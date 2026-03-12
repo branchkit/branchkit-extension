@@ -222,6 +222,8 @@ function showHints(category?: Category): void {
 function hideHints(): void {
   hintsVisible = false;
   activeCategory = null;
+  activateInNewTab = false;
+  keyHandler.exitHintMode();
   for (const w of store.all) {
     w.hint?.hide();
   }
