@@ -281,6 +281,7 @@ function pushGrammar(elements: ScannedElement[]): void {
 chrome.runtime.onMessage.addListener((message: Message) => {
   if (message.type === 'BRANCHKIT_ACTION') {
     const { action, params } = message.payload;
+    console.log('[BranchKit Content] action received:', action, params);
 
     // Map voice actions to dispatcher actions
     if (action === 'show_hints') {
@@ -288,7 +289,7 @@ chrome.runtime.onMessage.addListener((message: Message) => {
     } else if (action === 'show_hints_set') {
       dispatcher.dispatch('show_hints_category', { category: 'input' });
     } else if (action === 'show_hints_go') {
-      dispatcher.dispatch('show_hints_category', { category: 'button' });
+      dispatcher.dispatch('show_hints');
     } else if (action === 'show_hints_tables') {
       dispatcher.dispatch('show_hints_category', { category: 'tables' });
     } else if (action === 'click' || action === 'navigate' || action === 'set_value') {

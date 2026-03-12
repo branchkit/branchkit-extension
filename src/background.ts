@@ -151,13 +151,18 @@ function notifyOffscreenConnect(): void {
 
 async function notifyActiveTab(message: Message): Promise<void> {
   try {
-    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     const tab = tabs[0];
+    console.log('[BranchKit SW] notifyActiveTab:', tab?.id, tab?.url?.slice(0, 60));
     if (tab?.id) {
-      chrome.tabs.sendMessage(tab.id, message).catch(() => {});
+      chrome.tabs.sendMessage(tab.id, message).catch((e) => {
+        console.warn('[BranchKit SW] sendMessage failed:', e.message);
+      });
+    } else {
+      console.warn('[BranchKit SW] no active tab found');
     }
-  } catch {
-    // Tab may not be available
+  } catch (e) {
+    console.warn('[BranchKit SW] notifyActiveTab error:', e);
   }
 }
 
@@ -173,6 +178,7 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   if (message.type === 'SSE_EVENT') {
     // Offscreen doc forwarded an SSE event — route to active tab
     const data = message.data;
+    console.log('[BranchKit SW] SSE_EVENT received:', JSON.stringify(data));
     notifyActiveTab({
       type: 'BRANCHKIT_ACTION',
       payload: data,
