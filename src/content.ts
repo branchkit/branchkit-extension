@@ -25,6 +25,7 @@ let hintsVisible = false;
 let activeCategory: Category | null = null;
 let displayMode: BadgeDisplayMode = 'word';
 let lastGrammarHash = '';
+const MAX_BADGE_COUNT = 26; // Cap to single-word labels for clean UX
 
 // --- Display Mode from storage ---
 
@@ -165,7 +166,17 @@ function showHints(category?: Category): void {
 
   // Get elements to label (optionally filtered by category)
   // Copy array to avoid mutating store's internal order during sort
-  const targets = [...(category ? store.byCategory(category) : store.all)];
+  const allTargets = [...(category ? store.byCategory(category) : store.all)];
+
+  if (allTargets.length === 0) return;
+
+  // Filter to viewport-visible elements only
+  const vh = window.innerHeight;
+  const vw = window.innerWidth;
+  const targets = allTargets.filter(w => {
+    const r = w.element.getBoundingClientRect();
+    return r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
+  });
 
   if (targets.length === 0) return;
 
@@ -176,11 +187,14 @@ function showHints(category?: Category): void {
     return (ra.top - rb.top) || (ra.left - rb.left);
   });
 
-  // Assign labels
-  const labels = assignLabels(targets.length);
+  // Cap to 26 for single-word labels (clean UX). Word pairs only for category overflow.
+  const capped = targets.slice(0, MAX_BADGE_COUNT);
 
-  for (let i = 0; i < targets.length; i++) {
-    const wrapper = targets[i];
+  // Assign labels
+  const labels = assignLabels(capped.length);
+
+  for (let i = 0; i < capped.length; i++) {
+    const wrapper = capped[i];
     wrapper.label = labels[i];
 
     // Create badge if not exists
@@ -305,6 +319,22 @@ chrome.runtime.onMessage.addListener((message: Message) => {
     hideHints();
   }
 });
+
+// --- Scroll/Resize Listener (reposition fixed badges) ---
+
+let scrollRafPending = false;
+function onScrollOrResize(): void {
+  if (!hintsVisible || scrollRafPending) return;
+  scrollRafPending = true;
+  requestAnimationFrame(() => {
+    scrollRafPending = false;
+    for (const w of store.all) {
+      w.hint?.reposition();
+    }
+  });
+}
+window.addEventListener('scroll', onScrollOrResize, { passive: true, capture: true });
+window.addEventListener('resize', onScrollOrResize, { passive: true });
 
 // --- Keyboard Listener ---
 

@@ -2,74 +2,12 @@
  * BranchKit Extension — Shadow DOM hint badges.
  *
  * Each badge lives in a closed Shadow DOM to prevent page CSS interference.
- * Badges are DOM-embedded near their target element so they scroll naturally.
- * Based on Rango's approach (DESIGN_BROWSER_EXTENSION.md §3).
+ * Uses position:fixed with viewport coordinates for reliable placement.
+ * Badges reposition on scroll via a shared scroll listener in content.ts.
  */
 
 import { Category, CATEGORY_COLORS, BadgeDisplayMode } from './types';
 import { LabelAssignment, labelToDisplay } from './words';
-
-/**
- * Check if a CSS property creates a stacking context.
- */
-function createsStackingContext(style: CSSStyleDeclaration): boolean {
-  if (style.position !== 'static' && style.zIndex !== 'auto') return true;
-  if (parseFloat(style.opacity) < 1) return true;
-  if (style.transform !== 'none') return true;
-  if (style.filter !== 'none') return true;
-  if (style.isolation === 'isolate') return true;
-  if (style.position === 'fixed' || style.position === 'sticky') return true;
-  const willChange = style.willChange;
-  if (willChange === 'transform' || willChange === 'opacity' || willChange === 'filter') return true;
-  return false;
-}
-
-/**
- * Calculate z-index to sit above siblings near the target element.
- */
-function calculateZIndex(target: Element, container: Element): number {
-  let maxZ = 0;
-
-  // Walk ancestors up to container
-  let el: Element | null = target;
-  while (el && el !== container) {
-    const style = getComputedStyle(el);
-    if (createsStackingContext(style)) {
-      maxZ = Math.max(maxZ, parseInt(style.zIndex) || 0);
-    }
-    el = el.parentElement;
-  }
-
-  return maxZ + 5;
-}
-
-/**
- * Find the best DOM insertion point for a badge.
- * Simplified version: insert before target's parent.
- * Full ancestor traversal can be added later for edge cases.
- */
-function getAptContainer(target: Element): Element {
-  // For fixed/sticky elements, use the element itself
-  const style = getComputedStyle(target);
-  if (style.position === 'fixed' || style.position === 'sticky') {
-    return target;
-  }
-
-  // Walk up to find a block-level container
-  let el: Element | null = target.parentElement;
-  while (el && el !== document.body) {
-    const elStyle = getComputedStyle(el);
-    const display = elStyle.display;
-    // Skip inline, contents, and table internals
-    if (display !== 'inline' && display !== 'contents' &&
-        !display.startsWith('table') && !el.shadowRoot) {
-      return el;
-    }
-    el = el.parentElement;
-  }
-
-  return document.body;
-}
 
 export class HintBadge {
   private host: HTMLDivElement;
@@ -83,13 +21,11 @@ export class HintBadge {
     this.target = target;
 
     const colors = CATEGORY_COLORS[category];
-    const container = getAptContainer(target);
-    const zIndex = calculateZIndex(target, container);
 
-    // Create shadow host
+    // Create shadow host — appended to body to avoid layout interference
     this.host = document.createElement('div');
     this.host.setAttribute('data-branchkit-hint', 'true');
-    this.host.style.display = 'contents';
+    this.host.style.cssText = 'position:fixed; top:0; left:0; width:0; height:0; overflow:visible; z-index:2147483647; pointer-events:none;';
 
     // Closed shadow DOM
     this.shadow = this.host.attachShadow({ mode: 'closed' });
@@ -107,12 +43,9 @@ export class HintBadge {
     // Create style
     const style = document.createElement('style');
     style.textContent = `
-      :host { display: contents; }
       .bk-outer {
-        position: absolute;
-        contain: layout size style;
+        position: fixed;
         pointer-events: none;
-        z-index: ${zIndex};
       }
       .bk-inner {
         font: bold 11px/16px system-ui, -apple-system, sans-serif;
@@ -142,17 +75,16 @@ export class HintBadge {
     this.outer.appendChild(this.inner);
     this.shadow.appendChild(this.outer);
 
-    // Insert into DOM near target (position deferred until show())
-    container.insertBefore(this.host, container.firstChild);
+    // Append to body (fixed positioning, so location in DOM doesn't matter)
+    document.body.appendChild(this.host);
   }
 
-  private updatePosition(): void {
+  updatePosition(): void {
     const targetRect = this.target.getBoundingClientRect();
-    const outerRect = this.outer.getBoundingClientRect();
 
-    // Position at the left edge of the target, slightly overlapping
-    const x = targetRect.x - outerRect.x - 2;
-    const y = targetRect.y - outerRect.y;
+    // Position to the left of the target element
+    const x = targetRect.left - 24;
+    const y = targetRect.top + 2;
 
     this.outer.style.left = `${x}px`;
     this.outer.style.top = `${y}px`;
@@ -161,7 +93,6 @@ export class HintBadge {
   show(): void {
     if (this._visible) return;
     this._visible = true;
-    // Batch: position then fade in next frame
     this.updatePosition();
     requestAnimationFrame(() => {
       this.inner.classList.add('visible');
