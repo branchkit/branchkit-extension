@@ -25,7 +25,7 @@ let hintsVisible = false;
 let activeCategory: Category | null = null;
 let displayMode: BadgeDisplayMode = 'word';
 let lastGrammarHash = '';
-const MAX_BADGE_COUNT = 26; // Cap to single-word labels for clean UX
+const MAX_BADGE_COUNT = 676; // No artificial cap; word pairs for >26
 
 // --- Display Mode from storage ---
 
@@ -187,7 +187,6 @@ function showHints(category?: Category): void {
     return (ra.top - rb.top) || (ra.left - rb.left);
   });
 
-  // Cap to 26 for single-word labels (clean UX). Word pairs only for category overflow.
   const capped = targets.slice(0, MAX_BADGE_COUNT);
 
   // Assign labels
