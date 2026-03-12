@@ -2,7 +2,7 @@
  * BranchKit Browser — Service worker (background script).
  *
  * Responsibilities:
- * - Discover quickbase plugin port/token via actuator
+ * - Discover browser plugin port/token via actuator
  * - Push grammar to plugin on scan results
  * - Route SSE events from offscreen doc to content scripts
  * - Manage offscreen document lifecycle
@@ -36,7 +36,7 @@ const browserBundleID = detectBundleID();
 
 async function discoverPlugin(): Promise<boolean> {
   try {
-    const resp = await fetch(`${ACTUATOR_URL}/v1/plugins/quickbase/status`);
+    const resp = await fetch(`${ACTUATOR_URL}/v1/plugins/browser/status`);
     if (!resp.ok) return false;
     const data = await resp.json();
     if (!data.enabled || !data.listen) return false;

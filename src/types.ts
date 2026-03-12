@@ -43,7 +43,7 @@ export type Message =
   | { type: 'GET_HEALTH' }
   | { type: 'CONNECT_SSE'; port: number; token: string };
 
-// --- Grammar format matching quickbase plugin Go types ---
+// --- Grammar format matching browser plugin Go types ---
 
 export interface FieldInfo {
   fid: string;

@@ -1,7 +1,7 @@
 /**
  * BranchKit Browser — Offscreen document.
  *
- * Holds persistent EventSource SSE connection to quickbase plugin.
+ * Holds persistent EventSource SSE connection to browser plugin.
  * Forwards action events to service worker via chrome.runtime.sendMessage.
  * This survives service worker termination (MV3 30s idle limit).
  */
