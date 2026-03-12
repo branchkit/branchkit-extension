@@ -1,5 +1,5 @@
 /**
- * BranchKit Extension — Content script entry point.
+ * BranchKit Browser — Content script entry point.
  *
  * Injected per frame. Scans DOM, creates badges, handles keyboard input.
  * Voice commands arrive via background → BRANCHKIT_ACTION messages.
@@ -379,4 +379,4 @@ doScan();
 (window as any).branchkitHideHints = () => hideHints();
 (window as any).branchkitScan = () => { doScan(); return store.all; };
 
-console.log('[BranchKit] Hints extension loaded. Press f to show hints, or call branchkitShowHints()');
+console.log('[BranchKit Browser] Loaded. Press f to show hints, or call branchkitShowHints()');

@@ -1,5 +1,5 @@
 /**
- * BranchKit Extension — QuickBase site adapter.
+ * BranchKit Browser — QuickBase site adapter.
  *
  * Adds QuickBase-specific scanning:
  * - Edit/View record icons

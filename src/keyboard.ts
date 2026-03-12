@@ -1,5 +1,5 @@
 /**
- * BranchKit Extension — Keyboard handler.
+ * BranchKit Browser — Keyboard handler.
  *
  * Modes: normal, insert, hint.
  * In hint mode, typed characters filter badges by word prefix.

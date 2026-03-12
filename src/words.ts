@@ -1,5 +1,5 @@
 /**
- * BranchKit Extension — Prefix-free codeword labeling.
+ * BranchKit Browser — Prefix-free codeword labeling.
  *
  * The 26 codewords are split into two pools based on element count:
  *   - Singles: words that are complete commands (immediate execution)

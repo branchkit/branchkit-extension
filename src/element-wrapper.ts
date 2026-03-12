@@ -1,5 +1,5 @@
 /**
- * BranchKit Extension — Element wrapper and store.
+ * BranchKit Browser — Element wrapper and store.
  *
  * Lightweight wrapper that decouples element lifecycle from hint lifecycle.
  * Tracks viewport intersection, category, and adapter source.

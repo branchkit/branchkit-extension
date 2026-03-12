@@ -1,5 +1,5 @@
 /**
- * BranchKit Extension — Action dispatcher and command registry.
+ * BranchKit Browser — Action dispatcher and command registry.
  *
  * All user-facing actions go through ActionDispatcher.
  * Input modalities (voice, keyboard) produce action objects.

@@ -1,5 +1,5 @@
 /**
- * BranchKit Extension — Message protocol and shared types.
+ * BranchKit Browser — Message protocol and shared types.
  */
 
 // --- Categories ---

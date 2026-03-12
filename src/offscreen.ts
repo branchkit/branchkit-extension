@@ -1,5 +1,5 @@
 /**
- * BranchKit Extension — Offscreen document.
+ * BranchKit Browser — Offscreen document.
  *
  * Holds persistent EventSource SSE connection to quickbase plugin.
  * Forwards action events to service worker via chrome.runtime.sendMessage.

@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "BranchKit Hints",
+  "name": "BranchKit Browser",
   "version": "0.1.0",
   "description": "Voice-navigable hint badges for any website. Works standalone or with BranchKit.",
   "permissions": ["offscreen", "tabs", "activeTab", "storage", "alarms"],

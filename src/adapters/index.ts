@@ -1,5 +1,5 @@
 /**
- * BranchKit Extension — Site adapter registry.
+ * BranchKit Browser — Site adapter registry.
  *
  * Adapters add site-specific scanning on top of generic scanning.
  * They augment (not replace) the core selectors.

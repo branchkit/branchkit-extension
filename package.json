@@ -1,7 +1,7 @@
 {
-  "name": "branchkit-extension",
+  "name": "branchkit-browser",
   "version": "0.1.0",
-  "description": "BranchKit browser extension — voice-navigable hint badges",
+  "description": "BranchKit Browser — voice-navigable hint badges",
   "scripts": {
     "build": "npm run clean && npm run bundle && npm run copy-static",
     "bundle": "esbuild src/content.ts --bundle --format=iife --outfile=dist/content.js && esbuild src/background.ts --bundle --format=esm --outfile=dist/background.js && esbuild src/offscreen.ts --bundle --format=iife --outfile=dist/offscreen.js",

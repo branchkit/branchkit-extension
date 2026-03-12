@@ -1,5 +1,5 @@
 /**
- * BranchKit Extension — Shadow DOM hint badges.
+ * BranchKit Browser — Shadow DOM hint badges.
  *
  * Each badge lives in a closed Shadow DOM to prevent page CSS interference.
  * Uses position:fixed with viewport coordinates for reliable placement.

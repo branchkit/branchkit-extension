@@ -1,5 +1,5 @@
 /**
- * BranchKit Extension — Service worker (background script).
+ * BranchKit Browser — Service worker (background script).
  *
  * Responsibilities:
  * - Discover quickbase plugin port/token via actuator
