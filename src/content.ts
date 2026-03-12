@@ -212,11 +212,6 @@ function showHints(category?: Category): void {
   }
 
   hintsVisible = true;
-
-  // Auto-dismiss after 10s
-  setTimeout(() => {
-    if (hintsVisible) hideHints();
-  }, 10000);
 }
 
 function hideHints(): void {
