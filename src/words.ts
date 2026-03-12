@@ -32,11 +32,14 @@ export interface LabelAssignment {
  * Assign labels to elements sorted by viewport position.
  * Returns labels indexed same as input array.
  */
+export const MAX_LABELS = HINT_WORDS.length * HINT_WORDS.length; // 676
+
 export function assignLabels(count: number): LabelAssignment[] {
   const labels: LabelAssignment[] = [];
-  const needsPair = count > HINT_WORDS.length;
+  const capped = Math.min(count, MAX_LABELS);
+  const needsPair = capped > HINT_WORDS.length;
 
-  for (let i = 0; i < count; i++) {
+  for (let i = 0; i < capped; i++) {
     if (needsPair) {
       const first = Math.floor(i / HINT_WORDS.length);
       const second = i % HINT_WORDS.length;

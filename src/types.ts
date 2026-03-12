@@ -40,7 +40,8 @@ export type Message =
   | { type: 'SSE_EVENT'; data: unknown }
   | { type: 'HEALTH_STATUS'; branchkit: boolean }
   | { type: 'GRAMMAR_PUSH'; elements: ScannedElement[] }
-  | { type: 'GET_HEALTH' };
+  | { type: 'GET_HEALTH' }
+  | { type: 'CONNECT_SSE'; port: number; token: string };
 
 // --- Grammar format matching quickbase plugin Go types ---
 

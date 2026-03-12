@@ -96,7 +96,13 @@ function scannedToGrammarRequest(elements: ScannedElement[]): GrammarRequest {
 }
 
 async function pushGrammar(elements: ScannedElement[]): Promise<void> {
-  if (!pluginPort || !pluginToken) return;
+  // Lazy discovery: service worker may have restarted and lost state
+  if (!pluginPort || !pluginToken) {
+    const found = await discoverPlugin();
+    if (!found) return;
+    branchkitConnected = true;
+    notifyOffscreenConnect();
+  }
 
   const req = scannedToGrammarRequest(elements);
 
@@ -171,6 +177,12 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
       type: 'BRANCHKIT_ACTION',
       payload: data,
     });
+    return false;
+  }
+
+  if (message.type === 'HEALTH_STATUS') {
+    // Offscreen doc reports SSE connection state
+    branchkitConnected = message.branchkit ?? false;
     return false;
   }
 

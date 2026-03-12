@@ -58,11 +58,8 @@ export function classifyCategory(el: Element): Category {
  * Check if element is visible (non-zero dimensions and not off-screen).
  */
 function isVisible(el: Element): boolean {
-  const htmlEl = el as HTMLElement;
-  if (htmlEl.offsetWidth === 0 && htmlEl.offsetHeight === 0) return false;
   const rect = el.getBoundingClientRect();
-  if (rect.width === 0 && rect.height === 0) return false;
-  return true;
+  return rect.width > 0 || rect.height > 0;
 }
 
 /**
@@ -150,7 +147,16 @@ export function buildSelector(el: Element): string {
   if (role === 'tab' && el.parentElement) {
     const tabs = Array.from(el.parentElement.children).filter(c => c.getAttribute('role') === 'tab');
     const idx = tabs.indexOf(el);
-    if (idx >= 0) return `[role="tablist"] > [role="tab"]:nth-child(${idx + 1})`;
+    if (idx >= 0) {
+      // Use nth-of-type if all tabs share a tag, otherwise use our own index-based selector
+      const tag = el.tagName.toLowerCase();
+      const allSameTag = tabs.every(t => t.tagName === el.tagName);
+      if (allSameTag) {
+        return `[role="tablist"] > ${tag}:nth-of-type(${idx + 1})`;
+      }
+      // Fallback: use role attribute + position among role="tab" siblings
+      return `[role="tab"]:nth-of-type(${idx + 1})`;
+    }
   }
 
   // 4. Links with href
@@ -169,7 +175,8 @@ export function buildSelector(el: Element): string {
     let ancestor = parent;
     let depth = 0;
     while (ancestor && !ancestor.id && depth < 3) {
-      ancestor = ancestor.parentElement!;
+      if (!ancestor.parentElement) break;
+      ancestor = ancestor.parentElement;
       depth++;
     }
     if (ancestor?.id) {

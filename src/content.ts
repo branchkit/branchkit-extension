@@ -60,7 +60,10 @@ dispatcher.register('show_hints', () => {
   keyHandler.enterHintMode();
 });
 
+let activateInNewTab = false;
+
 dispatcher.register('show_hints_newtab', () => {
+  activateInNewTab = true;
   doScan();
   showHints();
   keyHandler.enterHintMode();
@@ -161,9 +164,8 @@ function showHints(category?: Category): void {
   activeCategory = category || null;
 
   // Get elements to label (optionally filtered by category)
-  const targets = category
-    ? store.byCategory(category)
-    : store.all;
+  // Copy array to avoid mutating store's internal order during sort
+  const targets = [...(category ? store.byCategory(category) : store.all)];
 
   if (targets.length === 0) return;
 
@@ -222,14 +224,24 @@ function updateBadgeLabels(): void {
 
 function activateWrapper(wrapper: ElementWrapper): void {
   const el = wrapper.element as HTMLElement;
+  const openNewTab = activateInNewTab;
 
   hideHints();
   keyHandler.exitHintMode();
+  activateInNewTab = false;
 
   if (wrapper.category === 'input') {
     el.focus();
     el.style.outline = '2px solid #007AFF';
     setTimeout(() => { el.style.outline = ''; }, 3000);
+  } else if (openNewTab && wrapper.category === 'link') {
+    // Open link in new tab
+    const href = (el as HTMLAnchorElement).href;
+    if (href) {
+      window.open(href, '_blank');
+    } else {
+      el.click();
+    }
   } else {
     el.click();
   }
@@ -263,6 +275,8 @@ chrome.runtime.onMessage.addListener((message: Message) => {
     // Map voice actions to dispatcher actions
     if (action === 'show_hints') {
       dispatcher.dispatch('show_hints');
+    } else if (action === 'show_hints_set') {
+      dispatcher.dispatch('show_hints_category', { category: 'input' });
     } else if (action === 'show_hints_go') {
       dispatcher.dispatch('show_hints_category', { category: 'button' });
     } else if (action === 'show_hints_tables') {
@@ -303,11 +317,13 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
 let mutationTimer: ReturnType<typeof setTimeout> | null = null;
 
 const observer = new MutationObserver((_mutations) => {
-  // Skip our own mutations
+  // Skip our own mutations (badge add/remove)
+  const isOwnMutation = (n: Node) =>
+    n instanceof HTMLElement && n.hasAttribute('data-branchkit-hint');
   if (_mutations.every(m =>
-    m.type === 'childList' && Array.from(m.addedNodes).every(n =>
-      n instanceof HTMLElement && n.hasAttribute('data-branchkit-hint')
-    )
+    m.type === 'childList' &&
+    Array.from(m.addedNodes).every(isOwnMutation) &&
+    Array.from(m.removedNodes).every(isOwnMutation)
   )) return;
 
   if (mutationTimer) clearTimeout(mutationTimer);

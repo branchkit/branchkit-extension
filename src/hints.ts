@@ -142,11 +142,8 @@ export class HintBadge {
     this.outer.appendChild(this.inner);
     this.shadow.appendChild(this.outer);
 
-    // Insert into DOM near target
+    // Insert into DOM near target (position deferred until show())
     container.insertBefore(this.host, container.firstChild);
-
-    // Position relative to container (badge scrolls with container)
-    this.updatePosition();
   }
 
   private updatePosition(): void {
@@ -164,7 +161,7 @@ export class HintBadge {
   show(): void {
     if (this._visible) return;
     this._visible = true;
-    // Position first, then fade in
+    // Batch: position then fade in next frame
     this.updatePosition();
     requestAnimationFrame(() => {
       this.inner.classList.add('visible');
