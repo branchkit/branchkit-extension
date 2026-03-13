@@ -149,6 +149,19 @@ function notifyOffscreenConnect(): void {
 
 // --- Message Routing ---
 
+async function broadcastToAllTabs(message: Message): Promise<void> {
+  try {
+    const tabs = await chrome.tabs.query({});
+    for (const tab of tabs) {
+      if (tab.id && tab.url && !tab.url.startsWith('chrome://')) {
+        chrome.tabs.sendMessage(tab.id, message).catch(() => {});
+      }
+    }
+  } catch {
+    // Extension context may be invalidated
+  }
+}
+
 async function notifyActiveTab(message: Message): Promise<void> {
   try {
     const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
@@ -179,16 +192,34 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     // Offscreen doc forwarded an SSE event — route to active tab
     const data = message.data;
     console.log('[BranchKit SW] SSE_EVENT received:', JSON.stringify(data));
-    notifyActiveTab({
-      type: 'BRANCHKIT_ACTION',
-      payload: data,
-    });
+
+    if (data.action === 'rescan' || data.action === 'set_badge_mode') {
+      // Broadcast to ALL tabs — rescan re-pushes grammar, set_badge_mode updates display
+      broadcastToAllTabs({
+        type: 'BRANCHKIT_ACTION',
+        payload: data,
+      });
+    } else {
+      notifyActiveTab({
+        type: 'BRANCHKIT_ACTION',
+        payload: data,
+      });
+    }
     return false;
   }
 
   if (message.type === 'HEALTH_STATUS') {
-    // Offscreen doc reports SSE connection state
+    const wasConnected = branchkitConnected;
     branchkitConnected = message.branchkit ?? false;
+
+    // SSE dropped — immediately re-discover plugin (port may have changed on restart)
+    if (wasConnected && !branchkitConnected) {
+      setTimeout(async () => {
+        const found = await discoverPlugin();
+        branchkitConnected = found;
+        if (found) notifyOffscreenConnect();
+      }, 2000); // brief delay for plugin to finish restarting
+    }
     return false;
   }
 

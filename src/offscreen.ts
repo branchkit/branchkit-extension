@@ -32,9 +32,14 @@ function connect(port: number, token: string): void {
   });
 
   source.onerror = () => {
-    console.warn('[BranchKit Offscreen] SSE disconnected, will auto-reconnect');
+    console.warn('[BranchKit Offscreen] SSE disconnected');
+    // Close immediately — don't let EventSource auto-reconnect to a stale port.
+    // The service worker will re-discover the new port and send CONNECT_SSE.
+    if (source) {
+      source.close();
+      source = null;
+    }
     chrome.runtime.sendMessage({ type: 'HEALTH_STATUS', branchkit: false }).catch(() => {});
-    // EventSource auto-reconnects by default
   };
 }
 

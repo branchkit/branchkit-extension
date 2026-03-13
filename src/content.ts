@@ -25,7 +25,14 @@ let hintsVisible = false;
 let activeCategory: Category | null = null;
 let displayMode: BadgeDisplayMode = 'word';
 let lastGrammarHash = '';
+let pendingMutation = false;
 const MAX_BADGE_COUNT = 676; // No artificial cap; word pairs for >26
+
+// Voice category groups — maps voice trigger prefixes to element categories.
+// "set ape" targets the first input, "go ape" targets the first clickable, etc.
+const VOICE_GROUP_SET: Category[] = ['input'];
+const VOICE_GROUP_GO: Category[] = ['link', 'button', 'tab', 'edit', 'view'];
+const VOICE_GROUP_TABLES: Category[] = ['tables'];
 
 // --- Display Mode from storage ---
 
@@ -132,6 +139,22 @@ keyHandler.setFilterCallback((prefix: string) => {
 
 // --- Core Functions ---
 
+/** Filter to viewport-visible elements and sort by position (top-left first). */
+function viewportSort(wrappers: ElementWrapper[]): ElementWrapper[] {
+  const vh = window.innerHeight;
+  const vw = window.innerWidth;
+  return wrappers
+    .filter(w => {
+      const r = w.element.getBoundingClientRect();
+      return r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
+    })
+    .sort((a, b) => {
+      const ra = a.element.getBoundingClientRect();
+      const rb = b.element.getBoundingClientRect();
+      return (ra.top - rb.top) || (ra.left - rb.left);
+    });
+}
+
 function doScan(): void {
   // Check for site adapter
   const adapter = getActiveAdapter(window.location.href);
@@ -158,34 +181,26 @@ function doScan(): void {
   store.set(wrappers);
 
   // Push grammar to background (for BranchKit voice)
-  pushGrammar(elements);
+  pushGrammar();
 }
 
-function showHints(category?: Category): void {
-  activeCategory = category || null;
+function showHints(filter?: Category | Category[]): void {
+  // Determine which categories to show
+  const categories: Category[] | null = filter
+    ? (Array.isArray(filter) ? filter : [filter])
+    : null;
+  activeCategory = typeof filter === 'string' ? filter : null;
 
-  // Get elements to label (optionally filtered by category)
-  // Copy array to avoid mutating store's internal order during sort
-  const allTargets = [...(category ? store.byCategory(category) : store.all)];
+  // Get elements, optionally filtered by category
+  const allTargets = categories
+    ? store.all.filter(w => categories.includes(w.category))
+    : [...store.all];
 
   if (allTargets.length === 0) return;
 
-  // Filter to viewport-visible elements only
-  const vh = window.innerHeight;
-  const vw = window.innerWidth;
-  const targets = allTargets.filter(w => {
-    const r = w.element.getBoundingClientRect();
-    return r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
-  });
-
+  // Filter to viewport-visible and sort by position (same as grammar push)
+  const targets = viewportSort(allTargets);
   if (targets.length === 0) return;
-
-  // Sort by viewport position: top-left first
-  targets.sort((a, b) => {
-    const ra = a.element.getBoundingClientRect();
-    const rb = b.element.getBoundingClientRect();
-    return (ra.top - rb.top) || (ra.left - rb.left);
-  });
 
   const capped = targets.slice(0, MAX_BADGE_COUNT);
 
@@ -221,6 +236,12 @@ function hideHints(): void {
   keyHandler.exitHintMode();
   for (const w of store.all) {
     w.hint?.hide();
+  }
+
+  // Catch up on DOM changes that occurred while hints were visible
+  if (pendingMutation) {
+    pendingMutation = false;
+    setTimeout(() => doScan(), 100);
   }
 }
 
@@ -259,7 +280,24 @@ function activateWrapper(wrapper: ElementWrapper): void {
 
 // --- Grammar Push (Slice C) ---
 
-function pushGrammar(elements: ScannedElement[]): void {
+/**
+ * Push grammar to background for BranchKit voice commands.
+ *
+ * Elements are sorted per voice-category group (set/go/tables) by viewport
+ * position. This ensures the Go plugin's index-based codeword assignment
+ * matches the display order when showHints() renders badges — both use
+ * viewportSort() with the same category grouping.
+ */
+function pushGrammar(): void {
+  const elements: ScannedElement[] = [];
+
+  for (const cats of [VOICE_GROUP_SET, VOICE_GROUP_GO, VOICE_GROUP_TABLES]) {
+    const group = store.all.filter(w => (cats as readonly Category[]).includes(w.category));
+    for (const w of viewportSort(group)) {
+      elements.push(w.scanned);
+    }
+  }
+
   // Hash-based deduplication
   const hash = elements.map(e => e.selector + e.category).join('|');
   if (hash === lastGrammarHash) return;
@@ -283,15 +321,24 @@ chrome.runtime.onMessage.addListener((message: Message) => {
     const { action, params } = message.payload;
     console.log('[BranchKit Content] action received:', action, params);
 
-    // Map voice actions to dispatcher actions
-    if (action === 'show_hints') {
-      dispatcher.dispatch('show_hints');
-    } else if (action === 'show_hints_set') {
-      dispatcher.dispatch('show_hints_category', { category: 'input' });
+    // Voice actions show category-specific hints (not all elements).
+    // Each voice group gets its own label pool matching the grammar's
+    // per-category codeword assignment.
+    if (action === 'show_hints' || action === 'show_hints_set') {
+      doScan();
+      showHints(VOICE_GROUP_SET);
     } else if (action === 'show_hints_go') {
-      dispatcher.dispatch('show_hints');
+      doScan();
+      showHints(VOICE_GROUP_GO);
     } else if (action === 'show_hints_tables') {
-      dispatcher.dispatch('show_hints_category', { category: 'tables' });
+      doScan();
+      showHints(VOICE_GROUP_TABLES);
+    } else if (action === 'rescan') {
+      // Browser plugin reconnected (actuator restart) — rescan DOM to re-push grammar
+      lastGrammarHash = '';
+      doScan();
+    } else if (action === 'set_badge_mode' && params?.mode) {
+      chrome.storage.sync.set({ badgeDisplayMode: params.mode });
     } else if (action === 'click' || action === 'navigate' || action === 'set_value') {
       // Voice command with selector — find and activate
       const selector = params?.selector;
@@ -353,13 +400,17 @@ const observer = new MutationObserver((_mutations) => {
     Array.from(m.removedNodes).every(isOwnMutation)
   )) return;
 
+  // Don't rescan while hints are visible — grammar replacement mid-interaction
+  // would change codeword assignments while the user is speaking commands.
+  // hideHints() will trigger a catch-up rescan if mutations occurred.
+  if (hintsVisible) {
+    pendingMutation = true;
+    return;
+  }
+
   if (mutationTimer) clearTimeout(mutationTimer);
   mutationTimer = setTimeout(() => {
-    // Rescan if hints are visible (badges may be stale)
-    if (hintsVisible) {
-      doScan();
-      showHints(activeCategory || undefined);
-    }
+    doScan();
   }, 300);
 });
 
