@@ -4,8 +4,8 @@
  * Responsibilities:
  * - Discover browser plugin port/token via actuator
  * - Push grammar to plugin on scan results
- * - Route SSE events from offscreen doc to content scripts
- * - Manage offscreen document lifecycle
+ * - Route SSE events from offscreen doc (Chrome) or direct SSE (Firefox) to content scripts
+ * - Manage offscreen document lifecycle (Chrome only)
  */
 
 import { Message, ScannedElement, GrammarRequest, FieldInfo, ClickableInfo, TableLink } from './types';
@@ -17,6 +17,13 @@ const ACTUATOR_URL = 'http://127.0.0.1:21551';
 let pluginPort: number | null = null;
 let pluginToken: string | null = null;
 let branchkitConnected = false;
+
+// Firefox direct SSE (no offscreen document needed)
+let directSSE: EventSource | null = null;
+
+// --- Feature Detection ---
+
+const hasOffscreenAPI = typeof chrome !== 'undefined' && !!chrome.offscreen;
 
 // --- Browser Bundle ID Detection ---
 
@@ -101,7 +108,7 @@ async function pushGrammar(elements: ScannedElement[]): Promise<void> {
     const found = await discoverPlugin();
     if (!found) return;
     branchkitConnected = true;
-    notifyOffscreenConnect();
+    connectSSE();
   }
 
   const req = scannedToGrammarRequest(elements);
@@ -120,9 +127,25 @@ async function pushGrammar(elements: ScannedElement[]): Promise<void> {
   }
 }
 
-// --- Offscreen Document Management ---
+// --- SSE Connection (browser-adaptive) ---
+
+/** Connect to the plugin's SSE stream using the best available method. */
+function connectSSE(): void {
+  if (!pluginPort || !pluginToken) return;
+
+  if (hasOffscreenAPI) {
+    // Chrome: delegate to offscreen document
+    ensureOffscreen().then(() => notifyOffscreenConnect());
+  } else {
+    // Firefox: open EventSource directly in background script
+    connectDirectSSE(pluginPort, pluginToken);
+  }
+}
+
+// --- Chrome: Offscreen Document ---
 
 async function ensureOffscreen(): Promise<void> {
+  if (!hasOffscreenAPI) return;
   try {
     const exists = await chrome.offscreen.hasDocument();
     if (!exists) {
@@ -147,13 +170,74 @@ function notifyOffscreenConnect(): void {
   }).catch(() => {});
 }
 
+// --- Firefox: Direct SSE in background script ---
+
+function connectDirectSSE(port: number, token: string): void {
+  if (directSSE) {
+    directSSE.close();
+    directSSE = null;
+  }
+
+  const url = `http://127.0.0.1:${port}/events?token=${token}`;
+  directSSE = new EventSource(url);
+
+  directSSE.addEventListener('connected', () => {
+    console.log('[BranchKit BG] SSE connected (direct)');
+    branchkitConnected = true;
+  });
+
+  directSSE.addEventListener('action', (e: MessageEvent) => {
+    try {
+      const data = JSON.parse(e.data);
+      handleSSEEvent(data);
+    } catch (err) {
+      console.error('[BranchKit BG] SSE parse error:', err);
+    }
+  });
+
+  directSSE.onerror = () => {
+    console.warn('[BranchKit BG] SSE disconnected (direct)');
+    if (directSSE) {
+      directSSE.close();
+      directSSE = null;
+    }
+    branchkitConnected = false;
+
+    // Re-discover after a delay (plugin may have restarted on a new port)
+    setTimeout(async () => {
+      const found = await discoverPlugin();
+      branchkitConnected = found;
+      if (found) connectSSE();
+    }, 2000);
+  };
+}
+
+// --- SSE Event Handling (shared by both paths) ---
+
+function handleSSEEvent(data: any): void {
+  console.log('[BranchKit BG] SSE event:', JSON.stringify(data));
+
+  if (data.action === 'rescan' || data.action === 'set_badge_mode') {
+    // Broadcast to ALL tabs
+    broadcastToAllTabs({
+      type: 'BRANCHKIT_ACTION',
+      payload: data,
+    });
+  } else {
+    notifyActiveTab({
+      type: 'BRANCHKIT_ACTION',
+      payload: data,
+    });
+  }
+}
+
 // --- Message Routing ---
 
 async function broadcastToAllTabs(message: Message): Promise<void> {
   try {
     const tabs = await chrome.tabs.query({});
     for (const tab of tabs) {
-      if (tab.id && tab.url && !tab.url.startsWith('chrome://')) {
+      if (tab.id && tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('moz-extension://')) {
         chrome.tabs.sendMessage(tab.id, message).catch(() => {});
       }
     }
@@ -189,22 +273,8 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   }
 
   if (message.type === 'SSE_EVENT') {
-    // Offscreen doc forwarded an SSE event — route to active tab
-    const data = message.data;
-    console.log('[BranchKit SW] SSE_EVENT received:', JSON.stringify(data));
-
-    if (data.action === 'rescan' || data.action === 'set_badge_mode') {
-      // Broadcast to ALL tabs — rescan re-pushes grammar, set_badge_mode updates display
-      broadcastToAllTabs({
-        type: 'BRANCHKIT_ACTION',
-        payload: data,
-      });
-    } else {
-      notifyActiveTab({
-        type: 'BRANCHKIT_ACTION',
-        payload: data,
-      });
-    }
+    // Offscreen doc forwarded an SSE event (Chrome path) — route to tabs
+    handleSSEEvent(message.data);
     return false;
   }
 
@@ -217,7 +287,7 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
       setTimeout(async () => {
         const found = await discoverPlugin();
         branchkitConnected = found;
-        if (found) notifyOffscreenConnect();
+        if (found) connectSSE();
       }, 2000); // brief delay for plugin to finish restarting
     }
     return false;
@@ -237,27 +307,31 @@ async function init(): Promise<void> {
   const found = await discoverPlugin();
   branchkitConnected = found;
 
-  await ensureOffscreen();
+  if (hasOffscreenAPI) {
+    await ensureOffscreen();
+  }
 
   if (found) {
-    notifyOffscreenConnect();
+    connectSSE();
   }
 }
 
 chrome.runtime.onInstalled.addListener(() => init());
 chrome.runtime.onStartup.addListener(() => init());
 
-// Safety net: check offscreen doc every 30s
-chrome.alarms.create('offscreen-check', { periodInMinutes: 0.5 });
+// Safety net: check connection every 30s
+chrome.alarms.create('connection-check', { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name === 'offscreen-check') {
-    await ensureOffscreen();
+  if (alarm.name === 'connection-check') {
+    if (hasOffscreenAPI) {
+      await ensureOffscreen();
+    }
 
-    // Also retry plugin discovery if not connected
+    // Retry plugin discovery if not connected
     if (!branchkitConnected) {
       const found = await discoverPlugin();
       branchkitConnected = found;
-      if (found) notifyOffscreenConnect();
+      if (found) connectSSE();
     }
   }
 });

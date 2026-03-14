@@ -4,6 +4,11 @@
   "version": "0.1.0",
   "description": "Voice-navigable hint badges for any website. Works standalone or with BranchKit.",
   "permissions": ["offscreen", "tabs", "activeTab", "storage", "alarms"],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "branchkit-browser@branchkit.dev"
+    }
+  },
   "host_permissions": [
     "<all_urls>",
     "http://127.0.0.1/*"
