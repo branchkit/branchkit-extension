@@ -28,6 +28,13 @@ export interface ScannedElement {
   category: Category;
   type: string;         // more specific: 'record_action', 'nav', etc.
   adapter: string | null;
+  /**
+   * Voice handle assigned by the per-tab label pool — e.g. "ape" or
+   * "zone ape". Empty when the pool didn't assign one (alphabet not
+   * loaded, pool exhausted). Voice plugin skips elements without a
+   * codeword. See notes/DESIGN_BROWSER_GRAMMAR_PROTOCOL.md §3.
+   */
+  codeword: string;
 }
 
 // --- Messages ---
@@ -85,12 +92,14 @@ export interface FieldInfo {
   selector: string;
   id: string;
   position: number;
+  codeword: string;
 }
 
 export interface ClickableInfo {
   label: string;
   selector: string;
   type: string;
+  codeword: string;
 }
 
 export interface TableLink {
@@ -98,6 +107,7 @@ export interface TableLink {
   selector: string;
   href: string;
   table_id: string;
+  codeword: string;
 }
 
 export interface GrammarRequest {

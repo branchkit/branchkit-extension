@@ -41,6 +41,7 @@ function scanRecordIcons(): { elements: ScannedElement[]; refs: Element[] } {
         category: 'edit',
         type: 'record_action',
         adapter: 'quickbase',
+        codeword: '',
       });
     } else {
       viewNum++;
@@ -50,6 +51,7 @@ function scanRecordIcons(): { elements: ScannedElement[]; refs: Element[] } {
         category: 'view',
         type: 'record_action',
         adapter: 'quickbase',
+        codeword: '',
       });
     }
     refs.push(el);
@@ -84,6 +86,7 @@ function scanTables(): { elements: ScannedElement[]; refs: Element[] } {
       category: 'tables',
       type: 'sidebar_link',
       adapter: 'quickbase',
+      codeword: '',
     });
     refs.push(el);
   });

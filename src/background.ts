@@ -19,6 +19,13 @@ let pluginPort: number | null = null;
 let pluginToken: string | null = null;
 let branchkitConnected = false;
 
+// Per-tab grammar aggregation. Each frame's SCAN_RESULT lands here keyed
+// by (tabId, frameId); on every update we rebuild the aggregate and push
+// it to the voice plugin. Without this, the voice plugin only sees
+// whichever frame pushed last — multi-frame grammar gets overwritten.
+// See notes/DESIGN_BROWSER_GRAMMAR_PROTOCOL.md §4.
+const tabGrammars = new Map<number, Map<number, ScannedElement[]>>();
+
 // Firefox direct SSE (no offscreen document needed)
 let directSSE: EventSource | null = null;
 
@@ -86,6 +93,7 @@ function scannedToGrammarRequest(elements: ScannedElement[]): GrammarRequest {
           selector: el.selector,
           id: '',
           position: fields.length,
+          codeword: el.codeword,
         });
         break;
       case 'tables':
@@ -94,6 +102,7 @@ function scannedToGrammarRequest(elements: ScannedElement[]): GrammarRequest {
           selector: el.selector,
           href: '',
           table_id: '',
+          codeword: el.codeword,
         });
         break;
       default:
@@ -101,6 +110,7 @@ function scannedToGrammarRequest(elements: ScannedElement[]): GrammarRequest {
           label: el.label,
           selector: el.selector,
           type: el.type,
+          codeword: el.codeword,
         });
         break;
     }
@@ -114,6 +124,27 @@ function scannedToGrammarRequest(elements: ScannedElement[]): GrammarRequest {
     table_id: '',
     bundle_id: browserBundleID,
   };
+}
+
+/** Record a frame's latest grammar; replaces any prior entry for that frame. */
+function recordFrameGrammar(tabId: number, frameId: number, elements: ScannedElement[]): void {
+  let perTab = tabGrammars.get(tabId);
+  if (!perTab) {
+    perTab = new Map();
+    tabGrammars.set(tabId, perTab);
+  }
+  perTab.set(frameId, elements);
+}
+
+/** Concat every frame's grammar for a tab. Insertion order = frame arrival. */
+function aggregateGrammarForTab(tabId: number): ScannedElement[] {
+  const perTab = tabGrammars.get(tabId);
+  if (!perTab) return [];
+  const out: ScannedElement[] = [];
+  for (const els of perTab.values()) {
+    out.push(...els);
+  }
+  return out;
 }
 
 async function pushGrammar(elements: ScannedElement[]): Promise<void> {
@@ -315,8 +346,15 @@ async function routeFrameForAction(tabId: number, message: Message): Promise<num
 
 chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   if (message.type === 'SCAN_RESULT') {
-    // Content script scanned the DOM — push grammar to plugin
-    pushGrammar(message.elements);
+    // Content script scanned the DOM. Record this frame's grammar, then
+    // push the tab-wide aggregate so multi-frame pages don't overwrite
+    // each other's elements at the voice plugin.
+    const tabId = _sender.tab?.id;
+    const frameId = _sender.frameId;
+    if (typeof tabId === 'number' && typeof frameId === 'number') {
+      recordFrameGrammar(tabId, frameId, message.elements);
+      pushGrammar(aggregateGrammarForTab(tabId));
+    }
     return false;
   }
 
@@ -382,15 +420,17 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   return false;
 });
 
-// Clear a tab's label pool when the tab is closed or starts navigating —
-// the content script reloads with no memory of its prior labels.
+// Clear a tab's label pool + per-frame grammar when the tab is closed or
+// starts navigating. Content scripts reload with no memory of prior state.
 chrome.tabs.onRemoved.addListener((tabId) => {
   clearStack(tabId).catch(() => {});
+  tabGrammars.delete(tabId);
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === 'loading') {
     clearStack(tabId).catch(() => {});
+    tabGrammars.delete(tabId);
   }
 });
 

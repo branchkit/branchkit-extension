@@ -6,7 +6,7 @@
  */
 
 import { Category, BadgeDisplayMode, ScannedElement, Message } from './types';
-import { assignLabels, isAlphabetLoaded, setAlphabet } from './words';
+import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from './words';
 import { scanElements, classifyCategory, buildSelector } from './scanner';
 import { ElementWrapper, WrapperStore } from './element-wrapper';
 import { HintBadge } from './hints';
@@ -27,6 +27,17 @@ let displayMode: BadgeDisplayMode = 'word';
 let lastGrammarHash = '';
 let pendingMutation = false;
 const MAX_BADGE_COUNT = 676; // No artificial cap; word pairs for >26
+
+// Codewords currently held from the per-tab pool. Released and re-claimed
+// on each scan so DOM mutations don't leak labels across renders. Kept
+// across hide/show cycles so the voice plugin's grammar (which is built
+// from pool codewords) stays valid even when badges aren't visible.
+let currentClaimedLabels: string[] = [];
+
+// Latest scan completion. showHints() awaits this so it can render badges
+// using codewords claimed during the in-flight scan, rather than racing
+// against a half-done assignment.
+let pendingScan: Promise<void> = Promise.resolve();
 
 // Voice category groups — maps voice trigger prefixes to element categories.
 // "set ape" targets the first input, "go ape" targets the first clickable, etc.
@@ -52,12 +63,15 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
       }
     }
     // BranchKit pushed a new alphabet — adopt it. Stays as the built-in
-    // fallback if the new value is malformed.
+    // fallback if the new value is malformed. Background regenerates the
+    // per-tab pool with the new alphabet; our prior codeword claims are
+    // stale (the assigned map has been wiped). Re-scan to claim afresh.
     if (changes.alphabet?.newValue) {
       setAlphabet(changes.alphabet.newValue);
-      if (hintsVisible) {
-        updateBadgeLabels();
-      }
+      currentClaimedLabels = []; // pool wiped server-side; don't double-release
+      doScan().then(() => {
+        if (hintsVisible) updateBadgeLabels();
+      });
     }
   });
 }
@@ -174,7 +188,48 @@ function viewportSort(wrappers: ElementWrapper[]): ElementWrapper[] {
     });
 }
 
-function doScan(): void {
+/**
+ * Claim N codewords from the per-tab pool. Returns up to N strings — fewer
+ * if the pool is partially exhausted, empty if the alphabet hasn't loaded.
+ * Pool is per-tab, shared across all frames; the background's assigned-map
+ * doubles as the routing table for voice actions.
+ */
+async function claimLabelsFromPool(count: number): Promise<string[]> {
+  if (count <= 0) return [];
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'CLAIM_LABELS', count });
+    return Array.isArray(response?.labels) ? response.labels : [];
+  } catch {
+    return [];
+  }
+}
+
+function releaseClaimedLabels(): void {
+  if (currentClaimedLabels.length === 0) return;
+  const toRelease = currentClaimedLabels;
+  currentClaimedLabels = [];
+  chrome.runtime.sendMessage({ type: 'RELEASE_LABELS', labels: toRelease })
+    .catch(() => {/* extension context may be invalidated */});
+}
+
+/**
+ * Convert a pool codeword string ("arch" or "rain bake") to the
+ * LabelAssignment shape the HintBadge renderer expects. Letter mapping
+ * comes from the words.ts WORD_TO_LETTER table populated when the
+ * alphabet was set; "?" only appears if the alphabet is mismatched.
+ */
+function poolLabelToAssignment(codeword: string): LabelAssignment {
+  const words = codeword.split(/\s+/).filter(w => w.length > 0);
+  const letter = words.map(w => WORD_TO_LETTER[w] ?? '?').join('');
+  return { words, letter, isSingle: words.length === 1 };
+}
+
+function doScan(): Promise<void> {
+  pendingScan = scanAndClaim();
+  return pendingScan;
+}
+
+async function scanAndClaim(): Promise<void> {
   // Check for site adapter
   const adapter = getActiveAdapter(window.location.href);
 
@@ -191,7 +246,20 @@ function doScan(): void {
     refs = result.refs;
   }
 
-  // Build wrappers
+  // Release any prior pool claims before claiming fresh ones — keeps the
+  // tab-wide pool from leaking codewords across rescans.
+  releaseClaimedLabels();
+
+  // Claim codewords from the per-tab pool. Pool returns up to N strings;
+  // any tail beyond the returned count gets no codeword and is excluded
+  // from the voice grammar (still hintable for keyboard, just not voice).
+  const claimed = await claimLabelsFromPool(elements.length);
+  currentClaimedLabels = [...claimed];
+  for (let i = 0; i < elements.length; i++) {
+    elements[i].codeword = i < claimed.length ? claimed[i] : '';
+  }
+
+  // Build wrappers (after codewords are stamped on the scanned elements)
   const wrappers: ElementWrapper[] = [];
   for (let i = 0; i < elements.length; i++) {
     wrappers.push(new ElementWrapper(refs[i], elements[i]));
@@ -199,15 +267,21 @@ function doScan(): void {
 
   store.set(wrappers);
 
-  // Push grammar to background (for BranchKit voice)
+  // Push grammar to background (for BranchKit voice). Codewords are now
+  // present on every voice-addressable element; voice plugin consumes
+  // them verbatim.
   pushGrammar();
 }
 
-function showHints(filter?: Category | Category[]): void {
+async function showHints(filter?: Category | Category[]): Promise<void> {
   if (!isAlphabetLoaded()) {
     console.warn('[BranchKit Browser] Hints unavailable: alphabet not loaded. Is BranchKit running?');
     return;
   }
+
+  // Wait for the most recent scan to finish so wrapper.scanned.codeword
+  // is populated before we try to render badges.
+  await pendingScan;
 
   // Determine which categories to show
   const categories: Category[] | null = filter
@@ -226,25 +300,27 @@ function showHints(filter?: Category | Category[]): void {
   const targets = viewportSort(allTargets);
   if (targets.length === 0) return;
 
-  const capped = targets.slice(0, MAX_BADGE_COUNT);
+  // Only render hints for elements that received a pool codeword.
+  // Elements without one wouldn't be voice-addressable and their badge
+  // would say "?" — better to leave them unhinted.
+  const renderable = targets
+    .slice(0, MAX_BADGE_COUNT)
+    .filter(w => w.scanned.codeword.length > 0);
 
-  // Assign labels
-  const labels = assignLabels(capped.length);
-
-  for (let i = 0; i < capped.length; i++) {
-    const wrapper = capped[i];
-    wrapper.label = labels[i];
+  for (const wrapper of renderable) {
+    const label = poolLabelToAssignment(wrapper.scanned.codeword);
+    wrapper.label = label;
 
     // Create badge if not exists
     if (!wrapper.hint) {
       wrapper.hint = new HintBadge(
         wrapper.element,
-        labels[i],
+        label,
         wrapper.category,
         displayMode,
       );
     } else {
-      wrapper.hint.updateLabel(labels[i], displayMode);
+      wrapper.hint.updateLabel(label, displayMode);
     }
 
     wrapper.hint.show();

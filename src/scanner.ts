@@ -138,6 +138,7 @@ export function scanElements(root: Document | Element = document): { elements: S
       category,
       type: el.tagName.toLowerCase(),
       adapter: null,
+      codeword: '', // assigned later by doScan via the per-tab label pool
     });
     refs.push(el);
   }

@@ -86,6 +86,7 @@ export function scanWithAdapter(adapter: SiteAdapter): { elements: ScannedElemen
         category: classifyCategory(el),
         type: el.tagName.toLowerCase(),
         adapter: adapter.name,
+        codeword: '',
       });
       refs.push(el);
     }
