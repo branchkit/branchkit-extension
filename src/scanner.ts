@@ -108,6 +108,38 @@ function isVisible(el: Element): boolean {
 }
 
 /**
+ * Cheap predicate: does this element pass every gate `scanElements` applies?
+ * Used by the MutationObserver to recompute hintability when an element's
+ * attributes change (e.g. `disabled` toggling) without rebuilding the
+ * world. Mirrors the per-element checks in `scanElements`.
+ */
+export function isHintable(el: Element): boolean {
+  if (!el.matches(HINTABLE_SELECTOR)) return false;
+  if (el.matches(EXCLUDE_SELECTOR)) return false;
+  if (el.closest('[data-branchkit-hint]')) return false;
+  if (!isVisible(el)) return false;
+  return true;
+}
+
+/**
+ * Build a `ScannedElement` for a single element, or `null` if the element
+ * isn't hintable. Same outputs as one iteration of `scanElements`'s loop —
+ * exposed so the MutationObserver can produce a wrapper for a freshly
+ * inserted node without re-scanning the document.
+ */
+export function scanSingle(el: Element): ScannedElement | null {
+  if (!isHintable(el)) return null;
+  return {
+    label: getElementLabel(el),
+    selector: buildSelector(el),
+    category: classifyCategory(el),
+    type: el.tagName.toLowerCase(),
+    adapter: null,
+    codeword: '',
+  };
+}
+
+/**
  * Scan the DOM for all hintable elements.
  * Returns ScannedElement[] sorted by DOM order.
  */

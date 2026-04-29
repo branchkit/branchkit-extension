@@ -7,7 +7,7 @@
 
 import { Category, BadgeDisplayMode, ScannedElement, Message } from './types';
 import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from './words';
-import { scanElements, classifyCategory, buildSelector } from './scanner';
+import { scanElements, scanSingle, isHintable } from './scanner';
 import { ElementWrapper, WrapperStore } from './element-wrapper';
 import { HintBadge } from './hints';
 import { ActionDispatcher, CommandRegistry } from './dispatcher';
@@ -515,32 +515,167 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
   keyHandler.handleKeyDown(e);
 }, true); // capture phase
 
-// --- MutationObserver (debounced rescan) ---
+// --- MutationObserver (discovery-only) ---
+//
+// Sprint B-1: the observer no longer triggers a full rescan. It surgically
+// reflects DOM changes into the wrapper store: new subtrees gain wrappers
+// (without pool codewords — those are claimed by Sprint B-2's
+// IntersectionObserver), removed subtrees lose theirs, and attribute
+// changes can flip an element in or out of hintability. Grammar push is
+// debounced after a batch settles so voice sees a consistent snapshot.
+//
+// Beyond the HUGE_MUTATIONS_COUNT threshold (DarkReader's pattern), we
+// stop processing nodes individually and just queue a coarse refresh.
+// Slack and Linear regularly trip 1000+ mutations per scroll event.
 
-let mutationTimer: ReturnType<typeof setTimeout> | null = null;
+const HUGE_MUTATIONS_COUNT = 1000;
+const HUGE_MUTATION_IDLE_MS = 50;
+const GRAMMAR_PUSH_DEBOUNCE_MS = 120;
 
-const observer = new MutationObserver((_mutations) => {
-  // Skip our own mutations (badge add/remove)
-  const isOwnMutation = (n: Node) =>
-    n instanceof HTMLElement && n.hasAttribute('data-branchkit-hint');
-  if (_mutations.every(m =>
-    m.type === 'childList' &&
-    Array.from(m.addedNodes).every(isOwnMutation) &&
-    Array.from(m.removedNodes).every(isOwnMutation)
-  )) return;
+let pushTimer: ReturnType<typeof setTimeout> | null = null;
+let hugeMutationTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // Don't rescan while hints are visible — grammar replacement mid-interaction
-  // would change codeword assignments while the user is speaking commands.
-  // hideHints() will trigger a catch-up rescan if mutations occurred.
+function schedulePushGrammar(): void {
+  if (pushTimer) clearTimeout(pushTimer);
+  pushTimer = setTimeout(() => {
+    pushTimer = null;
+    pushGrammar();
+  }, GRAMMAR_PUSH_DEBOUNCE_MS);
+}
+
+function isOwnMutation(n: Node): boolean {
+  return n instanceof HTMLElement && n.hasAttribute('data-branchkit-hint');
+}
+
+/** Walk an added subtree and create wrappers for any hintable descendants. */
+function discoverInSubtree(root: Element): number {
+  let added = 0;
+  const { elements, refs } = scanElements(root);
+  for (let i = 0; i < elements.length; i++) {
+    if (store.findWrapperFor(refs[i])) continue;
+    store.addWrapper(new ElementWrapper(refs[i], elements[i]));
+    added++;
+  }
+  return added;
+}
+
+/**
+ * Drop wrappers whose element has been disconnected from the DOM.
+ * Cheaper than diffing removedNodes subtrees individually — we just
+ * sweep the (small) store and check `.isConnected`.
+ */
+function dropDisconnectedWrappers(): number {
+  let removed = 0;
+  // Iterate a copy so we can mutate `store` mid-loop.
+  for (const w of [...store.all]) {
+    if (!w.element.isConnected) {
+      store.removeWrapperByElement(w.element);
+      removed++;
+    }
+  }
+  return removed;
+}
+
+/**
+ * Recompute hintability for an element whose attributes changed. Adds,
+ * removes, or refreshes its wrapper as needed. Returns true if the store
+ * was modified.
+ */
+function reevaluateAttribute(target: Element): boolean {
+  const existing = store.findWrapperFor(target);
+  const hintable = isHintable(target);
+  if (existing && !hintable) {
+    store.removeWrapperByElement(target);
+    return true;
+  }
+  if (!existing && hintable) {
+    const scanned = scanSingle(target);
+    if (!scanned) return false;
+    store.addWrapper(new ElementWrapper(target, scanned));
+    return true;
+  }
+  if (existing && hintable) {
+    // Refresh scanned metadata (label/category/selector). Codeword stays.
+    const refreshed = scanSingle(target);
+    if (refreshed) {
+      refreshed.codeword = existing.scanned.codeword;
+      existing.scanned = refreshed;
+    }
+    return true;
+  }
+  return false;
+}
+
+function processMutations(records: MutationRecord[]): void {
+  let dirty = false;
+  let sawRemoval = false;
+
+  for (const m of records) {
+    if (m.type === 'childList') {
+      for (const node of m.addedNodes) {
+        if (isOwnMutation(node)) continue;
+        if (node instanceof Element) {
+          if (discoverInSubtree(node) > 0) dirty = true;
+        }
+      }
+      for (const node of m.removedNodes) {
+        if (isOwnMutation(node)) continue;
+        if (node instanceof Element) {
+          sawRemoval = true;
+        }
+      }
+    } else if (m.type === 'attributes') {
+      const target = m.target;
+      if (target instanceof Element && !isOwnMutation(target)) {
+        if (reevaluateAttribute(target)) dirty = true;
+      }
+    }
+  }
+
+  // Removals are handled in bulk: the moved/removed subtree's descendants
+  // would be tedious to diff one by one, but `.isConnected` answers it
+  // for free.
+  if (sawRemoval && dropDisconnectedWrappers() > 0) dirty = true;
+
+  if (dirty) schedulePushGrammar();
+}
+
+const observer = new MutationObserver((records) => {
+  // Hints are visible — defer DOM-driven changes so codeword assignments
+  // don't shuffle mid-interaction. hideHints() flushes via doScan().
   if (hintsVisible) {
     pendingMutation = true;
     return;
   }
 
-  if (mutationTimer) clearTimeout(mutationTimer);
-  mutationTimer = setTimeout(() => {
-    doScan();
-  }, 300);
+  // Filter our own mutations early so the threshold isn't tripped by
+  // badge mount/unmount churn.
+  const foreign = records.filter(m => {
+    if (m.type === 'childList') {
+      const allOwnAdded = Array.from(m.addedNodes).every(isOwnMutation);
+      const allOwnRemoved = Array.from(m.removedNodes).every(isOwnMutation);
+      return !(allOwnAdded && allOwnRemoved);
+    }
+    return !isOwnMutation(m.target);
+  });
+  if (foreign.length === 0) return;
+
+  if (foreign.length >= HUGE_MUTATIONS_COUNT) {
+    // Mutation storm (Slack message virtualization, Linear list churn).
+    // Skip per-record work; coalesce into a coarse sweep once the storm
+    // subsides. We still pick up adds/removes via dropDisconnectedWrappers
+    // and a fresh document scan, but without iterating every record.
+    if (hugeMutationTimer) clearTimeout(hugeMutationTimer);
+    hugeMutationTimer = setTimeout(() => {
+      hugeMutationTimer = null;
+      const removed = dropDisconnectedWrappers();
+      const added = discoverInSubtree(document.body || document.documentElement);
+      if (removed > 0 || added > 0) schedulePushGrammar();
+    }, HUGE_MUTATION_IDLE_MS);
+    return;
+  }
+
+  processMutations(foreign);
 });
 
 observer.observe(document.body || document.documentElement, {
