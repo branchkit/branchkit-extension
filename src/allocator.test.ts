@@ -8,13 +8,15 @@
  * Run: npm test
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   HintCandidate,
   HintRect,
+  Metric,
   Point,
   rankByDistance,
   getRankedCandidates,
+  maxByFirstDiffering,
 } from './allocator';
 
 function rect(left: number, top: number, width = 10, height = 10): HintRect {
@@ -133,5 +135,92 @@ describe('getRankedCandidates', () => {
     const withoutOld = cand('without', rect(10, 10));
     const result = getRankedCandidates([withOld, withoutOld], focus);
     expect(result.map(c => c.id)).toEqual(['without', 'with']);
+  });
+});
+
+describe('maxByFirstDiffering', () => {
+  it('returns undefined for empty input', () => {
+    expect(maxByFirstDiffering([], [])).toBeUndefined();
+    expect(maxByFirstDiffering<number>([], [n => n])).toBeUndefined();
+  });
+
+  it('returns the only item without evaluating any metric on single-item input', () => {
+    const ranker = vi.fn((n: number) => n);
+    expect(maxByFirstDiffering([42], [ranker])).toBe(42);
+    expect(ranker).not.toHaveBeenCalled();
+  });
+
+  it('returns the first item when no metrics are supplied', () => {
+    expect(maxByFirstDiffering([3, 1, 2], [])).toBe(3);
+  });
+
+  it('picks the unique max under one metric', () => {
+    expect(maxByFirstDiffering([1, 5, 3], [n => n])).toBe(5);
+  });
+
+  it('breaks a tie using the next metric', () => {
+    type Item = { a: number; b: number };
+    const items: Item[] = [
+      { a: 5, b: 1 },
+      { a: 5, b: 9 }, // wins on second metric
+      { a: 3, b: 99 }, // dropped after first metric
+    ];
+    const metrics: Metric<Item>[] = [x => x.a, x => x.b];
+    expect(maxByFirstDiffering(items, metrics)).toBe(items[1]);
+  });
+
+  it('returns the first remaining item when every metric ties', () => {
+    type Item = { a: number; b: number };
+    const items: Item[] = [
+      { a: 1, b: 1 },
+      { a: 1, b: 1 },
+      { a: 0, b: 0 }, // dropped after first metric
+    ];
+    const metrics: Metric<Item>[] = [x => x.a, x => x.b];
+    // First two items tie on every metric; the helper returns the
+    // earliest-indexed survivor. The third is filtered out by the
+    // first metric.
+    expect(maxByFirstDiffering(items, metrics)).toBe(items[0]);
+  });
+
+  it('does not evaluate later metrics once a single survivor is found', () => {
+    const first = vi.fn((n: number) => n);
+    const second = vi.fn((n: number) => n);
+    maxByFirstDiffering([1, 2, 3], [first, second]);
+    expect(first).toHaveBeenCalledTimes(3);
+    expect(second).not.toHaveBeenCalled();
+  });
+
+  it('higher score wins (not lower)', () => {
+    // Caller convention: negate to prefer smaller values.
+    const items = [{ cost: 10 }, { cost: 1 }, { cost: 5 }];
+    const cheapest = maxByFirstDiffering(items, [x => -x.cost]);
+    expect(cheapest).toBe(items[1]);
+  });
+
+  it('does not mutate the input arrays', () => {
+    const items = [3, 1, 2];
+    const itemsCopy = [...items];
+    const metrics: Metric<number>[] = [n => n];
+    const metricsCopy = [...metrics];
+    maxByFirstDiffering(items, metrics);
+    expect(items).toEqual(itemsCopy);
+    expect(metrics).toEqual(metricsCopy);
+  });
+
+  it('handles a multi-metric narrowing chain', () => {
+    // Three metrics, three narrowing steps: first metric keeps two
+    // candidates, second keeps two (different ones from the first
+    // pair would have, but the kept set carries forward), third
+    // breaks the final tie.
+    type Item = { a: number; b: number; c: number; tag: string };
+    const items: Item[] = [
+      { a: 9, b: 9, c: 1, tag: 'A' },   // ties on a, ties on b, loses on c
+      { a: 9, b: 9, c: 9, tag: 'B' },   // wins
+      { a: 9, b: 1, c: 9, tag: 'C' },   // dropped after b
+      { a: 1, b: 9, c: 9, tag: 'D' },   // dropped after a
+    ];
+    const winner = maxByFirstDiffering(items, [x => x.a, x => x.b, x => x.c]);
+    expect(winner?.tag).toBe('B');
   });
 });

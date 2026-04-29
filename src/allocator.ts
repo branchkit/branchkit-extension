@@ -131,3 +131,55 @@ export function rankByDistance(focus: Point): (a: HintCandidate, b: HintCandidat
 export function getRankedCandidates(candidates: HintCandidate[], focus: Point): HintCandidate[] {
   return [...candidates].sort(rankByDistance(focus));
 }
+
+/**
+ * A scoring function over `T`. Convention: **higher is better.** The
+ * chooser narrows on the maximum value at each step. To prefer a
+ * smaller raw value (e.g. fewer syllables), return its negation.
+ */
+export type Metric<T> = (item: T) => number;
+
+/**
+ * Lexicographic chooser: given a list of items and a stack of metrics,
+ * walks the metrics in order, narrowing candidates at each step to
+ * those tied for the max value. Returns the unique survivor, or any
+ * one of the remaining items if all metrics tie through.
+ *
+ * Mirrors Cursorless's `maxByFirstDiffering`
+ * (`packages/lib-engine/src/util/allocateHats/maxByFirstDiffering.ts`).
+ *
+ * Sprint C ships rank-and-pair, where the metric stack is mostly a
+ * no-op; this helper is in place so the chooser can be promoted to a
+ * full multi-metric allocator later (DESIGN §2 Layer B) by adding
+ * metrics to the stack — no caller-side rewrite.
+ *
+ * Pure: does not mutate `items` or `metrics`. Stops evaluating
+ * metrics as soon as a single survivor remains, so later metrics
+ * pay no cost when an earlier one already decides.
+ */
+export function maxByFirstDiffering<T>(
+  items: readonly T[],
+  metrics: readonly Metric<T>[],
+): T | undefined {
+  if (items.length === 0) return undefined;
+  if (items.length === 1) return items[0];
+
+  let candidates: readonly T[] = items;
+  for (const metric of metrics) {
+    const scores = candidates.map(metric);
+    let max = scores[0];
+    for (let i = 1; i < scores.length; i++) {
+      if (scores[i] > max) max = scores[i];
+    }
+    const survivors: T[] = [];
+    for (let i = 0; i < candidates.length; i++) {
+      if (scores[i] === max) survivors.push(candidates[i]);
+    }
+    if (survivors.length === 1) return survivors[0];
+    candidates = survivors;
+  }
+  // Ties through every metric — the items are indistinguishable to the
+  // chooser. Return the first survivor, which (since the loop preserves
+  // input order at every filter) corresponds to the caller's input order.
+  return candidates[0];
+}
