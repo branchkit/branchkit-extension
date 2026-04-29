@@ -10,7 +10,11 @@ import { Category, CATEGORY_COLORS, BadgeDisplayMode } from './types';
 import { LabelAssignment, labelToDisplay } from './words';
 
 export class HintBadge {
-  private host: HTMLDivElement;
+  // Host is public so an external rescuer (content.ts's body
+  // childList observer) can re-append it after a page-driven
+  // removal. The shadow root inside is still closed; the page can
+  // remove the host from body but can't peek at its contents.
+  public readonly host: HTMLDivElement;
   private shadow: ShadowRoot;
   private outer: HTMLDivElement;
   private inner: HTMLDivElement;

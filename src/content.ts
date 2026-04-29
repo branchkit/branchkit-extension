@@ -261,6 +261,44 @@ function detachWrapper(element: Element): void {
 }
 
 /**
+ * Body-level safety net for badges that get yanked by hostile page
+ * scripts. Some sites (Baidu, occasional Google products) enumerate
+ * body and remove "unknown" nodes; without this rescue, our badges
+ * would silently disappear and voice/keyboard activation would still
+ * try to operate on them.
+ *
+ * Distinguishing intentional vs. page-driven removal: by the time this
+ * MO fires, intentional removals have already cleared `wrapper.hint`
+ * (HintBadge.remove → wrapper.hint = null in the calling code). If
+ * `store.all.find` still claims a wrapper that owns the removed host,
+ * the removal was page-driven. Re-append.
+ *
+ * Body-only childList observation is intentionally narrow: every body
+ * mutation fires this MO, but each callback's work is bounded by the
+ * removedNodes count and a one-pass store walk per matched host.
+ */
+const badgeReattachObserver = new MutationObserver((records) => {
+  for (const r of records) {
+    if (r.type !== 'childList' || r.removedNodes.length === 0) continue;
+    for (const removed of r.removedNodes) {
+      if (!(removed instanceof HTMLElement)) continue;
+      if (!removed.hasAttribute('data-branchkit-hint')) continue;
+      const wrapper = store.all.find(w => w.hint?.host === removed);
+      if (!wrapper?.hint) continue;
+      const parent = document.body || document.documentElement;
+      if (!parent) continue;
+      parent.appendChild(removed);
+      wrapper.hint.reposition();
+    }
+  }
+});
+
+function startBadgeReattachObserver(): void {
+  const target = document.body || document.documentElement;
+  if (target) badgeReattachObserver.observe(target, { childList: true });
+}
+
+/**
  * Full re-discovery of hintable elements in the document. Idempotent:
  * already-known elements keep their wrappers (and codewords); newly
  * discovered elements get fresh wrappers; elements no longer in the DOM
@@ -690,6 +728,8 @@ observer.observe(document.body || document.documentElement, {
   attributes: true,
   attributeFilter: ['disabled', 'aria-hidden', 'role', 'contenteditable', 'href'],
 });
+
+startBadgeReattachObserver();
 
 // --- Initial Scan ---
 
