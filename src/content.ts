@@ -600,6 +600,10 @@ function discoverInSubtree(root: Element): number {
     attachWrapper(new ElementWrapper(refs[i], elements[i]));
     added++;
   }
+  // New custom-element instances inside this subtree may not be
+  // upgraded yet. Watch their tags so when whenDefined resolves we
+  // re-discover the (now-shadow-bearing) instances.
+  watchUndefinedCustomElements(root);
   return added;
 }
 
@@ -731,10 +735,80 @@ observer.observe(document.body || document.documentElement, {
 
 startBadgeReattachObserver();
 
+// --- Dynamic shadow detection ---
+//
+// Static deepQuerySelectorAll only sees shadow roots that exist at scan
+// time. Sites that lazy-mount custom elements (GitHub PR review threads,
+// modern Slack, ChatGPT message list) attach shadow roots after first
+// paint — without observing those events, their interactive surfaces
+// stay invisible to the hint system.
+//
+// Two layers, per `notes/DESIGN_BROWSER_FRAMES_AND_OBSERVERS.md` §3:
+//
+//   1. attachShadow MAIN-world wrapper (in `bootstrap.ts`) dispatches a
+//      bubbling, composed CustomEvent before the native call. The
+//      listener below queues a microtask so we read `.shadowRoot` after
+//      the native attach has completed, then discoverInSubtree walks
+//      the new shadow content.
+//
+//   2. customElements.whenDefined for tags we've seen in :not(:defined)
+//      state. When a tag is upgraded, every instance with that tag may
+//      gain a shadow root; re-discover them. We track tags (not
+//      elements) to avoid duplicate watchers.
+//
+// Layer 3 (HUGE_MUTATIONS_COUNT short-circuit) is already wired into
+// the global MutationObserver above.
+
+// Must match the string in `src/bootstrap.ts`. The two scripts live in
+// different worlds (MAIN vs ISOLATED) and bundle independently, so the
+// constant can't be shared via import.
+const SHADOW_EVENT = '__branchkit__shadow_attached';
+
+document.addEventListener(SHADOW_EVENT, (event) => {
+  const host = event.target;
+  if (!(host instanceof Element)) return;
+  // The bootstrap fires the event *before* the native attach — the
+  // shadow root isn't there yet. Defer one microtask so .shadowRoot
+  // reflects post-attach state.
+  queueMicrotask(() => {
+    if (host.shadowRoot) {
+      const added = discoverInSubtree(host);
+      if (added > 0) schedulePushGrammar();
+    }
+  });
+}, true);
+
+const watchedUndefinedTags = new Set<string>();
+
+function watchUndefinedCustomElements(root: Element | Document): void {
+  // :not(:defined) only matches custom elements (hyphenated tags) that
+  // haven't been registered yet. Plain HTML tags are always "defined."
+  let undefinedEls: NodeListOf<Element>;
+  try {
+    undefinedEls = root.querySelectorAll(':not(:defined)');
+  } catch {
+    return;
+  }
+  for (const el of undefinedEls) {
+    const tag = el.tagName.toLowerCase();
+    if (!tag.includes('-')) continue;
+    if (watchedUndefinedTags.has(tag)) continue;
+    watchedUndefinedTags.add(tag);
+    customElements.whenDefined(tag).then(() => {
+      let dirty = false;
+      for (const instance of document.querySelectorAll(tag)) {
+        if (discoverInSubtree(instance) > 0) dirty = true;
+      }
+      if (dirty) schedulePushGrammar();
+    }).catch(() => {/* whenDefined rejects on invalid tag names */});
+  }
+}
+
 // --- Initial Scan ---
 
 // Scan on load to push initial grammar
 doScan();
+watchUndefinedCustomElements(document);
 
 // Expose for console debugging
 (window as any).branchkitShowHints = () => { doScan(); showHints(); };

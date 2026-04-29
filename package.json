@@ -4,8 +4,8 @@
   "description": "BranchKit Browser — voice-navigable hint badges",
   "scripts": {
     "build": "npm run clean && npm run bundle && npm run copy-static",
-    "bundle": "esbuild src/content.ts --bundle --format=iife --outfile=dist/content.js && esbuild src/background.ts --bundle --format=esm --outfile=dist/background.js && esbuild src/offscreen.ts --bundle --format=iife --outfile=dist/offscreen.js && esbuild src/popup.ts --bundle --format=iife --outfile=dist/popup.js",
-    "watch": "npm run clean && mkdir -p dist && npm run copy-static && esbuild src/content.ts --bundle --format=iife --outfile=dist/content.js --watch & esbuild src/background.ts --bundle --format=esm --outfile=dist/background.js --watch & esbuild src/offscreen.ts --bundle --format=iife --outfile=dist/offscreen.js --watch & esbuild src/popup.ts --bundle --format=iife --outfile=dist/popup.js --watch",
+    "bundle": "esbuild src/content.ts --bundle --format=iife --outfile=dist/content.js && esbuild src/bootstrap.ts --bundle --format=iife --outfile=dist/bootstrap.js && esbuild src/background.ts --bundle --format=esm --outfile=dist/background.js && esbuild src/offscreen.ts --bundle --format=iife --outfile=dist/offscreen.js && esbuild src/popup.ts --bundle --format=iife --outfile=dist/popup.js",
+    "watch": "npm run clean && mkdir -p dist && npm run copy-static && esbuild src/content.ts --bundle --format=iife --outfile=dist/content.js --watch & esbuild src/bootstrap.ts --bundle --format=iife --outfile=dist/bootstrap.js --watch & esbuild src/background.ts --bundle --format=esm --outfile=dist/background.js --watch & esbuild src/offscreen.ts --bundle --format=iife --outfile=dist/offscreen.js --watch & esbuild src/popup.ts --bundle --format=iife --outfile=dist/popup.js --watch",
     "clean": "rm -rf dist",
     "copy-static": "cp manifest.json dist/ && cp offscreen.html dist/ && cp popup.html dist/ && cp -r icons dist/",
     "test": "vitest run",
