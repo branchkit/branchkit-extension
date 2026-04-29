@@ -11,6 +11,11 @@ import { scanElements, scanSingle, isHintable } from './scanner';
 import { ElementWrapper, WrapperStore } from './element-wrapper';
 import { IntersectionTracker } from './intersection-tracker';
 import { HintBadge } from './hints';
+import {
+  CodewordSnapshot,
+  takeSnapshot,
+  resolveFromSnapshot,
+} from './snapshot';
 import { ActionDispatcher, CommandRegistry } from './dispatcher';
 import { KeyHandler } from './keyboard';
 import { getActiveAdapter, scanWithAdapter } from './adapters/index';
@@ -31,6 +36,13 @@ let displayMode: BadgeDisplayMode = 'word';
 let lastGrammarHash = '';
 let pendingMutation = false;
 const MAX_BADGE_COUNT = 676; // No artificial cap; word pairs for >26
+
+// Pre-phrase snapshot. Captured when the voice plugin signals a verb
+// prefix (show_hints_go / show_hints_set / show_hints_tables) so the
+// codeword the user speaks resolves to the wrapper they SAW at speech
+// start, even if the page has mutated by the time the action arrives.
+// See src/snapshot.ts and DESIGN_BROWSER_HINT_ALLOCATOR.md §3.C.
+let phraseSnapshot: CodewordSnapshot | null = null;
 
 // Voice category groups — maps voice trigger prefixes to element categories.
 // "set ape" targets the first input, "go ape" targets the first clickable, etc.
@@ -498,13 +510,22 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
     // Voice actions show category-specific hints (not all elements).
     // Each voice group gets its own label pool matching the grammar's
     // per-category codeword assignment.
+    //
+    // The verb-prefix actions are also our snapshot trigger: the user
+    // has said the verb and is about to say the codeword. Freezing the
+    // codeword → wrapper map here means the action that follows will
+    // resolve to what the user SAW, not what the DOM looks like by
+    // the time the second word lands.
     if (action === 'show_hints' || action === 'show_hints_set') {
+      phraseSnapshot = takeSnapshot(store.all, performance.now());
       doScan();
       showHints(VOICE_GROUP_SET);
     } else if (action === 'show_hints_go') {
+      phraseSnapshot = takeSnapshot(store.all, performance.now());
       doScan();
       showHints(VOICE_GROUP_GO);
     } else if (action === 'show_hints_tables') {
+      phraseSnapshot = takeSnapshot(store.all, performance.now());
       doScan();
       showHints(VOICE_GROUP_TABLES);
     } else if (action === 'rescan') {
@@ -514,19 +535,49 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
     } else if (action === 'set_badge_mode' && params?.mode) {
       chrome.storage.sync.set({ badgeDisplayMode: params.mode });
     } else if (action === 'click' || action === 'navigate' || action === 'set_value') {
-      // Voice command with selector — find and activate
-      const selector = params?.selector;
-      if (selector) {
-        const el = document.querySelector(selector) as HTMLElement;
-        if (el) {
-          hideHints();
-          if (action === 'set_value') {
-            el.focus();
-            el.style.outline = '2px solid #007AFF';
-            setTimeout(() => { el.style.outline = ''; }, 3000);
-          } else {
-            el.click();
-          }
+      // Voice command resolution, three-tier fallback:
+      //
+      //  1. Pre-phrase snapshot. If a verb prefix arrived recently
+      //     (show_hints_go / set / tables), the user-seen codeword
+      //     mapping is frozen there. This is the path that protects
+      //     against DOM mutations between speech-start and action-arrival.
+      //
+      //  2. Live store. The page might have just mutated; the wrapper
+      //     for this codeword has the up-to-date element.
+      //
+      //  3. Voice-plugin selector. Last resort — the plugin already
+      //     resolved codeword → selector at grammar push time. Stale
+      //     in the worst case but better than nothing.
+      const codeword = params?.codeword;
+      let target: Element | null = null;
+
+      if (codeword) {
+        const fromSnapshot = resolveFromSnapshot(
+          phraseSnapshot, codeword, performance.now(),
+        );
+        if (fromSnapshot) {
+          target = fromSnapshot.element;
+        } else {
+          const words = codeword.split(/\s+/).filter(w => w.length > 0);
+          const live = words.length === 2
+            ? store.byLabelPair(words[0], words[1])
+            : (words.length === 1 ? store.byLabel(words[0]) : undefined);
+          if (live) target = live.element;
+        }
+      }
+
+      if (!target && params?.selector) {
+        target = document.querySelector(params.selector);
+      }
+
+      if (target instanceof HTMLElement) {
+        hideHints();
+        if (action === 'set_value') {
+          target.focus();
+          target.style.outline = '2px solid #007AFF';
+          setTimeout(() => { target!.style.outline = ''; }, 3000);
+        } else {
+          target.click();
         }
       }
     }
