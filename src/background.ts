@@ -26,6 +26,24 @@ let branchkitConnected = false;
 // See notes/DESIGN_BROWSER_GRAMMAR_PROTOCOL.md §4.
 const tabGrammars = new Map<number, Map<number, ScannedElement[]>>();
 
+// Debounced push timers per tab. Mutation-heavy pages (Slack, Linear) can
+// fire 10+ SCAN_RESULTs/sec across frames; without a coalescing window
+// we'd hammer the voice plugin's /grammar endpoint. 120ms is short enough
+// to feel snappy on first-render and long enough to absorb a mutation
+// burst from a single user action (typing into a search field, etc.).
+const aggregateTimers = new Map<number, ReturnType<typeof setTimeout>>();
+const AGGREGATE_DEBOUNCE_MS = 120;
+
+function schedulePushForTab(tabId: number): void {
+  const existing = aggregateTimers.get(tabId);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(() => {
+    aggregateTimers.delete(tabId);
+    pushGrammar(aggregateGrammarForTab(tabId));
+  }, AGGREGATE_DEBOUNCE_MS);
+  aggregateTimers.set(tabId, timer);
+}
+
 // Firefox direct SSE (no offscreen document needed)
 let directSSE: EventSource | null = null;
 
@@ -57,6 +75,14 @@ function storeAlphabet(words: string[]): void {
   if (words.some(w => typeof w !== 'string' || w.length === 0)) return;
   chrome.storage.local.set({ alphabet: words })
     .then(() => regenerateAllStacks())
+    .then(() => {
+      // Drop every tab's cached grammar — entries reference codewords
+      // from the prior alphabet. Frames will re-trigger doScan via the
+      // alphabet onChanged listener and repopulate the map cleanly.
+      tabGrammars.clear();
+      for (const timer of aggregateTimers.values()) clearTimeout(timer);
+      aggregateTimers.clear();
+    })
     .catch(err => console.error('[BranchKit BG] alphabet store error:', err));
 }
 
@@ -364,7 +390,7 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     const frameId = _sender.frameId;
     if (typeof tabId === 'number' && typeof frameId === 'number') {
       recordFrameGrammar(tabId, frameId, message.elements);
-      pushGrammar(aggregateGrammarForTab(tabId));
+      schedulePushForTab(tabId);
     }
     return false;
   }
@@ -431,18 +457,23 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   return false;
 });
 
-// Clear a tab's label pool + per-frame grammar when the tab is closed or
-// starts navigating. Content scripts reload with no memory of prior state.
-chrome.tabs.onRemoved.addListener((tabId) => {
+// Clear a tab's label pool + per-frame grammar + pending push timer when
+// the tab is closed or starts navigating. Content scripts reload with no
+// memory of prior state.
+function purgeTab(tabId: number): void {
   clearStack(tabId).catch(() => {});
   tabGrammars.delete(tabId);
-});
+  const timer = aggregateTimers.get(tabId);
+  if (timer) {
+    clearTimeout(timer);
+    aggregateTimers.delete(tabId);
+  }
+}
+
+chrome.tabs.onRemoved.addListener(purgeTab);
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status === 'loading') {
-    clearStack(tabId).catch(() => {});
-    tabGrammars.delete(tabId);
-  }
+  if (changeInfo.status === 'loading') purgeTab(tabId);
 });
 
 // --- Startup ---

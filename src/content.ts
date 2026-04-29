@@ -225,7 +225,13 @@ function poolLabelToAssignment(codeword: string): LabelAssignment {
 }
 
 function doScan(): Promise<void> {
-  pendingScan = scanAndClaim();
+  // Chain new scans behind the prior one. Two scans firing close together
+  // (mutation observer + alphabet onChanged) would otherwise both read
+  // the same currentClaimedLabels, both claim, and both write — leaking
+  // the first scan's labels in the pool's `assigned` map. Serializing
+  // ensures each scan's release-then-claim runs to completion before the
+  // next starts.
+  pendingScan = pendingScan.then(scanAndClaim, scanAndClaim);
   return pendingScan;
 }
 
@@ -398,8 +404,10 @@ function pushGrammar(): void {
     }
   }
 
-  // Hash-based deduplication
-  const hash = elements.map(e => e.selector + e.category).join('|');
+  // Hash-based deduplication. Includes codeword so an alphabet regen that
+  // produces the same elements but different codewords still re-pushes —
+  // otherwise the voice plugin would keep using stale codewords.
+  const hash = elements.map(e => `${e.selector}|${e.category}|${e.codeword}`).join('\x1f');
   if (hash === lastGrammarHash) return;
   lastGrammarHash = hash;
 

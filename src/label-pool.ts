@@ -146,8 +146,14 @@ export async function getFrameForLabel(tabId: number, label: string): Promise<nu
 }
 
 /**
- * Release every label held by a specific frame. Called when a frame is
- * removed (navigation, iframe destruction).
+ * Release every label held by a specific frame. Should be called when a
+ * frame is detached without the whole tab going away (e.g. iframe
+ * removed from the DOM). Currently NOT wired — Chrome's only signal for
+ * this without `webNavigation` permission is unreliable. Frames that
+ * detach mid-page leak their codewords until the tab closes; in practice
+ * this is rare and bounded by the 251-label pool capacity. Wiring this
+ * up is a Sprint B task once the manifest gains `webNavigation` access
+ * for IntersectionObserver gating.
  */
 export async function releaseFrame(tabId: number, frameId: number): Promise<void> {
   return withTabLock(tabId, async () => {
@@ -181,6 +187,11 @@ export async function clearStack(tabId: number): Promise<void> {
  * Regenerate every active stack with a new alphabet. Called when the voice
  * plugin pushes an updated alphabet — old codewords are invalid. All
  * frames will re-claim labels on their next scan.
+ *
+ * Each tab's reset goes through its own withTabLock so an in-flight
+ * claim or release can't race the regeneration and overwrite the new
+ * pool with stale state. Tabs regenerate in parallel, but each tab's
+ * regenerate-then-anyone-else order is preserved.
  */
 export async function regenerateAllStacks(): Promise<void> {
   const alphabet = await getAlphabet();
@@ -189,13 +200,16 @@ export async function regenerateAllStacks(): Promise<void> {
   if (!newPool) return;
 
   const all = await chrome.storage.session.get();
-  const updates: Record<string, LabelStack> = {};
-  for (const key of Object.keys(all)) {
-    if (key.startsWith('labelStack:')) {
-      updates[key] = { free: [...newPool], assigned: {} };
-    }
-  }
-  if (Object.keys(updates).length > 0) {
-    await chrome.storage.session.set(updates);
-  }
+  const tabIds = Object.keys(all)
+    .filter(k => k.startsWith('labelStack:'))
+    .map(k => Number.parseInt(k.slice('labelStack:'.length), 10))
+    .filter(n => Number.isFinite(n));
+
+  await Promise.all(tabIds.map(tabId =>
+    withTabLock(tabId, async () => {
+      await chrome.storage.session.set({
+        [storageKey(tabId)]: { free: [...newPool], assigned: {} },
+      });
+    })
+  ));
 }
