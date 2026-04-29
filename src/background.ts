@@ -332,13 +332,24 @@ async function notifyActiveTab(message: Message): Promise<void> {
  * frame owns that codeword in the tab's label pool and return its frameId.
  * Returns null for actions that don't carry a codeword (show_hints, rescan,
  * etc.) — caller falls back to top-frame delivery.
+ *
+ * The voice plugin sends `params.codeword` directly (the full string, e.g.
+ * "ape" or "zone ape") per the Sprint A.5 protocol. Older keyboard-derived
+ * actions used `params.word` + optional `params.word2`; we still honor that
+ * shape for backwards compatibility within the extension's own dispatcher.
  */
 async function routeFrameForAction(tabId: number, message: Message): Promise<number | null> {
   if (message.type !== 'BRANCHKIT_ACTION') return null;
   const params = message.payload.params;
-  const word = params?.word;
-  if (!word) return null;
-  const codeword = params.word2 ? `${word} ${params.word2}` : word;
+  if (!params) return null;
+
+  let codeword = params.codeword;
+  if (!codeword) {
+    // Legacy keyboard shape — word/word2 split.
+    const word = params.word;
+    if (!word) return null;
+    codeword = params.word2 ? `${word} ${params.word2}` : word;
+  }
   return await getFrameForLabel(tabId, codeword);
 }
 

@@ -112,18 +112,25 @@ export async function claimLabels(tabId: number, frameId: number, count: number)
 
 /**
  * Release labels back to the pool. Labels not in `assigned` are silently
- * ignored — release is idempotent.
+ * ignored — release is idempotent. Returned labels are unshifted en bloc
+ * (preserving their original order) so an immediate re-claim of the same
+ * count yields the same labels — important for hint stability across
+ * rescans.
  */
 export async function releaseLabels(tabId: number, labels: string[]): Promise<void> {
   return withTabLock(tabId, async () => {
     const stack = await loadStack(tabId);
     if (!stack) return;
 
+    const toReturn: string[] = [];
     for (const label of labels) {
       if (label in stack.assigned) {
         delete stack.assigned[label];
-        stack.free.unshift(label);
+        toReturn.push(label);
       }
+    }
+    if (toReturn.length > 0) {
+      stack.free.unshift(...toReturn);
     }
     await saveStack(tabId, stack);
   });
@@ -153,7 +160,9 @@ export async function releaseFrame(tabId: number, frameId: number): Promise<void
     }
     for (const label of toRelease) {
       delete stack.assigned[label];
-      stack.free.unshift(label);
+    }
+    if (toRelease.length > 0) {
+      stack.free.unshift(...toRelease);
     }
     await saveStack(tabId, stack);
   });
