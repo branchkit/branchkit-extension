@@ -207,10 +207,38 @@ function poolLabelToAssignment(codeword: string): LabelAssignment {
 }
 
 /**
+ * ResizeObserver acts as a safety net for CSS-driven visibility changes
+ * the MutationObserver can't see. The MO's attribute filter watches
+ * `disabled`, `aria-hidden`, `role`, `contenteditable`, `href` — a
+ * `display:none` toggle (via class change or inline `style`) flies past
+ * it. When an element's bounding rect collapses to zero, RO fires; we
+ * re-evaluate hintability and detach if it's no longer hintable.
+ *
+ * One-directional: detects hintable → non-hintable, but can't catch the
+ * reverse (an element going from `display:none` to visible) since RO
+ * only observes elements we already know about. The forward-direction
+ * case is the one that matters for pool hygiene — keeping codewords
+ * attached to invisible elements would leak the budget.
+ */
+const resizeObserver = new ResizeObserver((entries) => {
+  let dirty = false;
+  for (const entry of entries) {
+    const el = entry.target;
+    if (!store.findWrapperFor(el)) continue;
+    if (!isHintable(el)) {
+      detachWrapper(el);
+      dirty = true;
+    }
+  }
+  if (dirty) schedulePushGrammar();
+});
+
+/**
  * Add a wrapper to the store and start tracking its viewport state. The
  * tracker claims a codeword for it the next time IntersectionObserver
  * fires for the element (or immediately, if the element is already in
- * the viewport when observed).
+ * the viewport when observed). ResizeObserver also begins watching for
+ * CSS-driven hintability changes.
  *
  * Idempotent: store.addWrapper is a no-op if a wrapper for the same
  * element already exists; IntersectionObserver.observe is similarly
@@ -219,13 +247,15 @@ function poolLabelToAssignment(codeword: string): LabelAssignment {
 function attachWrapper(wrapper: ElementWrapper): void {
   store.addWrapper(wrapper);
   tracker.observe(wrapper.element);
+  resizeObserver.observe(wrapper.element);
 }
 
 /**
  * Remove the wrapper for an element. Returns its codeword (if any) to
- * the pool and unobserves IO.
+ * the pool and unobserves both observers.
  */
 function detachWrapper(element: Element): void {
+  resizeObserver.unobserve(element);
   tracker.unobserve(element);
   store.removeWrapperByElement(element);
 }
