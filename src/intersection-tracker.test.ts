@@ -374,6 +374,49 @@ describe('IntersectionTracker rank-aware allocation', () => {
     expect(b.scanned.codeword).toBe('bake');
   });
 
+  it('preserves codeword assignments across a no-op flush (stability regression)', async () => {
+    // The Sprint C definition of done requires that "re-scan after a
+    // no-op page mutation produces identical hint assignments." In our
+    // pipeline that's enforced not by a stability metric (deferred in
+    // path 1) but by the absence of re-allocation: once a wrapper
+    // holds a codeword, no further flush touches it unless IO fires
+    // for it. This test pins that property.
+    const store = new WrapperStore();
+    const events = { onCodewordsChanged: vi.fn() };
+    const tracker = new IntersectionTracker(store, events);
+
+    const a = new ElementWrapper(
+      fakeElement('a', { left: 0, top: 0, width: 10, height: 10 }),
+      fakeScanned({ selector: 'a' }),
+    );
+    const b = new ElementWrapper(
+      fakeElement('b', { left: 200, top: 200, width: 10, height: 10 }),
+      fakeScanned({ selector: 'b' }),
+    );
+    a.isInViewport = true;
+    b.isInViewport = true;
+    store.addWrapper(a);
+    store.addWrapper(b);
+
+    setupClaimResponse(['arch', 'bake']);
+    tracker.refreshViewportClaims();
+    await tracker.flushNow();
+    const aFirst = a.scanned.codeword;
+    const bFirst = b.scanned.codeword;
+    expect(aFirst).toBeTruthy();
+    expect(bFirst).toBeTruthy();
+
+    // No-op flush — neither wrapper changed viewport state, no IO
+    // entries fired, refreshViewportClaims sees codewords already on
+    // both wrappers and skips them.
+    tracker.refreshViewportClaims();
+    await tracker.flushNow();
+
+    // Codewords unchanged.
+    expect(a.scanned.codeword).toBe(aFirst);
+    expect(b.scanned.codeword).toBe(bFirst);
+  });
+
   it('falls back to insertion order when all wrappers tie on distance', async () => {
     // All wrappers at the same rect → identical distance → stable sort
     // preserves insertion order. This is what existing tests (which use
