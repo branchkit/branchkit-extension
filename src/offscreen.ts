@@ -31,6 +31,17 @@ function connect(port: number, token: string): void {
     }
   });
 
+  source.addEventListener('alphabet', (e: MessageEvent) => {
+    try {
+      const data = JSON.parse(e.data);
+      if (Array.isArray(data?.words)) {
+        chrome.runtime.sendMessage({ type: 'ALPHABET', words: data.words }).catch(() => {});
+      }
+    } catch (err) {
+      console.error('[BranchKit Offscreen] alphabet parse error:', err);
+    }
+  });
+
   source.onerror = () => {
     console.warn('[BranchKit Offscreen] SSE disconnected');
     // Close immediately — don't let EventSource auto-reconnect to a stale port.

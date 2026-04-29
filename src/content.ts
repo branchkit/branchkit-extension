@@ -6,7 +6,7 @@
  */
 
 import { Category, BadgeDisplayMode, ScannedElement, Message } from './types';
-import { assignLabels, HINT_WORDS, WORD_TO_LETTER } from './words';
+import { assignLabels, isAlphabetLoaded, setAlphabet } from './words';
 import { scanElements, classifyCategory, buildSelector } from './scanner';
 import { ElementWrapper, WrapperStore } from './element-wrapper';
 import { HintBadge } from './hints';
@@ -50,6 +50,25 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
       if (hintsVisible) {
         updateBadgeLabels();
       }
+    }
+    // BranchKit pushed a new alphabet — adopt it. Stays as the built-in
+    // fallback if the new value is malformed.
+    if (changes.alphabet?.newValue) {
+      setAlphabet(changes.alphabet.newValue);
+      if (hintsVisible) {
+        updateBadgeLabels();
+      }
+    }
+  });
+}
+
+// Adopt the BranchKit alphabet from chrome.storage.local on script load.
+// Local (not sync) because the alphabet is per-machine: it tracks whatever
+// voice plugin happens to be running locally, not user preferences.
+if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+  chrome.storage.local.get('alphabet', (result) => {
+    if (Array.isArray(result.alphabet)) {
+      setAlphabet(result.alphabet);
     }
   });
 }
@@ -185,6 +204,11 @@ function doScan(): void {
 }
 
 function showHints(filter?: Category | Category[]): void {
+  if (!isAlphabetLoaded()) {
+    console.warn('[BranchKit Browser] Hints unavailable: alphabet not loaded. Is BranchKit running?');
+    return;
+  }
+
   // Determine which categories to show
   const categories: Category[] | null = filter
     ? (Array.isArray(filter) ? filter : [filter])
@@ -314,9 +338,30 @@ function pushGrammar(): void {
   }
 }
 
+// --- Active-frame tracking ---
+//
+// Each frame's content script knows whether `window` currently has focus.
+// The background uses this (via GET_FOCUS_STATUS) to route actions to
+// whichever frame the user is interacting with, when that's relevant.
+// Trusted focus/blur events on `window` are the canonical signal.
+
+let windowHasFocus = document.hasFocus();
+
+window.addEventListener('focus', (e) => {
+  if (e.target === window) windowHasFocus = true;
+}, true);
+window.addEventListener('blur', (e) => {
+  if (e.target === window) windowHasFocus = false;
+}, true);
+
 // --- Message Listener (from background / voice) ---
 
-chrome.runtime.onMessage.addListener((message: Message) => {
+chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {
+  if (message.type === 'GET_FOCUS_STATUS') {
+    sendResponse({ focused: windowHasFocus });
+    return false;
+  }
+
   if (message.type === 'BRANCHKIT_ACTION') {
     const { action, params } = message.payload;
     console.log('[BranchKit Content] action received:', action, params);

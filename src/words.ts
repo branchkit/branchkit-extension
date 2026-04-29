@@ -6,9 +6,9 @@
  *   - Pair prefixes: words that always require a second word
  *
  * No word appears in both pools, so there's zero ambiguity:
- *   "ape"       → always a single, execute immediately
- *   "quartz"    → always a pair prefix, wait for second word
- *   "quartz ape"→ pair command, execute
+ *   "arch"        → always a single, execute immediately
+ *   "zoo"         → always a pair prefix, wait for second word
+ *   "zoo arch"    → pair command, execute
  *
  * The split adapts to minimize pairs:
  *   30 elements → 25 singles + 1 prefix (1×26 pairs) = 51 capacity
@@ -16,30 +16,52 @@
  *  150 elements → 21 singles + 5 prefixes (5×26 pairs) = 151 capacity
  */
 
-export const HINT_WORDS: string[] = [
-  'ape', 'beam', 'chip', 'dash', 'elf', 'flux', 'glow', 'hex',
-  'ink', 'jet', 'kit', 'loom', 'mesh', 'nex', 'oak', 'pod',
-  'quartz', 'ritz', 'sox', 'tick', 'unit', 'volt', 'wick',
-  'xen', 'yoke', 'zone',
-];
+/**
+ * 26 codewords, one per letter A-Z. Populated only via `setAlphabet()` from
+ * the alphabet BranchKit pushes over SSE on connect. Until then the array
+ * is empty and `assignLabels()` returns no labels — hint mode bails so we
+ * never render badges that voice can't recognize.
+ */
+export const HINT_WORDS: string[] = [];
 
 export const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 
-/** Map from word to its letter (e.g. "ape" → "A") */
+/** Map from word to its letter (e.g. "arch" → "A") */
 export const WORD_TO_LETTER: Record<string, string> = {};
-for (let i = 0; i < HINT_WORDS.length; i++) {
-  WORD_TO_LETTER[HINT_WORDS[i]] = LETTERS[i];
+
+/** Map from letter to word (e.g. "A" → "arch") */
+export const LETTER_TO_WORD: Record<string, string> = {};
+
+function rebuildMaps(): void {
+  for (const k of Object.keys(WORD_TO_LETTER)) delete WORD_TO_LETTER[k];
+  for (const k of Object.keys(LETTER_TO_WORD)) delete LETTER_TO_WORD[k];
+  for (let i = 0; i < HINT_WORDS.length; i++) {
+    WORD_TO_LETTER[HINT_WORDS[i]] = LETTERS[i];
+    LETTER_TO_WORD[LETTERS[i]] = HINT_WORDS[i];
+  }
 }
 
-/** Map from letter to word (e.g. "A" → "ape") */
-export const LETTER_TO_WORD: Record<string, string> = {};
-for (let i = 0; i < HINT_WORDS.length; i++) {
-  LETTER_TO_WORD[LETTERS[i]] = HINT_WORDS[i];
+/** True once BranchKit has pushed a valid 26-word alphabet. */
+export function isAlphabetLoaded(): boolean {
+  return HINT_WORDS.length === 26;
+}
+
+/**
+ * Replace the active 26 codewords with one received from BranchKit.
+ * No-op if the input is the wrong length or has any blank entries.
+ */
+export function setAlphabet(words: string[]): boolean {
+  if (!Array.isArray(words) || words.length !== 26) return false;
+  if (words.some(w => typeof w !== 'string' || w.length === 0)) return false;
+  HINT_WORDS.length = 0;
+  HINT_WORDS.push(...words);
+  rebuildMaps();
+  return true;
 }
 
 export interface LabelAssignment {
-  words: string[];    // e.g. ["ape"] or ["quartz", "ape"]
-  letter: string;     // e.g. "A" or "QA"
+  words: string[];    // e.g. ["arch"] or ["zoo", "arch"]
+  letter: string;     // e.g. "A" or "ZA"
   isSingle: boolean;  // true = immediate execute, false = pair prefix
 }
 
@@ -59,18 +81,22 @@ export function computeSplit(count: number): { singles: number; pairPrefixes: nu
   return { singles, pairPrefixes };
 }
 
-/** Maximum addressable elements: 26 singles + 0 pairs, or 0 singles + 26×26 pairs */
-export const MAX_LABELS = HINT_WORDS.length * HINT_WORDS.length; // 676
+/** Maximum addressable elements once the alphabet is loaded: 26×26 = 676. */
+export function maxLabels(): number {
+  return HINT_WORDS.length * HINT_WORDS.length;
+}
 
 /**
- * Assign prefix-free labels to elements.
+ * Assign prefix-free labels to elements. Returns `[]` if no alphabet has
+ * been pushed yet — callers should treat that as "hints unavailable".
  *
  * First `singles` elements get single-word labels from the start of the word list.
  * Remaining elements get pair labels using words from the end of the list as prefixes.
  */
 export function assignLabels(count: number): LabelAssignment[] {
+  if (!isAlphabetLoaded()) return [];
   const labels: LabelAssignment[] = [];
-  const capped = Math.min(count, MAX_LABELS);
+  const capped = Math.min(count, maxLabels());
   const { singles, pairPrefixes } = computeSplit(capped);
 
   // Singles: first `singles` words

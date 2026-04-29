@@ -9,6 +9,7 @@
  */
 
 import { Message, ScannedElement, GrammarRequest, FieldInfo, ClickableInfo, TableLink } from './types';
+import { claimLabels, releaseLabels, clearStack, regenerateAllStacks, getFrameForLabel } from './label-pool';
 
 const ACTUATOR_URL = 'http://127.0.0.1:21551';
 
@@ -38,6 +39,19 @@ function detectBundleID(): string {
 }
 
 const browserBundleID = detectBundleID();
+
+// --- Alphabet ---
+
+// Persist the BranchKit voice alphabet so content scripts on every page see
+// the same codewords voice will recognize. content.ts reads this on load
+// and subscribes to chrome.storage.onChanged for live updates.
+function storeAlphabet(words: string[]): void {
+  if (!Array.isArray(words) || words.length !== 26) return;
+  if (words.some(w => typeof w !== 'string' || w.length === 0)) return;
+  chrome.storage.local.set({ alphabet: words })
+    .then(() => regenerateAllStacks())
+    .catch(err => console.error('[BranchKit BG] alphabet store error:', err));
+}
 
 // --- Plugin Discovery ---
 
@@ -195,6 +209,17 @@ function connectDirectSSE(port: number, token: string): void {
     }
   });
 
+  directSSE.addEventListener('alphabet', (e: MessageEvent) => {
+    try {
+      const data = JSON.parse(e.data);
+      if (Array.isArray(data?.words)) {
+        storeAlphabet(data.words);
+      }
+    } catch (err) {
+      console.error('[BranchKit BG] alphabet parse error:', err);
+    }
+  });
+
   directSSE.onerror = () => {
     console.warn('[BranchKit BG] SSE disconnected (direct)');
     if (directSSE) {
@@ -250,17 +275,40 @@ async function notifyActiveTab(message: Message): Promise<void> {
   try {
     const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     const tab = tabs[0];
-    console.log('[BranchKit SW] notifyActiveTab:', tab?.id, tab?.url?.slice(0, 60));
-    if (tab?.id) {
-      chrome.tabs.sendMessage(tab.id, message).catch((e) => {
-        console.warn('[BranchKit SW] sendMessage failed:', e.message);
-      });
-    } else {
+    if (!tab?.id) {
       console.warn('[BranchKit SW] no active tab found');
+      return;
     }
+
+    // If the action references a specific codeword, route to its owning frame.
+    // Otherwise fall through to the top frame (chrome's default).
+    const frameId = await routeFrameForAction(tab.id, message);
+    console.log('[BranchKit SW] notifyActiveTab:', tab.id, frameId ?? 'top', tab.url?.slice(0, 60));
+
+    const send = frameId !== null
+      ? chrome.tabs.sendMessage(tab.id, message, { frameId })
+      : chrome.tabs.sendMessage(tab.id, message);
+    send.catch((e: Error) => {
+      console.warn('[BranchKit SW] sendMessage failed:', e.message);
+    });
   } catch (e) {
     console.warn('[BranchKit SW] notifyActiveTab error:', e);
   }
+}
+
+/**
+ * If the message is a hint activation that names a codeword, look up which
+ * frame owns that codeword in the tab's label pool and return its frameId.
+ * Returns null for actions that don't carry a codeword (show_hints, rescan,
+ * etc.) — caller falls back to top-frame delivery.
+ */
+async function routeFrameForAction(tabId: number, message: Message): Promise<number | null> {
+  if (message.type !== 'BRANCHKIT_ACTION') return null;
+  const params = message.payload.params;
+  const word = params?.word;
+  if (!word) return null;
+  const codeword = params.word2 ? `${word} ${params.word2}` : word;
+  return await getFrameForLabel(tabId, codeword);
 }
 
 // --- Message Listener ---
@@ -275,6 +323,12 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   if (message.type === 'SSE_EVENT') {
     // Offscreen doc forwarded an SSE event (Chrome path) — route to tabs
     handleSSEEvent(message.data);
+    return false;
+  }
+
+  if (message.type === 'ALPHABET' && Array.isArray(message.words)) {
+    // Offscreen doc forwarded an alphabet event (Chrome path)
+    storeAlphabet(message.words);
     return false;
   }
 
@@ -298,7 +352,46 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     return false;
   }
 
+  // Per-tab label pool. Only trust messages from a content script in a tab —
+  // popup / offscreen don't have a tab context and wouldn't be claiming labels.
+  if (message.type === 'CLAIM_LABELS') {
+    const tabId = _sender.tab?.id;
+    const frameId = _sender.frameId;
+    if (typeof tabId !== 'number' || typeof frameId !== 'number') {
+      sendResponse({ labels: [] });
+      return false;
+    }
+    claimLabels(tabId, frameId, message.count)
+      .then(labels => sendResponse({ labels }))
+      .catch(err => {
+        console.warn('[BranchKit SW] CLAIM_LABELS error:', err);
+        sendResponse({ labels: [] });
+      });
+    return true;
+  }
+
+  if (message.type === 'RELEASE_LABELS') {
+    const tabId = _sender.tab?.id;
+    if (typeof tabId !== 'number') return false;
+    releaseLabels(tabId, message.labels).catch(err => {
+      console.warn('[BranchKit SW] RELEASE_LABELS error:', err);
+    });
+    return false;
+  }
+
   return false;
+});
+
+// Clear a tab's label pool when the tab is closed or starts navigating —
+// the content script reloads with no memory of its prior labels.
+chrome.tabs.onRemoved.addListener((tabId) => {
+  clearStack(tabId).catch(() => {});
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === 'loading') {
+    clearStack(tabId).catch(() => {});
+  }
 });
 
 // --- Startup ---

@@ -41,7 +41,40 @@ export type Message =
   | { type: 'HEALTH_STATUS'; branchkit: boolean }
   | { type: 'GRAMMAR_PUSH'; elements: ScannedElement[] }
   | { type: 'GET_HEALTH' }
-  | { type: 'CONNECT_SSE'; port: number; token: string };
+  | { type: 'CONNECT_SSE'; port: number; token: string }
+  // Frame label pool — content asks background for codewords so frames in
+  // the same tab don't independently pick the same label. See
+  // notes/DESIGN_BROWSER_FRAMES_AND_OBSERVERS.md §2.
+  | { type: 'CLAIM_LABELS'; count: number }
+  | { type: 'RELEASE_LABELS'; labels: string[] }
+  // Background → content ping. The focused frame answers true, others false.
+  // Used to route keyboard-derived actions to whichever frame the user is
+  // actually interacting with (vs. chrome's default top-frame routing).
+  | { type: 'GET_FOCUS_STATUS' };
+
+// Response to CLAIM_LABELS. Returned via sendResponse callback.
+// May be shorter than `count` if pool was partially exhausted; empty array
+// if the pool isn't ready (alphabet not loaded yet).
+export interface ClaimLabelsResponse {
+  labels: string[];
+}
+
+// --- Frame label pool ---
+
+/**
+ * Per-tab pool of voice-recognizable codewords. Stored in
+ * chrome.storage.session at key `labelStack:${tabId}`.
+ *
+ * `assigned` doubles as a routing table: when an action references a
+ * codeword, the background looks up `assigned[codeword]` to find the
+ * frame that owns it and routes the action there.
+ */
+export interface LabelStack {
+  /** Unclaimed codewords. Singles first, pairs at the end. */
+  free: string[];
+  /** Claimed codewords mapped to their owning frameId. */
+  assigned: Record<string, number>;
+}
 
 // --- Grammar format matching browser plugin Go types ---
 

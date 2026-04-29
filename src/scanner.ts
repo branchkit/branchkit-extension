@@ -25,6 +25,51 @@ const EXCLUDE = [
 const HINTABLE_SELECTOR = HINTABLE.join(', ');
 const EXCLUDE_SELECTOR = EXCLUDE.join(', ');
 
+// Standard HTML elements that don't host shadow DOM in practice. Used as a
+// pre-filter for shadow-host detection: only `<div>` and custom elements
+// (which have hyphens in their tag names) commonly attach shadow roots, so
+// skip the `.shadowRoot` lookup for everything else. Pattern from Rango.
+const COMMON_LEAF_TAGS = new Set([
+  'a', 'abbr', 'address', 'area', 'article', 'aside', 'audio', 'b', 'base',
+  'bdi', 'bdo', 'blockquote', 'body', 'br', 'button', 'canvas', 'caption',
+  'cite', 'code', 'col', 'colgroup', 'data', 'datalist', 'dd', 'del',
+  'details', 'dfn', 'dialog', 'dl', 'dt', 'em', 'embed', 'fieldset',
+  'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5',
+  'h6', 'head', 'header', 'hgroup', 'hr', 'html', 'i', 'iframe', 'img',
+  'input', 'ins', 'kbd', 'label', 'legend', 'li', 'link', 'main', 'map',
+  'mark', 'menu', 'meta', 'meter', 'nav', 'noscript', 'object', 'ol',
+  'optgroup', 'option', 'output', 'p', 'picture', 'pre', 'progress', 'q',
+  'rp', 'rt', 'ruby', 's', 'samp', 'script', 'section', 'select', 'slot',
+  'small', 'source', 'span', 'strong', 'style', 'sub', 'summary', 'sup',
+  'svg', 'table', 'tbody', 'td', 'template', 'textarea', 'tfoot', 'th',
+  'thead', 'time', 'title', 'tr', 'track', 'u', 'ul', 'var', 'video', 'wbr',
+]);
+
+function findShadowHosts(root: ParentNode): Element[] {
+  const hosts: Element[] = [];
+  const candidates = root.querySelectorAll('*');
+  for (const el of candidates) {
+    if (COMMON_LEAF_TAGS.has(el.tagName.toLowerCase())) continue;
+    if (el.shadowRoot) hosts.push(el);
+  }
+  return hosts;
+}
+
+/**
+ * Pierces open shadow roots. Closed shadow roots return null from
+ * .shadowRoot and are silently skipped — the host element is the
+ * deepest visible target.
+ */
+export function deepQuerySelectorAll(root: ParentNode, selector: string): Element[] {
+  const out = Array.from(root.querySelectorAll(selector));
+  for (const host of findShadowHosts(root)) {
+    if (host.shadowRoot) {
+      out.push(...deepQuerySelectorAll(host.shadowRoot, selector));
+    }
+  }
+  return out;
+}
+
 /**
  * Classify an element into a voice category.
  */
@@ -71,7 +116,7 @@ export function scanElements(root: Document | Element = document): { elements: S
   const refs: Element[] = [];
   const seen = new Set<Element>();
 
-  const candidates = (root === document ? document : root).querySelectorAll(HINTABLE_SELECTOR);
+  const candidates = deepQuerySelectorAll(root, HINTABLE_SELECTOR);
 
   for (const el of candidates) {
     if (seen.has(el)) continue;
