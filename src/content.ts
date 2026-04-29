@@ -9,6 +9,7 @@ import { Category, BadgeDisplayMode, ScannedElement, Message } from './types';
 import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from './words';
 import { scanElements, scanSingle, isHintable } from './scanner';
 import { ElementWrapper, WrapperStore } from './element-wrapper';
+import { IntersectionTracker } from './intersection-tracker';
 import { HintBadge } from './hints';
 import { ActionDispatcher, CommandRegistry } from './dispatcher';
 import { KeyHandler } from './keyboard';
@@ -20,6 +21,9 @@ const store = new WrapperStore();
 const dispatcher = new ActionDispatcher();
 const registry = new CommandRegistry();
 const keyHandler = new KeyHandler(registry, dispatcher);
+const tracker = new IntersectionTracker(store, {
+  onCodewordsChanged: () => schedulePushGrammar(),
+});
 
 let hintsVisible = false;
 let activeCategory: Category | null = null;
@@ -27,17 +31,6 @@ let displayMode: BadgeDisplayMode = 'word';
 let lastGrammarHash = '';
 let pendingMutation = false;
 const MAX_BADGE_COUNT = 676; // No artificial cap; word pairs for >26
-
-// Codewords currently held from the per-tab pool. Released and re-claimed
-// on each scan so DOM mutations don't leak labels across renders. Kept
-// across hide/show cycles so the voice plugin's grammar (which is built
-// from pool codewords) stays valid even when badges aren't visible.
-let currentClaimedLabels: string[] = [];
-
-// Latest scan completion. showHints() awaits this so it can render badges
-// using codewords claimed during the in-flight scan, rather than racing
-// against a half-done assignment.
-let pendingScan: Promise<void> = Promise.resolve();
 
 // Voice category groups — maps voice trigger prefixes to element categories.
 // "set ape" targets the first input, "go ape" targets the first clickable, etc.
@@ -62,16 +55,29 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
         updateBadgeLabels();
       }
     }
-    // BranchKit pushed a new alphabet — adopt it. Stays as the built-in
-    // fallback if the new value is malformed. Background regenerates the
-    // per-tab pool with the new alphabet; our prior codeword claims are
-    // stale (the assigned map has been wiped). Re-scan to claim afresh.
+    // BranchKit pushed a new alphabet — adopt it. The pool was wiped
+    // server-side by regenerateAllStacks; our wrappers' codewords are
+    // stale strings that no longer route. Drop them locally and let the
+    // tracker reclaim for every viewport-visible wrapper. (IO won't
+    // re-fire on already-intersecting elements, so we have to walk the
+    // store ourselves.)
     if (changes.alphabet?.newValue) {
       setAlphabet(changes.alphabet.newValue);
-      currentClaimedLabels = []; // pool wiped server-side; don't double-release
-      doScan().then(() => {
-        if (hintsVisible) updateBadgeLabels();
-      });
+      for (const w of store.all) {
+        w.scanned.codeword = '';
+        w.label = null;
+        if (w.hint) {
+          w.hint.remove();
+          w.hint = null;
+        }
+      }
+      tracker.refreshViewportClaims();
+      if (hintsVisible) {
+        // Re-render once the new codewords land.
+        tracker.flushNow().then(() => {
+          if (hintsVisible) showHints(activeCategory ?? undefined);
+        });
+      }
     }
   });
 }
@@ -189,30 +195,6 @@ function viewportSort(wrappers: ElementWrapper[]): ElementWrapper[] {
 }
 
 /**
- * Claim N codewords from the per-tab pool. Returns up to N strings — fewer
- * if the pool is partially exhausted, empty if the alphabet hasn't loaded.
- * Pool is per-tab, shared across all frames; the background's assigned-map
- * doubles as the routing table for voice actions.
- */
-async function claimLabelsFromPool(count: number): Promise<string[]> {
-  if (count <= 0) return [];
-  try {
-    const response = await chrome.runtime.sendMessage({ type: 'CLAIM_LABELS', count });
-    return Array.isArray(response?.labels) ? response.labels : [];
-  } catch {
-    return [];
-  }
-}
-
-function releaseClaimedLabels(): void {
-  if (currentClaimedLabels.length === 0) return;
-  const toRelease = currentClaimedLabels;
-  currentClaimedLabels = [];
-  chrome.runtime.sendMessage({ type: 'RELEASE_LABELS', labels: toRelease })
-    .catch(() => {/* extension context may be invalidated */});
-}
-
-/**
  * Convert a pool codeword string ("arch" or "rain bake") to the
  * LabelAssignment shape the HintBadge renderer expects. Letter mapping
  * comes from the words.ts WORD_TO_LETTER table populated when the
@@ -224,59 +206,49 @@ function poolLabelToAssignment(codeword: string): LabelAssignment {
   return { words, letter, isSingle: words.length === 1 };
 }
 
-function doScan(): Promise<void> {
-  // Chain new scans behind the prior one. Two scans firing close together
-  // (mutation observer + alphabet onChanged) would otherwise both read
-  // the same currentClaimedLabels, both claim, and both write — leaking
-  // the first scan's labels in the pool's `assigned` map. Serializing
-  // ensures each scan's release-then-claim runs to completion before the
-  // next starts.
-  pendingScan = pendingScan.then(scanAndClaim, scanAndClaim);
-  return pendingScan;
+/**
+ * Add a wrapper to the store and start tracking its viewport state. The
+ * tracker claims a codeword for it the next time IntersectionObserver
+ * fires for the element (or immediately, if the element is already in
+ * the viewport when observed).
+ *
+ * Idempotent: store.addWrapper is a no-op if a wrapper for the same
+ * element already exists; IntersectionObserver.observe is similarly
+ * tolerant of duplicate observe calls.
+ */
+function attachWrapper(wrapper: ElementWrapper): void {
+  store.addWrapper(wrapper);
+  tracker.observe(wrapper.element);
 }
 
-async function scanAndClaim(): Promise<void> {
-  // Check for site adapter
+/**
+ * Remove the wrapper for an element. Returns its codeword (if any) to
+ * the pool and unobserves IO.
+ */
+function detachWrapper(element: Element): void {
+  tracker.unobserve(element);
+  store.removeWrapperByElement(element);
+}
+
+/**
+ * Full re-discovery of hintable elements in the document. Idempotent:
+ * already-known elements keep their wrappers (and codewords); newly
+ * discovered elements get fresh wrappers; elements no longer in the DOM
+ * are dropped.
+ *
+ * doScan no longer claims codewords directly — that's the tracker's
+ * job, gated by viewport intersection. doScan only ensures every
+ * hintable element has a wrapper that the tracker is observing.
+ */
+function doScan(): void {
   const adapter = getActiveAdapter(window.location.href);
+  const result = adapter ? scanWithAdapter(adapter) : scanElements();
 
-  let elements: ScannedElement[];
-  let refs: Element[];
-
-  if (adapter) {
-    const result = scanWithAdapter(adapter);
-    elements = result.elements;
-    refs = result.refs;
-  } else {
-    const result = scanElements();
-    elements = result.elements;
-    refs = result.refs;
+  for (let i = 0; i < result.elements.length; i++) {
+    if (store.findWrapperFor(result.refs[i])) continue;
+    attachWrapper(new ElementWrapper(result.refs[i], result.elements[i]));
   }
-
-  // Release any prior pool claims before claiming fresh ones — keeps the
-  // tab-wide pool from leaking codewords across rescans.
-  releaseClaimedLabels();
-
-  // Claim codewords from the per-tab pool. Pool returns up to N strings;
-  // any tail beyond the returned count gets no codeword and is excluded
-  // from the voice grammar (still hintable for keyboard, just not voice).
-  const claimed = await claimLabelsFromPool(elements.length);
-  currentClaimedLabels = [...claimed];
-  for (let i = 0; i < elements.length; i++) {
-    elements[i].codeword = i < claimed.length ? claimed[i] : '';
-  }
-
-  // Build wrappers (after codewords are stamped on the scanned elements)
-  const wrappers: ElementWrapper[] = [];
-  for (let i = 0; i < elements.length; i++) {
-    wrappers.push(new ElementWrapper(refs[i], elements[i]));
-  }
-
-  store.set(wrappers);
-
-  // Push grammar to background (for BranchKit voice). Codewords are now
-  // present on every voice-addressable element; voice plugin consumes
-  // them verbatim.
-  pushGrammar();
+  dropDisconnectedWrappers();
 }
 
 async function showHints(filter?: Category | Category[]): Promise<void> {
@@ -285,9 +257,14 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
     return;
   }
 
-  // Wait for the most recent scan to finish so wrapper.scanned.codeword
-  // is populated before we try to render badges.
-  await pendingScan;
+  // Wait one frame so any pending IntersectionObserver entries (queued
+  // synchronously by observe(), delivered async) have a chance to fire,
+  // then drain pending claims/releases. Without this, a `f` keypress
+  // immediately after page load can race the tracker — wrappers exist
+  // but their codewords haven't been claimed yet and badges would
+  // render with no labels.
+  await new Promise(r => requestAnimationFrame(() => r(null)));
+  await tracker.flushNow();
 
   // Determine which categories to show
   const categories: Category[] | null = filter
@@ -517,11 +494,10 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
 
 // --- MutationObserver (discovery-only) ---
 //
-// Sprint B-1: the observer no longer triggers a full rescan. It surgically
-// reflects DOM changes into the wrapper store: new subtrees gain wrappers
-// (without pool codewords — those are claimed by Sprint B-2's
-// IntersectionObserver), removed subtrees lose theirs, and attribute
-// changes can flip an element in or out of hintability. Grammar push is
+// The observer surgically reflects DOM changes into the wrapper store:
+// new subtrees gain wrappers (the IntersectionTracker claims pool
+// codewords on viewport entry), removed subtrees lose theirs, attribute
+// changes flip elements in and out of hintability. Grammar push is
 // debounced after a batch settles so voice sees a consistent snapshot.
 //
 // Beyond the HUGE_MUTATIONS_COUNT threshold (DarkReader's pattern), we
@@ -553,7 +529,7 @@ function discoverInSubtree(root: Element): number {
   const { elements, refs } = scanElements(root);
   for (let i = 0; i < elements.length; i++) {
     if (store.findWrapperFor(refs[i])) continue;
-    store.addWrapper(new ElementWrapper(refs[i], elements[i]));
+    attachWrapper(new ElementWrapper(refs[i], elements[i]));
     added++;
   }
   return added;
@@ -569,7 +545,7 @@ function dropDisconnectedWrappers(): number {
   // Iterate a copy so we can mutate `store` mid-loop.
   for (const w of [...store.all]) {
     if (!w.element.isConnected) {
-      store.removeWrapperByElement(w.element);
+      detachWrapper(w.element);
       removed++;
     }
   }
@@ -585,13 +561,13 @@ function reevaluateAttribute(target: Element): boolean {
   const existing = store.findWrapperFor(target);
   const hintable = isHintable(target);
   if (existing && !hintable) {
-    store.removeWrapperByElement(target);
+    detachWrapper(target);
     return true;
   }
   if (!existing && hintable) {
     const scanned = scanSingle(target);
     if (!scanned) return false;
-    store.addWrapper(new ElementWrapper(target, scanned));
+    attachWrapper(new ElementWrapper(target, scanned));
     return true;
   }
   if (existing && hintable) {
