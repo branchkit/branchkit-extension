@@ -8,6 +8,7 @@
 import { Category, ScannedElement } from './types';
 import { LabelAssignment } from './words';
 import { HintBadge } from './hints';
+import { HintCandidate } from './allocator';
 
 export class ElementWrapper {
   element: Element;
@@ -49,6 +50,26 @@ export class ElementWrapper {
       this.hint = null;
     }
   }
+}
+
+/**
+ * Adapt an ElementWrapper to the allocator's polymorphic input. Reads
+ * the live bounding rect at call time, so callers should compute this
+ * once per allocation pass (it forces layout). `oldCodeword` carries
+ * forward any existing codeword on the wrapper — currently unused by
+ * the rank-and-pair allocator but reserved for a future stability
+ * metric without a signature break.
+ *
+ * Lives here (not in allocator.ts) so the allocator stays import-free
+ * of element-wrapper and a future TextTokenWrapper for
+ * contenteditable hints can adapt the same way.
+ */
+export function wrapperToCandidate(w: ElementWrapper): HintCandidate {
+  return {
+    id: w.scanned.selector,
+    rect: w.element.getBoundingClientRect(),
+    oldCodeword: w.scanned.codeword || undefined,
+  };
 }
 
 export class WrapperStore {

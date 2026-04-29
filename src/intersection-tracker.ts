@@ -22,7 +22,8 @@
  * O(N).
  */
 
-import { ElementWrapper, WrapperStore } from './element-wrapper';
+import { ElementWrapper, WrapperStore, wrapperToCandidate } from './element-wrapper';
+import { HintCandidate, getFocusPoint, rankByDistance } from './allocator';
 
 const VIEWPORT_MARGIN = '200px';
 const FLUSH_DEBOUNCE_MS = 50;
@@ -197,8 +198,28 @@ export class IntersectionTracker {
     }
 
     if (this.pendingClaim.size > 0) {
-      const wrappers = [...this.pendingClaim];
+      const queued = [...this.pendingClaim];
       this.pendingClaim.clear();
+
+      // Rank-aware allocation: closer-to-focus wrappers get the cheap
+      // (front-of-pool, single-word) codewords. The pool already orders
+      // singles before pairs (see label-pool.ts:buildPool); pairing
+      // pool order with rank order delivers the design's "cheap hints
+      // for visible elements" promise without a multi-metric chooser.
+      // (Sprint C path 1; DESIGN_BROWSER_HINT_ALLOCATOR.md §2.)
+      //
+      // getBoundingClientRect forces layout, so candidates are
+      // materialized once and reused for every comparison rather than
+      // recomputed inside the comparator.
+      const focus = getFocusPoint();
+      const cmp = rankByDistance(focus);
+      type Pair = { wrapper: ElementWrapper; candidate: HintCandidate };
+      const pairs: Pair[] = queued.map(w => ({
+        wrapper: w,
+        candidate: wrapperToCandidate(w),
+      }));
+      pairs.sort((a, b) => cmp(a.candidate, b.candidate));
+      const wrappers = pairs.map(p => p.wrapper);
 
       let labels: string[] = [];
       try {
