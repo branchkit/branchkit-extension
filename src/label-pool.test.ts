@@ -75,14 +75,14 @@ describe('label-pool', () => {
   });
 
   describe('buildPool', () => {
-    it('returns 251 codewords (17 singles + 9×26 pairs) for a valid alphabet', () => {
+    it('returns 176 codewords (20 singles + 6×26 pairs) for a valid alphabet', () => {
       const pool = buildPool(ALPHABET);
       expect(pool).not.toBeNull();
-      expect(pool!.length).toBe(251);
+      expect(pool!.length).toBe(176);
       expect(pool![0]).toBe('arch');         // first single
-      expect(pool![16]).toBe('quick');        // last single (alphabet[16])
-      expect(pool![17]).toBe('rain arch');    // first pair (prefix=alphabet[17], suffix=alphabet[0])
-      expect(pool![250]).toBe('zoo zoo');     // last pair
+      expect(pool![19]).toBe('take');         // last single (alphabet[19])
+      expect(pool![20]).toBe('under arch');   // first pair (prefix=alphabet[20], suffix=alphabet[0])
+      expect(pool![175]).toBe('zoo zoo');     // last pair
     });
 
     it('returns null for an alphabet of the wrong length', () => {
@@ -184,7 +184,7 @@ describe('label-pool', () => {
     it('returns at most pool capacity when more is requested', async () => {
       const tabId = nextTabId();
       const claimed = await claimLabels(tabId, 0, 300);
-      expect(claimed.length).toBe(251); // 17 singles + 9*26 pairs
+      expect(claimed.length).toBe(176); // 20 singles + 6*26 pairs
     });
 
     it('returns empty when alphabet is missing', async () => {

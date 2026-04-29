@@ -10,12 +10,34 @@
 
 import { LabelStack } from './types';
 
-// Pool composition: 17 singles + 9 prefixes × 26 pairs = 251 codewords.
-// Matches DESIGN_BROWSER_FRAMES_AND_OBSERVERS.md §2 ("26 singles + 9 prefix×26").
-// Sprint C will replace this fixed split with the dynamic allocator from
-// DESIGN_BROWSER_HINT_ALLOCATOR.md.
-const SINGLES_COUNT = 17;
-const PREFIXES_COUNT = 9;
+// Pool composition: 20 singles + 6 prefixes × 26 pairs = 176 codewords.
+//
+// SINGLES_COUNT was bumped from 17 to 20 in Sprint C-4. The Sprint C
+// design (DESIGN_BROWSER_HINT_ALLOCATOR.md §2 Layer C) initially
+// proposed dynamic "eager-promotion" of any letter into singles, but
+// analysis showed that's functionally equivalent to a static
+// SINGLES_COUNT bump: claims always hit alphabet order, so after K
+// claims the in-flight singles are alphabet[0..K-1] under either
+// model. The cheap UX win is just to push SINGLES_COUNT higher,
+// trading capacity ceiling for cheaper hints in the medium-density
+// band.
+//
+// 20 singles vs the prior 17:
+//  - Pages with 18-20 visible candidates now get all-singles (3 more
+//    elements get one-word hints in the band most affected).
+//  - Pages with 21+ candidates get pairs starting at the 21st element
+//    instead of the 18th.
+//  - Capacity ceiling drops from 251 to 176, retaining a 70+ buffer
+//    above the ~100-codeword peak observed in B-6 viewport-gated
+//    stress tests (Wikipedia 25k-px scroll, GitHub PR with shadow
+//    hosts).
+//
+// True dynamic resplitting (variable K driven by demand) would
+// require invalidating already-claimed codewords on density
+// transitions; deferred until a real-world signal justifies the
+// added complexity.
+const SINGLES_COUNT = 20;
+const PREFIXES_COUNT = 6;
 
 /**
  * Build the codeword pool from a 26-word alphabet. Pool is ordered so the
