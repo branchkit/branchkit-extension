@@ -43,6 +43,14 @@ export class IntersectionTracker {
   // already have been GC'd by the time we flush.
   private pendingRelease: string[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  // Promise chain that serializes every doFlush. Without this, a flush
+  // started by scheduleFlush's timer can be in mid-await on
+  // CLAIM_LABELS while flushNow's `await this.flush()` starts a second
+  // flush concurrently. The second sees an empty queue and returns
+  // immediately, so flushNow resolves before the first claim finishes —
+  // showHints would then render badges before all wrappers have
+  // codewords. Chaining ensures every doFlush waits for the prior one.
+  private flushChain: Promise<void> = Promise.resolve();
 
   constructor(store: WrapperStore, events: TrackerEvents) {
     this.store = store;
@@ -104,13 +112,20 @@ export class IntersectionTracker {
     if (this.pendingClaim.size > 0) this.scheduleFlush();
   }
 
-  /** Force pending work to flush. Awaitable. */
+  /**
+   * Force pending work to flush. Awaitable. Drains until both queues are
+   * stable — a doFlush awaiting CLAIM_LABELS may have IO fire more
+   * entries (or refreshViewportClaims push more wrappers) by the time
+   * it returns; we loop so showHints sees a quiescent tracker.
+   */
   async flushNow(): Promise<void> {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
-    await this.flush();
+    do {
+      await this.enqueueFlush();
+    } while (this.pendingClaim.size > 0 || this.pendingRelease.length > 0);
   }
 
   private handleEntries = (entries: IntersectionObserverEntry[]): void => {
@@ -149,11 +164,21 @@ export class IntersectionTracker {
     if (this.flushTimer) return;
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null;
-      this.flush();
+      this.enqueueFlush();
     }, FLUSH_DEBOUNCE_MS);
   }
 
-  private async flush(): Promise<void> {
+  /**
+   * Append a doFlush to the serialization chain. Returns the promise
+   * that resolves when this flush completes. Errors don't break the
+   * chain — both branches schedule the next doFlush.
+   */
+  private enqueueFlush(): Promise<void> {
+    this.flushChain = this.flushChain.then(() => this.doFlush(), () => this.doFlush());
+    return this.flushChain;
+  }
+
+  private async doFlush(): Promise<void> {
     let dirty = false;
 
     // Releases first so reclaimed labels are at the front of the pool's

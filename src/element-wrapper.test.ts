@@ -122,6 +122,27 @@ describe('WrapperStore', () => {
     expect(store.findWrapperFor(el)).toBeUndefined();
     expect(store.count).toBe(0);
   });
+
+  it('clear releases each wrapper’s pool codeword', () => {
+    // Without this, codewords held by cleared wrappers stay "assigned"
+    // server-side until tab close — destroy() tears down the badge but
+    // doesn't talk to the pool.
+    const store = new WrapperStore();
+    const w1 = new ElementWrapper(fakeElement('a'), fakeScanned({ codeword: 'arch' }));
+    const w2 = new ElementWrapper(fakeElement('b'), fakeScanned({ codeword: 'rain bake' }));
+    const w3 = new ElementWrapper(fakeElement('c'), fakeScanned({ codeword: '' }));
+    store.addWrapper(w1);
+    store.addWrapper(w2);
+    store.addWrapper(w3);
+
+    store.clear();
+
+    expect(sendMessageMock).toHaveBeenCalledWith({ type: 'RELEASE_LABELS', labels: ['arch'] });
+    expect(sendMessageMock).toHaveBeenCalledWith({ type: 'RELEASE_LABELS', labels: ['rain bake'] });
+    // w3 had no codeword; releaseLabel is a no-op, no extra call.
+    const releaseCalls = sendMessageMock.mock.calls.filter(([m]) => m.type === 'RELEASE_LABELS');
+    expect(releaseCalls).toHaveLength(2);
+  });
 });
 
 describe('ElementWrapper.releaseLabel', () => {

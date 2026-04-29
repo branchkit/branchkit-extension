@@ -67,7 +67,13 @@ export class WrapperStore {
   }
 
   clear(): void {
+    // Release codewords back to the pool *before* destroying badges.
+    // destroy() only tears down the visual element; without
+    // releaseLabel(), every wrapper's claimed codeword stays "assigned"
+    // server-side until tab close. The release path is the only thing
+    // that frees them.
     for (const w of this.wrappers) {
+      w.releaseLabel();
       w.destroy();
     }
     this.wrappers = [];

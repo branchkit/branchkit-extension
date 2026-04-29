@@ -34,12 +34,26 @@ function fakeScanned(overrides: Partial<ScannedElement> = {}): ScannedElement {
 }
 
 class FakeIntersectionObserver {
+  callback: IntersectionObserverCallback;
   observed: Set<Element> = new Set();
-  constructor(_cb: IntersectionObserverCallback, _opts?: IntersectionObserverInit) {}
+  static lastInstance: FakeIntersectionObserver | null = null;
+
+  constructor(cb: IntersectionObserverCallback, _opts?: IntersectionObserverInit) {
+    this.callback = cb;
+    FakeIntersectionObserver.lastInstance = this;
+  }
   observe(el: Element): void { this.observed.add(el); }
   unobserve(el: Element): void { this.observed.delete(el); }
   disconnect(): void { this.observed.clear(); }
   takeRecords(): IntersectionObserverEntry[] { return []; }
+
+  /** Test helper: fire a synthetic intersection entry. */
+  fire(target: Element, isIntersecting: boolean): void {
+    this.callback(
+      [{ target, isIntersecting } as IntersectionObserverEntry],
+      this as unknown as IntersectionObserver,
+    );
+  }
 }
 
 beforeEach(() => {
@@ -187,6 +201,62 @@ describe('IntersectionTracker.unobserve', () => {
 
     const claimCalls = sendMessageMock.mock.calls.filter(([m]) => m.type === 'CLAIM_LABELS');
     expect(claimCalls).toHaveLength(0);
+  });
+});
+
+describe('IntersectionTracker.flushNow', () => {
+  it('drains pending work that arrives during an in-flight flush', async () => {
+    // Regression for the showHints race. Without flushNow's drain loop,
+    // a doFlush mid-await on CLAIM_LABELS while a new IO entry queues a
+    // second claim would let flushNow return after only the first
+    // claim resolves — showHints would then render badges for wrappers
+    // whose codewords haven't landed yet.
+    const store = new WrapperStore();
+    const events = { onCodewordsChanged: vi.fn() };
+    const tracker = new IntersectionTracker(store, events);
+    const io = FakeIntersectionObserver.lastInstance!;
+
+    const w1 = new ElementWrapper(fakeElement('w1'), fakeScanned());
+    store.addWrapper(w1);
+    tracker.observe(w1.element);
+
+    let resolveFirst: (v: { labels: string[] }) => void = () => {};
+    let firstClaimSeen = false;
+    sendMessageMock.mockImplementation((msg: { type: string }) => {
+      if (msg.type === 'CLAIM_LABELS' && !firstClaimSeen) {
+        firstClaimSeen = true;
+        return new Promise<{ labels: string[] }>(r => { resolveFirst = r; });
+      }
+      if (msg.type === 'CLAIM_LABELS') {
+        return Promise.resolve({ labels: ['second'] });
+      }
+      return Promise.resolve(undefined);
+    });
+
+    // Fire intersect for w1 → queues a claim → schedules a 50ms flush.
+    io.fire(w1.element, true);
+
+    // flushNow clears the timer and starts the first doFlush.
+    const flushPromise = tracker.flushNow();
+
+    // Yield until doFlush has issued sendMessage and is suspended on it.
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Mid-flight: a new wrapper intersects. handleEntries skips wrappers
+    // that already hold a codeword, so w1 won't be re-queued — only w2.
+    const w2 = new ElementWrapper(fakeElement('w2'), fakeScanned());
+    store.addWrapper(w2);
+    tracker.observe(w2.element);
+    io.fire(w2.element, true);
+
+    // Resolve the first claim. flushNow's drain loop should then pick
+    // up w2 in a second doFlush before resolving.
+    resolveFirst({ labels: ['first'] });
+    await flushPromise;
+
+    expect(w1.scanned.codeword).toBe('first');
+    expect(w2.scanned.codeword).toBe('second');
   });
 });
 
