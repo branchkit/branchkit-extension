@@ -139,6 +139,60 @@ export function getRankedCandidates(candidates: HintCandidate[], focus: Point): 
  */
 export type Metric<T> = (item: T) => number;
 
+// --- Allocation metrics ----------------------------------------------------
+//
+// Sprint C ships rank-and-pair: candidates are sorted by viewport
+// distance, codewords are pulled from the pool in singles-then-pairs
+// order, and the two are zipped. The chooser machinery
+// (`maxByFirstDiffering` above) is therefore not invoked in the live
+// pipeline — the metric primitives below exist as building blocks for a
+// future promotion to a multi-metric chooser
+// (DESIGN_BROWSER_HINT_ALLOCATOR.md §2 Layer B).
+//
+// Metrics intentionally NOT shipped, with rationale:
+//
+// - **Stability** (prefer the codeword the candidate held last allocation):
+//   requires preserving `oldCodeword` past viewport-leave. The
+//   IntersectionTracker currently clears `wrapper.scanned.codeword`
+//   when an element exits the viewport, so the old assignment is gone
+//   by the next allocation pass. The pool's unshift-to-front behavior
+//   already gives us "scrolled out and back returns the same codeword"
+//   stability, which covers most real cases. Promote when an
+//   in-place re-allocation pass is added.
+//
+// - **Avoid-stealing**: structurally moot. Content-side allocation only
+//   draws from the pool's free list; the pool never returns held
+//   codewords. There's nothing to steal from.
+//
+// - **First-letter clash**: depends on `accessibleName` (Sprint F /
+//   Phase 2.5). DESIGN §6 Q4 marks the metric itself speculative
+//   ("may or may not matter"). Defer.
+//
+// - **codewordEarliestNeededRank tiebreaker**: subsumed by rank-and-pair.
+//   Cursorless's insight ("save 'arch' for closer-to-focus candidates")
+//   already falls out of sorting candidates by rank and drawing
+//   codewords in pool order.
+
+/**
+ * Syllable cost of a pool codeword. Single-word codewords are 1; pair
+ * codewords ("zone arch") are 2. Used as the canonical "cheapness"
+ * metric — pair with the chooser's higher-is-better convention by
+ * negating: `c => -syllableCost(c.codeword)`.
+ *
+ * Pool codewords are space-separated when paired (see
+ * `label-pool.ts:buildPool`), so a simple space count suffices. Empty
+ * input returns 0 (defensive — empty codewords shouldn't reach a
+ * metric, but the pool's exhausted path can produce them).
+ */
+export function syllableCost(codeword: string): number {
+  if (codeword.length === 0) return 0;
+  let words = 1;
+  for (let i = 0; i < codeword.length; i++) {
+    if (codeword.charCodeAt(i) === 32 /* space */) words++;
+  }
+  return words;
+}
+
 /**
  * Lexicographic chooser: given a list of items and a stack of metrics,
  * walks the metrics in order, narrowing candidates at each step to

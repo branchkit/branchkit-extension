@@ -17,6 +17,7 @@ import {
   rankByDistance,
   getRankedCandidates,
   maxByFirstDiffering,
+  syllableCost,
 } from './allocator';
 
 function rect(left: number, top: number, width = 10, height = 10): HintRect {
@@ -208,6 +209,15 @@ describe('maxByFirstDiffering', () => {
     expect(metrics).toEqual(metricsCopy);
   });
 
+  it('composes naturally with syllableCost as a "cheapest-wins" metric', () => {
+    // Caller-side proof that the higher-wins convention works for the
+    // canonical "prefer single over pair" use case via negation.
+    const codewords = ['arch', 'zone arch', 'bake'];
+    const cheapest = maxByFirstDiffering(codewords, [c => -syllableCost(c)]);
+    // 'arch' and 'bake' tie at cost 1; first survivor wins.
+    expect(cheapest).toBe('arch');
+  });
+
   it('handles a multi-metric narrowing chain', () => {
     // Three metrics, three narrowing steps: first metric keeps two
     // candidates, second keeps two (different ones from the first
@@ -222,5 +232,33 @@ describe('maxByFirstDiffering', () => {
     ];
     const winner = maxByFirstDiffering(items, [x => x.a, x => x.b, x => x.c]);
     expect(winner?.tag).toBe('B');
+  });
+});
+
+describe('syllableCost', () => {
+  it('returns 1 for a single-word codeword', () => {
+    expect(syllableCost('arch')).toBe(1);
+    expect(syllableCost('bake')).toBe(1);
+    expect(syllableCost('a')).toBe(1);
+  });
+
+  it('returns 2 for a pair codeword', () => {
+    expect(syllableCost('zone arch')).toBe(2);
+    expect(syllableCost('rain bake')).toBe(2);
+  });
+
+  it('returns 3 for a hypothetical triple (color + pair tier)', () => {
+    // The current pool is singles + pairs only, but the design doc's
+    // tier 4 (color + pair) would produce 3-word codewords. Confirm
+    // the cost function generalizes so that future tier additions
+    // don't need changes here.
+    expect(syllableCost('red zone arch')).toBe(3);
+  });
+
+  it('returns 0 for an empty codeword (defensive)', () => {
+    // Pool exhaustion can leave a wrapper with codeword === ''. The
+    // metric should not throw or return NaN; 0 keeps it sortable
+    // even if such a value reaches the chooser.
+    expect(syllableCost('')).toBe(0);
   });
 });
