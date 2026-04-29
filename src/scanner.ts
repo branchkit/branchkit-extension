@@ -47,6 +47,12 @@ const COMMON_LEAF_TAGS = new Set([
 
 function findShadowHosts(root: ParentNode): Element[] {
   const hosts: Element[] = [];
+  // querySelectorAll('*') only returns descendants. When `root` itself is
+  // a custom-element host (the case fired by the SHADOW_EVENT listener
+  // in content.ts on attachShadow), we'd miss its shadow root entirely.
+  if (root instanceof Element && !COMMON_LEAF_TAGS.has(root.tagName.toLowerCase()) && root.shadowRoot) {
+    hosts.push(root);
+  }
   const candidates = root.querySelectorAll('*');
   for (const el of candidates) {
     if (COMMON_LEAF_TAGS.has(el.tagName.toLowerCase())) continue;
@@ -62,6 +68,14 @@ function findShadowHosts(root: ParentNode): Element[] {
  */
 export function deepQuerySelectorAll(root: ParentNode, selector: string): Element[] {
   const out = Array.from(root.querySelectorAll(selector));
+  // querySelectorAll excludes the root. When MutationObserver fires for a
+  // single hintable leaf added to body (e.g. <button> inserted directly),
+  // discoverInSubtree's `root` IS the button — we'd miss it. Include
+  // matching root explicitly. (Document doesn't have `matches`, so guard
+  // on Element first.)
+  if (root instanceof Element && root.matches(selector)) {
+    out.unshift(root);
+  }
   for (const host of findShadowHosts(root)) {
     if (host.shadowRoot) {
       out.push(...deepQuerySelectorAll(host.shadowRoot, selector));
