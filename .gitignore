@@ -1,3 +1,13 @@
 node_modules/
 dist/
 *.zip
+
+# Chrome extension build outputs and signing key. The .crx is a packed
+# extension archive (rebuilt from `dist/` on every package step); the
+# .pem is the private signing key that authenticates extension updates
+# — *never* commit it. If it leaks, anyone holding the key can publish
+# updates that browsers will auto-install as this extension.
+dist.crx
+dist.pem
+*.crx
+*.pem
