@@ -41,7 +41,7 @@ const MAX_BADGE_COUNT = 676; // No artificial cap; word pairs for >26
 // prefix (show_hints_go / show_hints_set / show_hints_tables) so the
 // codeword the user speaks resolves to the wrapper they SAW at speech
 // start, even if the page has mutated by the time the action arrives.
-// See src/snapshot.ts and DESIGN_BROWSER_HINT_ALLOCATOR.md §3.C.
+// See src/snapshot.ts and DESIGN_BROWSER_HINT_ALLOCATOR.md section 3.C.
 let phraseSnapshot: CodewordSnapshot | null = null;
 
 // Voice category groups — maps voice trigger prefixes to element categories.
@@ -794,7 +794,7 @@ startBadgeReattachObserver();
 // paint — without observing those events, their interactive surfaces
 // stay invisible to the hint system.
 //
-// Two layers, per `notes/DESIGN_BROWSER_FRAMES_AND_OBSERVERS.md` §3:
+// Two layers, per `notes/DESIGN_BROWSER_FRAMES_AND_OBSERVERS.md` section 3:
 //
 //   1. attachShadow MAIN-world wrapper (in `bootstrap.ts`) dispatches a
 //      bubbling, composed CustomEvent before the native call. The

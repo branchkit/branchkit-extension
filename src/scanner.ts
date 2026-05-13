@@ -1,7 +1,7 @@
 /**
  * BranchKit Browser — DOM element scanning.
  *
- * Selectors from DESIGN_BROWSER_EXTENSION.md §1.
+ * Selectors from DESIGN_BROWSER_EXTENSION.md section 1.
  * buildSelector adapted from basetypes-extension.
  */
 

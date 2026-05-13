@@ -32,7 +32,7 @@ export interface ScannedElement {
    * Voice handle assigned by the per-tab label pool — e.g. "ape" or
    * "zone ape". Empty when the pool didn't assign one (alphabet not
    * loaded, pool exhausted). Voice plugin skips elements without a
-   * codeword. See notes/DESIGN_BROWSER_GRAMMAR_PROTOCOL.md §3.
+   * codeword. See notes/DESIGN_BROWSER_GRAMMAR_PROTOCOL.md section 3.
    */
   codeword: string;
 }
@@ -51,7 +51,7 @@ export type Message =
   | { type: 'CONNECT_SSE'; port: number; token: string }
   // Frame label pool — content asks background for codewords so frames in
   // the same tab don't independently pick the same label. See
-  // notes/DESIGN_BROWSER_FRAMES_AND_OBSERVERS.md §2.
+  // notes/DESIGN_BROWSER_FRAMES_AND_OBSERVERS.md section 2.
   | { type: 'CLAIM_LABELS'; count: number }
   | { type: 'RELEASE_LABELS'; labels: string[] }
   // Background → content ping. The focused frame answers true, others false.

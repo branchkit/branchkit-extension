@@ -23,7 +23,7 @@ let branchkitConnected = false;
 // by (tabId, frameId); on every update we rebuild the aggregate and push
 // it to the voice plugin. Without this, the voice plugin only sees
 // whichever frame pushed last — multi-frame grammar gets overwritten.
-// See notes/DESIGN_BROWSER_GRAMMAR_PROTOCOL.md §4.
+// See notes/DESIGN_BROWSER_GRAMMAR_PROTOCOL.md section 4.
 const tabGrammars = new Map<number, Map<number, ScannedElement[]>>();
 
 // Debounced push timers per tab. Mutation-heavy pages (Slack, Linear) can

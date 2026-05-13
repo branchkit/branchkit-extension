@@ -5,7 +5,7 @@
  * never independently pick the same label. Voice routing uses the
  * `assigned` map to find which frame owns a codeword.
  *
- * Design: notes/DESIGN_BROWSER_FRAMES_AND_OBSERVERS.md §2.
+ * Design: notes/DESIGN_BROWSER_FRAMES_AND_OBSERVERS.md section 2.
  */
 
 import { LabelStack } from './types';
@@ -13,7 +13,7 @@ import { LabelStack } from './types';
 // Pool composition: 20 singles + 6 prefixes × 26 pairs = 176 codewords.
 //
 // SINGLES_COUNT was bumped from 17 to 20 in Sprint C-4. The Sprint C
-// design (DESIGN_BROWSER_HINT_ALLOCATOR.md §2 Layer C) initially
+// design (DESIGN_BROWSER_HINT_ALLOCATOR.md section 2, Layer C) initially
 // proposed dynamic "eager-promotion" of any letter into singles, but
 // analysis showed that's functionally equivalent to a static
 // SINGLES_COUNT bump: claims always hit alphabet order, so after K

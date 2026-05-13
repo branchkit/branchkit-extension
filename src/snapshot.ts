@@ -14,7 +14,7 @@
  * on. Snapshot is per-frame; voice routing already targets the right
  * frame via the per-tab pool's `assigned` map.
  *
- * Design: notes/DESIGN_BROWSER_HINT_ALLOCATOR.md §3.C, ported from
+ * Design: notes/DESIGN_BROWSER_HINT_ALLOCATOR.md section 3.C, ported from
  * Cursorless's HatTokenMapImpl (lib-engine/src/core/HatTokenMapImpl.ts:136-157).
  */
 

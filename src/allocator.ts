@@ -30,7 +30,7 @@ export interface HintRect {
 /**
  * The allocator's view of a hintable thing.
  *
- * `oldCodeword` is reserved for a future stability metric (DESIGN §2
+ * `oldCodeword` is reserved for a future stability metric (DESIGN section 2
  * metric 1). Sprint C ships rank-and-pair, where the metric stack is
  * mostly a no-op; the field is on the interface now so the metric can
  * be wired in later without a signature break.
@@ -147,7 +147,7 @@ export type Metric<T> = (item: T) => number;
 // (`maxByFirstDiffering` above) is therefore not invoked in the live
 // pipeline — the metric primitives below exist as building blocks for a
 // future promotion to a multi-metric chooser
-// (DESIGN_BROWSER_HINT_ALLOCATOR.md §2 Layer B).
+// (DESIGN_BROWSER_HINT_ALLOCATOR.md section 2, Layer B).
 //
 // Metrics intentionally NOT shipped, with rationale:
 //
@@ -165,7 +165,7 @@ export type Metric<T> = (item: T) => number;
 //   codewords. There's nothing to steal from.
 //
 // - **First-letter clash**: depends on `accessibleName` (Sprint F /
-//   Phase 2.5). DESIGN §6 Q4 marks the metric itself speculative
+//   Phase 2.5). DESIGN section 6, Q4 marks the metric itself speculative
 //   ("may or may not matter"). Defer.
 //
 // - **codewordEarliestNeededRank tiebreaker**: subsumed by rank-and-pair.
@@ -204,7 +204,7 @@ export function syllableCost(codeword: string): number {
  *
  * Sprint C ships rank-and-pair, where the metric stack is mostly a
  * no-op; this helper is in place so the chooser can be promoted to a
- * full multi-metric allocator later (DESIGN §2 Layer B) by adding
+ * full multi-metric allocator later (DESIGN section 2, Layer B) by adding
  * metrics to the stack — no caller-side rewrite.
  *
  * Pure: does not mutate `items` or `metrics`. Stops evaluating

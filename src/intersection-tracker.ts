@@ -6,7 +6,7 @@
  * Without this gate, a 5000-link page (Twitter timeline, infinite-scroll
  * search results) exhausts the 251-codeword pool on first paint.
  *
- * Design: notes/DESIGN_BROWSER_FRAMES_AND_OBSERVERS.md §4.
+ * Design: notes/DESIGN_BROWSER_FRAMES_AND_OBSERVERS.md section 4.
  *
  * Lifecycle per wrapper:
  *   1. MutationObserver discovers a wrapper → tracker.observe(element).
@@ -206,7 +206,7 @@ export class IntersectionTracker {
       // singles before pairs (see label-pool.ts:buildPool); pairing
       // pool order with rank order delivers the design's "cheap hints
       // for visible elements" promise without a multi-metric chooser.
-      // (Sprint C path 1; DESIGN_BROWSER_HINT_ALLOCATOR.md §2.)
+      // (Sprint C path 1; DESIGN_BROWSER_HINT_ALLOCATOR.md section 2.)
       //
       // getBoundingClientRect forces layout, so candidates are
       // materialized once and reused for every comparison rather than

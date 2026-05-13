@@ -3,7 +3,7 @@
  *
  * Modes: normal, insert, hint.
  * In hint mode, typed characters filter badges by word prefix.
- * Insert mode detection from DESIGN doc §7.
+ * Insert mode detection from DESIGN doc section 7.
  */
 
 import { ActionDispatcher, CommandRegistry } from './dispatcher';
