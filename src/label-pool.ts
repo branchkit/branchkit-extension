@@ -10,34 +10,13 @@
 
 import { LabelStack } from './types';
 
-// Pool composition: 20 singles + 6 prefixes × 26 pairs = 176 codewords.
+// Pool composition: 26 singles + 26×26 pairs = 702 codewords.
 //
-// SINGLES_COUNT was bumped from 17 to 20 in Sprint C-4. The Sprint C
-// design (DESIGN_BROWSER_HINT_ALLOCATOR.md section 2, Layer C) initially
-// proposed dynamic "eager-promotion" of any letter into singles, but
-// analysis showed that's functionally equivalent to a static
-// SINGLES_COUNT bump: claims always hit alphabet order, so after K
-// claims the in-flight singles are alphabet[0..K-1] under either
-// model. The cheap UX win is just to push SINGLES_COUNT higher,
-// trading capacity ceiling for cheaper hints in the medium-density
-// band.
-//
-// 20 singles vs the prior 17:
-//  - Pages with 18-20 visible candidates now get all-singles (3 more
-//    elements get one-word hints in the band most affected).
-//  - Pages with 21+ candidates get pairs starting at the 21st element
-//    instead of the 18th.
-//  - Capacity ceiling drops from 251 to 176, retaining a 70+ buffer
-//    above the ~100-codeword peak observed in B-6 viewport-gated
-//    stress tests (Wikipedia 25k-px scroll, GitHub PR with shadow
-//    hosts).
-//
-// True dynamic resplitting (variable K driven by demand) would
-// require invalidating already-claimed codewords on density
-// transitions; deferred until a real-world signal justifies the
-// added complexity.
-const SINGLES_COUNT = 20;
-const PREFIXES_COUNT = 6;
+// Every letter serves as both a single and a prefix. Continuous Vosk
+// recognition (no VAD gate) makes pairs as fast to speak as singles
+// were under the old pause-speak-pause model, so the singles/prefixes
+// split that capped capacity at 176 is no longer needed.
+// See notes/DESIGN_BROWSER_CONTINUOUS_MODE_UNLOCKS.md.
 
 /**
  * Build the codeword pool from a 26-word alphabet. Pool is ordered so the
@@ -51,10 +30,9 @@ export function buildPool(alphabet: string[]): string[] | null {
   if (alphabet.some(w => typeof w !== 'string' || w.length === 0)) return null;
 
   const pool: string[] = [];
-  for (let i = 0; i < SINGLES_COUNT; i++) pool.push(alphabet[i]);
-  for (let p = 0; p < PREFIXES_COUNT; p++) {
-    const prefix = alphabet[SINGLES_COUNT + p];
-    for (let s = 0; s < 26; s++) pool.push(`${prefix} ${alphabet[s]}`);
+  for (let i = 0; i < 26; i++) pool.push(alphabet[i]);
+  for (let p = 0; p < 26; p++) {
+    for (let s = 0; s < 26; s++) pool.push(`${alphabet[p]} ${alphabet[s]}`);
   }
   return pool;
 }
@@ -173,7 +151,7 @@ export async function getFrameForLabel(tabId: number, label: string): Promise<nu
  * removed from the DOM). Currently NOT wired — Chrome's only signal for
  * this without `webNavigation` permission is unreliable. Frames that
  * detach mid-page leak their codewords until the tab closes; in practice
- * this is rare and bounded by the 251-label pool capacity. Wiring this
+ * this is rare and bounded by the 702-label pool capacity. Wiring this
  * up is a Sprint B task once the manifest gains `webNavigation` access
  * for IntersectionObserver gating.
  */
