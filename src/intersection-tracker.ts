@@ -4,7 +4,7 @@
  * The load-bearing piece of Sprint B: only viewport-near elements claim
  * codewords from the per-tab pool. Off-screen elements release theirs.
  * Without this gate, a 5000-link page (Twitter timeline, infinite-scroll
- * search results) exhausts the 702-codeword pool on first paint.
+ * search results) exhausts the 676-codeword pool on first paint.
  *
  * Design: notes/DESIGN_BROWSER_FRAMES_AND_OBSERVERS.md section 4.
  *

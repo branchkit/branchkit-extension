@@ -75,14 +75,14 @@ describe('label-pool', () => {
   });
 
   describe('buildPool', () => {
-    it('returns 702 codewords (26 singles + 26×26 pairs) for a valid alphabet', () => {
+    it('returns 676 codewords (26×26 pairs) for a valid alphabet', () => {
       const pool = buildPool(ALPHABET);
       expect(pool).not.toBeNull();
-      expect(pool!.length).toBe(702);
-      expect(pool![0]).toBe('arch');         // first single
-      expect(pool![25]).toBe('zoo');          // last single (alphabet[25])
-      expect(pool![26]).toBe('arch arch');    // first pair (prefix=alphabet[0], suffix=alphabet[0])
-      expect(pool![701]).toBe('zoo zoo');     // last pair
+      expect(pool!.length).toBe(676);
+      expect(pool![0]).toBe('arch arch');     // first pair
+      expect(pool![25]).toBe('arch zoo');     // last suffix for first prefix
+      expect(pool![26]).toBe('bake arch');    // second prefix starts
+      expect(pool![675]).toBe('zoo zoo');     // last pair
     });
 
     it('returns null for an alphabet of the wrong length', () => {
@@ -101,26 +101,24 @@ describe('label-pool', () => {
     it('returns the same labels on re-claim of the same count', async () => {
       const tabId = nextTabId();
       const first = await claimLabels(tabId, 0, 4);
-      expect(first).toEqual(['arch', 'bake', 'check', 'deck']);
+      expect(first).toEqual(['arch arch', 'arch bake', 'arch check', 'arch deck']);
 
       await releaseLabels(tabId, first);
 
       const second = await claimLabels(tabId, 0, 4);
-      expect(second).toEqual(['arch', 'bake', 'check', 'deck']);
+      expect(second).toEqual(['arch arch', 'arch bake', 'arch check', 'arch deck']);
     });
 
     it('release of partial set preserves order for unreleased labels', async () => {
       const tabId = nextTabId();
       const first = await claimLabels(tabId, 0, 5);
-      expect(first).toEqual(['arch', 'bake', 'check', 'deck', 'egg']);
+      expect(first).toEqual(['arch arch', 'arch bake', 'arch check', 'arch deck', 'arch egg']);
 
-      // Release only the middle three; arch and egg stay claimed.
-      await releaseLabels(tabId, ['bake', 'check', 'deck']);
+      // Release only the middle three; first and last stay claimed.
+      await releaseLabels(tabId, ['arch bake', 'arch check', 'arch deck']);
 
       const next = await claimLabels(tabId, 0, 3);
-      // Pool's free list was [bake, check, deck, ...rest] after release;
-      // claim returns from the front in order.
-      expect(next).toEqual(['bake', 'check', 'deck']);
+      expect(next).toEqual(['arch bake', 'arch check', 'arch deck']);
     });
   });
 
@@ -137,8 +135,11 @@ describe('label-pool', () => {
       const combined = new Set([...a, ...b]);
       expect(combined.size).toBe(10); // no overlap
 
-      // The first 10 alphabet codewords are split between the two frames.
-      const expected = new Set(['arch', 'bake', 'check', 'deck', 'egg', 'food', 'glad', 'half', 'iron', 'jake']);
+      // The first 10 pairs are split between the two frames.
+      const expected = new Set([
+        'arch arch', 'arch bake', 'arch check', 'arch deck', 'arch egg',
+        'arch food', 'arch glad', 'arch half', 'arch iron', 'arch jake',
+      ]);
       expect(combined).toEqual(expected);
     });
 
@@ -184,7 +185,7 @@ describe('label-pool', () => {
     it('returns at most pool capacity when more is requested', async () => {
       const tabId = nextTabId();
       const claimed = await claimLabels(tabId, 0, 800);
-      expect(claimed.length).toBe(702); // 26 singles + 26*26 pairs
+      expect(claimed.length).toBe(676); // 26×26 pairs
     });
 
     it('returns empty when alphabet is missing', async () => {
@@ -217,9 +218,9 @@ describe('label-pool', () => {
         expect(await getFrameForLabel(tabB, label)).toBeNull();
       }
 
-      // New claims pull from the alt alphabet.
+      // New claims pull from the alt alphabet (pairs now).
       const fresh = await claimLabels(tabA, 0, 3);
-      expect(fresh).toEqual(['apple', 'berry', 'cherry']);
+      expect(fresh).toEqual(['apple apple', 'apple berry', 'apple cherry']);
     });
   });
 });

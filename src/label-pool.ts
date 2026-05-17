@@ -10,27 +10,23 @@
 
 import { LabelStack } from './types';
 
-// Pool composition: 26 singles + 26×26 pairs = 702 codewords.
+// Pool composition: 26×26 pairs = 676 codewords.
 //
-// Every letter serves as both a single and a prefix. Continuous Vosk
-// recognition (no VAD gate) makes pairs as fast to speak as singles
-// were under the old pause-speak-pause model, so the singles/prefixes
-// split that capped capacity at 176 is no longer needed.
-// See notes/DESIGN_BROWSER_CONTINUOUS_MODE_UNLOCKS.md.
+// All hints are uniform two-word pairs — no singles. This eliminates
+// prefix ambiguity by construction: every first word is always a prefix,
+// every hint always requires a second word. Same approach as Rango.
+// Continuous Vosk recognition makes pairs flow as one utterance (~200ms),
+// so the one-word advantage of singles is negligible.
 
 /**
- * Build the codeword pool from a 26-word alphabet. Pool is ordered so the
- * cheapest hints (singles) sit at the front; splice from the start to claim
- * cheap labels first.
- *
- * Returns null if the alphabet isn't usable.
+ * Build the codeword pool from a 26-word alphabet. All pairs, ordered by
+ * prefix then suffix. Returns null if the alphabet isn't usable.
  */
 export function buildPool(alphabet: string[]): string[] | null {
   if (!Array.isArray(alphabet) || alphabet.length !== 26) return null;
   if (alphabet.some(w => typeof w !== 'string' || w.length === 0)) return null;
 
   const pool: string[] = [];
-  for (let i = 0; i < 26; i++) pool.push(alphabet[i]);
   for (let p = 0; p < 26; p++) {
     for (let s = 0; s < 26; s++) pool.push(`${alphabet[p]} ${alphabet[s]}`);
   }
@@ -151,7 +147,7 @@ export async function getFrameForLabel(tabId: number, label: string): Promise<nu
  * removed from the DOM). Currently NOT wired — Chrome's only signal for
  * this without `webNavigation` permission is unreliable. Frames that
  * detach mid-page leak their codewords until the tab closes; in practice
- * this is rare and bounded by the 702-label pool capacity. Wiring this
+ * this is rare and bounded by the 676-label pool capacity. Wiring this
  * up is a Sprint B task once the manifest gains `webNavigation` access
  * for IntersectionObserver gating.
  */
