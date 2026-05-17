@@ -44,11 +44,8 @@ const MAX_BADGE_COUNT = 676; // No artificial cap; word pairs for >26
 // See src/snapshot.ts and DESIGN_BROWSER_HINT_ALLOCATOR.md section 3.C.
 let phraseSnapshot: CodewordSnapshot | null = null;
 
-// Voice category groups — maps voice trigger prefixes to element categories.
-// "set arch" targets the first input, "go arch" targets the first clickable, etc.
-const VOICE_GROUP_SET: Category[] = ['input'];
-const VOICE_GROUP_GO: Category[] = ['link', 'button', 'tab', 'edit', 'view'];
-const VOICE_GROUP_TABLES: Category[] = ['tables'];
+// Input element types — used by the "activate" action to decide click vs focus.
+const INPUT_TYPES = new Set(['input', 'textarea', 'select', 'contenteditable']);
 
 // --- Display Mode from storage ---
 
@@ -446,20 +443,11 @@ function activateWrapper(wrapper: ElementWrapper): void {
 /**
  * Push grammar to background for BranchKit voice commands.
  *
- * Elements are sorted per voice-category group (set/go/tables) by viewport
- * position. This ensures the Go plugin's index-based codeword assignment
- * matches the display order when showHints() renders badges — both use
- * viewportSort() with the same category grouping.
+ * All elements are pushed in viewport order — the Go plugin builds one
+ * unified collection covering all element types.
  */
 function pushGrammar(): void {
-  const elements: ScannedElement[] = [];
-
-  for (const cats of [VOICE_GROUP_SET, VOICE_GROUP_GO, VOICE_GROUP_TABLES]) {
-    const group = store.all.filter(w => (cats as readonly Category[]).includes(w.category));
-    for (const w of viewportSort(group)) {
-      elements.push(w.scanned);
-    }
-  }
+  const elements: ScannedElement[] = viewportSort(store.all).map(w => w.scanned);
 
   // Hash-based deduplication. Includes codeword so an alphabet regen that
   // produces the same elements but different codewords still re-pushes —
@@ -507,47 +495,20 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
     const { action, params } = message.payload;
     console.log('[BranchKit Content] action received:', action, params);
 
-    // Voice actions show category-specific hints (not all elements).
-    // Each voice group gets its own label pool matching the grammar's
-    // per-category codeword assignment.
-    //
-    // The verb-prefix actions are also our snapshot trigger: the user
-    // has said the verb and is about to say the codeword. Freezing the
-    // codeword → wrapper map here means the action that follows will
-    // resolve to what the user SAW, not what the DOM looks like by
-    // the time the second word lands.
-    if (action === 'show_hints' || action === 'show_hints_set') {
+    if (action === 'show_hints') {
       phraseSnapshot = takeSnapshot(store.all, performance.now());
       doScan();
-      showHints(VOICE_GROUP_SET);
-    } else if (action === 'show_hints_go') {
-      phraseSnapshot = takeSnapshot(store.all, performance.now());
-      doScan();
-      showHints(VOICE_GROUP_GO);
-    } else if (action === 'show_hints_tables') {
-      phraseSnapshot = takeSnapshot(store.all, performance.now());
-      doScan();
-      showHints(VOICE_GROUP_TABLES);
+      showHints();
     } else if (action === 'rescan') {
-      // Browser plugin reconnected (actuator restart) — rescan DOM to re-push grammar
       lastGrammarHash = '';
       doScan();
     } else if (action === 'set_badge_mode' && params?.mode) {
       chrome.storage.sync.set({ badgeDisplayMode: params.mode });
-    } else if (action === 'click' || action === 'navigate' || action === 'set_value') {
-      // Voice command resolution, three-tier fallback:
-      //
-      //  1. Pre-phrase snapshot. If a verb prefix arrived recently
-      //     (show_hints_go / set / tables), the user-seen codeword
-      //     mapping is frozen there. This is the path that protects
-      //     against DOM mutations between speech-start and action-arrival.
-      //
-      //  2. Live store. The page might have just mutated; the wrapper
-      //     for this codeword has the up-to-date element.
-      //
-      //  3. Voice-plugin selector. Last resort — the plugin already
-      //     resolved codeword → selector at grammar push time. Stale
-      //     in the worst case but better than nothing.
+    } else if (action === 'activate') {
+      // Resolve element via three-tier fallback:
+      //  1. Pre-phrase snapshot (protects against DOM mutation)
+      //  2. Live store (current codeword mapping)
+      //  3. Selector from voice plugin (last resort)
       const codeword = params?.codeword;
       let target: Element | null = null;
 
@@ -572,7 +533,8 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
 
       if (target instanceof HTMLElement) {
         hideHints();
-        if (action === 'set_value') {
+        const elemType = params?.elem_type ?? '';
+        if (INPUT_TYPES.has(elemType) || INPUT_TYPES.has(target.tagName.toLowerCase())) {
           target.focus();
           target.style.outline = '2px solid #007AFF';
           setTimeout(() => { target!.style.outline = ''; }, 3000);
