@@ -141,13 +141,20 @@ export type Metric<T> = (item: T) => number;
 
 // --- Allocation metrics ----------------------------------------------------
 //
-// Sprint C ships rank-and-pair: candidates are sorted by viewport
-// distance, codewords are pulled from the pool in singles-then-pairs
-// order, and the two are zipped. The chooser machinery
-// (`maxByFirstDiffering` above) is therefore not invoked in the live
-// pipeline — the metric primitives below exist as building blocks for a
-// future promotion to a multi-metric chooser
-// (DESIGN_BROWSER_HINT_ALLOCATOR.md section 2, Layer B).
+// The live pipeline uses rank-and-pair: candidates sorted by viewport
+// distance, codewords drawn from the pool in singles-then-pairs order,
+// zipped. The chooser machinery (`maxByFirstDiffering`) is not invoked
+// yet — the metric primitives below are building blocks for a future
+// multi-metric chooser (DESIGN_BROWSER_HINT_ALLOCATOR.md section 2,
+// Layer B).
+//
+// With continuous Vosk recognition (no VAD gate), pairs are as fast to
+// speak as singles were under the old pause-speak-pause model. This
+// shifts the metric priorities: syllable cost is near-irrelevant, while
+// stability (keeping the same codeword across rescans) becomes the
+// dominant concern. When the multi-metric chooser is promoted, stability
+// should be the first metric and syllable cost should be weighted low
+// or dropped entirely.
 //
 // Metrics intentionally NOT shipped, with rationale:
 //
