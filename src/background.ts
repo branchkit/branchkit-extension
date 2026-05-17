@@ -360,7 +360,7 @@ async function notifyActiveTab(message: Message): Promise<void> {
  * etc.) — caller falls back to top-frame delivery.
  *
  * The voice plugin sends `params.codeword` directly (the full string, e.g.
- * "ape" or "zone ape") per the Sprint A.5 protocol. Older keyboard-derived
+ * "arch" or "zone arch") per the Sprint A.5 protocol. Older keyboard-derived
  * actions used `params.word` + optional `params.word2`; we still honor that
  * shape for backwards compatibility within the extension's own dispatcher.
  */

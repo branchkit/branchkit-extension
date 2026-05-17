@@ -29,8 +29,8 @@ export interface ScannedElement {
   type: string;         // more specific: 'record_action', 'nav', etc.
   adapter: string | null;
   /**
-   * Voice handle assigned by the per-tab label pool — e.g. "ape" or
-   * "zone ape". Empty when the pool didn't assign one (alphabet not
+   * Voice handle assigned by the per-tab label pool — e.g. "arch" or
+   * "zone arch". Empty when the pool didn't assign one (alphabet not
    * loaded, pool exhausted). Voice plugin skips elements without a
    * codeword. See notes/DESIGN_BROWSER_GRAMMAR_PROTOCOL.md section 3.
    */

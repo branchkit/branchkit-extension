@@ -45,7 +45,7 @@ const MAX_BADGE_COUNT = 676; // No artificial cap; word pairs for >26
 let phraseSnapshot: CodewordSnapshot | null = null;
 
 // Voice category groups — maps voice trigger prefixes to element categories.
-// "set ape" targets the first input, "go ape" targets the first clickable, etc.
+// "set arch" targets the first input, "go arch" targets the first clickable, etc.
 const VOICE_GROUP_SET: Category[] = ['input'];
 const VOICE_GROUP_GO: Category[] = ['link', 'button', 'tab', 'edit', 'view'];
 const VOICE_GROUP_TABLES: Category[] = ['tables'];

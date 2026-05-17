@@ -18,7 +18,7 @@ BranchKit Browser adds voice-navigable hint badges to interactive elements on an
 
 **How it works:**
 - The extension scans the page for interactive elements (buttons, links, form fields, tabs)
-- Each element gets a hint badge with a unique codeword (e.g., "ape", "beam", "cave")
+- Each element gets a hint badge with a unique codeword (e.g., "arch", "beam", "cave")
 - Say the codeword through BranchKit's push-to-talk to activate that element
 - Works on any website — no site-specific configuration needed
 
