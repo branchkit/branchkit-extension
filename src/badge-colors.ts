@@ -197,7 +197,6 @@ function adjustForContrast(fg: RGB, bg: RGB): RGB {
 
   let low = rgbToOklch(bg).l;
   let high = extremeL;
-  let currentL = rgbToOklch(fg).l;
 
   for (let i = 0; i < 10; i++) {
     const mid = (low + high) / 2;
@@ -214,7 +213,6 @@ function adjustForContrast(fg: RGB, bg: RGB): RGB {
     } else {
       low = mid;
     }
-    currentL = mid;
   }
 
   const result = oklchToRgb(high, c, h);

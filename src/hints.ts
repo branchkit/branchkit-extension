@@ -10,7 +10,6 @@
 import { Category, BadgeDisplayMode } from './types';
 import { LabelAssignment, labelToDisplay } from './words';
 import { getCachedRect, getCachedStyle, getCachedDims } from './layout-cache';
-import { calculateZIndex } from './stacking-context';
 import { computeBadgeColors } from './badge-colors';
 import { leaderLineGeometry } from './placement/geometry';
 
@@ -210,6 +209,8 @@ export class HintBadge {
   private category: Category;
   private _visible: boolean = false;
   private _size: { w: number; h: number } | null = null;
+  private focusinHandler: () => void;
+  private focusoutHandler: () => void;
 
   private label: LabelAssignment;
   private displayMode: BadgeDisplayMode;
@@ -260,8 +261,7 @@ export class HintBadge {
         display: none;
       }
       .bk-inner.text-match {
-        border-color: #FFD60A !important;
-        outline: 1px solid #FFD60A;
+        outline: 1px solid currentColor;
       }
       .bk-matched {
         opacity: 0.35;
@@ -290,17 +290,13 @@ export class HintBadge {
     this.clipAncestor = findClipAncestor(target);
     this.anchorParent.appendChild(this.host);
 
-    this.host.style.zIndex = String(calculateZIndex(target, this.host));
-
     if (document.hasFocus() && target === document.activeElement) {
       this.outer.classList.add('focus-hidden');
     }
-    target.addEventListener('focusin', () => {
-      this.outer.classList.add('focus-hidden');
-    });
-    target.addEventListener('focusout', () => {
-      this.outer.classList.remove('focus-hidden');
-    });
+    this.focusinHandler = () => this.outer.classList.add('focus-hidden');
+    this.focusoutHandler = () => this.outer.classList.remove('focus-hidden');
+    target.addEventListener('focusin', this.focusinHandler);
+    target.addEventListener('focusout', this.focusoutHandler);
   }
 
   updatePosition(candidate?: { x: number; y: number }): void {
@@ -403,6 +399,8 @@ export class HintBadge {
     this._size = null;
   }
 
+  // count = number of letter positions typed, not characters. In word mode,
+  // each word maps to one letter position, so count=1 dims the first word.
   setMatchedChars(count: number): void {
     if (count === 0) {
       this.inner.textContent = labelToDisplay(this.label, this.displayMode);
@@ -454,6 +452,8 @@ export class HintBadge {
   }
 
   remove(): void {
+    this.target.removeEventListener('focusin', this.focusinHandler);
+    this.target.removeEventListener('focusout', this.focusoutHandler);
     this.host.remove();
   }
 

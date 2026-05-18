@@ -1,31 +1,40 @@
 import { ElementWrapper } from '../element-wrapper';
-import { getCachedRect } from '../layout-cache';
+import { getCachedRect, getCachedStyle } from '../layout-cache';
 import { PlacementStrategy } from './strategy';
 
 const BASE_Z = 2147483000;
 
-function hasVisibleTextContent(element: Element): boolean {
+type TextProbe = { hasText: true; rect: DOMRect } | { hasText: false };
+
+function probeFirstVisibleText(element: Element): TextProbe {
   const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
   let node: Text | null;
   while ((node = walker.nextNode() as Text | null)) {
     if (!node.textContent || node.textContent.trim().length === 0) continue;
     const parent = node.parentElement;
     if (parent) {
-      const pr = parent.getBoundingClientRect();
+      const pr = getCachedRect(parent);
       if (pr.width < 3 && pr.height < 3) continue;
     }
-    return true;
+    const text = node.textContent;
+    const start = text.search(/\S/);
+    if (start < 0) continue;
+    const range = document.createRange();
+    range.setStart(node, start);
+    range.setEnd(node, start + 1);
+    const rect = range.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) return { hasText: true, rect };
   }
-  return false;
+  return { hasText: false };
 }
 
-function getNudgeRatios(element: Element): { x: number; y: number } {
-  const rect = element.getBoundingClientRect();
-  if (rect.width > 30 && rect.height > 30 && !hasVisibleTextContent(element)) {
+function getNudgeRatios(element: Element, hasText: boolean): { x: number; y: number } {
+  const rect = getCachedRect(element);
+  if (rect.width > 30 && rect.height > 30 && !hasText) {
     return { x: 1, y: 1 };
   }
 
-  const style = getComputedStyle(element);
+  const style = getCachedStyle(element);
   const fontSize = parseInt(style.fontSize, 10);
 
   if (fontSize < 15) return { x: 0.3, y: 0.5 };
@@ -62,7 +71,7 @@ export class RangoStrategy implements PlacementStrategy {
   clear(): void {}
 
   private isClipAncestor(el: Element): boolean {
-    const s = getComputedStyle(el);
+    const s = getCachedStyle(el);
     if (s.overflow !== 'visible') return true;
     if (s.clipPath !== 'none') return true;
     if (/paint|content|strict/.test(s.contain)) return true;
@@ -75,7 +84,7 @@ export class RangoStrategy implements PlacementStrategy {
     let parent = element.parentElement;
     while (parent) {
       if (parent === document.body || this.isClipAncestor(parent)) {
-        const parentRect = parent.getBoundingClientRect();
+        const parentRect = getCachedRect(parent);
         return {
           left: Math.max(0, rect.left - parentRect.left),
           top: Math.max(0, rect.top - parentRect.top),
@@ -86,33 +95,12 @@ export class RangoStrategy implements PlacementStrategy {
     return { left: undefined, top: undefined };
   }
 
-  private getFirstTextRect(element: Element): DOMRect {
-    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-    let node: Text | null;
-    while ((node = walker.nextNode() as Text | null)) {
-      if (!node.textContent || node.textContent.trim().length === 0) continue;
-      const parent = node.parentElement;
-      if (parent) {
-        const pr = parent.getBoundingClientRect();
-        if (pr.width < 3 && pr.height < 3) continue;
-      }
-      const range = document.createRange();
-      const text = node.textContent;
-      const start = text.search(/\S/);
-      if (start < 0) continue;
-      range.setStart(node, start);
-      range.setEnd(node, start + 1);
-      const rect = range.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) return rect;
-    }
-    return element.getBoundingClientRect();
-  }
-
   private positionAtTopLeft(w: ElementWrapper): void {
     if (!w.hint) return;
-    const targetRect = this.getFirstTextRect(w.element);
+    const probe = probeFirstVisibleText(w.element);
+    const targetRect = probe.hasText ? probe.rect : getCachedRect(w.element);
     const size = w.hint.badgeSize;
-    const { x: nudgeX, y: nudgeY } = getNudgeRatios(w.element);
+    const { x: nudgeX, y: nudgeY } = getNudgeRatios(w.element, probe.hasText);
     const space = this.getAvailableSpace(w.element, targetRect);
 
     const hintOffsetX = size.w * (1 - nudgeX);

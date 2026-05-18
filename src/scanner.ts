@@ -128,11 +128,9 @@ function isVisible(el: Element): boolean {
   }
 
   let current = el.parentElement;
-  let depth = 0;
-  while (current && depth < 4) {
+  while (current) {
     if (getComputedStyle(current).opacity === '0') return false;
     current = current.parentElement;
-    depth++;
   }
 
   return true;
