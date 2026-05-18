@@ -211,9 +211,14 @@ export class HintBadge {
   private _visible: boolean = false;
   private _size: { w: number; h: number } | null = null;
 
+  private label: LabelAssignment;
+  private displayMode: BadgeDisplayMode;
+
   constructor(target: Element, label: LabelAssignment, category: Category, displayMode: BadgeDisplayMode) {
     this.target = target;
     this.category = category;
+    this.label = label;
+    this.displayMode = displayMode;
 
     this.host = document.createElement('div');
     this.host.setAttribute('data-branchkit-hint', 'true');
@@ -257,6 +262,9 @@ export class HintBadge {
       .bk-inner.text-match {
         border-color: #FFD60A !important;
         outline: 1px solid #FFD60A;
+      }
+      .bk-matched {
+        opacity: 0.35;
       }
       .bk-leader {
         position: absolute;
@@ -338,8 +346,8 @@ export class HintBadge {
   show(): void {
     if (this._visible) return;
     this._visible = true;
+    this.inner.classList.remove('filtered');
     this.applyColors();
-    this.updatePosition();
     this._size = null;
     requestAnimationFrame(() => {
       this.inner.classList.add('visible');
@@ -377,9 +385,6 @@ export class HintBadge {
       this.inner.classList.add('filtered');
     } else {
       this.inner.classList.remove('filtered');
-      if (this._visible) {
-        this.updatePosition();
-      }
     }
   }
 
@@ -392,8 +397,54 @@ export class HintBadge {
   }
 
   updateLabel(label: LabelAssignment, displayMode: BadgeDisplayMode): void {
+    this.label = label;
+    this.displayMode = displayMode;
     this.inner.textContent = labelToDisplay(label, displayMode);
     this._size = null;
+  }
+
+  setMatchedChars(count: number): void {
+    if (count === 0) {
+      this.inner.textContent = labelToDisplay(this.label, this.displayMode);
+      return;
+    }
+
+    const { words, letter } = this.label;
+    let matchedText: string;
+    let remainingText: string;
+
+    switch (this.displayMode) {
+      case 'letter':
+        matchedText = letter.slice(0, count);
+        remainingText = letter.slice(count);
+        break;
+      case 'word':
+        matchedText = words.slice(0, count).join(' ');
+        remainingText = words.slice(count).join(' ');
+        if (matchedText && remainingText) remainingText = ' ' + remainingText;
+        break;
+      case 'both':
+        if (words.length === 1) {
+          matchedText = labelToDisplay(this.label, 'both');
+          remainingText = '';
+        } else {
+          matchedText = words.slice(0, count).join(' ');
+          remainingText = words.slice(count).join(' ');
+          if (matchedText && remainingText) remainingText = ' ' + remainingText;
+        }
+        break;
+    }
+
+    this.inner.textContent = '';
+    if (matchedText) {
+      const matched = document.createElement('span');
+      matched.className = 'bk-matched';
+      matched.textContent = matchedText;
+      this.inner.appendChild(matched);
+    }
+    if (remainingText) {
+      this.inner.appendChild(document.createTextNode(remainingText));
+    }
   }
 
   reposition(): void {

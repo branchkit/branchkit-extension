@@ -338,6 +338,7 @@ keyHandler.setFilterCallback((prefix: string, byText: boolean) => {
     for (const w of store.all) {
       w.hint?.setFiltered(false);
       w.hint?.setTextMatch(false);
+      w.hint?.setMatchedChars(0);
     }
     return;
   }
@@ -366,6 +367,9 @@ keyHandler.setFilterCallback((prefix: string, byText: boolean) => {
       const isMatch = matches.includes(w);
       w.hint?.setFiltered(!isMatch);
       w.hint?.setTextMatch(false);
+      if (isMatch) {
+        w.hint?.setMatchedChars(prefix.length);
+      }
     }
 
     if (matches.length === 1) {

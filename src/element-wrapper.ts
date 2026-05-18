@@ -164,10 +164,10 @@ export class WrapperStore {
 
   /** Find wrapper by letter prefix (for keyboard filtering) */
   matchingLetterPrefix(prefix: string): ElementWrapper[] {
-    const upper = prefix.toUpperCase();
+    const lower = prefix.toLowerCase();
     return this.wrappers.filter(w => {
       if (!w.label) return false;
-      return w.label.letter.startsWith(upper);
+      return w.label.letter.toLowerCase().startsWith(lower);
     });
   }
 
