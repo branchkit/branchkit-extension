@@ -86,6 +86,91 @@ function storeAlphabet(words: string[]): void {
     .catch(err => console.error('[BranchKit BG] alphabet store error:', err));
 }
 
+// --- Reference Names ---
+
+const REFERENCES_STORAGE_KEY = 'branchkit_references';
+
+async function loadAllReferenceNames(): Promise<string[]> {
+  const result = await chrome.storage.local.get(REFERENCES_STORAGE_KEY);
+  const store = result[REFERENCES_STORAGE_KEY] || {};
+  const names = new Set<string>();
+  for (const host of Object.keys(store)) {
+    const refs = store[host]?.references;
+    if (refs) {
+      for (const name of Object.keys(refs)) {
+        names.add(name);
+      }
+    }
+  }
+  return [...names];
+}
+
+async function saveReferenceToCollection(host: string, name: string, reference: Record<string, unknown>): Promise<void> {
+  if (!pluginPort || !pluginToken) return;
+  try {
+    await fetch(`http://127.0.0.1:${pluginPort}/reference/save`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${pluginToken}`,
+      },
+      body: JSON.stringify({ host, name, reference }),
+    });
+  } catch {
+    // Plugin may be down
+  }
+}
+
+async function pushReferenceNames(): Promise<void> {
+  if (!pluginPort || !pluginToken) return;
+  const names = await loadAllReferenceNames();
+  try {
+    await fetch(`http://127.0.0.1:${pluginPort}/references`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${pluginToken}`,
+      },
+      body: JSON.stringify({ names }),
+    });
+  } catch {
+    // Plugin may be down
+  }
+}
+
+async function hydrateReferencesFromCollection(): Promise<void> {
+  if (!pluginPort || !pluginToken) return;
+  try {
+    const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    const tab = tabs[0];
+    if (!tab?.url) return;
+    const host = new URL(tab.url).hostname;
+    if (!host) return;
+
+    const resp = await fetch(
+      `http://127.0.0.1:${pluginPort}/references?host=${encodeURIComponent(host)}&token=${pluginToken}`,
+    );
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const refs = data?.references;
+    if (!refs || Object.keys(refs).length === 0) return;
+
+    const result = await chrome.storage.local.get(REFERENCES_STORAGE_KEY);
+    const store = result[REFERENCES_STORAGE_KEY] || {};
+    if (!store[host]) {
+      store[host] = { references: {}, marks: {} };
+    }
+    for (const [name, ref] of Object.entries(refs)) {
+      if (!store[host].references[name]) {
+        store[host].references[name] = ref;
+      }
+    }
+    await chrome.storage.local.set({ [REFERENCES_STORAGE_KEY]: store });
+  } catch {
+    // Plugin may be down or tab URL unavailable
+  }
+}
+
 // --- Plugin Discovery ---
 
 async function discoverPlugin(): Promise<boolean> {
@@ -255,6 +340,7 @@ function connectDirectSSE(port: number, token: string): void {
   directSSE.addEventListener('connected', () => {
     console.log('[BranchKit BG] SSE connected (direct)');
     branchkitConnected = true;
+    hydrateReferencesFromCollection().then(() => pushReferenceNames());
   });
 
   directSSE.addEventListener('action', (e: MessageEvent) => {
@@ -407,9 +493,24 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     return false;
   }
 
+  if (message.type === 'REFERENCE_NAMES_CHANGED') {
+    pushReferenceNames();
+    return false;
+  }
+
+  if (message.type === 'REFERENCE_SAVED') {
+    saveReferenceToCollection(message.host, message.name, message.reference);
+    return false;
+  }
+
   if (message.type === 'HEALTH_STATUS') {
     const wasConnected = branchkitConnected;
     branchkitConnected = message.branchkit ?? false;
+
+    // New connection — hydrate from collection then push reference names
+    if (!wasConnected && branchkitConnected) {
+      hydrateReferencesFromCollection().then(() => pushReferenceNames());
+    }
 
     // SSE dropped — immediately re-discover plugin (port may have changed on restart)
     if (wasConnected && !branchkitConnected) {

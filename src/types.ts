@@ -58,7 +58,9 @@ export type Message =
   // Used to route keyboard-derived actions to whichever frame the user is
   // actually interacting with (vs. chrome's default top-frame routing).
   | { type: 'GET_FOCUS_STATUS' }
-  | { type: 'SCROLL_BOUNDARY'; boundary: 'top' | 'bottom' | 'left' | 'right' };
+  | { type: 'SCROLL_BOUNDARY'; boundary: 'top' | 'bottom' | 'left' | 'right' }
+  | { type: 'REFERENCE_NAMES_CHANGED' }
+  | { type: 'REFERENCE_SAVED'; host: string; name: string; reference: Record<string, unknown> };
 
 // Response to CLAIM_LABELS. Returned via sendResponse callback.
 // May be shorter than `count` if pool was partially exhausted; empty array

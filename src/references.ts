@@ -127,3 +127,14 @@ export async function listReferences(): Promise<Record<string, SavedReference>> 
   const host = getHost();
   return store[host]?.references ?? {};
 }
+
+export async function listAllReferenceNames(): Promise<string[]> {
+  const store = await loadStore();
+  const names = new Set<string>();
+  for (const host of Object.keys(store)) {
+    for (const name of Object.keys(store[host].references)) {
+      names.add(name);
+    }
+  }
+  return [...names];
+}

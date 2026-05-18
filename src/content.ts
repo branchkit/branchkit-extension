@@ -46,6 +46,7 @@ import {
   handlePostFindKey,
   setFindCallbacks,
 } from './find';
+import { saveReference, resolveReference, listReferences } from './references';
 
 // --- State ---
 
@@ -78,6 +79,7 @@ let activeCategory: Category | null = null;
 let displayMode: BadgeDisplayMode = 'word';
 let lastGrammarHash = '';
 let pendingMutation = false;
+let lastActivatedElement: Element | null = null;
 const MAX_BADGE_COUNT = 676; // No artificial cap; word pairs for >26
 
 // Pre-phrase snapshot. Captured when the voice plugin signals a verb
@@ -601,6 +603,7 @@ function updateBadgeLabels(): void {
 function activateWrapper(wrapper: ElementWrapper): void {
   const el = wrapper.element as HTMLElement;
   const openNewTab = activateInNewTab;
+  lastActivatedElement = el;
 
   hideHints();
   keyHandler.exitHintMode();
@@ -721,6 +724,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       }
 
       if (target instanceof HTMLElement) {
+        lastActivatedElement = target;
         hideHints();
         const elemType = params?.elem_type ?? '';
         if (INPUT_TYPES.has(elemType) || INPUT_TYPES.has(target.tagName.toLowerCase())) {
@@ -731,6 +735,46 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
           target.click();
         }
       }
+    } else if (action === 'name_reference') {
+      const refName = params?.name?.toLowerCase().trim();
+      if (!refName) return;
+      if (!lastActivatedElement || !lastActivatedElement.isConnected) {
+        console.warn('[BranchKit Content] name_reference: no last-activated element');
+        return;
+      }
+      saveReference(refName, lastActivatedElement).then(async () => {
+        console.log('[BranchKit Content] reference saved:', refName);
+        const refs = await listReferences();
+        const ref = refs[refName];
+        try {
+          chrome.runtime.sendMessage({
+            type: 'REFERENCE_SAVED',
+            host: window.location.hostname,
+            name: refName,
+            reference: ref as unknown as Record<string, unknown>,
+          } as Message);
+          chrome.runtime.sendMessage({ type: 'REFERENCE_NAMES_CHANGED' } as Message);
+        } catch { /* context invalidated */ }
+      });
+    } else if (action === 'resolve_reference') {
+      const refName = params?.name?.toLowerCase().trim();
+      if (!refName) return;
+      resolveReference(refName).then(el => {
+        if (!el) {
+          console.warn('[BranchKit Content] resolve_reference: not found:', refName);
+          return;
+        }
+        lastActivatedElement = el;
+        if (el instanceof HTMLElement) {
+          if (INPUT_TYPES.has(el.tagName.toLowerCase())) {
+            el.focus();
+            el.style.outline = '2px solid #007AFF';
+            setTimeout(() => { el.style.outline = ''; }, 3000);
+          } else {
+            el.click();
+          }
+        }
+      });
     }
   } else if (message.type === 'SHOW_HINTS') {
     doScan();
