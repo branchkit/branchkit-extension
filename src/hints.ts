@@ -197,6 +197,13 @@ function findClipAncestor(target: Element): HTMLElement | null {
 
 const BADGE_OFFSET = 24;
 
+const MAX_BADGE_FONT = 14;
+
+function computeBadgeFontSize(target: Element): number {
+  const targetSize = parseFloat(getCachedStyle(target).fontSize) || 12;
+  return Math.min(Math.round(targetSize), MAX_BADGE_FONT);
+}
+
 export class HintBadge {
   public readonly host: HTMLDivElement;
   public readonly anchorParent: HTMLElement;
@@ -214,12 +221,14 @@ export class HintBadge {
 
   private label: LabelAssignment;
   private displayMode: BadgeDisplayMode;
+  private fontSize: number;
 
   constructor(target: Element, label: LabelAssignment, category: Category, displayMode: BadgeDisplayMode) {
     this.target = target;
     this.category = category;
     this.label = label;
     this.displayMode = displayMode;
+    this.fontSize = computeBadgeFontSize(target);
 
     this.host = document.createElement('div');
     this.host.setAttribute('data-branchkit-hint', 'true');
@@ -232,6 +241,7 @@ export class HintBadge {
 
     this.inner = document.createElement('div');
     this.inner.className = 'bk-inner';
+    this.inner.style.fontSize = `${this.fontSize}px`;
 
     const text = labelToDisplay(label, displayMode);
     this.inner.textContent = text;
@@ -243,7 +253,9 @@ export class HintBadge {
         pointer-events: none;
       }
       .bk-inner {
-        font: bold 12px/1.2 system-ui, -apple-system, sans-serif;
+        font-weight: bold;
+        font-family: system-ui, -apple-system, sans-serif;
+        line-height: 1.2;
         padding: 0 0.1em;
         border-radius: 2px;
         user-select: none;
@@ -358,8 +370,9 @@ export class HintBadge {
       return this._size;
     }
     const text = this.inner.textContent || '';
-    const w = Math.ceil(text.length * 7.2) + 4;
-    const h = 16;
+    const charWidth = this.fontSize * 0.6;
+    const w = Math.ceil(text.length * charWidth) + 4;
+    const h = Math.ceil(this.fontSize * 1.2) + 2;
     this._size = { w, h };
     return this._size;
   }
