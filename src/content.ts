@@ -81,7 +81,7 @@ setScrollBoundaryCallback((boundary) => {
 
 let hintsVisible = false;
 let activeCategory: Category | null = null;
-let displayMode: BadgeDisplayMode = 'word';
+let displayMode: BadgeDisplayMode = 'letter';
 let lastGrammarHash = '';
 let pendingMutation = false;
 let lastActivatedElement: Element | null = null;
