@@ -170,4 +170,46 @@ export class WrapperStore {
       return w.label.letter.startsWith(upper);
     });
   }
+
+  /**
+   * Score all wrappers against a text query using Vimium's scoreLinkHint
+   * algorithm. Returns wrappers with score > 0, sorted descending.
+   */
+  matchingText(query: string): { wrapper: ElementWrapper; score: number }[] {
+    if (!query) return [];
+    const lower = query.toLowerCase();
+    const results: { wrapper: ElementWrapper; score: number }[] = [];
+    for (const w of this.wrappers) {
+      if (!w.label) continue;
+      const score = scoreTextMatch(w.scanned.label, lower);
+      if (score > 0) results.push({ wrapper: w, score });
+    }
+    results.sort((a, b) => b.score - a.score);
+    return results;
+  }
+}
+
+/**
+ * Vimium's scoreLinkHint scoring: tokenize the label on non-word chars,
+ * weight whole-word match 8 (first token) / 4 (later), prefix-of-word
+ * 6 (first) / 2 (later), substring 1.
+ */
+export function scoreTextMatch(label: string, query: string): number {
+  if (!label) return 0;
+  const lower = label.toLowerCase();
+  if (!lower.includes(query)) return 0;
+
+  const tokens = lower.split(/\W+/).filter(t => t.length > 0);
+  if (tokens.length === 0) return 1;
+
+  let best = 1; // substring match baseline
+  for (let i = 0; i < tokens.length; i++) {
+    const isFirst = i === 0;
+    if (tokens[i] === query) {
+      best = Math.max(best, isFirst ? 8 : 4);
+    } else if (tokens[i].startsWith(query)) {
+      best = Math.max(best, isFirst ? 6 : 2);
+    }
+  }
+  return best;
 }

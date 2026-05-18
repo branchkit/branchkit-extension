@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { ElementWrapper, WrapperStore } from './element-wrapper';
+import { ElementWrapper, WrapperStore, scoreTextMatch } from './element-wrapper';
 import { ScannedElement } from './types';
 
 // Reference-equality stand-in for Element. WrapperStore's Map uses object
@@ -169,5 +169,47 @@ describe('ElementWrapper.releaseLabel', () => {
     w.releaseLabel();
     w.releaseLabel();
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('scoreTextMatch', () => {
+  it('returns 0 for empty label', () => {
+    expect(scoreTextMatch('', 'foo')).toBe(0);
+  });
+
+  it('returns 0 when query not found', () => {
+    expect(scoreTextMatch('Hello World', 'xyz')).toBe(0);
+  });
+
+  it('scores 8 for exact first-token match', () => {
+    expect(scoreTextMatch('Get started', 'get')).toBe(8);
+  });
+
+  it('scores 4 for exact later-token match', () => {
+    expect(scoreTextMatch('Get started now', 'now')).toBe(4);
+  });
+
+  it('scores 6 for prefix of first token', () => {
+    expect(scoreTextMatch('Settings page', 'set')).toBe(6);
+  });
+
+  it('scores 2 for prefix of later token', () => {
+    expect(scoreTextMatch('Go to settings', 'set')).toBe(2);
+  });
+
+  it('scores 1 for substring-only match', () => {
+    expect(scoreTextMatch('Unresettable', 'set')).toBe(1);
+  });
+
+  it('is case-insensitive', () => {
+    expect(scoreTextMatch('GitHub', 'github')).toBe(8);
+  });
+
+  it('tokenizes on non-word characters', () => {
+    expect(scoreTextMatch('Sign-in / Register', 'register')).toBe(4);
+  });
+
+  it('picks the best score across all tokens', () => {
+    expect(scoreTextMatch('Settings and setup', 'set')).toBe(6);
   });
 });

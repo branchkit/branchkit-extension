@@ -325,29 +325,48 @@ dispatcher.register('show_hints_category', (params) => {
 
 // --- Keyboard Filter Callback ---
 
-keyHandler.setFilterCallback((prefix: string) => {
+keyHandler.setFilterCallback((prefix: string, byText: boolean) => {
   if (!hintsVisible) return;
 
   if (prefix === '') {
-    // Show all badges
     for (const w of store.all) {
       w.hint?.setFiltered(false);
+      w.hint?.setTextMatch(false);
     }
     return;
   }
 
-  // Filter: match word prefix using first letter (keyboard types letter, matches word)
-  const matches = store.matchingLetterPrefix(prefix);
-  for (const w of store.all) {
-    const isMatch = matches.includes(w);
-    w.hint?.setFiltered(!isMatch);
-  }
+  if (byText) {
+    // Text filter mode: match against visible element text
+    const textResults = store.matchingText(prefix);
+    const textMatches = new Set(textResults.map(r => r.wrapper));
 
-  // Auto-activate if single match
-  if (matches.length === 1) {
-    activateWrapper(matches[0]);
-    hideHints();
-    keyHandler.exitHintMode();
+    for (const w of store.all) {
+      const isMatch = textMatches.has(w);
+      w.hint?.setFiltered(!isMatch);
+      w.hint?.setTextMatch(isMatch);
+    }
+
+    if (textMatches.size === 1) {
+      const winner = textMatches.values().next().value!;
+      activateWrapper(winner);
+      hideHints();
+      keyHandler.exitHintMode();
+    }
+  } else {
+    // Codeword mode: match against hint letter codes
+    const matches = store.matchingLetterPrefix(prefix);
+    for (const w of store.all) {
+      const isMatch = matches.includes(w);
+      w.hint?.setFiltered(!isMatch);
+      w.hint?.setTextMatch(false);
+    }
+
+    if (matches.length === 1) {
+      activateWrapper(matches[0]);
+      hideHints();
+      keyHandler.exitHintMode();
+    }
   }
 });
 

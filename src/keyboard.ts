@@ -32,17 +32,22 @@ export class KeyHandler {
   private sequence: string = '';
   private timeout: ReturnType<typeof setTimeout> | null = null;
   private filterText: string = '';
+  private filterByText: boolean = false;
   private registry: CommandRegistry;
   private dispatcher: ActionDispatcher;
-  private onFilterChange: ((prefix: string) => void) | null = null;
+  private onFilterChange: ((prefix: string, byText: boolean) => void) | null = null;
 
   constructor(registry: CommandRegistry, dispatcher: ActionDispatcher) {
     this.registry = registry;
     this.dispatcher = dispatcher;
   }
 
-  setFilterCallback(cb: (prefix: string) => void): void {
+  setFilterCallback(cb: (prefix: string, byText: boolean) => void): void {
     this.onFilterChange = cb;
+  }
+
+  isFilteringByText(): boolean {
+    return this.filterByText;
   }
 
   getMode(): KeyMode {
@@ -52,11 +57,13 @@ export class KeyHandler {
   enterHintMode(): void {
     this.mode = 'hint';
     this.filterText = '';
+    this.filterByText = false;
   }
 
   exitHintMode(): void {
     this.mode = 'normal';
     this.filterText = '';
+    this.filterByText = false;
     this.sequence = '';
   }
 
@@ -90,7 +97,10 @@ export class KeyHandler {
       e.stopPropagation();
       if (this.filterText.length > 0) {
         this.filterText = this.filterText.slice(0, -1);
-        this.onFilterChange?.(this.filterText);
+        this.onFilterChange?.(this.filterText, this.filterByText);
+      } else if (this.filterByText) {
+        this.filterByText = false;
+        this.onFilterChange?.('', false);
       }
       return true;
     }
@@ -102,12 +112,31 @@ export class KeyHandler {
       return true;
     }
 
-    // Single letter characters for filtering
+    // `/` in hint mode switches to text filter
+    if (e.key === '/' && !this.filterByText) {
+      e.preventDefault();
+      e.stopPropagation();
+      this.filterByText = true;
+      this.filterText = '';
+      this.onFilterChange?.('', true);
+      return true;
+    }
+
+    // In text filter mode, accept any printable character (including spaces, digits)
+    if (this.filterByText && e.key.length === 1) {
+      e.preventDefault();
+      e.stopPropagation();
+      this.filterText += e.key.toLowerCase();
+      this.onFilterChange?.(this.filterText, true);
+      return true;
+    }
+
+    // Codeword mode: single letter characters for filtering
     if (e.key.length === 1 && /[a-zA-Z]/.test(e.key)) {
       e.preventDefault();
       e.stopPropagation();
       this.filterText += e.key.toLowerCase();
-      this.onFilterChange?.(this.filterText);
+      this.onFilterChange?.(this.filterText, false);
       return true;
     }
 

@@ -72,6 +72,10 @@ export class HintBadge {
       .bk-inner.filtered {
         display: none;
       }
+      .bk-inner.text-match {
+        border-color: #FFD60A;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.3), 0 0 0 1px #FFD60A;
+      }
       @media print { .bk-outer { visibility: hidden; } }
     `;
 
@@ -116,6 +120,14 @@ export class HintBadge {
       if (this._visible) {
         this.updatePosition();
       }
+    }
+  }
+
+  setTextMatch(matched: boolean): void {
+    if (matched) {
+      this.inner.classList.add('text-match');
+    } else {
+      this.inner.classList.remove('text-match');
     }
   }
 
