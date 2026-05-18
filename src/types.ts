@@ -6,14 +6,14 @@
 
 export type Category = 'link' | 'button' | 'input' | 'tab' | 'edit' | 'view' | 'tables';
 
-export const CATEGORY_COLORS: Record<Category, { bg: string; fg: string; border: string }> = {
-  input:   { bg: '#f5a623', fg: '#000',  border: '#c88400' },   // Gold
-  edit:    { bg: '#ff9500', fg: '#000',  border: '#cc7700' },   // Orange
-  view:    { bg: '#5ac8fa', fg: '#000',  border: '#3aa8d8' },   // Teal
-  tab:     { bg: '#007AFF', fg: '#fff',  border: '#005ecb' },   // Blue
-  link:    { bg: '#af52de', fg: '#fff',  border: '#8a3fb5' },   // Purple
-  button:  { bg: '#007AFF', fg: '#fff',  border: '#005ecb' },   // Blue
-  tables:  { bg: '#28a745', fg: '#fff',  border: '#1e7e34' },   // Green
+export const CATEGORY_BORDER_COLORS: Record<Category, string> = {
+  input:   '#f5a623',   // Gold
+  edit:    '#ff9500',   // Orange
+  view:    '#5ac8fa',   // Teal
+  tab:     '#007AFF',   // Blue
+  link:    '#af52de',   // Purple
+  button:  '#007AFF',   // Blue
+  tables:  '#28a745',   // Green
 };
 
 // --- Badge Display ---

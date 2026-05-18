@@ -7,10 +7,11 @@
  * the badge via overflow/clip-path/contain.
  */
 
-import { Category, CATEGORY_COLORS, BadgeDisplayMode } from './types';
+import { Category, CATEGORY_BORDER_COLORS, BadgeDisplayMode } from './types';
 import { LabelAssignment, labelToDisplay } from './words';
 import { getCachedRect, getCachedStyle, getCachedDims } from './layout-cache';
 import { calculateZIndex } from './stacking-context';
+import { computeBadgeColors } from './badge-colors';
 
 const BADGE_SPACE_LEFT = 28;
 const BADGE_SPACE_TOP = 10;
@@ -204,12 +205,12 @@ export class HintBadge {
   private outer: HTMLDivElement;
   private inner: HTMLDivElement;
   private target: Element;
+  private category: Category;
   private _visible: boolean = false;
 
   constructor(target: Element, label: LabelAssignment, category: Category, displayMode: BadgeDisplayMode) {
     this.target = target;
-
-    const colors = CATEGORY_COLORS[category];
+    this.category = category;
 
     this.host = document.createElement('div');
     this.host.setAttribute('data-branchkit-hint', 'true');
@@ -240,10 +241,9 @@ export class HintBadge {
         white-space: nowrap;
         min-width: 16px;
         text-align: center;
-        background: ${colors.bg};
-        color: ${colors.fg};
-        border: 1px solid ${colors.border};
-        box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+        border-width: 1.5px;
+        border-style: solid;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.18);
         opacity: 0;
         transition: opacity 0.15s ease-in;
       }
@@ -254,8 +254,8 @@ export class HintBadge {
         display: none;
       }
       .bk-inner.text-match {
-        border-color: #FFD60A;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.3), 0 0 0 1px #FFD60A;
+        border-color: #FFD60A !important;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.18), 0 0 0 1px #FFD60A;
       }
       .bk-outer.focus-hidden { visibility: hidden; }
       @media print { .bk-outer { visibility: hidden; } }
@@ -321,10 +321,19 @@ export class HintBadge {
   show(): void {
     if (this._visible) return;
     this._visible = true;
+    this.applyColors();
     this.updatePosition();
     requestAnimationFrame(() => {
       this.inner.classList.add('visible');
     });
+  }
+
+  private applyColors(): void {
+    const borderHex = CATEGORY_BORDER_COLORS[this.category];
+    const colors = computeBadgeColors(this.target, borderHex);
+    this.inner.style.background = colors.bg;
+    this.inner.style.color = colors.fg;
+    this.inner.style.borderColor = colors.border;
   }
 
   hide(): void {
