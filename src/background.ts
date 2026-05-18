@@ -614,3 +614,23 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 
 // Init immediately (service worker may be waking from alarm)
 init();
+
+// --- Dev auto-reload (stripped from production builds by esbuild) ---
+declare const __DEV_RELOAD__: boolean;
+if (typeof __DEV_RELOAD__ !== 'undefined' && __DEV_RELOAD__) {
+  const DEV_WS_URL = 'ws://localhost:35729';
+  function devConnect() {
+    try {
+      const ws = new WebSocket(DEV_WS_URL);
+      ws.onmessage = (e) => {
+        if (e.data === 'reload') {
+          console.log('[BranchKit Dev] reloading extension...');
+          chrome.runtime.reload();
+        }
+      };
+      ws.onclose = () => setTimeout(devConnect, 2000);
+      ws.onerror = () => ws.close();
+    } catch { /* dev server not running */ }
+  }
+  devConnect();
+}

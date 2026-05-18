@@ -2,29 +2,201 @@
  * BranchKit Browser — Shadow DOM hint badges.
  *
  * Each badge lives in a closed Shadow DOM to prevent page CSS interference.
- * Appended to the target's nearest scroll ancestor so badges scroll in
- * lockstep with their targets via the compositor — no JS repositioning
- * needed during scroll.
+ * Container selection adapted from Rango: walks the ancestor tree to find a
+ * container that (a) scrolls in lockstep with the target and (b) won't clip
+ * the badge via overflow/clip-path/contain.
  */
 
 import { Category, CATEGORY_COLORS, BadgeDisplayMode } from './types';
 import { LabelAssignment, labelToDisplay } from './words';
 
-function getScrollAncestor(el: Element): HTMLElement | null {
-  let parent = el.parentElement;
-  while (parent && parent !== document.body && parent !== document.documentElement) {
-    const s = getComputedStyle(parent);
-    if (/(auto|scroll)/.test(s.overflow + s.overflowX + s.overflowY)) {
-      return parent;
+const BADGE_SPACE_LEFT = 28;
+const BADGE_SPACE_TOP = 10;
+
+function isScrollable(el: Element): boolean {
+  const s = getComputedStyle(el);
+  return (
+    el === document.documentElement ||
+    (el.scrollWidth > el.clientWidth && /scroll|auto/.test(s.overflowX)) ||
+    (el.scrollHeight > el.clientHeight && /scroll|auto/.test(s.overflowY))
+  );
+}
+
+function clips(el: Element): boolean {
+  const s = getComputedStyle(el);
+  if (s.overflow !== 'visible') return true;
+  if (s.clipPath !== 'none') return true;
+  if (/paint|content|strict/.test(s.contain)) return true;
+  if (s.contentVisibility && s.contentVisibility !== 'visible') return true;
+  return false;
+}
+
+function limitsChildren(el: Element): boolean {
+  const s = getComputedStyle(el);
+  return (
+    s.position === 'fixed' ||
+    s.position === 'sticky' ||
+    s.transform !== 'none' ||
+    s.willChange === 'transform' ||
+    isScrollable(el)
+  );
+}
+
+function getPaddingRect(el: Element): DOMRect {
+  const s = getComputedStyle(el);
+  const bl = parseInt(s.borderLeftWidth, 10) || 0;
+  const bt = parseInt(s.borderTopWidth, 10) || 0;
+  const br = parseInt(s.borderRightWidth, 10) || 0;
+  const bb = parseInt(s.borderBottomWidth, 10) || 0;
+  const r = el.getBoundingClientRect();
+  return new DOMRect(r.x + bl, r.y + bt, r.width - bl - br, r.height - bt - bb);
+}
+
+function getSpaceAvailable(container: HTMLElement, target: Element): { left: number; top: number } {
+  const targetRect = target.getBoundingClientRect();
+
+  if (isScrollable(container)) {
+    const pr = getPaddingRect(container);
+    return {
+      left: Math.max(container.scrollLeft + (targetRect.left - pr.left), 0),
+      top: Math.max(container.scrollTop + (targetRect.top - pr.top), 0),
+    };
+  }
+
+  if (clips(container)) {
+    const pr = getPaddingRect(container);
+    return {
+      left: Math.max(targetRect.left - pr.left, 0),
+      top: Math.max(targetRect.top - pr.top, 0),
+    };
+  }
+
+  const s = getComputedStyle(container);
+  if (s.position === 'fixed' || s.position === 'sticky') {
+    const br = container.getBoundingClientRect();
+    return {
+      left: Math.max(targetRect.left - br.left, 0),
+      top: Math.max(targetRect.top - br.top, 0),
+    };
+  }
+
+  return {
+    left: Math.max(targetRect.left + window.scrollX, 0),
+    top: Math.max(targetRect.top + window.scrollY, 0),
+  };
+}
+
+function isAptContainer(el: HTMLElement): boolean {
+  const tag = el.tagName;
+  if (/^(THEAD|TBODY|TFOOT|CAPTION|COLGROUP|COL|TR|TH|TD)$/.test(tag)) return false;
+  if (tag === 'TABLE') return false;
+  const s = getComputedStyle(el);
+  if (s.display.startsWith('table')) return false;
+  if (s.display === 'contents') return false;
+  return true;
+}
+
+function findAptContainer(start: Element): HTMLElement {
+  let current: Node | null = start.parentNode;
+  while (current) {
+    if (current instanceof HTMLElement && !current.shadowRoot && isAptContainer(current)) {
+      return current;
     }
-    parent = parent.parentElement;
+    current = current.parentNode;
+  }
+  return document.body;
+}
+
+type HintContainer = {
+  container: HTMLElement;
+  spaceLeft: number;
+  spaceTop: number;
+};
+
+function pickContainer(target: Element): HintContainer {
+  let limitParent: HTMLElement | null = null;
+  const clipAncestors: HTMLElement[] = [];
+
+  const s0 = getComputedStyle(target);
+  let current: Node | null =
+    s0.position === 'sticky' || s0.position === 'fixed' ? target : target.parentNode;
+
+  while (current) {
+    if (!(current instanceof HTMLElement)) {
+      current = current.parentNode;
+      continue;
+    }
+    if (current === document.body || current === document.documentElement) {
+      limitParent ??= current as HTMLElement;
+      clipAncestors.push(current as HTMLElement);
+      break;
+    }
+
+    if (limitsChildren(current)) limitParent ??= current;
+
+    if (clips(current) || limitsChildren(current)) {
+      clipAncestors.push(current);
+      if (limitParent) break;
+    }
+
+    current = current.parentNode;
+  }
+
+  limitParent ??= document.body;
+
+  let candidate = findAptContainer(target);
+  let prevSpace = clipAncestors.length > 0
+    ? getSpaceAvailable(clipAncestors[0]!, target)
+    : { left: Infinity, top: Infinity };
+  let prevClip: HTMLElement | undefined;
+
+  for (const clipAnc of clipAncestors) {
+    const space = getSpaceAvailable(clipAnc, target);
+
+    if (space.left >= BADGE_SPACE_LEFT && space.top >= BADGE_SPACE_TOP) {
+      const container =
+        (space.left > prevSpace.left || space.top > prevSpace.top) && prevClip
+          ? findAptContainer(prevClip)
+          : candidate;
+      return { container, spaceLeft: space.left, spaceTop: space.top };
+    }
+
+    if (
+      (space.left > prevSpace.left && prevSpace.left < BADGE_SPACE_LEFT) ||
+      (space.top > prevSpace.top && prevSpace.top < BADGE_SPACE_TOP)
+    ) {
+      if (prevClip) {
+        const next = findAptContainer(prevClip);
+        if (limitParent.contains(next)) {
+          candidate = next;
+          prevSpace = space;
+        } else {
+          break;
+        }
+      }
+    }
+
+    prevClip = clipAnc;
+  }
+
+  return { container: candidate, spaceLeft: prevSpace.left, spaceTop: prevSpace.top };
+}
+
+function findClipAncestor(target: Element): HTMLElement | null {
+  let el = target.parentElement;
+  while (el && el !== document.body && el !== document.documentElement) {
+    if (clips(el)) return el;
+    el = el.parentElement;
   }
   return null;
 }
 
+const BADGE_OFFSET = 24;
+
 export class HintBadge {
   public readonly host: HTMLDivElement;
   public readonly anchorParent: HTMLElement;
+  private clipAncestor: HTMLElement | null;
   private shadow: ShadowRoot;
   private outer: HTMLDivElement;
   private inner: HTMLDivElement;
@@ -89,33 +261,41 @@ export class HintBadge {
     this.outer.appendChild(this.inner);
     this.shadow.appendChild(this.outer);
 
-    const scrollAncestor = getScrollAncestor(target);
-    if (scrollAncestor) {
-      if (getComputedStyle(scrollAncestor).position === 'static') {
-        scrollAncestor.style.position = 'relative';
+    const { container } = pickContainer(target);
+    if (container !== document.body && container !== document.documentElement) {
+      if (getComputedStyle(container).position === 'static') {
+        container.style.position = 'relative';
       }
-      this.anchorParent = scrollAncestor;
-    } else {
-      this.anchorParent = document.body;
     }
+    this.anchorParent = container;
+    this.clipAncestor = findClipAncestor(target);
     this.anchorParent.appendChild(this.host);
   }
 
   updatePosition(): void {
     const targetRect = this.target.getBoundingClientRect();
+    let x: number;
+    let y: number;
 
-    if (this.anchorParent === document.body) {
-      const x = targetRect.left + window.scrollX - 24;
-      const y = targetRect.top + window.scrollY + 2;
-      this.outer.style.left = `${x}px`;
-      this.outer.style.top = `${y}px`;
+    if (this.anchorParent === document.body || this.anchorParent === document.documentElement) {
+      x = targetRect.left + window.scrollX - BADGE_OFFSET;
+      y = targetRect.top + window.scrollY + 2;
     } else {
       const parentRect = this.anchorParent.getBoundingClientRect();
-      const x = targetRect.left - parentRect.left + this.anchorParent.scrollLeft - 24;
-      const y = targetRect.top - parentRect.top + this.anchorParent.scrollTop + 2;
-      this.outer.style.left = `${x}px`;
-      this.outer.style.top = `${y}px`;
+      x = targetRect.left - parentRect.left + this.anchorParent.scrollLeft - BADGE_OFFSET;
+      y = targetRect.top - parentRect.top + this.anchorParent.scrollTop + 2;
     }
+
+    if (this.clipAncestor) {
+      const clipRect = getPaddingRect(this.clipAncestor);
+      const minX = this.anchorParent === document.body || this.anchorParent === document.documentElement
+        ? clipRect.left + window.scrollX
+        : clipRect.left - this.anchorParent.getBoundingClientRect().left + this.anchorParent.scrollLeft;
+      if (x < minX) x = minX;
+    }
+
+    this.outer.style.left = `${x}px`;
+    this.outer.style.top = `${y}px`;
   }
 
   reattach(): void {
