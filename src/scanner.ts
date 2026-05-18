@@ -114,12 +114,57 @@ export function classifyCategory(el: Element): Category {
   return 'button';
 }
 
-/**
- * Check if element is visible (non-zero dimensions and not off-screen).
- */
 function isVisible(el: Element): boolean {
   const rect = el.getBoundingClientRect();
-  return rect.width > 0 || rect.height > 0;
+  const style = getComputedStyle(el);
+
+  if (style.visibility === 'hidden' || rect.width < 5 || rect.height < 5 || style.opacity === '0') {
+    if (el instanceof HTMLInputElement &&
+        (el.type === 'checkbox' || el.type === 'radio') &&
+        el.parentElement && isVisible(el.parentElement)) {
+      return true;
+    }
+    return false;
+  }
+
+  let current = el.parentElement;
+  let depth = 0;
+  while (current && depth < 4) {
+    if (getComputedStyle(current).opacity === '0') return false;
+    current = current.parentElement;
+    depth++;
+  }
+
+  return true;
+}
+
+function isRedundant(el: Element): boolean {
+  if (el.parentElement instanceof HTMLLabelElement &&
+      el.parentElement.control === el) {
+    return false;
+  }
+
+  if (el.parentElement?.matches(HINTABLE_SELECTOR) &&
+      !hasSignificantSiblings(el)) {
+    return true;
+  }
+
+  if (el instanceof HTMLLabelElement && el.control && isVisible(el.control)) {
+    return true;
+  }
+
+  return false;
+}
+
+function hasSignificantSiblings(el: Node): boolean {
+  if (!el.parentNode) return false;
+  if (el.parentNode.childNodes.length > 10) return true;
+
+  return [...el.parentNode.childNodes].some(node =>
+    node !== el &&
+    ((node instanceof Element && !node.hasAttribute('data-branchkit-hint')) ||
+     (node instanceof Text && node.textContent && /\S/.test(node.textContent)))
+  );
 }
 
 /**
@@ -133,6 +178,7 @@ export function isHintable(el: Element): boolean {
   if (el.matches(EXCLUDE_SELECTOR)) return false;
   if (el.closest('[data-branchkit-hint]')) return false;
   if (!isVisible(el)) return false;
+  if (isRedundant(el)) return false;
   return true;
 }
 
@@ -169,9 +215,8 @@ export function scanElements(root: Document | Element = document): { elements: S
     if (seen.has(el)) continue;
     if (el.matches(EXCLUDE_SELECTOR)) continue;
     if (!isVisible(el)) continue;
-
-    // Skip elements inside Shadow DOM hosts we didn't create
     if (el.closest('[data-branchkit-hint]')) continue;
+    if (isRedundant(el)) continue;
 
     seen.add(el);
 
