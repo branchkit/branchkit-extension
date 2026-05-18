@@ -1,8 +1,10 @@
-import { generateSelector } from './selector-generator';
+import { generateSelector, generateSelectorPath, resolveSelectorPath } from './selector-generator';
 import { accessibleName } from './accessible-name';
+import { deepQuerySelectorAll } from './scanner';
 
 export interface SavedReference {
   selector: string;
+  selectorPath?: string[];
   tag: string;
   createdAt: number;
   lastUsedAt: number;
@@ -49,8 +51,10 @@ export async function saveReference(name: string, el: Element): Promise<void> {
   const host = getHost();
   const entry = ensureHostEntry(store, host);
 
+  const path = generateSelectorPath(el);
   entry.references[name] = {
-    selector: generateSelector(el),
+    selector: path[path.length - 1],
+    selectorPath: path.length > 1 ? path : undefined,
     tag: el.tagName.toLowerCase(),
     createdAt: Date.now(),
     lastUsedAt: Date.now(),
@@ -69,7 +73,17 @@ export async function resolveReference(name: string): Promise<Element | null> {
   const ref = entry.references[name];
   if (!ref) return null;
 
-  // 1. Exact selector match
+  // 1a. Shadow path match (handles elements inside shadow DOM)
+  if (ref.selectorPath) {
+    const viaPath = resolveSelectorPath(ref.selectorPath);
+    if (viaPath) {
+      ref.lastUsedAt = Date.now();
+      await saveStore(store);
+      return viaPath;
+    }
+  }
+
+  // 1b. Exact selector match (flat DOM)
   const direct = document.querySelector(ref.selector);
   if (direct) {
     ref.lastUsedAt = Date.now();
@@ -77,13 +91,15 @@ export async function resolveReference(name: string): Promise<Element | null> {
     return direct;
   }
 
-  // 2. Tag + visible-text match
+  // 2. Tag + visible-text match (pierces shadow DOM)
   if (ref.visibleText) {
     const tag = ref.tag || '*';
-    const candidates = document.querySelectorAll(tag);
+    const candidates = deepQuerySelectorAll(document, tag);
     for (const el of candidates) {
       if (accessibleName(el) === ref.visibleText) {
-        ref.selector = generateSelector(el);
+        const path = generateSelectorPath(el);
+        ref.selector = path[path.length - 1];
+        ref.selectorPath = path.length > 1 ? path : undefined;
         ref.lastUsedAt = Date.now();
         await saveStore(store);
         return el;

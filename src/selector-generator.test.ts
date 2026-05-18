@@ -4,6 +4,8 @@ import {
   isProbablyStable,
   matchesBlacklist,
   generateSelector,
+  generateSelectorPath,
+  resolveSelectorPath,
 } from './selector-generator';
 
 beforeEach(() => {
@@ -153,5 +155,62 @@ describe('generateSelector', () => {
     const el = document.querySelector('span')!;
     const sel = generateSelector(el);
     expect(document.querySelector(sel)).toBe(el);
+  });
+});
+
+describe('generateSelectorPath', () => {
+  it('returns single-element array for flat DOM elements', () => {
+    document.body.innerHTML = `<button id="flat">Go</button>`;
+    const btn = document.querySelector('#flat')!;
+    const path = generateSelectorPath(btn);
+    expect(path).toEqual(['#flat']);
+  });
+
+  it('returns multi-element array for shadow DOM elements', () => {
+    document.body.innerHTML = `<div id="host-el"></div>`;
+    const host = document.querySelector('#host-el')!;
+    const shadow = host.attachShadow({ mode: 'open' });
+    const inner = document.createElement('button');
+    inner.setAttribute('aria-label', 'Inner Action');
+    shadow.appendChild(inner);
+
+    const path = generateSelectorPath(inner);
+    expect(path.length).toBe(2);
+    expect(path[0]).toBe('#host-el');
+    expect(document.querySelector(path[0])).toBe(host);
+    expect(shadow.querySelector(path[1])).toBe(inner);
+  });
+});
+
+describe('resolveSelectorPath', () => {
+  it('resolves single-element path', () => {
+    document.body.innerHTML = `<button id="btn">Go</button>`;
+    const btn = document.querySelector('#btn')!;
+    expect(resolveSelectorPath(['#btn'])).toBe(btn);
+  });
+
+  it('resolves multi-element path through shadow DOM', () => {
+    document.body.innerHTML = `<div id="shadow-host"></div>`;
+    const host = document.querySelector('#shadow-host')!;
+    const shadow = host.attachShadow({ mode: 'open' });
+    const inner = document.createElement('span');
+    inner.id = 'inner-target';
+    shadow.appendChild(inner);
+
+    expect(resolveSelectorPath(['#shadow-host', '#inner-target'])).toBe(inner);
+  });
+
+  it('returns null for empty path', () => {
+    expect(resolveSelectorPath([])).toBeNull();
+  });
+
+  it('returns null when intermediate host has no shadow root', () => {
+    document.body.innerHTML = `<div id="no-shadow"></div>`;
+    expect(resolveSelectorPath(['#no-shadow', 'button'])).toBeNull();
+  });
+
+  it('returns null when selector does not match', () => {
+    document.body.innerHTML = `<div id="exists"></div>`;
+    expect(resolveSelectorPath(['#nonexistent'])).toBeNull();
   });
 });

@@ -53,35 +53,34 @@ function isUnique(selector: string, scope: ParentNode): boolean {
   }
 }
 
-export function generateSelector(el: Element): string {
-  const doc = el.ownerDocument;
+function generateSelectorInScope(el: Element, scope: ParentNode): string {
   const tag = el.tagName.toLowerCase();
 
   // 1. ID (skip blacklisted)
   if (el.id && !matchesBlacklist(el.id)) {
     const sel = `#${escapeSelector(el.id)}`;
-    if (isUnique(sel, doc)) return sel;
+    if (isUnique(sel, scope)) return sel;
   }
 
   // 2. data-testid
   const testId = el.getAttribute('data-testid');
   if (testId) {
     const sel = `[data-testid="${escapeSelector(testId)}"]`;
-    if (isUnique(sel, doc)) return sel;
+    if (isUnique(sel, scope)) return sel;
   }
 
   // 3. Tag + stable classes
   const classes = stableClasses(el);
   if (classes.length > 0) {
     const classSel = `${tag}.${classes.map(escapeSelector).join('.')}`;
-    if (isUnique(classSel, doc)) return classSel;
+    if (isUnique(classSel, scope)) return classSel;
   }
 
   // 4. Tag + aria-label
   const ariaLabel = el.getAttribute('aria-label');
   if (ariaLabel) {
     const sel = `${tag}[aria-label="${escapeSelector(ariaLabel)}"]`;
-    if (isUnique(sel, doc)) return sel;
+    if (isUnique(sel, scope)) return sel;
   }
 
   // 5. Tag + attribute escalation for src/href (truncate data:/blob:)
@@ -91,10 +90,10 @@ export function generateSelector(el: Element): string {
       const truncated = truncateDataUrl(val);
       if (truncated !== val) {
         const sel = `${tag}[${attr}^="${escapeSelector(truncated)}"]`;
-        if (isUnique(sel, doc)) return sel;
+        if (isUnique(sel, scope)) return sel;
       } else {
         const sel = `${tag}[${attr}="${escapeSelector(val)}"]`;
-        if (isUnique(sel, doc)) return sel;
+        if (isUnique(sel, scope)) return sel;
       }
     }
   }
@@ -108,9 +107,9 @@ export function generateSelector(el: Element): string {
         c => c.getAttribute('role') === role && c.tagName === el.tagName,
       );
       const idx = siblings.indexOf(el) + 1;
-      const parentSel = generateSelector(parent);
+      const parentSel = generateSelectorInScope(parent, scope);
       const sel = `${parentSel} > ${tag}[role="${role}"]:nth-of-type(${idx})`;
-      if (isUnique(sel, doc)) return sel;
+      if (isUnique(sel, scope)) return sel;
     }
   }
 
@@ -121,7 +120,7 @@ export function generateSelector(el: Element): string {
     if (ancestor.id && !matchesBlacklist(ancestor.id)) {
       const nth = nthOfType(el);
       const sel = `#${escapeSelector(ancestor.id)} ${nth}`;
-      if (isUnique(sel, doc)) return sel;
+      if (isUnique(sel, scope)) return sel;
     }
     ancestor = ancestor.parentElement;
     depth++;
@@ -129,4 +128,45 @@ export function generateSelector(el: Element): string {
 
   // 8. Fallback: tag + nth-of-type
   return nthOfType(el);
+}
+
+export function generateSelector(el: Element): string {
+  const root = el.getRootNode();
+  const scope = root instanceof ShadowRoot ? root : el.ownerDocument;
+  return generateSelectorInScope(el, scope);
+}
+
+export function generateSelectorPath(el: Element): string[] {
+  const path: string[] = [];
+  let current: Element | null = el;
+
+  while (current) {
+    const root = current.getRootNode();
+    if (root instanceof ShadowRoot) {
+      path.unshift(generateSelectorInScope(current, root));
+      current = root.host;
+    } else {
+      path.unshift(generateSelectorInScope(current, current.ownerDocument));
+      current = null;
+    }
+  }
+
+  return path;
+}
+
+export function resolveSelectorPath(path: string[]): Element | null {
+  if (path.length === 0) return null;
+
+  let scope: ParentNode = document;
+  for (let i = 0; i < path.length; i++) {
+    const el = scope.querySelector(path[i]);
+    if (!el) return null;
+    if (i < path.length - 1) {
+      if (!el.shadowRoot) return null;
+      scope = el.shadowRoot;
+    } else {
+      return el;
+    }
+  }
+  return null;
 }
