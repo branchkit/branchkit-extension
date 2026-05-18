@@ -9,21 +9,24 @@
 
 import { Category, CATEGORY_COLORS, BadgeDisplayMode } from './types';
 import { LabelAssignment, labelToDisplay } from './words';
+import { getCachedRect, getCachedStyle, getCachedDims } from './layout-cache';
+import { calculateZIndex } from './stacking-context';
 
 const BADGE_SPACE_LEFT = 28;
 const BADGE_SPACE_TOP = 10;
 
 function isScrollable(el: Element): boolean {
-  const s = getComputedStyle(el);
+  const s = getCachedStyle(el);
+  const dims = getCachedDims(el);
   return (
     el === document.documentElement ||
-    (el.scrollWidth > el.clientWidth && /scroll|auto/.test(s.overflowX)) ||
-    (el.scrollHeight > el.clientHeight && /scroll|auto/.test(s.overflowY))
+    (dims.scrollWidth > dims.clientWidth && /scroll|auto/.test(s.overflowX)) ||
+    (dims.scrollHeight > dims.clientHeight && /scroll|auto/.test(s.overflowY))
   );
 }
 
 function clips(el: Element): boolean {
-  const s = getComputedStyle(el);
+  const s = getCachedStyle(el);
   if (s.overflow !== 'visible') return true;
   if (s.clipPath !== 'none') return true;
   if (/paint|content|strict/.test(s.contain)) return true;
@@ -32,7 +35,7 @@ function clips(el: Element): boolean {
 }
 
 function limitsChildren(el: Element): boolean {
-  const s = getComputedStyle(el);
+  const s = getCachedStyle(el);
   return (
     s.position === 'fixed' ||
     s.position === 'sticky' ||
@@ -43,17 +46,17 @@ function limitsChildren(el: Element): boolean {
 }
 
 function getPaddingRect(el: Element): DOMRect {
-  const s = getComputedStyle(el);
+  const s = getCachedStyle(el);
   const bl = parseInt(s.borderLeftWidth, 10) || 0;
   const bt = parseInt(s.borderTopWidth, 10) || 0;
   const br = parseInt(s.borderRightWidth, 10) || 0;
   const bb = parseInt(s.borderBottomWidth, 10) || 0;
-  const r = el.getBoundingClientRect();
+  const r = getCachedRect(el);
   return new DOMRect(r.x + bl, r.y + bt, r.width - bl - br, r.height - bt - bb);
 }
 
 function getSpaceAvailable(container: HTMLElement, target: Element): { left: number; top: number } {
-  const targetRect = target.getBoundingClientRect();
+  const targetRect = getCachedRect(target);
 
   if (isScrollable(container)) {
     const pr = getPaddingRect(container);
@@ -90,7 +93,7 @@ function isAptContainer(el: HTMLElement): boolean {
   const tag = el.tagName;
   if (/^(THEAD|TBODY|TFOOT|CAPTION|COLGROUP|COL|TR|TH|TD)$/.test(tag)) return false;
   if (tag === 'TABLE') return false;
-  const s = getComputedStyle(el);
+  const s = getCachedStyle(el);
   if (s.display.startsWith('table')) return false;
   if (s.display === 'contents') return false;
   return true;
@@ -117,7 +120,7 @@ function pickContainer(target: Element): HintContainer {
   let limitParent: HTMLElement | null = null;
   const clipAncestors: HTMLElement[] = [];
 
-  const s0 = getComputedStyle(target);
+  const s0 = getCachedStyle(target);
   let current: Node | null =
     s0.position === 'sticky' || s0.position === 'fixed' ? target : target.parentNode;
 
@@ -210,7 +213,7 @@ export class HintBadge {
 
     this.host = document.createElement('div');
     this.host.setAttribute('data-branchkit-hint', 'true');
-    this.host.style.cssText = 'position:absolute; top:0; left:0; width:0; height:0; overflow:visible; z-index:2147483647; pointer-events:none;';
+    this.host.style.cssText = 'position:absolute; top:0; left:0; width:0; height:0; overflow:visible; pointer-events:none;';
 
     this.shadow = this.host.attachShadow({ mode: 'closed' });
 
@@ -254,6 +257,7 @@ export class HintBadge {
         border-color: #FFD60A;
         box-shadow: 0 1px 3px rgba(0,0,0,0.3), 0 0 0 1px #FFD60A;
       }
+      .bk-outer.focus-hidden { visibility: hidden; }
       @media print { .bk-outer { visibility: hidden; } }
     `;
 
@@ -263,17 +267,29 @@ export class HintBadge {
 
     const { container } = pickContainer(target);
     if (container !== document.body && container !== document.documentElement) {
-      if (getComputedStyle(container).position === 'static') {
+      if (getCachedStyle(container).position === 'static') {
         container.style.position = 'relative';
       }
     }
     this.anchorParent = container;
     this.clipAncestor = findClipAncestor(target);
     this.anchorParent.appendChild(this.host);
+
+    this.host.style.zIndex = String(calculateZIndex(target, this.host));
+
+    if (document.hasFocus() && target === document.activeElement) {
+      this.outer.classList.add('focus-hidden');
+    }
+    target.addEventListener('focusin', () => {
+      this.outer.classList.add('focus-hidden');
+    });
+    target.addEventListener('focusout', () => {
+      this.outer.classList.remove('focus-hidden');
+    });
   }
 
   updatePosition(): void {
-    const targetRect = this.target.getBoundingClientRect();
+    const targetRect = getCachedRect(this.target);
     let x: number;
     let y: number;
 
@@ -281,7 +297,7 @@ export class HintBadge {
       x = targetRect.left + window.scrollX - BADGE_OFFSET;
       y = targetRect.top + window.scrollY + 2;
     } else {
-      const parentRect = this.anchorParent.getBoundingClientRect();
+      const parentRect = getCachedRect(this.anchorParent);
       x = targetRect.left - parentRect.left + this.anchorParent.scrollLeft - BADGE_OFFSET;
       y = targetRect.top - parentRect.top + this.anchorParent.scrollTop + 2;
     }
@@ -290,7 +306,7 @@ export class HintBadge {
       const clipRect = getPaddingRect(this.clipAncestor);
       const minX = this.anchorParent === document.body || this.anchorParent === document.documentElement
         ? clipRect.left + window.scrollX
-        : clipRect.left - this.anchorParent.getBoundingClientRect().left + this.anchorParent.scrollLeft;
+        : clipRect.left - getCachedRect(this.anchorParent).left + this.anchorParent.scrollLeft;
       if (x < minX) x = minX;
     }
 

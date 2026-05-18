@@ -400,8 +400,40 @@ export function scrollAtElement(
 // --- Snap scroll (scroll element to visible position) ---
 
 /**
+ * Detect the height of sticky/fixed headers at the top of a container
+ * using elementsFromPoint. Scans at the target's x coordinate to catch
+ * headers that don't span the full width.
+ */
+function detectStickyHeaderHeight(
+  target: Element,
+  scrollOffset: number,
+): number {
+  const targetRect = target.getBoundingClientRect();
+  const probeX = targetRect.x + 5;
+  const probeY = targetRect.y - scrollOffset + 5;
+
+  const els = document.elementsFromPoint(probeX, probeY);
+  for (const el of els) {
+    if (el === target || el.contains(target)) break;
+
+    const style = getComputedStyle(el);
+    if (
+      style.display !== 'none' &&
+      style.visibility !== 'hidden' &&
+      style.opacity !== '0' &&
+      (style.position === 'sticky' || style.position === 'fixed')
+    ) {
+      return el.getBoundingClientRect().height;
+    }
+  }
+  return 0;
+}
+
+/**
  * Scroll a container so that a target element appears at the top,
- * accounting for sticky/fixed headers.
+ * accounting for sticky/fixed headers. After scroll completes, re-probes
+ * for sticky elements that may have appeared at the new position
+ * (handles stacked sticky headers).
  */
 export function snapToElement(
   target: Element,
@@ -409,32 +441,16 @@ export function snapToElement(
 ): void {
   const container = findScrollableAncestor(target, 'y');
   const containerRect = container === document.documentElement
-    ? { top: 0, height: window.innerHeight }
+    ? { top: 0, height: window.innerHeight, width: window.innerWidth }
     : container.getBoundingClientRect();
   const targetRect = target.getBoundingClientRect();
-
-  // Detect sticky/fixed headers at the top of the container
-  let headerHeight = 0;
-  const probePoints = [containerRect.top + 5, containerRect.top + 30, containerRect.top + 50];
-  const cx = containerRect.top + (('width' in containerRect ? containerRect.width : window.innerWidth) / 2);
-  for (const py of probePoints) {
-    const els = document.elementsFromPoint(cx, py);
-    for (const el of els) {
-      if (el === container || el === target) continue;
-      const pos = getComputedStyle(el).position;
-      if (pos === 'fixed' || pos === 'sticky') {
-        const h = el.getBoundingClientRect().bottom - containerRect.top;
-        if (h > headerHeight) headerHeight = h;
-      }
-    }
-  }
 
   let scrollDelta: number;
   const relativeTop = targetRect.top - containerRect.top + container.scrollTop;
 
   switch (position) {
     case 'top':
-      scrollDelta = relativeTop - container.scrollTop - headerHeight;
+      scrollDelta = relativeTop - container.scrollTop;
       break;
     case 'center':
       scrollDelta = relativeTop - container.scrollTop - containerRect.height / 2 + targetRect.height / 2;
@@ -444,7 +460,44 @@ export function snapToElement(
       break;
   }
 
-  animateScroll(container, 'y', scrollDelta);
+  let stickyHeight = 0;
+  if (position === 'top') {
+    stickyHeight = detectStickyHeaderHeight(target, scrollDelta);
+
+    const scrollTarget = container === document.documentElement ? globalThis : container;
+    scrollTarget.addEventListener(
+      'scrollend',
+      () => {
+        const rect = target.getBoundingClientRect();
+        const probeX = rect.x + 5;
+        const probeY = rect.y + 5;
+        const els = document.elementsFromPoint(probeX, probeY);
+
+        for (const el of els) {
+          if (el === target || el.contains(target)) break;
+
+          const style = getComputedStyle(el);
+          if (
+            style.display !== 'none' &&
+            style.visibility !== 'hidden' &&
+            style.opacity !== '0' &&
+            (style.position === 'sticky' || style.position === 'fixed')
+          ) {
+            const stickyBottom = el.getBoundingClientRect().bottom;
+            container.scrollBy({
+              left: 0,
+              top: rect.top - stickyBottom,
+              behavior: prefersReducedMotion() ? 'instant' : 'smooth',
+            });
+            break;
+          }
+        }
+      },
+      { once: true },
+    );
+  }
+
+  animateScroll(container, 'y', scrollDelta - stickyHeight);
 }
 
 // --- Cycle target (keyboard: cycle through scrollable containers) ---

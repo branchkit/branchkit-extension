@@ -11,6 +11,8 @@ import { scanElements, scanSingle, isHintable } from './scanner';
 import { ElementWrapper, WrapperStore } from './element-wrapper';
 import { IntersectionTracker } from './intersection-tracker';
 import { HintBadge } from './hints';
+import { cacheLayout, clearLayoutCache } from './layout-cache';
+import { activateElement } from './event-sequence';
 import {
   CodewordSnapshot,
   takeSnapshot,
@@ -554,6 +556,8 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
     .slice(0, MAX_BADGE_COUNT)
     .filter(w => w.scanned.codeword.length > 0);
 
+  cacheLayout(renderable.map(w => w.element));
+
   for (const wrapper of renderable) {
     const label = poolLabelToAssignment(wrapper.scanned.codeword);
     wrapper.label = label;
@@ -573,6 +577,7 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
     wrapper.hint.show();
   }
 
+  clearLayoutCache();
   hintsVisible = true;
 }
 
@@ -593,15 +598,23 @@ function hideHints(): void {
 }
 
 function badgeNewlyCodeworded(): void {
+  const newBadges: ElementWrapper[] = [];
   for (const w of store.all) {
     if (w.scanned.codeword && !w.hint && w.isInViewport) {
       if (activeCategory && w.category !== activeCategory) continue;
-      const label = poolLabelToAssignment(w.scanned.codeword);
-      w.label = label;
-      w.hint = new HintBadge(w.element, label, w.category, displayMode);
-      w.hint.show();
+      newBadges.push(w);
     }
   }
+  if (newBadges.length === 0) return;
+
+  cacheLayout(newBadges.map(w => w.element));
+  for (const w of newBadges) {
+    const label = poolLabelToAssignment(w.scanned.codeword);
+    w.label = label;
+    w.hint = new HintBadge(w.element, label, w.category, displayMode);
+    w.hint.show();
+  }
+  clearLayoutCache();
 }
 
 function updateBadgeLabels(): void {
@@ -625,16 +638,8 @@ function activateWrapper(wrapper: ElementWrapper): void {
     el.focus();
     el.style.outline = '2px solid #007AFF';
     setTimeout(() => { el.style.outline = ''; }, 3000);
-  } else if (openNewTab && wrapper.category === 'link') {
-    // Open link in new tab
-    const href = (el as HTMLAnchorElement).href;
-    if (href) {
-      window.open(href, '_blank');
-    } else {
-      el.click();
-    }
   } else {
-    el.click();
+    activateElement(el, { newTab: openNewTab });
   }
 }
 
@@ -744,7 +749,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
           target.style.outline = '2px solid #007AFF';
           setTimeout(() => { target!.style.outline = ''; }, 3000);
         } else {
-          target.click();
+          activateElement(target);
         }
       }
     } else if (action === 'name_reference') {
@@ -783,7 +788,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
             el.style.outline = '2px solid #007AFF';
             setTimeout(() => { el.style.outline = ''; }, 3000);
           } else {
-            el.click();
+            activateElement(el);
           }
         }
       });
@@ -806,8 +811,13 @@ function onResize(): void {
   resizeRafPending = true;
   requestAnimationFrame(() => {
     resizeRafPending = false;
-    for (const w of store.all) {
-      w.hint?.reposition();
+    const visible = store.all.filter(w => w.hint?.isVisible);
+    if (visible.length > 0) {
+      cacheLayout(visible.map(w => w.element));
+      for (const w of visible) {
+        w.hint!.reposition();
+      }
+      clearLayoutCache();
     }
   });
 }
