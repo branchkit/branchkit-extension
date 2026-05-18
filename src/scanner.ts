@@ -6,6 +6,7 @@
  */
 
 import { Category, ScannedElement } from './types';
+import { accessibleName } from './accessible-name';
 
 // Core selectors — always scanned
 const HINTABLE = [
@@ -192,33 +193,8 @@ export function scanElements(root: Document | Element = document): { elements: S
   return { elements, refs };
 }
 
-/**
- * Get a human-readable label for an element.
- */
 function getElementLabel(el: Element): string {
-  // aria-label
-  const ariaLabel = el.getAttribute('aria-label');
-  if (ariaLabel) return ariaLabel.trim();
-
-  // Text content (for buttons, links, etc.)
-  const text = el.textContent?.trim();
-  if (text && text.length <= 60) return text;
-
-  // Placeholder
-  const placeholder = (el as HTMLInputElement).placeholder;
-  if (placeholder) return placeholder.trim();
-
-  // Associated label
-  if (el.id) {
-    const label = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
-    if (label) return label.textContent?.trim() || '';
-  }
-
-  // Name attribute
-  const name = el.getAttribute('name');
-  if (name) return name;
-
-  return el.tagName.toLowerCase();
+  return accessibleName(el);
 }
 
 /**
