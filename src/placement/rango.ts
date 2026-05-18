@@ -4,18 +4,24 @@ import { PlacementStrategy } from './strategy';
 
 const BASE_Z = 2147483000;
 
-function hasTextContent(element: Element): boolean {
+function hasVisibleTextContent(element: Element): boolean {
   const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
   let node: Text | null;
   while ((node = walker.nextNode() as Text | null)) {
-    if (node.textContent && node.textContent.trim().length > 0) return true;
+    if (!node.textContent || node.textContent.trim().length === 0) continue;
+    const parent = node.parentElement;
+    if (parent) {
+      const pr = parent.getBoundingClientRect();
+      if (pr.width < 3 && pr.height < 3) continue;
+    }
+    return true;
   }
   return false;
 }
 
 function getNudgeRatios(element: Element): { x: number; y: number } {
   const rect = element.getBoundingClientRect();
-  if (rect.width > 30 && rect.height > 30 && !hasTextContent(element)) {
+  if (rect.width > 30 && rect.height > 30 && !hasVisibleTextContent(element)) {
     return { x: 1, y: 1 };
   }
 
@@ -85,6 +91,11 @@ export class RangoStrategy implements PlacementStrategy {
     let node: Text | null;
     while ((node = walker.nextNode() as Text | null)) {
       if (!node.textContent || node.textContent.trim().length === 0) continue;
+      const parent = node.parentElement;
+      if (parent) {
+        const pr = parent.getBoundingClientRect();
+        if (pr.width < 3 && pr.height < 3) continue;
+      }
       const range = document.createRange();
       const text = node.textContent;
       const start = text.search(/\S/);
@@ -94,8 +105,6 @@ export class RangoStrategy implements PlacementStrategy {
       const rect = range.getBoundingClientRect();
       if (rect.width > 0 && rect.height > 0) return rect;
     }
-    const rects = element.getClientRects();
-    if (rects.length > 0) return rects[0];
     return element.getBoundingClientRect();
   }
 
