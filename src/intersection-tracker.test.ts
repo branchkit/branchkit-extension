@@ -313,20 +313,21 @@ describe('IntersectionTracker rank-aware allocation', () => {
     const events = { onCodewordsChanged: vi.fn() };
     const tracker = new IntersectionTracker(store, events);
 
-    // Three wrappers at increasing distance from origin (0, 0).
+    // Three wrappers at increasing distance from viewport center (512, 384).
+    // happy-dom defaults to 1024x768, so getFocusPoint returns (512, 384).
     // Note that codeword assignment is INDEPENDENT of insertion order:
     // we deliberately add and queue them in reverse-distance order, then
     // verify the closest gets the cheapest codeword regardless.
     const far = new ElementWrapper(
-      fakeElement('far', { left: 1000, top: 1000, width: 10, height: 10 }),
+      fakeElement('far', { left: 0, top: 0, width: 10, height: 10 }),
       fakeScanned({ selector: 'button.far' }),
     );
     const mid = new ElementWrapper(
-      fakeElement('mid', { left: 100, top: 100, width: 10, height: 10 }),
+      fakeElement('mid', { left: 400, top: 300, width: 10, height: 10 }),
       fakeScanned({ selector: 'button.mid' }),
     );
     const near = new ElementWrapper(
-      fakeElement('near', { left: 0, top: 0, width: 10, height: 10 }),
+      fakeElement('near', { left: 507, top: 379, width: 10, height: 10 }),
       fakeScanned({ selector: 'button.near' }),
     );
     far.isInViewport = true;
@@ -349,16 +350,17 @@ describe('IntersectionTracker rank-aware allocation', () => {
   it('rank-sorts even when wrappers arrive in already-sorted insertion order', async () => {
     // Sanity check: the sort doesn't break the trivially-already-sorted
     // case. Closest first by insertion → still closest first by rank.
+    // Rects relative to viewport center (512, 384).
     const store = new WrapperStore();
     const events = { onCodewordsChanged: vi.fn() };
     const tracker = new IntersectionTracker(store, events);
 
     const a = new ElementWrapper(
-      fakeElement('a', { left: 0, top: 0, width: 10, height: 10 }),
+      fakeElement('a', { left: 507, top: 379, width: 10, height: 10 }),
       fakeScanned({ selector: 'a' }),
     );
     const b = new ElementWrapper(
-      fakeElement('b', { left: 200, top: 0, width: 10, height: 10 }),
+      fakeElement('b', { left: 0, top: 0, width: 10, height: 10 }),
       fakeScanned({ selector: 'b' }),
     );
     a.isInViewport = true;
