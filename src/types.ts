@@ -57,7 +57,8 @@ export type Message =
   // Background → content ping. The focused frame answers true, others false.
   // Used to route keyboard-derived actions to whichever frame the user is
   // actually interacting with (vs. chrome's default top-frame routing).
-  | { type: 'GET_FOCUS_STATUS' };
+  | { type: 'GET_FOCUS_STATUS' }
+  | { type: 'SCROLL_BOUNDARY'; boundary: 'top' | 'bottom' | 'left' | 'right' };
 
 // Response to CLAIM_LABELS. Returned via sendResponse callback.
 // May be shorter than `count` if pool was partially exhausted; empty array

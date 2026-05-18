@@ -19,6 +19,33 @@ import {
 import { ActionDispatcher, CommandRegistry } from './dispatcher';
 import { KeyHandler } from './keyboard';
 import { getActiveAdapter, scanWithAdapter } from './adapters/index';
+import {
+  scroll,
+  scrollRegion,
+  scrollAtElement,
+  snapToElement,
+  cycleScrollTarget,
+  getCycleTarget,
+  resetCycleTarget,
+  scrollElement,
+  scrollToPercent,
+  shouldSuppressScrollEvent,
+  setKeyHeld,
+  setScrollBoundaryCallback,
+  type ScrollDirection,
+  type ScrollAmount,
+  type ScrollRegion,
+} from './scroller';
+import {
+  openFindMode,
+  closeFindMode,
+  findNext,
+  findPrevious,
+  findImmediate,
+  isFindActive,
+  handlePostFindKey,
+  setFindCallbacks,
+} from './find';
 
 // --- State ---
 
@@ -28,6 +55,22 @@ const registry = new CommandRegistry();
 const keyHandler = new KeyHandler(registry, dispatcher);
 const tracker = new IntersectionTracker(store, {
   onCodewordsChanged: () => schedulePushGrammar(),
+});
+
+setFindCallbacks({
+  onActivate: () => { hideHints(); },
+  onDeactivate: () => { resetCycleTarget(); },
+});
+
+setScrollBoundaryCallback((boundary) => {
+  try {
+    chrome.runtime.sendMessage({
+      type: 'SCROLL_BOUNDARY',
+      boundary,
+    } as Message);
+  } catch {
+    // Extension context may be invalidated
+  }
 });
 
 let hintsVisible = false;
@@ -108,6 +151,24 @@ registry.add({ keys: 'f', action: 'show_hints' });
 registry.add({ keys: 'F', action: 'show_hints_newtab' });
 registry.add({ keys: 'Escape', action: 'hide_hints' });
 
+// Scroll commands (Vimium-compatible)
+registry.add({ keys: 'j', action: 'scroll_down' });
+registry.add({ keys: 'k', action: 'scroll_up' });
+registry.add({ keys: 'd', action: 'scroll_half_down' });
+registry.add({ keys: 'u', action: 'scroll_half_up' });
+registry.add({ keys: 'gg', action: 'scroll_top' });
+registry.add({ keys: 'G', action: 'scroll_bottom' });
+registry.add({ keys: 'h', action: 'scroll_left' });
+registry.add({ keys: 'l', action: 'scroll_right' });
+
+// Cycle scroll target (Surfingkeys-style)
+registry.add({ keys: 'cs', action: 'cycle_scroll_target' });
+
+// Find-in-page
+registry.add({ keys: '/', action: 'find_open' });
+registry.add({ keys: 'n', action: 'find_next' });
+registry.add({ keys: 'N', action: 'find_previous' });
+
 // --- Register Action Handlers ---
 
 dispatcher.register('show_hints', () => {
@@ -146,6 +207,111 @@ dispatcher.register('activate_hint', (params) => {
   } else if (word) {
     const w = store.byLabel(word);
     if (w) activateWrapper(w);
+  }
+});
+
+// --- Scroll action handlers ---
+
+dispatcher.register('scroll_down', () => {
+  const ct = getCycleTarget();
+  if (ct) scrollElement(ct, 'down', 'step');
+  else scroll('down', 'step');
+});
+
+dispatcher.register('scroll_up', () => {
+  const ct = getCycleTarget();
+  if (ct) scrollElement(ct, 'up', 'step');
+  else scroll('up', 'step');
+});
+
+dispatcher.register('scroll_half_down', () => {
+  const ct = getCycleTarget();
+  if (ct) scrollElement(ct, 'down', 'half');
+  else scroll('down', 'half');
+});
+
+dispatcher.register('scroll_half_up', () => {
+  const ct = getCycleTarget();
+  if (ct) scrollElement(ct, 'up', 'half');
+  else scroll('up', 'half');
+});
+
+dispatcher.register('scroll_top', () => {
+  const ct = getCycleTarget();
+  if (ct) scrollElement(ct, 'up', 'top');
+  else scroll('up', 'top');
+});
+
+dispatcher.register('scroll_bottom', () => {
+  const ct = getCycleTarget();
+  if (ct) scrollElement(ct, 'down', 'bottom');
+  else scroll('down', 'bottom');
+});
+
+dispatcher.register('scroll_left', () => {
+  const ct = getCycleTarget();
+  if (ct) scrollElement(ct, 'left', 'step');
+  else scroll('left', 'step');
+});
+
+dispatcher.register('scroll_right', () => {
+  const ct = getCycleTarget();
+  if (ct) scrollElement(ct, 'right', 'step');
+  else scroll('right', 'step');
+});
+
+dispatcher.register('cycle_scroll_target', () => {
+  cycleScrollTarget();
+});
+
+// --- Find action handlers ---
+
+dispatcher.register('find_open', () => {
+  openFindMode();
+});
+
+dispatcher.register('find_close', () => {
+  closeFindMode();
+});
+
+dispatcher.register('find_next', () => {
+  findNext();
+});
+
+dispatcher.register('find_previous', () => {
+  findPrevious();
+});
+
+dispatcher.register('find_immediate', (params) => {
+  const query = params.query || '';
+  if (query) findImmediate(query);
+});
+
+// Voice scroll handler — receives parameterized scroll commands from the plugin
+dispatcher.register('scroll', (params) => {
+  const direction = (params.direction || 'down') as ScrollDirection;
+  const amount = (params.amount || 'step') as ScrollAmount;
+  const count = parseInt(params.count || '1', 10) || 1;
+  const region = params.region as ScrollRegion | undefined;
+
+  if (region) {
+    scrollRegion(region, direction, amount, count);
+  } else {
+    scroll(direction, amount, count);
+  }
+});
+
+dispatcher.register('scroll_to_percent', (params) => {
+  const pct = parseInt(params.percent || '50', 10);
+  scrollToPercent(pct);
+});
+
+dispatcher.register('scroll_to_element', (params) => {
+  const position = (params.position || 'top') as 'top' | 'center' | 'bottom';
+  const selector = params.selector;
+  if (selector) {
+    const el = document.querySelector(selector);
+    if (el) snapToElement(el, position);
   }
 });
 
@@ -504,6 +670,10 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       doScan();
     } else if (action === 'set_badge_mode' && params?.mode) {
       chrome.storage.sync.set({ badgeDisplayMode: params.mode });
+    } else if (action === 'scroll' || action === 'scroll_to_element' || action === 'scroll_to_percent') {
+      dispatcher.dispatch(action, params);
+    } else if (action === 'find_open' || action === 'find_close' || action === 'find_next' || action === 'find_previous' || action === 'find_immediate') {
+      dispatcher.dispatch(action, params);
     } else if (action === 'activate') {
       // Resolve element via three-tier fallback:
       //  1. Pre-phrase snapshot (protects against DOM mutation)
@@ -555,6 +725,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
 
 let scrollRafPending = false;
 function onScrollOrResize(): void {
+  if (shouldSuppressScrollEvent()) return;
   if (!hintsVisible || scrollRafPending) return;
   scrollRafPending = true;
   requestAnimationFrame(() => {
@@ -569,9 +740,24 @@ window.addEventListener('resize', onScrollOrResize, { passive: true });
 
 // --- Keyboard Listener ---
 
+const scrollKeys = new Set(['j', 'k', 'd', 'u', 'h', 'l']);
+const heldKeys = new Set<string>();
+
 document.addEventListener('keydown', (e: KeyboardEvent) => {
+  if (handlePostFindKey(e)) return;
+  if (scrollKeys.has(e.key) && !e.repeat && !heldKeys.has(e.key)) {
+    heldKeys.add(e.key);
+    setKeyHeld(true);
+  }
   keyHandler.handleKeyDown(e);
-}, true); // capture phase
+}, true);
+
+document.addEventListener('keyup', (e: KeyboardEvent) => {
+  if (heldKeys.has(e.key)) {
+    heldKeys.delete(e.key);
+    setKeyHeld(false);
+  }
+}, true);
 
 // --- MutationObserver (discovery-only) ---
 //
