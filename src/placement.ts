@@ -1,21 +1,15 @@
 export type { PlacementStrategy } from './placement/strategy';
-export { GreedyStrategy } from './placement/greedy';
 export { RangoStrategy } from './placement/rango';
-export { WhitespaceStrategy } from './placement/whitespace';
 
 import { PlacementStrategy } from './placement/strategy';
-import { GreedyStrategy } from './placement/greedy';
 import { RangoStrategy } from './placement/rango';
-import { WhitespaceStrategy } from './placement/whitespace';
 import { ElementWrapper } from './element-wrapper';
 
 const strategies: Record<string, () => PlacementStrategy> = {
-  greedy: () => new GreedyStrategy(),
   rango: () => new RangoStrategy(),
-  whitespace: () => new WhitespaceStrategy(),
 };
 
-let active: PlacementStrategy = new GreedyStrategy();
+let active: PlacementStrategy = new RangoStrategy();
 
 export function setPlacementStrategy(name: string): void {
   const factory = strategies[name];

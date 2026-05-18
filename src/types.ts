@@ -6,16 +6,6 @@
 
 export type Category = 'link' | 'button' | 'input' | 'tab' | 'edit' | 'view' | 'tables';
 
-export const CATEGORY_BORDER_COLORS: Record<Category, string> = {
-  input:   '#f5a623',   // Gold
-  edit:    '#ff9500',   // Orange
-  view:    '#5ac8fa',   // Teal
-  tab:     '#007AFF',   // Blue
-  link:    '#af52de',   // Purple
-  button:  '#007AFF',   // Blue
-  tables:  '#28a745',   // Green
-};
-
 // --- Badge Display ---
 
 export type BadgeDisplayMode = 'word' | 'letter' | 'both';

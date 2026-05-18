@@ -12,7 +12,7 @@ import { ElementWrapper, WrapperStore } from './element-wrapper';
 import { IntersectionTracker } from './intersection-tracker';
 import { HintBadge } from './hints';
 import { cacheLayout, clearLayoutCache } from './layout-cache';
-import { placeBadges, placeOne, clearPlacement, setPlacementStrategy } from './placement';
+import { placeBadges, placeOne, clearPlacement } from './placement';
 import { activateElement } from './event-sequence';
 import {
   CodewordSnapshot,
@@ -100,12 +100,9 @@ const INPUT_TYPES = new Set(['input', 'textarea', 'select', 'contenteditable']);
 // --- Display Mode from storage ---
 
 if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
-  chrome.storage.sync.get(['badgeDisplayMode', 'placementStrategy'], (result) => {
+  chrome.storage.sync.get('badgeDisplayMode', (result) => {
     if (result.badgeDisplayMode) {
       displayMode = result.badgeDisplayMode;
-    }
-    if (result.placementStrategy) {
-      setPlacementStrategy(result.placementStrategy);
     }
   });
 
@@ -114,17 +111,6 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
       displayMode = changes.badgeDisplayMode.newValue || 'word';
       if (hintsVisible) {
         updateBadgeLabels();
-      }
-    }
-    if (changes.placementStrategy?.newValue) {
-      setPlacementStrategy(changes.placementStrategy.newValue);
-      if (hintsVisible) {
-        const visible = store.all.filter(w => w.hint?.isVisible);
-        if (visible.length > 0) {
-          cacheLayout(visible.map(w => w.element));
-          placeBadges(visible);
-          clearLayoutCache();
-        }
       }
     }
     // BranchKit pushed a new alphabet — adopt it. The pool was wiped

@@ -31,20 +31,5 @@ function initHintModeSelect(): void {
   });
 }
 
-function initPlacementSelect(): void {
-  const select = document.getElementById('placement') as HTMLSelectElement;
-
-  chrome.storage.sync.get('placementStrategy', (result) => {
-    if (result.placementStrategy) {
-      select.value = result.placementStrategy;
-    }
-  });
-
-  select.addEventListener('change', () => {
-    chrome.storage.sync.set({ placementStrategy: select.value });
-  });
-}
-
 checkStatus();
 initHintModeSelect();
-initPlacementSelect();
