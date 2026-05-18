@@ -150,12 +150,13 @@ The "Both" option (`both`, currently shows "A arch") can be removed -- first-wor
 
 ## Implementation Sketch
 
-### Phase 1: First-Word Display Mode (no HUD)
+### Phase 1: First-Word Display Mode (no HUD) -- COMPLETE (2026-05-18)
 
-1. Add `'first-word'` to `BadgeDisplayMode` type.
-2. In `labelToDisplay()`, return just `label.words[0]` for first-word mode.
-3. Update `setMatchedChars()` for first-word mode: after first letter typed, transform badge -- collapse first word to dimmed letter, expand second position to full word (e.g., "arch" becomes "a bake").
-4. Add popup option.
+1. ~~Add `'first-word'` to `BadgeDisplayMode` type.~~ Done: `src/types.ts`.
+2. ~~In `labelToDisplay()`, return first word + second letter for first-word mode.~~ Done: `src/words.ts`. Two-word labels show "arch l"; single-word labels show just the word.
+3. ~~Update `setMatchedChars()` for first-word mode.~~ Done: `src/hints.ts`. Stage 2 collapses first word to dimmed letter + expands second position to full word ("arch l" becomes "a lime"). Badge size cache invalidated on transform.
+4. ~~Add popup option.~~ Done: `popup.html`. "First word" option between Letters and Words.
+5. Unit tests for `labelToDisplay` first-word mode: `src/words.test.ts`.
 
 This phase is useful on its own: less visual noise, and the inline expansion provides discovery without a HUD.
 
@@ -188,7 +189,7 @@ This phase is useful on its own: less visual noise, and the inline expansion pro
 
 1. **Spatial clustering.** Investigation confirmed this is a one-line change: replace the `rankByDistance` sort in `intersection-tracker.ts:214-221` with a top-left spatial sort (same comparator already exists as `viewportSort()` in content.ts). The pool's prefix-first ordering means contiguous claims share a prefix naturally. **Recommendation: do it.** The benefit is that the first word becomes a region selector ("arch" = top of page, "rain" = middle). Users develop spatial intuition over time. The cost is minimal -- focus-distance sorting gave slightly better labels to the focused element, but spatial predictability is more valuable. Independent of staged reveal, so can land separately.
 
-2. **Badge width change during Stage 2.** "arch l" → "a lime" changes the badge width. Snap (no animation) is simpler and avoids layout thrash. The expansion is transient. Decide during implementation.
+2. ~~**Badge width change during Stage 2.**~~ Resolved: snap with no animation. `_size` cache is invalidated so placement can adjust, but no CSS transition on width.
 
 3. **HUD positioning.** Bottom-center or top-right? Bottom-center is more visible but may overlap page content. Top-right is out of the way but requires eye movement. Could be user-configurable, but start with bottom-center and iterate.
 

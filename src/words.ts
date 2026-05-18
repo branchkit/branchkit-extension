@@ -6,6 +6,8 @@
  * (label-pool.ts), not here.
  */
 
+import { BadgeDisplayMode } from './types';
+
 /** Map from word to its letter (e.g. "arch" → "A") */
 export const WORD_TO_LETTER: Record<string, string> = {};
 
@@ -46,7 +48,7 @@ export interface LabelAssignment {
 /**
  * Format label for display based on display mode.
  */
-export function labelToDisplay(assignment: LabelAssignment, mode: 'word' | 'letter' | 'both'): string {
+export function labelToDisplay(assignment: LabelAssignment, mode: BadgeDisplayMode): string {
   switch (mode) {
     case 'word':
       return assignment.words.join(' ');
@@ -57,5 +59,10 @@ export function labelToDisplay(assignment: LabelAssignment, mode: 'word' | 'lett
         return `${assignment.letter} ${assignment.words[0]}`;
       }
       return assignment.words.join(' ');
+    case 'first-word':
+      if (assignment.words.length === 1) {
+        return assignment.words[0];
+      }
+      return `${assignment.words[0]} ${WORD_TO_LETTER[assignment.words[1]] || assignment.letter[1] || ''}`;
   }
 }

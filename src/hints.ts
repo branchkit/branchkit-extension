@@ -412,11 +412,10 @@ export class HintBadge {
     this._size = null;
   }
 
-  // count = number of letter positions typed, not characters. In word mode,
-  // each word maps to one letter position, so count=1 dims the first word.
   setMatchedChars(count: number): void {
     if (count === 0) {
       this.inner.textContent = labelToDisplay(this.label, this.displayMode);
+      this._size = null;
       return;
     }
 
@@ -444,6 +443,15 @@ export class HintBadge {
           if (matchedText && remainingText) remainingText = ' ' + remainingText;
         }
         break;
+      case 'first-word':
+        if (count >= 1 && words.length >= 2) {
+          matchedText = letter[0];
+          remainingText = ' ' + words[1];
+        } else {
+          matchedText = letter.slice(0, count);
+          remainingText = '';
+        }
+        break;
     }
 
     this.inner.textContent = '';
@@ -456,6 +464,7 @@ export class HintBadge {
     if (remainingText) {
       this.inner.appendChild(document.createTextNode(remainingText));
     }
+    this._size = null;
   }
 
   reposition(): void {
