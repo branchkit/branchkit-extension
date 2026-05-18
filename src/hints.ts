@@ -12,6 +12,7 @@ import { LabelAssignment, labelToDisplay } from './words';
 import { getCachedRect, getCachedStyle, getCachedDims } from './layout-cache';
 import { calculateZIndex } from './stacking-context';
 import { computeBadgeColors } from './badge-colors';
+import { leaderLineGeometry } from './placement/geometry';
 
 const BADGE_SPACE_LEFT = 28;
 const BADGE_SPACE_TOP = 10;
@@ -204,9 +205,11 @@ export class HintBadge {
   private shadow: ShadowRoot;
   private outer: HTMLDivElement;
   private inner: HTMLDivElement;
+  private leaderLine: HTMLDivElement | null = null;
   private target: Element;
   private category: Category;
   private _visible: boolean = false;
+  private _size: { w: number; h: number } | null = null;
 
   constructor(target: Element, label: LabelAssignment, category: Category, displayMode: BadgeDisplayMode) {
     this.target = target;
@@ -234,16 +237,14 @@ export class HintBadge {
         pointer-events: none;
       }
       .bk-inner {
-        font: bold 11px/16px system-ui, -apple-system, sans-serif;
-        padding: 1px 5px;
-        border-radius: 3px;
+        font: bold 12px/1.2 system-ui, -apple-system, sans-serif;
+        padding: 0 0.1em;
+        border-radius: 2px;
         user-select: none;
         white-space: nowrap;
-        min-width: 16px;
         text-align: center;
-        border-width: 1.5px;
+        border-width: 1px;
         border-style: solid;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.18);
         opacity: 0;
         transition: opacity 0.15s ease-in;
       }
@@ -255,7 +256,13 @@ export class HintBadge {
       }
       .bk-inner.text-match {
         border-color: #FFD60A !important;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.18), 0 0 0 1px #FFD60A;
+        outline: 1px solid #FFD60A;
+      }
+      .bk-leader {
+        position: absolute;
+        height: 1px;
+        transform-origin: 0 0;
+        pointer-events: none;
       }
       .bk-outer.focus-hidden { visibility: hidden; }
       @media print { .bk-outer { visibility: hidden; } }
@@ -288,18 +295,28 @@ export class HintBadge {
     });
   }
 
-  updatePosition(): void {
-    const targetRect = getCachedRect(this.target);
+  updatePosition(candidate?: { x: number; y: number }): void {
+    let vpX: number;
+    let vpY: number;
+
+    if (candidate) {
+      vpX = candidate.x;
+      vpY = candidate.y;
+    } else {
+      const targetRect = getCachedRect(this.target);
+      vpX = targetRect.left - BADGE_OFFSET;
+      vpY = targetRect.top + 2;
+    }
+
     let x: number;
     let y: number;
-
     if (this.anchorParent === document.body || this.anchorParent === document.documentElement) {
-      x = targetRect.left + window.scrollX - BADGE_OFFSET;
-      y = targetRect.top + window.scrollY + 2;
+      x = vpX + window.scrollX;
+      y = vpY + window.scrollY;
     } else {
       const parentRect = getCachedRect(this.anchorParent);
-      x = targetRect.left - parentRect.left + this.anchorParent.scrollLeft - BADGE_OFFSET;
-      y = targetRect.top - parentRect.top + this.anchorParent.scrollTop + 2;
+      x = vpX - parentRect.left + this.anchorParent.scrollLeft;
+      y = vpY - parentRect.top + this.anchorParent.scrollTop;
     }
 
     if (this.clipAncestor) {
@@ -323,9 +340,24 @@ export class HintBadge {
     this._visible = true;
     this.applyColors();
     this.updatePosition();
+    this._size = null;
     requestAnimationFrame(() => {
       this.inner.classList.add('visible');
     });
+  }
+
+  get badgeSize(): { w: number; h: number } {
+    if (this._size) return this._size;
+    const rect = this.inner.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) {
+      this._size = { w: Math.ceil(rect.width), h: Math.ceil(rect.height) };
+      return this._size;
+    }
+    const text = this.inner.textContent || '';
+    const w = Math.ceil(text.length * 7.2) + 4;
+    const h = 16;
+    this._size = { w, h };
+    return this._size;
   }
 
   private applyColors(): void {
@@ -362,6 +394,7 @@ export class HintBadge {
 
   updateLabel(label: LabelAssignment, displayMode: BadgeDisplayMode): void {
     this.inner.textContent = labelToDisplay(label, displayMode);
+    this._size = null;
   }
 
   reposition(): void {
@@ -376,5 +409,57 @@ export class HintBadge {
 
   get isVisible(): boolean {
     return this._visible;
+  }
+
+  setLeader(
+    targetRect: { left: number; right: number; top: number; bottom: number },
+    badgeRect: { x: number; y: number; width: number; height: number },
+  ): void {
+    if (!this.leaderLine) {
+      this.leaderLine = document.createElement('div');
+      this.leaderLine.className = 'bk-leader';
+      const borderHex = CATEGORY_BORDER_COLORS[this.category];
+      this.leaderLine.style.background = borderHex;
+      this.leaderLine.style.opacity = '0.4';
+      this.outer.appendChild(this.leaderLine);
+    }
+
+    const badgeAnchor = { x: badgeRect.x + badgeRect.width / 2, y: badgeRect.y + badgeRect.height / 2 };
+    const targetAnchor = {
+      x: Math.max(targetRect.left, Math.min(targetRect.right, badgeAnchor.x)),
+      y: Math.max(targetRect.top, Math.min(targetRect.bottom, badgeAnchor.y)),
+    };
+    const { length, angle } = leaderLineGeometry(badgeAnchor, targetAnchor);
+
+    if (length <= 16) {
+      this.leaderLine.style.display = 'none';
+      return;
+    }
+
+    const outerLeft = parseFloat(this.outer.style.left) || 0;
+    const outerTop = parseFloat(this.outer.style.top) || 0;
+
+    let anchorLocalX: number;
+    let anchorLocalY: number;
+    if (this.anchorParent === document.body || this.anchorParent === document.documentElement) {
+      anchorLocalX = badgeAnchor.x + window.scrollX - outerLeft;
+      anchorLocalY = badgeAnchor.y + window.scrollY - outerTop;
+    } else {
+      const parentRect = getCachedRect(this.anchorParent);
+      anchorLocalX = badgeAnchor.x - parentRect.left + this.anchorParent.scrollLeft - outerLeft;
+      anchorLocalY = badgeAnchor.y - parentRect.top + this.anchorParent.scrollTop - outerTop;
+    }
+
+    this.leaderLine.style.display = '';
+    this.leaderLine.style.width = `${length}px`;
+    this.leaderLine.style.left = `${anchorLocalX}px`;
+    this.leaderLine.style.top = `${anchorLocalY}px`;
+    this.leaderLine.style.transform = `rotate(${angle}rad)`;
+  }
+
+  hideLeader(): void {
+    if (this.leaderLine) {
+      this.leaderLine.style.display = 'none';
+    }
   }
 }

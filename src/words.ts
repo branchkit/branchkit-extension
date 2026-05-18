@@ -9,7 +9,7 @@
 /** Map from word to its letter (e.g. "arch" → "A") */
 export const WORD_TO_LETTER: Record<string, string> = {};
 
-const LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const LETTERS = 'abcdefghijklmnopqrstuvwxyz';
 const alphabet: string[] = [];
 
 function rebuildMaps(): void {

@@ -12,6 +12,7 @@ import { ElementWrapper, WrapperStore } from './element-wrapper';
 import { IntersectionTracker } from './intersection-tracker';
 import { HintBadge } from './hints';
 import { cacheLayout, clearLayoutCache } from './layout-cache';
+import { placeBadges, placeOne, clearPlacement, setPlacementStrategy } from './placement';
 import { activateElement } from './event-sequence';
 import {
   CodewordSnapshot,
@@ -99,18 +100,31 @@ const INPUT_TYPES = new Set(['input', 'textarea', 'select', 'contenteditable']);
 // --- Display Mode from storage ---
 
 if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
-  chrome.storage.sync.get('badgeDisplayMode', (result) => {
+  chrome.storage.sync.get(['badgeDisplayMode', 'placementStrategy'], (result) => {
     if (result.badgeDisplayMode) {
       displayMode = result.badgeDisplayMode;
+    }
+    if (result.placementStrategy) {
+      setPlacementStrategy(result.placementStrategy);
     }
   });
 
   chrome.storage.onChanged.addListener((changes) => {
     if (changes.badgeDisplayMode) {
       displayMode = changes.badgeDisplayMode.newValue || 'word';
-      // Re-render visible badges with new display mode
       if (hintsVisible) {
         updateBadgeLabels();
+      }
+    }
+    if (changes.placementStrategy?.newValue) {
+      setPlacementStrategy(changes.placementStrategy.newValue);
+      if (hintsVisible) {
+        const visible = store.all.filter(w => w.hint?.isVisible);
+        if (visible.length > 0) {
+          cacheLayout(visible.map(w => w.element));
+          placeBadges(visible);
+          clearLayoutCache();
+        }
       }
     }
     // BranchKit pushed a new alphabet — adopt it. The pool was wiped
@@ -562,7 +576,6 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
     const label = poolLabelToAssignment(wrapper.scanned.codeword);
     wrapper.label = label;
 
-    // Create badge if not exists
     if (!wrapper.hint) {
       wrapper.hint = new HintBadge(
         wrapper.element,
@@ -577,6 +590,8 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
     wrapper.hint.show();
   }
 
+  placeBadges(renderable);
+
   clearLayoutCache();
   hintsVisible = true;
 }
@@ -585,8 +600,10 @@ function hideHints(): void {
   hintsVisible = false;
   activeCategory = null;
   activateInNewTab = false;
+  clearPlacement();
   keyHandler.exitHintMode();
   for (const w of store.all) {
+    w.hint?.hideLeader();
     w.hint?.hide();
   }
 
@@ -607,12 +624,16 @@ function badgeNewlyCodeworded(): void {
   }
   if (newBadges.length === 0) return;
 
+  const existingCount = store.all.filter(w => w.hint?.isVisible).length;
+
   cacheLayout(newBadges.map(w => w.element));
-  for (const w of newBadges) {
+  for (let i = 0; i < newBadges.length; i++) {
+    const w = newBadges[i];
     const label = poolLabelToAssignment(w.scanned.codeword);
     w.label = label;
     w.hint = new HintBadge(w.element, label, w.category, displayMode);
     w.hint.show();
+    placeOne(w, existingCount + i);
   }
   clearLayoutCache();
 }
@@ -814,9 +835,7 @@ function onResize(): void {
     const visible = store.all.filter(w => w.hint?.isVisible);
     if (visible.length > 0) {
       cacheLayout(visible.map(w => w.element));
-      for (const w of visible) {
-        w.hint!.reposition();
-      }
+      placeBadges(visible);
       clearLayoutCache();
     }
   });
