@@ -29,7 +29,6 @@ import {
   resetCycleTarget,
   scrollElement,
   scrollToPercent,
-  shouldSuppressScrollEvent,
   setKeyHeld,
   setScrollBoundaryCallback,
   type ScrollDirection,
@@ -55,7 +54,10 @@ const dispatcher = new ActionDispatcher();
 const registry = new CommandRegistry();
 const keyHandler = new KeyHandler(registry, dispatcher);
 const tracker = new IntersectionTracker(store, {
-  onCodewordsChanged: () => schedulePushGrammar(),
+  onCodewordsChanged: () => {
+    schedulePushGrammar();
+    if (hintsVisible) badgeNewlyCodeworded();
+  },
 });
 
 setFindCallbacks({
@@ -481,9 +483,7 @@ const badgeReattachObserver = new MutationObserver((records) => {
       if (!removed.hasAttribute('data-branchkit-hint')) continue;
       const wrapper = store.all.find(w => w.hint?.host === removed);
       if (!wrapper?.hint) continue;
-      const parent = document.body || document.documentElement;
-      if (!parent) continue;
-      parent.appendChild(removed);
+      wrapper.hint.reattach();
       wrapper.hint.reposition();
     }
   }
@@ -491,7 +491,7 @@ const badgeReattachObserver = new MutationObserver((records) => {
 
 function startBadgeReattachObserver(): void {
   const target = document.body || document.documentElement;
-  if (target) badgeReattachObserver.observe(target, { childList: true });
+  if (target) badgeReattachObserver.observe(target, { childList: true, subtree: true });
 }
 
 /**
@@ -589,6 +589,18 @@ function hideHints(): void {
   if (pendingMutation) {
     pendingMutation = false;
     setTimeout(() => doScan(), 100);
+  }
+}
+
+function badgeNewlyCodeworded(): void {
+  for (const w of store.all) {
+    if (w.scanned.codeword && !w.hint && w.isInViewport) {
+      if (activeCategory && w.category !== activeCategory) continue;
+      const label = poolLabelToAssignment(w.scanned.codeword);
+      w.label = label;
+      w.hint = new HintBadge(w.element, label, w.category, displayMode);
+      w.hint.show();
+    }
   }
 }
 
@@ -784,22 +796,22 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
   }
 });
 
-// --- Scroll/Resize Listener (reposition fixed badges) ---
+// --- Resize Listener ---
+// Badges live in their target's scroll ancestor, so scroll is handled by the
+// compositor. Only window resize requires JS repositioning.
 
-let scrollRafPending = false;
-function onScrollOrResize(): void {
-  if (shouldSuppressScrollEvent()) return;
-  if (!hintsVisible || scrollRafPending) return;
-  scrollRafPending = true;
+let resizeRafPending = false;
+function onResize(): void {
+  if (!hintsVisible || resizeRafPending) return;
+  resizeRafPending = true;
   requestAnimationFrame(() => {
-    scrollRafPending = false;
+    resizeRafPending = false;
     for (const w of store.all) {
       w.hint?.reposition();
     }
   });
 }
-window.addEventListener('scroll', onScrollOrResize, { passive: true, capture: true });
-window.addEventListener('resize', onScrollOrResize, { passive: true });
+window.addEventListener('resize', onResize, { passive: true });
 
 // --- Keyboard Listener ---
 
@@ -1043,6 +1055,7 @@ document.addEventListener(SHADOW_EVENT, (event) => {
 const watchedUndefinedTags = new Set<string>();
 
 function watchUndefinedCustomElements(root: Element | Document): void {
+  if (!customElements) return;
   // :not(:defined) only matches custom elements (hyphenated tags) that
   // haven't been registered yet. Plain HTML tags are always "defined."
   let undefinedEls: NodeListOf<Element>;

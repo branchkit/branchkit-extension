@@ -2,19 +2,29 @@
  * BranchKit Browser — Shadow DOM hint badges.
  *
  * Each badge lives in a closed Shadow DOM to prevent page CSS interference.
- * Uses position:fixed with viewport coordinates for reliable placement.
- * Badges reposition on scroll via a shared scroll listener in content.ts.
+ * Appended to the target's nearest scroll ancestor so badges scroll in
+ * lockstep with their targets via the compositor — no JS repositioning
+ * needed during scroll.
  */
 
 import { Category, CATEGORY_COLORS, BadgeDisplayMode } from './types';
 import { LabelAssignment, labelToDisplay } from './words';
 
+function getScrollAncestor(el: Element): HTMLElement | null {
+  let parent = el.parentElement;
+  while (parent && parent !== document.body && parent !== document.documentElement) {
+    const s = getComputedStyle(parent);
+    if (/(auto|scroll)/.test(s.overflow + s.overflowX + s.overflowY)) {
+      return parent;
+    }
+    parent = parent.parentElement;
+  }
+  return null;
+}
+
 export class HintBadge {
-  // Host is public so an external rescuer (content.ts's body
-  // childList observer) can re-append it after a page-driven
-  // removal. The shadow root inside is still closed; the page can
-  // remove the host from body but can't peek at its contents.
   public readonly host: HTMLDivElement;
+  public readonly anchorParent: HTMLElement;
   private shadow: ShadowRoot;
   private outer: HTMLDivElement;
   private inner: HTMLDivElement;
@@ -26,15 +36,12 @@ export class HintBadge {
 
     const colors = CATEGORY_COLORS[category];
 
-    // Create shadow host — appended to body to avoid layout interference
     this.host = document.createElement('div');
     this.host.setAttribute('data-branchkit-hint', 'true');
-    this.host.style.cssText = 'position:fixed; top:0; left:0; width:0; height:0; overflow:visible; z-index:2147483647; pointer-events:none;';
+    this.host.style.cssText = 'position:absolute; top:0; left:0; width:0; height:0; overflow:visible; z-index:2147483647; pointer-events:none;';
 
-    // Closed shadow DOM
     this.shadow = this.host.attachShadow({ mode: 'closed' });
 
-    // Build inner structure
     this.outer = document.createElement('div');
     this.outer.className = 'bk-outer';
 
@@ -44,11 +51,10 @@ export class HintBadge {
     const text = labelToDisplay(label, displayMode);
     this.inner.textContent = text;
 
-    // Create style
     const style = document.createElement('style');
     style.textContent = `
       .bk-outer {
-        position: fixed;
+        position: absolute;
         pointer-events: none;
       }
       .bk-inner {
@@ -83,19 +89,37 @@ export class HintBadge {
     this.outer.appendChild(this.inner);
     this.shadow.appendChild(this.outer);
 
-    // Append to body (fixed positioning, so location in DOM doesn't matter)
-    document.body.appendChild(this.host);
+    const scrollAncestor = getScrollAncestor(target);
+    if (scrollAncestor) {
+      if (getComputedStyle(scrollAncestor).position === 'static') {
+        scrollAncestor.style.position = 'relative';
+      }
+      this.anchorParent = scrollAncestor;
+    } else {
+      this.anchorParent = document.body;
+    }
+    this.anchorParent.appendChild(this.host);
   }
 
   updatePosition(): void {
     const targetRect = this.target.getBoundingClientRect();
 
-    // Position to the left of the target element
-    const x = targetRect.left - 24;
-    const y = targetRect.top + 2;
+    if (this.anchorParent === document.body) {
+      const x = targetRect.left + window.scrollX - 24;
+      const y = targetRect.top + window.scrollY + 2;
+      this.outer.style.left = `${x}px`;
+      this.outer.style.top = `${y}px`;
+    } else {
+      const parentRect = this.anchorParent.getBoundingClientRect();
+      const x = targetRect.left - parentRect.left + this.anchorParent.scrollLeft - 24;
+      const y = targetRect.top - parentRect.top + this.anchorParent.scrollTop + 2;
+      this.outer.style.left = `${x}px`;
+      this.outer.style.top = `${y}px`;
+    }
+  }
 
-    this.outer.style.left = `${x}px`;
-    this.outer.style.top = `${y}px`;
+  reattach(): void {
+    this.anchorParent.appendChild(this.host);
   }
 
   show(): void {
