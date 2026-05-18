@@ -998,9 +998,12 @@ function processMutations(records: MutationRecord[]): void {
 }
 
 const observer = new MutationObserver((records) => {
-  // Hints are visible — defer DOM-driven changes so codeword assignments
-  // don't shuffle mid-interaction. hideHints() flushes via doScan().
-  if (hintsVisible) {
+  // Hints are visible — behavior depends on visibility mode.
+  // In "manual" mode, defer mutations so codewords don't shuffle while
+  // the user is reading badges. hideHints() flushes via doScan().
+  // In "always" mode, process mutations incrementally so SPA navigation
+  // and dynamic content get badges without requiring escape+re-show.
+  if (hintsVisible && hintVisibility === 'manual') {
     pendingMutation = true;
     return;
   }
