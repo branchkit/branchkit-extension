@@ -18,6 +18,7 @@ const ACTUATOR_URL = 'http://127.0.0.1:21551';
 let pluginPort: number | null = null;
 let pluginToken: string | null = null;
 let branchkitConnected = false;
+let cachedActiveTabId: number | null = null;
 
 // Per-tab grammar aggregation. Each frame's SCAN_RESULT lands here keyed
 // by (tabId, frameId); on every update we rebuild the aggregate and push
@@ -416,21 +417,22 @@ async function broadcastToAllTabs(message: Message): Promise<void> {
 
 async function notifyActiveTab(message: Message): Promise<void> {
   try {
-    const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    const tab = tabs[0];
-    if (!tab?.id) {
+    let tabId = cachedActiveTabId;
+    if (tabId === null) {
+      const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      tabId = tabs[0]?.id ?? null;
+      if (tabId !== null) cachedActiveTabId = tabId;
+    }
+    if (tabId === null) {
       console.warn('[BranchKit SW] no active tab found');
       return;
     }
 
-    // If the action references a specific codeword, route to its owning frame.
-    // Otherwise fall through to the top frame (chrome's default).
-    const frameId = await routeFrameForAction(tab.id, message);
-    console.log('[BranchKit SW] notifyActiveTab:', tab.id, frameId ?? 'top', tab.url?.slice(0, 60));
+    const frameId = await routeFrameForAction(tabId, message);
 
     const send = frameId !== null
-      ? chrome.tabs.sendMessage(tab.id, message, { frameId })
-      : chrome.tabs.sendMessage(tab.id, message);
+      ? chrome.tabs.sendMessage(tabId, message, { frameId })
+      : chrome.tabs.sendMessage(tabId, message);
     send.catch((e: Error) => {
       console.warn('[BranchKit SW] sendMessage failed:', e.message);
     });
@@ -571,7 +573,24 @@ function purgeTab(tabId: number): void {
   }
 }
 
-chrome.tabs.onRemoved.addListener(purgeTab);
+chrome.tabs.onActivated.addListener((activeInfo) => {
+  cachedActiveTabId = activeInfo.tabId;
+});
+
+chrome.windows.onFocusChanged.addListener(async (windowId) => {
+  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+  try {
+    const tabs = await chrome.tabs.query({ active: true, windowId });
+    cachedActiveTabId = tabs[0]?.id ?? null;
+  } catch {
+    cachedActiveTabId = null;
+  }
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (cachedActiveTabId === tabId) cachedActiveTabId = null;
+  purgeTab(tabId);
+});
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === 'loading') purgeTab(tabId);

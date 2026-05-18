@@ -35,6 +35,11 @@ export function buildPool(alphabet: string[]): string[] | null {
 
 const storageKey = (tabId: number) => `labelStack:${tabId}`;
 
+// In-memory mirror of each tab's assigned map. Avoids chrome.storage.session
+// IPC (~1-5ms) on the hot path — getFrameForLabel is called on every voice
+// action. Mutators (claim/release/clear/regenerate) keep this in sync.
+const assignedCache = new Map<number, Record<string, number>>();
+
 // Per-tab promise chain that serializes all mutations on that tab.
 // Two frames calling CLAIM_LABELS at the same time can't both splice the
 // same labels because their work runs sequentially in this chain.
@@ -84,6 +89,7 @@ async function getOrCreateStack(tabId: number): Promise<LabelStack | null> {
 
   const stack: LabelStack = { free: pool, assigned: {} };
   await saveStack(tabId, stack);
+  assignedCache.set(tabId, {});
   return stack;
 }
 
@@ -102,6 +108,7 @@ export async function claimLabels(tabId: number, frameId: number, count: number)
     for (const label of claimed) stack.assigned[label] = frameId;
 
     await saveStack(tabId, stack);
+    assignedCache.set(tabId, { ...stack.assigned });
     return claimed;
   });
 }
@@ -129,6 +136,7 @@ export async function releaseLabels(tabId: number, labels: string[]): Promise<vo
       stack.free.unshift(...toReturn);
     }
     await saveStack(tabId, stack);
+    assignedCache.set(tabId, { ...stack.assigned });
   });
 }
 
@@ -137,7 +145,10 @@ export async function releaseLabels(tabId: number, labels: string[]): Promise<vo
  * actions to the correct frame.
  */
 export async function getFrameForLabel(tabId: number, label: string): Promise<number | null> {
+  const cached = assignedCache.get(tabId);
+  if (cached) return cached[label] ?? null;
   const stack = await loadStack(tabId);
+  if (stack) assignedCache.set(tabId, { ...stack.assigned });
   return stack?.assigned[label] ?? null;
 }
 
@@ -167,6 +178,7 @@ export async function releaseFrame(tabId: number, frameId: number): Promise<void
       stack.free.unshift(...toRelease);
     }
     await saveStack(tabId, stack);
+    assignedCache.set(tabId, { ...stack.assigned });
   });
 }
 
@@ -175,6 +187,7 @@ export async function releaseFrame(tabId: number, frameId: number): Promise<void
  */
 export async function clearStack(tabId: number): Promise<void> {
   return withTabLock(tabId, async () => {
+    assignedCache.delete(tabId);
     await chrome.storage.session.remove(storageKey(tabId));
   });
 }
@@ -203,6 +216,7 @@ export async function regenerateAllStacks(): Promise<void> {
 
   await Promise.all(tabIds.map(tabId =>
     withTabLock(tabId, async () => {
+      assignedCache.set(tabId, {});
       await chrome.storage.session.set({
         [storageKey(tabId)]: { free: [...newPool], assigned: {} },
       });

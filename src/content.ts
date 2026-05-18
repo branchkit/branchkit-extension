@@ -5,7 +5,7 @@
  * Voice commands arrive via background → BRANCHKIT_ACTION messages.
  */
 
-import { Category, BadgeDisplayMode, ScannedElement, Message } from './types';
+import { Category, BadgeDisplayMode, HintVisibility, ScannedElement, Message } from './types';
 import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from './words';
 import { scanElements, scanSingle, isHintable } from './scanner';
 import { ElementWrapper, WrapperStore } from './element-wrapper';
@@ -82,6 +82,7 @@ setScrollBoundaryCallback((boundary) => {
 let hintsVisible = false;
 let activeCategory: Category | null = null;
 let displayMode: BadgeDisplayMode = 'letter';
+let hintVisibility: HintVisibility = 'always';
 let lastGrammarHash = '';
 let pendingMutation = false;
 let lastActivatedElement: Element | null = null;
@@ -100,17 +101,28 @@ const INPUT_TYPES = new Set(['input', 'textarea', 'select', 'contenteditable']);
 // --- Display Mode from storage ---
 
 if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
-  chrome.storage.sync.get('badgeDisplayMode', (result) => {
+  chrome.storage.sync.get(['badgeDisplayMode', 'hintVisibility'], (result) => {
     if (result.badgeDisplayMode) {
       displayMode = result.badgeDisplayMode;
+    }
+    if (result.hintVisibility) {
+      hintVisibility = result.hintVisibility;
     }
   });
 
   chrome.storage.onChanged.addListener((changes) => {
     if (changes.badgeDisplayMode) {
-      displayMode = changes.badgeDisplayMode.newValue || 'word';
+      displayMode = changes.badgeDisplayMode.newValue || 'letter';
       if (hintsVisible) {
         updateBadgeLabels();
+      }
+    }
+    if (changes.hintVisibility) {
+      hintVisibility = changes.hintVisibility.newValue || 'always';
+      if (hintVisibility === 'always' && !hintsVisible) {
+        showHints();
+      } else if (hintVisibility === 'manual' && hintsVisible) {
+        hideHints();
       }
     }
     // BranchKit pushed a new alphabet — adopt it. The pool was wiped
@@ -147,6 +159,11 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
   chrome.storage.local.get('alphabet', (result) => {
     if (Array.isArray(result.alphabet)) {
       setAlphabet(result.alphabet);
+      if (hintVisibility === 'always') {
+        tracker.flushNow().then(() => {
+          if (hintVisibility === 'always' && !hintsVisible) showHints();
+        });
+      }
     }
   });
 }
@@ -344,7 +361,6 @@ keyHandler.setFilterCallback((prefix: string, byText: boolean) => {
   }
 
   if (byText) {
-    // Text filter mode: match against visible element text
     const textResults = store.matchingText(prefix);
     const textMatches = new Set(textResults.map(r => r.wrapper));
 
@@ -361,10 +377,9 @@ keyHandler.setFilterCallback((prefix: string, byText: boolean) => {
       keyHandler.exitHintMode();
     }
   } else {
-    // Codeword mode: match against hint letter codes
-    const matches = store.matchingLetterPrefix(prefix);
+    const matchSet = new Set(store.matchingLetterPrefix(prefix));
     for (const w of store.all) {
-      const isMatch = matches.includes(w);
+      const isMatch = matchSet.has(w);
       w.hint?.setFiltered(!isMatch);
       w.hint?.setTextMatch(false);
       if (isMatch) {
@@ -372,8 +387,9 @@ keyHandler.setFilterCallback((prefix: string, byText: boolean) => {
       }
     }
 
-    if (matches.length === 1) {
-      activateWrapper(matches[0]);
+    if (matchSet.size === 1) {
+      const first = matchSet.values().next().value!;
+      activateWrapper(first);
       hideHints();
       keyHandler.exitHintMode();
     }

@@ -31,5 +31,20 @@ function initHintModeSelect(): void {
   });
 }
 
+function initHintVisibilitySelect(): void {
+  const select = document.getElementById('hint-visibility') as HTMLSelectElement;
+
+  chrome.storage.sync.get('hintVisibility', (result) => {
+    if (result.hintVisibility) {
+      select.value = result.hintVisibility;
+    }
+  });
+
+  select.addEventListener('change', () => {
+    chrome.storage.sync.set({ hintVisibility: select.value });
+  });
+}
+
 checkStatus();
+initHintVisibilitySelect();
 initHintModeSelect();
