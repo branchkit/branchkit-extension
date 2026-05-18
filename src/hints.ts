@@ -7,7 +7,7 @@
  * the badge via overflow/clip-path/contain.
  */
 
-import { Category, CATEGORY_BORDER_COLORS, BadgeDisplayMode } from './types';
+import { Category, BadgeDisplayMode } from './types';
 import { LabelAssignment, labelToDisplay } from './words';
 import { getCachedRect, getCachedStyle, getCachedDims } from './layout-cache';
 import { calculateZIndex } from './stacking-context';
@@ -361,8 +361,7 @@ export class HintBadge {
   }
 
   private applyColors(): void {
-    const borderHex = CATEGORY_BORDER_COLORS[this.category];
-    const colors = computeBadgeColors(this.target, borderHex);
+    const colors = computeBadgeColors(this.target);
     this.inner.style.background = colors.bg;
     this.inner.style.color = colors.fg;
     this.inner.style.borderColor = colors.border;
@@ -418,8 +417,7 @@ export class HintBadge {
     if (!this.leaderLine) {
       this.leaderLine = document.createElement('div');
       this.leaderLine.className = 'bk-leader';
-      const borderHex = CATEGORY_BORDER_COLORS[this.category];
-      this.leaderLine.style.background = borderHex;
+      this.leaderLine.style.background = this.inner.style.color || '#333';
       this.leaderLine.style.opacity = '0.4';
       this.outer.appendChild(this.leaderLine);
     }

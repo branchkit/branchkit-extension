@@ -237,33 +237,41 @@ function toCSS(c: RGB, alpha?: number): string {
   return `rgb(${Math.round(c.r)},${Math.round(c.g)},${Math.round(c.b)})`;
 }
 
+function getElementForegroundColor(target: Element): RGB {
+  if (target instanceof SVGElement) {
+    const stroke = target.getAttribute('stroke');
+    if (stroke && stroke !== 'none') {
+      const parsed = parseColor(stroke) || parseHexColor(stroke);
+      if (parsed) return parsed;
+    }
+    const fill = target.getAttribute('fill');
+    if (fill && fill !== 'none') {
+      const parsed = parseColor(fill) || parseHexColor(fill);
+      if (parsed) return parsed;
+    }
+  }
+  const style = getComputedStyle(target);
+  return parseColor(style.color) || BLACK;
+}
+
 /**
- * Compute adaptive badge colors for an element given its category border color.
+ * Compute adaptive badge colors for an element.
  *
- * 1. Resolves page background behind the target
- * 2. Picks light or dark badge fill to contrast with page
- * 3. Picks text color to contrast with badge fill
- * 4. Adjusts category border color to contrast with page background
+ * Matches Rango's approach: resolves page background, uses it as badge
+ * fill, adjusts element's text color for contrast as badge foreground,
+ * and uses foreground at 0.3 alpha as border.
  */
-export function computeBadgeColors(target: Element, categoryBorderHex: string): BadgeColors {
+export function computeBadgeColors(target: Element): BadgeColors {
   const pageBg = resolveBackgroundColor(target);
-  const bgIsLight = isLightBackground(pageBg);
 
-  const badgeFill: RGB = bgIsLight
-    ? { r: 255, g: 255, b: 255, a: 1 }
-    : { r: 30, g: 30, b: 30, a: 1 };
-
-  const textColor: RGB = bgIsLight
-    ? { r: 26, g: 26, b: 26, a: 1 }
-    : { r: 240, g: 240, b: 240, a: 1 };
-
-  const categoryColor = parseHexColor(categoryBorderHex);
-  const adjustedBorder = adjustForContrast(categoryColor, pageBg);
+  const elementFg = getElementForegroundColor(target);
+  const compositedFg = compositeOver(elementFg, pageBg);
+  const adjustedFg = adjustForContrast(compositedFg, pageBg);
 
   return {
-    bg: toCSS(badgeFill, 0.92),
-    fg: toCSS(textColor),
-    border: toCSS(adjustedBorder),
+    bg: toCSS(pageBg),
+    fg: toCSS(adjustedFg),
+    border: toCSS(adjustedFg, 0.3),
   };
 }
 
