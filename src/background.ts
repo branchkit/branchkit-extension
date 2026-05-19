@@ -9,7 +9,7 @@
  */
 
 import { Message, ScannedElement, GrammarRequest, FieldInfo, ClickableInfo, TableLink, HintVisibility } from './types';
-import { claimLabels, releaseLabels, clearStack, regenerateAllStacks, getFrameForLabel } from './label-pool';
+import { claimLabels, releaseLabels, releaseFrame, clearStack, regenerateAllStacks, getFrameForLabel } from './label-pool';
 
 const ACTUATOR_URL = 'http://127.0.0.1:21551';
 
@@ -581,6 +581,34 @@ function purgeTab(tabId: number): void {
     aggregateTimers.delete(tabId);
   }
 }
+
+// Per-frame liveness via long-lived Port. Each content-script context opens
+// one Port at startup; when the context dies (iframe removed, navigation,
+// tab closed) Chrome closes the Port and onDisconnect fires here. Without
+// this, dead frames' codewords leak from the per-tab label pool until tab
+// close, and their stale ScannedElement entries leak from tabGrammars until
+// the next purgeTab. See notes/DESIGN_BROWSER_FRAME_POOL_EXHAUSTION.md.
+//
+// The Port carries no messages — its lifetime IS the signal. Service worker
+// idle-termination is a known small leak window (frames that die while the
+// SW is asleep don't get cleaned), accepted for v1.
+const LIVENESS_PORT_NAME = 'frame-liveness';
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== LIVENESS_PORT_NAME) return;
+  const tabId = port.sender?.tab?.id;
+  const frameId = port.sender?.frameId;
+  if (typeof tabId !== 'number' || typeof frameId !== 'number') return;
+  port.onDisconnect.addListener(() => {
+    releaseFrame(tabId, frameId).catch(() => {});
+    tabGrammars.get(tabId)?.delete(frameId);
+    // Re-aggregate so the next push (or the immediate active-tab guard
+    // below) reflects only surviving frames. schedulePushForTab no-ops if
+    // tabId isn't the active tab; background tabs ship the cleanup when
+    // they're next activated via onActivated's own pushGrammar.
+    schedulePushForTab(tabId);
+  });
+});
 
 chrome.tabs.onActivated.addListener((activeInfo) => {
   cachedActiveTabId = activeInfo.tabId;

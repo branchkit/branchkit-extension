@@ -715,6 +715,42 @@ window.addEventListener('blur', (e) => {
   if (e.target === window) windowHasFocus = false;
 }, true);
 
+// --- Frame liveness Port ---
+//
+// One long-lived Port per content-script V8 context. We send no messages —
+// the Port's *lifetime* is the signal. When this context dies (iframe
+// removed, navigation, tab closed) Chrome closes the Port and the
+// background's onDisconnect handler releases this frame's labels and
+// clears its tabGrammars entry. See
+// notes/DESIGN_BROWSER_FRAME_POOL_EXHAUSTION.md.
+//
+// The content-side onDisconnect handler below fires only when the SW
+// restarts (idle-terminated), not when this frame dies. On SW restart we
+// reopen a Port so the background can re-track us; we don't re-claim
+// labels because our existing claims survive in chrome.storage.session.
+
+const LIVENESS_PORT_NAME = 'frame-liveness';
+let livenessPort: chrome.runtime.Port | null = null;
+
+function openLivenessPort(): void {
+  try {
+    const port = chrome.runtime.connect({ name: LIVENESS_PORT_NAME });
+    livenessPort = port;
+    port.onDisconnect.addListener(() => {
+      livenessPort = null;
+      // Brief delay so the SW finishes its init pass before we
+      // re-announce ourselves.
+      setTimeout(openLivenessPort, 500);
+    });
+  } catch {
+    // Extension context invalidated (e.g., extension reloaded mid-page).
+    // Page reload required to recover; nothing useful to do here.
+    livenessPort = null;
+  }
+}
+
+openLivenessPort();
+
 // --- Message Listener (from background / voice) ---
 
 chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {
