@@ -5,7 +5,7 @@
  * Voice commands arrive via background → BRANCHKIT_ACTION messages.
  */
 
-import { Category, BadgeDisplayMode, HintVisibility, ScannedElement, Message } from './types';
+import { Category, BadgeDisplayMode, HintVisibility, ScannedElement, Message, DispatchResult } from './types';
 import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from './words';
 import { scanElements, scanSingle, isHintable } from './scanner';
 import { ElementWrapper, WrapperStore } from './element-wrapper';
@@ -751,6 +751,38 @@ function openLivenessPort(): void {
 
 openLivenessPort();
 
+// --- Dispatch result reporting ---
+//
+// After every BRANCHKIT_ACTION the content script attempted, send the
+// outcome to the background script, which forwards it to the plugin's
+// POST /dispatch-result endpoint. The plugin logs it so the actuator.log
+// carries end-to-end visibility from voice transcript through element
+// activation. Failures are swallowed — observability shouldn't break the
+// user-facing flow.
+
+function reportDispatchResult(result: DispatchResult): void {
+  try {
+    chrome.runtime.sendMessage({
+      type: 'DISPATCH_RESULT',
+      payload: result,
+    } as Message);
+  } catch {
+    // Extension context invalidated; nothing useful to do.
+  }
+}
+
+// Truncate the frame URL for log readability. Includes path but not query
+// strings (which often carry session data). Capped to 200 chars.
+function trimFrameUrl(href: string): string {
+  try {
+    const u = new URL(href);
+    const out = `${u.origin}${u.pathname}`;
+    return out.length > 200 ? out.slice(0, 200) + '…' : out;
+  } catch {
+    return href.slice(0, 200);
+  }
+}
+
 // --- Message Listener (from background / voice) ---
 
 chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {
@@ -783,8 +815,10 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       //  1. Pre-phrase snapshot (protects against DOM mutation)
       //  2. Live store (current codeword mapping)
       //  3. Selector from voice plugin (last resort)
-      const codeword = params?.codeword;
+      const codeword = params?.codeword ?? '';
       let target: Element | null = null;
+      let resolution: DispatchResult['resolution'] = 'none';
+      let detail = '';
 
       if (codeword) {
         const fromSnapshot = resolveFromSnapshot(
@@ -792,20 +826,33 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         );
         if (fromSnapshot) {
           target = fromSnapshot.element;
+          resolution = 'snapshot';
         } else {
           const words = codeword.split(/\s+/).filter(w => w.length > 0);
           const live = words.length === 2
             ? store.byLabelPair(words[0], words[1])
             : (words.length === 1 ? store.byLabel(words[0]) : undefined);
-          if (live) target = live.element;
+          if (live) {
+            target = live.element;
+            resolution = 'live_store';
+          }
         }
       }
 
       if (!target && params?.selector) {
-        target = document.querySelector(params.selector);
+        try {
+          target = document.querySelector(params.selector);
+          if (target) resolution = 'selector';
+        } catch (e) {
+          detail = `selector parse: ${(e as Error).message}`;
+        }
       }
 
+      let taken: DispatchResult['taken'] = 'skipped';
+      let elemTag = '';
+
       if (target instanceof HTMLElement) {
+        elemTag = target.tagName.toLowerCase();
         lastActivatedElement = target;
         hideHints();
         const elemType = params?.elem_type ?? '';
@@ -813,10 +860,22 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
           target.focus();
           target.style.outline = '2px solid #007AFF';
           setTimeout(() => { target!.style.outline = ''; }, 3000);
+          taken = 'focus';
         } else {
           activateElement(target);
+          taken = 'click';
         }
+      } else if (target) {
+        elemTag = (target as Element).tagName.toLowerCase();
+        detail = 'target is not HTMLElement';
       }
+
+      reportDispatchResult({
+        action, codeword, resolution, elem_tag: elemTag, taken,
+        ok: taken === 'focus' || taken === 'click',
+        frame: trimFrameUrl(window.location.href),
+        detail,
+      });
     } else if (action === 'noop') {
       const prefix = params?.prefix;
       if (prefix) {

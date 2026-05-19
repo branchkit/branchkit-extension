@@ -8,7 +8,7 @@
  * - Manage offscreen document lifecycle (Chrome only)
  */
 
-import { Message, ScannedElement, GrammarRequest, FieldInfo, ClickableInfo, TableLink, HintVisibility } from './types';
+import { Message, ScannedElement, GrammarRequest, FieldInfo, ClickableInfo, TableLink, HintVisibility, DispatchResult } from './types';
 import { claimLabels, releaseLabels, releaseFrame, clearStack, regenerateAllStacks, getFrameForLabel } from './label-pool';
 
 const ACTUATOR_URL = 'http://127.0.0.1:21551';
@@ -267,6 +267,27 @@ function aggregateGrammarForTab(tabId: number): ScannedElement[] {
   return out;
 }
 
+// Forward a content-script dispatch outcome to the plugin's POST
+// /dispatch-result. Best-effort; the plugin can survive missing reports.
+async function forwardDispatchResult(result: DispatchResult): Promise<void> {
+  if (!pluginPort || !pluginToken) {
+    const found = await discoverPlugin();
+    if (!found) return;
+  }
+  try {
+    await fetch(`http://127.0.0.1:${pluginPort}/dispatch-result`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${pluginToken}`,
+      },
+      body: JSON.stringify(result),
+    });
+  } catch {
+    // Plugin may be down; observability isn't worth retrying.
+  }
+}
+
 async function pushGrammar(tabId: number | null, elements: ScannedElement[]): Promise<void> {
   // Lazy discovery: service worker may have restarted and lost state
   if (!pluginPort || !pluginToken) {
@@ -511,6 +532,11 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
 
   if (message.type === 'REFERENCE_SAVED') {
     saveReferenceToCollection(message.host, message.name, message.reference);
+    return false;
+  }
+
+  if (message.type === 'DISPATCH_RESULT') {
+    forwardDispatchResult(message.payload);
     return false;
   }
 

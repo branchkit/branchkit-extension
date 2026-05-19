@@ -40,6 +40,11 @@ export type Message =
   | { type: 'GRAMMAR_PUSH'; elements: ScannedElement[] }
   | { type: 'GET_HEALTH' }
   | { type: 'CONNECT_SSE'; port: number; token: string }
+  // Content → background, after handling a BRANCHKIT_ACTION. Background
+  // forwards to the browser plugin's POST /dispatch-result so the actuator
+  // log carries end-to-end visibility (voice → match → dispatch → frame
+  // resolution → outcome) without having to cross-reference SW DevTools.
+  | { type: 'DISPATCH_RESULT'; payload: DispatchResult }
   // Frame label pool — content asks background for codewords so frames in
   // the same tab don't independently pick the same label. See
   // notes/DESIGN_BROWSER_FRAMES_AND_OBSERVERS.md section 2.
@@ -102,6 +107,20 @@ export interface TableLink {
   href: string;
   table_id: string;
   codeword: string;
+}
+
+// Outcome of one content-script action attempt. Shapes the body content
+// sends to background and (after forwarding) the body background POSTs to
+// the plugin's /dispatch-result endpoint.
+export interface DispatchResult {
+  action: string;            // e.g. "activate", "scroll", "noop"
+  codeword: string;          // e.g. "arch check" — empty for non-codeword actions
+  resolution: 'snapshot' | 'live_store' | 'selector' | 'none';
+  elem_tag: string;          // actual tag of the resolved element, e.g. "input"
+  taken: 'focus' | 'click' | 'skipped' | 'noop';
+  ok: boolean;               // overall success
+  frame: string;             // window.location.href, trimmed
+  detail: string;            // optional error message or notes
 }
 
 export interface GrammarRequest {
