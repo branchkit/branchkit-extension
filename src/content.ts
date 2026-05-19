@@ -609,13 +609,19 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
 // modes (keyboard hint mode, new-tab flag) so the next utterance starts
 // fresh. Safe to call when no badges are showing — the per-wrapper calls
 // are no-ops on hidden hints.
+//
+// Does NOT reset matched-chars on badges. That state represents "user
+// matched the prefix X" — we want it preserved during the activation
+// flash so the user sees the narrowed text (e.g., "a check") while the
+// badge flashes yellow, not the displayMode default ("arch c"). The
+// scheduled hint refresh (after the flash completes) re-renders all
+// badges via updateLabel, which resets the text naturally.
 function clearHintFilter(): void {
   activateInNewTab = false;
   keyHandler.exitHintMode();
   for (const w of store.all) {
     w.hint?.setFiltered(false);
     w.hint?.setTextMatch(false);
-    w.hint?.setMatchedChars(0);
   }
 }
 
@@ -641,8 +647,14 @@ function hideHints(): void {
 // expansion, autocomplete) are reflected. Idempotent re-call is coalesced:
 // if a refresh is already scheduled, drop the new request — the existing
 // one will pick up whatever changed by the time it fires.
+//
+// Delay must exceed the activation flash duration (400ms in hints.ts) so
+// the refresh's updateLabel — which resets badge text to the displayMode
+// default — runs AFTER the yellow flash completes. Otherwise the
+// activated badge's narrowed text ("a check") would visibly snap back to
+// "arch c" mid-flash.
 let hintRefreshScheduled = false;
-const HINT_REFRESH_DELAY_MS = 150;
+const HINT_REFRESH_DELAY_MS = 450;
 
 function scheduleHintRefresh(): void {
   if (hintRefreshScheduled) return;
