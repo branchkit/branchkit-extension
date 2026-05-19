@@ -278,6 +278,15 @@ export class HintBadge {
       .bk-matched {
         opacity: 0.35;
       }
+      @keyframes bk-flash {
+        0%   { background: #ffeb3b !important; color: #000 !important; transform: scale(1.35); }
+        50%  { background: #ffeb3b !important; color: #000 !important; transform: scale(1.35); }
+        100% { transform: scale(1); }
+      }
+      .bk-inner.flashing {
+        animation: bk-flash 350ms ease-out;
+        transform-origin: center;
+      }
       .bk-leader {
         position: absolute;
         height: 1px;
@@ -403,6 +412,17 @@ export class HintBadge {
     } else {
       this.inner.classList.remove('text-match');
     }
+  }
+
+  // Briefly highlight this badge to confirm "this is the codeword that
+  // matched." Yellow flash + scale-up that decays back. Runs on the
+  // compositor so the caller's focus()/click() proceeds unblocked. Safe
+  // to call mid-animation: removing then re-adding the class restarts.
+  flash(): void {
+    this.inner.classList.remove('flashing');
+    void this.inner.offsetWidth; // force reflow so re-add restarts the animation
+    this.inner.classList.add('flashing');
+    setTimeout(() => this.inner.classList.remove('flashing'), 400);
   }
 
   updateLabel(label: LabelAssignment, displayMode: BadgeDisplayMode): void {
