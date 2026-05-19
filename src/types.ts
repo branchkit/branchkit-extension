@@ -112,4 +112,9 @@ export interface GrammarRequest {
   table_id: string;
   bundle_id: string;
   hint_visibility: HintVisibility;
+  // Chrome tab ID this grammar came from. Plugin uses this only for
+  // observability — log lines and emitted events include it so multi-tab
+  // bugs are visible. No plugin-side enforcement; the extension is the
+  // single source of truth for which tab's grammar is live.
+  tab_id?: number;
 }

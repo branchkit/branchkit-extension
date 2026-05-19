@@ -41,7 +41,13 @@ function schedulePushForTab(tabId: number): void {
   if (existing) clearTimeout(existing);
   const timer = setTimeout(() => {
     aggregateTimers.delete(tabId);
-    pushGrammar(aggregateGrammarForTab(tabId));
+    // Only the active tab's grammar is live in the plugin. Background tabs
+    // accumulate scans into tabGrammars locally (so they're ready when the
+    // user activates them) but don't POST. The active-tab guard runs at
+    // timer fire — not at schedule time — so a tab activated during the
+    // 120ms debounce window still gets its push.
+    if (tabId !== cachedActiveTabId) return;
+    pushGrammar(tabId, aggregateGrammarForTab(tabId));
   }, AGGREGATE_DEBOUNCE_MS);
   aggregateTimers.set(tabId, timer);
 }
@@ -261,7 +267,7 @@ function aggregateGrammarForTab(tabId: number): ScannedElement[] {
   return out;
 }
 
-async function pushGrammar(elements: ScannedElement[]): Promise<void> {
+async function pushGrammar(tabId: number | null, elements: ScannedElement[]): Promise<void> {
   // Lazy discovery: service worker may have restarted and lost state
   if (!pluginPort || !pluginToken) {
     const found = await discoverPlugin();
@@ -271,6 +277,7 @@ async function pushGrammar(elements: ScannedElement[]): Promise<void> {
   }
 
   const req = scannedToGrammarRequest(elements);
+  if (tabId != null) req.tab_id = tabId;
 
   try {
     await fetch(`http://127.0.0.1:${pluginPort}/grammar`, {
@@ -577,21 +584,34 @@ function purgeTab(tabId: number): void {
 
 chrome.tabs.onActivated.addListener((activeInfo) => {
   cachedActiveTabId = activeInfo.tabId;
+  // Replace the plugin's grammar with the now-active tab's cache (may be []
+  // if that tab hasn't scanned yet — plugin's empty-elements handler clears
+  // commands and collections in that case).
+  pushGrammar(activeInfo.tabId, aggregateGrammarForTab(activeInfo.tabId));
 });
 
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
   if (windowId === chrome.windows.WINDOW_ID_NONE) return;
   try {
     const tabs = await chrome.tabs.query({ active: true, windowId });
-    cachedActiveTabId = tabs[0]?.id ?? null;
+    const newActive = tabs[0]?.id ?? null;
+    cachedActiveTabId = newActive;
+    if (newActive != null) {
+      pushGrammar(newActive, aggregateGrammarForTab(newActive));
+    }
   } catch {
     cachedActiveTabId = null;
   }
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  if (cachedActiveTabId === tabId) cachedActiveTabId = null;
+  const wasActive = cachedActiveTabId === tabId;
+  if (wasActive) cachedActiveTabId = null;
   purgeTab(tabId);
+  // Closing the active tab leaves the plugin holding its commands; clear
+  // them with an empty push. Chrome will fire onActivated for the next-up
+  // tab right after, which re-pushes that tab's grammar.
+  if (wasActive) pushGrammar(null, []);
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
@@ -622,7 +642,7 @@ chrome.storage.onChanged.addListener((changes) => {
   if (changes.hintVisibility) {
     hintVisibility = changes.hintVisibility.newValue || 'always';
     if (cachedActiveTabId != null) {
-      pushGrammar(aggregateGrammarForTab(cachedActiveTabId));
+      pushGrammar(cachedActiveTabId, aggregateGrammarForTab(cachedActiveTabId));
     }
   }
 });
