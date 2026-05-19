@@ -111,4 +111,5 @@ export interface GrammarRequest {
   app_id: string;
   table_id: string;
   bundle_id: string;
+  hint_visibility: HintVisibility;
 }

@@ -731,6 +731,8 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       phraseSnapshot = takeSnapshot(store.all, performance.now());
       doScan();
       showHints();
+    } else if (action === 'hide_hints') {
+      hideHints();
     } else if (action === 'rescan') {
       lastGrammarHash = '';
       doScan();
@@ -777,6 +779,30 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
           setTimeout(() => { target!.style.outline = ''; }, 3000);
         } else {
           activateElement(target);
+        }
+      }
+    } else if (action === 'noop') {
+      const prefix = params?.prefix;
+      if (prefix) {
+        const letter = WORD_TO_LETTER[prefix];
+        if (letter) {
+          if (!hintsVisible) showHints();
+          const matchSet = new Set(store.matchingLetterPrefix(letter));
+          for (const w of store.all) {
+            const isMatch = matchSet.has(w);
+            w.hint?.setFiltered(!isMatch);
+            w.hint?.setTextMatch(false);
+            if (isMatch) {
+              w.hint?.setMatchedChars(1);
+            }
+          }
+        }
+      } else {
+        // No prefix — reset all hints to default (cancel pair state)
+        for (const w of store.all) {
+          w.hint?.setFiltered(false);
+          w.hint?.setTextMatch(false);
+          w.hint?.setMatchedChars(0);
         }
       }
     } else if (action === 'name_reference') {

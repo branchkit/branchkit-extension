@@ -8,7 +8,7 @@
  * - Manage offscreen document lifecycle (Chrome only)
  */
 
-import { Message, ScannedElement, GrammarRequest, FieldInfo, ClickableInfo, TableLink } from './types';
+import { Message, ScannedElement, GrammarRequest, FieldInfo, ClickableInfo, TableLink, HintVisibility } from './types';
 import { claimLabels, releaseLabels, clearStack, regenerateAllStacks, getFrameForLabel } from './label-pool';
 
 const ACTUATOR_URL = 'http://127.0.0.1:21551';
@@ -19,6 +19,7 @@ let pluginPort: number | null = null;
 let pluginToken: string | null = null;
 let branchkitConnected = false;
 let cachedActiveTabId: number | null = null;
+let hintVisibility: HintVisibility = 'always';
 
 // Per-tab grammar aggregation. Each frame's SCAN_RESULT lands here keyed
 // by (tabId, frameId); on every update we rebuild the aggregate and push
@@ -235,6 +236,7 @@ function scannedToGrammarRequest(elements: ScannedElement[]): GrammarRequest {
     app_id: '',
     table_id: '',
     bundle_id: browserBundleID,
+    hint_visibility: hintVisibility,
   };
 }
 
@@ -599,6 +601,11 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 // --- Startup ---
 
 async function init(): Promise<void> {
+  const result = await chrome.storage.sync.get('hintVisibility');
+  if (result.hintVisibility) {
+    hintVisibility = result.hintVisibility;
+  }
+
   const found = await discoverPlugin();
   branchkitConnected = found;
 
@@ -610,6 +617,15 @@ async function init(): Promise<void> {
     connectSSE();
   }
 }
+
+chrome.storage.onChanged.addListener((changes) => {
+  if (changes.hintVisibility) {
+    hintVisibility = changes.hintVisibility.newValue || 'always';
+    if (cachedActiveTabId != null) {
+      pushGrammar(aggregateGrammarForTab(cachedActiveTabId));
+    }
+  }
+});
 
 chrome.runtime.onInstalled.addListener(() => init());
 chrome.runtime.onStartup.addListener(() => init());
