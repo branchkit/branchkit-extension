@@ -279,8 +279,12 @@ export class HintBadge {
         opacity: 0.35;
       }
       @keyframes bk-flash {
-        0%   { background: #ffeb3b !important; color: #000 !important; }
-        70%  { background: #ffeb3b !important; color: #000 !important; }
+        /* No !important here — the CSS spec specifies that !important inside
+         * @keyframes is silently ignored, which drops the entire declaration
+         * and makes the keyframe a no-op. Animation declarations naturally
+         * outrank normal inline styles set by applyColors(), so no override
+         * marker is needed. */
+        0%, 70% { background: #ffeb3b; color: #000; }
         100% { /* fade back to inherited background/color */ }
       }
       .bk-inner.flashing {
