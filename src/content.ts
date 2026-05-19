@@ -602,12 +602,28 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
   hintsVisible = true;
 }
 
+// Reset narrowing/interaction state on existing hint badges without
+// removing them from the DOM. Used after an action completes when we want
+// to keep badges visible (always-mode activate) but clear visual highlights
+// from prefix narrowing or keyboard filter typing, and exit interaction
+// modes (keyboard hint mode, new-tab flag) so the next utterance starts
+// fresh. Safe to call when no badges are showing — the per-wrapper calls
+// are no-ops on hidden hints.
+function clearHintFilter(): void {
+  activateInNewTab = false;
+  keyHandler.exitHintMode();
+  for (const w of store.all) {
+    w.hint?.setFiltered(false);
+    w.hint?.setTextMatch(false);
+    w.hint?.setMatchedChars(0);
+  }
+}
+
 function hideHints(): void {
+  clearHintFilter();
   hintsVisible = false;
   activeCategory = null;
-  activateInNewTab = false;
   clearPlacement();
-  keyHandler.exitHintMode();
   for (const w of store.all) {
     w.hint?.hideLeader();
     w.hint?.hide();
@@ -618,6 +634,25 @@ function hideHints(): void {
     pendingMutation = false;
     setTimeout(() => doScan(), 100);
   }
+}
+
+// Re-scan and re-render hint badges after a short delay. Used after
+// always-mode activation so post-activate DOM mutations (modal open, form
+// expansion, autocomplete) are reflected. Idempotent re-call is coalesced:
+// if a refresh is already scheduled, drop the new request — the existing
+// one will pick up whatever changed by the time it fires.
+let hintRefreshScheduled = false;
+const HINT_REFRESH_DELAY_MS = 150;
+
+function scheduleHintRefresh(): void {
+  if (hintRefreshScheduled) return;
+  hintRefreshScheduled = true;
+  setTimeout(() => {
+    hintRefreshScheduled = false;
+    if (hintVisibility !== 'always') return;
+    doScan();
+    showHints();
+  }, HINT_REFRESH_DELAY_MS);
 }
 
 function badgeNewlyCodeworded(): void {
@@ -657,9 +692,15 @@ function activateWrapper(wrapper: ElementWrapper): void {
   const openNewTab = activateInNewTab;
   lastActivatedElement = el;
 
-  hideHints();
-  keyHandler.exitHintMode();
-  activateInNewTab = false;
+  // Visibility handoff: same rules as the SSE activate path above. In
+  // always-mode we clear narrowing/keyboard state and schedule a refresh;
+  // in manual-mode we fully hide so the user can re-summon explicitly.
+  if (hintVisibility === 'always') {
+    clearHintFilter();
+    scheduleHintRefresh();
+  } else {
+    hideHints();
+  }
 
   if (wrapper.category === 'input') {
     el.focus();
@@ -873,7 +914,20 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       if (target instanceof HTMLElement) {
         elemTag = target.tagName.toLowerCase();
         lastActivatedElement = target;
-        hideHints();
+        // Visibility handoff after activation:
+        //  - Always-mode: keep badges visible so the user can immediately
+        //    voice-trigger the next action. Just clear narrowing/keyboard
+        //    state, then schedule a doScan + showHints after a short delay
+        //    so post-activate DOM changes (modal open, form expansion,
+        //    autocomplete dropdown) get reflected in the next badge set.
+        //  - Manual-mode: full hide. Activate is the "I'm done" gesture;
+        //    user re-summons via "show" or the f keybind.
+        if (hintVisibility === 'always') {
+          clearHintFilter();
+          scheduleHintRefresh();
+        } else {
+          hideHints();
+        }
         // Branch on the live element's tag, not the voice plugin's elem_type
         // hint. elem_type was captured at grammar-push time and can become
         // stale (DOM mutation between scan and action arrival); the live tag
