@@ -418,14 +418,25 @@ export class HintBadge {
   }
 
   // Briefly highlight this badge to confirm "this is the codeword that
-  // matched." Yellow flash + scale-up that decays back. Runs on the
-  // compositor so the caller's focus()/click() proceeds unblocked. Safe
-  // to call mid-animation: removing then re-adding the class restarts.
+  // matched." Yellow background + temporarily expanded text showing both
+  // full words (so a pair displayed as "arch c" in first-word mode reads
+  // as "arch check" during the flash — the user sees the complete
+  // codeword they actually spoke). Reverts to displayMode-based text
+  // after the animation. Runs on the compositor; non-blocking.
   flash(): void {
+    // Expand to full word pair so the user sees what matched, regardless
+    // of displayMode. Single-codeword labels are unchanged.
+    this.inner.textContent = labelToDisplay(this.label, 'word');
     this.inner.classList.remove('flashing');
     void this.inner.offsetWidth; // force reflow so re-add restarts the animation
     this.inner.classList.add('flashing');
-    setTimeout(() => this.inner.classList.remove('flashing'), 400);
+    setTimeout(() => {
+      this.inner.classList.remove('flashing');
+      // Restore the displayMode-based text. Use current displayMode in
+      // case it changed during the flash.
+      this.inner.textContent = labelToDisplay(this.label, this.displayMode);
+      this._size = null; // text width may have changed; let placement recompute
+    }, 400);
   }
 
   updateLabel(label: LabelAssignment, displayMode: BadgeDisplayMode): void {
