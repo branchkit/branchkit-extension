@@ -811,16 +811,44 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
     } else if (action === 'find_open' || action === 'find_close' || action === 'find_next' || action === 'find_previous' || action === 'find_immediate') {
       dispatcher.dispatch(action, params);
     } else if (action === 'activate') {
-      // Resolve element via three-tier fallback:
-      //  1. Pre-phrase snapshot (protects against DOM mutation)
-      //  2. Live store (current codeword mapping)
-      //  3. Selector from voice plugin (last resort)
+      // Resolve element via three-tier fallback. Order matters: the voice
+      // plugin's selector is captured at grammar-push time and is paired
+      // with the codeword and elem_type the user actually saw. The local
+      // live-store can disagree because the codeword pool reassigns labels
+      // between grammar push and action arrival (scroll-driven Intersection
+      // Observer churn, DOM mutations, ad refreshes). Trusting live-store
+      // over the voice plugin's selector caused real bugs where "arch
+      // check" said on an input ended up focusing a nearby <a> that the
+      // pool had reassigned the same codeword to.
+      //
+      // Tier order:
+      //  1. Selector from voice plugin (authoritative at grammar-push time).
+      //  2. Pre-phrase snapshot (manual-mode show_hints flow; empty in
+      //     always-mode, so usually skipped).
+      //  3. Live store (codeword → current DOM element; last resort because
+      //     of the reassignment race described above).
+      //
+      // Rango (the Talon extension) uses a pure in-memory hint registry
+      // captured at render time and accepts a similar race silently. We
+      // chose selector-first because the voice plugin already ships the
+      // selector with every action and recovering from a stale live-store
+      // map at action time is more reliable than expanding the snapshot
+      // mechanism to fire on every grammar push.
       const codeword = params?.codeword ?? '';
       let target: Element | null = null;
       let resolution: DispatchResult['resolution'] = 'none';
       let detail = '';
 
-      if (codeword) {
+      if (params?.selector) {
+        try {
+          target = document.querySelector(params.selector);
+          if (target) resolution = 'selector';
+        } catch (e) {
+          detail = `selector parse: ${(e as Error).message}`;
+        }
+      }
+
+      if (!target && codeword) {
         const fromSnapshot = resolveFromSnapshot(
           phraseSnapshot, codeword, performance.now(),
         );
@@ -836,15 +864,6 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
             target = live.element;
             resolution = 'live_store';
           }
-        }
-      }
-
-      if (!target && params?.selector) {
-        try {
-          target = document.querySelector(params.selector);
-          if (target) resolution = 'selector';
-        } catch (e) {
-          detail = `selector parse: ${(e as Error).message}`;
         }
       }
 
