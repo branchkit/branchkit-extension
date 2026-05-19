@@ -279,13 +279,12 @@ export class HintBadge {
         opacity: 0.35;
       }
       @keyframes bk-flash {
-        0%   { background: #ffeb3b !important; color: #000 !important; transform: scale(1.35); }
-        50%  { background: #ffeb3b !important; color: #000 !important; transform: scale(1.35); }
-        100% { transform: scale(1); }
+        0%   { background: #ffeb3b !important; color: #000 !important; }
+        70%  { background: #ffeb3b !important; color: #000 !important; }
+        100% { /* fade back to inherited background/color */ }
       }
       .bk-inner.flashing {
         animation: bk-flash 350ms ease-out;
-        transform-origin: center;
       }
       .bk-leader {
         position: absolute;
