@@ -874,8 +874,13 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         elemTag = target.tagName.toLowerCase();
         lastActivatedElement = target;
         hideHints();
-        const elemType = params?.elem_type ?? '';
-        if (INPUT_TYPES.has(elemType) || INPUT_TYPES.has(target.tagName.toLowerCase())) {
+        // Branch on the live element's tag, not the voice plugin's elem_type
+        // hint. elem_type was captured at grammar-push time and can become
+        // stale (DOM mutation between scan and action arrival); the live tag
+        // is what's actually there now. Same pattern as resolve_reference
+        // below. Borrowed from Rango — element type decisions always come
+        // from the live DOM reference, never from the action payload.
+        if (INPUT_TYPES.has(elemTag)) {
           target.focus();
           target.style.outline = '2px solid #007AFF';
           setTimeout(() => { target!.style.outline = ''; }, 3000);
