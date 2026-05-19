@@ -98,6 +98,51 @@ let phraseSnapshot: CodewordSnapshot | null = null;
 // Input element types — used by the "activate" action to decide click vs focus.
 const INPUT_TYPES = new Set(['input', 'textarea', 'select', 'contenteditable']);
 
+// --- Activation pulse ---
+//
+// Visual confirmation that an element was acted on. Layered box-shadow
+// (inset tint + outer ring), so it composes with the element's existing
+// background instead of replacing brand colors. Runs on the compositor —
+// does not block the focus()/click() call that initiated it.
+
+const ACTIVATION_CLASS = 'branchkit-activated';
+const ACTIVATION_DURATION_MS = 400;
+
+(function injectActivationStyles(): void {
+  if (document.getElementById('branchkit-activation-styles')) return;
+  const style = document.createElement('style');
+  style.id = 'branchkit-activation-styles';
+  style.textContent = `
+    @keyframes branchkit-activation-pulse {
+      0% {
+        box-shadow:
+          inset 0 0 0 1000px rgba(0, 122, 255, 0.30),
+          0 0 0 2px rgba(0, 122, 255, 0.9);
+      }
+      100% {
+        box-shadow:
+          inset 0 0 0 1000px rgba(0, 122, 255, 0),
+          0 0 0 10px rgba(0, 122, 255, 0);
+      }
+    }
+    .${ACTIVATION_CLASS} {
+      animation: branchkit-activation-pulse ${ACTIVATION_DURATION_MS}ms ease-out;
+    }
+  `;
+  (document.head || document.documentElement).appendChild(style);
+})();
+
+// Trigger the activation pulse on an element. Safe to call repeatedly —
+// removes the class first to restart the animation if one is already in
+// flight. Non-blocking: the animation runs on the compositor while the
+// caller's focus()/click() proceeds normally.
+function flashActivation(el: HTMLElement): void {
+  el.classList.remove(ACTIVATION_CLASS);
+  void el.offsetWidth; // force reflow so the next class add restarts the animation
+  el.classList.add(ACTIVATION_CLASS);
+  setTimeout(() => el.classList.remove(ACTIVATION_CLASS), ACTIVATION_DURATION_MS + 50);
+}
+
 // --- Display Mode from storage ---
 
 if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
@@ -702,10 +747,9 @@ function activateWrapper(wrapper: ElementWrapper): void {
     hideHints();
   }
 
+  flashActivation(el);
   if (wrapper.category === 'input') {
     el.focus();
-    el.style.outline = '2px solid #007AFF';
-    setTimeout(() => { el.style.outline = ''; }, 3000);
   } else {
     activateElement(el, { newTab: openNewTab });
   }
@@ -934,10 +978,9 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         // is what's actually there now. Same pattern as resolve_reference
         // below. Borrowed from Rango — element type decisions always come
         // from the live DOM reference, never from the action payload.
+        flashActivation(target);
         if (INPUT_TYPES.has(elemTag)) {
           target.focus();
-          target.style.outline = '2px solid #007AFF';
-          setTimeout(() => { target!.style.outline = ''; }, 3000);
           taken = 'focus';
         } else {
           activateElement(target);
@@ -1009,10 +1052,9 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         }
         lastActivatedElement = el;
         if (el instanceof HTMLElement) {
+          flashActivation(el);
           if (INPUT_TYPES.has(el.tagName.toLowerCase())) {
             el.focus();
-            el.style.outline = '2px solid #007AFF';
-            setTimeout(() => { el.style.outline = ''; }, 3000);
           } else {
             activateElement(el);
           }
