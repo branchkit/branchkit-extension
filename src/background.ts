@@ -587,7 +587,7 @@ function purgeTab(tabId: number): void {
 // tab closed) Chrome closes the Port and onDisconnect fires here. Without
 // this, dead frames' codewords leak from the per-tab label pool until tab
 // close, and their stale ScannedElement entries leak from tabGrammars until
-// the next purgeTab. See notes/DESIGN_BROWSER_FRAME_POOL_EXHAUSTION.md.
+// the next purgeTab. See docs/completed/DESIGN_BROWSER_FRAME_POOL_EXHAUSTION.md.
 //
 // The Port carries no messages — its lifetime IS the signal. Service worker
 // idle-termination is a known small leak window (frames that die while the

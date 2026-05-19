@@ -722,7 +722,7 @@ window.addEventListener('blur', (e) => {
 // removed, navigation, tab closed) Chrome closes the Port and the
 // background's onDisconnect handler releases this frame's labels and
 // clears its tabGrammars entry. See
-// notes/DESIGN_BROWSER_FRAME_POOL_EXHAUSTION.md.
+// docs/completed/DESIGN_BROWSER_FRAME_POOL_EXHAUSTION.md.
 //
 // The content-side onDisconnect handler below fires only when the SW
 // restarts (idle-terminated), not when this frame dies. On SW restart we
