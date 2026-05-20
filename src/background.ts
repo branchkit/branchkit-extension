@@ -356,7 +356,16 @@ async function handleDebugSnapshot(
   payload: unknown,
   sender: chrome.runtime.MessageSender,
 ): Promise<void> {
-  if (!pluginPort || !pluginToken) return;
+  // Snapshots can be triggered at any time — including before SCAN_RESULT
+  // has run discovery. Mirror forwardCommandsInvalidate's pattern and
+  // auto-discover before bailing.
+  if (!pluginPort || !pluginToken) {
+    const found = await discoverPlugin();
+    if (!found) {
+      console.warn('[branchkit] debug snapshot: plugin not discovered');
+      return;
+    }
+  }
   const snapshotId =
     typeof payload === 'object' && payload !== null && 'snapshot_id' in payload
       ? String((payload as { snapshot_id: unknown }).snapshot_id)

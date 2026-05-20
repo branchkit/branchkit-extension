@@ -240,10 +240,7 @@ export function captureDebugSnapshot(store: WrapperStore, frameUrl: string): voi
     frameUrl,
   });
   try {
-    chrome.runtime.sendMessage({
-      type: 'DEBUG_SNAPSHOT',
-      payload,
-    });
+    chrome.runtime.sendMessage({ type: 'DEBUG_SNAPSHOT', payload });
   } catch {
     // Extension context invalidated; nothing useful to do.
   }
