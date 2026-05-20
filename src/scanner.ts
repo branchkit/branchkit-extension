@@ -180,6 +180,50 @@ export function isHintable(el: Element): boolean {
   return true;
 }
 
+/** Reason an element matched `HINTABLE_SELECTOR` but didn't become a
+ * wrapper. Used by the debug snapshot to explain "this should have a
+ * badge but doesn't" cases — the negative-space signal `BK_ACTIVATE_PATH`
+ * can't surface on principle. */
+export type AlmostHintableReason = 'EXCLUDE' | 'invisible' | 'redundant';
+
+export interface AlmostHintable {
+  el: Element;
+  reason: AlmostHintableReason;
+}
+
+/** Walk the DOM and surface every element that matched `HINTABLE_SELECTOR`
+ * but was rejected by one of `EXCLUDE`/`isVisible`/`isRedundant`. Elements
+ * that pass all three are real hintables (handled by `scanElements`); they
+ * aren't returned here. Used by the Phase 2 debug snapshot.
+ *
+ * Skips hint hosts (`[data-branchkit-hint]` descendants) — those are the
+ * badges themselves, not page content. */
+export function enumerateAlmostHintable(
+  root: Document | Element = document,
+): AlmostHintable[] {
+  const out: AlmostHintable[] = [];
+  for (const el of deepQuerySelectorAll(root, HINTABLE_SELECTOR)) {
+    if (el.matches(EXCLUDE_SELECTOR)) {
+      out.push({ el, reason: 'EXCLUDE' });
+      continue;
+    }
+    if (el.closest('[data-branchkit-hint]')) {
+      // Hint badge subtree — neither hintable nor "almost"; just noise.
+      continue;
+    }
+    if (!isVisible(el)) {
+      out.push({ el, reason: 'invisible' });
+      continue;
+    }
+    if (isRedundant(el)) {
+      out.push({ el, reason: 'redundant' });
+      continue;
+    }
+    // Otherwise this element IS hintable; not almost-hintable.
+  }
+  return out;
+}
+
 /**
  * Build a `ScannedElement` for a single element, or `null` if the element
  * isn't hintable. Same outputs as one iteration of `scanElements`'s loop —

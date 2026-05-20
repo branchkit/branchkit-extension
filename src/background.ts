@@ -336,6 +336,86 @@ async function forwardPluginDebugLog(
   }
 }
 
+// Hint-diagnostics snapshot (Phase 2b). Content script fires a
+// DEBUG_SNAPSHOT message with the structured payload it built (per
+// docs/completed/DESIGN_HINT_DIAGNOSTICS.md §2). We:
+//
+//   1. POST the JSON to /debug-snapshot (plugin writes snapshot.json).
+//   2. captureVisibleTab on the sender's tab.windowId. §2.5(d) — using
+//      sender.tab.windowId rather than the currently-focused-tab id
+//      avoids the race where the user has switched tabs between
+//      pressing Ctrl+Alt+D and the SW handling the message.
+//   3. POST the PNG (or capture error) to /debug-snapshot/screenshot
+//      so the plugin can attach it / patch screenshot_error per §2.5(e).
+//
+// Best-effort end to end: any failure logs to the console and abandons
+// the snapshot. The plugin endpoint either succeeded (snapshot.json on
+// disk) or didn't; partial state is OK because /debug-snapshot/screenshot
+// is keyed by snapshot_id and the plugin tolerates missing follow-ups.
+async function handleDebugSnapshot(
+  payload: unknown,
+  sender: chrome.runtime.MessageSender,
+): Promise<void> {
+  if (!pluginPort || !pluginToken) return;
+  const snapshotId =
+    typeof payload === 'object' && payload !== null && 'snapshot_id' in payload
+      ? String((payload as { snapshot_id: unknown }).snapshot_id)
+      : '';
+  if (!snapshotId) {
+    console.warn('[branchkit] debug snapshot: missing snapshot_id');
+    return;
+  }
+
+  // Step 1: structured-state POST.
+  try {
+    const res = await fetch(`http://127.0.0.1:${pluginPort}/debug-snapshot`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${pluginToken}`,
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      console.warn(`[branchkit] debug-snapshot POST failed: HTTP ${res.status}`);
+      return;
+    }
+  } catch (e) {
+    console.warn(`[branchkit] debug-snapshot POST exception: ${e}`);
+    return;
+  }
+
+  // Step 2: captureVisibleTab on the sender's window. windowId is
+  // optional but if we don't pass one we capture the focused window —
+  // which may have moved since the user pressed Ctrl+Alt+D.
+  const windowId = sender.tab?.windowId;
+  let pngBase64 = '';
+  let captureError = '';
+  try {
+    const dataUrl = await chrome.tabs.captureVisibleTab(windowId!, { format: 'png' });
+    pngBase64 = dataUrl.replace(/^data:image\/png;base64,/, '');
+  } catch (e) {
+    captureError = e instanceof Error ? e.message : String(e);
+  }
+
+  // Step 3: screenshot follow-up. Exactly one of png_base64 / error.
+  const body: Record<string, string> = { snapshot_id: snapshotId };
+  if (pngBase64) body.png_base64 = pngBase64;
+  else body.error = captureError || 'unknown';
+  try {
+    await fetch(`http://127.0.0.1:${pluginPort}/debug-snapshot/screenshot`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${pluginToken}`,
+      },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    console.warn(`[branchkit] debug-snapshot screenshot POST exception: ${e}`);
+  }
+}
+
 // Tell the plugin to wipe its commands.push memory so the next grammar
 // arrival does a full re-registration. Best-effort; the plugin's
 // invalidate endpoint is idempotent.
@@ -625,6 +705,11 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   if (message.type === 'PLUGIN_DEBUG_LOG' && typeof message.tag === 'string') {
     const level = typeof message.level === 'string' ? message.level : 'debug';
     forwardPluginDebugLog(message.tag, message.data, level);
+    return false;
+  }
+
+  if (message.type === 'DEBUG_SNAPSHOT' && message.payload) {
+    handleDebugSnapshot(message.payload, _sender);
     return false;
   }
 

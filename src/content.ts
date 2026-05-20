@@ -18,6 +18,12 @@ import { placeBadges, placeOne, clearPlacement } from './placement';
 import { activateElement, type ActivationResult } from './event-sequence';
 import { accessibleName } from './accessible-name';
 import {
+  emitActivatePath,
+  elementSnap,
+  type ActivatePathEvent,
+} from './activate-path-log';
+import { captureDebugSnapshot } from './debug-snapshot';
+import {
   CodewordSnapshot,
   takeSnapshot,
   resolveFromSnapshot,
@@ -898,92 +904,11 @@ function reportDispatchResult(result: DispatchResult): void {
 //
 // Every browser.activate dispatch emits one PLUGIN_DEBUG_LOG line tagged
 // BK_ACTIVATE_PATH so wrong-element-clicked bugs can be diagnosed from
-// the per-plugin log file (plugin-logs/browser.log) alone. The ring
-// buffer keeps the last 10 events in memory so the Phase 2 snapshot
-// endpoint can include "what just happened" without round-tripping
-// through any log file. See notes/DESIGN_HINT_DIAGNOSTICS.md §1 and
-// docs/completed/DESIGN_PLUGIN_LOGGING.md §4 for the per-plugin-channel rationale.
-
-interface ElementSnap {
-  tag: string;
-  role: string;
-  accessibleName: string;
-  rect: { x: number; y: number; w: number; h: number };
-  dataTestId?: string;
-  parentChain: string[];
-}
-
-interface ActivatePathEvent {
-  ts: number;
-  url: string;
-  wrapperId: number;
-  codeword: string;
-  resolution: DispatchResult['resolution'];
-  fingerprint: idRegistry.Fingerprint | null;
-  resolved: ElementSnap | null;
-  clicked: ElementSnap | null;
-  delegation: ActivationResult['delegation'] | 'focus-input' | 'noop';
-}
-
-const ACTIVATE_PATH_BUFFER_SIZE = 10;
-const activatePathBuffer: ActivatePathEvent[] = [];
-
-function elementSnap(el: Element | null): ElementSnap | null {
-  if (!el) return null;
-  const r = el.getBoundingClientRect();
-  const tid = el.getAttribute('data-testid');
-  return {
-    tag: el.tagName.toLowerCase(),
-    role: idRegistry.computeRole(el),
-    accessibleName: accessibleName(el),
-    rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
-    dataTestId: tid || undefined,
-    parentChain: parentChainSig(el, 5),
-  };
-}
-
-// Compact ancestor signature like "div#main > nav.sidebar > ul > li". Used
-// to identify which "region" of the page a wrapper sits in without dumping
-// the full DOM. 5 levels covers most "is this in the right list/section"
-// distinguishing.
-function parentChainSig(el: Element, depth: number): string[] {
-  const out: string[] = [];
-  let cur: Element | null = el.parentElement;
-  for (let i = 0; i < depth && cur; i++) {
-    let sig = cur.tagName.toLowerCase();
-    if (cur.id) sig += `#${cur.id}`;
-    else if (cur.classList.length > 0) sig += `.${cur.classList[0]}`;
-    const role = cur.getAttribute('role');
-    if (role) sig += `[role=${role}]`;
-    const tid = cur.getAttribute('data-testid');
-    if (tid) sig += `[data-testid=${tid}]`;
-    out.push(sig);
-    cur = cur.parentElement;
-  }
-  return out;
-}
-
-function emitActivatePath(event: ActivatePathEvent): void {
-  activatePathBuffer.push(event);
-  if (activatePathBuffer.length > ACTIVATE_PATH_BUFFER_SIZE) {
-    activatePathBuffer.shift();
-  }
-  try {
-    chrome.runtime.sendMessage({
-      type: 'PLUGIN_DEBUG_LOG',
-      tag: 'BK_ACTIVATE_PATH',
-      data: event,
-      // v2 of per-plugin logging defaults the threshold to `info`, so
-      // emit at info-level to remain visible by default. The trace of
-      // "which element did we click" is intentionally always-on for the
-      // hint-diagnostics feature — it isn't debug-only chatter.
-      level: 'info',
-    });
-  } catch {
-    // Extension context invalidated; the in-memory ring buffer still
-    // captured this event for Phase 2's snapshot consumption.
-  }
-}
+// the per-plugin log file (plugin-logs/browser.log) alone. Buffer + types
+// + emit machinery live in activate-path-log.ts so the Phase 2 debug
+// snapshot can read the buffer too (Q7). See
+// docs/completed/DESIGN_HINT_DIAGNOSTICS.md §1 + Q7 and
+// docs/completed/DESIGN_PLUGIN_LOGGING.md §4.
 
 /**
  * Ask the background to POST /commands/invalidate on the plugin. Fires
@@ -1258,6 +1183,18 @@ const heldKeys = new Set<string>();
 
 document.addEventListener('keydown', (e: KeyboardEvent) => {
   if (handlePostFindKey(e)) return;
+
+  // Ctrl+Alt+D — hint-diagnostics snapshot trigger (Phase 2b of
+  // docs/completed/DESIGN_HINT_DIAGNOSTICS.md). Q1 of that doc rejected
+  // a voice trigger because debug needs to work *when voice is broken*;
+  // Ctrl+Alt+D is the documented default.
+  if (e.ctrlKey && e.altKey && (e.key === 'd' || e.key === 'D') && !e.repeat) {
+    e.preventDefault();
+    e.stopPropagation();
+    captureDebugSnapshot(store, trimFrameUrl(window.location.href));
+    return;
+  }
+
   if (scrollKeys.has(e.key) && !e.repeat && !heldKeys.has(e.key)) {
     heldKeys.add(e.key);
     setKeyHeld(true);
