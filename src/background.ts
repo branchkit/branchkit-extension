@@ -409,22 +409,36 @@ async function handleDebugSnapshot(
     return;
   }
 
-  // Step 2: captureVisibleTab on the sender's window. windowId is
-  // optional but if we don't pass one we capture the focused window —
-  // which may have moved since the user pressed Ctrl+Alt+D.
+  // Step 2: captureVisibleTab on the sender's window. Per §2.5(d), use
+  // sender.tab.windowId (not the focused-window default) to avoid
+  // capturing a different tab if the user has switched focus since
+  // pressing Ctrl+Alt+D. If windowId is unavailable (rare — message
+  // came from a context without a tab), record an error rather than
+  // letting Chrome silently fall back.
   const windowId = sender.tab?.windowId;
   let pngBase64 = '';
+  let captured = false;
   let captureError = '';
-  try {
-    const dataUrl = await chrome.tabs.captureVisibleTab(windowId!, { format: 'png' });
-    pngBase64 = dataUrl.replace(/^data:image\/png;base64,/, '');
-  } catch (e) {
-    captureError = e instanceof Error ? e.message : String(e);
+  if (windowId === undefined) {
+    captureError = 'sender.tab.windowId unavailable';
+  } else {
+    try {
+      const dataUrl = await chrome.tabs.captureVisibleTab(windowId, { format: 'png' });
+      const match = /^data:image\/png;base64,(.+)$/.exec(dataUrl);
+      if (match) {
+        pngBase64 = match[1];
+        captured = true;
+      } else {
+        captureError = `unexpected dataUrl shape: ${dataUrl.slice(0, 40)}`;
+      }
+    } catch (e) {
+      captureError = e instanceof Error ? e.message : String(e);
+    }
   }
 
   // Step 3: screenshot follow-up. Exactly one of png_base64 / error.
   const body: Record<string, string> = { snapshot_id: snapshotId };
-  if (pngBase64) body.png_base64 = pngBase64;
+  if (captured) body.png_base64 = pngBase64;
   else body.error = captureError || 'unknown';
   try {
     await fetch(`http://127.0.0.1:${pluginPort}/debug-snapshot/screenshot`, {
