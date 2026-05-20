@@ -550,7 +550,7 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
       // Stamp frame_id onto each element. Content scripts don't know
       // their own frameId — only the SW does — but the plugin needs it
       // to scope ids to the right frame on dispatch. See §8 of
-      // notes/DESIGN_ELEMENT_IDENTITY_REGISTRY.md.
+      // docs/completed/DESIGN_ELEMENT_IDENTITY_REGISTRY.md.
       for (const el of message.elements) {
         el.frame_id = frameId;
       }

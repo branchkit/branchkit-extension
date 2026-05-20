@@ -18,7 +18,7 @@ export interface ScannedElement {
   /**
    * Stable registry id. Minted in the content script when the wrapper
    * is registered. 0 means "not registered" — voice can't address it.
-   * See notes/DESIGN_ELEMENT_IDENTITY_REGISTRY.md.
+   * See docs/completed/DESIGN_ELEMENT_IDENTITY_REGISTRY.md.
    */
   id: number;
   category: Category;

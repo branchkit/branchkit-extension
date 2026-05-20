@@ -951,7 +951,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
     } else if (action === 'find_open' || action === 'find_close' || action === 'find_next' || action === 'find_previous' || action === 'find_immediate') {
       dispatcher.dispatch(action, params);
     } else if (action === 'activate') {
-      // Three-tier resolution (see notes/DESIGN_ELEMENT_IDENTITY_REGISTRY.md §6).
+      // Three-tier resolution (see docs/completed/DESIGN_ELEMENT_IDENTITY_REGISTRY.md §6).
       // Algorithm lives in activate-resolution.ts so it's unit-testable.
       const codeword = params?.codeword ?? '';
       const idParam = parseInt(params?.id ?? '0', 10);

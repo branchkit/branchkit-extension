@@ -8,7 +8,7 @@
  *
  * Returns a target Element + resolution tag + diagnostic detail. The
  * caller wires the activation effect (focus/click/flash). See
- * notes/DESIGN_ELEMENT_IDENTITY_REGISTRY.md §6.
+ * docs/completed/DESIGN_ELEMENT_IDENTITY_REGISTRY.md §6.
  */
 
 import type { ElementWrapper } from './element-wrapper';

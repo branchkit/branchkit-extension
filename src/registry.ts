@@ -3,7 +3,7 @@
  *
  * Frame-local, document-lifetime store mapping monotonic integer ids to
  * WeakRef<Element> + fingerprint. Replaces the selector-based identity
- * stamped at scan time. See notes/DESIGN_ELEMENT_IDENTITY_REGISTRY.md.
+ * stamped at scan time. See docs/completed/DESIGN_ELEMENT_IDENTITY_REGISTRY.md.
  *
  * The registry is the source of truth for "which DOM element does this
  * id refer to" after grammar push: tier 1 (live WeakRef) handles the
