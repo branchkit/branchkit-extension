@@ -191,6 +191,32 @@ export interface AlmostHintable {
   reason: AlmostHintableReason;
 }
 
+/** Walk the DOM and surface elements that would have been hintable
+ * (matched `HINTABLE_SELECTOR` AND passed `isHintable`) but don't have
+ * a wrapper in the store. The most likely cause is `registry.register`
+ * returning 0 — fingerprint collision with an existing wrapper that
+ * the identity registry couldn't distinguish.
+ *
+ * Used by the Phase 3 debug overlay (red tier). Pass the live wrapper
+ * set so we can subtract; what's left is the rejected pool.
+ *
+ * Note: an element rejected for collision at time T1 may later succeed
+ * if the colliding wrapper is destroyed. We only see the *current*
+ * state, which is what the visual overlay should reflect.
+ */
+export function enumerateRegistryRejected(
+  liveWrappedElements: Set<Element>,
+  root: Document | Element = document,
+): Element[] {
+  const out: Element[] = [];
+  for (const el of deepQuerySelectorAll(root, HINTABLE_SELECTOR)) {
+    if (!isHintable(el)) continue;          // tier 5 (blue) handles these
+    if (liveWrappedElements.has(el)) continue; // has a wrapper; not rejected
+    out.push(el);
+  }
+  return out;
+}
+
 /** Walk the DOM and surface every element that matched `HINTABLE_SELECTOR`
  * but was rejected by one of `EXCLUDE`/`isVisible`/`isRedundant`. Elements
  * that pass all three are real hintables (handled by `scanElements`); they

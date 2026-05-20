@@ -23,6 +23,7 @@ import {
   type ActivatePathEvent,
 } from './activate-path-log';
 import { captureDebugSnapshot } from './debug-snapshot';
+import { toggleOverlay } from './debug-overlay';
 import {
   CodewordSnapshot,
   takeSnapshot,
@@ -1204,6 +1205,10 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
       level: 'info',
     });
     captureDebugSnapshot(store, url);
+    // Phase 3: same press also toggles the in-page debug overlay so the
+    // diagnostic categories (yellow/orange/red/blue) become visible
+    // without needing to read JSON. Frozen-frame; re-press flips off.
+    toggleOverlay(store);
     return;
   }
 
