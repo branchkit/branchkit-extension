@@ -682,6 +682,16 @@ chrome.runtime.onConnect.addListener((port) => {
   const tabId = port.sender?.tab?.id;
   const frameId = port.sender?.frameId;
   if (typeof tabId !== 'number' || typeof frameId !== 'number') return;
+  // Tell the content script its own frameId. Content has no API to
+  // discover this on its own and uses it to detect misrouted activate
+  // actions (id minted in frame A, dispatched into frame B by SW
+  // routing drift). Sent on connect because it never changes for the
+  // lifetime of this Port.
+  try {
+    port.postMessage({ type: 'FRAME_ID', frameId });
+  } catch {
+    // Port may already be closing; harmless.
+  }
   port.onDisconnect.addListener(() => {
     releaseFrame(tabId, frameId).catch(() => {});
     tabGrammars.get(tabId)?.delete(frameId);

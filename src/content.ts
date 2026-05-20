@@ -839,11 +839,24 @@ window.addEventListener('pageshow', (e) => {
 
 const LIVENESS_PORT_NAME = 'frame-liveness';
 let livenessPort: chrome.runtime.Port | null = null;
+// Our own frameId, as told to us by the SW on connect. Used to detect
+// misrouted activate actions (registry id minted in a different frame).
+// null until the Port handshake completes; the activate path treats
+// "unknown" as "trust the routing" so dispatches that arrive before the
+// handshake aren't dropped.
+let myFrameId: number | null = null;
 
 function openLivenessPort(): void {
   try {
     const port = chrome.runtime.connect({ name: LIVENESS_PORT_NAME });
     livenessPort = port;
+    port.onMessage.addListener((msg: unknown) => {
+      if (typeof msg !== 'object' || msg === null) return;
+      const m = msg as { type?: unknown; frameId?: unknown };
+      if (m.type === 'FRAME_ID' && typeof m.frameId === 'number') {
+        myFrameId = m.frameId;
+      }
+    });
     port.onDisconnect.addListener(() => {
       livenessPort = null;
       // Brief delay so the SW finishes its init pass before we
@@ -946,12 +959,23 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       // notes/DESIGN_ELEMENT_IDENTITY_REGISTRY.md §6.
       const codeword = params?.codeword ?? '';
       const idParam = parseInt(params?.id ?? '0', 10);
+      const frameIdParam = parseInt(params?.frame_id ?? '0', 10);
       let target: Element | null = null;
       let resolution: DispatchResult['resolution'] = 'none';
       let detail = '';
       let fp = '';
 
-      if (idParam > 0) {
+      // If the SW routed this id into a frame that isn't the one that
+      // minted it, tier 1 would either miss or — worse — fingerprint-
+      // match the wrong element of the same shape. Skip tier 1 and let
+      // snapshot/live-store take over (those are codeword-keyed and
+      // resolve in whatever frame received the dispatch). myFrameId is
+      // null until the liveness Port handshake completes; treat that as
+      // "trust the routing" so we don't drop early dispatches.
+      const frameMismatch =
+        myFrameId !== null && frameIdParam > 0 && frameIdParam !== myFrameId;
+
+      if (idParam > 0 && !frameMismatch) {
         const entry = idRegistry.get(idParam);
         if (entry) {
           fp = idRegistry.fingerprintToString(entry.fingerprint);
@@ -970,6 +994,11 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
               idRegistry.rebindRef(idParam, found);
             } else {
               detail = `id=${idParam} dead, fingerprint not found`;
+              // Both tier 1 and tier 2 failed — the entry can never
+              // resolve. Lazy-delete so it stops occupying memory and
+              // can't accidentally tier-1-hit some future element that
+              // happens to share its fingerprint shape.
+              idRegistry.unregister(idParam);
             }
           }
         } else {
@@ -980,6 +1009,8 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
           // sending dead ids until the user reloads the tab.
           requestCommandsInvalidate('stale_id');
         }
+      } else if (frameMismatch) {
+        detail = `id=${idParam} for frame ${frameIdParam}, this is frame ${myFrameId}`;
       }
 
       if (!target && codeword) {
