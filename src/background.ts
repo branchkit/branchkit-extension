@@ -359,7 +359,7 @@ async function forwardPluginDebugLog(
 //   2. captureVisibleTab on the sender's tab.windowId. §2.5(d) — using
 //      sender.tab.windowId rather than the currently-focused-tab id
 //      avoids the race where the user has switched tabs between
-//      pressing Ctrl+Alt+D and the SW handling the message.
+//      pressing Ctrl+Alt+A and the SW handling the message.
 //   3. POST the PNG (or capture error) to /debug-snapshot/screenshot
 //      so the plugin can attach it / patch screenshot_error per §2.5(e).
 //
@@ -412,7 +412,7 @@ async function handleDebugSnapshot(
   // Step 2: captureVisibleTab on the sender's window. Per §2.5(d), use
   // sender.tab.windowId (not the focused-window default) to avoid
   // capturing a different tab if the user has switched focus since
-  // pressing Ctrl+Alt+D. If windowId is unavailable (rare — message
+  // pressing Ctrl+Alt+A. If windowId is unavailable (rare — message
   // came from a context without a tab), record an error rather than
   // letting Chrome silently fall back.
   const windowId = sender.tab?.windowId;

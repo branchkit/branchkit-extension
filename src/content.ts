@@ -1185,11 +1185,13 @@ const heldKeys = new Set<string>();
 document.addEventListener('keydown', (e: KeyboardEvent) => {
   if (handlePostFindKey(e)) return;
 
-  // Ctrl+Alt+D — hint-diagnostics snapshot trigger (Phase 2b of
-  // docs/completed/DESIGN_HINT_DIAGNOSTICS.md). Q1 of that doc rejected
-  // a voice trigger because debug needs to work *when voice is broken*;
-  // Ctrl+Alt+D is the documented default.
-  if (e.ctrlKey && e.altKey && (e.key === 'd' || e.key === 'D') && !e.repeat) {
+  // Ctrl+Alt+A — hint-diagnostics snapshot trigger (Phase 2b of
+  // docs/completed/DESIGN_HINT_DIAGNOSTICS.md). The design originally
+  // specified Ctrl+Alt+D, but Chrome (or the page) intercepts that on
+  // some configurations before our listener fires; A is unbound in
+  // typical Chrome shortcuts. Q1 of the doc rejected a voice trigger
+  // because debug needs to work *when voice is broken*.
+  if (e.ctrlKey && e.altKey && (e.key === 'a' || e.key === 'A') && !e.repeat) {
     e.preventDefault();
     e.stopPropagation();
     // Pre-press breadcrumb. Lands in plugin-logs/browser.log via the

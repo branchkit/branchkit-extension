@@ -5,7 +5,7 @@
  * plugin-side validator), orphan detection, and the wrapper-id discovery
  * step that captureDebugSnapshot uses to seed orphan detection. Full
  * end-to-end (DOM walk + chrome.runtime.sendMessage) is exercised
- * manually via Ctrl+Alt+D in a real tab; see the Phase 2b verification
+ * manually via Ctrl+Alt+A in a real tab; see the Phase 2b verification
  * notes.
  *
  * Run: npm test

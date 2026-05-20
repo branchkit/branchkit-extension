@@ -2,7 +2,7 @@
  * BranchKit Browser — hint-diagnostics debug overlay (Phase 3 of
  * `docs/completed/DESIGN_HINT_DIAGNOSTICS.md`).
  *
- * Toggled by Ctrl+Alt+D (same trigger as the Phase 2 snapshot — pressing
+ * Toggled by Ctrl+Alt+A (same trigger as the Phase 2 snapshot — pressing
  * the key writes a snapshot AND flips the overlay). Draws a colored box
  * over every wrapper + every "almost-hintable" candidate so the
  * diagnostic categories that *don't* have a visible badge today become

@@ -2,7 +2,7 @@
  * BranchKit Browser — hint-diagnostics debug snapshot (Phase 2b of
  * `docs/completed/DESIGN_HINT_DIAGNOSTICS.md`).
  *
- * Triggered by `Ctrl+Alt+D` (wired in content.ts). Walks the live store,
+ * Triggered by `Ctrl+Alt+A` (wired in content.ts). Walks the live store,
  * registry, DOM, and the activate-path ring buffer to build a frozen
  * structural picture of hint resolution on this page. Forwards the
  * structured JSON to background.ts, which POSTs to the plugin's
