@@ -7,8 +7,9 @@
 
 import { Category, BadgeDisplayMode, HintVisibility, ScannedElement, Message, DispatchResult } from './types';
 import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from './words';
-import { scanElements, scanSingle, isHintable } from './scanner';
+import { scanElements, scanSingle, isHintable, deepQuerySelectorAll } from './scanner';
 import { ElementWrapper, WrapperStore } from './element-wrapper';
+import * as idRegistry from './registry';
 import { IntersectionTracker } from './intersection-tracker';
 import { HintBadge } from './hints';
 import { cacheLayout, clearLayoutCache } from './layout-cache';
@@ -465,6 +466,14 @@ const resizeObserver = new ResizeObserver((entries) => {
  * tolerant of duplicate observe calls.
  */
 function attachWrapper(wrapper: ElementWrapper): void {
+  // Mint the registry id first. A rejected registration (id=0) means the
+  // fingerprint validator couldn't disambiguate this element from another
+  // already in the registry — voice can't safely address it, so don't add
+  // it to the store or start observers. Quill's empty editor div sibling
+  // is the canonical case: same role/name/tag as the toolbar div, no
+  // distinguisher.
+  const id = idRegistry.register(wrapper);
+  if (id === 0) return;
   store.addWrapper(wrapper);
   tracker.observe(wrapper.element);
   resizeObserver.observe(wrapper.element);
@@ -477,7 +486,10 @@ function attachWrapper(wrapper: ElementWrapper): void {
 function detachWrapper(element: Element): void {
   resizeObserver.unobserve(element);
   tracker.unobserve(element);
-  store.removeWrapperByElement(element);
+  const removed = store.removeWrapperByElement(element);
+  if (removed && removed.scanned.id > 0) {
+    idRegistry.unregister(removed.scanned.id);
+  }
 }
 
 /**
@@ -736,7 +748,7 @@ function pushGrammar(): void {
   // Hash-based deduplication. Includes codeword so an alphabet regen that
   // produces the same elements but different codewords still re-pushes —
   // otherwise the voice plugin would keep using stale codewords.
-  const hash = elements.map(e => `${e.selector}|${e.category}|${e.codeword}`).join('\x1f');
+  const hash = elements.map(e => `${e.id}|${e.category}|${e.codeword}`).join('\x1f');
   if (hash === lastGrammarHash) return;
   lastGrammarHash = hash;
 
@@ -784,6 +796,11 @@ window.addEventListener('blur', (e) => {
 // the normal init flow; we skip them here to avoid double-scanning.
 window.addEventListener('pageshow', (e) => {
   if (!e.persisted) return;
+  // Registry survives bfcache (V8 context is preserved) but its ids are
+  // now lying — page may have dropped DOM nodes, rectangles are stale,
+  // and the plugin's grammar was wiped by purgeTab on the navigate-away.
+  // Clear and rebuild from doScan; pushGrammar will re-mint ids from 1.
+  idRegistry.clear();
   lastGrammarHash = '';
   doScan();
   pushGrammar();
@@ -845,6 +862,24 @@ function reportDispatchResult(result: DispatchResult): void {
   }
 }
 
+/**
+ * Ask the background to POST /commands/invalidate on the plugin. Fires
+ * when the activate path receives an id we don't know — the plugin's
+ * cached "I already pushed commands" memory is lying after SW restart,
+ * page reload mid-debounce, or content-script remount. Without this,
+ * the plugin keeps dispatching dead ids until the user reloads the tab.
+ */
+function requestCommandsInvalidate(reason: string): void {
+  try {
+    chrome.runtime.sendMessage({
+      type: 'INVALIDATE_COMMANDS',
+      reason,
+    } as Message);
+  } catch {
+    // Extension context invalidated; recovery happens on next reload.
+  }
+}
+
 // Truncate the frame URL for log readability. Includes path but not query
 // strings (which often carry session data). Capped to 200 chars.
 function trimFrameUrl(href: string): string {
@@ -885,40 +920,48 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
     } else if (action === 'find_open' || action === 'find_close' || action === 'find_next' || action === 'find_previous' || action === 'find_immediate') {
       dispatcher.dispatch(action, params);
     } else if (action === 'activate') {
-      // Resolve element via three-tier fallback. Order matters: the voice
-      // plugin's selector is captured at grammar-push time and is paired
-      // with the codeword and elem_type the user actually saw. The local
-      // live-store can disagree because the codeword pool reassigns labels
-      // between grammar push and action arrival (scroll-driven Intersection
-      // Observer churn, DOM mutations, ad refreshes). Trusting live-store
-      // over the voice plugin's selector caused real bugs where "arch
-      // check" said on an input ended up focusing a nearby <a> that the
-      // pool had reassigned the same codeword to.
-      //
-      // Tier order:
-      //  1. Selector from voice plugin (authoritative at grammar-push time).
-      //  2. Pre-phrase snapshot (manual-mode show_hints flow; empty in
-      //     always-mode, so usually skipped).
-      //  3. Live store (codeword → current DOM element; last resort because
-      //     of the reassignment race described above).
-      //
-      // Rango (the Talon extension) uses a pure in-memory hint registry
-      // captured at render time and accepts a similar race silently. We
-      // chose selector-first because the voice plugin already ships the
-      // selector with every action and recovering from a stale live-store
-      // map at action time is more reliable than expanding the snapshot
-      // mechanism to fire on every grammar push.
+      // Three-tier resolution. The voice plugin ships the registry id we
+      // minted at grammar-push time; tier 1 (registry WeakRef) is the
+      // happy path. When that's dead — React swap, mutation between push
+      // and dispatch — tier 2 falls back to fingerprint matching against
+      // the live document. Tier 3 (snapshot/live_store) survives the
+      // SW-restart and id-not-in-registry cases. See
+      // notes/DESIGN_ELEMENT_IDENTITY_REGISTRY.md §6.
       const codeword = params?.codeword ?? '';
+      const idParam = parseInt(params?.id ?? '0', 10);
       let target: Element | null = null;
       let resolution: DispatchResult['resolution'] = 'none';
       let detail = '';
+      let fp = '';
 
-      if (params?.selector) {
-        try {
-          target = document.querySelector(params.selector);
-          if (target) resolution = 'selector';
-        } catch (e) {
-          detail = `selector parse: ${(e as Error).message}`;
+      if (idParam > 0) {
+        const entry = idRegistry.get(idParam);
+        if (entry) {
+          fp = idRegistry.fingerprintToString(entry.fingerprint);
+          const live = entry.ref.deref();
+          if (live && live.isConnected) {
+            target = live;
+            resolution = 'registry';
+          } else {
+            const found = idRegistry.fingerprintFallback(
+              entry.fingerprint,
+              deepQuerySelectorAll(document, '*'),
+            );
+            if (found) {
+              target = found;
+              resolution = 'fingerprint';
+              idRegistry.rebindRef(idParam, found);
+            } else {
+              detail = `id=${idParam} dead, fingerprint not found`;
+            }
+          }
+        } else {
+          detail = `id=${idParam} not in registry`;
+          // The plugin is dispatching against an id we never minted (or
+          // have since cleared). Tell it to invalidate its commands so
+          // the next grammar push starts fresh — otherwise it'll keep
+          // sending dead ids until the user reloads the tab.
+          requestCommandsInvalidate('stale_id');
         }
       }
 
@@ -985,6 +1028,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         ok: taken === 'focus' || taken === 'click',
         frame: trimFrameUrl(window.location.href),
         detail,
+        fp,
       });
     } else if (action === 'noop') {
       const prefix = params?.prefix;
@@ -1182,11 +1226,17 @@ function reevaluateAttribute(target: Element): boolean {
     return true;
   }
   if (existing && hintable) {
-    // Refresh scanned metadata (label/category/selector). Codeword stays.
+    // Refresh scanned metadata (label/category). Preserve registry id
+    // and codeword; recompute the fingerprint so a renamed aria-label
+    // doesn't leave the dead-ref fallback unable to find this element.
     const refreshed = scanSingle(target);
     if (refreshed) {
       refreshed.codeword = existing.scanned.codeword;
+      refreshed.id = existing.scanned.id;
       existing.scanned = refreshed;
+    }
+    if (existing.scanned.id > 0) {
+      idRegistry.refreshFingerprint(existing.scanned.id, target);
     }
     return true;
   }
@@ -1272,7 +1322,16 @@ observer.observe(document.body || document.documentElement, {
   childList: true,
   subtree: true,
   attributes: true,
-  attributeFilter: ['disabled', 'aria-hidden', 'role', 'contenteditable', 'href'],
+  // Watch attributes that flip hintability AND those that feed the
+  // fingerprint. Without aria-label/title/type in the filter, a button
+  // renamed from "Save" to "Save changes" would still register against
+  // its stale fingerprint and the WeakRef-dead-fingerprint-fallback
+  // path could never recover it.
+  attributeFilter: [
+    'disabled', 'aria-hidden', 'role', 'contenteditable', 'href',
+    'aria-label', 'aria-labelledby', 'aria-describedby', 'aria-roledescription',
+    'title', 'type',
+  ],
 });
 
 startBadgeReattachObserver();

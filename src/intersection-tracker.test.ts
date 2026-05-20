@@ -42,7 +42,7 @@ function fakeElement(
 function fakeScanned(overrides: Partial<ScannedElement> = {}): ScannedElement {
   return {
     label: 'click me',
-    selector: 'button',
+    id: 0,
     category: 'button',
     type: 'button',
     adapter: null,
@@ -320,15 +320,15 @@ describe('IntersectionTracker rank-aware allocation', () => {
     // verify the closest gets the cheapest codeword regardless.
     const far = new ElementWrapper(
       fakeElement('far', { left: 0, top: 0, width: 10, height: 10 }),
-      fakeScanned({ selector: 'button.far' }),
+      fakeScanned({ id: 1 }),
     );
     const mid = new ElementWrapper(
       fakeElement('mid', { left: 400, top: 300, width: 10, height: 10 }),
-      fakeScanned({ selector: 'button.mid' }),
+      fakeScanned({ id: 2 }),
     );
     const near = new ElementWrapper(
       fakeElement('near', { left: 507, top: 379, width: 10, height: 10 }),
-      fakeScanned({ selector: 'button.near' }),
+      fakeScanned({ id: 3 }),
     );
     far.isInViewport = true;
     mid.isInViewport = true;
@@ -357,11 +357,11 @@ describe('IntersectionTracker rank-aware allocation', () => {
 
     const a = new ElementWrapper(
       fakeElement('a', { left: 507, top: 379, width: 10, height: 10 }),
-      fakeScanned({ selector: 'a' }),
+      fakeScanned({ id: 1 }),
     );
     const b = new ElementWrapper(
       fakeElement('b', { left: 0, top: 0, width: 10, height: 10 }),
-      fakeScanned({ selector: 'b' }),
+      fakeScanned({ id: 2 }),
     );
     a.isInViewport = true;
     b.isInViewport = true;
@@ -389,11 +389,11 @@ describe('IntersectionTracker rank-aware allocation', () => {
 
     const a = new ElementWrapper(
       fakeElement('a', { left: 0, top: 0, width: 10, height: 10 }),
-      fakeScanned({ selector: 'a' }),
+      fakeScanned({ id: 1 }),
     );
     const b = new ElementWrapper(
       fakeElement('b', { left: 200, top: 200, width: 10, height: 10 }),
-      fakeScanned({ selector: 'b' }),
+      fakeScanned({ id: 2 }),
     );
     a.isInViewport = true;
     b.isInViewport = true;
@@ -427,9 +427,9 @@ describe('IntersectionTracker rank-aware allocation', () => {
     const events = { onCodewordsChanged: vi.fn() };
     const tracker = new IntersectionTracker(store, events);
 
-    const w1 = new ElementWrapper(fakeElement('1'), fakeScanned({ selector: 'one' }));
-    const w2 = new ElementWrapper(fakeElement('2'), fakeScanned({ selector: 'two' }));
-    const w3 = new ElementWrapper(fakeElement('3'), fakeScanned({ selector: 'three' }));
+    const w1 = new ElementWrapper(fakeElement('1'), fakeScanned({ id: 1 }));
+    const w2 = new ElementWrapper(fakeElement('2'), fakeScanned({ id: 2 }));
+    const w3 = new ElementWrapper(fakeElement('3'), fakeScanned({ id: 3 }));
     w1.isInViewport = true;
     w2.isInViewport = true;
     w3.isInViewport = true;

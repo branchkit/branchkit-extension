@@ -11,7 +11,6 @@
 
 import { SiteAdapter } from './index';
 import { ScannedElement } from '../types';
-import { buildSelector } from '../scanner';
 
 const EXCLUDE_CLASSES = ['saveBtn', 'cancelBtn', 'deleteBtn', 'qb-splitbutton-menubtn'];
 const EXCLUDE_TEXTS = ['save', 'cancel', 'delete', 'customize this form'];
@@ -37,7 +36,7 @@ function scanRecordIcons(): { elements: ScannedElement[]; refs: Element[] } {
       editNum++;
       elements.push({
         label: `Edit row ${editNum}`,
-        selector: buildSelector(el),
+        id: 0,
         category: 'edit',
         type: 'record_action',
         adapter: 'quickbase',
@@ -47,7 +46,7 @@ function scanRecordIcons(): { elements: ScannedElement[]; refs: Element[] } {
       viewNum++;
       elements.push({
         label: `View row ${viewNum}`,
-        selector: buildSelector(el),
+        id: 0,
         category: 'view',
         type: 'record_action',
         adapter: 'quickbase',
@@ -72,17 +71,9 @@ function scanTables(): { elements: ScannedElement[]; refs: Element[] } {
     const text = el.textContent?.trim() || '';
     if (!text) return;
 
-    const match = href.match(/\/table\/([^/]+)/);
-    const tableId = match ? match[1] : '';
-
-    // Use href fragment for unique selector
-    const selector = tableId
-      ? `a.custom-link[href*="${tableId}"]`
-      : buildSelector(el);
-
     elements.push({
       label: text,
-      selector,
+      id: 0,
       category: 'tables',
       type: 'sidebar_link',
       adapter: 'quickbase',

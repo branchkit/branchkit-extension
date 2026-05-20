@@ -26,7 +26,7 @@ function fakeElement(connected = true): Element {
 function fakeScanned(codeword: string): ScannedElement {
   return {
     label: 'click me',
-    selector: `button.${codeword}`,
+    id: 0,
     category: 'button',
     type: 'button',
     adapter: null,

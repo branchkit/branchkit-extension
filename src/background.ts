@@ -203,14 +203,14 @@ function scannedToGrammarRequest(elements: ScannedElement[]): GrammarRequest {
   const tables: TableLink[] = [];
 
   for (const el of elements) {
+    const frameId = el.frame_id ?? 0;
     switch (el.category) {
       case 'input':
         fields.push({
-          fid: el.selector,
           label: el.label,
           type: el.type,
-          selector: el.selector,
-          id: '',
+          id: el.id,
+          frame_id: frameId,
           position: fields.length,
           codeword: el.codeword,
         });
@@ -218,7 +218,8 @@ function scannedToGrammarRequest(elements: ScannedElement[]): GrammarRequest {
       case 'tables':
         tables.push({
           label: el.label,
-          selector: el.selector,
+          id: el.id,
+          frame_id: frameId,
           href: '',
           table_id: '',
           codeword: el.codeword,
@@ -227,7 +228,8 @@ function scannedToGrammarRequest(elements: ScannedElement[]): GrammarRequest {
       default:
         clickables.push({
           label: el.label,
-          selector: el.selector,
+          id: el.id,
+          frame_id: frameId,
           type: el.type,
           codeword: el.codeword,
         });
@@ -285,6 +287,44 @@ async function forwardDispatchResult(result: DispatchResult): Promise<void> {
     });
   } catch {
     // Plugin may be down; observability isn't worth retrying.
+  }
+}
+
+async function forwardDebugLog(tag: string, data: unknown): Promise<void> {
+  if (!pluginPort || !pluginToken) return;
+  try {
+    await fetch(`http://127.0.0.1:${pluginPort}/debug-log`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${pluginToken}`,
+      },
+      body: JSON.stringify({ tag, data }),
+    });
+  } catch {
+    // Plugin may be down; diagnostic-only, no retry.
+  }
+}
+
+// Tell the plugin to wipe its commands.push memory so the next grammar
+// arrival does a full re-registration. Best-effort; the plugin's
+// invalidate endpoint is idempotent.
+async function forwardCommandsInvalidate(reason: string): Promise<void> {
+  if (!pluginPort || !pluginToken) {
+    const found = await discoverPlugin();
+    if (!found) return;
+  }
+  try {
+    await fetch(`http://127.0.0.1:${pluginPort}/commands/invalidate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${pluginToken}`,
+      },
+      body: JSON.stringify({ reason, tab_id: cachedActiveTabId ?? 0 }),
+    });
+  } catch {
+    // Plugin may be down; the next grammar push will reconcile.
   }
 }
 
@@ -507,6 +547,13 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     const tabId = _sender.tab?.id;
     const frameId = _sender.frameId;
     if (typeof tabId === 'number' && typeof frameId === 'number') {
+      // Stamp frame_id onto each element. Content scripts don't know
+      // their own frameId — only the SW does — but the plugin needs it
+      // to scope ids to the right frame on dispatch. See §8 of
+      // notes/DESIGN_ELEMENT_IDENTITY_REGISTRY.md.
+      for (const el of message.elements) {
+        el.frame_id = frameId;
+      }
       recordFrameGrammar(tabId, frameId, message.elements);
       schedulePushForTab(tabId);
     }
@@ -537,6 +584,16 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
 
   if (message.type === 'DISPATCH_RESULT') {
     forwardDispatchResult(message.payload);
+    return false;
+  }
+
+  if (message.type === 'DEBUG_LOG' && typeof message.tag === 'string') {
+    forwardDebugLog(message.tag, message.data);
+    return false;
+  }
+
+  if (message.type === 'INVALIDATE_COMMANDS' && typeof message.reason === 'string') {
+    forwardCommandsInvalidate(message.reason);
     return false;
   }
 

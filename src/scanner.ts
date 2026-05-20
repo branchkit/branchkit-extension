@@ -190,7 +190,7 @@ export function scanSingle(el: Element): ScannedElement | null {
   if (!isHintable(el)) return null;
   return {
     label: getElementLabel(el),
-    selector: buildSelector(el),
+    id: 0, // minted by registry.register during attachWrapper
     category: classifyCategory(el),
     type: el.tagName.toLowerCase(),
     adapter: null,
@@ -218,14 +218,10 @@ export function scanElements(root: Document | Element = document): { elements: S
 
     seen.add(el);
 
-    const label = getElementLabel(el);
-    const category = classifyCategory(el);
-    const selector = buildSelector(el);
-
     elements.push({
-      label,
-      selector,
-      category,
+      label: getElementLabel(el),
+      id: 0, // minted by registry.register during attachWrapper
+      category: classifyCategory(el),
       type: el.tagName.toLowerCase(),
       adapter: null,
       codeword: '', // assigned later by doScan via the per-tab label pool
@@ -238,69 +234,4 @@ export function scanElements(root: Document | Element = document): { elements: S
 
 function getElementLabel(el: Element): string {
   return accessibleName(el);
-}
-
-/**
- * Build a CSS selector that uniquely identifies an element.
- * Priority: ID > data-testid > role+position > href > nth-child fallback.
- * Adapted from basetypes-extension buildClickableSelector().
- */
-export function buildSelector(el: Element): string {
-  // 1. ID
-  if (el.id) return '#' + CSS.escape(el.id);
-
-  // 2. data-testid
-  const testId = el.getAttribute('data-testid');
-  if (testId) return `[data-testid="${CSS.escape(testId)}"]`;
-
-  // 3. Role-based tab selector
-  const role = el.getAttribute('role');
-  if (role === 'tab' && el.parentElement) {
-    const tabs = Array.from(el.parentElement.children).filter(c => c.getAttribute('role') === 'tab');
-    const idx = tabs.indexOf(el);
-    if (idx >= 0) {
-      // Use nth-of-type if all tabs share a tag, otherwise use our own index-based selector
-      const tag = el.tagName.toLowerCase();
-      const allSameTag = tabs.every(t => t.tagName === el.tagName);
-      if (allSameTag) {
-        return `[role="tablist"] > ${tag}:nth-of-type(${idx + 1})`;
-      }
-      // Fallback: use role attribute + position among role="tab" siblings
-      return `[role="tab"]:nth-of-type(${idx + 1})`;
-    }
-  }
-
-  // 4. Links with href
-  if (el.tagName === 'A') {
-    const href = (el as HTMLAnchorElement).getAttribute('href');
-    if (href && href !== '#' && href.length < 200) {
-      return `a[href="${CSS.escape(href)}"]`;
-    }
-  }
-
-  // 5. Fallback: nth-of-type from nearest identifiable ancestor
-  const parent = el.parentElement;
-  if (parent) {
-    const siblings = Array.from(parent.children);
-    // Try finding an ancestor with ID
-    let ancestor = parent;
-    let depth = 0;
-    while (ancestor && !ancestor.id && depth < 3) {
-      if (!ancestor.parentElement) break;
-      ancestor = ancestor.parentElement;
-      depth++;
-    }
-    if (ancestor?.id) {
-      const sameTag = siblings.filter(c => c.tagName === el.tagName);
-      const tagIdx = sameTag.indexOf(el);
-      return `#${CSS.escape(ancestor.id)} ${el.tagName.toLowerCase()}:nth-of-type(${tagIdx + 1})`;
-    }
-
-    // Last resort: tag + nth-of-type
-    const sameTag = Array.from(parent.children).filter(c => c.tagName === el.tagName);
-    const idx = sameTag.indexOf(el);
-    return `${el.tagName.toLowerCase()}:nth-of-type(${idx + 1})`;
-  }
-
-  return el.tagName.toLowerCase();
 }

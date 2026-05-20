@@ -66,7 +66,7 @@ export class ElementWrapper {
  */
 export function wrapperToCandidate(w: ElementWrapper): HintCandidate {
   return {
-    id: w.scanned.selector,
+    id: String(w.scanned.id),
     rect: w.element.getBoundingClientRect(),
     oldCodeword: w.scanned.codeword || undefined,
   };
@@ -78,6 +78,10 @@ export class WrapperStore {
   // performs frequent point lookups (e.g. removedNodes → which wrappers go
   // away?), and a Map sidesteps the O(n) `find(...)` in the hot path.
   private byElement: Map<Element, ElementWrapper> = new Map();
+  // Reverse index from registry id → wrapper. Activation path is keyed
+  // by the registry id arriving from the voice plugin; without this map
+  // we'd O(n)-scan to find the wrapper for the badge flash.
+  private byIdMap: Map<number, ElementWrapper> = new Map();
 
   get all(): ElementWrapper[] {
     return this.wrappers;
@@ -99,12 +103,16 @@ export class WrapperStore {
     }
     this.wrappers = [];
     this.byElement.clear();
+    this.byIdMap.clear();
   }
 
   set(wrappers: ElementWrapper[]): void {
     this.clear();
     this.wrappers = wrappers;
-    for (const w of wrappers) this.byElement.set(w.element, w);
+    for (const w of wrappers) {
+      this.byElement.set(w.element, w);
+      if (w.scanned.id > 0) this.byIdMap.set(w.scanned.id, w);
+    }
   }
 
   /** Add a single wrapper. No-op if a wrapper already exists for the element. */
@@ -112,11 +120,17 @@ export class WrapperStore {
     if (this.byElement.has(w.element)) return;
     this.wrappers.push(w);
     this.byElement.set(w.element, w);
+    if (w.scanned.id > 0) this.byIdMap.set(w.scanned.id, w);
   }
 
   /** Look up the wrapper for an element, if any. */
   findWrapperFor(el: Element): ElementWrapper | undefined {
     return this.byElement.get(el);
+  }
+
+  /** Look up a wrapper by its registry id, if any. */
+  byId(id: number): ElementWrapper | undefined {
+    return this.byIdMap.get(id);
   }
 
   /**
@@ -128,6 +142,7 @@ export class WrapperStore {
     const w = this.byElement.get(el);
     if (!w) return undefined;
     this.byElement.delete(el);
+    if (w.scanned.id > 0) this.byIdMap.delete(w.scanned.id);
     const idx = this.wrappers.indexOf(w);
     if (idx >= 0) this.wrappers.splice(idx, 1);
     w.releaseLabel();

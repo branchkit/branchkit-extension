@@ -15,7 +15,12 @@ export type HintVisibility = 'always' | 'manual';
 
 export interface ScannedElement {
   label: string;
-  selector: string;
+  /**
+   * Stable registry id. Minted in the content script when the wrapper
+   * is registered. 0 means "not registered" — voice can't address it.
+   * See notes/DESIGN_ELEMENT_IDENTITY_REGISTRY.md.
+   */
+  id: number;
   category: Category;
   type: string;         // more specific: 'record_action', 'nav', etc.
   adapter: string | null;
@@ -26,6 +31,13 @@ export interface ScannedElement {
    * codeword. See notes/DESIGN_BROWSER_GRAMMAR_PROTOCOL.md section 3.
    */
   codeword: string;
+  /**
+   * Frame id this element lives in. Stamped by the SW on receipt of
+   * SCAN_RESULT (content scripts don't know their own frame id). Flows
+   * to the plugin so dispatched actions can carry frame_id and the SW
+   * can route back to the right frame.
+   */
+  frame_id?: number;
 }
 
 // --- Messages ---
@@ -56,7 +68,12 @@ export type Message =
   | { type: 'GET_FOCUS_STATUS' }
   | { type: 'SCROLL_BOUNDARY'; boundary: 'top' | 'bottom' | 'left' | 'right' }
   | { type: 'REFERENCE_NAMES_CHANGED' }
-  | { type: 'REFERENCE_SAVED'; host: string; name: string; reference: Record<string, unknown> };
+  | { type: 'REFERENCE_SAVED'; host: string; name: string; reference: Record<string, unknown> }
+  // Content → background, asking the plugin to wipe its commands.push
+  // memory. Fires when the activate path sees a registry id that we
+  // never minted (or have since cleared) — the plugin's bookkeeping is
+  // out of sync and a fresh commands.push is needed.
+  | { type: 'INVALIDATE_COMMANDS'; reason: string };
 
 // Response to CLAIM_LABELS. Returned via sendResponse callback.
 // May be shorter than `count` if pool was partially exhausted; empty array
@@ -85,25 +102,26 @@ export interface LabelStack {
 // --- Grammar format matching browser plugin Go types ---
 
 export interface FieldInfo {
-  fid: string;
   label: string;
   type: string;
-  selector: string;
-  id: string;
+  id: number;
+  frame_id: number;
   position: number;
   codeword: string;
 }
 
 export interface ClickableInfo {
   label: string;
-  selector: string;
+  id: number;
+  frame_id: number;
   type: string;
   codeword: string;
 }
 
 export interface TableLink {
   label: string;
-  selector: string;
+  id: number;
+  frame_id: number;
   href: string;
   table_id: string;
   codeword: string;
@@ -115,12 +133,16 @@ export interface TableLink {
 export interface DispatchResult {
   action: string;            // e.g. "activate", "scroll", "noop"
   codeword: string;          // e.g. "arch check" — empty for non-codeword actions
-  resolution: 'snapshot' | 'live_store' | 'selector' | 'none';
+  resolution: 'registry' | 'fingerprint' | 'snapshot' | 'live_store' | 'none';
   elem_tag: string;          // actual tag of the resolved element, e.g. "input"
   taken: 'focus' | 'click' | 'skipped' | 'noop';
   ok: boolean;               // overall success
   frame: string;             // window.location.href, trimmed
   detail: string;            // optional error message or notes
+  // Attempted fingerprint, for diagnostic grep in actuator.log when
+  // resolution falls through to live_store/none. Format from
+  // registry.fingerprintToString — flat key=value, not JSON.
+  fp: string;
 }
 
 export interface GrammarRequest {

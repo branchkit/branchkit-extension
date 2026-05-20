@@ -22,7 +22,7 @@ function fakeElement(label = 'el'): Element {
 function fakeScanned(overrides: Partial<ScannedElement> = {}): ScannedElement {
   return {
     label: 'click me',
-    selector: 'button',
+    id: 0,
     category: 'button',
     type: 'button',
     adapter: null,

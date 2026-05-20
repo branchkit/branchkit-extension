@@ -6,7 +6,7 @@
  */
 
 import { ScannedElement, Category } from '../types';
-import { scanElements, buildSelector, classifyCategory } from '../scanner';
+import { scanElements, classifyCategory } from '../scanner';
 import { quickbaseAdapter } from './quickbase';
 
 export interface CategoryScan {
@@ -82,7 +82,7 @@ export function scanWithAdapter(adapter: SiteAdapter): { elements: ScannedElemen
       seen.add(el);
       elements.push({
         label: el.textContent?.trim() || el.tagName.toLowerCase(),
-        selector: buildSelector(el),
+        id: 0,
         category: classifyCategory(el),
         type: el.tagName.toLowerCase(),
         adapter: adapter.name,
