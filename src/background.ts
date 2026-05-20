@@ -306,6 +306,27 @@ async function forwardDebugLog(tag: string, data: unknown): Promise<void> {
   }
 }
 
+// Sibling of forwardDebugLog that targets the per-plugin debug log
+// channel (plugin-logs/browser.log) instead of the shared actuator.log.
+// Use for plugin-internal diagnostic chatter that doesn't belong
+// interleaved with the actuator's cross-cutting coordination lines —
+// see notes/DESIGN_PLUGIN_LOGGING.md.
+async function forwardPluginDebugLog(tag: string, data: unknown): Promise<void> {
+  if (!pluginPort || !pluginToken) return;
+  try {
+    await fetch(`http://127.0.0.1:${pluginPort}/plugin-debug-log`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${pluginToken}`,
+      },
+      body: JSON.stringify({ tag, data }),
+    });
+  } catch {
+    // Plugin may be down; diagnostic-only, no retry.
+  }
+}
+
 // Tell the plugin to wipe its commands.push memory so the next grammar
 // arrival does a full re-registration. Best-effort; the plugin's
 // invalidate endpoint is idempotent.
@@ -589,6 +610,11 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
 
   if (message.type === 'DEBUG_LOG' && typeof message.tag === 'string') {
     forwardDebugLog(message.tag, message.data);
+    return false;
+  }
+
+  if (message.type === 'PLUGIN_DEBUG_LOG' && typeof message.tag === 'string') {
+    forwardPluginDebugLog(message.tag, message.data);
     return false;
   }
 

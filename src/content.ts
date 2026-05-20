@@ -896,12 +896,13 @@ function reportDispatchResult(result: DispatchResult): void {
 
 // --- BK_ACTIVATE_PATH diagnostic ---
 //
-// Every browser.activate dispatch emits one DEBUG_LOG line tagged
+// Every browser.activate dispatch emits one PLUGIN_DEBUG_LOG line tagged
 // BK_ACTIVATE_PATH so wrong-element-clicked bugs can be diagnosed from
-// actuator.log alone. The ring buffer keeps the last 10 events in memory
-// so the Phase 2 snapshot endpoint can include "what just happened"
-// without round-tripping through the actuator log. See
-// notes/DESIGN_HINT_DIAGNOSTICS.md §1.
+// the per-plugin log file (plugin-logs/browser.log) alone. The ring
+// buffer keeps the last 10 events in memory so the Phase 2 snapshot
+// endpoint can include "what just happened" without round-tripping
+// through any log file. See notes/DESIGN_HINT_DIAGNOSTICS.md §1 and
+// notes/DESIGN_PLUGIN_LOGGING.md §4 for the per-plugin-channel rationale.
 
 interface ElementSnap {
   tag: string;
@@ -969,7 +970,7 @@ function emitActivatePath(event: ActivatePathEvent): void {
   }
   try {
     chrome.runtime.sendMessage({
-      type: 'DEBUG_LOG',
+      type: 'PLUGIN_DEBUG_LOG',
       tag: 'BK_ACTIVATE_PATH',
       data: event,
     });
