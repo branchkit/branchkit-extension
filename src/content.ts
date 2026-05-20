@@ -973,6 +973,11 @@ function emitActivatePath(event: ActivatePathEvent): void {
       type: 'PLUGIN_DEBUG_LOG',
       tag: 'BK_ACTIVATE_PATH',
       data: event,
+      // v2 of per-plugin logging defaults the threshold to `info`, so
+      // emit at info-level to remain visible by default. The trace of
+      // "which element did we click" is intentionally always-on for the
+      // hint-diagnostics feature — it isn't debug-only chatter.
+      level: 'info',
     });
   } catch {
     // Extension context invalidated; the in-memory ring buffer still

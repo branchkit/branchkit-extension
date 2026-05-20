@@ -310,8 +310,17 @@ async function forwardDebugLog(tag: string, data: unknown): Promise<void> {
 // channel (plugin-logs/browser.log) instead of the shared actuator.log.
 // Use for plugin-internal diagnostic chatter that doesn't belong
 // interleaved with the actuator's cross-cutting coordination lines —
-// see notes/DESIGN_PLUGIN_LOGGING.md.
-async function forwardPluginDebugLog(tag: string, data: unknown): Promise<void> {
+// see notes/DESIGN_PLUGIN_LOGGING.md and DESIGN_PLUGIN_LOG_LEVELS.md.
+//
+// `level` is one of trace/debug/info/warn/error. Defaults to "debug"
+// for callers that haven't migrated to v2's per-level emit. The
+// underlying plugin endpoint also defaults missing/unknown levels to
+// "debug" so the wire surface is robust to extension-side typos.
+async function forwardPluginDebugLog(
+  tag: string,
+  data: unknown,
+  level: string = 'debug',
+): Promise<void> {
   if (!pluginPort || !pluginToken) return;
   try {
     await fetch(`http://127.0.0.1:${pluginPort}/plugin-debug-log`, {
@@ -320,7 +329,7 @@ async function forwardPluginDebugLog(tag: string, data: unknown): Promise<void> 
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${pluginToken}`,
       },
-      body: JSON.stringify({ tag, data }),
+      body: JSON.stringify({ tag, data, level }),
     });
   } catch {
     // Plugin may be down; diagnostic-only, no retry.
@@ -614,7 +623,8 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   }
 
   if (message.type === 'PLUGIN_DEBUG_LOG' && typeof message.tag === 'string') {
-    forwardPluginDebugLog(message.tag, message.data);
+    const level = typeof message.level === 'string' ? message.level : 'debug';
+    forwardPluginDebugLog(message.tag, message.data, level);
     return false;
   }
 
