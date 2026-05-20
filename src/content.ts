@@ -1191,7 +1191,19 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
   if (e.ctrlKey && e.altKey && (e.key === 'd' || e.key === 'D') && !e.repeat) {
     e.preventDefault();
     e.stopPropagation();
-    captureDebugSnapshot(store, trimFrameUrl(window.location.href));
+    // Pre-press breadcrumb. Lands in plugin-logs/browser.log via the
+    // standard per-plugin debug channel before any of the snapshot SW
+    // work begins, so users grepping for "I pressed it" see the press
+    // even when the snapshot chain fails downstream (no captureVisibleTab
+    // permission, plugin endpoint unreachable, etc.).
+    const url = trimFrameUrl(window.location.href);
+    chrome.runtime.sendMessage({
+      type: 'PLUGIN_DEBUG_LOG',
+      tag: 'BK_SNAPSHOT_REQUESTED',
+      data: { url, ts: performance.now() },
+      level: 'info',
+    });
+    captureDebugSnapshot(store, url);
     return;
   }
 
