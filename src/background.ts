@@ -114,7 +114,10 @@ async function loadAllReferenceNames(): Promise<string[]> {
 }
 
 async function saveReferenceToCollection(host: string, name: string, reference: Record<string, unknown>): Promise<void> {
-  if (!pluginPort || !pluginToken) return;
+  if (!pluginPort || !pluginToken) {
+    const found = await discoverPlugin();
+    if (!found) return;
+  }
   try {
     await fetch(`http://127.0.0.1:${pluginPort}/reference/save`, {
       method: 'POST',
@@ -130,7 +133,10 @@ async function saveReferenceToCollection(host: string, name: string, reference: 
 }
 
 async function pushReferenceNames(): Promise<void> {
-  if (!pluginPort || !pluginToken) return;
+  if (!pluginPort || !pluginToken) {
+    const found = await discoverPlugin();
+    if (!found) return;
+  }
   const names = await loadAllReferenceNames();
   try {
     await fetch(`http://127.0.0.1:${pluginPort}/references`, {
@@ -147,7 +153,10 @@ async function pushReferenceNames(): Promise<void> {
 }
 
 async function hydrateReferencesFromCollection(): Promise<void> {
-  if (!pluginPort || !pluginToken) return;
+  if (!pluginPort || !pluginToken) {
+    const found = await discoverPlugin();
+    if (!found) return;
+  }
   try {
     const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     const tab = tabs[0];
@@ -291,7 +300,10 @@ async function forwardDispatchResult(result: DispatchResult): Promise<void> {
 }
 
 async function forwardDebugLog(tag: string, data: unknown): Promise<void> {
-  if (!pluginPort || !pluginToken) return;
+  if (!pluginPort || !pluginToken) {
+    const found = await discoverPlugin();
+    if (!found) return;
+  }
   try {
     await fetch(`http://127.0.0.1:${pluginPort}/debug-log`, {
       method: 'POST',
@@ -321,7 +333,10 @@ async function forwardPluginDebugLog(
   data: unknown,
   level: string = 'debug',
 ): Promise<void> {
-  if (!pluginPort || !pluginToken) return;
+  if (!pluginPort || !pluginToken) {
+    const found = await discoverPlugin();
+    if (!found) return;
+  }
   try {
     await fetch(`http://127.0.0.1:${pluginPort}/plugin-debug-log`, {
       method: 'POST',
