@@ -10,6 +10,7 @@ import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from '
 import { scanElements, scanSingle, isHintable, deepQuerySelectorAll } from './scanner';
 import { ElementWrapper, WrapperStore } from './element-wrapper';
 import * as idRegistry from './registry';
+import { resolveTarget } from './activate-resolution';
 import { IntersectionTracker } from './intersection-tracker';
 import { HintBadge } from './hints';
 import { cacheLayout, clearLayoutCache } from './layout-cache';
@@ -950,87 +951,36 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
     } else if (action === 'find_open' || action === 'find_close' || action === 'find_next' || action === 'find_previous' || action === 'find_immediate') {
       dispatcher.dispatch(action, params);
     } else if (action === 'activate') {
-      // Three-tier resolution. The voice plugin ships the registry id we
-      // minted at grammar-push time; tier 1 (registry WeakRef) is the
-      // happy path. When that's dead — React swap, mutation between push
-      // and dispatch — tier 2 falls back to fingerprint matching against
-      // the live document. Tier 3 (snapshot/live_store) survives the
-      // SW-restart and id-not-in-registry cases. See
-      // notes/DESIGN_ELEMENT_IDENTITY_REGISTRY.md §6.
+      // Three-tier resolution (see notes/DESIGN_ELEMENT_IDENTITY_REGISTRY.md §6).
+      // Algorithm lives in activate-resolution.ts so it's unit-testable.
       const codeword = params?.codeword ?? '';
       const idParam = parseInt(params?.id ?? '0', 10);
       const frameIdParam = parseInt(params?.frame_id ?? '0', 10);
-      let target: Element | null = null;
-      let resolution: DispatchResult['resolution'] = 'none';
-      let detail = '';
-      let fp = '';
 
-      // If the SW routed this id into a frame that isn't the one that
-      // minted it, tier 1 would either miss or — worse — fingerprint-
-      // match the wrong element of the same shape. Skip tier 1 and let
-      // snapshot/live-store take over (those are codeword-keyed and
-      // resolve in whatever frame received the dispatch). myFrameId is
-      // null until the liveness Port handshake completes; treat that as
-      // "trust the routing" so we don't drop early dispatches.
-      const frameMismatch =
-        myFrameId !== null && frameIdParam > 0 && frameIdParam !== myFrameId;
-
-      if (idParam > 0 && !frameMismatch) {
-        const entry = idRegistry.get(idParam);
-        if (entry) {
-          fp = idRegistry.fingerprintToString(entry.fingerprint);
-          const live = entry.ref.deref();
-          if (live && live.isConnected) {
-            target = live;
-            resolution = 'registry';
-          } else {
-            const found = idRegistry.fingerprintFallback(
-              entry.fingerprint,
-              deepQuerySelectorAll(document, '*'),
-            );
-            if (found) {
-              target = found;
-              resolution = 'fingerprint';
-              idRegistry.rebindRef(idParam, found);
-            } else {
-              detail = `id=${idParam} dead, fingerprint not found`;
-              // Both tier 1 and tier 2 failed — the entry can never
-              // resolve. Lazy-delete so it stops occupying memory and
-              // can't accidentally tier-1-hit some future element that
-              // happens to share its fingerprint shape.
-              idRegistry.unregister(idParam);
-            }
-          }
-        } else {
-          detail = `id=${idParam} not in registry`;
-          // The plugin is dispatching against an id we never minted (or
-          // have since cleared). Tell it to invalidate its commands so
-          // the next grammar push starts fresh — otherwise it'll keep
-          // sending dead ids until the user reloads the tab.
-          requestCommandsInvalidate('stale_id');
-        }
-      } else if (frameMismatch) {
-        detail = `id=${idParam} for frame ${frameIdParam}, this is frame ${myFrameId}`;
-      }
-
-      if (!target && codeword) {
-        const fromSnapshot = resolveFromSnapshot(
-          phraseSnapshot, codeword, performance.now(),
-        );
-        if (fromSnapshot) {
-          target = fromSnapshot.element;
-          resolution = 'snapshot';
-        } else {
-          const words = codeword.split(/\s+/).filter(w => w.length > 0);
-          const live = words.length === 2
-            ? store.byLabelPair(words[0], words[1])
-            : (words.length === 1 ? store.byLabel(words[0]) : undefined);
-          if (live) {
-            target = live.element;
-            resolution = 'live_store';
-          }
-        }
-      }
+      const resolved = resolveTarget(
+        idParam, frameIdParam, codeword,
+        {
+          myFrameId,
+          registry: {
+            get: idRegistry.get,
+            rebindRef: idRegistry.rebindRef,
+            unregister: idRegistry.unregister,
+            fingerprintFallback: idRegistry.fingerprintFallback,
+            fingerprintToString: idRegistry.fingerprintToString,
+          },
+          candidates: () => deepQuerySelectorAll(document, '*'),
+          resolveFromSnapshot: (cw) => resolveFromSnapshot(phraseSnapshot, cw, performance.now()),
+          resolveFromStore: (cw) => {
+            const words = cw.split(/\s+/).filter(w => w.length > 0);
+            return words.length === 2
+              ? store.byLabelPair(words[0], words[1])
+              : (words.length === 1 ? store.byLabel(words[0]) : undefined);
+          },
+          onStaleId: requestCommandsInvalidate,
+        },
+      );
+      const { target, resolution, fp } = resolved;
+      let detail = resolved.detail;
 
       let taken: DispatchResult['taken'] = 'skipped';
       let elemTag = '';

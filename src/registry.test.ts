@@ -234,3 +234,67 @@ describe('reverseIndex behavior across clear', () => {
     expect(registry.get(id2)).toBeTruthy();
   });
 });
+
+describe('bfcache re-registration (regression for stale wrapper ids)', () => {
+  // The pageshow handler clears the registry then walks the surviving
+  // wrappers and re-registers each. Without that walk, wrappers keep
+  // their pre-clear scanned.id values pointing at entries that no
+  // longer exist — every subsequent activate falls through tier 1.
+  // This test pins the contract that re-registration restores the
+  // wrapper → registry-entry pairing.
+  it('walking the store after clear re-mints ids and re-syncs wrapper.scanned.id', () => {
+    const a = makeButton('A');
+    const b = makeButton('B');
+    const c = makeButton('C');
+    const wa = wrapper(a);
+    const wb = wrapper(b);
+    const wc = wrapper(c);
+
+    expect(registry.register(wa)).toBe(1);
+    expect(registry.register(wb)).toBe(2);
+    expect(registry.register(wc)).toBe(3);
+
+    // bfcache: V8 context survived; wrappers still hold their old ids;
+    // registry got cleared because rectangles + plugin grammar are gone.
+    registry.clear();
+    expect(registry.get(wa.scanned.id)).toBeUndefined();
+
+    // Re-register loop — same shape as content.ts:pageshow.
+    for (const w of [wa, wb, wc]) {
+      registry.register(w);
+    }
+
+    // Counter restarted at 1; entries point at the same elements; the
+    // wrapper.scanned.id values now match the new registry slots.
+    expect(wa.scanned.id).toBe(1);
+    expect(wb.scanned.id).toBe(2);
+    expect(wc.scanned.id).toBe(3);
+    expect(registry.get(1)?.ref.deref()).toBe(a);
+    expect(registry.get(2)?.ref.deref()).toBe(b);
+    expect(registry.get(3)?.ref.deref()).toBe(c);
+  });
+
+  it('drops a wrapper whose fingerprint now collides after re-registration', () => {
+    // Edge case: while in bfcache, the page may have re-rendered such
+    // that two previously-distinguishable elements now collide. The
+    // re-register loop's `id===0` branch is what catches that.
+    const wrap1 = document.createElement('div');
+    const wrap2 = document.createElement('div');
+    document.body.appendChild(wrap1);
+    document.body.appendChild(wrap2);
+    const a = makeButton('Save', wrap1);
+    const b = makeButton('Save', wrap2);
+    const wa = wrapper(a);
+    const wb = wrapper(b);
+
+    // First pass: only A is registered, no collision yet.
+    expect(registry.register(wa)).toBeGreaterThan(0);
+
+    registry.clear();
+
+    // Second pass: both A and B want to register; B can't be
+    // distinguished from A and gets rejected.
+    expect(registry.register(wa)).toBeGreaterThan(0);
+    expect(registry.register(wb)).toBe(0);
+  });
+});
