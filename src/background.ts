@@ -310,7 +310,7 @@ async function forwardDebugLog(tag: string, data: unknown): Promise<void> {
 // channel (plugin-logs/browser.log) instead of the shared actuator.log.
 // Use for plugin-internal diagnostic chatter that doesn't belong
 // interleaved with the actuator's cross-cutting coordination lines —
-// see notes/DESIGN_PLUGIN_LOGGING.md and DESIGN_PLUGIN_LOG_LEVELS.md.
+// see docs/completed/DESIGN_PLUGIN_LOGGING.md and DESIGN_PLUGIN_LOG_LEVELS.md.
 //
 // `level` is one of trace/debug/info/warn/error. Defaults to "debug"
 // for callers that haven't migrated to v2's per-level emit. The

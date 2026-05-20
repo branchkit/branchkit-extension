@@ -902,7 +902,7 @@ function reportDispatchResult(result: DispatchResult): void {
 // buffer keeps the last 10 events in memory so the Phase 2 snapshot
 // endpoint can include "what just happened" without round-tripping
 // through any log file. See notes/DESIGN_HINT_DIAGNOSTICS.md §1 and
-// notes/DESIGN_PLUGIN_LOGGING.md §4 for the per-plugin-channel rationale.
+// docs/completed/DESIGN_PLUGIN_LOGGING.md §4 for the per-plugin-channel rationale.
 
 interface ElementSnap {
   tag: string;
