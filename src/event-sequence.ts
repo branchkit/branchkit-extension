@@ -148,5 +148,9 @@ export function activateElement(
     return;
   }
 
+  // Hover before click — many widgets (menus, tooltips, custom dropdowns)
+  // only bind their click handler after a hover event lands. Rango's
+  // wrapper.click() does the same.
+  dispatchHover(el);
   dispatchClick(el);
 }
