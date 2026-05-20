@@ -767,6 +767,28 @@ window.addEventListener('blur', (e) => {
   if (e.target === window) windowHasFocus = false;
 }, true);
 
+// --- bfcache restore ---
+//
+// When the user navigates back/forward and Chrome restores the page from
+// its back-forward cache, the content script is NOT re-injected — the
+// existing V8 context is reactivated. Meanwhile, navigation away triggered
+// the background's purgeTab on status=loading, wiping tabGrammars; and any
+// last-gasp empty SCAN_RESULT from the outgoing page caused the plugin's
+// empty-elements handler to clear commands. After restore, the plugin
+// holds empty grammar and voice can't match anything.
+//
+// `pageshow` with persisted=true is the canonical bfcache-restore signal.
+// On restore, clear the dedup hash and push the current store's grammar so
+// the plugin re-registers commands for this page's elements. Fresh page
+// loads also fire pageshow but with persisted=false — those are handled by
+// the normal init flow; we skip them here to avoid double-scanning.
+window.addEventListener('pageshow', (e) => {
+  if (!e.persisted) return;
+  lastGrammarHash = '';
+  doScan();
+  pushGrammar();
+});
+
 // --- Frame liveness Port ---
 //
 // One long-lived Port per content-script V8 context. We send no messages —
