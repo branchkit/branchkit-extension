@@ -111,6 +111,19 @@ export function dispatchUnhover(el: Element): void {
 }
 
 /**
+ * Outcome of `activateElement`: which element actually received the
+ * activation, and what kind of delegation (if any) occurred between the
+ * caller's `el` argument and the final target. Used by the activate
+ * handler's BK_ACTIVATE_PATH instrumentation to identify "wrong element
+ * activated" bugs — when wrapper.element != clicked.element, the
+ * delegation tag tells you which `activateElement` branch fired.
+ */
+export interface ActivationResult {
+  target: HTMLElement;
+  delegation: 'none' | 'anchor' | 'file-picker' | 'select';
+}
+
+/**
  * Click an element using the appropriate strategy:
  * - Anchors: native .click() for proper tab/navigation handling
  * - File inputs: focus + Enter key (triggers file picker)
@@ -120,11 +133,11 @@ export function dispatchUnhover(el: Element): void {
 export function activateElement(
   el: HTMLElement,
   opts: { newTab?: boolean } = {},
-): void {
+): ActivationResult {
   if (el instanceof HTMLSelectElement) {
     el.focus();
     el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
-    return;
+    return { target: el, delegation: 'select' };
   }
 
   if (el instanceof HTMLInputElement && el.type === 'file') {
@@ -135,22 +148,31 @@ export function activateElement(
     el.dispatchEvent(new KeyboardEvent('keyup', {
       key: 'Enter', code: 'Enter', bubbles: true, composed: true,
     }));
-    return;
+    return { target: el, delegation: 'file-picker' };
   }
 
   const anchor = el.closest('a') as HTMLAnchorElement | null;
-  if (anchor) {
+  if (anchor && anchor !== el) {
     if (opts.newTab && anchor.href) {
       window.open(anchor.href, '_blank');
     } else {
       anchor.click();
     }
-    return;
+    return { target: anchor, delegation: 'anchor' };
   }
 
   // Hover before click — many widgets (menus, tooltips, custom dropdowns)
   // only bind their click handler after a hover event lands. Rango's
   // wrapper.click() does the same.
+  if (anchor === el && opts.newTab && (el as HTMLAnchorElement).href) {
+    window.open((el as HTMLAnchorElement).href, '_blank');
+    return { target: el, delegation: 'none' };
+  }
+  if (anchor === el) {
+    el.click();
+    return { target: el, delegation: 'none' };
+  }
   dispatchHover(el);
   dispatchClick(el);
+  return { target: el, delegation: 'none' };
 }

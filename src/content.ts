@@ -15,7 +15,8 @@ import { IntersectionTracker } from './intersection-tracker';
 import { HintBadge } from './hints';
 import { cacheLayout, clearLayoutCache } from './layout-cache';
 import { placeBadges, placeOne, clearPlacement } from './placement';
-import { activateElement } from './event-sequence';
+import { activateElement, type ActivationResult } from './event-sequence';
+import { accessibleName } from './accessible-name';
 import {
   CodewordSnapshot,
   takeSnapshot,
@@ -893,6 +894,91 @@ function reportDispatchResult(result: DispatchResult): void {
   }
 }
 
+// --- BK_ACTIVATE_PATH diagnostic ---
+//
+// Every browser.activate dispatch emits one DEBUG_LOG line tagged
+// BK_ACTIVATE_PATH so wrong-element-clicked bugs can be diagnosed from
+// actuator.log alone. The ring buffer keeps the last 10 events in memory
+// so the Phase 2 snapshot endpoint can include "what just happened"
+// without round-tripping through the actuator log. See
+// notes/DESIGN_HINT_DIAGNOSTICS.md §1.
+
+interface ElementSnap {
+  tag: string;
+  role: string;
+  accessibleName: string;
+  rect: { x: number; y: number; w: number; h: number };
+  dataTestId?: string;
+  parentChain: string[];
+}
+
+interface ActivatePathEvent {
+  ts: number;
+  url: string;
+  wrapperId: number;
+  codeword: string;
+  resolution: DispatchResult['resolution'];
+  fingerprint: idRegistry.Fingerprint | null;
+  resolved: ElementSnap | null;
+  clicked: ElementSnap | null;
+  delegation: ActivationResult['delegation'] | 'focus-input' | 'noop';
+}
+
+const ACTIVATE_PATH_BUFFER_SIZE = 10;
+const activatePathBuffer: ActivatePathEvent[] = [];
+
+function elementSnap(el: Element | null): ElementSnap | null {
+  if (!el) return null;
+  const r = el.getBoundingClientRect();
+  const tid = el.getAttribute('data-testid');
+  return {
+    tag: el.tagName.toLowerCase(),
+    role: idRegistry.computeRole(el),
+    accessibleName: accessibleName(el),
+    rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) },
+    dataTestId: tid || undefined,
+    parentChain: parentChainSig(el, 5),
+  };
+}
+
+// Compact ancestor signature like "div#main > nav.sidebar > ul > li". Used
+// to identify which "region" of the page a wrapper sits in without dumping
+// the full DOM. 5 levels covers most "is this in the right list/section"
+// distinguishing.
+function parentChainSig(el: Element, depth: number): string[] {
+  const out: string[] = [];
+  let cur: Element | null = el.parentElement;
+  for (let i = 0; i < depth && cur; i++) {
+    let sig = cur.tagName.toLowerCase();
+    if (cur.id) sig += `#${cur.id}`;
+    else if (cur.classList.length > 0) sig += `.${cur.classList[0]}`;
+    const role = cur.getAttribute('role');
+    if (role) sig += `[role=${role}]`;
+    const tid = cur.getAttribute('data-testid');
+    if (tid) sig += `[data-testid=${tid}]`;
+    out.push(sig);
+    cur = cur.parentElement;
+  }
+  return out;
+}
+
+function emitActivatePath(event: ActivatePathEvent): void {
+  activatePathBuffer.push(event);
+  if (activatePathBuffer.length > ACTIVATE_PATH_BUFFER_SIZE) {
+    activatePathBuffer.shift();
+  }
+  try {
+    chrome.runtime.sendMessage({
+      type: 'DEBUG_LOG',
+      tag: 'BK_ACTIVATE_PATH',
+      data: event,
+    });
+  } catch {
+    // Extension context invalidated; the in-memory ring buffer still
+    // captured this event for Phase 2's snapshot consumption.
+  }
+}
+
 /**
  * Ask the background to POST /commands/invalidate on the plugin. Fires
  * when the activate path receives an id we don't know — the plugin's
@@ -1009,16 +1095,55 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         // below. Borrowed from Rango — element type decisions always come
         // from the live DOM reference, never from the action payload.
         store.findWrapperFor(target)?.hint?.flash();
+        let clickedEl: Element = target;
+        let delegation: ActivatePathEvent['delegation'] = 'noop';
         if (INPUT_TYPES.has(elemTag)) {
           target.focus();
           taken = 'focus';
+          delegation = 'focus-input';
         } else {
-          activateElement(target);
+          const result = activateElement(target);
+          clickedEl = result.target;
+          delegation = result.delegation;
           taken = 'click';
         }
+        emitActivatePath({
+          ts: performance.now(),
+          url: trimFrameUrl(window.location.href),
+          wrapperId: idParam,
+          codeword,
+          resolution,
+          fingerprint: idParam > 0 ? idRegistry.get(idParam)?.fingerprint ?? null : null,
+          resolved: elementSnap(target),
+          clicked: elementSnap(clickedEl),
+          delegation,
+        });
       } else if (target) {
         elemTag = (target as Element).tagName.toLowerCase();
         detail = 'target is not HTMLElement';
+        emitActivatePath({
+          ts: performance.now(),
+          url: trimFrameUrl(window.location.href),
+          wrapperId: idParam,
+          codeword,
+          resolution,
+          fingerprint: idParam > 0 ? idRegistry.get(idParam)?.fingerprint ?? null : null,
+          resolved: elementSnap(target),
+          clicked: null,
+          delegation: 'noop',
+        });
+      } else {
+        emitActivatePath({
+          ts: performance.now(),
+          url: trimFrameUrl(window.location.href),
+          wrapperId: idParam,
+          codeword,
+          resolution,
+          fingerprint: idParam > 0 ? idRegistry.get(idParam)?.fingerprint ?? null : null,
+          resolved: null,
+          clicked: null,
+          delegation: 'noop',
+        });
       }
 
       reportDispatchResult({

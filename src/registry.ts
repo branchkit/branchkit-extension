@@ -51,7 +51,7 @@ const IMPLICIT_ROLES: Record<string, string> = {
   option: 'option',
 };
 
-function computeRole(el: Element): string {
+export function computeRole(el: Element): string {
   const explicit = el.getAttribute('role');
   if (explicit) return explicit.toLowerCase();
   const tag = el.tagName.toLowerCase();
