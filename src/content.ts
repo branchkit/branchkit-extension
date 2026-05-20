@@ -796,12 +796,29 @@ window.addEventListener('blur', (e) => {
 // the normal init flow; we skip them here to avoid double-scanning.
 window.addEventListener('pageshow', (e) => {
   if (!e.persisted) return;
-  // Registry survives bfcache (V8 context is preserved) but its ids are
-  // now lying — page may have dropped DOM nodes, rectangles are stale,
-  // and the plugin's grammar was wiped by purgeTab on the navigate-away.
-  // Clear and rebuild from doScan; pushGrammar will re-mint ids from 1.
+  // Registry survives bfcache (V8 context is preserved) but its entries
+  // are stale — the plugin's grammar was wiped by purgeTab on navigate-
+  // away, and we want fresh ids on the next push. doScan alone won't
+  // re-register surviving wrappers because findWrapperFor short-circuits
+  // for elements still in the store, so we have to walk the store and
+  // re-register each one ourselves. Codewords + pool claims survive
+  // bfcache (the pool is in chrome.storage.session), so re-registering
+  // in place avoids churning RELEASE_LABELS through the pool.
   idRegistry.clear();
   lastGrammarHash = '';
+  for (const w of [...store.all]) {
+    if (!w.element.isConnected) {
+      detachWrapper(w.element);
+      continue;
+    }
+    const id = idRegistry.register(w);
+    if (id === 0) {
+      // Element no longer voice-addressable (collision with a sibling
+      // we couldn't disambiguate). Drop it; its codeword goes back to
+      // the pool via detachWrapper's release path.
+      detachWrapper(w.element);
+    }
+  }
   doScan();
   pushGrammar();
 });
