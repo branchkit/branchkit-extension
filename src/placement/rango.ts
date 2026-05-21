@@ -31,7 +31,7 @@ function probeFirstVisibleText(element: Element): TextProbe {
 function getNudgeRatios(element: Element, hasText: boolean): { x: number; y: number } {
   const rect = getCachedRect(element);
   if (rect.width > 30 && rect.height > 30 && !hasText) {
-    return { x: 1, y: 1 };
+    return { x: 0.4, y: 0.5 };
   }
 
   const style = getCachedStyle(element);
