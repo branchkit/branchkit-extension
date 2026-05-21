@@ -27,12 +27,9 @@
  */
 
 import { ElementWrapper, WrapperStore } from './element-wrapper';
-import {
-  enumerateAlmostHintable,
-  enumerateRegistryRejected,
-} from './scanner';
+import { enumerateAlmostHintable } from './scanner';
 
-type OverlayColor = 'green' | 'yellow' | 'orange' | 'red' | 'blue';
+type OverlayColor = 'green' | 'yellow' | 'orange' | 'blue';
 
 interface OverlayColorScheme {
   border: string;
@@ -46,7 +43,6 @@ const COLORS: Record<OverlayColor, OverlayColorScheme> = {
   green:  { border: '#39d353', bg: 'rgba(57, 211, 83, 0.10)',  label: '#39d353' },
   yellow: { border: '#f0c33c', bg: 'rgba(240, 195, 60, 0.10)', label: '#f0c33c' },
   orange: { border: '#ff8c42', bg: 'rgba(255, 140, 66, 0.10)', label: '#ff8c42' },
-  red:    { border: '#f85149', bg: 'rgba(248, 81, 73, 0.10)',  label: '#f85149' },
   blue:   { border: '#58a6ff', bg: 'rgba(88, 166, 255, 0.10)', label: '#58a6ff' },
 };
 
@@ -64,10 +60,9 @@ interface OverlayState {
 
 const state: OverlayState = { active: false, root: null };
 
-/** Classify a wrapper into one of the three "registered" tiers. The red
- * and blue tiers don't have wrappers — they come from the scanner's
- * enumerateRegistryRejected / enumerateAlmostHintable. Pure function;
- * tested directly. */
+/** Classify a wrapper into one of the three "registered" tiers. The blue
+ * tier doesn't have wrappers — it comes from the scanner's
+ * enumerateAlmostHintable. Pure function; tested directly. */
 export function classifyWrapper(w: ElementWrapper): 'green' | 'yellow' | 'orange' {
   if (!w.isInViewport) return 'orange';
   if (w.scanned.codeword) return 'green';
@@ -146,11 +141,6 @@ function buildOverlay(store: WrapperStore): HTMLDivElement {
   const sx = window.scrollX;
   const sy = window.scrollY;
 
-  // Build a set of live wrapper elements once — registry-rejected
-  // enumeration needs to subtract this from all hintable candidates.
-  const liveElements = new Set<Element>();
-  for (const w of store.all) liveElements.add(w.element);
-
   // Green / yellow / orange — wrappers from the live store.
   for (const w of store.all) {
     const r = w.element.getBoundingClientRect();
@@ -159,16 +149,6 @@ function buildOverlay(store: WrapperStore): HTMLDivElement {
     const codeword = w.scanned.codeword || '(no codeword)';
     root.appendChild(
       buildBox(pageRect(r, sx, sy), color, `id=${w.scanned.id} ${codeword}`),
-    );
-  }
-
-  // Red — would-be hintable but no wrapper (likely register-rejection
-  // via fingerprint collision).
-  for (const el of enumerateRegistryRejected(liveElements)) {
-    const r = el.getBoundingClientRect();
-    if (r.width === 0 && r.height === 0) continue;
-    root.appendChild(
-      buildBox(pageRect(r, sx, sy), 'red', 'rejected: collision'),
     );
   }
 

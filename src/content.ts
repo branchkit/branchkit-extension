@@ -108,6 +108,28 @@ let phraseSnapshot: CodewordSnapshot | null = null;
 // Input element types — used by the "activate" action to decide click vs focus.
 const INPUT_TYPES = new Set(['input', 'textarea', 'select', 'contenteditable']);
 
+// --- Hydration-safe deferral ---
+//
+// Wait for DOM mutations to settle before inserting badge hosts. React
+// SSR apps hydrate via a burst of mutations after page load; inserting
+// nodes mid-hydration causes error #418. This watches for a quiet
+// period (no mutations for SETTLE_MS) before firing the callback.
+const SETTLE_MS = 200;
+
+function whenDOMSettles(callback: () => void): void {
+  let timer: ReturnType<typeof setTimeout> | null = setTimeout(fire, SETTLE_MS);
+  const mo = new MutationObserver(() => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(fire, SETTLE_MS);
+  });
+  mo.observe(document.documentElement, { childList: true, subtree: true });
+  function fire() {
+    mo.disconnect();
+    timer = null;
+    callback();
+  }
+}
+
 // --- Display Mode from storage ---
 
 if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
@@ -170,8 +192,10 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
     if (Array.isArray(result.alphabet)) {
       setAlphabet(result.alphabet);
       if (hintVisibility === 'always') {
-        tracker.flushNow().then(() => {
-          if (hintVisibility === 'always' && !hintsVisible) showHints();
+        whenDOMSettles(() => {
+          tracker.flushNow().then(() => {
+            if (hintVisibility === 'always' && !hintsVisible) showHints();
+          });
         });
       }
     }
@@ -481,8 +505,7 @@ function attachWrapper(wrapper: ElementWrapper): void {
   // it to the store or start observers. Quill's empty editor div sibling
   // is the canonical case: same role/name/tag as the toolbar div, no
   // distinguisher.
-  const id = idRegistry.register(wrapper);
-  if (id === 0) return;
+  idRegistry.register(wrapper);
   store.addWrapper(wrapper);
   tracker.observe(wrapper.element);
   resizeObserver.observe(wrapper.element);
@@ -533,8 +556,7 @@ const badgeReattachObserver = new MutationObserver((records) => {
 });
 
 function startBadgeReattachObserver(): void {
-  const target = document.body || document.documentElement;
-  if (target) badgeReattachObserver.observe(target, { childList: true, subtree: true });
+  badgeReattachObserver.observe(document.documentElement, { childList: true, subtree: true });
 }
 
 /**
@@ -820,13 +842,7 @@ window.addEventListener('pageshow', (e) => {
       detachWrapper(w.element);
       continue;
     }
-    const id = idRegistry.register(w);
-    if (id === 0) {
-      // Element no longer voice-addressable (collision with a sibling
-      // we couldn't disambiguate). Drop it; its codeword goes back to
-      // the pool via detachWrapper's release path.
-      detachWrapper(w.element);
-    }
+    idRegistry.register(w);
   }
   doScan();
   pushGrammar();

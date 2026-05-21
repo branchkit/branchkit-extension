@@ -2,29 +2,15 @@
  * BranchKit Browser — Shadow DOM hint badges.
  *
  * Each badge lives in a closed Shadow DOM to prevent page CSS interference.
- * Container selection adapted from Rango: walks the ancestor tree to find a
- * container that (a) scrolls in lockstep with the target and (b) won't clip
- * the badge via overflow/clip-path/contain.
+ * Badge hosts are always appended to document.documentElement — never inside
+ * React-owned subtrees — so they can't trigger hydration error #418.
  */
 
 import { Category, BadgeDisplayMode } from './types';
 import { LabelAssignment, labelToDisplay } from './words';
-import { getCachedRect, getCachedStyle, getCachedDims } from './layout-cache';
+import { getCachedRect, getCachedStyle } from './layout-cache';
 import { computeBadgeColors } from './badge-colors';
 import { leaderLineGeometry } from './placement/geometry';
-
-const BADGE_SPACE_LEFT = 28;
-const BADGE_SPACE_TOP = 10;
-
-function isScrollable(el: Element): boolean {
-  const s = getCachedStyle(el);
-  const dims = getCachedDims(el);
-  return (
-    el === document.documentElement ||
-    (dims.scrollWidth > dims.clientWidth && /scroll|auto/.test(s.overflowX)) ||
-    (dims.scrollHeight > dims.clientHeight && /scroll|auto/.test(s.overflowY))
-  );
-}
 
 function clips(el: Element): boolean {
   const s = getCachedStyle(el);
@@ -35,17 +21,6 @@ function clips(el: Element): boolean {
   return false;
 }
 
-function limitsChildren(el: Element): boolean {
-  const s = getCachedStyle(el);
-  return (
-    s.position === 'fixed' ||
-    s.position === 'sticky' ||
-    s.transform !== 'none' ||
-    s.willChange === 'transform' ||
-    isScrollable(el)
-  );
-}
-
 function getPaddingRect(el: Element): DOMRect {
   const s = getCachedStyle(el);
   const bl = parseInt(s.borderLeftWidth, 10) || 0;
@@ -54,136 +29,6 @@ function getPaddingRect(el: Element): DOMRect {
   const bb = parseInt(s.borderBottomWidth, 10) || 0;
   const r = getCachedRect(el);
   return new DOMRect(r.x + bl, r.y + bt, r.width - bl - br, r.height - bt - bb);
-}
-
-function getSpaceAvailable(container: HTMLElement, target: Element): { left: number; top: number } {
-  const targetRect = getCachedRect(target);
-
-  if (isScrollable(container)) {
-    const pr = getPaddingRect(container);
-    return {
-      left: Math.max(container.scrollLeft + (targetRect.left - pr.left), 0),
-      top: Math.max(container.scrollTop + (targetRect.top - pr.top), 0),
-    };
-  }
-
-  if (clips(container)) {
-    const pr = getPaddingRect(container);
-    return {
-      left: Math.max(targetRect.left - pr.left, 0),
-      top: Math.max(targetRect.top - pr.top, 0),
-    };
-  }
-
-  const s = getComputedStyle(container);
-  if (s.position === 'fixed' || s.position === 'sticky') {
-    const br = container.getBoundingClientRect();
-    return {
-      left: Math.max(targetRect.left - br.left, 0),
-      top: Math.max(targetRect.top - br.top, 0),
-    };
-  }
-
-  return {
-    left: Math.max(targetRect.left + window.scrollX, 0),
-    top: Math.max(targetRect.top + window.scrollY, 0),
-  };
-}
-
-function isAptContainer(el: HTMLElement): boolean {
-  const tag = el.tagName;
-  if (/^(THEAD|TBODY|TFOOT|CAPTION|COLGROUP|COL|TR|TH|TD)$/.test(tag)) return false;
-  if (tag === 'TABLE') return false;
-  const s = getCachedStyle(el);
-  if (s.display.startsWith('table')) return false;
-  if (s.display === 'contents') return false;
-  return true;
-}
-
-function findAptContainer(start: Element): HTMLElement {
-  let current: Node | null = start.parentNode;
-  while (current) {
-    if (current instanceof HTMLElement && !current.shadowRoot && isAptContainer(current)) {
-      return current;
-    }
-    current = current.parentNode;
-  }
-  return document.body;
-}
-
-type HintContainer = {
-  container: HTMLElement;
-  spaceLeft: number;
-  spaceTop: number;
-};
-
-function pickContainer(target: Element): HintContainer {
-  let limitParent: HTMLElement | null = null;
-  const clipAncestors: HTMLElement[] = [];
-
-  const s0 = getCachedStyle(target);
-  let current: Node | null =
-    s0.position === 'sticky' || s0.position === 'fixed' ? target : target.parentNode;
-
-  while (current) {
-    if (!(current instanceof HTMLElement)) {
-      current = current.parentNode;
-      continue;
-    }
-    if (current === document.body || current === document.documentElement) {
-      limitParent ??= current as HTMLElement;
-      clipAncestors.push(current as HTMLElement);
-      break;
-    }
-
-    if (limitsChildren(current)) limitParent ??= current;
-
-    if (clips(current) || limitsChildren(current)) {
-      clipAncestors.push(current);
-      if (limitParent) break;
-    }
-
-    current = current.parentNode;
-  }
-
-  limitParent ??= document.body;
-
-  let candidate = findAptContainer(target);
-  let prevSpace = clipAncestors.length > 0
-    ? getSpaceAvailable(clipAncestors[0]!, target)
-    : { left: Infinity, top: Infinity };
-  let prevClip: HTMLElement | undefined;
-
-  for (const clipAnc of clipAncestors) {
-    const space = getSpaceAvailable(clipAnc, target);
-
-    if (space.left >= BADGE_SPACE_LEFT && space.top >= BADGE_SPACE_TOP) {
-      const container =
-        (space.left > prevSpace.left || space.top > prevSpace.top) && prevClip
-          ? findAptContainer(prevClip)
-          : candidate;
-      return { container, spaceLeft: space.left, spaceTop: space.top };
-    }
-
-    if (
-      (space.left > prevSpace.left && prevSpace.left < BADGE_SPACE_LEFT) ||
-      (space.top > prevSpace.top && prevSpace.top < BADGE_SPACE_TOP)
-    ) {
-      if (prevClip) {
-        const next = findAptContainer(prevClip);
-        if (limitParent.contains(next)) {
-          candidate = next;
-          prevSpace = space;
-        } else {
-          break;
-        }
-      }
-    }
-
-    prevClip = clipAnc;
-  }
-
-  return { container: candidate, spaceLeft: prevSpace.left, spaceTop: prevSpace.top };
 }
 
 function findClipAncestor(target: Element): HTMLElement | null {
@@ -232,7 +77,7 @@ export class HintBadge {
 
     this.host = document.createElement('div');
     this.host.setAttribute('data-branchkit-hint', 'true');
-    this.host.style.cssText = 'position:absolute; top:0; left:0; width:0; height:0; overflow:visible; pointer-events:none;';
+    this.host.style.cssText = 'display:contents;';
 
     this.shadow = this.host.attachShadow({ mode: 'closed' });
 
@@ -250,6 +95,9 @@ export class HintBadge {
     style.textContent = `
       .bk-outer {
         position: absolute;
+        left: 0;
+        top: 0;
+        z-index: 2147483647;
         pointer-events: none;
       }
       .bk-inner {
@@ -304,13 +152,7 @@ export class HintBadge {
     this.outer.appendChild(this.inner);
     this.shadow.appendChild(this.outer);
 
-    const { container } = pickContainer(target);
-    if (container !== document.body && container !== document.documentElement) {
-      if (getCachedStyle(container).position === 'static') {
-        container.style.position = 'relative';
-      }
-    }
-    this.anchorParent = container;
+    this.anchorParent = document.documentElement as HTMLElement;
     this.clipAncestor = findClipAncestor(target);
     this.anchorParent.appendChild(this.host);
 
@@ -336,27 +178,22 @@ export class HintBadge {
       vpY = targetRect.top + 2;
     }
 
-    let x: number;
-    let y: number;
-    if (this.anchorParent === document.body || this.anchorParent === document.documentElement) {
-      x = vpX + window.scrollX;
-      y = vpY + window.scrollY;
-    } else {
-      const parentRect = getCachedRect(this.anchorParent);
-      x = vpX - parentRect.left + this.anchorParent.scrollLeft;
-      y = vpY - parentRect.top + this.anchorParent.scrollTop;
-    }
-
     if (this.clipAncestor) {
       const clipRect = getPaddingRect(this.clipAncestor);
-      const minX = this.anchorParent === document.body || this.anchorParent === document.documentElement
-        ? clipRect.left + window.scrollX
-        : clipRect.left - getCachedRect(this.anchorParent).left + this.anchorParent.scrollLeft;
-      if (x < minX) x = minX;
+      if (vpX < clipRect.left) vpX = clipRect.left;
     }
 
-    this.outer.style.left = `${x}px`;
-    this.outer.style.top = `${y}px`;
+    // Delta-based positioning: measure where the outer currently sits
+    // in viewport coords, then adjust left/top to reach the desired
+    // position. Works regardless of containing block — no need to set
+    // position:relative on the container (which would mutate React-
+    // owned elements and break hydration).
+    const outerRect = this.outer.getBoundingClientRect();
+    const curLeft = parseFloat(this.outer.style.left) || 0;
+    const curTop = parseFloat(this.outer.style.top) || 0;
+
+    this.outer.style.left = `${curLeft + (vpX - outerRect.left)}px`;
+    this.outer.style.top = `${curTop + (vpY - outerRect.top)}px`;
   }
 
   reattach(): void {
@@ -530,19 +367,9 @@ export class HintBadge {
       return;
     }
 
-    const outerLeft = parseFloat(this.outer.style.left) || 0;
-    const outerTop = parseFloat(this.outer.style.top) || 0;
-
-    let anchorLocalX: number;
-    let anchorLocalY: number;
-    if (this.anchorParent === document.body || this.anchorParent === document.documentElement) {
-      anchorLocalX = badgeAnchor.x + window.scrollX - outerLeft;
-      anchorLocalY = badgeAnchor.y + window.scrollY - outerTop;
-    } else {
-      const parentRect = getCachedRect(this.anchorParent);
-      anchorLocalX = badgeAnchor.x - parentRect.left + this.anchorParent.scrollLeft - outerLeft;
-      anchorLocalY = badgeAnchor.y - parentRect.top + this.anchorParent.scrollTop - outerTop;
-    }
+    const outerRect = this.outer.getBoundingClientRect();
+    const anchorLocalX = badgeAnchor.x - outerRect.left;
+    const anchorLocalY = badgeAnchor.y - outerRect.top;
 
     this.leaderLine.style.display = '';
     this.leaderLine.style.width = `${length}px`;

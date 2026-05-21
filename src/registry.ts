@@ -113,86 +113,12 @@ export function fingerprintToString(fp: Fingerprint): string {
   return parts.join(' ');
 }
 
-// --- Distinguishers ---
-//
-// When two registrations would otherwise share a fingerprint, we look for
-// any structural signal that voice-addressable disambiguation can lean on:
-// surrounding heading, ancestor landmark label, parent test-id, or
-// position-among-same-role siblings. If none distinguishes them, register
-// rejects the new element so voice can't ambiguously activate either.
-
-function nearestHeadingText(el: Element): string {
-  let cur: Element | null = el.parentElement;
-  while (cur) {
-    const t = cur.tagName.toLowerCase();
-    if (t === 'h1' || t === 'h2' || t === 'h3' || t === 'h4' || t === 'h5' || t === 'h6') {
-      return visibleText(cur, 80);
-    }
-    if ((cur.getAttribute('role') || '').toLowerCase() === 'heading') {
-      return visibleText(cur, 80);
-    }
-    if (t === 'section' || t === 'article' || (cur.getAttribute('role') || '').toLowerCase() === 'region') {
-      const lead = cur.querySelector(':scope > h1, :scope > h2, :scope > h3, :scope > h4, :scope > h5, :scope > h6');
-      if (lead) return visibleText(lead, 80);
-    }
-    cur = cur.parentElement;
-  }
-  return '';
-}
-
-const LANDMARK_ROLES = new Set([
-  'navigation', 'main', 'banner', 'contentinfo', 'complementary',
-  'region', 'search', 'form',
-]);
-const LANDMARK_TAGS = new Set(['nav', 'main', 'header', 'footer', 'aside', 'section', 'form']);
-
-function nearestLandmarkLabel(el: Element): string {
-  let cur: Element | null = el.parentElement;
-  while (cur) {
-    const role = (cur.getAttribute('role') || '').toLowerCase();
-    const tag = cur.tagName.toLowerCase();
-    if (LANDMARK_ROLES.has(role) || LANDMARK_TAGS.has(tag)) {
-      const lab = cur.getAttribute('aria-label');
-      if (lab) return lab.trim();
-    }
-    cur = cur.parentElement;
-  }
-  return '';
-}
-
-function positionAmongSameRole(el: Element, role: string): number {
-  const parent = el.parentElement;
-  if (!parent) return -1;
-  const siblings = Array.from(parent.children).filter(c => computeRole(c) === role);
-  return siblings.indexOf(el);
-}
-
-function distinguish(fp: Fingerprint, newEl: Element, otherEl: Element): string | null {
-  const heading = nearestHeadingText(newEl);
-  const otherHeading = nearestHeadingText(otherEl);
-  if (heading && heading !== otherHeading) return `h:${heading}`;
-
-  const landmark = nearestLandmarkLabel(newEl);
-  const otherLandmark = nearestLandmarkLabel(otherEl);
-  if (landmark && landmark !== otherLandmark) return `l:${landmark}`;
-
-  const tid = newEl.parentElement?.getAttribute('data-testid');
-  const otherTid = otherEl.parentElement?.getAttribute('data-testid');
-  if (tid && tid !== otherTid) return `t:${tid}`;
-
-  const idx = positionAmongSameRole(newEl, fp.role);
-  const otherIdx = positionAmongSameRole(otherEl, fp.role);
-  if (idx >= 0 && idx !== otherIdx) return `p:${idx}`;
-
-  return null;
-}
-
 // --- Public API ---
 
 /**
  * Mint a registry id for `wrapper`. Idempotent: a re-registration of the
- * same element returns its existing id. Returns 0 to indicate a refused
- * registration — caller should treat the wrapper as not voice-addressable.
+ * same element returns its existing id. Every hintable element gets an id;
+ * codeword assignment is the addressing layer (like Rango's label pool).
  */
 export function register(wrapper: ElementWrapper): number {
   const existing = reverseIndex.get(wrapper.element);
@@ -206,15 +132,12 @@ export function register(wrapper: ElementWrapper): number {
   for (const [otherId, entry] of registry) {
     if (!fingerprintsEqual(entry.fingerprint, fp)) continue;
     const otherEl = entry.ref.deref();
-    if (!otherEl) continue; // stale; reclaim later via fingerprint fallback
+    if (!otherEl) continue;
     if (otherEl === wrapper.element) {
       wrapper.scanned.id = otherId;
       reverseIndex.set(wrapper.element, otherId);
       return otherId;
     }
-    const distinct = distinguish(fp, wrapper.element, otherEl);
-    if (!distinct) return 0;
-    fp.text = distinct;
     break;
   }
 
@@ -262,31 +185,12 @@ export function rebindRef(id: number, el: Element): void {
 
 /**
  * Recompute the fingerprint for an element whose name-bearing attributes
- * just mutated (aria-label, type, role, etc.). Re-runs the collision
- * validator; on unresolvable conflict the entry is dropped so a stale
- * fingerprint can't shadow a live one of the same shape.
+ * just mutated (aria-label, type, role, etc.).
  */
 export function refreshFingerprint(id: number, el: Element): void {
   const entry = registry.get(id);
   if (!entry) return;
-  const fp = computeFingerprint(el);
-
-  for (const [otherId, other] of registry) {
-    if (otherId === id) continue;
-    if (!fingerprintsEqual(other.fingerprint, fp)) continue;
-    const otherEl = other.ref.deref();
-    if (!otherEl) continue;
-    const distinct = distinguish(fp, el, otherEl);
-    if (!distinct) {
-      registry.delete(id);
-      reverseIndex.delete(el);
-      return;
-    }
-    fp.text = distinct;
-    break;
-  }
-
-  entry.fingerprint = fp;
+  entry.fingerprint = computeFingerprint(el);
 }
 
 /**

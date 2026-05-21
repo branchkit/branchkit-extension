@@ -2,8 +2,8 @@
  * BranchKit Browser — Stable-id registry unit tests.
  *
  * Pins the contract that voice activation depends on: monotonic ids,
- * idempotent re-registration, fingerprint-based collision rejection,
- * WeakRef-dead fingerprint fallback, and the clear-on-bfcache reset.
+ * idempotent re-registration, WeakRef-dead fingerprint fallback, and
+ * the clear-on-bfcache reset.
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -68,30 +68,13 @@ describe('registry.register', () => {
     expect(id2).toBe(id1);
   });
 
-  it('refuses to register an indistinguishable duplicate (id=0)', () => {
-    // Two buttons sharing role/name/tag with no surrounding structure to
-    // disambiguate them. Wrap each in its own bare <div> so positional
-    // distinguishing fails (each is index-0 in its own parent) — the
-    // Quill editor-vs-toolbar bug shape. Second registration must be
-    // rejected so voice can't ambiguously activate either.
+  it('registers elements with identical fingerprints (each gets its own id)', () => {
     const wrap1 = document.createElement('div');
     const wrap2 = document.createElement('div');
     document.body.appendChild(wrap1);
     document.body.appendChild(wrap2);
     const a = makeButton('Save', wrap1);
     const b = makeButton('Save', wrap2);
-    const id1 = registry.register(wrapper(a));
-    const id2 = registry.register(wrapper(b));
-    expect(id1).toBeGreaterThan(0);
-    expect(id2).toBe(0);
-  });
-
-  it('disambiguates colliding fingerprints when a surrounding heading differs', () => {
-    document.body.innerHTML = `
-      <section><h2>Account</h2><button>Edit</button></section>
-      <section><h2>Billing</h2><button>Edit</button></section>
-    `;
-    const [a, b] = document.querySelectorAll('button');
     const id1 = registry.register(wrapper(a));
     const id2 = registry.register(wrapper(b));
     expect(id1).toBeGreaterThan(0);
@@ -177,11 +160,7 @@ describe('registry.refreshFingerprint', () => {
     expect(after.name).toBe('Save changes');
   });
 
-  it('drops the entry when refresh would collide with another id (no disambiguator)', () => {
-    // Same shape as the no-disambiguator rejection test: each button
-    // lives in its own bare <div> so position-among-siblings can't break
-    // the tie. After B is renamed to "Save", refresh sees the collision
-    // and drops B's entry.
+  it('updates the fingerprint even when it collides with another entry', () => {
     const wrap1 = document.createElement('div');
     const wrap2 = document.createElement('div');
     document.body.appendChild(wrap1);
@@ -200,7 +179,8 @@ describe('registry.refreshFingerprint', () => {
     b.setAttribute('aria-label', 'Save');
     b.textContent = 'Save';
     registry.refreshFingerprint(idB, b);
-    expect(registry.get(idB)).toBeUndefined();
+    expect(registry.get(idB)).toBeTruthy();
+    expect(registry.get(idB)!.fingerprint.name).toBe('Save');
   });
 });
 
@@ -274,10 +254,7 @@ describe('bfcache re-registration (regression for stale wrapper ids)', () => {
     expect(registry.get(3)?.ref.deref()).toBe(c);
   });
 
-  it('drops a wrapper whose fingerprint now collides after re-registration', () => {
-    // Edge case: while in bfcache, the page may have re-rendered such
-    // that two previously-distinguishable elements now collide. The
-    // re-register loop's `id===0` branch is what catches that.
+  it('re-registers colliding fingerprints after bfcache restore', () => {
     const wrap1 = document.createElement('div');
     const wrap2 = document.createElement('div');
     document.body.appendChild(wrap1);
@@ -287,14 +264,14 @@ describe('bfcache re-registration (regression for stale wrapper ids)', () => {
     const wa = wrapper(a);
     const wb = wrapper(b);
 
-    // First pass: only A is registered, no collision yet.
     expect(registry.register(wa)).toBeGreaterThan(0);
 
     registry.clear();
 
-    // Second pass: both A and B want to register; B can't be
-    // distinguished from A and gets rejected.
-    expect(registry.register(wa)).toBeGreaterThan(0);
-    expect(registry.register(wb)).toBe(0);
+    const idA = registry.register(wa);
+    const idB = registry.register(wb);
+    expect(idA).toBeGreaterThan(0);
+    expect(idB).toBeGreaterThan(0);
+    expect(idA).not.toBe(idB);
   });
 });
