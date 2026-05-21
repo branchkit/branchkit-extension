@@ -17,8 +17,8 @@
  * - **Orphans**: registry entries whose wrappers got detached. Explains
  *   "why did my badge disappear" with no clicking required.
  * - **Visual-layer signal**: viewport screenshot pairs with each wrapper's
- *   `hint.hostRect` so category-3 failures (badge overlaps element B but
- *   anchors to A) become diagnosable.
+ *   `hint.innerRect` / `hint.outerRect` so category-3 failures (badge
+ *   overlaps element B but anchors to A) become diagnosable.
  *
  * Snapshot id is the directory name on disk; the content script generates
  * an ISO-timestamp-shaped id with colons replaced by hyphens
@@ -66,8 +66,13 @@ interface WrapperRecord {
   fingerprint: idRegistry.Fingerprint | null;
   element: (ElementSnap & { closestAnchor: ClosestAnchorInfo | null }) | null;
   hint: {
-    hostRect: { x: number; y: number; w: number; h: number };
+    innerRect: { x: number; y: number; w: number; h: number };
+    outerRect: { x: number; y: number; w: number; h: number };
+    anchorParentRect: { x: number; y: number; w: number; h: number };
+    anchorParentScroll: { top: number; left: number; width: number; height: number };
+    anchorParentOverflow: { x: string; y: string };
     anchorParentTag: string;
+    anchorParentClasses: string;
     displayedAs: string;
   } | null;
   isInViewport: boolean;
@@ -104,6 +109,7 @@ export interface DebugSnapshotPayload {
   snapshot_id: string;
   taken_at: string;
   frame_url: string;
+  viewport: { width: number; height: number; scrollX: number; scrollY: number };
   wrappers: WrapperRecord[];
   almost_hintable: AlmostHintableRecord[];
   orphans: OrphanRecord[];
@@ -147,16 +153,16 @@ function captureWrapper(w: ElementWrapper): WrapperRecord {
 
   let hint: WrapperRecord['hint'] = null;
   if (w.hint) {
-    const r = w.hint.host.getBoundingClientRect();
+    const diag = w.hint.diagnostics;
     hint = {
-      hostRect: {
-        x: Math.round(r.left),
-        y: Math.round(r.top),
-        w: Math.round(r.width),
-        h: Math.round(r.height),
-      },
-      anchorParentTag: w.hint.anchorParent.tagName.toLowerCase(),
-      displayedAs: w.hint.host.textContent ?? '',
+      innerRect: diag.innerRect,
+      outerRect: diag.outerRect,
+      anchorParentRect: diag.anchorParentRect,
+      anchorParentScroll: diag.anchorParentScroll,
+      anchorParentOverflow: diag.anchorParentOverflow,
+      anchorParentTag: diag.anchorParentTag,
+      anchorParentClasses: diag.anchorParentClasses,
+      displayedAs: diag.displayedAs,
     };
   }
 
@@ -284,6 +290,12 @@ export function buildSnapshotPayload(inputs: BuildInputs): DebugSnapshotPayload 
     snapshot_id: generateSnapshotId(now),
     taken_at: now.toISOString(),
     frame_url: inputs.frameUrl,
+    viewport: {
+      width: window.innerWidth,
+      height: window.innerHeight,
+      scrollX: window.scrollX,
+      scrollY: window.scrollY,
+    },
     wrappers: inputs.store.all.map(captureWrapper),
     almost_hintable: captureAlmostHintable(),
     orphans: findOrphans(inputs.store, inputs.knownRegistryIds),

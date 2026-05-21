@@ -2,8 +2,10 @@
  * BranchKit Browser — Shadow DOM hint badges.
  *
  * Each badge lives in a closed Shadow DOM to prevent page CSS interference.
- * Badge hosts are always appended to document.documentElement — never inside
- * React-owned subtrees — so they can't trigger hydration error #418.
+ * Badges mount in their target's nearest block-level ancestor (like Rango's
+ * getAptContainer) so they sit close to the target in the DOM tree and
+ * naturally follow any scroll mechanism — CSS overflow, JS-driven, or
+ * transform-based. No JS scroll listeners needed.
  */
 
 import { Category, BadgeDisplayMode } from './types';
@@ -12,32 +14,43 @@ import { getCachedRect, getCachedStyle } from './layout-cache';
 import { computeBadgeColors } from './badge-colors';
 import { leaderLineGeometry } from './placement/geometry';
 
-function clips(el: Element): boolean {
-  const s = getCachedStyle(el);
-  if (s.overflow !== 'visible') return true;
-  if (s.clipPath !== 'none') return true;
-  if (/paint|content|strict/.test(s.contain)) return true;
-  if (s.contentVisibility && s.contentVisibility !== 'visible') return true;
-  return false;
+export type PositionMode = 'absolute' | 'relative';
+
+export interface BadgeContext {
+  container: HTMLElement;
+  positionMode: PositionMode;
 }
 
-function getPaddingRect(el: Element): DOMRect {
-  const s = getCachedStyle(el);
-  const bl = parseInt(s.borderLeftWidth, 10) || 0;
-  const bt = parseInt(s.borderTopWidth, 10) || 0;
-  const br = parseInt(s.borderRightWidth, 10) || 0;
-  const bb = parseInt(s.borderBottomWidth, 10) || 0;
-  const r = getCachedRect(el);
-  return new DOMRect(r.x + bl, r.y + bt, r.width - bl - br, r.height - bt - bb);
-}
-
-function findClipAncestor(target: Element): HTMLElement | null {
-  let el = target.parentElement;
-  while (el && el !== document.body && el !== document.documentElement) {
-    if (clips(el)) return el;
-    el = el.parentElement;
+export function findBadgeContainer(target: Element): HTMLElement {
+  let current: Node | null = target.parentNode;
+  while (current) {
+    if (current instanceof ShadowRoot) return current.host as HTMLElement;
+    if (!(current instanceof HTMLElement) || current.shadowRoot) {
+      current = current.parentNode;
+      continue;
+    }
+    const s = getCachedStyle(current);
+    if (s.display === 'contents') { current = current.parentElement; continue; }
+    if (current.matches('thead,tbody,tfoot,caption,colgroup,col,tr,th,td')) {
+      current = current.closest('table') ?? current.parentElement;
+      continue;
+    }
+    if (current.tagName === 'TABLE' || s.display.startsWith('table')) {
+      current = current.parentElement;
+      continue;
+    }
+    return current;
   }
-  return null;
+  return document.body;
+}
+
+export function resolveBadgeContext(target: Element, host: HTMLElement, outer: HTMLElement): BadgeContext {
+  const container = findBadgeContainer(target);
+  container.appendChild(host);
+  const offsetParent = outer.offsetParent;
+  const positionMode = offsetParent && !container.contains(offsetParent)
+    ? 'relative' : 'absolute';
+  return { container, positionMode };
 }
 
 const BADGE_OFFSET = 24;
@@ -52,7 +65,6 @@ function computeBadgeFontSize(target: Element): number {
 export class HintBadge {
   public readonly host: HTMLDivElement;
   public readonly anchorParent: HTMLElement;
-  private clipAncestor: HTMLElement | null;
   private shadow: ShadowRoot;
   private outer: HTMLDivElement;
   private inner: HTMLDivElement;
@@ -95,12 +107,14 @@ export class HintBadge {
     style.textContent = `
       .bk-outer {
         position: absolute;
-        left: 0;
-        top: 0;
+        inset: auto;
+        display: block;
+        contain: layout size style;
         z-index: 2147483647;
         pointer-events: none;
       }
       .bk-inner {
+        position: absolute;
         font-weight: bold;
         font-family: system-ui, -apple-system, sans-serif;
         line-height: 1.2;
@@ -152,9 +166,12 @@ export class HintBadge {
     this.outer.appendChild(this.inner);
     this.shadow.appendChild(this.outer);
 
-    this.anchorParent = document.documentElement as HTMLElement;
-    this.clipAncestor = findClipAncestor(target);
-    this.anchorParent.appendChild(this.host);
+    const ctx = resolveBadgeContext(target, this.host, this.outer);
+    this.anchorParent = ctx.container;
+    if (ctx.positionMode === 'relative') {
+      this.outer.style.position = 'relative';
+      this.outer.style.display = 'inline';
+    }
 
     if (document.hasFocus() && target === document.activeElement) {
       this.outer.classList.add('focus-hidden');
@@ -178,22 +195,9 @@ export class HintBadge {
       vpY = targetRect.top + 2;
     }
 
-    if (this.clipAncestor) {
-      const clipRect = getPaddingRect(this.clipAncestor);
-      if (vpX < clipRect.left) vpX = clipRect.left;
-    }
-
-    // Delta-based positioning: measure where the outer currently sits
-    // in viewport coords, then adjust left/top to reach the desired
-    // position. Works regardless of containing block — no need to set
-    // position:relative on the container (which would mutate React-
-    // owned elements and break hydration).
     const outerRect = this.outer.getBoundingClientRect();
-    const curLeft = parseFloat(this.outer.style.left) || 0;
-    const curTop = parseFloat(this.outer.style.top) || 0;
-
-    this.outer.style.left = `${curLeft + (vpX - outerRect.left)}px`;
-    this.outer.style.top = `${curTop + (vpY - outerRect.top)}px`;
+    this.inner.style.left = `${vpX - outerRect.left}px`;
+    this.inner.style.top = `${vpY - outerRect.top}px`;
   }
 
   reattach(): void {
@@ -341,6 +345,33 @@ export class HintBadge {
 
   get isVisible(): boolean {
     return this._visible;
+  }
+
+  get diagnostics(): {
+    innerRect: { x: number; y: number; w: number; h: number };
+    outerRect: { x: number; y: number; w: number; h: number };
+    anchorParentRect: { x: number; y: number; w: number; h: number };
+    anchorParentScroll: { top: number; left: number; width: number; height: number };
+    anchorParentOverflow: { x: string; y: string };
+    anchorParentTag: string;
+    anchorParentClasses: string;
+    displayedAs: string;
+  } {
+    const ir = this.inner.getBoundingClientRect();
+    const or2 = this.outer.getBoundingClientRect();
+    const ap = this.anchorParent;
+    const apr = ap.getBoundingClientRect();
+    const aps = getComputedStyle(ap);
+    return {
+      innerRect: { x: Math.round(ir.left), y: Math.round(ir.top), w: Math.round(ir.width), h: Math.round(ir.height) },
+      outerRect: { x: Math.round(or2.left), y: Math.round(or2.top), w: Math.round(or2.width), h: Math.round(or2.height) },
+      anchorParentRect: { x: Math.round(apr.left), y: Math.round(apr.top), w: Math.round(apr.width), h: Math.round(apr.height) },
+      anchorParentScroll: { top: ap.scrollTop, left: ap.scrollLeft, width: ap.scrollWidth, height: ap.scrollHeight },
+      anchorParentOverflow: { x: aps.overflowX, y: aps.overflowY },
+      anchorParentTag: ap.tagName.toLowerCase(),
+      anchorParentClasses: ap.className?.toString().slice(0, 200) ?? '',
+      displayedAs: this.inner.textContent ?? '',
+    };
   }
 
   setLeader(

@@ -199,21 +199,26 @@ the right long-term approach — it has zero runtime cost and is correct by
 construction. But the React hydration issue (commit 6008708) was the reason
 we moved to documentElement in the first place.
 
-**Recommended path:**
+**Implemented: Option A** (correct container mounting). Went straight to
+the correct solution rather than shipping the scroll-listener workaround
+first.
 
-1. **Immediate fix: Option B** (scroll event repositioning). Ship this now
-   to make the extension usable on scrollable pages. It's a ~20 line change.
+`findBadgeContainer()` in hints.ts walks up from the target and stops at
+the first ancestor that clips, scrolls, or creates a visual boundary
+(overflow, fixed/sticky, transform, clip-path, contain). Badges mount
+there with `position: relative; width: 0; height: 0` on the outer and
+`position: absolute` on the inner. The outer is in the flow and scrolls
+with the container's content; the inner's offset from the outer stays
+stable across scroll. Zero runtime cost — no scroll listener needed.
 
-2. **Follow-up: Option A** (correct container mounting). Investigate whether
-   shadow DOM hosts actually trigger React hydration errors. If they don't
-   (shadow DOM is invisible to React's tree walker), Option A replaces
-   Option B entirely and the scroll listener is removed. Port Rango's
-   `getContextForHint` logic — we already have a partial version in
-   `findClipAncestor`.
+Shadow DOM hosts with `display: contents` are invisible to React's tree
+walker, so inserting them into React-managed containers does not trigger
+hydration errors. If a site removes the badge host during re-render, the
+existing `reattach()` mechanism handles it.
 
-3. **If hydration is a problem: Option C** (hybrid). Use container mounting
-   where safe, fall back to documentElement + scroll listener for React
-   containers.
+**If hydration becomes a problem:** Option C (hybrid). Use container mounting
+where safe, fall back to documentElement + scroll listener for React
+containers.
 
 ### Implementation sketch for Option B
 

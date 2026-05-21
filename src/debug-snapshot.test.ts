@@ -143,6 +143,12 @@ describe('buildSnapshotPayload', () => {
     expect(payload.snapshot_id).toBe('2026-01-02T12-00-00-000Z');
     expect(payload.taken_at).toBe('2026-01-02T12:00:00.000Z');
     expect(payload.frame_url).toBe('https://example.com/page');
+    expect(payload.viewport).toEqual({
+      width: window.innerWidth,
+      height: window.innerHeight,
+      scrollX: window.scrollX,
+      scrollY: window.scrollY,
+    });
     expect(payload.wrappers).toEqual([]);
     expect(payload.almost_hintable).toEqual([]);
     expect(payload.orphans).toEqual([]);
