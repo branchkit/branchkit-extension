@@ -211,7 +211,7 @@ const MAX_BADGE_FONT = 14;
 
 function computeBadgeFontSize(target: Element): number {
   const targetSize = parseFloat(getCachedStyle(target).fontSize) || 12;
-  return Math.min(Math.round(targetSize), MAX_BADGE_FONT);
+  return Math.min(Math.round(targetSize * 0.85), MAX_BADGE_FONT);
 }
 
 export class HintBadge {
@@ -271,7 +271,7 @@ export class HintBadge {
         font-family: system-ui, -apple-system, sans-serif;
         line-height: 1.2;
         padding: 0 0.1em;
-        border-radius: 2px;
+        border-radius: 3px;
         user-select: none;
         white-space: nowrap;
         text-align: center;
