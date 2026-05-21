@@ -125,10 +125,11 @@ export interface ActivationResult {
 
 /**
  * Click an element using the appropriate strategy:
- * - Anchors: native .click() for proper tab/navigation handling
+ * - New-tab anchors: window.open() for explicit tab control
+ * - Anchors wrapping a child element: delegate to the anchor
  * - File inputs: focus + Enter key (triggers file picker)
  * - Selects: focus + synthetic open
- * - Everything else: full event sequence
+ * - Everything else (including anchors): full event sequence
  */
 export function activateElement(
   el: HTMLElement,
@@ -152,27 +153,16 @@ export function activateElement(
   }
 
   const anchor = el.closest('a') as HTMLAnchorElement | null;
-  if (anchor && anchor !== el) {
-    if (opts.newTab && anchor.href) {
-      window.open(anchor.href, '_blank');
-    } else {
-      anchor.click();
-    }
-    return { target: anchor, delegation: 'anchor' };
+
+  if (opts.newTab && anchor?.href) {
+    window.open(anchor.href, '_blank');
+    return { target: anchor ?? el, delegation: anchor !== el ? 'anchor' : 'none' };
   }
 
-  // Hover before click — many widgets (menus, tooltips, custom dropdowns)
-  // only bind their click handler after a hover event lands. Rango's
-  // wrapper.click() does the same.
-  if (anchor === el && opts.newTab && (el as HTMLAnchorElement).href) {
-    window.open((el as HTMLAnchorElement).href, '_blank');
-    return { target: el, delegation: 'none' };
-  }
-  if (anchor === el) {
-    el.click();
-    return { target: el, delegation: 'none' };
-  }
-  dispatchHover(el);
-  dispatchClick(el);
-  return { target: el, delegation: 'none' };
+  const target = (anchor && anchor !== el) ? anchor : el;
+  const delegation = (anchor && anchor !== el) ? 'anchor' as const : 'none' as const;
+
+  dispatchHover(target);
+  dispatchClick(target);
+  return { target, delegation };
 }
