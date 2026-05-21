@@ -488,21 +488,91 @@ const resizeObserver = new ResizeObserver((entries) => {
 });
 
 /**
- * IntersectionObserver for elements that matched HINTABLE_SELECTOR but
- * failed isVisible() at scan time. When an element transitions from
- * hidden to visible (e.g. display:none removed via class change), the
- * IO fires and we promote it to a full wrapper. Complements the
- * ResizeObserver above which handles the reverse (visible → hidden).
+ * Visibility recovery for elements that matched HINTABLE_SELECTOR but
+ * failed isVisible() at scan time. Two layers (see
+ * notes/DESIGN_VISIBILITY_OBSERVER.md):
+ *
+ * 1. IntersectionObserver catches display:none -> block (geometry change).
+ * 2. Scoped MutationObserver on class/style catches visibility:hidden ->
+ *    visible (no geometry change). Connected only while candidates exist;
+ *    disconnects when the set empties. RAF-debounced to coalesce React's
+ *    per-component class churn into one re-check per frame.
  */
-const visibilityObserver = new IntersectionObserver((entries) => {
+const pendingVisibility = new Set<Element>();
+const VISIBILITY_ABANDON_MS = 30_000;
+let visibilityAbandonTimer: ReturnType<typeof setTimeout> | null = null;
+let visibilityRafPending = false;
+
+const visibilityIO = new IntersectionObserver((entries) => {
   let dirty = false;
   for (const entry of entries) {
     if (!entry.isIntersecting) continue;
     const el = entry.target;
-    visibilityObserver.unobserve(el);
+    visibilityIO.unobserve(el);
     if (store.findWrapperFor(el)) continue;
     const scanned = scanSingle(el);
     if (!scanned) continue;
+    attachWrapper(new ElementWrapper(el, scanned));
+    pendingVisibility.delete(el);
+    dirty = true;
+  }
+  if (dirty) {
+    schedulePushGrammar();
+    if (hintsVisible) showHints();
+    if (pendingVisibility.size === 0) disconnectVisibilityMO();
+  }
+}, { root: null, rootMargin: '200px', threshold: 0 });
+
+const visibilityMO = new MutationObserver(() => {
+  if (visibilityRafPending) return;
+  visibilityRafPending = true;
+  requestAnimationFrame(recheckPendingVisibility);
+});
+
+let visibilityMOConnected = false;
+
+function connectVisibilityMO(): void {
+  if (visibilityMOConnected) return;
+  visibilityMO.observe(document.documentElement, {
+    subtree: true,
+    attributes: true,
+    attributeFilter: ['class', 'style'],
+  });
+  visibilityMOConnected = true;
+  visibilityAbandonTimer = setTimeout(() => {
+    pendingVisibility.clear();
+    disconnectVisibilityMO();
+  }, VISIBILITY_ABANDON_MS);
+}
+
+function disconnectVisibilityMO(): void {
+  if (!visibilityMOConnected) return;
+  visibilityMO.disconnect();
+  visibilityMOConnected = false;
+  if (visibilityAbandonTimer) {
+    clearTimeout(visibilityAbandonTimer);
+    visibilityAbandonTimer = null;
+  }
+}
+
+function recheckPendingVisibility(): void {
+  visibilityRafPending = false;
+  let dirty = false;
+  for (const el of pendingVisibility) {
+    if (!el.isConnected) {
+      pendingVisibility.delete(el);
+      visibilityIO.unobserve(el);
+      continue;
+    }
+    if (store.findWrapperFor(el)) {
+      pendingVisibility.delete(el);
+      visibilityIO.unobserve(el);
+      continue;
+    }
+    const scanned = scanSingle(el);
+    if (!scanned) continue;
+    pendingVisibility.delete(el);
+    visibilityIO.unobserve(el);
     attachWrapper(new ElementWrapper(el, scanned));
     dirty = true;
   }
@@ -510,14 +580,16 @@ const visibilityObserver = new IntersectionObserver((entries) => {
     schedulePushGrammar();
     if (hintsVisible) showHints();
   }
-}, { root: null, rootMargin: '200px', threshold: 0 });
+  if (pendingVisibility.size === 0) disconnectVisibilityMO();
+}
 
 function observeInvisibleCandidates(candidates: Element[]): void {
   for (const el of candidates) {
-    if (!store.findWrapperFor(el) && el.isConnected) {
-      visibilityObserver.observe(el);
-    }
+    if (store.findWrapperFor(el) || !el.isConnected) continue;
+    pendingVisibility.add(el);
+    visibilityIO.observe(el);
   }
+  if (pendingVisibility.size > 0) connectVisibilityMO();
 }
 
 /**
@@ -1549,20 +1621,6 @@ function watchUndefinedCustomElements(root: Element | Document): void {
 
 // Scan on load to push initial grammar
 doScan();
-
-// One-shot catch-up for CSS-only visibility transitions (visibility:hidden
-// → visible). IntersectionObserver catches geometry changes (display:none →
-// block) but fires false positives for visibility:hidden elements (they
-// have non-zero rects). No mutation fires for a class-driven visibility
-// flip, so a single deferred re-scan covers this gap.
-setTimeout(() => {
-  const before = store.all.length;
-  doScan();
-  if (store.all.length > before) {
-    schedulePushGrammar();
-    if (hintsVisible) showHints();
-  }
-}, 1500);
 watchUndefinedCustomElements(document);
 
 // Expose for console debugging
