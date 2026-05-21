@@ -602,8 +602,6 @@ function connectDirectSSE(port: number, token: string): void {
 // --- SSE Event Handling (shared by both paths) ---
 
 function handleSSEEvent(data: any): void {
-  console.log('[BranchKit BG] SSE event:', JSON.stringify(data));
-
   if (data.action === 'rescan' || data.action === 'set_badge_mode') {
     // Broadcast to ALL tabs
     broadcastToAllTabs({

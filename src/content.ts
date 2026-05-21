@@ -1078,8 +1078,6 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
 
   if (message.type === 'BRANCHKIT_ACTION') {
     const { action, params } = message.payload;
-    console.log('[BranchKit Content] action received:', action, params);
-
     if (action === 'show_hints') {
       phraseSnapshot = takeSnapshot(store.all, performance.now());
       doScan();
@@ -1244,7 +1242,6 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         return;
       }
       saveReference(refName, lastActivatedElement).then(async () => {
-        console.log('[BranchKit Content] reference saved:', refName);
         const refs = await listReferences();
         const ref = refs[refName];
         try {
@@ -1633,4 +1630,3 @@ watchUndefinedCustomElements(document);
 (window as any).branchkitHideHints = () => hideHints();
 (window as any).branchkitScan = () => { doScan(); return store.all; };
 
-console.log('[BranchKit Browser] Loaded. Press f to show hints, or call branchkitShowHints()');
