@@ -509,9 +509,9 @@ const visibilityIO = new IntersectionObserver((entries) => {
     if (!entry.isIntersecting) continue;
     const el = entry.target;
     visibilityIO.unobserve(el);
-    if (store.findWrapperFor(el)) continue;
+    if (store.findWrapperFor(el)) { pendingVisibility.delete(el); continue; }
     const scanned = scanSingle(el);
-    if (!scanned) continue;
+    if (!scanned) { pendingVisibility.delete(el); continue; }
     attachWrapper(new ElementWrapper(el, scanned));
     pendingVisibility.delete(el);
     dirty = true;
@@ -519,8 +519,8 @@ const visibilityIO = new IntersectionObserver((entries) => {
   if (dirty) {
     schedulePushGrammar();
     if (hintsVisible) showHints();
-    if (pendingVisibility.size === 0) disconnectVisibilityMO();
   }
+  if (pendingVisibility.size === 0) disconnectVisibilityMO();
 }, { root: null, rootMargin: '200px', threshold: 0 });
 
 const visibilityMO = new MutationObserver(() => {
@@ -532,6 +532,12 @@ const visibilityMO = new MutationObserver(() => {
 let visibilityMOConnected = false;
 
 function connectVisibilityMO(): void {
+  if (visibilityAbandonTimer) clearTimeout(visibilityAbandonTimer);
+  visibilityAbandonTimer = setTimeout(() => {
+    for (const el of pendingVisibility) visibilityIO.unobserve(el);
+    pendingVisibility.clear();
+    disconnectVisibilityMO();
+  }, VISIBILITY_ABANDON_MS);
   if (visibilityMOConnected) return;
   visibilityMO.observe(document.documentElement, {
     subtree: true,
@@ -539,10 +545,6 @@ function connectVisibilityMO(): void {
     attributeFilter: ['class', 'style'],
   });
   visibilityMOConnected = true;
-  visibilityAbandonTimer = setTimeout(() => {
-    pendingVisibility.clear();
-    disconnectVisibilityMO();
-  }, VISIBILITY_ABANDON_MS);
 }
 
 function disconnectVisibilityMO(): void {
