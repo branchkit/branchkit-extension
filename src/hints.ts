@@ -44,8 +44,160 @@ export function findBadgeContainer(target: Element): HTMLElement {
   return document.body;
 }
 
+function overflowClips(v: string): boolean {
+  return v !== '' && v !== 'visible';
+}
+
+function isClipAncestor(el: HTMLElement): boolean {
+  const s = getCachedStyle(el);
+  if (overflowClips(s.overflowX) || overflowClips(s.overflowY)) return true;
+  if (s.clipPath && s.clipPath !== 'none') return true;
+  if (/paint|content|strict/.test(s.contain)) return true;
+  if (s.contentVisibility && s.contentVisibility !== 'visible') return true;
+  return false;
+}
+
+function isScrollContainer(el: Element): boolean {
+  const s = getCachedStyle(el);
+  const { clientWidth, scrollWidth, clientHeight, scrollHeight } = el;
+  return (
+    el === document.documentElement ||
+    (scrollWidth > clientWidth && /scroll|auto/.test(s.overflowX)) ||
+    (scrollHeight > clientHeight && /scroll|auto/.test(s.overflowY))
+  );
+}
+
+const ENOUGH_LEFT = 15;
+const ENOUGH_TOP = 10;
+
+export function findLimitParent(target: Element): HTMLElement {
+  let current: Element | null = target.parentElement;
+  while (current && current !== document.body) {
+    if (current instanceof HTMLElement) {
+      const s = getCachedStyle(current);
+      if (
+        s.position === 'fixed' || s.position === 'sticky' ||
+        (s.transform && s.transform !== 'none') ||
+        s.willChange === 'transform' ||
+        isScrollContainer(current)
+      ) {
+        return current;
+      }
+    }
+    current = current.parentElement;
+  }
+  return document.body;
+}
+
+function getSpaceInAncestor(ancestor: Element, targetRect: DOMRect): { left: number; top: number } {
+  const ancestorRect = getCachedRect(ancestor);
+  return {
+    left: Math.max(0, targetRect.left - ancestorRect.left),
+    top: Math.max(0, targetRect.top - ancestorRect.top),
+  };
+}
+
+export function resolveContainer(target: Element): HTMLElement {
+  const candidate = findBadgeContainer(target);
+  const limitParent = findLimitParent(target);
+  const targetRect = getCachedRect(target);
+
+  let current: Element | null = target.parentElement;
+  let firstTightClip: HTMLElement | null = null;
+
+  while (current && current !== limitParent && current !== document.body) {
+    if (current instanceof HTMLElement && isClipAncestor(current)) {
+      const space = getSpaceInAncestor(current, targetRect);
+      if (space.left < ENOUGH_LEFT || space.top < ENOUGH_TOP) {
+        firstTightClip ??= current;
+      }
+    }
+    current = current.parentElement;
+  }
+
+  if (!firstTightClip) return candidate;
+
+  const clipParent = firstTightClip.parentElement;
+  if (clipParent instanceof HTMLElement && limitParent.contains(clipParent)) {
+    return clipParent;
+  }
+
+  const escaped = findBadgeContainer(firstTightClip);
+  if (limitParent.contains(escaped)) return escaped;
+  return candidate;
+}
+
+export interface ContainerResolutionDiag {
+  limitParent: { tag: string; id: string; classes: string; position: string; isScrollContainer: boolean };
+  clipAncestors: Array<{ tag: string; id: string; classes: string; space: { left: number; top: number }; tight: boolean }>;
+  escalated: boolean;
+  escalationBlocked: boolean;
+  finalContainer: { tag: string; id: string; classes: string };
+}
+
+function elSig(el: Element): { tag: string; id: string; classes: string } {
+  return {
+    tag: el.tagName.toLowerCase(),
+    id: el.id || '',
+    classes: (typeof el.className === 'string' ? el.className : '').slice(0, 200),
+  };
+}
+
+export function diagnoseContainerResolution(target: Element): ContainerResolutionDiag {
+  const candidate = findBadgeContainer(target);
+  const limitParent = findLimitParent(target);
+  const targetRect = getCachedRect(target);
+  const lpStyle = getCachedStyle(limitParent);
+
+  const clipAncestors: ContainerResolutionDiag['clipAncestors'] = [];
+  let current: Element | null = target.parentElement;
+  let firstTightClip: HTMLElement | null = null;
+
+  while (current && current !== limitParent && current !== document.body) {
+    if (current instanceof HTMLElement && isClipAncestor(current)) {
+      const space = getSpaceInAncestor(current, targetRect);
+      const tight = space.left < ENOUGH_LEFT || space.top < ENOUGH_TOP;
+      clipAncestors.push({ ...elSig(current), space, tight });
+      if (tight) firstTightClip ??= current;
+    }
+    current = current.parentElement;
+  }
+
+  let escalated = false;
+  let escalationBlocked = false;
+  let finalContainer = candidate;
+
+  if (firstTightClip) {
+    const clipParent = firstTightClip.parentElement;
+    if (clipParent instanceof HTMLElement && limitParent.contains(clipParent)) {
+      finalContainer = clipParent;
+      escalated = true;
+    } else {
+      const escaped = findBadgeContainer(firstTightClip);
+      if (limitParent.contains(escaped)) {
+        finalContainer = escaped;
+        escalated = true;
+      } else {
+        escalationBlocked = true;
+      }
+    }
+  }
+
+  return {
+    limitParent: {
+      ...elSig(limitParent),
+      position: lpStyle.position,
+      isScrollContainer: isScrollContainer(limitParent),
+    },
+    clipAncestors,
+    escalated,
+    escalationBlocked,
+    finalContainer: elSig(finalContainer),
+  };
+}
+
 export function resolveBadgeContext(target: Element, host: HTMLElement, outer: HTMLElement): BadgeContext {
-  const container = findBadgeContainer(target);
+  const container = resolveContainer(target);
   container.appendChild(host);
   const offsetParent = outer.offsetParent;
   const positionMode = offsetParent && !container.contains(offsetParent)

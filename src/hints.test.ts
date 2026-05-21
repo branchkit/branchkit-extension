@@ -1,24 +1,28 @@
-import { describe, it, expect } from 'vitest';
-import { findBadgeContainer, resolveBadgeContext } from './hints';
+import { describe, it, expect, afterEach } from 'vitest';
+import { findBadgeContainer, findLimitParent, resolveContainer, resolveBadgeContext } from './hints';
 
 // happy-dom gives us real DOM APIs. getComputedStyle returns inline styles
 // (no CSS engine), so we set style properties directly to simulate layouts.
+
+const mounted: Element[] = [];
 
 function mount(html: string): Element {
   const wrapper = document.createElement('div');
   wrapper.innerHTML = html;
   document.body.appendChild(wrapper);
+  mounted.push(wrapper);
   return wrapper;
 }
+
+afterEach(() => {
+  for (const el of mounted) el.remove();
+  mounted.length = 0;
+});
 
 describe('findBadgeContainer', () => {
   it('returns the nearest block-level parent', () => {
     const root = mount('<div id="outer"><span id="inner"><button id="btn">click</button></span></div>');
     const btn = root.querySelector('#btn')!;
-    // span is inline by default in happy-dom, but getCachedStyle won't
-    // report display:inline without a CSS engine. happy-dom returns ''
-    // for computed display, which doesn't match 'contents' or table
-    // selectors, so the first HTMLElement parent is returned.
     const container = findBadgeContainer(btn);
     expect(container).toBe(root.querySelector('#inner'));
   });
@@ -37,14 +41,17 @@ describe('findBadgeContainer', () => {
     expect(container).toBe(root.querySelector('#wrapper'));
   });
 
-  // display:table-* skip is also tested by the real <table> test above.
-  // happy-dom doesn't preserve display:table-cell on inline styles so we
-  // can't test the CSS-driven path here — it's exercised in Playwright
-  // integration tests on real pages.
+  it('returns div inside td when no table-structural skip applies', () => {
+    const root = mount('<div id="wrapper"><table><tbody><tr><td><div id="cell-content"><button id="btn">click</button></div></td></tr></tbody></table></div>');
+    const btn = root.querySelector('#btn')!;
+    const container = findBadgeContainer(btn);
+    expect(container).toBe(root.querySelector('#cell-content'));
+  });
 
   it('falls back to document.body when no suitable parent exists', () => {
     const btn = document.createElement('button');
     document.body.appendChild(btn);
+    mounted.push(btn);
     const container = findBadgeContainer(btn);
     expect(container).toBe(document.body);
   });
@@ -52,6 +59,7 @@ describe('findBadgeContainer', () => {
   it('returns shadow root host when target is inside shadow DOM', () => {
     const host = document.createElement('div');
     document.body.appendChild(host);
+    mounted.push(host);
     const shadow = host.attachShadow({ mode: 'open' });
     const btn = document.createElement('button');
     shadow.appendChild(btn);
@@ -64,16 +72,78 @@ describe('findBadgeContainer', () => {
     const root = mount('<div id="outer"><div id="shadowed"><button id="btn">click</button></div></div>');
     const shadowed = root.querySelector('#shadowed') as HTMLElement;
     shadowed.attachShadow({ mode: 'open' });
-    // The button is a light DOM child, but #shadowed has a shadowRoot
-    // so findBadgeContainer skips it.
     const btn = root.querySelector('#btn')!;
     const container = findBadgeContainer(btn);
     expect(container).toBe(root.querySelector('#outer'));
   });
 });
 
+describe('findLimitParent', () => {
+  it('returns body when no scroll/fixed/sticky/transform ancestor exists', () => {
+    const root = mount('<div id="outer"><button id="btn">click</button></div>');
+    const btn = root.querySelector('#btn')!;
+    expect(findLimitParent(btn)).toBe(document.body);
+  });
+
+  it('returns fixed-position ancestor', () => {
+    const root = mount('<div id="fixed" style="position:fixed"><button id="btn">click</button></div>');
+    const btn = root.querySelector('#btn')!;
+    expect(findLimitParent(btn)).toBe(root.querySelector('#fixed'));
+  });
+
+  it('returns sticky-position ancestor', () => {
+    const root = mount('<div id="sticky" style="position:sticky"><button id="btn">click</button></div>');
+    const btn = root.querySelector('#btn')!;
+    expect(findLimitParent(btn)).toBe(root.querySelector('#sticky'));
+  });
+
+  it('returns transform ancestor', () => {
+    const root = mount('<div id="transformed" style="transform:translateX(0)"><button id="btn">click</button></div>');
+    const btn = root.querySelector('#btn')!;
+    expect(findLimitParent(btn)).toBe(root.querySelector('#transformed'));
+  });
+});
+
+describe('resolveContainer', () => {
+  it('returns findBadgeContainer result when no clip ancestor', () => {
+    const root = mount('<div id="parent"><button id="btn">click</button></div>');
+    const btn = root.querySelector('#btn')!;
+    expect(resolveContainer(btn)).toBe(root.querySelector('#parent'));
+  });
+
+  it('escapes clipping div inside td to the td', () => {
+    // Simulate div.column-... with overflow:hidden inside td (QuickBase pattern).
+    // In happy-dom, getBoundingClientRect returns zero rects, so space.left = 0 < 15.
+    // resolveContainer should escape to td (the clip div's parent).
+    const root = mount(
+      '<div id="wrapper"><table><tbody><tr>' +
+      '<td id="cell"><div id="clipdiv" style="overflow-x:hidden;overflow-y:hidden"><button id="btn">click</button></div></td>' +
+      '</tr></tbody></table></div>'
+    );
+    const btn = root.querySelector('#btn')!;
+    const container = resolveContainer(btn);
+    expect(container).toBe(root.querySelector('#cell'));
+  });
+
+  it('does not escape past limitParent', () => {
+    const root = mount(
+      '<div id="above">' +
+      '<div id="scroll" style="position:fixed">' +
+      '<table><tbody><tr>' +
+      '<td><div id="clipdiv" style="overflow-x:hidden;overflow-y:hidden"><button id="btn">click</button></div></td>' +
+      '</tr></tbody></table>' +
+      '</div></div>'
+    );
+    const btn = root.querySelector('#btn')!;
+    const container = resolveContainer(btn);
+    // Should escape the clip div but stop at or inside #scroll (the limitParent).
+    const scroll = root.querySelector('#scroll')!;
+    expect(scroll.contains(container)).toBe(true);
+  });
+});
+
 describe('resolveBadgeContext', () => {
-  it('returns the container from findBadgeContainer and appends the host', () => {
+  it('returns the container and appends the host', () => {
     const root = mount('<div id="parent"><button id="btn">click</button></div>');
     const btn = root.querySelector('#btn')!;
     const host = document.createElement('div');
@@ -86,21 +156,6 @@ describe('resolveBadgeContext', () => {
     expect(ctx.container.contains(host)).toBe(true);
   });
 
-  it('returns absolute when offsetParent is inside the container', () => {
-    const root = mount('<div id="parent" style="position:relative"><button id="btn">click</button></div>');
-    const btn = root.querySelector('#btn')!;
-    const host = document.createElement('div');
-    host.style.display = 'contents';
-    const outer = document.createElement('div');
-    outer.style.position = 'absolute';
-    host.attachShadow({ mode: 'open' }).appendChild(outer);
-
-    const ctx = resolveBadgeContext(btn, host, outer);
-    // happy-dom may not compute offsetParent correctly, so this tests
-    // the fallback path (offsetParent null → absolute).
-    expect(ctx.positionMode).toBe('absolute');
-  });
-
   it('returns absolute when offsetParent is null (default)', () => {
     const root = mount('<div id="parent"><button id="btn">click</button></div>');
     const btn = root.querySelector('#btn')!;
@@ -110,8 +165,6 @@ describe('resolveBadgeContext', () => {
     host.attachShadow({ mode: 'open' }).appendChild(outer);
 
     const ctx = resolveBadgeContext(btn, host, outer);
-    // When offsetParent is null (happy-dom, or element not in DOM properly),
-    // we default to absolute — the safe default that works for most cases.
     expect(ctx.positionMode).toBe('absolute');
   });
 });

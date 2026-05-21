@@ -72,25 +72,23 @@ export class RangoStrategy implements PlacementStrategy {
 
   private isClipAncestor(el: Element): boolean {
     const s = getCachedStyle(el);
-    if (s.overflow !== 'visible') return true;
-    if (s.clipPath !== 'none') return true;
+    if ((s.overflowX && s.overflowX !== 'visible') || (s.overflowY && s.overflowY !== 'visible')) return true;
+    if (s.clipPath && s.clipPath !== 'none') return true;
     if (/paint|content|strict/.test(s.contain)) return true;
-    if (s.position === 'fixed' || s.position === 'sticky') return true;
     if (s.contentVisibility && s.contentVisibility !== 'visible') return true;
     return false;
   }
 
-  private getAvailableSpace(element: Element, rect: DOMRect): { left: number | undefined; top: number | undefined } {
-    let parent = element.parentElement;
-    while (parent) {
-      if (parent === document.body || this.isClipAncestor(parent)) {
-        const parentRect = getCachedRect(parent);
-        return {
-          left: Math.max(0, rect.left - parentRect.left),
-          top: Math.max(0, rect.top - parentRect.top),
-        };
+  private getAvailableSpace(container: Element, rect: DOMRect): { left: number | undefined; top: number | undefined } {
+    let current: Element | null = container;
+    while (current) {
+      if (current === document.body || this.isClipAncestor(current)) {
+        const parentRect = getCachedRect(current);
+        const left = Math.max(0, rect.left - parentRect.left);
+        const top = Math.max(0, rect.top - parentRect.top);
+        return { left, top };
       }
-      parent = parent.parentElement;
+      current = current.parentElement;
     }
     return { left: undefined, top: undefined };
   }
@@ -101,7 +99,7 @@ export class RangoStrategy implements PlacementStrategy {
     const targetRect = probe.hasText ? probe.rect : getCachedRect(w.element);
     const size = w.hint.badgeSize;
     const { x: nudgeX, y: nudgeY } = getNudgeRatios(w.element, probe.hasText);
-    const space = this.getAvailableSpace(w.element, targetRect);
+    const space = this.getAvailableSpace(w.hint.anchorParent, targetRect);
 
     const hintOffsetX = size.w * (1 - nudgeX);
     const hintOffsetY = size.h * (1 - nudgeY);

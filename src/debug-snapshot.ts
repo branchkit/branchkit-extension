@@ -30,6 +30,7 @@ import { ElementWrapper, WrapperStore } from './element-wrapper';
 import * as idRegistry from './registry';
 import { enumerateAlmostHintable, isHintable, type AlmostHintable } from './scanner';
 import { accessibleName } from './accessible-name';
+import { diagnoseContainerResolution, type ContainerResolutionDiag } from './hints';
 import {
   elementSnap,
   parentChainSig,
@@ -75,6 +76,7 @@ interface WrapperRecord {
     anchorParentClasses: string;
     displayedAs: string;
   } | null;
+  containerResolution: ContainerResolutionDiag | null;
   isInViewport: boolean;
 }
 
@@ -166,6 +168,11 @@ function captureWrapper(w: ElementWrapper): WrapperRecord {
     };
   }
 
+  let containerResolution: ContainerResolutionDiag | null = null;
+  try {
+    if (el.isConnected) containerResolution = diagnoseContainerResolution(el);
+  } catch { /* detached element */ }
+
   return {
     scanned: {
       id: w.scanned.id,
@@ -178,6 +185,7 @@ function captureWrapper(w: ElementWrapper): WrapperRecord {
     fingerprint,
     element: baseSnap ? { ...baseSnap, closestAnchor } : null,
     hint,
+    containerResolution,
     isInViewport: w.isInViewport,
   };
 }
