@@ -1281,16 +1281,17 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
   }
 });
 
-// --- Resize Listener ---
+// --- Reposition ---
 // Badges live in their target's scroll ancestor, so scroll is handled by the
-// compositor. Only window resize requires JS repositioning.
+// compositor. Window resize and DOM mutations that shift layout require JS
+// repositioning.
 
-let resizeRafPending = false;
-function onResize(): void {
-  if (!hintsVisible || resizeRafPending) return;
-  resizeRafPending = true;
+let repositionRafPending = false;
+function scheduleReposition(): void {
+  if (!hintsVisible || repositionRafPending) return;
+  repositionRafPending = true;
   requestAnimationFrame(() => {
-    resizeRafPending = false;
+    repositionRafPending = false;
     const visible = store.all.filter(w => w.hint?.isVisible);
     if (visible.length > 0) {
       cacheLayout(visible.map(w => w.element));
@@ -1299,7 +1300,7 @@ function onResize(): void {
     }
   });
 }
-window.addEventListener('resize', onResize, { passive: true });
+window.addEventListener('resize', scheduleReposition, { passive: true });
 
 // --- Keyboard Listener ---
 
@@ -1524,11 +1525,13 @@ const observer = new MutationObserver((records) => {
       const removed = dropDisconnectedWrappers();
       const added = discoverInSubtree(document.body || document.documentElement);
       if (removed > 0 || added > 0) schedulePushGrammar();
+      if (hintsVisible) scheduleReposition();
     }, HUGE_MUTATION_IDLE_MS);
     return;
   }
 
   processMutations(foreign);
+  if (hintsVisible) scheduleReposition();
 });
 
 observer.observe(document.body || document.documentElement, {
