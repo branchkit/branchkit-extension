@@ -511,7 +511,7 @@ const visibilityIO = new IntersectionObserver((entries) => {
     visibilityIO.unobserve(el);
     if (store.findWrapperFor(el)) { pendingVisibility.delete(el); continue; }
     const scanned = scanSingle(el);
-    if (!scanned) { pendingVisibility.delete(el); continue; }
+    if (!scanned) continue;
     attachWrapper(new ElementWrapper(el, scanned));
     pendingVisibility.delete(el);
     dirty = true;
