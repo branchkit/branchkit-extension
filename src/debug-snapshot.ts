@@ -30,7 +30,7 @@ import { ElementWrapper, WrapperStore } from './element-wrapper';
 import * as idRegistry from './registry';
 import { enumerateAlmostHintable, isHintable, type AlmostHintable } from './scanner';
 import { accessibleName } from './accessible-name';
-import { diagnoseContainerResolution, type ContainerResolutionDiag } from './hints';
+import { diagnoseContainerResolution, getPositionLog, type ContainerResolutionDiag, type PositionLogEntry } from './hints';
 import {
   elementSnap,
   parentChainSig,
@@ -117,6 +117,7 @@ export interface DebugSnapshotPayload {
   orphans: OrphanRecord[];
   recent_activations: readonly ActivatePathEvent[];
   dom_survey?: DomSurveyElement[];
+  position_log?: readonly PositionLogEntry[];
 }
 
 // --- id generation ---
@@ -309,6 +310,7 @@ export function buildSnapshotPayload(inputs: BuildInputs): DebugSnapshotPayload 
     orphans: findOrphans(inputs.store, inputs.knownRegistryIds),
     recent_activations: getActivatePathBuffer(),
     dom_survey: captureDomSurvey(inputs.store),
+    position_log: getPositionLog(),
   };
 }
 

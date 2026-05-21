@@ -14,6 +14,28 @@ import { getCachedRect, getCachedStyle } from './layout-cache';
 import { computeBadgeColors } from './badge-colors';
 import { leaderLineGeometry } from './placement/geometry';
 
+// --- Position debug log (temporary investigation) ---
+export interface PositionLogEntry {
+  ts: number;
+  caller: string;
+  scrollY: number;
+  target: { tag: string; name: string; vpY: number };
+  container: { tag: string; id: string; vpY: number; display: string; position: string };
+  outer: { vpY: number; h: number; w: number };
+  computed: { vpX: number; vpY: number; innerTop: string; innerLeft: string };
+  result: { innerVpY: number; diff: number };
+}
+const POSITION_LOG_MAX = 200;
+const positionLog: PositionLogEntry[] = [];
+function pushPositionLog(entry: PositionLogEntry): void {
+  positionLog.push(entry);
+  if (positionLog.length > POSITION_LOG_MAX) positionLog.shift();
+}
+export function getPositionLog(): readonly PositionLogEntry[] { return positionLog; }
+let _positionCaller = '';
+export function setPositionCaller(c: string): void { _positionCaller = c; }
+export function clearPositionCaller(): void { _positionCaller = ''; }
+
 export type PositionMode = 'absolute' | 'relative';
 
 export interface BadgeContext {
@@ -334,7 +356,7 @@ export class HintBadge {
     target.addEventListener('focusout', this.focusoutHandler);
   }
 
-  updatePosition(candidate?: { x: number; y: number }): void {
+  updatePosition(candidate?: { x: number; y: number }, caller?: string): void {
     let vpX: number;
     let vpY: number;
 
@@ -350,6 +372,41 @@ export class HintBadge {
     const outerRect = this.outer.getBoundingClientRect();
     this.inner.style.left = `${vpX - outerRect.left}px`;
     this.inner.style.top = `${vpY - outerRect.top}px`;
+
+    const elRect = this.target.getBoundingClientRect();
+    const containerRect = this.anchorParent.getBoundingClientRect();
+    pushPositionLog({
+      ts: Date.now(),
+      caller: caller ?? (_positionCaller || '?'),
+      scrollY: Math.round(window.scrollY),
+      target: {
+        tag: this.target.tagName.toLowerCase(),
+        name: (this.target as HTMLElement).innerText?.slice(0, 30) ?? '',
+        vpY: Math.round(elRect.top),
+      },
+      container: {
+        tag: this.anchorParent.tagName.toLowerCase(),
+        id: this.anchorParent.id.slice(0, 20),
+        vpY: Math.round(containerRect.top),
+        display: getComputedStyle(this.anchorParent).display,
+        position: getComputedStyle(this.anchorParent).position,
+      },
+      outer: {
+        vpY: Math.round(outerRect.top),
+        h: Math.round(outerRect.height),
+        w: Math.round(outerRect.width),
+      },
+      computed: {
+        vpX: Math.round(vpX),
+        vpY: Math.round(vpY),
+        innerTop: `${Math.round(vpY - outerRect.top)}`,
+        innerLeft: `${Math.round(vpX - outerRect.left)}`,
+      },
+      result: {
+        innerVpY: Math.round(outerRect.top + (vpY - outerRect.top)),
+        diff: Math.round(Math.abs(elRect.top - (outerRect.top + (vpY - outerRect.top)))),
+      },
+    });
   }
 
   reattach(): void {

@@ -141,6 +141,6 @@ export class RangoStrategy implements PlacementStrategy {
       y = elementRect.bottom - size.h * 0.5;
     }
 
-    w.hint.updatePosition({ x, y });
+    w.hint.updatePosition({ x, y }, 'rango.positionAtTopLeft');
   }
 }

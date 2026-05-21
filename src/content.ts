@@ -12,7 +12,7 @@ import { ElementWrapper, WrapperStore } from './element-wrapper';
 import * as idRegistry from './registry';
 import { resolveTarget } from './activate-resolution';
 import { IntersectionTracker } from './intersection-tracker';
-import { HintBadge } from './hints';
+import { HintBadge, setPositionCaller, clearPositionCaller } from './hints';
 import { cacheLayout, clearLayoutCache } from './layout-cache';
 import { placeBadges, placeOne, clearPlacement } from './placement';
 import { activateElement, type ActivationResult } from './event-sequence';
@@ -750,7 +750,9 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
     wrapper.hint.show();
   }
 
+  setPositionCaller('showHints');
   placeBadges(renderable);
+  clearPositionCaller();
 
   clearLayoutCache();
   hintsVisible = true;
@@ -833,6 +835,7 @@ function badgeNewlyCodeworded(): void {
 
   const existingCount = store.all.filter(w => w.hint?.isVisible).length;
 
+  setPositionCaller('badgeNewlyCodeworded');
   cacheLayout(newBadges.map(w => w.element));
   for (let i = 0; i < newBadges.length; i++) {
     const w = newBadges[i];
@@ -843,6 +846,7 @@ function badgeNewlyCodeworded(): void {
     placeOne(w, existingCount + i);
   }
   clearLayoutCache();
+  clearPositionCaller();
 }
 
 function updateBadgeLabels(): void {
@@ -1294,13 +1298,16 @@ function scheduleReposition(): void {
     repositionRafPending = false;
     const visible = store.all.filter(w => w.hint?.isVisible);
     if (visible.length > 0) {
+      setPositionCaller('scheduleReposition');
       cacheLayout(visible.map(w => w.element));
       placeBadges(visible);
       clearLayoutCache();
+      clearPositionCaller();
     }
   });
 }
 window.addEventListener('resize', scheduleReposition, { passive: true });
+window.addEventListener('scroll', scheduleReposition, { passive: true });
 
 // --- Keyboard Listener ---
 
