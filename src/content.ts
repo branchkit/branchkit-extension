@@ -731,30 +731,30 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
     .filter(w => w.scanned.codeword.length > 0);
 
   cacheLayout(renderable.map(w => w.element));
+  try {
+    for (const wrapper of renderable) {
+      const label = poolLabelToAssignment(wrapper.scanned.codeword);
+      wrapper.label = label;
 
-  for (const wrapper of renderable) {
-    const label = poolLabelToAssignment(wrapper.scanned.codeword);
-    wrapper.label = label;
+      if (!wrapper.hint) {
+        wrapper.hint = new HintBadge(
+          wrapper.element,
+          label,
+          wrapper.category,
+          displayMode,
+        );
+      } else {
+        wrapper.hint.updateLabel(label, displayMode);
+      }
 
-    if (!wrapper.hint) {
-      wrapper.hint = new HintBadge(
-        wrapper.element,
-        label,
-        wrapper.category,
-        displayMode,
-      );
-    } else {
-      wrapper.hint.updateLabel(label, displayMode);
+      wrapper.hint.show();
     }
 
-    wrapper.hint.show();
+    setPositionCaller('showHints');
+    try { placeBadges(renderable); } finally { clearPositionCaller(); }
+  } finally {
+    clearLayoutCache();
   }
-
-  setPositionCaller('showHints');
-  placeBadges(renderable);
-  clearPositionCaller();
-
-  clearLayoutCache();
   hintsVisible = true;
 }
 
@@ -836,17 +836,20 @@ function badgeNewlyCodeworded(): void {
   const existingCount = store.all.filter(w => w.hint?.isVisible).length;
 
   setPositionCaller('badgeNewlyCodeworded');
-  cacheLayout(newBadges.map(w => w.element));
-  for (let i = 0; i < newBadges.length; i++) {
-    const w = newBadges[i];
-    const label = poolLabelToAssignment(w.scanned.codeword);
-    w.label = label;
-    w.hint = new HintBadge(w.element, label, w.category, displayMode);
-    w.hint.show();
-    placeOne(w, existingCount + i);
+  try {
+    cacheLayout(newBadges.map(w => w.element));
+    for (let i = 0; i < newBadges.length; i++) {
+      const w = newBadges[i];
+      const label = poolLabelToAssignment(w.scanned.codeword);
+      w.label = label;
+      w.hint = new HintBadge(w.element, label, w.category, displayMode);
+      w.hint.show();
+      placeOne(w, existingCount + i);
+    }
+  } finally {
+    clearLayoutCache();
+    clearPositionCaller();
   }
-  clearLayoutCache();
-  clearPositionCaller();
 }
 
 function updateBadgeLabels(): void {
@@ -1299,10 +1302,13 @@ function scheduleReposition(): void {
     const visible = store.all.filter(w => w.hint?.isVisible);
     if (visible.length > 0) {
       setPositionCaller('scheduleReposition');
-      cacheLayout(visible.map(w => w.element));
-      placeBadges(visible);
-      clearLayoutCache();
-      clearPositionCaller();
+      try {
+        cacheLayout(visible.map(w => w.element));
+        placeBadges(visible);
+      } finally {
+        clearLayoutCache();
+        clearPositionCaller();
+      }
     }
   });
 }

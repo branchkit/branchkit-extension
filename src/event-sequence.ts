@@ -48,12 +48,6 @@ function getFocusable(el: Element): HTMLElement | null {
   return el instanceof HTMLElement ? el : null;
 }
 
-function isEditable(el: Element): boolean {
-  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return true;
-  if (el instanceof HTMLElement && el.isContentEditable) return true;
-  return false;
-}
-
 let lastClicked: Element | undefined;
 
 /**
@@ -72,10 +66,6 @@ export function dispatchClick(el: Element): void {
   const focusable = getFocusable(el);
   if (focusable) {
     focusable.focus();
-  }
-
-  if (el instanceof HTMLElement && isEditable(el)) {
-    window.focus();
   }
 
   el.dispatchEvent(pointer('pointerup', x, y));
@@ -127,7 +117,7 @@ export interface ActivationResult {
  * Click an element using the appropriate strategy:
  * - New-tab anchors: window.open() for explicit tab control
  * - Anchors wrapping a child element: delegate to the anchor
- * - File inputs: focus + Enter key (triggers file picker)
+ * - File inputs: .click() (triggers file picker)
  * - Selects: focus + synthetic open
  * - Everything else (including anchors): full event sequence
  */
@@ -136,19 +126,15 @@ export function activateElement(
   opts: { newTab?: boolean } = {},
 ): ActivationResult {
   if (el instanceof HTMLSelectElement) {
+    if (el.disabled) return { target: el, delegation: 'select' };
     el.focus();
     el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
     return { target: el, delegation: 'select' };
   }
 
   if (el instanceof HTMLInputElement && el.type === 'file') {
-    el.focus();
-    el.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'Enter', code: 'Enter', bubbles: true, composed: true,
-    }));
-    el.dispatchEvent(new KeyboardEvent('keyup', {
-      key: 'Enter', code: 'Enter', bubbles: true, composed: true,
-    }));
+    if (el.disabled) return { target: el, delegation: 'file-picker' };
+    el.click();
     return { target: el, delegation: 'file-picker' };
   }
 

@@ -229,6 +229,19 @@ describe('resolveTarget — tier 3 (codeword fallthrough)', () => {
     expect(r.resolution).toBe('live_store');
   });
 
+  it('skips tier 3 when frame_id mismatches, even with a codeword', () => {
+    const el = fakeElement();
+    const { deps } = makeDeps({
+      myFrameId: 0,
+      resolveFromStore: () => fakeWrapper(el),
+    });
+
+    const r = resolveTarget(0, 7, 'arch', deps);
+
+    expect(r.target).toBeNull();
+    expect(r.resolution).toBe('none');
+  });
+
   it('still hits tier 3 when tier 1 missed AND a codeword is present', () => {
     const el = fakeElement();
     const { deps, state } = makeDeps({

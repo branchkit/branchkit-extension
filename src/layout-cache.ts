@@ -58,6 +58,19 @@ export function getCachedStyle(el: Element): CSSStyleDeclaration {
   return computedStyles.get(el) ?? getComputedStyle(el);
 }
 
+function overflowClips(v: string): boolean {
+  return v !== '' && v !== 'visible';
+}
+
+export function isClipAncestor(el: Element): boolean {
+  const s = getCachedStyle(el);
+  if (overflowClips(s.overflowX) || overflowClips(s.overflowY)) return true;
+  if (s.clipPath && s.clipPath !== 'none') return true;
+  if (/paint|content|strict/.test(s.contain)) return true;
+  if (s.contentVisibility && s.contentVisibility !== 'visible') return true;
+  return false;
+}
+
 export function getCachedDims(el: Element): {
   clientWidth: number; scrollWidth: number; clientHeight: number; scrollHeight: number;
 } {

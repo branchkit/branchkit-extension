@@ -10,7 +10,7 @@
 
 import { Category, BadgeDisplayMode } from './types';
 import { LabelAssignment, labelToDisplay } from './words';
-import { getCachedRect, getCachedStyle } from './layout-cache';
+import { getCachedRect, getCachedStyle, getCachedDims, isClipAncestor } from './layout-cache';
 import { computeBadgeColors } from './badge-colors';
 import { leaderLineGeometry } from './placement/geometry';
 
@@ -66,22 +66,9 @@ export function findBadgeContainer(target: Element): HTMLElement {
   return document.body;
 }
 
-function overflowClips(v: string): boolean {
-  return v !== '' && v !== 'visible';
-}
-
-function isClipAncestor(el: HTMLElement): boolean {
-  const s = getCachedStyle(el);
-  if (overflowClips(s.overflowX) || overflowClips(s.overflowY)) return true;
-  if (s.clipPath && s.clipPath !== 'none') return true;
-  if (/paint|content|strict/.test(s.contain)) return true;
-  if (s.contentVisibility && s.contentVisibility !== 'visible') return true;
-  return false;
-}
-
 function isScrollContainer(el: Element): boolean {
   const s = getCachedStyle(el);
-  const { clientWidth, scrollWidth, clientHeight, scrollHeight } = el;
+  const { clientWidth, scrollWidth, clientHeight, scrollHeight } = getCachedDims(el);
   return (
     el === document.documentElement ||
     (scrollWidth > clientWidth && /scroll|auto/.test(s.overflowX)) ||

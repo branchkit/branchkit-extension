@@ -1,5 +1,5 @@
 import { ElementWrapper } from '../element-wrapper';
-import { getCachedRect, getCachedStyle } from '../layout-cache';
+import { getCachedRect, getCachedStyle, isClipAncestor } from '../layout-cache';
 import { PlacementStrategy } from './strategy';
 
 const BASE_Z = 2147483000;
@@ -52,10 +52,14 @@ export class RangoStrategy implements PlacementStrategy {
       return (ra.top - rb.top) || (ra.left - rb.left);
     });
 
+    // Read pass: probe text positions for all elements before any writes.
+    const probes = sorted.map((w) => probeFirstVisibleText(w.element));
+
+    // Write pass: position all badges using pre-collected probes.
     for (let i = 0; i < sorted.length; i++) {
       const w = sorted[i];
       if (!w.hint) continue;
-      this.positionAtTopLeft(w);
+      this.positionAtTopLeft(w, probes[i]);
       w.hint.hideLeader();
       w.hint.host.style.zIndex = String(BASE_Z + i);
     }
@@ -70,19 +74,10 @@ export class RangoStrategy implements PlacementStrategy {
 
   clear(): void {}
 
-  private isClipAncestor(el: Element): boolean {
-    const s = getCachedStyle(el);
-    if ((s.overflowX && s.overflowX !== 'visible') || (s.overflowY && s.overflowY !== 'visible')) return true;
-    if (s.clipPath && s.clipPath !== 'none') return true;
-    if (/paint|content|strict/.test(s.contain)) return true;
-    if (s.contentVisibility && s.contentVisibility !== 'visible') return true;
-    return false;
-  }
-
   private getAvailableSpace(container: Element, rect: DOMRect): { left: number | undefined; top: number | undefined } {
     let current: Element | null = container;
     while (current) {
-      if (current === document.body || this.isClipAncestor(current)) {
+      if (current === document.body || isClipAncestor(current)) {
         const parentRect = getCachedRect(current);
         const left = Math.max(0, rect.left - parentRect.left);
         const top = Math.max(0, rect.top - parentRect.top);
@@ -106,9 +101,9 @@ export class RangoStrategy implements PlacementStrategy {
     return null;
   }
 
-  private positionAtTopLeft(w: ElementWrapper): void {
+  private positionAtTopLeft(w: ElementWrapper, probe?: TextProbe): void {
     if (!w.hint) return;
-    const probe = probeFirstVisibleText(w.element);
+    if (!probe) probe = probeFirstVisibleText(w.element);
     const targetRect = probe.hasText ? probe.rect : getCachedRect(w.element);
     const elementRect = getCachedRect(w.element);
     const size = w.hint.badgeSize;
