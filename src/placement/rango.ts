@@ -93,6 +93,19 @@ export class RangoStrategy implements PlacementStrategy {
     return { left: undefined, top: undefined };
   }
 
+  private findStickyBound(container: Element): { left: number; top: number } | null {
+    let current: Element | null = container.parentElement;
+    while (current && current !== document.body) {
+      const s = getCachedStyle(current);
+      if (s.position === 'sticky' || s.position === 'fixed') {
+        const r = getCachedRect(current);
+        return { left: r.left, top: r.top };
+      }
+      current = current.parentElement;
+    }
+    return null;
+  }
+
   private positionAtTopLeft(w: ElementWrapper): void {
     if (!w.hint) return;
     const probe = probeFirstVisibleText(w.element);
@@ -111,8 +124,14 @@ export class RangoStrategy implements PlacementStrategy {
       ? Math.min(hintOffsetY, Math.max(0, space.top - 1))
       : hintOffsetY;
 
-    const x = Math.max(0, targetRect.left - clampedOffsetX);
-    const y = Math.max(0, targetRect.top - clampedOffsetY);
+    let x = Math.max(0, targetRect.left - clampedOffsetX);
+    let y = Math.max(0, targetRect.top - clampedOffsetY);
+
+    const stickyBound = this.findStickyBound(w.hint.anchorParent);
+    if (stickyBound) {
+      x = Math.max(stickyBound.left, x);
+      y = Math.max(stickyBound.top, y);
+    }
 
     w.hint.updatePosition({ x, y });
   }
