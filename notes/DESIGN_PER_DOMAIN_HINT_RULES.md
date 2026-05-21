@@ -31,18 +31,23 @@ DomainRule:
 
 RuleEntry:
   id: string           -- UUID
-  kind: "exclude" | "include"
+  kind: "exclude" | "include" | "reveal"
   matcher: Matcher
+  reveal?: RevealMethod   -- only for kind: "reveal"
 
 Matcher (tagged union):
   | { type: "css";  selector: string }
   | { type: "text"; value: string; caseSensitive: boolean }
   | { type: "class"; name: string }
+
+RevealMethod: "opacity" | "visibility" | "display"
 ```
 
 `kind: "exclude"` — any hintable element matched by this entry is dropped from the scan result.
 
 `kind: "include"` — elements matching this entry are added even if they didn't match `HINTABLE_SELECTOR`. Semantically identical to `SiteAdapter.include`, but user-defined.
+
+`kind: "reveal"` — forces hover-hidden elements visible via CSS injection so the scanner can discover and hint them. See the "Reveal rules" section below.
 
 ### Pattern matching
 
@@ -97,6 +102,8 @@ Rule evaluation runs inside `scanElements` and `scanWithAdapter`. The new module
 
 export function loadRulesForURL(url: string, allRules: DomainRule[]): DomainRule | null
 
+export function injectRevealStyles(rule: DomainRule): HTMLStyleElement | null
+
 export function applyExclusions(
   refs: Element[],
   elements: ScannedElement[],
@@ -139,6 +146,126 @@ function doScan(): void {
 `discoverInSubtree` calls `scanElements(root)`, not `doScan`. The user rule must also be consulted here. The simplest fix: after `attachWrapper` in `discoverInSubtree`, check the user exclude rule and skip if matched. A thin wrapper `scanElementsWithRule(root, rule)` handles this without duplicating the exclusion logic.
 
 `isHintable` is used by `reevaluateAttribute` and the ResizeObserver. User exclude rules need to be checked there too, or newly-revealed elements that match an exclude rule will pick up wrappers mid-session. Extend `isHintable` to accept an optional rule parameter; callers in content.ts pass the cached rule.
+
+### Reveal rules
+
+Many web apps hide interactive elements until the user hovers a parent
+container. These elements are invisible to voice navigation — the user
+can't hover to reveal them and then voice-activate them. Rango has no
+solution for this; it's an open gap in every voice-navigation tool.
+
+Reveal rules inject page-level CSS that forces hover-hidden elements
+visible so the scanner can discover and hint them. This is a genuine
+accessibility improvement for voice-only users.
+
+**How sites hide elements on hover (three patterns):**
+
+1. **`opacity: 0` until parent `:hover`** — the element has non-zero
+   dimensions but is invisible. The scanner's `isVisible()` rejects it
+   because `style.opacity === '0'`. Most common pattern (QuickBase
+   sidebar gear buttons, column menu buttons).
+
+2. **`display: none` until parent `:hover`** — the element has zero
+   dimensions. The scanner rejects it because `rect.width < 5`. Riskier
+   to override because forcing `display: block` can cause layout shifts.
+
+3. **`visibility: hidden` until parent `:hover`** — similar to opacity
+   but the element still occupies layout space. Less common.
+
+**Implementation: page-level style injection**
+
+The extension currently injects all CSS inside badge shadow DOMs. Reveal
+rules need a different mechanism: a single `<style>` element in the
+page's `<head>` that forces hover-hidden elements visible.
+
+```ts
+// src/domain-rules.ts
+
+function buildRevealStylesheet(rule: DomainRule): string {
+  const lines: string[] = [];
+  for (const entry of rule.entries) {
+    if (entry.kind !== 'reveal' || entry.matcher.type !== 'css') continue;
+    const selector = entry.matcher.selector;
+    switch (entry.reveal) {
+      case 'opacity':
+        lines.push(`${selector} { opacity: 1 !important; }`);
+        break;
+      case 'visibility':
+        lines.push(`${selector} { visibility: visible !important; }`);
+        break;
+      case 'display':
+        // display is risky — use the most layout-neutral value
+        lines.push(`${selector} { display: revert !important; }`);
+        break;
+    }
+  }
+  return lines.join('\n');
+}
+
+export function injectRevealStyles(rule: DomainRule): HTMLStyleElement | null {
+  const css = buildRevealStylesheet(rule);
+  if (!css) return null;
+  const style = document.createElement('style');
+  style.setAttribute('data-branchkit-reveal', 'true');
+  style.textContent = css;
+  document.head.appendChild(style);
+  return style;
+}
+```
+
+**Lifecycle:**
+
+1. On content script init, after loading rules from storage, call
+   `injectRevealStyles(rule)` if the matched rule has reveal entries.
+2. The injected `<style>` is retained for the page lifetime — removing
+   it would re-hide elements and orphan their badges.
+3. On rule change (via `chrome.storage.onChanged`), remove the old
+   `<style>` (query by `data-branchkit-reveal`), inject the new one,
+   and trigger a rescan.
+4. The style must be injected *before* the first `doScan()` so the
+   scanner sees the revealed elements as visible.
+
+**Order of operations (updated):**
+
+```
+0. Inject reveal styles (forces hover-hidden elements visible)
+1. Generic scan (HINTABLE_SELECTOR + isVisible + isRedundant)
+2. Adapter exclusions (adapter.exclude)
+3. Adapter inclusions (adapter.include)
+4. Adapter category scans (adapter.categories)
+5. User exclude rules
+6. User include rules
+```
+
+Reveal runs at step 0 because it modifies the DOM's computed styles,
+which all subsequent steps read. It's not a scan-time filter — it's a
+pre-scan environment change.
+
+**Why CSS injection and not JavaScript hover simulation:**
+
+Dispatching `mouseenter`/`pointerover` events triggers JavaScript event
+handlers but does NOT activate the CSS `:hover` pseudo-class. Only real
+cursor positioning (via `element.dispatchEvent` with `MouseEvent` at the
+right coordinates, or `chrome.debugger` protocol) can trigger CSS
+`:hover`. CSS injection is simpler, more reliable, and doesn't cause
+side effects in JavaScript event handlers.
+
+**Risk: layout shifts from `display` reveals.** Forcing `display: block`
+on an element that was `display: none` can push surrounding content
+around. The `opacity` and `visibility` reveal methods don't cause layout
+shifts because the element already occupies space. For `display` reveals,
+use `display: revert !important` which attempts to restore the
+browser-default display value. Flag `display` reveals as "may cause
+layout shifts" in the UI.
+
+**Risk: visual clutter from always-visible elements.** Revealing 20
+column menu buttons permanently changes the page's visual feel. This is
+a deliberate tradeoff — voice-only users need to see what they can
+interact with, even if sighted mouse users prefer the clean hover
+pattern. The user can disable individual reveal entries if the clutter
+is too much. A future refinement: inject reveal styles only when hints
+are active (toggled on), and restore the original styles when hints are
+toggled off.
 
 ### Settings UI approach
 
@@ -238,6 +365,7 @@ The migration path for users currently relying on hardcoded exclusions in adapte
 2. The QuickBase adapter's `include`/`exclude` fields are still in `SiteAdapter` for future hardcoded use. User rules layer on top of adapter results, not below them. Order of operations at scan time:
 
    ```
+   0. Inject reveal styles (forces hover-hidden elements visible)
    1. Generic scan (HINTABLE_SELECTOR + isVisible + isRedundant)
    2. Adapter exclusions (adapter.exclude)
    3. Adapter inclusions (adapter.include)
@@ -246,7 +374,7 @@ The migration path for users currently relying on hardcoded exclusions in adapte
    6. User include rules
    ```
 
-   User rules run last so they can override adapter decisions.
+   Reveal runs at step 0 because it modifies computed styles before scanning. User exclude/include rules run last so they can override adapter decisions.
 
 ### Edge cases
 
@@ -264,9 +392,44 @@ The migration path for users currently relying on hardcoded exclusions in adapte
 
 **MV3 service worker + storage.onChanged.** User rules changes from the popup must also propagate to already-open tabs. `chrome.storage.onChanged` fires in every content script context when the popup saves, so the cache update and rescan happen automatically.
 
-## Files to create or modify
+**Reveal styles and page performance.** The injected `<style>` element contains simple property overrides (`opacity: 1 !important`). These trigger style recalculation on affected elements but no layout reflow (for `opacity` and `visibility` reveals). The performance cost is negligible. `display` reveals do trigger reflow and should be flagged in the UI.
 
-- `src/domain-rules.ts` — new. Pattern matching, rule evaluation, storage helpers, TypeScript types.
+**Reveal styles and site functionality.** Forcing `opacity: 1` may interfere with CSS transitions that fade elements in on hover. The element will already be visible, so the hover transition becomes a no-op. This is intentional — voice users don't hover, so the transition serves no purpose. If a site uses opacity for something other than hover-hide (e.g., a loading skeleton), the user can disable the specific reveal entry.
+
+**Reveal + exclude interaction.** A reveal entry can make an element visible that the user then wants to exclude. This is fine — reveal runs at step 0 (CSS injection), exclude runs at step 5 (scan-time filter). The element becomes visible, gets scanned, then gets excluded. No conflict.
+
+## Known seed rules
+
+Concrete rules discovered during development. These should ship as
+default rules (enabled, user-deletable) or be offered as suggested rules
+when the domain is first visited.
+
+### QuickBase (`*.quickbase.com`)
+
+**Exclusions:**
+
+| Element | Matcher | Reason |
+|---------|---------|--------|
+| Row-actions column header `th` | `th.actionColumn[tabindex="0"]` | QuickBase sets `tabindex=0` on only this th, making it hintable. The checkbox inside already has its own badge. The th badge appears orphaned. Other column ths have `tabindex=-1` and are correctly skipped. |
+
+**Reveals:**
+
+Discovered via `almost_hintable` snapshot data (2026-05-21): 128
+elements matched `HINTABLE_SELECTOR` but were rejected as invisible
+due to `opacity:0`. All are hover-dependent interactive elements.
+
+| Element | Matcher | Reveal | Count | Description |
+|---------|---------|--------|-------|-------------|
+| Sidebar table settings gears | `button.settings-button` | `opacity` | ~107 | Gear icon on each sidebar table link. `opacity:0` until `a.custom-link` is hovered. Allows voice users to open table settings without hovering. |
+| Column header menu buttons | `section.tableReportDropdown button` | `opacity` | ~20 | "Column menu" dropdown trigger in each column header. `opacity:0` until column header is hovered. Provides access to sort, filter, hide column, and field properties. |
+| App settings button | `button[aria-label="App settings"]` | `opacity` | 1 | Sidebar header gear. `opacity:0` until sidebar header is hovered. |
+
+**Not yet addressed (display:none pattern):**
+
+| Element | Notes |
+|---------|-------|
+| Row-level action icons (edit, view, checkbox) inside `td.actionColumn` | Children are `display:none` or zero-size until row hover. Forcing `display` risks layout shifts. May need a different approach — e.g., the adapter's `scanRecordIcons()` category scan could be updated for the modern "hybrid table report" grid format, or the reveal rule could target the parent `td` with a `display` reveal. Needs further investigation. |
+
 ## Future: named element references
 
 There is a potential convergence point between per-domain hint rules and

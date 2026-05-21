@@ -110,6 +110,7 @@ export class RangoStrategy implements PlacementStrategy {
     if (!w.hint) return;
     const probe = probeFirstVisibleText(w.element);
     const targetRect = probe.hasText ? probe.rect : getCachedRect(w.element);
+    const elementRect = getCachedRect(w.element);
     const size = w.hint.badgeSize;
     const { x: nudgeX, y: nudgeY } = getNudgeRatios(w.element, probe.hasText);
     const space = this.getAvailableSpace(w.hint.anchorParent, targetRect);
@@ -131,6 +132,12 @@ export class RangoStrategy implements PlacementStrategy {
     if (stickyBound) {
       x = Math.max(stickyBound.left, x);
       y = Math.max(stickyBound.top, y);
+    }
+
+    const badgeOverlapsText = y + size.h > targetRect.top + 2;
+    if (stickyBound && badgeOverlapsText) {
+      x = Math.max(stickyBound.left, elementRect.left);
+      y = elementRect.bottom - size.h;
     }
 
     w.hint.updatePosition({ x, y });
