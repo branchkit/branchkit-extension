@@ -1102,7 +1102,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       // Algorithm lives in activate-resolution.ts so it's unit-testable.
       const codeword = params?.codeword ?? '';
       const idParam = parseInt(params?.id ?? '0', 10);
-      const frameIdParam = parseInt(params?.frame_id ?? '0', 10);
+      const frameIdParam = params?.frame_id != null ? parseInt(params.frame_id, 10) : -1;
 
       const resolved = resolveTarget(
         idParam, frameIdParam, codeword,

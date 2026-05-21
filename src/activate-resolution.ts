@@ -54,11 +54,10 @@ export function resolveTarget(
   let detail = '';
   let fp = '';
 
-  // Frame-routing safety: if the SW landed this id in the wrong frame,
-  // tier 1 would either miss or fingerprint-match a same-shape sibling
-  // here. Skip tier 1; codeword resolution still works in this frame.
+  // Frame-routing safety: if the dispatch targets a different frame,
+  // skip all resolution tiers so only the intended frame acts.
   const frameMismatch =
-    deps.myFrameId !== null && frameIdParam > 0 && frameIdParam !== deps.myFrameId;
+    deps.myFrameId !== null && frameIdParam >= 0 && frameIdParam !== deps.myFrameId;
 
   if (idParam > 0 && !frameMismatch) {
     const entry = deps.registry.get(idParam);
@@ -94,7 +93,7 @@ export function resolveTarget(
     detail = `id=${idParam} for frame ${frameIdParam}, this is frame ${deps.myFrameId}`;
   }
 
-  if (!target && codeword) {
+  if (!target && codeword && !frameMismatch) {
     const fromSnapshot = deps.resolveFromSnapshot(codeword);
     if (fromSnapshot) {
       target = fromSnapshot.element;

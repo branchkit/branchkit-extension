@@ -180,15 +180,26 @@ describe('resolveTarget — frame mismatch', () => {
     expect(r.resolution).toBe('registry');
   });
 
-  it('honors tier 1 when params.frame_id is 0 (default / unspecified)', () => {
+  it('honors tier 1 when params.frame_id is -1 (unspecified)', () => {
+    const el = fakeElement();
+    const { deps, state } = makeDeps({ myFrameId: 3 });
+    state.registryEntries.set(42, entry(el));
+
+    const r = resolveTarget(42, -1, '', deps);
+
+    expect(r.target).toBe(el);
+    expect(r.resolution).toBe('registry');
+  });
+
+  it('detects frame mismatch when frame_id is 0 (main frame) but myFrameId differs', () => {
     const el = fakeElement();
     const { deps, state } = makeDeps({ myFrameId: 3 });
     state.registryEntries.set(42, entry(el));
 
     const r = resolveTarget(42, 0, '', deps);
 
-    expect(r.target).toBe(el);
-    expect(r.resolution).toBe('registry');
+    expect(r.target).toBeNull();
+    expect(r.resolution).toBe('none');
   });
 });
 
