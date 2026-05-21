@@ -4,24 +4,12 @@
  * Adds QuickBase-specific scanning:
  * - Edit/View record icons
  * - Sidebar table navigation links
- * - Exclusion of destructive actions (save, cancel, delete)
  *
  * Ported from basetypes-extension/src/content.ts.
  */
 
 import { SiteAdapter } from './index';
 import { ScannedElement } from '../types';
-
-const EXCLUDE_CLASSES = ['saveBtn', 'cancelBtn', 'deleteBtn', 'qb-splitbutton-menubtn'];
-const EXCLUDE_TEXTS = ['save', 'cancel', 'delete', 'customize this form'];
-
-function isExcluded(el: Element): boolean {
-  const cls = el.className?.toString() || '';
-  if (EXCLUDE_CLASSES.some(c => cls.includes(c))) return true;
-  const text = el.textContent?.trim().toLowerCase() || '';
-  if (EXCLUDE_TEXTS.some(t => text === t || text.startsWith(t))) return true;
-  return false;
-}
 
 function scanRecordIcons(): { elements: ScannedElement[]; refs: Element[] } {
   const elements: ScannedElement[] = [];
@@ -88,7 +76,6 @@ function scanTables(): { elements: ScannedElement[]; refs: Element[] } {
 export const quickbaseAdapter: SiteAdapter = {
   name: 'quickbase',
   pattern: /quickbase\.com/,
-  exclude: isExcluded,
   categories: [
     { category: 'edit', scan: scanRecordIcons },
     { category: 'tables', scan: scanTables },
