@@ -28,9 +28,11 @@
 
 import { ElementWrapper, WrapperStore } from './element-wrapper';
 import * as idRegistry from './registry';
-import { enumerateAlmostHintable, type AlmostHintable } from './scanner';
+import { enumerateAlmostHintable, isHintable, type AlmostHintable } from './scanner';
+import { accessibleName } from './accessible-name';
 import {
   elementSnap,
+  parentChainSig,
   getActivatePathBuffer,
   type ActivatePathEvent,
   type ElementSnap,
@@ -81,6 +83,23 @@ interface OrphanRecord {
   fingerprint: idRegistry.Fingerprint | null;
 }
 
+interface DomSurveyElement {
+  tag: string;
+  id: string;
+  className: string;
+  role: string;
+  accessibleName: string;
+  cursor: string;
+  href: string | null;
+  forAttr: string | null;
+  tabindex: string | null;
+  contenteditable: string | null;
+  rect: { x: number; y: number; w: number; h: number };
+  matchesHintable: boolean;
+  isHinted: boolean;
+  parentChain: string[];
+}
+
 export interface DebugSnapshotPayload {
   snapshot_id: string;
   taken_at: string;
@@ -89,6 +108,7 @@ export interface DebugSnapshotPayload {
   almost_hintable: AlmostHintableRecord[];
   orphans: OrphanRecord[];
   recent_activations: readonly ActivatePathEvent[];
+  dom_survey?: DomSurveyElement[];
 }
 
 // --- id generation ---
@@ -196,6 +216,54 @@ function captureAlmostHintable(): AlmostHintableRecord[] {
   }, []);
 }
 
+// --- DOM survey ---
+
+function captureDomSurvey(store: WrapperStore): DomSurveyElement[] {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const hintedEls = new Set<Element>(store.all.map(w => w.element));
+  const out: DomSurveyElement[] = [];
+
+  for (const el of document.querySelectorAll('*')) {
+    if (el.closest('[data-branchkit-hint]')) continue;
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1) continue;
+    if (rect.bottom < 0 || rect.top > vh || rect.right < 0 || rect.left > vw) continue;
+    const style = getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden') continue;
+
+    const tag = el.tagName.toLowerCase();
+    const interactive = tag === 'a' || tag === 'button' || tag === 'input' ||
+      tag === 'textarea' || tag === 'select' || tag === 'label' || tag === 'summary' ||
+      el.hasAttribute('role') || el.hasAttribute('tabindex') ||
+      el.hasAttribute('contenteditable') || style.cursor === 'pointer';
+    if (!interactive) continue;
+
+    out.push({
+      tag,
+      id: el.id,
+      className: typeof el.className === 'string' ? el.className.slice(0, 200) : '',
+      role: el.getAttribute('role') ?? '',
+      accessibleName: accessibleName(el).slice(0, 200),
+      cursor: style.cursor,
+      href: el.getAttribute('href'),
+      forAttr: el.getAttribute('for'),
+      tabindex: el.getAttribute('tabindex'),
+      contenteditable: el.getAttribute('contenteditable'),
+      rect: {
+        x: Math.round(rect.left),
+        y: Math.round(rect.top),
+        w: Math.round(rect.width),
+        h: Math.round(rect.height),
+      },
+      matchesHintable: isHintable(el),
+      isHinted: hintedEls.has(el),
+      parentChain: parentChainSig(el, 4),
+    });
+  }
+  return out;
+}
+
 // --- top-level builder ---
 
 interface BuildInputs {
@@ -220,6 +288,7 @@ export function buildSnapshotPayload(inputs: BuildInputs): DebugSnapshotPayload 
     almost_hintable: captureAlmostHintable(),
     orphans: findOrphans(inputs.store, inputs.knownRegistryIds),
     recent_activations: getActivatePathBuffer(),
+    dom_survey: captureDomSurvey(inputs.store),
   };
 }
 

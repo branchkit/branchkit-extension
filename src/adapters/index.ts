@@ -41,7 +41,7 @@ export function getActiveAdapter(url: string): SiteAdapter | null {
 /**
  * Scan using a site adapter. Merges adapter-specific results with generic scan.
  */
-export function scanWithAdapter(adapter: SiteAdapter): { elements: ScannedElement[]; refs: Element[] } {
+export function scanWithAdapter(adapter: SiteAdapter): { elements: ScannedElement[]; refs: Element[]; invisibleCandidates: Element[] } {
   // Start with generic scan
   const generic = scanElements();
   const elements = [...generic.elements];
@@ -92,5 +92,5 @@ export function scanWithAdapter(adapter: SiteAdapter): { elements: ScannedElemen
     }
   }
 
-  return { elements, refs };
+  return { elements, refs, invisibleCandidates: generic.invisibleCandidates };
 }

@@ -488,6 +488,39 @@ const resizeObserver = new ResizeObserver((entries) => {
 });
 
 /**
+ * IntersectionObserver for elements that matched HINTABLE_SELECTOR but
+ * failed isVisible() at scan time. When an element transitions from
+ * hidden to visible (e.g. display:none removed via class change), the
+ * IO fires and we promote it to a full wrapper. Complements the
+ * ResizeObserver above which handles the reverse (visible → hidden).
+ */
+const visibilityObserver = new IntersectionObserver((entries) => {
+  let dirty = false;
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    const el = entry.target;
+    visibilityObserver.unobserve(el);
+    if (store.findWrapperFor(el)) continue;
+    const scanned = scanSingle(el);
+    if (!scanned) continue;
+    attachWrapper(new ElementWrapper(el, scanned));
+    dirty = true;
+  }
+  if (dirty) {
+    schedulePushGrammar();
+    if (hintsVisible) showHints();
+  }
+}, { root: null, rootMargin: '200px', threshold: 0 });
+
+function observeInvisibleCandidates(candidates: Element[]): void {
+  for (const el of candidates) {
+    if (!store.findWrapperFor(el) && el.isConnected) {
+      visibilityObserver.observe(el);
+    }
+  }
+}
+
+/**
  * Add a wrapper to the store and start tracking its viewport state. The
  * tracker claims a codeword for it the next time IntersectionObserver
  * fires for the element (or immediately, if the element is already in
@@ -578,6 +611,7 @@ function doScan(): void {
     attachWrapper(new ElementWrapper(result.refs[i], result.elements[i]));
   }
   dropDisconnectedWrappers();
+  observeInvisibleCandidates(result.invisibleCandidates);
 }
 
 async function showHints(filter?: Category | Category[]): Promise<void> {
@@ -1288,15 +1322,13 @@ function isOwnMutation(n: Node): boolean {
 /** Walk an added subtree and create wrappers for any hintable descendants. */
 function discoverInSubtree(root: Element): number {
   let added = 0;
-  const { elements, refs } = scanElements(root);
+  const { elements, refs, invisibleCandidates } = scanElements(root);
   for (let i = 0; i < elements.length; i++) {
     if (store.findWrapperFor(refs[i])) continue;
     attachWrapper(new ElementWrapper(refs[i], elements[i]));
     added++;
   }
-  // New custom-element instances inside this subtree may not be
-  // upgraded yet. Watch their tags so when whenDefined resolves we
-  // re-discover the (now-shadow-bearing) instances.
+  observeInvisibleCandidates(invisibleCandidates);
   watchUndefinedCustomElements(root);
   return added;
 }
@@ -1412,10 +1444,6 @@ const observer = new MutationObserver((records) => {
   if (foreign.length === 0) return;
 
   if (foreign.length >= HUGE_MUTATIONS_COUNT) {
-    // Mutation storm (Slack message virtualization, Linear list churn).
-    // Skip per-record work; coalesce into a coarse sweep once the storm
-    // subsides. We still pick up adds/removes via dropDisconnectedWrappers
-    // and a fresh document scan, but without iterating every record.
     if (hugeMutationTimer) clearTimeout(hugeMutationTimer);
     hugeMutationTimer = setTimeout(() => {
       hugeMutationTimer = null;
@@ -1521,6 +1549,20 @@ function watchUndefinedCustomElements(root: Element | Document): void {
 
 // Scan on load to push initial grammar
 doScan();
+
+// One-shot catch-up for CSS-only visibility transitions (visibility:hidden
+// → visible). IntersectionObserver catches geometry changes (display:none →
+// block) but fires false positives for visibility:hidden elements (they
+// have non-zero rects). No mutation fires for a class-driven visibility
+// flip, so a single deferred re-scan covers this gap.
+setTimeout(() => {
+  const before = store.all.length;
+  doScan();
+  if (store.all.length > before) {
+    schedulePushGrammar();
+    if (hintsVisible) showHints();
+  }
+}, 1500);
 watchUndefinedCustomElements(document);
 
 // Expose for console debugging

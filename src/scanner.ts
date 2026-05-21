@@ -11,7 +11,7 @@ import { accessibleName } from './accessible-name';
 // Core selectors — always scanned
 const HINTABLE = [
   'a[href]', 'button:not([disabled])', 'input:not([type="hidden"])',
-  'textarea', 'select', 'summary', 'label[for]',
+  'textarea', 'select', 'summary', 'label',
   '[role="button"]', '[role="link"]', '[role="tab"]', '[role="menuitem"]',
   '[role="option"]', '[role="checkbox"]', '[role="radio"]',
   '[contenteditable="true"]', '[contenteditable=""]',
@@ -147,9 +147,6 @@ function isRedundant(el: Element): boolean {
     return true;
   }
 
-  if (el instanceof HTMLLabelElement && el.control && isVisible(el.control)) {
-    return true;
-  }
 
   return false;
 }
@@ -246,9 +243,10 @@ export function scanSingle(el: Element): ScannedElement | null {
  * Scan the DOM for all hintable elements.
  * Returns ScannedElement[] sorted by DOM order.
  */
-export function scanElements(root: Document | Element = document): { elements: ScannedElement[]; refs: Element[] } {
+export function scanElements(root: Document | Element = document): { elements: ScannedElement[]; refs: Element[]; invisibleCandidates: Element[] } {
   const elements: ScannedElement[] = [];
   const refs: Element[] = [];
+  const invisibleCandidates: Element[] = [];
   const seen = new Set<Element>();
 
   const candidates = deepQuerySelectorAll(root, HINTABLE_SELECTOR);
@@ -256,24 +254,28 @@ export function scanElements(root: Document | Element = document): { elements: S
   for (const el of candidates) {
     if (seen.has(el)) continue;
     if (el.matches(EXCLUDE_SELECTOR)) continue;
-    if (!isVisible(el)) continue;
     if (el.closest('[data-branchkit-hint]')) continue;
+
+    if (!isVisible(el)) {
+      invisibleCandidates.push(el);
+      continue;
+    }
     if (isRedundant(el)) continue;
 
     seen.add(el);
 
     elements.push({
       label: getElementLabel(el),
-      id: 0, // minted by registry.register during attachWrapper
+      id: 0,
       category: classifyCategory(el),
       type: el.tagName.toLowerCase(),
       adapter: null,
-      codeword: '', // assigned later by doScan via the per-tab label pool
+      codeword: '',
     });
     refs.push(el);
   }
 
-  return { elements, refs };
+  return { elements, refs, invisibleCandidates };
 }
 
 function getElementLabel(el: Element): string {
