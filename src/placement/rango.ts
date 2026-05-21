@@ -136,9 +136,9 @@ export class RangoStrategy implements PlacementStrategy {
 
     const overlapIntoText = (y + size.h) - targetRect.top;
     const badgeOverlapsText = overlapIntoText > size.h * 0.4;
-    if (stickyBound && badgeOverlapsText) {
+    if (stickyBound && badgeOverlapsText && probe.hasText) {
       x = Math.max(stickyBound.left, elementRect.left);
-      y = elementRect.bottom - size.h * nudgeY;
+      y = elementRect.bottom - size.h * 0.5;
     }
 
     w.hint.updatePosition({ x, y });
