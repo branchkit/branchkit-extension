@@ -893,7 +893,20 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status === 'loading') purgeTab(tabId);
+  // Only clear grammar cache on navigation, NOT the label pool. SPA
+  // navigations fire onUpdated but the content script survives — its
+  // wrappers still hold claimed codewords. Clearing the pool here would
+  // let new elements claim the same codewords, creating duplicates.
+  // The label pool is cleaned per-frame via releaseFrame when the
+  // content script's liveness port actually disconnects (full nav).
+  if (changeInfo.status === 'loading') {
+    tabGrammars.delete(tabId);
+    const timer = aggregateTimers.get(tabId);
+    if (timer) {
+      clearTimeout(timer);
+      aggregateTimers.delete(tabId);
+    }
+  }
 });
 
 // --- Startup ---
