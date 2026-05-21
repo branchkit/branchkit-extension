@@ -511,6 +511,9 @@ const visibilityIO = new IntersectionObserver((entries) => {
     visibilityIO.unobserve(el);
     if (store.findWrapperFor(el)) { pendingVisibility.delete(el); continue; }
     const scanned = scanSingle(el);
+    // Keep in pendingVisibility — visibility:hidden elements have non-zero
+    // rects so IO fires immediately, but they need the MO layer to promote
+    // them once a class/style change flips visibility.
     if (!scanned) continue;
     attachWrapper(new ElementWrapper(el, scanned));
     pendingVisibility.delete(el);
