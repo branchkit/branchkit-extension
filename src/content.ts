@@ -1187,11 +1187,21 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
 
   // Ctrl+Alt+A — hint-diagnostics snapshot trigger (Phase 2b of
   // docs/completed/DESIGN_HINT_DIAGNOSTICS.md). The design originally
-  // specified Ctrl+Alt+D, but Chrome (or the page) intercepts that on
-  // some configurations before our listener fires; A is unbound in
-  // typical Chrome shortcuts. Q1 of the doc rejected a voice trigger
-  // because debug needs to work *when voice is broken*.
-  if (e.ctrlKey && e.altKey && (e.key === 'a' || e.key === 'A') && !e.repeat) {
+  // specified Ctrl+Alt+D, but Rectangle (popular macOS window manager)
+  // claims that as "First Third" and absorbs the keystroke before any
+  // browser-level handler fires. A is unbound in Rectangle and in
+  // Chrome's defaults.
+  //
+  // Key check is on `e.code`, not `e.key`. On macOS, Alt+letter
+  // produces a dead-key character: Alt+A becomes "å", Alt+D becomes
+  // "∂", etc. `e.key` carries the dead-key char, not the letter. But
+  // `e.code` is keyboard-layout-independent — always "KeyA" for the
+  // A key regardless of modifiers. That's the correct check for an
+  // accelerator binding.
+  //
+  // Q1 of the design doc rejected a voice trigger because debug needs
+  // to work *when voice is broken*.
+  if (e.ctrlKey && e.altKey && e.code === 'KeyA' && !e.repeat) {
     e.preventDefault();
     e.stopPropagation();
     // Pre-press breadcrumb. Lands in plugin-logs/browser.log via the
