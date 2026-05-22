@@ -862,10 +862,17 @@ chrome.runtime.onConnect.addListener((port) => {
 
 chrome.tabs.onActivated.addListener((activeInfo) => {
   cachedActiveTabId = activeInfo.tabId;
-  // Replace the plugin's grammar with the now-active tab's cache (may be []
-  // if that tab hasn't scanned yet — plugin's empty-elements handler clears
-  // commands and collections in that case).
-  pushGrammar(activeInfo.tabId, aggregateGrammarForTab(activeInfo.tabId));
+  const grammar = aggregateGrammarForTab(activeInfo.tabId);
+  pushGrammar(activeInfo.tabId, grammar);
+  // SW may have restarted and lost tabGrammars. If grammar is empty,
+  // ask the content script to re-scan so commands become available
+  // without requiring a manual page refresh.
+  if (grammar.length === 0) {
+    chrome.tabs.sendMessage(activeInfo.tabId, {
+      type: 'BRANCHKIT_ACTION',
+      payload: { action: 'rescan' },
+    }).catch(() => {});
+  }
 });
 
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
@@ -875,7 +882,14 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
     const newActive = tabs[0]?.id ?? null;
     cachedActiveTabId = newActive;
     if (newActive != null) {
-      pushGrammar(newActive, aggregateGrammarForTab(newActive));
+      const grammar = aggregateGrammarForTab(newActive);
+      pushGrammar(newActive, grammar);
+      if (grammar.length === 0) {
+        chrome.tabs.sendMessage(newActive, {
+          type: 'BRANCHKIT_ACTION',
+          payload: { action: 'rescan' },
+        }).catch(() => {});
+      }
     }
   } catch {
     cachedActiveTabId = null;
