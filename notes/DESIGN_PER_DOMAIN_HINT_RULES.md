@@ -4,6 +4,8 @@ User-defined rules that exclude, include, or reveal elements on specific
 domains. Applied at scan time so excluded elements never receive badges
 and revealed elements become visible to the scanner.
 
+**Status:** Shipped. This doc describes the as-built design.
+
 ## Problem
 
 The hint system applies the same scanning logic everywhere.
@@ -23,50 +25,57 @@ Users need to:
 
 Resolved questions that shaped this design:
 
-1. **Popup vs. options page.** Use an **options page** (`options.html`),
-   not the popup. The popup is 260px wide with two dropdowns and a status
-   dot. Domain rules need nested entry lists, codeword resolution, and
-   element previews. That doesn't fit. The popup gets a link to the options
-   page. The options page is vanilla HTML/JS — no framework.
+1. **Popup *and* options page.** The popup is the primary per-site
+   surface — it stays attached to the active tab, so "fix THIS site"
+   flows feel direct. The options page is the cross-site browser for
+   power users. An earlier draft called for options-only; the popup
+   was added when testing revealed that bouncing to a separate tab
+   broke the connection between rule editing and the page being fixed.
 
 2. **Multiple rules per domain.** Only one rule per domain pattern.
-   Creating a second rule for `*.quickbase.com` when one exists opens the
-   existing rule for editing. The UI makes this obvious by showing existing
-   rules grouped by pattern.
+   The popup edits the rule matched by the active tab; the options
+   page is where you'd add a more specific override (e.g., a
+   `demo.quickbase.com` rule alongside an existing `*.quickbase.com`).
 
 3. **Seed rules delivery.** **No defaults ship.** Users who want a
    QuickBase or other site-specific rule add it themselves. Shipping
-   pre-populated rules creates a maintenance burden (selectors break when
-   sites change) and makes the extension's behavior feel less predictable
-   to users who didn't ask for them. The data model carries no `builtin`
-   flag and no "Default" badge — every rule is user-authored.
+   pre-populated rules creates a maintenance burden (selectors break
+   when sites change) and feels unpredictable to users who didn't ask
+   for them. No `builtin` flag on `DomainRule`; every rule is
+   user-authored.
 
-4. **`display` reveals.** **Defer to v2.** `opacity` and `visibility`
-   reveals are safe (no layout shifts). `display: none -> revert` risks
-   breaking page layout. The v1 data model includes the `RevealMethod`
-   type with all three values so the schema doesn't need migration later,
-   but the UI only exposes `opacity` and `visibility`. The `display`
-   option is hidden behind a "Show advanced" toggle or omitted entirely.
+4. **`display` reveals.** **Deferred.** `opacity` and `visibility`
+   reveals are safe (no layout shifts); reverting `display: none` to
+   visible risks breaking page layout. The `RevealMethod` type carries
+   all three values for forward compatibility, but the UI exposes only
+   `opacity` and `visibility`. `injectRevealStyles` ignores `display`.
 
 5. **Reveal lifecycle: always-on vs. hints-active-only.** **Always-on.**
    Injecting and removing styles on hint toggle would cause visible
-   flicker and orphan badges for elements that disappear mid-session. The
-   reveal stylesheet is injected once on page load and stays. Users who
-   find the always-visible elements distracting can disable individual
-   reveal entries.
+   flicker and orphan badges for elements that disappear mid-session.
+   The reveal stylesheet is injected once on page load and stays.
+   Users who find the always-visible elements distracting can disable
+   individual reveal entries.
 
 6. **Text/class matchers for includes.** **CSS-only for v1.** Include
-   rules only accept CSS selectors. `querySelectorAll('*')` filtered by
-   text content is too slow on large DOMs and the use case is rare (power
-   users adding custom elements). Text and class matcher types remain in
-   the data model for exclude rules where they filter an already-scanned
-   list rather than querying the DOM.
+   rules only accept CSS selectors. `querySelectorAll('*')` filtered
+   by text content is too slow on large DOMs and the use case is rare.
+   Text and class matcher types remain in the data model for exclude
+   rules where they filter an already-scanned list rather than
+   querying the DOM.
 
-7. **Named element references.** **Not in v1.** The data model doesn't
-   pre-allocate `name` or `gate` fields. When command-gated hints
-   (`DESIGN_COMMAND_GATED_HINTS.md`) ships, the two features will share
-   a filter mechanism but the data models merge at that point, not now.
-   Adding unused fields to "leave room" just creates confusion.
+7. **Codeword resolution lives in the popup and options page.** The
+   popup resolves against the active tab implicitly (no tab picker).
+   The options page has a tab picker so you can resolve from a
+   different tab than the one you're configuring. Both flows reuse the
+   existing `src/selector-generator.ts` (`generateSelector(el)`)
+   instead of reimplementing the heuristics.
+
+8. **Named element references.** **Not in v1.** The data model
+   doesn't pre-allocate `name` or `gate` fields. When command-gated
+   hints (`DESIGN_COMMAND_GATED_HINTS.md`) ships, the two features
+   will share a filter mechanism but the data models merge at that
+   point, not now.
 
 ## Data Model
 
@@ -87,7 +96,7 @@ interface RuleEntry {
   kind: 'exclude' | 'include' | 'reveal';
   matcher: Matcher;
   reveal?: 'opacity' | 'visibility' | 'display';  // only for kind: 'reveal'
-  label?: string;              // human-readable description ("Sidebar gears")
+  label?: string;              // human-readable description
 }
 
 type Matcher =
@@ -99,7 +108,28 @@ type Matcher =
 Constraints:
 - `text` and `class` matchers are only valid for `kind: 'exclude'`.
 - `include` entries must use `type: 'css'`.
-- `reveal` entries must use `type: 'css'` (CSS injection requires a selector).
+- `reveal` entries must use `type: 'css'`.
+
+### CompiledRule
+
+Scan-time path takes a `CompiledRule`, not a `DomainRule`. Compilation
+buckets entries by kind, validates each include CSS selector, and joins
+the valid ones into a single selector string so the runtime can use one
+`querySelectorAll` per scan instead of N.
+
+```typescript
+interface CompiledRule {
+  rule: DomainRule;
+  excludes: readonly RuleEntry[];
+  reveals: readonly RuleEntry[];
+  includeSelector: string | null;  // joined CSS, or null if no valid includes
+}
+
+function compileRule(rule: DomainRule): CompiledRule;
+```
+
+The content script holds at most one compiled rule (`compiledRule`)
+matched to the frame's URL. Recompilation happens once per rule change.
 
 ## Pattern Matching
 
@@ -137,25 +167,23 @@ Implementation is ~20 lines in `src/domain-rules.ts`. No glob library.
     ]
   }
 }
-
 ```
 
-Limits: 8KB per item, 100KB total. A rule is a few hundred bytes. Not a
-concern for v1. If exceeded, `chrome.runtime.lastError` surfaces at write
-time; the options page shows a save error.
+Limits: 8KB per item, 100KB total. A rule is a few hundred bytes — not
+a v1 concern.
 
 ## Rule Evaluation Pipeline
 
 Order of operations at scan time:
 
 ```
-0. Inject reveal styles  (CSS, pre-scan, modifies computed styles)
+0. Inject reveal styles  (CSS, once at rule load — modifies computed styles)
 1. Generic scan           (HINTABLE_SELECTOR + isVisible + isRedundant)
 2. Adapter exclusions     (adapter.exclude)
 3. Adapter inclusions     (adapter.include)
 4. Adapter category scans (adapter.categories)
-5. User exclude rules     (domain-rules.ts)
-6. User include rules     (domain-rules.ts, CSS-only)
+5. User exclude rules     (domain-rules.ts, via CompiledRule.excludes)
+6. User include rules     (domain-rules.ts, via CompiledRule.includeSelector)
 ```
 
 ### Module API
@@ -166,64 +194,81 @@ Order of operations at scan time:
 // Find the first enabled rule matching this URL.
 export function matchRule(url: string, rules: DomainRule[]): DomainRule | null;
 
-// Inject a <style> element for reveal entries. Returns the element for
-// later removal (on rule change). Must run before first doScan().
-export function injectRevealStyles(rule: DomainRule): HTMLStyleElement | null;
+// Bucket entries + validate + join include selectors. Cache the result.
+export function compileRule(rule: DomainRule): CompiledRule;
+
+// Build a <style data-branchkit-reveal> from reveal entries. Caller
+// inserts into <head>. Returns null when there are no usable reveals.
+export function injectRevealStyles(reveals: readonly RuleEntry[]): HTMLStyleElement | null;
 
 // Filter scanned results by exclude entries. Mutates arrays in place.
 export function applyExclusions(
   refs: Element[],
   elements: ScannedElement[],
-  rule: DomainRule,
+  excludes: readonly RuleEntry[],
 ): void;
 
-// Query DOM for include entries and return new elements to add.
+// Query DOM via the joined include selector and return new elements.
 export function collectInclusions(
   seen: Set<Element>,
-  rule: DomainRule,
+  includeSelector: string | null,
+  root?: ParentNode,
 ): { refs: Element[]; elements: ScannedElement[] };
 
-// Check if a single element should be excluded. Used by isHintable
-// callers (reevaluateAttribute, discoverInSubtree).
-export function isExcludedByRule(el: Element, rule: DomainRule): boolean;
+// Single-element exclusion check for MutationObserver paths.
+export function isExcludedByRule(el: Element, excludes: readonly RuleEntry[]): boolean;
 ```
 
 ### Integration in content.ts
 
-**On init** (before first `doScan()`):
+**On init:**
 1. Load rules from `chrome.storage.sync`.
-2. Call `matchRule(location.href, rules)` and cache the result.
-3. If the matched rule has reveal entries, call `injectRevealStyles()`.
-4. Subscribe to `chrome.storage.onChanged` — on `domainRules` change,
-   re-match, re-inject reveal styles (remove old `<style>` first via
-   `[data-branchkit-reveal]`), and trigger `doScan()`.
+2. Call `matchRule(location.href, rules)` and `compileRule()` if matched.
+3. Inject reveal styles if any.
+4. Run `doScan()` again (the boot-time scan ran before storage returned).
 
-**In `doScan()`:**
+**On `chrome.storage.onChanged`:**
+1. Re-match and compile.
+2. Short-circuit if the matched rule for this frame is structurally
+   identical to the previous one — avoids the multi-tab stampede when
+   the user edits a rule unrelated to this frame's URL.
+3. Sweep previous `[data-branchkit-reveal]` stylesheets, inject the new one.
+4. Detach wrappers that the new rule excludes; `doScan` picks up the rest.
+
+**In the scan path** (`doScan`, `discoverInSubtree`):
 ```typescript
-const userRule = cachedUserRule;  // module-level, set on init
-if (userRule) {
-  applyExclusions(refs, elements, userRule);
-  const extra = collectInclusions(seen, userRule);
-  refs.push(...extra.refs);
-  elements.push(...extra.elements);
-}
+applyUserRuleToScan(result, root);  // shared helper
+```
+which is:
+```typescript
+if (cr.excludes.length > 0) applyExclusions(result.refs, result.elements, cr.excludes);
+if (!cr.includeSelector) return;
+const seen = new Set<Element>(result.refs);
+for (const w of store.all) seen.add(w.element);
+const extra = collectInclusions(seen, cr.includeSelector, root);
+result.refs.push(...extra.refs);
+result.elements.push(...extra.elements);
 ```
 
-**In `discoverInSubtree()` and `reevaluateAttribute()`:**
-Pass the cached rule to `isExcludedByRule()` before creating wrappers.
-This prevents MutationObserver-discovered elements from bypassing rules.
+The `seen` set is only built when the rule has an include selector —
+the more common exclude-only path doesn't pay the O(`store.all`) cost.
 
-**Timing:** Rules load asynchronously. The first `doScan()` at the bottom
-of `content.ts` fires immediately. If rules haven't loaded yet, that scan
-runs without them. The `storage.onChanged` callback (or the initial load
-callback) triggers a second `doScan()` with rules applied. The gap is
-~10ms — a brief flash of extra badges on slow storage reads.
+**In `reevaluateAttribute()` and `observeInvisibleCandidates()`:**
+`isExcludedByRule(el, compiledRule.excludes)` is called after the
+cheaper `isHintable(el)` short-circuit, so MO-discovered elements
+that aren't hintable in the first place don't pay the exclude check.
+
+**Timing:** Rules load asynchronously. The first `doScan()` at the
+bottom of `content.ts` fires immediately. If rules haven't loaded yet,
+that scan runs without them. The storage callback triggers a second
+`doScan()` with rules applied. The gap is ~10ms — a brief flash of
+extra badges on slow storage reads.
 
 ## Reveal Rules
 
 Reveal rules inject page-level CSS that forces hover-hidden elements
-visible. This is a genuine accessibility improvement — voice users can't
-hover to reveal interactive elements.
+visible. This is a genuine accessibility improvement — voice users
+can't hover to reveal interactive elements.
 
 ### How sites hide elements
 
@@ -231,7 +276,7 @@ hover to reveal interactive elements.
 |---------|-------------------|---------------|-------------|
 | `opacity: 0` until parent `:hover` | `isVisible` rejects `opacity === '0'` | `opacity` | None |
 | `visibility: hidden` until parent `:hover` | `isVisible` rejects | `visibility` | None |
-| `display: none` until parent `:hover` | Zero dimensions | `display` (v2) | Layout shifts |
+| `display: none` until parent `:hover` | Zero dimensions | `display` (deferred) | Layout shifts |
 
 ### Implementation
 
@@ -242,97 +287,108 @@ button.settings-button { opacity: 1 !important; }
 section.tableReportDropdown button { opacity: 1 !important; }
 ```
 
-Built by iterating reveal entries and emitting one CSS rule per entry.
-Injected once on page load, before the first scan. On rule change, the
-old `<style>` is removed and a new one injected.
+One CSS rule per reveal entry. Injected once on page load, before the
+first scan. On rule change, all `[data-branchkit-reveal]` stylesheets
+are removed (covers our previous match and any orphans from a prior
+content-script generation) and a fresh one is injected.
 
 **Why CSS injection, not JS hover simulation:** `dispatchEvent` with
-`MouseEvent` triggers JS handlers but does NOT activate the CSS `:hover`
-pseudo-class. CSS injection is simpler, reliable, and side-effect-free.
+`MouseEvent` triggers JS handlers but does NOT activate the CSS
+`:hover` pseudo-class. CSS injection is simpler, reliable, and
+side-effect-free.
 
-## Options Page UI
+## UI
 
-### Layout
+Two surfaces:
 
-The options page (`options.html`) opens from a link in the popup. It has
-one section: a rule list.
+### Popup (`popup.html` / `src/popup.ts`)
 
-```
-+--------------------------------------------------+
-| Domain Rules                                      |
-|                                                   |
-| [+ Add rule for current site]                     |
-|                                                   |
-| *.quickbase.com  [on/off]  [edit] [delete]       |
-|   - Exclude: th.actionColumn[tabindex="0"]        |
-|   o Reveal:  button.settings-button (opacity)     |
-|                                                   |
-| github.com  [on/off]  [edit] [delete]             |
-|   (no entries)                                     |
-+--------------------------------------------------+
-
-[-] = red, exclude     [+] = green, include     [o] = blue, reveal
-```
-
-### Key UX patterns (from Vimium/Rango research)
-
-1. **Auto-generate pattern from active tab.** "Add rule for current
-   site" reads `chrome.tabs.query({ active: true })`, extracts the
-   eTLD+1, and pre-fills `*.domain.com`. The user never writes a pattern
-   from scratch.
-
-2. **Live validation.** A green/red dot next to each rule's pattern
-   showing whether it matches the current tab's URL. Implemented by
-   running `matchRule()` against the active tab URL on page load.
-
-3. **Visual entry type indicators.** Red minus for excludes, green plus
-   for includes, blue circle for reveals. Rango uses this pattern; it
-   scales well as the entry list grows.
-
-### Adding an entry
-
-Two input modes, toggled by a radio:
-
-**Codeword mode (default):** The user types a visible hint codeword
-(e.g., "ape deck"). The options page sends a `RESOLVE_HINT` message to
-the content script, which resolves codeword -> wrapper -> element and
-returns a stable matcher + HTML preview. The user sees:
+The "fix THIS site" surface. Shows the rule matched against the active
+tab's URL — or a "Create rule for `*.example.com`" affordance with a
+suggested pattern when no rule matches. Compact entry list with inline
+remove, an add-entry form (CSS-only matchers), and a codeword resolve
+input that targets the active tab implicitly.
 
 ```
-Resolve: [ape deck____]  [Resolve]
-
-  Matched: <a class="deleteBtn">Delete</a>
-  Selector: a.deleteBtn
-  [Accept as exclude]  [Accept as include]  [Edit selector]
++----------------------------------------+
+| BranchKit Browser                       |
+| ● Connected                             |
+| Hints: [Always visible ▾]               |
+| Labels: [Letters ▾]                     |
+|----------------------------------------|
+| RULES FOR app.quickbase.com             |
+|                                         |
+|   *.quickbase.com        [✓ enabled]   |
+|   – th.actionColumn[tabindex="0"]   ×   |
+|   ◉ button.settings-button (opacity) ×  |
+|                                         |
+|   [exclude ▾]  [css selector_____] [Add]|
+|   Pick: [hint codeword___] [Resolve]    |
+|                                         |
+| All domain rules…                       |
++----------------------------------------+
 ```
 
-The codeword is throwaway — only the derived selector is saved.
+CSS-only matchers in the popup keep the UI compact. Text/class matchers
+(exclude-only anyway) live in the options page.
 
-**Manual mode:** A text field for a CSS selector (or text/class matcher
-for excludes). Validated on input via `document.querySelector` in a
-try/catch. Invalid selectors show a red border.
+### Options page (`options.html` / `src/options.ts`)
 
-### Selector generation heuristics
+Cross-site rule list. Editable pattern field with live "matches current
+tab" dot, all matcher types, per-rule tab picker for codeword resolve
+(useful when you're configuring one site from another), and add/remove
+for rules themselves.
 
-When resolving a codeword to a stable selector, priority order:
+Opens via `chrome.runtime.openOptionsPage()` from the popup link or
+from chrome://extensions → BranchKit Browser → Details → Options.
 
-1. `tag.className` — if 1-3 short, non-hash class names. Example:
-   `a.deleteBtn`.
-2. `[attribute="value"]` — semantic attributes (`data-action`,
-   `aria-label`, `role`). Example: `a[aria-label="Delete"]`.
-3. `#id` — if the id doesn't look generated (no UUIDs, no numeric
-   suffixes). Ranked below class because many apps generate unstable ids.
-4. Text content — last resort. Returns a `{ type: "text" }` matcher
-   instead of CSS. Only valid for exclude entries.
+### Visual indicators
 
-The heuristics don't need to be perfect — the user sees the result and
-can edit before saving.
+Red minus (–) for excludes, green plus (+) for includes, blue dot (◉)
+for reveals. Same conventions across popup and options. Pattern by
+Rango.
+
+## Codeword Resolution
+
+The user types a visible hint codeword (e.g., "ape deck") instead of
+hand-writing a CSS selector. Two-hop routing:
+
+```
+UI         → background          → content (specific frame)
+RESOLVE_HINT_FROM_TAB              RESOLVE_HINT
+  { tabId, codeword }                { codeword }
+              │
+              ▼
+  getFrameForLabel(tabId, codeword)  // existing label-pool helper
+              │
+              ▼  chrome.tabs.sendMessage(tabId, ..., { frameId })
+```
+
+The content script's handler calls `store.byCodeword(codeword)` (a
+shared `WrapperStore` method used by activate_hint and the snapshot
+fallback too) and runs `generateSelector(wrapper.element)` from
+`src/selector-generator.ts`. The selector-generator already implements
+better heuristics than this design originally sketched: blacklist for
+hash-like classes, `tag.className` for stable classes, `data-testid`
+priority, ID quality checks, uniqueness verification, ancestor walks.
+We did not write our own.
+
+Response shape:
+
+```typescript
+type ResolveHintResponse =
+  | { ok: true; selector: string; tagName: string; accessibleName: string }
+  | { ok: false; reason: string };
+```
+
+The UI populates the matcher input with the selector and previews
+`<tag> "name"` underneath. The user can edit before clicking Add.
 
 ## Example QuickBase Rules
 
-Not shipped as defaults — kept here as reference for users (or for our
-docs) who want to recreate the rules that motivated this feature. Add via
-the options page.
+Not shipped as defaults — kept here as reference for users who want to
+recreate the rules that motivated this feature. Add via the popup or
+options page.
 
 **Exclusions:**
 
@@ -348,35 +404,53 @@ the options page.
 | Column header menu buttons | `section.tableReportDropdown button` | ~20 | Sort/filter/hide column access. |
 | App settings button | `button[aria-label="App settings"]` | 1 | Sidebar header gear. |
 
-**Deferred (`display:none`, v2):**
+**Deferred (`display:none`):**
 
 | Element | Notes |
 |---------|-------|
 | Row-level action icons in `td.actionColumn` | Children are `display:none` until row hover. Forcing `display` risks layout shifts. |
 
-## Files to Create or Modify
+## Files
 
-New files:
-- `src/domain-rules.ts` — types, pattern matching, rule evaluation, reveal injection, `isExcludedByRule`.
-- `src/domain-rules.test.ts` — unit tests for pattern matching, exclusion, inclusion.
-- `options.html` — options page markup.
-- `src/options.ts` — options page logic (vanilla JS).
+New:
+- `src/domain-rules.ts` + `src/domain-rules.test.ts` — types, pattern
+  matching, `compileRule`, exclusion/inclusion/reveal helpers.
+- `src/options-helpers.ts` + `src/options-helpers.test.ts` — pure
+  helpers (`suggestPattern`, `isValidSelector`, `validatePattern`).
+- `options.html` + `src/options.ts` — full options page.
 
-Modified files:
-- `src/content.ts` — load rules on init, wire into `doScan`, `discoverInSubtree`, `reevaluateAttribute`.
-- `src/scanner.ts` — extend `isHintable` to accept optional rule parameter.
-- `popup.html` — add link to options page.
-- `manifest.json` — add `options_page` or `options_ui` entry, add `options.html` + `options.js` to build.
+Modified:
+- `popup.html` + `src/popup.ts` — widened to 340px; added per-site
+  rule editor.
+- `src/content.ts` — `compiledRule` state, `applyUserRuleToScan`
+  helper, storage init + onChanged listener, exclude check in
+  `reevaluateAttribute` and `observeInvisibleCandidates`,
+  `resolveHintLocally` handler.
+- `src/background.ts` — `resolveHintFromTab` routing.
+- `src/element-wrapper.ts` — shared `WrapperStore.byCodeword`.
+- `src/types.ts` — `RESOLVE_HINT_FROM_TAB` / `RESOLVE_HINT` /
+  `ResolveHintResponse`.
+- `manifest.json` — `options_ui` entry.
+- `package.json` + `scripts/dev.mjs` — esbuild target for options
+  bundle.
 
-## Implementation Order
+## Implementation Status
 
-1. **`domain-rules.ts` + tests** — pure functions, no DOM dependencies
-   beyond `document.querySelector` for validation. Fully testable.
-2. **Wire into content.ts** — load from storage, cache, apply in scan
-   pipeline. Test with hardcoded seed rules before UI exists.
-3. **Reveal injection** — `injectRevealStyles` + lifecycle (init, rule
-   change). Test on QuickBase with the known reveal selectors.
-4. **Options page** — rule list, add/edit/delete, pattern auto-fill,
-   live validation.
-5. **Codeword resolution** — `RESOLVE_HINT` message, selector generation
-   heuristics, preview in options page.
+All shipped 2026-05-22.
+
+1. **`domain-rules.ts` + tests** — done; 41 tests pin pattern
+   matching, compileRule bucketing, exclusion/inclusion/reveal.
+2. **Wire into content.ts** — done; CompiledRule cached, scan path
+   shared between `doScan` and `discoverInSubtree`, MO paths apply
+   exclusion.
+3. **Reveal injection lifecycle** — done; init via storage load,
+   teardown + reinject on storage change.
+4. **Options page** — done; cross-site rule list, pattern auto-fill,
+   live match indicator, per-rule tab-picker resolve.
+5. **Codeword resolution** — done via `RESOLVE_HINT_FROM_TAB` →
+   `getFrameForLabel` → `RESOLVE_HINT` → `generateSelector`.
+6. **Popup per-site editor** — done; active-tab implicit, CSS-only
+   matchers, inline resolve.
+
+Step 7 from the original plan (ship QuickBase seed defaults) was
+dropped per Decision #3.
