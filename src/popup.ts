@@ -13,13 +13,19 @@
 import {
   matchRule,
   type DomainRule,
-  type DomainRules,
-  type Matcher,
   type RuleEntry,
   type RevealMethod,
 } from './domain-rules';
+import { loadDomainRules, saveDomainRules } from './domain-rules-storage';
 import { suggestPattern, isValidSelector } from './options-helpers';
-import type { ResolveHintResponse } from './types';
+import {
+  KIND_META,
+  matcherSummary,
+  resolveCodewordFromTab,
+  renderResolvePreview,
+  setFeedbackError,
+  clearFeedback,
+} from './rule-ui';
 
 // --- State ---
 
@@ -69,14 +75,11 @@ function initOptionsLink(): void {
 // --- Per-site rules ---
 
 async function loadRules(): Promise<void> {
-  const result = await chrome.storage.sync.get('domainRules');
-  const stored = result.domainRules as DomainRules | undefined;
-  rules = stored?.rules ?? [];
+  rules = await loadDomainRules();
 }
 
 function saveRules(): void {
-  const data: DomainRules = { rules };
-  chrome.storage.sync.set({ domainRules: data });
+  saveDomainRules(rules);
 }
 
 function activeHost(): string {
@@ -196,9 +199,7 @@ function renderEntry(rule: DomainRule, entry: RuleEntry, entriesEl: HTMLElement)
 
   const kind = document.createElement('span');
   kind.className = `entry-kind ${entry.kind}`;
-  kind.textContent = entry.kind === 'exclude' ? '–'
-                    : entry.kind === 'include' ? '+'
-                    : '◉';
+  kind.textContent = KIND_META[entry.kind].glyph;
   kind.title = entry.kind + (entry.reveal ? ` (${entry.reveal})` : '');
   node.appendChild(kind);
 
@@ -221,14 +222,6 @@ function renderEntry(rule: DomainRule, entry: RuleEntry, entriesEl: HTMLElement)
   node.appendChild(remove);
 
   return node;
-}
-
-function matcherSummary(matcher: Matcher): string {
-  switch (matcher.type) {
-    case 'css':   return matcher.selector;
-    case 'text':  return `text="${matcher.value}"`;
-    case 'class': return `.${matcher.name}`;
-  }
 }
 
 function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
@@ -266,6 +259,13 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
   matcherInput.placeholder = 'CSS selector';
   matcherInput.spellcheck = false;
   row1.appendChild(matcherInput);
+
+  const labelInput = document.createElement('input');
+  labelInput.type = 'text';
+  labelInput.className = 'entry-label';
+  labelInput.placeholder = 'Label (optional)';
+  labelInput.spellcheck = false;
+  row1.appendChild(labelInput);
 
   const addBtn = document.createElement('button');
   addBtn.className = 'primary';
@@ -305,20 +305,19 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
 
   matcherInput.addEventListener('input', () => {
     matcherInput.classList.remove('invalid');
-    feedback.classList.remove('error');
-    feedback.textContent = '';
+    clearFeedback(feedback);
   });
 
   addBtn.addEventListener('click', () => {
     const selector = matcherInput.value.trim();
     if (!selector) {
       matcherInput.classList.add('invalid');
-      setError(feedback, 'Selector is required.');
+      setFeedbackError(feedback, 'Selector is required.');
       return;
     }
     if (!isValidSelector(selector)) {
       matcherInput.classList.add('invalid');
-      setError(feedback, 'Invalid CSS selector.');
+      setFeedbackError(feedback, 'Invalid CSS selector.');
       return;
     }
     const kind = kindSelect.value as RuleEntry['kind'];
@@ -326,6 +325,7 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
       id: crypto.randomUUID(),
       kind,
       matcher: { type: 'css', selector },
+      label: labelInput.value.trim() || undefined,
     };
     if (kind === 'reveal') {
       entry.reveal = revealSelect.value as RevealMethod;
@@ -333,59 +333,41 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
     rule.entries.push(entry);
     saveRules();
     matcherInput.value = '';
-    feedback.textContent = '';
+    labelInput.value = '';
+    clearFeedback(feedback);
     renderEntries(rule, entriesEl);
   });
 
   resolveBtn.addEventListener('click', async () => {
     const codeword = codewordInput.value.trim();
     if (!codeword) {
-      setError(feedback, 'Type a hint codeword first.');
+      setFeedbackError(feedback, 'Type a hint codeword first.');
       return;
     }
-    if (!activeTab?.id) {
-      setError(feedback, 'No active tab.');
+    // Re-query the active tab so a tab-switch mid-popup doesn't target stale state.
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab?.id) {
+      setFeedbackError(feedback, 'No active tab.');
       return;
     }
-    feedback.classList.remove('error');
+    activeTab = tab;
+    clearFeedback(feedback);
     feedback.textContent = 'Resolving…';
     resolveBtn.disabled = true;
-    let response: ResolveHintResponse;
-    try {
-      response = await chrome.runtime.sendMessage({
-        type: 'RESOLVE_HINT_FROM_TAB',
-        tabId: activeTab.id,
-        codeword,
-      });
-    } catch (err) {
-      response = { ok: false, reason: String((err as Error)?.message ?? err) };
-    }
+    const response = await resolveCodewordFromTab(tab.id, codeword);
     resolveBtn.disabled = false;
     if (!response.ok) {
-      setError(feedback, response.reason);
+      setFeedbackError(feedback, response.reason);
       return;
     }
     matcherInput.value = response.selector;
     matcherInput.classList.remove('invalid');
     codewordInput.value = '';
-    feedback.classList.remove('error');
-    feedback.innerHTML = '';
-    feedback.append('Matched ');
-    const tag = document.createElement('code');
-    tag.textContent = `<${response.tagName}>`;
-    feedback.appendChild(tag);
-    if (response.accessibleName) {
-      feedback.append(` "${response.accessibleName}"`);
-    }
+    renderResolvePreview(feedback, response);
     matcherInput.focus();
   });
 
   return wrap;
-}
-
-function setError(el: HTMLElement, msg: string): void {
-  el.classList.add('error');
-  el.textContent = msg;
 }
 
 // --- Init ---

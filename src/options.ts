@@ -1,29 +1,38 @@
 /**
  * BranchKit Browser — Options page logic.
  *
- * Vanilla JS over the chrome.storage.sync `domainRules` key. Renders the
- * rule list from the markup in options.html, wires up add/edit/delete,
- * and keeps the "matches current tab" indicator live.
- *
- * Codeword resolution (picking an element via voice handle in a tab and
- * pasting the resulting selector here) is deferred to step 5 of the
- * design doc — this v1 uses manual selector/text/class entry only.
+ * Vanilla JS cross-site rule editor. Pattern editing with live
+ * "matches current tab" indicator, all matcher types (CSS / text /
+ * class), and a per-rule tab-picker for codeword resolve. Storage
+ * and message-passing go through ./domain-rules-storage and ./rule-ui.
  */
 
 import type {
   DomainRule,
-  DomainRules,
   Matcher,
   RuleEntry,
   RevealMethod,
 } from './domain-rules';
 import { matchRule } from './domain-rules';
 import {
+  loadDomainRules,
+  saveDomainRules,
+  onDomainRulesChanged,
+  rulesEqual,
+} from './domain-rules-storage';
+import {
   suggestPattern,
   isValidSelector,
   validatePattern,
 } from './options-helpers';
-import type { ResolveHintResponse } from './types';
+import {
+  KIND_META,
+  matcherSummary,
+  resolveCodewordFromTab,
+  renderResolvePreview,
+  setFeedbackError,
+  clearFeedback,
+} from './rule-ui';
 
 // --- State ---
 
@@ -38,19 +47,12 @@ const entryTpl = document.getElementById('entry-template') as HTMLTemplateElemen
 
 // --- Storage ---
 
-function load(): Promise<void> {
-  return new Promise((resolve) => {
-    chrome.storage.sync.get('domainRules', (result) => {
-      const stored = result.domainRules as DomainRules | undefined;
-      rules = stored?.rules ?? [];
-      resolve();
-    });
-  });
+async function load(): Promise<void> {
+  rules = await loadDomainRules();
 }
 
 function save(): void {
-  const data: DomainRules = { rules };
-  chrome.storage.sync.set({ domainRules: data });
+  saveDomainRules(rules);
 }
 
 async function getActiveTabUrl(): Promise<string | null> {
@@ -142,9 +144,7 @@ function renderEntry(rule: DomainRule, entry: RuleEntry): HTMLElement {
 
   const kindEl = node.querySelector('.entry-kind') as HTMLElement;
   kindEl.classList.add(entry.kind);
-  kindEl.textContent = entry.kind === 'exclude' ? '–'
-                    : entry.kind === 'include' ? '+'
-                    : '◉';
+  kindEl.textContent = KIND_META[entry.kind].glyph;
   kindEl.title = entry.kind;
 
   const desc = node.querySelector('.entry-desc') as HTMLElement;
@@ -169,14 +169,6 @@ function renderEntry(rule: DomainRule, entry: RuleEntry): HTMLElement {
   });
 
   return node;
-}
-
-function matcherSummary(matcher: Matcher): string {
-  switch (matcher.type) {
-    case 'css':   return matcher.selector;
-    case 'text':  return `text="${matcher.value}"${matcher.caseSensitive ? '' : ' (case-insensitive)'}`;
-    case 'class': return `.${matcher.name}`;
-  }
 }
 
 // --- Pattern editing ---
@@ -381,33 +373,21 @@ function wireResolvePanel(rule: DomainRule, ruleNode: HTMLElement): void {
   resolveBtn.addEventListener('click', async () => {
     const tabId = parseInt(tabSelect.value, 10);
     const codeword = codewordInput.value.trim();
-    result.classList.remove('error');
     if (!tabId) {
-      result.classList.add('error');
-      result.textContent = 'Pick a tab first.';
+      setFeedbackError(result, 'Pick a tab first.');
       return;
     }
     if (!codeword) {
-      result.classList.add('error');
-      result.textContent = 'Enter a hint codeword.';
+      setFeedbackError(result, 'Enter a hint codeword.');
       return;
     }
+    clearFeedback(result);
     result.textContent = 'Resolving…';
     resolveBtn.disabled = true;
-    let response: ResolveHintResponse;
-    try {
-      response = await chrome.runtime.sendMessage({
-        type: 'RESOLVE_HINT_FROM_TAB',
-        tabId,
-        codeword,
-      });
-    } catch (err) {
-      response = { ok: false, reason: String((err as Error)?.message ?? err) };
-    }
+    const response = await resolveCodewordFromTab(tabId, codeword);
     resolveBtn.disabled = false;
     if (!response.ok) {
-      result.classList.add('error');
-      result.textContent = response.reason;
+      setFeedbackError(result, response.reason);
       return;
     }
     const matcherTypeSelect = ruleNode.querySelector('.matcher-type') as HTMLSelectElement;
@@ -417,19 +397,7 @@ function wireResolvePanel(rule: DomainRule, ruleNode: HTMLElement): void {
     matcherInput.value = response.selector;
     matcherInput.classList.remove('invalid');
     matcherInput.focus();
-
-    result.innerHTML = '';
-    result.appendChild(document.createTextNode('Matched '));
-    const code = document.createElement('code');
-    code.textContent = `<${response.tagName}>`;
-    result.appendChild(code);
-    if (response.accessibleName) {
-      result.appendChild(document.createTextNode(` "${response.accessibleName}"`));
-    }
-    result.appendChild(document.createTextNode(' → '));
-    const sel = document.createElement('code');
-    sel.textContent = response.selector;
-    result.appendChild(sel);
+    renderResolvePreview(result, response, { includeSelector: true });
   });
 }
 
@@ -476,12 +444,8 @@ async function init(): Promise<void> {
 
   addBlank.addEventListener('click', () => addRule(''));
 
-  chrome.storage.onChanged.addListener((changes) => {
-    if (!changes.domainRules) return;
-    const stored = changes.domainRules.newValue as DomainRules | undefined;
-    // Skip if the change originated from us (rules already in sync).
-    const incoming = stored?.rules ?? [];
-    if (JSON.stringify(incoming) === JSON.stringify(rules)) return;
+  onDomainRulesChanged((incoming) => {
+    if (rulesEqual(incoming, rules)) return;
     rules = incoming;
     render();
   });

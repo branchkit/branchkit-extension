@@ -176,6 +176,20 @@ describe('compileRule', () => {
     expect(compileRule(r).includeSelector).toBe('button');
   });
 
+  it('drops invalid exclude CSS selectors so they don\'t throw per-element at scan time', () => {
+    const r = rule({
+      entries: [
+        excludeEntry({ type: 'css', selector: '[unclosed' }),
+        excludeEntry({ type: 'css', selector: 'button.kept' }),
+        excludeEntry({ type: 'class', name: 'still-here' }),
+      ],
+    });
+    const c = compileRule(r);
+    expect(c.excludes).toHaveLength(2);
+    expect((c.excludes[0].matcher as { selector: string }).selector).toBe('button.kept');
+    expect(c.excludes[1].matcher.type).toBe('class');
+  });
+
   it('returns null includeSelector when there are no valid includes', () => {
     const r = rule({ entries: [excludeEntry({ type: 'css', selector: 'a' })] });
     expect(compileRule(r).includeSelector).toBeNull();

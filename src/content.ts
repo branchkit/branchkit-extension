@@ -67,9 +67,10 @@ import {
   isExcludedByRule,
   injectRevealStyles,
   type CompiledRule,
-  type DomainRules,
+  type DomainRule,
   type RuleEntry,
 } from './domain-rules';
+import { loadDomainRules, onDomainRulesChanged, ruleEqual } from './domain-rules-storage';
 import { generateSelector } from './selector-generator';
 import type { ResolveHintResponse } from './types';
 
@@ -129,13 +130,12 @@ const INPUT_TYPES = new Set(['input', 'textarea', 'select', 'contenteditable']);
 // the storage callback triggers a second doScan once the rule is known.
 // See notes/DESIGN_PER_DOMAIN_HINT_RULES.md "Timing".
 let compiledRule: CompiledRule | null = null;
-const EMPTY_EXCLUDES: readonly RuleEntry[] = [];
 
 function getExcludes(): readonly RuleEntry[] {
-  return compiledRule?.excludes ?? EMPTY_EXCLUDES;
+  return compiledRule?.excludes ?? [];
 }
 
-function applyMatchedRule(rule: DomainRules['rules'][number] | null): void {
+function applyMatchedRule(rule: DomainRule | null): void {
   // Sweep any prior reveal stylesheet — covers both our previous match
   // and orphan nodes left by an earlier content-script generation
   // (extension reload re-injects JS but leaves the DOM).
@@ -152,9 +152,8 @@ function applyMatchedRule(rule: DomainRules['rules'][number] | null): void {
 }
 
 if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
-  chrome.storage.sync.get('domainRules', (result) => {
-    const stored = result.domainRules as DomainRules | undefined;
-    const rule = stored?.rules ? matchRule(window.location.href, stored.rules) : null;
+  loadDomainRules().then((rules) => {
+    const rule = matchRule(window.location.href, rules);
     applyMatchedRule(rule);
     if (rule) {
       doScan();
@@ -162,37 +161,21 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
     }
   });
 
-  chrome.storage.onChanged.addListener((changes) => {
-    if (!changes.domainRules) return;
-    const stored = changes.domainRules.newValue as DomainRules | undefined;
-    const nextRule = stored?.rules ? matchRule(window.location.href, stored.rules) : null;
+  onDomainRulesChanged((rules) => {
+    const nextRule = matchRule(window.location.href, rules);
     // Skip if THIS frame's matched rule is unchanged — a user editing
     // *.github.com's rule shouldn't trigger a re-scan stampede on every
     // quickbase.com tab.
-    const sameAsCached = sameRule(nextRule, compiledRule?.rule ?? null);
-    if (sameAsCached) return;
-    const prevExcludes = getExcludes();
+    if (ruleEqual(nextRule, compiledRule?.rule ?? null)) return;
     applyMatchedRule(nextRule);
     if (compiledRule) {
       for (const w of [...store.all]) {
         if (isExcludedByRule(w.element, compiledRule.excludes)) detachWrapper(w.element);
       }
-    } else if (prevExcludes.length > 0) {
-      // Rule went away — no wrappers need detaching (the previous rule's
-      // exclusions never created wrappers to begin with). Still need to
-      // re-scan to pick up elements that had been excluded.
     }
     doScan();
     schedulePushGrammar();
   });
-}
-
-function sameRule(a: DomainRules['rules'][number] | null, b: DomainRules['rules'][number] | null): boolean {
-  if (a === b) return true;
-  if (!a || !b) return false;
-  // JSON shape match is enough — rules are small (a few hundred bytes),
-  // and the chrome.storage write preserves our insertion key order.
-  return JSON.stringify(a) === JSON.stringify(b);
 }
 
 // --- Hydration-safe deferral ---
@@ -788,10 +771,13 @@ function applyUserRuleToScan(
   if (cr.excludes.length > 0) applyExclusions(result.refs, result.elements, cr.excludes);
   if (!cr.includeSelector) return;
 
-  // Building the seen set is O(store.all). Only pay this when we
-  // actually have includes to run.
+  // Subtree scans only need to dedupe within this scan — added subtrees
+  // don't overlap with existing wrappers (those are by definition NOT
+  // in the just-added subtree). Skip the O(store.all) walk for them.
   const seen = new Set<Element>(result.refs);
-  for (const w of store.all) seen.add(w.element);
+  if (root === document) {
+    for (const w of store.all) seen.add(w.element);
+  }
   const extra = collectInclusions(seen, cr.includeSelector, root);
   result.refs.push(...extra.refs);
   result.elements.push(...extra.elements);

@@ -102,10 +102,11 @@ function matchesPattern(pattern: string, host: string, hostPath: string): boolea
 // --- Compile ---
 
 /**
- * Bucket a rule's entries by kind, validate include CSS selectors, and
- * join the valid ones into a single selector string. Validating up-front
- * means the runtime `collectInclusions` can use one querySelectorAll
- * call instead of N, and a single broken selector won't kill the lot.
+ * Bucket a rule's entries by kind, validate CSS selectors, and join
+ * the valid include selectors into a single string. Validating up-front
+ * lets `collectInclusions` use one querySelectorAll instead of N and
+ * keeps invalid exclude/include selectors from throwing on every
+ * element checked.
  */
 export function compileRule(rule: DomainRule): CompiledRule {
   const excludes: RuleEntry[] = [];
@@ -114,15 +115,13 @@ export function compileRule(rule: DomainRule): CompiledRule {
 
   for (const entry of rule.entries) {
     if (entry.kind === 'exclude') {
+      if (entry.matcher.type === 'css' && !isValidCSSSelector(entry.matcher.selector)) continue;
       excludes.push(entry);
     } else if (entry.kind === 'reveal') {
       reveals.push(entry);
     } else if (entry.kind === 'include' && entry.matcher.type === 'css') {
-      try {
-        document.querySelector(entry.matcher.selector);
+      if (isValidCSSSelector(entry.matcher.selector)) {
         includeSelectors.push(entry.matcher.selector);
-      } catch {
-        // Broken include selector — drop it. Other entries keep working.
       }
     }
   }
@@ -133,6 +132,15 @@ export function compileRule(rule: DomainRule): CompiledRule {
     reveals,
     includeSelector: includeSelectors.length > 0 ? includeSelectors.join(', ') : null,
   };
+}
+
+function isValidCSSSelector(selector: string): boolean {
+  try {
+    document.querySelector(selector);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // --- Exclusions ---
