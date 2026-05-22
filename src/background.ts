@@ -839,8 +839,37 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     return false;
   }
 
+  if (message.type === 'RESOLVE_HINT_FROM_TAB') {
+    resolveHintFromTab(message.tabId, message.codeword)
+      .then(sendResponse)
+      .catch(err => sendResponse({ ok: false, reason: String(err?.message ?? err) }));
+    return true;  // async response
+  }
+
   return false;
 });
+
+// Look up which frame in `tabId` owns `codeword` and ask it to resolve.
+// Returns ResolveHintResponse. Used by the options page to derive a stable
+// selector from a visible-hint codeword without the user having to write
+// CSS by hand.
+async function resolveHintFromTab(tabId: number, codeword: string) {
+  const trimmed = codeword.trim();
+  if (!trimmed) return { ok: false, reason: 'Codeword is empty.' };
+  const frameId = await getFrameForLabel(tabId, trimmed);
+  if (frameId == null) {
+    return { ok: false, reason: `Codeword "${trimmed}" is not visible in that tab. Make sure hints are showing.` };
+  }
+  try {
+    return await chrome.tabs.sendMessage(
+      tabId,
+      { type: 'RESOLVE_HINT', codeword: trimmed },
+      { frameId },
+    );
+  } catch (err) {
+    return { ok: false, reason: `Could not reach tab frame: ${String((err as Error)?.message ?? err)}` };
+  }
+}
 
 // Clear a tab's label pool + per-frame grammar + pending push timer when
 // the tab is closed or starts navigating. Content scripts reload with no

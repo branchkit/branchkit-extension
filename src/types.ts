@@ -73,7 +73,26 @@ export type Message =
   // memory. Fires when the activate path sees a registry id that we
   // never minted (or have since cleared) — the plugin's bookkeeping is
   // out of sync and a fresh commands.push is needed.
-  | { type: 'INVALIDATE_COMMANDS'; reason: string };
+  | { type: 'INVALIDATE_COMMANDS'; reason: string }
+  // Options → background. User wants to convert a visible hint codeword
+  // (in a specific tab) into a stable CSS selector for inclusion in a
+  // domain rule. Background looks up which frame owns the codeword via
+  // the label pool and forwards a RESOLVE_HINT to that frame.
+  | { type: 'RESOLVE_HINT_FROM_TAB'; tabId: number; codeword: string }
+  // Background → content (specific frame). Resolve the codeword to an
+  // element in the local store and synthesize a stable selector. Response
+  // shape is ResolveHintResponse.
+  | { type: 'RESOLVE_HINT'; codeword: string };
+
+// Response to RESOLVE_HINT / RESOLVE_HINT_FROM_TAB.
+export type ResolveHintResponse =
+  | {
+      ok: true;
+      selector: string;
+      tagName: string;
+      accessibleName: string;
+    }
+  | { ok: false; reason: string };
 
 // Response to CLAIM_LABELS. Returned via sendResponse callback.
 // May be shorter than `count` if pool was partially exhausted; empty array

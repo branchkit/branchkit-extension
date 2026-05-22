@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>BranchKit Browser — Domain rules</title>
+  <style>
+    :root {
+      --fg: #1c1c1e;
+      --fg-muted: #6b6b6f;
+      --bg: #fbfbfb;
+      --card: #fff;
+      --border: #e5e5ea;
+      --accent: #0a84ff;
+      --danger: #ff3b30;
+      --ok: #34c759;
+      --exclude: #ff3b30;
+      --include: #34c759;
+      --reveal: #0a84ff;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 14px;
+      color: var(--fg);
+      background: var(--bg);
+      margin: 0;
+      padding: 32px 24px 64px;
+    }
+    .container {
+      max-width: 720px;
+      margin: 0 auto;
+    }
+    h1 {
+      font-size: 22px;
+      margin: 0 0 4px 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    h1 img { width: 28px; height: 28px; }
+    .subtitle {
+      color: var(--fg-muted);
+      margin-bottom: 24px;
+      line-height: 1.4;
+    }
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+      align-items: center;
+    }
+    button {
+      font: inherit;
+      padding: 6px 12px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--fg);
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+    }
+    button.danger {
+      color: var(--danger);
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .rule {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 12px;
+      overflow: hidden;
+    }
+    .rule.disabled { opacity: 0.55; }
+    .rule-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+    .rule-header.no-entries { border-bottom: none; }
+    .pattern {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+      font-size: 13px;
+      flex: 1;
+      min-width: 0;
+    }
+    .pattern input {
+      width: 100%;
+      font: inherit;
+      padding: 4px 6px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--bg);
+    }
+    .pattern input.invalid { border-color: var(--danger); }
+    .match-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--border);
+      flex-shrink: 0;
+    }
+    .match-dot.match { background: var(--ok); }
+    .toggle {
+      cursor: pointer;
+    }
+    .entries {
+      padding: 6px 8px 10px;
+    }
+    .entries.empty {
+      color: var(--fg-muted);
+      padding: 10px 14px;
+      font-style: italic;
+    }
+    .entry {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 8px;
+      border-radius: 6px;
+    }
+    .entry:hover { background: rgba(0,0,0,0.025); }
+    .entry-kind {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 10px;
+      font-weight: bold;
+    }
+    .entry-kind.exclude { background: var(--exclude); }
+    .entry-kind.include { background: var(--include); }
+    .entry-kind.reveal { background: var(--reveal); }
+    .entry-desc {
+      flex: 1;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+      font-size: 12px;
+      color: var(--fg);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .entry-desc .label-text {
+      color: var(--fg-muted);
+      font-family: inherit;
+      margin-right: 6px;
+    }
+    .entry-actions {
+      display: flex;
+      gap: 4px;
+    }
+    .entry-actions button {
+      padding: 2px 8px;
+      font-size: 12px;
+    }
+    .add-entry {
+      margin: 6px 8px 0;
+      padding: 8px;
+      border: 1px dashed var(--border);
+      border-radius: 6px;
+      background: var(--bg);
+    }
+    .add-entry-row {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .add-entry-row label {
+      font-size: 12px;
+      color: var(--fg-muted);
+    }
+    .add-entry-row input,
+    .add-entry-row select {
+      font: inherit;
+      padding: 4px 6px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--card);
+      font-size: 13px;
+    }
+    .add-entry-row input.matcher {
+      flex: 1;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    }
+    .add-entry-row input.matcher.invalid { border-color: var(--danger); }
+    .add-entry-row input.label {
+      flex: 1;
+    }
+    .pattern-error,
+    .matcher-error {
+      color: var(--danger);
+      font-size: 12px;
+      margin-top: 4px;
+    }
+    .pattern-error:empty,
+    .matcher-error:empty { display: none; }
+    .resolve-panel {
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px dashed var(--border);
+    }
+    .resolve-panel summary {
+      font-size: 12px;
+      color: var(--fg-muted);
+      cursor: pointer;
+      user-select: none;
+    }
+    .resolve-row {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      margin-top: 8px;
+    }
+    .resolve-row select,
+    .resolve-row input {
+      font: inherit;
+      padding: 4px 6px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--card);
+      font-size: 13px;
+    }
+    .resolve-row .resolve-tab { flex: 2; min-width: 0; }
+    .resolve-row .resolve-codeword { flex: 1; font-family: ui-monospace, SFMono-Regular, monospace; }
+    .resolve-result {
+      margin-top: 6px;
+      font-size: 12px;
+      color: var(--fg-muted);
+    }
+    .resolve-result.error { color: var(--danger); }
+    .resolve-result code {
+      background: var(--bg);
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+    }
+    .empty-state {
+      text-align: center;
+      color: var(--fg-muted);
+      padding: 48px 16px;
+      border: 1px dashed var(--border);
+      border-radius: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1><img src="icons/icon48.png" alt="">Domain rules</h1>
+    <div class="subtitle">
+      Customize which elements get hint badges on specific sites. Excludes hide
+      cluttering elements, includes pick up widgets the scanner misses, and
+      reveals make hover-hidden elements visible. Rules sync across browsers.
+    </div>
+
+    <div class="toolbar">
+      <button id="add-current" class="primary">+ Add rule for current site</button>
+      <button id="add-blank">+ Add blank rule</button>
+    </div>
+
+    <div id="rules"></div>
+
+    <template id="rule-template">
+      <div class="rule">
+        <div class="rule-header">
+          <span class="match-dot" title="Matches the current tab"></span>
+          <span class="pattern">
+            <input type="text" class="pattern-input" spellcheck="false">
+          </span>
+          <input type="checkbox" class="toggle" title="Enable/disable rule">
+          <button class="delete danger" title="Delete rule">Delete</button>
+        </div>
+        <div class="pattern-error" style="padding: 0 14px 8px"></div>
+        <div class="entries"></div>
+        <div class="add-entry">
+          <div class="add-entry-row">
+            <label>
+              Type
+              <select class="kind-select">
+                <option value="exclude">Exclude</option>
+                <option value="include">Include</option>
+                <option value="reveal">Reveal</option>
+              </select>
+            </label>
+            <label class="matcher-type-label">
+              Match by
+              <select class="matcher-type">
+                <option value="css">CSS selector</option>
+                <option value="text">Text content</option>
+                <option value="class">Class name</option>
+              </select>
+            </label>
+            <label class="reveal-method-label" hidden>
+              Method
+              <select class="reveal-method">
+                <option value="opacity">Opacity</option>
+                <option value="visibility">Visibility</option>
+              </select>
+            </label>
+          </div>
+          <div class="add-entry-row">
+            <input type="text" class="matcher" placeholder="button.gear">
+            <input type="text" class="entry-label" placeholder="Label (optional)">
+            <button class="add-entry-btn primary">Add</button>
+          </div>
+          <div class="matcher-error"></div>
+          <details class="resolve-panel">
+            <summary>Or pick from an open tab…</summary>
+            <div class="resolve-row">
+              <select class="resolve-tab" title="Open tab to resolve in">
+                <option value="">— Select tab —</option>
+              </select>
+              <input type="text" class="resolve-codeword" placeholder="e.g. ape deck" spellcheck="false">
+              <button class="resolve-btn">Resolve</button>
+            </div>
+            <div class="resolve-result"></div>
+          </details>
+        </div>
+      </div>
+    </template>
+
+    <template id="entry-template">
+      <div class="entry">
+        <span class="entry-kind"></span>
+        <span class="entry-desc"></span>
+        <span class="entry-actions">
+          <button class="delete-entry danger">Remove</button>
+        </span>
+      </div>
+    </template>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

@@ -152,6 +152,18 @@ export class WrapperStore {
     );
   }
 
+  /**
+   * Resolve a full codeword string ("arch" or "zone arch") to its
+   * wrapper. Whitespace-tolerant. Returns undefined for empty input,
+   * unknown codewords, or codewords with more than two words.
+   */
+  byCodeword(codeword: string): ElementWrapper | undefined {
+    const words = codeword.trim().split(/\s+/).filter(w => w.length > 0);
+    if (words.length === 1) return this.byLabel(words[0]);
+    if (words.length === 2) return this.byLabelPair(words[0], words[1]);
+    return undefined;
+  }
+
   /** Find wrapper matching a prefix string (for keyboard filtering) */
   matchingPrefix(prefix: string): ElementWrapper[] {
     const lower = prefix.toLowerCase();

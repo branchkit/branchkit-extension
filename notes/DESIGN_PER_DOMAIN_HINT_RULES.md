@@ -34,11 +34,12 @@ Resolved questions that shaped this design:
    existing rule for editing. The UI makes this obvious by showing existing
    rules grouped by pattern.
 
-3. **Seed rules delivery.** Ship as **built-in defaults** that appear
-   pre-populated in the user's rule list on first install. Marked with a
-   "default" badge so the user knows they didn't create them. Deletable
-   and editable. No "suggested rules on first visit" flow — that requires
-   detection logic and a prompt UI that isn't worth the complexity.
+3. **Seed rules delivery.** **No defaults ship.** Users who want a
+   QuickBase or other site-specific rule add it themselves. Shipping
+   pre-populated rules creates a maintenance burden (selectors break when
+   sites change) and makes the extension's behavior feel less predictable
+   to users who didn't ask for them. The data model carries no `builtin`
+   flag and no "Default" badge — every rule is user-authored.
 
 4. **`display` reveals.** **Defer to v2.** `opacity` and `visibility`
    reveals are safe (no layout shifts). `display: none -> revert` risks
@@ -67,12 +68,6 @@ Resolved questions that shaped this design:
    a filter mechanism but the data models merge at that point, not now.
    Adding unused fields to "leave room" just creates confusion.
 
-8. **Breadcrumb seed rule.** **Exclude**, not gate. The sidebar table
-   list already provides voice navigation to tables. Breadcrumb links
-   are low-value targets that obscure high-value text (the active table
-   name). Exact selector TBD pending DOM inspection — likely
-   `nav.GlobalNav a` or the breadcrumb container's anchor elements.
-
 ## Data Model
 
 ```typescript
@@ -84,7 +79,6 @@ interface DomainRule {
   id: string;                  // crypto.randomUUID()
   pattern: string;             // "*.quickbase.com", "github.com"
   enabled: boolean;
-  builtin: boolean;            // true for shipped defaults; user can delete
   entries: RuleEntry[];
 }
 
@@ -131,7 +125,6 @@ Implementation is ~20 lines in `src/domain-rules.ts`. No glob library.
         "id": "550e8400-...",
         "pattern": "*.quickbase.com",
         "enabled": true,
-        "builtin": true,
         "entries": [
           {
             "id": "6ba7b810-...",
@@ -270,17 +263,14 @@ one section: a rule list.
 |                                                   |
 | [+ Add rule for current site]                     |
 |                                                   |
-| *.quickbase.com  [on/off]  [edit] [delete]  [D]  |
+| *.quickbase.com  [on/off]  [edit] [delete]       |
 |   - Exclude: th.actionColumn[tabindex="0"]        |
-|   + Exclude: nav breadcrumb links                 |
 |   o Reveal:  button.settings-button (opacity)     |
-|   o Reveal:  section.tableReportDropdown (opacity) |
 |                                                   |
 | github.com  [on/off]  [edit] [delete]             |
 |   (no entries)                                     |
 +--------------------------------------------------+
 
-[D] = "default" badge for built-in rules
 [-] = red, exclude     [+] = green, include     [o] = blue, reveal
 ```
 
@@ -338,16 +328,17 @@ When resolving a codeword to a stable selector, priority order:
 The heuristics don't need to be perfect — the user sees the result and
 can edit before saving.
 
-## Known Seed Rules
+## Example QuickBase Rules
 
-### QuickBase (`*.quickbase.com`)
+Not shipped as defaults — kept here as reference for users (or for our
+docs) who want to recreate the rules that motivated this feature. Add via
+the options page.
 
 **Exclusions:**
 
 | Element | Matcher | Reason |
 |---------|---------|--------|
 | Row-actions column header | `th.actionColumn[tabindex="0"]` | Only `th` with `tabindex=0`; the checkbox inside already has its own badge. |
-| Breadcrumb nav links | TBD (needs DOM inspection) | Badges obscure the active table name. Sidebar already provides voice table navigation. |
 
 **Reveals (opacity):**
 
@@ -361,7 +352,7 @@ can edit before saving.
 
 | Element | Notes |
 |---------|-------|
-| Row-level action icons in `td.actionColumn` | Children are `display:none` until row hover. Forcing `display` risks layout shifts. May need the adapter's `scanRecordIcons()` updated for the hybrid table report format instead. |
+| Row-level action icons in `td.actionColumn` | Children are `display:none` until row hover. Forcing `display` risks layout shifts. |
 
 ## Files to Create or Modify
 
@@ -389,4 +380,3 @@ Modified files:
    live validation.
 5. **Codeword resolution** — `RESOLVE_HINT` message, selector generation
    heuristics, preview in options page.
-6. **Ship seed rules** — QuickBase defaults pre-populated on install.

@@ -59,6 +59,19 @@ import {
   setFindCallbacks,
 } from './find';
 import { saveReference, resolveReference, listReferences } from './references';
+import {
+  matchRule,
+  compileRule,
+  applyExclusions,
+  collectInclusions,
+  isExcludedByRule,
+  injectRevealStyles,
+  type CompiledRule,
+  type DomainRules,
+  type RuleEntry,
+} from './domain-rules';
+import { generateSelector } from './selector-generator';
+import type { ResolveHintResponse } from './types';
 
 // --- State ---
 
@@ -107,6 +120,80 @@ let phraseSnapshot: CodewordSnapshot | null = null;
 
 // Input element types — used by the "activate" action to decide click vs focus.
 const INPUT_TYPES = new Set(['input', 'textarea', 'select', 'contenteditable']);
+
+// --- Per-domain hint rules ---
+//
+// Loaded asynchronously from chrome.storage.sync at startup; the initial
+// doScan() at the bottom of this file runs BEFORE the storage read
+// returns, so the first frame may render without user rules applied —
+// the storage callback triggers a second doScan once the rule is known.
+// See notes/DESIGN_PER_DOMAIN_HINT_RULES.md "Timing".
+let compiledRule: CompiledRule | null = null;
+const EMPTY_EXCLUDES: readonly RuleEntry[] = [];
+
+function getExcludes(): readonly RuleEntry[] {
+  return compiledRule?.excludes ?? EMPTY_EXCLUDES;
+}
+
+function applyMatchedRule(rule: DomainRules['rules'][number] | null): void {
+  // Sweep any prior reveal stylesheet — covers both our previous match
+  // and orphan nodes left by an earlier content-script generation
+  // (extension reload re-injects JS but leaves the DOM).
+  for (const old of document.querySelectorAll('style[data-branchkit-reveal]')) {
+    old.remove();
+  }
+  if (!rule) {
+    compiledRule = null;
+    return;
+  }
+  compiledRule = compileRule(rule);
+  const style = injectRevealStyles(compiledRule.reveals);
+  if (style && document.head) document.head.appendChild(style);
+}
+
+if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
+  chrome.storage.sync.get('domainRules', (result) => {
+    const stored = result.domainRules as DomainRules | undefined;
+    const rule = stored?.rules ? matchRule(window.location.href, stored.rules) : null;
+    applyMatchedRule(rule);
+    if (rule) {
+      doScan();
+      schedulePushGrammar();
+    }
+  });
+
+  chrome.storage.onChanged.addListener((changes) => {
+    if (!changes.domainRules) return;
+    const stored = changes.domainRules.newValue as DomainRules | undefined;
+    const nextRule = stored?.rules ? matchRule(window.location.href, stored.rules) : null;
+    // Skip if THIS frame's matched rule is unchanged — a user editing
+    // *.github.com's rule shouldn't trigger a re-scan stampede on every
+    // quickbase.com tab.
+    const sameAsCached = sameRule(nextRule, compiledRule?.rule ?? null);
+    if (sameAsCached) return;
+    const prevExcludes = getExcludes();
+    applyMatchedRule(nextRule);
+    if (compiledRule) {
+      for (const w of [...store.all]) {
+        if (isExcludedByRule(w.element, compiledRule.excludes)) detachWrapper(w.element);
+      }
+    } else if (prevExcludes.length > 0) {
+      // Rule went away — no wrappers need detaching (the previous rule's
+      // exclusions never created wrappers to begin with). Still need to
+      // re-scan to pick up elements that had been excluded.
+    }
+    doScan();
+    schedulePushGrammar();
+  });
+}
+
+function sameRule(a: DomainRules['rules'][number] | null, b: DomainRules['rules'][number] | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  // JSON shape match is enough — rules are small (a few hundred bytes),
+  // and the chrome.storage write preserves our insertion key order.
+  return JSON.stringify(a) === JSON.stringify(b);
+}
 
 // --- Hydration-safe deferral ---
 //
@@ -256,15 +343,10 @@ dispatcher.register('activate_first_visible', () => {
 });
 
 dispatcher.register('activate_hint', (params) => {
-  const word = params.word;
-  const word2 = params.word2;
-  if (word2) {
-    const w = store.byLabelPair(word, word2);
-    if (w) activateWrapper(w);
-  } else if (word) {
-    const w = store.byLabel(word);
-    if (w) activateWrapper(w);
-  }
+  const codeword = params.word2 ? `${params.word} ${params.word2}` : params.word;
+  if (!codeword) return;
+  const w = store.byCodeword(codeword);
+  if (w) activateWrapper(w);
 });
 
 // --- Scroll action handlers ---
@@ -591,6 +673,7 @@ function recheckPendingVisibility(): void {
 function observeInvisibleCandidates(candidates: Element[]): void {
   for (const el of candidates) {
     if (store.findWrapperFor(el) || !el.isConnected) continue;
+    if (isExcludedByRule(el, getExcludes())) continue;
     pendingVisibility.add(el);
     visibilityIO.observe(el);
   }
@@ -682,6 +765,7 @@ function startBadgeReattachObserver(): void {
 function doScan(): void {
   const adapter = getActiveAdapter(window.location.href);
   const result = adapter ? scanWithAdapter(adapter) : scanElements();
+  applyUserRuleToScan(result, document);
 
   for (let i = 0; i < result.elements.length; i++) {
     if (store.findWrapperFor(result.refs[i])) continue;
@@ -689,6 +773,28 @@ function doScan(): void {
   }
   dropDisconnectedWrappers();
   observeInvisibleCandidates(result.invisibleCandidates);
+}
+
+// Apply the current compiled rule's exclusions + inclusions to a scan
+// result. Mutates result in place. Used by both doScan (full document)
+// and discoverInSubtree (added subtree). Cheap no-op when no rule is
+// active — the only added cost is one branch.
+function applyUserRuleToScan(
+  result: { refs: Element[]; elements: ScannedElement[] },
+  root: ParentNode,
+): void {
+  const cr = compiledRule;
+  if (!cr) return;
+  if (cr.excludes.length > 0) applyExclusions(result.refs, result.elements, cr.excludes);
+  if (!cr.includeSelector) return;
+
+  // Building the seen set is O(store.all). Only pay this when we
+  // actually have includes to run.
+  const seen = new Set<Element>(result.refs);
+  for (const w of store.all) seen.add(w.element);
+  const extra = collectInclusions(seen, cr.includeSelector, root);
+  result.refs.push(...extra.refs);
+  result.elements.push(...extra.elements);
 }
 
 async function showHints(filter?: Category | Category[]): Promise<void> {
@@ -1063,6 +1169,26 @@ function requestCommandsInvalidate(reason: string): void {
   }
 }
 
+// Resolve a visible-hint codeword to a stable selector. Used by the
+// options page (via background) to convert "ape deck" into something like
+// `a.deleteBtn` for a domain rule entry.
+function resolveHintLocally(codeword: string): ResolveHintResponse {
+  const wrapper = store.byCodeword(codeword);
+  if (!wrapper) {
+    return { ok: false, reason: `Codeword "${codeword.trim()}" not visible in this frame.` };
+  }
+  const el = wrapper.element;
+  if (!el.isConnected) {
+    return { ok: false, reason: 'Element is no longer in the DOM.' };
+  }
+  return {
+    ok: true,
+    selector: generateSelector(el),
+    tagName: el.tagName.toLowerCase(),
+    accessibleName: accessibleName(el),
+  };
+}
+
 // Truncate the frame URL for log readability. Includes path but not query
 // strings (which often carry session data). Capped to 200 chars.
 function trimFrameUrl(href: string): string {
@@ -1080,6 +1206,11 @@ function trimFrameUrl(href: string): string {
 chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {
   if (message.type === 'GET_FOCUS_STATUS') {
     sendResponse({ focused: windowHasFocus });
+    return false;
+  }
+
+  if (message.type === 'RESOLVE_HINT') {
+    sendResponse(resolveHintLocally(message.codeword));
     return false;
   }
 
@@ -1121,12 +1252,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
           },
           candidates: () => deepQuerySelectorAll(document, '*'),
           resolveFromSnapshot: (cw) => resolveFromSnapshot(phraseSnapshot, cw, performance.now()),
-          resolveFromStore: (cw) => {
-            const words = cw.split(/\s+/).filter(w => w.length > 0);
-            return words.length === 2
-              ? store.byLabelPair(words[0], words[1])
-              : (words.length === 1 ? store.byLabel(words[0]) : undefined);
-          },
+          resolveFromStore: (cw) => store.byCodeword(cw),
           onStaleId: requestCommandsInvalidate,
         },
       );
@@ -1411,13 +1537,15 @@ function isOwnMutation(n: Node): boolean {
 /** Walk an added subtree and create wrappers for any hintable descendants. */
 function discoverInSubtree(root: Element): number {
   let added = 0;
-  const { elements, refs, invisibleCandidates } = scanElements(root);
-  for (let i = 0; i < elements.length; i++) {
-    if (store.findWrapperFor(refs[i])) continue;
-    attachWrapper(new ElementWrapper(refs[i], elements[i]));
+  const result = scanElements(root);
+  applyUserRuleToScan(result, root);
+
+  for (let i = 0; i < result.elements.length; i++) {
+    if (store.findWrapperFor(result.refs[i])) continue;
+    attachWrapper(new ElementWrapper(result.refs[i], result.elements[i]));
     added++;
   }
-  observeInvisibleCandidates(invisibleCandidates);
+  observeInvisibleCandidates(result.invisibleCandidates);
   watchUndefinedCustomElements(root);
   return added;
 }
@@ -1446,7 +1574,9 @@ function dropDisconnectedWrappers(): number {
  */
 function reevaluateAttribute(target: Element): boolean {
   const existing = store.findWrapperFor(target);
-  const hintable = isHintable(target);
+  // Order matters: isHintable is the cheap short-circuit. Only run the
+  // user-rule exclusion check on elements that already pass.
+  const hintable = isHintable(target) && !isExcludedByRule(target, getExcludes());
   if (existing && !hintable) {
     detachWrapper(target);
     return true;

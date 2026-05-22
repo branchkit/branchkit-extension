@@ -34,6 +34,7 @@ const entries = [
   { in: 'src/background.ts', out: 'dist/background.js', format: 'esm' },
   { in: 'src/offscreen.ts',  out: 'dist/offscreen.js',  format: 'iife' },
   { in: 'src/popup.ts',      out: 'dist/popup.js',      format: 'iife' },
+  { in: 'src/options.ts',    out: 'dist/options.js',    format: 'iife' },
 ];
 
 const reloadPlugin = {
@@ -51,6 +52,7 @@ const reloadPlugin = {
 cpSync('manifest.json', 'dist/manifest.json');
 cpSync('offscreen.html', 'dist/offscreen.html');
 cpSync('popup.html', 'dist/popup.html');
+cpSync('options.html', 'dist/options.html');
 cpSync('icons', 'dist/icons', { recursive: true });
 
 // Start a watch context per entry point. The last one to finish a rebuild
