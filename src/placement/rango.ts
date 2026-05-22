@@ -1,5 +1,5 @@
 import { ElementWrapper } from '../element-wrapper';
-import { getCachedRect, getCachedStyle, isClipAncestor } from '../layout-cache';
+import { getCachedDims, getCachedRect, getCachedStyle, isClipAncestor } from '../layout-cache';
 import { PlacementStrategy } from './strategy';
 
 const BASE_Z = 2147483000;
@@ -101,6 +101,17 @@ export class RangoStrategy implements PlacementStrategy {
     return null;
   }
 
+  private isInScrollList(el: Element): boolean {
+    let current: Element | null = el;
+    while (current && current !== document.body) {
+      const s = getCachedStyle(current);
+      const { clientHeight, scrollHeight } = getCachedDims(current);
+      if (scrollHeight > clientHeight && /scroll|auto/.test(s.overflowY)) return true;
+      current = current.parentElement;
+    }
+    return false;
+  }
+
   private positionAtTopLeft(w: ElementWrapper, probe?: TextProbe): void {
     if (!w.hint) return;
     if (!probe) probe = probeFirstVisibleText(w.element);
@@ -131,7 +142,7 @@ export class RangoStrategy implements PlacementStrategy {
 
     const overlapIntoText = (y + size.h) - targetRect.top;
     const badgeOverlapsText = overlapIntoText > size.h * 0.4;
-    if (stickyBound && badgeOverlapsText && probe.hasText) {
+    if (stickyBound && badgeOverlapsText && probe.hasText && !this.isInScrollList(w.hint.anchorParent)) {
       x = Math.max(stickyBound.left, elementRect.left);
       y = elementRect.bottom - size.h * 0.5;
     }

@@ -55,6 +55,47 @@ function schedulePushForTab(tabId: number): void {
 // Firefox direct SSE (no offscreen document needed)
 let directSSE: EventSource | null = null;
 
+// SSE reconnect backoff state. Shared by Chrome (offscreen→HEALTH_STATUS)
+// and Firefox (direct EventSource) paths.
+let sseRetryTimer: ReturnType<typeof setTimeout> | null = null;
+let sseRetryDelay = 1000;
+const SSE_RETRY_CAP_MS = 30_000;
+
+function cancelSSERetry(): void {
+  if (sseRetryTimer) {
+    clearTimeout(sseRetryTimer);
+    sseRetryTimer = null;
+  }
+  sseRetryDelay = 1000;
+}
+
+function scheduleSSERetry(): void {
+  if (sseRetryTimer) return;
+  const delay = sseRetryDelay;
+  sseRetryDelay = Math.min(sseRetryDelay * 2, SSE_RETRY_CAP_MS);
+  sseRetryTimer = setTimeout(async () => {
+    sseRetryTimer = null;
+    const found = await discoverPlugin();
+    if (found) {
+      branchkitConnected = true;
+      cancelSSERetry();
+      connectSSE();
+      rescanActiveTab();
+    } else {
+      scheduleSSERetry();
+    }
+  }, delay);
+}
+
+function rescanActiveTab(): void {
+  if (cachedActiveTabId == null) return;
+  tabGrammars.delete(cachedActiveTabId);
+  chrome.tabs.sendMessage(cachedActiveTabId, {
+    type: 'BRANCHKIT_ACTION',
+    payload: { action: 'rescan' },
+  }).catch(() => {});
+}
+
 // --- Feature Detection ---
 
 const hasOffscreenAPI = typeof chrome !== 'undefined' && !!chrome.offscreen;
@@ -589,13 +630,7 @@ function connectDirectSSE(port: number, token: string): void {
       directSSE = null;
     }
     branchkitConnected = false;
-
-    // Re-discover after a delay (plugin may have restarted on a new port)
-    setTimeout(async () => {
-      const found = await discoverPlugin();
-      branchkitConnected = found;
-      if (found) connectSSE();
-    }, 2000);
+    scheduleSSERetry();
   };
 }
 
@@ -758,18 +793,16 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     const wasConnected = branchkitConnected;
     branchkitConnected = message.branchkit ?? false;
 
-    // New connection — hydrate from collection then push reference names
+    // New connection — cancel any pending retry, hydrate, rescan
     if (!wasConnected && branchkitConnected) {
+      cancelSSERetry();
       hydrateReferencesFromCollection().then(() => pushReferenceNames());
+      rescanActiveTab();
     }
 
-    // SSE dropped — immediately re-discover plugin (port may have changed on restart)
+    // SSE dropped — retry with exponential backoff until plugin is back
     if (wasConnected && !branchkitConnected) {
-      setTimeout(async () => {
-        const found = await discoverPlugin();
-        branchkitConnected = found;
-        if (found) connectSSE();
-      }, 2000); // brief delay for plugin to finish restarting
+      scheduleSSERetry();
     }
     return false;
   }
@@ -862,12 +895,14 @@ chrome.runtime.onConnect.addListener((port) => {
 
 chrome.tabs.onActivated.addListener((activeInfo) => {
   cachedActiveTabId = activeInfo.tabId;
-  const grammar = aggregateGrammarForTab(activeInfo.tabId);
-  pushGrammar(activeInfo.tabId, grammar);
-  // SW may have restarted and lost tabGrammars. If grammar is empty,
-  // ask the content script to re-scan so commands become available
-  // without requiring a manual page refresh.
-  if (grammar.length === 0) {
+  if (tabGrammars.has(activeInfo.tabId)) {
+    // Normal tab switch — push whatever we have (may be empty if the tab
+    // genuinely has no hintable elements).
+    pushGrammar(activeInfo.tabId, aggregateGrammarForTab(activeInfo.tabId));
+  } else {
+    // SW restarted and lost tabGrammars. Don't push empty (that would
+    // clear the plugin's commands). Ask the content script to re-scan;
+    // its SCAN_RESULT will repopulate and push the real grammar.
     chrome.tabs.sendMessage(activeInfo.tabId, {
       type: 'BRANCHKIT_ACTION',
       payload: { action: 'rescan' },
@@ -882,9 +917,9 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
     const newActive = tabs[0]?.id ?? null;
     cachedActiveTabId = newActive;
     if (newActive != null) {
-      const grammar = aggregateGrammarForTab(newActive);
-      pushGrammar(newActive, grammar);
-      if (grammar.length === 0) {
+      if (tabGrammars.has(newActive)) {
+        pushGrammar(newActive, aggregateGrammarForTab(newActive));
+      } else {
         chrome.tabs.sendMessage(newActive, {
           type: 'BRANCHKIT_ACTION',
           payload: { action: 'rescan' },
@@ -963,11 +998,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
       await ensureOffscreen();
     }
 
-    // Retry plugin discovery if not connected
+    // Kick off retry loop if not connected and no retry is pending
     if (!branchkitConnected) {
-      const found = await discoverPlugin();
-      branchkitConnected = found;
-      if (found) connectSSE();
+      scheduleSSERetry();
     }
   }
 });

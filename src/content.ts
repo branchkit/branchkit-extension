@@ -1094,6 +1094,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
     } else if (action === 'rescan') {
       lastGrammarHash = '';
       doScan();
+      pushGrammar();
     } else if (action === 'set_badge_mode' && params?.mode) {
       chrome.storage.sync.set({ badgeDisplayMode: params.mode });
     } else if (action === 'scroll' || action === 'scroll_to_element' || action === 'scroll_to_percent') {
@@ -1636,6 +1637,10 @@ function watchUndefinedCustomElements(root: Element | Document): void {
 }
 
 // --- Initial Scan ---
+
+// Remove orphaned badge hosts from a prior content script (extension reload
+// re-injects JS but leaves the old script's DOM nodes behind).
+for (const old of document.querySelectorAll('[data-branchkit-hint]')) old.remove();
 
 // Scan on load to push initial grammar
 doScan();
