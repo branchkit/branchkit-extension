@@ -285,6 +285,43 @@ The popup is currently ~50 lines of vanilla JS in `popup.ts`. The domain rules s
 
 For power users who prefer it: the BranchKit app settings tab for the browser plugin can expose a JSON editor for the full `domainRules` object. This is optional and comes later.
 
+### Prior art: Vimium and Rango settings patterns
+
+Three patterns from Vimium/Vimium-C worth adopting:
+
+1. **Auto-generate pattern from active tab URL.** When the user opens the
+   popup, pre-fill the domain pattern from the current tab (e.g.,
+   `*.quickbase.com`). The user never writes a pattern from scratch. Vimium
+   does this with a single `new URL(tab.url).hostname` call and wraps it in
+   `https?://hostname/*`. For our use case, strip to the eTLD+1 and prefix
+   with `*.` since QuickBase-style apps use subdomains (`realm.quickbase.com`).
+
+2. **Live validation ("matches current page").** Show a green/red indicator
+   next to the pattern field confirming whether it matches the active tab's
+   URL. Removes guesswork. Vimium shows a red warning sentence; a simple
+   color dot is enough for us.
+
+3. **Two-column table layout (pattern + behavior).** The established UI for
+   per-site rules. Vimium uses pattern + passKeys columns; ours would be
+   pattern + entries list. Keep the same shape — users who have used any
+   Vim-style extension will recognize it.
+
+Rango's per-site customization is also instructive:
+
+- **Custom CSS selectors with include/exclude.** Rango lets users define
+  regex URL patterns paired with CSS selectors for include/exclude, with
+  real-time validation of both the regex and the selector. Green `+` icon
+  for includes, red ban icon for excludes. Visual distinction matters when
+  a rule list grows.
+
+- **Host-pattern scoping via `getHostPattern()`.** Converts the current URL
+  to a wildcard pattern automatically, same idea as Vimium's auto-fill.
+
+- **Gap: no element preview/inspector.** Rango requires users to know CSS
+  selectors — no way to point at an element and derive a selector. This is
+  exactly the gap our hint-codeword-as-pointer design fills (see next
+  section). Neither Vimium nor Rango solves this.
+
 ### Element selection via hint codeword
 
 Typing CSS selectors is hostile to non-developer users. The primary way to
@@ -411,6 +448,7 @@ when the domain is first visited.
 | Element | Matcher | Reason |
 |---------|---------|--------|
 | Row-actions column header `th` | `th.actionColumn[tabindex="0"]` | QuickBase sets `tabindex=0` on only this th, making it hintable. The checkbox inside already has its own badge. The th badge appears orphaned. Other column ths have `tabindex=-1` and are correctly skipped. |
+| Breadcrumb nav links | `nav a` (or more specific: `.GlobalNav a`, breadcrumb container TBD) | Breadcrumb links in the top nav bar (Home > Table Name > ...) get badges that obscure the active table name — the one piece of text the user most needs to read. These links are rarely voice-activated; the sidebar table list already provides voice navigation to tables. Exclude or gate behind a command. Exact selector needs confirmation from DOM inspection. |
 
 **Reveals:**
 
