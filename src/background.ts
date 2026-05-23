@@ -48,6 +48,10 @@ function schedulePushForTab(tabId: number): void {
     // 120ms debounce window still gets its push.
     if (tabId !== cachedActiveTabId) return;
     pushGrammar(tabId, aggregateGrammarForTab(tabId));
+    // Persist the latest active-tab grammar to chrome.storage.session so
+    // a SW restart can replay it on next boot (Layer 2 of the hint sync
+    // design). Best-effort, async; same debouncing the push uses.
+    persistActiveTabGrammar();
   }, AGGREGATE_DEBOUNCE_MS);
   aggregateTimers.set(tabId, timer);
 }
@@ -961,6 +965,9 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
       payload: { action: 'rescan' },
     }).catch(() => {});
   }
+  // Persist the new active tab id so the next SW restart's
+  // `restoreActiveTabGrammar` sees the right tab.
+  persistActiveTabGrammar();
 });
 
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
@@ -1011,9 +1018,82 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   }
 });
 
+// --- Session-cache persistence (Layer 2 of hint sync) ---
+//
+// On a service-worker restart, `tabGrammars` and `cachedActiveTabId`
+// reset to empty. Without this cache the only way to repopulate is to
+// wait for the next content-script scan, which happens on DOM mutation
+// or an explicit rescan — meaning a freshly-woken SW that hits the
+// plugin's discovery success can't push grammar for the tab the user is
+// already in. This persists just the active tab's per-frame grammar to
+// chrome.storage.session (cleared at browser close — matches the desired
+// lifetime) so the next SW can restore it and POST cached grammar to the
+// plugin synchronously on discovery, before any scan arrives.
+//
+// Scoped to only the active tab on purpose: keeps the persisted blob
+// small (~10s of KB even for hint-heavy pages), avoids stale-tab
+// bookkeeping, and covers the load-bearing case (user is in a tab when
+// the SW restarts).
+const SESSION_KEY_ACTIVE_TAB_ID = 'branchkit.activeTabId';
+const SESSION_KEY_ACTIVE_TAB_GRAMMAR = 'branchkit.activeTabGrammar';
+
+async function persistActiveTabGrammar(): Promise<void> {
+  try {
+    if (cachedActiveTabId == null) {
+      await chrome.storage.session.remove([
+        SESSION_KEY_ACTIVE_TAB_ID,
+        SESSION_KEY_ACTIVE_TAB_GRAMMAR,
+      ]);
+      return;
+    }
+    const perTab = tabGrammars.get(cachedActiveTabId);
+    if (!perTab) {
+      // Active tab known but no scan data yet — leave any prior cache in
+      // place so a focus flicker doesn't drop a still-valid replay.
+      return;
+    }
+    const framesObj: Record<number, ScannedElement[]> = {};
+    for (const [frameId, elements] of perTab) {
+      framesObj[frameId] = elements;
+    }
+    await chrome.storage.session.set({
+      [SESSION_KEY_ACTIVE_TAB_ID]: cachedActiveTabId,
+      [SESSION_KEY_ACTIVE_TAB_GRAMMAR]: framesObj,
+    });
+  } catch {
+    // Best effort — storage failures shouldn't break the live path.
+  }
+}
+
+async function restoreActiveTabGrammar(): Promise<void> {
+  try {
+    const result = await chrome.storage.session.get([
+      SESSION_KEY_ACTIVE_TAB_ID,
+      SESSION_KEY_ACTIVE_TAB_GRAMMAR,
+    ]);
+    const tabId = result[SESSION_KEY_ACTIVE_TAB_ID];
+    const framesObj = result[SESSION_KEY_ACTIVE_TAB_GRAMMAR];
+    if (typeof tabId !== 'number' || !framesObj) return;
+
+    cachedActiveTabId = tabId;
+    const perTab = new Map<number, ScannedElement[]>();
+    for (const [frameIdStr, elements] of Object.entries(framesObj)) {
+      perTab.set(Number(frameIdStr), elements as ScannedElement[]);
+    }
+    tabGrammars.set(tabId, perTab);
+  } catch {
+    // Best effort.
+  }
+}
+
 // --- Startup ---
 
 async function init(): Promise<void> {
+  // Restore the cached active-tab grammar BEFORE plugin discovery so the
+  // post-discovery replay below sees populated state in the SW-restart
+  // case.
+  await restoreActiveTabGrammar();
+
   const result = await chrome.storage.sync.get('hintVisibility');
   if (result.hintVisibility) {
     hintVisibility = result.hintVisibility;
@@ -1028,6 +1108,14 @@ async function init(): Promise<void> {
 
   if (found) {
     connectSSE();
+    // Replay cached grammar to the plugin so its view matches the badges
+    // already drawn on the page. Without this, the plugin's per-prefix
+    // collections stay empty until the content script triggers another
+    // scan, leaving the user unable to activate visible hints for
+    // seconds after SW restart.
+    if (cachedActiveTabId != null && tabGrammars.has(cachedActiveTabId)) {
+      pushGrammar(cachedActiveTabId, aggregateGrammarForTab(cachedActiveTabId));
+    }
   }
 }
 
