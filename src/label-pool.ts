@@ -193,6 +193,24 @@ export async function clearStack(tabId: number): Promise<void> {
 }
 
 /**
+ * Strict order-preserving equality on two alphabet arrays. Used by
+ * `storeAlphabet` to short-circuit redundant pool churn — voice
+ * re-pushes the alphabet on a hot path, and a `regenerateAllStacks` call
+ * for a no-op change creates a race window between the pool wipe and
+ * the `chrome.storage.onChanged` listener (which Chrome suppresses when
+ * the stored value didn't actually change), letting new wrappers claim
+ * codewords that existing wrappers still hold locally. See
+ * notes/DESIGN_POOL_WRAPPER_INVARIANT.md.
+ */
+export function alphabetsEqual(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+/**
  * Regenerate every active stack with a new alphabet. Called when the voice
  * plugin pushes an updated alphabet — old codewords are invalid. All
  * frames will re-claim labels on their next scan.

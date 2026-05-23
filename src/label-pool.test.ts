@@ -16,6 +16,7 @@ import {
   releaseFrame,
   getFrameForLabel,
   regenerateAllStacks,
+  alphabetsEqual,
 } from './label-pool';
 
 const ALPHABET = [
@@ -221,6 +222,32 @@ describe('label-pool', () => {
       // New claims pull from the alt alphabet (pairs now).
       const fresh = await claimLabels(tabA, 0, 3);
       expect(fresh).toEqual(['apple apple', 'apple berry', 'apple cherry']);
+    });
+  });
+
+  describe('alphabetsEqual', () => {
+    it('returns true for same words in same order', () => {
+      expect(alphabetsEqual(ALPHABET, [...ALPHABET])).toBe(true);
+    });
+
+    it('returns false when any word differs', () => {
+      const swapped = [...ALPHABET];
+      swapped[5] = 'different';
+      expect(alphabetsEqual(ALPHABET, swapped)).toBe(false);
+    });
+
+    it('returns false when order differs', () => {
+      const reordered = [...ALPHABET];
+      [reordered[0], reordered[1]] = [reordered[1], reordered[0]];
+      expect(alphabetsEqual(ALPHABET, reordered)).toBe(false);
+    });
+
+    it('returns false on different lengths', () => {
+      expect(alphabetsEqual(ALPHABET, ALPHABET.slice(0, 25))).toBe(false);
+    });
+
+    it('returns true for two empty arrays', () => {
+      expect(alphabetsEqual([], [])).toBe(true);
     });
   });
 });

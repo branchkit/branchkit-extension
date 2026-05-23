@@ -9,7 +9,7 @@
  */
 
 import { Message, ScannedElement, GrammarRequest, FieldInfo, ClickableInfo, TableLink, HintVisibility, DispatchResult } from './types';
-import { claimLabels, releaseLabels, releaseFrame, clearStack, regenerateAllStacks, getFrameForLabel } from './label-pool';
+import { claimLabels, releaseLabels, releaseFrame, clearStack, regenerateAllStacks, getFrameForLabel, alphabetsEqual } from './label-pool';
 
 const ACTUATOR_URL = 'http://127.0.0.1:21551';
 
@@ -119,20 +119,38 @@ const browserBundleID = detectBundleID();
 // Persist the BranchKit voice alphabet so content scripts on every page see
 // the same codewords voice will recognize. content.ts reads this on load
 // and subscribes to chrome.storage.onChanged for live updates.
-function storeAlphabet(words: string[]): void {
+//
+// Short-circuits when the incoming alphabet matches the one already in
+// storage. Voice re-pushes the alphabet on a hot path (688 pushes in a
+// single observed session, almost all identical content); running the
+// full chain on each one wipes the per-tab label pools and creates a
+// race window where existing wrappers retain codewords locally that
+// the pool now considers free, producing duplicate badge assignments.
+// `chrome.storage.local.set` of an unchanged value suppresses the
+// `chrome.storage.onChanged` event, so content scripts never get the
+// signal to clear their wrappers — but `regenerateAllStacks` runs
+// anyway. Detecting the no-op here is the load-bearing check. See
+// notes/DESIGN_POOL_WRAPPER_INVARIANT.md.
+async function storeAlphabet(words: string[]): Promise<void> {
   if (!Array.isArray(words) || words.length !== 26) return;
   if (words.some(w => typeof w !== 'string' || w.length === 0)) return;
-  chrome.storage.local.set({ alphabet: words })
-    .then(() => regenerateAllStacks())
-    .then(() => {
-      // Drop every tab's cached grammar — entries reference codewords
-      // from the prior alphabet. Frames will re-trigger doScan via the
-      // alphabet onChanged listener and repopulate the map cleanly.
-      tabGrammars.clear();
-      for (const timer of aggregateTimers.values()) clearTimeout(timer);
-      aggregateTimers.clear();
-    })
-    .catch(err => console.error('[BranchKit BG] alphabet store error:', err));
+
+  try {
+    const current = await chrome.storage.local.get('alphabet');
+    if (Array.isArray(current.alphabet) && alphabetsEqual(current.alphabet, words)) {
+      return;
+    }
+    await chrome.storage.local.set({ alphabet: words });
+    await regenerateAllStacks();
+    // Drop every tab's cached grammar — entries reference codewords
+    // from the prior alphabet. Frames will re-trigger doScan via the
+    // alphabet onChanged listener and repopulate the map cleanly.
+    tabGrammars.clear();
+    for (const timer of aggregateTimers.values()) clearTimeout(timer);
+    aggregateTimers.clear();
+  } catch (err) {
+    console.error('[BranchKit BG] alphabet store error:', err);
+  }
 }
 
 // --- Reference Names ---
