@@ -137,6 +137,15 @@ async function storeAlphabet(words: string[]): Promise<void> {
 
   try {
     const current = await chrome.storage.local.get('alphabet');
+    // LOAD-BEARING: drop the no-op alphabet push before it touches the pool.
+    // Relies on a Chrome behavior: `chrome.storage.local.set` of an unchanged
+    // value suppresses `storage.onChanged`. If a future Chrome ever fires
+    // onChanged for equal-value sets, this dedup becomes a slight optimization
+    // rather than a correctness gate — but the pool-wipe race it prevents is
+    // still real. Do NOT remove this dedup without also fixing the pool to
+    // tolerate wipes-with-surviving-wrappers (see audit table in
+    // notes/DESIGN_POOL_WRAPPER_INVARIANT.md §"All Paths That Mutate
+    // stack.assigned").
     if (Array.isArray(current.alphabet) && alphabetsEqual(current.alphabet, words)) {
       return;
     }
