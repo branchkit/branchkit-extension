@@ -129,8 +129,7 @@ const browserBundleID = detectBundleID();
 // `chrome.storage.local.set` of an unchanged value suppresses the
 // `chrome.storage.onChanged` event, so content scripts never get the
 // signal to clear their wrappers — but `regenerateAllStacks` runs
-// anyway. Detecting the no-op here is the load-bearing check. See
-// docs/completed/DESIGN_POOL_WRAPPER_INVARIANT.md.
+// anyway. Detecting the no-op here is the load-bearing check.
 async function storeAlphabet(words: string[]): Promise<void> {
   if (!Array.isArray(words) || words.length !== 26) return;
   if (words.some(w => typeof w !== 'string' || w.length === 0)) return;
@@ -143,9 +142,7 @@ async function storeAlphabet(words: string[]): Promise<void> {
     // onChanged for equal-value sets, this dedup becomes a slight optimization
     // rather than a correctness gate — but the pool-wipe race it prevents is
     // still real. Do NOT remove this dedup without also fixing the pool to
-    // tolerate wipes-with-surviving-wrappers (see audit table in
-    // docs/completed/DESIGN_POOL_WRAPPER_INVARIANT.md §"All Paths That Mutate
-    // stack.assigned").
+    // tolerate wipes-with-surviving-wrappers.
     if (Array.isArray(current.alphabet) && alphabetsEqual(current.alphabet, words)) {
       return;
     }

@@ -199,8 +199,7 @@ export async function clearStack(tabId: number): Promise<void> {
  * for a no-op change creates a race window between the pool wipe and
  * the `chrome.storage.onChanged` listener (which Chrome suppresses when
  * the stored value didn't actually change), letting new wrappers claim
- * codewords that existing wrappers still hold locally. See
- * docs/completed/DESIGN_POOL_WRAPPER_INVARIANT.md.
+ * codewords that existing wrappers still hold locally.
  */
 export function alphabetsEqual(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false;
