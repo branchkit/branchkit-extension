@@ -200,7 +200,7 @@ export async function clearStack(tabId: number): Promise<void> {
  * the `chrome.storage.onChanged` listener (which Chrome suppresses when
  * the stored value didn't actually change), letting new wrappers claim
  * codewords that existing wrappers still hold locally. See
- * notes/DESIGN_POOL_WRAPPER_INVARIANT.md.
+ * docs/completed/DESIGN_POOL_WRAPPER_INVARIANT.md.
  */
 export function alphabetsEqual(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false;
