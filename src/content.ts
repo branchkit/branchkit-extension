@@ -990,7 +990,10 @@ function pushGrammar(): void {
   // produces the same elements but different codewords still re-pushes —
   // otherwise the voice plugin would keep using stale codewords.
   const hash = elements.map(e => `${e.id}|${e.category}|${e.codeword}`).join('\x1f');
-  if (hash === lastGrammarHash) return;
+  if (hash === lastGrammarHash) {
+    chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_grammar_skipped', data: { reason: 'dedupe', elements: elements.length } } as Message).catch(() => {});
+    return;
+  }
   lastGrammarHash = hash;
 
   try {
@@ -999,6 +1002,7 @@ function pushGrammar(): void {
       elements,
       adapter: getActiveAdapter(window.location.href)?.name || null,
     } as Message);
+    chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_grammar_sent', data: { elements: elements.length } } as Message).catch(() => {});
   } catch {
     // Extension context may be invalidated
   }
@@ -1209,8 +1213,12 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
     } else if (action === 'hide_hints') {
       hideHints();
     } else if (action === 'rescan') {
+      const t0 = performance.now();
+      chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_rescan_received', data: { url: window.location.href } } as Message).catch(() => {});
       lastGrammarHash = '';
       doScan();
+      const t1 = performance.now();
+      chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_scan_completed', data: { elements: store.all.length, duration_ms: Math.round(t1 - t0) } } as Message).catch(() => {});
       pushGrammar();
     } else if (action === 'set_badge_mode' && params?.mode) {
       chrome.storage.sync.set({ badgeDisplayMode: params.mode });

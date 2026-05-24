@@ -94,6 +94,7 @@ function scheduleSSERetry(): void {
 function rescanActiveTab(): void {
   if (cachedActiveTabId == null) return;
   tabGrammars.delete(cachedActiveTabId);
+  forwardDebugLog('pipeline.bg_rescan_dispatched', { tab_id: cachedActiveTabId, source: 'rescanActiveTab' });
   chrome.tabs.sendMessage(cachedActiveTabId, {
     type: 'BRANCHKIT_ACTION',
     payload: { action: 'rescan' },
@@ -605,6 +606,7 @@ async function pushGrammar(tabId: number | null, elements: ScannedElement[]): Pr
   const req = scannedToGrammarRequest(elements);
   if (tabId != null) req.tab_id = tabId;
 
+  forwardDebugLog('pipeline.bg_grammar_post_starting', { tab_id: tabId, elements: elements.length, hint_visibility: req.hint_visibility });
   try {
     await fetch(`http://127.0.0.1:${pluginPort}/grammar`, {
       method: 'POST',
@@ -812,6 +814,7 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
         el.frame_id = frameId;
       }
       recordFrameGrammar(tabId, frameId, message.elements);
+      forwardDebugLog('pipeline.bg_scan_result_received', { tab_id: tabId, frame_id: frameId, elements: message.elements.length });
       schedulePushForTab(tabId);
     }
     return false;
@@ -1048,6 +1051,7 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
     // SW restarted and lost tabGrammars. Don't push empty (that would
     // clear the plugin's commands). Ask the content script to re-scan;
     // its SCAN_RESULT will repopulate and push the real grammar.
+    forwardDebugLog('pipeline.bg_rescan_dispatched', { tab_id: activeInfo.tabId, source: 'onActivated_cache_miss' });
     chrome.tabs.sendMessage(activeInfo.tabId, {
       type: 'BRANCHKIT_ACTION',
       payload: { action: 'rescan' },
@@ -1076,6 +1080,7 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
       if (tabGrammars.has(newActive)) {
         pushGrammar(newActive, aggregateGrammarForTab(newActive));
       } else {
+        forwardDebugLog('pipeline.bg_rescan_dispatched', { tab_id: newActive, source: 'onFocusChanged_cache_miss' });
         chrome.tabs.sendMessage(newActive, {
           type: 'BRANCHKIT_ACTION',
           payload: { action: 'rescan' },
