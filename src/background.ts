@@ -567,6 +567,32 @@ async function forwardHintsSessionEnd(reason: string, tabId: number): Promise<vo
   }
 }
 
+// Tell the plugin to pre-arm the hints tag for an imminent hints-eligible
+// session on `tabId`. Triggered on tab activation in always-mode: the plugin
+// fires its eager-arm bridge (same one used for browser app focus) so the
+// codeword-vs-alphabet disambiguator is in place before the new tab's
+// grammar push arrives. If grammar doesn't arrive within the eager-arm
+// timeout (2s), the plugin auto-clears.
+async function forwardHintsSessionStart(reason: string, tabId: number): Promise<void> {
+  if (!pluginPort || !pluginToken) {
+    const found = await discoverPlugin();
+    if (!found) return;
+  }
+  try {
+    await fetch(`http://127.0.0.1:${pluginPort}/hints/session_start`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${pluginToken}`,
+      },
+      body: JSON.stringify({ reason, tab_id: tabId }),
+    });
+  } catch {
+    // Plugin may be down; grammar push will eventually set the tag if/when
+    // it arrives. We just lose the eager-arm bridge for this one switch.
+  }
+}
+
 async function pushGrammar(tabId: number | null, elements: ScannedElement[]): Promise<void> {
   // Lazy discovery: service worker may have restarted and lost state
   if (!pluginPort || !pluginToken) {
@@ -1007,6 +1033,12 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
   if (oldTabId !== activeInfo.tabId) {
     logTabSwitch('tab_activated', oldTabId, activeInfo.tabId);
     endHintSessionOnOldTab(oldTabId, 'tab_switch');
+    // Always-mode: pre-arm hints on the new tab so a codeword spoken in
+    // the gap before its grammar push arrives still gates correctly. The
+    // plugin's eager-arm auto-clears in 2s if no grammar follows.
+    if (hintVisibility === 'always') {
+      forwardHintsSessionStart('tab_switch', activeInfo.tabId);
+    }
   }
   if (tabGrammars.has(activeInfo.tabId)) {
     // Normal tab switch — push whatever we have (may be empty if the tab
@@ -1036,6 +1068,9 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
     if (oldTabId != null && oldTabId !== newActive) {
       logTabSwitch('window_focus', oldTabId, newActive);
       endHintSessionOnOldTab(oldTabId, 'window_focus');
+      if (newActive != null && hintVisibility === 'always') {
+        forwardHintsSessionStart('window_focus', newActive);
+      }
     }
     if (newActive != null) {
       if (tabGrammars.has(newActive)) {
