@@ -545,6 +545,28 @@ async function forwardCommandsInvalidate(reason: string): Promise<void> {
   }
 }
 
+// Tell the plugin to end the active hint session on `tabId`. Hints follow
+// focus: when the user switches tabs, dispatches must not route to the new
+// tab using a hint context that was painted on the old one.
+async function forwardHintsSessionEnd(reason: string, tabId: number): Promise<void> {
+  if (!pluginPort || !pluginToken) {
+    const found = await discoverPlugin();
+    if (!found) return;
+  }
+  try {
+    await fetch(`http://127.0.0.1:${pluginPort}/hints/session_end`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${pluginToken}`,
+      },
+      body: JSON.stringify({ reason, tab_id: tabId }),
+    });
+  } catch {
+    // Plugin may be down; the hints tag will eventually clear via other paths.
+  }
+}
+
 async function pushGrammar(tabId: number | null, elements: ScannedElement[]): Promise<void> {
   // Lazy discovery: service worker may have restarted and lost state
   if (!pluginPort || !pluginToken) {
@@ -950,8 +972,42 @@ chrome.runtime.onConnect.addListener((port) => {
   });
 });
 
+// End the hint session on `oldTabId` (if any) before activating a new tab.
+// Hints follow focus: clear the plugin's hints tag and hide badges on the
+// old tab so a subsequent voice dispatch can't be routed via the new tab's
+// content script onto a stale or coincidentally-matching element.
+function endHintSessionOnOldTab(oldTabId: number | null, reason: string): void {
+  if (oldTabId == null) return;
+  forwardHintsSessionEnd(reason, oldTabId);
+  chrome.tabs.sendMessage(oldTabId, {
+    type: 'BRANCHKIT_ACTION',
+    payload: { action: 'hide_hints' },
+  }).catch(() => {});
+}
+
+// Log a tab switch to actuator.log so post-hoc debugging shows what the
+// user actually did, not just opaque tab IDs.
+async function logTabSwitch(reason: string, oldTabId: number | null, newTabId: number | null): Promise<void> {
+  const lookup = async (id: number | null): Promise<{ id: number | null; url: string; title: string }> => {
+    if (id == null) return { id: null, url: '', title: '' };
+    try {
+      const t = await chrome.tabs.get(id);
+      return { id, url: t.url ?? '', title: t.title ?? '' };
+    } catch {
+      return { id, url: '<gone>', title: '' };
+    }
+  };
+  const [from, to] = await Promise.all([lookup(oldTabId), lookup(newTabId)]);
+  forwardDebugLog('tab_switch', { reason, from, to });
+}
+
 chrome.tabs.onActivated.addListener((activeInfo) => {
+  const oldTabId = cachedActiveTabId;
   cachedActiveTabId = activeInfo.tabId;
+  if (oldTabId !== activeInfo.tabId) {
+    logTabSwitch('tab_activated', oldTabId, activeInfo.tabId);
+    endHintSessionOnOldTab(oldTabId, 'tab_switch');
+  }
   if (tabGrammars.has(activeInfo.tabId)) {
     // Normal tab switch — push whatever we have (may be empty if the tab
     // genuinely has no hintable elements).
@@ -975,7 +1031,12 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
   try {
     const tabs = await chrome.tabs.query({ active: true, windowId });
     const newActive = tabs[0]?.id ?? null;
+    const oldTabId = cachedActiveTabId;
     cachedActiveTabId = newActive;
+    if (oldTabId != null && oldTabId !== newActive) {
+      logTabSwitch('window_focus', oldTabId, newActive);
+      endHintSessionOnOldTab(oldTabId, 'window_focus');
+    }
     if (newActive != null) {
       if (tabGrammars.has(newActive)) {
         pushGrammar(newActive, aggregateGrammarForTab(newActive));
@@ -993,7 +1054,12 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   const wasActive = cachedActiveTabId === tabId;
-  if (wasActive) cachedActiveTabId = null;
+  if (wasActive) {
+    cachedActiveTabId = null;
+    // Tab closed: end its hint session (no badges to hide — tab is gone —
+    // but the plugin's hints tag still needs clearing).
+    forwardHintsSessionEnd('tab_closed', tabId);
+  }
   purgeTab(tabId);
   // Closing the active tab leaves the plugin holding its commands; clear
   // them with an empty push. Chrome will fire onActivated for the next-up
