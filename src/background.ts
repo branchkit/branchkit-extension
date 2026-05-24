@@ -1002,16 +1002,18 @@ chrome.runtime.onConnect.addListener((port) => {
 });
 
 // End the hint session on `oldTabId` (if any) before activating a new tab.
-// Hints follow focus: clear the plugin's hints tag and hide badges on the
-// old tab so a subsequent voice dispatch can't be routed via the new tab's
-// content script onto a stale or coincidentally-matching element.
+// Hints follow focus at the matcher level: clear the plugin's hints tag so
+// a subsequent voice dispatch can't be routed via the new tab's content
+// script onto a stale or coincidentally-matching element. We deliberately
+// do NOT dispatch hide_hints to the old tab — in always-mode hint badges
+// are a persistent visual property of every browser tab, and hiding them
+// on switch-away destroys the case where the user switches back (rescan
+// doesn't re-show in always mode, so badges would stay hidden forever).
+// The user can't see the inactive tab anyway, so leaving badges painted
+// there is cosmetically free.
 function endHintSessionOnOldTab(oldTabId: number | null, reason: string): void {
   if (oldTabId == null) return;
   forwardHintsSessionEnd(reason, oldTabId);
-  chrome.tabs.sendMessage(oldTabId, {
-    type: 'BRANCHKIT_ACTION',
-    payload: { action: 'hide_hints' },
-  }).catch(() => {});
 }
 
 // Log a tab switch to actuator.log so post-hoc debugging shows what the
