@@ -40,8 +40,18 @@ export class ElementWrapper {
     if (!codeword) return;
     this.scanned.codeword = '';
     this.label = null;
-    chrome.runtime.sendMessage({ type: 'RELEASE_LABELS', labels: [codeword] })
-      .catch(() => {/* extension context may be invalidated */});
+    // chrome.runtime.sendMessage THROWS SYNCHRONOUSLY when the extension
+    // context is invalidated (orphan content script after extension reload).
+    // The `.catch()` only handles async rejection — the sync throw escapes
+    // and surfaces as an uncaught error from whatever observer callback
+    // happened to call us. Wrap in try/catch for safety.
+    try {
+      chrome.runtime.sendMessage({ type: 'RELEASE_LABELS', labels: [codeword] })
+        .catch(() => {/* extension context may be invalidated */});
+    } catch {
+      // Orphan content script post-reload. Nothing to do — label tracking
+      // already cleared locally, and the orphan's SW connection is dead.
+    }
   }
 
   destroy(): void {

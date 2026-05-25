@@ -1562,8 +1562,26 @@ function openLivenessPort(): void {
     });
     port.onDisconnect.addListener(() => {
       livenessPort = null;
-      // Brief delay so the SW finishes its init pass before we
-      // re-announce ourselves.
+      // Discriminate between two disconnect causes:
+      //   1. Transient SW restart (idle timeout, browser sleep): Chrome
+      //      will start a new SW on the next API call. Reconnect after a
+      //      brief delay so the SW finishes its init pass.
+      //   2. Extension reload/uninstall: this content script's runtime
+      //      context is invalidated. `chrome.runtime` is undefined or
+      //      `chrome.runtime.id` is undefined. We can't reconnect from
+      //      here ever — the SW-side re-injection (background.ts) will
+      //      inject a fresh content script that opens its own port. Our
+      //      job is to self-quiesce so we stop polluting the page.
+      let stillValid = false;
+      try {
+        stillValid = typeof chrome !== 'undefined' && !!chrome.runtime?.id;
+      } catch {
+        stillValid = false;
+      }
+      if (!stillValid) {
+        quiesceOrphan();
+        return;
+      }
       setTimeout(openLivenessPort, 500);
     });
   } catch {
@@ -1574,6 +1592,44 @@ function openLivenessPort(): void {
 }
 
 openLivenessPort();
+
+// --- Orphan self-quiesce ---
+//
+// When the extension is reloaded at chrome://extensions/, this content
+// script's `chrome.runtime` context is invalidated but the JS execution
+// context lives on. Observers and listeners keep firing into dead `chrome.*`
+// APIs — wasted CPU plus duplicate dispatch alongside the freshly-injected
+// new content script.
+//
+// We detect this via the liveness port's disconnect handler (above). When
+// `chrome.runtime.id` is no longer accessible, we know we're an orphan; this
+// function tears down our observers and removes our badge hosts so the new
+// content script's freshly-mounted observers run alone.
+//
+// Idempotent: subsequent calls are no-ops. Each `try` block is independent
+// so a failure in one doesn't skip the others.
+let orphaned = false;
+function quiesceOrphan(): void {
+  if (orphaned) return;
+  orphaned = true;
+  // Each module-scope observer that fires user-driven callbacks. Missing one
+  // means the orphan keeps reacting to DOM changes / viewport shifts and
+  // surfacing `Extension context invalidated` errors in the page console.
+  try { observer.disconnect(); } catch { /* may not be initialized yet */ }
+  try { badgeReattachObserver.disconnect(); } catch { /* same */ }
+  try { tracker.disconnectAll(); } catch { /* same */ }
+  try { resizeObserver.disconnect(); } catch { /* same */ }
+  try { visibilityIO.disconnect(); } catch { /* same */ }
+  try { visibilityMO.disconnect(); } catch { /* same */ }
+  // Remove badge hosts so the new content script's initial DOM-clear sweep
+  // (content.ts ~line 2230) doesn't have to fight visible artifacts.
+  try {
+    for (const node of document.querySelectorAll('[data-branchkit-hint]')) {
+      node.remove();
+    }
+  } catch { /* document gone */ }
+  console.warn('[BranchKit] content script orphaned (extension reload). Self-quiesced.');
+}
 
 // --- Dispatch result reporting ---
 //
@@ -1906,6 +1962,7 @@ const scrollKeys = new Set(['j', 'k', 'd', 'u', 'h', 'l']);
 const heldKeys = new Set<string>();
 
 document.addEventListener('keydown', (e: KeyboardEvent) => {
+  if (orphaned) return;
   if (handlePostFindKey(e)) return;
 
   // Ctrl+Alt+A — hint-diagnostics snapshot trigger (Phase 2b of
@@ -1955,6 +2012,7 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
 }, true);
 
 document.addEventListener('keyup', (e: KeyboardEvent) => {
+  if (orphaned) return;
   if (heldKeys.has(e.key)) {
     heldKeys.delete(e.key);
     setKeyHeld(false);
