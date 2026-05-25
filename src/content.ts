@@ -73,6 +73,7 @@ import {
 import { loadDomainRules, onDomainRulesChanged, ruleEqual } from './domain-rules-storage';
 import { generateSelector } from './selector-generator';
 import { sweepDisconnectedAfterBatch } from './batch-sweep';
+import { filterNewBatchRefs } from './batch-dedup';
 import type { ResolveHintResponse } from './types';
 
 // --- State ---
@@ -236,6 +237,14 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
     // store ourselves.)
     if (changes.alphabet?.newValue) {
       setAlphabet(changes.alphabet.newValue);
+      // Problem 3 (notes/DESIGN_OPTION_B_REATTEMPT.md): the previous
+      // alphabet's codewords are now invalid, and the plugin still
+      // holds them in `browser_hints_<old-prefix>` for this frame.
+      // Rotate the session_id so the plugin's ensureFrameSession sees
+      // a session change → cleanupFrameSessionLocked clears stale
+      // per-prefix entries. This is the ONE place in a content
+      // script's lifetime where we want plugin-side cleanup.
+      sessionId = generateSessionId();
       for (const w of store.all) {
         w.scanned.codeword = '';
         w.label = null;
@@ -1081,7 +1090,7 @@ async function batchedStateSync(reason: string): Promise<void> {
   if (!isAlphabetLoaded()) return;
 
   const wrappers = viewportSort(store.all).filter(w => w.scanned.codeword);
-  const sessionId = generateSessionId();
+  // Uses module-scope sessionId — see Problem 1 in the design doc.
   const sessionMeta = {
     bundle_id: '',
     hint_visibility: hintVisibility,
@@ -1155,7 +1164,7 @@ async function batchedStateSync(reason: string): Promise<void> {
 // (with the 120ms debounce). Currently BATCH_MODE=false after the
 // revert — see the design issues noted at pushGrammar above.
 
-const BATCH_MODE = false;
+const BATCH_MODE = true;
 
 // Codewords queued for deletion on the next outbound batch. Populated
 // by the post-batch isConnected sweep when a wrapper's element gets
@@ -1179,6 +1188,19 @@ function generateSessionId(): string {
   for (const b of a) s += b.toString(16).padStart(2, '0');
   return s.slice(0, 8) + '-' + s.slice(8, 12) + '-' + s.slice(12, 16) + '-' + s.slice(16, 20) + '-' + s.slice(20);
 }
+
+// Per-content-script session id. Generated once at module load and
+// re-used across every batched POST for this content script's lifetime.
+// notes/DESIGN_OPTION_B_REATTEMPT.md "Problem 1": rotating the session_id
+// on every doScanBatched call made `ensureFrameSession` on the plugin
+// side wipe entity_cache for the frame between MO rescans, opening a
+// "badges painted but voice doesn't match" window. Same id across
+// rescans keeps `session.Codewords` accumulating.
+//
+// Reset only on alphabet change (see chrome.storage.onChanged handler)
+// — that's the one in-lifetime event where we WANT plugin-side cleanup
+// of stale per-prefix entries.
+let sessionId = generateSessionId();
 
 async function claimLabelsForBatch(count: number): Promise<string[]> {
   if (count === 0) return [];
@@ -1236,7 +1258,7 @@ async function doScanBatched(): Promise<void> {
     return;
   }
 
-  const sessionId = generateSessionId();
+  // Uses module-scope sessionId — see Problem 1 in the design doc.
   const cr = compiledRule;
   const adapter = getActiveAdapter(window.location.href);
 
@@ -1321,9 +1343,28 @@ async function processScanBatch(
     applyExclusions(batch.refs, batch.elements, compiledRule.excludes);
   }
 
+  // Drop refs whose wrappers already exist in the store
+  // (notes/DESIGN_OPTION_B_REATTEMPT.md "Problem 2"). Their codewords
+  // are already in the plugin's session.Codewords from a prior batch
+  // and will be re-pushed by the cumulative buildTabPrefixState.
+  // Re-claiming pool labels for them depletes the pool: the duplicate
+  // wrapper would be discarded but the just-claimed label stays in
+  // the pool's `assigned` map. Empirically this drained the pool
+  // after ~10 rescans on QuickBase.
+  const { newRefs, newElements } = filterNewBatchRefs(
+    batch.refs, batch.elements, (el) => store.findWrapperFor(el) !== undefined,
+  );
+
+  // No new elements to claim — bail unless this is the terminal batch,
+  // in which case the protocol still needs an is_final marker so the
+  // plugin closes out the scan window.
+  if (newRefs.length === 0 && !batch.isLast) {
+    return;
+  }
+
   // Pool-claim codewords for the batch. claimLabels serializes per
   // tab via withTabLock so multi-frame pages don't collide.
-  const labels = await claimLabelsForBatch(batch.refs.length);
+  const labels = await claimLabelsForBatch(newRefs.length);
 
   // Build candidate wrappers with codewords assigned but DO NOT
   // attach to the store yet. Wrappers in the store with codewords
@@ -1335,11 +1376,11 @@ async function processScanBatch(
   // element is still in the DOM. Any wrapper that fails either
   // check gets its label released without ever entering the store.
   const candidates: ElementWrapper[] = [];
-  for (let i = 0; i < batch.refs.length; i++) {
+  for (let i = 0; i < newRefs.length; i++) {
     const label = i < labels.length ? labels[i] : '';
     if (!label) continue;  // pool exhausted; element stays unaddressable
-    batch.elements[i].codeword = label;
-    candidates.push(new ElementWrapper(batch.refs[i], batch.elements[i]));
+    newElements[i].codeword = label;
+    candidates.push(new ElementWrapper(newRefs[i], newElements[i]));
   }
 
   // Even an empty batch sends an is_final marker so the plugin
