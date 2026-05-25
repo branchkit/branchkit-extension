@@ -76,6 +76,32 @@ import { sweepDisconnectedAfterBatch } from './batch-sweep';
 import { filterNewBatchRefs } from './batch-dedup';
 import type { ResolveHintResponse } from './types';
 
+// --- Idempotency guard ---
+//
+// Two paths can land us here:
+//   1. Manifest content_scripts on page load (fresh JS context, flag unset).
+//   2. SW programmatic re-injection via `chrome.scripting.executeScript`
+//      after `chrome.runtime.onInstalled` (extension install/update/reload).
+//
+// Case 2 hits a frame whose isolated world already holds an orphan content
+// script with the flag set. The SW clears the flag immediately before
+// injecting (see background.ts re-injection handler), so the fresh script
+// runs to completion and binds new listeners. The orphan stays in the
+// world but its `chrome.runtime` is invalidated; its observers/listeners
+// keep firing into dead code until the page navigates or follow-up work
+// (step A in the orphan-CS plan) adds a `port.onDisconnect` teardown.
+//
+// Manual F5 of the page destroys both scripts and the manifest injection
+// starts clean — guard catches the rare case of two manifest-driven
+// injections (shouldn't happen but is cheap insurance).
+if ((window as unknown as { __branchkitContentInjected?: boolean }).__branchkitContentInjected) {
+  // Already initialized in this isolated world. Throwing aborts the IIFE
+  // without re-binding listeners; the original content script keeps owning
+  // the frame. No-op for the page.
+  throw new Error('[BranchKit] content script duplicate injection — bailing');
+}
+(window as unknown as { __branchkitContentInjected: boolean }).__branchkitContentInjected = true;
+
 // --- State ---
 
 const store = new WrapperStore();

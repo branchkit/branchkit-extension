@@ -1386,8 +1386,78 @@ chrome.storage.onChanged.addListener((changes) => {
   }
 });
 
-chrome.runtime.onInstalled.addListener(() => init());
+chrome.runtime.onInstalled.addListener((details) => {
+  init();
+  // Re-inject content scripts into already-open tabs on install/update so
+  // the user doesn't need to F5 every tab after reloading the extension.
+  // Canonical Chrome MV3 pattern — see
+  // https://www.codestudy.net/blog/chrome-extension-content-script-re-injection-after-upgrade-or-install/
+  //
+  // Orphan content scripts from the previous extension generation are still
+  // in those frames' isolated worlds; we explicitly clear their idempotency
+  // flag before file injection so the fresh content.js runs to completion.
+  // Pairs with the guard at the top of content.ts.
+  //
+  // Step A of the orphan-CS plan (port.onDisconnect self-quiesce) is still
+  // pending; until that lands, the orphan's bound observers/listeners keep
+  // firing — most calls into chrome.runtime fail silently (invalidated
+  // context) so the visible damage is limited to wasted CPU.
+  if (details.reason === 'install' || details.reason === 'update') {
+    void reinjectContentScripts();
+  }
+});
 chrome.runtime.onStartup.addListener(() => init());
+
+async function reinjectContentScripts(): Promise<void> {
+  let tabs: chrome.tabs.Tab[];
+  try {
+    tabs = await chrome.tabs.query({});
+  } catch (e) {
+    console.warn('[BranchKit] reinject: tabs.query failed', e);
+    return;
+  }
+  for (const tab of tabs) {
+    if (typeof tab.id !== 'number') continue;
+    // chrome:// and chrome-extension:// pages reject scripting.executeScript.
+    // skip them silently. http(s):// and file:// (when permitted) succeed.
+    const url = tab.url ?? '';
+    if (url.startsWith('chrome://') || url.startsWith('chrome-extension://')
+        || url.startsWith('edge://') || url.startsWith('about:')
+        || url.startsWith('devtools://') || url.startsWith('view-source:')) {
+      continue;
+    }
+    try {
+      // Step 1: clear any orphan's idempotency flag in every frame so the
+      // about-to-be-injected fresh content.js init runs.
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: true },
+        func: () => {
+          delete (window as unknown as { __branchkitContentInjected?: boolean }).__branchkitContentInjected;
+        },
+      });
+      // Step 2: re-inject the MAIN-world bootstrap (attachShadow wrapper).
+      // Idempotent — bootstrap.ts guards its own re-installation.
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: true },
+        files: ['bootstrap.js'],
+        world: 'MAIN',
+      });
+      // Step 3: re-inject content.js — the guard cleared in step 1 lets it
+      // run; on completion it sets the guard again to block duplicates.
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id, allFrames: true },
+        files: ['content.js'],
+      });
+    } catch (e) {
+      // Tab may have navigated, been closed, or hit a restricted URL we
+      // didn't filter above. Per-tab errors are non-fatal — move on.
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!msg.includes('Cannot access') && !msg.includes('No tab with id')) {
+        console.warn(`[BranchKit] reinject: tab ${tab.id} (${url}):`, msg);
+      }
+    }
+  }
+}
 
 // Safety net: check connection every 30s
 chrome.alarms.create('connection-check', { periodInMinutes: 0.5 });
