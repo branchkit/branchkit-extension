@@ -1186,16 +1186,14 @@ async function postGrammarBatch(
  * Puts complete — the visual badge and the matcher's per-prefix
  * entry move together. See notes/DESIGN_HINT_PIPELINE_RESYNC.md.
  *
- * Failure handling at C4 is minimal: codewords whose Put failed are
- * released via detachWrapper. The post-Put `isConnected` sweep (item
- * 5 RED) lands at C5; per-Put retry-once (item 11) at C6; cross-tab
- * cleanup (items 4, 7) at C7.
- *
- * Painting follows the same gates as the existing flow: in always-
- * mode, a batch's wrappers are painted via `badgeNewlyCodeworded`
- * once they land in the store. In manual-mode, the first batch
- * triggers `showHints()` so subsequent batches go through the
- * incremental paint path.
+ * Badge-implies-functional contract: wrappers are NOT attached to
+ * the store until the plugin acknowledges the batch's POST and the
+ * element is still in the DOM. Failed elements get their labels
+ * released without entering the store; disconnected elements get
+ * their codewords queued for plugin-side delete via the next
+ * batch's piggyback. The store therefore never contains a wrapper
+ * the matcher can't activate, and `badgeNewlyCodeworded` only
+ * paints badges whose voice command is live.
  */
 async function doScanBatched(): Promise<void> {
   if (!isAlphabetLoaded()) {
@@ -1291,19 +1289,26 @@ async function processScanBatch(
   // tab via withTabLock so multi-frame pages don't collide.
   const labels = await claimLabelsForBatch(batch.refs.length);
 
-  const claimedWrappers: ElementWrapper[] = [];
+  // Build candidate wrappers with codewords assigned but DO NOT
+  // attach to the store yet. Wrappers in the store with codewords
+  // would be visible to showHints() and badgeNewlyCodeworded(),
+  // causing badges to paint before the plugin acknowledges the
+  // grammar push. The design's badge-implies-functional contract
+  // (every painted badge must be voice-activatable) requires that
+  // we hold off attachWrapper until AFTER POST succeeds AND the
+  // element is still in the DOM. Any wrapper that fails either
+  // check gets its label released without ever entering the store.
+  const candidates: ElementWrapper[] = [];
   for (let i = 0; i < batch.refs.length; i++) {
     const label = i < labels.length ? labels[i] : '';
     if (!label) continue;  // pool exhausted; element stays unaddressable
     batch.elements[i].codeword = label;
-    const w = new ElementWrapper(batch.refs[i], batch.elements[i]);
-    attachWrapper(w);
-    claimedWrappers.push(w);
+    candidates.push(new ElementWrapper(batch.refs[i], batch.elements[i]));
   }
 
   // Even an empty batch sends an is_final marker so the plugin
   // knows the scan ended (matters for the C7 cleanup window).
-  if (claimedWrappers.length === 0 && !batch.isLast) {
+  if (candidates.length === 0 && !batch.isLast) {
     return;
   }
 
@@ -1319,44 +1324,39 @@ async function processScanBatch(
     hint_visibility: sessionMeta.hint_visibility,
     app_id: sessionMeta.app_id,
     table_id: sessionMeta.table_id,
-    elements: claimedWrappers.map(w => w.scanned),
+    elements: candidates.map(w => w.scanned),
   });
 
-  // Release wrappers whose Put failed; the plugin doesn't hold them
-  // and painting their badges would surface a no-match codeword.
-  if (resp.failed.length > 0) {
-    const failedSet = new Set(resp.failed.map(f => f.codeword));
-    for (const w of claimedWrappers) {
-      if (failedSet.has(w.scanned.codeword)) {
-        detachWrapper(w.element); // releases label back to the pool
-      }
+  // Partition: succeeded + still-connected → attach to store (paint
+  // follows). Succeeded + disconnected (item 5 RED) → queue the
+  // codeword for delete on the next batch and release the label.
+  // Failed or unknown → release the label without ever attaching.
+  const succeededSet = new Set(resp.succeeded);
+  const attached: ElementWrapper[] = [];
+  for (const w of candidates) {
+    if (!succeededSet.has(w.scanned.codeword)) {
+      // Either explicitly failed or the response didn't acknowledge
+      // it. Either way: never entered the store, just release.
+      w.releaseLabel();
+      continue;
     }
+    if (!w.element.isConnected) {
+      // Element disconnected during the POST round-trip. Plugin
+      // already holds the codeword in its entity_cache — queue the
+      // delete on the next batch to clear it.
+      pendingDeleteCodewords.push(w.scanned.codeword);
+      w.releaseLabel();
+      continue;
+    }
+    attachWrapper(w);
+    attached.push(w);
   }
 
-  // Post-batch isConnected sweep — item 5 RED mitigation. If an
-  // element disconnected between yield-from-scanner and Put response,
-  // its badge shouldn't paint and the codeword needs Delete on the
-  // next batch (queued in pendingDeleteCodewords). Restricted to
-  // succeeded wrappers because failed ones already got detachWrapper
-  // above; sweep only matters for wrappers the plugin currently
-  // believes it holds.
-  const succeededSet = new Set(resp.succeeded);
-  const succeededWrappers = claimedWrappers.filter(w => succeededSet.has(w.scanned.codeword));
-  sweepDisconnectedAfterBatch(
-    succeededWrappers,
-    (el) => el.isConnected,
-    pendingDeleteCodewords,
-    detachWrapper,
-  );
-
-  // Paint succeeded badges incrementally. badgeNewlyCodeworded
-  // walks the store and paints anything with a codeword that
-  // doesn't yet have a hint; safe to call repeatedly per batch.
-  // Gated by hintsVisible so manual-mode batches stay un-painted
-  // until "show" fires. The sweep above already removed
-  // disconnected wrappers from the store, so badgeNewlyCodeworded
-  // won't try to paint them.
-  if (hintsVisible && resp.succeeded.length > 0) {
+  // Paint the just-attached badges. Each one is now backed by a
+  // successful plugin acknowledgement AND a still-connected element,
+  // so the badge-implies-functional contract holds. Gated by
+  // hintsVisible so manual-mode batches don't paint until "show".
+  if (hintsVisible && attached.length > 0) {
     badgeNewlyCodeworded();
   }
 
