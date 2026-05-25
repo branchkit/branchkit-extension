@@ -193,6 +193,30 @@ export async function clearStack(tabId: number): Promise<void> {
 }
 
 /**
+ * Clear every per-tab label stack from chrome.storage.session. Called
+ * on SW startup (onInstalled / onStartup) to release labels that
+ * were assigned to content-script frames whose Ports never fired
+ * onDisconnect (typical for SW idle-termination cycles and extension
+ * reload). Without this, the per-tab pool can stay near-exhausted
+ * indefinitely — claims return empty arrays, scans produce zero-
+ * codeword batches, and badges never paint.
+ *
+ * Label stability across SW restart is sacrificed by this clear, but
+ * the alternative (silent pool exhaustion) is worse UX. Content
+ * scripts on already-open tabs re-claim from the freshly-empty pool
+ * on their next scan, getting head-of-pool codewords just like a
+ * cold-start.
+ */
+export async function clearAllStacks(): Promise<void> {
+  assignedCache.clear();
+  const all = await chrome.storage.session.get();
+  const stackKeys = Object.keys(all).filter(k => k.startsWith('labelStack:'));
+  if (stackKeys.length > 0) {
+    await chrome.storage.session.remove(stackKeys);
+  }
+}
+
+/**
  * Strict order-preserving equality on two alphabet arrays. Used by
  * `storeAlphabet` to short-circuit redundant pool churn — voice
  * re-pushes the alphabet on a hot path, and a `regenerateAllStacks` call

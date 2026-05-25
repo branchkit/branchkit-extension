@@ -9,7 +9,7 @@
  */
 
 import { Message, ScannedElement, GrammarRequest, FieldInfo, ClickableInfo, TableLink, HintVisibility, DispatchResult, GrammarBatchRequest, GrammarBatchResponse } from './types';
-import { claimLabels, releaseLabels, releaseFrame, clearStack, regenerateAllStacks, getFrameForLabel, alphabetsEqual } from './label-pool';
+import { claimLabels, releaseLabels, releaseFrame, clearStack, clearAllStacks, regenerateAllStacks, getFrameForLabel, alphabetsEqual } from './label-pool';
 
 const ACTUATOR_URL = 'http://127.0.0.1:21551';
 
@@ -1338,6 +1338,15 @@ async function restoreAllTabGrammars(): Promise<void> {
 // --- Startup ---
 
 async function init(): Promise<void> {
+  // Clear every per-tab label pool. Frames from prior SW sessions
+  // may have died without firing the port.onDisconnect handler that
+  // releases their labels (Chrome can lose port subscriptions across
+  // SW idle-termination and extension reload). Without this, the
+  // pool stays near-exhausted: claims return empty, batches have
+  // zero elements, and badges never paint. Sacrifices label
+  // stability across SW restart in exchange for correctness.
+  await clearAllStacks();
+
   // Restore cached grammar for every previously-visited tab BEFORE plugin
   // discovery so the post-discovery replay sees populated state in the
   // SW-restart case (F1).
