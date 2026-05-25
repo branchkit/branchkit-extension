@@ -39,6 +39,11 @@ const AGGREGATE_DEBOUNCE_MS = 120;
 function schedulePushForTab(tabId: number): void {
   const existing = aggregateTimers.get(tabId);
   if (existing) clearTimeout(existing);
+  // F3 — single-frame pages (the majority) have nothing to aggregate, so
+  // skip the 120ms window and let the timer fire on the next macrotask.
+  // Multi-frame pages keep the debounce so frame-N's SCAN_RESULT, arriving
+  // a few ms after frame-(N-1)'s, still collapses into one POST per burst.
+  const debounce = tabGrammars.get(tabId)?.size === 1 ? 0 : AGGREGATE_DEBOUNCE_MS;
   const timer = setTimeout(() => {
     aggregateTimers.delete(tabId);
     // Only the active tab's grammar is live in the plugin. Background tabs
@@ -52,7 +57,7 @@ function schedulePushForTab(tabId: number): void {
     // a SW restart can replay it on next boot (Layer 2 of the hint sync
     // design). Best-effort, async; same debouncing the push uses.
     persistActiveTabGrammar();
-  }, AGGREGATE_DEBOUNCE_MS);
+  }, debounce);
   aggregateTimers.set(tabId, timer);
 }
 
