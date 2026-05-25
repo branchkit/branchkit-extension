@@ -67,6 +67,15 @@ export interface GrammarBatchRequest {
   app_id: string;
   table_id: string;
   elements: ScannedElement[];
+  /**
+   * Codewords whose elements disconnected from the DOM since the prior
+   * batch — the extension's post-batch isConnected sweep piggybacks
+   * them here so the plugin can Delete them from its per-prefix
+   * collections (investigation item 5 RED mitigation). Optional;
+   * absent on the first batch of a session and on any batch where
+   * no sweep flagged anything.
+   */
+  delete_codewords?: string[];
 }
 
 export interface GrammarBatchFailure {

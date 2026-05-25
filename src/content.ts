@@ -72,6 +72,7 @@ import {
 } from './domain-rules';
 import { loadDomainRules, onDomainRulesChanged, ruleEqual } from './domain-rules-storage';
 import { generateSelector } from './selector-generator';
+import { sweepDisconnectedAfterBatch } from './batch-sweep';
 import type { ResolveHintResponse } from './types';
 
 // --- State ---
@@ -1037,6 +1038,20 @@ function pushGrammar(): void {
 
 const BATCH_MODE = false;
 
+// Codewords queued for deletion on the next outbound batch. Populated
+// by the post-batch isConnected sweep when a wrapper's element gets
+// removed from the DOM between yield and Put completion — the RED
+// item 5 mitigation from the investigation. Drained on each
+// postGrammarBatch and on the final deletes-only batch at scan end.
+const pendingDeleteCodewords: string[] = [];
+
+function drainPendingDeletes(): string[] {
+  if (pendingDeleteCodewords.length === 0) return [];
+  const drained = pendingDeleteCodewords.slice();
+  pendingDeleteCodewords.length = 0;
+  return drained;
+}
+
 function generateSessionId(): string {
   // Crypto-random UUID-shaped id; we just need uniqueness per scan,
   // not RFC 4122 conformance. crypto is available in extension content.
@@ -1059,9 +1074,20 @@ async function claimLabelsForBatch(count: number): Promise<string[]> {
 async function postGrammarBatch(
   request: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'>,
 ): Promise<GrammarBatchResponse> {
+  // Piggyback any queued deletes from the prior batch's isConnected
+  // sweep. Drain unconditionally — even an empty batch should carry
+  // pending deletes through so disconnected elements don't leak past
+  // a scan boundary.
+  const drainedDeletes = drainPendingDeletes();
+  const fullRequest: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'> =
+    drainedDeletes.length > 0 ? { ...request, delete_codewords: drainedDeletes } : request;
   try {
-    return await chrome.runtime.sendMessage({ type: 'GRAMMAR_BATCH', request } as Message);
+    return await chrome.runtime.sendMessage({ type: 'GRAMMAR_BATCH', request: fullRequest } as Message);
   } catch {
+    // Restore drained deletes on transport failure so they're carried
+    // on the next attempt — otherwise an SW restart mid-scan would
+    // strand the deletes silently.
+    pendingDeleteCodewords.push(...drainedDeletes);
     return {
       result: 'error',
       succeeded: [],
@@ -1143,8 +1169,26 @@ async function doScanBatched(): Promise<void> {
     // Yield to the event loop between batches so MutationObserver
     // can fire and any DOM removal mid-scan flags the wrapper's
     // element as disconnected before the next batch (item 5
-    // mitigation infrastructure; the actual sweep lands at C5).
+    // mitigation; the sweep itself runs in processScanBatch).
     await new Promise(r => setTimeout(r, 0));
+  }
+
+  // If the terminal batch's sweep queued deletes, flush them now via
+  // an empty deletes-only batch — otherwise they'd strand until the
+  // next user-driven scan. Reuses the same session_id so plugin-side
+  // session tracking stays consistent.
+  if (pendingDeleteCodewords.length > 0) {
+    await postGrammarBatch({
+      session_id: sessionId,
+      batch_index: batchIndex,
+      is_final: true,
+      kind: 'scan',
+      bundle_id: sessionMeta.bundle_id,
+      hint_visibility: sessionMeta.hint_visibility,
+      app_id: sessionMeta.app_id,
+      table_id: sessionMeta.table_id,
+      elements: [],
+    });
   }
 }
 
@@ -1206,11 +1250,29 @@ async function processScanBatch(
     }
   }
 
+  // Post-batch isConnected sweep — item 5 RED mitigation. If an
+  // element disconnected between yield-from-scanner and Put response,
+  // its badge shouldn't paint and the codeword needs Delete on the
+  // next batch (queued in pendingDeleteCodewords). Restricted to
+  // succeeded wrappers because failed ones already got detachWrapper
+  // above; sweep only matters for wrappers the plugin currently
+  // believes it holds.
+  const succeededSet = new Set(resp.succeeded);
+  const succeededWrappers = claimedWrappers.filter(w => succeededSet.has(w.scanned.codeword));
+  sweepDisconnectedAfterBatch(
+    succeededWrappers,
+    (el) => el.isConnected,
+    pendingDeleteCodewords,
+    detachWrapper,
+  );
+
   // Paint succeeded badges incrementally. badgeNewlyCodeworded
   // walks the store and paints anything with a codeword that
   // doesn't yet have a hint; safe to call repeatedly per batch.
   // Gated by hintsVisible so manual-mode batches stay un-painted
-  // until "show" fires.
+  // until "show" fires. The sweep above already removed
+  // disconnected wrappers from the store, so badgeNewlyCodeworded
+  // won't try to paint them.
   if (hintsVisible && resp.succeeded.length > 0) {
     badgeNewlyCodeworded();
   }
