@@ -244,14 +244,24 @@ export function scanSingle(el: Element): ScannedElement | null {
  * Returns ScannedElement[] sorted by DOM order.
  */
 export function scanElements(root: Document | Element = document): { elements: ScannedElement[]; refs: Element[]; invisibleCandidates: Element[] } {
+  return collectHintables(root);
+}
+
+// Shared DOM walk + filter pipeline. Used by both the eager `scanElements`
+// and the batch-yielding `scanInBatches`. Walks `root` once via
+// `deepQuerySelectorAll`, filters out excludes / hint hosts / invisible /
+// redundant, and returns the surviving (refs, elements) plus an
+// invisible-candidate list for the ResizeObserver-driven hintability
+// flip path. Same dedup semantics as the original single-pass loop.
+function collectHintables(
+  root: Document | Element,
+): { elements: ScannedElement[]; refs: Element[]; invisibleCandidates: Element[] } {
   const elements: ScannedElement[] = [];
   const refs: Element[] = [];
   const invisibleCandidates: Element[] = [];
   const seen = new Set<Element>();
 
-  const candidates = deepQuerySelectorAll(root, HINTABLE_SELECTOR);
-
-  for (const el of candidates) {
+  for (const el of deepQuerySelectorAll(root, HINTABLE_SELECTOR)) {
     if (seen.has(el)) continue;
     if (el.matches(EXCLUDE_SELECTOR)) continue;
     if (el.closest('[data-branchkit-hint]')) continue;
@@ -263,7 +273,6 @@ export function scanElements(root: Document | Element = document): { elements: S
     if (isRedundant(el)) continue;
 
     seen.add(el);
-
     elements.push({
       label: getElementLabel(el),
       id: 0,
@@ -276,6 +285,64 @@ export function scanElements(root: Document | Element = document): { elements: S
   }
 
   return { elements, refs, invisibleCandidates };
+}
+
+/** Default batch size for `scanInBatches`. Per
+ * notes/DESIGN_HINT_PIPELINE_RESYNC.md the per-batch flow targets 10-20
+ * elements: small enough that Put+paint per batch feels incremental,
+ * large enough that round-trip overhead amortizes. */
+export const DEFAULT_SCAN_BATCH_SIZE = 15;
+
+/** One yielded chunk from `scanInBatches`. `invisibleCandidates` is
+ * populated only on the terminal yield — the ResizeObserver-flip path
+ * needs them once per scan, not per batch. */
+export interface ScanBatch {
+  elements: ScannedElement[];
+  refs: Element[];
+  /** True iff this is the last batch in the scan (or the scan was empty). */
+  isLast: boolean;
+  /** Invisible HINTABLE_SELECTOR matches; populated only when `isLast`. */
+  invisibleCandidates: Element[];
+}
+
+/**
+ * Walk the DOM once eagerly, then yield the surviving hintables in
+ * chunks of `batchSize`. Same filter pipeline and dedup as
+ * `scanElements`; the only behavior change is that the caller receives
+ * results incrementally so per-batch follow-up work (claim codewords,
+ * Put, paint) can begin before all candidates have been processed.
+ *
+ * The walk is eager (not lazy per yield): we need the full candidate
+ * count before we can flag `isLast`, and the dedup `seen` set has to
+ * cover the whole scan. The incremental win is on what callers DO
+ * with each batch, not on the walk itself.
+ *
+ * Yields exactly one batch with `isLast: true` for a scan that found
+ * zero hintables — that signals the caller's terminal-batch handler
+ * (cleanup, vocabulary commit) without a special "no batches" path.
+ */
+export function* scanInBatches(
+  root: Document | Element = document,
+  batchSize: number = DEFAULT_SCAN_BATCH_SIZE,
+): Generator<ScanBatch, void, void> {
+  const { elements, refs, invisibleCandidates } = collectHintables(root);
+
+  if (elements.length === 0) {
+    yield { elements: [], refs: [], isLast: true, invisibleCandidates };
+    return;
+  }
+
+  const total = elements.length;
+  for (let start = 0; start < total; start += batchSize) {
+    const end = Math.min(start + batchSize, total);
+    const isLast = end === total;
+    yield {
+      elements: elements.slice(start, end),
+      refs: refs.slice(start, end),
+      isLast,
+      invisibleCandidates: isLast ? invisibleCandidates : [],
+    };
+  }
 }
 
 function getElementLabel(el: Element): string {
