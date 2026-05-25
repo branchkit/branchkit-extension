@@ -108,6 +108,7 @@ let hintsVisible = false;
 let activeCategory: Category | null = null;
 let displayMode: BadgeDisplayMode = 'letter';
 let hintVisibility: HintVisibility = 'always';
+let lastGrammarHash = '';
 let pendingMutation = false;
 let lastActivatedElement: Element | null = null;
 const MAX_BADGE_COUNT = 676; // No artificial cap; word pairs for >26
@@ -1005,12 +1006,46 @@ function activateWrapper(wrapper: ElementWrapper): void {
   }
 }
 
-// --- Grammar Push (Option B) ---
+// --- Grammar Push (legacy whole-grammar) ---
 //
-// Under batched mode the old pushGrammar (whole-grammar via
-// SCAN_RESULT) is replaced by batchedStateSync below. Call sites that
-// previously called schedulePushGrammar now go through the same
-// debounced entrypoint, which delegates to batchedStateSync.
+// The pre-Option-B path: scans the whole store, hash-dedups, posts to
+// the background SW via SCAN_RESULT, which aggregates per-tab and
+// POSTs to the plugin's POST /grammar handler. Lives behind
+// BATCH_MODE=false (the current default after reverting C8).
+//
+// Option B's per-batch path (doScanBatched + batchedStateSync below)
+// stays in tree but is dead until BATCH_MODE flips back to true. The
+// re-attempt needs to address: per-content-script session lifetime
+// (not per-scan), rescan deduplication so already-attached wrappers
+// don't re-claim labels, and badge cleanup when entity_cache loses
+// entries.
+
+function pushGrammar(): void {
+  const elements: ScannedElement[] = viewportSort(store.all).map(w => w.scanned);
+
+  // Hash-based deduplication. Includes codeword so an alphabet regen that
+  // produces the same elements but different codewords still re-pushes —
+  // otherwise the voice plugin would keep using stale codewords.
+  const hash = elements.map(e => `${e.id}|${e.category}|${e.codeword}`).join('\x1f');
+  if (hash === lastGrammarHash) {
+    chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_grammar_skipped', data: { reason: 'dedupe', elements: elements.length } } as Message).catch(() => {});
+    return;
+  }
+  lastGrammarHash = hash;
+
+  try {
+    chrome.runtime.sendMessage({
+      type: 'SCAN_RESULT',
+      elements,
+      adapter: getActiveAdapter(window.location.href)?.name || null,
+    } as Message);
+    chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_grammar_sent', data: { elements: elements.length } } as Message).catch(() => {});
+  } catch {
+    // Extension context may be invalidated
+  }
+}
+
+// --- Grammar Push (Option B, dead under BATCH_MODE=false) ---
 
 let batchedSyncTimer: ReturnType<typeof setTimeout> | null = null;
 const BATCHED_SYNC_DEBOUNCE_MS = 80;
@@ -1115,11 +1150,12 @@ async function batchedStateSync(reason: string): Promise<void> {
 //     handles the diff cleanup automatically — simpler than
 //     tracking per-wrapper pushed/unpushed state.
 //
-// schedulePushGrammar (the legacy whole-grammar entrypoint) now
-// dispatches to scheduleBatchedSync. Old pushGrammar + SCAN_RESULT
-// + plugin's POST /grammar handler all deleted in this commit.
+// schedulePushGrammar dispatches to scheduleBatchedSync when
+// BATCH_MODE=true, otherwise falls back to the legacy pushGrammar
+// (with the 120ms debounce). Currently BATCH_MODE=false after the
+// revert — see the design issues noted at pushGrammar above.
 
-const BATCH_MODE = true;
+const BATCH_MODE = false;
 
 // Codewords queued for deletion on the next outbound batch. Populated
 // by the post-batch isConnected sweep when a wrapper's element gets
@@ -1411,6 +1447,7 @@ window.addEventListener('pageshow', (e) => {
   // bfcache (the pool is in chrome.storage.session), so re-registering
   // in place avoids churning RELEASE_LABELS through the pool.
   idRegistry.clear();
+  lastGrammarHash = '';
   for (const w of [...store.all]) {
     if (!w.element.isConnected) {
       detachWrapper(w.element);
@@ -1419,6 +1456,7 @@ window.addEventListener('pageshow', (e) => {
     idRegistry.register(w);
   }
   doScan();
+  pushGrammar();
 });
 
 // --- Frame liveness Port ---
@@ -1574,9 +1612,11 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
     } else if (action === 'rescan') {
       const t0 = performance.now();
       chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_rescan_received', data: { url: window.location.href } } as Message).catch(() => {});
+      lastGrammarHash = '';
       doScan();
       const t1 = performance.now();
       chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_scan_completed', data: { elements: store.all.length, duration_ms: Math.round(t1 - t0) } } as Message).catch(() => {});
+      pushGrammar();
     } else if (action === 'set_badge_mode' && params?.mode) {
       chrome.storage.sync.set({ badgeDisplayMode: params.mode });
     } else if (action === 'scroll' || action === 'scroll_to_element' || action === 'scroll_to_percent') {
@@ -1868,16 +1908,25 @@ document.addEventListener('keyup', (e: KeyboardEvent) => {
 
 const HUGE_MUTATIONS_COUNT = 1000;
 const HUGE_MUTATION_IDLE_MS = 50;
+const GRAMMAR_PUSH_DEBOUNCE_MS = 120;
 
+let pushTimer: ReturnType<typeof setTimeout> | null = null;
 let hugeMutationTimer: ReturnType<typeof setTimeout> | null = null;
 
-// Legacy entrypoint name retained because many call sites use it
-// (IT.onCodewordsChanged, MutationObserver, alphabet swap, focus).
-// Under Option B (BATCH_MODE) it just routes to scheduleBatchedSync —
-// the work it triggers (re-Put current store state with a fresh
-// session_id) is the right thing to do for every existing caller.
+// Dispatched on every grammar-relevant change (MO mutations, IT
+// codeword claims, alphabet swap, bfcache restore). Under BATCH_MODE
+// this routes to scheduleBatchedSync (per-batch path); otherwise it
+// uses the legacy debounced whole-grammar pushGrammar.
 function schedulePushGrammar(): void {
-  scheduleBatchedSync('schedulePushGrammar');
+  if (BATCH_MODE) {
+    scheduleBatchedSync('schedulePushGrammar');
+    return;
+  }
+  if (pushTimer) clearTimeout(pushTimer);
+  pushTimer = setTimeout(() => {
+    pushTimer = null;
+    pushGrammar();
+  }, GRAMMAR_PUSH_DEBOUNCE_MS);
 }
 
 function isOwnMutation(n: Node): boolean {
