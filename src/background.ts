@@ -8,7 +8,7 @@
  * - Manage offscreen document lifecycle (Chrome only)
  */
 
-import { Message, ScannedElement, GrammarRequest, FieldInfo, ClickableInfo, TableLink, HintVisibility, DispatchResult } from './types';
+import { Message, ScannedElement, GrammarRequest, FieldInfo, ClickableInfo, TableLink, HintVisibility, DispatchResult, GrammarBatchRequest, GrammarBatchResponse } from './types';
 import { claimLabels, releaseLabels, releaseFrame, clearStack, regenerateAllStacks, getFrameForLabel, alphabetsEqual } from './label-pool';
 
 const ACTUATOR_URL = 'http://127.0.0.1:21551';
@@ -612,6 +612,55 @@ async function forwardHintsSessionStart(reason: string, tabId: number): Promise<
   }
 }
 
+// Per-batch grammar push (Option B). The content script's batched
+// doScan sends one of these per 10-20 elements; the SW stamps
+// tab_id + frame_id from sender and POSTs to /grammar/batch. Plugin
+// runs the per-element Puts and returns a succeeded/failed split
+// the content script uses to paint or releaseLabel each element.
+//
+// Failure modes (return value):
+//  - Plugin unreachable → empty succeeded, every element failed
+//    with reason "transport". Lets the content script unwind the
+//    batch cleanly instead of mismatched state.
+async function postGrammarBatch(
+  tabId: number,
+  frameId: number,
+  request: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'>,
+): Promise<GrammarBatchResponse> {
+  if (!pluginPort || !pluginToken) {
+    const found = await discoverPlugin();
+    if (!found) return transportFailure(request);
+    branchkitConnected = true;
+    connectSSE();
+  }
+
+  const fullRequest: GrammarBatchRequest = { ...request, tab_id: tabId, frame_id: frameId };
+  try {
+    const r = await fetch(`http://127.0.0.1:${pluginPort}/grammar/batch`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${pluginToken}`,
+      },
+      body: JSON.stringify(fullRequest),
+    });
+    if (!r.ok) return transportFailure(request);
+    return await r.json() as GrammarBatchResponse;
+  } catch {
+    return transportFailure(request);
+  }
+}
+
+function transportFailure(
+  request: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'>,
+): GrammarBatchResponse {
+  return {
+    result: 'error',
+    succeeded: [],
+    failed: request.elements.map(e => ({ codeword: e.codeword, reason: 'transport' })),
+  };
+}
+
 async function pushGrammar(tabId: number | null, elements: ScannedElement[]): Promise<void> {
   // Lazy discovery: service worker may have restarted and lost state
   if (!pluginPort || !pluginToken) {
@@ -836,6 +885,26 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
       schedulePushForTab(tabId);
     }
     return false;
+  }
+
+  if (message.type === 'GRAMMAR_BATCH') {
+    // Content's batched doScan (Option B) sent a grammar batch. Stamp
+    // tab_id + frame_id and POST. Returning true keeps sendResponse
+    // alive across the await — Chrome closes the channel otherwise.
+    const tabId = _sender.tab?.id;
+    const frameId = _sender.frameId;
+    if (typeof tabId !== 'number' || typeof frameId !== 'number') {
+      sendResponse(transportFailure(message.request));
+      return false;
+    }
+    // Stamp frame_id onto every element so the plugin's per-element
+    // payload carries the same frame the SW knows. Same rationale as
+    // SCAN_RESULT above.
+    for (const el of message.request.elements) {
+      el.frame_id = frameId;
+    }
+    postGrammarBatch(tabId, frameId, message.request).then(sendResponse);
+    return true;
   }
 
   if (message.type === 'SSE_EVENT') {

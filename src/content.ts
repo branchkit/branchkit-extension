@@ -5,9 +5,9 @@
  * Voice commands arrive via background → BRANCHKIT_ACTION messages.
  */
 
-import { Category, BadgeDisplayMode, HintVisibility, ScannedElement, Message, DispatchResult } from './types';
+import { Category, BadgeDisplayMode, HintVisibility, ScannedElement, Message, DispatchResult, GrammarBatchRequest, GrammarBatchResponse } from './types';
 import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from './words';
-import { scanElements, scanSingle, isHintable, deepQuerySelectorAll } from './scanner';
+import { scanElements, scanSingle, isHintable, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE } from './scanner';
 import { ElementWrapper, WrapperStore } from './element-wrapper';
 import * as idRegistry from './registry';
 import { resolveTarget } from './activate-resolution';
@@ -746,6 +746,15 @@ function startBadgeReattachObserver(): void {
  * hintable element has a wrapper that the tracker is observing.
  */
 function doScan(): void {
+  if (BATCH_MODE) {
+    // Fire-and-forget — the batched path is async (per-batch awaits a
+    // codeword claim + POST round-trip), but doScan's existing callers
+    // are sync. The new path schedules itself onto the microtask queue
+    // and runs to completion in the background.
+    void doScanBatched();
+    return;
+  }
+
   const adapter = getActiveAdapter(window.location.href);
   const result = adapter ? scanWithAdapter(adapter) : scanElements();
   applyUserRuleToScan(result, document);
@@ -1007,6 +1016,213 @@ function pushGrammar(): void {
     // Extension context may be invalidated
   }
 }
+
+// --- Per-batch grammar push (Option B, gated by BATCH_MODE) ---
+//
+// notes/DESIGN_HINT_PIPELINE_RESYNC.md proposes replacing the
+// whole-grammar `pushGrammar` + SW debounce + plugin diff/Put-all
+// pipeline with a per-batch flow:
+//   1. Walk DOM and yield batches of 10-20 elements
+//   2. Inclusions run ONCE up front (item 15 mitigation)
+//   3. Per batch: apply exclusions → claim codewords inline →
+//      attachWrapper → POST grammar batch → release failed,
+//      paint succeeded
+//   4. Terminal batch carries is_final=true so the plugin marks
+//      the session complete and a future session_id change
+//      triggers cleanup (C7)
+//
+// Until C8 flips BATCH_MODE to true, this path is dead code. C5/C6/C7
+// add the isConnected sweep, retry, and cross-tab cleanup respectively.
+// C8 deletes pushGrammar/lastGrammarHash + the SW SCAN_RESULT path.
+
+const BATCH_MODE = false;
+
+function generateSessionId(): string {
+  // Crypto-random UUID-shaped id; we just need uniqueness per scan,
+  // not RFC 4122 conformance. crypto is available in extension content.
+  const a = crypto.getRandomValues(new Uint8Array(16));
+  let s = '';
+  for (const b of a) s += b.toString(16).padStart(2, '0');
+  return s.slice(0, 8) + '-' + s.slice(8, 12) + '-' + s.slice(12, 16) + '-' + s.slice(16, 20) + '-' + s.slice(20);
+}
+
+async function claimLabelsForBatch(count: number): Promise<string[]> {
+  if (count === 0) return [];
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: 'CLAIM_LABELS', count });
+    return Array.isArray(resp?.labels) ? resp.labels : [];
+  } catch {
+    return [];
+  }
+}
+
+async function postGrammarBatch(
+  request: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'>,
+): Promise<GrammarBatchResponse> {
+  try {
+    return await chrome.runtime.sendMessage({ type: 'GRAMMAR_BATCH', request } as Message);
+  } catch {
+    return {
+      result: 'error',
+      succeeded: [],
+      failed: request.elements.map(e => ({ codeword: e.codeword, reason: 'sendMessage_failed' })),
+    };
+  }
+}
+
+/**
+ * Per-batch replacement for `doScan` + `pushGrammar`. Walks the DOM
+ * once via `scanInBatches`, claims codewords per batch, POSTs each
+ * batch to the plugin, and paints succeeded badges as soon as their
+ * Puts complete — the visual badge and the matcher's per-prefix
+ * entry move together. See notes/DESIGN_HINT_PIPELINE_RESYNC.md.
+ *
+ * Failure handling at C4 is minimal: codewords whose Put failed are
+ * released via detachWrapper. The post-Put `isConnected` sweep (item
+ * 5 RED) lands at C5; per-Put retry-once (item 11) at C6; cross-tab
+ * cleanup (items 4, 7) at C7.
+ *
+ * Painting follows the same gates as the existing flow: in always-
+ * mode, a batch's wrappers are painted via `badgeNewlyCodeworded`
+ * once they land in the store. In manual-mode, the first batch
+ * triggers `showHints()` so subsequent batches go through the
+ * incremental paint path.
+ */
+async function doScanBatched(): Promise<void> {
+  if (!isAlphabetLoaded()) {
+    return;
+  }
+
+  const sessionId = generateSessionId();
+  const cr = compiledRule;
+  const adapter = getActiveAdapter(window.location.href);
+
+  // Inclusions run ONCE per scan (item 15: per-batch inclusion would
+  // be N querySelectorAll for the whole document). Pre-mark these
+  // refs so the scanner walk doesn't rediscover them.
+  let inclusionRefs: Element[] = [];
+  let inclusionElements: ScannedElement[] = [];
+  if (cr?.includeSelector) {
+    const inc = collectInclusions(new Set(), cr.includeSelector, document);
+    inclusionRefs = inc.refs;
+    inclusionElements = inc.elements;
+  }
+  const initialSeen = new Set<Element>(inclusionRefs);
+
+  // Drop wrappers whose elements disconnected since the last scan
+  // BEFORE walking — same as the old doScan path's end-of-pass sweep
+  // but moved up so the per-batch loop starts from a clean store.
+  dropDisconnectedWrappers();
+
+  const sessionMeta = {
+    bundle_id: '',
+    hint_visibility: hintVisibility,
+    app_id: '',
+    table_id: '',
+  };
+
+  let batchIndex = 0;
+
+  // Synthetic first "batch" for inclusion-rule elements, if any. Goes
+  // through the same processing path so its codewords get Put and the
+  // succeeded ones paint. is_final stays false because the scanner
+  // walk will follow with at least its own terminal batch.
+  if (inclusionRefs.length > 0) {
+    await processScanBatch(
+      { refs: inclusionRefs, elements: inclusionElements, isLast: false, invisibleCandidates: [] },
+      sessionId, batchIndex, sessionMeta, adapter,
+    );
+    batchIndex++;
+  }
+
+  for (const batch of scanInBatches(
+    adapter ? document : document, DEFAULT_SCAN_BATCH_SIZE, initialSeen,
+  )) {
+    await processScanBatch(batch, sessionId, batchIndex, sessionMeta, adapter);
+    batchIndex++;
+    // Yield to the event loop between batches so MutationObserver
+    // can fire and any DOM removal mid-scan flags the wrapper's
+    // element as disconnected before the next batch (item 5
+    // mitigation infrastructure; the actual sweep lands at C5).
+    await new Promise(r => setTimeout(r, 0));
+  }
+}
+
+async function processScanBatch(
+  batch: { refs: Element[]; elements: ScannedElement[]; isLast: boolean; invisibleCandidates: Element[] },
+  sessionId: string, batchIndex: number,
+  sessionMeta: { bundle_id: string; hint_visibility: HintVisibility; app_id: string; table_id: string },
+  adapter: ReturnType<typeof getActiveAdapter>,
+): Promise<void> {
+  // Per-batch exclusions (item 15). collectInclusions already ran
+  // once at scan start; only exclusions need batch-shape application.
+  if (compiledRule?.excludes.length) {
+    applyExclusions(batch.refs, batch.elements, compiledRule.excludes);
+  }
+
+  // Pool-claim codewords for the batch. claimLabels serializes per
+  // tab via withTabLock so multi-frame pages don't collide.
+  const labels = await claimLabelsForBatch(batch.refs.length);
+
+  const claimedWrappers: ElementWrapper[] = [];
+  for (let i = 0; i < batch.refs.length; i++) {
+    const label = i < labels.length ? labels[i] : '';
+    if (!label) continue;  // pool exhausted; element stays unaddressable
+    batch.elements[i].codeword = label;
+    const w = new ElementWrapper(batch.refs[i], batch.elements[i]);
+    attachWrapper(w);
+    claimedWrappers.push(w);
+  }
+
+  // Even an empty batch sends an is_final marker so the plugin
+  // knows the scan ended (matters for the C7 cleanup window).
+  if (claimedWrappers.length === 0 && !batch.isLast) {
+    return;
+  }
+
+  const adapterName = adapter?.name ?? '';
+  void adapterName; // reserved for plugin-side adapter-aware routing
+
+  const resp = await postGrammarBatch({
+    session_id: sessionId,
+    batch_index: batchIndex,
+    is_final: batch.isLast,
+    kind: 'scan',
+    bundle_id: sessionMeta.bundle_id,
+    hint_visibility: sessionMeta.hint_visibility,
+    app_id: sessionMeta.app_id,
+    table_id: sessionMeta.table_id,
+    elements: claimedWrappers.map(w => w.scanned),
+  });
+
+  // Release wrappers whose Put failed; the plugin doesn't hold them
+  // and painting their badges would surface a no-match codeword.
+  if (resp.failed.length > 0) {
+    const failedSet = new Set(resp.failed.map(f => f.codeword));
+    for (const w of claimedWrappers) {
+      if (failedSet.has(w.scanned.codeword)) {
+        detachWrapper(w.element); // releases label back to the pool
+      }
+    }
+  }
+
+  // Paint succeeded badges incrementally. badgeNewlyCodeworded
+  // walks the store and paints anything with a codeword that
+  // doesn't yet have a hint; safe to call repeatedly per batch.
+  // Gated by hintsVisible so manual-mode batches stay un-painted
+  // until "show" fires.
+  if (hintsVisible && resp.succeeded.length > 0) {
+    badgeNewlyCodeworded();
+  }
+
+  // Surface terminal-batch invisibleCandidates to the
+  // ResizeObserver path (same as the old doScan's end-of-pass).
+  if (batch.isLast && batch.invisibleCandidates.length > 0) {
+    observeInvisibleCandidates(batch.invisibleCandidates);
+  }
+}
+
+void doScanBatched; // gated by BATCH_MODE; referenced from doScan when flipped
 
 // --- Active-frame tracking ---
 //

@@ -40,10 +40,55 @@ export interface ScannedElement {
   frame_id?: number;
 }
 
+// --- Per-batch grammar protocol (Option B) ---
+//
+// Mirror of the plugin-side shapes in plugins/browser/src/batch.go.
+// Per notes/DESIGN_HINT_PIPELINE_RESYNC.md, the extension sends one
+// GrammarBatchRequest per 10-20 elements; multiple batches with the
+// same session_id make up one logical scan. tab_id and frame_id are
+// stamped by the SW (sender.tab.id / sender.frameId), not the
+// content script — same pattern as SCAN_RESULT today.
+
+export interface GrammarBatchRequest {
+  /** Set by background SW from sender.tab.id; absent from content's outbound shape. */
+  tab_id?: number;
+  /** Set by background SW from sender.frameId. */
+  frame_id?: number;
+  /** UUID per logical scan; groups all batches of one scan. */
+  session_id: string;
+  /** 0-based monotonic batch index within the session. */
+  batch_index: number;
+  /** True on the last batch of this scan (or for an empty terminal batch). */
+  is_final: boolean;
+  /** "scan" = full doScan replacement; "incremental" = MO-driven discovery. */
+  kind: 'scan' | 'incremental';
+  bundle_id: string;
+  hint_visibility: HintVisibility;
+  app_id: string;
+  table_id: string;
+  elements: ScannedElement[];
+}
+
+export interface GrammarBatchFailure {
+  codeword: string;
+  reason: string;
+}
+
+export interface GrammarBatchResponse {
+  result: 'ok' | 'error';
+  succeeded: string[];
+  failed: GrammarBatchFailure[];
+}
+
 // --- Messages ---
 
 export type Message =
   | { type: 'SCAN_RESULT'; elements: ScannedElement[]; adapter: string | null }
+  | {
+      type: 'GRAMMAR_BATCH';
+      /** Content omits tab_id/frame_id; SW stamps them from sender. */
+      request: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'>;
+    }
   | { type: 'SHOW_HINTS'; category?: Category }
   | { type: 'HIDE_HINTS' }
   | { type: 'BRANCHKIT_ACTION'; payload: { action: string; params: Record<string, string> } }
