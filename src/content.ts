@@ -257,10 +257,17 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
 // Adopt the BranchKit alphabet from chrome.storage.local on script load.
 // Local (not sync) because the alphabet is per-machine: it tracks whatever
 // voice plugin happens to be running locally, not user preferences.
+//
+// Re-triggers doScan after setAlphabet because under Option B's batched
+// path (doScanBatched) the initial doScan at module load no-ops if the
+// alphabet isn't loaded yet — without this re-trigger the store stays
+// empty and badges never paint. Old path's IntersectionTracker async-
+// claim hid the race; the batched path's inline claim doesn't.
 if (typeof chrome !== 'undefined' && chrome.storage?.local) {
   chrome.storage.local.get('alphabet', (result) => {
     if (Array.isArray(result.alphabet)) {
       setAlphabet(result.alphabet);
+      doScan();
       if (hintVisibility === 'always') {
         whenDOMSettles(() => {
           tracker.flushNow().then(() => {
@@ -818,11 +825,25 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
     ? store.all.filter(w => categories.includes(w.category))
     : [...store.all];
 
-  if (allTargets.length === 0) return;
+  // hintsVisible is the mode flag — "user wants hints showing." Set it
+  // even when the store has nothing to paint right now so subsequent
+  // wrappers arriving via the batched scan (or MutationObserver
+  // discovery) paint via badgeNewlyCodeworded, which is hintsVisible-
+  // gated. Under the old whole-grammar path the store was always
+  // populated by the time showHints fired, so an empty return here
+  // never mattered; under batched mode the scan is async and showHints
+  // can race ahead of the first batch landing.
+  if (allTargets.length === 0) {
+    hintsVisible = true;
+    return;
+  }
 
   // Filter to viewport-visible and sort by position (same as grammar push)
   const targets = viewportSort(allTargets);
-  if (targets.length === 0) return;
+  if (targets.length === 0) {
+    hintsVisible = true;
+    return;
+  }
 
   // Only render hints for elements that received a pool codeword.
   // Elements without one wouldn't be voice-addressable and their badge
