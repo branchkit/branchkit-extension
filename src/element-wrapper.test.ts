@@ -145,6 +145,137 @@ describe('WrapperStore', () => {
   });
 });
 
+describe('rescan stability under lazy load', () => {
+  // Locks the invariant Option B's per-batch refactor relies on: element
+  // identity → codeword binding survives any rescan, regardless of scan
+  // order. doScan walks refs in viewport/DOM order; for each ref it skips
+  // creation if findWrapperFor(ref) already returns a wrapper. So an
+  // element that gets codeword "arch arch" on scan 1 and reappears at a
+  // different position on scan 2 keeps "arch arch" — the wrapper (and its
+  // .scanned.codeword) is reused, the codeword isn't re-derived from
+  // position. The "claim" in these tests assigns directly to
+  // wrapper.scanned.codeword; the real flow goes through the intersection
+  // tracker + label pool, but pool ordering is already covered by
+  // label-pool.test.ts. See notes/DESIGN_HINT_PIPELINE_RESYNC.md item 6.
+
+  // Simulate doScan's walk: for each ref in scan order, reuse an existing
+  // wrapper or attach a new one. Returns the wrappers in the same order as
+  // refs so callers can assert positional behavior.
+  function doScanLike(store: WrapperStore, refs: Element[]): ElementWrapper[] {
+    const out: ElementWrapper[] = [];
+    for (const ref of refs) {
+      let w = store.findWrapperFor(ref);
+      if (!w) {
+        w = new ElementWrapper(ref, fakeScanned());
+        store.addWrapper(w);
+      }
+      out.push(w);
+    }
+    return out;
+  }
+
+  it('insertion at position 0 preserves codewords on all prior wrappers', () => {
+    const store = new WrapperStore();
+    const e1 = fakeElement('one');
+    const e2 = fakeElement('two');
+    const e3 = fakeElement('three');
+
+    // Scan 1: three elements get wrappers; tracker claims codewords.
+    doScanLike(store, [e1, e2, e3]);
+    store.findWrapperFor(e1)!.scanned.codeword = 'arch arch';
+    store.findWrapperFor(e2)!.scanned.codeword = 'arch bake';
+    store.findWrapperFor(e3)!.scanned.codeword = 'arch check';
+
+    // Scan 2: a lazy-loaded element e0 appears at position 0. doScan's
+    // findWrapperFor short-circuit means e1/e2/e3 reuse their wrappers.
+    const e0 = fakeElement('zero');
+    doScanLike(store, [e0, e1, e2, e3]);
+
+    expect(store.findWrapperFor(e1)!.scanned.codeword).toBe('arch arch');
+    expect(store.findWrapperFor(e2)!.scanned.codeword).toBe('arch bake');
+    expect(store.findWrapperFor(e3)!.scanned.codeword).toBe('arch check');
+    // e0 has a wrapper but no codeword yet — tracker hasn't claimed.
+    expect(store.findWrapperFor(e0)!.scanned.codeword).toBe('');
+  });
+
+  it('rescan returning refs in a different order preserves codewords', () => {
+    const store = new WrapperStore();
+    const e1 = fakeElement('one');
+    const e2 = fakeElement('two');
+    const e3 = fakeElement('three');
+
+    doScanLike(store, [e1, e2, e3]);
+    store.findWrapperFor(e1)!.scanned.codeword = 'arch arch';
+    store.findWrapperFor(e2)!.scanned.codeword = 'arch bake';
+    store.findWrapperFor(e3)!.scanned.codeword = 'arch check';
+
+    // Refs come back reordered (e.g. a sort key changed). Bindings are by
+    // element identity, not list position, so codewords are unchanged.
+    doScanLike(store, [e3, e1, e2]);
+
+    expect(store.findWrapperFor(e1)!.scanned.codeword).toBe('arch arch');
+    expect(store.findWrapperFor(e2)!.scanned.codeword).toBe('arch bake');
+    expect(store.findWrapperFor(e3)!.scanned.codeword).toBe('arch check');
+  });
+
+  it('repeated lazy loads at position 0 accumulate fresh wrappers without disturbing earlier ones', () => {
+    const store = new WrapperStore();
+    const e1 = fakeElement('one');
+    const e2 = fakeElement('two');
+
+    doScanLike(store, [e1, e2]);
+    store.findWrapperFor(e1)!.scanned.codeword = 'arch arch';
+    store.findWrapperFor(e2)!.scanned.codeword = 'arch bake';
+
+    // Lazy load #1: insert eA before everything, then tracker claims its codeword.
+    const eA = fakeElement('A');
+    doScanLike(store, [eA, e1, e2]);
+    store.findWrapperFor(eA)!.scanned.codeword = 'arch check';
+
+    // Lazy load #2: insert eB at the new front.
+    const eB = fakeElement('B');
+    doScanLike(store, [eB, eA, e1, e2]);
+    store.findWrapperFor(eB)!.scanned.codeword = 'arch deck';
+
+    expect(store.findWrapperFor(e1)!.scanned.codeword).toBe('arch arch');
+    expect(store.findWrapperFor(e2)!.scanned.codeword).toBe('arch bake');
+    expect(store.findWrapperFor(eA)!.scanned.codeword).toBe('arch check');
+    expect(store.findWrapperFor(eB)!.scanned.codeword).toBe('arch deck');
+    expect(store.count).toBe(4);
+  });
+
+  it('lazy-loaded element disappearing on a later scan releases only its own codeword', () => {
+    const store = new WrapperStore();
+    const e1 = fakeElement('one');
+    const e2 = fakeElement('two');
+    const e0 = fakeElement('zero');
+
+    doScanLike(store, [e0, e1, e2]);
+    store.findWrapperFor(e0)!.scanned.codeword = 'arch arch';
+    store.findWrapperFor(e1)!.scanned.codeword = 'arch bake';
+    store.findWrapperFor(e2)!.scanned.codeword = 'arch check';
+
+    // Scan 2: e0 is gone. Drop wrappers whose elements are no longer in
+    // the scan result (doScan's dropDisconnectedWrappers analogue).
+    const refs2 = [e1, e2];
+    const survivors = new Set(refs2);
+    for (const w of [...store.all]) {
+      if (!survivors.has(w.element)) store.removeWrapperByElement(w.element);
+    }
+
+    expect(store.findWrapperFor(e0)).toBeUndefined();
+    expect(sendMessageMock).toHaveBeenCalledWith({
+      type: 'RELEASE_LABELS',
+      labels: ['arch arch'],
+    });
+    // Other wrappers' codewords are untouched (no release for them).
+    expect(store.findWrapperFor(e1)!.scanned.codeword).toBe('arch bake');
+    expect(store.findWrapperFor(e2)!.scanned.codeword).toBe('arch check');
+    const releaseCalls = sendMessageMock.mock.calls.filter(([m]) => m.type === 'RELEASE_LABELS');
+    expect(releaseCalls).toHaveLength(1);
+  });
+});
+
 describe('ElementWrapper.releaseLabel', () => {
   it('sends RELEASE_LABELS for the held codeword and clears it locally', () => {
     const w = new ElementWrapper(fakeElement(), fakeScanned({ codeword: 'rain bake' }));
