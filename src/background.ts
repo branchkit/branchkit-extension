@@ -564,14 +564,27 @@ async function forwardCommandsInvalidate(reason: string): Promise<void> {
   }
 }
 
-// Tell the plugin to end the active hint session on `tabId`. Hints follow
-// focus: when the user switches tabs, dispatches must not route to the new
-// tab using a hint context that was painted on the old one.
-async function forwardHintsSessionEnd(reason: string, tabId: number): Promise<void> {
+// Tell the plugin to end a hint session. Two scopes:
+//   - tab-wide: omit `frameId`. Plugin Deletes every frame's tracked
+//     codewords for this tab and clears the hints tag. Used on tab
+//     switch / tab close / navigation — the user can't be addressing
+//     a stale tab's hints anymore.
+//   - frame-scoped: pass `frameId`. Plugin Deletes only that frame's
+//     codewords; hints tag stays held if other frames in the tab are
+//     still live. Used by future frame-removal detection (the label-
+//     pool's releaseFrame mention).
+//
+// Both scopes are part of the Option B C7 cleanup story
+// (notes/DESIGN_HINT_PIPELINE_RESYNC.md). The tab-wide call replaces
+// the implicit "stop pushing" cleanup the old whole-grammar path did
+// via diffPrefixesToDelete.
+async function forwardHintsSessionEnd(reason: string, tabId: number, frameId?: number): Promise<void> {
   if (!pluginPort || !pluginToken) {
     const found = await discoverPlugin();
     if (!found) return;
   }
+  const body: { reason: string; tab_id: number; frame_id?: number } = { reason, tab_id: tabId };
+  if (typeof frameId === 'number') body.frame_id = frameId;
   try {
     await fetch(`http://127.0.0.1:${pluginPort}/hints/session_end`, {
       method: 'POST',
@@ -579,7 +592,7 @@ async function forwardHintsSessionEnd(reason: string, tabId: number): Promise<vo
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${pluginToken}`,
       },
-      body: JSON.stringify({ reason, tab_id: tabId }),
+      body: JSON.stringify(body),
     });
   } catch {
     // Plugin may be down; the hints tag will eventually clear via other paths.
