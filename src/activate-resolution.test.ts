@@ -40,7 +40,6 @@ interface MockState {
   registryEntries: Map<number, RegistryEntry>;
   rebindCalls: Array<[number, Element]>;
   unregisterCalls: number[];
-  staleIdCalls: string[];
 }
 
 function makeDeps(overrides: Partial<ResolutionDeps> & { state?: MockState } = {}): {
@@ -51,7 +50,6 @@ function makeDeps(overrides: Partial<ResolutionDeps> & { state?: MockState } = {
     registryEntries: new Map(),
     rebindCalls: [],
     unregisterCalls: [],
-    staleIdCalls: [],
   };
   const deps: ResolutionDeps = {
     myFrameId: null,
@@ -65,7 +63,6 @@ function makeDeps(overrides: Partial<ResolutionDeps> & { state?: MockState } = {
     candidates: () => [],
     resolveFromSnapshot: () => undefined,
     resolveFromStore: () => undefined,
-    onStaleId: (reason) => { state.staleIdCalls.push(reason); },
     ...overrides,
   };
   return { deps, state };
@@ -89,7 +86,6 @@ describe('resolveTarget — tier 1 (registry hit)', () => {
     expect(r.fp).toMatch(/role=button/);
     expect(state.rebindCalls).toEqual([]);
     expect(state.unregisterCalls).toEqual([]);
-    expect(state.staleIdCalls).toEqual([]);
   });
 });
 
@@ -130,9 +126,9 @@ describe('resolveTarget — tier 2 (fingerprint fallback)', () => {
   });
 });
 
-describe('resolveTarget — stale id (Q2 protocol)', () => {
-  it('fires onStaleId when the registry has no entry for a non-zero id', () => {
-    const { deps, state } = makeDeps();
+describe('resolveTarget — stale id', () => {
+  it('reports detail when the registry has no entry for a non-zero id', () => {
+    const { deps } = makeDeps();
     // No entry for id=99.
 
     const r = resolveTarget(99, 0, '', deps);
@@ -140,14 +136,12 @@ describe('resolveTarget — stale id (Q2 protocol)', () => {
     expect(r.target).toBeNull();
     expect(r.resolution).toBe('none');
     expect(r.detail).toContain('id=99 not in registry');
-    expect(state.staleIdCalls).toEqual(['stale_id']);
   });
 
-  it('does not fire onStaleId when id is 0 (codeword-only dispatch)', () => {
-    const { deps, state } = makeDeps();
+  it('returns no target when id is 0 and codeword is empty', () => {
+    const { deps } = makeDeps();
     const r = resolveTarget(0, 0, '', deps);
     expect(r.target).toBeNull();
-    expect(state.staleIdCalls).toEqual([]);
   });
 });
 
@@ -166,7 +160,6 @@ describe('resolveTarget — frame mismatch', () => {
     // Did NOT touch registry side effects.
     expect(state.rebindCalls).toEqual([]);
     expect(state.unregisterCalls).toEqual([]);
-    expect(state.staleIdCalls).toEqual([]);
   });
 
   it('honors tier 1 when myFrameId is unknown (pre-handshake)', () => {
@@ -247,11 +240,10 @@ describe('resolveTarget — tier 3 (codeword fallthrough)', () => {
     const { deps, state } = makeDeps({
       resolveFromStore: () => fakeWrapper(el),
     });
-    // id=99 not in registry → onStaleId fires AND tier 3 catches it.
+    // id=99 not in registry → tier 3 codeword resolution catches it.
     const r = resolveTarget(99, 0, 'arch', deps);
 
     expect(r.target).toBe(el);
     expect(r.resolution).toBe('live_store');
-    expect(state.staleIdCalls).toEqual(['stale_id']);
   });
 });

@@ -8,7 +8,7 @@
  * - Manage offscreen document lifecycle (Chrome only)
  */
 
-import { Message, ScannedElement, GrammarRequest, FieldInfo, ClickableInfo, TableLink, HintVisibility, DispatchResult, GrammarBatchRequest, GrammarBatchResponse } from './types';
+import { Message, ScannedElement, HintVisibility, DispatchResult, GrammarBatchRequest, GrammarBatchResponse } from './types';
 import { claimLabels, releaseLabels, releaseFrame, clearStack, clearAllStacks, regenerateAllStacks, getFrameForLabel, alphabetsEqual } from './label-pool';
 
 const ACTUATOR_URL = 'http://127.0.0.1:21551';
@@ -20,52 +20,6 @@ let pluginToken: string | null = null;
 let branchkitConnected = false;
 let cachedActiveTabId: number | null = null;
 let hintVisibility: HintVisibility = 'always';
-
-// Per-tab grammar aggregation. Each frame's SCAN_RESULT lands here keyed
-// by (tabId, frameId); on every update we rebuild the aggregate and push
-// it to the voice plugin. Without this, the voice plugin only sees
-// whichever frame pushed last — multi-frame grammar gets overwritten.
-// See notes/DESIGN_BROWSER_GRAMMAR_PROTOCOL.md section 4.
-const tabGrammars = new Map<number, Map<number, ScannedElement[]>>();
-
-// Last-seen timestamp per tab, used for LRU eviction when the persisted
-// cache hits the storage budget (F1, notes/DESIGN_HINT_PIPELINE_RESYNC.md).
-// Stamped on every frame's SCAN_RESULT arrival + on tab activation so the
-// freshest interaction wins. Restored from storage on SW startup so an
-// LRU order survives across SW restarts.
-const tabLastSeen = new Map<number, number>();
-function markTabSeen(tabId: number): void {
-  tabLastSeen.set(tabId, Date.now());
-}
-
-// Debounced push timers per tab. Mutation-heavy pages (Slack, Linear) can
-// fire 10+ SCAN_RESULTs/sec across frames; without a coalescing window
-// we'd hammer the voice plugin's /grammar endpoint. 120ms is short enough
-// to feel snappy on first-render and long enough to absorb a mutation
-// burst from a single user action (typing into a search field, etc.).
-const aggregateTimers = new Map<number, ReturnType<typeof setTimeout>>();
-const AGGREGATE_DEBOUNCE_MS = 120;
-
-function schedulePushForTab(tabId: number): void {
-  const existing = aggregateTimers.get(tabId);
-  if (existing) clearTimeout(existing);
-  // F3 — single-frame pages (the majority) have nothing to aggregate, so
-  // skip the 120ms window and let the timer fire on the next macrotask.
-  // Multi-frame pages keep the debounce so frame-N's SCAN_RESULT, arriving
-  // a few ms after frame-(N-1)'s, still collapses into one POST per burst.
-  const debounce = tabGrammars.get(tabId)?.size === 1 ? 0 : AGGREGATE_DEBOUNCE_MS;
-  const timer = setTimeout(() => {
-    aggregateTimers.delete(tabId);
-    // Only the active tab's grammar is live in the plugin. Background tabs
-    // accumulate scans into tabGrammars locally (so they're ready when the
-    // user activates them) but don't POST. The active-tab guard runs at
-    // timer fire — not at schedule time — so a tab activated during the
-    // 120ms debounce window still gets its push.
-    if (tabId !== cachedActiveTabId) return;
-    pushGrammar(tabId, aggregateGrammarForTab(tabId));
-  }, debounce);
-  aggregateTimers.set(tabId, timer);
-}
 
 // Firefox direct SSE (no offscreen document needed)
 let directSSE: EventSource | null = null;
@@ -104,7 +58,6 @@ function scheduleSSERetry(): void {
 
 function rescanActiveTab(): void {
   if (cachedActiveTabId == null) return;
-  tabGrammars.delete(cachedActiveTabId);
   forwardDebugLog('pipeline.bg_rescan_dispatched', { tab_id: cachedActiveTabId, source: 'rescanActiveTab' });
   chrome.tabs.sendMessage(cachedActiveTabId, {
     type: 'BRANCHKIT_ACTION',
@@ -164,14 +117,6 @@ async function storeAlphabet(words: string[]): Promise<void> {
     }
     await chrome.storage.local.set({ alphabet: words });
     await regenerateAllStacks();
-    // Drop every tab's cached grammar — entries reference codewords
-    // from the prior alphabet. Frames will re-trigger doScan via the
-    // alphabet onChanged listener and repopulate the map cleanly.
-    tabGrammars.clear();
-    tabLastSeen.clear();
-    for (const timer of aggregateTimers.values()) clearTimeout(timer);
-    aggregateTimers.clear();
-    schedulePersist();
   } catch (err) {
     console.error('[BranchKit BG] alphabet store error:', err);
   }
@@ -287,85 +232,6 @@ async function discoverPlugin(): Promise<boolean> {
   }
 }
 
-// --- Grammar Push ---
-
-function scannedToGrammarRequest(elements: ScannedElement[]): GrammarRequest {
-  const fields: FieldInfo[] = [];
-  const clickables: ClickableInfo[] = [];
-  const tables: TableLink[] = [];
-
-  for (const el of elements) {
-    const frameId = el.frame_id ?? 0;
-    switch (el.category) {
-      case 'input':
-        fields.push({
-          label: el.label,
-          type: el.type,
-          id: el.id,
-          frame_id: frameId,
-          position: fields.length,
-          codeword: el.codeword,
-        });
-        break;
-      case 'tables':
-        tables.push({
-          label: el.label,
-          id: el.id,
-          frame_id: frameId,
-          href: '',
-          table_id: '',
-          codeword: el.codeword,
-        });
-        break;
-      default:
-        clickables.push({
-          label: el.label,
-          id: el.id,
-          frame_id: frameId,
-          type: el.type,
-          codeword: el.codeword,
-        });
-        break;
-    }
-  }
-
-  return {
-    fields,
-    clickables,
-    tables,
-    app_id: '',
-    table_id: '',
-    bundle_id: browserBundleID,
-    hint_visibility: hintVisibility,
-  };
-}
-
-/** Record a frame's latest grammar; replaces any prior entry for that frame. */
-function recordFrameGrammar(tabId: number, frameId: number, elements: ScannedElement[]): void {
-  let perTab = tabGrammars.get(tabId);
-  if (!perTab) {
-    perTab = new Map();
-    tabGrammars.set(tabId, perTab);
-  }
-  perTab.set(frameId, elements);
-  // F1: any tab with grammar gets cached, not just the active one, so a
-  // later switch into a previously-visited tab skips the cold scan. Mark
-  // it freshly seen for LRU ordering on the persist write.
-  markTabSeen(tabId);
-  schedulePersist();
-}
-
-/** Concat every frame's grammar for a tab. Insertion order = frame arrival. */
-function aggregateGrammarForTab(tabId: number): ScannedElement[] {
-  const perTab = tabGrammars.get(tabId);
-  if (!perTab) return [];
-  const out: ScannedElement[] = [];
-  for (const els of perTab.values()) {
-    out.push(...els);
-  }
-  return out;
-}
-
 // Forward a content-script dispatch outcome to the plugin's POST
 // /dispatch-result. Best-effort; the plugin can survive missing reports.
 async function forwardDispatchResult(result: DispatchResult): Promise<void> {
@@ -459,9 +325,8 @@ async function handleDebugSnapshot(
   payload: unknown,
   sender: chrome.runtime.MessageSender,
 ): Promise<void> {
-  // Snapshots can be triggered at any time — including before SCAN_RESULT
-  // has run discovery. Mirror forwardCommandsInvalidate's pattern and
-  // auto-discover before bailing.
+  // Snapshots can be triggered at any time — including before plugin
+  // discovery has run. Auto-discover before bailing.
   if (!pluginPort || !pluginToken) {
     const found = await discoverPlugin();
     if (!found) {
@@ -539,28 +404,6 @@ async function handleDebugSnapshot(
     });
   } catch (e) {
     console.warn(`[branchkit] debug-snapshot screenshot POST exception: ${e}`);
-  }
-}
-
-// Tell the plugin to wipe its commands.push memory so the next grammar
-// arrival does a full re-registration. Best-effort; the plugin's
-// invalidate endpoint is idempotent.
-async function forwardCommandsInvalidate(reason: string): Promise<void> {
-  if (!pluginPort || !pluginToken) {
-    const found = await discoverPlugin();
-    if (!found) return;
-  }
-  try {
-    await fetch(`http://127.0.0.1:${pluginPort}/commands/invalidate`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${pluginToken}`,
-      },
-      body: JSON.stringify({ reason, tab_id: cachedActiveTabId ?? 0 }),
-    });
-  } catch {
-    // Plugin may be down; the next grammar push will reconcile.
   }
 }
 
@@ -672,33 +515,6 @@ function transportFailure(
     succeeded: [],
     failed: request.elements.map(e => ({ codeword: e.codeword, reason: 'transport' })),
   };
-}
-
-async function pushGrammar(tabId: number | null, elements: ScannedElement[]): Promise<void> {
-  // Lazy discovery: service worker may have restarted and lost state
-  if (!pluginPort || !pluginToken) {
-    const found = await discoverPlugin();
-    if (!found) return;
-    branchkitConnected = true;
-    connectSSE();
-  }
-
-  const req = scannedToGrammarRequest(elements);
-  if (tabId != null) req.tab_id = tabId;
-
-  forwardDebugLog('pipeline.bg_grammar_post_starting', { tab_id: tabId, elements: elements.length, hint_visibility: req.hint_visibility });
-  try {
-    await fetch(`http://127.0.0.1:${pluginPort}/grammar`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${pluginToken}`,
-      },
-      body: JSON.stringify(req),
-    });
-  } catch {
-    // Plugin may be down
-  }
 }
 
 // --- SSE Connection (browser-adaptive) ---
@@ -879,40 +695,20 @@ async function routeFrameForAction(tabId: number, message: Message): Promise<num
 // --- Message Listener ---
 
 chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
-  if (message.type === 'SCAN_RESULT') {
-    // Content script scanned the DOM. Record this frame's grammar, then
-    // push the tab-wide aggregate so multi-frame pages don't overwrite
-    // each other's elements at the voice plugin.
-    const tabId = _sender.tab?.id;
-    const frameId = _sender.frameId;
-    if (typeof tabId === 'number' && typeof frameId === 'number') {
-      // Stamp frame_id onto each element. Content scripts don't know
-      // their own frameId — only the SW does — but the plugin needs it
-      // to scope ids to the right frame on dispatch. See §8 of
-      // docs/completed/DESIGN_ELEMENT_IDENTITY_REGISTRY.md.
-      for (const el of message.elements) {
-        el.frame_id = frameId;
-      }
-      recordFrameGrammar(tabId, frameId, message.elements);
-      forwardDebugLog('pipeline.bg_scan_result_received', { tab_id: tabId, frame_id: frameId, elements: message.elements.length });
-      schedulePushForTab(tabId);
-    }
-    return false;
-  }
-
   if (message.type === 'GRAMMAR_BATCH') {
     // Content's batched doScan (Option B) sent a grammar batch. Stamp
     // tab_id + frame_id and POST. Returning true keeps sendResponse
     // alive across the await — Chrome closes the channel otherwise.
+    //
+    // Content scripts don't know their own frameId — only the SW does —
+    // but the plugin needs it to scope ids to the right frame on
+    // dispatch. See §8 of docs/completed/DESIGN_ELEMENT_IDENTITY_REGISTRY.md.
     const tabId = _sender.tab?.id;
     const frameId = _sender.frameId;
     if (typeof tabId !== 'number' || typeof frameId !== 'number') {
       sendResponse(transportFailure(message.request));
       return false;
     }
-    // Stamp frame_id onto every element so the plugin's per-element
-    // payload carries the same frame the SW knows. Same rationale as
-    // SCAN_RESULT above.
     for (const el of message.request.elements) {
       el.frame_id = frameId;
     }
@@ -960,11 +756,6 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
 
   if (message.type === 'DEBUG_SNAPSHOT' && message.payload) {
     handleDebugSnapshot(message.payload, _sender);
-    return false;
-  }
-
-  if (message.type === 'INVALIDATE_COMMANDS' && typeof message.reason === 'string') {
-    forwardCommandsInvalidate(message.reason);
     return false;
   }
 
@@ -1050,30 +841,17 @@ async function resolveHintFromTab(tabId: number, codeword: string) {
   }
 }
 
-// Clear a tab's label pool + per-frame grammar + pending push timer when
-// the tab is closed or starts navigating. Content scripts reload with no
-// memory of prior state.
+// Clear a tab's label pool when the tab is closed or starts navigating.
+// Content scripts reload with no memory of prior state.
 function purgeTab(tabId: number): void {
   clearStack(tabId).catch(() => {});
-  tabGrammars.delete(tabId);
-  tabLastSeen.delete(tabId);
-  const timer = aggregateTimers.get(tabId);
-  if (timer) {
-    clearTimeout(timer);
-    aggregateTimers.delete(tabId);
-  }
-  // F1: drop from persisted cache too. Without this, a tab id we burned
-  // through could linger in storage forever (chrome.tabs ids never
-  // reused, but the entry still wastes budget).
-  schedulePersist();
 }
 
 // Per-frame liveness via long-lived Port. Each content-script context opens
 // one Port at startup; when the context dies (iframe removed, navigation,
 // tab closed) Chrome closes the Port and onDisconnect fires here. Without
 // this, dead frames' codewords leak from the per-tab label pool until tab
-// close, and their stale ScannedElement entries leak from tabGrammars until
-// the next purgeTab. See docs/completed/DESIGN_BROWSER_FRAME_POOL_EXHAUSTION.md.
+// close. See docs/completed/DESIGN_BROWSER_FRAME_POOL_EXHAUSTION.md.
 //
 // The Port carries no messages — its lifetime IS the signal. Service worker
 // idle-termination is a known small leak window (frames that die while the
@@ -1097,12 +875,6 @@ chrome.runtime.onConnect.addListener((port) => {
   }
   port.onDisconnect.addListener(() => {
     releaseFrame(tabId, frameId).catch(() => {});
-    tabGrammars.get(tabId)?.delete(frameId);
-    // Re-aggregate so the next push (or the immediate active-tab guard
-    // below) reflects only surviving frames. schedulePushForTab no-ops if
-    // tabId isn't the active tab; background tabs ship the cleanup when
-    // they're next activated via onActivated's own pushGrammar.
-    schedulePushForTab(tabId);
   });
 });
 
@@ -1143,32 +915,18 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
   if (oldTabId !== activeInfo.tabId) {
     logTabSwitch('tab_activated', oldTabId, activeInfo.tabId);
     endHintSessionOnOldTab(oldTabId, 'tab_switch');
-    // Always-mode: pre-arm hints on the new tab so a codeword spoken in
-    // the gap before its grammar push arrives still gates correctly. The
-    // plugin's eager-arm auto-clears in 2s if no grammar follows.
+    // Always-mode: signal the new tab's content script that it became the
+    // active tab. The session-start path resets per-tab plugin state.
     if (hintVisibility === 'always') {
       forwardHintsSessionStart('tab_switch', activeInfo.tabId);
     }
   }
-  markTabSeen(activeInfo.tabId);
-  if (tabGrammars.has(activeInfo.tabId)) {
-    // Cache hit (F1): push whatever we have. Previously this was only a
-    // hit for the tab the SW restart fired from; now any tab visited in
-    // this browser session that's still inside the LRU cap is a hit too.
-    pushGrammar(activeInfo.tabId, aggregateGrammarForTab(activeInfo.tabId));
-  } else {
-    // Cold path: tab not in cache (never visited this session or LRU-evicted).
-    // Don't push empty (that would clear the plugin's commands). Ask the
-    // content script to re-scan; its SCAN_RESULT will repopulate and push.
-    forwardDebugLog('pipeline.bg_rescan_dispatched', { tab_id: activeInfo.tabId, source: 'onActivated_cache_miss' });
-    chrome.tabs.sendMessage(activeInfo.tabId, {
-      type: 'BRANCHKIT_ACTION',
-      payload: { action: 'rescan' },
-    }).catch(() => {});
-  }
-  // Persist the new active tab id so the next SW restart restores the
-  // right `cachedActiveTabId` for its initial-push.
-  schedulePersist();
+  // Under Option B the new tab's content script owns its own grammar state
+  // (in plugin.session.Codewords via prior grammar_batch POSTs). Activation
+  // doesn't need an SW-side re-push; the content script's batches already
+  // populated the plugin's per-frame view. If the tab was never scanned in
+  // this browser session, the content script will scan on next navigation
+  // or via a rescan dispatch.
 });
 
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
@@ -1185,19 +943,9 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
         forwardHintsSessionStart('window_focus', newActive);
       }
     }
-    if (newActive != null) {
-      markTabSeen(newActive);
-      if (tabGrammars.has(newActive)) {
-        pushGrammar(newActive, aggregateGrammarForTab(newActive));
-      } else {
-        forwardDebugLog('pipeline.bg_rescan_dispatched', { tab_id: newActive, source: 'onFocusChanged_cache_miss' });
-        chrome.tabs.sendMessage(newActive, {
-          type: 'BRANCHKIT_ACTION',
-          payload: { action: 'rescan' },
-        }).catch(() => {});
-      }
-      schedulePersist();
-    }
+    // Under Option B the new tab's grammar state already lives in the
+    // plugin (built up from prior grammar_batch POSTs from its content
+    // script). Focus-change is just a session-start signal.
   } catch {
     cachedActiveTabId = null;
   }
@@ -1212,128 +960,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     forwardHintsSessionEnd('tab_closed', tabId);
   }
   purgeTab(tabId);
-  // Closing the active tab leaves the plugin holding its commands; clear
-  // them with an empty push. Chrome will fire onActivated for the next-up
-  // tab right after, which re-pushes that tab's grammar.
-  if (wasActive) pushGrammar(null, []);
 });
-
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  // Only clear grammar cache on navigation, NOT the label pool. SPA
-  // navigations fire onUpdated but the content script survives — its
-  // wrappers still hold claimed codewords. Clearing the pool here would
-  // let new elements claim the same codewords, creating duplicates.
-  // The label pool is cleaned per-frame via releaseFrame when the
-  // content script's liveness port actually disconnects (full nav).
-  if (changeInfo.status === 'loading') {
-    tabGrammars.delete(tabId);
-    tabLastSeen.delete(tabId);
-    const timer = aggregateTimers.get(tabId);
-    if (timer) {
-      clearTimeout(timer);
-      aggregateTimers.delete(tabId);
-    }
-    // F1: a navigating tab's old grammar is now stale — drop it from
-    // storage so the next SW restart doesn't replay codewords for elements
-    // that no longer exist.
-    schedulePersist();
-  }
-});
-
-// --- Session-cache persistence (Layer 2 of hint sync) ---
-//
-// On a service-worker restart, `tabGrammars`, `tabLastSeen`, and
-// `cachedActiveTabId` reset to empty. Without this cache the only way to
-// repopulate any tab is to wait for the next content-script scan, which
-// happens on DOM mutation or an explicit rescan. F1 extends the cache from
-// active-tab-only to all visited tabs (capped at MAX_PERSISTED_TABS via
-// LRU) so the post-SW-restart cold path covers tab switches into any
-// previously-visited tab, not just the one that was active when the SW
-// died.
-//
-// One combined key (vs per-tab) — simpler restore, atomic eviction, and
-// chrome.storage.session handles multi-MB values fine. The stored payload
-// stays small in practice: a 250-element hint-heavy page serializes to
-// ~10-30 KB, so 30 tabs × ~20 KB ≈ 0.6 MB. Well under the 10 MB budget.
-const SESSION_KEY_CACHE = 'branchkit.tabCache';
-const MAX_PERSISTED_TABS = 30;
-
-// Leading-edge rate limit. With F3 + per-tab pushes, schedulePushForTab
-// can fire many times across many tabs in a single burst; we don't want
-// one chrome.storage.session.set per frame's SCAN_RESULT. 500ms is short
-// enough to lose minimal work on SW death, long enough to coalesce a
-// scroll burst.
-let persistTimer: ReturnType<typeof setTimeout> | null = null;
-const PERSIST_DEBOUNCE_MS = 500;
-
-interface PersistedTab {
-  frames: Record<number, ScannedElement[]>;
-  lastSeen: number;
-}
-
-interface PersistedCache {
-  activeTabId: number | null;
-  tabs: Record<number, PersistedTab>;
-}
-
-function schedulePersist(): void {
-  if (persistTimer) return;
-  persistTimer = setTimeout(() => {
-    persistTimer = null;
-    persistAllTabGrammars();
-  }, PERSIST_DEBOUNCE_MS);
-}
-
-async function persistAllTabGrammars(): Promise<void> {
-  try {
-    // Snapshot the tabs to persist, LRU-capped. tabLastSeen carries the
-    // ordering signal; freshest interactions stay, oldest get dropped.
-    const ordered = [...tabGrammars.keys()]
-      .map(id => ({ id, lastSeen: tabLastSeen.get(id) ?? 0 }))
-      .sort((a, b) => b.lastSeen - a.lastSeen)
-      .slice(0, MAX_PERSISTED_TABS);
-
-    const tabs: Record<number, PersistedTab> = {};
-    for (const { id, lastSeen } of ordered) {
-      const perTab = tabGrammars.get(id);
-      if (!perTab || perTab.size === 0) continue;
-      const frames: Record<number, ScannedElement[]> = {};
-      for (const [frameId, elements] of perTab) {
-        frames[frameId] = elements;
-      }
-      tabs[id] = { frames, lastSeen };
-    }
-    const cache: PersistedCache = { activeTabId: cachedActiveTabId, tabs };
-    await chrome.storage.session.set({ [SESSION_KEY_CACHE]: cache });
-  } catch {
-    // Best effort — storage failures (quota, IO) shouldn't break the live
-    // path. If the cache falls behind, the worst outcome is a cold scan on
-    // the next tab switch.
-  }
-}
-
-async function restoreAllTabGrammars(): Promise<void> {
-  try {
-    const result = await chrome.storage.session.get(SESSION_KEY_CACHE);
-    const cache = result[SESSION_KEY_CACHE] as PersistedCache | undefined;
-    if (!cache) return;
-
-    if (typeof cache.activeTabId === 'number') {
-      cachedActiveTabId = cache.activeTabId;
-    }
-    for (const [tabIdStr, entry] of Object.entries(cache.tabs)) {
-      const tabId = Number(tabIdStr);
-      const perTab = new Map<number, ScannedElement[]>();
-      for (const [frameIdStr, elements] of Object.entries(entry.frames)) {
-        perTab.set(Number(frameIdStr), elements);
-      }
-      tabGrammars.set(tabId, perTab);
-      tabLastSeen.set(tabId, entry.lastSeen);
-    }
-  } catch {
-    // Best effort.
-  }
-}
 
 // --- Startup ---
 
@@ -1346,11 +973,6 @@ async function init(): Promise<void> {
   // zero elements, and badges never paint. Sacrifices label
   // stability across SW restart in exchange for correctness.
   await clearAllStacks();
-
-  // Restore cached grammar for every previously-visited tab BEFORE plugin
-  // discovery so the post-discovery replay sees populated state in the
-  // SW-restart case (F1).
-  await restoreAllTabGrammars();
 
   const result = await chrome.storage.sync.get('hintVisibility');
   if (result.hintVisibility) {
@@ -1366,23 +988,12 @@ async function init(): Promise<void> {
 
   if (found) {
     connectSSE();
-    // Replay cached grammar to the plugin so its view matches the badges
-    // already drawn on the page. Without this, the plugin's per-prefix
-    // collections stay empty until the content script triggers another
-    // scan, leaving the user unable to activate visible hints for
-    // seconds after SW restart.
-    if (cachedActiveTabId != null && tabGrammars.has(cachedActiveTabId)) {
-      pushGrammar(cachedActiveTabId, aggregateGrammarForTab(cachedActiveTabId));
-    }
   }
 }
 
 chrome.storage.onChanged.addListener((changes) => {
   if (changes.hintVisibility) {
     hintVisibility = changes.hintVisibility.newValue || 'always';
-    if (cachedActiveTabId != null) {
-      pushGrammar(cachedActiveTabId, aggregateGrammarForTab(cachedActiveTabId));
-    }
   }
 });
 

@@ -135,7 +135,6 @@ let hintsVisible = false;
 let activeCategory: Category | null = null;
 let displayMode: BadgeDisplayMode = 'letter';
 let hintVisibility: HintVisibility = 'always';
-let lastGrammarHash = '';
 let pendingMutation = false;
 let lastActivatedElement: Element | null = null;
 const MAX_BADGE_COUNT = 676; // No artificial cap; word pairs for >26
@@ -789,25 +788,11 @@ function startBadgeReattachObserver(): void {
  * hintable element has a wrapper that the tracker is observing.
  */
 function doScan(): void {
-  if (BATCH_MODE) {
-    // Fire-and-forget — the batched path is async (per-batch awaits a
-    // codeword claim + POST round-trip), but doScan's existing callers
-    // are sync. The new path schedules itself onto the microtask queue
-    // and runs to completion in the background.
-    void doScanBatched();
-    return;
-  }
-
-  const adapter = getActiveAdapter(window.location.href);
-  const result = adapter ? scanWithAdapter(adapter) : scanElements();
-  applyUserRuleToScan(result, document);
-
-  for (let i = 0; i < result.elements.length; i++) {
-    if (store.findWrapperFor(result.refs[i])) continue;
-    attachWrapper(new ElementWrapper(result.refs[i], result.elements[i]));
-  }
-  dropDisconnectedWrappers();
-  observeInvisibleCandidates(result.invisibleCandidates);
+  // Fire-and-forget — the batched path is async (per-batch awaits a
+  // codeword claim + POST round-trip), but doScan's existing callers
+  // are sync. doScanBatched schedules itself onto the microtask queue
+  // and runs to completion in the background.
+  void doScanBatched();
 }
 
 // Apply the current compiled rule's exclusions + inclusions to a scan
@@ -1041,46 +1026,7 @@ function activateWrapper(wrapper: ElementWrapper): void {
   }
 }
 
-// --- Grammar Push (legacy whole-grammar) ---
-//
-// The pre-Option-B path: scans the whole store, hash-dedups, posts to
-// the background SW via SCAN_RESULT, which aggregates per-tab and
-// POSTs to the plugin's POST /grammar handler. Lives behind
-// BATCH_MODE=false (the current default after reverting C8).
-//
-// Option B's per-batch path (doScanBatched + batchedStateSync below)
-// stays in tree but is dead until BATCH_MODE flips back to true. The
-// re-attempt needs to address: per-content-script session lifetime
-// (not per-scan), rescan deduplication so already-attached wrappers
-// don't re-claim labels, and badge cleanup when entity_cache loses
-// entries.
-
-function pushGrammar(): void {
-  const elements: ScannedElement[] = viewportSort(store.all).map(w => w.scanned);
-
-  // Hash-based deduplication. Includes codeword so an alphabet regen that
-  // produces the same elements but different codewords still re-pushes —
-  // otherwise the voice plugin would keep using stale codewords.
-  const hash = elements.map(e => `${e.id}|${e.category}|${e.codeword}`).join('\x1f');
-  if (hash === lastGrammarHash) {
-    chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_grammar_skipped', data: { reason: 'dedupe', elements: elements.length } } as Message).catch(() => {});
-    return;
-  }
-  lastGrammarHash = hash;
-
-  try {
-    chrome.runtime.sendMessage({
-      type: 'SCAN_RESULT',
-      elements,
-      adapter: getActiveAdapter(window.location.href)?.name || null,
-    } as Message);
-    chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_grammar_sent', data: { elements: elements.length } } as Message).catch(() => {});
-  } catch {
-    // Extension context may be invalidated
-  }
-}
-
-// --- Grammar Push (Option B, dead under BATCH_MODE=false) ---
+// --- Grammar Push (Option B per-batch path) ---
 
 let batchedSyncTimer: ReturnType<typeof setTimeout> | null = null;
 const BATCHED_SYNC_DEBOUNCE_MS = 80;
@@ -1172,25 +1118,15 @@ async function batchedStateSync(reason: string): Promise<void> {
 
 // --- Per-batch grammar push (Option B) ---
 //
-// notes/DESIGN_HINT_PIPELINE_RESYNC.md: replaced the whole-grammar
-// pushGrammar + SW debounce + plugin diff/Put-all pipeline with a
-// per-batch flow:
-//   - doScanBatched: scan in batches, claim codewords inline,
-//     POST each batch, paint succeeded incrementally. Each scan
-//     uses a fresh session_id (plugin's implicit-reset cleans up
-//     the prior session for that frame).
+// docs/completed/DESIGN_OPTION_B_REATTEMPT.md is the authoritative record.
+// Two paths into this section:
+//   - doScanBatched: scan in batches, claim codewords inline, POST each
+//     batch, paint succeeded incrementally. Uses the module-scope
+//     sessionId (problem 1 fix), filters already-attached refs before
+//     claiming pool labels (problem 2 fix).
 //   - batchedStateSync: IT- and MO-driven catchup. Collects current
-//     wrappers-with-codewords and re-Puts them as a fresh batched
-//     session. The plugin's implicit-reset on session_id change
-//     handles the diff cleanup automatically — simpler than
-//     tracking per-wrapper pushed/unpushed state.
-//
-// schedulePushGrammar dispatches to scheduleBatchedSync when
-// BATCH_MODE=true, otherwise falls back to the legacy pushGrammar
-// (with the 120ms debounce). Currently BATCH_MODE=false after the
-// revert — see the design issues noted at pushGrammar above.
-
-const BATCH_MODE = true;
+//     wrappers-with-codewords and re-POSTs them through the per-batch
+//     protocol so MO-discovered + IT-claimed elements reach the plugin.
 
 // Codewords queued for deletion on the next outbound batch. Populated
 // by the post-batch isConnected sweep when a wrapper's element gets
@@ -1470,8 +1406,6 @@ async function processScanBatch(
   }
 }
 
-void doScanBatched; // gated by BATCH_MODE; referenced from doScan when flipped
-
 // --- Active-frame tracking ---
 //
 // Each frame's content script knows whether `window` currently has focus.
@@ -1514,7 +1448,6 @@ window.addEventListener('pageshow', (e) => {
   // bfcache (the pool is in chrome.storage.session), so re-registering
   // in place avoids churning RELEASE_LABELS through the pool.
   idRegistry.clear();
-  lastGrammarHash = '';
   for (const w of [...store.all]) {
     if (!w.element.isConnected) {
       detachWrapper(w.element);
@@ -1523,7 +1456,7 @@ window.addEventListener('pageshow', (e) => {
     idRegistry.register(w);
   }
   doScan();
-  pushGrammar();
+  schedulePushGrammar();
 });
 
 // --- Frame liveness Port ---
@@ -1661,23 +1594,6 @@ function reportDispatchResult(result: DispatchResult): void {
 // docs/completed/DESIGN_HINT_DIAGNOSTICS.md §1 + Q7 and
 // docs/completed/DESIGN_PLUGIN_LOGGING.md §4.
 
-/**
- * Ask the background to POST /commands/invalidate on the plugin. Fires
- * when the activate path receives an id we don't know — the plugin's
- * cached "I already pushed commands" memory is lying after SW restart,
- * page reload mid-debounce, or content-script remount. Without this,
- * the plugin keeps dispatching dead ids until the user reloads the tab.
- */
-function requestCommandsInvalidate(reason: string): void {
-  try {
-    chrome.runtime.sendMessage({
-      type: 'INVALIDATE_COMMANDS',
-      reason,
-    } as Message);
-  } catch {
-    // Extension context invalidated; recovery happens on next reload.
-  }
-}
 
 // Resolve a visible-hint codeword to a stable selector. Used by the
 // options page (via background) to convert "ape deck" into something like
@@ -1735,11 +1651,9 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
     } else if (action === 'rescan') {
       const t0 = performance.now();
       chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_rescan_received', data: { url: window.location.href } } as Message).catch(() => {});
-      lastGrammarHash = '';
       doScan();
       const t1 = performance.now();
       chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_scan_completed', data: { elements: store.all.length, duration_ms: Math.round(t1 - t0) } } as Message).catch(() => {});
-      pushGrammar();
     } else if (action === 'set_badge_mode' && params?.mode) {
       chrome.storage.sync.set({ badgeDisplayMode: params.mode });
     } else if (action === 'scroll' || action === 'scroll_to_element' || action === 'scroll_to_percent') {
@@ -1767,7 +1681,6 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
           candidates: () => deepQuerySelectorAll(document, '*'),
           resolveFromSnapshot: (cw) => resolveFromSnapshot(phraseSnapshot, cw, performance.now()),
           resolveFromStore: (cw) => store.byCodeword(cw),
-          onStaleId: requestCommandsInvalidate,
         },
       );
       const { target, resolution, fp } = resolved;
@@ -2033,25 +1946,15 @@ document.addEventListener('keyup', (e: KeyboardEvent) => {
 
 const HUGE_MUTATIONS_COUNT = 1000;
 const HUGE_MUTATION_IDLE_MS = 50;
-const GRAMMAR_PUSH_DEBOUNCE_MS = 120;
 
-let pushTimer: ReturnType<typeof setTimeout> | null = null;
 let hugeMutationTimer: ReturnType<typeof setTimeout> | null = null;
 
 // Dispatched on every grammar-relevant change (MO mutations, IT
-// codeword claims, alphabet swap, bfcache restore). Under BATCH_MODE
-// this routes to scheduleBatchedSync (per-batch path); otherwise it
-// uses the legacy debounced whole-grammar pushGrammar.
+// codeword claims, alphabet swap, bfcache restore). Routes to
+// scheduleBatchedSync — the per-batch path's catchup for MO-discovered
+// + IT-claimed wrappers (see batchedStateSync above).
 function schedulePushGrammar(): void {
-  if (BATCH_MODE) {
-    scheduleBatchedSync('schedulePushGrammar');
-    return;
-  }
-  if (pushTimer) clearTimeout(pushTimer);
-  pushTimer = setTimeout(() => {
-    pushTimer = null;
-    pushGrammar();
-  }, GRAMMAR_PUSH_DEBOUNCE_MS);
+  scheduleBatchedSync('schedulePushGrammar');
 }
 
 function isOwnMutation(n: Node): boolean {

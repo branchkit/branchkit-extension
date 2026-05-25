@@ -39,8 +39,6 @@ export interface ResolutionDeps {
   resolveFromSnapshot: (codeword: string) => ElementWrapper | undefined;
   /** Tier 3b: codeword → wrapper via live store. Caller splits the codeword. */
   resolveFromStore: (codeword: string) => ElementWrapper | undefined;
-  /** Side effect: ask the plugin to invalidate its commands cache. */
-  onStaleId: (reason: string) => void;
 }
 
 export function resolveTarget(
@@ -85,9 +83,9 @@ export function resolveTarget(
     } else {
       detail = `id=${idParam} not in registry`;
       // Plugin's grammar is dispatching against an id we never minted
-      // (or have since cleared). Ask it to invalidate so the next push
-      // does a full re-registration.
-      deps.onStaleId('stale_id');
+      // (or have since cleared). Tier-3 codeword resolution below is the
+      // recovery path; if that also fails the activation is dropped and
+      // the user retries with the live page state.
     }
   } else if (frameMismatch) {
     detail = `id=${idParam} for frame ${frameIdParam}, this is frame ${deps.myFrameId}`;

@@ -123,11 +123,6 @@ export type Message =
   | { type: 'SCROLL_BOUNDARY'; boundary: 'top' | 'bottom' | 'left' | 'right' }
   | { type: 'REFERENCE_NAMES_CHANGED' }
   | { type: 'REFERENCE_SAVED'; host: string; name: string; reference: Record<string, unknown> }
-  // Content → background, asking the plugin to wipe its commands.push
-  // memory. Fires when the activate path sees a registry id that we
-  // never minted (or have since cleared) — the plugin's bookkeeping is
-  // out of sync and a fresh commands.push is needed.
-  | { type: 'INVALIDATE_COMMANDS'; reason: string }
   // Options → background. User wants to convert a visible hint codeword
   // (in a specific tab) into a stable CSS selector for inclusion in a
   // domain rule. Background looks up which frame owns the codeword via
