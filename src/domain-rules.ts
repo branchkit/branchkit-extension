@@ -148,6 +148,11 @@ function isValidCSSSelector(selector: string): boolean {
 /**
  * Remove elements matching any exclude entry. Mutates `refs` and
  * `elements` in place, keeping them in sync (same indices).
+ *
+ * Safe to call on a per-batch slice (10-20 elements) — the function is
+ * array-shape-agnostic. The per-batch doScan path (Option B, see
+ * notes/DESIGN_HINT_PIPELINE_RESYNC.md item 15) calls this on every
+ * scanInBatches yield rather than running it across the whole scan.
  */
 export function applyExclusions(
   refs: Element[],
@@ -203,6 +208,11 @@ export function isExcludedByRule(el: Element, excludes: readonly RuleEntry[]): b
  * Query the DOM for the rule's joined include selector and return any
  * elements not already in `seen`. `root` is the document by default;
  * MutationObserver subtree callers pass the subtree root.
+ *
+ * Per-batch doScan callers (Option B) call this **once per scan**, not
+ * per batch — N querySelectorAll calls across batches would be wasteful
+ * (item 15). The returned refs are then fed into `scanInBatches`'s
+ * `initialSeen` so the regular walk doesn't rediscover them.
  */
 export function collectInclusions(
   seen: Set<Element>,

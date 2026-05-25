@@ -253,13 +253,19 @@ export function scanElements(root: Document | Element = document): { elements: S
 // redundant, and returns the surviving (refs, elements) plus an
 // invisible-candidate list for the ResizeObserver-driven hintability
 // flip path. Same dedup semantics as the original single-pass loop.
+//
+// `initialSeen` lets the caller pre-mark elements as already-discovered —
+// the per-batch doScan uses this so inclusion-rule refs (gathered once
+// per scan, see domain-rules.ts:collectInclusions) aren't rediscovered
+// by the regular walk.
 function collectHintables(
   root: Document | Element,
+  initialSeen?: ReadonlySet<Element>,
 ): { elements: ScannedElement[]; refs: Element[]; invisibleCandidates: Element[] } {
   const elements: ScannedElement[] = [];
   const refs: Element[] = [];
   const invisibleCandidates: Element[] = [];
-  const seen = new Set<Element>();
+  const seen = new Set<Element>(initialSeen);
 
   for (const el of deepQuerySelectorAll(root, HINTABLE_SELECTOR)) {
     if (seen.has(el)) continue;
@@ -320,12 +326,18 @@ export interface ScanBatch {
  * Yields exactly one batch with `isLast: true` for a scan that found
  * zero hintables — that signals the caller's terminal-batch handler
  * (cleanup, vocabulary commit) without a special "no batches" path.
+ *
+ * `initialSeen` pre-marks elements as already-discovered. The per-batch
+ * doScan flow runs inclusion-rule queries once at scan start (avoiding
+ * N querySelectorAll per batch — see investigation item 15) and passes
+ * those refs here so the regular walk doesn't re-emit them.
  */
 export function* scanInBatches(
   root: Document | Element = document,
   batchSize: number = DEFAULT_SCAN_BATCH_SIZE,
+  initialSeen?: ReadonlySet<Element>,
 ): Generator<ScanBatch, void, void> {
-  const { elements, refs, invisibleCandidates } = collectHintables(root);
+  const { elements, refs, invisibleCandidates } = collectHintables(root, initialSeen);
 
   if (elements.length === 0) {
     yield { elements: [], refs: [], isLast: true, invisibleCandidates };

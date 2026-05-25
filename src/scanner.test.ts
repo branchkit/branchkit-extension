@@ -133,4 +133,27 @@ describe('scanInBatches', () => {
     expect(batches).toHaveLength(1);
     expect(batches[0].elements).toHaveLength(7);
   });
+
+  it('initialSeen pre-marks elements so the walk skips them', () => {
+    html(nButtons(10));
+    const allButtons = Array.from(document.querySelectorAll('button'));
+    const skipped = new Set<Element>(allButtons.slice(0, 4));
+
+    const batches = [...scanInBatches(document, 100, skipped)];
+    expect(batches).toHaveLength(1);
+    expect(batches[0].elements).toHaveLength(6);
+    // Skipped refs must not appear in yielded refs.
+    for (const ref of batches[0].refs) {
+      expect(skipped.has(ref)).toBe(false);
+    }
+  });
+
+  it('initialSeen still yields a terminal empty batch when everything is pre-marked', () => {
+    html(nButtons(5));
+    const all = new Set<Element>(Array.from(document.querySelectorAll('button')));
+    const batches = [...scanInBatches(document, 100, all)];
+    expect(batches).toHaveLength(1);
+    expect(batches[0].isLast).toBe(true);
+    expect(batches[0].elements).toEqual([]);
+  });
 });
