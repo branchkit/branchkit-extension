@@ -234,8 +234,6 @@ export class HintBadge {
   private category: Category;
   private _visible: boolean = false;
   private _size: { w: number; h: number } | null = null;
-  private focusinHandler: () => void;
-  private focusoutHandler: () => void;
 
   private label: LabelAssignment;
   private displayMode: BadgeDisplayMode;
@@ -319,7 +317,6 @@ export class HintBadge {
         transform-origin: 0 0;
         pointer-events: none;
       }
-      .bk-outer.focus-hidden { visibility: hidden; }
       @media print { .bk-outer { visibility: hidden; } }
     `;
 
@@ -334,13 +331,6 @@ export class HintBadge {
       this.outer.style.display = 'inline';
     }
 
-    if (document.hasFocus() && target === document.activeElement) {
-      this.outer.classList.add('focus-hidden');
-    }
-    this.focusinHandler = () => this.outer.classList.add('focus-hidden');
-    this.focusoutHandler = () => this.outer.classList.remove('focus-hidden');
-    target.addEventListener('focusin', this.focusinHandler);
-    target.addEventListener('focusout', this.focusoutHandler);
   }
 
   updatePosition(candidate?: { x: number; y: number }, caller?: string): void {
@@ -534,8 +524,6 @@ export class HintBadge {
   }
 
   remove(): void {
-    this.target.removeEventListener('focusin', this.focusinHandler);
-    this.target.removeEventListener('focusout', this.focusoutHandler);
     this.host.remove();
   }
 
