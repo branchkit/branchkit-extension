@@ -611,6 +611,18 @@ function connectDirectSSE(port: number, token: string): void {
 // --- SSE Event Handling (shared by both paths) ---
 
 function handleSSEEvent(data: any): void {
+  // Active-tab-only routing for events that carry params.target === 'active'.
+  // The plugin uses this for focus-driven rescans where only the active
+  // tab's state matters — broadcasting to every tab would multiply the
+  // refocus latency by tab count for no functional benefit.
+  if (data.params?.target === 'active') {
+    notifyActiveTab({
+      type: 'BRANCHKIT_ACTION',
+      payload: data,
+    });
+    return;
+  }
+
   if (data.action === 'rescan' || data.action === 'set_badge_mode') {
     // Broadcast to ALL tabs
     broadcastToAllTabs({

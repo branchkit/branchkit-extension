@@ -1650,10 +1650,39 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       hideHints();
     } else if (action === 'rescan') {
       const t0 = performance.now();
-      chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_rescan_received', data: { url: window.location.href } } as Message).catch(() => {});
-      doScan();
-      const t1 = performance.now();
-      chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_scan_completed', data: { elements: store.all.length, duration_ms: Math.round(t1 - t0) } } as Message).catch(() => {});
+      chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_rescan_received', data: { url: window.location.href, from_cache: params?.from_cache === 'true' } } as Message).catch(() => {});
+
+      if (params?.from_cache === 'true') {
+        // Fast path for app-refocus rescans: drop dead wrappers, then
+        // republish the current wrapper store (no DOM walk).
+        //
+        // We DON'T hide/show hints — `batchedStateSync` reuses the
+        // existing `sessionId` so the plugin doesn't wipe its per-prefix
+        // collections; the matcher's vocab is intact throughout the
+        // rescan and codewords stay matchable mid-flight. The previous
+        // hide-show cycle was UX signaling, not correctness, and it
+        // actively hurt: users saw badges blink and lost confidence,
+        // sometimes pausing mid-utterance or saying "show" to bring
+        // them back. A deferred doScanBatched() still runs as a
+        // reconciliation pass to heal any cache/DOM drift.
+        void (async () => {
+          dropDisconnectedWrappers();
+          await batchedStateSync('refocus_from_cache');
+          const t1 = performance.now();
+          chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_scan_completed', data: { elements: store.all.length, duration_ms: Math.round(t1 - t0), path: 'from_cache' } } as Message).catch(() => {});
+
+          // Reconciliation: a real DOM walk picks up anything the cache
+          // doesn't know about (lazy-loaded elements, post-blur DOM
+          // mutations that bypassed MutationObserver, framework-driven
+          // element replacement). Idempotent when cache was accurate —
+          // filterNewBatchRefs drops everything already wrapped.
+          setTimeout(() => { void doScanBatched(); }, 300);
+        })();
+      } else {
+        doScan();
+        const t1 = performance.now();
+        chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_scan_completed', data: { elements: store.all.length, duration_ms: Math.round(t1 - t0) } } as Message).catch(() => {});
+      }
     } else if (action === 'set_badge_mode' && params?.mode) {
       chrome.storage.sync.set({ badgeDisplayMode: params.mode });
     } else if (action === 'scroll' || action === 'scroll_to_element' || action === 'scroll_to_percent') {
