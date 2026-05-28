@@ -13,6 +13,8 @@ import { LabelAssignment, labelToDisplay } from './words';
 import { getCachedRect, getCachedStyle, getCachedDims, isClipAncestor } from './layout-cache';
 import { computeBadgeColors } from './badge-colors';
 import { leaderLineGeometry } from './placement/geometry';
+import { trackContainerResize, untrackContainerResize } from './container-resize-tracker';
+import { trackTargetMutations, untrackTargetMutations } from './target-mutation-tracker';
 
 // --- Position debug log (temporary investigation) ---
 export interface PositionLogEntry {
@@ -331,6 +333,8 @@ export class HintBadge {
       this.outer.style.display = 'inline';
     }
 
+    trackContainerResize(this.anchorParent);
+    trackTargetMutations(this.target);
   }
 
   updatePosition(candidate?: { x: number; y: number }, caller?: string): void {
@@ -524,6 +528,8 @@ export class HintBadge {
   }
 
   remove(): void {
+    untrackContainerResize(this.anchorParent);
+    untrackTargetMutations(this.target);
     this.host.remove();
   }
 

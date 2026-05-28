@@ -13,6 +13,8 @@ import * as idRegistry from './registry';
 import { resolveTarget } from './activate-resolution';
 import { IntersectionTracker } from './intersection-tracker';
 import { HintBadge, setPositionCaller, clearPositionCaller } from './hints';
+import { onContainerResize } from './container-resize-tracker';
+import { onTargetMutation } from './target-mutation-tracker';
 import { cacheLayout, clearLayoutCache } from './layout-cache';
 import { placeBadges, placeOne, clearPlacement } from './placement';
 import { activateElement, type ActivationResult } from './event-sequence';
@@ -1897,6 +1899,49 @@ function scheduleReposition(): void {
 }
 window.addEventListener('resize', scheduleReposition, { passive: true });
 window.addEventListener('scroll', scheduleReposition, { passive: true });
+
+// Per-container resize: each HintBadge registers its anchor with the
+// shared tracker. Catches CSS-only and container-scoped layout shifts
+// (animated dropdowns, sibling row expansion, :focus-within rules)
+// that don't surface as a window scroll/resize or a DOM mutation —
+// the classic "click → hints look stale" case.
+onContainerResize(scheduleReposition);
+
+// Deferred reposition for signals that hint "layout is about to settle":
+// - focusin/focusout: :focus-within can resize parents, focus-driven
+//   popovers open, autocomplete suggestions appear. focusin/focusout
+//   bubble (focus/blur don't), so a single document-level listener
+//   covers the page.
+// - transitionend/animationend: CSS-driven dropdowns and panels
+//   interpolate layout over 200-300ms after the trigger. The
+//   MutationObserver fires at the *start* of the class change; without
+//   a settle signal, reposition runs mid-animation and is wrong.
+//
+// 100ms debounce coalesces the burst (a single transition can fire many
+// transitionend events — one per animated property — and a click fires
+// focusout+focusin <16ms apart) into one reposition after things
+// settle. Matches Rango's ElementWrapper.ts focus debounce.
+let deferredRepositionTimer: ReturnType<typeof setTimeout> | null = null;
+const DEFERRED_REPOSITION_DEBOUNCE_MS = 100;
+function scheduleDeferredReposition(): void {
+  if (deferredRepositionTimer) clearTimeout(deferredRepositionTimer);
+  deferredRepositionTimer = setTimeout(() => {
+    deferredRepositionTimer = null;
+    scheduleReposition();
+  }, DEFERRED_REPOSITION_DEBOUNCE_MS);
+}
+document.addEventListener('focusin', scheduleDeferredReposition, { passive: true });
+document.addEventListener('focusout', scheduleDeferredReposition, { passive: true });
+document.addEventListener('transitionend', scheduleDeferredReposition, { passive: true });
+document.addEventListener('animationend', scheduleDeferredReposition, { passive: true });
+
+// Per-target mutation: each HintBadge registers its target with the
+// shared tracker. Catches class/style/subtree changes that move a
+// target without resizing its container — the long tail the doc-level
+// MutationObserver's attributeFilter misses and the container RO can't
+// see. Settle-debounced because React renders fire many records in a
+// burst.
+onTargetMutation(scheduleDeferredReposition);
 
 // --- Keyboard Listener ---
 
