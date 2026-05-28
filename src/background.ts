@@ -652,14 +652,57 @@ async function broadcastToAllTabs(message: Message): Promise<void> {
   }
 }
 
+/**
+ * Pick the tab that voice actions should dispatch to. Avoids the
+ * `lastFocusedWindow: true` trap — when devtools (or any extension
+ * popup, panel, or about:debugging window) is the most recently
+ * focused window, `chrome.tabs.query` would return either no tab or
+ * the about:* tab inside the devtools window, neither of which has a
+ * content script. We explicitly restrict the search to type='normal'
+ * windows (regular browser windows) and within those prefer the
+ * focused one; ignore tabs whose URL is in our injection blocklist.
+ */
+async function resolveActiveContentTab(): Promise<number | null> {
+  // Cached value, set by tabs.onActivated, is usually correct.
+  if (cachedActiveTabId !== null) return cachedActiveTabId;
+
+  try {
+    const windows = await chrome.windows.getAll({
+      populate: true,
+      windowTypes: ['normal'],
+    });
+    // Prefer the currently-focused normal window.
+    const focused = windows.find(w => w.focused);
+    const orderedWindows = focused
+      ? [focused, ...windows.filter(w => w !== focused)]
+      : windows;
+    for (const w of orderedWindows) {
+      const tab = w.tabs?.find(t => t.active);
+      if (tab?.id === undefined) continue;
+      if (!isInjectableURL(tab.url ?? '')) continue;
+      cachedActiveTabId = tab.id;
+      return tab.id;
+    }
+  } catch {
+    // ignore — fall through
+  }
+  return null;
+}
+
+function isInjectableURL(url: string): boolean {
+  return !!url
+    && !url.startsWith('chrome://')
+    && !url.startsWith('chrome-extension://')
+    && !url.startsWith('moz-extension://')
+    && !url.startsWith('edge://')
+    && !url.startsWith('about:')
+    && !url.startsWith('devtools://')
+    && !url.startsWith('view-source:');
+}
+
 async function notifyActiveTab(message: Message): Promise<void> {
   try {
-    let tabId = cachedActiveTabId;
-    if (tabId === null) {
-      const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-      tabId = tabs[0]?.id ?? null;
-      if (tabId !== null) cachedActiveTabId = tabId;
-    }
+    const tabId = await resolveActiveContentTab();
     if (tabId === null) {
       console.warn('[BranchKit SW] no active tab found');
       return;
@@ -1085,6 +1128,14 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
   if (windowId === chrome.windows.WINDOW_ID_NONE) return;
   try {
+    // Only follow focus into normal browser windows. Devtools / popups
+    // / extension panels would otherwise blank cachedActiveTabId (they
+    // either have no tabs or their "tab" is an about:* URL), breaking
+    // voice routing while devtools is open. Skip the update; the last
+    // known content tab stays cached.
+    const win = await chrome.windows.get(windowId);
+    if (win.type !== 'normal') return;
+
     const tabs = await chrome.tabs.query({ active: true, windowId });
     const newActive = tabs[0]?.id ?? null;
     const oldTabId = cachedActiveTabId;
@@ -1100,7 +1151,9 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
     // plugin (built up from prior grammar_batch POSTs from its content
     // script). Focus-change is just a session-start signal.
   } catch {
-    cachedActiveTabId = null;
+    // Don't blank cachedActiveTabId on error — fall back to the last
+    // known content tab so voice routing keeps working through transient
+    // window state.
   }
 });
 
