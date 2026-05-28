@@ -28,6 +28,7 @@
 
 import { ElementWrapper, WrapperStore } from './element-wrapper';
 import { enumerateAlmostHintable } from './scanner';
+import type { RebindCounters } from './rebind';
 
 type OverlayColor = 'green' | 'yellow' | 'orange' | 'blue';
 
@@ -125,7 +126,10 @@ function buildBox(
   return box;
 }
 
-function buildOverlay(store: WrapperStore): HTMLDivElement {
+function buildOverlay(
+  store: WrapperStore,
+  rebindCounters?: RebindCounters,
+): HTMLDivElement {
   const root = document.createElement('div');
   Object.assign(root.style, {
     position: 'absolute',
@@ -161,20 +165,92 @@ function buildOverlay(store: WrapperStore): HTMLDivElement {
     );
   }
 
+  if (rebindCounters) {
+    root.appendChild(buildRebindStatsPanel(rebindCounters, sx, sy));
+  }
+
   return root;
+}
+
+/**
+ * Bottom-right viewport panel summarizing wrapper-rebind outcomes
+ * accumulated since the content script loaded. Useful during soak on
+ * Gmail/Linear/Discord — the bucket ratios drive tuning of
+ * REBIND_DISTANCE_THRESHOLD_PX.
+ */
+function buildRebindStatsPanel(
+  counters: RebindCounters,
+  scrollX: number,
+  scrollY: number,
+): HTMLDivElement {
+  const panel = document.createElement('div');
+  // Anchor to the bottom-right of the viewport in page coordinates so
+  // it stays put under the overlay's static-at-toggle model.
+  Object.assign(panel.style, {
+    position: 'absolute',
+    top: `${scrollY + window.innerHeight - 96}px`,
+    left: `${scrollX + window.innerWidth - 240}px`,
+    width: '220px',
+    background: 'rgba(13, 17, 23, 0.92)',
+    color: '#c9d1d9',
+    border: '1px solid #30363d',
+    borderRadius: '4px',
+    padding: '6px 8px',
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+    fontSize: '11px',
+    lineHeight: '1.4',
+    pointerEvents: 'none',
+  } as CSSStyleDeclaration);
+
+  const heading = document.createElement('div');
+  Object.assign(heading.style, {
+    fontWeight: '600',
+    marginBottom: '2px',
+    color: '#58a6ff',
+  } as CSSStyleDeclaration);
+  heading.textContent = 'rebind counters';
+  panel.appendChild(heading);
+
+  const rows: Array<[string, number, string]> = [
+    ['rebind_clean',    counters.rebind_clean,    '#39d353'],
+    ['rebind_position', counters.rebind_position, '#39d353'],
+    ['refuse_distance', counters.refuse_distance, '#ff8c42'],
+    ['refuse_no_match', counters.refuse_no_match, '#ff8c42'],
+  ];
+  for (const [name, n, color] of rows) {
+    const row = document.createElement('div');
+    Object.assign(row.style, {
+      display: 'flex',
+      justifyContent: 'space-between',
+      color,
+    } as CSSStyleDeclaration);
+    const k = document.createElement('span');
+    k.textContent = name;
+    const v = document.createElement('span');
+    v.textContent = String(n);
+    row.appendChild(k);
+    row.appendChild(v);
+    panel.appendChild(row);
+  }
+  return panel;
 }
 
 /** Toggle the overlay on/off. Reads from the live store + scans the DOM
  * at toggle-on time; doesn't react to subsequent changes. Call this
- * alongside the Phase 2 snapshot trigger — same press fires both. */
-export function toggleOverlay(store: WrapperStore): void {
+ * alongside the Phase 2 snapshot trigger — same press fires both.
+ * Optional `rebindCounters` adds a bottom-right stats panel summarizing
+ * wrapper-rebind outcomes since CS load (step 5 instrumentation). */
+export function toggleOverlay(
+  store: WrapperStore,
+  rebindCounters?: RebindCounters,
+): void {
   if (state.active && state.root) {
     state.root.remove();
     state.root = null;
     state.active = false;
     return;
   }
-  const root = buildOverlay(store);
+  const root = buildOverlay(store, rebindCounters);
   document.documentElement.appendChild(root);
   state.root = root;
   state.active = true;

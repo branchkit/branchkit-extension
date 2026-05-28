@@ -10,6 +10,8 @@ import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from '
 import { scanElements, scanSingle, isHintable, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE } from './scanner';
 import { ElementWrapper, WrapperStore, enterLimbo, isLimboExpired } from './element-wrapper';
 import * as idRegistry from './registry';
+import { computeFingerprint, fingerprintsEqual } from './registry';
+import { findLimboMatch, newRebindCounters, REBIND_DISTANCE_THRESHOLD_PX, type RebindCounters } from './rebind';
 import { resolveTarget } from './activate-resolution';
 import { IntersectionTracker } from './intersection-tracker';
 import { HintBadge, setPositionCaller, clearPositionCaller } from './hints';
@@ -587,7 +589,13 @@ const resizeObserver = new ResizeObserver((entries) => {
   let dirty = false;
   for (const entry of entries) {
     const el = entry.target;
-    if (!store.findWrapperFor(el)) continue;
+    const wrapper = store.findWrapperFor(el);
+    if (!wrapper) continue;
+    // Limbo wrappers: hold codeword + badge until finalize/rebind.
+    // Disconnected elements deterministically fail isHintable; we don't
+    // want that path stealing the wrapper out from under the limbo
+    // lifecycle.
+    if (wrapper.disconnectedAt !== null) continue;
     if (!isHintable(el)) {
       detachWrapper(el);
       dirty = true;
@@ -1987,7 +1995,9 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
     // Phase 3: same press also toggles the in-page debug overlay so the
     // diagnostic categories (yellow/orange/red/blue) become visible
     // without needing to read JSON. Frozen-frame; re-press flips off.
-    toggleOverlay(store);
+    // The rebind-counters panel rides along — see step 5 of
+    // notes/DESIGN_WRAPPER_IDENTITY_STABILITY.md.
+    toggleOverlay(store, rebindCounters);
     return;
   }
 
@@ -2041,15 +2051,118 @@ function discoverInSubtree(root: Element): number {
   const result = scanElements(root);
   applyUserRuleToScan(result, root);
 
+  // Limbo wrappers seen by every iteration in this pass — gathered once
+  // so the rebind matcher doesn't re-walk the store per ref. Locally
+  // spliced as wrappers get consumed, so two new elements can't both
+  // claim the same limbo wrapper.
+  const limboPool = collectLimboWrappers();
+
   for (let i = 0; i < result.elements.length; i++) {
-    if (store.findWrapperFor(result.refs[i])) continue;
-    attachWrapper(new ElementWrapper(result.refs[i], result.elements[i]));
+    const ref = result.refs[i];
+    if (store.findWrapperFor(ref)) continue;
+    if (limboPool.length > 0 && tryRebindFromLimbo(ref, limboPool)) continue;
+    attachWrapper(new ElementWrapper(ref, result.elements[i]));
     added++;
   }
   observeInvisibleCandidates(result.invisibleCandidates);
   watchUndefinedCustomElements(root);
   return added;
 }
+
+function collectLimboWrappers(): ElementWrapper[] {
+  const out: ElementWrapper[] = [];
+  for (const w of store.all) {
+    if (w.disconnectedAt !== null && w.scanned.id > 0) out.push(w);
+  }
+  return out;
+}
+
+/**
+ * Probe `pool` for a limbo wrapper whose fingerprint (and, on multi-
+ * match, last position) matches `newEl`. On a successful rebind, the
+ * wrapper is consumed from `pool` and `rebindWrapper` is run. On
+ * `refuse_distance`, the ambiguous candidates are finalized in place
+ * (their last positions are too scrambled to safely pick one). Returns
+ * true iff the new element was rebound; false means the caller should
+ * create a fresh wrapper.
+ */
+function tryRebindFromLimbo(newEl: Element, pool: ElementWrapper[]): boolean {
+  const newFp = computeFingerprint(newEl);
+  const matches: ElementWrapper[] = [];
+  for (const w of pool) {
+    const entry = idRegistry.get(w.scanned.id);
+    if (!entry) continue;
+    if (fingerprintsEqual(entry.fingerprint, newFp)) matches.push(w);
+  }
+  if (matches.length === 0) return false;
+
+  // One getBoundingClientRect read per discovery — paid only when there's
+  // at least one fingerprint match. Single-match case ignores it.
+  const newRect = matches.length === 1 ? null : newEl.getBoundingClientRect();
+  const outcome = findLimboMatch(matches, newRect, REBIND_DISTANCE_THRESHOLD_PX);
+
+  switch (outcome.kind) {
+    case 'rebind_clean':
+    case 'rebind_position': {
+      rebindWrapper(outcome.wrapper, newEl);
+      consume(pool, outcome.wrapper);
+      rebindCounters[outcome.kind]++;
+      return true;
+    }
+    case 'refuse_distance': {
+      for (const c of outcome.candidates) {
+        consume(pool, c);
+        detachWrapper(c.element);
+      }
+      rebindCounters.refuse_distance++;
+      return false;
+    }
+    case 'no_candidates':
+      return false;
+  }
+}
+
+function consume(pool: ElementWrapper[], w: ElementWrapper): void {
+  const idx = pool.indexOf(w);
+  if (idx >= 0) pool.splice(idx, 1);
+}
+
+/**
+ * Re-anchor `w` to `newEl`. The wrapper's codeword, badge, label, and
+ * registry id all survive — only the DOM-identity edges swap. Mirrors
+ * the algorithm in `notes/DESIGN_WRAPPER_IDENTITY_STABILITY.md`
+ * "Rebind operation". Order matters: store + registry first (so the
+ * tracker callbacks can find the wrapper by newEl), then observers,
+ * then the badge swap, then the mutable `.element` pointer.
+ */
+function rebindWrapper(w: ElementWrapper, newEl: Element): void {
+  const oldEl = w.element;
+
+  store.rebindElement(oldEl, newEl, w);
+  if (w.scanned.id > 0) {
+    idRegistry.rebindRef(w.scanned.id, newEl);
+    idRegistry.refreshFingerprint(w.scanned.id, newEl);
+  }
+
+  tracker.unobserve(oldEl);
+  tracker.observe(newEl);
+  resizeObserver.unobserve(oldEl);
+  resizeObserver.observe(newEl);
+
+  if (w.hint) w.hint.retarget(newEl);
+
+  w.element = newEl;
+  w.disconnectedAt = null;
+  w.lastRect = null;
+}
+
+// --- Rebind instrumentation (step 5) ---
+//
+// Per-bucket counters fed by `tryRebindFromLimbo` and the finalize
+// sweeper. Read via `window.branchkitRebindStats()` (console) and the
+// debug overlay's stats panel. The thresholds and bucket ratios drive
+// the soak-time tuning of REBIND_DISTANCE_THRESHOLD_PX.
+const rebindCounters: RebindCounters = newRebindCounters();
 
 const LIMBO_DEADLINE_MS = 250;
 
@@ -2098,15 +2211,15 @@ function finalizeExpiredLimboWrappers(): number {
     // Defensive de-limbo: if the same DOM node reconnected during the
     // window (rare — React typically swaps to a new element, but plain
     // DOM moves don't), graduate the wrapper back to connected rather
-    // than tearing it down and re-creating a fresh one with a different
-    // codeword. The fingerprint-based rebind in step 3 will handle the
-    // new-element case.
+    // than tearing it down. The fingerprint-based rebind (step 3)
+    // handles the new-element case.
     if (w.element.isConnected) {
       w.disconnectedAt = null;
       w.lastRect = null;
       continue;
     }
     detachWrapper(w.element);
+    rebindCounters.refuse_no_match++;
     finalized++;
   }
   if (finalized > 0) schedulePushGrammar();
@@ -2333,4 +2446,8 @@ watchUndefinedCustomElements(document);
 (window as any).branchkitShowHints = () => { doScan(); showHints(); };
 (window as any).branchkitHideHints = () => hideHints();
 (window as any).branchkitScan = () => { doScan(); return store.all; };
+// Snapshot of the wrapper-rebind counters (step 5 instrumentation).
+// Returns a fresh copy on each call so callers can take a baseline,
+// soak, and diff.
+(window as any).branchkitRebindStats = (): RebindCounters => ({ ...rebindCounters });
 

@@ -129,6 +129,28 @@ describe('WrapperStore', () => {
     expect(store.count).toBe(0);
   });
 
+  it('rebindElement repoints the index without disturbing wrapper identity', () => {
+    // Step 4 of DESIGN_WRAPPER_IDENTITY_STABILITY: rebind swaps the
+    // store's lookup key while keeping the wrapper itself stable. The
+    // codeword + label must survive (the whole point of holding
+    // through limbo).
+    const store = new WrapperStore();
+    const oldEl = fakeElement('old');
+    const newEl = fakeElement('new');
+    const w = new ElementWrapper(oldEl, fakeScanned({ codeword: 'arch' }));
+    store.addWrapper(w);
+
+    store.rebindElement(oldEl, newEl, w);
+
+    expect(store.findWrapperFor(oldEl)).toBeUndefined();
+    expect(store.findWrapperFor(newEl)).toBe(w);
+    expect(store.all).toEqual([w]);
+    expect(w.scanned.codeword).toBe('arch');
+    // Pool release path is the only thing that talks to chrome.runtime.
+    // Rebind must NOT release the codeword (decision 3: hold).
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
   it('clear releases each wrapper’s pool codeword', () => {
     // Without this, codewords held by cleared wrappers stay "assigned"
     // server-side until tab close — destroy() tears down the badge but

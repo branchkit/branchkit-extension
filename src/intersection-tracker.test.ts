@@ -197,6 +197,63 @@ describe('IntersectionTracker.refreshViewportClaims', () => {
   });
 });
 
+describe('IntersectionTracker limbo gating', () => {
+  // DESIGN_WRAPPER_IDENTITY_STABILITY decision 3: a disconnected
+  // element's IO `isIntersecting: false` must not strip the wrapper's
+  // codeword. Otherwise the limbo window would silently release
+  // codewords back to the pool, defeating the rebind story.
+
+  it('does not release codeword when a limbo wrapper fires not-intersecting', async () => {
+    const store = new WrapperStore();
+    const events = { onCodewordsChanged: vi.fn() };
+    const tracker = new IntersectionTracker(store, events);
+    const io = FakeIntersectionObserver.lastInstance!;
+
+    const w = new ElementWrapper(fakeElement(), fakeScanned({ codeword: 'arch' }));
+    w.isInViewport = true;
+    w.disconnectedAt = 1_000;  // marked as limbo
+    store.addWrapper(w);
+    tracker.observe(w.element);
+
+    // Simulate the IO firing the disconnect entry that Chrome emits
+    // after `el.remove()`.
+    io.fire(w.element, false);
+
+    await tracker.flushNow();
+
+    // Codeword still on the wrapper, badge state untouched, no
+    // RELEASE_LABELS request issued.
+    expect(w.scanned.codeword).toBe('arch');
+    const releaseCalls = sendMessageMock.mock.calls.filter(([m]) => m.type === 'RELEASE_LABELS');
+    expect(releaseCalls).toHaveLength(0);
+  });
+
+  it('processes intersection entries normally once the wrapper de-limbos', async () => {
+    const store = new WrapperStore();
+    const events = { onCodewordsChanged: vi.fn() };
+    const tracker = new IntersectionTracker(store, events);
+    const io = FakeIntersectionObserver.lastInstance!;
+
+    const w = new ElementWrapper(fakeElement(), fakeScanned({ codeword: 'arch' }));
+    w.isInViewport = true;
+    w.disconnectedAt = 1_000;
+    store.addWrapper(w);
+    tracker.observe(w.element);
+
+    // Rebind clears disconnectedAt — IT should resume normal handling
+    // on the next entry. (We don't drive the full rebind path here;
+    // that lives in content.ts. Just flip the flag.)
+    w.disconnectedAt = null;
+    io.fire(w.element, false);
+    await tracker.flushNow();
+
+    expect(w.scanned.codeword).toBe('');
+    const releaseCalls = sendMessageMock.mock.calls.filter(([m]) => m.type === 'RELEASE_LABELS');
+    expect(releaseCalls).toHaveLength(1);
+    expect(releaseCalls[0][0]).toEqual({ type: 'RELEASE_LABELS', labels: ['arch'] });
+  });
+});
+
 describe('IntersectionTracker.unobserve', () => {
   it('removes the wrapper from pendingClaim so a detached wrapper does not leak a codeword', async () => {
     const store = new WrapperStore();

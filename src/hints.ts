@@ -228,7 +228,11 @@ function computeBadgeFontSize(target: Element): number {
 
 export class HintBadge {
   public readonly host: HTMLDivElement;
-  public readonly anchorParent: HTMLElement;
+  // Mutable: `retarget(newEl)` resolves a new container when the wrapper
+  // rebinds to a replacement DOM node (DESIGN_WRAPPER_IDENTITY_STABILITY
+  // step 4). Same host stays attached; the host's parent and the
+  // tracked target both move.
+  public anchorParent: HTMLElement;
   private shadow: ShadowRoot;
   private outer: HTMLDivElement;
   private inner: HTMLDivElement;
@@ -397,6 +401,42 @@ export class HintBadge {
 
   reattach(): void {
     this.anchorParent.appendChild(this.host);
+  }
+
+  /**
+   * Re-point this badge at a different DOM element. Called when the
+   * wrapper's logical identity rebinds to a new node (the React
+   * re-render case — see DESIGN_WRAPPER_IDENTITY_STABILITY step 4).
+   * The host element itself is reused; only the tracked target, its
+   * container, and the per-target/per-anchor observers swap.
+   *
+   * Font size and colors aren't recomputed — a same-fingerprint
+   * replacement should be visually similar, and re-running those reads
+   * during a rebind would add a layout/style read for a marginal
+   * appearance match. Future tuning can revisit if rebound badges
+   * routinely mis-paint.
+   */
+  retarget(newEl: Element): void {
+    untrackContainerResize(this.anchorParent);
+    untrackTargetMutations(this.target);
+
+    this.target = newEl;
+    const ctx = resolveBadgeContext(newEl, this.host, this.outer);
+    this.anchorParent = ctx.container;
+    if (ctx.positionMode === 'relative') {
+      this.outer.style.position = 'relative';
+      this.outer.style.display = 'inline';
+    } else {
+      // Reset in case the prior context was relative.
+      this.outer.style.position = 'absolute';
+      this.outer.style.display = 'block';
+    }
+
+    trackContainerResize(this.anchorParent);
+    trackTargetMutations(this.target);
+    // host-attribute tracker is keyed on the host (unchanged); no swap.
+
+    this.reposition();
   }
 
   show(): void {

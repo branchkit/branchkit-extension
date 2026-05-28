@@ -133,6 +133,12 @@ export class IntersectionTracker {
     for (const entry of entries) {
       const wrapper = this.store.findWrapperFor(entry.target);
       if (!wrapper) continue;
+      // Limbo wrappers hold their codeword by design (decision 3 of
+      // DESIGN_WRAPPER_IDENTITY_STABILITY). A disconnected element
+      // typically fires `isIntersecting: false` from the IO — letting
+      // that release the codeword would defeat the whole limbo
+      // mechanism. Skip until the wrapper rebinds or finalizes.
+      if (wrapper.disconnectedAt !== null) continue;
       wrapper.isInViewport = entry.isIntersecting;
 
       if (entry.isIntersecting) {

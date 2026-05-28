@@ -1,5 +1,14 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { findBadgeContainer, findLimitParent, resolveContainer, resolveBadgeContext } from './hints';
+import {
+  findBadgeContainer,
+  findLimitParent,
+  resolveContainer,
+  resolveBadgeContext,
+  HintBadge,
+} from './hints';
+import { __testing as containerTracker } from './container-resize-tracker';
+import { __testing as targetTracker } from './target-mutation-tracker';
+import { __testing as hostTracker } from './host-attribute-tracker';
 
 // happy-dom gives us real DOM APIs. getComputedStyle returns inline styles
 // (no CSS engine), so we set style properties directly to simulate layouts.
@@ -166,5 +175,75 @@ describe('resolveBadgeContext', () => {
 
     const ctx = resolveBadgeContext(btn, host, outer);
     expect(ctx.positionMode).toBe('absolute');
+  });
+});
+
+describe('HintBadge.retarget', () => {
+  // Step 4 of DESIGN_WRAPPER_IDENTITY_STABILITY. Verifies the badge
+  // swaps target + anchor + per-target observers atomically, and that
+  // the host element (and its observer) survives unchanged.
+
+  const label = { letter: 'a', words: ['arch'], isSingle: true };
+
+  afterEach(() => {
+    containerTracker.reset();
+    targetTracker.reset();
+    hostTracker.reset();
+  });
+
+  it('moves the host into the new target’s container and re-tracks observers', () => {
+    const root = mount(
+      '<div id="oldContainer"><button id="oldBtn">click</button></div>' +
+      '<div id="newContainer"><button id="newBtn">click</button></div>'
+    );
+    const oldBtn = root.querySelector('#oldBtn')!;
+    const newBtn = root.querySelector('#newBtn')!;
+    const oldContainer = root.querySelector('#oldContainer')!;
+    const newContainer = root.querySelector('#newContainer')!;
+
+    const badge = new HintBadge(oldBtn, label, 'button', 'word');
+    expect(badge.anchorParent).toBe(oldContainer);
+    expect(oldContainer.contains(badge.host)).toBe(true);
+    expect(containerTracker.getRefCount(oldContainer)).toBe(1);
+    expect(targetTracker.isTracked(oldBtn)).toBe(true);
+    expect(targetTracker.isTracked(newBtn)).toBe(false);
+    // Host attribute tracker observes the badge host — must survive
+    // unchanged across retarget.
+    expect(hostTracker.isTracked(badge.host)).toBe(true);
+
+    badge.retarget(newBtn);
+
+    expect(badge.anchorParent).toBe(newContainer);
+    expect(newContainer.contains(badge.host)).toBe(true);
+    expect(oldContainer.contains(badge.host)).toBe(false);
+
+    // Container tracker: refcount transferred from old to new.
+    expect(containerTracker.getRefCount(oldContainer)).toBe(0);
+    expect(containerTracker.getRefCount(newContainer)).toBe(1);
+
+    // Target tracker: old detached, new attached.
+    expect(targetTracker.isTracked(oldBtn)).toBe(false);
+    expect(targetTracker.isTracked(newBtn)).toBe(true);
+
+    // Host attribute tracker still on the same host — not torn down.
+    expect(hostTracker.isTracked(badge.host)).toBe(true);
+  });
+
+  it('remove() after retarget unsubscribes the new anchor + target, not the old', () => {
+    const root = mount(
+      '<div id="oldContainer"><button id="oldBtn">click</button></div>' +
+      '<div id="newContainer"><button id="newBtn">click</button></div>'
+    );
+    const oldBtn = root.querySelector('#oldBtn')!;
+    const newBtn = root.querySelector('#newBtn')!;
+    const newContainer = root.querySelector('#newContainer')!;
+
+    const badge = new HintBadge(oldBtn, label, 'button', 'word');
+    badge.retarget(newBtn);
+    badge.remove();
+
+    expect(containerTracker.getRefCount(newContainer)).toBe(0);
+    expect(targetTracker.isTracked(newBtn)).toBe(false);
+    expect(hostTracker.isTracked(badge.host)).toBe(false);
   });
 });

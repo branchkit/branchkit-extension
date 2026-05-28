@@ -135,6 +135,18 @@ export class WrapperStore {
     this.byElement.set(w.element, w);
   }
 
+  /**
+   * Repoint the byElement index so `wrapper` is now looked up by `newEl`
+   * instead of `oldEl`. The wrapper's own `.element` field is updated by
+   * the caller (it sequences the rebind alongside observer + registry
+   * + badge changes). The wrappers array is unchanged — wrapper identity
+   * is stable across rebind.
+   */
+  rebindElement(oldEl: Element, newEl: Element, wrapper: ElementWrapper): void {
+    this.byElement.delete(oldEl);
+    this.byElement.set(newEl, wrapper);
+  }
+
   /** Look up the wrapper for an element, if any. */
   findWrapperFor(el: Element): ElementWrapper | undefined {
     return this.byElement.get(el);
