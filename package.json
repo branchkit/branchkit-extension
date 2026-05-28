@@ -4,18 +4,16 @@
   "description": "BranchKit Browser — voice-navigable hint badges",
   "license": "SEE LICENSE IN LICENSE",
   "scripts": {
-    "build": "npm run build:chrome",
-    "build:chrome": "npm run clean && npm run bundle && npm run copy-static && node scripts/build-manifest.mjs chrome",
-    "build:firefox": "npm run clean && npm run bundle && npm run copy-static && node scripts/build-manifest.mjs firefox",
-    "bundle": "esbuild src/content.ts --bundle --format=iife --outfile=dist/content.js && esbuild src/bootstrap.ts --bundle --format=iife --outfile=dist/bootstrap.js && esbuild src/background.ts --bundle --format=esm --outfile=dist/background.js && esbuild src/offscreen.ts --bundle --format=iife --outfile=dist/offscreen.js && esbuild src/popup.ts --bundle --format=iife --outfile=dist/popup.js && esbuild src/options.ts --bundle --format=iife --outfile=dist/options.js",
-    "dev": "npm run clean && mkdir -p dist && node scripts/dev.mjs",
-    "watch": "npm run clean && mkdir -p dist && npm run copy-static && node scripts/build-manifest.mjs chrome && esbuild src/content.ts --bundle --format=iife --outfile=dist/content.js --watch & esbuild src/bootstrap.ts --bundle --format=iife --outfile=dist/bootstrap.js --watch & esbuild src/background.ts --bundle --format=esm --outfile=dist/background.js --watch & esbuild src/offscreen.ts --bundle --format=iife --outfile=dist/offscreen.js --watch & esbuild src/popup.ts --bundle --format=iife --outfile=dist/popup.js --watch & esbuild src/options.ts --bundle --format=iife --outfile=dist/options.js --watch",
+    "build": "npm run build:chrome && npm run build:firefox",
+    "build:chrome": "node scripts/build.mjs chrome",
+    "build:firefox": "node scripts/build.mjs firefox",
+    "dev": "node scripts/dev.mjs chrome",
+    "dev:firefox": "node scripts/dev.mjs firefox",
     "clean": "rm -rf dist",
-    "copy-static": "cp offscreen.html dist/ && cp popup.html dist/ && cp options.html dist/ && cp -r icons dist/",
     "test": "vitest run",
     "test:watch": "vitest",
-    "lint:firefox": "npm run build:firefox && npx --yes web-ext lint --source-dir=dist",
-    "package:firefox": "npm run build:firefox && npx --yes web-ext build --source-dir=dist --artifacts-dir=artifacts --overwrite-dest"
+    "lint:firefox": "npm run build:firefox && npx --yes web-ext lint --source-dir=dist/firefox",
+    "package:firefox": "npm run build:firefox && npx --yes web-ext build --source-dir=dist/firefox --artifacts-dir=artifacts --overwrite-dest"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.268",

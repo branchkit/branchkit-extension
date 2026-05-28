@@ -60,5 +60,6 @@ if (target === 'chrome') {
   };
 }
 
-writeFileSync(resolve(root, 'dist/manifest.json'), JSON.stringify(base, null, 2) + '\n');
-console.log(`wrote dist/manifest.json for ${target}`);
+const outPath = resolve(root, 'dist', target, 'manifest.json');
+writeFileSync(outPath, JSON.stringify(base, null, 2) + '\n');
+console.log(`wrote dist/${target}/manifest.json`);
