@@ -16,6 +16,17 @@ export class ElementWrapper {
   hint: HintBadge | null = null;
   label: LabelAssignment | null = null;
   isInViewport: boolean = true;
+  // Limbo lifecycle (DESIGN_WRAPPER_IDENTITY_STABILITY steps 1–2).
+  // `disconnectedAt` is null when the wrapper's element is still in the
+  // DOM, and a monotonic timestamp once `dropDisconnectedWrappers` has
+  // observed the element disconnect. The finalize sweeper detaches any
+  // wrapper whose timestamp is older than LIMBO_DEADLINE_MS. `lastRect`
+  // captures the element's pre-disconnect rect so the future rebind path
+  // (step 3) has a position-hint tiebreaker — the codeword/hint stay
+  // attached to the wrapper throughout, so badges don't flicker during
+  // the limbo window.
+  disconnectedAt: number | null = null;
+  lastRect: DOMRect | null = null;
 
   constructor(element: Element, scanned: ScannedElement) {
     this.element = element;
@@ -209,6 +220,32 @@ export class WrapperStore {
     results.sort((a, b) => b.score - a.score);
     return results;
   }
+}
+
+/**
+ * Mark a wrapper as having lost its DOM element. The wrapper stays in
+ * the store with its codeword and badge intact; the finalize sweeper
+ * will detach it once LIMBO_DEADLINE_MS has elapsed (or, in a later
+ * step, the rebind path will swap in a new element first). Idempotent —
+ * subsequent disconnects on the same wrapper don't reset the timer.
+ */
+export function enterLimbo(
+  w: ElementWrapper,
+  now: number,
+  lastRect: DOMRect | null,
+): void {
+  if (w.disconnectedAt !== null) return;
+  w.disconnectedAt = now;
+  w.lastRect = lastRect;
+}
+
+/** True if the wrapper has been in limbo for at least `deadlineMs`. */
+export function isLimboExpired(
+  w: ElementWrapper,
+  now: number,
+  deadlineMs: number,
+): boolean {
+  return w.disconnectedAt !== null && now - w.disconnectedAt >= deadlineMs;
 }
 
 /**

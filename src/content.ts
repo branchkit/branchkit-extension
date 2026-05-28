@@ -8,14 +8,14 @@
 import { Category, BadgeDisplayMode, HintVisibility, ScannedElement, Message, DispatchResult, GrammarBatchRequest, GrammarBatchResponse } from './types';
 import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from './words';
 import { scanElements, scanSingle, isHintable, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE } from './scanner';
-import { ElementWrapper, WrapperStore } from './element-wrapper';
+import { ElementWrapper, WrapperStore, enterLimbo, isLimboExpired } from './element-wrapper';
 import * as idRegistry from './registry';
 import { resolveTarget } from './activate-resolution';
 import { IntersectionTracker } from './intersection-tracker';
 import { HintBadge, setPositionCaller, clearPositionCaller } from './hints';
 import { onContainerResize } from './container-resize-tracker';
 import { onTargetMutation } from './target-mutation-tracker';
-import { cacheLayout, clearLayoutCache } from './layout-cache';
+import { cacheLayout, clearLayoutCache, peekCachedRect } from './layout-cache';
 import { placeBadges, placeOne, clearPlacement } from './placement';
 import { activateElement, type ActivationResult } from './event-sequence';
 import { accessibleName } from './accessible-name';
@@ -2051,22 +2051,69 @@ function discoverInSubtree(root: Element): number {
   return added;
 }
 
+const LIMBO_DEADLINE_MS = 250;
+
 /**
- * Drop wrappers whose element has been disconnected from the DOM.
- * Cheaper than diffing removedNodes subtrees individually — we just
- * sweep the (small) store and check `.isConnected`.
+ * Move disconnected wrappers into limbo. Per
+ * `notes/DESIGN_WRAPPER_IDENTITY_STABILITY.md` steps 1–2, a disconnect
+ * no longer immediately tears down the wrapper — codeword and badge are
+ * held so a follow-up React render or DOM move can re-attach the same
+ * logical identity (step 3+) without churning the codeword pool. The
+ * finalize sweeper (`finalizeExpiredLimboWrappers`) reaps any wrapper
+ * still disconnected after `LIMBO_DEADLINE_MS`.
+ *
+ * Returns the count of wrappers that newly entered limbo. Grammar
+ * doesn't change on limbo entry (the codeword stays claimed), so callers
+ * should NOT use the return value to schedule a grammar push — the
+ * sweeper does that when it actually detaches.
  */
 function dropDisconnectedWrappers(): number {
-  let removed = 0;
-  // Iterate a copy so we can mutate `store` mid-loop.
-  for (const w of [...store.all]) {
+  let entered = 0;
+  const now = Date.now();
+  for (const w of store.all) {
+    if (w.disconnectedAt !== null) continue;
     if (!w.element.isConnected) {
-      detachWrapper(w.element);
-      removed++;
+      enterLimbo(w, now, peekCachedRect(w.element));
+      entered++;
     }
   }
-  return removed;
+  return entered;
 }
+
+/**
+ * Finalize sweeper. Detaches any wrapper whose limbo deadline has
+ * elapsed without a rebind. Runs on a fixed interval — short enough
+ * that the codeword pool can't be starved by held-but-dead wrappers
+ * (worst case: 676 codewords × 250ms ≈ ¼-second blocking window).
+ *
+ * No-op until rebind lands (step 3+); for now every limbo wrapper
+ * eventually expires and takes the existing detach path.
+ */
+function finalizeExpiredLimboWrappers(): number {
+  const now = Date.now();
+  // Iterate a copy so we can mutate `store` mid-loop.
+  let finalized = 0;
+  for (const w of [...store.all]) {
+    if (!isLimboExpired(w, now, LIMBO_DEADLINE_MS)) continue;
+    // Defensive de-limbo: if the same DOM node reconnected during the
+    // window (rare — React typically swaps to a new element, but plain
+    // DOM moves don't), graduate the wrapper back to connected rather
+    // than tearing it down and re-creating a fresh one with a different
+    // codeword. The fingerprint-based rebind in step 3 will handle the
+    // new-element case.
+    if (w.element.isConnected) {
+      w.disconnectedAt = null;
+      w.lastRect = null;
+      continue;
+    }
+    detachWrapper(w.element);
+    finalized++;
+  }
+  if (finalized > 0) schedulePushGrammar();
+  return finalized;
+}
+
+setInterval(finalizeExpiredLimboWrappers, LIMBO_DEADLINE_MS);
 
 /**
  * Recompute hintability for an element whose attributes changed. Adds,
@@ -2134,8 +2181,10 @@ function processMutations(records: MutationRecord[]): void {
 
   // Removals are handled in bulk: the moved/removed subtree's descendants
   // would be tedious to diff one by one, but `.isConnected` answers it
-  // for free.
-  if (sawRemoval && dropDisconnectedWrappers() > 0) dirty = true;
+  // for free. With limbo, dropDisconnectedWrappers only marks wrappers —
+  // grammar push waits for the finalize sweeper, which calls
+  // schedulePushGrammar itself when it actually detaches.
+  if (sawRemoval) dropDisconnectedWrappers();
 
   if (dirty) schedulePushGrammar();
 }
@@ -2167,9 +2216,12 @@ const observer = new MutationObserver((records) => {
     if (hugeMutationTimer) clearTimeout(hugeMutationTimer);
     hugeMutationTimer = setTimeout(() => {
       hugeMutationTimer = null;
-      const removed = dropDisconnectedWrappers();
+      // Limbo entry doesn't change grammar (codewords are still claimed);
+      // the finalize sweeper schedules push on actual detach. We only
+      // need to push if discovery added new wrappers.
+      dropDisconnectedWrappers();
       const added = discoverInSubtree(document.body || document.documentElement);
-      if (removed > 0 || added > 0) schedulePushGrammar();
+      if (added > 0) schedulePushGrammar();
       if (hintsVisible) scheduleReposition();
     }, HUGE_MUTATION_IDLE_MS);
     return;

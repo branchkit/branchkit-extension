@@ -10,7 +10,13 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { ElementWrapper, WrapperStore, scoreTextMatch } from './element-wrapper';
+import {
+  ElementWrapper,
+  WrapperStore,
+  enterLimbo,
+  isLimboExpired,
+  scoreTextMatch,
+} from './element-wrapper';
 import { ScannedElement } from './types';
 
 // Reference-equality stand-in for Element. WrapperStore's Map uses object
@@ -273,6 +279,123 @@ describe('rescan stability under lazy load', () => {
     expect(store.findWrapperFor(e2)!.scanned.codeword).toBe('arch check');
     const releaseCalls = sendMessageMock.mock.calls.filter(([m]) => m.type === 'RELEASE_LABELS');
     expect(releaseCalls).toHaveLength(1);
+  });
+});
+
+describe('limbo lifecycle', () => {
+  // Step 1–2 of DESIGN_WRAPPER_IDENTITY_STABILITY: a wrapper that loses
+  // its DOM element enters limbo (keeps its codeword + badge), and the
+  // finalize sweeper detaches only those whose limbo deadline elapsed.
+  // The rebind logic (step 3+) isn't tested here.
+
+  const fakeRect = (x: number, y: number, w = 10, h = 10): DOMRect => ({
+    x, y, width: w, height: h,
+    top: y, left: x, right: x + w, bottom: y + h,
+    toJSON: () => ({}),
+  } as DOMRect);
+
+  it('enterLimbo records timestamp and rect on a connected wrapper', () => {
+    const w = new ElementWrapper(fakeElement(), fakeScanned({ codeword: 'arch' }));
+    const rect = fakeRect(40, 60);
+
+    enterLimbo(w, 1_000, rect);
+
+    expect(w.disconnectedAt).toBe(1_000);
+    expect(w.lastRect).toBe(rect);
+    // Codeword stays — limbo holds the pool allocation until finalize.
+    expect(w.scanned.codeword).toBe('arch');
+  });
+
+  it('enterLimbo is idempotent — repeated calls do not reset the timer', () => {
+    const w = new ElementWrapper(fakeElement(), fakeScanned());
+    const firstRect = fakeRect(0, 0);
+    enterLimbo(w, 1_000, firstRect);
+    enterLimbo(w, 5_000, fakeRect(99, 99));
+
+    expect(w.disconnectedAt).toBe(1_000);
+    expect(w.lastRect).toBe(firstRect);
+  });
+
+  it('enterLimbo accepts a null rect (uncached element)', () => {
+    const w = new ElementWrapper(fakeElement(), fakeScanned());
+    enterLimbo(w, 1_000, null);
+
+    expect(w.disconnectedAt).toBe(1_000);
+    expect(w.lastRect).toBeNull();
+  });
+
+  it('isLimboExpired is false for connected wrappers', () => {
+    const w = new ElementWrapper(fakeElement(), fakeScanned());
+    expect(isLimboExpired(w, 999_999, 250)).toBe(false);
+  });
+
+  it('isLimboExpired is false within the deadline window', () => {
+    const w = new ElementWrapper(fakeElement(), fakeScanned());
+    enterLimbo(w, 1_000, null);
+    expect(isLimboExpired(w, 1_100, 250)).toBe(false);
+    expect(isLimboExpired(w, 1_249, 250)).toBe(false);
+  });
+
+  it('isLimboExpired is true at and past the deadline', () => {
+    const w = new ElementWrapper(fakeElement(), fakeScanned());
+    enterLimbo(w, 1_000, null);
+    expect(isLimboExpired(w, 1_250, 250)).toBe(true);
+    expect(isLimboExpired(w, 5_000, 250)).toBe(true);
+  });
+
+  it('store retains limbo wrappers — codeword is still claimed', () => {
+    // Mirrors the content.ts contract: dropDisconnectedWrappers marks the
+    // wrapper but leaves it in the store. Anything iterating store.all
+    // (grammar push, etc.) still sees the codeword.
+    const store = new WrapperStore();
+    const el = fakeElement();
+    const w = new ElementWrapper(el, fakeScanned({ codeword: 'arch' }));
+    store.addWrapper(w);
+
+    enterLimbo(w, 1_000, fakeRect(0, 0));
+
+    expect(store.findWrapperFor(el)).toBe(w);
+    expect(store.count).toBe(1);
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  it('sweep applies the existing detach path to every expired wrapper', () => {
+    // Models finalizeExpiredLimboWrappers without pulling in the
+    // content.ts module: select expired wrappers, then call the existing
+    // store.removeWrapperByElement (the detach path's pool release).
+    const store = new WrapperStore();
+    const elA = fakeElement('a');
+    const elB = fakeElement('b');
+    const elC = fakeElement('c');
+    const wA = new ElementWrapper(elA, fakeScanned({ codeword: 'arch' }));
+    const wB = new ElementWrapper(elB, fakeScanned({ codeword: 'bake' }));
+    const wC = new ElementWrapper(elC, fakeScanned({ codeword: 'check' }));
+    store.addWrapper(wA);
+    store.addWrapper(wB);
+    store.addWrapper(wC);
+
+    // A and B enter limbo at different times; C stays connected.
+    enterLimbo(wA, 1_000, fakeRect(0, 0));
+    enterLimbo(wB, 1_200, fakeRect(10, 10));
+
+    const deadline = 250;
+    const now = 1_300;
+    for (const w of [...store.all]) {
+      if (isLimboExpired(w, now, deadline)) {
+        store.removeWrapperByElement(w.element);
+      }
+    }
+
+    // wA: 1_300 - 1_000 = 300 >= 250 → finalized.
+    // wB: 1_300 - 1_200 = 100 < 250 → still in limbo.
+    // wC: never entered limbo → untouched.
+    expect(store.findWrapperFor(elA)).toBeUndefined();
+    expect(store.findWrapperFor(elB)).toBe(wB);
+    expect(store.findWrapperFor(elC)).toBe(wC);
+    const released = sendMessageMock.mock.calls
+      .filter(([m]) => m.type === 'RELEASE_LABELS')
+      .map(([m]) => m.labels[0]);
+    expect(released).toEqual(['arch']);
   });
 });
 

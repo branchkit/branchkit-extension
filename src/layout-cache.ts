@@ -54,6 +54,17 @@ export function getCachedRect(el: Element): DOMRect {
   return boundingRects.get(el) ?? el.getBoundingClientRect();
 }
 
+/**
+ * Cache-only peek — returns null if no entry was populated. Distinct from
+ * `getCachedRect`, which falls back to a live `getBoundingClientRect()`.
+ * The live fallback returns `{0,0,0,0}` for disconnected elements; for
+ * code that needs to remember an element's last *connected* rect (limbo
+ * tiebreaker), the zero-rect fallback would corrupt the signal.
+ */
+export function peekCachedRect(el: Element): DOMRect | null {
+  return boundingRects.get(el) ?? null;
+}
+
 export function getCachedStyle(el: Element): CSSStyleDeclaration {
   return computedStyles.get(el) ?? getComputedStyle(el);
 }
