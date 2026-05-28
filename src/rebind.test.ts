@@ -8,7 +8,12 @@
 
 import { describe, it, expect } from 'vitest';
 import { ElementWrapper } from './element-wrapper';
-import { findLimboMatch, REBIND_DISTANCE_THRESHOLD_PX } from './rebind';
+import {
+  bumpRebindCounter,
+  findLimboMatch,
+  newRebindCounters,
+  REBIND_DISTANCE_THRESHOLD_PX,
+} from './rebind';
 import type { ScannedElement } from './types';
 
 function fakeElement(label = 'el'): Element {
@@ -143,5 +148,51 @@ describe('findLimboMatch', () => {
     expect(out.kind).toBe('rebind_position');
     const out2 = findLimboMatch([wA, wB], newRect, 59);
     expect(out2.kind).toBe('refuse_distance');
+  });
+});
+
+describe('bumpRebindCounter', () => {
+  it('increments the bucket matching the outcome kind', () => {
+    const c = newRebindCounters();
+    const w = limbo(1, null);
+
+    bumpRebindCounter(c, { kind: 'rebind_clean', wrapper: w });
+    bumpRebindCounter(c, { kind: 'rebind_clean', wrapper: w });
+    bumpRebindCounter(c, { kind: 'rebind_position', wrapper: w, distance: 12, candidateCount: 3 });
+    bumpRebindCounter(c, { kind: 'refuse_distance', bestDistance: 200, candidates: [w] });
+
+    expect(c).toEqual({
+      rebind_clean: 2,
+      rebind_position: 1,
+      refuse_distance: 1,
+      refuse_no_match: 0,
+    });
+  });
+
+  it('no_candidates is intentionally not counted', () => {
+    // It's a "no rebind decision was needed" signal, not a refusal.
+    // The finalize sweeper owns refuse_no_match.
+    const c = newRebindCounters();
+    bumpRebindCounter(c, { kind: 'no_candidates' });
+    bumpRebindCounter(c, { kind: 'no_candidates' });
+    expect(c).toEqual({
+      rebind_clean: 0,
+      rebind_position: 0,
+      refuse_distance: 0,
+      refuse_no_match: 0,
+    });
+  });
+
+  it('counter keys match the four LimboMatchOutcome buckets', () => {
+    // Locks the relationship: every counter except refuse_no_match must
+    // correspond to a kind the matcher can return. If a new outcome
+    // kind is added without a counter, this test guards the gap.
+    const c = newRebindCounters();
+    const matcherBuckets = ['rebind_clean', 'rebind_position', 'refuse_distance'] as const;
+    for (const k of matcherBuckets) expect(c).toHaveProperty(k);
+    expect(c).toHaveProperty('refuse_no_match');
+    expect(Object.keys(c).sort()).toEqual([
+      'rebind_clean', 'rebind_position', 'refuse_distance', 'refuse_no_match',
+    ].sort());
   });
 });

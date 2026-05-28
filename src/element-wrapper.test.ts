@@ -316,34 +316,27 @@ describe('limbo lifecycle', () => {
     toJSON: () => ({}),
   } as DOMRect);
 
-  it('enterLimbo records timestamp and rect on a connected wrapper', () => {
+  it('enterLimbo records the timestamp; lastRect is managed separately', () => {
     const w = new ElementWrapper(fakeElement(), fakeScanned({ codeword: 'arch' }));
-    const rect = fakeRect(40, 60);
+    // Simulate the IntersectionTracker having stamped a recent rect.
+    const priorRect = fakeRect(40, 60);
+    w.lastRect = priorRect;
 
-    enterLimbo(w, 1_000, rect);
+    enterLimbo(w, 1_000);
 
     expect(w.disconnectedAt).toBe(1_000);
-    expect(w.lastRect).toBe(rect);
+    // lastRect is untouched — IT/cache-fallback is the source of truth.
+    expect(w.lastRect).toBe(priorRect);
     // Codeword stays — limbo holds the pool allocation until finalize.
     expect(w.scanned.codeword).toBe('arch');
   });
 
   it('enterLimbo is idempotent — repeated calls do not reset the timer', () => {
     const w = new ElementWrapper(fakeElement(), fakeScanned());
-    const firstRect = fakeRect(0, 0);
-    enterLimbo(w, 1_000, firstRect);
-    enterLimbo(w, 5_000, fakeRect(99, 99));
+    enterLimbo(w, 1_000);
+    enterLimbo(w, 5_000);
 
     expect(w.disconnectedAt).toBe(1_000);
-    expect(w.lastRect).toBe(firstRect);
-  });
-
-  it('enterLimbo accepts a null rect (uncached element)', () => {
-    const w = new ElementWrapper(fakeElement(), fakeScanned());
-    enterLimbo(w, 1_000, null);
-
-    expect(w.disconnectedAt).toBe(1_000);
-    expect(w.lastRect).toBeNull();
   });
 
   it('isLimboExpired is false for connected wrappers', () => {
@@ -353,14 +346,14 @@ describe('limbo lifecycle', () => {
 
   it('isLimboExpired is false within the deadline window', () => {
     const w = new ElementWrapper(fakeElement(), fakeScanned());
-    enterLimbo(w, 1_000, null);
+    enterLimbo(w, 1_000);
     expect(isLimboExpired(w, 1_100, 250)).toBe(false);
     expect(isLimboExpired(w, 1_249, 250)).toBe(false);
   });
 
   it('isLimboExpired is true at and past the deadline', () => {
     const w = new ElementWrapper(fakeElement(), fakeScanned());
-    enterLimbo(w, 1_000, null);
+    enterLimbo(w, 1_000);
     expect(isLimboExpired(w, 1_250, 250)).toBe(true);
     expect(isLimboExpired(w, 5_000, 250)).toBe(true);
   });
@@ -374,7 +367,7 @@ describe('limbo lifecycle', () => {
     const w = new ElementWrapper(el, fakeScanned({ codeword: 'arch' }));
     store.addWrapper(w);
 
-    enterLimbo(w, 1_000, fakeRect(0, 0));
+    enterLimbo(w, 1_000);
 
     expect(store.findWrapperFor(el)).toBe(w);
     expect(store.count).toBe(1);
@@ -397,8 +390,8 @@ describe('limbo lifecycle', () => {
     store.addWrapper(wC);
 
     // A and B enter limbo at different times; C stays connected.
-    enterLimbo(wA, 1_000, fakeRect(0, 0));
-    enterLimbo(wB, 1_200, fakeRect(10, 10));
+    enterLimbo(wA, 1_000);
+    enterLimbo(wB, 1_200);
 
     const deadline = 250;
     const now = 1_300;

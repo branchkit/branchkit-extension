@@ -137,8 +137,17 @@ export class IntersectionTracker {
       // DESIGN_WRAPPER_IDENTITY_STABILITY). A disconnected element
       // typically fires `isIntersecting: false` from the IO — letting
       // that release the codeword would defeat the whole limbo
-      // mechanism. Skip until the wrapper rebinds or finalizes.
+      // mechanism. Skip until the wrapper rebinds or finalizes; the
+      // pre-disconnect lastRect snapshot is preserved.
       if (wrapper.disconnectedAt !== null) continue;
+      // Snapshot the latest rect for the limbo position-tiebreaker.
+      // IO entries give us a free, current rect on every observation —
+      // without this hook, `lastRect` would almost always be null at
+      // disconnect time (the layout cache is cleared after each show/
+      // reposition, so the MO-driven `dropDisconnectedWrappers` path
+      // would observe an empty cache). entry.boundingClientRect IS a
+      // DOMRectReadOnly at runtime; cast is safe.
+      wrapper.lastRect = entry.boundingClientRect as DOMRect;
       wrapper.isInViewport = entry.isIntersecting;
 
       if (entry.isIntersecting) {

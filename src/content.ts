@@ -11,7 +11,7 @@ import { scanElements, scanSingle, isHintable, deepQuerySelectorAll, scanInBatch
 import { ElementWrapper, WrapperStore, enterLimbo, isLimboExpired } from './element-wrapper';
 import * as idRegistry from './registry';
 import { computeFingerprint, fingerprintsEqual } from './registry';
-import { findLimboMatch, newRebindCounters, REBIND_DISTANCE_THRESHOLD_PX, type RebindCounters } from './rebind';
+import { bumpRebindCounter, findLimboMatch, newRebindCounters, REBIND_DISTANCE_THRESHOLD_PX, type RebindCounters } from './rebind';
 import { resolveTarget } from './activate-resolution';
 import { IntersectionTracker } from './intersection-tracker';
 import { HintBadge, setPositionCaller, clearPositionCaller } from './hints';
@@ -2045,6 +2045,14 @@ function isOwnMutation(n: Node): boolean {
   return n instanceof HTMLElement && n.hasAttribute('data-branchkit-hint');
 }
 
+// --- Rebind instrumentation (step 5) ---
+//
+// Per-bucket counters fed by `tryRebindFromLimbo` and the finalize
+// sweeper. Read via `window.branchkitRebindStats()` (console) and the
+// debug overlay's stats panel. The thresholds and bucket ratios drive
+// the soak-time tuning of REBIND_DISTANCE_THRESHOLD_PX.
+const rebindCounters: RebindCounters = newRebindCounters();
+
 /** Walk an added subtree and create wrappers for any hintable descendants. */
 function discoverInSubtree(root: Element): number {
   let added = 0;
@@ -2101,12 +2109,12 @@ function tryRebindFromLimbo(newEl: Element, pool: ElementWrapper[]): boolean {
   const newRect = matches.length === 1 ? null : newEl.getBoundingClientRect();
   const outcome = findLimboMatch(matches, newRect, REBIND_DISTANCE_THRESHOLD_PX);
 
+  bumpRebindCounter(rebindCounters, outcome);
   switch (outcome.kind) {
     case 'rebind_clean':
     case 'rebind_position': {
       rebindWrapper(outcome.wrapper, newEl);
       consume(pool, outcome.wrapper);
-      rebindCounters[outcome.kind]++;
       return true;
     }
     case 'refuse_distance': {
@@ -2114,7 +2122,6 @@ function tryRebindFromLimbo(newEl: Element, pool: ElementWrapper[]): boolean {
         consume(pool, c);
         detachWrapper(c.element);
       }
-      rebindCounters.refuse_distance++;
       return false;
     }
     case 'no_candidates':
@@ -2156,14 +2163,6 @@ function rebindWrapper(w: ElementWrapper, newEl: Element): void {
   w.lastRect = null;
 }
 
-// --- Rebind instrumentation (step 5) ---
-//
-// Per-bucket counters fed by `tryRebindFromLimbo` and the finalize
-// sweeper. Read via `window.branchkitRebindStats()` (console) and the
-// debug overlay's stats panel. The thresholds and bucket ratios drive
-// the soak-time tuning of REBIND_DISTANCE_THRESHOLD_PX.
-const rebindCounters: RebindCounters = newRebindCounters();
-
 const LIMBO_DEADLINE_MS = 250;
 
 /**
@@ -2186,7 +2185,13 @@ function dropDisconnectedWrappers(): number {
   for (const w of store.all) {
     if (w.disconnectedAt !== null) continue;
     if (!w.element.isConnected) {
-      enterLimbo(w, now, peekCachedRect(w.element));
+      // lastRect is normally already populated by the IntersectionTracker
+      // from a recent IO entry. Only fall back to the layout cache for
+      // wrappers that disconnected before IO had a chance to fire (race
+      // during heavy first-paint mutation churn). If neither has a rect,
+      // multi-match rebinds for this wrapper will refuse on distance.
+      if (!w.lastRect) w.lastRect = peekCachedRect(w.element);
+      enterLimbo(w, now);
       entered++;
     }
   }
@@ -2199,8 +2204,10 @@ function dropDisconnectedWrappers(): number {
  * that the codeword pool can't be starved by held-but-dead wrappers
  * (worst case: 676 codewords × 250ms ≈ ¼-second blocking window).
  *
- * No-op until rebind lands (step 3+); for now every limbo wrapper
- * eventually expires and takes the existing detach path.
+ * Increments `refuse_no_match` per finalization. A high rate on a
+ * given site suggests the fingerprint is too tight (rebind never finds
+ * a match) — see the open question on fingerprint refresh in the
+ * design doc.
  */
 function finalizeExpiredLimboWrappers(): number {
   const now = Date.now();

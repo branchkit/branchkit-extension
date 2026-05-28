@@ -236,19 +236,22 @@ export class WrapperStore {
 
 /**
  * Mark a wrapper as having lost its DOM element. The wrapper stays in
- * the store with its codeword and badge intact; the finalize sweeper
- * will detach it once LIMBO_DEADLINE_MS has elapsed (or, in a later
- * step, the rebind path will swap in a new element first). Idempotent —
- * subsequent disconnects on the same wrapper don't reset the timer.
+ * the store with its codeword and badge intact; the rebind path swaps
+ * in a fingerprint-equivalent replacement element if one appears
+ * before LIMBO_DEADLINE_MS, otherwise the finalize sweeper detaches.
+ *
+ * `lastRect` is maintained separately — IntersectionTracker writes the
+ * latest IO `boundingClientRect` to it on every entry, and
+ * `dropDisconnectedWrappers` seeds it from the layout cache as a
+ * fallback before calling this. By the time we're in limbo, lastRect
+ * already reflects the element's pre-disconnect position.
+ *
+ * Idempotent: subsequent disconnects on the same wrapper don't reset
+ * the timer.
  */
-export function enterLimbo(
-  w: ElementWrapper,
-  now: number,
-  lastRect: DOMRect | null,
-): void {
+export function enterLimbo(w: ElementWrapper, now: number): void {
   if (w.disconnectedAt !== null) return;
   w.disconnectedAt = now;
-  w.lastRect = lastRect;
 }
 
 /** True if the wrapper has been in limbo for at least `deadlineMs`. */

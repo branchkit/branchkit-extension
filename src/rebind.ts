@@ -116,3 +116,25 @@ export function newRebindCounters(): RebindCounters {
     refuse_no_match: 0,
   };
 }
+
+/**
+ * Increment the bucket corresponding to a discovery-time outcome.
+ * `no_candidates` is intentionally NOT counted — it means there were no
+ * limbo wrappers to consider, so the discovery is just a normal new
+ * wrapper (not a rebind decision). `refuse_no_match` is bumped
+ * separately by the finalize sweeper, not here.
+ */
+export function bumpRebindCounter(
+  counters: RebindCounters,
+  outcome: LimboMatchOutcome,
+): void {
+  switch (outcome.kind) {
+    case 'rebind_clean':
+    case 'rebind_position':
+    case 'refuse_distance':
+      counters[outcome.kind]++;
+      return;
+    case 'no_candidates':
+      return;
+  }
+}

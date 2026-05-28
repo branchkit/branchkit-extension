@@ -66,9 +66,10 @@ class FakeIntersectionObserver {
   takeRecords(): IntersectionObserverEntry[] { return []; }
 
   /** Test helper: fire a synthetic intersection entry. */
-  fire(target: Element, isIntersecting: boolean): void {
+  fire(target: Element, isIntersecting: boolean, boundingClientRect?: DOMRect): void {
+    const rect = boundingClientRect ?? ({ x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0, toJSON: () => ({}) } as DOMRect);
     this.callback(
-      [{ target, isIntersecting } as IntersectionObserverEntry],
+      [{ target, isIntersecting, boundingClientRect: rect } as IntersectionObserverEntry],
       this as unknown as IntersectionObserver,
     );
   }
@@ -194,6 +195,64 @@ describe('IntersectionTracker.refreshViewportClaims', () => {
     expect(events.onCodewordsChanged).not.toHaveBeenCalled();
     const claimCalls = sendMessageMock.mock.calls.filter(([m]) => m.type === 'CLAIM_LABELS');
     expect(claimCalls).toHaveLength(0);
+  });
+});
+
+describe('IntersectionTracker lastRect snapshot', () => {
+  // Without this, lastRect would almost always be null at limbo entry —
+  // the layout cache is cleared after every reposition and the MO-driven
+  // disconnect path runs with an empty cache. IO entries are the
+  // continuous source of "where was this element just now."
+
+  function rect(x: number, y: number, w = 40, h = 20): DOMRect {
+    return { x, y, width: w, height: h, top: y, left: x, right: x + w, bottom: y + h, toJSON: () => ({}) } as DOMRect;
+  }
+
+  it('writes entry.boundingClientRect to wrapper.lastRect on every entry', () => {
+    const store = new WrapperStore();
+    const events = { onCodewordsChanged: vi.fn() };
+    const tracker = new IntersectionTracker(store, events);
+    const io = FakeIntersectionObserver.lastInstance!;
+
+    const w = new ElementWrapper(fakeElement(), fakeScanned());
+    store.addWrapper(w);
+    tracker.observe(w.element);
+
+    expect(w.lastRect).toBeNull();
+    const first = rect(100, 200);
+    io.fire(w.element, true, first);
+    // Reference equality: the tracker stores the IO-provided rect as-is,
+    // it doesn't copy. That's intentional — DOMRect is cheap to retain
+    // and an extra copy would be wasted work on every IO entry.
+    expect(w.lastRect).toBe(first);
+
+    // A subsequent entry (scroll, reflow) keeps it fresh.
+    const second = rect(100, 150);
+    io.fire(w.element, true, second);
+    expect(w.lastRect).toBe(second);
+  });
+
+  it('does not overwrite lastRect while the wrapper is in limbo', () => {
+    // After disconnect, IO may emit one final not-intersecting entry —
+    // we want to preserve the pre-disconnect rect for the position
+    // tiebreaker, not overwrite it with whatever bogus rect the
+    // disconnected element reports.
+    const store = new WrapperStore();
+    const events = { onCodewordsChanged: vi.fn() };
+    const tracker = new IntersectionTracker(store, events);
+    const io = FakeIntersectionObserver.lastInstance!;
+
+    const w = new ElementWrapper(fakeElement(), fakeScanned({ codeword: 'arch' }));
+    store.addWrapper(w);
+    tracker.observe(w.element);
+
+    const preDisconnect = rect(100, 200);
+    io.fire(w.element, true, preDisconnect);
+    expect(w.lastRect).toBe(preDisconnect);
+
+    w.disconnectedAt = 1_000;  // limbo
+    io.fire(w.element, false, rect(0, 0));  // zero rect from disconnected el
+    expect(w.lastRect).toBe(preDisconnect);  // unchanged
   });
 });
 
