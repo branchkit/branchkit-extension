@@ -728,14 +728,28 @@ async function injectContentScriptFiles(tabId: number): Promise<boolean> {
       || url.startsWith('view-source:')) {
     return false;
   }
+  // Try allFrames first (covers same-origin iframes, what we want for
+  // most sites). If it fails, fall back to top-frame-only — on Firefox
+  // a single failing frame (CSP-locked cross-origin iframe, sandboxed
+  // ad slot) rejects the entire call atomically, leaving even the main
+  // frame uninjected. YouTube and Netflix are the canonical offenders.
+  return await tryInject(tabId, url, { allFrames: true })
+      || await tryInject(tabId, url, { frameIds: [0] });
+}
+
+async function tryInject(
+  tabId: number,
+  url: string,
+  target: { allFrames?: boolean; frameIds?: number[] },
+): Promise<boolean> {
   try {
     await chrome.scripting.executeScript({
-      target: { tabId, allFrames: true },
+      target: { tabId, ...target },
       files: ['bootstrap.js'],
       world: 'MAIN',
     });
     await chrome.scripting.executeScript({
-      target: { tabId, allFrames: true },
+      target: { tabId, ...target },
       files: ['content.js'],
     });
     return true;
@@ -745,7 +759,8 @@ async function injectContentScriptFiles(tabId: number): Promise<boolean> {
     // that's the expected path when proactive injection hits a tab
     // that's already been injected. Not an error.
     if (msg.includes('duplicate injection')) return true;
-    console.warn(`[BranchKit SW] lazy-inject failed for tab ${tabId} (${url}):`, msg);
+    const scope = target.allFrames ? 'allFrames' : `frames=${target.frameIds?.join(',')}`;
+    console.warn(`[BranchKit SW] inject failed for tab ${tabId} (${url}, ${scope}):`, msg);
     return false;
   }
 }
