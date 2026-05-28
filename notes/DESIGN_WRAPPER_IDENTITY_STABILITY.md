@@ -1,6 +1,6 @@
 # Wrapper Identity Stability
 
-Draft. Status: proposed.
+Draft. Status: proposed (three decisions resolved internally; awaiting implementation go-ahead).
 
 ## Problem
 
@@ -152,13 +152,31 @@ Three options:
 
 The registry's fingerprint already has known false-positive cases: a list with two `[Reply]` buttons has two elements with identical (role=button, name="Reply", tag=button, text="Reply"). Rebinding one to the wrong sibling would be a real correctness bug — voice activation would then click the wrong row.
 
-Options:
+Options considered:
 
-- **Position hint** — store the wrapper's last-known rect at disconnect. Prefer the candidate element whose rect is closest. Requires storing rect on disconnect.
-- **DOM-path hint** — store the parent's signature (parent role + tag, optionally aria-label). Only rebind if the new element's parent matches. Cheap, narrows most cases.
-- **Refuse on ambiguity** — if more than one limbo wrapper matches the new element's fingerprint (or vice versa), refuse to rebind both: finalize all of them and let them be re-created fresh. Today's behavior, just delayed.
+- **Position hint** — store the wrapper's last-known rect at disconnect. Use rect-center distance as the tiebreaker among multiple fingerprint matches.
+- **DOM-path hint** — store the parent's signature (parent role + tag, optionally aria-label). Only rebind if the new element's parent matches.
+- **Refuse on ambiguity** — if more than one limbo wrapper matches the new element's fingerprint (or vice versa), finalize all ambiguous wrappers and let them be re-created fresh. Equivalent to today's behavior, just delayed.
 
-**Recommendation for v1: refuse on ambiguity.** Easier to reason about correctness; bias toward correctness over completeness. Position hint and DOM-path hint can be added in v2 if the refuse rate is too high in practice. Instrument the refuse path so we can measure it.
+**Decision: position-hint.** The ambiguous cases (Gmail thread list, Slack reactions, social feed buttons) are exactly where #5 needs to work — refuse-on-ambiguity would make the feature vestigial in the cases that matter most. Position-hint is cheap and the rect data is already touched by the allocator.
+
+Algorithm:
+
+1. **On disconnect**: capture the element's `getBoundingClientRect()` as `lastRect` on the wrapper. One layout read; reuses the cached rect if available.
+2. **On new-element discovery**: find all limbo wrappers whose `fingerprintsEqual(wrapper.scanned.fingerprint, newFp)`.
+3. **If zero matches**: create a fresh wrapper (existing path).
+4. **If exactly one match**: rebind.
+5. **If multiple matches**: pick the wrapper whose `lastRect` center is nearest to the new element's rect center. If the winning distance is > **REBIND_DISTANCE_THRESHOLD** (initial: 50px), refuse all — finalize the ambiguous limbo wrappers, create a fresh wrapper for the new element.
+
+The 50px threshold means "list rearranged because new item inserted at top, every row shifted down" falls through to refuse (the wrappers genuinely moved, not swapped). Tunable based on instrumentation. Per-axis distance, not Euclidean — vertical and horizontal mismatches mean different things on different sites.
+
+Instrumentation must distinguish three counter buckets so calibration is grounded:
+- `rebind_clean`: unique fingerprint match, no ambiguity
+- `rebind_position`: multiple matches, position tiebreaker resolved within threshold
+- `refuse_distance`: multiple matches, winner exceeded distance threshold
+- `refuse_no_match`: limbo wrapper expired with no fingerprint match found
+
+A high `refuse_distance` rate on a given site indicates the threshold is too tight or the page is doing something exotic (full-list reordering). A high `refuse_no_match` rate indicates fingerprint refresh is the bigger lever (see open question 4).
 
 ## Tracker module changes
 
@@ -173,29 +191,24 @@ Already enumerated in the "Current architecture map" above. Concretely:
 
 ## Migration sequencing
 
-Two approaches:
+Two approaches considered:
 
-**Option A: Big-bang.** Single commit that flips `wrapper.element` to mutable and adds `rebindWrapper` + all tracker updates at once. Risk: large diff; reviewer can't easily verify individual sites are correct; revert risk.
+**Option A: Big-bang.** Single commit that flips `wrapper.element` to mutable and adds `rebindWrapper` + all tracker updates at once.
 
-**Option B: Adapter shim, incremental migration.**
+**Option B: Adapter shim.** Introduce a `WrapperHandle` interface exposing `getElement()` + `onElementChanged(callback)`. Migrate sites one at a time, then flip `element` to mutable. Drop the shim after.
 
-1. Introduce a `WrapperHandle` interface that exposes `getElement(): Element` + `onElementChanged(callback)`. `ElementWrapper` implements it.
-2. Migrate sites one at a time from direct `.element` access to `getElement()` + subscription.
-3. Once all hot sites use the handle interface, flip `element` to mutable and add `rebindWrapper`.
-4. Drop the shim once everything's migrated.
+**Decision: big-bang.** Actual surface count from `grep -rn '\.element\b' src/ --exclude='*.test.ts'`: **48 occurrences across 11 files**, heavily concentrated in `content.ts` (20). Almost all are read-and-use patterns; no caching of the ref across async boundaries that would break under mutation. There's no `wrapper.element =` write anywhere in the codebase today — the field is only set in the constructor.
 
-**Recommendation: Option B.** The shim is small (~50 lines), reviewable incrementally, and gives us a forcing function to find sites that read `.element` once and cache it (which would break under rebind). Adapter callsites are mechanical; the design choices are isolated to the rebind algorithm.
+The shim's value is when the surface is large enough that migration spans days or weeks and concurrent work needs an adapter. At 48 sites, the shim adds review burden (every site changes twice — once to adopt `getElement()`, once to drop it) without proportional risk reduction. Big-bang is one atomic refactor with a single comprehensive test pass.
 
 Concrete order:
 
-1. Add `WrapperHandle` interface + `getElement()` on `ElementWrapper` (no behavior change yet)
-2. Add `disconnectedAt` field, change `dropDisconnectedWrappers` to set it instead of detaching (no rebind yet — just a delay)
-3. Add finalize sweeper (250ms deadline → detachWrapper)
-4. Add fingerprint-match lookup in `discoverInSubtree`, refuse-on-ambiguity policy
-5. Add `HintBadge.retarget()` and `rebindWrapper()`; wire into discoverInSubtree
-6. Migrate hot-path sites from `.element` to `getElement()`
-7. Add observability: count rebinds, finalizes, refusals; surface in debug overlay
-8. Per-site soak: load Gmail / Linear / Discord, exercise the modal flows, confirm codeword continuity
+1. Add `disconnectedAt: number | null` and `lastRect: DOMRect | null` fields to `ElementWrapper`. Change `dropDisconnectedWrappers` to set them instead of calling `detachWrapper`. No rebind yet — just a delayed finalize. Verify badges stay visible for ~250ms after disconnect instead of disappearing immediately.
+2. Add finalize sweeper (250ms deadline → existing `detachWrapper` path). Verify limbo wrappers actually clear after the deadline. Pool size remains bounded.
+3. Add fingerprint-match lookup + position-distance tiebreaker in `discoverInSubtree`. Refuse path on threshold-exceeded ambiguity. Verify ambiguous-list scenarios refuse cleanly.
+4. Add `HintBadge.retarget(newEl)` + `rebindWrapper()`. Wire into `discoverInSubtree`. This is the big-bang step — `wrapper.element` becomes mutable, all 11 sites change atomically (no callers actually break because they all read once and use immediately).
+5. Add four-bucket instrumentation (`rebind_clean`, `rebind_position`, `refuse_distance`, `refuse_no_match`) accessible via debug overlay + console. Soak on Gmail / Linear / Discord; tune `REBIND_DISTANCE_THRESHOLD` based on observed distributions.
+6. Decide on bfcache, iframe-removal, and fingerprint-refresh policies based on what the soak reveals (see open questions).
 
 ## Alternatives considered
 
@@ -204,30 +217,38 @@ Concrete order:
 - **Page-side stable ID injection**: require pages to add `data-bk-id`. Pro: zero ambiguity. Con: not a real option — extension can't require page cooperation.
 - **More aggressive disconnect debouncing**: defer `dropDisconnectedWrappers` by N ms before running it. Pro: simplest. Con: same outcome as today, just slower — the wrapper still dies, codeword still churns. Doesn't fix anything.
 
+## Decisions resolved
+
+| # | Question | Decision | Why |
+|---|---|---|---|
+| 1 | Migration approach | Big-bang | 48 sites across 11 files; no cached-ref patterns; shim adds review burden without proportional risk reduction |
+| 2 | Disambiguation policy | Position-hint + 50px threshold | Refuse-on-ambiguity would make the feature vestigial in its highest-value cases (Gmail thread list, social feeds); rect data is already touched by the allocator |
+| 3 | Codeword during limbo | Hold | `releaseLabels` unshift only preserves order in uncontested cases; concurrent IO claims during scroll-plus-render would shuffle the codeword. Hold guarantees continuity at bounded worst-case (676 codewords × 250ms) |
+
+## Codeword reservation rationale (decision 3 detail)
+
+`releaseLabels()` does `stack.free.unshift(...)`, so an *uncontested* release-then-reclaim cycle returns the same codeword. This works on a quiet page. But:
+
+- The `IntersectionTracker` (`intersection-tracker.ts:50ms` debounce) batches claims for newly-scrolled-in elements
+- A typical user gesture is scroll + click, which produces concurrent React-render disconnects and IO-driven new claims
+- Released codewords sit at the head of the stack for ~16ms before being grabbed by the IO batch flush; if rebind happens after that, the wrapper gets a different codeword
+
+Hold avoids the race entirely. Worst case: 676 codewords held in limbo for 250ms (the pool fully reserved). Only relevant when more genuinely-new elements appear during a render than were disconnected — rare in practice. Those new elements wait up to 250ms for an empty slot. Acceptable.
+
 ## Open questions
 
-1. **Codeword reservation during limbo.** Does the codeword stay claimed (preventing new wrappers from getting it) or release immediately?
-   - Hold: rebind is guaranteed to get the same codeword. Cost: pool fragmentation during heavy churn — a Discord scroll could leak temporarily-reserved codewords for the deadline window.
-   - Release: simpler, no fragmentation. Cost: rebind may get a different codeword (defeats the whole goal in pool-pressure scenarios).
-   - **Tentative**: hold. The 676-codeword pool size and the ~250ms deadline put a worst-case ceiling on fragmentation that's well within budget.
+1. **bfcache restore.** Existing `idRegistry.clear()` runs on `pageshow.persisted`. Should we also clear limbo? The wrappers' `.element` refs are likely valid (V8 context preserved) but the layout may have shifted. Probably: finalize all limbo wrappers immediately on bfcache restore, let the rescan rebuild fresh. Defer until soak reveals whether this matters.
 
-2. **bfcache restore.** Existing `idRegistry.clear()` runs on `pageshow.persisted`. Should we also clear limbo? The wrappers' `.element` refs are likely valid (V8 context preserved) but the layout may have shifted. Probably: finalize all limbo wrappers immediately on bfcache restore, let the rescan rebuild fresh.
+2. **iframe removal.** When an iframe element disconnects from its parent frame, all wrappers in that frame should finalize at once. The frame's own content script will tear down via the existing port-disconnect path, but the parent's MO might see the iframe removal first. Likely a no-op (the per-iframe content script's wrappers aren't in the parent's store), but worth verifying.
 
-3. **iframe removal.** When an iframe element disconnects from its parent frame, all wrappers in that frame should finalize at once. The frame's own content script will tear down via the existing port-disconnect path, but the parent's MO might see the iframe removal first. Likely a no-op (the per-iframe content script's wrappers aren't in the parent's store), but worth verifying.
+3. **Fingerprint refresh during limbo.** If the new element's text changed slightly (e.g., "Reply" → "Reply (1)"), `fingerprintsEqual` returns false. Do we run a more permissive match during limbo? Tradeoff: leniency increases match rate (good) but raises false-positive risk (bad). Defer to v2 if `refuse_no_match` counter is high.
 
-4. **Fingerprint refresh during limbo.** If the new element's text changed slightly (e.g., "Reply" → "Reply (1)"), `fingerprintsEqual` returns false. Do we run a more permissive match during limbo? Tradeoff: leniency increases match rate (good) but raises false-positive risk (bad).
-
-5. **Test harness.** happy-dom doesn't simulate React reconciliation. We'd need either:
+4. **Test harness.** happy-dom doesn't simulate React reconciliation. We need either:
    - A stub harness that mimics the disconnect-then-insert pattern (synthetic test)
    - Playwright tests against real React fixtures (heavier infrastructure)
    - Both, with the synthetic harness as the fast-feedback path and Playwright as the integration check
+   - Initial direction: synthetic harness first. Playwright integration only if synthetic misses real bugs.
 
-## Decision needed
+## Estimated work
 
-Three decisions before implementation:
-
-1. Go / no-go on Option B (incremental migration with `WrapperHandle` shim)
-2. v1 disambiguation policy: refuse-on-ambiguity vs. position-hint
-3. Codeword reservation policy during limbo: hold vs. release
-
-Implementation work, assuming Option B + refuse + hold: estimated 5–8 days, split across 8 steps above. Each step is independently revertable.
+**3–5 days** across the 6 implementation steps above. Each step is independently revertable. The big-bang step (4) is the largest single diff but lands once `disconnectedAt` + finalize sweeper (steps 1–2) prove the lifecycle change is safe in isolation.
