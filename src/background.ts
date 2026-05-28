@@ -721,6 +721,11 @@ async function injectContentScriptFiles(tabId: number): Promise<boolean> {
   } catch {
     return false;
   }
+  // Firefox aggressively discards inactive tabs; executeScript can't
+  // reach a discarded tab and Firefox reports the failure as a generic
+  // "An unexpected error occurred". The next tabs.onActivated for this
+  // tab will retry after Firefox restores it.
+  if (tab.discarded) return false;
   const url = tab.url ?? '';
   if (url.startsWith('chrome://') || url.startsWith('chrome-extension://')
       || url.startsWith('moz-extension://') || url.startsWith('edge://')
@@ -1054,7 +1059,9 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
   // even on Chrome the install-time pass can miss tabs that were
   // restored after the install (session restore, BFCache). Pinging
   // first means this is a no-op for tabs that already have the
-  // content script.
+  // content script. For tabs that Firefox just started restoring from
+  // disk, `tabs.onUpdated` below catches them once the restore
+  // completes — `tab.discarded` is racy here.
   void ensureContentScriptInjected(activeInfo.tabId);
   // Under Option B the new tab's content script owns its own grammar state
   // (in plugin.session.Codewords via prior grammar_batch POSTs). Activation
@@ -1062,6 +1069,17 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
   // populated the plugin's per-frame view. If the tab was never scanned in
   // this browser session, the content script will scan on next navigation
   // or via a rescan dispatch.
+});
+
+// Catch tabs finishing load — Firefox restoring a discarded tab fires
+// onActivated before restoration completes, so the onActivated handler
+// can see `tab.discarded === true` and bail. The status=='complete'
+// transition fires once the page is actually live, by which time
+// executeScript can reach it. Pinging first keeps this a no-op for
+// tabs whose manifest content_scripts already ran.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status !== 'complete') return;
+  void ensureContentScriptInjected(tabId);
 });
 
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
@@ -1164,6 +1182,11 @@ async function reinjectContentScripts(): Promise<void> {
   }
   for (const tab of tabs) {
     if (typeof tab.id !== 'number') continue;
+    // Firefox aggressively discards inactive tabs to save memory;
+    // executeScript can't reach a discarded tab. Skip — the lazy-inject
+    // on tabs.onActivated handles them when the user clicks back in
+    // (Firefox restores the tab from disk first).
+    if (tab.discarded) continue;
     const tabId = tab.id;
     const url = tab.url ?? '';
     if (url.startsWith('chrome://') || url.startsWith('chrome-extension://')
