@@ -15,6 +15,7 @@ import { computeBadgeColors } from './badge-colors';
 import { leaderLineGeometry } from './placement/geometry';
 import { trackContainerResize, untrackContainerResize } from './container-resize-tracker';
 import { trackTargetMutations, untrackTargetMutations } from './target-mutation-tracker';
+import { trackHostAttributes, untrackHostAttributes } from './host-attribute-tracker';
 
 // --- Position debug log (temporary investigation) ---
 export interface PositionLogEntry {
@@ -335,6 +336,10 @@ export class HintBadge {
 
     trackContainerResize(this.anchorParent);
     trackTargetMutations(this.target);
+    // Start the host-attribute defender AFTER all setup is done — the
+    // observer fires on real mutations only, but starting it earlier
+    // would treat our own setAttribute/style writes as page tampering.
+    trackHostAttributes(this.host);
   }
 
   updatePosition(candidate?: { x: number; y: number }, caller?: string): void {
@@ -530,6 +535,7 @@ export class HintBadge {
   remove(): void {
     untrackContainerResize(this.anchorParent);
     untrackTargetMutations(this.target);
+    untrackHostAttributes(this.host);
     this.host.remove();
   }
 
