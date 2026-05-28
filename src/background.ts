@@ -666,16 +666,116 @@ async function notifyActiveTab(message: Message): Promise<void> {
     }
 
     const frameId = await routeFrameForAction(tabId, message);
+    const tid = tabId;
+    const trySend = (): Promise<unknown> =>
+      frameId !== null
+        ? chrome.tabs.sendMessage(tid, message, { frameId })
+        : chrome.tabs.sendMessage(tid, message);
 
-    const send = frameId !== null
-      ? chrome.tabs.sendMessage(tabId, message, { frameId })
-      : chrome.tabs.sendMessage(tabId, message);
-    send.catch((e: Error) => {
-      console.warn('[BranchKit SW] sendMessage failed:', e.message);
+    trySend().catch(async (e: Error) => {
+      // "Receiving end does not exist" means the tab has no content
+      // script — typically a pre-existing tab from before the extension
+      // was sideloaded (Firefox temp add-ons don't auto-inject into
+      // tabs that loaded earlier; Chrome's onInstalled re-injection
+      // doesn't always cover every edge case either). Lazy-inject and
+      // retry once.
+      if (!/Receiving end does not exist|Could not establish connection/i.test(e.message)) {
+        console.warn('[BranchKit SW] sendMessage failed:', e.message);
+        return;
+      }
+      const injected = await injectContentScriptFiles(tid);
+      if (!injected) {
+        console.warn('[BranchKit SW] sendMessage failed and lazy-inject did not apply:', e.message);
+        return;
+      }
+      trySend().catch((e2: Error) => {
+        console.warn('[BranchKit SW] sendMessage failed after lazy-inject:', e2.message);
+      });
     });
   } catch (e) {
     console.warn('[BranchKit SW] notifyActiveTab error:', e);
   }
+}
+
+/**
+ * Inject bootstrap + content script into `tabId`. Used as a recovery
+ * path when `chrome.tabs.sendMessage` fails with "Receiving end does
+ * not exist" — typically a pre-existing tab from before sideload, OR
+ * a Firefox temporary add-on where `onInstalled` didn't reach this
+ * tab.
+ *
+ * Does NOT clear `__branchkitContentInjected` (unlike the install-time
+ * `reinjectContentScripts` path which does, to flush orphans). Lazy
+ * injection assumes "if a content script is alive in this tab, leave
+ * it alone." If the script is already loaded, content.ts's top-level
+ * guard throws "duplicate injection" — we catch that quietly (it's not
+ * an error in this context, just the guard doing its job).
+ *
+ * Returns true on success; false if the tab URL is restricted
+ * (about:, chrome://, etc.) or injection failed for another reason.
+ */
+async function injectContentScriptFiles(tabId: number): Promise<boolean> {
+  let tab: chrome.tabs.Tab;
+  try {
+    tab = await chrome.tabs.get(tabId);
+  } catch {
+    return false;
+  }
+  const url = tab.url ?? '';
+  if (url.startsWith('chrome://') || url.startsWith('chrome-extension://')
+      || url.startsWith('moz-extension://') || url.startsWith('edge://')
+      || url.startsWith('about:') || url.startsWith('devtools://')
+      || url.startsWith('view-source:')) {
+    return false;
+  }
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: ['bootstrap.js'],
+      world: 'MAIN',
+    });
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      files: ['content.js'],
+    });
+    return true;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    // content.ts throws "duplicate injection" if its guard is set —
+    // that's the expected path when proactive injection hits a tab
+    // that's already been injected. Not an error.
+    if (msg.includes('duplicate injection')) return true;
+    console.warn(`[BranchKit SW] lazy-inject failed for tab ${tabId} (${url}):`, msg);
+    return false;
+  }
+}
+
+/**
+ * Ping the content script in `tabId` to see if it's listening. Returns
+ * true if a response came back; false if no content script is loaded
+ * (or the tab URL forbids messaging).
+ *
+ * Uses GET_FOCUS_STATUS as the ping because content.ts already handles
+ * it synchronously — no extra message type needed.
+ */
+async function pingContentScript(tabId: number): Promise<boolean> {
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: 'GET_FOCUS_STATUS' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Proactive lazy-injection: if the tab doesn't have BranchKit's content
+ * script yet (typically a pre-existing tab from before sideload), inject
+ * it now so badges paint without the user needing to F5. No-op if the
+ * script is already alive.
+ */
+async function ensureContentScriptInjected(tabId: number): Promise<void> {
+  if (await pingContentScript(tabId)) return;
+  await injectContentScriptFiles(tabId);
 }
 
 /**
@@ -933,6 +1033,14 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
       forwardHintsSessionStart('tab_switch', activeInfo.tabId);
     }
   }
+  // Lazy injection for tabs that loaded before the extension was
+  // installed. Firefox temporary add-ons don't fire `onInstalled`
+  // re-injection reliably enough to cover every pre-existing tab, and
+  // even on Chrome the install-time pass can miss tabs that were
+  // restored after the install (session restore, BFCache). Pinging
+  // first means this is a no-op for tabs that already have the
+  // content script.
+  void ensureContentScriptInjected(activeInfo.tabId);
   // Under Option B the new tab's content script owns its own grammar state
   // (in plugin.session.Codewords via prior grammar_batch POSTs). Activation
   // doesn't need an SW-side re-push; the content script's batches already
