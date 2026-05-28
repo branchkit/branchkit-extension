@@ -1449,6 +1449,17 @@ window.addEventListener('blur', (e) => {
 // the normal init flow; we skip them here to avoid double-scanning.
 window.addEventListener('pageshow', (e) => {
   if (!e.persisted) return;
+  // Finalize any limbo wrappers before the existing re-registration
+  // sweep. Per the open question on bfcache in DESIGN_WRAPPER_IDENTITY_
+  // STABILITY: lastRect snapshots from pre-bfcache aren't trustworthy
+  // for the rebind tiebreaker after restore (layout/scroll may have
+  // shifted), and any wrapper still in limbo at restore time has been
+  // disconnected for an indeterminate window. Detach now; the rescan
+  // rebuilds fresh wrappers for whatever's still in the DOM. Common
+  // case: the loop body never fires (limbo is empty at restore).
+  for (const w of [...store.all]) {
+    if (w.disconnectedAt !== null) detachWrapper(w.element);
+  }
   // Registry survives bfcache (V8 context is preserved) but its entries
   // are stale — the plugin's grammar was wiped by purgeTab on navigate-
   // away, and we want fresh ids on the next push. doScan alone won't
