@@ -1164,44 +1164,35 @@ async function reinjectContentScripts(): Promise<void> {
   }
   for (const tab of tabs) {
     if (typeof tab.id !== 'number') continue;
-    // chrome:// and chrome-extension:// pages reject scripting.executeScript.
-    // skip them silently. http(s):// and file:// (when permitted) succeed.
+    const tabId = tab.id;
     const url = tab.url ?? '';
     if (url.startsWith('chrome://') || url.startsWith('chrome-extension://')
-        || url.startsWith('edge://') || url.startsWith('about:')
-        || url.startsWith('devtools://') || url.startsWith('view-source:')) {
+        || url.startsWith('moz-extension://') || url.startsWith('edge://')
+        || url.startsWith('about:') || url.startsWith('devtools://')
+        || url.startsWith('view-source:')) {
       continue;
     }
+    // Best-effort orphan-guard flush across all frames. On Firefox this
+    // routinely fails atomically on sites with CSP-locked iframes
+    // (YouTube ads, Netflix DRM frame, Cloudflare challenges) — that's
+    // fine, the lazy-inject path on tab activation handles those tabs
+    // without trying to clear orphans (which a fresh tab doesn't have
+    // anyway).
     try {
-      // Step 1: clear any orphan's idempotency flag in every frame so the
-      // about-to-be-injected fresh content.js init runs.
       await chrome.scripting.executeScript({
-        target: { tabId: tab.id, allFrames: true },
+        target: { tabId, allFrames: true },
         func: () => {
           delete (window as unknown as { __branchkitContentInjected?: boolean }).__branchkitContentInjected;
         },
       });
-      // Step 2: re-inject the MAIN-world bootstrap (attachShadow wrapper).
-      // Idempotent — bootstrap.ts guards its own re-installation.
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id, allFrames: true },
-        files: ['bootstrap.js'],
-        world: 'MAIN',
-      });
-      // Step 3: re-inject content.js — the guard cleared in step 1 lets it
-      // run; on completion it sets the guard again to block duplicates.
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id, allFrames: true },
-        files: ['content.js'],
-      });
-    } catch (e) {
-      // Tab may have navigated, been closed, or hit a restricted URL we
-      // didn't filter above. Per-tab errors are non-fatal — move on.
-      const msg = e instanceof Error ? e.message : String(e);
-      if (!msg.includes('Cannot access') && !msg.includes('No tab with id')) {
-        console.warn(`[BranchKit] reinject: tab ${tab.id} (${url}):`, msg);
-      }
+    } catch {
+      // swallow — flush failure means orphans persist in some frames,
+      // not the end of the world.
     }
+    // Inject via the same fallback path lazy-inject uses, so YouTube /
+    // Netflix / Cloudflare-challenged tabs get the top frame even when
+    // allFrames refuses.
+    await injectContentScriptFiles(tabId);
   }
 }
 
