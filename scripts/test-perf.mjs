@@ -242,6 +242,16 @@ async function runEngine(engine) {
       console.log(`    scanSingle calls   ${fmt(c.scanSingleCalls)}`);
       console.log(`    getComputedStyle   ${fmt(c.computedStyleCalls)}`);
       console.log(`    getBoundingRect    ${fmt(c.boundingRectCalls)}`);
+      if (c.messages) {
+        const m = c.messages;
+        const kb = (m.bytes / 1024).toFixed(1);
+        console.log(`    messages out       ${fmt(m.total)} (${kb}KB)`);
+        const byType = Object.entries(m.byType)
+          .sort((a, b) => b[1] - a[1])
+          .map(([k, v]) => `${k}=${fmt(v)}`)
+          .join(' ');
+        if (byType) console.log(`      by type          ${byType}`);
+      }
       aggWrappers += c.wrapperCount;
       aggScans += c.scanCalls;
       aggScanMs += c.scanTotalMs;
