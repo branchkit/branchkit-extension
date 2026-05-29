@@ -12,11 +12,14 @@ browser has perfect information about what's near the viewport.
 
 | Phase | What | Status |
 |---|---|---|
-| 1 | CPU instrumentation bridge | Done — landed with viewport-scoped lifecycle |
-| 2 | Viewport-scoped wrapper + pendingVisibility lifecycle (AttentionObserver) | Done — landed in `0b938d3` |
-| 3 | TargetRectStore + LayoutSignalRouter (shadow) | Ahead |
+| 1 | CPU instrumentation bridge | Done (`0b938d3`) |
+| 2 | Viewport-scoped wrapper + pendingVisibility lifecycle (AttentionObserver) | Done (`0b938d3`) |
+| 2b | AttentionObserver far-threshold eviction | Done (`1f05d76`) |
+| 2c | `visibilityMO` targeted recheck | Held — caused render regression in earlier attempt; needs design for CSS-parent transitions before re-attempt |
+| 3 | TargetRectStore shadow (cache + drift sampler) | Done (`421c834`) |
+| 3b | LayoutSignalRouter (write rects on scroll/resize) | Done (`9e1173b`) — window scroll + RO surfaces; overflow-ancestor scroll still ahead |
 | 4 | Flag-gated cutover of `updatePosition` reads | Ahead |
-| 5 | Delete global rAF reposition sweep | Ahead |
+| 5 | Delete global rAF reposition sweep | Ahead — requires Phase 4 activated first |
 | 6 | Relocate position log to read from store | Ahead |
 
 Phase 2 measured impact (YouTube video page, 45s scroll soak):
