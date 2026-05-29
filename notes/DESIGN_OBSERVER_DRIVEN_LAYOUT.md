@@ -20,7 +20,42 @@ browser has perfect information about what's near the viewport.
 | 3b | LayoutSignalRouter (write rects on scroll/resize) | Done (`9e1173b`) — window scroll + RO surfaces; overflow-ancestor scroll still ahead |
 | 4 | Flag-gated cutover of `updatePosition` reads | Ahead |
 | 5 | Delete global rAF reposition sweep | Ahead — requires Phase 4 activated first |
+| 5b | Overflow-ancestor scroll listeners | **Hard** — must be per-wrapper ancestor walk + refcounted listeners. Naive attempts confirmed (see "Known limitations" below) |
 | 6 | Relocate position log to read from store | Ahead |
+
+## Known limitations (don't reattempt without a new design)
+
+**Gmail mail-list scroll-back loses hints.** When wrappers leave the
+attention region, `detachWrapper` releases the codeword and removes
+the wrapper. Scrolling back doesn't re-attach because the IO subscription
+was also removed. Attempted fix: keep the IO subscription past detach.
+Result: Gmail unresponsive — its many simultaneously observed elements
+multiplied per-scroll IO entry processing cost. Reverted in `f0782ee`.
+Correct approach probably needs scroll-triggered rediscovery (walk
+viewport on user scroll, re-observe selector matches we don't currently
+track) rather than infinite IO retention.
+
+**Inner-pane scroll jitter (Gmail, Slack-style apps).** Badges anchored
+to targets inside an overflow-scroll container don't reposition while
+the container scrolls because `scheduleReposition` only listens to
+`window.scroll`. Visible as badges falling behind the page and snapping
+forward. Wikipedia/normal-window-scroll sites unaffected.
+
+Attempted fix 1: capture-phase scroll listener on `document`. Result
+on YouTube (which has many internal scrollables): longtask total
+2.8s → 12.5s, four scrollers firing constantly.
+
+Attempted fix 2: same listener with 100ms throttle on inner scrolls,
+window-scroll keeping its dedicated path. Result on YouTube: longtask
+total still 10.7s. Inner scrollers still cumulatively too expensive.
+
+Correct fix needs **per-wrapper overflow-ancestor walk** (Floating UI's
+`getOverflowAncestors` pattern): when a wrapper attaches, walk its
+parents identifying ones with `overflow: auto/scroll`, register a
+scroll listener on each (refcounted across wrappers), detach on
+unwrap. Bounds listener attachment to actually-scrollable ancestors
+of actually-wrapped elements, not every scroll on the page. Significant
+implementation work — left as Phase 5b.
 
 Phase 2 measured impact (YouTube video page, 45s scroll soak):
 
