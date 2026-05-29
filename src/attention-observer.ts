@@ -66,7 +66,22 @@ export class AttentionObserver {
       } else if (!is && was) {
         this.intersecting.delete(el);
         this.events.onLeave(el);
+      } else if (!is && !was) {
+        // First entry for a not-intersecting element. Use the IO's own
+        // boundingClientRect (engine-warm, free to read) to evict
+        // candidates that sit way outside any plausible attention
+        // region — prevents `discoverInSubtree` from leaking an IO
+        // subscription per selector-matching ref below the fold.
+        // Threshold sits well past the 2-viewport attention margin so
+        // we don't evict elements the user might soon scroll to.
+        const rect = entry.boundingClientRect;
+        const vh = window.innerHeight || 1;
+        const farBelow = rect.top > vh * FAR_THRESHOLD_VH;
+        const farAbove = rect.bottom < -vh * FAR_THRESHOLD_VH;
+        if (farBelow || farAbove) this.io.unobserve(el);
       }
     }
   };
 }
+
+const FAR_THRESHOLD_VH = 5;
