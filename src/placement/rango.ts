@@ -28,28 +28,30 @@ function probeFirstVisibleText(element: Element): TextProbe {
   return { hasText: false };
 }
 
-function getNudgeRatios(element: Element, hasText: boolean): { x: number; y: number } {
+type NudgeKind = 'inside' | 'outside';
+interface Nudge { kind: NudgeKind; x: number; y: number }
+
+function getNudge(element: Element, hasText: boolean): Nudge {
   const rect = getCachedRect(element);
-  // Large no-text elements (icon-only buttons, image links): place hint
-  // INSIDE the top-left corner. nudge=1 means hintOffset is 0 → badge
-  // top-left aligns with target top-left. Matches Rango.
+  // Large icon-only elements (icon-only buttons big enough to host the
+  // badge inside): place hint at the top-left INSIDE the element.
+  // Matches Rango's "nudge=1" branch.
   if (rect.width > 30 && rect.height > 30 && !hasText) {
-    return { x: 1, y: 1 };
+    return { kind: 'inside', x: 1, y: 1 };
   }
 
-  // Text-bearing elements. nudge here is the target ABSOLUTE PIXEL
-  // OVERHANG (see positionAtTopLeft for the formula). Smaller = more
-  // clearance from the text. The y-overhang stays at 0 because any
-  // overhang past text-top covers ascender-tall characters (G, h, l)
-  // and looks worse the wider the badge gets. x-overhang is small so
-  // the badge ends just barely past text-left; this matches Rango's
-  // visual at common font sizes.
+  // Everything else (text-bearing labels + small icon targets like
+  // collapse-chevrons) — place the badge OUTSIDE the element to the
+  // upper-left. `x` and `y` are absolute pixel overhang past the
+  // element's left/top edge; 0 means the badge ends exactly at the
+  // edge with no overlap. Smaller font sizes look fine with a tiny
+  // x-overhang (badge tucks into the leading); larger fonts need a
+  // bit more so the badge doesn't look detached.
   const style = getCachedStyle(element);
   const fontSize = parseInt(style.fontSize, 10);
-
-  if (fontSize < 15) return { x: 3, y: 0 };
-  if (fontSize < 20) return { x: 4, y: 0 };
-  return { x: 6, y: 0 };
+  if (fontSize < 15) return { kind: 'outside', x: 3, y: 0 };
+  if (fontSize < 20) return { kind: 'outside', x: 4, y: 0 };
+  return { kind: 'outside', x: 6, y: 0 };
 }
 
 export class RangoStrategy implements PlacementStrategy {
@@ -128,23 +130,23 @@ export class RangoStrategy implements PlacementStrategy {
     const targetRect = probe.hasText ? probe.rect : getCachedRect(w.element);
     const elementRect = getCachedRect(w.element);
     const size = w.hint.badgeSize;
-    const { x: nudgeX, y: nudgeY } = getNudgeRatios(w.element, probe.hasText);
+    const nudge = getNudge(w.element, probe.hasText);
     const space = this.getAvailableSpace(w.hint.anchorParent, targetRect);
 
-    // Rango uses nudge ratios because their badges are always 1 char
-    // (~12-14px). BranchKit shows 2-char codeword pairs in "Letters"
-    // mode (~24-28px) and the same ratio doubles the absolute overlap.
-    // For text-bearing targets we treat nudge as an absolute pixel
-    // overhang past the text edge — independent of badge width — so
-    // 1-char and 2-char badges land in the same relative position.
-    // For no-text large targets we keep the old ratio semantics so
-    // nudge=1 still aligns badge top-left with target top-left.
-    const hintOffsetX = probe.hasText
-      ? Math.max(0, size.w - nudgeX)
-      : size.w * (1 - nudgeX);
-    const hintOffsetY = probe.hasText
-      ? Math.max(0, size.h - nudgeY)
-      : size.h * (1 - nudgeY);
+    // 'inside': nudge is a ratio (1 = badge at target top-left, no
+    //   offset). Used for large icon-only targets.
+    // 'outside': nudge is an absolute pixel OVERHANG past the target's
+    //   edge. Independent of badge width, so 1-char and 2-char badges
+    //   land in the same relative position past target.left/top. The
+    //   chevron in Gmail's Categories row hits this branch (small,
+    //   no-text) so its badge sits above-and-to-the-left of the
+    //   chevron icon — not on top of it.
+    const hintOffsetX = nudge.kind === 'inside'
+      ? size.w * (1 - nudge.x)
+      : Math.max(0, size.w - nudge.x);
+    const hintOffsetY = nudge.kind === 'inside'
+      ? size.h * (1 - nudge.y)
+      : Math.max(0, size.h - nudge.y);
 
     const clampedOffsetX = space.left !== undefined
       ? Math.min(hintOffsetX, Math.max(0, space.left - 1))
