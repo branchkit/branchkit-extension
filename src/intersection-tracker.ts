@@ -29,8 +29,15 @@ const VIEWPORT_MARGIN = '200px';
 const FLUSH_DEBOUNCE_MS = 50;
 
 export interface TrackerEvents {
-  /** Called after a flush that may have changed any wrapper's codeword. */
-  onCodewordsChanged: () => void;
+  /**
+   * Called after a flush that changed any wrapper's codeword.
+   * `claimed` are wrappers that just got a fresh codeword via this flush.
+   * `released` are codewords released back to the pool this flush
+   * (viewport-leave). The delta-sync path on content.ts uses these
+   * lists to drive per-wrapper Put / per-codeword Delete on the plugin
+   * side without re-walking the whole store.
+   */
+  onCodewordsChanged: (claimed: ElementWrapper[], released: string[]) => void;
 }
 
 export class IntersectionTracker {
@@ -196,6 +203,8 @@ export class IntersectionTracker {
 
   private async doFlush(): Promise<void> {
     let dirty = false;
+    const releasedCodewords: string[] = [];
+    const newlyClaimed: ElementWrapper[] = [];
 
     // Releases first so reclaimed labels are at the front of the pool's
     // free list when the immediately-following claim fires. This is what
@@ -204,6 +213,7 @@ export class IntersectionTracker {
     if (this.pendingRelease.length > 0) {
       const labels = this.pendingRelease;
       this.pendingRelease = [];
+      releasedCodewords.push(...labels);
       dirty = true;
       try {
         await chrome.runtime.sendMessage({ type: 'RELEASE_LABELS', labels });
@@ -261,6 +271,7 @@ export class IntersectionTracker {
 
         if (label) {
           wrapper.scanned.codeword = label;
+          newlyClaimed.push(wrapper);
           dirty = true;
         }
         // No label → pool exhausted; wrapper stays unhinted. Will retry
@@ -268,7 +279,7 @@ export class IntersectionTracker {
       }
     }
 
-    if (dirty) this.events.onCodewordsChanged();
+    if (dirty) this.events.onCodewordsChanged(newlyClaimed, releasedCodewords);
 
     // We may have queued more work during the await — typically extra
     // releases for late-leaving wrappers. Flush again.

@@ -113,7 +113,14 @@ const dispatcher = new ActionDispatcher();
 const registry = new CommandRegistry();
 const keyHandler = new KeyHandler(registry, dispatcher);
 const tracker = new IntersectionTracker(store, {
-  onCodewordsChanged: () => {
+  onCodewordsChanged: (claimed, released) => {
+    for (const w of claimed) pendingPuts.add(w);
+    for (const cw of released) {
+      // Only enqueue a real Delete if we'd actually told the plugin
+      // about this codeword; if the claim happened and immediately got
+      // released inside one debounce window, the plugin never saw it.
+      if (sentCodewords.has(cw)) pendingDeleteCodewords.push(cw);
+    }
     schedulePushGrammar();
     if (hintsVisible) badgeNewlyCodeworded();
   },
@@ -283,6 +290,14 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
       // per-prefix entries. This is the ONE place in a content
       // script's lifetime where we want plugin-side cleanup.
       sessionId = generateSessionId();
+      // Plugin clears its per-frame session on session_id change, so the
+      // delta-sync mirror state on this side is now stale; reset it.
+      // Subsequent IT.refreshViewportClaims will re-claim codewords for
+      // in-viewport wrappers and onCodewordsChanged will re-queue them
+      // as pending Puts.
+      sentCodewords.clear();
+      pendingPuts.clear();
+      pendingDeleteCodewords.length = 0;
       for (const w of store.all) {
         w.scanned.codeword = '';
         w.label = null;
@@ -756,8 +771,17 @@ function detachWrapper(element: Element): void {
   resizeObserver.unobserve(element);
   tracker.unobserve(element);
   const removed = store.removeWrapperByElement(element);
-  if (removed && removed.scanned.id > 0) {
-    idRegistry.unregister(removed.scanned.id);
+  if (removed) {
+    // Delta-sync bookkeeping: if the plugin holds this codeword, queue
+    // the Delete; if the wrapper was pending a Put that hasn't fired
+    // yet, drop the Put. Either way we don't want stale state on the
+    // plugin side post-detach.
+    pendingPuts.delete(removed);
+    const cw = removed.scanned.codeword;
+    if (cw && sentCodewords.has(cw)) pendingDeleteCodewords.push(cw);
+    if (removed.scanned.id > 0) {
+      idRegistry.unregister(removed.scanned.id);
+    }
   }
 }
 
@@ -1080,7 +1104,27 @@ function scheduleBatchedSync(reason: string): void {
 async function batchedStateSync(reason: string): Promise<void> {
   if (!isAlphabetLoaded()) return;
 
-  const wrappers = viewportSort(store.all).filter(w => w.scanned.codeword);
+  // Drain pendingPuts. Snapshot + clear before any await so codewords
+  // claimed during the post round-trip re-queue for the next push.
+  // Filter out wrappers whose codeword went away or were replaced in
+  // the store between schedule and drain (race with IT viewport-leave
+  // or rebind).
+  const drained = [...pendingPuts];
+  pendingPuts.clear();
+  const puts = drained.filter(w =>
+    w.scanned.codeword && store.findWrapperFor(w.element) === w,
+  );
+
+  // Pure-empty delta — nothing changed since last push. Skip the
+  // round-trip entirely. This is the "hash-skip for free" case: in
+  // the steady state the only way to land here is "MO fired but no
+  // hintability change", which is the bulk of cosmetic-mutation
+  // pages (style toggles, animation classes, hover state churn).
+  if (puts.length === 0 && pendingDeleteCodewords.length === 0) {
+    void reason;
+    return;
+  }
+
   // Uses module-scope sessionId — see Problem 1 in the design doc.
   const sessionMeta = {
     bundle_id: '',
@@ -1089,31 +1133,43 @@ async function batchedStateSync(reason: string): Promise<void> {
     table_id: '',
   };
 
-  if (wrappers.length === 0) {
-    // Empty state — plugin's prior session for this frame should be
-    // cleared. Send one empty terminal batch with the new session_id
-    // so the implicit-reset cleanup runs and the frame's tracking
-    // ends up empty.
-    await postGrammarBatch({
+  if (puts.length === 0) {
+    // Pure-delete push. postGrammarBatch drains pendingDeleteCodewords
+    // and piggybacks them via delete_codewords on a single empty batch.
+    const drainedDeletes = pendingDeleteCodewords.slice();
+    const resp = await postGrammarBatch({
       session_id: sessionId,
       batch_index: 0,
       is_final: true,
-      kind: 'scan',
+      kind: 'incremental',
       ...sessionMeta,
       elements: [],
     });
+    // Plugin doesn't report deletes in `succeeded`/`failed`, but it
+    // honors them as long as the batch itself didn't error. On error,
+    // postGrammarBatch restores pendingDeleteCodewords for us.
+    if (resp.result === 'ok') {
+      for (const cw of drainedDeletes) sentCodewords.delete(cw);
+    }
+    void reason;
     return;
   }
 
-  for (let start = 0; start < wrappers.length; start += DEFAULT_SCAN_BATCH_SIZE) {
-    const end = Math.min(start + DEFAULT_SCAN_BATCH_SIZE, wrappers.length);
-    const chunk = wrappers.slice(start, end);
-    const isLast = end === wrappers.length;
+  // One delta-push chunked at DEFAULT_SCAN_BATCH_SIZE so each round-trip
+  // stays small. Deletes ride on the first batch's drainPendingDeletes.
+  for (let start = 0; start < puts.length; start += DEFAULT_SCAN_BATCH_SIZE) {
+    const end = Math.min(start + DEFAULT_SCAN_BATCH_SIZE, puts.length);
+    const chunk = puts.slice(start, end);
+    const isLast = end === puts.length;
+    // Capture which deletes ride this batch — postGrammarBatch's drain
+    // empties pendingDeleteCodewords for us. We track the snapshot so
+    // sentCodewords can be updated on a successful response.
+    const deletesRidingHere = start === 0 ? pendingDeleteCodewords.slice() : [];
     const resp = await postGrammarBatch({
       session_id: sessionId,
       batch_index: Math.floor(start / DEFAULT_SCAN_BATCH_SIZE),
       is_final: isLast,
-      kind: 'scan',
+      kind: 'incremental',
       ...sessionMeta,
       elements: chunk.map(w => w.scanned),
     });
@@ -1124,6 +1180,10 @@ async function batchedStateSync(reason: string): Promise<void> {
       }
     }
     const succeededSet = new Set(resp.succeeded);
+    for (const cw of succeededSet) sentCodewords.add(cw);
+    if (resp.result === 'ok') {
+      for (const cw of deletesRidingHere) sentCodewords.delete(cw);
+    }
     const succeededWrappers = chunk.filter(w => succeededSet.has(w.scanned.codeword));
     sweepDisconnectedAfterBatch(succeededWrappers, (el) => el.isConnected, pendingDeleteCodewords, detachWrapper);
     if (hintsVisible && resp.succeeded.length > 0) {
@@ -1147,11 +1207,33 @@ async function batchedStateSync(reason: string): Promise<void> {
 //     wrappers-with-codewords and re-POSTs them through the per-batch
 //     protocol so MO-discovered + IT-claimed elements reach the plugin.
 
-// Codewords queued for deletion on the next outbound batch. Populated
-// by the post-batch isConnected sweep when a wrapper's element gets
-// removed from the DOM between yield and Put completion — the RED
-// item 5 mitigation from the investigation. Drained on each
-// postGrammarBatch and on the final deletes-only batch at scan end.
+// --- Delta-sync state ---
+//
+// The CS owns truth; the plugin is a derived cache. We track three
+// pieces of state so each `batchedStateSync` flush sends only what
+// changed since the last successful push:
+//
+//   sentCodewords: codewords currently live on the plugin side. Lets us
+//     distinguish "real delete" (was Put, now gone — send Delete) from
+//     "never sent" (claimed and released within one debounce window —
+//     don't send anything). Cleared on session_id rotation since the
+//     plugin clears its own session state on the same event.
+//
+//   pendingPuts: wrappers whose codeword exists locally but hasn't been
+//     Put to the plugin yet. Populated by IT.onCodewordsChanged
+//     (newly-claimed) and by the scan path (after attach + push). Drained
+//     each batchedStateSync.
+//
+//   pendingDeleteCodewords: codewords queued for plugin-side delete.
+//     Populated by IT viewport-leave releases, detachWrapper, and the
+//     post-batch isConnected sweep (item 5 RED).
+//
+// Pre-delta, batchedStateSync re-flushed every wrapper-with-codeword on
+// every fire — quadratic-ish in mutation rate × set size. With these,
+// flushing N wrappers' worth of state for one row insertion is O(rows
+// changed) not O(rows total). Empty deltas skip the round-trip entirely.
+const sentCodewords: Set<string> = new Set();
+const pendingPuts: Set<ElementWrapper> = new Set();
 const pendingDeleteCodewords: string[] = [];
 
 function drainPendingDeletes(): string[] {
@@ -1407,6 +1489,11 @@ async function processScanBatch(
       continue;
     }
     attachWrapper(w);
+    // Delta-sync: the plugin acknowledged this codeword inside the
+    // scan-path POST above, so it's now live on the plugin side. Mark
+    // it so future detaches know to send a Delete and future syncs
+    // skip re-Putting it.
+    sentCodewords.add(w.scanned.codeword);
     attached.push(w);
   }
 
