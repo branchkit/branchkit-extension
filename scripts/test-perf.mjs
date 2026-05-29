@@ -1,94 +1,309 @@
 #!/usr/bin/env node
 /**
- * Measure scan + hintability perf on the stress fixture in both modes.
+ * Measure scan + hintability perf and memory cost in fixture or real-site
+ * mode, single or multi-tab, optionally comparing against Rango.
  *
- * For each mode (aggressive off / on):
- * 1. Reset perf counters.
- * 2. Let the page churn for SOAK_MS while mutations fire.
- * 3. Read counters.
- * 4. Report scan rate, ms/scan, computed-style calls/scan, etc.
+ * Per-engine signals fall in two buckets:
+ * - Engine-agnostic (works for any extension): JS heap from
+ *   `performance.memory`, sampled at t=0/5/15/30s for leak detection.
+ *   Slope is the smoking gun for runaway processes.
+ * - BranchKit-specific: the perf counters wired into scanner.ts, read via
+ *   the documentElement.dataset bridge. Rango has no equivalent; in
+ *   `engine=rango` mode the counter block is omitted from the per-tab
+ *   report and the comparison is on memory + leak slope only.
  *
- * Goal: identify hot path before optimizing. Numbers from this script
- * give a baseline; subsequent optimizations get measured against it.
+ * Examples:
+ *   npm run test:perf
+ *   npm run test:perf -- --url https://github.com/anthropics
+ *   npm run test:perf -- --url https://www.reddit.com --tabs 3 --scroll
+ *   npm run test:perf -- --engine=both --url https://news.ycombinator.com
+ *
+ * Rango path defaults to /tmp/rango/dist/chrome (built via
+ * `cd /tmp/rango && npm i && npm run build:chrome`).
  */
 
 import { chromium } from 'playwright';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, rmSync } from 'node:fs';
+import { parseArgs } from 'node:util';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
-const EXT = resolve(root, 'dist/chrome');
+const BRANCHKIT_EXT = resolve(root, 'dist/chrome');
 const FIXTURE = resolve(root, 'test-fixtures/perf-stress.html');
-const PROFILE = '/tmp/branchkit-perf-test-profile';
-const SOAK_MS = 10_000;
 
-if (existsSync(PROFILE)) rmSync(PROFILE, { recursive: true });
-
-const ctx = await chromium.launchPersistentContext(PROFILE, {
-  headless: false,
-  args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`],
+const { values: argv } = parseArgs({
+  options: {
+    url: { type: 'string', multiple: true },
+    tabs: { type: 'string', default: '1' },
+    soak: { type: 'string', default: '30' },
+    engine: { type: 'string', default: 'branchkit' }, // branchkit|rango|both|none
+    'rango-path': { type: 'string', default: '/tmp/rango/dist/chrome' },
+    scroll: { type: 'boolean', default: false },
+    headless: { type: 'boolean', default: false },
+  },
 });
 
-async function setAggressive(on) {
+const urls = argv.url && argv.url.length ? argv.url : [`file://${FIXTURE}`];
+const tabsPerUrl = Math.max(1, Number(argv.tabs));
+const soakMs = Math.max(1, Number(argv.soak)) * 1000;
+const engines = argv.engine === 'both'
+  ? ['branchkit', 'rango']
+  : [argv.engine];
+
+// Leak-detection sample points (ms from soak start). Final reading also
+// happens at end-of-soak — but the per-window slope from these snapshots
+// is what tells us "memory is climbing steadily" vs "flat after settle".
+const SAMPLE_TIMES_MS = [0, 5_000, 15_000, 30_000].filter(t => t <= soakMs);
+if (!SAMPLE_TIMES_MS.includes(soakMs)) SAMPLE_TIMES_MS.push(soakMs);
+SAMPLE_TIMES_MS.sort((a, b) => a - b);
+
+async function launchContext(engine) {
+  const profile = `/tmp/branchkit-perf-${engine}-profile`;
+  if (existsSync(profile)) rmSync(profile, { recursive: true });
+
+  const args = ['--enable-precise-memory-info']; // un-buckets performance.memory
+  if (engine === 'branchkit') {
+    args.push(`--disable-extensions-except=${BRANCHKIT_EXT}`);
+    args.push(`--load-extension=${BRANCHKIT_EXT}`);
+  } else if (engine === 'rango') {
+    if (!existsSync(argv['rango-path'])) {
+      throw new Error(
+        `Rango build not found at ${argv['rango-path']}. ` +
+        `Build it: cd /tmp/rango && npm i && npm run build:chrome`,
+      );
+    }
+    args.push(`--disable-extensions-except=${argv['rango-path']}`);
+    args.push(`--load-extension=${argv['rango-path']}`);
+  } // engine=none: no extension loaded — baseline page cost
+
+  return chromium.launchPersistentContext(profile, {
+    headless: argv.headless,
+    args,
+  });
+}
+
+async function setBranchKitAggressive(ctx, on) {
   const sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent('serviceworker');
   await sw.evaluate(async (v) => {
     await chrome.storage.sync.set({ aggressiveHints: v });
   }, on);
 }
 
-async function runMode(label, on) {
-  await setAggressive(on);
+async function openTab(ctx, url) {
   const page = await ctx.newPage();
-  await page.goto(`file://${FIXTURE}`);
-  // Wait for first scan to settle (badge claims etc.)
-  await page.waitForTimeout(1500);
-  // Reset counters via the dataset bridge (content script runs in
-  // isolated world; main-world page.evaluate can't call its globals
-  // directly).
-  await page.evaluate(() => { document.documentElement.dataset.branchkitResetPerf = '1'; });
-  await page.waitForTimeout(400); // let the content script observe + reset
-  const start = Date.now();
-  await page.waitForTimeout(SOAK_MS);
-  const elapsedMs = Date.now() - start;
-  const stats = await page.evaluate(() => {
+  try {
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  } catch (err) {
+    console.warn(`  load failed for ${url}: ${err.message}`);
+  }
+  // Warmup: extension content scripts + first scan settle.
+  await page.waitForTimeout(2000);
+  return page;
+}
+
+async function readMemory(page) {
+  return page.evaluate(() => {
+    if (!performance.memory) return null;
+    return {
+      usedMB: performance.memory.usedJSHeapSize / 1048576,
+      totalMB: performance.memory.totalJSHeapSize / 1048576,
+    };
+  }).catch(() => null);
+}
+
+async function readBranchKitCounters(page) {
+  return page.evaluate(() => {
     const raw = document.documentElement.dataset.branchkitPerf;
     return raw ? JSON.parse(raw) : null;
-  });
-  await page.close();
+  }).catch(() => null);
+}
 
-  if (!stats) {
-    console.log(`\n=== ${label} ===\n  branchkitPerfStats not exposed.`);
-    return null;
+async function resetBranchKitCounters(page) {
+  await page.evaluate(() => {
+    document.documentElement.dataset.branchkitResetPerf = '1';
+  }).catch(() => { });
+}
+
+async function scrollTab(page) {
+  await page.evaluate(() => {
+    window.scrollBy(0, 500);
+  }).catch(() => { });
+}
+
+function fmt(n, digits = 0) {
+  if (typeof n !== 'number' || !Number.isFinite(n)) return String(n);
+  return n.toLocaleString(undefined, { maximumFractionDigits: digits });
+}
+
+function fmtSlope(samples) {
+  // samples: [{ t, usedMB }]. Returns "+X.XMB over Yms (Z.ZMB/min)"
+  if (samples.length < 2) return 'n/a';
+  const first = samples[0];
+  const last = samples[samples.length - 1];
+  const dMB = last.usedMB - first.usedMB;
+  const dMs = last.t - first.t;
+  const perMin = (dMB / dMs) * 60_000;
+  const sign = dMB >= 0 ? '+' : '';
+  return `${sign}${fmt(dMB, 2)}MB over ${fmt(dMs)}ms (${sign}${fmt(perMin, 2)}MB/min)`;
+}
+
+async function runEngine(engine) {
+  console.log(`\n========================================`);
+  console.log(`  ENGINE: ${engine}`);
+  console.log(`========================================`);
+
+  const ctx = await launchContext(engine);
+  if (engine === 'branchkit') {
+    // Aggressive hints ON gives the worst-case workload — that's what we
+    // want to stress, since the OFF mode does essentially nothing on
+    // div-heavy pages.
+    await setBranchKitAggressive(ctx, true);
   }
-  console.log(`\n=== ${label} (${elapsedMs}ms soak) ===`);
-  console.log(`  wrappers in store        ${stats.wrapperCount}`);
-  console.log(`  scan calls (subtree)     ${stats.scanCalls}`);
-  console.log(`    scan total ms          ${stats.scanTotalMs.toFixed(1)}`);
-  console.log(`    scan avg ms            ${stats.scanCalls ? (stats.scanTotalMs / stats.scanCalls).toFixed(2) : '-'}`);
-  console.log(`    candidates seen        ${stats.scanCandidatesSeen.toLocaleString()}`);
-  console.log(`    kept as hintable       ${stats.scanKeptAsHintable}`);
-  console.log(`    rejected: exclude      ${stats.scanRejectedExclude}`);
-  console.log(`    rejected: invisible    ${stats.scanRejectedInvisible}`);
-  console.log(`    rejected: redundant    ${stats.scanRejectedRedundant}`);
-  console.log(`    rejected: extra-NC     ${stats.scanRejectedExtraNotClickable}`);
-  console.log(`  scanSingle calls         ${stats.scanSingleCalls.toLocaleString()}`);
-  console.log(`  isHintableExtra calls    ${stats.isHintableExtraCalls.toLocaleString()}`);
-  console.log(`  getComputedStyle calls   ${stats.computedStyleCalls.toLocaleString()}`);
-  console.log(`  getBoundingClientRect    ${stats.boundingRectCalls.toLocaleString()}`);
-  return stats;
+
+  const tabs = [];
+  for (const url of urls) {
+    for (let i = 0; i < tabsPerUrl; i++) {
+      console.log(`  opening ${url}  (tab ${i + 1}/${tabsPerUrl})`);
+      const page = await openTab(ctx, url);
+      tabs.push({ url, idx: i + 1, page });
+    }
+  }
+
+  // Reset BranchKit counters in parallel — for Rango/none this is a no-op.
+  if (engine === 'branchkit') {
+    await Promise.all(tabs.map(t => resetBranchKitCounters(t.page)));
+    await new Promise(r => setTimeout(r, 400));
+  }
+
+  // Leak sampling: snapshot heap at each sample point during the soak.
+  // Tab samples are taken in parallel so a slow-respond tab doesn't skew
+  // others' timestamps.
+  const samples = tabs.map(() => []);
+  const scrollTimer = argv.scroll
+    ? setInterval(() => { for (const t of tabs) scrollTab(t.page); }, 1000)
+    : null;
+
+  const soakStart = Date.now();
+  for (const sampleAt of SAMPLE_TIMES_MS) {
+    const waitMs = sampleAt - (Date.now() - soakStart);
+    if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
+    const t = Date.now() - soakStart;
+    const mems = await Promise.all(tabs.map(tab => readMemory(tab.page)));
+    for (let i = 0; i < tabs.length; i++) {
+      if (mems[i]) samples[i].push({ t, ...mems[i] });
+    }
+  }
+
+  if (scrollTimer) clearInterval(scrollTimer);
+
+  const finalCounters = engine === 'branchkit'
+    ? await Promise.all(tabs.map(t => readBranchKitCounters(t.page)))
+    : tabs.map(() => null);
+
+  await Promise.all(tabs.map(t => t.page.close().catch(() => { })));
+
+  // Per-tab report
+  let aggHeapStartMB = 0;
+  let aggHeapEndMB = 0;
+  let aggHeapPeakMB = 0;
+  let aggWrappers = 0;
+  let aggScans = 0;
+  let aggScanMs = 0;
+  let aggCandidates = 0;
+  let aggGCS = 0;
+  let aggBCR = 0;
+  let tabsWithMem = 0;
+  let tabsWithCounters = 0;
+
+  for (let i = 0; i < tabs.length; i++) {
+    const { url, idx } = tabs[i];
+    const ts = samples[i];
+    const c = finalCounters[i];
+    console.log(`\n  ${url}  [tab ${idx}]`);
+    if (ts.length === 0) {
+      console.log(`    (no memory readings — performance.memory unavailable)`);
+    } else {
+      tabsWithMem++;
+      const peak = Math.max(...ts.map(s => s.usedMB));
+      console.log(`    heap samples       ${ts.map(s => `t=${(s.t / 1000).toFixed(0)}s ${fmt(s.usedMB, 1)}MB`).join(' | ')}`);
+      console.log(`    heap slope         ${fmtSlope(ts)}`);
+      console.log(`    heap peak          ${fmt(peak, 1)}MB`);
+      aggHeapStartMB += ts[0].usedMB;
+      aggHeapEndMB += ts[ts.length - 1].usedMB;
+      aggHeapPeakMB += peak;
+    }
+    if (c) {
+      tabsWithCounters++;
+      console.log(`    wrappers           ${fmt(c.wrapperCount)}`);
+      console.log(`    scans              ${fmt(c.scanCalls)} (${fmt(c.scanTotalMs, 1)}ms total, ${fmt(c.scanCalls ? c.scanTotalMs / c.scanCalls : 0, 2)}ms avg)`);
+      console.log(`    candidates         ${fmt(c.scanCandidatesSeen)}`);
+      console.log(`    scanSingle calls   ${fmt(c.scanSingleCalls)}`);
+      console.log(`    getComputedStyle   ${fmt(c.computedStyleCalls)}`);
+      console.log(`    getBoundingRect    ${fmt(c.boundingRectCalls)}`);
+      aggWrappers += c.wrapperCount;
+      aggScans += c.scanCalls;
+      aggScanMs += c.scanTotalMs;
+      aggCandidates += c.scanCandidatesSeen;
+      aggGCS += c.computedStyleCalls;
+      aggBCR += c.boundingRectCalls;
+    }
+  }
+
+  if (tabs.length > 1 && (tabsWithMem > 0 || tabsWithCounters > 0)) {
+    console.log(`\n  --- Aggregate across ${tabs.length} tabs ---`);
+    if (tabsWithMem > 0) {
+      console.log(`    heap (sum start)   ${fmt(aggHeapStartMB, 1)}MB`);
+      console.log(`    heap (sum end)     ${fmt(aggHeapEndMB, 1)}MB`);
+      console.log(`    heap (sum peak)    ${fmt(aggHeapPeakMB, 1)}MB`);
+      console.log(`    heap growth        ${fmt(aggHeapEndMB - aggHeapStartMB, 1)}MB`);
+    }
+    if (tabsWithCounters > 0) {
+      console.log(`    wrappers (sum)     ${fmt(aggWrappers)}`);
+      console.log(`    scans (sum)        ${fmt(aggScans)}`);
+      console.log(`    scan ms (sum)      ${fmt(aggScanMs, 1)}`);
+      console.log(`    GCS (sum)          ${fmt(aggGCS)}`);
+      console.log(`    BCR (sum)          ${fmt(aggBCR)}`);
+    }
+  }
+
+  await ctx.close();
+
+  return {
+    engine,
+    tabCount: tabs.length,
+    heapStartMB: aggHeapStartMB,
+    heapEndMB: aggHeapEndMB,
+    heapPeakMB: aggHeapPeakMB,
+    growthMB: aggHeapEndMB - aggHeapStartMB,
+  };
 }
 
-const off = await runMode('Aggressive hints OFF', false);
-const on = await runMode('Aggressive hints ON', true);
-
-if (off && on) {
-  console.log('\n=== Delta (ON − OFF) ===');
-  console.log(`  scan candidates  +${(on.scanCandidatesSeen - off.scanCandidatesSeen).toLocaleString()}`);
-  console.log(`  scan total ms    +${(on.scanTotalMs - off.scanTotalMs).toFixed(1)}`);
-  console.log(`  computedStyle    +${(on.computedStyleCalls - off.computedStyleCalls).toLocaleString()}`);
-  console.log(`  wrappers added   +${on.wrapperCount - off.wrapperCount}`);
+const results = [];
+for (const e of engines) {
+  results.push(await runEngine(e));
 }
 
-await ctx.close();
+if (results.length > 1) {
+  console.log(`\n========================================`);
+  console.log(`  CROSS-ENGINE COMPARISON`);
+  console.log(`========================================`);
+  console.log(`  ${'engine'.padEnd(12)} ${'start'.padStart(10)} ${'end'.padStart(10)} ${'peak'.padStart(10)} ${'growth'.padStart(10)}`);
+  for (const r of results) {
+    console.log(`  ${r.engine.padEnd(12)} ${(fmt(r.heapStartMB, 1) + 'MB').padStart(10)} ${(fmt(r.heapEndMB, 1) + 'MB').padStart(10)} ${(fmt(r.heapPeakMB, 1) + 'MB').padStart(10)} ${(fmt(r.growthMB, 1) + 'MB').padStart(10)}`);
+  }
+  // Ratio relative to first engine (typically BranchKit)
+  const base = results[0];
+  for (let i = 1; i < results.length; i++) {
+    const r = results[i];
+    if (base.heapEndMB > 0) {
+      const x = r.heapEndMB / base.heapEndMB;
+      console.log(`  ${r.engine} vs ${base.engine}: end-heap ${fmt(x, 2)}×`);
+    }
+    if (base.growthMB !== 0) {
+      const x = r.growthMB / base.growthMB;
+      console.log(`  ${r.engine} vs ${base.engine}: growth ${fmt(x, 2)}×`);
+    }
+  }
+}
