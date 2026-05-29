@@ -151,15 +151,20 @@ export function resolveContainer(target: Element): HTMLElement {
 
   if (chosen) return chosen;
 
-  // No ancestor had enough room — fall back to escaping past the first
-  // tight clip we did see, preserving the previous best-effort behavior.
+  // No ancestor had enough room. Escape past the LAST tight clip we
+  // found — escaping past only the first would land us inside the
+  // remaining tight clips, which still clamp the badge over the text.
+  // Confirmed on Gmail's nav: clipAncestors are [span.nU, div.aio.UKr6le],
+  // both with space (0, 1). Anchoring at span.nU.parentElement = div.aio
+  // (the second tight clip) leaves the badge clamped; anchoring at
+  // div.aio.parentElement = div.TN gets us out of both.
   if (clipAncestors.length > 0) {
-    const firstTight = clipAncestors[0];
-    const clipParent = firstTight.parentElement;
+    const lastTight = clipAncestors[clipAncestors.length - 1];
+    const clipParent = lastTight.parentElement;
     if (clipParent instanceof HTMLElement && limitParent.contains(clipParent)) {
       return clipParent;
     }
-    const escaped = findBadgeContainer(firstTight);
+    const escaped = findBadgeContainer(lastTight);
     if (limitParent.contains(escaped)) return escaped;
   }
   return candidate;

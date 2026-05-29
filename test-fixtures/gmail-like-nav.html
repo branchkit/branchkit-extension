@@ -14,6 +14,11 @@ body { margin: 0; font-family: system-ui; }
 .compose { display: flex; align-items: center; gap: 16px; padding: 12px 24px; background: #c2e7ff; border-radius: 16px; margin: 0 16px 16px; font-size: 14px; font-weight: 500; }
 .compose .ico { width: 24px; height: 24px; background: #555; border-radius: 4px; }
 .nav-list { list-style: none; margin: 0; padding: 0; overflow: hidden; }
+/* Real Gmail wraps each row in TWO nested tight-clipping divs that hug
+   the link content. Reproduce that — both clip ancestors have ~0px
+   left + 1px top space. */
+.row-aio { overflow: hidden; }
+.row-nu { overflow: hidden; display: block; }
 .nav-item { display: flex; align-items: center; gap: 16px; padding: 0 12px 0 24px; height: 32px; border-radius: 0 16px 16px 0; font-size: 14px; cursor: pointer; }
 .nav-item .ico { width: 20px; height: 20px; background: #5f6368; border-radius: 2px; flex-shrink: 0; }
 .nav-item .label { flex: 1; }
@@ -32,13 +37,13 @@ body { margin: 0; font-family: system-ui; }
   <div class="sidebar"><div class="sidebar-inner"><div class="nav-wrap">
     <a href="#" class="compose"><span class="ico"></span>Compose</a>
     <ul class="nav-list">
-      <li><a href="#inbox" class="nav-item selected"><span class="ico"></span><span class="label">Inbox</span><span class="count">1,269</span></a></li>
-      <li><a href="#starred" class="nav-item"><span class="ico"></span><span class="label">Starred</span></a></li>
-      <li><a href="#snoozed" class="nav-item"><span class="ico"></span><span class="label">Snoozed</span></a></li>
-      <li><a href="#sent" class="nav-item"><span class="ico"></span><span class="label">Sent</span></a></li>
-      <li><a href="#drafts" class="nav-item"><span class="ico"></span><span class="label">Drafts</span><span class="count">9</span></a></li>
-      <li><a href="#categories" class="nav-item"><span class="ico"></span><span class="label">Categories</span></a></li>
-      <li><a href="#more" class="nav-item"><span class="ico"></span><span class="label">More</span></a></li>
+      <li><div class="row-aio"><span class="row-nu"><a href="#inbox" class="nav-item selected"><span class="ico"></span><span class="label">Inbox</span><span class="count">1,269</span></a></span></div></li>
+      <li><div class="row-aio"><span class="row-nu"><a href="#starred" class="nav-item"><span class="ico"></span><span class="label">Starred</span></a></span></div></li>
+      <li><div class="row-aio"><span class="row-nu"><a href="#snoozed" class="nav-item"><span class="ico"></span><span class="label">Snoozed</span></a></span></div></li>
+      <li><div class="row-aio"><span class="row-nu"><a href="#sent" class="nav-item"><span class="ico"></span><span class="label">Sent</span></a></span></div></li>
+      <li><div class="row-aio"><span class="row-nu"><a href="#drafts" class="nav-item"><span class="ico"></span><span class="label">Drafts</span><span class="count">9</span></a></span></div></li>
+      <li><div class="row-aio"><span class="row-nu"><a href="#categories" class="nav-item"><span class="ico"></span><span class="label">Categories</span></a></span></div></li>
+      <li><div class="row-aio"><span class="row-nu"><a href="#more" class="nav-item"><span class="ico"></span><span class="label">More</span></a></span></div></li>
     </ul>
   </div></div></div>
   <div class="main">
