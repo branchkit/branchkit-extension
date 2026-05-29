@@ -796,15 +796,16 @@ const attentionObserver = new AttentionObserver({
     connectVisibilityMO();
   },
   onLeave: (el) => {
-    if (store.findWrapperFor(el)) {
-      detachWrapper(el);
-      schedulePushGrammar();
-    } else {
-      // Non-wrapper leave: pendingVisibility candidate that drifted out
-      // of attention. detachWrapper handles the wrapper case (it evicts
-      // the store there too); this branch covers the pure-pending case.
-      targetRectStore.evict(el);
-    }
+    // Deliberately NOT detaching wrappers on attention-leave (Rango model).
+    // Wrappers stay alive until their element disconnects from the DOM.
+    // The attention IO's role here is just to manage pendingVisibility
+    // membership — bounding the visibility-recheck set is what fixed the
+    // Firefox unresponsive-script case on YouTube. Detaching wrappers as
+    // well introduced two real regressions (Gmail scroll-back lost hints;
+    // Gmail unresponsiveness when we tried keeping IO subscriptions alive
+    // instead). Better trade-off: wrappers grow with discovered hintables,
+    // but scroll-back works correctly and per-event cost stays bounded.
+    targetRectStore.evict(el);
     if (pendingVisibility.has(el)) {
       pendingVisibility.delete(el);
       visibilityIO.unobserve(el);
@@ -838,9 +839,9 @@ function attachWrapper(wrapper: ElementWrapper): void {
   store.addWrapper(wrapper);
   tracker.observe(wrapper.element);
   resizeObserver.observe(wrapper.element);
-  // Subscribe to the attention observer so we leave-detach when the
-  // wrapper drifts >2 viewports away. Idempotent on the observer side.
-  attentionObserver.observe(wrapper.element);
+  // Note: NOT observing via attentionObserver. Wrappers stay attached
+  // until DOM disconnect (Rango model); leave-detach is the regression
+  // path. The attention observer's only job is bounding pendingVisibility.
 }
 
 /**
@@ -2272,12 +2273,13 @@ function discoverInSubtree(root: Element): number {
     const ref = result.refs[i];
     if (store.findWrapperFor(ref)) continue;
     if (limboPool.length > 0 && tryRebindFromLimbo(ref, limboPool)) continue;
-    // Defer wrapper attach to attention IO. Visible refs get wrapped on
-    // the next microtask (IO entries fire synchronously after observe);
-    // refs below the fold stay observed but unwrapped until the user
-    // scrolls them into the attention region. Prevents the YouTube-style
-    // unbounded wrapper growth that the eager attach produced.
-    attentionObserver.observe(ref);
+    // Eager attach (Rango/Vimium model). Wrappers stay alive while their
+    // element is in the DOM — scroll-out doesn't release them. The
+    // attention IO is reserved for bounding `pendingVisibility` membership
+    // (the YouTube-comment-skeleton case), not for wrapper lifecycle.
+    // Trades unbounded wrapper growth on infinite-scroll pages for
+    // correct scroll-back behavior (badges reappear on scroll up).
+    attachWrapper(new ElementWrapper(ref, result.elements[i]));
     added++;
   }
   observeInvisibleCandidates(result.invisibleCandidates);
