@@ -127,8 +127,20 @@ export class RangoStrategy implements PlacementStrategy {
     const { x: nudgeX, y: nudgeY } = getNudgeRatios(w.element, probe.hasText);
     const space = this.getAvailableSpace(w.hint.anchorParent, targetRect);
 
-    const hintOffsetX = size.w * (1 - nudgeX);
-    const hintOffsetY = size.h * (1 - nudgeY);
+    // Rango uses nudge ratios because their badges are always 1 char
+    // (~12-14px). BranchKit shows 2-char codeword pairs (~24-28px) in
+    // "Letters" display mode — same ratio doubles the absolute overlap
+    // and the badge ends up covering the first letters of the label
+    // text. Treat the nudge as a target ABSOLUTE overhang in pixels:
+    // hintOffsetX = badge_w - overhang. For a 14px ref-width badge
+    // (Rango's case) with nudgeX=0.4, the overhang is 14*0.4 = 5.6px,
+    // which generalises cleanly to any badge width.
+    const REF_BADGE_W = 14;
+    const REF_BADGE_H = 14;
+    const overhangX = REF_BADGE_W * nudgeX;
+    const overhangY = REF_BADGE_H * nudgeY;
+    const hintOffsetX = Math.max(0, size.w - overhangX);
+    const hintOffsetY = Math.max(0, size.h - overhangY);
 
     const clampedOffsetX = space.left !== undefined
       ? Math.min(hintOffsetX, Math.max(0, space.left - 1))
