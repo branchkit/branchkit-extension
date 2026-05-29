@@ -17,7 +17,7 @@ import { IntersectionTracker } from './intersection-tracker';
 import { HintBadge, setPositionCaller, clearPositionCaller } from './hints';
 import { onContainerResize } from './container-resize-tracker';
 import { onTargetMutation } from './target-mutation-tracker';
-import { cacheLayout, clearLayoutCache, peekCachedRect } from './layout-cache';
+import { cacheLayout, cacheVisibility, clearLayoutCache, peekCachedRect } from './layout-cache';
 import { placeBadges, placeOne, clearPlacement } from './placement';
 import { activateElement, type ActivationResult } from './event-sequence';
 import { accessibleName } from './accessible-name';
@@ -704,23 +704,33 @@ function disconnectVisibilityMO(): void {
 function recheckPendingVisibility(): void {
   visibilityRafPending = false;
   let dirty = false;
-  for (const el of pendingVisibility) {
-    if (!el.isConnected) {
+  // Pre-cache the union of (target + ancestor chain) so the many
+  // isVisible() reads inside scanSingle share the read. Same trick as
+  // drainReevaluations — siblings under one parent reuse the ancestor
+  // walk's computedStyle reads. Cleared in `finally` so the next frame
+  // sees live state.
+  cacheVisibility(pendingVisibility);
+  try {
+    for (const el of pendingVisibility) {
+      if (!el.isConnected) {
+        pendingVisibility.delete(el);
+        visibilityIO.unobserve(el);
+        continue;
+      }
+      if (store.findWrapperFor(el)) {
+        pendingVisibility.delete(el);
+        visibilityIO.unobserve(el);
+        continue;
+      }
+      const scanned = scanSingle(el);
+      if (!scanned) continue;
       pendingVisibility.delete(el);
       visibilityIO.unobserve(el);
-      continue;
+      attachWrapper(new ElementWrapper(el, scanned));
+      dirty = true;
     }
-    if (store.findWrapperFor(el)) {
-      pendingVisibility.delete(el);
-      visibilityIO.unobserve(el);
-      continue;
-    }
-    const scanned = scanSingle(el);
-    if (!scanned) continue;
-    pendingVisibility.delete(el);
-    visibilityIO.unobserve(el);
-    attachWrapper(new ElementWrapper(el, scanned));
-    dirty = true;
+  } finally {
+    clearLayoutCache();
   }
   if (dirty) {
     schedulePushGrammar();
@@ -2394,6 +2404,66 @@ function reevaluateAttribute(target: Element): boolean {
   return false;
 }
 
+// --- Per-frame coalesce of attribute reevaluations ---
+//
+// MO attribute records fire one-by-one, and each reevaluateAttribute call
+// runs isHintable → isVisible → at least one getBoundingClientRect + one
+// getComputedStyle on the element, plus an opacity walk up the parent
+// chain. On busy SPAs that's hundreds of forced layouts per second.
+//
+// Queue the targets, coalesce on the next animation frame, pre-cache
+// the union of (target + ancestor chain) layout reads in one batch, and
+// run the reevaluations against the warm cache. Net effect: 1 forced
+// layout pass per frame instead of 1 per mutation, with ancestor reads
+// shared across same-tree mutations within the batch.
+//
+// Latency: ~16ms between attribute change and wrapper hintability
+// update. Inconsequential — the user can't issue a voice command on
+// the new state inside a frame.
+const pendingReevaluations: Set<Element> = new Set();
+let reevaluationFrame: number | null = null;
+
+function scheduleReevaluation(target: Element): void {
+  pendingReevaluations.add(target);
+  if (reevaluationFrame === null) {
+    reevaluationFrame = requestAnimationFrame(drainReevaluations);
+  }
+}
+
+function drainReevaluations(): void {
+  reevaluationFrame = null;
+  if (pendingReevaluations.size === 0) return;
+  const targets = [...pendingReevaluations];
+  pendingReevaluations.clear();
+
+  // One batched layout-read pass over targets + their ancestor chains.
+  // isVisible's peekCachedRect / peekCachedStyle fall back to live
+  // reads (with counter increments) on miss, so this is purely an
+  // optimization — correctness doesn't depend on cache presence.
+  cacheVisibility(targets);
+
+  let dirty = false;
+  try {
+    for (const t of targets) {
+      if (!t.isConnected) {
+        // Element disconnected before we drained; if it had a wrapper
+        // detach it. (dropDisconnectedWrappers usually catches this
+        // via the childList path, but mutation order may leave it for
+        // us when the disconnect was an attribute-only side-effect.)
+        if (store.findWrapperFor(t)) {
+          detachWrapper(t);
+          dirty = true;
+        }
+        continue;
+      }
+      if (reevaluateAttribute(t)) dirty = true;
+    }
+  } finally {
+    clearLayoutCache();
+  }
+  if (dirty) schedulePushGrammar();
+}
+
 function processMutations(records: MutationRecord[]): void {
   processMutationsCalls++;
   let dirty = false;
@@ -2417,7 +2487,7 @@ function processMutations(records: MutationRecord[]): void {
     } else if (m.type === 'attributes') {
       const target = m.target;
       if (target instanceof Element && !isOwnMutation(target)) {
-        if (reevaluateAttribute(target)) dirty = true;
+        scheduleReevaluation(target);
       }
     }
   }

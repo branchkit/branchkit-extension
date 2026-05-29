@@ -69,6 +69,43 @@ export function getCachedStyle(el: Element): CSSStyleDeclaration {
   return computedStyles.get(el) ?? getComputedStyle(el);
 }
 
+/**
+ * Cache-only peek for computed styles, mirroring peekCachedRect. Used by
+ * isVisible to count cache hits vs. real reads — a getCachedStyle()
+ * fallthrough hides the distinction.
+ */
+export function peekCachedStyle(el: Element): CSSStyleDeclaration | null {
+  return computedStyles.get(el) ?? null;
+}
+
+/**
+ * Lighter alternative to `cacheLayout` for visibility/hintability checks:
+ * caches the element itself plus its ancestor chain (up to 15 levels) and
+ * no descendants. isHintable's hot path reads `el.getBoundingClientRect`
+ * + `getComputedStyle(el)` once and then walks the parent chain probing
+ * opacity; neither phase touches descendants, so the full cacheLayout's
+ * descendant walk would be pure overhead. Called from the rAF-coalesced
+ * reevaluateAttribute drain so many same-tree attribute mutations share
+ * one ancestor pre-read.
+ */
+export function cacheVisibility(elements: Iterable<Element>): void {
+  const toCache = new Set<Element>();
+  for (const el of elements) {
+    let current: Element | null = el;
+    let depth = 0;
+    while (current && depth < 15) {
+      if (toCache.has(current)) break;
+      toCache.add(current);
+      current = current.parentElement;
+      depth++;
+    }
+  }
+  for (const el of toCache) {
+    if (!boundingRects.has(el)) boundingRects.set(el, el.getBoundingClientRect());
+    if (!computedStyles.has(el)) computedStyles.set(el, getComputedStyle(el));
+  }
+}
+
 function overflowClips(v: string): boolean {
   return v !== '' && v !== 'visible';
 }

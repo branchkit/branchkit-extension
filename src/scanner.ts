@@ -7,6 +7,7 @@
 
 import { Category, ScannedElement } from './types';
 import { accessibleName } from './accessible-name';
+import { peekCachedRect, peekCachedStyle } from './layout-cache';
 
 // Core selectors — always scanned
 const HINTABLE = [
@@ -61,8 +62,12 @@ function isHintableExtra(el: Element): boolean {
   // Cheap match-based check first — avoids the getComputedStyle round
   // trip for the common case.
   if (el.matches(EXTRA_CLICKABLE_SELECTOR)) return true;
-  perfCounters.computedStyleCalls++;
-  const cursor = getComputedStyle(el).cursor;
+  let style = peekCachedStyle(el);
+  if (style === null) {
+    style = getComputedStyle(el);
+    perfCounters.computedStyleCalls++;
+  }
+  const cursor = style.cursor;
   return cursor === 'pointer' || cursor === 'text';
 }
 
@@ -209,10 +214,20 @@ export function classifyCategory(el: Element): Category {
 let visibilityCache: WeakSet<Element> | null = null;
 
 function isVisible(el: Element): boolean {
-  const rect = el.getBoundingClientRect();
-  perfCounters.boundingRectCalls++;
-  perfCounters.computedStyleCalls++;
-  const style = getComputedStyle(el);
+  // Peek the layout-cache first. Hit = cheap; miss = live read +
+  // counter bump. The cache is populated by the rAF-coalesced
+  // attribute drain so a batch of same-tree mutations shares the
+  // ancestor walk reads.
+  let rect = peekCachedRect(el);
+  if (rect === null) {
+    rect = el.getBoundingClientRect();
+    perfCounters.boundingRectCalls++;
+  }
+  let style = peekCachedStyle(el);
+  if (style === null) {
+    style = getComputedStyle(el);
+    perfCounters.computedStyleCalls++;
+  }
 
   if (style.visibility === 'hidden' || rect.width < 5 || rect.height < 5 || style.opacity === '0') {
     if (el instanceof HTMLInputElement &&
@@ -231,8 +246,12 @@ function isVisible(el: Element): boolean {
   let current = el.parentElement;
   while (current) {
     if (visibilityCache && visibilityCache.has(current)) break;
-    perfCounters.computedStyleCalls++;
-    if (getComputedStyle(current).opacity === '0') return false;
+    let parentStyle = peekCachedStyle(current);
+    if (parentStyle === null) {
+      parentStyle = getComputedStyle(current);
+      perfCounters.computedStyleCalls++;
+    }
+    if (parentStyle.opacity === '0') return false;
     chain.push(current);
     current = current.parentElement;
   }
