@@ -4,9 +4,17 @@ import { PlacementStrategy } from './strategy';
 
 const BASE_Z = 2147483000;
 
-type TextProbe = { hasText: true; rect: DOMRect } | { hasText: false };
+export type TextProbe = { hasText: true; rect: DOMRect } | { hasText: false };
 
-function probeFirstVisibleText(element: Element): TextProbe {
+/**
+ * Compute the first-visible-text probe for an element. Each call walks
+ * text nodes and reads `Range.getBoundingClientRect()` — the rect read
+ * forces synchronous layout unconditionally (the Element rect cache
+ * doesn't extend to Ranges). Prefer `getOrComputeProbe(wrapper)` from
+ * the hot placement path; this raw function is exported for tests and
+ * for callers that don't have a wrapper.
+ */
+export function probeFirstVisibleText(element: Element): TextProbe {
   const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
   let node: Text | null;
   while ((node = walker.nextNode() as Text | null)) {
@@ -26,6 +34,49 @@ function probeFirstVisibleText(element: Element): TextProbe {
     if (rect.width > 0 && rect.height > 0) return { hasText: true, rect };
   }
   return { hasText: false };
+}
+
+/**
+ * Read the wrapper's cached probe — or compute and store one on first call.
+ *
+ * The cache stores scroll-invariant offsets from the element rect (see
+ * `ElementWrapper.cachedProbe`), so we can reconstruct the absolute viewport
+ * rect by reading the current element rect (cheap, Element-rect cache covers
+ * it) and adding the offset. Subsequent scrolls reuse the cached offset; no
+ * Range rect reads on the scroll path.
+ *
+ * Invalidation is the caller's responsibility — see `invalidateProbe`. The
+ * target-mutation-tracker wires this in `content.ts`.
+ */
+export function getOrComputeProbe(w: ElementWrapper): TextProbe {
+  if (w.cachedProbe !== null) {
+    if (!w.cachedProbe.hasText) return { hasText: false };
+    const el = getCachedRect(w.element);
+    const { offsetX, offsetY, width, height } = w.cachedProbe;
+    return { hasText: true, rect: new DOMRect(el.left + offsetX, el.top + offsetY, width, height) };
+  }
+  const probe = probeFirstVisibleText(w.element);
+  if (!probe.hasText) {
+    w.cachedProbe = { hasText: false };
+    return probe;
+  }
+  const el = getCachedRect(w.element);
+  w.cachedProbe = {
+    hasText: true,
+    offsetX: probe.rect.left - el.left,
+    offsetY: probe.rect.top - el.top,
+    width: probe.rect.width,
+    height: probe.rect.height,
+  };
+  return probe;
+}
+
+/**
+ * Clear a wrapper's cached probe. Call when the element mutates, so the
+ * next placement re-probes against the fresh internal layout.
+ */
+export function invalidateProbe(w: ElementWrapper): void {
+  w.cachedProbe = null;
 }
 
 type NudgeKind = 'inside' | 'outside';
@@ -65,7 +116,9 @@ export class RangoStrategy implements PlacementStrategy {
     });
 
     // Read pass: probe text positions for all elements before any writes.
-    const probes = sorted.map((w) => probeFirstVisibleText(w.element));
+    // Cached per-wrapper (see `ElementWrapper.cachedProbe`) so scroll-only
+    // repositions don't re-walk text nodes or re-read Range rects.
+    const probes = sorted.map((w) => getOrComputeProbe(w));
 
     // Write pass: position all badges using pre-collected probes.
     for (let i = 0; i < sorted.length; i++) {
@@ -126,7 +179,7 @@ export class RangoStrategy implements PlacementStrategy {
 
   private positionAtTopLeft(w: ElementWrapper, probe?: TextProbe): void {
     if (!w.hint) return;
-    if (!probe) probe = probeFirstVisibleText(w.element);
+    if (!probe) probe = getOrComputeProbe(w);
     const targetRect = probe.hasText ? probe.rect : getCachedRect(w.element);
     const elementRect = getCachedRect(w.element);
     const size = w.hint.badgeSize;

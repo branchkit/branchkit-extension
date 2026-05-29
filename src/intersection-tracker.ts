@@ -137,6 +137,10 @@ export class IntersectionTracker {
   }
 
   private handleEntries = (entries: IntersectionObserverEntry[]): void => {
+    // Sync cost is the whole loop + scheduleFlush. Reported via the
+    // global recorder content.ts wires up (see __branchkitRecordCpu).
+    // No-op when the recorder isn't present (tests, early boot).
+    const __t0 = performance.now();
     for (const entry of entries) {
       const wrapper = this.store.findWrapperFor(entry.target);
       if (!wrapper) continue;
@@ -181,6 +185,8 @@ export class IntersectionTracker {
       }
     }
     this.scheduleFlush();
+    const rec = (globalThis as { __branchkitRecordCpu?: (label: string, ms: number) => void }).__branchkitRecordCpu;
+    if (rec) rec('intersection:handleEntries', performance.now() - __t0);
   };
 
   private scheduleFlush(): void {

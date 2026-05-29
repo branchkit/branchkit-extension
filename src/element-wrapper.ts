@@ -10,6 +10,36 @@ import { LabelAssignment } from './words';
 import { HintBadge } from './hints';
 import { HintCandidate } from './allocator';
 
+/**
+ * Scroll-invariant cache of `RangoStrategy.probeFirstVisibleText`.
+ *
+ * The probe finds the first visible text node inside an element and reads
+ * its `Range.getBoundingClientRect()`. Range rect reads always force
+ * synchronous layout — the browser's Element rect cache doesn't extend to
+ * Ranges — so repeating the probe on every scroll-coalesced reposition
+ * dominates main-thread time on dense pages (Gmail inbox: ~1000 forced
+ * layouts per scroll burst, enough to trip Firefox's unresponsive-script
+ * dialog).
+ *
+ * What we cache: the **offset** from the element's top-left to the text's
+ * top-left, plus the text rect's dimensions. Offsets are invariant under
+ * scroll because both rects translate by the same scroll delta; only the
+ * element's internal layout changes them. Storing offsets (not the absolute
+ * rect) means we don't need to wipe the cache on every scroll.
+ *
+ * Invalidated by `target-mutation-tracker.ts`'s callback when the element
+ * mutates. Container CSS resizes that don't mutate the DOM leave the cache
+ * intact — in practice the leaf elements that host badges don't internally
+ * reflow on container resize, and a subsequent mutation will re-probe if
+ * the text actually moved.
+ *
+ * See `placement/rango.ts:probeFirstVisibleText` for the canonical compute
+ * path, and `placement/rango.ts:getOrComputeProbe` for the cache read.
+ */
+export type TextProbeOffset =
+  | { hasText: false }
+  | { hasText: true; offsetX: number; offsetY: number; width: number; height: number };
+
 export class ElementWrapper {
   element: Element;
   scanned: ScannedElement;
@@ -27,6 +57,9 @@ export class ElementWrapper {
   // the limbo window.
   disconnectedAt: number | null = null;
   lastRect: DOMRect | null = null;
+  // See `TextProbeOffset` doc above. `null` = not yet computed; set on the
+  // first placement that probes this wrapper, cleared on target mutation.
+  cachedProbe: TextProbeOffset | null = null;
 
   constructor(element: Element, scanned: ScannedElement) {
     this.element = element;

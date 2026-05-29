@@ -272,6 +272,29 @@ async function forwardDebugLog(tag: string, data: unknown): Promise<void> {
   }
 }
 
+// Sibling of forwardDebugLog. Pumps the content script's perf snapshot
+// to the plugin's /perf-report endpoint, which appends to a JSONL trail
+// for offline analysis. See plugins/browser/src/perf_report.go and
+// src/content.ts (search PERF_REPORT). Diagnostic-only, no retry.
+async function forwardPerfReport(payload: { url: string; tab_id: number; browser: string; snapshot: unknown }): Promise<void> {
+  if (!pluginPort || !pluginToken) {
+    const found = await discoverPlugin();
+    if (!found) return;
+  }
+  try {
+    await fetch(`http://127.0.0.1:${pluginPort}/perf-report`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${pluginToken}`,
+      },
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    // Plugin may be down; diagnostic-only, no retry.
+  }
+}
+
 // Sibling of forwardDebugLog that targets the per-plugin debug log
 // channel (plugin-logs/browser.log) instead of the shared actuator.log.
 // Use for plugin-internal diagnostic chatter that doesn't belong
@@ -920,6 +943,17 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
 
   if (message.type === 'DEBUG_LOG' && typeof message.tag === 'string') {
     forwardDebugLog(message.tag, message.data);
+    return false;
+  }
+
+  if (message.type === 'PERF_REPORT' && message.snapshot) {
+    // Tab id comes from the sender; the content script doesn't know its
+    // own tab id. URL is the frame's URL — useful for attributing the
+    // report to a YouTube vs Gmail tab in the JSONL trail.
+    const tabId = _sender.tab?.id ?? -1;
+    const url = _sender.url ?? (message.url as string) ?? '';
+    const browser = typeof message.browser === 'string' ? message.browser : 'unknown';
+    forwardPerfReport({ url, tab_id: tabId, browser, snapshot: message.snapshot });
     return false;
   }
 

@@ -61,6 +61,9 @@ export class AttentionObserver {
   }
 
   private handleEntries = (entries: IntersectionObserverEntry[]): void => {
+    // Sync cost reported via the global recorder content.ts wires up
+    // (see __branchkitRecordCpu). No-op when the recorder isn't present.
+    const __t0 = performance.now();
     for (const entry of entries) {
       const el = entry.target;
       const was = this.intersecting.has(el);
@@ -87,6 +90,8 @@ export class AttentionObserver {
         if (farBelow || farAbove) this.io.unobserve(el);
       }
     }
+    const rec = (globalThis as { __branchkitRecordCpu?: (label: string, ms: number) => void }).__branchkitRecordCpu;
+    if (rec) rec('attention:handleEntries', performance.now() - __t0);
   };
 }
 

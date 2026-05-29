@@ -21,6 +21,7 @@ import { onContainerResize } from './container-resize-tracker';
 import { onTargetMutation } from './target-mutation-tracker';
 import { cacheLayout, cacheVisibility, clearLayoutCache, peekCachedRect } from './layout-cache';
 import { placeBadges, placeOne, clearPlacement } from './placement';
+import { invalidateProbe } from './placement/rango';
 import { activateElement, type ActivationResult } from './event-sequence';
 import { accessibleName } from './accessible-name';
 import {
@@ -1489,8 +1490,14 @@ async function processScanBatch(
   sessionMeta: { bundle_id: string; hint_visibility: HintVisibility; app_id: string; table_id: string },
   adapter: ReturnType<typeof getActiveAdapter>,
 ): Promise<void> {
-  // Per-batch exclusions (item 15). collectInclusions already ran
-  // once at scan start; only exclusions need batch-shape application.
+  // Sync slab 1: exclusions + dedup + candidate construction. Measured
+  // separately from the surrounding awaits so the recorded ms reflects
+  // actual main-thread block time, not wall-clock through claim+POST.
+  // Compare with `doScanBatched` (wall-clock across all batches +
+  // yields) — that bucket is useful for "how long did this scan feel"
+  // but a single high value there doesn't imply a freeze. The sync
+  // buckets here are the freeze attribution surface.
+  const __syncAStart = performance.now();
   if (compiledRule?.excludes.length) {
     applyExclusions(batch.refs, batch.elements, compiledRule.excludes);
   }
@@ -1506,6 +1513,7 @@ async function processScanBatch(
   const { newRefs, newElements } = filterNewBatchRefs(
     batch.refs, batch.elements, (el) => store.findWrapperFor(el) !== undefined,
   );
+  recordCpu('processScanBatch:syncA', performance.now() - __syncAStart);
 
   // No new elements to claim — bail unless this is the terminal batch,
   // in which case the protocol still needs an is_final marker so the
@@ -1556,6 +1564,11 @@ async function processScanBatch(
     elements: candidates.map(w => w.scanned),
   });
 
+  // Sync slab 2: response partitioning, attach loop, paint, observer
+  // surfacing. Everything after the POST-await is synchronous; if any
+  // of it takes >50ms it's a real main-thread block.
+  const __syncBStart = performance.now();
+
   // Partition: succeeded + still-connected → attach to store (paint
   // follows). Succeeded + disconnected (item 5 RED) → queue the
   // codeword for delete on the next batch and release the label.
@@ -1599,6 +1612,7 @@ async function processScanBatch(
   if (batch.isLast && batch.invisibleCandidates.length > 0) {
     observeInvisibleCandidates(batch.invisibleCandidates);
   }
+  recordCpu('processScanBatch:syncB', performance.now() - __syncBStart);
 }
 
 // --- Active-frame tracking ---
@@ -2152,7 +2166,16 @@ document.addEventListener('animationend', scheduleDeferredReposition, { passive:
 // MutationObserver's attributeFilter misses and the container RO can't
 // see. Settle-debounced because React renders fire many records in a
 // burst.
-onTargetMutation(scheduleDeferredReposition);
+//
+// Per-target invalidation of the cached text probe: the element's
+// internal layout may have shifted, so the offset-from-element-rect we
+// stored on the wrapper could now point at the wrong place. Drop the
+// cache so the next placement re-probes against the fresh layout.
+onTargetMutation((target) => {
+  const w = store.findWrapperFor(target);
+  if (w) invalidateProbe(w);
+  scheduleDeferredReposition();
+});
 
 // --- Keyboard Listener ---
 
@@ -2444,6 +2467,14 @@ function resetCpuCounters(): void {
   for (const k of Object.keys(cpuBuckets)) delete cpuBuckets[k];
 }
 
+// Expose recordCpu globally so peer modules without a direct content.ts
+// import (intersection-tracker, attention-observer) can attribute their
+// callback time to the same bucket system content.ts already collects.
+// Plain globalThis stash — explicit string contract beats an event-callback
+// wire-up that would add an API surface to two observers nothing else
+// touches. Read by handleEntries in both observers.
+(globalThis as { __branchkitRecordCpu?: (label: string, ms: number) => void }).__branchkitRecordCpu = recordCpu;
+
 // Long Tasks API (Chrome/Edge only; Firefox returns false for supportedEntryTypes).
 // Catches anything that monopolizes the main thread for >50ms regardless of source —
 // includes work from page scripts, not just ours, so attribution is via the wall-clock
@@ -2476,6 +2507,46 @@ function resetLongtask(): void {
   longtaskMaxMs = 0;
   longtaskTop.length = 0;
 }
+
+// Watchdog: self-rescheduling setTimeout that records the gap between
+// expected and actual fire times. Firefox doesn't support the Long Tasks
+// API, so this is our only direct measurement of "did the main thread
+// freeze." Any source — page scripts, browser-internal layout, extension
+// paths we don't instrument — shows up here as a delayed fire.
+//
+// Skipped while the tab is hidden because Firefox throttles setTimeout to
+// 1000ms in background tabs; the throttling would otherwise look like a
+// continuous freeze. visibilitychange resets the baseline on un-hide.
+//
+// Top-N preserves the wall-clock timestamps of the worst stalls so we can
+// correlate trail entries to user-reported unresponsive-script events.
+const WATCHDOG_INTERVAL_MS = 250;
+const WATCHDOG_RECORD_THRESHOLD_MS = 100;
+let watchdogLastFire = performance.now();
+let watchdogVisibleOnLastFire = document.visibilityState === 'visible';
+function watchdogTick(): void {
+  const now = performance.now();
+  const visible = document.visibilityState === 'visible';
+  // Only attribute delay when the tab was visible during BOTH the prior
+  // fire and this one. If either was hidden, the gap could be Firefox /
+  // Chrome's background-tab setTimeout throttling (clamps to ≥1000ms,
+  // further when inactive >5min), not a real main-thread block. Check
+  // both ends because event-driven visibility tracking misses tabs that
+  // were never visible to begin with (loader iframes, OAuth popups,
+  // hidden gapi frames on about:blank) — those would otherwise look
+  // like permanent 750-1000ms freezes from the throttle.
+  if (visible && watchdogVisibleOnLastFire) {
+    const expected = watchdogLastFire + WATCHDOG_INTERVAL_MS;
+    const delay = Math.max(0, now - expected);
+    if (delay > WATCHDOG_RECORD_THRESHOLD_MS) {
+      recordCpu('watchdog:delay', delay);
+    }
+  }
+  watchdogLastFire = now;
+  watchdogVisibleOnLastFire = visible;
+  setTimeout(watchdogTick, WATCHDOG_INTERVAL_MS);
+}
+setTimeout(watchdogTick, WATCHDOG_INTERVAL_MS);
 
 /**
  * Finalize sweeper. Detaches any wrapper whose limbo deadline has
@@ -2948,6 +3019,30 @@ function publishPerfSnapshot(): void {
 }
 setInterval(publishPerfSnapshot, 250);
 publishPerfSnapshot();
+
+// Periodic ship to the browser plugin's /perf-report endpoint so we have
+// a JSONL trail in `~/Library/Application Support/BranchKitDev/plugins/
+// browser/extension-perf.jsonl` for offline analysis. The dataset
+// publish above is for live in-page inspection; this is the durable
+// record. Every 5s is the sample interval — slow enough to be cheap,
+// fast enough to bracket a Firefox unresponsive-script event.
+function shipPerfReport(): void {
+  try {
+    const snapshot = buildPerfSnapshot();
+    const ua = navigator.userAgent;
+    const browser = /Firefox\//i.test(ua) ? 'firefox' : /Chrome\//i.test(ua) ? 'chrome' : 'other';
+    chrome.runtime.sendMessage({
+      type: 'PERF_REPORT',
+      url: location.href,
+      browser,
+      snapshot,
+    }).catch(() => {/* extension context may be invalidated */});
+  } catch {
+    /* extension orphan or chrome.runtime missing */
+  }
+}
+const PERF_REPORT_INTERVAL_MS = 5000;
+setInterval(shipPerfReport, PERF_REPORT_INTERVAL_MS);
 // Reset trigger from main world — set the dataset to "1" and we reset.
 new MutationObserver(() => {
   if (document.documentElement.dataset.branchkitResetPerf === '1') {
