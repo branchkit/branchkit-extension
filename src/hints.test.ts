@@ -43,11 +43,16 @@ describe('findBadgeContainer', () => {
     expect(container).toBe(root.querySelector('#outer'));
   });
 
-  it('skips table internal elements up to the table', () => {
-    const root = mount('<div id="wrapper"><table><tbody><tr><td><button id="btn">click</button></td></tr></tbody></table></div>');
+  it('mounts inside table cells (td) so badges scroll with table-scrolling apps', () => {
+    // Required for Gmail-style mail lists where the table scrolls
+    // inside a static outer wrapper. Mounting in the wrapper instead
+    // of the cell would anchor the badge OUTSIDE the scrolling content.
+    // Tested by snapshot evidence from Gmail (outer.vpY stuck at the
+    // wrapper's bottom edge regardless of internal scroll).
+    const root = mount('<div id="wrapper"><table><tbody><tr><td id="cell"><button id="btn">click</button></td></tr></tbody></table></div>');
     const btn = root.querySelector('#btn')!;
     const container = findBadgeContainer(btn);
-    expect(container).toBe(root.querySelector('#wrapper'));
+    expect(container).toBe(root.querySelector('#cell'));
   });
 
   it('returns div inside td when no table-structural skip applies', () => {
