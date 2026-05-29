@@ -181,12 +181,36 @@ function isRedundant(el: Element): boolean {
     return false;
   }
 
-  if (el.parentElement?.matches(HINTABLE_SELECTOR) &&
-      !hasSignificantSiblings(el)) {
+  const parent = el.parentElement;
+  if (!parent) return false;
+
+  // Wrapped-inside-hintable: standard Rango redundancy filter.
+  if (parent.matches(HINTABLE_SELECTOR) && !hasSignificantSiblings(el)) {
     return true;
   }
 
+  // In aggressive mode the wider selector catches nested div/span
+  // wrappers whose parent is ALSO an extra hintable (e.g. Gmail's
+  // "Select" button → inner decorative span both match). When the
+  // inner has no siblings, it's a pure wrapper and the outer is the
+  // real target — suppress the inner. When the inner HAS siblings
+  // (e.g. a checkbox alongside a star alongside subject text inside
+  // a clickable row), the inner IS a distinct target — keep it.
+  if (extraHintsEnabled
+      && !el.matches(HINTABLE_SELECTOR)
+      && isExtraHintableAncestor(parent)
+      && !hasSignificantSiblings(el)) {
+    return true;
+  }
 
+  return false;
+}
+
+function isExtraHintableAncestor(el: Element): boolean {
+  // Cheap matches first; only fall to getComputedStyle if needed and
+  // only for the immediate parent (no walking — keeps O(1) per call).
+  if (el.matches(HINTABLE_SELECTOR)) return true;
+  if (el.matches(EXTRA_SELECTOR) && isHintableExtra(el)) return true;
   return false;
 }
 
