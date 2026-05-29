@@ -6,10 +6,10 @@
  *
  * The base manifest is structured to be Firefox-compatible by default
  * (it omits Chrome-only permissions). Chrome builds layer those back in.
- * Chrome-and-Firefox-shared fields (`background.service_worker` +
- * `background.scripts`, `browser_specific_settings.gecko`) live in the
- * base manifest unchanged — each browser silently ignores the other's
- * fields, so no patching needed for those.
+ * Each browser's manifest exposes the right `background.*` field —
+ * `service_worker` for Chrome, `scripts` for Firefox — and the other
+ * is stripped, because Chrome MV3 *rejects* `background.scripts` (it's
+ * an MV2-only field) and Firefox warns on `background.service_worker`.
  *
  * Single source of truth principle: one manifest.json, two
  * deterministic outputs. If a third browser shows up, add a branch
@@ -38,6 +38,12 @@ if (target === 'chrome') {
   // unknown permission, so it lives only in the Chrome output.
   if (!base.permissions.includes('offscreen')) {
     base.permissions.push('offscreen');
+  }
+  // Chrome MV3 only accepts `background.service_worker` — having
+  // `background.scripts` present at all is a hard validation error
+  // ("requires manifest version of 2 or lower"). Strip it.
+  if (base.background?.scripts) {
+    delete base.background.scripts;
   }
 } else if (target === 'firefox') {
   // Firefox doesn't recognize the `offscreen` permission; AMO's
