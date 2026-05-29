@@ -19,6 +19,8 @@ body { margin: 0; font-family: system-ui; }
    left + 1px top space. */
 .row-aio { overflow: hidden; }
 .row-nu { overflow: hidden; display: block; }
+.row-tn { display: flex; align-items: center; }
+.chevron { width: 20px; height: 20px; background: #888; border-radius: 2px; margin: 0 4px 0 8px; flex-shrink: 0; cursor: pointer; }
 .nav-item { display: flex; align-items: center; gap: 16px; padding: 0 12px 0 24px; height: 32px; border-radius: 0 16px 16px 0; font-size: 14px; cursor: pointer; }
 .nav-item .ico { width: 20px; height: 20px; background: #5f6368; border-radius: 2px; flex-shrink: 0; }
 .nav-item .label { flex: 1; }
@@ -42,7 +44,15 @@ body { margin: 0; font-family: system-ui; }
       <li><div class="row-aio"><span class="row-nu"><a href="#snoozed" class="nav-item"><span class="ico"></span><span class="label">Snoozed</span></a></span></div></li>
       <li><div class="row-aio"><span class="row-nu"><a href="#sent" class="nav-item"><span class="ico"></span><span class="label">Sent</span></a></span></div></li>
       <li><div class="row-aio"><span class="row-nu"><a href="#drafts" class="nav-item"><span class="ico"></span><span class="label">Drafts</span><span class="count">9</span></a></span></div></li>
-      <li><div class="row-aio"><span class="row-nu"><a href="#categories" class="nav-item"><span class="ico"></span><span class="label">Categories</span></a></span></div></li>
+      <!-- Real Gmail: collapsible Categories row has a separate
+           [role=link] chevron div as sibling of the link, both at the
+           same y but different x. -->
+      <li>
+        <div class="row-tn">
+          <div class="chevron" role="link" aria-label="Expand label: Categories" tabindex="0"></div>
+          <div class="row-aio"><span class="row-nu"><a href="#categories" class="nav-item"><span class="ico"></span><span class="label">Categories</span></a></span></div>
+        </div>
+      </li>
       <li><div class="row-aio"><span class="row-nu"><a href="#more" class="nav-item"><span class="ico"></span><span class="label">More</span></a></span></div></li>
     </ul>
   </div></div></div>
