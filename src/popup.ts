@@ -63,6 +63,16 @@ function initSyncedSelect(id: string, storageKey: string): void {
   });
 }
 
+function initSyncedCheckbox(id: string, storageKey: string): void {
+  const cb = document.getElementById(id) as HTMLInputElement;
+  chrome.storage.sync.get(storageKey, (result) => {
+    cb.checked = result[storageKey] === true;
+  });
+  cb.addEventListener('change', () => {
+    chrome.storage.sync.set({ [storageKey]: cb.checked });
+  });
+}
+
 function initOptionsLink(): void {
   const btn = document.getElementById('open-options');
   if (!btn) return;
@@ -376,6 +386,7 @@ async function init(): Promise<void> {
   checkStatus();
   initSyncedSelect('hint-visibility', 'hintVisibility');
   initSyncedSelect('hint-mode', 'badgeDisplayMode');
+  initSyncedCheckbox('aggressive-hints', 'aggressiveHints');
   initOptionsLink();
 
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });

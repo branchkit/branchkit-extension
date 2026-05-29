@@ -26,6 +26,45 @@ const EXCLUDE = [
 const HINTABLE_SELECTOR = HINTABLE.join(', ');
 const EXCLUDE_SELECTOR = EXCLUDE.join(', ');
 
+// Aggressive-hints opt-in: extra container tags (divs, spans, list items,
+// table cells, headings) that aren't natively interactive but commonly
+// host click handlers in SPAs. Direct port of Rango's `extraSelector` —
+// they only become hintable if they ALSO look interactive (see
+// `isHintableExtra` below). Gmail's email-row click area, Slack message
+// hover actions, GitHub's role-less buttons, etc. fall in this set.
+const EXTRA_TAGS = 'div, span, i, li, td, p, h1, h2, h3, h4, h5, h6';
+const EXTRA_SELECTOR = `${HINTABLE_SELECTOR}, ${EXTRA_TAGS}`;
+
+// Heuristic match for "this container is probably clickable" — matches
+// Rango's isHintableExtra. Selector match for common JS framework class
+// patterns + `[jsaction]` (Google's everything-uses-this attribute).
+const EXTRA_CLICKABLE_SELECTOR =
+  '[class*="button" i], [class*="btn" i], [class*="select" i], [class*="control" i], [jsaction]';
+
+let extraHintsEnabled = false;
+
+/**
+ * Toggle the "extra hints" mode on/off. Persisted by the caller; this
+ * just controls scan-time selector behavior. Calling this does NOT
+ * re-scan — the caller (content.ts) should trigger a rescan.
+ */
+export function setExtraHintsEnabled(on: boolean): void {
+  extraHintsEnabled = on;
+}
+
+export function getExtraHintsEnabled(): boolean {
+  return extraHintsEnabled;
+}
+
+function isHintableExtra(el: Element): boolean {
+  if (!el.matches(EXTRA_SELECTOR)) return false;
+  // Cheap match-based check first — avoids the getComputedStyle round
+  // trip for the common case.
+  if (el.matches(EXTRA_CLICKABLE_SELECTOR)) return true;
+  const cursor = getComputedStyle(el).cursor;
+  return cursor === 'pointer' || cursor === 'text';
+}
+
 // Standard HTML elements that don't host shadow DOM in practice. Used as a
 // pre-filter for shadow-host detection: only `<div>` and custom elements
 // (which have hyphens in their tag names) commonly attach shadow roots, so
@@ -169,9 +208,10 @@ function hasSignificantSiblings(el: Node): boolean {
  * world. Mirrors the per-element checks in `scanElements`.
  */
 export function isHintable(el: Element): boolean {
-  if (!el.matches(HINTABLE_SELECTOR)) return false;
   if (el.matches(EXCLUDE_SELECTOR)) return false;
   if (el.closest('[data-branchkit-hint]')) return false;
+  const matchesCore = el.matches(HINTABLE_SELECTOR);
+  if (!matchesCore && !(extraHintsEnabled && isHintableExtra(el))) return false;
   if (!isVisible(el)) return false;
   if (isRedundant(el)) return false;
   return true;
@@ -267,10 +307,17 @@ function collectHintables(
   const invisibleCandidates: Element[] = [];
   const seen = new Set<Element>(initialSeen);
 
-  for (const el of deepQuerySelectorAll(root, HINTABLE_SELECTOR)) {
+  const scanSelector = extraHintsEnabled ? EXTRA_SELECTOR : HINTABLE_SELECTOR;
+  for (const el of deepQuerySelectorAll(root, scanSelector)) {
     if (seen.has(el)) continue;
     if (el.matches(EXCLUDE_SELECTOR)) continue;
     if (el.closest('[data-branchkit-hint]')) continue;
+
+    // In extra-hints mode, the wider selector matches plenty of
+    // non-interactive elements. Keep them only if they look clickable.
+    if (extraHintsEnabled && !el.matches(HINTABLE_SELECTOR) && !isHintableExtra(el)) {
+      continue;
+    }
 
     if (!isVisible(el)) {
       invisibleCandidates.push(el);

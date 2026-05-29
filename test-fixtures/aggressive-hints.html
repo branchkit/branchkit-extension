@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Aggressive hints test fixture</title>
+<style>
+body { font-family: system-ui; padding: 16px; }
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #eee;
+  cursor: pointer;
+}
+.cb { width: 18px; height: 18px; border: 1px solid #888; border-radius: 2px; cursor: pointer; flex-shrink: 0; }
+.star { width: 18px; height: 18px; background: #fc0; clip-path: polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%); cursor: pointer; flex-shrink: 0; }
+.from { width: 120px; font-weight: 500; }
+.subj { flex: 1; }
+.btn-thing { padding: 6px 12px; border-radius: 4px; background: #1a73e8; color: white; cursor: pointer; }
+</style>
+</head>
+<body>
+  <h2>Email-like rows (Gmail jsaction pattern)</h2>
+  <!-- Rows with jsaction (Google's pattern), no native interactive elements -->
+  <div class="row" jsaction="click:openMail">
+    <div class="cb" jsaction="click:toggleSelect"></div>
+    <div class="star" jsaction="click:toggleStar"></div>
+    <div class="from">Alice Sender</div>
+    <div class="subj">Email subject line one</div>
+  </div>
+  <div class="row" jsaction="click:openMail">
+    <div class="cb" jsaction="click:toggleSelect"></div>
+    <div class="star" jsaction="click:toggleStar"></div>
+    <div class="from">Bob Sender</div>
+    <div class="subj">Another email subject</div>
+  </div>
+  <div class="row" jsaction="click:openMail">
+    <div class="cb" jsaction="click:toggleSelect"></div>
+    <div class="star" jsaction="click:toggleStar"></div>
+    <div class="from">Carol Sender</div>
+    <div class="subj">Third email subject</div>
+  </div>
+
+  <h2>Class-name patterns (Bootstrap-ish)</h2>
+  <div class="btn-thing">Save</div>
+  <div class="btn-thing">Cancel</div>
+
+  <h2>Real interactive elements (always hinted)</h2>
+  <p><a href="#real-link">Real link 1</a> | <button>Real button</button></p>
+</body>
+</html>

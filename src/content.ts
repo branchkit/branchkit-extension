@@ -7,7 +7,7 @@
 
 import { Category, BadgeDisplayMode, HintVisibility, ScannedElement, Message, DispatchResult, GrammarBatchRequest, GrammarBatchResponse } from './types';
 import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from './words';
-import { scanElements, scanSingle, isHintable, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE } from './scanner';
+import { scanElements, scanSingle, isHintable, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, setExtraHintsEnabled } from './scanner';
 import { ElementWrapper, WrapperStore, enterLimbo, isLimboExpired } from './element-wrapper';
 import * as idRegistry from './registry';
 import { computeFingerprint, fingerprintsEqual } from './registry';
@@ -234,13 +234,14 @@ function whenDOMSettles(callback: () => void): void {
 // --- Display Mode from storage ---
 
 if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
-  chrome.storage.sync.get(['badgeDisplayMode', 'hintVisibility'], (result) => {
+  chrome.storage.sync.get(['badgeDisplayMode', 'hintVisibility', 'aggressiveHints'], (result) => {
     if (result.badgeDisplayMode) {
       displayMode = result.badgeDisplayMode;
     }
     if (result.hintVisibility) {
       hintVisibility = result.hintVisibility;
     }
+    setExtraHintsEnabled(result.aggressiveHints === true);
   });
 
   chrome.storage.onChanged.addListener((changes) => {
@@ -257,6 +258,14 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
       } else if (hintVisibility === 'manual' && hintsVisible) {
         hideHints();
       }
+    }
+    if (changes.aggressiveHints) {
+      // Toggle changed → re-scan so the wider/narrower selector takes
+      // effect immediately. Clear the store first so already-hinted
+      // elements that no longer qualify get torn down.
+      setExtraHintsEnabled(changes.aggressiveHints.newValue === true);
+      store.clear();
+      doScan();
     }
     // BranchKit pushed a new alphabet — adopt it. The pool was wiped
     // server-side by regenerateAllStacks; our wrappers' codewords are
