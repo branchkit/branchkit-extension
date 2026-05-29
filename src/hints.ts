@@ -114,28 +114,54 @@ export function resolveContainer(target: Element): HTMLElement {
   const limitParent = findLimitParent(target);
   const targetRect = getCachedRect(target);
 
+  // Walk every clipping ancestor between target and limitParent. For
+  // each, measure how much space the badge would have to the left and
+  // above the target. Stop at the first ancestor that has ENOUGH_LEFT
+  // and ENOUGH_TOP — that ancestor's parent is the container. Direct
+  // port of Rango's getContextForHint loop; the multi-level escalation
+  // is what handles deeply-nested sidebars (Gmail's nav rail clips at
+  // ~3 levels and a single-level escalation would still leave the
+  // badge clamped over the menu text).
+  const clipAncestors: HTMLElement[] = [];
   let current: Element | null = target.parentElement;
-  let firstTightClip: HTMLElement | null = null;
-
-  while (current && current !== limitParent && current !== document.body) {
+  while (current && current !== document.body) {
     if (current instanceof HTMLElement && isClipAncestor(current)) {
-      const space = getSpaceInAncestor(current, targetRect);
-      if (space.left < ENOUGH_LEFT || space.top < ENOUGH_TOP) {
-        firstTightClip ??= current;
-      }
+      clipAncestors.push(current);
     }
+    if (current === limitParent) break;
     current = current.parentElement;
   }
 
-  if (!firstTightClip) return candidate;
-
-  const clipParent = firstTightClip.parentElement;
-  if (clipParent instanceof HTMLElement && limitParent.contains(clipParent)) {
-    return clipParent;
+  let chosen: HTMLElement | null = null;
+  for (let i = 0; i < clipAncestors.length; i++) {
+    const ancestor = clipAncestors[i];
+    const space = getSpaceInAncestor(ancestor, targetRect);
+    if (space.left >= ENOUGH_LEFT && space.top >= ENOUGH_TOP) {
+      // This ancestor has enough space for the badge; its parent
+      // container is the right place to anchor.
+      const parent = (i === 0 ? ancestor : clipAncestors[i - 1]).parentElement;
+      if (parent instanceof HTMLElement && limitParent.contains(parent)) {
+        chosen = parent;
+      } else {
+        chosen = findBadgeContainer(ancestor);
+      }
+      break;
+    }
   }
 
-  const escaped = findBadgeContainer(firstTightClip);
-  if (limitParent.contains(escaped)) return escaped;
+  if (chosen) return chosen;
+
+  // No ancestor had enough room — fall back to escaping past the first
+  // tight clip we did see, preserving the previous best-effort behavior.
+  if (clipAncestors.length > 0) {
+    const firstTight = clipAncestors[0];
+    const clipParent = firstTight.parentElement;
+    if (clipParent instanceof HTMLElement && limitParent.contains(clipParent)) {
+      return clipParent;
+    }
+    const escaped = findBadgeContainer(firstTight);
+    if (limitParent.contains(escaped)) return escaped;
+  }
   return candidate;
 }
 

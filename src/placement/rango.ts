@@ -30,16 +30,22 @@ function probeFirstVisibleText(element: Element): TextProbe {
 
 function getNudgeRatios(element: Element, hasText: boolean): { x: number; y: number } {
   const rect = getCachedRect(element);
+  // Large no-text elements (icon-only buttons, image links): place hint
+  // INSIDE the top-left corner. nudge=1 means hintOffset is 0 → badge
+  // top-left aligns with target top-left. Matches Rango.
   if (rect.width > 30 && rect.height > 30 && !hasText) {
-    return { x: 0.4, y: 0.5 };
+    return { x: 1, y: 1 };
   }
 
+  // Text-bearing elements: nudge values picked so the badge sits just
+  // above-and-to-the-left of the first character, with minimal overlap.
+  // Direct port of Rango's font-size scale.
   const style = getCachedStyle(element);
   const fontSize = parseInt(style.fontSize, 10);
 
-  if (fontSize < 15) return { x: 0.1, y: 0.2 };
-  if (fontSize < 20) return { x: 0.15, y: 0.25 };
-  return { x: 0.2, y: 0.3 };
+  if (fontSize < 15) return { x: 0.3, y: 0.5 };
+  if (fontSize < 20) return { x: 0.4, y: 0.6 };
+  return { x: 0.6, y: 0.8 };
 }
 
 export class RangoStrategy implements PlacementStrategy {
