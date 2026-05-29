@@ -37,15 +37,19 @@ function getNudgeRatios(element: Element, hasText: boolean): { x: number; y: num
     return { x: 1, y: 1 };
   }
 
-  // Text-bearing elements: nudge values picked so the badge sits just
-  // above-and-to-the-left of the first character, with minimal overlap.
-  // Direct port of Rango's font-size scale.
+  // Text-bearing elements. nudge here is the target ABSOLUTE PIXEL
+  // OVERHANG (see positionAtTopLeft for the formula). Smaller = more
+  // clearance from the text. The y-overhang stays at 0 because any
+  // overhang past text-top covers ascender-tall characters (G, h, l)
+  // and looks worse the wider the badge gets. x-overhang is small so
+  // the badge ends just barely past text-left; this matches Rango's
+  // visual at common font sizes.
   const style = getCachedStyle(element);
   const fontSize = parseInt(style.fontSize, 10);
 
-  if (fontSize < 15) return { x: 0.3, y: 0.5 };
-  if (fontSize < 20) return { x: 0.4, y: 0.6 };
-  return { x: 0.6, y: 0.8 };
+  if (fontSize < 15) return { x: 3, y: 0 };
+  if (fontSize < 20) return { x: 4, y: 0 };
+  return { x: 6, y: 0 };
 }
 
 export class RangoStrategy implements PlacementStrategy {
@@ -128,19 +132,19 @@ export class RangoStrategy implements PlacementStrategy {
     const space = this.getAvailableSpace(w.hint.anchorParent, targetRect);
 
     // Rango uses nudge ratios because their badges are always 1 char
-    // (~12-14px). BranchKit shows 2-char codeword pairs (~24-28px) in
-    // "Letters" display mode — same ratio doubles the absolute overlap
-    // and the badge ends up covering the first letters of the label
-    // text. Treat the nudge as a target ABSOLUTE overhang in pixels:
-    // hintOffsetX = badge_w - overhang. For a 14px ref-width badge
-    // (Rango's case) with nudgeX=0.4, the overhang is 14*0.4 = 5.6px,
-    // which generalises cleanly to any badge width.
-    const REF_BADGE_W = 14;
-    const REF_BADGE_H = 14;
-    const overhangX = REF_BADGE_W * nudgeX;
-    const overhangY = REF_BADGE_H * nudgeY;
-    const hintOffsetX = Math.max(0, size.w - overhangX);
-    const hintOffsetY = Math.max(0, size.h - overhangY);
+    // (~12-14px). BranchKit shows 2-char codeword pairs in "Letters"
+    // mode (~24-28px) and the same ratio doubles the absolute overlap.
+    // For text-bearing targets we treat nudge as an absolute pixel
+    // overhang past the text edge — independent of badge width — so
+    // 1-char and 2-char badges land in the same relative position.
+    // For no-text large targets we keep the old ratio semantics so
+    // nudge=1 still aligns badge top-left with target top-left.
+    const hintOffsetX = probe.hasText
+      ? Math.max(0, size.w - nudgeX)
+      : size.w * (1 - nudgeX);
+    const hintOffsetY = probe.hasText
+      ? Math.max(0, size.h - nudgeY)
+      : size.h * (1 - nudgeY);
 
     const clampedOffsetX = space.left !== undefined
       ? Math.min(hintOffsetX, Math.max(0, space.left - 1))
