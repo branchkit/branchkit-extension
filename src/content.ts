@@ -15,8 +15,7 @@ import { bumpRebindCounter, findLimboMatch, newRebindCounters, REBIND_DISTANCE_T
 import { resolveTarget } from './activate-resolution';
 import { IntersectionTracker } from './intersection-tracker';
 import { AttentionObserver } from './attention-observer';
-import { TargetRectStore } from './target-rect-store';
-import { HintBadge, setPositionCaller, clearPositionCaller, setTargetRectSource } from './hints';
+import { HintBadge, setPositionCaller, clearPositionCaller } from './hints';
 import { onContainerResize } from './container-resize-tracker';
 import { onTargetMutation } from './target-mutation-tracker';
 import { cacheLayout, cacheVisibility, clearLayoutCache, peekCachedRect } from './layout-cache';
@@ -625,15 +624,7 @@ const resizeObserver = new ResizeObserver((entries) => {
     if (!isHintable(el)) {
       detachWrapper(el);
       dirty = true;
-      continue;
     }
-    // Phase 5 (router-via-RO): the engine just told us this element's
-    // box changed. Refresh its rect in the store so subscribers reading
-    // through the store see the new position. The DOMRectReadOnly from
-    // the entry is content-box; we want viewport-relative, so the read
-    // is live — but it follows the engine's resize work, so the layout
-    // is already warm.
-    targetRectStore.write(el, el.getBoundingClientRect());
   }
   if (dirty) schedulePushGrammar();
 });
@@ -652,6 +643,7 @@ const resizeObserver = new ResizeObserver((entries) => {
 const pendingVisibility = new Set<Element>();
 const VISIBILITY_ABANDON_MS = 30_000;
 let visibilityAbandonTimer: ReturnType<typeof setTimeout> | null = null;
+let visibilityRafPending = false;
 
 const visibilityIO = new IntersectionObserver((entries) => {
   let dirty = false;
@@ -676,48 +668,10 @@ const visibilityIO = new IntersectionObserver((entries) => {
   if (pendingVisibility.size === 0) disconnectVisibilityMO();
 }, { root: null, rootMargin: '200px', threshold: 0 });
 
-const visibilityMO = new MutationObserver((records) => {
-  // Targeted recheck: only the mutation targets that are themselves in
-  // pendingVisibility. Replaces the old rAF-debounced full-set walk,
-  // which on YouTube spent ~24k scanSingle calls/sec re-walking up to
-  // 8k pending elements per fire. Per-record cost is now O(1) Set.has
-  // plus scanSingle on actual matches.
-  //
-  // Edge case: a parent's class/style change that affects descendant
-  // visibility via CSS selector (e.g., body.loaded .skeleton {display:
-  // block}) won't be caught here because the MO record's target is the
-  // parent, not the descendants. Those transitions still get caught by
-  // the next discovery sweep or by attention IO firing intersecting
-  // when the geometry actually flips. We accept the corner case for
-  // the structural CPU savings.
-  const __cpuStart = performance.now();
-  let dirty = false;
-  let checked = 0;
-  for (const m of records) {
-    const target = m.target;
-    if (!(target instanceof Element)) continue;
-    if (!pendingVisibility.has(target)) continue;
-    checked++;
-    if (!target.isConnected) {
-      pendingVisibility.delete(target);
-      visibilityIO.unobserve(target);
-      continue;
-    }
-    const scanned = scanSingle(target);
-    if (scanned) {
-      pendingVisibility.delete(target);
-      visibilityIO.unobserve(target);
-      attachWrapper(new ElementWrapper(target, scanned));
-      dirty = true;
-    }
-  }
-  if (dirty) {
-    schedulePushGrammar();
-    if (hintsVisible) showHints();
-  }
-  if (pendingVisibility.size === 0) disconnectVisibilityMO();
-  recordCpu('visibilityMO:callback', performance.now() - __cpuStart);
-  if (checked > 0) recordCpu('visibilityMO:checked', checked);
+const visibilityMO = new MutationObserver(() => {
+  if (visibilityRafPending) return;
+  visibilityRafPending = true;
+  requestAnimationFrame(recheckPendingVisibility);
 });
 
 let visibilityMOConnected = false;
@@ -748,6 +702,48 @@ function disconnectVisibilityMO(): void {
   }
 }
 
+function recheckPendingVisibility(): void {
+  const __cpuStart = performance.now();
+  const __initialSize = pendingVisibility.size;
+  visibilityRafPending = false;
+  let dirty = false;
+  // Pre-cache the union of (target + ancestor chain) so the many
+  // isVisible() reads inside scanSingle share the read. Same trick as
+  // drainReevaluations — siblings under one parent reuse the ancestor
+  // walk's computedStyle reads. Cleared in `finally` so the next frame
+  // sees live state.
+  cacheVisibility(pendingVisibility);
+  try {
+    for (const el of pendingVisibility) {
+      if (!el.isConnected) {
+        pendingVisibility.delete(el);
+        visibilityIO.unobserve(el);
+        continue;
+      }
+      if (store.findWrapperFor(el)) {
+        pendingVisibility.delete(el);
+        visibilityIO.unobserve(el);
+        continue;
+      }
+      const scanned = scanSingle(el);
+      if (!scanned) continue;
+      pendingVisibility.delete(el);
+      visibilityIO.unobserve(el);
+      attachWrapper(new ElementWrapper(el, scanned));
+      dirty = true;
+    }
+  } finally {
+    clearLayoutCache();
+  }
+  if (dirty) {
+    schedulePushGrammar();
+    if (hintsVisible) showHints();
+  }
+  if (pendingVisibility.size === 0) disconnectVisibilityMO();
+  recordCpu('recheckPendingVisibility', performance.now() - __cpuStart);
+  if (__initialSize > 0) recordCpu(`recheckPendingVisibility:size:${__initialSize > 1000 ? '1000+' : __initialSize > 100 ? '100-1000' : '<100'}`, __initialSize);
+}
+
 function observeInvisibleCandidates(candidates: Element[]): void {
   // Under the viewport-scoped lifecycle, invisible candidates are routed
   // through the attention observer. They only join `pendingVisibility`
@@ -769,34 +765,6 @@ function observeInvisibleCandidates(candidates: Element[]): void {
 // from the IntersectionTracker (narrow-margin IO for codeword claim/
 // release) by design — different concerns, different margins. See
 // notes/DESIGN_OBSERVER_DRIVEN_LAYOUT.md.
-// Phase 3 shadow: target-rect store, populated from attention IO entries.
-// Phase 4 cutover is flag-gated via setTargetRectSource — flag default
-// off; flip via `chrome.storage.sync.set({observerDrivenLayout: true})`
-// (or by editing OBSERVER_DRIVEN_LAYOUT_DEFAULT below) once the drift
-// signal in buildPerfSnapshot confirms the store stays correct.
-const targetRectStore = new TargetRectStore();
-const OBSERVER_DRIVEN_LAYOUT_DEFAULT = false;
-let observerDrivenLayoutEnabled = OBSERVER_DRIVEN_LAYOUT_DEFAULT;
-setTargetRectSource(targetRectStore, observerDrivenLayoutEnabled);
-try {
-  chrome.storage.sync.get(['observerDrivenLayout']).then((stored) => {
-    const v = stored?.observerDrivenLayout;
-    if (typeof v === 'boolean' && v !== observerDrivenLayoutEnabled) {
-      observerDrivenLayoutEnabled = v;
-      setTargetRectSource(targetRectStore, v);
-    }
-  });
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== 'sync') return;
-    const c = changes.observerDrivenLayout;
-    if (!c) return;
-    if (typeof c.newValue === 'boolean') {
-      observerDrivenLayoutEnabled = c.newValue;
-      setTargetRectSource(targetRectStore, c.newValue);
-    }
-  });
-} catch { /* chrome.storage unavailable (test env) */ }
-
 const attentionObserver = new AttentionObserver({
   onEnter: (el) => {
     if (!el.isConnected) return;
@@ -819,19 +787,12 @@ const attentionObserver = new AttentionObserver({
     if (store.findWrapperFor(el)) {
       detachWrapper(el);
       schedulePushGrammar();
-    } else {
-      // Non-wrapper leave (pendingVisibility candidate scrolled away);
-      // detachWrapper already evicts the store for wrapper cases.
-      targetRectStore.evict(el);
     }
     if (pendingVisibility.has(el)) {
       pendingVisibility.delete(el);
       visibilityIO.unobserve(el);
       if (pendingVisibility.size === 0) disconnectVisibilityMO();
     }
-  },
-  onRect: (el, rect) => {
-    targetRectStore.write(el, rect);
   },
 });
 
@@ -870,7 +831,6 @@ function detachWrapper(element: Element): void {
   resizeObserver.unobserve(element);
   tracker.unobserve(element);
   attentionObserver.unobserve(element);
-  targetRectStore.evict(element);
   const removed = store.removeWrapperByElement(element);
   if (removed) {
     // Delta-sync bookkeeping: if the plugin holds this codeword, queue
@@ -2112,14 +2072,6 @@ function scheduleReposition(): void {
       const __pbStart = performance.now();
       try {
         cacheLayout(visible.map(w => w.element));
-        // Phase 5 (router-via-scroll-rAF): on scroll/resize, refresh
-        // store rects for everything we're about to reposition anyway.
-        // The reads share the cacheLayout warm pass, so no extra layout
-        // cost. Subscribers reading from the store see fresh rects in
-        // the same frame.
-        for (const w of visible) {
-          targetRectStore.write(w.element, w.element.getBoundingClientRect());
-        }
         placeBadges(visible);
       } finally {
         clearLayoutCache();
@@ -2941,21 +2893,6 @@ function buildPerfSnapshot() {
           .supportedEntryTypes?.includes('longtask') || false,
       },
     },
-    targetRectStore: buildTargetRectStoreSnapshot(),
-  };
-}
-
-// Phase 3 shadow validator: report store size + a fresh drift sample.
-// The drift sampler forces layout (compares cached vs live rect), so
-// limit it tightly — once per snapshot, max ~10 elements. With Phase 4
-// gated off, this is the only signal telling us whether the store
-// would have been a correct read source.
-function buildTargetRectStoreSnapshot() {
-  const drift = targetRectStore.sampleDrift(10);
-  return {
-    size: targetRectStore.size,
-    subscribers: targetRectStore.subscriberCount,
-    drift,
   };
 }
 (window as any).branchkitPerfStats = buildPerfSnapshot;

@@ -11,7 +11,6 @@
 import { Category, BadgeDisplayMode } from './types';
 import { LabelAssignment, labelToDisplay } from './words';
 import { getCachedRect, getCachedStyle, getCachedDims, isClipAncestor } from './layout-cache';
-import type { TargetRectStore } from './target-rect-store';
 import { computeBadgeColors } from './badge-colors';
 import { leaderLineGeometry } from './placement/geometry';
 import { trackContainerResize, untrackContainerResize } from './container-resize-tracker';
@@ -39,20 +38,6 @@ export function getPositionLog(): readonly PositionLogEntry[] { return positionL
 let _positionCaller = '';
 export function setPositionCaller(c: string): void { _positionCaller = c; }
 export function clearPositionCaller(): void { _positionCaller = ''; }
-
-// Phase 4 (DESIGN_OBSERVER_DRIVEN_LAYOUT.md): flag-gated cutover of the
-// target-rect read in updatePosition. Off by default — when enabled,
-// the badge's target rect comes from the observer-populated store
-// (free, engine-warm) instead of the per-batch layout-cache (which
-// still forces a layout when the cache misses). Position log + outer
-// + anchorParent reads stay live for this phase; Phases 5-6 finish
-// the migration.
-let _targetRectStore: TargetRectStore | null = null;
-let _observerDrivenLayoutEnabled = false;
-export function setTargetRectSource(store: TargetRectStore | null, enabled: boolean): void {
-  _targetRectStore = store;
-  _observerDrivenLayoutEnabled = enabled;
-}
 
 export type PositionMode = 'absolute' | 'relative';
 
@@ -418,15 +403,7 @@ export class HintBadge {
       vpX = candidate.x;
       vpY = candidate.y;
     } else {
-      // Phase 4 cutover (flag-gated): prefer the observer-populated
-      // store. Falls through to the per-batch layout cache on miss so
-      // we don't regress on targets the attention IO hasn't yet
-      // observed (first paint, just-attached wrappers).
-      let targetRect: DOMRectReadOnly | undefined;
-      if (_observerDrivenLayoutEnabled && _targetRectStore) {
-        targetRect = _targetRectStore.read(this.target);
-      }
-      if (!targetRect) targetRect = getCachedRect(this.target);
+      const targetRect = getCachedRect(this.target);
       vpX = targetRect.left - BADGE_OFFSET;
       vpY = targetRect.top + 2;
     }

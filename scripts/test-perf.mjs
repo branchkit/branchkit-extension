@@ -279,10 +279,6 @@ async function runEngine(engine) {
           .join(' ');
         if (byType) console.log(`      by type          ${byType}`);
       }
-      if (c.targetRectStore) {
-        const t = c.targetRectStore;
-        console.log(`    rect store         size=${fmt(t.size)} subs=${fmt(t.subscribers)} drift=${fmt(t.drift.drifted)}/${fmt(t.drift.sampled)} max=${fmt(t.drift.maxDriftPx, 1)}px`);
-      }
       if (c.cpu) {
         const sorted = Object.entries(c.cpu.buckets)
           .sort((a, b) => b[1].maxMs - a[1].maxMs);
