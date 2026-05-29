@@ -8,6 +8,62 @@ unbounded wrapper/pending-visibility growth are symptoms of the same
 architectural mismatch: we attend to the whole document when the
 browser has perfect information about what's near the viewport.
 
+## Status
+
+| Phase | What | Status |
+|---|---|---|
+| 1 | CPU instrumentation bridge | Done — landed with viewport-scoped lifecycle |
+| 2 | Viewport-scoped wrapper + pendingVisibility lifecycle (AttentionObserver) | Done — landed in `0b938d3` |
+| 3 | TargetRectStore + LayoutSignalRouter (shadow) | Ahead |
+| 4 | Flag-gated cutover of `updatePosition` reads | Ahead |
+| 5 | Delete global rAF reposition sweep | Ahead |
+| 6 | Relocate position log to read from store | Ahead |
+
+Phase 2 measured impact (YouTube video page, 45s scroll soak):
+
+| Metric | Before | After | Change |
+|---|---|---|---|
+| `wrapperCount` final | 4,288 | 602 | −86% |
+| `wrapperCount` trajectory | monotonic climb | peaks then decreases | leave-detach working |
+| `scanSingle` calls / 45s | 1,103,195 | 105,055 | −90% |
+| `pendingVisibility` peak | 8,081 (size:1000+) | 424 (size:100-1000) | structurally bounded |
+| `recheckPendingVisibility` max single drain | 112ms | 25ms | −78% |
+| Long task max | 1,180ms | 698ms | −41% |
+| Long task total | 30.8s / 45s | 19.6s / 45s | −36% |
+| Heap final | 353MB | 255MB | −28% |
+
+This eliminated the Firefox unresponsive-script warning on YouTube
+comment pages — the 5s+ main-thread-pinning sync drain that triggered
+it became structurally impossible once the pending set was bounded
+by viewport proximity.
+
+## Phase 2 follow-ups (still gaps)
+
+These surfaced during the Phase 2 run and are not addressed yet:
+
+- **Attention IO subscriptions accumulate.** `discoverInSubtree`
+  registers every selector-matching ref with the attention observer.
+  Refs far below the fold that never enter the attention region never
+  get unobserved. Heap is still climbing (+175MB/min during scroll
+  soak), driven by IO subscription bookkeeping the engine maintains
+  per observed element. Fix: TTL or distance-based unobserve for
+  attention candidates that haven't fired enter in N seconds, or
+  scope discovery itself to viewport-extended regions so we never
+  observe far-away elements in the first place.
+- **`recheckPendingVisibility` is still the dominant CPU bucket** at
+  steady state (94s of element-walks across 297 drains, avg 320
+  elements per drain). It's bounded now, but YouTube has a lot of
+  visibility:hidden skeletons inside the attention region. Reducing
+  further means replacing pendingVisibility + visibilityMO entirely
+  with attention-IO-driven `scanSingle` on geometry-change — which
+  the attention IO already provides if we wire it that way. Part of
+  the "purest observer-source" target.
+- **Positioning axis (Phases 3-6) untouched.** `placeBadges:reposition`
+  is currently fine (16ms avg / 63ms max), but the structural change
+  is still worth doing — same observer-trigger principle applied to
+  rect reads. Builds on Phase 2's attention region (only positions
+  badges whose targets are near the viewport, which already holds).
+
 ## Why this is one design, not two
 
 The forced-reflow problem (every visible badge re-measured per scroll
@@ -364,23 +420,42 @@ The doc proposes this as the end state, not as a single commit. Phasing
 runs lifecycle first because that's where the YouTube smoking gun
 lives; positioning second because it builds on the lifecycle work.
 
-**Phase 1: Instrument (done).** Long-task observer + per-hot-path
+**Phase 1: Instrument (DONE).** Long-task observer + per-hot-path
 wall-clock on the perf bridge. The CPU buckets in `buildPerfSnapshot`
 were what surfaced `recheckPendingVisibility:size:1000+` and made the
 lifecycle gap visible.
 
-**Phase 2: Viewport-scoped lifecycle (the YouTube fix).** Build
-`TargetLifecycleObserver` with the wide-margin attention IO. Replace
-`observeInvisibleCandidates` + `pendingVisibility` with attention-
-region-based observation. `discoverInSubtree` populates the candidate
-pool but no longer eagerly attaches wrappers — IO entries do.
+**Phase 2: Viewport-scoped lifecycle (DONE — `0b938d3`).** Shipped
+`src/attention-observer.ts` as `AttentionObserver` (not
+`TargetLifecycleObserver` as originally named — same role). Wired
+into content.ts:
 
-Validation: rerun the perf harness against the YouTube video page.
-Required signals:
-- `wrapperCount` stabilizes (e.g., bounded at ~500 with realistic
-  attention region), does not climb with scroll distance
-- `pendingVisibility` removed; `recheckPendingVisibility` bucket gone
-- `scanSingle calls` drops from 24k/s to <100/s
+- `observeInvisibleCandidates` rewritten to route candidates through
+  the attention observer; `pendingVisibility` no longer grows with
+  document candidate count.
+- `discoverInSubtree` no longer eagerly attaches wrappers for
+  MO-discovered subtrees — calls `attentionObserver.observe(ref)`.
+  The IO's `onEnter` runs `scanSingle` and attaches if hintable.
+- `attachWrapper`/`detachWrapper` subscribe/unsubscribe the attention
+  observer so leave-detach applies uniformly across all wrappers
+  (including initial-scan eager-attached ones — initial scan kept its
+  eager path to preserve badge-on-load UX).
+- `onLeave` detaches the wrapper and drops pendingVisibility
+  membership, with `schedulePushGrammar` for delta-sync.
+
+Two-IO model (kept tracker + attention separate):
+- `IntersectionTracker` (existing, `rootMargin: '200px'`) drives
+  codeword claim/release — "you-are-interactive."
+- `AttentionObserver` (new, `rootMargin: '200%'`) drives wrapper
+  attach/detach + pendingVisibility membership — "you-are-a-candidate."
+
+Outcome matched the predicted signals (see Status table above).
+Two anticipated wins didn't fully land:
+- `recheckPendingVisibility` bucket is *bounded* but not *gone*.
+  Eliminating it requires the "purest observer-source" model (IO
+  geometry-change replaces visibilityMO).
+- `scanSingle calls` dropped 90% (1.1M → 105K) but not to <100/s — the
+  bounded-but-present pendingVisibility set still gets walked.
 
 **Phase 3: TargetRectStore + LayoutSignalRouter alongside existing
 positioning.** New system writes to a shadow rect store but doesn't
