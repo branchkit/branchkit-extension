@@ -2302,8 +2302,20 @@ function dropDisconnectedWrappers(): number {
       entered++;
     }
   }
+  dropDisconnectedCalls++;
+  dropDisconnectedFound += entered;
   return entered;
 }
+
+let dropDisconnectedCalls = 0;
+let dropDisconnectedFound = 0;
+let finalizeSweeps = 0;
+let finalizeDetached = 0;
+let moCallbackInvocations = 0;
+let moForeignRecords = 0;
+let moRemoveRecordsSeen = 0;
+let moHugePathFired = 0;
+let processMutationsCalls = 0;
 
 /**
  * Finalize sweeper. Detaches any wrapper whose limbo deadline has
@@ -2336,6 +2348,8 @@ function finalizeExpiredLimboWrappers(): number {
     rebindCounters.refuse_no_match++;
     finalized++;
   }
+  finalizeSweeps++;
+  finalizeDetached += finalized;
   if (finalized > 0) schedulePushGrammar();
   return finalized;
 }
@@ -2381,6 +2395,7 @@ function reevaluateAttribute(target: Element): boolean {
 }
 
 function processMutations(records: MutationRecord[]): void {
+  processMutationsCalls++;
   let dirty = false;
   let sawRemoval = false;
 
@@ -2395,6 +2410,7 @@ function processMutations(records: MutationRecord[]): void {
       for (const node of m.removedNodes) {
         if (isOwnMutation(node)) continue;
         if (node instanceof Element) {
+          moRemoveRecordsSeen++;
           sawRemoval = true;
         }
       }
@@ -2417,6 +2433,7 @@ function processMutations(records: MutationRecord[]): void {
 }
 
 const observer = new MutationObserver((records) => {
+  moCallbackInvocations++;
   // Hints are visible — behavior depends on visibility mode.
   // In "manual" mode, defer mutations so codewords don't shuffle while
   // the user is reading badges. hideHints() flushes via doScan().
@@ -2437,9 +2454,11 @@ const observer = new MutationObserver((records) => {
     }
     return !isOwnMutation(m.target);
   });
+  moForeignRecords += foreign.length;
   if (foreign.length === 0) return;
 
   if (foreign.length >= HUGE_MUTATIONS_COUNT) {
+    moHugePathFired++;
     if (hugeMutationTimer) clearTimeout(hugeMutationTimer);
     hugeMutationTimer = setTimeout(() => {
       hugeMutationTimer = null;
@@ -2602,13 +2621,52 @@ function resetMessageCounters(): void {
   messageCounters.totalBytesApprox = 0;
 }
 
+function resetLifecycleCounters(): void {
+  dropDisconnectedCalls = 0;
+  dropDisconnectedFound = 0;
+  finalizeSweeps = 0;
+  finalizeDetached = 0;
+  moCallbackInvocations = 0;
+  moForeignRecords = 0;
+  moRemoveRecordsSeen = 0;
+  moHugePathFired = 0;
+  processMutationsCalls = 0;
+}
+
 // Scan / hintability perf snapshot. Counters are cumulative since CS load
 // (or last reset). Useful diff sequence: reset → interact for N seconds →
 // read. Surfaces "are we paying 5000 getComputedStyle calls per scan?".
 function buildPerfSnapshot() {
+  // Walk the store once to split connected from limbo. Limbo wrappers
+  // have `disconnectedAt !== null` — the design's "wrapper held while
+  // we wait for a possible rebind" state. A monotonically-climbing
+  // limboCount across the leak samples is the signature of a
+  // finalize-sweeper that's falling behind.
+  let limbo = 0;
+  let sentinelDisconnected = 0;
+  for (const w of store.all) {
+    if (w.disconnectedAt !== null) limbo++;
+    else if (!w.element.isConnected) sentinelDisconnected++;
+  }
   return {
     ...getPerfCounters(),
     wrapperCount: store.all.length,
+    wrapperLimboCount: limbo,
+    // Disconnected wrappers that aren't yet in limbo. Should be ≈ 0 in
+    // steady state; nonzero means dropDisconnectedWrappers isn't being
+    // called between detach and snapshot.
+    wrapperDisconnectedOutOfLimbo: sentinelDisconnected,
+    lifecycleCounters: {
+      dropDisconnectedCalls,
+      dropDisconnectedFound,
+      finalizeSweeps,
+      finalizeDetached,
+      moCallbackInvocations,
+      moForeignRecords,
+      moRemoveRecordsSeen,
+      moHugePathFired,
+      processMutationsCalls,
+    },
     rebindCounters: { ...rebindCounters },
     messages: {
       total: messageCounters.totalSends,
@@ -2621,6 +2679,7 @@ function buildPerfSnapshot() {
 (window as any).branchkitResetPerf = (): void => {
   resetPerfCounters();
   resetMessageCounters();
+  resetLifecycleCounters();
 };
 // Cross-world bridge: content script globals live in the isolated world,
 // so Playwright's page.evaluate (main world) can't call them directly.
@@ -2639,6 +2698,7 @@ new MutationObserver(() => {
   if (document.documentElement.dataset.branchkitResetPerf === '1') {
     resetPerfCounters();
     resetMessageCounters();
+    resetLifecycleCounters();
     delete document.documentElement.dataset.branchkitResetPerf;
     publishPerfSnapshot();
   }

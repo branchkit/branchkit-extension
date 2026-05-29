@@ -42,8 +42,11 @@ const { values: argv } = parseArgs({
     'rango-path': { type: 'string', default: '/tmp/rango/dist/chrome' },
     scroll: { type: 'boolean', default: false },
     headless: { type: 'boolean', default: false },
+    warmup: { type: 'string', default: '2' },
   },
 });
+
+const warmupMs = Math.max(1, Number(argv.warmup)) * 1000;
 
 const urls = argv.url && argv.url.length ? argv.url : [`file://${FIXTURE}`];
 const tabsPerUrl = Math.max(1, Number(argv.tabs));
@@ -98,18 +101,27 @@ async function openTab(ctx, url) {
   } catch (err) {
     console.warn(`  load failed for ${url}: ${err.message}`);
   }
-  // Warmup: extension content scripts + first scan settle.
-  await page.waitForTimeout(2000);
+  // Warmup: let the extension's initial scan settle. Default is short
+  // for snappy runs, but big-fixture pages need 5s+ for the per-batch
+  // scan + grammar push round-trips to drain. Override with --warmup=S.
+  await page.waitForTimeout(warmupMs);
   return page;
 }
 
 async function readMemory(page) {
   return page.evaluate(() => {
-    if (!performance.memory) return null;
-    return {
+    const mem = performance.memory ? {
       usedMB: performance.memory.usedJSHeapSize / 1048576,
       totalMB: performance.memory.totalJSHeapSize / 1048576,
-    };
+    } : null;
+    // Read BranchKit's wrapperCount + limbo size via the same dataset
+    // bridge the perf counters use. Engine-agnostic readers (Rango,
+    // none) will see null — which is fine, we only graph when present.
+    const raw = document.documentElement.dataset.branchkitPerf;
+    const stats = raw ? JSON.parse(raw) : null;
+    return mem
+      ? { ...mem, wrapperCount: stats?.wrapperCount ?? null, limbo: stats?.wrapperLimboCount ?? null }
+      : null;
   }).catch(() => null);
 }
 
@@ -230,6 +242,11 @@ async function runEngine(engine) {
       console.log(`    heap samples       ${ts.map(s => `t=${(s.t / 1000).toFixed(0)}s ${fmt(s.usedMB, 1)}MB`).join(' | ')}`);
       console.log(`    heap slope         ${fmtSlope(ts)}`);
       console.log(`    heap peak          ${fmt(peak, 1)}MB`);
+      if (ts.some(s => s.wrapperCount !== null)) {
+        console.log(`    wrapper samples    ${ts.map(s =>
+          `t=${(s.t / 1000).toFixed(0)}s w=${s.wrapperCount}${s.limbo ? `+${s.limbo}L` : ''}`,
+        ).join(' | ')}`);
+      }
       aggHeapStartMB += ts[0].usedMB;
       aggHeapEndMB += ts[ts.length - 1].usedMB;
       aggHeapPeakMB += peak;
@@ -242,6 +259,16 @@ async function runEngine(engine) {
       console.log(`    scanSingle calls   ${fmt(c.scanSingleCalls)}`);
       console.log(`    getComputedStyle   ${fmt(c.computedStyleCalls)}`);
       console.log(`    getBoundingRect    ${fmt(c.boundingRectCalls)}`);
+      if (c.wrapperDisconnectedOutOfLimbo !== undefined) {
+        console.log(`    limbo (final)      ${fmt(c.wrapperLimboCount)} (disc-not-limbo ${fmt(c.wrapperDisconnectedOutOfLimbo)})`);
+      }
+      if (c.lifecycleCounters) {
+        const l = c.lifecycleCounters;
+        console.log(`    MO callback        ${fmt(l.moCallbackInvocations)} fires, ${fmt(l.moForeignRecords)} foreign records, ${fmt(l.moHugePathFired)} huge path`);
+        console.log(`    processMutations   ${fmt(l.processMutationsCalls)} calls, ${fmt(l.moRemoveRecordsSeen)} remove records seen`);
+        console.log(`    dropDisc           ${fmt(l.dropDisconnectedCalls)} calls, ${fmt(l.dropDisconnectedFound)} found`);
+        console.log(`    finalize           ${fmt(l.finalizeSweeps)} sweeps, ${fmt(l.finalizeDetached)} detached`);
+      }
       if (c.messages) {
         const m = c.messages;
         const kb = (m.bytes / 1024).toFixed(1);
