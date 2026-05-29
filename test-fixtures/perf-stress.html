@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Perf stress (Gmail-density)</title>
+<style>
+body { margin: 0; font-family: system-ui; }
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border-bottom: 1px solid #eee;
+  cursor: pointer;
+  font-size: 13px;
+}
+.cb { width: 16px; height: 16px; border: 1px solid #888; flex-shrink: 0; cursor: pointer; }
+.star { width: 16px; height: 16px; background: #fc0; cursor: pointer; flex-shrink: 0; }
+.from { width: 140px; font-weight: 500; cursor: pointer; }
+.subj { flex: 1; cursor: pointer; }
+.date { width: 80px; color: #888; font-size: 11px; }
+.deco { /* purely cosmetic spans Gmail uses */
+  display: inline-block; padding: 2px 6px;
+}
+.muted { color: #888; }
+.app { display: flex; height: 100vh; }
+.sidebar { width: 200px; background: #f5f5f5; padding: 12px; overflow-y: auto; }
+.sidebar div { padding: 4px 8px; cursor: pointer; font-size: 13px; }
+.main { flex: 1; overflow-y: auto; }
+.toolbar { padding: 8px 12px; border-bottom: 1px solid #ddd; display: flex; gap: 8px; }
+.toolbar div { padding: 4px 8px; cursor: pointer; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="sidebar">
+    <div jsaction="click:open">Inbox</div>
+    <div jsaction="click:open">Starred</div>
+    <div jsaction="click:open">Snoozed</div>
+    <div jsaction="click:open">Sent</div>
+    <div jsaction="click:open">Drafts</div>
+    <div jsaction="click:open">Archive</div>
+    <div jsaction="click:open">Spam</div>
+    <div jsaction="click:open">Trash</div>
+    <div jsaction="click:open">All Mail</div>
+    <div jsaction="click:open">Categories</div>
+    <div jsaction="click:open">More</div>
+  </div>
+  <div class="main">
+    <div class="toolbar">
+      <div jsaction="click:select-all" class="cb"></div>
+      <div jsaction="click:refresh">⟳</div>
+      <div jsaction="click:more">⋮</div>
+      <div class="muted">1–50 of 1,824</div>
+      <div jsaction="click:newer">‹</div>
+      <div jsaction="click:older">›</div>
+    </div>
+    <div id="rows"></div>
+  </div>
+</div>
+<script>
+// Generate N rows. Each row has: row container, checkbox, star, sender,
+// subject — all "clickable" divs with jsaction attribute. Matches the
+// pattern aggressive mode is designed to catch.
+const ROWS = 200;
+const senders = ['Alice', 'Bob', 'Carol', 'Dan', 'Eve', 'Frank', 'Grace', 'Henry'];
+const subjects = [
+  'Project status update for this week',
+  'Re: Meeting notes from Tuesday',
+  'Quick question about the design',
+  'Updated invoice attached',
+  'Fwd: New requirements doc',
+];
+const rowsEl = document.getElementById('rows');
+for (let i = 0; i < ROWS; i++) {
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.setAttribute('jsaction', 'click:openMail');
+  row.innerHTML = `
+    <div class="cb" jsaction="click:toggleSelect"></div>
+    <div class="star" jsaction="click:toggleStar"></div>
+    <div class="from" jsaction="click:openMail">${senders[i % senders.length]} ${i}</div>
+    <div class="subj" jsaction="click:openMail">
+      <span class="deco">${subjects[i % subjects.length]}</span>
+      <span class="muted">— snippet preview text…</span>
+    </div>
+    <div class="date">${(i % 28) + 1}:${(i % 60).toString().padStart(2, '0')} AM</div>
+  `;
+  rowsEl.appendChild(row);
+}
+// Simulate Gmail's mutation churn.
+// (a) presence indicators / new mail flags — attribute changes
+setInterval(() => {
+  const i = Math.floor(Math.random() * ROWS);
+  const row = rowsEl.children[i];
+  if (!row) return;
+  const cb = row.querySelector('.cb');
+  cb.style.background = cb.style.background ? '' : '#aef';
+}, 100);
+// (b) new mail / row remove — childList churn. Insert + delete a row
+//     every 500ms so the MutationObserver path runs scan + reevaluate
+//     and we can measure that cost.
+let counter = 0;
+setInterval(() => {
+  counter++;
+  // Insert a new row at the top
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.setAttribute('jsaction', 'click:openMail');
+  row.innerHTML = `
+    <div class="cb" jsaction="click:toggleSelect"></div>
+    <div class="star" jsaction="click:toggleStar"></div>
+    <div class="from" jsaction="click:openMail">NewSender ${counter}</div>
+    <div class="subj" jsaction="click:openMail">
+      <span class="deco">Fresh subject ${counter}</span>
+      <span class="muted">— snippet…</span>
+    </div>
+    <div class="date">${(counter % 12) + 1}:00 PM</div>
+  `;
+  rowsEl.insertBefore(row, rowsEl.firstChild);
+  // Remove the oldest row to keep total bounded
+  if (rowsEl.children.length > ROWS + 1) {
+    rowsEl.removeChild(rowsEl.lastChild);
+  }
+}, 500);
+</script>
+</body>
+</html>

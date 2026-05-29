@@ -61,8 +61,56 @@ function isHintableExtra(el: Element): boolean {
   // Cheap match-based check first — avoids the getComputedStyle round
   // trip for the common case.
   if (el.matches(EXTRA_CLICKABLE_SELECTOR)) return true;
+  perfCounters.computedStyleCalls++;
   const cursor = getComputedStyle(el).cursor;
   return cursor === 'pointer' || cursor === 'text';
+}
+
+// --- Perf instrumentation ---
+// Counters incremented during scan + hintability checks. Exposed via
+// `window.branchkitPerfStats()` so a soak on a real page can answer
+// "is aggressive mode making us pay 5000 getComputedStyle calls per
+// scan?". The counters are absolute; consumers snapshot + diff to
+// measure a span of activity.
+
+export interface PerfCounters {
+  scanCalls: number;                 // collectHintables (full subtree scan)
+  scanTotalMs: number;
+  scanCandidatesSeen: number;        // total .matches(scanSelector) hits
+  scanKeptAsHintable: number;        // survived all filters
+  scanRejectedExclude: number;
+  scanRejectedInvisible: number;
+  scanRejectedRedundant: number;
+  scanRejectedExtraNotClickable: number;
+  scanSingleCalls: number;           // scanSingle (per-element re-check via MO)
+  isHintableExtraCalls: number;
+  computedStyleCalls: number;        // total getComputedStyle calls (all sites)
+  boundingRectCalls: number;         // total getBoundingClientRect (forces layout)
+}
+
+const perfCounters: PerfCounters = {
+  scanCalls: 0,
+  scanTotalMs: 0,
+  scanCandidatesSeen: 0,
+  scanKeptAsHintable: 0,
+  scanRejectedExclude: 0,
+  scanRejectedInvisible: 0,
+  scanRejectedRedundant: 0,
+  scanRejectedExtraNotClickable: 0,
+  scanSingleCalls: 0,
+  isHintableExtraCalls: 0,
+  computedStyleCalls: 0,
+  boundingRectCalls: 0,
+};
+
+export function getPerfCounters(): PerfCounters {
+  return { ...perfCounters };
+}
+
+export function resetPerfCounters(): void {
+  for (const k of Object.keys(perfCounters) as Array<keyof PerfCounters>) {
+    perfCounters[k] = 0;
+  }
 }
 
 // Standard HTML elements that don't host shadow DOM in practice. Used as a
@@ -153,8 +201,17 @@ export function classifyCategory(el: Element): Category {
   return 'button';
 }
 
+// Per-scan cache of ancestors already proven to have non-zero opacity.
+// Reduces isVisible's opacity-ancestor walk from O(depth) per element to
+// amortized O(1) for siblings within the same scan. Reset to null at scan
+// end so we can't leak references into the next scan (ancestor's opacity
+// may have changed between scans, and WeakSet has no API to drop entries).
+let visibilityCache: WeakSet<Element> | null = null;
+
 function isVisible(el: Element): boolean {
   const rect = el.getBoundingClientRect();
+  perfCounters.boundingRectCalls++;
+  perfCounters.computedStyleCalls++;
   const style = getComputedStyle(el);
 
   if (style.visibility === 'hidden' || rect.width < 5 || rect.height < 5 || style.opacity === '0') {
@@ -166,10 +223,22 @@ function isVisible(el: Element): boolean {
     return false;
   }
 
+  // Walk ancestors checking for opacity:0. Hit the cache first — the
+  // first descendant of an ancestor chain pays the full walk, every
+  // subsequent descendant within the same scan short-circuits the
+  // moment it hits a cached ancestor.
+  const chain: Element[] = [];
   let current = el.parentElement;
   while (current) {
+    if (visibilityCache && visibilityCache.has(current)) break;
+    perfCounters.computedStyleCalls++;
     if (getComputedStyle(current).opacity === '0') return false;
+    chain.push(current);
     current = current.parentElement;
+  }
+  // Memoize the chain we just validated for the rest of this scan.
+  if (visibilityCache) {
+    for (const a of chain) visibilityCache.add(a);
   }
 
   return true;
@@ -292,6 +361,7 @@ export function enumerateAlmostHintable(
  * inserted node without re-scanning the document.
  */
 export function scanSingle(el: Element): ScannedElement | null {
+  perfCounters.scanSingleCalls++;
   if (!isHintable(el)) return null;
   return {
     label: getElementLabel(el),
@@ -331,25 +401,35 @@ function collectHintables(
   const invisibleCandidates: Element[] = [];
   const seen = new Set<Element>(initialSeen);
 
+  const scanStart = performance.now();
+  perfCounters.scanCalls++;
+  visibilityCache = new WeakSet<Element>();
   const scanSelector = extraHintsEnabled ? EXTRA_SELECTOR : HINTABLE_SELECTOR;
   for (const el of deepQuerySelectorAll(root, scanSelector)) {
+    perfCounters.scanCandidatesSeen++;
     if (seen.has(el)) continue;
-    if (el.matches(EXCLUDE_SELECTOR)) continue;
+    if (el.matches(EXCLUDE_SELECTOR)) { perfCounters.scanRejectedExclude++; continue; }
     if (el.closest('[data-branchkit-hint]')) continue;
 
     // In extra-hints mode, the wider selector matches plenty of
     // non-interactive elements. Keep them only if they look clickable.
-    if (extraHintsEnabled && !el.matches(HINTABLE_SELECTOR) && !isHintableExtra(el)) {
-      continue;
+    if (extraHintsEnabled && !el.matches(HINTABLE_SELECTOR)) {
+      perfCounters.isHintableExtraCalls++;
+      if (!isHintableExtra(el)) {
+        perfCounters.scanRejectedExtraNotClickable++;
+        continue;
+      }
     }
 
     if (!isVisible(el)) {
       invisibleCandidates.push(el);
+      perfCounters.scanRejectedInvisible++;
       continue;
     }
-    if (isRedundant(el)) continue;
+    if (isRedundant(el)) { perfCounters.scanRejectedRedundant++; continue; }
 
     seen.add(el);
+    perfCounters.scanKeptAsHintable++;
     elements.push({
       label: getElementLabel(el),
       id: 0,
@@ -361,6 +441,8 @@ function collectHintables(
     refs.push(el);
   }
 
+  perfCounters.scanTotalMs += performance.now() - scanStart;
+  visibilityCache = null;
   return { elements, refs, invisibleCandidates };
 }
 

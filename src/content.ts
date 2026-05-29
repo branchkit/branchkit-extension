@@ -7,7 +7,7 @@
 
 import { Category, BadgeDisplayMode, HintVisibility, ScannedElement, Message, DispatchResult, GrammarBatchRequest, GrammarBatchResponse } from './types';
 import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from './words';
-import { scanElements, scanSingle, isHintable, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, setExtraHintsEnabled } from './scanner';
+import { scanElements, scanSingle, isHintable, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, setExtraHintsEnabled, getPerfCounters, resetPerfCounters } from './scanner';
 import { ElementWrapper, WrapperStore, enterLimbo, isLimboExpired } from './element-wrapper';
 import * as idRegistry from './registry';
 import { computeFingerprint, fingerprintsEqual } from './registry';
@@ -2477,4 +2477,36 @@ watchUndefinedCustomElements(document);
 // Returns a fresh copy on each call so callers can take a baseline,
 // soak, and diff.
 (window as any).branchkitRebindStats = (): RebindCounters => ({ ...rebindCounters });
+// Scan / hintability perf snapshot. Counters are cumulative since CS load
+// (or last reset). Useful diff sequence: reset → interact for N seconds →
+// read. Surfaces "are we paying 5000 getComputedStyle calls per scan?".
+function buildPerfSnapshot() {
+  return {
+    ...getPerfCounters(),
+    wrapperCount: store.all.length,
+    rebindCounters: { ...rebindCounters },
+  };
+}
+(window as any).branchkitPerfStats = buildPerfSnapshot;
+(window as any).branchkitResetPerf = (): void => resetPerfCounters();
+// Cross-world bridge: content script globals live in the isolated world,
+// so Playwright's page.evaluate (main world) can't call them directly.
+// Mirror the snapshot to a documentElement dataset attribute every 250ms
+// so any world can read it. Cheap; the JSON is small (<500B).
+function publishPerfSnapshot(): void {
+  try {
+    document.documentElement.dataset.branchkitPerf =
+      JSON.stringify(buildPerfSnapshot());
+  } catch { /* dom not ready */ }
+}
+setInterval(publishPerfSnapshot, 250);
+publishPerfSnapshot();
+// Reset trigger from main world — set the dataset to "1" and we reset.
+new MutationObserver(() => {
+  if (document.documentElement.dataset.branchkitResetPerf === '1') {
+    resetPerfCounters();
+    delete document.documentElement.dataset.branchkitResetPerf;
+    publishPerfSnapshot();
+  }
+}).observe(document.documentElement, { attributes: true, attributeFilter: ['data-branchkit-reset-perf'] });
 
