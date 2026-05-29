@@ -14,6 +14,7 @@ import { computeFingerprint, fingerprintsEqual } from './registry';
 import { bumpRebindCounter, findLimboMatch, newRebindCounters, REBIND_DISTANCE_THRESHOLD_PX, type RebindCounters } from './rebind';
 import { resolveTarget } from './activate-resolution';
 import { IntersectionTracker } from './intersection-tracker';
+import { AttentionObserver } from './attention-observer';
 import { HintBadge, setPositionCaller, clearPositionCaller } from './hints';
 import { onContainerResize } from './container-resize-tracker';
 import { onTargetMutation } from './target-mutation-tracker';
@@ -702,6 +703,8 @@ function disconnectVisibilityMO(): void {
 }
 
 function recheckPendingVisibility(): void {
+  const __cpuStart = performance.now();
+  const __initialSize = pendingVisibility.size;
   visibilityRafPending = false;
   let dirty = false;
   // Pre-cache the union of (target + ancestor chain) so the many
@@ -737,17 +740,61 @@ function recheckPendingVisibility(): void {
     if (hintsVisible) showHints();
   }
   if (pendingVisibility.size === 0) disconnectVisibilityMO();
+  recordCpu('recheckPendingVisibility', performance.now() - __cpuStart);
+  if (__initialSize > 0) recordCpu(`recheckPendingVisibility:size:${__initialSize > 1000 ? '1000+' : __initialSize > 100 ? '100-1000' : '<100'}`, __initialSize);
 }
 
 function observeInvisibleCandidates(candidates: Element[]): void {
+  // Under the viewport-scoped lifecycle, invisible candidates are routed
+  // through the attention observer. They only join `pendingVisibility`
+  // when they actually enter the attention region (handled by
+  // attentionObserver.onEnter below). This bounds the recheck set by
+  // viewport proximity instead of total document candidate count —
+  // YouTube comment skeletons that scroll past stay registered with
+  // attention IO but are no longer rechecked on every MO fire.
   for (const el of candidates) {
     if (store.findWrapperFor(el) || !el.isConnected) continue;
     if (isExcludedByRule(el, getExcludes())) continue;
+    attentionObserver.observe(el);
+  }
+}
+
+// Viewport-scoped attention. Wide-margin IO (2 viewports above/below)
+// drives the lifecycle of candidates that aren't yet wrappers, plus
+// leave-detach for wrappers that drift far from the viewport. Distinct
+// from the IntersectionTracker (narrow-margin IO for codeword claim/
+// release) by design — different concerns, different margins. See
+// notes/DESIGN_OBSERVER_DRIVEN_LAYOUT.md.
+const attentionObserver = new AttentionObserver({
+  onEnter: (el) => {
+    if (!el.isConnected) return;
+    if (store.findWrapperFor(el)) return;
+    const scanned = scanSingle(el);
+    if (scanned) {
+      attachWrapper(new ElementWrapper(el, scanned));
+      schedulePushGrammar();
+      return;
+    }
+    // Still not hintable (visibility:hidden, opacity:0, etc.). Bounded
+    // by attention region — only stays in the recheck loop while near
+    // the viewport. visibilityMO watches for class/style flips that
+    // make it hintable.
     pendingVisibility.add(el);
     visibilityIO.observe(el);
-  }
-  if (pendingVisibility.size > 0) connectVisibilityMO();
-}
+    connectVisibilityMO();
+  },
+  onLeave: (el) => {
+    if (store.findWrapperFor(el)) {
+      detachWrapper(el);
+      schedulePushGrammar();
+    }
+    if (pendingVisibility.has(el)) {
+      pendingVisibility.delete(el);
+      visibilityIO.unobserve(el);
+      if (pendingVisibility.size === 0) disconnectVisibilityMO();
+    }
+  },
+});
 
 /**
  * Add a wrapper to the store and start tracking its viewport state. The
@@ -771,6 +818,9 @@ function attachWrapper(wrapper: ElementWrapper): void {
   store.addWrapper(wrapper);
   tracker.observe(wrapper.element);
   resizeObserver.observe(wrapper.element);
+  // Subscribe to the attention observer so we leave-detach when the
+  // wrapper drifts >2 viewports away. Idempotent on the observer side.
+  attentionObserver.observe(wrapper.element);
 }
 
 /**
@@ -780,6 +830,7 @@ function attachWrapper(wrapper: ElementWrapper): void {
 function detachWrapper(element: Element): void {
   resizeObserver.unobserve(element);
   tracker.unobserve(element);
+  attentionObserver.unobserve(element);
   const removed = store.removeWrapperByElement(element);
   if (removed) {
     // Delta-sync bookkeeping: if the plugin holds this codeword, queue
@@ -947,7 +998,11 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
     }
 
     setPositionCaller('showHints');
-    try { placeBadges(renderable); } finally { clearPositionCaller(); }
+    const __pbStart = performance.now();
+    try { placeBadges(renderable); } finally {
+      recordCpu('placeBadges:show', performance.now() - __pbStart);
+      clearPositionCaller();
+    }
   } finally {
     clearLayoutCache();
   }
@@ -1330,6 +1385,7 @@ async function doScanBatched(): Promise<void> {
   if (!isAlphabetLoaded()) {
     return;
   }
+  const __cpuStart = performance.now();
 
   // Uses module-scope sessionId — see Problem 1 in the design doc.
   const cr = compiledRule;
@@ -1402,6 +1458,7 @@ async function doScanBatched(): Promise<void> {
       elements: [],
     });
   }
+  recordCpu('doScanBatched', performance.now() - __cpuStart);
 }
 
 async function processScanBatch(
@@ -2012,12 +2069,14 @@ function scheduleReposition(): void {
     const visible = store.all.filter(w => w.hint?.isVisible);
     if (visible.length > 0) {
       setPositionCaller('scheduleReposition');
+      const __pbStart = performance.now();
       try {
         cacheLayout(visible.map(w => w.element));
         placeBadges(visible);
       } finally {
         clearLayoutCache();
         clearPositionCaller();
+        recordCpu('placeBadges:reposition', performance.now() - __pbStart);
       }
     }
   });
@@ -2172,6 +2231,7 @@ const rebindCounters: RebindCounters = newRebindCounters();
 
 /** Walk an added subtree and create wrappers for any hintable descendants. */
 function discoverInSubtree(root: Element): number {
+  const __cpuStart = performance.now();
   let added = 0;
   const result = scanElements(root);
   applyUserRuleToScan(result, root);
@@ -2186,11 +2246,17 @@ function discoverInSubtree(root: Element): number {
     const ref = result.refs[i];
     if (store.findWrapperFor(ref)) continue;
     if (limboPool.length > 0 && tryRebindFromLimbo(ref, limboPool)) continue;
-    attachWrapper(new ElementWrapper(ref, result.elements[i]));
+    // Defer wrapper attach to attention IO. Visible refs get wrapped on
+    // the next microtask (IO entries fire synchronously after observe);
+    // refs below the fold stay observed but unwrapped until the user
+    // scrolls them into the attention region. Prevents the YouTube-style
+    // unbounded wrapper growth that the eager attach produced.
+    attentionObserver.observe(ref);
     added++;
   }
   observeInvisibleCandidates(result.invisibleCandidates);
   watchUndefinedCustomElements(root);
+  recordCpu('discoverInSubtree', performance.now() - __cpuStart);
   return added;
 }
 
@@ -2327,6 +2393,62 @@ let moRemoveRecordsSeen = 0;
 let moHugePathFired = 0;
 let processMutationsCalls = 0;
 
+// CPU timing: wall-clock around suspect long-task paths. Each bucket
+// records call count, total ms, max single-call ms, and a top-N ring of
+// the longest individual calls (with wall-clock timestamps) for forensic
+// when Firefox flags an unresponsive script.
+type CpuBucket = { count: number; totalMs: number; maxMs: number; top: Array<{ ts: number; ms: number }> };
+const cpuBuckets: Record<string, CpuBucket> = {};
+const CPU_TOP_N = 10;
+function recordCpu(label: string, ms: number): void {
+  let b = cpuBuckets[label];
+  if (!b) { b = cpuBuckets[label] = { count: 0, totalMs: 0, maxMs: 0, top: [] }; }
+  b.count++;
+  b.totalMs += ms;
+  if (ms > b.maxMs) b.maxMs = ms;
+  if (b.top.length < CPU_TOP_N || ms > (b.top[b.top.length - 1]?.ms ?? 0)) {
+    b.top.push({ ts: Date.now(), ms });
+    b.top.sort((a, x) => x.ms - a.ms);
+    if (b.top.length > CPU_TOP_N) b.top.length = CPU_TOP_N;
+  }
+}
+function resetCpuCounters(): void {
+  for (const k of Object.keys(cpuBuckets)) delete cpuBuckets[k];
+}
+
+// Long Tasks API (Chrome/Edge only; Firefox returns false for supportedEntryTypes).
+// Catches anything that monopolizes the main thread for >50ms regardless of source —
+// includes work from page scripts, not just ours, so attribution is via the wall-clock
+// buckets above. The longtask block answers "did anything block?"; the buckets answer
+// "was it us, and which path?".
+let longtaskCount = 0;
+let longtaskTotalMs = 0;
+let longtaskMaxMs = 0;
+const longtaskTop: Array<{ ts: number; ms: number }> = [];
+try {
+  const supported = (PerformanceObserver as unknown as { supportedEntryTypes?: string[] }).supportedEntryTypes;
+  if (supported?.includes('longtask')) {
+    new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) {
+        longtaskCount++;
+        longtaskTotalMs += e.duration;
+        if (e.duration > longtaskMaxMs) longtaskMaxMs = e.duration;
+        if (longtaskTop.length < CPU_TOP_N || e.duration > (longtaskTop[longtaskTop.length - 1]?.ms ?? 0)) {
+          longtaskTop.push({ ts: Date.now(), ms: e.duration });
+          longtaskTop.sort((a, x) => x.ms - a.ms);
+          if (longtaskTop.length > CPU_TOP_N) longtaskTop.length = CPU_TOP_N;
+        }
+      }
+    }).observe({ type: 'longtask', buffered: true });
+  }
+} catch { /* PerformanceObserver missing or longtask unsupported */ }
+function resetLongtask(): void {
+  longtaskCount = 0;
+  longtaskTotalMs = 0;
+  longtaskMaxMs = 0;
+  longtaskTop.length = 0;
+}
+
 /**
  * Finalize sweeper. Detaches any wrapper whose limbo deadline has
  * elapsed without a rebind. Runs on a fixed interval — short enough
@@ -2431,10 +2553,12 @@ function scheduleReevaluation(target: Element): void {
 }
 
 function drainReevaluations(): void {
+  const __cpuStart = performance.now();
   reevaluationFrame = null;
   if (pendingReevaluations.size === 0) return;
   const targets = [...pendingReevaluations];
   pendingReevaluations.clear();
+  const __targetCount = targets.length;
 
   // One batched layout-read pass over targets + their ancestor chains.
   // isVisible's peekCachedRect / peekCachedStyle fall back to live
@@ -2462,9 +2586,12 @@ function drainReevaluations(): void {
     clearLayoutCache();
   }
   if (dirty) schedulePushGrammar();
+  recordCpu('drainReevaluations', performance.now() - __cpuStart);
+  if (__targetCount > 0) recordCpu(`drainReevaluations:size:${__targetCount > 1000 ? '1000+' : __targetCount > 100 ? '100-1000' : '<100'}`, __targetCount);
 }
 
 function processMutations(records: MutationRecord[]): void {
+  const __cpuStart = performance.now();
   processMutationsCalls++;
   let dirty = false;
   let sawRemoval = false;
@@ -2500,9 +2627,11 @@ function processMutations(records: MutationRecord[]): void {
   if (sawRemoval) dropDisconnectedWrappers();
 
   if (dirty) schedulePushGrammar();
+  recordCpu('processMutations', performance.now() - __cpuStart);
 }
 
 const observer = new MutationObserver((records) => {
+  const __cpuStart = performance.now();
   moCallbackInvocations++;
   // Hints are visible — behavior depends on visibility mode.
   // In "manual" mode, defer mutations so codewords don't shuffle while
@@ -2511,6 +2640,7 @@ const observer = new MutationObserver((records) => {
   // and dynamic content get badges without requiring escape+re-show.
   if (hintsVisible && hintVisibility === 'manual') {
     pendingMutation = true;
+    recordCpu('moCallback', performance.now() - __cpuStart);
     return;
   }
 
@@ -2525,7 +2655,7 @@ const observer = new MutationObserver((records) => {
     return !isOwnMutation(m.target);
   });
   moForeignRecords += foreign.length;
-  if (foreign.length === 0) return;
+  if (foreign.length === 0) { recordCpu('moCallback', performance.now() - __cpuStart); return; }
 
   if (foreign.length >= HUGE_MUTATIONS_COUNT) {
     moHugePathFired++;
@@ -2540,11 +2670,13 @@ const observer = new MutationObserver((records) => {
       if (added > 0) schedulePushGrammar();
       if (hintsVisible) scheduleReposition();
     }, HUGE_MUTATION_IDLE_MS);
+    recordCpu('moCallback', performance.now() - __cpuStart);
     return;
   }
 
   processMutations(foreign);
   if (hintsVisible) scheduleReposition();
+  recordCpu('moCallback', performance.now() - __cpuStart);
 });
 
 observer.observe(document.body || document.documentElement, {
@@ -2743,6 +2875,24 @@ function buildPerfSnapshot() {
       bytes: messageCounters.totalBytesApprox,
       byType: { ...messageCounters.bySendType },
     },
+    cpu: {
+      buckets: Object.fromEntries(
+        Object.entries(cpuBuckets).map(([k, b]) => [k, {
+          count: b.count,
+          totalMs: +b.totalMs.toFixed(2),
+          maxMs: +b.maxMs.toFixed(2),
+          top: b.top.map(t => ({ ts: t.ts, ms: +t.ms.toFixed(2) })),
+        }]),
+      ),
+      longtask: {
+        count: longtaskCount,
+        totalMs: +longtaskTotalMs.toFixed(2),
+        maxMs: +longtaskMaxMs.toFixed(2),
+        top: longtaskTop.map(t => ({ ts: t.ts, ms: +t.ms.toFixed(2) })),
+        supported: longtaskCount > 0 || (PerformanceObserver as unknown as { supportedEntryTypes?: string[] })
+          .supportedEntryTypes?.includes('longtask') || false,
+      },
+    },
   };
 }
 (window as any).branchkitPerfStats = buildPerfSnapshot;
@@ -2750,6 +2900,8 @@ function buildPerfSnapshot() {
   resetPerfCounters();
   resetMessageCounters();
   resetLifecycleCounters();
+  resetCpuCounters();
+  resetLongtask();
 };
 // Cross-world bridge: content script globals live in the isolated world,
 // so Playwright's page.evaluate (main world) can't call them directly.
@@ -2769,6 +2921,8 @@ new MutationObserver(() => {
     resetPerfCounters();
     resetMessageCounters();
     resetLifecycleCounters();
+    resetCpuCounters();
+    resetLongtask();
     delete document.documentElement.dataset.branchkitResetPerf;
     publishPerfSnapshot();
   }

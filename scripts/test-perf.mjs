@@ -279,6 +279,27 @@ async function runEngine(engine) {
           .join(' ');
         if (byType) console.log(`      by type          ${byType}`);
       }
+      if (c.cpu) {
+        const sorted = Object.entries(c.cpu.buckets)
+          .sort((a, b) => b[1].maxMs - a[1].maxMs);
+        if (sorted.length) {
+          console.log(`    cpu buckets (sorted by maxMs)`);
+          for (const [k, b] of sorted) {
+            const avg = b.count ? b.totalMs / b.count : 0;
+            console.log(`      ${k.padEnd(26)} count=${fmt(b.count)} total=${fmt(b.totalMs, 1)}ms max=${fmt(b.maxMs, 1)}ms avg=${fmt(avg, 2)}ms`);
+          }
+        }
+        const lt = c.cpu.longtask;
+        if (lt.supported) {
+          console.log(`    longtask           count=${fmt(lt.count)} total=${fmt(lt.totalMs, 1)}ms max=${fmt(lt.maxMs, 1)}ms`);
+          if (lt.top.length) {
+            const topStr = lt.top.slice(0, 3).map(t => `${fmt(t.ms, 0)}ms`).join(', ');
+            console.log(`      top 3 by ms      ${topStr}`);
+          }
+        } else {
+          console.log(`    longtask           (not supported in this browser)`);
+        }
+      }
       aggWrappers += c.wrapperCount;
       aggScans += c.scanCalls;
       aggScanMs += c.scanTotalMs;
