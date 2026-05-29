@@ -17,8 +17,9 @@ browser has perfect information about what's near the viewport.
 | 2b | Lifecycle gap-close: attention IO far-threshold eviction + visibilityMO targeted recheck | Done (this commit) |
 | 3 | TargetRectStore (shadow) | Done (this commit) — written by AttentionObserver `onRect`, validated by drift sampler |
 | 4 | Flag-gated cutover of `updatePosition` reads | Wired (this commit, `setTargetRectSource`) — **do not enable until Phase 5** |
-| 5 | LayoutSignalRouter: per-target ResizeObserver + ancestor scroll listeners | Ahead — required before Phase 4 can be activated |
-| 6 | Delete global rAF reposition sweep + relocate position log | Ahead |
+| 5 | LayoutSignalRouter (window + RO surfaces) | Done (this commit) — window-scroll + ResizeObserver keep the store fresh; overflow-ancestor scroll still ahead |
+| 5b | Overflow-ancestor scroll listeners (Floating UI `getOverflowAncestors`) | Ahead — needed for badges inside scrollable sidebars/panels |
+| 6 | Delete global rAF reposition sweep + relocate position log | Ahead — requires Phase 4 activation + 5b first |
 
 Phase 2 measured impact (YouTube video page, 45s scroll soak):
 
@@ -96,15 +97,24 @@ stale. The Phase 3 drift sampler shows this directly: settled-state
 drift is 0-1px (correct), active-scroll drift can hit 10,000+ px
 (badges would render at the element's pre-scroll position).
 
-Phase 5 closes this: a `LayoutSignalRouter` adds per-target
-`ResizeObserver` subscriptions and listens to scroll on the chain of
-overflow ancestors (Floating UI's `getOverflowAncestors` pattern).
-Those signals refresh store rects on scroll/resize. Until that lands,
-flipping the flag will visibly misplace badges during scroll.
+Phase 5 closes this for the dominant case: existing `ResizeObserver`
+and `scheduleReposition` rAF both write fresh rects to the store now.
+Window scroll, window resize, container resize, and per-element
+resize all refresh the store within the same frame they fire.
 
-The flag wiring is in place now so Phase 5 can be a small, isolated
-change (just the new router writing to the existing store), with no
-content.ts integration work needed at activation time.
+Phase 5b still ahead — overflow-ancestor scroll listeners (Floating UI's
+`getOverflowAncestors`) for badges inside their own scrollable
+containers (chat sidebars, message lists). Window-scroll covers
+the YouTube/infinite-feed shape that drove this work, but not
+internal-scroll panels.
+
+After Phase 5: drift sampler reports `drifted=4/10` during active
+scroll at `~60px` max — single-frame staleness as rect refresh follows
+the scroll rAF. For static-layout badges (most pages), drift is
+`0/10` at `0px`. Whether `60px` mid-scroll is acceptable for
+activation is the next call: probably yes for normal use (one frame
+of badge lag is invisible at human scroll speed), maybe no for
+fast-scroll/momentum cases.
 
 ## Why this is one design, not two
 

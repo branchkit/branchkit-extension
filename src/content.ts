@@ -625,7 +625,15 @@ const resizeObserver = new ResizeObserver((entries) => {
     if (!isHintable(el)) {
       detachWrapper(el);
       dirty = true;
+      continue;
     }
+    // Phase 5 (router-via-RO): the engine just told us this element's
+    // box changed. Refresh its rect in the store so subscribers reading
+    // through the store see the new position. The DOMRectReadOnly from
+    // the entry is content-box; we want viewport-relative, so the read
+    // is live — but it follows the engine's resize work, so the layout
+    // is already warm.
+    targetRectStore.write(el, el.getBoundingClientRect());
   }
   if (dirty) schedulePushGrammar();
 });
@@ -2104,6 +2112,14 @@ function scheduleReposition(): void {
       const __pbStart = performance.now();
       try {
         cacheLayout(visible.map(w => w.element));
+        // Phase 5 (router-via-scroll-rAF): on scroll/resize, refresh
+        // store rects for everything we're about to reposition anyway.
+        // The reads share the cacheLayout warm pass, so no extra layout
+        // cost. Subscribers reading from the store see fresh rects in
+        // the same frame.
+        for (const w of visible) {
+          targetRectStore.write(w.element, w.element.getBoundingClientRect());
+        }
         placeBadges(visible);
       } finally {
         clearLayoutCache();
