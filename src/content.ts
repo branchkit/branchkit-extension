@@ -15,6 +15,7 @@ import { bumpRebindCounter, findLimboMatch, newRebindCounters, REBIND_DISTANCE_T
 import { resolveTarget } from './activate-resolution';
 import { IntersectionTracker } from './intersection-tracker';
 import { AttentionObserver } from './attention-observer';
+import { TargetRectStore } from './target-rect-store';
 import { HintBadge, setPositionCaller, clearPositionCaller } from './hints';
 import { onContainerResize } from './container-resize-tracker';
 import { onTargetMutation } from './target-mutation-tracker';
@@ -765,6 +766,13 @@ function observeInvisibleCandidates(candidates: Element[]): void {
 // from the IntersectionTracker (narrow-margin IO for codeword claim/
 // release) by design — different concerns, different margins. See
 // notes/DESIGN_OBSERVER_DRIVEN_LAYOUT.md.
+
+// Phase 3 shadow: rect cache populated by the attention IO's onRect.
+// No production read path consumes it yet. The drift sampler in
+// buildPerfSnapshot reports `{ size, subscribers, drift }` so we can
+// see whether the store would have been correct before any cutover.
+const targetRectStore = new TargetRectStore();
+
 const attentionObserver = new AttentionObserver({
   onEnter: (el) => {
     if (!el.isConnected) return;
@@ -787,12 +795,20 @@ const attentionObserver = new AttentionObserver({
     if (store.findWrapperFor(el)) {
       detachWrapper(el);
       schedulePushGrammar();
+    } else {
+      // Non-wrapper leave: pendingVisibility candidate that drifted out
+      // of attention. detachWrapper handles the wrapper case (it evicts
+      // the store there too); this branch covers the pure-pending case.
+      targetRectStore.evict(el);
     }
     if (pendingVisibility.has(el)) {
       pendingVisibility.delete(el);
       visibilityIO.unobserve(el);
       if (pendingVisibility.size === 0) disconnectVisibilityMO();
     }
+  },
+  onRect: (el, rect) => {
+    targetRectStore.write(el, rect);
   },
 });
 
@@ -831,6 +847,7 @@ function detachWrapper(element: Element): void {
   resizeObserver.unobserve(element);
   tracker.unobserve(element);
   attentionObserver.unobserve(element);
+  targetRectStore.evict(element);
   const removed = store.removeWrapperByElement(element);
   if (removed) {
     // Delta-sync bookkeeping: if the plugin holds this codeword, queue
@@ -2892,6 +2909,11 @@ function buildPerfSnapshot() {
         supported: longtaskCount > 0 || (PerformanceObserver as unknown as { supportedEntryTypes?: string[] })
           .supportedEntryTypes?.includes('longtask') || false,
       },
+    },
+    targetRectStore: {
+      size: targetRectStore.size,
+      subscribers: targetRectStore.subscriberCount,
+      drift: targetRectStore.sampleDrift(10),
     },
   };
 }

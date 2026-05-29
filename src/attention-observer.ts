@@ -21,6 +21,11 @@
 export interface AttentionEvents {
   onEnter: (element: Element) => void;
   onLeave: (element: Element) => void;
+  // Phase 3 shadow hook. Fired only for intersecting transitions —
+  // the IO entry's boundingClientRect was just computed by the engine,
+  // so passing it on costs nothing. Skipped on leave + far-threshold
+  // paths so non-attended elements never pollute the rect store.
+  onRect?: (element: Element, rect: DOMRectReadOnly) => void;
 }
 
 const ATTENTION_ROOT_MARGIN = '200%';
@@ -62,6 +67,7 @@ export class AttentionObserver {
       const is = entry.isIntersecting;
       if (is && !was) {
         this.intersecting.add(el);
+        if (this.events.onRect) this.events.onRect(el, entry.boundingClientRect);
         this.events.onEnter(el);
       } else if (!is && was) {
         this.intersecting.delete(el);
