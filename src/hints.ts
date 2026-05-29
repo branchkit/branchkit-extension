@@ -59,14 +59,10 @@ export function findBadgeContainer(target: Element): HTMLElement {
     // Mount inside table cells / rows / sections — these participate
     // in normal flow for inline-block children and are required for
     // scroll-tracking on apps that scroll the table itself rather than
-    // an outer wrapper (Gmail mail list). Skip only the <table> itself
-    // (and table-display containers) since they don't accept arbitrary
-    // children well.
-    if (current.tagName === 'TABLE' || s.display.startsWith('table-')) {
-      current = current.parentElement;
-      continue;
-    }
-    if (s.display === 'table') {
+    // an outer wrapper (Gmail mail list). Skip only the <table>/<inline-table>
+    // containers themselves; their cell/row/section/group descendants
+    // accept arbitrary inline children fine.
+    if (current.tagName === 'TABLE' || s.display === 'table' || s.display === 'inline-table') {
       current = current.parentElement;
       continue;
     }
