@@ -12,12 +12,13 @@ browser has perfect information about what's near the viewport.
 
 | Phase | What | Status |
 |---|---|---|
-| 1 | CPU instrumentation bridge | Done — landed with viewport-scoped lifecycle |
-| 2 | Viewport-scoped wrapper + pendingVisibility lifecycle (AttentionObserver) | Done — landed in `0b938d3` |
-| 3 | TargetRectStore + LayoutSignalRouter (shadow) | Ahead |
-| 4 | Flag-gated cutover of `updatePosition` reads | Ahead |
-| 5 | Delete global rAF reposition sweep | Ahead |
-| 6 | Relocate position log to read from store | Ahead |
+| 1 | CPU instrumentation bridge | Done (`0b938d3`) |
+| 2 | Viewport-scoped wrapper + pendingVisibility lifecycle (AttentionObserver) | Done (`0b938d3`) |
+| 2b | Lifecycle gap-close: attention IO far-threshold eviction + visibilityMO targeted recheck | Done (this commit) |
+| 3 | TargetRectStore (shadow) | Done (this commit) — written by AttentionObserver `onRect`, validated by drift sampler |
+| 4 | Flag-gated cutover of `updatePosition` reads | Wired (this commit, `setTargetRectSource`) — **do not enable until Phase 5** |
+| 5 | LayoutSignalRouter: per-target ResizeObserver + ancestor scroll listeners | Ahead — required before Phase 4 can be activated |
+| 6 | Delete global rAF reposition sweep + relocate position log | Ahead |
 
 Phase 2 measured impact (YouTube video page, 45s scroll soak):
 
@@ -37,32 +38,73 @@ comment pages — the 5s+ main-thread-pinning sync drain that triggered
 it became structurally impossible once the pending set was bounded
 by viewport proximity.
 
-## Phase 2 follow-ups (still gaps)
+## Phase 2b + Phase 3 outcomes (this commit)
 
-These surfaced during the Phase 2 run and are not addressed yet:
+Lifecycle gap-close shipped:
 
-- **Attention IO subscriptions accumulate.** `discoverInSubtree`
-  registers every selector-matching ref with the attention observer.
-  Refs far below the fold that never enter the attention region never
-  get unobserved. Heap is still climbing (+175MB/min during scroll
-  soak), driven by IO subscription bookkeeping the engine maintains
-  per observed element. Fix: TTL or distance-based unobserve for
-  attention candidates that haven't fired enter in N seconds, or
-  scope discovery itself to viewport-extended regions so we never
-  observe far-away elements in the first place.
-- **`recheckPendingVisibility` is still the dominant CPU bucket** at
-  steady state (94s of element-walks across 297 drains, avg 320
-  elements per drain). It's bounded now, but YouTube has a lot of
-  visibility:hidden skeletons inside the attention region. Reducing
-  further means replacing pendingVisibility + visibilityMO entirely
-  with attention-IO-driven `scanSingle` on geometry-change — which
-  the attention IO already provides if we wire it that way. Part of
-  the "purest observer-source" target.
-- **Positioning axis (Phases 3-6) untouched.** `placeBadges:reposition`
-  is currently fine (16ms avg / 63ms max), but the structural change
-  is still worth doing — same observer-trigger principle applied to
-  rect reads. Builds on Phase 2's attention region (only positions
-  badges whose targets are near the viewport, which already holds).
+- **Attention IO far-threshold eviction.** In `AttentionObserver.handleEntries`,
+  when an entry fires `!isIntersecting` for an element with no prior
+  intersection state (first observation, element is below the fold), the
+  IO's own `boundingClientRect` decides whether to unobserve. Elements
+  more than 5 viewport-heights away get unobserved immediately —
+  prevents the per-`discoverInSubtree`-call IO subscription leak that
+  drove +175MB/min heap on YouTube. Reuses the engine's free rect read
+  in the entry, no extra layout cost.
+
+- **`visibilityMO` targeted recheck.** Replaced the rAF-flushed full-set
+  walk with per-record matching. The MO callback iterates mutation
+  records, checks `pendingVisibility.has(target)` per record, and only
+  reruns `scanSingle` on actual matches. `recheckPendingVisibility`
+  function deleted (dead code).
+
+Phase 3 shadow shipped:
+
+- **TargetRectStore.** New module. `read`/`write`/`evict`/`subscribe`
+  API + `sampleDrift` for validation. Written by `AttentionObserver`
+  via a new optional `onRect` event; entries are populated only for
+  elements actually inside the attention region (not for far-threshold
+  candidates that get evicted before they ever matter).
+- Drift sampler reports `{ sampled, drifted, maxDriftPx }` in
+  `buildPerfSnapshot.targetRectStore` and the test-perf output.
+
+Measured impact (YouTube video, 30s scroll soak, vs Phase 2 baseline):
+
+| Metric | Phase 2 (45s) | Phase 2b + 3 (30s) | Notes |
+|---|---|---|---|
+| `scanSingle` calls | 105,055 | ~4,400 | −96% additional reduction; `recheckPendingVisibility` bucket gone |
+| `recheckPendingVisibility` max | 25ms | function deleted | |
+| `visibilityMO:callback` max | n/a | 0.4ms | targeted recheck, no full walk |
+| Long task max | 698ms | ~570ms | continued steady decline |
+| Long task total | 19.6s / 45s | ~4s / 30s | ≈80% lower rate |
+| `wrapperCount` | 602 | ~700 | bounded; varies with scroll position |
+| Store size | n/a | ~700-1k | tracks wrappers + pending-visibility set |
+| Drift on settled page | n/a | 0-1px max | rects are correct at steady state |
+| Drift during active scroll | n/a | 14,400px max | confirms Phase 5 needed before Phase 4 activates |
+
+## Phase 4 — wired but not active
+
+`hints.ts` accepts a `setTargetRectSource(store, enabled)` from
+`content.ts`. When the flag is on, `updatePosition` reads target rect
+from the store with a fallback to the existing `getCachedRect`. The
+flag default is `false`; reads `chrome.storage.sync.observerDrivenLayout`
+on init and listens for changes.
+
+**Why off by default:** the store currently updates on intersection
+transitions only. During active scroll, an element's rect changes
+continuously but the IO doesn't fire — the store's cached rect goes
+stale. The Phase 3 drift sampler shows this directly: settled-state
+drift is 0-1px (correct), active-scroll drift can hit 10,000+ px
+(badges would render at the element's pre-scroll position).
+
+Phase 5 closes this: a `LayoutSignalRouter` adds per-target
+`ResizeObserver` subscriptions and listens to scroll on the chain of
+overflow ancestors (Floating UI's `getOverflowAncestors` pattern).
+Those signals refresh store rects on scroll/resize. Until that lands,
+flipping the flag will visibly misplace badges during scroll.
+
+The flag wiring is in place now so Phase 5 can be a small, isolated
+change (just the new router writing to the existing store), with no
+content.ts integration work needed at activation time.
 
 ## Why this is one design, not two
 
