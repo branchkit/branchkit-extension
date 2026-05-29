@@ -36,13 +36,6 @@ export class AttentionObserver {
   // Tracks intersection state per observed element. IO entries arrive
   // for both transitions; we only fire enter/leave on actual change.
   private intersecting: WeakSet<Element> = new WeakSet();
-  // Elements that have at least once entered the attention region.
-  // The far-threshold eviction below skips these — they're known to
-  // be hintable candidates the user has been near, and we want them
-  // to re-fire onEnter if the user scrolls back to them. Without this
-  // protection, "scroll down a long list, scroll back up" leaves the
-  // re-visited items unobserved and unhinted (Gmail mail list bug).
-  private everIntersected: WeakSet<Element> = new WeakSet();
 
   constructor(events: AttentionEvents) {
     this.events = events;
@@ -74,22 +67,19 @@ export class AttentionObserver {
       const is = entry.isIntersecting;
       if (is && !was) {
         this.intersecting.add(el);
-        this.everIntersected.add(el);
         if (this.events.onRect) this.events.onRect(el, entry.boundingClientRect);
         this.events.onEnter(el);
       } else if (!is && was) {
         this.intersecting.delete(el);
         this.events.onLeave(el);
       } else if (!is && !was) {
-        // Far-threshold eviction for never-intersected candidates only.
-        // Skipped for elements that have ever been in the attention
-        // region — those were once hintable and we want them to
-        // re-attach if the user scrolls back. The leak this fixes
-        // (discoverInSubtree finding selector-matching refs far below
-        // the fold) is dominated by elements that NEVER enter; the
-        // ones that have entered are bounded by what fits inside the
-        // attention region across the session.
-        if (this.everIntersected.has(el)) continue;
+        // First entry for a not-intersecting element. Use the IO's own
+        // boundingClientRect (engine-warm, free to read) to evict
+        // candidates that sit way outside any plausible attention
+        // region — prevents `discoverInSubtree` from leaking an IO
+        // subscription per selector-matching ref below the fold.
+        // Threshold sits well past the 2-viewport attention margin so
+        // we don't evict elements the user might soon scroll to.
         const rect = entry.boundingClientRect;
         const vh = window.innerHeight || 1;
         const farBelow = rect.top > vh * FAR_THRESHOLD_VH;
