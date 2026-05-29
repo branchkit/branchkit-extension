@@ -251,10 +251,17 @@ export function resolveBadgeContext(target: Element, host: HTMLElement, outer: H
 const BADGE_OFFSET = 24;
 
 const MAX_BADGE_FONT = 14;
+const MIN_BADGE_FONT = 11;
 
 function computeBadgeFontSize(target: Element): number {
+  // Targets with font-size: 0 (the common a11y-text-hiding trick on
+  // role=checkbox / role=button divs) would otherwise yield a 0px or
+  // tiny badge — `0 || 12` would fall back to 12 but only when targetSize
+  // is exactly 0. Floor at MIN_BADGE_FONT so any sub-readable value
+  // (parsing oddities, 0px declarations, vw/em < 11) lifts to readable.
   const targetSize = parseFloat(getCachedStyle(target).fontSize) || 12;
-  return Math.min(Math.round(targetSize * 0.85), MAX_BADGE_FONT);
+  const scaled = Math.round(targetSize * 0.85);
+  return Math.min(Math.max(scaled, MIN_BADGE_FONT), MAX_BADGE_FONT);
 }
 
 export class HintBadge {
@@ -312,6 +319,17 @@ export class HintBadge {
       }
       .bk-inner {
         position: absolute;
+        /* Floor the font size so inheritance from the host can't collapse
+         * the badge text. Gmail's email-row checkbox is a div[role=checkbox]
+         * with font-size:0 (to hide its accessible-name text node from layout)
+         * and that value inherits through the shadow boundary. Without this
+         * floor, badges on Gmail rows render at 3x3 px — visible to the
+         * scanner but invisible to the user. Inline style.fontSize set in
+         * the constructor still wins for normal targets; this rule is the
+         * defensive backstop. */
+        font-size: 11px;
+        min-width: 8px;
+        min-height: 12px;
         font-weight: bold;
         font-family: system-ui, -apple-system, sans-serif;
         line-height: 1.2;

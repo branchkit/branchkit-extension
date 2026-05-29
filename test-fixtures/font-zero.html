@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>font-size:0 target (Gmail email-row checkbox pattern)</title>
+<style>
+body { font-family: system-ui; padding: 16px; }
+/* Gmail's email-row checkbox: a div[role=checkbox] with font-size:0 so
+   its accessibleName text node doesn't take layout space. */
+.row { display: flex; align-items: center; gap: 12px; padding: 8px; border-bottom: 1px solid #eee; }
+.cbox {
+  width: 20px;
+  height: 20px;
+  background: #888;
+  border-radius: 2px;
+  font-size: 0;            /* the killer rule */
+  cursor: pointer;
+  flex-shrink: 0;
+}
+</style>
+</head>
+<body>
+  <h2>div[role=checkbox] with font-size:0 — does the badge render?</h2>
+  <div class="row">
+    <div role="checkbox" tabindex="0" class="cbox">Select email 1</div>
+    <span>Subject line one</span>
+  </div>
+  <div class="row">
+    <div role="checkbox" tabindex="0" class="cbox">Select email 2</div>
+    <span>Subject line two</span>
+  </div>
+  <div class="row">
+    <div role="checkbox" tabindex="0" class="cbox">Select email 3</div>
+    <span>Subject line three</span>
+  </div>
+</body>
+</html>
