@@ -137,6 +137,14 @@ export function resolveContainer(target: Element): HTMLElement {
   let chosen: HTMLElement | null = null;
   for (let i = 0; i < clipAncestors.length; i++) {
     const ancestor = clipAncestors[i];
+    // The limitParent represents the scroll/positioning boundary. If
+    // it appears as a clip ancestor itself (overflow:auto scroll
+    // container case), don't escape past it — that would mount the
+    // badge OUTSIDE the scrolling context where it can't follow the
+    // target on internal scroll. Let the fallthrough return the
+    // candidate (findBadgeContainer's result) so the badge stays
+    // inside the scrolling content (Gmail mail-list bug).
+    if (ancestor === limitParent) continue;
     const space = getSpaceInAncestor(ancestor, targetRect);
     if (space.left >= ENOUGH_LEFT && space.top >= ENOUGH_TOP) {
       // This ancestor has enough space for the badge; its parent
@@ -145,7 +153,12 @@ export function resolveContainer(target: Element): HTMLElement {
       if (parent instanceof HTMLElement && limitParent.contains(parent)) {
         chosen = parent;
       } else {
-        chosen = findBadgeContainer(ancestor);
+        const escaped = findBadgeContainer(ancestor);
+        // Don't escape outside limitParent. If the escape result isn't
+        // contained, leave chosen null so we fall through to candidate
+        // (which is findBadgeContainer(target) — already inside limitParent
+        // because target is).
+        if (limitParent.contains(escaped)) chosen = escaped;
       }
       break;
     }

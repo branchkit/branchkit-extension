@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Gmail-like table-scrolling fixture</title>
+<style>
+  body { margin: 0; padding: 0; font-family: sans-serif; }
+  /* Mimic Gmail's structure: static outer wrapper with overflow:auto
+     scroller inside, containing the table. */
+  .scroll-wrapper {
+    position: relative;  /* matches Gmail's div.Tm.aeJ */
+    width: 600px;
+    height: 400px;
+    overflow-y: auto;
+    border: 2px solid #888;
+  }
+  .static-inner {
+    position: relative;  /* matches Gmail's div.AO */
+    /* No overflow here; the wrapper above does the scrolling */
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+  tr { border-bottom: 1px solid #eee; }
+  td { padding: 12px 16px; }
+  td:first-child { width: 40px; }
+  a { color: #1a73e8; text-decoration: none; }
+</style>
+</head>
+<body>
+  <h1>Gmail-like table fixture</h1>
+  <div class="scroll-wrapper">
+    <div class="static-inner">
+      <table>
+        <tbody>
+          <tr><td><input type="checkbox"></td><td><a href="#" data-row="0">Row 0 — Click here</a></td></tr>
+          <tr><td><input type="checkbox"></td><td><a href="#" data-row="1">Row 1 — Click here</a></td></tr>
+          <tr><td><input type="checkbox"></td><td><a href="#" data-row="2">Row 2 — Click here</a></td></tr>
+          <tr><td><input type="checkbox"></td><td><a href="#" data-row="3">Row 3 — Click here</a></td></tr>
+          <tr><td><input type="checkbox"></td><td><a href="#" data-row="4">Row 4 — Click here</a></td></tr>
+          <tr><td><input type="checkbox"></td><td><a href="#" data-row="5">Row 5 — Click here</a></td></tr>
+          <tr><td><input type="checkbox"></td><td><a href="#" data-row="6">Row 6 — Click here</a></td></tr>
+          <tr><td><input type="checkbox"></td><td><a href="#" data-row="7">Row 7 — Click here</a></td></tr>
+          <tr><td><input type="checkbox"></td><td><a href="#" data-row="8">Row 8 — Click here</a></td></tr>
+          <tr><td><input type="checkbox"></td><td><a href="#" data-row="9">Row 9 — Click here</a></td></tr>
+          <tr><td><input type="checkbox"></td><td><a href="#" data-row="10">Row 10 — Click here</a></td></tr>
+          <tr><td><input type="checkbox"></td><td><a href="#" data-row="11">Row 11 — Click here</a></td></tr>
+          <tr><td><input type="checkbox"></td><td><a href="#" data-row="12">Row 12 — Click here</a></td></tr>
+          <tr><td><input type="checkbox"></td><td><a href="#" data-row="13">Row 13 — Click here</a></td></tr>
+          <tr><td><input type="checkbox"></td><td><a href="#" data-row="14">Row 14 — Click here</a></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</body>
+</html>
