@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Gmail-like Nav Test</title>
+<style>
+body { margin: 0; font-family: system-ui; }
+.app { display: flex; height: 100vh; }
+.rail { width: 80px; background: #f1f3f4; padding: 8px 0; overflow: hidden; }
+.rail-icon { display: flex; flex-direction: column; align-items: center; padding: 8px 0; font-size: 12px; }
+.rail-icon .ico { width: 24px; height: 24px; background: #5f6368; border-radius: 50%; margin-bottom: 4px; }
+.sidebar { width: 256px; background: white; padding: 16px 0; overflow: hidden; contain: paint; }
+.sidebar-inner { contain: paint; overflow: hidden; }
+.nav-wrap { contain: paint; overflow: hidden; }
+.compose { display: flex; align-items: center; gap: 16px; padding: 12px 24px; background: #c2e7ff; border-radius: 16px; margin: 0 16px 16px; font-size: 14px; font-weight: 500; }
+.compose .ico { width: 24px; height: 24px; background: #555; border-radius: 4px; }
+.nav-list { list-style: none; margin: 0; padding: 0; overflow: hidden; }
+.nav-item { display: flex; align-items: center; gap: 16px; padding: 0 12px 0 24px; height: 32px; border-radius: 0 16px 16px 0; font-size: 14px; cursor: pointer; }
+.nav-item .ico { width: 20px; height: 20px; background: #5f6368; border-radius: 2px; flex-shrink: 0; }
+.nav-item .label { flex: 1; }
+.nav-item .count { color: #5f6368; font-size: 12px; }
+.nav-item.selected { background: #d3e3fd; color: #001d35; font-weight: 600; }
+.main { flex: 1; padding: 16px; background: white; overflow: hidden; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="rail">
+    <div class="rail-icon"><div class="ico"></div><span>Mail</span></div>
+    <div class="rail-icon"><div class="ico"></div><span>Chat</span></div>
+    <div class="rail-icon"><div class="ico"></div><span>Meet</span></div>
+  </div>
+  <div class="sidebar"><div class="sidebar-inner"><div class="nav-wrap">
+    <a href="#" class="compose"><span class="ico"></span>Compose</a>
+    <ul class="nav-list">
+      <li><a href="#inbox" class="nav-item selected"><span class="ico"></span><span class="label">Inbox</span><span class="count">1,269</span></a></li>
+      <li><a href="#starred" class="nav-item"><span class="ico"></span><span class="label">Starred</span></a></li>
+      <li><a href="#snoozed" class="nav-item"><span class="ico"></span><span class="label">Snoozed</span></a></li>
+      <li><a href="#sent" class="nav-item"><span class="ico"></span><span class="label">Sent</span></a></li>
+      <li><a href="#drafts" class="nav-item"><span class="ico"></span><span class="label">Drafts</span><span class="count">9</span></a></li>
+      <li><a href="#categories" class="nav-item"><span class="ico"></span><span class="label">Categories</span></a></li>
+      <li><a href="#more" class="nav-item"><span class="ico"></span><span class="label">More</span></a></li>
+    </ul>
+  </div></div></div>
+  <div class="main">
+    <h2>Inbox</h2>
+    <p>Main content area. <a href="#">A link to test</a>.</p>
+  </div>
+</div>
+</body>
+</html>

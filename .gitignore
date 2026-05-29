@@ -11,3 +11,4 @@ dist.crx
 dist.pem
 *.crx
 *.pem
+test-fixtures/output/

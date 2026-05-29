@@ -13,12 +13,14 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint:firefox": "npm run build:firefox && npx --yes web-ext lint --source-dir=dist/firefox",
-    "package:firefox": "npm run build:firefox && npx --yes web-ext build --source-dir=dist/firefox --artifacts-dir=artifacts --overwrite-dest"
+    "package:firefox": "npm run build:firefox && npx --yes web-ext build --source-dir=dist/firefox --artifacts-dir=artifacts --overwrite-dest",
+    "test:placement": "npm run build:chrome && node scripts/test-placement.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.268",
     "esbuild": "^0.27.2",
     "happy-dom": "^20.9.0",
+    "playwright": "^1.60.0",
     "typescript": "^5.3.3",
     "vitest": "^4.1.5",
     "ws": "^8.20.1"
