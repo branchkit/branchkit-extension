@@ -850,7 +850,12 @@ function attachWrapper(wrapper: ElementWrapper): void {
 function detachWrapper(element: Element): void {
   resizeObserver.unobserve(element);
   tracker.unobserve(element);
-  attentionObserver.unobserve(element);
+  // Deliberately NOT unobserving from attentionObserver. The wrapper
+  // is gone, but the element may scroll back into the attention region
+  // later (Gmail mail-list scroll-down-then-up); keeping the IO
+  // subscription lets onEnter fire and re-attach. The attention
+  // observer's own far-threshold + everIntersected logic owns the IO
+  // subscription lifecycle.
   targetRectStore.evict(element);
   const removed = store.removeWrapperByElement(element);
   if (removed) {
