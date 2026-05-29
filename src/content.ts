@@ -625,7 +625,11 @@ const resizeObserver = new ResizeObserver((entries) => {
     if (!isHintable(el)) {
       detachWrapper(el);
       dirty = true;
+      continue;
     }
+    // Phase 5 (router-via-RO): the engine just resized this element. The
+    // read here follows the layout pass it triggered, so it's warm.
+    targetRectStore.write(el, el.getBoundingClientRect());
   }
   if (dirty) schedulePushGrammar();
 });
@@ -2089,6 +2093,11 @@ function scheduleReposition(): void {
       const __pbStart = performance.now();
       try {
         cacheLayout(visible.map(w => w.element));
+        // Phase 5 (router-via-scroll-rAF): reads share the cacheLayout
+        // warm pass, so each write is essentially free.
+        for (const w of visible) {
+          targetRectStore.write(w.element, w.element.getBoundingClientRect());
+        }
         placeBadges(visible);
       } finally {
         clearLayoutCache();
