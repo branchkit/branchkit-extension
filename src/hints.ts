@@ -242,10 +242,41 @@ export function diagnoseContainerResolution(target: Element): ContainerResolutio
 export function resolveBadgeContext(target: Element, host: HTMLElement, outer: HTMLElement): BadgeContext {
   const container = resolveContainer(target);
   container.appendChild(host);
-  const offsetParent = outer.offsetParent;
-  const positionMode = offsetParent && !container.contains(offsetParent)
+  // Read the OUTER's offsetParent first — works in light DOM tests.
+  // In closed shadow DOM (production) this returns null, so we fall
+  // through to the container-relative check below.
+  const outerOffsetParent = outer.offsetParent;
+  let positionMode: PositionMode = outerOffsetParent && !container.contains(outerOffsetParent)
     ? 'relative' : 'absolute';
+  // Gmail-class fix (closed shadow path): when the outer's containing
+  // block (its offsetParent's containing block, approximated by the
+  // container's offsetParent) sits OUTSIDE the nearest scroll ancestor
+  // OR is the scroll ancestor itself, an absolute-positioned outer is
+  // anchored to a border box that doesn't move on internal scroll.
+  // Targets inside the scroll container shift visually; outer doesn't;
+  // badge falls behind. Switch to relative so the outer's DOM position
+  // — which IS inside the scrolling content — drives its visual position.
+  if (positionMode === 'absolute' && container instanceof HTMLElement) {
+    const containerOffsetParent = container.offsetParent;
+    const scrollAncestor = findNearestScrollAncestor(container);
+    if (scrollAncestor && (
+      !containerOffsetParent ||
+      containerOffsetParent === scrollAncestor ||
+      !scrollAncestor.contains(containerOffsetParent)
+    )) {
+      positionMode = 'relative';
+    }
+  }
   return { container, positionMode };
+}
+
+function findNearestScrollAncestor(el: Element): HTMLElement | null {
+  let cur: Element | null = el.parentElement;
+  while (cur && cur !== document.documentElement) {
+    if (cur instanceof HTMLElement && isScrollContainer(cur)) return cur;
+    cur = cur.parentElement;
+  }
+  return null;
 }
 
 const BADGE_OFFSET = 24;
