@@ -242,41 +242,28 @@ export function diagnoseContainerResolution(target: Element): ContainerResolutio
 export function resolveBadgeContext(target: Element, host: HTMLElement, outer: HTMLElement): BadgeContext {
   const container = resolveContainer(target);
   container.appendChild(host);
-  // Read the OUTER's offsetParent first — works in light DOM tests.
-  // In closed shadow DOM (production) this returns null, so we fall
-  // through to the container-relative check below.
+  // Always use relative positioning (Rango/Vimium pattern). The outer's
+  // visual position is driven by its DOM placement — which is INSIDE
+  // the container, which is inside whatever scrolling content the
+  // target lives in. Both scroll together natively; no JS reposition
+  // needed for in-context tracking.
+  //
+  // Previous absolute-default broke on Gmail because the outer's
+  // containing block (under closed shadow DOM, anchored to the nearest
+  // positioned ancestor outside the shadow tree) didn't move with
+  // internal pane scrolls. Switching to relative makes the outer
+  // participate in normal flow inside the container, which is the case
+  // Rango has shipped reliably across the same hard targets (Gmail,
+  // Slack, etc.) for years.
+  //
+  // The `outer.offsetParent` open-shadow check remains for completeness
+  // — in test environments using open shadow it preserves the original
+  // behavior, while production closed-shadow falls through to relative.
   const outerOffsetParent = outer.offsetParent;
-  let positionMode: PositionMode = outerOffsetParent && !container.contains(outerOffsetParent)
-    ? 'relative' : 'absolute';
-  // Gmail-class fix (closed shadow path): when the outer's containing
-  // block (its offsetParent's containing block, approximated by the
-  // container's offsetParent) sits OUTSIDE the nearest scroll ancestor
-  // OR is the scroll ancestor itself, an absolute-positioned outer is
-  // anchored to a border box that doesn't move on internal scroll.
-  // Targets inside the scroll container shift visually; outer doesn't;
-  // badge falls behind. Switch to relative so the outer's DOM position
-  // — which IS inside the scrolling content — drives its visual position.
-  if (positionMode === 'absolute' && container instanceof HTMLElement) {
-    const containerOffsetParent = container.offsetParent;
-    const scrollAncestor = findNearestScrollAncestor(container);
-    if (scrollAncestor && (
-      !containerOffsetParent ||
-      containerOffsetParent === scrollAncestor ||
-      !scrollAncestor.contains(containerOffsetParent)
-    )) {
-      positionMode = 'relative';
-    }
-  }
+  const positionMode: PositionMode = outerOffsetParent && container.contains(outerOffsetParent)
+    ? 'absolute'  // open-shadow test path: outer's offsetParent is inside container
+    : 'relative'; // closed-shadow production path (offsetParent null) OR offsetParent outside container
   return { container, positionMode };
-}
-
-function findNearestScrollAncestor(el: Element): HTMLElement | null {
-  let cur: Element | null = el.parentElement;
-  while (cur && cur !== document.documentElement) {
-    if (cur instanceof HTMLElement && isScrollContainer(cur)) return cur;
-    cur = cur.parentElement;
-  }
-  return null;
 }
 
 const BADGE_OFFSET = 24;

@@ -165,7 +165,13 @@ describe('resolveBadgeContext', () => {
     expect(ctx.container.contains(host)).toBe(true);
   });
 
-  it('returns absolute when offsetParent is null (default)', () => {
+  it('returns relative when offsetParent is null (closed-shadow production path)', () => {
+    // In production, the badge shadow is closed, so outer.offsetParent
+    // returns null. We default to relative positioning (Rango pattern)
+    // so the outer's DOM position drives its visual position — works
+    // correctly inside overflow-scrolling ancestors (Gmail mail list,
+    // Slack chat panels) where absolute positioning would anchor the
+    // outer to a non-scrolling containing block.
     const root = mount('<div id="parent"><button id="btn">click</button></div>');
     const btn = root.querySelector('#btn')!;
     const host = document.createElement('div');
@@ -174,7 +180,7 @@ describe('resolveBadgeContext', () => {
     host.attachShadow({ mode: 'open' }).appendChild(outer);
 
     const ctx = resolveBadgeContext(btn, host, outer);
-    expect(ctx.positionMode).toBe('absolute');
+    expect(ctx.positionMode).toBe('relative');
   });
 });
 
