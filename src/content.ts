@@ -129,6 +129,15 @@ const tracker = new IntersectionTracker(store, {
   },
 });
 
+// (Strict-viewport tracker removed — it was meant to narrow the
+// scheduleReposition set on heavy pages, but on YouTube /watch the
+// added per-wrapper observation (a second IO per element, on top of
+// the IntersectionTracker's 200px-margin IO) appeared to saturate
+// the process when wrap counts climbed past ~250 during scroll-driven
+// lazy-load. The scroll-debounce coalesces reposition bursts into one
+// call per scroll-end now, which makes per-call cost much less critical
+// than total observation overhead.)
+
 setFindCallbacks({
   onActivate: () => { hideHints(); },
   onDeactivate: () => { resetCycleTarget(); },
@@ -333,14 +342,30 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
   chrome.storage.local.get('alphabet', (result) => {
     if (Array.isArray(result.alphabet)) {
       setAlphabet(result.alphabet);
-      doScan();
-      if (hintVisibility === 'always') {
-        whenDOMSettles(() => {
-          tracker.flushNow().then(() => {
-            if (hintVisibility === 'always' && !hintsVisible) showHints();
+      // Defer the initial scan by one macrotask. Running doScan
+      // synchronously inside the storage callback blocks the main thread
+      // before the snapshot publisher's setInterval has a chance to
+      // register its first tick — on heavy pages (YouTube /watch with
+      // shadow DOM and 1000+ candidates) this looks like a freeze and
+      // Firefox flags the extension as unresponsive.
+      //
+      // setTimeout(0) (rather than requestIdleCallback) because rIC
+      // never finds a true idle window on hyperactive pages, and the 2s
+      // timeout fallback still starves the scan-batch loop's own
+      // setTimeout(0) yields. A single-tick defer is enough to let the
+      // page paint + the publisher fire its first sample; from there
+      // scanInBatches' chunked walk + the per-batch await yield the
+      // event loop between batches.
+      setTimeout(() => {
+        doScan();
+        if (hintVisibility === 'always') {
+          whenDOMSettles(() => {
+            tracker.flushNow().then(() => {
+              if (hintVisibility === 'always' && !hintsVisible) showHints();
+            });
           });
-        });
-      }
+        }
+      }, 0);
     }
   });
 }
@@ -1772,6 +1797,11 @@ function quiesceOrphan(): void {
   try { badgeReattachObserver.disconnect(); } catch { /* same */ }
   try { tracker.disconnectAll(); } catch { /* same */ }
   try { resizeObserver.disconnect(); } catch { /* same */ }
+  if (discoveryFrame !== null) {
+    try { cancelAnimationFrame(discoveryFrame); } catch { /* same */ }
+    discoveryFrame = null;
+    pendingDiscoveryRoots.clear();
+  }
   try { visibilityIO.disconnect(); } catch { /* same */ }
   try { visibilityMO.disconnect(); } catch { /* same */ }
   // Remove badge hosts so the new content script's initial DOM-clear sweep
@@ -2123,7 +2153,21 @@ function scheduleReposition(): void {
   });
 }
 window.addEventListener('resize', scheduleReposition, { passive: true });
-window.addEventListener('scroll', scheduleReposition, { passive: true });
+
+// Scroll is debounced via scheduleDeferredReposition (declared just below)
+// rather than calling scheduleReposition directly. Per the architectural
+// note above, badges already follow scroll via CSS positioning in their
+// scroll ancestor — the JS reposition here is for edge cases where the
+// scroll-ancestor detection couldn't pin the badge correctly, not for
+// the common case. Firing it on every rAF during scroll burned ~22%
+// sustained CPU at wrap=99 on YouTube /watch, tripped Firefox's
+// "extension is slowing things down" warning during scroll, and starved
+// YouTube's own scroll-driven lazy-loading so content below the fold
+// failed to render. Debouncing to "after scroll settles" coalesces the
+// burst (~30 events/sec during fast scrolling) into one reposition.
+// Edge-case badges lag the scroll by ~100ms but settle correctly when
+// it stops, which the user can't perceive mid-scroll anyway.
+window.addEventListener('scroll', () => scheduleDeferredReposition(), { passive: true });
 
 // Per-container resize: each HintBadge registers its anchor with the
 // shared tracker. Catches CSS-only and container-scoped layout shifts
@@ -2465,7 +2509,31 @@ function recordCpu(label: string, ms: number): void {
 }
 function resetCpuCounters(): void {
   for (const k of Object.keys(cpuBuckets)) delete cpuBuckets[k];
+  cpuShareLastSumMs = 0;
+  cpuShareLastWall = performance.now();
 }
+
+/**
+ * Sum all bucket totalMs values, skipping the `:size:` overloaded buckets
+ * (those store target counts in their ms field — meaningful by themselves
+ * but not summable with real ms).
+ */
+function sumBucketTotalMs(): number {
+  let total = 0;
+  for (const [k, b] of Object.entries(cpuBuckets)) {
+    if (k.includes(':size:')) continue;
+    total += b.totalMs;
+  }
+  return total;
+}
+
+// Rolling CPU-share tracker. Firefox's "extension is slowing things down"
+// warning fires on sustained CPU share, not single-stall length — see
+// notes from the YouTube freeze investigation. Snapshot-to-snapshot delta
+// over wall-clock gap gives us "CPU% used in the last sample window."
+let cpuShareLastSumMs = 0;
+let cpuShareLastWall = performance.now();
+const cpuShareBucketPrior: Record<string, { count: number; totalMs: number }> = {};
 
 // Expose recordCpu globally so peer modules without a direct content.ts
 // import (intersection-tracker, attention-observer) can attribute their
@@ -2689,10 +2757,85 @@ function drainReevaluations(): void {
   if (__targetCount > 0) recordCpu(`drainReevaluations:size:${__targetCount > 1000 ? '1000+' : __targetCount > 100 ? '100-1000' : '<100'}`, __targetCount);
 }
 
+// Discovery is the dominant per-mutation cost (scanElements + isHintable
+// + getComputedStyle per descendant). On YouTube's initial load we saw
+// 673 discoverInSubtree calls in 419ms (~80 MO callbacks/sec, ~20 added
+// subtree roots per batch) consuming 84ms of CPU in that window. Rather
+// than running each scan synchronously inside the MO callback — which
+// is what trips Firefox's unresponsive-script warning — accumulate
+// added subtree roots in a Set and drain them via rAF, mirroring the
+// existing `scheduleReevaluation` pattern for attribute changes.
+//
+// Net effect: 80 sync scans/sec → ≤60 batched drains/sec, with the same
+// total discovery work amortized across frames so no single task exceeds
+// the unresponsive threshold. Side effect: badges for newly-mounted
+// elements appear up to one frame (~16ms) later than they used to,
+// which is imperceptible in `always` mode (the user's typical setup).
+const pendingDiscoveryRoots: Set<Element> = new Set();
+let discoveryFrame: number | null = null;
+
+function scheduleDiscovery(root: Element): void {
+  pendingDiscoveryRoots.add(root);
+  if (discoveryFrame === null) {
+    discoveryFrame = requestAnimationFrame(drainDiscovery);
+  }
+}
+
+// Time-slice budget for a single drain pass. With many queued roots (or
+// one heavy root like a freshly-mounted <ytd-app> on YouTube /watch),
+// running every discoverInSubtree synchronously in one rAF can blow
+// past 16ms and trip Firefox's unresponsive-script warning. Cap the
+// per-drain wall time at half a frame; any remaining roots are deferred
+// to the next rAF via the same scheduling path. We always do at least
+// one root per pass so a single very-expensive root can't permanently
+// starve the queue — we'd rather take one expensive frame than freeze
+// indefinitely.
+const DRAIN_DISCOVERY_BUDGET_MS = 8;
+
+function drainDiscovery(): void {
+  const __cpuStart = performance.now();
+  discoveryFrame = null;
+  if (pendingDiscoveryRoots.size === 0) return;
+  const roots = [...pendingDiscoveryRoots];
+  pendingDiscoveryRoots.clear();
+  const __rootCount = roots.length;
+
+  let dirty = false;
+  let processed = 0;
+  for (const root of roots) {
+    processed++;
+    // Skip if the subtree got removed between enqueue and drain. The
+    // childList path's dropDisconnectedWrappers will have handled any
+    // wrappers that already lived inside it.
+    if (!root.isConnected) continue;
+    if (discoverInSubtree(root) > 0) dirty = true;
+    // Yield to the event loop once we've exceeded the budget — but
+    // always do at least one root so we make forward progress even when
+    // a single root is heavy enough to blow the budget by itself.
+    if (performance.now() - __cpuStart >= DRAIN_DISCOVERY_BUDGET_MS) break;
+  }
+  // Re-queue anything we didn't process this pass; the rAF below picks
+  // it up on the next frame. Re-adding to a Set is idempotent so any
+  // new arrivals between drain start and now coalesce naturally.
+  for (let i = processed; i < roots.length; i++) {
+    pendingDiscoveryRoots.add(roots[i]);
+  }
+  if (pendingDiscoveryRoots.size > 0 && discoveryFrame === null) {
+    discoveryFrame = requestAnimationFrame(drainDiscovery);
+  }
+  if (dirty) schedulePushGrammar();
+  recordCpu('drainDiscovery', performance.now() - __cpuStart);
+  if (__rootCount > 0) {
+    recordCpu(
+      `drainDiscovery:size:${__rootCount > 1000 ? '1000+' : __rootCount > 100 ? '100-1000' : '<100'}`,
+      __rootCount,
+    );
+  }
+}
+
 function processMutations(records: MutationRecord[]): void {
   const __cpuStart = performance.now();
   processMutationsCalls++;
-  let dirty = false;
   let sawRemoval = false;
 
   for (const m of records) {
@@ -2700,7 +2843,7 @@ function processMutations(records: MutationRecord[]): void {
       for (const node of m.addedNodes) {
         if (isOwnMutation(node)) continue;
         if (node instanceof Element) {
-          if (discoverInSubtree(node) > 0) dirty = true;
+          scheduleDiscovery(node);
         }
       }
       for (const node of m.removedNodes) {
@@ -2725,7 +2868,8 @@ function processMutations(records: MutationRecord[]): void {
   // schedulePushGrammar itself when it actually detaches.
   if (sawRemoval) dropDisconnectedWrappers();
 
-  if (dirty) schedulePushGrammar();
+  // Grammar push for added subtrees now happens inside drainDiscovery
+  // (deferred). Removals still push via dropDisconnectedWrappers above.
   recordCpu('processMutations', performance.now() - __cpuStart);
 }
 
@@ -2975,6 +3119,44 @@ function buildPerfSnapshot() {
       byType: { ...messageCounters.bySendType },
     },
     cpu: {
+      // Rolling CPU share since the prior snapshot publish. This is the
+      // metric Firefox uses to flag "extension is slowing things down" —
+      // sustained percentage of the main thread, not single-stall length.
+      // We were measuring the wrong thing for the YouTube unresponsive
+      // investigation; high per-second invocation rates of small-cost
+      // paths add up to 20-37% sustained CPU on YouTube without any
+      // single call exceeding the watchdog's 100ms threshold.
+      //
+      // The `since` block also includes per-bucket delta totals so each
+      // sample window can be attributed to specific paths post-hoc,
+      // without needing to re-derive from cumulative counters.
+      share: (() => {
+        const curSum = sumBucketTotalMs();
+        const curWall = performance.now();
+        const wallGap = curWall - cpuShareLastWall;
+        const sumGap = Math.max(0, curSum - cpuShareLastSumMs);
+        const pct = wallGap > 0 ? (sumGap / wallGap) * 100 : 0;
+        // Per-bucket delta since prior publish, computed on read.
+        const sinceBuckets: Record<string, { dCount: number; dMs: number }> = {};
+        for (const [k, b] of Object.entries(cpuBuckets)) {
+          if (k.includes(':size:')) continue;
+          const prior = cpuShareBucketPrior[k] || { count: 0, totalMs: 0 };
+          const dCount = b.count - prior.count;
+          const dMs = b.totalMs - prior.totalMs;
+          if (dCount > 0 || dMs > 0.01) {
+            sinceBuckets[k] = { dCount, dMs: +dMs.toFixed(2) };
+          }
+          cpuShareBucketPrior[k] = { count: b.count, totalMs: b.totalMs };
+        }
+        cpuShareLastSumMs = curSum;
+        cpuShareLastWall = curWall;
+        return {
+          wallMs: +wallGap.toFixed(0),
+          sumMs: +sumGap.toFixed(0),
+          pct: +pct.toFixed(2),
+          buckets: sinceBuckets,
+        };
+      })(),
       buckets: Object.fromEntries(
         Object.entries(cpuBuckets).map(([k, b]) => [k, {
           count: b.count,

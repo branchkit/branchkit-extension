@@ -509,24 +509,89 @@ export function* scanInBatches(
   batchSize: number = DEFAULT_SCAN_BATCH_SIZE,
   initialSeen?: ReadonlySet<Element>,
 ): Generator<ScanBatch, void, void> {
-  const { elements, refs, invisibleCandidates } = collectHintables(root, initialSeen);
+  // INCREMENTAL walk + filter. The previous implementation called
+  // `collectHintables` upfront, walking the entire document and running
+  // isVisible/isHintableExtra on every candidate before yielding the
+  // first batch. On a freshly-loaded YouTube /watch page (~1000+ hintable
+  // candidates × ~0.5ms isVisible per call), that single synchronous
+  // task ran 500ms+, blocking the main thread before the snapshot
+  // publisher could fire its first sample — the tab would appear frozen
+  // and Firefox flagged the extension as unresponsive.
+  //
+  // Now: deepQuerySelectorAll runs once (cheap — native CSS selector
+  // traversal), then we iterate candidates lazily, yielding a batch
+  // every `batchSize` accepted ones. The caller (doScanBatched) awaits
+  // setTimeout(0) between batches, so the event loop drains between
+  // each filter chunk. Final batch (possibly empty) carries isLast and
+  // the full invisibleCandidates list — same contract as before.
+  const seen = new Set<Element>(initialSeen);
+  visibilityCache = new WeakSet<Element>();
+  const scanStart = performance.now();
+  perfCounters.scanCalls++;
+  const scanSelector = extraHintsEnabled ? EXTRA_SELECTOR : HINTABLE_SELECTOR;
+  const allCandidates = deepQuerySelectorAll(root, scanSelector);
 
-  if (elements.length === 0) {
-    yield { elements: [], refs: [], isLast: true, invisibleCandidates };
-    return;
+  const invisibleCandidates: Element[] = [];
+  let bufferedElements: ScannedElement[] = [];
+  let bufferedRefs: Element[] = [];
+
+  for (const el of allCandidates) {
+    perfCounters.scanCandidatesSeen++;
+    if (seen.has(el)) continue;
+    if (el.matches(EXCLUDE_SELECTOR)) { perfCounters.scanRejectedExclude++; continue; }
+    if (el.closest('[data-branchkit-hint]')) continue;
+
+    if (extraHintsEnabled && !el.matches(HINTABLE_SELECTOR)) {
+      perfCounters.isHintableExtraCalls++;
+      if (!isHintableExtra(el)) {
+        perfCounters.scanRejectedExtraNotClickable++;
+        continue;
+      }
+    }
+
+    if (!isVisible(el)) {
+      invisibleCandidates.push(el);
+      perfCounters.scanRejectedInvisible++;
+      continue;
+    }
+    if (isRedundant(el)) { perfCounters.scanRejectedRedundant++; continue; }
+
+    seen.add(el);
+    perfCounters.scanKeptAsHintable++;
+    bufferedElements.push({
+      label: getElementLabel(el),
+      id: 0,
+      category: classifyCategory(el),
+      type: el.tagName.toLowerCase(),
+      adapter: null,
+      codeword: '',
+    });
+    bufferedRefs.push(el);
+
+    if (bufferedElements.length >= batchSize) {
+      yield {
+        elements: bufferedElements,
+        refs: bufferedRefs,
+        isLast: false,
+        invisibleCandidates: [],
+      };
+      bufferedElements = [];
+      bufferedRefs = [];
+    }
   }
 
-  const total = elements.length;
-  for (let start = 0; start < total; start += batchSize) {
-    const end = Math.min(start + batchSize, total);
-    const isLast = end === total;
-    yield {
-      elements: elements.slice(start, end),
-      refs: refs.slice(start, end),
-      isLast,
-      invisibleCandidates: isLast ? invisibleCandidates : [],
-    };
-  }
+  perfCounters.scanTotalMs += performance.now() - scanStart;
+  visibilityCache = null;
+
+  // Terminal batch — carries any remaining buffered candidates plus the
+  // full invisibleCandidates list. Always emitted (possibly with empty
+  // elements/refs) so callers' isLast handler always runs.
+  yield {
+    elements: bufferedElements,
+    refs: bufferedRefs,
+    isLast: true,
+    invisibleCandidates,
+  };
 }
 
 function getElementLabel(el: Element): string {
