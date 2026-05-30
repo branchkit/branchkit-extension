@@ -29,27 +29,32 @@
  */
 
 const observers = new Map<Element, MutationObserver>();
+// Expected `display` per host. Firefox/nesting badges use `contents` (host
+// generates no box); the Chromium CSS-anchor fast-path needs a real box
+// (`position:absolute`) so its host expects `block`. Defaults to `contents`.
+const expectedDisplays = new Map<Element, string>();
 
-function reconcile(host: HTMLElement, attributeName: string): void {
+function reconcile(host: HTMLElement, attributeName: string, expectedDisplay = 'contents'): void {
   if (attributeName === 'data-branchkit-hint') {
     if (host.getAttribute('data-branchkit-hint') !== 'true') {
       host.setAttribute('data-branchkit-hint', 'true');
     }
   } else if (attributeName === 'style') {
-    if (host.style.display !== 'contents') {
-      host.style.display = 'contents';
+    if (host.style.display !== expectedDisplay) {
+      host.style.display = expectedDisplay;
     }
   } else {
     host.removeAttribute(attributeName);
   }
 }
 
-export function trackHostAttributes(host: HTMLElement): void {
+export function trackHostAttributes(host: HTMLElement, expectedDisplay = 'contents'): void {
   if (typeof MutationObserver === 'undefined') return;
   if (observers.has(host)) return;
+  expectedDisplays.set(host, expectedDisplay);
   const observer = new MutationObserver((records) => {
     for (const r of records) {
-      if (r.attributeName) reconcile(host, r.attributeName);
+      if (r.attributeName) reconcile(host, r.attributeName, expectedDisplay);
     }
   });
   observer.observe(host, { attributes: true });
@@ -61,12 +66,14 @@ export function untrackHostAttributes(host: HTMLElement): void {
   if (!observer) return;
   observer.disconnect();
   observers.delete(host);
+  expectedDisplays.delete(host);
 }
 
 export const __testing = {
   reset(): void {
     for (const o of observers.values()) o.disconnect();
     observers.clear();
+    expectedDisplays.clear();
   },
   isTracked(host: Element): boolean {
     return observers.has(host);

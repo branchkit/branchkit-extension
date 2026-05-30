@@ -1,10 +1,12 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import {
   findBadgeContainer,
   findLimitParent,
   resolveContainer,
   resolveBadgeContext,
   HintBadge,
+  anchorOffsetCss,
+  __testing as hintsTesting,
 } from './hints';
 import { __testing as containerTracker } from './container-resize-tracker';
 import { __testing as targetTracker } from './target-mutation-tracker';
@@ -196,7 +198,14 @@ describe('HintBadge.retarget', () => {
 
   const label = { letter: 'a', words: ['arch'], isSingle: true };
 
+  // These assert the nesting (Firefox) path: host lives inside the target's
+  // container. happy-dom's CSS.supports lies (returns true), so pin the mode.
+  beforeEach(() => {
+    hintsTesting.setAnchorSupport(false);
+  });
+
   afterEach(() => {
+    hintsTesting.setAnchorSupport(null);
     containerTracker.reset();
     targetTracker.reset();
     hostTracker.reset();
@@ -256,5 +265,92 @@ describe('HintBadge.retarget', () => {
     expect(containerTracker.getRefCount(newContainer)).toBe(0);
     expect(targetTracker.isTracked(newBtn)).toBe(false);
     expect(hostTracker.isTracked(badge.host)).toBe(false);
+  });
+});
+
+describe('HintBadge anchor mode (CSS Anchor Positioning fast-path)', () => {
+  // When the engine supports anchor positioning the host is body-mounted and
+  // pinned to the target via an `anchor-name`, not nested in the container.
+
+  const label = { letter: 'a', words: ['arch'], isSingle: true };
+
+  beforeEach(() => {
+    hintsTesting.setAnchorSupport(true);
+  });
+
+  afterEach(() => {
+    hintsTesting.setAnchorSupport(null);
+    containerTracker.reset();
+    targetTracker.reset();
+    hostTracker.reset();
+  });
+
+  it('mounts the host at document.body and writes anchor-name on the target', () => {
+    const root = mount('<div id="container"><button id="btn">click</button></div>');
+    const btn = root.querySelector('#btn')! as HTMLElement;
+
+    const badge = new HintBadge(btn, label, 'button', 'word');
+
+    // Host is body-mounted, not nested in the container.
+    expect(badge.host.parentElement).toBe(document.body);
+    expect(root.querySelector('#container')!.contains(badge.host)).toBe(false);
+    // Target carries a unique anchor-name; host references it.
+    const name = btn.style.getPropertyValue('anchor-name');
+    expect(name).toMatch(/^--bk-\d+$/);
+    expect(badge.host.style.getPropertyValue('position-anchor')).toBe(name);
+    expect(badge.host.style.position).toBe('absolute');
+    // anchorParent is still resolved for placement clamping.
+    expect(badge.anchorParent).toBe(root.querySelector('#container'));
+
+    badge.remove();
+  });
+
+  it('moves the anchor-name to the new target on retarget, reusing the name', () => {
+    const root = mount(
+      '<div id="c1"><button id="b1">click</button></div>' +
+      '<div id="c2"><button id="b2">click</button></div>'
+    );
+    const b1 = root.querySelector('#b1')! as HTMLElement;
+    const b2 = root.querySelector('#b2')! as HTMLElement;
+
+    const badge = new HintBadge(b1, label, 'button', 'word');
+    const name = b1.style.getPropertyValue('anchor-name');
+    expect(name).toMatch(/^--bk-\d+$/);
+
+    badge.retarget(b2);
+
+    expect(b1.style.getPropertyValue('anchor-name')).toBe('');
+    expect(b2.style.getPropertyValue('anchor-name')).toBe(name);
+    // Host stays body-mounted; position-anchor unchanged.
+    expect(badge.host.parentElement).toBe(document.body);
+    expect(badge.host.style.getPropertyValue('position-anchor')).toBe(name);
+    expect(badge.anchorParent).toBe(root.querySelector('#c2'));
+
+    badge.remove();
+  });
+
+  it('clears the anchor-name from the target on remove', () => {
+    const root = mount('<div id="container"><button id="btn">click</button></div>');
+    const btn = root.querySelector('#btn')! as HTMLElement;
+
+    const badge = new HintBadge(btn, label, 'button', 'word');
+    expect(btn.style.getPropertyValue('anchor-name')).toMatch(/^--bk-\d+$/);
+
+    badge.remove();
+
+    expect(btn.style.getPropertyValue('anchor-name')).toBe('');
+    expect(badge.host.parentElement).toBeNull();
+  });
+
+  it('bakes the placement offset into an anchor() calc relative to the target rect', () => {
+    // Pure conversion: candidate is absolute viewport; the offset is from the
+    // target's element rect (scroll-invariant — both move together on scroll).
+    // (happy-dom's CSS parser rejects calc(anchor(...)) on style.left, so the
+    // string write is exercised in the real browser; the math is unit-tested
+    // here against the exported helper.)
+    expect(anchorOffsetCss({ x: 15, y: -8 }, { left: 0, top: 0 }))
+      .toEqual({ left: 'calc(anchor(left) + 15px)', top: 'calc(anchor(top) + -8px)' });
+    expect(anchorOffsetCss({ x: 120, y: 240 }, { left: 100, top: 250 }))
+      .toEqual({ left: 'calc(anchor(left) + 20px)', top: 'calc(anchor(top) + -10px)' });
   });
 });

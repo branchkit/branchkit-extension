@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>CSS Anchor Positioning + CLOSED Shadow DOM compatibility test</title>
+<style>
+  body { margin: 0; padding: 20px; font-family: sans-serif; }
+  #sidebar {
+    width: 200px; height: 200px;
+    overflow-y: auto;
+    border: 2px solid #888;
+    margin-bottom: 100px;
+  }
+  .item { padding: 12px; border-bottom: 1px solid #ddd; }
+  #target { background: lightyellow; padding: 4px 8px; }
+  #badge-host { position: absolute; top: 0; left: 0; }
+</style>
+</head>
+<body>
+  <h1>Anchor Positioning + CLOSED Shadow DOM</h1>
+  <p>Scroll the sidebar. The badge should follow the yellow target.</p>
+
+  <div id="sidebar">
+    <div class="item">Item 1</div>
+    <div class="item">Item 2</div>
+    <div class="item" id="target" style="anchor-name: --bk-test">TARGET (anchor-name: --bk-test)</div>
+    <div class="item">Item 4</div>
+    <div class="item">Item 5</div>
+    <div class="item">Item 6</div>
+    <div class="item">Item 7</div>
+    <div class="item">Item 8</div>
+    <div class="item">Item 9</div>
+    <div class="item">Item 10</div>
+    <div class="item">Item 11</div>
+    <div class="item">Item 12</div>
+    <div class="item">Item 13</div>
+    <div class="item">Item 14</div>
+    <div class="item">Item 15</div>
+  </div>
+
+  <div id="badge-host"></div>
+
+  <script>
+    const host = document.getElementById('badge-host');
+    // CLOSED mode — exactly what hints.ts:331 uses. host.shadowRoot is null,
+    // so stash the badge element on window for the probe to measure.
+    const shadow = host.attachShadow({ mode: 'closed' });
+    shadow.innerHTML = `
+      <style>
+        :host { display: block; }
+        .badge {
+          position: absolute;
+          position-anchor: --bk-test;
+          top: anchor(top);
+          left: calc(anchor(left) - 30px);
+          background: red; color: white;
+          padding: 2px 6px; font-size: 12px; font-weight: bold;
+          z-index: 999;
+        }
+      </style>
+      <div class="badge">A</div>
+    `;
+    window.__badge = shadow.querySelector('.badge');
+  </script>
+</body>
+</html>

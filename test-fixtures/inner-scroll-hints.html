@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Inner-pane scroll hint tracking</title>
+<style>
+  body { margin: 0; padding: 40px; font-family: sans-serif; }
+  #pane {
+    width: 320px; height: 240px;
+    overflow-y: scroll;
+    border: 2px solid #444;
+  }
+  .row { padding: 14px; border-bottom: 1px solid #ccc; }
+  button { font-size: 14px; padding: 4px 10px; }
+</style>
+</head>
+<body>
+  <h1>Inner-pane scroll hint tracking</h1>
+  <p>The pane below scrolls internally. Badges should track their buttons.</p>
+  <div id="pane"></div>
+  <script>
+    const pane = document.getElementById('pane');
+    let html = '';
+    for (let i = 0; i < 40; i++) {
+      html += `<div class="row"><button id="btn-${i}">Action ${i}</button></div>`;
+    }
+    pane.innerHTML = html;
+  </script>
+</body>
+</html>

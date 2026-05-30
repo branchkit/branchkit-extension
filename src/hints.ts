@@ -17,6 +17,47 @@ import { trackContainerResize, untrackContainerResize } from './container-resize
 import { trackTargetMutations, untrackTargetMutations } from './target-mutation-tracker';
 import { trackHostAttributes, untrackHostAttributes } from './host-attribute-tracker';
 
+// --- CSS Anchor Positioning fast-path (Chromium 125+) ---
+//
+// When the engine supports CSS Anchor Positioning we pin each badge host to
+// its target via `anchor-name`/`anchor()` instead of physically nesting the
+// host inside the target's scroll-ancestor. The compositor then carries the
+// badge through *every* overflow ancestor with zero JS scroll work — solving
+// the "Hard" inner-pane scroll case (Phase 5b) natively. The anchor CSS must
+// live on the light-DOM host: `anchor()` does not pierce up out of a shadow
+// tree to a light-DOM `anchor-name` (verified open + closed). Firefox (no
+// `anchor()`) keeps the nesting + settle-reposition path unchanged.
+let _anchorSupport: boolean | null = null;
+export function supportsAnchorPositioning(): boolean {
+  if (_anchorSupport !== null) return _anchorSupport;
+  _anchorSupport =
+    typeof CSS !== 'undefined' &&
+    typeof CSS.supports === 'function' &&
+    CSS.supports('anchor-name', '--x') &&
+    CSS.supports('top', 'anchor(top)');
+  return _anchorSupport;
+}
+let _nextAnchorId = 0;
+
+// Express placement's absolute viewport decision as a scroll-invariant offset
+// from the target's element rect, baked into the host's anchor() calc. The
+// compositor then carries the badge through scroll.
+export function anchorOffsetCss(
+  candidate: { x: number; y: number },
+  elRect: { left: number; top: number },
+): { left: string; top: string } {
+  const offX = Math.round(candidate.x - elRect.left);
+  const offY = Math.round(candidate.y - elRect.top);
+  return { left: `calc(anchor(left) + ${offX}px)`, top: `calc(anchor(top) + ${offY}px)` };
+}
+
+// Test hook: pin anchor support on/off (or null to re-detect). happy-dom's
+// CSS.supports returns true for everything, so tests must set the mode they
+// intend rather than relying on detection.
+export const __testing = {
+  setAnchorSupport(v: boolean | null): void { _anchorSupport = v; },
+};
+
 // --- Position debug log (temporary investigation) ---
 export interface PositionLogEntry {
   ts: number;
@@ -317,6 +358,12 @@ export class HintBadge {
   private displayMode: BadgeDisplayMode;
   private fontSize: number;
 
+  // CSS Anchor Positioning fast-path. When `anchorMode` is true the host is
+  // body-mounted and pinned to the target via `anchorName`; scroll-tracking
+  // is handled by the compositor, so reposition() is a no-op.
+  private readonly anchorMode: boolean = supportsAnchorPositioning();
+  private anchorName: string | null = null;
+
   constructor(target: Element, label: LabelAssignment, category: Category, displayMode: BadgeDisplayMode) {
     this.target = target;
     this.category = category;
@@ -413,11 +460,24 @@ export class HintBadge {
     this.outer.appendChild(this.inner);
     this.shadow.appendChild(this.outer);
 
-    const ctx = resolveBadgeContext(target, this.host, this.outer);
-    this.anchorParent = ctx.container;
-    if (ctx.positionMode === 'relative') {
-      this.outer.style.position = 'relative';
-      this.outer.style.display = 'inline';
+    if (this.anchorMode) {
+      // Pin the host to the target via CSS Anchor Positioning. anchorParent
+      // is still resolved (placement reads it for space/sticky clamping) but
+      // the host is mounted at body, not nested in the container.
+      this.anchorName = `--bk-${_nextAnchorId++}`;
+      // One-time page-DOM write, BEFORE trackTargetMutations starts so it
+      // isn't seen as a foreign mutation. The per-placement offset lives on
+      // our own host, so the target is never mutated again until remove().
+      (this.target as HTMLElement).style?.setProperty?.('anchor-name', this.anchorName);
+      this.anchorParent = resolveContainer(target);
+      this.setupAnchorHost();
+    } else {
+      const ctx = resolveBadgeContext(target, this.host, this.outer);
+      this.anchorParent = ctx.container;
+      if (ctx.positionMode === 'relative') {
+        this.outer.style.position = 'relative';
+        this.outer.style.display = 'inline';
+      }
     }
 
     trackContainerResize(this.anchorParent);
@@ -425,10 +485,37 @@ export class HintBadge {
     // Start the host-attribute defender AFTER all setup is done — the
     // observer fires on real mutations only, but starting it earlier
     // would treat our own setAttribute/style writes as page tampering.
-    trackHostAttributes(this.host);
+    // Anchor hosts need a real box (position:absolute → display block);
+    // nesting hosts stay display:contents.
+    trackHostAttributes(this.host, this.anchorMode ? 'block' : 'contents');
+  }
+
+  // Body-mount the host and pin it to the target via anchor(). outer/inner
+  // sit at the host's origin; updatePosition writes the placement offset into
+  // the host's anchor() calc. Idempotent enough to reuse from reattach.
+  private setupAnchorHost(): void {
+    this.host.style.cssText =
+      `display:block;position:absolute;top:anchor(top);left:anchor(left);` +
+      `position-anchor:${this.anchorName};width:0;height:0;pointer-events:none;`;
+    this.outer.style.position = 'absolute';
+    this.outer.style.top = '0';
+    this.outer.style.left = '0';
+    document.body.appendChild(this.host);
   }
 
   updatePosition(candidate?: { x: number; y: number }, caller?: string): void {
+    if (this.anchorMode) {
+      // Express placement's absolute decision as a scroll-invariant offset
+      // from the target's element rect and bake it into the host's anchor()
+      // calc. The compositor then carries the badge through scroll. A
+      // candidate-less call is the reposition path — a no-op here.
+      if (!candidate) return;
+      const css = anchorOffsetCss(candidate, getCachedRect(this.target));
+      this.host.style.left = css.left;
+      this.host.style.top = css.top;
+      return;
+    }
+
     let vpX: number;
     let vpY: number;
 
@@ -482,6 +569,10 @@ export class HintBadge {
   }
 
   reattach(): void {
+    if (this.anchorMode) {
+      this.setupAnchorHost();
+      return;
+    }
     this.anchorParent.appendChild(this.host);
   }
 
@@ -502,16 +593,26 @@ export class HintBadge {
     untrackContainerResize(this.anchorParent);
     untrackTargetMutations(this.target);
 
-    this.target = newEl;
-    const ctx = resolveBadgeContext(newEl, this.host, this.outer);
-    this.anchorParent = ctx.container;
-    if (ctx.positionMode === 'relative') {
-      this.outer.style.position = 'relative';
-      this.outer.style.display = 'inline';
+    if (this.anchorMode) {
+      // Move the anchor name from the old target to the new one (reuse the
+      // same name so the host's position-anchor stays valid). Set it before
+      // trackTargetMutations so it isn't seen as a foreign mutation.
+      (this.target as HTMLElement).style?.removeProperty?.('anchor-name');
+      this.target = newEl;
+      if (this.anchorName) (newEl as HTMLElement).style?.setProperty?.('anchor-name', this.anchorName);
+      this.anchorParent = resolveContainer(newEl);
     } else {
-      // Reset in case the prior context was relative.
-      this.outer.style.position = 'absolute';
-      this.outer.style.display = 'block';
+      this.target = newEl;
+      const ctx = resolveBadgeContext(newEl, this.host, this.outer);
+      this.anchorParent = ctx.container;
+      if (ctx.positionMode === 'relative') {
+        this.outer.style.position = 'relative';
+        this.outer.style.display = 'inline';
+      } else {
+        // Reset in case the prior context was relative.
+        this.outer.style.position = 'absolute';
+        this.outer.style.display = 'block';
+      }
     }
 
     trackContainerResize(this.anchorParent);
@@ -649,6 +750,10 @@ export class HintBadge {
   }
 
   reposition(): void {
+    // Anchor-mode badges follow their target via the compositor; a
+    // candidate-less reposition would have no offset to apply (and
+    // updatePosition guards against it anyway).
+    if (this.anchorMode) return;
     if (this._visible) {
       this.updatePosition();
     }
@@ -658,6 +763,11 @@ export class HintBadge {
     untrackContainerResize(this.anchorParent);
     untrackTargetMutations(this.target);
     untrackHostAttributes(this.host);
+    if (this.anchorMode) {
+      // Untrack the target mutation observer first (above) so clearing our
+      // anchor-name write isn't observed as a foreign mutation.
+      (this.target as HTMLElement).style?.removeProperty?.('anchor-name');
+    }
     this.host.remove();
   }
 

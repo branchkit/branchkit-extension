@@ -320,9 +320,15 @@ throughout, and the final step deletes the scaffolding. No big-bang rewrite.
    `onRemoved` today.
 
 4. **Replace stage internals one at a time** behind the stable interfaces:
-   DiscoveryStage gets the pre-filter + ancestor-dedup; RenderStage cuts over to
-   LayoutSignalRouter/TargetRectStore (the observer-driven Phases 4–6). Each
-   swap is measured against the perf harness with the others held fixed.
+   DiscoveryStage gets the pre-filter + ancestor-dedup (done 2026-05-30,
+   commit `8fe4e4c` — even ahead of the step-2 seam; landed directly in
+   `content.ts`). RenderStage's cutover to LayoutSignalRouter/TargetRectStore
+   was re-scoped on 2026-05-30 — see `DESIGN_OBSERVER_DRIVEN_LAYOUT.md`
+   "Course correction": the standalone flag-gated Phase 4 is dropped as
+   behaviorally inert, and the positioning axis now forks into a
+   cross-browser store path (Phases 5+5b together) and a Chromium CSS
+   Anchor Positioning fast-path. Each swap is measured against the perf
+   harness with the others held fixed.
 
 5. **Delete the adapters and the residual `content.ts` logic.** Final commit:
    `content.ts` is wiring only; the transitional shims from step 2 are gone.

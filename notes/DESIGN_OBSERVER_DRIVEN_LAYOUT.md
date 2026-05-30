@@ -18,10 +18,126 @@ browser has perfect information about what's near the viewport.
 | 2c | `visibilityMO` targeted recheck | Held — caused render regression in earlier attempt; needs design for CSS-parent transitions before re-attempt |
 | 3 | TargetRectStore shadow (cache + drift sampler) | Done (`421c834`) |
 | 3b | LayoutSignalRouter (write rects on scroll/resize) | Done (`9e1173b`) — window scroll + RO surfaces; overflow-ancestor scroll still ahead |
-| 4 | Flag-gated cutover of `updatePosition` reads | Ahead |
-| 5 | Delete global rAF reposition sweep | Ahead — requires Phase 4 activated first |
-| 5b | Overflow-ancestor scroll listeners | **Hard** — must be per-wrapper ancestor walk + refcounted listeners. Naive attempts confirmed (see "Known limitations" below) |
+| 4 | Flag-gated cutover of `updatePosition` reads | Re-scoped — see "Course correction" |
+| 5 | Delete global rAF reposition sweep | Re-scoped — see "Course correction" |
+| 5b | Overflow-ancestor scroll listeners | **Hard** — but CSS Anchor Positioning sidesteps it on Chromium (see "Course correction") |
 | 6 | Relocate position log to read from store | Ahead |
+
+## Course correction (2026-05-30)
+
+Three findings, surfaced while preparing the Phase 4 cutover, change the
+plan for the positioning axis. None invalidates the lifecycle axis
+(Phases 1-2b) — that work stands.
+
+**1. The per-scroll-frame reflow this doc set out to kill is already
+gone.** The "Problem (positioning axis)" section below describes a model
+where `window.scroll` schedules a rAF that re-measures every visible
+badge. That model was since replaced: scroll repositioning is debounced
+to *settle-only* (`scheduleDeferredReposition`, 100ms) and badges follow
+live scroll via CSS anchoring inside their scroll-ancestor (the badge
+host is appended into the target's scroll container, so the compositor
+carries it). `scheduleReposition` now fires only on resize, container-
+resize-settle, focus, transition/animation-end, and target-mutation-
+settle — not per scroll frame. The headline win Phase 4 promised was
+captured by a different mechanism that landed in the interim.
+
+**2. The flag-gated cutover (Phase 4 as written) is behaviorally inert
+in isolation.** The reposition sweep writes a live
+`getBoundingClientRect` for every visible target into `TargetRectStore`
+*immediately before* `placeBadges` reads (content.ts, inside
+`scheduleReposition`'s rAF). So at placement time the store and the
+per-batch layout-cache hold the same values from the same frame. Cutting
+placement's `getCachedRect(w.element)` reads over to `targetRectStore.read`
+under a flag would produce pixel-identical output flag-on vs flag-off —
+a parity harness would trivially pass and prove nothing. The cutover only
+delivers measurable value once the sweep's blanket `cacheLayout` + live
+reads are deleted (Phase 5) and the store is kept warm purely by
+observers. That, in turn, needs every layout signal to write the store —
+including overflow-ancestor scroll, the "Hard" Phase 5b.
+
+**3. CSS Anchor Positioning solves the "Hard" Phase 5b natively — on
+Chromium, but only when the anchor CSS lives on the light-DOM host.**
+Prototype fixtures confirm a positioned element with `position-anchor` +
+`anchor()` follows its target through an inner overflow-container scroll
+with **zero JS scroll listeners** (target moved top:223→123 on
+`scrollTop=100`; tracked exactly, delta held at dy:0/dx:-30). This is
+precisely the inner-pane case Phase 5b calls "Hard." But CSS Anchor
+Positioning is Chromium-only (Chrome 125+); Firefox — the entire freeze
+motivation for this work — does not support it yet. So it is a Chromium
+*fast-path*, not a cross-browser replacement.
+
+Critical shadow-boundary finding (2026-05-30). `anchor()` does **not**
+pierce *up* out of a shadow tree to a light-DOM `anchor-name`. Tested
+three structures against Playwright's bundled Chromium:
+
+| Anchor CSS lives on | `anchor-name` lives on | Result |
+|---|---|---|
+| Badge inside **open** shadow root | light-DOM target | **FAIL** — stuck at (0,0) |
+| Badge inside **closed** shadow root | light-DOM target | **FAIL** — stuck at (0,0) |
+| **Light-DOM host** element | light-DOM target | **PASS** — tracks through scroll |
+
+This resolves the doc's earlier open sub-question (closed-shadow badges).
+Shadow `mode` is irrelevant — both open and closed fail identically,
+confirming this is tree-scope behavior, not a JS-access artifact. The
+earlier "shadow prototype passes" note was actually measuring the
+*plain* light-DOM fixture. Implication for the fast-path: the anchor
+properties (`position-anchor`, `top/left: anchor(...)`) must be set on
+the **light-DOM `HintBadge.host`**, with the badge visuals remaining in
+the closed shadow root for style isolation. Fixtures:
+`test-fixtures/anchor-positioning-{plain,shadow,closed-shadow,host-light}.html`,
+driven by `scripts/_anchor-plain-test.mjs`, `_test-anchor-shadow.mjs`,
+`_test-anchor-closed-shadow.mjs`, `_test-anchor-host-light.mjs`.
+
+### Reconciled two-path plan
+
+The two approaches are complementary, not competing — and the doc's own
+Open Question (CSS Anchor "delegate to platform" with the store as the
+abstraction) already anticipated this:
+
+- **Cross-browser / Firefox foundation:** `TargetRectStore` +
+  observer-driven writes remain the general path. The valuable form of
+  the cutover is Phases 4 **and** 5 done together (cut reads to the store
+  *and* delete the blanket sweep), which requires Phase 5b
+  (overflow-ancestor scroll listeners) for inner-pane correctness on
+  Firefox. The standalone flag-gated Phase 4 is dropped as inert.
+- **Chromium fast-path:** when `CSS.supports('anchor-name: --x')` is
+  true, position badges with CSS Anchor Positioning and skip the JS
+  reposition machinery entirely (including Phase 5b's listener walk) for
+  those badges. The store becomes the fallback the platform path
+  degrades to.
+
+  Implementation shape (grounded in current `hints.ts`). Today
+  `HintBadge.host` is a `display:contents` light-DOM div appended *inside*
+  the target's scroll-ancestor (`resolveBadgeContext` → `resolveContainer`),
+  with `outer` at `position:relative` riding that container's scroll and
+  `inner` carrying explicit offsets from `updatePosition`. The fast-path
+  replaces the *physical nesting* with anchoring:
+  1. Feature-gate once: `supportsAnchor = CSS.supports('anchor-name','--x')
+     && CSS.supports('top','anchor(top)')`.
+  2. On the **target**, set a unique `anchor-name: --bk-<id>` (cleared on
+     `destroy`/`retarget`). One name per live badge.
+  3. On the **light-DOM `host`** (not the shadow): drop `display:contents`,
+     set `position:absolute; position-anchor:--bk-<id>;
+     top:anchor(top); left:calc(anchor(left) - BADGE_OFFSET)`. Mount it at
+     `document.body` (or any fixed root) instead of the scroll-ancestor —
+     the compositor now tracks the target through *all* its overflow
+     ancestors, which is exactly what Phase 5b's listener walk was for.
+  4. `outer`/`inner` keep their style-isolation role; their explicit
+     offset math (`updatePosition`) is bypassed on this path since the
+     host itself is anchored.
+  5. `scheduleReposition`/`scheduleDeferredReposition` become no-ops for
+     anchored badges; only resize-driven *size* recompute may remain.
+
+  Firefox (no `anchor()`) keeps the current nesting + settle-reposition
+  path unchanged. This is the fork: one positioning strategy selected at
+  badge construction by feature support.
+
+Sequencing decision is deferred to the user. The realistic options are:
+(a) build Phase 5b + the combined 4/5 cutover for a correct cross-browser
+store path, or (b) land the Chromium CSS-anchor fast-path first (it
+removes the inner-pane pain on the majority browser and de-risks 5b by
+shrinking its scope to Firefox-only). Either way the standalone,
+flag-gated Phase 4 is not worth building.
 
 ## Known limitations (don't reattempt without a new design)
 
@@ -500,14 +616,19 @@ positioning.** New system writes to a shadow rect store but doesn't
 drive positioning yet. Compare cached rect against live
 `getBoundingClientRect` on a sample interval; alert on divergence.
 
-**Phase 4: Cut over `updatePosition` reads to the store, flag-gated.**
-Run the Playwright fixture suite under both modes; require pixel
-parity on badge positions across scroll/resize/mutation timelines.
+**Phase 4 (re-scoped — see "Course correction").** The standalone
+flag-gated cutover is dropped: with the sweep writing the store right
+before placement, it's behaviorally inert. The cutover only matters
+folded into Phase 5.
 
-**Phase 5: Delete the global rAF reposition sweep.** Once Phase 4 is
-clean on the fixture suite and three real sites, remove the
-`scheduleReposition` blanket handler and the `cacheLayout` warmup
-inside it.
+**Phase 5: Cut reads to the store AND delete the global rAF reposition
+sweep, together.** Make placement read target rects from
+`TargetRectStore` and remove the `scheduleReposition` blanket handler +
+its `cacheLayout` warmup. Requires Phase 5b first (the store must be
+warm for inner-pane scroll before the sweep that currently covers that
+case is removed). Run the Playwright fixture suite (sticky, overflow-
+ancestor, transition, plain) and three real sites; require pixel parity
+before deleting the sweep.
 
 **Phase 6: Relocate position log.** Default path reads from cache;
 debug path opts in to live reads.
@@ -526,4 +647,9 @@ debug path opts in to live reads.
 - CSS Anchor Positioning is the long-term trajectory (Chrome 125+).
   Should the store be designed so that "delegate to platform" is a
   drop-in for Chromium when available? Probably yes; the abstraction
-  cost is zero.
+  cost is zero. **Update (2026-05-30):** prototyped and validated —
+  follows inner-overflow scroll with zero JS (see "Course correction").
+  Now a concrete fork in the plan, not a hypothetical. Open sub-question:
+  do badges in *closed* shadow roots (our hint hosts) reach a light-DOM
+  `anchor-name`? `_test-anchor-shadow.mjs` exists to answer this; result
+  not yet recorded here.
