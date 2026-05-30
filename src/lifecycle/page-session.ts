@@ -67,6 +67,9 @@ export class PageSession {
   /** Whether the visibility MutationObserver is currently connected. */
   visibilityMOConnected = false;
 
+  /** The mode flag — "user wants hints showing." */
+  hintsVisible = false;
+
   constructor(private readonly hooks: PageSessionHooks) {}
 
   /**

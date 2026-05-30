@@ -143,7 +143,7 @@ const tracker = new IntersectionTracker(store, {
       if (hasSent(cw)) queueDelete(cw);
     }
     schedulePushGrammar();
-    if (hintsVisible) badgeNewlyCodeworded();
+    if (pageSession.hintsVisible) badgeNewlyCodeworded();
   },
 });
 
@@ -172,16 +172,15 @@ setScrollBoundaryCallback((boundary) => {
   }
 });
 
-let hintsVisible = false;
-
 // Wire the LabelStage's catchup sync to content.ts-owned collaborators.
 // detachWrapper/badgeNewlyCodeworded are hoisted function declarations;
-// store is defined above; hintsVisible is read lazily via the arrow.
+// store is defined above; the visibility flag (pageSession.hintsVisible) is
+// read lazily via the arrow.
 initLabelSync({
   store,
   detachWrapper,
   badgeNewlyCodeworded,
-  isHintsVisible: () => hintsVisible,
+  isHintsVisible: () => pageSession.hintsVisible,
 });
 
 let activeCategory: Category | null = null;
@@ -281,13 +280,13 @@ function whenDOMSettles(callback: () => void): void {
 
 loadConfig({
   onDisplayModeChange: () => {
-    if (hintsVisible) updateBadgeLabels();
+    if (pageSession.hintsVisible) updateBadgeLabels();
   },
   onHintVisibilityChange: () => {
     const v = getHintVisibility();
-    if (v === 'always' && !hintsVisible) {
+    if (v === 'always' && !pageSession.hintsVisible) {
       showHints();
-    } else if (v === 'manual' && hintsVisible) {
+    } else if (v === 'manual' && pageSession.hintsVisible) {
       hideHints();
     }
   },
@@ -331,10 +330,10 @@ if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
         }
       }
       tracker.refreshViewportClaims();
-      if (hintsVisible) {
+      if (pageSession.hintsVisible) {
         // Re-render once the new codewords land.
         tracker.flushNow().then(() => {
-          if (hintsVisible) showHints(activeCategory ?? undefined);
+          if (pageSession.hintsVisible) showHints(activeCategory ?? undefined);
         });
       }
     }
@@ -373,7 +372,7 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
         if (getHintVisibility() === 'always') {
           whenDOMSettles(() => {
             tracker.flushNow().then(() => {
-              if (getHintVisibility() === 'always' && !hintsVisible) showHints();
+              if (getHintVisibility() === 'always' && !pageSession.hintsVisible) showHints();
             });
           });
         }
@@ -558,7 +557,7 @@ dispatcher.register('show_hints_category', (params) => {
 // --- Keyboard Filter Callback ---
 
 keyHandler.setFilterCallback((prefix: string, byText: boolean) => {
-  if (!hintsVisible) return;
+  if (!pageSession.hintsVisible) return;
 
   if (prefix === '') {
     for (const w of store.all) {
@@ -706,7 +705,7 @@ const visibilityIO = new IntersectionObserver((entries) => {
   }
   if (dirty) {
     schedulePushGrammar();
-    if (hintsVisible) showHints();
+    if (pageSession.hintsVisible) showHints();
   }
   if (pendingVisibility.size === 0) disconnectVisibilityMO();
 }, { root: null, rootMargin: '200px', threshold: 0 });
@@ -778,7 +777,7 @@ function recheckPendingVisibility(): void {
   }
   if (dirty) {
     schedulePushGrammar();
-    if (hintsVisible) showHints();
+    if (pageSession.hintsVisible) showHints();
   }
   if (pendingVisibility.size === 0) disconnectVisibilityMO();
   recordCpu('recheckPendingVisibility', performance.now() - __cpuStart);
@@ -1008,23 +1007,23 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
     ? store.all.filter(w => categories.includes(w.category))
     : [...store.all];
 
-  // hintsVisible is the mode flag — "user wants hints showing." Set it
+  // pageSession.hintsVisible is the mode flag — "user wants hints showing." Set it
   // even when the store has nothing to paint right now so subsequent
   // wrappers arriving via the batched scan (or MutationObserver
-  // discovery) paint via badgeNewlyCodeworded, which is hintsVisible-
+  // discovery) paint via badgeNewlyCodeworded, which is pageSession.hintsVisible-
   // gated. Under the old whole-grammar path the store was always
   // populated by the time showHints fired, so an empty return here
   // never mattered; under batched mode the scan is async and showHints
   // can race ahead of the first batch landing.
   if (allTargets.length === 0) {
-    hintsVisible = true;
+    pageSession.hintsVisible = true;
     return;
   }
 
   // Filter to viewport-visible and sort by position (same as grammar push)
   const targets = viewportSort(allTargets);
   if (targets.length === 0) {
-    hintsVisible = true;
+    pageSession.hintsVisible = true;
     return;
   }
 
@@ -1069,7 +1068,7 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
   } finally {
     clearLayoutCache();
   }
-  hintsVisible = true;
+  pageSession.hintsVisible = true;
 }
 
 // Reset narrowing/interaction state on existing hint badges without
@@ -1097,7 +1096,7 @@ function clearHintFilter(): void {
 
 function hideHints(): void {
   clearHintFilter();
-  hintsVisible = false;
+  pageSession.hintsVisible = false;
   activeCategory = null;
   clearPlacement();
   for (const w of store.all) {
@@ -1412,8 +1411,8 @@ async function processScanBatch(
   // Paint the just-attached badges. Each one is now backed by a
   // successful plugin acknowledgement AND a still-connected element,
   // so the badge-implies-functional contract holds. Gated by
-  // hintsVisible so manual-mode batches don't paint until "show".
-  if (hintsVisible && attached.length > 0) {
+  // pageSession.hintsVisible so manual-mode batches don't paint until "show".
+  if (pageSession.hintsVisible && attached.length > 0) {
     badgeNewlyCodeworded();
   }
 
@@ -1759,7 +1758,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       if (prefix) {
         const letter = WORD_TO_LETTER[prefix];
         if (letter) {
-          if (!hintsVisible) showHints();
+          if (!pageSession.hintsVisible) showHints();
           const matchSet = new Set(store.matchingLetterPrefix(letter));
           for (const w of store.all) {
             const isMatch = matchSet.has(w);
@@ -1844,7 +1843,7 @@ type RepositionScope = 'all' | 'drifted';
 let repositionRafPending = false;
 let pendingScope: RepositionScope = 'drifted';
 function scheduleReposition(scope: RepositionScope = 'all'): void {
-  if (!hintsVisible) return;
+  if (!pageSession.hintsVisible) return;
   // 'all' supersedes a queued 'drifted' — a real layout change needs the full
   // sweep even if a scroll already queued the cheap path.
   if (scope === 'all') pendingScope = 'all';
@@ -2560,7 +2559,7 @@ const observer = new MutationObserver((records) => {
   // the user is reading badges. hideHints() flushes via doScan().
   // In "always" mode, process mutations incrementally so SPA navigation
   // and dynamic content get badges without requiring escape+re-show.
-  if (hintsVisible && getHintVisibility() === 'manual') {
+  if (pageSession.hintsVisible && getHintVisibility() === 'manual') {
     pendingMutation = true;
     recordCpu('moCallback', performance.now() - __cpuStart);
     return;
@@ -2590,7 +2589,7 @@ const observer = new MutationObserver((records) => {
       dropDisconnectedWrappers();
       const added = discoverInSubtree(document.body || document.documentElement);
       if (added > 0) schedulePushGrammar();
-      if (hintsVisible) scheduleReposition();
+      if (pageSession.hintsVisible) scheduleReposition();
     }, HUGE_MUTATION_IDLE_MS);
     recordCpu('moCallback', performance.now() - __cpuStart);
     return;
@@ -2604,7 +2603,7 @@ const observer = new MutationObserver((records) => {
   // the dominant scroll-time CPU bucket. A mutation batch means "layout
   // may have shifted"; coalescing to one reposition after mutations
   // settle is the same trade already accepted for scroll/resize.
-  if (hintsVisible) scheduleDeferredReposition();
+  if (pageSession.hintsVisible) scheduleDeferredReposition();
   recordCpu('moCallback', performance.now() - __cpuStart);
 });
 
