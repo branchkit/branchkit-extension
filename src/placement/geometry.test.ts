@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { leaderLineGeometry } from './placement/geometry';
+import { leaderLineGeometry } from './geometry';
 
 describe('leaderLineGeometry', () => {
   it('horizontal line has angle 0', () => {

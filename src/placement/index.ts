@@ -1,9 +1,9 @@
-export type { PlacementStrategy } from './placement/strategy';
-export { RangoStrategy } from './placement/rango';
+export type { PlacementStrategy } from './strategy';
+export { RangoStrategy } from './rango';
 
-import { PlacementStrategy } from './placement/strategy';
-import { RangoStrategy } from './placement/rango';
-import { ElementWrapper } from './element-wrapper';
+import { PlacementStrategy } from './strategy';
+import { RangoStrategy } from './rango';
+import { ElementWrapper } from '../element-wrapper';
 
 const strategies: Record<string, () => PlacementStrategy> = {
   rango: () => new RangoStrategy(),
@@ -42,4 +42,4 @@ export function clearPlacement(): void {
   active.clear();
 }
 
-export { leaderLineGeometry } from './placement/geometry';
+export { leaderLineGeometry } from './geometry';

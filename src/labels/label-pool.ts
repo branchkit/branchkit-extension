@@ -8,7 +8,7 @@
  * Design: notes/DESIGN_BROWSER_FRAMES_AND_OBSERVERS.md section 2.
  */
 
-import { LabelStack } from './types';
+import { LabelStack } from '../types';
 
 // Pool composition: 26×26 pairs = 676 codewords.
 //
