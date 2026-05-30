@@ -1925,7 +1925,17 @@ function scheduleDeferredReposition(): void {
   if (deferredRepositionTimer) clearTimeout(deferredRepositionTimer);
   deferredRepositionTimer = setTimeout(() => {
     deferredRepositionTimer = null;
-    scheduleReposition();
+    // 'drifted', not 'all'. These signals (container resize, target mutation,
+    // focus/transition settle) fire continuously on churny pages — YouTube
+    // /watch lazy-loading comments resizes containers ~constantly. Re-placing
+    // every visible badge each time made this the dominant extension CPU cost
+    // at scale (2404ms over a 60s soak at ~208 badges, vs 765ms for the already
+    // -trimmed scroll path). needsScrollReposition() is general drift detection,
+    // not scroll-specific: a resize/mutation that genuinely moves a target
+    // relative to its badge produces drift and is re-placed; badges that moved
+    // in flow with their target (the common case) correctly skip. The window
+    // 'resize' handler stays 'all' for genuine global layout/clamping changes.
+    scheduleReposition('drifted');
   }, DEFERRED_REPOSITION_DEBOUNCE_MS);
 }
 document.addEventListener('focusin', scheduleDeferredReposition, { passive: true });
