@@ -35,6 +35,21 @@ export interface PageSessionHooks {
    * underlying body should tolerate being run after partial init too.
    */
   teardown: (reason: TeardownReason) => void;
+
+  /**
+   * Content-side reconcile for a same-document navigation. Driven by the
+   * background `webNavigation` SPA-nav signal (dispatched as the `rescan`
+   * action); this hook is the handler, not the detector. `fromCache` selects
+   * the fast app-refocus path (drop dead wrappers + republish) vs. a full
+   * DOM rescan.
+   */
+  onUrlChange: (fromCache: boolean, reason: string) => void;
+
+  /**
+   * bfcache restore (`pageshow` with persisted=true): re-register surviving
+   * wrappers and rescan so the plugin's wiped grammar is rebuilt.
+   */
+  restore: () => void;
 }
 
 export class PageSession {
@@ -96,5 +111,15 @@ export class PageSession {
     if (this.toreDown) return;
     this.toreDown = true;
     this.hooks.teardown(reason);
+  }
+
+  /** Reconcile after a same-document navigation. See `onUrlChange` hook. */
+  onUrlChange(fromCache: boolean, reason: string): void {
+    this.hooks.onUrlChange(fromCache, reason);
+  }
+
+  /** Rebuild grammar after a bfcache restore. See `restore` hook. */
+  restore(): void {
+    this.hooks.restore();
   }
 }

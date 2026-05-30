@@ -395,9 +395,16 @@ multi-hundred-line inline callback referencing free functions defined all over
 the file) onto the instance is the entangled-boot relocation step (1) explicitly
 deferred, and is coupled to the §3.2 stage extraction — so it waits for the boot
 relocation / stage cut rather than being forced as field assignment now. (3)
-Route the `rescan` action and `pageshow` through `onUrlChange`/`restore`. Each
-step keeps `npm test` green and is independently revertable; the final commit
-(after boot relocation) leaves no module-scope lifecycle state behind.
+**Done 2026-05-30.** Route the `rescan` action and `pageshow` through
+`onUrlChange`/`restore`. Same injection-seam pattern as `teardown`: the SPA-nav
+rescan body (`rescanForNav`) and the bfcache-restore body (`restoreFromBfcache`)
+are now named functions wired as `PageSessionHooks.onUrlChange`/`restore`; the
+message listener and `pageshow` listener delegate to `pageSession.onUrlChange`/
+`restore`. Detection is unchanged — the background `webNavigation` signal still
+fires the `rescan` action and `pageshow` is still the bfcache trigger; only the
+handler ownership moved onto the session. Behavior byte-identical. Each step
+kept `npm test` green and is independently revertable; the final commit (after
+boot relocation) leaves no module-scope lifecycle state behind.
 
 **Explicitly out of scope for this cut / do not touch:** the stage interfaces
 (§3.2 — `DiscoveryStage`/`LifecycleStage`/`LabelStage`/`RenderStage`) and
