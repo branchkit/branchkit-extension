@@ -75,4 +75,28 @@ export class TargetRectStore {
     }
     return { sampled, drifted, maxDriftPx };
   }
+
+  /** Like sampleDrift but scoped to a caller-supplied target set — the
+   *  population placement actually reads (painted badges). Used to verify the
+   *  store stays warm for the targets the positioning cutover depends on,
+   *  without the noise of in-band-but-unpainted entries the attention IO also
+   *  writes. Forces a layout per sampled target — call sparingly. */
+  sampleDriftFor(targets: Iterable<Element>, limit: number): { sampled: number; drifted: number; maxDriftPx: number } {
+    let sampled = 0;
+    let drifted = 0;
+    let maxDriftPx = 0;
+    for (const el of targets) {
+      if (sampled >= limit) break;
+      const cached = this.rects.get(el);
+      if (!cached || !el.isConnected) continue;
+      sampled++;
+      const live = el.getBoundingClientRect();
+      const max = Math.max(Math.abs(live.left - cached.left), Math.abs(live.top - cached.top));
+      if (max > 1) {
+        drifted++;
+        if (max > maxDriftPx) maxDriftPx = max;
+      }
+    }
+    return { sampled, drifted, maxDriftPx };
+  }
 }

@@ -18,6 +18,7 @@ import { AttentionObserver } from './attention-observer';
 import { TargetRectStore } from './target-rect-store';
 import { HintBadge, setPositionCaller, clearPositionCaller } from './hints';
 import { onContainerResize } from './container-resize-tracker';
+import { onScrollAncestor, scrollAncestorStats, registeredScrollTargets } from './scroll-ancestor-tracker';
 import { onTargetMutation } from './target-mutation-tracker';
 import { cacheLayout, cacheVisibility, clearLayoutCache, peekCachedRect, getCachedRect } from './layout-cache';
 import { placeBadges, placeOne, clearPlacement } from './placement';
@@ -1061,6 +1062,11 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
       recordCpu('placeBadges:show', performance.now() - __pbStart);
       clearPositionCaller();
     }
+    // Write-on-paint: seed the store with each painted target's current rect
+    // from the warm cache. The attention IO writes targets at band-entry time
+    // (often a stale position by the time they paint); this corrects it on
+    // paint so the store is warm without the blanket sweep.
+    for (const w of renderable) targetRectStore.write(w.element, getCachedRect(w.element));
   } finally {
     clearLayoutCache();
   }
@@ -1154,6 +1160,7 @@ function badgeNewlyCodeworded(): void {
       w.hint = new HintBadge(w.element, label, w.category, getDisplayMode());
       w.hint.show();
       placeOne(w, existingCount + i);
+      targetRectStore.write(w.element, getCachedRect(w.element)); // write-on-paint
     }
   } finally {
     clearLayoutCache();
@@ -1904,6 +1911,20 @@ window.addEventListener('scroll', scheduleScrollReposition, { passive: true });
 // layout settles trades a ~100ms lag on resize-driven repositions —
 // imperceptible mid-scroll, same trade already accepted for scroll.
 onContainerResize(scheduleDeferredReposition);
+
+// Inner-pane scroll → keep TargetRectStore warm for that pane's targets
+// (DESIGN_OBSERVER_DRIVEN_LAYOUT Phase 5b). `scroll` doesn't bubble, so the
+// window listener above misses overflow-container scroll; nesting-path badges
+// ride the compositor visually but their store rects would otherwise go stale.
+// The tracker hands us one rAF-coalesced batch of the scrolled containers'
+// targets; this is a read-only pass (store writes, no DOM writes) so the
+// getBoundingClientRect reads don't thrash layout. Store is not yet read in
+// production — additive warmth ahead of the positioning cutover.
+onScrollAncestor((targets) => {
+  for (const el of targets) {
+    if (el.isConnected) targetRectStore.write(el, el.getBoundingClientRect());
+  }
+});
 
 // Deferred reposition for signals that hint "layout is about to settle":
 // - focusin/focusout: :focus-within can resize parents, focus-driven
@@ -2766,6 +2787,10 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
       size: targetRectStore.size,
       subscribers: targetRectStore.subscriberCount,
       drift: targetRectStore.sampleDrift(10),
+      scrollAncestors: scrollAncestorStats(),
+      // Drift scoped to inner-pane-registered targets (the placement-relevant
+      // set) — confirms Phase 5b keeps the store warm where it matters.
+      scrollAncestorDrift: targetRectStore.sampleDriftFor(registeredScrollTargets(), 10),
     },
   };
 }
