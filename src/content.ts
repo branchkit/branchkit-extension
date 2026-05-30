@@ -5,7 +5,7 @@
  * Voice commands arrive via background → BRANCHKIT_ACTION messages.
  */
 
-import { Category, HintVisibility, ScannedElement, Message, DispatchResult, GrammarBatchRequest, GrammarBatchResponse } from './types';
+import { Category, HintVisibility, ScannedElement, Message, DispatchResult } from './types';
 import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from './words';
 import { scanElements, scanSingle, isHintable, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters } from './scanner';
 import { ElementWrapper, WrapperStore, enterLimbo, isLimboExpired } from './element-wrapper';
@@ -77,13 +77,27 @@ import {
   type RuleEntry,
 } from './domain-rules';
 import { loadDomainRules, onDomainRulesChanged, ruleEqual } from './domain-rules-storage';
-import { sweepDisconnectedAfterBatch } from './batch-sweep';
 import { filterNewBatchRefs } from './batch-dedup';
 import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
 import { openLivenessPort } from './plugin/liveness';
 import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './telemetry/message-counters';
 import { recordCpu, resetCpuCounters, resetLongtask, computeCpuShare, cpuBucketsSnapshot, longtaskSnapshot } from './telemetry/perf-counters';
 import { loadConfig, getDisplayMode, getHintVisibility } from './core/config';
+import {
+  initLabelSync,
+  queuePut,
+  dropPendingPut,
+  queueDelete,
+  markSent,
+  hasSent,
+  hasPendingDeletes,
+  getSessionId,
+  rotateSession,
+  claimLabels,
+  postBatch,
+  scheduleSync,
+  syncNow,
+} from './labels/label-sync';
 
 // --- Idempotency guard ---
 //
@@ -119,12 +133,12 @@ const registry = new CommandRegistry();
 const keyHandler = new KeyHandler(registry, dispatcher);
 const tracker = new IntersectionTracker(store, {
   onCodewordsChanged: (claimed, released) => {
-    for (const w of claimed) pendingPuts.add(w);
+    for (const w of claimed) queuePut(w);
     for (const cw of released) {
       // Only enqueue a real Delete if we'd actually told the plugin
       // about this codeword; if the claim happened and immediately got
       // released inside one debounce window, the plugin never saw it.
-      if (sentCodewords.has(cw)) pendingDeleteCodewords.push(cw);
+      if (hasSent(cw)) queueDelete(cw);
     }
     schedulePushGrammar();
     if (hintsVisible) badgeNewlyCodeworded();
@@ -157,6 +171,17 @@ setScrollBoundaryCallback((boundary) => {
 });
 
 let hintsVisible = false;
+
+// Wire the LabelStage's catchup sync to content.ts-owned collaborators.
+// detachWrapper/badgeNewlyCodeworded are hoisted function declarations;
+// store is defined above; hintsVisible is read lazily via the arrow.
+initLabelSync({
+  store,
+  detachWrapper,
+  badgeNewlyCodeworded,
+  isHintsVisible: () => hintsVisible,
+});
+
 let activeCategory: Category | null = null;
 let pendingMutation = false;
 let lastActivatedElement: Element | null = null;
@@ -289,15 +314,12 @@ if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
       // a session change → cleanupFrameSessionLocked clears stale
       // per-prefix entries. This is the ONE place in a content
       // script's lifetime where we want plugin-side cleanup.
-      sessionId = generateSessionId();
       // Plugin clears its per-frame session on session_id change, so the
-      // delta-sync mirror state on this side is now stale; reset it.
-      // Subsequent IT.refreshViewportClaims will re-claim codewords for
-      // in-viewport wrappers and onCodewordsChanged will re-queue them
-      // as pending Puts.
-      sentCodewords.clear();
-      pendingPuts.clear();
-      pendingDeleteCodewords.length = 0;
+      // delta-sync mirror state on this side is now stale; rotateSession
+      // rotates the id and resets it. Subsequent IT.refreshViewportClaims
+      // will re-claim codewords for in-viewport wrappers and
+      // onCodewordsChanged will re-queue them as pending Puts.
+      rotateSession();
       for (const w of store.all) {
         w.scanned.codeword = '';
         w.label = null;
@@ -873,9 +895,9 @@ function detachWrapper(element: Element): void {
     // the Delete; if the wrapper was pending a Put that hasn't fired
     // yet, drop the Put. Either way we don't want stale state on the
     // plugin side post-detach.
-    pendingPuts.delete(removed);
+    dropPendingPut(removed);
     const cw = removed.scanned.codeword;
-    if (cw && sentCodewords.has(cw)) pendingDeleteCodewords.push(cw);
+    if (cw && hasSent(cw)) queueDelete(cw);
     if (removed.scanned.id > 0) {
       idRegistry.unregister(removed.scanned.id);
     }
@@ -1170,237 +1192,6 @@ function activateWrapper(wrapper: ElementWrapper): void {
   }
 }
 
-// --- Grammar Push (Option B per-batch path) ---
-
-let batchedSyncTimer: ReturnType<typeof setTimeout> | null = null;
-const BATCHED_SYNC_DEBOUNCE_MS = 80;
-
-function scheduleBatchedSync(reason: string): void {
-  if (batchedSyncTimer) clearTimeout(batchedSyncTimer);
-  batchedSyncTimer = setTimeout(() => {
-    batchedSyncTimer = null;
-    void batchedStateSync(reason);
-  }, BATCHED_SYNC_DEBOUNCE_MS);
-}
-
-/**
- * Catchup sync: collect every wrapper with a codeword, batch them up
- * with a fresh session_id, and POST through the per-batch protocol.
- * The plugin's session_id implicit-reset Deletes the prior session's
- * codewords for this frame before applying the new ones — so the
- * "what changed" diff is handled implicitly by the plugin.
- *
- * Used by:
- *   - IT.onCodewordsChanged (scroll-driven new claims / releases)
- *   - MutationObserver-driven discovery (new wrappers after DOM
- *     mutation; IT will have async-claimed their codewords first)
- *   - Alphabet swap / rescan triggers
- *
- * Simpler than tracking per-wrapper pushed state: the plugin already
- * implements per-frame session cleanup (C7), so we pay one
- * sync-everything POST burst per change instead of incremental
- * diff bookkeeping on the extension side. For dense scroll bursts
- * the 80ms debounce keeps this from hammering.
- */
-async function batchedStateSync(reason: string): Promise<void> {
-  if (!isAlphabetLoaded()) return;
-
-  // Drain pendingPuts. Snapshot + clear before any await so codewords
-  // claimed during the post round-trip re-queue for the next push.
-  // Filter out wrappers whose codeword went away or were replaced in
-  // the store between schedule and drain (race with IT viewport-leave
-  // or rebind).
-  const drained = [...pendingPuts];
-  pendingPuts.clear();
-  const puts = drained.filter(w =>
-    w.scanned.codeword && store.findWrapperFor(w.element) === w,
-  );
-
-  // Pure-empty delta — nothing changed since last push. Skip the
-  // round-trip entirely. This is the "hash-skip for free" case: in
-  // the steady state the only way to land here is "MO fired but no
-  // hintability change", which is the bulk of cosmetic-mutation
-  // pages (style toggles, animation classes, hover state churn).
-  if (puts.length === 0 && pendingDeleteCodewords.length === 0) {
-    void reason;
-    return;
-  }
-
-  // Uses module-scope sessionId — see Problem 1 in the design doc.
-  const sessionMeta = {
-    bundle_id: '',
-    hint_visibility: getHintVisibility(),
-    app_id: '',
-    table_id: '',
-  };
-
-  if (puts.length === 0) {
-    // Pure-delete push. postGrammarBatch drains pendingDeleteCodewords
-    // and piggybacks them via delete_codewords on a single empty batch.
-    const drainedDeletes = pendingDeleteCodewords.slice();
-    const resp = await postGrammarBatch({
-      session_id: sessionId,
-      batch_index: 0,
-      is_final: true,
-      kind: 'incremental',
-      ...sessionMeta,
-      elements: [],
-    });
-    // Plugin doesn't report deletes in `succeeded`/`failed`, but it
-    // honors them as long as the batch itself didn't error. On error,
-    // postGrammarBatch restores pendingDeleteCodewords for us.
-    if (resp.result === 'ok') {
-      for (const cw of drainedDeletes) sentCodewords.delete(cw);
-    }
-    void reason;
-    return;
-  }
-
-  // One delta-push chunked at DEFAULT_SCAN_BATCH_SIZE so each round-trip
-  // stays small. Deletes ride on the first batch's drainPendingDeletes.
-  for (let start = 0; start < puts.length; start += DEFAULT_SCAN_BATCH_SIZE) {
-    const end = Math.min(start + DEFAULT_SCAN_BATCH_SIZE, puts.length);
-    const chunk = puts.slice(start, end);
-    const isLast = end === puts.length;
-    // Capture which deletes ride this batch — postGrammarBatch's drain
-    // empties pendingDeleteCodewords for us. We track the snapshot so
-    // sentCodewords can be updated on a successful response.
-    const deletesRidingHere = start === 0 ? pendingDeleteCodewords.slice() : [];
-    const resp = await postGrammarBatch({
-      session_id: sessionId,
-      batch_index: Math.floor(start / DEFAULT_SCAN_BATCH_SIZE),
-      is_final: isLast,
-      kind: 'incremental',
-      ...sessionMeta,
-      elements: chunk.map(w => w.scanned),
-    });
-    if (resp.failed.length > 0) {
-      const failedSet = new Set(resp.failed.map(f => f.codeword));
-      for (const w of chunk) {
-        if (failedSet.has(w.scanned.codeword)) detachWrapper(w.element);
-      }
-    }
-    const succeededSet = new Set(resp.succeeded);
-    for (const cw of succeededSet) sentCodewords.add(cw);
-    if (resp.result === 'ok') {
-      for (const cw of deletesRidingHere) sentCodewords.delete(cw);
-    }
-    const succeededWrappers = chunk.filter(w => succeededSet.has(w.scanned.codeword));
-    sweepDisconnectedAfterBatch(succeededWrappers, (el) => el.isConnected, pendingDeleteCodewords, detachWrapper);
-    if (hintsVisible && resp.succeeded.length > 0) {
-      badgeNewlyCodeworded();
-    }
-    await new Promise(r => setTimeout(r, 0));
-  }
-
-  void reason;
-}
-
-// --- Per-batch grammar push (Option B) ---
-//
-// docs/completed/DESIGN_OPTION_B_REATTEMPT.md is the authoritative record.
-// Two paths into this section:
-//   - doScanBatched: scan in batches, claim codewords inline, POST each
-//     batch, paint succeeded incrementally. Uses the module-scope
-//     sessionId (problem 1 fix), filters already-attached refs before
-//     claiming pool labels (problem 2 fix).
-//   - batchedStateSync: IT- and MO-driven catchup. Collects current
-//     wrappers-with-codewords and re-POSTs them through the per-batch
-//     protocol so MO-discovered + IT-claimed elements reach the plugin.
-
-// --- Delta-sync state ---
-//
-// The CS owns truth; the plugin is a derived cache. We track three
-// pieces of state so each `batchedStateSync` flush sends only what
-// changed since the last successful push:
-//
-//   sentCodewords: codewords currently live on the plugin side. Lets us
-//     distinguish "real delete" (was Put, now gone — send Delete) from
-//     "never sent" (claimed and released within one debounce window —
-//     don't send anything). Cleared on session_id rotation since the
-//     plugin clears its own session state on the same event.
-//
-//   pendingPuts: wrappers whose codeword exists locally but hasn't been
-//     Put to the plugin yet. Populated by IT.onCodewordsChanged
-//     (newly-claimed) and by the scan path (after attach + push). Drained
-//     each batchedStateSync.
-//
-//   pendingDeleteCodewords: codewords queued for plugin-side delete.
-//     Populated by IT viewport-leave releases, detachWrapper, and the
-//     post-batch isConnected sweep (item 5 RED).
-//
-// Pre-delta, batchedStateSync re-flushed every wrapper-with-codeword on
-// every fire — quadratic-ish in mutation rate × set size. With these,
-// flushing N wrappers' worth of state for one row insertion is O(rows
-// changed) not O(rows total). Empty deltas skip the round-trip entirely.
-const sentCodewords: Set<string> = new Set();
-const pendingPuts: Set<ElementWrapper> = new Set();
-const pendingDeleteCodewords: string[] = [];
-
-function drainPendingDeletes(): string[] {
-  if (pendingDeleteCodewords.length === 0) return [];
-  const drained = pendingDeleteCodewords.slice();
-  pendingDeleteCodewords.length = 0;
-  return drained;
-}
-
-function generateSessionId(): string {
-  // Crypto-random UUID-shaped id; we just need uniqueness per scan,
-  // not RFC 4122 conformance. crypto is available in extension content.
-  const a = crypto.getRandomValues(new Uint8Array(16));
-  let s = '';
-  for (const b of a) s += b.toString(16).padStart(2, '0');
-  return s.slice(0, 8) + '-' + s.slice(8, 12) + '-' + s.slice(12, 16) + '-' + s.slice(16, 20) + '-' + s.slice(20);
-}
-
-// Per-content-script session id. Generated once at module load and
-// re-used across every batched POST for this content script's lifetime.
-// notes/DESIGN_OPTION_B_REATTEMPT.md "Problem 1": rotating the session_id
-// on every doScanBatched call made `ensureFrameSession` on the plugin
-// side wipe entity_cache for the frame between MO rescans, opening a
-// "badges painted but voice doesn't match" window. Same id across
-// rescans keeps `session.Codewords` accumulating.
-//
-// Reset only on alphabet change (see chrome.storage.onChanged handler)
-// — that's the one in-lifetime event where we WANT plugin-side cleanup
-// of stale per-prefix entries.
-let sessionId = generateSessionId();
-
-async function claimLabelsForBatch(count: number): Promise<string[]> {
-  if (count === 0) return [];
-  try {
-    const resp = await chrome.runtime.sendMessage({ type: 'CLAIM_LABELS', count });
-    return Array.isArray(resp?.labels) ? resp.labels : [];
-  } catch {
-    return [];
-  }
-}
-
-async function postGrammarBatch(
-  request: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'>,
-): Promise<GrammarBatchResponse> {
-  // Piggyback any queued deletes from the prior batch's isConnected
-  // sweep. Drain unconditionally — even an empty batch should carry
-  // pending deletes through so disconnected elements don't leak past
-  // a scan boundary.
-  const drainedDeletes = drainPendingDeletes();
-  const fullRequest: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'> =
-    drainedDeletes.length > 0 ? { ...request, delete_codewords: drainedDeletes } : request;
-  try {
-    return await chrome.runtime.sendMessage({ type: 'GRAMMAR_BATCH', request: fullRequest } as Message);
-  } catch {
-    // Restore drained deletes on transport failure so they're carried
-    // on the next attempt — otherwise an SW restart mid-scan would
-    // strand the deletes silently.
-    pendingDeleteCodewords.push(...drainedDeletes);
-    return {
-      result: 'error',
-      succeeded: [],
-      failed: request.elements.map(e => ({ codeword: e.codeword, reason: 'sendMessage_failed' })),
-    };
-  }
-}
-
 /**
  * Per-batch replacement for `doScan` + `pushGrammar`. Walks the DOM
  * once via `scanInBatches`, claims codewords per batch, POSTs each
@@ -1423,7 +1214,7 @@ async function doScanBatched(): Promise<void> {
   }
   const __cpuStart = performance.now();
 
-  // Uses module-scope sessionId — see Problem 1 in the design doc.
+  // Uses the LabelStage session id — see Problem 1 in the design doc.
   const cr = compiledRule;
   const adapter = getActiveAdapter(window.location.href);
 
@@ -1460,7 +1251,7 @@ async function doScanBatched(): Promise<void> {
   if (inclusionRefs.length > 0) {
     await processScanBatch(
       { refs: inclusionRefs, elements: inclusionElements, isLast: false, invisibleCandidates: [] },
-      sessionId, batchIndex, sessionMeta, adapter,
+      getSessionId(), batchIndex, sessionMeta, adapter,
     );
     batchIndex++;
   }
@@ -1468,7 +1259,7 @@ async function doScanBatched(): Promise<void> {
   for (const batch of scanInBatches(
     adapter ? document : document, DEFAULT_SCAN_BATCH_SIZE, initialSeen,
   )) {
-    await processScanBatch(batch, sessionId, batchIndex, sessionMeta, adapter);
+    await processScanBatch(batch, getSessionId(), batchIndex, sessionMeta, adapter);
     batchIndex++;
     // Yield to the event loop between batches so MutationObserver
     // can fire and any DOM removal mid-scan flags the wrapper's
@@ -1481,9 +1272,9 @@ async function doScanBatched(): Promise<void> {
   // an empty deletes-only batch — otherwise they'd strand until the
   // next user-driven scan. Reuses the same session_id so plugin-side
   // session tracking stays consistent.
-  if (pendingDeleteCodewords.length > 0) {
-    await postGrammarBatch({
-      session_id: sessionId,
+  if (hasPendingDeletes()) {
+    await postBatch({
+      session_id: getSessionId(),
       batch_index: batchIndex,
       is_final: true,
       kind: 'scan',
@@ -1537,7 +1328,7 @@ async function processScanBatch(
 
   // Pool-claim codewords for the batch. claimLabels serializes per
   // tab via withTabLock so multi-frame pages don't collide.
-  const labels = await claimLabelsForBatch(newRefs.length);
+  const labels = await claimLabels(newRefs.length);
 
   // Build candidate wrappers with codewords assigned but DO NOT
   // attach to the store yet. Wrappers in the store with codewords
@@ -1565,7 +1356,7 @@ async function processScanBatch(
   const adapterName = adapter?.name ?? '';
   void adapterName; // reserved for plugin-side adapter-aware routing
 
-  const resp = await postGrammarBatch({
+  const resp = await postBatch({
     session_id: sessionId,
     batch_index: batchIndex,
     is_final: batch.isLast,
@@ -1599,7 +1390,7 @@ async function processScanBatch(
       // Element disconnected during the POST round-trip. Plugin
       // already holds the codeword in its entity_cache — queue the
       // delete on the next batch to clear it.
-      pendingDeleteCodewords.push(w.scanned.codeword);
+      queueDelete(w.scanned.codeword);
       w.releaseLabel();
       continue;
     }
@@ -1608,7 +1399,7 @@ async function processScanBatch(
     // scan-path POST above, so it's now live on the plugin side. Mark
     // it so future detaches know to send a Delete and future syncs
     // skip re-Putting it.
-    sentCodewords.add(w.scanned.codeword);
+    markSent(w.scanned.codeword);
     attached.push(w);
   }
 
@@ -1803,7 +1594,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         // Fast path for app-refocus rescans: drop dead wrappers, then
         // republish the current wrapper store (no DOM walk).
         //
-        // We DON'T hide/show hints — `batchedStateSync` reuses the
+        // We DON'T hide/show hints — `syncNow` reuses the
         // existing `sessionId` so the plugin doesn't wipe its per-prefix
         // collections; the matcher's vocab is intact throughout the
         // rescan and codewords stay matchable mid-flight. The previous
@@ -1814,7 +1605,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         // reconciliation pass to heal any cache/DOM drift.
         void (async () => {
           dropDisconnectedWrappers();
-          await batchedStateSync('refocus_from_cache');
+          await syncNow('refocus_from_cache');
           const t1 = performance.now();
           chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_scan_completed', data: { elements: store.all.length, duration_ms: Math.round(t1 - t0), path: 'from_cache' } } as Message).catch(() => {});
 
@@ -2210,11 +2001,10 @@ const HUGE_MUTATION_IDLE_MS = 50;
 let hugeMutationTimer: ReturnType<typeof setTimeout> | null = null;
 
 // Dispatched on every grammar-relevant change (MO mutations, IT
-// codeword claims, alphabet swap, bfcache restore). Routes to
-// scheduleBatchedSync — the per-batch path's catchup for MO-discovered
-// + IT-claimed wrappers (see batchedStateSync above).
+// codeword claims, alphabet swap, bfcache restore). Routes to the
+// LabelStage's debounced catchup for MO-discovered + IT-claimed wrappers.
 function schedulePushGrammar(): void {
-  scheduleBatchedSync('schedulePushGrammar');
+  scheduleSync('schedulePushGrammar');
 }
 
 function isOwnMutation(n: Node): boolean {
