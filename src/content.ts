@@ -19,7 +19,7 @@ import { TargetRectStore } from './target-rect-store';
 import { HintBadge, setPositionCaller, clearPositionCaller } from './hints';
 import { onContainerResize } from './container-resize-tracker';
 import { onTargetMutation } from './target-mutation-tracker';
-import { cacheLayout, cacheVisibility, clearLayoutCache, peekCachedRect } from './layout-cache';
+import { cacheLayout, cacheVisibility, clearLayoutCache, peekCachedRect, getCachedRect } from './layout-cache';
 import { placeBadges, placeOne, clearPlacement } from './placement';
 import { invalidateProbe } from './placement/rango';
 import { activateElement, type ActivationResult } from './event-sequence';
@@ -1814,48 +1814,80 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
 // compositor. Window resize and DOM mutations that shift layout require JS
 // repositioning.
 
+// Reposition scope:
+//  - 'all'     — re-place every visible badge. Used when layout actually
+//                changed (resize, DOM mutation, focus/transition settle,
+//                container resize): badge sizes, available space, and sticky
+//                bounds can all shift, so the full placement must re-run.
+//  - 'drifted' — only re-place badges that didn't track their target on their
+//                own (HintBadge.needsScrollReposition). Used for window scroll,
+//                where geometry translates uniformly and nested badges ride
+//                the compositor for free — re-placing all of them was the
+//                dominant scroll-time CPU bucket on heavy pages.
+type RepositionScope = 'all' | 'drifted';
 let repositionRafPending = false;
-function scheduleReposition(): void {
-  if (!hintsVisible || repositionRafPending) return;
+let pendingScope: RepositionScope = 'drifted';
+function scheduleReposition(scope: RepositionScope = 'all'): void {
+  if (!hintsVisible) return;
+  // 'all' supersedes a queued 'drifted' — a real layout change needs the full
+  // sweep even if a scroll already queued the cheap path.
+  if (scope === 'all') pendingScope = 'all';
+  if (repositionRafPending) return;
   repositionRafPending = true;
   requestAnimationFrame(() => {
     repositionRafPending = false;
+    const scope = pendingScope;
+    pendingScope = 'drifted';
     const visible = store.all.filter(w => w.hint?.isVisible);
-    if (visible.length > 0) {
-      setPositionCaller('scheduleReposition');
-      const __pbStart = performance.now();
-      try {
-        cacheLayout(visible.map(w => w.element));
-        // Phase 5 (router-via-scroll-rAF): reads share the cacheLayout
-        // warm pass, so each write is essentially free.
-        for (const w of visible) {
-          targetRectStore.write(w.element, w.element.getBoundingClientRect());
-        }
-        placeBadges(visible);
-      } finally {
-        clearLayoutCache();
-        clearPositionCaller();
-        recordCpu('placeBadges:reposition', performance.now() - __pbStart);
+    if (visible.length === 0) return;
+    setPositionCaller(scope === 'drifted' ? 'scrollReposition' : 'scheduleReposition');
+    const __pbStart = performance.now();
+    try {
+      cacheLayout(visible.map(w => w.element));
+      // Phase 5 (router-via-scroll-rAF): reads share the cacheLayout
+      // warm pass, so each write is essentially free.
+      for (const w of visible) {
+        targetRectStore.write(w.element, getCachedRect(w.element));
       }
+      const toPlace = scope === 'drifted'
+        ? visible.filter(w => w.hint!.needsScrollReposition())
+        : visible;
+      if (toPlace.length > 0) placeBadges(toPlace);
+    } finally {
+      clearLayoutCache();
+      clearPositionCaller();
+      recordCpu(scope === 'drifted' ? 'placeBadges:scroll' : 'placeBadges:reposition',
+        performance.now() - __pbStart);
     }
   });
 }
-window.addEventListener('resize', scheduleReposition, { passive: true });
+window.addEventListener('resize', () => scheduleReposition('all'), { passive: true });
 
-// Scroll is debounced via scheduleDeferredReposition (declared just below)
-// rather than calling scheduleReposition directly. Per the architectural
-// note above, badges already follow scroll via CSS positioning in their
-// scroll ancestor — the JS reposition here is for edge cases where the
-// scroll-ancestor detection couldn't pin the badge correctly, not for
-// the common case. Firing it on every rAF during scroll burned ~22%
-// sustained CPU at wrap=99 on YouTube /watch, tripped Firefox's
-// "extension is slowing things down" warning during scroll, and starved
-// YouTube's own scroll-driven lazy-loading so content below the fold
-// failed to render. Debouncing to "after scroll settles" coalesces the
-// burst (~30 events/sec during fast scrolling) into one reposition.
-// Edge-case badges lag the scroll by ~100ms but settle correctly when
-// it stops, which the user can't perceive mid-scroll anyway.
-window.addEventListener('scroll', () => scheduleDeferredReposition(), { passive: true });
+// Scroll runs a 'drifted'-scoped reposition: badges already follow scroll via
+// CSS positioning in their scroll ancestor, so the compositor tracks them for
+// free and only the genuinely scroll-sensitive subset (sticky/fixed clamps,
+// scroll-context mismatch — see HintBadge.needsScrollReposition) needs a JS
+// re-place. Re-placing ALL visible badges on every scroll settle made
+// placeBadges the dominant CPU bucket during scroll on heavy pages (~565ms
+// over a 15s soak on YouTube /watch with ~280 badges on the nesting path);
+// scoping to drifted badges keeps the per-settle cost to cheap rect reads.
+//
+// Still debounced. Firing on every rAF during scroll burned ~22% sustained
+// CPU at wrap=99 on YouTube /watch, tripped Firefox's "extension is slowing
+// things down" warning, and starved YouTube's own scroll-driven lazy-loading
+// so content below the fold failed to render. The 100ms debounce coalesces
+// the burst (~30 events/sec during fast scrolling) into one reposition;
+// scroll-sensitive badges lag by ~100ms but settle correctly when scroll
+// stops, which the user can't perceive mid-scroll anyway.
+let scrollRepositionTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleScrollReposition(): void {
+  if (scrollRepositionTimer) clearTimeout(scrollRepositionTimer);
+  scrollRepositionTimer = setTimeout(() => {
+    scrollRepositionTimer = null;
+    scheduleReposition('drifted');
+  }, DEFERRED_REPOSITION_DEBOUNCE_MS);
+}
+window.addEventListener('scroll', scheduleScrollReposition, { passive: true });
 
 // Per-container resize: each HintBadge registers its anchor with the
 // shared tracker. Catches CSS-only and container-scoped layout shifts

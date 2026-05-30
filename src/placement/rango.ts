@@ -212,6 +212,10 @@ export class RangoStrategy implements PlacementStrategy {
     let y = Math.max(0, targetRect.top - clampedOffsetY);
 
     const stickyBound = this.findStickyBound(w.hint.anchorParent);
+    // A sticky/fixed ancestor means the badge's clamp point is viewport-fixed,
+    // so its placement changes as the target scrolls past it. Mark it so the
+    // window-scroll reposition doesn't skip it as compositor-tracked.
+    w.hint.scrollSensitive = !!stickyBound;
     if (stickyBound) {
       x = Math.max(stickyBound.left, x);
       y = Math.max(stickyBound.top, y);

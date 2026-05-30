@@ -364,6 +364,21 @@ export class HintBadge {
   private readonly anchorMode: boolean = supportsAnchorPositioning();
   private anchorName: string | null = null;
 
+  // Scroll-tracking trim (nesting path). A badge nested in its target's
+  // scroll context translates with the target via the compositor, so the
+  // window-scroll reposition is redundant for it. needsScrollReposition()
+  // detects the badges that DO need a JS reposition on scroll: those whose
+  // placement is clamped by a sticky/fixed ancestor (clamp point is
+  // viewport-fixed, so it engages/disengages as the target scrolls past it),
+  // and those whose host drifted relative to the target (scroll-context
+  // mismatch). `scrollSensitive` is set by the placement strategy when it
+  // resolves a sticky bound; the *Vp fields snapshot the last placement so
+  // drift can be measured as a delta-of-deltas.
+  public scrollSensitive: boolean = false;
+  private _lastTargetVp: { x: number; y: number } | null = null;
+  private _lastOuterVp: { x: number; y: number } | null = null;
+  private static readonly DRIFT_EPS = 0.5;
+
   constructor(target: Element, label: LabelAssignment, category: Category, displayMode: BadgeDisplayMode) {
     this.target = target;
     this.category = category;
@@ -531,6 +546,12 @@ export class HintBadge {
     const outerRect = this.outer.getBoundingClientRect();
     this.inner.style.left = `${vpX - outerRect.left}px`;
     this.inner.style.top = `${vpY - outerRect.top}px`;
+
+    // Snapshot target + outer viewport origin so a later scroll can decide,
+    // via delta-of-deltas, whether the badge tracked the target on its own.
+    const tRect = getCachedRect(this.target);
+    this._lastTargetVp = { x: tRect.left, y: tRect.top };
+    this._lastOuterVp = { x: outerRect.left, y: outerRect.top };
 
     const elRect = this.target.getBoundingClientRect();
     const containerRect = this.anchorParent.getBoundingClientRect();
@@ -757,6 +778,26 @@ export class HintBadge {
     if (this._visible) {
       this.updatePosition();
     }
+  }
+
+  // Does this badge need a JS reposition on a window scroll? For the nesting
+  // path the host rides the scroll-ancestor compositor, so the common badge
+  // tracks its target for free. Returns true only for badges the compositor
+  // can't keep correct on its own:
+  //  - anchor mode never needs it (compositor + anchor()), always false;
+  //  - sticky/fixed-clamped badges: the clamp point is viewport-fixed, so it
+  //    must be recomputed as the target scrolls relative to it;
+  //  - drifted badges: the outer moved by a different delta than the target
+  //    since the last placement (scroll-context mismatch).
+  needsScrollReposition(): boolean {
+    if (this.anchorMode || !this._visible) return false;
+    if (this.scrollSensitive) return true;
+    if (!this._lastTargetVp || !this._lastOuterVp) return true;
+    const t = getCachedRect(this.target);
+    const o = this.outer.getBoundingClientRect();
+    const driftX = (t.left - this._lastTargetVp.x) - (o.left - this._lastOuterVp.x);
+    const driftY = (t.top - this._lastTargetVp.y) - (o.top - this._lastOuterVp.y);
+    return Math.abs(driftX) > HintBadge.DRIFT_EPS || Math.abs(driftY) > HintBadge.DRIFT_EPS;
   }
 
   remove(): void {

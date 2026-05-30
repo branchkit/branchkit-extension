@@ -354,3 +354,67 @@ describe('HintBadge anchor mode (CSS Anchor Positioning fast-path)', () => {
       .toEqual({ left: 'calc(anchor(left) + 20px)', top: 'calc(anchor(top) + -10px)' });
   });
 });
+
+describe('HintBadge.needsScrollReposition (window-scroll trim)', () => {
+  // The window-scroll reposition is scoped to badges that don't track their
+  // target on their own. A nested badge rides the scroll-ancestor compositor,
+  // so it must report "no reposition needed" — that's what lets content.ts
+  // skip the placement sweep that dominated scroll-time CPU on heavy pages.
+  const label = { letter: 'a', words: ['arch'], isSingle: true };
+
+  afterEach(() => {
+    hintsTesting.setAnchorSupport(null);
+  });
+
+  function place(badge: HintBadge): void {
+    badge.show();
+    badge.reposition(); // runs updatePosition → snapshots target/outer origin
+  }
+
+  it('returns false for a placed, compositor-tracked nesting badge', () => {
+    hintsTesting.setAnchorSupport(false);
+    const root = mount('<div id="c"><button id="btn">click</button></div>');
+    const badge = new HintBadge(root.querySelector('#btn')!, label, 'button', 'word');
+    place(badge);
+    // Target and outer share a zero origin and neither moved → no drift.
+    expect(badge.needsScrollReposition()).toBe(false);
+    badge.remove();
+  });
+
+  it('returns true when the target drifts relative to the badge outer', () => {
+    hintsTesting.setAnchorSupport(false);
+    const root = mount('<div id="c"><button id="btn">click</button></div>');
+    const btn = root.querySelector('#btn')! as HTMLElement;
+    const badge = new HintBadge(btn, label, 'button', 'word');
+    place(badge);
+    // Simulate the scroll-context-mismatch case: the target shifted but the
+    // badge's outer (still at origin) did not move with it.
+    btn.getBoundingClientRect = () => new DOMRect(0, 200, 10, 10);
+    expect(badge.needsScrollReposition()).toBe(true);
+    badge.remove();
+  });
+
+  it('returns true for a sticky/fixed-clamped badge even with no drift', () => {
+    hintsTesting.setAnchorSupport(false);
+    const root = mount('<div id="c"><button id="btn">click</button></div>');
+    const badge = new HintBadge(root.querySelector('#btn')!, label, 'button', 'word');
+    place(badge);
+    badge.scrollSensitive = true; // placement marks this when a sticky bound resolves
+    expect(badge.needsScrollReposition()).toBe(true);
+    badge.remove();
+  });
+
+  it('returns false in anchor mode regardless of drift or sticky marking', () => {
+    hintsTesting.setAnchorSupport(true);
+    const root = mount('<div id="c"><button id="btn">click</button></div>');
+    const btn = root.querySelector('#btn')! as HTMLElement;
+    const badge = new HintBadge(btn, label, 'button', 'word');
+    badge.show();
+    badge.scrollSensitive = true;
+    btn.getBoundingClientRect = () => new DOMRect(0, 500, 10, 10);
+    // Anchor-mode badges follow the target via the compositor + anchor();
+    // the JS scroll reposition never applies.
+    expect(badge.needsScrollReposition()).toBe(false);
+    badge.remove();
+  });
+});
