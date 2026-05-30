@@ -1,6 +1,11 @@
 # Wrapper Identity Stability
 
-Draft. Status: proposed (three decisions resolved internally; awaiting implementation go-ahead).
+**Status:** Completed (marker corrected 2026-05-30). This doc describes the
+as-built design — all six steps shipped. Limbo lifecycle lives in
+`src/scan/element-wrapper.ts` (`enterLimbo`/`isLimboExpired`), rebind in
+`src/labels/rebind.ts` (`findLimboMatch`, which cites this doc's "Step 3"),
+and the finalize sweeper + rebind instrumentation are wired in `content.ts`.
+The earlier "proposed / awaiting go-ahead" line was stale.
 
 ## Problem
 

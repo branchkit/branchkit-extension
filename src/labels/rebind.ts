@@ -1,7 +1,7 @@
 /**
  * BranchKit Browser — limbo-wrapper rebind matcher.
  *
- * Step 3 of `notes/DESIGN_WRAPPER_IDENTITY_STABILITY.md`. When
+ * Step 3 of `notes/completed/DESIGN_WRAPPER_IDENTITY_STABILITY.md`. When
  * `discoverInSubtree` encounters a new hintable element, it consults
  * this module to decide whether the element is the React-rendered
  * replacement for an existing limbo wrapper — in which case the wrapper

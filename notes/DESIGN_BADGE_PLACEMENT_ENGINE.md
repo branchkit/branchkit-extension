@@ -2,6 +2,13 @@
 
 Overlap-free hint badge positioning with leader lines for displaced badges.
 
+**Status:** Proposal / unbuilt (marker added 2026-05-30). Not implemented. The
+live placement strategy is `RangoStrategy` (`src/placement/rango.ts`), which
+uses Rango-style nudge positioning with no occupancy/collision model;
+z-index is reading-order based. Leader-line scaffolding exists in
+`src/render/hints.ts` (`setLeader`, `bk-leader`) but is inert — `setLeader` is
+never called. Pick this up if overlap on dense pages becomes a real complaint.
+
 ## Problem
 
 BranchKit places 50-200 hint badges on a page. Each badge currently sits 24px to the left of its target element. On dense UIs (nav menus, stacked lists, Gmail, Slack), badges overlap each other, making labels unreadable and targets unidentifiable.

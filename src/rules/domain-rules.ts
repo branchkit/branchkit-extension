@@ -5,7 +5,7 @@
  * elements by exclude entries, querying the DOM for include entries, and
  * building a <style> element for reveal entries.
  *
- * Design: notes/DESIGN_PER_DOMAIN_HINT_RULES.md.
+ * Design: notes/completed/DESIGN_PER_DOMAIN_HINT_RULES.md.
  */
 
 import { ScannedElement } from '../types';

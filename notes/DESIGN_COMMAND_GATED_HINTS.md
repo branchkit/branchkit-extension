@@ -1,5 +1,12 @@
 # Command-Gated Hints
 
+**Status:** Partially landed (marker added 2026-05-30). Category filtering by
+voice command shipped — `showHints(filter)` (`src/content.ts`), the
+`show_hints_category` dispatcher, and `activeCategory` narrowing. The specific
+design in this doc — the `show_hints_filtered` action type, the `text:`/`category:`
+filter-string encoding, text/substring filters, and user-defined custom
+triggers — is **unbuilt**.
+
 ## Problem
 
 The current "show" trigger reveals every hintable element on the page. On dense pages this can mean 50-100 badges. Most of the time the user has intent: they want to click a link, fill a form field, or delete something. Showing all elements provides no help narrowing to that intent and adds cognitive load.
@@ -312,7 +319,7 @@ Phase 3 is independent of Phase 1 and 2. Custom triggers require the Phase 2 gra
 ## Future: convergence with per-domain hint rules
 
 There is a potential convergence point between command-gated hints and
-per-domain hint rules (see `DESIGN_PER_DOMAIN_HINT_RULES.md`). The
+per-domain hint rules (see `completed/DESIGN_PER_DOMAIN_HINT_RULES.md`). The
 underlying idea: both features are about controlling which elements appear
 and when, but from different angles — domain rules are static visibility
 rules, command-gated hints are dynamic per-command filters.

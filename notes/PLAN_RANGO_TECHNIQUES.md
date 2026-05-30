@@ -6,13 +6,16 @@ Reference clone at `/tmp/rango` (david-tejada/rango).
 
 | # | Technique | Effort | Status |
 |---|-----------|--------|--------|
-| 1 | Layout caching | Medium | Done |
-| 2 | Stacking context + z-index | Medium | Done |
-| 3 | Sticky header detection | Medium | Done |
-| 4 | Focus-driven visibility | Low | Done |
-| 5 | Event dispatch order | High | Done |
+| 1 | Layout caching | Medium | Done (`src/layout-cache.ts`) |
+| 2 | Stacking context + z-index | Medium | **Not built** (verified 2026-05-30 — z-index is still reading-order based, `BASE_Z + i`; no `createsStackingContext`/`calculateZIndex` in `src/`) |
+| 3 | Sticky header detection | Medium | Done (`src/activate/scroller.ts`) |
+| 4 | Focus-driven visibility | Low | **Not built** (verified 2026-05-30 — no focus-hide-badge listeners; the focusin/focusout handlers in `content.ts` are reposition triggers, not the badge-hide behavior this item describes) |
+| 5 | Event dispatch order | High | Done (`src/activate/event-sequence.ts`) |
 
 Items 6 (deep shadow DOM) and 7 (scroll region detection) are already implemented in BranchKit.
+
+> **Marker correction (2026-05-30):** items 2 and 4 were previously marked "Done"
+> but neither is implemented as specified. Corrected after a code audit.
 
 ## Sequencing
 

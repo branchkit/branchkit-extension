@@ -1,5 +1,13 @@
 # Scroll Positioning Fix
 
+**Status:** Completed / superseded (marker added 2026-05-30). The scroll-tracking
+bug is fixed — the CSS Anchor Positioning fast-path (`anchorMode` in
+`src/render/hints.ts`) and the scroll-ancestor tracker
+(`src/observe/scroll-ancestor-tracker.ts`) keep badges glued to their targets.
+The forward-looking architecture sketched here is subsumed by the anchor-first
+model in `../DESIGN_OBSERVER_DRIVEN_LAYOUT.md` (still partially-landed, kept in
+`notes/`). This doc is retained as the historical record of the original fix.
+
 Badges don't track their elements during scroll. They freeze at their
 initial viewport position, causing misalignment, bunching, and premature
 disappearance. This is the highest-priority UX bug — the extension is

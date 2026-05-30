@@ -204,7 +204,7 @@ const INPUT_TYPES = new Set(['input', 'textarea', 'select', 'contenteditable']);
 // doScan() at the bottom of this file runs BEFORE the storage read
 // returns, so the first frame may render without user rules applied —
 // the storage callback triggers a second doScan once the rule is known.
-// See notes/DESIGN_PER_DOMAIN_HINT_RULES.md "Timing".
+// See notes/completed/DESIGN_PER_DOMAIN_HINT_RULES.md "Timing".
 let compiledRule: CompiledRule | null = null;
 
 function getExcludes(): readonly RuleEntry[] {
@@ -674,7 +674,7 @@ const resizeObserver = new ResizeObserver((entries) => {
 /**
  * Visibility recovery for elements that matched HINTABLE_SELECTOR but
  * failed isVisible() at scan time. Two layers (see
- * notes/DESIGN_VISIBILITY_OBSERVER.md):
+ * notes/completed/DESIGN_VISIBILITY_OBSERVER.md):
  *
  * 1. IntersectionObserver catches display:none -> block (geometry change).
  * 2. Scoped MutationObserver on class/style catches visibility:hidden ->
@@ -2026,7 +2026,7 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
     // diagnostic categories (yellow/orange/red/blue) become visible
     // without needing to read JSON. Frozen-frame; re-press flips off.
     // The rebind-counters panel rides along — see step 5 of
-    // notes/DESIGN_WRAPPER_IDENTITY_STABILITY.md.
+    // notes/completed/DESIGN_WRAPPER_IDENTITY_STABILITY.md.
     toggleOverlay(store, rebindCounters);
     return;
   }
@@ -2174,7 +2174,7 @@ function consume(pool: ElementWrapper[], w: ElementWrapper): void {
 /**
  * Re-anchor `w` to `newEl`. The wrapper's codeword, badge, label, and
  * registry id all survive — only the DOM-identity edges swap. Mirrors
- * the algorithm in `notes/DESIGN_WRAPPER_IDENTITY_STABILITY.md`
+ * the algorithm in `notes/completed/DESIGN_WRAPPER_IDENTITY_STABILITY.md`
  * "Rebind operation". Order matters: store + registry first (so the
  * tracker callbacks can find the wrapper by newEl), then observers,
  * then the badge swap, then the mutable `.element` pointer.
@@ -2204,7 +2204,7 @@ const LIMBO_DEADLINE_MS = 250;
 
 /**
  * Move disconnected wrappers into limbo. Per
- * `notes/DESIGN_WRAPPER_IDENTITY_STABILITY.md` steps 1–2, a disconnect
+ * `notes/completed/DESIGN_WRAPPER_IDENTITY_STABILITY.md` steps 1–2, a disconnect
  * no longer immediately tears down the wrapper — codeword and badge are
  * held so a follow-up React render or DOM move can re-attach the same
  * logical identity (step 3+) without churning the codeword pool. The

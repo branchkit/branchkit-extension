@@ -1,5 +1,12 @@
 # Visibility Observer
 
+**Status:** Completed (marker added 2026-05-30). The "v2" scoped-MutationObserver
+design described below is shipped — `visibilityMO`, `observeInvisibleCandidates`,
+and `connect/disconnectVisibilityMO` are wired in `src/content.ts`, fed by the
+scanner's `invisibleCandidates` (`src/scan/scanner.ts`), and the v1
+`setTimeout(doScan, 1500)` it replaced is gone. The "Proposed" framing in the
+v2 section below is historical; this is the as-built record.
+
 Addresses the gap where elements match `HINTABLE_SELECTOR` but are invisible
 at scan time, then become visible via CSS-only changes that no existing
 observer detects.

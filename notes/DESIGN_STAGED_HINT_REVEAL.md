@@ -1,5 +1,10 @@
 # Staged Hint Reveal and Discovery HUD
 
+**Status:** Partially landed (marker added 2026-05-30). Phase 1 (first-word
+display mode) shipped 2026-05-18 — `setMatchedChars` + the `'first-word'`
+display-mode case in `src/render/hints.ts`. Phase 2 (Discovery HUD) and Phase 3
+(voice narrow action) are **unbuilt** (`DiscoveryHUD` does not exist in `src/`).
+
 ## Problem
 
 On pages with many hintable elements, showing full two-word labels ("arch bake") creates visual noise. Users need to read and remember both words before speaking, which slows the interaction. The first word narrows the set dramatically (26 options per prefix), but the second word requires scanning scattered badges across the page.
