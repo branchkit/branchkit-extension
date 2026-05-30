@@ -82,6 +82,15 @@ export class PageSession {
     return getSessionId();
   }
 
+  /**
+   * Whether this frame's session has torn down. Read by the hot keydown/keyup
+   * handlers to short-circuit once the context is dead, replacing the old
+   * module-scope `orphaned` flag.
+   */
+  get isTornDown(): boolean {
+    return this.toreDown;
+  }
+
   /** Tear down this frame's session. Idempotent. */
   teardown(reason: TeardownReason): void {
     if (this.toreDown) return;

@@ -1527,12 +1527,11 @@ openLivenessPort({
 // function tears down our observers and removes our badge hosts so the new
 // content script's freshly-mounted observers run alone.
 //
-// Idempotent: subsequent calls are no-ops. Each `try` block is independent
-// so a failure in one doesn't skip the others.
-let orphaned = false;
+// Idempotent via the single guarded entry point: this body runs only as
+// `PageSession.teardown`'s hook, which flips `toreDown` before invoking it, so
+// a second teardown is a no-op upstream. Each `try` block is independent so a
+// failure in one doesn't skip the others.
 function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
-  if (orphaned) return;
-  orphaned = true;
   // Each module-scope observer that fires user-driven callbacks. Missing one
   // means the orphan keeps reacting to DOM changes / viewport shifts and
   // surfacing `Extension context invalidated` errors in the page console.
@@ -1993,7 +1992,7 @@ const scrollKeys = new Set(['j', 'k', 'd', 'u', 'h', 'l']);
 const heldKeys = new Set<string>();
 
 document.addEventListener('keydown', (e: KeyboardEvent) => {
-  if (orphaned) return;
+  if (pageSession.isTornDown) return;
   if (handlePostFindKey(e)) return;
 
   // Ctrl+Alt+A — hint-diagnostics snapshot trigger (Phase 2b of
@@ -2045,7 +2044,7 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
 }, true);
 
 document.addEventListener('keyup', (e: KeyboardEvent) => {
-  if (orphaned) return;
+  if (pageSession.isTornDown) return;
   if (heldKeys.has(e.key)) {
     heldKeys.delete(e.key);
     setKeyHeld(false);
