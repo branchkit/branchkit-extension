@@ -19,8 +19,8 @@ browser has perfect information about what's near the viewport.
 | 3 | TargetRectStore shadow (cache + drift sampler) | Done (`421c834`) |
 | 3b | LayoutSignalRouter (write rects on scroll/resize) | Done (`9e1173b`) — window scroll + RO surfaces; overflow-ancestor scroll still ahead |
 | 4 | Flag-gated cutover of `updatePosition` reads | Dropped standalone; folds into combined 4/5 (Firefox path) — see "Course correction" |
-| 5 | Delete global rAF reposition sweep | Pending — combined with 4 for the Firefox cross-browser path |
-| 5b | Overflow-ancestor scroll listeners | **Hard** — solved on Chromium by the CSS-anchor fast-path (landed `95468e1`); still the open task for Firefox |
+| 5 | Delete global rAF reposition sweep | **Blocked on ancestor geometry** — see "Cutover blocker" (2026-05-30). Store holds only target rects; placement needs ancestor rects/styles/dims. Deferred to a full LayoutSignalRouter design |
+| 5b | Overflow-ancestor scroll listeners | Done (`9edd979`) — `scroll-ancestor-tracker` + write-on-paint; store stays warm through inner-pane scroll on the Firefox nesting path (scoped drift 0 at 30px/120px). Chromium uses the CSS-anchor fast-path (`95468e1`) instead |
 | 6 | Relocate position log to read from store | Ahead |
 
 ## Course correction (2026-05-30)
@@ -148,6 +148,51 @@ writing `TargetRectStore`) + the combined 4/5 cutover (route `placeBadges`
 reads through the store, delete the blanket reposition sweep). This is the
 original Firefox-freeze motivation; it is genuinely new behavior and the
 "Hard" part. The standalone flag-gated Phase 4 remains not worth building.
+
+## Cutover blocker: the store holds target rects, placement needs ancestor geometry (2026-05-30)
+
+Phase 5b landed (`9edd979`): `scroll-ancestor-tracker` registers one passive
+listener per inner overflow pane (refcounted by target, rAF-coalesced) and
+writes fresh rects to `TargetRectStore`; write-on-paint at
+`showHints`/`badgeNewlyCodeworded` covers targets painted mid-scroll. Verified
+in real Firefox on the nesting path: the inner pane registers and scoped drift
+stays 0 through 30px and 120px inner scrolls. The store is now genuinely warm.
+
+But the combined 4/5 cutover — "route `placeBadges` reads through the store,
+delete the blanket sweep" — does **not** follow from a warm store, and we
+stopped short of attempting it. Two facts surfaced while scoping it:
+
+1. **The store has zero production readers.** It is written in six places
+   (attention-IO band entry, eviction-paired writes, write-on-paint ×2, the
+   sweep's brute-force loop, 5b scroll writes) and read by nothing but the
+   diagnostic drift sampler. The cutover's whole point is to *make* it the
+   read source so the sweep can be deleted.
+
+2. **Placement reads ancestor geometry, not just the target rect.** The Rango
+   strategy's `positionAtTopLeft` (`placement/rango.ts`) reads: clip-ancestor
+   rects (`getAvailableSpace`), sticky/fixed ancestor rects + styles
+   (`findStickyBound`), and ancestor styles + dims (`isInScrollList`), plus
+   `resolveContainer`/`getSpaceInAncestor` in `hints.ts`. `TargetRectStore`
+   caches only **target** rects. So routing the target-rect read through the
+   store cannot eliminate the layout reads placement actually depends on —
+   which is exactly why the standalone Phase 4 was "inert" and why an earlier
+   read-cutover attempt (2c) regressed.
+
+Compounding both: on the Firefox nesting path the badge host is physically
+nested inside the target's scroll-ancestor, so non-drifted badges already
+track inner-pane scroll **via the compositor** — they render correctly with no
+store read at all. Phase 5b's drift was about the *store* going stale, never
+the badges. And the sweep's `'drifted'` scope (course-correction finding 1)
+already trimmed per-scroll re-placement to the genuinely scroll-sensitive
+subset.
+
+**Conclusion.** A faithful cutover is not a read-routing swap; it needs a full
+`LayoutSignalRouter` that also caches ancestor geometry (clip-ancestor rects,
+sticky/fixed bounds, ancestor dims) with its own invalidation on RO/MO/scroll,
+then deletes `scheduleReposition` entirely. That is a much larger design than
+Phase 5b and the part that regressed as 2c — do not reattempt without it.
+Phase 5b stands as the warm-store foundation that a future router would build
+on. Decision (2026-05-30): land 5b, defer the cutover.
 
 ## Known limitations (don't reattempt without a new design)
 
@@ -631,14 +676,18 @@ flag-gated cutover is dropped: with the sweep writing the store right
 before placement, it's behaviorally inert. The cutover only matters
 folded into Phase 5.
 
-**Phase 5: Cut reads to the store AND delete the global rAF reposition
-sweep, together.** Make placement read target rects from
-`TargetRectStore` and remove the `scheduleReposition` blanket handler +
-its `cacheLayout` warmup. Requires Phase 5b first (the store must be
-warm for inner-pane scroll before the sweep that currently covers that
-case is removed). Run the Playwright fixture suite (sticky, overflow-
-ancestor, transition, plain) and three real sites; require pixel parity
-before deleting the sweep.
+**Phase 5b: Done (`9edd979`).** `scroll-ancestor-tracker` + write-on-paint;
+the store stays warm through inner-pane scroll on the Firefox nesting path.
+
+**Phase 5: Deferred — blocked on ancestor geometry.** See "Cutover blocker"
+above. With 5b landed the store is warm, but making placement *read* from it
+doesn't delete the sweep: `placeBadges` still needs ancestor rects/styles/dims
+that the store doesn't cache. The real cutover requires a full
+`LayoutSignalRouter` (ancestor geometry + invalidation), not a read-routing
+swap — a separate, larger design. Decision (2026-05-30): land 5b, defer the
+cutover. When that router is designed, the original parity bar still applies:
+run the Playwright fixture suite (sticky, overflow-ancestor, transition,
+plain) and three real sites; require pixel parity before deleting the sweep.
 
 **Phase 6: Relocate position log.** Default path reads from cache;
 debug path opts in to live reads.
