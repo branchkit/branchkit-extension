@@ -39,6 +39,13 @@ mkdirSync(profile, { recursive: true });
 const ffWithExt = withExtension(firefox, EXT);
 const ctx = await ffWithExt.launchPersistentContext(profile, {
   headless: false,
+  // A tall viewport is the lever that drives the visible-badge count up. The
+  // scroll-reposition handler iterates `visible` (painted badges within the
+  // viewport+200px band) and does a getBoundingClientRect per badge every
+  // settle. At a default 720px viewport only ~76 land in-band; the real freeze
+  // ran 400-1100. A ~2400px viewport widens the band ~3x so the soak actually
+  // exercises the O(visible) cost path that bites at scale.
+  viewport: { width: 1500, height: 2400 },
   firefoxUserPrefs: {
     // Playwright bundles Firefox NIGHTLY, which now ships CSS anchor
     // positioning. That makes CSS.supports('anchor-name') true, so the
@@ -74,9 +81,13 @@ async function readPerf() {
     try {
       const p = JSON.parse(raw);
       const b = p.cpu?.buckets || {};
+      // `hosts` ([data-branchkit-hint]) is one light-DOM host per PAINTED badge
+      // — the set the scroll handler iterates and rect-reads each settle, so the
+      // freeze cost scales with it. wrapperCount is the larger JS-object total.
       return {
         present: true,
         hosts,
+        wrapperCount: p.wrapperCount,
         scanCalls: p.scanCalls,
         cpuPct: p.cpu?.share?.pct,
         reposMs: b['placeBadges:reposition']?.totalMs || 0,
@@ -103,23 +114,36 @@ if (!before.present || before.hosts === 0) {
   process.exit(1);
 }
 
-// Sustained window scroll, like a user reading comments — this is what pegged
-// the main thread in the original freeze.
+// Progressive deep scroll, like a user reading a long comment thread. The
+// original short soak reset to y=0 every 12000px, so YouTube never lazy-loaded
+// the comment section beyond the first screen and only ~76 badges ever painted.
+// To reproduce the heavy state (400-1100 visible badges, 1000+ wrappers) we
+// keep descending and DWELL at each step: each pause lets YouTube fetch the
+// next comment batch and lets the extension's scanner discover + paint the new
+// interactive controls before we read counts. We never scroll back up, so the
+// painted-badge set monotonically grows toward the freeze regime.
 const start = Date.now();
 let y = 0;
+let peakHosts = before.hosts, peakWrappers = before.wrapperCount || 0;
 while (Date.now() - start < SOAK_MS) {
-  y += 600;
+  y += 1400;
   await page.evaluate((yy) => window.scrollTo(0, yy), y).catch(() => {});
-  await page.waitForTimeout(120);
-  if (y > 12000) y = 0;
+  await page.waitForTimeout(450); // dwell: let comments lazy-load + scanner paint
+  const s = await readPerf().catch(() => null);
+  if (s?.present) {
+    peakHosts = Math.max(peakHosts, s.hosts);
+    peakWrappers = Math.max(peakWrappers, s.wrapperCount || 0);
+  }
 }
 await page.waitForTimeout(600); // let the settle reposition fire
 
 const after = await readPerf();
 console.log('after soak: ', JSON.stringify(after));
+console.log(`peak during soak: hosts=${peakHosts} wrappers=${peakWrappers} (final scrollY≈${y})`);
 
 console.log('\n--- Analysis (' + SOAK_MS + 'ms scroll soak, REAL Firefox / nesting path) ---');
-console.log(`hints painted:           ${after.hosts}`);
+console.log(`hints painted:           ${after.hosts}  (peak ${peakHosts})`);
+console.log(`wrappers (store.all):    ${after.wrapperCount}  (peak ${peakWrappers})`);
 console.log(`cpu.share.pct:           before=${before.cpuPct}  after=${after.cpuPct}`);
 console.log(`reposition fires (all):  Δ=${after.reposCount - before.reposCount}  (full-replace path)`);
 console.log(`reposition CPU (all):    Δ=${(after.reposMs - before.reposMs).toFixed(1)}ms`);
