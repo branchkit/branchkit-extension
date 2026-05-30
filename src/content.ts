@@ -717,8 +717,6 @@ const visibilityMO = new MutationObserver(() => {
   requestAnimationFrame(recheckPendingVisibility);
 });
 
-let visibilityMOConnected = false;
-
 function connectVisibilityMO(): void {
   if (visibilityAbandonTimer) clearTimeout(visibilityAbandonTimer);
   visibilityAbandonTimer = setTimeout(() => {
@@ -726,19 +724,19 @@ function connectVisibilityMO(): void {
     pendingVisibility.clear();
     disconnectVisibilityMO();
   }, VISIBILITY_ABANDON_MS);
-  if (visibilityMOConnected) return;
+  if (pageSession.visibilityMOConnected) return;
   visibilityMO.observe(document.documentElement, {
     subtree: true,
     attributes: true,
     attributeFilter: ['class', 'style'],
   });
-  visibilityMOConnected = true;
+  pageSession.visibilityMOConnected = true;
 }
 
 function disconnectVisibilityMO(): void {
-  if (!visibilityMOConnected) return;
+  if (!pageSession.visibilityMOConnected) return;
   visibilityMO.disconnect();
-  visibilityMOConnected = false;
+  pageSession.visibilityMOConnected = false;
   if (visibilityAbandonTimer) {
     clearTimeout(visibilityAbandonTimer);
     visibilityAbandonTimer = null;
@@ -1499,19 +1497,21 @@ window.addEventListener('pageshow', (e) => {
 // activate path treats "unknown" as "trust the routing" so dispatches that
 // arrive before the handshake aren't dropped. Port mechanics live in
 // plugin/liveness.ts; the orphan teardown (quiesceOrphan) stays here
-// because it disconnects this file's observers.
-let myFrameId: number | null = null;
+// because it disconnects this file's observers. The frame id itself now lives
+// on `pageSession.myFrameId`.
 
-// This frame's page-session lifecycle object. First transitional cut: it owns
-// the teardown transition (and its reason) while the observer/timer state still
-// lives in this module and is reached via the injected `teardown` hook. See
+// This frame's page-session lifecycle object. Owns the teardown transition
+// (and its reason) plus the per-frame lifecycle primitives migrated out of
+// module scope (frame id, discovery scheduling, reposition timers, visibility
+// wiring flag). The observer singletons and boot logic still live in this
+// module and reach the session via the module-level reference. See
 // notes/DESIGN_EXTENSION_RESTRUCTURE.md §3.3.1.
 const pageSession = new PageSession({
   teardown: (reason) => quiesceOrphan(reason),
 });
 
 openLivenessPort({
-  onFrameId: (frameId) => { myFrameId = frameId; },
+  onFrameId: (frameId) => { pageSession.myFrameId = frameId; },
   onOrphan: () => pageSession.teardown('orphan'),
 });
 
@@ -1541,10 +1541,10 @@ function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
   try { badgeReattachObserver.disconnect(); } catch { /* same */ }
   try { tracker.disconnectAll(); } catch { /* same */ }
   try { resizeObserver.disconnect(); } catch { /* same */ }
-  if (discoveryFrame !== null) {
-    try { cancelAnimationFrame(discoveryFrame); } catch { /* same */ }
-    discoveryFrame = null;
-    pendingDiscoveryRoots.clear();
+  if (pageSession.discoveryFrame !== null) {
+    try { cancelAnimationFrame(pageSession.discoveryFrame); } catch { /* same */ }
+    pageSession.discoveryFrame = null;
+    pageSession.pendingDiscoveryRoots.clear();
   }
   try { visibilityIO.disconnect(); } catch { /* same */ }
   try { visibilityMO.disconnect(); } catch { /* same */ }
@@ -1653,7 +1653,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       const resolved = resolveTarget(
         idParam, frameIdParam, codeword,
         {
-          myFrameId,
+          myFrameId: pageSession.myFrameId,
           registry: {
             get: idRegistry.get,
             rebindRef: idRegistry.rebindRef,
@@ -1895,11 +1895,10 @@ window.addEventListener('resize', () => scheduleReposition('all'), { passive: tr
 // the burst (~30 events/sec during fast scrolling) into one reposition;
 // scroll-sensitive badges lag by ~100ms but settle correctly when scroll
 // stops, which the user can't perceive mid-scroll anyway.
-let scrollRepositionTimer: ReturnType<typeof setTimeout> | null = null;
 function scheduleScrollReposition(): void {
-  if (scrollRepositionTimer) clearTimeout(scrollRepositionTimer);
-  scrollRepositionTimer = setTimeout(() => {
-    scrollRepositionTimer = null;
+  if (pageSession.scrollRepositionTimer) clearTimeout(pageSession.scrollRepositionTimer);
+  pageSession.scrollRepositionTimer = setTimeout(() => {
+    pageSession.scrollRepositionTimer = null;
     scheduleReposition('drifted');
   }, DEFERRED_REPOSITION_DEBOUNCE_MS);
 }
@@ -1949,12 +1948,11 @@ onScrollAncestor((targets) => {
 // transitionend events — one per animated property — and a click fires
 // focusout+focusin <16ms apart) into one reposition after things
 // settle. Matches Rango's ElementWrapper.ts focus debounce.
-let deferredRepositionTimer: ReturnType<typeof setTimeout> | null = null;
 const DEFERRED_REPOSITION_DEBOUNCE_MS = 100;
 function scheduleDeferredReposition(): void {
-  if (deferredRepositionTimer) clearTimeout(deferredRepositionTimer);
-  deferredRepositionTimer = setTimeout(() => {
-    deferredRepositionTimer = null;
+  if (pageSession.deferredRepositionTimer) clearTimeout(pageSession.deferredRepositionTimer);
+  pageSession.deferredRepositionTimer = setTimeout(() => {
+    pageSession.deferredRepositionTimer = null;
     // 'drifted', not 'all'. These signals (container resize, target mutation,
     // focus/transition settle) fire continuously on churny pages — YouTube
     // /watch lazy-loading comments resizes containers ~constantly. Re-placing
@@ -2069,8 +2067,6 @@ document.addEventListener('keyup', (e: KeyboardEvent) => {
 
 const HUGE_MUTATIONS_COUNT = 1000;
 const HUGE_MUTATION_IDLE_MS = 50;
-
-let hugeMutationTimer: ReturnType<typeof setTimeout> | null = null;
 
 // Dispatched on every grammar-relevant change (MO mutations, IT
 // codeword claims, alphabet swap, bfcache restore). Routes to the
@@ -2421,13 +2417,10 @@ function drainReevaluations(): void {
 // the unresponsive threshold. Side effect: badges for newly-mounted
 // elements appear up to one frame (~16ms) later than they used to,
 // which is imperceptible in `always` mode (the user's typical setup).
-const pendingDiscoveryRoots: Set<Element> = new Set();
-let discoveryFrame: number | null = null;
-
 function scheduleDiscovery(root: Element): void {
-  pendingDiscoveryRoots.add(root);
-  if (discoveryFrame === null) {
-    discoveryFrame = requestAnimationFrame(drainDiscovery);
+  pageSession.pendingDiscoveryRoots.add(root);
+  if (pageSession.discoveryFrame === null) {
+    pageSession.discoveryFrame = requestAnimationFrame(drainDiscovery);
   }
 }
 
@@ -2444,10 +2437,10 @@ const DRAIN_DISCOVERY_BUDGET_MS = 8;
 
 function drainDiscovery(): void {
   const __cpuStart = performance.now();
-  discoveryFrame = null;
-  if (pendingDiscoveryRoots.size === 0) return;
-  const roots = [...pendingDiscoveryRoots];
-  pendingDiscoveryRoots.clear();
+  pageSession.discoveryFrame = null;
+  if (pageSession.pendingDiscoveryRoots.size === 0) return;
+  const roots = [...pageSession.pendingDiscoveryRoots];
+  pageSession.pendingDiscoveryRoots.clear();
   const __rootCount = roots.length;
 
   // Ancestor-dedup: if a queued root is contained by another queued
@@ -2493,10 +2486,10 @@ function drainDiscovery(): void {
   // it up on the next frame. Re-adding to a Set is idempotent so any
   // new arrivals between drain start and now coalesce naturally.
   for (let i = processed; i < workRoots.length; i++) {
-    pendingDiscoveryRoots.add(workRoots[i]);
+    pageSession.pendingDiscoveryRoots.add(workRoots[i]);
   }
-  if (pendingDiscoveryRoots.size > 0 && discoveryFrame === null) {
-    discoveryFrame = requestAnimationFrame(drainDiscovery);
+  if (pageSession.pendingDiscoveryRoots.size > 0 && pageSession.discoveryFrame === null) {
+    pageSession.discoveryFrame = requestAnimationFrame(drainDiscovery);
   }
   if (dirty) schedulePushGrammar();
   recordCpu('drainDiscovery', performance.now() - __cpuStart);
@@ -2588,9 +2581,9 @@ const observer = new MutationObserver((records) => {
 
   if (foreign.length >= HUGE_MUTATIONS_COUNT) {
     moHugePathFired++;
-    if (hugeMutationTimer) clearTimeout(hugeMutationTimer);
-    hugeMutationTimer = setTimeout(() => {
-      hugeMutationTimer = null;
+    if (pageSession.hugeMutationTimer) clearTimeout(pageSession.hugeMutationTimer);
+    pageSession.hugeMutationTimer = setTimeout(() => {
+      pageSession.hugeMutationTimer = null;
       // Limbo entry doesn't change grammar (codewords are still claimed);
       // the finalize sweeper schedules push on actual detach. We only
       // need to push if discovery added new wrappers.

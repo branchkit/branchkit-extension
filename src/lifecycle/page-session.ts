@@ -40,6 +40,33 @@ export interface PageSessionHooks {
 export class PageSession {
   private toreDown = false;
 
+  /**
+   * Per-frame lifecycle state, migrated out of `content.ts` module scope
+   * (DESIGN_EXTENSION_RESTRUCTURE.md §3.3.1 step 2). These are deliberately
+   * public during the transition: the boot/teardown/scheduling logic still
+   * lives as free functions in `content.ts` and reaches them through the
+   * module-level `pageSession` singleton. Later increments encapsulate them
+   * as the surrounding logic moves onto the instance. The observer singletons
+   * and `hintsVisible` stay in module scope for now (heavier entanglement).
+   */
+
+  /** SW-assigned frame id; null until the liveness Port handshake completes. */
+  myFrameId: number | null = null;
+
+  /** In-flight discovery rAF handle, or null when no drain is scheduled. */
+  discoveryFrame: number | null = null;
+
+  /** Roots queued for the next discovery drain. */
+  readonly pendingDiscoveryRoots: Set<Element> = new Set();
+
+  /** Debounce handles for the three reposition paths. */
+  scrollRepositionTimer: ReturnType<typeof setTimeout> | null = null;
+  deferredRepositionTimer: ReturnType<typeof setTimeout> | null = null;
+  hugeMutationTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Whether the visibility MutationObserver is currently connected. */
+  visibilityMOConnected = false;
+
   constructor(private readonly hooks: PageSessionHooks) {}
 
   /**
