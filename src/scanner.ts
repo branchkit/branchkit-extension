@@ -7,7 +7,7 @@
 
 import { Category, ScannedElement } from './types';
 import { accessibleName } from './accessible-name';
-import { peekCachedRect, peekCachedStyle } from './layout-cache';
+import { peekCachedRect, peekCachedStyle, cacheVisibility, clearLayoutCache } from './layout-cache';
 
 // Core selectors — always scanned
 const HINTABLE = [
@@ -87,6 +87,7 @@ export interface PerfCounters {
   scanRejectedInvisible: number;
   scanRejectedRedundant: number;
   scanRejectedExtraNotClickable: number;
+  scanSkippedKnown: number;          // already-tracked, skipped before any layout read
   scanSingleCalls: number;           // scanSingle (per-element re-check via MO)
   isHintableExtraCalls: number;
   computedStyleCalls: number;        // total getComputedStyle calls (all sites)
@@ -102,6 +103,7 @@ const perfCounters: PerfCounters = {
   scanRejectedInvisible: 0,
   scanRejectedRedundant: 0,
   scanRejectedExtraNotClickable: 0,
+  scanSkippedKnown: 0,
   scanSingleCalls: 0,
   isHintableExtraCalls: 0,
   computedStyleCalls: 0,
@@ -396,8 +398,11 @@ export function scanSingle(el: Element): ScannedElement | null {
  * Scan the DOM for all hintable elements.
  * Returns ScannedElement[] sorted by DOM order.
  */
-export function scanElements(root: Document | Element = document): { elements: ScannedElement[]; refs: Element[]; invisibleCandidates: Element[] } {
-  return collectHintables(root);
+export function scanElements(
+  root: Document | Element = document,
+  isKnown?: (el: Element) => boolean,
+): { elements: ScannedElement[]; refs: Element[]; invisibleCandidates: Element[] } {
+  return collectHintables(root, undefined, isKnown);
 }
 
 // Shared DOM walk + filter pipeline. Used by both the eager `scanElements`
@@ -414,6 +419,7 @@ export function scanElements(root: Document | Element = document): { elements: S
 function collectHintables(
   root: Document | Element,
   initialSeen?: ReadonlySet<Element>,
+  isKnown?: (el: Element) => boolean,
 ): { elements: ScannedElement[]; refs: Element[]; invisibleCandidates: Element[] } {
   const elements: ScannedElement[] = [];
   const refs: Element[] = [];
@@ -424,12 +430,36 @@ function collectHintables(
   perfCounters.scanCalls++;
   visibilityCache = new WeakSet<Element>();
   const scanSelector = extraHintsEnabled ? EXTRA_SELECTOR : HINTABLE_SELECTOR;
+
+  // Pass 1: cheap, layout-free filters only. Collect survivors so we can
+  // batch-warm the layout cache before any getComputedStyle /
+  // getBoundingClientRect. Skipping already-tracked elements here is the
+  // dominant steady-state win (discovery only needs NEW hintables;
+  // visibility/hintability flips are the ResizeObserver/attribute path's
+  // job). EXCLUDE and hint-host checks are pure selector matches — no reflow.
+  const survivors: Element[] = [];
   for (const el of deepQuerySelectorAll(root, scanSelector)) {
     perfCounters.scanCandidatesSeen++;
     if (seen.has(el)) continue;
+    if (isKnown && isKnown(el)) { perfCounters.scanSkippedKnown++; continue; }
     if (el.matches(EXCLUDE_SELECTOR)) { perfCounters.scanRejectedExclude++; continue; }
     if (el.closest('[data-branchkit-hint]')) continue;
+    survivors.push(el);
+  }
 
+  // Batch-warm element + ancestor rect/style for every survivor. Shared
+  // ancestors are deduped inside cacheVisibility, so when a YouTube /watch
+  // section mounts ~1000 sibling candidates their common ancestor chain is
+  // read once, not once per candidate. The layout-dependent pass below then
+  // reads from the warm cache via peekCachedRect/peekCachedStyle. We
+  // attribute cacheVisibility's live reads to our own counters so the perf
+  // trail reflects the true read count, not just peek-misses.
+  const warmed = cacheVisibility(survivors);
+  perfCounters.boundingRectCalls += warmed.rects;
+  perfCounters.computedStyleCalls += warmed.styles;
+
+  // Pass 2: layout-dependent filters, now hitting the warm cache.
+  for (const el of survivors) {
     // In extra-hints mode, the wider selector matches plenty of
     // non-interactive elements. Keep them only if they look clickable.
     if (extraHintsEnabled && !el.matches(HINTABLE_SELECTOR)) {
@@ -460,6 +490,7 @@ function collectHintables(
     refs.push(el);
   }
 
+  clearLayoutCache();
   perfCounters.scanTotalMs += performance.now() - scanStart;
   visibilityCache = null;
   return { elements, refs, invisibleCandidates };

@@ -88,22 +88,34 @@ export function peekCachedStyle(el: Element): CSSStyleDeclaration | null {
  * reevaluateAttribute drain so many same-tree attribute mutations share
  * one ancestor pre-read.
  */
-export function cacheVisibility(elements: Iterable<Element>): void {
-  const toCache = new Set<Element>();
+export function cacheVisibility(elements: Iterable<Element>): { rects: number; styles: number } {
+  // isVisible reads the *element's* rect once, then walks ancestors probing
+  // only `opacity` (a style read). It never reads an ancestor's rect. So we
+  // cache rect for the seed elements only, and style for seed + ancestor
+  // chain. Caching ancestor rects (the old behavior) was pure waste — on a
+  // YouTube comment mount that's thousands of needless getBoundingClientRect.
+  let rects = 0;
+  let styles = 0;
+  const toCacheStyle = new Set<Element>();
   for (const el of elements) {
+    if (!boundingRects.has(el)) { boundingRects.set(el, el.getBoundingClientRect()); rects++; }
     let current: Element | null = el;
     let depth = 0;
     while (current && depth < 15) {
-      if (toCache.has(current)) break;
-      toCache.add(current);
+      if (toCacheStyle.has(current)) break;
+      toCacheStyle.add(current);
       current = current.parentElement;
       depth++;
     }
   }
-  for (const el of toCache) {
-    if (!boundingRects.has(el)) boundingRects.set(el, el.getBoundingClientRect());
-    if (!computedStyles.has(el)) computedStyles.set(el, getComputedStyle(el));
+  // Count the live reads we actually perform (ancestor-deduped via the Set)
+  // so callers can attribute the cost to their own perf counters — without
+  // this the scanner's getComputedStyle/getBoundingClientRect counters only
+  // see peek-misses and undercount the work moved in here.
+  for (const el of toCacheStyle) {
+    if (!computedStyles.has(el)) { computedStyles.set(el, getComputedStyle(el)); styles++; }
   }
+  return { rects, styles };
 }
 
 function overflowClips(v: string): boolean {

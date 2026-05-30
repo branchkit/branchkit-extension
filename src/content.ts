@@ -2327,7 +2327,7 @@ const rebindCounters: RebindCounters = newRebindCounters();
 function discoverInSubtree(root: Element): number {
   const __cpuStart = performance.now();
   let added = 0;
-  const result = scanElements(root);
+  const result = scanElements(root, (el) => store.findWrapperFor(el) !== undefined);
   applyUserRuleToScan(result, root);
 
   // Limbo wrappers seen by every iteration in this pass — gathered once
@@ -3081,7 +3081,12 @@ function resetLifecycleCounters(): void {
 // Scan / hintability perf snapshot. Counters are cumulative since CS load
 // (or last reset). Useful diff sequence: reset → interact for N seconds →
 // read. Surfaces "are we paying 5000 getComputedStyle calls per scan?".
-function buildPerfSnapshot() {
+// `advanceShareBaseline` gates the rolling cpu.share window. Only the
+// durable 5s ship (shipPerfReport) should advance it; the 250ms live
+// publisher must read without consuming the delta, or it cannibalizes
+// the window the trail is meant to measure (pct collapses to ~0 and
+// share.buckets goes empty — the YouTube-investigation measurement gap).
+function buildPerfSnapshot(advanceShareBaseline = false) {
   // Walk the store once to split connected from limbo. Limbo wrappers
   // have `disconnectedAt !== null` — the design's "wrapper held while
   // we wait for a possible rebind" state. A monotonically-climbing
@@ -3146,10 +3151,14 @@ function buildPerfSnapshot() {
           if (dCount > 0 || dMs > 0.01) {
             sinceBuckets[k] = { dCount, dMs: +dMs.toFixed(2) };
           }
-          cpuShareBucketPrior[k] = { count: b.count, totalMs: b.totalMs };
+          if (advanceShareBaseline) {
+            cpuShareBucketPrior[k] = { count: b.count, totalMs: b.totalMs };
+          }
         }
-        cpuShareLastSumMs = curSum;
-        cpuShareLastWall = curWall;
+        if (advanceShareBaseline) {
+          cpuShareLastSumMs = curSum;
+          cpuShareLastWall = curWall;
+        }
         return {
           wallMs: +wallGap.toFixed(0),
           sumMs: +sumGap.toFixed(0),
@@ -3210,7 +3219,7 @@ publishPerfSnapshot();
 // fast enough to bracket a Firefox unresponsive-script event.
 function shipPerfReport(): void {
   try {
-    const snapshot = buildPerfSnapshot();
+    const snapshot = buildPerfSnapshot(true);
     const ua = navigator.userAgent;
     const browser = /Firefox\//i.test(ua) ? 'firefox' : /Chrome\//i.test(ua) ? 'chrome' : 'other';
     chrome.runtime.sendMessage({

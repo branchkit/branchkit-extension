@@ -951,7 +951,12 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     // own tab id. URL is the frame's URL — useful for attributing the
     // report to a YouTube vs Gmail tab in the JSONL trail.
     const tabId = _sender.tab?.id ?? -1;
-    const url = _sender.url ?? (message.url as string) ?? '';
+    // Prefer the content script's live location.href (message.url) over
+    // _sender.url. _sender.url is the URL the script was *injected* into and
+    // does not follow SPA navigation — on YouTube it stays "www.youtube.com/"
+    // after a homepage→/watch transition, mislabeling /watch samples in the
+    // trail and hiding them from /watch-filtered analysis.
+    const url = (message.url as string) ?? _sender.url ?? '';
     const browser = typeof message.browser === 'string' ? message.browser : 'unknown';
     forwardPerfReport({ url, tab_id: tabId, browser, snapshot: message.snapshot });
     return false;
