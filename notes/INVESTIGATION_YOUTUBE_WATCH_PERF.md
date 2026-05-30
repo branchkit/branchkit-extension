@@ -1,6 +1,6 @@
 # Investigation — Firefox "extension is slowing things down" on YouTube /watch
 
-**Status:** reposition cost paths resolved; discovery churn remains the open root cause. Most pages and YouTube homepage are fixed (68% → 0–8% sustained CPU). On YouTube /watch the two reposition paths (scroll + deferred/ResizeObserver) are now scoped to drifted badges and no longer dominate. The unattributed-to-YouTube stalls persist, but in real-Firefox driver runs at 5000+ wrappers the unresponsive-script warning no longer reproduces.
+**Status:** resolved in instrumented real-Firefox testing; pending real-world field confirmation. Every lead in this doc is now addressed — discovery churn (ancestor-dedup + light-DOM pre-filter), both reposition paths (scroll + deferred scoped to drifted), and the trail-URL bug. In real-Firefox driver runs at 5000+ wrappers the unresponsive-script warning no longer reproduces; the residual main-thread stalls are 70–95% YouTube's own layout/paint (confirmed by an extension-off control that stalls as hard or harder). The remaining extension CPU is small and already optimized. The honest open item is no longer a code lead — it's confirming the freeze is gone in a long real-world /watch session in the user's actual Firefox, which the driver can't fully replicate (real scroll cadence, real session length).
 
 **Audience:** a fresh agent picking up this work cold. The session that produced this doc burned through 8+ iterations on the symptom, made real but incomplete progress, and stepped back to write this up. Rango handles YouTube /watch without this problem; we have a local copy at `/private/tmp/rango/` to compare against.
 
@@ -22,8 +22,11 @@ A later session built the tooling the original doc lacked (a way to drive **real
 
 **Key findings from the heavy-state repro (5235–5449 wrappers, ~200 painted badges):**
 - Every main-thread stall is **70–95% unattributed** (YouTube's own layout/paint). The extension-off control stalls as hard or harder than extension-on — YouTube alone blocks the main thread up to ~1s during comment-load scroll.
-- Our JS is the minority of each stall, and the recurring our-JS labels are `moCallback` + `processMutations` + `discoverInSubtree` + `drainDiscovery` — i.e. the **mutation/discovery pipeline**, exactly the documented open root cause below. The reposition trims removed a *different* cost path.
-- **`wrapperCount` climbed to 5000+ and did not plateau** within a 60s soak (peak == final). Possible leak: wrappers may not be released as YouTube recycles/virtualizes comment DOM. This amplifies every `store.all`-iterating loop over time. Unconfirmed — needs a dwell-then-idle test watching `wrapperCount` + `wrapperLimboCount`.
+- Our JS is the minority of each stall. The recurring our-JS labels are `moCallback` + `processMutations` (receiving YouTube's mutation firehose) + `discoverInSubtree` + `drainDiscovery` + reposition. All already optimized — see below.
+
+**Discovery churn is already addressed (commit `8fe4e4c`, predates this doc's "open root cause" framing).** The mutation→discovery path now has ancestor-dedup (`hasQueuedAncestor`) and a shadow-sound light-DOM pre-filter (`subtreeMaybeHintable`: native `matches()`/`querySelector()`, bails at first hit; shadow-hosted hintables arrive via the separate `SHADOW_EVENT` attach path). Real trail numbers at the heaviest state (wrap=5283): of **45,730 enqueued roots, 96% deduped, 1% skipped by the pre-filter, only 2% (939) actually walked** (1677ms cumulative, ~1.8ms each). 98% of YouTube's mutation churn is filtered before the expensive walk. The residual `moCallback`/`processMutations` cost (~1674 batches) is the irreducible cost of *receiving* the mutations; cutting it would mean narrowing the MutationObserver's scope, which risks missing real DOM changes for little gain (our share is already the minority).
+
+**Wrapper-leak hypothesis — refuted (2026-05-30).** A scroll-accumulate-then-idle test showed `wrapperLimboCount` and `wrapperDisconnectedOutOfLimbo` stay **0** throughout, and `wrapperCount` **plateaus** the instant scrolling stops (flat for 30s idle). The earlier "climbs to 5000+ / peak == final" reading was an artifact of scrolling continuously the whole soak (always loading new content, never idling). The store ratchets up to the session high-water-mark and doesn't drop on scroll-to-top — but that's because YouTube /watch keeps all rendered comment/suggested DOM live (no virtualization), so the wrappers correctly track still-connected elements. Not our leak. Bounding it would need viewport-scoped wrapper eviction, but the prior "strict-viewport IO" attempt was reverted for per-element overhead — poor trade.
 
 **Already fixed since this doc was written:** the trail-URL sender bug (step 6 below) — content now sends `url: location.href` (content.ts shipPerfReport) and background prefers it over `_sender.url` (background.ts ~959). No longer an action item.
 
@@ -116,14 +119,17 @@ There are local comparison scripts in `scripts/_rango-compare.mjs` and `scripts/
 
 ## Suggested next steps for a fresh investigation
 
-In rough order (updated 2026-05-30 — the harness now lets you measure each change in real Firefox via `scripts/_drive-firefox-youtube.mjs`; A/B with `BK_EXT`):
+**As of 2026-05-30 the code leads below are all done.** What remains is field confirmation, not implementation.
 
-1. **Confirm whether `wrapperCount` leaks.** Dwell-scroll then idle and watch `wrapperCount` + `wrapperLimboCount` in the trail. If it doesn't plateau as YouTube recycles comment DOM, that's a release gap amplifying every `store.all` loop — fix it first; it's cross-cutting.
-2. **Cheap pre-filter on added roots.** Before enqueueing `scheduleDiscovery(node)`, do `if (!node.querySelector(HINTABLE_SELECTOR) && !node.matches(HINTABLE_SELECTOR)) skip`. Native + bailable; should save the deeper filter pipeline cost on the ~4000 mutations/sec that add nothing actionable. This is the most direct hit on the documented root cause.
-3. **Ancestor-dedup in `pendingDiscoveryRoots`.** If A contains B and both are queued, process A and skip B. Currently `discoverInSubtree` redundantly re-walks B's subtree as part of A's, then walks B again from B itself.
-4. **Diff our `processMutations` against Rango's `mutationCallback`.** Look specifically for what Rango does *less* of, not more. Use `/private/tmp/rango/src/content/wrappers/ElementWrapper.ts:225-278`. Then check Rango's `deepGetElements` cost vs our `deepQuerySelectorAll`; port if materially cheaper per-walk.
+1. **Field confirmation (the real open item).** Have the user run a long real-world /watch session in their actual Firefox with the current build (real scroll cadence, real session length, real extension+browser) and confirm the unresponsive-script warning does not appear. The driver reproduces 5000+ wrappers without the warning, but only a real session closes this out for sure.
+2. **Only if the warning resurfaces in the field:** the one untried lever is narrowing the MutationObserver scope (it currently observes `document.body` with `subtree: true, attributes: true`, so it receives YouTube's full ~1674-batch mutation firehose). This is high-risk — narrowing risks missing real DOM changes — so it's a last resort, not a default.
 
-**Done since the original list:** the trail-URL sender bug is fixed (see the 2026-05-30 update note above). Running Rango side-by-side is still worth doing but no longer blocks — the real-Firefox driver already measures our own builds directly.
+**Done since the original list (do not re-attempt):**
+- Discovery pre-filter + ancestor-dedup — committed `8fe4e4c`; 98% of enqueued roots filtered before the walk (see update note above).
+- Both reposition paths scoped to drifted — `8b2c8fe` (scroll) + `0525e98` (deferred/RO); −43% reposition CPU.
+- Trail-URL sender bug — fixed.
+- Wrapper-leak hypothesis — refuted (limbo/outOfLimbo stay 0, count plateaus when idle).
+- Rango side-by-side comparison is no longer needed to make progress — the real-Firefox driver measures our own builds directly.
 
 ## What to commit / what to keep
 
