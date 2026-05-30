@@ -35,6 +35,13 @@ export interface PlacementResult {
   /** True when a sticky/fixed ancestor makes the badge's clamp viewport-fixed,
    *  so window-scroll reposition must not skip it as compositor-tracked. */
   scrollSensitive: boolean;
+  /** True when this placement actually depended on ancestor geometry — the
+   *  available-space clamp bit, or a sticky/fixed bound applied. A layout
+   *  change (resize, container resize) can move that geometry, so such a badge
+   *  must be re-placed on the 'all' sweep. When false, the offset is purely
+   *  target-relative (target rect + badge size) and therefore layout-invariant
+   *  — on the compositor-driven anchor path it never needs re-placing. */
+  geometryDependent: boolean;
 }
 
 export function computePlacement(inp: PlacementInputs): PlacementResult {
@@ -55,6 +62,10 @@ export function computePlacement(inp: PlacementInputs): PlacementResult {
   const clampedOffsetY = space.top !== undefined
     ? Math.min(hintOffsetY, Math.max(0, space.top - 1))
     : hintOffsetY;
+  // The space clamp only feeds the offset when it actually bit. A defined-but-
+  // generous available space leaves the offset untouched, so a resize won't
+  // change the result — that badge is not geometry-dependent.
+  const spaceClamped = clampedOffsetX < hintOffsetX || clampedOffsetY < hintOffsetY;
 
   let x = Math.max(0, targetRect.left - clampedOffsetX);
   let y = Math.max(0, targetRect.top - clampedOffsetY);
@@ -72,5 +83,5 @@ export function computePlacement(inp: PlacementInputs): PlacementResult {
     y = elementRect.bottom - size.h * 0.5;
   }
 
-  return { x, y, scrollSensitive };
+  return { x, y, scrollSensitive, geometryDependent: scrollSensitive || spaceClamped };
 }

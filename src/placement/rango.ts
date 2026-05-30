@@ -204,7 +204,10 @@ export class RangoStrategy implements PlacementStrategy {
 
     // scrollSensitive marks a viewport-fixed clamp (sticky/fixed ancestor) so
     // the window-scroll reposition doesn't skip it as compositor-tracked.
+    // geometryDependent marks placements whose offset rode ancestor geometry,
+    // so the 'all' layout sweep must re-place them even on the anchor path.
     w.hint.scrollSensitive = result.scrollSensitive;
+    w.hint.geometryDependent = result.geometryDependent;
     w.hint.updatePosition({ x: result.x, y: result.y }, 'rango.positionAtTopLeft');
   }
 }

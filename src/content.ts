@@ -1858,7 +1858,7 @@ function scheduleReposition(scope: RepositionScope = 'all'): void {
       }
       const toPlace = scope === 'drifted'
         ? visible.filter(w => w.hint!.needsScrollReposition())
-        : visible;
+        : visible.filter(w => w.hint!.needsLayoutReposition());
       if (toPlace.length > 0) placeBadges(toPlace);
     } finally {
       clearLayoutCache();

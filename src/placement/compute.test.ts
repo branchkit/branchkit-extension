@@ -20,20 +20,22 @@ describe('computePlacement', () => {
     const r = computePlacement(base());
     // hintOffsetX = max(0, 16 - 3) = 13; x = 200 - 13 = 187
     // hintOffsetY = max(0, 12 - 0) = 12; y = 100 - 12 = 88
-    expect(r).toEqual({ x: 187, y: 88, scrollSensitive: false });
+    // no clamp, no sticky => offset is purely target-relative
+    expect(r).toEqual({ x: 187, y: 88, scrollSensitive: false, geometryDependent: false });
   });
 
   it('inside nudge keeps the badge within the target (ratio offset)', () => {
     const r = computePlacement(base({ nudge: { kind: 'inside', x: 1, y: 1 }, hasText: false }));
     // ratio 1 => offset 0 => badge at target top-left
-    expect(r).toEqual({ x: 200, y: 100, scrollSensitive: false });
+    expect(r).toEqual({ x: 200, y: 100, scrollSensitive: false, geometryDependent: false });
   });
 
   it('clamps the offset to available space so the badge never overflows its clip ancestor', () => {
     const r = computePlacement(base({ availableSpace: { left: 5, top: 4 } }));
     // clampedOffsetX = min(13, max(0, 5-1)) = 4; x = 200 - 4 = 196
     // clampedOffsetY = min(12, max(0, 4-1)) = 3; y = 100 - 3 = 97
-    expect(r).toEqual({ x: 196, y: 97, scrollSensitive: false });
+    // both axes clamped => offset rode ancestor geometry
+    expect(r).toEqual({ x: 196, y: 97, scrollSensitive: false, geometryDependent: true });
   });
 
   it('marks scrollSensitive and clamps to the sticky bound', () => {
@@ -42,8 +44,16 @@ describe('computePlacement', () => {
     // unclamped x = 187 < 190 => x = 190; y = 88 > 80 => y unchanged 88
     // overlapIntoText = (88 + 12) - 100 = 0, not > 4.8 => no fallback
     expect(r.scrollSensitive).toBe(true);
+    expect(r.geometryDependent).toBe(true);
     expect(r.x).toBe(190);
     expect(r.y).toBe(88);
+  });
+
+  it('leaves geometryDependent false when available space is defined but generous', () => {
+    // space is defined but larger than the offset, so the clamp never bites —
+    // a resize won't move this badge, so it must NOT be flagged geometry-dependent.
+    const r = computePlacement(base({ availableSpace: { left: 999, top: 999 } }));
+    expect(r).toEqual({ x: 187, y: 88, scrollSensitive: false, geometryDependent: false });
   });
 
   it('applies the overlap-into-text fallback when a sticky clamp pushes the badge onto the text', () => {

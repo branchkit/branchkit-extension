@@ -397,6 +397,12 @@ export class HintBadge {
   // resolves a sticky bound; the *Vp fields snapshot the last placement so
   // drift can be measured as a delta-of-deltas.
   public scrollSensitive: boolean = false;
+  // Set by the placement strategy when the resolved offset actually rode
+  // ancestor geometry (available-space clamp bit, or a sticky/fixed bound
+  // applied). Such a badge must be re-placed on the 'all' layout sweep even on
+  // the anchor path, because a resize can move that ancestor geometry. When
+  // false, the offset is purely target-relative and the compositor carries it.
+  public geometryDependent: boolean = false;
   private _lastTargetVp: { x: number; y: number } | null = null;
   private _lastOuterVp: { x: number; y: number } | null = null;
   private static readonly DRIFT_EPS = 0.5;
@@ -832,6 +838,18 @@ export class HintBadge {
     const driftX = (t.left - this._lastTargetVp.x) - (o.left - this._lastOuterVp.x);
     const driftY = (t.top - this._lastTargetVp.y) - (o.top - this._lastOuterVp.y);
     return Math.abs(driftX) > HintBadge.DRIFT_EPS || Math.abs(driftY) > HintBadge.DRIFT_EPS;
+  }
+
+  // Does this badge need a JS re-place on an 'all' layout sweep (resize,
+  // huge-mutation settle)? The nesting path always does — its host position is
+  // computed in JS. The anchor path normally does not: the compositor carries a
+  // target-relative offset through layout changes for free. The exception is a
+  // badge whose offset rode ancestor geometry (clamped to a clip ancestor's
+  // available space, or pinned to a sticky/fixed bound) — a resize can move
+  // that geometry, so it must be recomputed.
+  needsLayoutReposition(): boolean {
+    if (!this.anchorMode || !this._visible) return true;
+    return this.geometryDependent;
   }
 
   remove(): void {

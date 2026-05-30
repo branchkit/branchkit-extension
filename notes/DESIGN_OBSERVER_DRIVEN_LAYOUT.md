@@ -22,8 +22,8 @@ browser has perfect information about what's near the viewport.
 | 5 | Delete global rAF reposition sweep | **Superseded** — not via a JS router but by the anchor model deleting the scroll dimension entirely. See "Anchor-first architecture" (2026-05-30). The router (ancestor-geometry caching) is explicitly NOT the investment |
 | 5b | Overflow-ancestor scroll listeners | Done (`9edd979`) for the nesting path — but the nesting path is now frozen-for-deletion; no further 5b investment. Chromium uses the CSS-anchor fast-path (`95468e1`) |
 | 6 | Relocate position log to read from store | Ahead |
-| A1 | Extract `computePlacement` (pure, DOM-free) | In progress — anchor-first step 1; behavior-preserving reusable core |
-| A2 | Anchor path self-driving (own observers, off the sweep) | Planned — anchor-first step 2 |
+| A1 | Extract `computePlacement` (pure, DOM-free) | Done (`fc78f6d`) — anchor-first step 1; behavior-preserving reusable core |
+| A2 | Anchor path off the legacy sweep (explicit drive model) | Done — anchor-first step 2. `computePlacement` returns `geometryDependent`; `HintBadge.needsLayoutReposition()` excludes non-geometry-dependent anchored badges from the 'all' sweep (compositor carries them). Nesting path returns true → unchanged. Verified: 441 tests + live Chromium resize hold |
 | A3 | Freeze nesting path; delete when Firefox ships anchor positioning | Ongoing posture |
 
 ## Course correction (2026-05-30)
@@ -228,11 +228,22 @@ one and the eventual Firefox deletion a one-liner:
    the reusable core both paths consume and is unit-testable without a DOM.
    This is the highest-leverage, lowest-risk step and de-risks everything
    downstream. **Behavior-preserving.**
-2. **Make the anchor path self-driving.** Recompute placement only when its
-   real inputs change — badge size (`ResizeObserver` on the badge) and
-   ancestor space/sticky bounds — never on scroll. The anchor path already
-   no-ops scroll repositioning; this step lets it stand on its own observers
-   instead of borrowing the legacy `scheduleReposition` sweep's plumbing.
+2. **Take the anchor path off the legacy sweep, explicitly.** The anchor path
+   already no-ops scroll repositioning (`needsScrollReposition()` is false for
+   anchorMode), so it skipped every 'drifted' sweep incidentally. Step 2 makes
+   that independence a declared property instead of an accident, and extends it
+   to the 'all' sweep (resize, huge-mutation settle). `computePlacement` now
+   returns `geometryDependent` — true only when the resolved offset actually
+   rode ancestor geometry (a clip-ancestor available-space clamp bit, or a
+   sticky/fixed bound applied). `HintBadge.needsLayoutReposition()` is the
+   'all'-sweep gate: the nesting path always returns true (its host position is
+   JS-computed), the anchor path returns true only when `geometryDependent`.
+   A non-geometry-dependent anchored badge's offset is purely target-relative,
+   so the compositor carries it through a resize for free — no JS re-place.
+   (We considered giving the anchor path its own `ResizeObserver` on the badge,
+   but badge size only changes on a label edit, which already routes through
+   `placeOne` — a standing observer would be redundant.) **Behavior-changing on
+   the anchor path** (badges leave the 'all' sweep); nesting path unchanged.
 3. **Freeze the nesting path; schedule its deletion.** Marked "delete when
    Firefox ships anchor positioning."
 
