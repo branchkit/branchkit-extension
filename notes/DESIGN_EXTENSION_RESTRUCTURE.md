@@ -480,11 +480,30 @@ throughout, and the final step deletes the scaffolding. No big-bang rewrite.
    §1.3 detection correction); (b) route it into the *existing* bounded `rescan`
    action path (`content.ts:1596`) instead of the mutation firehose.
 
-   **Status (2026-05-30):** (a) and (b) are built — `webNavigation` listeners
-   feed `scheduleSpaRescan` (debounced) which dispatches the bounded `rescan`
-   action. This was done ahead of `PageSession` — the wires landed directly in
-   `background.ts`; the lifecycle object that would *own* them (§3.3) doesn't
-   exist yet.
+   **Status (2026-05-30):** (a) and (b) are built and the content-side handler
+   now lives on `PageSession.onUrlChange` (the `rescan` action routes through
+   it; the detection still fires from `background.ts`'s `webNavigation`
+   listeners → debounced `scheduleSpaRescan`).
+
+   **Verified on real Firefox (2026-05-30).** Driving a real Firefox with the
+   live extension (`scripts/_drive-firefox-nav.mjs`), clicking a YouTube
+   recommendation produced, in `actuator.log`:
+   `[pipeline.cs_rescan_received] {"url":".../watch?v=qQDrqV5Hw4c","reason":"spa_nav"}`
+   — i.e. the full chain fires end-to-end: same-document nav → `webNavigation`
+   detect → bounded `rescan` dispatch → `PageSession.onUrlChange` receive. The
+   reconcile *triggers* correctly.
+
+   **Caveat — the reconcile triggers, but completing it on a fresh heavy page
+   stalls hard.** After the nav into a new YouTube video the page shipped *zero*
+   perf snapshots (the first video shipped 149) and Playwright lost the renderer
+   — the main thread was blocked too completely to introspect. This is not a
+   reconcile-path defect; it is the *same* per-page scan cost the
+   unresponsive-script investigation is chasing, now reproduced at nav time
+   rather than only under scroll soak. The nav fix is correct; the heavy-page
+   scan cost underneath it is the open work (see `DESIGN_OBSERVER_DRIVEN_LAYOUT`
+   and the perf harness). Validating responsiveness across a hard SPA nav can't
+   be done by introspecting the wedged page — confirm the trigger out-of-band
+   via the `cs_rescan_received` log, as above.
 
    **A third wire (c) — a nav-time `purgeTab`/`releaseFrame` from
    `background.ts` — was planned here but dropped 2026-05-30 after
@@ -541,12 +560,16 @@ the tree green between refactors.
   relocation step must keep it green; the interfaces in step 2 should make more
   of the lifecycle unit-testable than it is today (currently much is only
   reachable through the monolith).
-- **Risk: the SPA-nav reconcile (step 3) is genuinely new behavior.** It needs
-  Playwright validation on YouTube + a couple of SPA sites: navigate, confirm
-  badges + grammar re-establish without the mutation firehose, and confirm the
-  pool reclaims the prior page's codewords (via the content-side limbo→finalize
+- **Risk: the SPA-nav reconcile (step 3) is genuinely new behavior.**
+  *Trigger verified on real Firefox 2026-05-30* (see §5 step 3): a YouTube
+  recommendation click fires the full detect→dispatch→`onUrlChange` chain. Still
+  unverified by direct observation: that badges + grammar fully re-establish and
+  the pool reclaims the prior page's codewords — because completing the rescan
+  on a heavy page wedges the renderer past the point Playwright can read it.
+  Confirm those out-of-band (grammar-batch logs, pool counters) rather than by
+  introspecting the page. The pool reclaim is the content-side limbo→finalize
   release the rescan drives — *not* a background purge; see §5 step 3 for why a
-  background purge corrupts the grammar).
+  background purge corrupts the grammar.
 - **Risk: hidden coupling via module globals.** Extraction will surface
   implicit dependencies (e.g. who reads `hintsVisible`). Expected; the point is
   to make them explicit parameters/state instead of ambient.
