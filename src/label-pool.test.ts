@@ -76,14 +76,27 @@ describe('label-pool', () => {
   });
 
   describe('buildPool', () => {
-    it('returns 676 codewords (26×26 pairs) for a valid alphabet', () => {
+    it('returns 676 unique codewords in balanced square-fill order', () => {
       const pool = buildPool(ALPHABET);
       expect(pool).not.toBeNull();
       expect(pool!.length).toBe(676);
-      expect(pool![0]).toBe('arch arch');     // first pair
-      expect(pool![25]).toBe('arch zoo');     // last suffix for first prefix
-      expect(pool![26]).toBe('bake arch');    // second prefix starts
-      expect(pool![675]).toBe('zoo zoo');     // last pair
+      expect(new Set(pool!).size).toBe(676);   // all unique
+
+      // First 4 form a balanced 2×2 grid (prefixes × suffixes = arch,bake).
+      expect(pool!.slice(0, 4)).toEqual([
+        'arch arch', 'arch bake', 'bake bake', 'bake arch',
+      ]);
+
+      // Invariant: the first N codewords use ceil(sqrt(N)) distinct
+      // prefixes AND the same count of distinct suffixes. Checked at N=9
+      // (a full 3×3 shell).
+      const first9 = pool!.slice(0, 9);
+      const prefixes = new Set(first9.map(c => c.split(' ')[0]));
+      const suffixes = new Set(first9.map(c => c.split(' ')[1]));
+      expect(prefixes).toEqual(new Set(['arch', 'bake', 'check']));
+      expect(suffixes).toEqual(new Set(['arch', 'bake', 'check']));
+
+      expect(pool!).toContain('zoo zoo');
     });
 
     it('returns null for an alphabet of the wrong length', () => {
@@ -102,24 +115,24 @@ describe('label-pool', () => {
     it('returns the same labels on re-claim of the same count', async () => {
       const tabId = nextTabId();
       const first = await claimLabels(tabId, 0, 4);
-      expect(first).toEqual(['arch arch', 'arch bake', 'arch check', 'arch deck']);
+      expect(first).toEqual(['arch arch', 'arch bake', 'bake bake', 'bake arch']);
 
       await releaseLabels(tabId, first);
 
       const second = await claimLabels(tabId, 0, 4);
-      expect(second).toEqual(['arch arch', 'arch bake', 'arch check', 'arch deck']);
+      expect(second).toEqual(['arch arch', 'arch bake', 'bake bake', 'bake arch']);
     });
 
     it('release of partial set preserves order for unreleased labels', async () => {
       const tabId = nextTabId();
       const first = await claimLabels(tabId, 0, 5);
-      expect(first).toEqual(['arch arch', 'arch bake', 'arch check', 'arch deck', 'arch egg']);
+      expect(first).toEqual(['arch arch', 'arch bake', 'bake bake', 'bake arch', 'arch check']);
 
       // Release only the middle three; first and last stay claimed.
-      await releaseLabels(tabId, ['arch bake', 'arch check', 'arch deck']);
+      await releaseLabels(tabId, ['arch bake', 'bake bake', 'bake arch']);
 
       const next = await claimLabels(tabId, 0, 3);
-      expect(next).toEqual(['arch bake', 'arch check', 'arch deck']);
+      expect(next).toEqual(['arch bake', 'bake bake', 'bake arch']);
     });
   });
 
@@ -136,10 +149,12 @@ describe('label-pool', () => {
       const combined = new Set([...a, ...b]);
       expect(combined.size).toBe(10); // no overlap
 
-      // The first 10 pairs are split between the two frames.
+      // The first 10 pairs are split between the two frames. Square-fill
+      // ordering fills expanding shells: the 2×2 and 3×3 grids, then the
+      // first cell of the 4×4 shell.
       const expected = new Set([
-        'arch arch', 'arch bake', 'arch check', 'arch deck', 'arch egg',
-        'arch food', 'arch glad', 'arch half', 'arch iron', 'arch jake',
+        'arch arch', 'arch bake', 'bake bake', 'bake arch', 'arch check',
+        'bake check', 'check check', 'check bake', 'check arch', 'arch deck',
       ]);
       expect(combined).toEqual(expected);
     });
@@ -221,7 +236,7 @@ describe('label-pool', () => {
 
       // New claims pull from the alt alphabet (pairs now).
       const fresh = await claimLabels(tabA, 0, 3);
-      expect(fresh).toEqual(['apple apple', 'apple berry', 'apple cherry']);
+      expect(fresh).toEqual(['apple apple', 'apple berry', 'berry berry']);
     });
   });
 

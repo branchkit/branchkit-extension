@@ -2,9 +2,11 @@
  * BranchKit Browser — Hint allocator.
  *
  * Decides which codeword goes to which hint candidate. Closer-to-focus
- * candidates rank earlier and pair with cheaper codewords (the per-tab
- * pool is already singles-before-pairs, so rank order × pool order gives
- * "single-word hints for the elements you'll most likely target").
+ * candidates rank earlier and pair with front-of-pool codewords. The
+ * per-tab pool is balanced square-fill (label-pool.ts:buildPool), so rank
+ * order × pool order gives the closest hints a grid of distinct prefixes ×
+ * distinct suffixes — both spoken stages stay meaningful for the elements
+ * you'll most likely target.
  *
  * Design: notes/DESIGN_BROWSER_HINT_ALLOCATOR.md.
  *

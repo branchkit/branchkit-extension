@@ -17,18 +17,43 @@ import { LabelStack } from './types';
 // every hint always requires a second word. Same approach as Rango.
 // Continuous Vosk recognition makes pairs flow as one utterance (~200ms),
 // so the one-word advantage of singles is negligible.
+//
+// Ordering is BALANCED (square-fill): pairs are enumerated by expanding
+// L-shaped shells where shell d holds every pair with max(prefix,suffix)==d.
+// The first N codewords therefore always use ceil(sqrt(N)) DISTINCT prefixes
+// AND ceil(sqrt(N)) DISTINCT suffixes — a balanced grid. Both spoken stages
+// stay meaningful at every hint count: the prefix narrows the set and the
+// suffix selects within it.
+//
+// This matters because both stages are real disambiguation steps. The plugin
+// derives `browser_hints_prefix` *only* from prefixes present in claimed
+// codewords (buildPrefixListData), and the per-prefix suffix collection only
+// from suffixes claimed under that prefix. Codewords are claimed front-of-pool
+// and released on viewport-leave, so the live set is roughly the in-viewport
+// hints. A naive prefix-major order collapses the prefix stage on sparse pages
+// (every hint is `a <suffix>`, only "a" is a usable prefix); suffix-major
+// collapses the suffix stage (every hint is `<prefix> a`, the second word is
+// always the same). Square-fill avoids both — with 16 visible hints you get a
+// 4×4 grid of distinct prefixes × distinct suffixes.
 
 /**
- * Build the codeword pool from a 26-word alphabet. All pairs, ordered by
- * prefix then suffix. Returns null if the alphabet isn't usable.
+ * Build the codeword pool from a 26-word alphabet. All 676 pairs, ordered
+ * by expanding square shells so the first N claims form a balanced
+ * prefix×suffix grid. Returns null if the alphabet isn't usable.
  */
 export function buildPool(alphabet: string[]): string[] | null {
   if (!Array.isArray(alphabet) || alphabet.length !== 26) return null;
   if (alphabet.some(w => typeof w !== 'string' || w.length === 0)) return null;
 
   const pool: string[] = [];
-  for (let p = 0; p < 26; p++) {
-    for (let s = 0; s < 26; s++) pool.push(`${alphabet[p]} ${alphabet[s]}`);
+  // Shell d (max coord == d) contributes 2d+1 pairs; summed over d=0..25
+  // this is 26² = 676. Within a shell: first the new suffix d across all
+  // prefixes 0..d (the row), then the new prefix d across suffixes d-1..0
+  // (the column), so each shell introduces exactly one new prefix and one
+  // new suffix.
+  for (let d = 0; d < 26; d++) {
+    for (let p = 0; p <= d; p++) pool.push(`${alphabet[p]} ${alphabet[d]}`);
+    for (let s = d - 1; s >= 0; s--) pool.push(`${alphabet[d]} ${alphabet[s]}`);
   }
   return pool;
 }

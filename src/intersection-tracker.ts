@@ -232,12 +232,13 @@ export class IntersectionTracker {
       const queued = [...this.pendingClaim];
       this.pendingClaim.clear();
 
-      // Rank-aware allocation: closer-to-focus wrappers get the cheap
-      // (front-of-pool, single-word) codewords. The pool already orders
-      // singles before pairs (see label-pool.ts:buildPool); pairing
-      // pool order with rank order delivers the design's "cheap hints
-      // for visible elements" promise without a multi-metric chooser.
-      // (Sprint C path 1; DESIGN_BROWSER_HINT_ALLOCATOR.md section 2.)
+      // Rank-aware allocation: closer-to-focus wrappers get the
+      // front-of-pool codewords. The pool is balanced square-fill (see
+      // label-pool.ts:buildPool), so the first claims form a grid of
+      // distinct prefixes × distinct suffixes; pairing that with rank
+      // order means the closest visible hints get the grid's cheapest
+      // codewords and both spoken stages stay meaningful. (Sprint C
+      // path 1; DESIGN_BROWSER_HINT_ALLOCATOR.md section 2.)
       //
       // getBoundingClientRect forces layout, so candidates are
       // materialized once and reused for every comparison rather than
