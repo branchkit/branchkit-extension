@@ -696,7 +696,7 @@ were what surfaced `recheckPendingVisibility:size:1000+` and made the
 lifecycle gap visible.
 
 **Phase 2: Viewport-scoped lifecycle (DONE — `0b938d3`).** Shipped
-`src/attention-observer.ts` as `AttentionObserver` (not
+`src/observe/attention-observer.ts` as `AttentionObserver` (not
 `TargetLifecycleObserver` as originally named — same role). Wired
 into content.ts:
 

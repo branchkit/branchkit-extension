@@ -1,6 +1,23 @@
 # Extension Restructure — module boundaries and the content-script pipeline
 
-**Status:** proposal. Nothing here is built yet.
+**Status:** partially landed (updated 2026-05-30). The diagnosis (§1–2) still
+holds, but reality has moved past the original "nothing built yet":
+- **Module grouping shipped** — `src/` is now organized into intent-based dirs
+  (`scan/ observe/ placement/ labels/ render/ activate/ rules/ debug/`, plus
+  `adapters/` and `plugin/`). The names differ from the original §3.1 sketch
+  (see the updated §3.1); the shipped names are now ground truth.
+- **Step-1 leaf extraction substantially done** — `config.ts`, `plugin/liveness.ts`,
+  `plugin/resolve.ts`, and the `debug/` telemetry files are out of the monolith.
+  `content.ts` is down from 3,265 lines to ~2,854.
+- **Step-3 SPA-nav fix mostly built** — `webNavigation.onHistoryStateUpdated`
+  (+`onReferenceFragmentUpdated`) feed a debounced bounded rescan
+  (`background.ts` `scheduleSpaRescan`). **Still open:** the nav-time label-pool
+  purge (3c) — `purgeTab` fires only on `tabs.onRemoved`, so codewords still
+  leak across same-document navigations.
+
+**Still unbuilt (the high-value remainder):** the stage interfaces (§3.2), the
+`PageSession` lifecycle object (§3.3), and reducing `content.ts` to wiring (§5
+steps 2, 4-residual, 5).
 
 **Motivation in one line:** the YouTube unresponsive-script freeze is not a
 bug we keep failing to fix — it's the symptom of a content script that has
@@ -159,42 +176,63 @@ explicit page-session lifecycle.
 
 ### 3.1 Module layout
 
+The directory grouping below shipped 2026-05-30. The original sketch used
+`core/ discover/ lifecycle/ layout/ telemetry/`; the names that actually landed
+(`scan/ observe/ placement/ debug/`, config + layout-cache at root) are shown
+here as ground truth. `(exists)` = file present today; `NEW` = still unbuilt,
+shown in the dir it would land in.
+
 ```
 src/
-  content.ts                  // thin: wire stages, own nothing but the graph
-  core/
-    page-session.ts           // NEW: lifecycle object (boot, navigate, teardown)
-    pipeline.ts               // NEW: stage interfaces + the orchestrator
-    config.ts                 // storage-backed settings (extract from content.ts)
-  discover/
+  content.ts                  // GOAL: thin — wire stages, own nothing but the graph
+  config.ts                   // (exists) storage-backed settings — was core/config
+  layout-cache.ts             // (exists) cross-stage rect/style cache — stays at root
+  types.ts                    // (exists) shared types — stays at root
+  core/                       // NEW dir — (re)introduced when these two land; that
+    page-session.ts           //   NEW: lifecycle object (boot, navigate, teardown)
+    pipeline.ts               //   NEW: stage interfaces + the orchestrator. (We
+                              //   folded the lone config.ts up to root in the reorg;
+                              //   core/ earns its place again as a ≥2-file boundary
+                              //   once the lifecycle/orchestrator objects exist.)
+  scan/                       // was "discover/"
     scanner.ts                // (exists) pure DOM→candidates, no side effects
+    find.ts, references.ts, element-wrapper.ts, registry.ts, ...  // (exist)
     discovery.ts              // NEW: owns scheduleDiscovery/drain, ancestor-dedup,
                               //      the cheap pre-filter on added roots
-  lifecycle/
-    wrapper-store.ts          // (exists as WrapperStore)
-    attention.ts              // attach/detach candidacy (folds attention-observer)
-    limbo.ts                  // NEW: rebind/limbo/finalize (extract from content.ts)
-  layout/
-    layout-signal-router.ts   // from DESIGN_OBSERVER_DRIVEN_LAYOUT (Phase 3+)
+  observe/                    // was "lifecycle/" + "layout/" (the observer zoo)
+    attention-observer.ts     // (exists) attach/detach candidacy
     target-rect-store.ts      // (exists) the one canonical rect cache
+    intersection-tracker.ts, *-tracker.ts  // (exist)
+    limbo.ts                  // NEW: rebind/limbo/finalize (extract from content.ts)
+  placement/                  // (exists) position math — index, compute, rango, ...
   labels/
-    label-pool.ts             // (exists, background side)
-    label-sync.ts             // NEW: claim/release batching, sessionId, grammar push
+    label-pool.ts             // (exists) square-fill pool
+    label-sync.ts             // (exists) claim/release batching, sessionId, grammar push
   render/
     hints.ts                  // (exists) badge element
-    placement.ts              // (exists in placement/) position math
+    badge-colors.ts           // (exists)
     badge-manager.ts          // NEW: show/hide/reposition orchestration
+  activate/                   // NEW grouping — the "act on a chosen target" stage
+    resolve.ts?               // resolveHintLocally + activate + report (see note*)
+    event-sequence.ts, scroller.ts, keyboard.ts, snapshot.ts  // (exist)
+  rules/                      // domain include/exclude/reveal + options UI (exist)
   plugin/
+    liveness.ts               // (exists) Port + orphan handling
+    resolve.ts                // (exists) plugin-side resolve  (*resolution currently
+                              //   lives here, not activate/ — revisit when the
+                              //   activate stage is formalized)
     grammar-batch.ts          // NEW: postGrammarBatch + delta-sync (extract)
-    liveness.ts               // NEW: Port + orphan handling (extract)
-    resolve.ts                // NEW: resolveHintLocally + activate + report
-  telemetry/
-    perf.ts                   // NEW: snapshot, cpu-share, watchdog, longtask
-    cpu-recorder.ts           // NEW: recordCpu sink; stages call it via injected fn
+  debug/                      // was "telemetry/" — diagnostics + perf
+    perf-counters.ts, message-counters.ts  // (exist)
+    debug-snapshot.ts         // (exists)
+    perf.ts                   // NEW: snapshot, cpu-share, watchdog, longtask sink
 ```
 
 This is a target, not a literal commit list. The point is **one concern per
-file, behind an interface, with `content.ts` reduced to wiring.**
+file, behind an interface, with `content.ts` reduced to wiring.** Naming note:
+the reorg chose stage-verb dirs (`scan/observe/placement/render/activate`) over
+the original noun sketch (`discover/lifecycle/layout/render`); they describe the
+same pipeline.
 
 ### 3.2 The pipeline
 
@@ -300,7 +338,11 @@ throughout, and the final step deletes the scaffolding. No big-bang rewrite.
    liveness, resolve/activate, grammar-batch, and config into their own files;
    `content.ts` imports them. Pure relocation; counters become module exports
    or an injected sink. Lowest risk, immediately shrinks the monolith and makes
-   the rest legible.
+   the rest legible. **Substantially done (2026-05-30):** `config.ts`,
+   `plugin/liveness.ts`, `plugin/resolve.ts`, and `debug/{perf,message}-counters`
+   are extracted; the `src/`-wide intent-based regrouping landed in the same
+   pass. Residual: `grammar-batch` and the perf `watchdog`/`longtask`/`cpu-share`
+   block still live inside `content.ts`.
 
 2. **Introduce the stage interfaces with the *current* code behind them.**
    Wrap existing discovery/lifecycle/label/render code in adapter objects that
@@ -318,6 +360,14 @@ throughout, and the final step deletes the scaffolding. No big-bang rewrite.
    action path (`content.ts:1903`) instead of the mutation firehose; (c) add the
    nav-time `purgeTab`/`releaseFrame` call that `background.ts` only does on
    `onRemoved` today.
+
+   **Status (2026-05-30):** (a) and (b) are built — `webNavigation` listeners
+   feed `scheduleSpaRescan` (debounced) which dispatches the bounded `rescan`
+   action. **(c) is still open:** `purgeTab` is still wired only to
+   `tabs.onRemoved` (`background.ts:1267`), so the label pool isn't purged on
+   same-document navigation and codewords leak across SPA navs. This was done
+   ahead of `PageSession` — the wires landed directly in `background.ts`; the
+   lifecycle object that would *own* them (§3.3) doesn't exist yet.
 
 4. **Replace stage internals one at a time** behind the stable interfaces:
    DiscoveryStage gets the pre-filter + ancestor-dedup (done 2026-05-30,
