@@ -491,6 +491,19 @@ async function forwardHintsSessionStart(reason: string, tabId: number): Promise<
   }
 }
 
+// Tell the newly-active tab to republish its grammar. Because the relay drops
+// grammar batches from non-active tabs, a tab that was backgrounded while
+// scanning never populated the (global) hint collections. On activation it
+// must re-push from scratch so the active tab is the sole, complete contributor
+// to the global vocabulary. The content script's `reactivate` handler flips its
+// local active flag back on and re-queues its whole wrapper store.
+function republishActiveTab(tabId: number): void {
+  chrome.tabs.sendMessage(tabId, {
+    type: 'BRANCHKIT_ACTION',
+    payload: { action: 'reactivate', params: { reason: 'tab_activated' } },
+  } as Message).catch(() => {});
+}
+
 // Per-batch grammar push (Option B). The content script's batched
 // doScan sends one of these per 10-20 elements; the SW stamps
 // tab_id + frame_id from sender and POSTs to /grammar/batch. Plugin
@@ -537,6 +550,19 @@ function transportFailure(
     result: 'error',
     succeeded: [],
     failed: request.elements.map(e => ({ codeword: e.codeword, reason: 'transport' })),
+  };
+}
+
+// The sender tab isn't the active tab, so its push was suppressed before
+// reaching the plugin. Distinct from `error` (a real failure): the content
+// script keeps its wrappers and pauses syncing rather than releasing labels.
+function inactiveResponse(
+  request: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'>,
+): GrammarBatchResponse {
+  return {
+    result: 'inactive',
+    succeeded: [],
+    failed: request.elements.map(e => ({ codeword: e.codeword, reason: 'inactive' })),
   };
 }
 
@@ -907,6 +933,17 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
       sendResponse(transportFailure(message.request));
       return false;
     }
+    // Active-tab scoping: the per-prefix hint collections are a global
+    // namespace, so only the active tab may push grammar — a background tab's
+    // REPLACE would clobber the focused tab's vocabulary (and LastTabID would
+    // route clicks to the wrong tab). Reject batches from non-active tabs with
+    // `inactive`; the content script then suppresses its push and flushes on
+    // reactivation. Fail open when we don't yet know the active tab (SW just
+    // started) so the first scan isn't silently dropped.
+    if (cachedActiveTabId != null && tabId !== cachedActiveTabId) {
+      sendResponse(inactiveResponse(message.request));
+      return false;
+    }
     for (const el of message.request.elements) {
       el.frame_id = frameId;
     }
@@ -1138,6 +1175,9 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
     // active tab. The session-start path resets per-tab plugin state.
     if (hintVisibility === 'always') {
       forwardHintsSessionStart('tab_switch', activeInfo.tabId);
+      // The relay suppressed this tab's grammar while it was backgrounded;
+      // force a clean republish so it repopulates the global vocabulary.
+      republishActiveTab(activeInfo.tabId);
     }
   }
   // Lazy injection for tabs that loaded before the extension was
@@ -1150,12 +1190,6 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
   // disk, `tabs.onUpdated` below catches them once the restore
   // completes — `tab.discarded` is racy here.
   void ensureContentScriptInjected(activeInfo.tabId);
-  // Under Option B the new tab's content script owns its own grammar state
-  // (in plugin.session.Codewords via prior grammar_batch POSTs). Activation
-  // doesn't need an SW-side re-push; the content script's batches already
-  // populated the plugin's per-frame view. If the tab was never scanned in
-  // this browser session, the content script will scan on next navigation
-  // or via a rescan dispatch.
 });
 
 // Catch tabs finishing load — Firefox restoring a discarded tab fires
@@ -1244,11 +1278,9 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
       endHintSessionOnOldTab(oldTabId, 'window_focus');
       if (newActive != null && hintVisibility === 'always') {
         forwardHintsSessionStart('window_focus', newActive);
+        republishActiveTab(newActive);
       }
     }
-    // Under Option B the new tab's grammar state already lives in the
-    // plugin (built up from prior grammar_batch POSTs from its content
-    // script). Focus-change is just a session-start signal.
   } catch {
     // Don't blank cachedActiveTabId on error — fall back to the last
     // known content tab so voice routing keeps working through transient

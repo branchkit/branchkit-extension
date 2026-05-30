@@ -63,6 +63,23 @@ const sentCodewords: Set<string> = new Set();
 const pendingPuts: Set<ElementWrapper> = new Set();
 const pendingDeleteCodewords: string[] = [];
 
+// --- Active-tab gate ---
+// The per-prefix hint collections are a global namespace, so only the active
+// tab may push grammar (a background tab's REPLACE clobbers the focused tab's
+// vocabulary). Defaults true: the common single-active-tab case is unchanged.
+// Flipped false when the relay rejects a push with `inactive`; flipped back
+// true (and the whole store re-queued) on `reactivate`. See
+// notes/DESIGN_ACTIVE_TAB_GRAMMAR_SCOPING.md.
+let tabActive = true;
+
+export function setTabActive(v: boolean): void {
+  tabActive = v;
+}
+
+export function getTabActive(): boolean {
+  return tabActive;
+}
+
 /** Enqueue a newly-codeworded wrapper for the next Put. */
 export function queuePut(w: ElementWrapper): void {
   pendingPuts.add(w);
@@ -213,6 +230,10 @@ export function scheduleSync(reason: string): void {
  */
 export async function syncNow(reason: string): Promise<void> {
   if (!isAlphabetLoaded()) return;
+  // This tab isn't the active tab — its push would be rejected by the relay
+  // and clobber the focused tab. Skip; pending state is preserved for the
+  // republish on reactivation.
+  if (!tabActive) return;
 
   // Drain pendingPuts. Snapshot + clear before any await so codewords
   // claimed during the post round-trip re-queue for the next push.
@@ -257,6 +278,13 @@ export async function syncNow(reason: string): Promise<void> {
     // Plugin doesn't report deletes in `succeeded`/`failed`, but it
     // honors them as long as the batch itself didn't error. On error,
     // postBatch restores pendingDeleteCodewords for us.
+    if (resp.result === 'inactive') {
+      // Relay suppressed the push: we just learned this tab is inactive.
+      // postBatch drained the deletes, so restore them for the republish.
+      setTabActive(false);
+      pendingDeleteCodewords.push(...drainedDeletes);
+      return;
+    }
     if (resp.result === 'ok') {
       for (const cw of drainedDeletes) sentCodewords.delete(cw);
     }
@@ -282,6 +310,15 @@ export async function syncNow(reason: string): Promise<void> {
       ...sessionMeta,
       elements: chunk.map(w => w.scanned),
     });
+    if (resp.result === 'inactive') {
+      // Relay suppressed the push mid-flush: this tab is inactive. Re-queue
+      // the not-yet-pushed puts and the deletes that rode this batch, then
+      // stop. The republish on reactivation will flush everything cleanly.
+      setTabActive(false);
+      for (const w of puts.slice(start)) pendingPuts.add(w);
+      pendingDeleteCodewords.push(...deletesRidingHere);
+      return;
+    }
     if (resp.failed.length > 0) {
       const failedSet = new Set(resp.failed.map(f => f.codeword));
       for (const w of chunk) {

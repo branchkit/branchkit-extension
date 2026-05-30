@@ -84,7 +84,7 @@ export interface GrammarBatchFailure {
 }
 
 export interface GrammarBatchResponse {
-  result: 'ok' | 'error';
+  result: 'ok' | 'error' | 'inactive';
   succeeded: string[];
   failed: GrammarBatchFailure[];
 }

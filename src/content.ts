@@ -99,6 +99,8 @@ import {
   postBatch,
   scheduleSync,
   syncNow,
+  getTabActive,
+  setTabActive,
 } from './labels/label-sync';
 
 // --- Idempotency guard ---
@@ -1299,6 +1301,12 @@ async function processScanBatch(
   sessionMeta: { bundle_id: string; hint_visibility: HintVisibility; app_id: string; table_id: string },
   adapter: ReturnType<typeof getActiveAdapter>,
 ): Promise<void> {
+  // Active-tab scoping: a backgrounded tab must not push grammar (its REPLACE
+  // would clobber the focused tab's global hint vocabulary). Skip the whole
+  // batch — claim, POST, and paint. republishForActivation rebuilds on
+  // reactivation. See notes/DESIGN_ACTIVE_TAB_GRAMMAR_SCOPING.md.
+  if (!getTabActive()) return;
+
   // Sync slab 1: exclusions + dedup + candidate construction. Measured
   // separately from the surrounding awaits so the recorded ms reflects
   // actual main-thread block time, not wall-clock through claim+POST.
@@ -1372,6 +1380,15 @@ async function processScanBatch(
     table_id: sessionMeta.table_id,
     elements: candidates.map(w => w.scanned),
   });
+
+  if (resp.result === 'inactive') {
+    // Went inactive mid-scan (this tab was active when the batch started but
+    // got backgrounded before the push landed). Nothing reached the plugin:
+    // release the claimed labels without attaching or painting.
+    setTabActive(false);
+    for (const w of candidates) w.releaseLabel();
+    return;
+  }
 
   // Sync slab 2: response partitioning, attach loop, paint, observer
   // surfacing. Everything after the POST-await is synchronous; if any
@@ -1626,6 +1643,30 @@ function rescanForNav(fromCache: boolean, reason: string): void {
   }
 }
 
+// This tab just became the active tab. While backgrounded, the relay
+// suppressed every grammar push (active-tab scoping), so the plugin holds no
+// vocabulary for this tab and `tabActive` is false. Flip it back on and
+// re-push the whole store from a fresh session so this tab becomes the sole,
+// complete contributor to the global hint collections. Mirrors the
+// from-cache rescan path. See notes/DESIGN_ACTIVE_TAB_GRAMMAR_SCOPING.md.
+function republishForActivation(reason: string): void {
+  setTabActive(true);
+  // The plugin cleared this tab's session when it was backgrounded; rotate to
+  // a fresh session id so the re-push rebuilds the plugin's per-frame view
+  // cleanly. rotateSession also resets the delta-sync mirror, so every live
+  // codeword needs re-Putting below.
+  rotateSession();
+  void (async () => {
+    dropDisconnectedWrappers();
+    for (const w of store.all) {
+      if (w.scanned.codeword) queuePut(w);
+    }
+    await syncNow(reason);
+    // Reconciliation walk: pick up anything that changed while backgrounded.
+    setTimeout(() => { void doScanBatched(); }, 300);
+  })();
+}
+
 // --- Message Listener (from background / voice) ---
 
 chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {
@@ -1649,6 +1690,8 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       hideHints();
     } else if (action === 'rescan') {
       pageSession.onUrlChange(params?.from_cache === 'true', params?.reason ?? '');
+    } else if (action === 'reactivate') {
+      republishForActivation(params?.reason ?? 'tab_activated');
     } else if (action === 'set_badge_mode' && params?.mode) {
       chrome.storage.sync.set({ badgeDisplayMode: params.mode });
     } else if (action === 'scroll' || action === 'scroll_to_element' || action === 'scroll_to_percent') {
