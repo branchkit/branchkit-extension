@@ -1,8 +1,31 @@
 # Investigation — Firefox "extension is slowing things down" on YouTube /watch
 
-**Status:** unresolved on YouTube /watch worst case. Most pages and YouTube homepage are fixed (68% → 0–8% sustained CPU). YouTube /watch during scroll still hits ~36% spikes and the tab can wedge on heavy mutation bursts.
+**Status:** reposition cost paths resolved; discovery churn remains the open root cause. Most pages and YouTube homepage are fixed (68% → 0–8% sustained CPU). On YouTube /watch the two reposition paths (scroll + deferred/ResizeObserver) are now scoped to drifted badges and no longer dominate. The unattributed-to-YouTube stalls persist, but in real-Firefox driver runs at 5000+ wrappers the unresponsive-script warning no longer reproduces.
 
 **Audience:** a fresh agent picking up this work cold. The session that produced this doc burned through 8+ iterations on the symptom, made real but incomplete progress, and stepped back to write this up. Rango handles YouTube /watch without this problem; we have a local copy at `/private/tmp/rango/` to compare against.
+
+---
+
+## Update — 2026-05-30 (reposition paths resolved; real-Firefox harness landed)
+
+A later session built the tooling the original doc lacked (a way to drive **real** Firefox with the live extension and measure the freeze ourselves) and resolved the reposition cost paths. What changed:
+
+**New harness (committed):**
+- `scripts/_drive-firefox-youtube.mjs` — drives real Firefox (playwright-webextext, `installTemporaryAddon`) on /watch with the nesting path forced (`layout.css.anchor-positioning.enabled: false`), tall viewport + dwelling deep-scroll to reproduce the heavy state. Reads perf via `document.documentElement.dataset.branchkitPerf`. `BK_EXT=<dir>` selects an alternate build for A/B.
+- `scripts/_drive-firefox-control.mjs` — same page/soak with NO extension and a mirrored page-injected watchdog, to attribute stalls to YouTube's own work.
+- `scripts/_watch-perf.py` — reads the JSONL trail, surfaces CPU share / longtasks / reposition buckets and watchdog stall attribution.
+- Watchdog stall attribution (perf-counters.ts): a breadcrumb ring splits each ≥100ms main-thread block into `trackedMs` (our instrumented JS) vs `unattributedMs` (browser render/paint of injected DOM, or page script).
+
+**Fixes landed:**
+- `8b2c8fe` — window-scroll reposition scoped to drifted badges.
+- `0525e98` — deferred/ResizeObserver/mutation/focus/transition reposition also scoped to drifted (was full-replace 'all'). Interleaved real-Firefox A/B at ~4500 wrappers: total reposition CPU −43%, full-replace path −73%. Window `resize` stays 'all' for genuine global layout/clamping changes.
+
+**Key findings from the heavy-state repro (5235–5449 wrappers, ~200 painted badges):**
+- Every main-thread stall is **70–95% unattributed** (YouTube's own layout/paint). The extension-off control stalls as hard or harder than extension-on — YouTube alone blocks the main thread up to ~1s during comment-load scroll.
+- Our JS is the minority of each stall, and the recurring our-JS labels are `moCallback` + `processMutations` + `discoverInSubtree` + `drainDiscovery` — i.e. the **mutation/discovery pipeline**, exactly the documented open root cause below. The reposition trims removed a *different* cost path.
+- **`wrapperCount` climbed to 5000+ and did not plateau** within a 60s soak (peak == final). Possible leak: wrappers may not be released as YouTube recycles/virtualizes comment DOM. This amplifies every `store.all`-iterating loop over time. Unconfirmed — needs a dwell-then-idle test watching `wrapperCount` + `wrapperLimboCount`.
+
+**Already fixed since this doc was written:** the trail-URL sender bug (step 6 below) — content now sends `url: location.href` (content.ts shipPerfReport) and background prefers it over `_sender.url` (background.ts ~959). No longer an action item.
 
 ---
 
@@ -93,14 +116,14 @@ There are local comparison scripts in `scripts/_rango-compare.mjs` and `scripts/
 
 ## Suggested next steps for a fresh investigation
 
-In rough order:
+In rough order (updated 2026-05-30 — the harness now lets you measure each change in real Firefox via `scripts/_drive-firefox-youtube.mjs`; A/B with `BK_EXT`):
 
-1. **Run Rango on the same YouTube /watch tab.** Confirm it doesn't trip the warning. If it does, the premise changes.
-2. **Diff our `processMutations` against Rango's `mutationCallback`.** Look specifically for what Rango does *less* of, not more. Use `/private/tmp/rango/src/content/wrappers/ElementWrapper.ts:225-278`.
-3. **Check Rango's `deepGetElements` cost** vs our `deepQuerySelectorAll`. If Rango is materially cheaper per-walk, port the technique.
-4. **Consider a cheap pre-filter on added roots.** Before enqueueing `scheduleDiscovery(node)`, do something like `if (!node.querySelector(HINTABLE_SELECTOR) && !node.matches(HINTABLE_SELECTOR)) skip`. This is itself a DOM walk but native + bailable; might save the deeper filter pipeline cost on most YouTube mutations.
-5. **Consider ancestor-dedup in `pendingDiscoveryRoots`.** If A contains B and both are queued, process A and skip B. Currently `discoverInSubtree` will redundantly re-walk B's subtree as part of A's, then walk B again from B itself.
-6. **Fix the trail URL bug** (see above) so future debugging isn't confused by sender vs current URL.
+1. **Confirm whether `wrapperCount` leaks.** Dwell-scroll then idle and watch `wrapperCount` + `wrapperLimboCount` in the trail. If it doesn't plateau as YouTube recycles comment DOM, that's a release gap amplifying every `store.all` loop — fix it first; it's cross-cutting.
+2. **Cheap pre-filter on added roots.** Before enqueueing `scheduleDiscovery(node)`, do `if (!node.querySelector(HINTABLE_SELECTOR) && !node.matches(HINTABLE_SELECTOR)) skip`. Native + bailable; should save the deeper filter pipeline cost on the ~4000 mutations/sec that add nothing actionable. This is the most direct hit on the documented root cause.
+3. **Ancestor-dedup in `pendingDiscoveryRoots`.** If A contains B and both are queued, process A and skip B. Currently `discoverInSubtree` redundantly re-walks B's subtree as part of A's, then walks B again from B itself.
+4. **Diff our `processMutations` against Rango's `mutationCallback`.** Look specifically for what Rango does *less* of, not more. Use `/private/tmp/rango/src/content/wrappers/ElementWrapper.ts:225-278`. Then check Rango's `deepGetElements` cost vs our `deepQuerySelectorAll`; port if materially cheaper per-walk.
+
+**Done since the original list:** the trail-URL sender bug is fixed (see the 2026-05-30 update note above). Running Rango side-by-side is still worth doing but no longer blocks — the real-Firefox driver already measures our own builds directly.
 
 ## What to commit / what to keep
 
