@@ -23,7 +23,6 @@ import { cacheLayout, cacheVisibility, clearLayoutCache, peekCachedRect } from '
 import { placeBadges, placeOne, clearPlacement } from './placement';
 import { invalidateProbe } from './placement/rango';
 import { activateElement, type ActivationResult } from './event-sequence';
-import { accessibleName } from './accessible-name';
 import {
   emitActivatePath,
   elementSnap,
@@ -78,10 +77,9 @@ import {
   type RuleEntry,
 } from './domain-rules';
 import { loadDomainRules, onDomainRulesChanged, ruleEqual } from './domain-rules-storage';
-import { generateSelector } from './selector-generator';
 import { sweepDisconnectedAfterBatch } from './batch-sweep';
 import { filterNewBatchRefs } from './batch-dedup';
-import type { ResolveHintResponse } from './types';
+import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
 
 // --- Idempotency guard ---
 //
@@ -1814,26 +1812,6 @@ function quiesceOrphan(): void {
   console.warn('[BranchKit] content script orphaned (extension reload). Self-quiesced.');
 }
 
-// --- Dispatch result reporting ---
-//
-// After every BRANCHKIT_ACTION the content script attempted, send the
-// outcome to the background script, which forwards it to the plugin's
-// POST /dispatch-result endpoint. The plugin logs it so the actuator.log
-// carries end-to-end visibility from voice transcript through element
-// activation. Failures are swallowed — observability shouldn't break the
-// user-facing flow.
-
-function reportDispatchResult(result: DispatchResult): void {
-  try {
-    chrome.runtime.sendMessage({
-      type: 'DISPATCH_RESULT',
-      payload: result,
-    } as Message);
-  } catch {
-    // Extension context invalidated; nothing useful to do.
-  }
-}
-
 // --- BK_ACTIVATE_PATH diagnostic ---
 //
 // Every browser.activate dispatch emits one PLUGIN_DEBUG_LOG line tagged
@@ -1844,26 +1822,6 @@ function reportDispatchResult(result: DispatchResult): void {
 // docs/completed/DESIGN_HINT_DIAGNOSTICS.md §1 + Q7 and
 // docs/completed/DESIGN_PLUGIN_LOGGING.md §4.
 
-
-// Resolve a visible-hint codeword to a stable selector. Used by the
-// options page (via background) to convert "ape deck" into something like
-// `a.deleteBtn` for a domain rule entry.
-function resolveHintLocally(codeword: string): ResolveHintResponse {
-  const wrapper = store.byCodeword(codeword);
-  if (!wrapper) {
-    return { ok: false, reason: `Codeword "${codeword.trim()}" not visible in this frame.` };
-  }
-  const el = wrapper.element;
-  if (!el.isConnected) {
-    return { ok: false, reason: 'Element is no longer in the DOM.' };
-  }
-  return {
-    ok: true,
-    selector: generateSelector(el),
-    tagName: el.tagName.toLowerCase(),
-    accessibleName: accessibleName(el),
-  };
-}
 
 // Truncate the frame URL for log readability. Includes path but not query
 // strings (which often carry session data). Capped to 200 chars.
@@ -1886,7 +1844,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
   }
 
   if (message.type === 'RESOLVE_HINT') {
-    sendResponse(resolveHintLocally(message.codeword));
+    sendResponse(resolveHintLocally(store, message.codeword));
     return false;
   }
 
