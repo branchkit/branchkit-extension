@@ -2174,7 +2174,16 @@ window.addEventListener('scroll', () => scheduleDeferredReposition(), { passive:
 // (animated dropdowns, sibling row expansion, :focus-within rules)
 // that don't surface as a window scroll/resize or a DOM mutation —
 // the classic "click → hints look stale" case.
-onContainerResize(scheduleReposition);
+//
+// Debounced (not direct scheduleReposition) for the same reason scroll
+// is: on churny pages (YouTube /watch, where comment threads + player +
+// chapters resize continuously during scroll as content lazy-loads) the
+// RO fires ~15/sec, and each direct call repositions every visible badge
+// (400-1100 in always-mode). That made placeBadges:reposition the
+// dominant CPU bucket during scroll. Coalescing to one reposition after
+// layout settles trades a ~100ms lag on resize-driven repositions —
+// imperceptible mid-scroll, same trade already accepted for scroll.
+onContainerResize(scheduleDeferredReposition);
 
 // Deferred reposition for signals that hint "layout is about to settle":
 // - focusin/focusout: :focus-within can resize parents, focus-driven
@@ -2327,7 +2336,7 @@ const rebindCounters: RebindCounters = newRebindCounters();
 function discoverInSubtree(root: Element): number {
   const __cpuStart = performance.now();
   let added = 0;
-  const result = scanElements(root, (el) => store.findWrapperFor(el) !== undefined);
+  const result = scanElements(root, (el) => store.findWrapperFor(el) !== undefined, true);
   applyUserRuleToScan(result, root);
 
   // Limbo wrappers seen by every iteration in this pass — gathered once
@@ -2918,7 +2927,14 @@ const observer = new MutationObserver((records) => {
   }
 
   processMutations(foreign);
-  if (hintsVisible) scheduleReposition();
+  // Debounced, not direct: on churny pages (YouTube /watch) this callback
+  // fires many times/sec as comments/player/chapters lazy-load during
+  // scroll. Each direct scheduleReposition() coalesces only to the next
+  // rAF, so reposition still ran ~once/frame on every visible badge —
+  // the dominant scroll-time CPU bucket. A mutation batch means "layout
+  // may have shifted"; coalescing to one reposition after mutations
+  // settle is the same trade already accepted for scroll/resize.
+  if (hintsVisible) scheduleDeferredReposition();
   recordCpu('moCallback', performance.now() - __cpuStart);
 });
 
