@@ -1588,7 +1588,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       hideHints();
     } else if (action === 'rescan') {
       const t0 = performance.now();
-      chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_rescan_received', data: { url: window.location.href, from_cache: params?.from_cache === 'true' } } as Message).catch(() => {});
+      chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_rescan_received', data: { url: window.location.href, from_cache: params?.from_cache === 'true', reason: params?.reason ?? '' } } as Message).catch(() => {});
 
       if (params?.from_cache === 'true') {
         // Fast path for app-refocus rescans: drop dead wrappers, then

@@ -1160,9 +1160,49 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
 // executeScript can reach it. Pinging first keeps this a no-op for
 // tabs whose manifest content_scripts already ran.
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (changeInfo.status !== 'complete') return;
-  void ensureContentScriptInjected(tabId);
+  if (changeInfo.status === 'complete') {
+    void ensureContentScriptInjected(tabId);
+    return;
+  }
+  // SPA navigation (History API pushState/replaceState): the tab's URL
+  // changed with no document reload. Chrome reports this as a `url`-only
+  // changeInfo (no `status` transition — a full load carries
+  // `status: 'loading'` alongside the url). Without this branch the
+  // content script has no "the page is now a different page" signal and
+  // relies entirely on absorbing the mutation firehose to notice the new
+  // page — the exact path that trips the unresponsive-script killer on
+  // YouTube /watch. Route the change into the content script's existing
+  // bounded rescan (from_cache: drop dead wrappers, re-sync grammar, then
+  // one deferred DOM walk) instead. We can't detect this from the content
+  // script: its History API patch would run in the isolated world and
+  // never see the page's main-world pushState calls.
+  if (changeInfo.url && changeInfo.status == null && isHintableUrl(changeInfo.url)) {
+    scheduleSpaRescan(tabId);
+  }
 });
+
+// Coalesce bursts of History-API URL changes (SPAs often fire several
+// pushState/replaceState calls settling on one route) into a single
+// bounded rescan per tab.
+const SPA_RESCAN_DEBOUNCE_MS = 150;
+const spaRescanTimers = new Map<number, ReturnType<typeof setTimeout>>();
+
+function isHintableUrl(url: string): boolean {
+  return /^https?:\/\//.test(url);
+}
+
+function scheduleSpaRescan(tabId: number): void {
+  const existing = spaRescanTimers.get(tabId);
+  if (existing) clearTimeout(existing);
+  spaRescanTimers.set(tabId, setTimeout(() => {
+    spaRescanTimers.delete(tabId);
+    forwardDebugLog('pipeline.bg_rescan_dispatched', { tab_id: tabId, source: 'spa_nav' });
+    chrome.tabs.sendMessage(tabId, {
+      type: 'BRANCHKIT_ACTION',
+      payload: { action: 'rescan', params: { from_cache: 'true', reason: 'spa_nav' } },
+    } as Message).catch(() => {});
+  }, SPA_RESCAN_DEBOUNCE_MS));
+}
 
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
   if (windowId === chrome.windows.WINDOW_ID_NONE) return;
@@ -1203,6 +1243,11 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     // Tab closed: end its hint session (no badges to hide — tab is gone —
     // but the plugin's hints tag still needs clearing).
     forwardHintsSessionEnd('tab_closed', tabId);
+  }
+  const pendingSpaRescan = spaRescanTimers.get(tabId);
+  if (pendingSpaRescan) {
+    clearTimeout(pendingSpaRescan);
+    spaRescanTimers.delete(tabId);
   }
   purgeTab(tabId);
 });
