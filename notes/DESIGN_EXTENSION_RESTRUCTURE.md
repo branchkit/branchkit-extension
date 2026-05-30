@@ -379,11 +379,25 @@ are referenced throughout the file — relocating them in one diff is exactly th
 freeze-risky monolith surgery the restructure exists to avoid. Instead the
 session delegates `teardown(reason)` to the existing `quiesceOrphan` body and
 the orphan path routes through `pageSession.teardown('orphan')`. Behavior
-byte-identical; `id` delegates to `label-sync.getSessionId`. (2) Migrate the
-module-scope observer/timer state into the instance, incrementally. (3) Route
-the `rescan` action and `pageshow` through `onUrlChange`/`restore`. Each step
-keeps `npm test` green and is independently revertable; the final commit leaves
-no module-scope lifecycle state behind.
+byte-identical; `id` delegates to `label-sync.getSessionId`. (2) **Mutable
+lifecycle state done 2026-05-30.** Migrate the module-scope observer/timer
+state into the instance, incrementally. Landed across three revertable commits:
+the per-frame primitives (`myFrameId`, discovery rAF scheduling, the three
+reposition timers, `visibilityMOConnected`), then `hintsVisible`, then the
+`orphaned` flag (folded into `PageSession.toreDown` via the `isTornDown`
+getter). **What deliberately stays in module scope: the eight observer
+singletons** (`store`, `tracker`, `observer`, `resizeObserver`, `visibilityIO`,
+`visibilityMO`, `attentionObserver`, `badgeReattachObserver`). They were
+verified to be `const`, never reassigned — i.e. stable references, not mutable
+*state*; their only lifecycle interaction is disconnect-on-teardown, already
+routed through `quiesceOrphan`. Relocating their *construction* (each carries a
+multi-hundred-line inline callback referencing free functions defined all over
+the file) onto the instance is the entangled-boot relocation step (1) explicitly
+deferred, and is coupled to the §3.2 stage extraction — so it waits for the boot
+relocation / stage cut rather than being forced as field assignment now. (3)
+Route the `rescan` action and `pageshow` through `onUrlChange`/`restore`. Each
+step keeps `npm test` green and is independently revertable; the final commit
+(after boot relocation) leaves no module-scope lifecycle state behind.
 
 **Explicitly out of scope for this cut / do not touch:** the stage interfaces
 (§3.2 — `DiscoveryStage`/`LifecycleStage`/`LabelStage`/`RenderStage`) and
