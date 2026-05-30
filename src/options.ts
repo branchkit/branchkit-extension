@@ -12,19 +12,19 @@ import type {
   Matcher,
   RuleEntry,
   RevealMethod,
-} from './domain-rules';
-import { matchRule } from './domain-rules';
+} from './rules/domain-rules';
+import { matchRule } from './rules/domain-rules';
 import {
   loadDomainRules,
   saveDomainRules,
   onDomainRulesChanged,
   rulesEqual,
-} from './domain-rules-storage';
+} from './rules/domain-rules-storage';
 import {
   suggestPattern,
   isValidSelector,
   validatePattern,
-} from './options-helpers';
+} from './rules/options-helpers';
 import {
   KIND_META,
   matcherSummary,
@@ -32,7 +32,7 @@ import {
   renderResolvePreview,
   setFeedbackError,
   clearFeedback,
-} from './rule-ui';
+} from './rules/rule-ui';
 
 // --- State ---
 

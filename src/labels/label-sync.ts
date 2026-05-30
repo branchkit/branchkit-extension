@@ -33,12 +33,12 @@
  * (step 2). See notes/DESIGN_EXTENSION_RESTRUCTURE.md.
  */
 
-import { ElementWrapper, WrapperStore } from '../element-wrapper';
+import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
 import { GrammarBatchRequest, GrammarBatchResponse, Message } from '../types';
-import { isAlphabetLoaded } from '../words';
-import { DEFAULT_SCAN_BATCH_SIZE } from '../scanner';
-import { sweepDisconnectedAfterBatch } from '../batch-sweep';
-import { getHintVisibility } from '../core/config';
+import { isAlphabetLoaded } from './words';
+import { DEFAULT_SCAN_BATCH_SIZE } from '../scan/scanner';
+import { sweepDisconnectedAfterBatch } from '../scan/batch-sweep';
+import { getHintVisibility } from '../config';
 
 /**
  * Content.ts-owned collaborators the catchup sync needs. Injected once at

@@ -1,4 +1,4 @@
-import { ElementWrapper } from '../element-wrapper';
+import { ElementWrapper } from '../scan/element-wrapper';
 import { getCachedDims, getCachedRect, getCachedStyle, isClipAncestor } from '../layout-cache';
 import { PlacementStrategy } from './strategy';
 import { computePlacement, Nudge } from './compute';

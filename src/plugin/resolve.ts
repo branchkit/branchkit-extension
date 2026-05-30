@@ -11,9 +11,9 @@
  * carve leaf concerns). See notes/DESIGN_EXTENSION_RESTRUCTURE.md.
  */
 
-import { WrapperStore } from '../element-wrapper';
-import { generateSelector } from '../selector-generator';
-import { accessibleName } from '../accessible-name';
+import { WrapperStore } from '../scan/element-wrapper';
+import { generateSelector } from '../scan/selector-generator';
+import { accessibleName } from '../scan/accessible-name';
 import { DispatchResult, Message, ResolveHintResponse } from '../types';
 
 /**

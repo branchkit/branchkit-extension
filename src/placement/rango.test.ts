@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { ElementWrapper, TextProbeOffset } from '../element-wrapper';
+import { ElementWrapper, TextProbeOffset } from '../scan/element-wrapper';
 import { ScannedElement } from '../types';
 import { getOrComputeProbe, invalidateProbe, type TextProbe } from './rango';
 

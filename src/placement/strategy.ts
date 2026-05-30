@@ -1,4 +1,4 @@
-import { ElementWrapper } from '../element-wrapper';
+import { ElementWrapper } from '../scan/element-wrapper';
 
 export interface PlacementStrategy {
   name: string;

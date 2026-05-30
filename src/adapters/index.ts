@@ -6,7 +6,7 @@
  */
 
 import { ScannedElement, Category } from '../types';
-import { scanElements, classifyCategory } from '../scanner';
+import { scanElements, classifyCategory } from '../scan/scanner';
 import { quickbaseAdapter } from './quickbase';
 
 export interface CategoryScan {

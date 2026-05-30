@@ -15,9 +15,9 @@ import {
   type DomainRule,
   type RuleEntry,
   type RevealMethod,
-} from './domain-rules';
-import { loadDomainRules, saveDomainRules } from './domain-rules-storage';
-import { suggestPattern, isValidSelector } from './options-helpers';
+} from './rules/domain-rules';
+import { loadDomainRules, saveDomainRules } from './rules/domain-rules-storage';
+import { suggestPattern, isValidSelector } from './rules/options-helpers';
 import {
   KIND_META,
   matcherSummary,
@@ -25,7 +25,7 @@ import {
   renderResolvePreview,
   setFeedbackError,
   clearFeedback,
-} from './rule-ui';
+} from './rules/rule-ui';
 
 // --- State ---
 

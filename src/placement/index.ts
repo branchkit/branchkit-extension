@@ -3,7 +3,7 @@ export { RangoStrategy } from './rango';
 
 import { PlacementStrategy } from './strategy';
 import { RangoStrategy } from './rango';
-import { ElementWrapper } from '../element-wrapper';
+import { ElementWrapper } from '../scan/element-wrapper';
 
 const strategies: Record<string, () => PlacementStrategy> = {
   rango: () => new RangoStrategy(),

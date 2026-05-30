@@ -6,39 +6,39 @@
  */
 
 import { Category, HintVisibility, ScannedElement, Message, DispatchResult } from './types';
-import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from './words';
-import { scanElements, scanSingle, isHintable, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters, subtreeMaybeHintable } from './scanner';
-import { ElementWrapper, WrapperStore, enterLimbo, isLimboExpired } from './element-wrapper';
-import * as idRegistry from './registry';
-import { computeFingerprint, fingerprintsEqual } from './registry';
-import { bumpRebindCounter, findLimboMatch, newRebindCounters, REBIND_DISTANCE_THRESHOLD_PX, type RebindCounters } from './rebind';
-import { resolveTarget } from './activate-resolution';
-import { IntersectionTracker } from './intersection-tracker';
-import { AttentionObserver } from './attention-observer';
-import { TargetRectStore } from './target-rect-store';
-import { HintBadge, setPositionCaller, clearPositionCaller } from './hints';
-import { onContainerResize } from './container-resize-tracker';
-import { onScrollAncestor, scrollAncestorStats, registeredScrollTargets } from './scroll-ancestor-tracker';
-import { onTargetMutation } from './target-mutation-tracker';
+import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from './labels/words';
+import { scanElements, scanSingle, isHintable, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters, subtreeMaybeHintable } from './scan/scanner';
+import { ElementWrapper, WrapperStore, enterLimbo, isLimboExpired } from './scan/element-wrapper';
+import * as idRegistry from './scan/registry';
+import { computeFingerprint, fingerprintsEqual } from './scan/registry';
+import { bumpRebindCounter, findLimboMatch, newRebindCounters, REBIND_DISTANCE_THRESHOLD_PX, type RebindCounters } from './labels/rebind';
+import { resolveTarget } from './activate/activate-resolution';
+import { IntersectionTracker } from './observe/intersection-tracker';
+import { AttentionObserver } from './observe/attention-observer';
+import { TargetRectStore } from './observe/target-rect-store';
+import { HintBadge, setPositionCaller, clearPositionCaller } from './render/hints';
+import { onContainerResize } from './observe/container-resize-tracker';
+import { onScrollAncestor, scrollAncestorStats, registeredScrollTargets } from './observe/scroll-ancestor-tracker';
+import { onTargetMutation } from './observe/target-mutation-tracker';
 import { cacheLayout, cacheVisibility, clearLayoutCache, peekCachedRect, getCachedRect } from './layout-cache';
 import { placeBadges, placeOne, clearPlacement } from './placement';
 import { invalidateProbe } from './placement/rango';
-import { activateElement, type ActivationResult } from './event-sequence';
+import { activateElement, type ActivationResult } from './activate/event-sequence';
 import {
   emitActivatePath,
   elementSnap,
   type ActivatePathEvent,
-} from './activate-path-log';
-import { captureDebugSnapshot } from './debug-snapshot';
-import { toggleOverlay } from './debug-overlay';
+} from './activate/activate-path-log';
+import { captureDebugSnapshot } from './debug/debug-snapshot';
+import { toggleOverlay } from './render/debug-overlay';
 import {
   CodewordSnapshot,
   takeSnapshot,
   resolveFromSnapshot,
-} from './snapshot';
+} from './activate/snapshot';
 import { ActionDispatcher, CommandRegistry } from './dispatcher';
-import { KeyHandler } from './keyboard';
-import { getActiveAdapter, scanWithAdapter } from './adapters/index';
+import { KeyHandler } from './activate/keyboard';
+import { getActiveAdapter, scanWithAdapter } from './adapters';
 import {
   scroll,
   scrollRegion,
@@ -54,7 +54,7 @@ import {
   type ScrollDirection,
   type ScrollAmount,
   type ScrollRegion,
-} from './scroller';
+} from './activate/scroller';
 import {
   openFindMode,
   closeFindMode,
@@ -64,8 +64,8 @@ import {
   isFindActive,
   handlePostFindKey,
   setFindCallbacks,
-} from './find';
-import { saveReference, resolveReference, listReferences } from './references';
+} from './scan/find';
+import { saveReference, resolveReference, listReferences } from './scan/references';
 import {
   matchRule,
   compileRule,
@@ -76,14 +76,14 @@ import {
   type CompiledRule,
   type DomainRule,
   type RuleEntry,
-} from './domain-rules';
-import { loadDomainRules, onDomainRulesChanged, ruleEqual } from './domain-rules-storage';
-import { filterNewBatchRefs } from './batch-dedup';
+} from './rules/domain-rules';
+import { loadDomainRules, onDomainRulesChanged, ruleEqual } from './rules/domain-rules-storage';
+import { filterNewBatchRefs } from './scan/batch-dedup';
 import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
 import { openLivenessPort } from './plugin/liveness';
-import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './telemetry/message-counters';
-import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot } from './telemetry/perf-counters';
-import { loadConfig, getDisplayMode, getHintVisibility } from './core/config';
+import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './debug/message-counters';
+import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot } from './debug/perf-counters';
+import { loadConfig, getDisplayMode, getHintVisibility } from './config';
 import {
   initLabelSync,
   queuePut,
