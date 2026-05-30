@@ -18,9 +18,9 @@ browser has perfect information about what's near the viewport.
 | 2c | `visibilityMO` targeted recheck | Held — caused render regression in earlier attempt; needs design for CSS-parent transitions before re-attempt |
 | 3 | TargetRectStore shadow (cache + drift sampler) | Done (`421c834`) |
 | 3b | LayoutSignalRouter (write rects on scroll/resize) | Done (`9e1173b`) — window scroll + RO surfaces; overflow-ancestor scroll still ahead |
-| 4 | Flag-gated cutover of `updatePosition` reads | Re-scoped — see "Course correction" |
-| 5 | Delete global rAF reposition sweep | Re-scoped — see "Course correction" |
-| 5b | Overflow-ancestor scroll listeners | **Hard** — but CSS Anchor Positioning sidesteps it on Chromium (see "Course correction") |
+| 4 | Flag-gated cutover of `updatePosition` reads | Dropped standalone; folds into combined 4/5 (Firefox path) — see "Course correction" |
+| 5 | Delete global rAF reposition sweep | Pending — combined with 4 for the Firefox cross-browser path |
+| 5b | Overflow-ancestor scroll listeners | **Hard** — solved on Chromium by the CSS-anchor fast-path (landed `95468e1`); still the open task for Firefox |
 | 6 | Relocate position log to read from store | Ahead |
 
 ## Course correction (2026-05-30)
@@ -132,12 +132,22 @@ abstraction) already anticipated this:
   path unchanged. This is the fork: one positioning strategy selected at
   badge construction by feature support.
 
-Sequencing decision is deferred to the user. The realistic options are:
-(a) build Phase 5b + the combined 4/5 cutover for a correct cross-browser
-store path, or (b) land the Chromium CSS-anchor fast-path first (it
-removes the inner-pane pain on the majority browser and de-risks 5b by
-shrinking its scope to Firefox-only). Either way the standalone,
-flag-gated Phase 4 is not worth building.
+Sequencing decision (resolved 2026-05-30): option (b) — the Chromium
+CSS-anchor fast-path — was built first and **landed** (commit `95468e1`).
+`HintBadge` now forks at construction: when `CSS.supports('anchor-name')`
+&& `CSS.supports('top','anchor(top)')`, the badge sets `anchor-name` on the
+target and positions a body-mounted light-DOM host via `calc(anchor(...))`;
+the compositor tracks the target through every overflow ancestor with no JS
+scroll listener. Verified live (`scripts/_verify-anchor-tracking.mjs`: pinned
+badge held its offset through an inner-pane scroll). Firefox keeps the
+`display:contents` nesting + settle-reposition path unchanged.
+
+That leaves exactly one remaining positioning task — the cross-browser /
+Firefox foundation, option (a): Phase 5b (overflow-ancestor scroll listeners
+writing `TargetRectStore`) + the combined 4/5 cutover (route `placeBadges`
+reads through the store, delete the blanket reposition sweep). This is the
+original Firefox-freeze motivation; it is genuinely new behavior and the
+"Hard" part. The standalone flag-gated Phase 4 remains not worth building.
 
 ## Known limitations (don't reattempt without a new design)
 
