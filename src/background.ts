@@ -1162,28 +1162,29 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === 'complete') {
     void ensureContentScriptInjected(tabId);
-    return;
-  }
-  // SPA navigation (History API pushState/replaceState): the tab's URL
-  // changed with no document reload. Chrome reports this as a `url`-only
-  // changeInfo (no `status` transition — a full load carries
-  // `status: 'loading'` alongside the url). Without this branch the
-  // content script has no "the page is now a different page" signal and
-  // relies entirely on absorbing the mutation firehose to notice the new
-  // page — the exact path that trips the unresponsive-script killer on
-  // YouTube /watch. Route the change into the content script's existing
-  // bounded rescan (from_cache: drop dead wrappers, re-sync grammar, then
-  // one deferred DOM walk) instead. We can't detect this from the content
-  // script: its History API patch would run in the isolated world and
-  // never see the page's main-world pushState calls.
-  if (changeInfo.url && changeInfo.status == null && isHintableUrl(changeInfo.url)) {
-    scheduleSpaRescan(tabId);
   }
 });
 
-// Coalesce bursts of History-API URL changes (SPAs often fire several
-// pushState/replaceState calls settling on one route) into a single
-// bounded rescan per tab.
+// SPA navigation (History API pushState/replaceState, or in-page hash
+// routing): the tab's top-frame URL changes with no document reload, so
+// the content script stays alive but is now looking at a different page.
+// Without a signal it relies entirely on absorbing the mutation firehose
+// to notice — the exact path that trips the unresponsive-script killer on
+// YouTube /watch. We route the change into the content script's existing
+// bounded rescan (from_cache: drop dead wrappers, re-sync grammar, then
+// one deferred DOM walk).
+//
+// We use webNavigation rather than tabs.onUpdated because they are NOT
+// distinguishable by changeInfo alone: a History-API nav on YouTube
+// reports `{status:'loading', url}` then `{status:'complete'}` — exactly
+// like a full document load — so any tabs.onUpdated guess either misses
+// real SPA navs or fires redundant rescans on every full load.
+// onHistoryStateUpdated / onReferenceFragmentUpdated fire ONLY for
+// same-document URL changes, never for full loads, so the full-load path
+// (manifest content_scripts → fresh scan) and the SPA path stay disjoint.
+// We can't detect this from the content script either: its History API
+// patch runs in the isolated world and never sees the page's main-world
+// pushState calls.
 const SPA_RESCAN_DEBOUNCE_MS = 150;
 const spaRescanTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
@@ -1191,6 +1192,20 @@ function isHintableUrl(url: string): boolean {
   return /^https?:\/\//.test(url);
 }
 
+function onSameDocumentNav(details: { tabId: number; frameId: number; url: string }): void {
+  // Top frame only — subframe history changes (ad/embed SPAs) shouldn't
+  // trigger a whole-tab rescan.
+  if (details.frameId !== 0) return;
+  if (!isHintableUrl(details.url)) return;
+  scheduleSpaRescan(details.tabId);
+}
+
+chrome.webNavigation.onHistoryStateUpdated.addListener(onSameDocumentNav);
+chrome.webNavigation.onReferenceFragmentUpdated.addListener(onSameDocumentNav);
+
+// Coalesce bursts of same-document URL changes (SPAs often fire several
+// pushState/replaceState calls settling on one route) into a single
+// bounded rescan per tab.
 function scheduleSpaRescan(tabId: number): void {
   const existing = spaRescanTimers.get(tabId);
   if (existing) clearTimeout(existing);

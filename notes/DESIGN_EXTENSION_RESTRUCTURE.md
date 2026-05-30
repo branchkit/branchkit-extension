@@ -92,8 +92,15 @@ it would be three more module-scoped singletons inside `content.ts`.
   which is exactly the path that trips the unresponsive-script killer. The gap
   is on both sides: content.ts has no `popstate`/`pushState`/`replaceState`
   listener, and `background.ts`'s `tabs.onUpdated` (line 1162) fires only on
-  `changeInfo.status === 'complete'` (full load) — it never inspects
-  `changeInfo.url`, which *does* fire on History-API URL changes. **Good news
+  `changeInfo.status === 'complete'` (full load), so the SPA case is unhandled.
+  **Detection correction (2026-05-30, Playwright):** `tabs.onUpdated` cannot
+  distinguish a History-API nav from a full load. On a YouTube in-site nav it
+  reports `{status:'loading', url}` then `{status:'complete'}` — byte-identical
+  to a full document load — so any `changeInfo.url` guess either misses real SPA
+  navs or fires redundant rescans on every full load. The correct signal is
+  `chrome.webNavigation.onHistoryStateUpdated` (+ `onReferenceFragmentUpdated`
+  for hash routes), which fire *only* for same-document URL changes; this needs
+  the `webNavigation` permission (added 2026-05-30). **Good news
   for step 3:** the reconcile machinery partly exists. content.ts already
   handles a `rescan` action (`background.ts:649` → `content.ts:1903`), today
   triggered only by plugin-connect/focus. `onUrlChange` can route into that
@@ -304,11 +311,12 @@ throughout, and the final step deletes the scaffolding. No big-bang rewrite.
    Wire SPA navigation + nav-time pool purge. This is the first behavior change
    and the one that fixes the user-visible "page 2" bug — ship and validate it
    on its own. Concretely this is three small wires, not a new subsystem:
-   (a) detect the URL change (a `changeInfo.url` branch in `background.ts`'s
-   existing `tabs.onUpdated`, and/or a patched-history listener in the content
-   script); (b) route it into the *existing* bounded `rescan` action path
-   (`content.ts:1903`) instead of the mutation firehose; (c) add the nav-time
-   `purgeTab`/`releaseFrame` call that `background.ts:1207` only does on
+   (a) detect the URL change via `chrome.webNavigation.onHistoryStateUpdated`
+   (+ `onReferenceFragmentUpdated`), top-frame only — *not* a `tabs.onUpdated`
+   `changeInfo.url` guess, which can't separate SPA navs from full loads (see
+   §1.3 detection correction); (b) route it into the *existing* bounded `rescan`
+   action path (`content.ts:1903`) instead of the mutation firehose; (c) add the
+   nav-time `purgeTab`/`releaseFrame` call that `background.ts` only does on
    `onRemoved` today.
 
 4. **Replace stage internals one at a time** behind the stable interfaces:
