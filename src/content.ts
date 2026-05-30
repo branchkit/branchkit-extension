@@ -81,7 +81,7 @@ import { filterNewBatchRefs } from './batch-dedup';
 import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
 import { openLivenessPort } from './plugin/liveness';
 import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './telemetry/message-counters';
-import { recordCpu, resetCpuCounters, resetLongtask, computeCpuShare, cpuBucketsSnapshot, longtaskSnapshot } from './telemetry/perf-counters';
+import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot } from './telemetry/perf-counters';
 import { loadConfig, getDisplayMode, getHintVisibility } from './core/config';
 import {
   initLabelSync,
@@ -2750,6 +2750,7 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
       share: computeCpuShare(advanceShareBaseline),
       buckets: cpuBucketsSnapshot(),
       longtask: longtaskSnapshot(),
+      watchdog: watchdogSnapshot(),
     },
     targetRectStore: {
       size: targetRectStore.size,
@@ -2765,6 +2766,7 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
   resetLifecycleCounters();
   resetCpuCounters();
   resetLongtask();
+  resetWatchdog();
 };
 // Cross-world bridge: content script globals live in the isolated world,
 // so Playwright's page.evaluate (main world) can't call them directly.

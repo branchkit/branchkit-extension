@@ -40,6 +40,30 @@ export function recordCpu(label: string, ms: number): void {
     b.top.sort((a, x) => x.ms - a.ms);
     if (b.top.length > CPU_TOP_N) b.top.length = CPU_TOP_N;
   }
+  // Breadcrumb for watchdog stall attribution (see pushMark). Skip the
+  // `:size:` count-overloaded buckets (their ms field is a target count, not
+  // real time) and the watchdog's own record (self-reference).
+  if (!label.includes(':size:') && label !== 'watchdog:delay') {
+    pushMark(label, ms);
+  }
+}
+
+// Breadcrumb ring of recent recordCpu marks, for attributing a watchdog stall
+// to instrumented work. When the watchdog reports a delay D, the blocking ran
+// during the gap [lastFire, now]; summing the marks whose end-time lands in
+// that gap tells us how much of D was OUR instrumented JS vs. unattributed
+// (browser style/layout/paint of the DOM we injected, or page script — neither
+// shows up in a recordCpu bucket). Fixed circular buffer, no per-call alloc.
+const MARK_RING = 512;
+const markLabel: string[] = new Array(MARK_RING).fill('');
+const markEndAt = new Float64Array(MARK_RING); // performance.now() at record time
+const markMs = new Float64Array(MARK_RING);
+let markHead = 0;
+function pushMark(label: string, ms: number): void {
+  markLabel[markHead] = label;
+  markEndAt[markHead] = performance.now();
+  markMs[markHead] = ms;
+  markHead = (markHead + 1) % MARK_RING;
 }
 
 export function resetCpuCounters(): void {
@@ -198,6 +222,39 @@ const WATCHDOG_INTERVAL_MS = 250;
 const WATCHDOG_RECORD_THRESHOLD_MS = 100;
 let watchdogLastFire = performance.now();
 let watchdogVisibleOnLastFire = document.visibilityState === 'visible';
+
+// Top-N worst stalls with attribution: how much of the stall landed in our
+// instrumented buckets (`trackedMs`) vs. went unaccounted (`unattributedMs` =
+// browser style/layout/paint of injected DOM, or page script). `topLabels`
+// names the heaviest instrumented contributors during the stall window so a
+// JS-side cause can be pinpointed. unattributed ≫ tracked ⇒ not our JS.
+const STALL_TOP_N = 8;
+type WatchdogStall = {
+  ts: number; delayMs: number; trackedMs: number; unattributedMs: number;
+  topLabels: Array<{ label: string; ms: number; count: number }>;
+};
+const watchdogStalls: WatchdogStall[] = [];
+
+function attributeStall(windowStart: number, windowEnd: number): { trackedMs: number; topLabels: Array<{ label: string; ms: number; count: number }> } {
+  const byLabel: Record<string, { ms: number; count: number }> = {};
+  let trackedMs = 0;
+  for (let i = 0; i < MARK_RING; i++) {
+    const at = markEndAt[i];
+    if (at < windowStart || at > windowEnd) continue;
+    const label = markLabel[i];
+    if (!label) continue;
+    const ms = markMs[i];
+    trackedMs += ms;
+    const e = byLabel[label] || (byLabel[label] = { ms: 0, count: 0 });
+    e.ms += ms; e.count++;
+  }
+  const topLabels = Object.entries(byLabel)
+    .map(([label, v]) => ({ label, ms: +v.ms.toFixed(1), count: v.count }))
+    .sort((a, b) => b.ms - a.ms)
+    .slice(0, STALL_TOP_N);
+  return { trackedMs: +trackedMs.toFixed(1), topLabels };
+}
+
 function watchdogTick(): void {
   const now = performance.now();
   const visible = document.visibilityState === 'visible';
@@ -214,6 +271,21 @@ function watchdogTick(): void {
     const delay = Math.max(0, now - expected);
     if (delay > WATCHDOG_RECORD_THRESHOLD_MS) {
       recordCpu('watchdog:delay', delay);
+      // The blocking work ran somewhere in [watchdogLastFire, now]. Attribute
+      // it against the breadcrumb ring captured over that same gap.
+      const { trackedMs, topLabels } = attributeStall(watchdogLastFire, now);
+      const stall: WatchdogStall = {
+        ts: Date.now(),
+        delayMs: +delay.toFixed(1),
+        trackedMs,
+        unattributedMs: +Math.max(0, delay - trackedMs).toFixed(1),
+        topLabels,
+      };
+      if (watchdogStalls.length < STALL_TOP_N || delay > (watchdogStalls[watchdogStalls.length - 1]?.delayMs ?? 0)) {
+        watchdogStalls.push(stall);
+        watchdogStalls.sort((a, b) => b.delayMs - a.delayMs);
+        if (watchdogStalls.length > STALL_TOP_N) watchdogStalls.length = STALL_TOP_N;
+      }
     }
   }
   watchdogLastFire = now;
@@ -221,3 +293,12 @@ function watchdogTick(): void {
   setTimeout(watchdogTick, WATCHDOG_INTERVAL_MS);
 }
 setTimeout(watchdogTick, WATCHDOG_INTERVAL_MS);
+
+export function resetWatchdog(): void {
+  watchdogStalls.length = 0;
+}
+
+/** Worst attributed stalls for the snapshot's `cpu.watchdog`. */
+export function watchdogSnapshot(): { stalls: WatchdogStall[] } {
+  return { stalls: watchdogStalls.map(s => ({ ...s, topLabels: s.topLabels.map(t => ({ ...t })) })) };
+}

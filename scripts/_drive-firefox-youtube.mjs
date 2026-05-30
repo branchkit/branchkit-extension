@@ -86,6 +86,7 @@ async function readPerf() {
         longtaskCount: p.cpu?.longtask?.count,
         longtaskMax: p.cpu?.longtask?.maxMs,
         longtaskTotal: p.cpu?.longtask?.totalMs,
+        stalls: p.cpu?.watchdog?.stalls || [],
       };
     } catch (e) { return { present: false, hosts, parseError: String(e) }; }
   });
@@ -125,6 +126,18 @@ console.log(`reposition CPU (all):    Δ=${(after.reposMs - before.reposMs).toFi
 console.log(`scroll-trim fires:       Δ=${after.scrollCount - before.scrollCount}  (drifted-scoped path)`);
 console.log(`scroll-trim CPU:         Δ=${(after.scrollMs - before.scrollMs).toFixed(1)}ms over the soak`);
 console.log(`longtasks:               before count=${before.longtaskCount}/max=${before.longtaskMax}ms; after count=${after.longtaskCount}/max=${after.longtaskMax}ms (Δtotal=${(after.longtaskTotal - before.longtaskTotal).toFixed(0)}ms)`);
+
+console.log('\n--- Watchdog stalls (main-thread blocks; Firefox has no Long Tasks API) ---');
+if (!after.stalls.length) {
+  console.log('none recorded (no block exceeded the 100ms threshold)');
+} else {
+  for (const s of after.stalls) {
+    const top = s.topLabels.map(t => `${t.label}=${t.ms}ms×${t.count}`).join(', ') || '(no instrumented marks)';
+    const verdict = s.unattributedMs > s.trackedMs ? 'NOT-our-JS (browser render / page script)' : 'OUR-JS';
+    console.log(`  stall ${s.delayMs}ms: tracked=${s.trackedMs}ms unattributed=${s.unattributedMs}ms → ${verdict}`);
+    console.log(`    top: ${top}`);
+  }
+}
 
 await page.screenshot({ path: '/tmp/firefox-youtube.png' }).catch(() => {});
 console.log('\nscreenshot: /tmp/firefox-youtube.png');

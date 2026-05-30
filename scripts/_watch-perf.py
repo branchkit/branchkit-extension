@@ -18,6 +18,7 @@ def bucket(cpu, name):
 
 rows = []
 prev_by_url = {}
+stalls = {}  # (ts, delayMs) -> stall dict, de-duped across snapshots
 for line in sys.stdin:
     try:
         e = json.loads(line)
@@ -27,6 +28,8 @@ for line in sys.stdin:
     cpu = s.get("cpu") or {}
     lt = cpu.get("longtask") or {}
     url = e.get("url", "")
+    for st in ((cpu.get("watchdog") or {}).get("stalls") or []):
+        stalls[(st.get("ts"), st.get("delayMs"))] = st
     cur = {
         "ltCount": lt.get("count", 0),
         "ltTotal": lt.get("totalMs", 0.0),
@@ -61,3 +64,19 @@ if rows:
     print("(want: longtasks ~0, max well under ~50ms, cpu% low during scroll)")
 else:
     print("--- no active (non-idle) windows in trail yet ---")
+
+# Watchdog stall attribution (cpu.watchdog.stalls): each main-thread block,
+# split into OUR instrumented JS (trackedMs) vs unattributed (browser style/
+# layout/paint of injected DOM, or page script). This is the freeze signal on
+# Firefox, which lacks the Long Tasks API. unattributed >> tracked ⇒ not our JS.
+if stalls:
+    print("\n--- Worst watchdog stalls (main-thread blocks) ---")
+    for st in sorted(stalls.values(), key=lambda x: -(x.get("delayMs") or 0))[:10]:
+        tracked = st.get("trackedMs", 0)
+        unattr = st.get("unattributedMs", 0)
+        verdict = "NOT-our-JS (browser render / page script)" if unattr > tracked else "OUR-JS"
+        top = ", ".join("{}={}ms x{}".format(t.get("label"), t.get("ms"), t.get("count"))
+                        for t in st.get("topLabels") or []) or "(no instrumented marks)"
+        print("  {:>6.0f}ms block | tracked={:>6.1f}ms unattributed={:>6.1f}ms -> {}".format(
+            st.get("delayMs") or 0, tracked, unattr, verdict))
+        print("     top: {}".format(top))
