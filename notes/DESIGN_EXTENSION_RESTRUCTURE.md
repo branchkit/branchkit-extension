@@ -310,9 +310,79 @@ region once, push grammar once — instead of absorbing the mutation firehose.
 This directly addresses "page 2 doesn't register" and removes the dependency on
 the 4000-mutations/sec path for the common navigation case.
 
-Pool purge on navigation (the `background.ts` gap) becomes the SW-side half of
-the same lifecycle: `PageSession.teardown`/`onUrlChange` is the authoritative
-signal, not `onRemoved` alone.
+Codeword reclamation on navigation is the **content-side** half of this
+lifecycle, not a background purge. `PageSession.onUrlChange`/`teardown` releases
+the gone wrappers' codewords through the existing `releaseLabel` path (the
+content script owns codeword truth; the pool is a derived cache). An earlier
+draft of this section proposed a SW-side `purgeTab`/`releaseFrame` on nav as
+"the authoritative signal" — that was investigated and rejected 2026-05-30 (see
+§5 step 3): a background purge races the content script's local codeword
+ownership and corrupts the plugin grammar. Background `purgeTab` stays wired to
+`onRemoved` (tab close) only.
+
+#### 3.3.1 Concrete scoping (2026-05-30) — mapping to the code as it stands
+
+The original §3.3 sketch predates several things that have since landed. This
+subsection grounds `PageSession` in `content.ts` as it actually exists today so
+the extraction is a mechanical lift, not a redesign. **Scope of this first
+cut: introduce the object as a transitional adapter that *owns* the existing
+boot/teardown/nav surface; do not yet collapse the observer zoo or build the
+stage interfaces (§3.2).** Those follow once the seam exists.
+
+**What already exists (so PageSession wraps it, doesn't invent it):**
+- **`teardown()` already exists as `quiesceOrphan` (`content.ts:1525`).** It is
+  idempotent and disconnects every module-scope observer (`observer`,
+  `badgeReattachObserver`, `tracker.disconnectAll`, `resizeObserver`,
+  `visibilityIO`, `visibilityMO`), cancels `discoveryFrame`, and removes badge
+  hosts. This is the teardown body; `PageSession.teardown(reason)` generalizes
+  it (orphan-reload is one `reason`; nav-unload and a future explicit stop are
+  others).
+- **`onUrlChange` detection already ships.** `background.ts` listens on
+  `webNavigation.onHistoryStateUpdated`/`onReferenceFragmentUpdated` (top-frame,
+  correctly distinguishes SPA nav from full load) → `scheduleSpaRescan` →
+  dispatches the bounded `rescan` action into `content.ts:1596` (the `from_cache`
+  path: `dropDisconnectedWrappers` + `syncNow`). `PageSession.onUrlChange`
+  becomes the **content-side handler** for that dispatched action — it does NOT
+  re-implement detection. **Decision: keep the background-driven signal; do not
+  monkey-patch `history.pushState`/`replaceState` in the page main world** as the
+  original §3.3 suggested. The background `webNavigation` signal is already
+  correct, permissioned, and avoids reaching into the page's globals.
+- **`id` is already extracted.** The module-scoped `sessionId` the sketch wanted
+  to replace now lives in `labels/label-sync.ts` (`getSessionId`/`rotateSession`).
+  `PageSession` references it rather than owning a second copy; `rotateSession`
+  stays the alphabet-swap reset.
+- **bfcache restore (`pageshow` persisted, `content.ts:1460`)** is a fourth
+  lifecycle entry point the sketch omitted. `PageSession` owns it as a
+  `restore()`/soft-rescan path alongside `onUrlChange`.
+
+**What PageSession absorbs from module scope (the lift):** the observer/timer
+zoo currently free-floating at module top — `observer`, `badgeReattachObserver`,
+`tracker`, `resizeObserver`, `visibilityIO`/`visibilityMO`(+`visibilityMOConnected`),
+`attentionObserver`, the reposition timers (`scrollRepositionTimer`,
+`deferredRepositionTimer`, `hugeMutationTimer`), `discoveryFrame`, `hintsVisible`,
+`myFrameId`, and `orphaned`. Construction of these moves into `start()`; their
+teardown is the existing `quiesceOrphan` body.
+
+**Per-frame.** One `PageSession` per content-script context (resolves the §7
+open question in favor of per-frame). It matches the current per-frame injection
+model and the plugin already aggregates across frames; no top-frame coordinator
+in this cut.
+
+**Sequencing (clean end state via transitional seam).** (1) Add
+`lifecycle/page-session.ts` with a `PageSession` that, on `start()`, calls the
+*existing* top-level boot statements (moved into the method body) and on
+`teardown()` calls the existing `quiesceOrphan` logic — behavior byte-identical,
+the module just instantiates one `PageSession` instead of running boot at import
+time. (2) Migrate the module-scope observer/timer state into the instance. (3)
+Route the `rescan` action and `pageshow` through `onUrlChange`/`restore`. Each
+step keeps `npm test` green and is independently revertable; the final commit
+leaves no module-scope lifecycle state behind.
+
+**Explicitly out of scope for this cut / do not touch:** the stage interfaces
+(§3.2 — `DiscoveryStage`/`LifecycleStage`/`LabelStage`/`RenderStage`) and
+`pipeline.ts`; the `LayoutSignalRouter` collapse; the telemetry sink injection
+(§3.4); any change to the matcher/grammar protocol. This cut is purely
+"lifecycle becomes an object," nothing more.
 
 ### 3.4 Telemetry as an injected sink, not ambient globals
 
@@ -455,10 +525,10 @@ the tree green between refactors.
   `LayoutSignalRouter`, or do they share one IO instance? `DESIGN_OBSERVER_DRIVEN_LAYOUT`
   §"Open Questions" leans separate-but-sharing-the-IO; the stage split here is
   compatible either way.
-- Is `PageSession` per-frame (every content-script context owns one) with a
-  thin top-frame coordinator, or is cross-frame state left to the
-  background/plugin as today? Leaning per-frame — it matches the current
-  per-frame injection model and the plugin already aggregates frames.
+- ~~Is `PageSession` per-frame or is cross-frame state left to the
+  background/plugin?~~ **Resolved 2026-05-30 (see §3.3.1): per-frame, no
+  top-frame coordinator in the first cut.** Matches the per-frame injection
+  model; the plugin already aggregates across frames.
 - How much of step 1 is worth doing before getting agreement on steps 2–5?
   Step 1 is pure upside regardless, so it could start immediately; 2–5 want
   sign-off on the stage shape first.
