@@ -1,6 +1,8 @@
 # Investigation — Firefox "extension is slowing things down" on YouTube /watch
 
-**Status:** resolved — preliminary field confirmation 2026-05-30 (user reports normal real-Firefox use with no freeze "so far"; keep watching over longer sessions before treating as permanently closed). Every lead in this doc is now addressed — discovery churn (ancestor-dedup + light-DOM pre-filter), both reposition paths (scroll + deferred scoped to drifted), and the trail-URL bug. In real-Firefox driver runs at 5000+ wrappers the unresponsive-script warning no longer reproduces; the residual main-thread stalls are 70–95% YouTube's own layout/paint (confirmed by an extension-off control that stalls as hard or harder). The remaining extension CPU is small and already optimized. The honest open item is no longer a code lead — it's confirming the freeze is gone in a long real-world /watch session in the user's actual Firefox, which the driver can't fully replicate (real scroll cadence, real session length).
+**Status:** the *scroll-soak* freeze is resolved — preliminary field confirmation 2026-05-30 (user reports normal real-Firefox use with no freeze "so far"; keep watching over longer sessions before treating as permanently closed). Every scroll-path lead is addressed — discovery churn (ancestor-dedup + light-DOM pre-filter), both reposition paths (scroll + deferred scoped to drifted), and the trail-URL bug. In real-Firefox driver runs at 5000+ wrappers the unresponsive-script warning no longer reproduces under scroll; the residual scroll stalls are 70–95% YouTube's own layout/paint (confirmed by an extension-off control that stalls as hard or harder).
+
+**OPEN (2026-05-30): a distinct *nav-time* wedge, and this one IS ours.** See the "Nav-time wedge" section below. A same-document SPA nav (clicking a YouTube recommendation, /watch → /watch) freezes the tab's main thread for >1s and, in the driver, wedges the renderer so hard Firefox's debugging protocol stops responding. Unlike the scroll case, an extension-off control on the *same* nav is smooth — so the cost is the extension's, not YouTube's. This is the current open code lead.
 
 **Audience:** a fresh agent picking up this work cold. The session that produced this doc burned through 8+ iterations on the symptom, made real but incomplete progress, and stepped back to write this up. Rango handles YouTube /watch without this problem; we have a local copy at `/private/tmp/rango/` to compare against.
 
@@ -29,6 +31,30 @@ A later session built the tooling the original doc lacked (a way to drive **real
 **Wrapper-leak hypothesis — refuted (2026-05-30).** A scroll-accumulate-then-idle test showed `wrapperLimboCount` and `wrapperDisconnectedOutOfLimbo` stay **0** throughout, and `wrapperCount` **plateaus** the instant scrolling stops (flat for 30s idle). The earlier "climbs to 5000+ / peak == final" reading was an artifact of scrolling continuously the whole soak (always loading new content, never idling). The store ratchets up to the session high-water-mark and doesn't drop on scroll-to-top — but that's because YouTube /watch keeps all rendered comment/suggested DOM live (no virtualization), so the wrappers correctly track still-connected elements. Not our leak. Bounding it would need viewport-scoped wrapper eviction, but the prior "strict-viewport IO" attempt was reverted for per-element overhead — poor trade.
 
 **Already fixed since this doc was written:** the trail-URL sender bug (step 6 below) — content now sends `url: location.href` (content.ts shipPerfReport) and background prefers it over `_sender.url` (background.ts ~959). No longer an action item.
+
+---
+
+## Nav-time wedge (OPEN, 2026-05-30) — attributed to the extension
+
+**Symptom.** A same-document SPA navigation on YouTube (clicking a recommendation, /watch → /watch) freezes the tab. Distinct from the scroll soak: it's a single hard block at nav time, not sustained scroll CPU.
+
+**A/B attribution (the gate the scroll work taught us to run first).** `scripts/_drive-firefox-nav-ab.mjs` drives the *same* nav under identical page-injected instrumentation (a heartbeat ticking every 100ms + a watchdog), with the only variable being whether the extension is loaded:
+
+| Metric (25s post-nav window) | Control — no extension | Extension ON |
+|---|---|---|
+| reads that succeeded | 31/31 | ~1, then protocol-dead |
+| heartbeat ticks (≈250 ⇒ thread free) | 263 | 29 (near-frozen) |
+| worst single stall | 531ms | 1171ms |
+| renderer | stayed live | wedged; juggler pipe died |
+
+Control sails through; extension-on nearly freezes. **The nav-time cost is ours.** (Contrast the scroll case, where the control stalled as hard ⇒ YouTube's cost.)
+
+**What fires at nav (grounding for the fix, not yet a measured hot-path attribution).**
+- Detection is correct and verified: `background.ts` `onHistoryStateUpdated`/`onReferenceFragmentUpdated` → debounced `scheduleSpaRescan` → bounded `rescan` action → `PageSession.onUrlChange` → `rescanForNav` (confirmed on real Firefox via `cs_rescan_received {reason:"spa_nav"}`).
+- **`scheduleSpaRescan` hardcodes `from_cache: 'true'`** (`background.ts:1222`). So *every* SPA nav — including a genuine video→video content change — takes `rescanForNav`'s fast branch (`content.ts:1596`): `dropDisconnectedWrappers()` + `syncNow()` + a deferred `doScanBatched()` at +300ms. It never takes the full-`doScan` branch and never distinguishes app-refocus from a real content swap.
+- That deferred full-page walk then **races YouTube replacing the entire page DOM** (a much larger single mutation burst than incremental scroll), so the discovery firehose + the rescan's own walk + re-establishing ~200 badges all land together on a fresh heavy page.
+
+**Still to pin before designing the fix:** which of those is the dominant cost (the `doScanBatched` walk, the mutation-firehose drain from the DOM swap, or badge re-layout). The page wedges too hard to self-report — the new page shipped *zero* perf snapshots — so capture must either wait for post-burst recovery (read the watchdog breadcrumb's `topLabels` from the trail once a snapshot finally ships) or add nav-path timing that ships before the wedge.
 
 ---
 
