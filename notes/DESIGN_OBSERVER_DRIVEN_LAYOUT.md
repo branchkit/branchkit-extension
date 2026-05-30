@@ -19,9 +19,12 @@ browser has perfect information about what's near the viewport.
 | 3 | TargetRectStore shadow (cache + drift sampler) | Done (`421c834`) |
 | 3b | LayoutSignalRouter (write rects on scroll/resize) | Done (`9e1173b`) — window scroll + RO surfaces; overflow-ancestor scroll still ahead |
 | 4 | Flag-gated cutover of `updatePosition` reads | Dropped standalone; folds into combined 4/5 (Firefox path) — see "Course correction" |
-| 5 | Delete global rAF reposition sweep | **Blocked on ancestor geometry** — see "Cutover blocker" (2026-05-30). Store holds only target rects; placement needs ancestor rects/styles/dims. Deferred to a full LayoutSignalRouter design |
-| 5b | Overflow-ancestor scroll listeners | Done (`9edd979`) — `scroll-ancestor-tracker` + write-on-paint; store stays warm through inner-pane scroll on the Firefox nesting path (scoped drift 0 at 30px/120px). Chromium uses the CSS-anchor fast-path (`95468e1`) instead |
+| 5 | Delete global rAF reposition sweep | **Superseded** — not via a JS router but by the anchor model deleting the scroll dimension entirely. See "Anchor-first architecture" (2026-05-30). The router (ancestor-geometry caching) is explicitly NOT the investment |
+| 5b | Overflow-ancestor scroll listeners | Done (`9edd979`) for the nesting path — but the nesting path is now frozen-for-deletion; no further 5b investment. Chromium uses the CSS-anchor fast-path (`95468e1`) |
 | 6 | Relocate position log to read from store | Ahead |
+| A1 | Extract `computePlacement` (pure, DOM-free) | In progress — anchor-first step 1; behavior-preserving reusable core |
+| A2 | Anchor path self-driving (own observers, off the sweep) | Planned — anchor-first step 2 |
+| A3 | Freeze nesting path; delete when Firefox ships anchor positioning | Ongoing posture |
 
 ## Course correction (2026-05-30)
 
@@ -193,6 +196,53 @@ then deletes `scheduleReposition` entirely. That is a much larger design than
 Phase 5b and the part that regressed as 2c — do not reattempt without it.
 Phase 5b stands as the warm-store foundation that a future router would build
 on. Decision (2026-05-30): land 5b, defer the cutover.
+
+## Anchor-first architecture (chosen direction, 2026-05-30)
+
+Reframing the two positioning paths makes the router question moot. They are
+not "Chromium fast-path + Firefox fallback." They are:
+
+- **Anchor model** — the *future, eventually universal* path. Chromium has CSS
+  anchor positioning now; Firefox ships it on a when-not-if basis. The
+  compositor tracks the target through every overflow ancestor natively, so
+  *tracking is free* and the entire scroll dimension (scroll listeners, drift
+  detection, Phase 5b's ancestor walk, the 100ms debounce) does not exist on
+  this path.
+- **Nesting model** — *sunsetting legacy*. It exists only because Firefox
+  stable/ESR hasn't caught up. It is **frozen**: no router, no Phase 5b
+  extensions, no new investment. It gets deleted when Firefox ships anchor
+  positioning.
+
+The `LayoutSignalRouter` would have been investment in the legacy path —
+rebuilding scroll tracking + ancestor-geometry caching in JS for a model the
+browser is about to obsolete. The better investment is the model where that
+machinery is unnecessary. So we do **not** build the router.
+
+What we *do* build is the structure that makes the anchor model the canonical
+one and the eventual Firefox deletion a one-liner:
+
+1. **Extract `computePlacement` as a pure, DOM-free function**
+   (`placement/compute.ts`). Today the placement decision (corner, overhang,
+   space clamp, sticky clamp, overlap-into-text fallback) is tangled inside
+   `RangoStrategy.positionAtTopLeft` and `updatePosition`. Pulled out, it is
+   the reusable core both paths consume and is unit-testable without a DOM.
+   This is the highest-leverage, lowest-risk step and de-risks everything
+   downstream. **Behavior-preserving.**
+2. **Make the anchor path self-driving.** Recompute placement only when its
+   real inputs change — badge size (`ResizeObserver` on the badge) and
+   ancestor space/sticky bounds — never on scroll. The anchor path already
+   no-ops scroll repositioning; this step lets it stand on its own observers
+   instead of borrowing the legacy `scheduleReposition` sweep's plumbing.
+3. **Freeze the nesting path; schedule its deletion.** Marked "delete when
+   Firefox ships anchor positioning."
+
+Open design question the anchor model must answer (don't hand-wave):
+**clipping.** A nested host is clipped by its scroll-pane for free; a
+body-mounted anchored host is not, so a badge whose target scrolls toward the
+pane edge would float over the pane border. The platform has a mechanism —
+`position-visibility: anchors-visible` hides an anchored element when its
+anchor is clipped/off-screen — so lean on that rather than reintroducing JS
+clip-tracking. Validate it behaves as wanted before relying on it.
 
 ## Known limitations (don't reattempt without a new design)
 

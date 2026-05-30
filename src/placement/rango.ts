@@ -1,6 +1,7 @@
 import { ElementWrapper } from '../element-wrapper';
 import { getCachedDims, getCachedRect, getCachedStyle, isClipAncestor } from '../layout-cache';
 import { PlacementStrategy } from './strategy';
+import { computePlacement, Nudge } from './compute';
 
 const BASE_Z = 2147483000;
 
@@ -78,9 +79,6 @@ export function getOrComputeProbe(w: ElementWrapper): TextProbe {
 export function invalidateProbe(w: ElementWrapper): void {
   w.cachedProbe = null;
 }
-
-type NudgeKind = 'inside' | 'outside';
-interface Nudge { kind: NudgeKind; x: number; y: number }
 
 function getNudge(element: Element, hasText: boolean): Nudge {
   const rect = getCachedRect(element);
@@ -180,54 +178,33 @@ export class RangoStrategy implements PlacementStrategy {
   private positionAtTopLeft(w: ElementWrapper, probe?: TextProbe): void {
     if (!w.hint) return;
     if (!probe) probe = getOrComputeProbe(w);
+
+    // Gather half: all DOM reads. The decision (corner/overhang/space clamp/
+    // sticky clamp/overlap fallback) lives in the pure computePlacement.
+    //   nudge — 'inside' (ratio, large icon-only targets) vs 'outside'
+    //     (absolute overhang, e.g. Gmail's Categories chevron sits
+    //     above-and-left of the icon, not on it).
     const targetRect = probe.hasText ? probe.rect : getCachedRect(w.element);
-    const elementRect = getCachedRect(w.element);
-    const size = w.hint.badgeSize;
-    const nudge = getNudge(w.element, probe.hasText);
-    const space = this.getAvailableSpace(w.hint.anchorParent, targetRect);
-
-    // 'inside': nudge is a ratio (1 = badge at target top-left, no
-    //   offset). Used for large icon-only targets.
-    // 'outside': nudge is an absolute pixel OVERHANG past the target's
-    //   edge. Independent of badge width, so 1-char and 2-char badges
-    //   land in the same relative position past target.left/top. The
-    //   chevron in Gmail's Categories row hits this branch (small,
-    //   no-text) so its badge sits above-and-to-the-left of the
-    //   chevron icon — not on top of it.
-    const hintOffsetX = nudge.kind === 'inside'
-      ? size.w * (1 - nudge.x)
-      : Math.max(0, size.w - nudge.x);
-    const hintOffsetY = nudge.kind === 'inside'
-      ? size.h * (1 - nudge.y)
-      : Math.max(0, size.h - nudge.y);
-
-    const clampedOffsetX = space.left !== undefined
-      ? Math.min(hintOffsetX, Math.max(0, space.left - 1))
-      : hintOffsetX;
-    const clampedOffsetY = space.top !== undefined
-      ? Math.min(hintOffsetY, Math.max(0, space.top - 1))
-      : hintOffsetY;
-
-    let x = Math.max(0, targetRect.left - clampedOffsetX);
-    let y = Math.max(0, targetRect.top - clampedOffsetY);
-
     const stickyBound = this.findStickyBound(w.hint.anchorParent);
-    // A sticky/fixed ancestor means the badge's clamp point is viewport-fixed,
-    // so its placement changes as the target scrolls past it. Mark it so the
-    // window-scroll reposition doesn't skip it as compositor-tracked.
-    w.hint.scrollSensitive = !!stickyBound;
-    if (stickyBound) {
-      x = Math.max(stickyBound.left, x);
-      y = Math.max(stickyBound.top, y);
-    }
+    const result = computePlacement({
+      targetRect,
+      elementRect: getCachedRect(w.element),
+      badgeSize: w.hint.badgeSize,
+      nudge: getNudge(w.element, probe.hasText),
+      availableSpace: this.getAvailableSpace(w.hint.anchorParent, targetRect),
+      stickyBound,
+      // isInScrollList is only consulted in the sticky overlap fallback; gate
+      // the ancestor walk on the cheap precondition so the common (non-sticky)
+      // path skips it, preserving the original short-circuit.
+      inScrollList: stickyBound !== null && probe.hasText
+        ? this.isInScrollList(w.hint.anchorParent)
+        : false,
+      hasText: probe.hasText,
+    });
 
-    const overlapIntoText = (y + size.h) - targetRect.top;
-    const badgeOverlapsText = overlapIntoText > size.h * 0.4;
-    if (stickyBound && badgeOverlapsText && probe.hasText && !this.isInScrollList(w.hint.anchorParent)) {
-      x = Math.max(stickyBound.left, elementRect.left);
-      y = elementRect.bottom - size.h * 0.5;
-    }
-
-    w.hint.updatePosition({ x, y }, 'rango.positionAtTopLeft');
+    // scrollSensitive marks a viewport-fixed clamp (sticky/fixed ancestor) so
+    // the window-scroll reposition doesn't skip it as compositor-tracked.
+    w.hint.scrollSensitive = result.scrollSensitive;
+    w.hint.updatePosition({ x: result.x, y: result.y }, 'rango.positionAtTopLeft');
   }
 }
