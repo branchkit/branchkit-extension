@@ -9,11 +9,17 @@ holds, but reality has moved past the original "nothing built yet":
 - **Step-1 leaf extraction substantially done** — `config.ts`, `plugin/liveness.ts`,
   `plugin/resolve.ts`, and the `debug/` telemetry files are out of the monolith.
   `content.ts` is down from 3,265 lines to ~2,854.
-- **Step-3 SPA-nav fix mostly built** — `webNavigation.onHistoryStateUpdated`
+- **Step-3 SPA-nav fix built** — `webNavigation.onHistoryStateUpdated`
   (+`onReferenceFragmentUpdated`) feed a debounced bounded rescan
-  (`background.ts` `scheduleSpaRescan`). **Still open:** the nav-time label-pool
-  purge (3c) — `purgeTab` fires only on `tabs.onRemoved`, so codewords still
-  leak across same-document navigations.
+  (`background.ts` `scheduleSpaRescan`). **Step 3c (nav-time label-pool purge)
+  was investigated and dropped 2026-05-30 as both redundant and unsafe** — see
+  §5 step 3. The premise ("codewords leak across SPA navs") was true only
+  *before* 3a/3b: now that the rescan is wired, the content script — which
+  stays alive across same-document nav — drops disconnected wrappers and
+  releases their codewords through the normal limbo→finalize path within
+  ~500ms. A background-side `purgeTab`/`releaseFrame` at nav time would race
+  that content-side ownership and corrupt the grammar (see §5 step 3 for the
+  delete-collision).
 
 **Still unbuilt (the high-value remainder):** the stage interfaces (§3.2), the
 `PageSession` lifecycle object (§3.3), and reducing `content.ts` to wiring (§5
@@ -119,14 +125,25 @@ it would be three more module-scoped singletons inside `content.ts`.
   for hash routes), which fire *only* for same-document URL changes; this needs
   the `webNavigation` permission (added 2026-05-30). **Good news
   for step 3:** the reconcile machinery partly exists. content.ts already
-  handles a `rescan` action (`background.ts:649` → `content.ts:1903`), today
+  handles a `rescan` action (`content.ts:1596`), today
   triggered only by plugin-connect/focus. `onUrlChange` can route into that
   existing bounded path rather than build a new one.
-- **Per-tab label pool is never purged on navigation.** `purgeTab` is wired
-  only to `chrome.tabs.onRemoved` (tab close). The code comment at
-  `background.ts:1058` claims it clears "on navigation"; it does not. Stale
-  codewords are reclaimed only opportunistically via per-frame liveness Port
-  disconnect, which has a known service-worker-idle leak window.
+- **Per-tab label pool is purged only on tab close (`chrome.tabs.onRemoved` →
+  `purgeTab`), and that is correct.** An earlier read of this file took the
+  stale `background.ts:1058` comment ("clear … when the tab is closed or starts
+  navigating") at face value and concluded codewords leak across navigations.
+  They do not, in either nav shape:
+    - *Same-document (SPA) nav:* the content script stays alive. Old elements
+      disconnect → limbo → finalize → `releaseLabel` (`element-wrapper.ts:82`),
+      reclaiming codewords within ~500ms. The `scheduleSpaRescan` rescan
+      (`from_cache` path, `content.ts:1600`) actively drives `dropDisconnectedWrappers`.
+    - *Cross-document nav / tab close:* the content script dies. Per-frame
+      reclamation runs through the liveness Port `onDisconnect` →
+      `releaseFrame` (`background.ts:1091`), and `purgeTab` on tab close.
+  The `background.ts:1058` comment is stale (says "or starts navigating") and
+  the `releaseFrame` doc-comment in `label-pool.ts` is stale (says "Currently
+  NOT wired") — both are corrected. The one residual is the long-known
+  SW-idle window on Port `onDisconnect`, which is independent of navigation.
 - **Perf trail is unbounded.** `extension-perf.jsonl` was 242 MB / 94,740 lines.
   `perf_report.go` keeps every sample by design ("clearing is manual").
 
@@ -350,24 +367,44 @@ throughout, and the final step deletes the scaffolding. No big-bang rewrite.
    adapters. Behavior identical; the seam now exists.
 
 3. **Introduce `PageSession`** owning boot/teardown and, newly, `onUrlChange`.
-   Wire SPA navigation + nav-time pool purge. This is the first behavior change
-   and the one that fixes the user-visible "page 2" bug — ship and validate it
-   on its own. Concretely this is three small wires, not a new subsystem:
+   Wire SPA navigation. This is the first behavior change and the one that fixes
+   the user-visible "page 2" bug — ship and validate it on its own. Concretely
+   this is two small wires, not a new subsystem:
    (a) detect the URL change via `chrome.webNavigation.onHistoryStateUpdated`
    (+ `onReferenceFragmentUpdated`), top-frame only — *not* a `tabs.onUpdated`
    `changeInfo.url` guess, which can't separate SPA navs from full loads (see
    §1.3 detection correction); (b) route it into the *existing* bounded `rescan`
-   action path (`content.ts:1903`) instead of the mutation firehose; (c) add the
-   nav-time `purgeTab`/`releaseFrame` call that `background.ts` only does on
-   `onRemoved` today.
+   action path (`content.ts:1596`) instead of the mutation firehose.
 
    **Status (2026-05-30):** (a) and (b) are built — `webNavigation` listeners
    feed `scheduleSpaRescan` (debounced) which dispatches the bounded `rescan`
-   action. **(c) is still open:** `purgeTab` is still wired only to
-   `tabs.onRemoved` (`background.ts:1267`), so the label pool isn't purged on
-   same-document navigation and codewords leak across SPA navs. This was done
-   ahead of `PageSession` — the wires landed directly in `background.ts`; the
-   lifecycle object that would *own* them (§3.3) doesn't exist yet.
+   action. This was done ahead of `PageSession` — the wires landed directly in
+   `background.ts`; the lifecycle object that would *own* them (§3.3) doesn't
+   exist yet.
+
+   **A third wire (c) — a nav-time `purgeTab`/`releaseFrame` from
+   `background.ts` — was planned here but dropped 2026-05-30 after
+   investigation.** It is both redundant and unsafe:
+   - *Redundant.* The leak it targeted only existed before (a)/(b). Now that
+     the rescan is wired, a same-document nav keeps the content script alive;
+     its `dropDisconnectedWrappers` (driven by the `from_cache` rescan,
+     `content.ts:1600`) sends the old elements to limbo, and finalize releases
+     their codewords (`element-wrapper.ts:82`) within ~500ms. The content
+     script owns codeword truth; the pool is a derived cache it keeps in step.
+   - *Unsafe.* Releasing frame 0's codewords from `background.ts` at nav time
+     returns them to `free` while limbo wrappers still hold them locally. A new
+     wrapper then re-claims a head-of-pool codeword (e.g. `"a b"`) that an old
+     limbo wrapper also holds; when that old wrapper finalizes ~250ms later, its
+     `queueDelete("a b")` deletes the *new* badge's codeword from the plugin
+     grammar — the fresh badge goes voice-unmatchable. A genuine correctness
+     regression, so the literal step 3c is not the right shape.
+
+   If transient pool pressure during the ~500ms limbo window ever proves to
+   matter on a hard SPA nav (where rebind is pointless because the page truly
+   changed), the *safe* refinement is content-side: on `reason:'spa_nav'`,
+   release disconnected wrappers immediately instead of through limbo. The same
+   owner does release-then-reclaim in order, so no collision. Not currently
+   needed — flag if SPA-heavy sites show pool starvation.
 
 4. **Replace stage internals one at a time** behind the stable interfaces:
    DiscoveryStage gets the pre-filter + ancestor-dedup (done 2026-05-30,
@@ -402,8 +439,10 @@ the tree green between refactors.
   reachable through the monolith).
 - **Risk: the SPA-nav reconcile (step 3) is genuinely new behavior.** It needs
   Playwright validation on YouTube + a couple of SPA sites: navigate, confirm
-  badges + grammar re-establish without the mutation firehose, confirm no
-  codeword leak across navigations.
+  badges + grammar re-establish without the mutation firehose, and confirm the
+  pool reclaims the prior page's codewords (via the content-side limbo→finalize
+  release the rescan drives — *not* a background purge; see §5 step 3 for why a
+  background purge corrupts the grammar).
 - **Risk: hidden coupling via module globals.** Extraction will surface
   implicit dependencies (e.g. who reads `hintsVisible`). Expected; the point is
   to make them explicit parameters/state instead of ambient.

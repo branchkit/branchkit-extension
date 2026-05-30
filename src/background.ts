@@ -1055,8 +1055,13 @@ async function resolveHintFromTab(tabId: number, codeword: string) {
   }
 }
 
-// Clear a tab's label pool when the tab is closed or starts navigating.
-// Content scripts reload with no memory of prior state.
+// Clear a tab's label pool when the tab is closed (the sole call site is
+// `chrome.tabs.onRemoved`). NOT called on navigation, and deliberately so:
+// cross-document nav reclaims per-frame via the liveness Port's onDisconnect,
+// and same-document (SPA) nav keeps the content script alive — it releases its
+// own codewords through limbo→finalize, so a purge here would race that local
+// ownership and corrupt the grammar. See notes/DESIGN_EXTENSION_RESTRUCTURE.md
+// §5 step 3 (dropped 2026-05-30).
 function purgeTab(tabId: number): void {
   clearStack(tabId).catch(() => {});
 }

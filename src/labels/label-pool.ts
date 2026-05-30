@@ -178,14 +178,14 @@ export async function getFrameForLabel(tabId: number, label: string): Promise<nu
 }
 
 /**
- * Release every label held by a specific frame. Should be called when a
- * frame is detached without the whole tab going away (e.g. iframe
- * removed from the DOM). Currently NOT wired — Chrome's only signal for
- * this without `webNavigation` permission is unreliable. Frames that
- * detach mid-page leak their codewords until the tab closes; in practice
- * this is rare and bounded by the 676-label pool capacity. Wiring this
- * up is a Sprint B task once the manifest gains `webNavigation` access
- * for IntersectionObserver gating.
+ * Release every label held by a specific frame. Called when a frame is
+ * detached without the whole tab going away (e.g. iframe removed from the
+ * DOM). Wired to the per-frame liveness Port's `onDisconnect` in
+ * `background.ts` — when a frame's content script tears down, its Port
+ * disconnects and we reclaim its codewords here. The one residual gap is
+ * the service-worker-idle window: if the SW is terminated when the frame
+ * dies, `onDisconnect` may not fire until the SW next wakes, so the
+ * reclaim is delayed (bounded by the 676-label pool capacity, not lost).
  */
 export async function releaseFrame(tabId: number, frameId: number): Promise<void> {
   return withTabLock(tabId, async () => {
@@ -208,7 +208,9 @@ export async function releaseFrame(tabId: number, frameId: number): Promise<void
 }
 
 /**
- * Clear a tab's stack. Called on tab close or top-level navigation.
+ * Clear a tab's stack. Called on tab close only (via `purgeTab`). Not used
+ * for navigation — see the `purgeTab` comment in `background.ts` for why a
+ * nav-time clear would corrupt the grammar.
  */
 export async function clearStack(tabId: number): Promise<void> {
   return withTabLock(tabId, async () => {
