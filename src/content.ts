@@ -5,9 +5,9 @@
  * Voice commands arrive via background → BRANCHKIT_ACTION messages.
  */
 
-import { Category, BadgeDisplayMode, HintVisibility, ScannedElement, Message, DispatchResult, GrammarBatchRequest, GrammarBatchResponse } from './types';
+import { Category, HintVisibility, ScannedElement, Message, DispatchResult, GrammarBatchRequest, GrammarBatchResponse } from './types';
 import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from './words';
-import { scanElements, scanSingle, isHintable, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, setExtraHintsEnabled, getPerfCounters, resetPerfCounters } from './scanner';
+import { scanElements, scanSingle, isHintable, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters } from './scanner';
 import { ElementWrapper, WrapperStore, enterLimbo, isLimboExpired } from './element-wrapper';
 import * as idRegistry from './registry';
 import { computeFingerprint, fingerprintsEqual } from './registry';
@@ -83,6 +83,7 @@ import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
 import { openLivenessPort } from './plugin/liveness';
 import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './telemetry/message-counters';
 import { recordCpu, resetCpuCounters, resetLongtask, computeCpuShare, cpuBucketsSnapshot, longtaskSnapshot } from './telemetry/perf-counters';
+import { loadConfig, getDisplayMode, getHintVisibility } from './core/config';
 
 // --- Idempotency guard ---
 //
@@ -157,8 +158,6 @@ setScrollBoundaryCallback((boundary) => {
 
 let hintsVisible = false;
 let activeCategory: Category | null = null;
-let displayMode: BadgeDisplayMode = 'letter';
-let hintVisibility: HintVisibility = 'always';
 let pendingMutation = false;
 let lastActivatedElement: Element | null = null;
 const MAX_BADGE_COUNT = 676; // No artificial cap; word pairs for >26
@@ -251,48 +250,36 @@ function whenDOMSettles(callback: () => void): void {
   }
 }
 
-// --- Display Mode from storage ---
+// --- User settings from storage (core/config.ts) ---
 
-if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
-  chrome.storage.sync.get(['badgeDisplayMode', 'hintVisibility', 'aggressiveHints'], (result) => {
-    if (result.badgeDisplayMode) {
-      displayMode = result.badgeDisplayMode;
+loadConfig({
+  onDisplayModeChange: () => {
+    if (hintsVisible) updateBadgeLabels();
+  },
+  onHintVisibilityChange: () => {
+    const v = getHintVisibility();
+    if (v === 'always' && !hintsVisible) {
+      showHints();
+    } else if (v === 'manual' && hintsVisible) {
+      hideHints();
     }
-    if (result.hintVisibility) {
-      hintVisibility = result.hintVisibility;
-    }
-    setExtraHintsEnabled(result.aggressiveHints === true);
-  });
+  },
+  onAggressiveHintsChange: () => {
+    // Clear the store so already-hinted elements that no longer qualify
+    // get torn down, then re-scan with the new selector breadth.
+    store.clear();
+    doScan();
+  },
+});
 
+// Alphabet adoption (not a user setting; stays here, coupled to delta-sync
+// session state). BranchKit pushed a new alphabet — adopt it. The pool was
+// wiped server-side by regenerateAllStacks; our wrappers' codewords are
+// stale strings that no longer route. Drop them locally and let the tracker
+// reclaim for every viewport-visible wrapper. (IO won't re-fire on
+// already-intersecting elements, so we have to walk the store ourselves.)
+if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
   chrome.storage.onChanged.addListener((changes) => {
-    if (changes.badgeDisplayMode) {
-      displayMode = changes.badgeDisplayMode.newValue || 'letter';
-      if (hintsVisible) {
-        updateBadgeLabels();
-      }
-    }
-    if (changes.hintVisibility) {
-      hintVisibility = changes.hintVisibility.newValue || 'always';
-      if (hintVisibility === 'always' && !hintsVisible) {
-        showHints();
-      } else if (hintVisibility === 'manual' && hintsVisible) {
-        hideHints();
-      }
-    }
-    if (changes.aggressiveHints) {
-      // Toggle changed → re-scan so the wider/narrower selector takes
-      // effect immediately. Clear the store first so already-hinted
-      // elements that no longer qualify get torn down.
-      setExtraHintsEnabled(changes.aggressiveHints.newValue === true);
-      store.clear();
-      doScan();
-    }
-    // BranchKit pushed a new alphabet — adopt it. The pool was wiped
-    // server-side by regenerateAllStacks; our wrappers' codewords are
-    // stale strings that no longer route. Drop them locally and let the
-    // tracker reclaim for every viewport-visible wrapper. (IO won't
-    // re-fire on already-intersecting elements, so we have to walk the
-    // store ourselves.)
     if (changes.alphabet?.newValue) {
       setAlphabet(changes.alphabet.newValue);
       // Problem 3 (notes/DESIGN_OPTION_B_REATTEMPT.md): the previous
@@ -359,10 +346,10 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
       // event loop between batches.
       setTimeout(() => {
         doScan();
-        if (hintVisibility === 'always') {
+        if (getHintVisibility() === 'always') {
           whenDOMSettles(() => {
             tracker.flushNow().then(() => {
-              if (hintVisibility === 'always' && !hintsVisible) showHints();
+              if (getHintVisibility() === 'always' && !hintsVisible) showHints();
             });
           });
         }
@@ -1037,10 +1024,10 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
           wrapper.element,
           label,
           wrapper.category,
-          displayMode,
+          getDisplayMode(),
         );
       } else {
-        wrapper.hint.updateLabel(label, displayMode);
+        wrapper.hint.updateLabel(label, getDisplayMode());
       }
 
       wrapper.hint.show();
@@ -1117,7 +1104,7 @@ function scheduleHintRefresh(): void {
   hintRefreshScheduled = true;
   setTimeout(() => {
     hintRefreshScheduled = false;
-    if (hintVisibility !== 'always') return;
+    if (getHintVisibility() !== 'always') return;
     doScan();
     showHints();
   }, HINT_REFRESH_DELAY_MS);
@@ -1142,7 +1129,7 @@ function badgeNewlyCodeworded(): void {
       const w = newBadges[i];
       const label = poolLabelToAssignment(w.scanned.codeword);
       w.label = label;
-      w.hint = new HintBadge(w.element, label, w.category, displayMode);
+      w.hint = new HintBadge(w.element, label, w.category, getDisplayMode());
       w.hint.show();
       placeOne(w, existingCount + i);
     }
@@ -1155,7 +1142,7 @@ function badgeNewlyCodeworded(): void {
 function updateBadgeLabels(): void {
   for (const w of store.all) {
     if (w.hint && w.label) {
-      w.hint.updateLabel(w.label, displayMode);
+      w.hint.updateLabel(w.label, getDisplayMode());
     }
   }
 }
@@ -1168,7 +1155,7 @@ function activateWrapper(wrapper: ElementWrapper): void {
   // Visibility handoff: same rules as the SSE activate path above. In
   // always-mode we clear narrowing/keyboard state and schedule a refresh;
   // in manual-mode we fully hide so the user can re-summon explicitly.
-  if (hintVisibility === 'always') {
+  if (getHintVisibility() === 'always') {
     clearHintFilter();
     scheduleHintRefresh();
   } else {
@@ -1242,7 +1229,7 @@ async function batchedStateSync(reason: string): Promise<void> {
   // Uses module-scope sessionId — see Problem 1 in the design doc.
   const sessionMeta = {
     bundle_id: '',
-    hint_visibility: hintVisibility,
+    hint_visibility: getHintVisibility(),
     app_id: '',
     table_id: '',
   };
@@ -1459,7 +1446,7 @@ async function doScanBatched(): Promise<void> {
 
   const sessionMeta = {
     bundle_id: '',
-    hint_visibility: hintVisibility,
+    hint_visibility: getHintVisibility(),
     app_id: '',
     table_id: '',
   };
@@ -1889,7 +1876,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         //    autocomplete dropdown) get reflected in the next badge set.
         //  - Manual-mode: full hide. Activate is the "I'm done" gesture;
         //    user re-summons via "show" or the f keybind.
-        if (hintVisibility === 'always') {
+        if (getHintVisibility() === 'always') {
           clearHintFilter();
           scheduleHintRefresh();
         } else {
@@ -2677,7 +2664,7 @@ const observer = new MutationObserver((records) => {
   // the user is reading badges. hideHints() flushes via doScan().
   // In "always" mode, process mutations incrementally so SPA navigation
   // and dynamic content get badges without requiring escape+re-show.
-  if (hintsVisible && hintVisibility === 'manual') {
+  if (hintsVisible && getHintVisibility() === 'manual') {
     pendingMutation = true;
     recordCpu('moCallback', performance.now() - __cpuStart);
     return;
