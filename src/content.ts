@@ -2099,21 +2099,19 @@ function isOwnMutation(n: Node): boolean {
 // the soak-time tuning of REBIND_DISTANCE_THRESHOLD_PX.
 const rebindCounters: RebindCounters = newRebindCounters();
 
-/** Walk an added subtree and create wrappers for any hintable descendants. */
-function discoverInSubtree(root: Element): number {
-  const __cpuStart = performance.now();
+// Rebind-or-attach a batch of freshly-scanned hintables. Shared by the
+// synchronous `discoverInSubtree` and the sliced
+// `discoverInSubtreeBatched` so the limbo-rebind/eager-attach semantics
+// stay identical between them. `limboPool` is gathered once by the caller
+// and spliced in place as wrappers get consumed, so two new elements can't
+// both claim the same limbo wrapper (across batches too). Returns the
+// number of wrappers newly attached (rebinds don't count as added).
+function attachDiscovered(
+  refs: Element[], elements: ScannedElement[], limboPool: ElementWrapper[],
+): number {
   let added = 0;
-  const result = scanElements(root, (el) => store.findWrapperFor(el) !== undefined);
-  applyUserRuleToScan(result, root);
-
-  // Limbo wrappers seen by every iteration in this pass — gathered once
-  // so the rebind matcher doesn't re-walk the store per ref. Locally
-  // spliced as wrappers get consumed, so two new elements can't both
-  // claim the same limbo wrapper.
-  const limboPool = collectLimboWrappers();
-
-  for (let i = 0; i < result.elements.length; i++) {
-    const ref = result.refs[i];
+  for (let i = 0; i < refs.length; i++) {
+    const ref = refs[i];
     if (store.findWrapperFor(ref)) continue;
     if (limboPool.length > 0 && tryRebindFromLimbo(ref, limboPool)) continue;
     // Eager attach (Rango/Vimium model). Wrappers stay alive while their
@@ -2122,12 +2120,71 @@ function discoverInSubtree(root: Element): number {
     // (the YouTube-comment-skeleton case), not for wrapper lifecycle.
     // Trades unbounded wrapper growth on infinite-scroll pages for
     // correct scroll-back behavior (badges reappear on scroll up).
-    attachWrapper(new ElementWrapper(ref, result.elements[i]));
+    attachWrapper(new ElementWrapper(ref, elements[i]));
     added++;
   }
+  return added;
+}
+
+/** Walk an added subtree and create wrappers for any hintable descendants. */
+function discoverInSubtree(root: Element): number {
+  const __cpuStart = performance.now();
+  const result = scanElements(root, (el) => store.findWrapperFor(el) !== undefined);
+  applyUserRuleToScan(result, root);
+  const added = attachDiscovered(result.refs, result.elements, collectLimboWrappers());
   observeInvisibleCandidates(result.invisibleCandidates);
   watchUndefinedCustomElements(root);
   recordCpu('discoverInSubtree', performance.now() - __cpuStart);
+  return added;
+}
+
+// Sliced variant of `discoverInSubtree` for roots big enough that one
+// synchronous walk would freeze the main thread — specifically the
+// full-page DOM swap on a YouTube /watch -> /watch SPA nav, which trips
+// the HUGE_MUTATIONS short-circuit. The synchronous path walks ~1000+
+// fresh elements (isVisible per candidate + attachWrapper per survivor)
+// in a single ~1.1s task. `drainDiscovery`'s 8ms budget can't help: it
+// only yields BETWEEN roots, and one document.body root runs to
+// completion. Here we walk via `scanInBatches` (the same incremental
+// walk doScanBatched uses), attaching per batch and awaiting
+// setTimeout(0) between batches so the event loop drains. Semantics
+// match discoverInSubtree: inclusion-rule elements run once up front
+// (a per-batch query would be N querySelectorAll), exclusions apply per
+// batch, limbo-rebind is shared via attachDiscovered. See
+// notes/DESIGN_NAV_TIME_RESCAN.md.
+async function discoverInSubtreeBatched(root: Element): Promise<number> {
+  const __cpuStart = performance.now();
+  let added = 0;
+  const limboPool = collectLimboWrappers();
+  const cr = compiledRule;
+  const isKnown = (el: Element) => store.findWrapperFor(el) !== undefined;
+
+  // Inclusion-rule elements once, pre-marked so the walk doesn't re-emit
+  // them. Mirrors applyUserRuleToScan's include branch + doScanBatched's
+  // one-shot inclusion handling.
+  let initialSeen: ReadonlySet<Element> | undefined;
+  if (cr?.includeSelector) {
+    const seen = new Set<Element>();
+    if (root === document.body || root === document.documentElement) {
+      for (const w of store.all) seen.add(w.element);
+    }
+    const inc = collectInclusions(seen, cr.includeSelector, root);
+    added += attachDiscovered(inc.refs, inc.elements, limboPool);
+    initialSeen = new Set(inc.refs);
+  }
+
+  let invisibleCandidates: Element[] = [];
+  for (const batch of scanInBatches(root, DEFAULT_SCAN_BATCH_SIZE, initialSeen, isKnown)) {
+    if (cr?.excludes.length) applyExclusions(batch.refs, batch.elements, cr.excludes);
+    added += attachDiscovered(batch.refs, batch.elements, limboPool);
+    if (batch.isLast) invisibleCandidates = batch.invisibleCandidates;
+    // Yield so the main thread frees between batches — this is the whole
+    // point of the sliced path.
+    await new Promise(r => setTimeout(r, 0));
+  }
+  observeInvisibleCandidates(invisibleCandidates);
+  watchUndefinedCustomElements(root);
+  recordCpu('discoverInSubtreeBatched', performance.now() - __cpuStart);
   return added;
 }
 
@@ -2600,9 +2657,14 @@ const observer = new MutationObserver((records) => {
       // the finalize sweeper schedules push on actual detach. We only
       // need to push if discovery added new wrappers.
       dropDisconnectedWrappers();
-      const added = discoverInSubtree(document.body || document.documentElement);
-      if (added > 0) schedulePushGrammar();
-      if (pageSession.hintsVisible) scheduleReposition();
+      // Full-page rediscovery is sliced — a synchronous discoverInSubtree
+      // over the whole fresh body froze Firefox ~1.1s on YouTube /watch
+      // SPA nav (notes/DESIGN_NAV_TIME_RESCAN.md).
+      void discoverInSubtreeBatched(document.body || document.documentElement)
+        .then((added) => {
+          if (added > 0) schedulePushGrammar();
+          if (pageSession.hintsVisible) scheduleReposition();
+        });
     }, HUGE_MUTATION_IDLE_MS);
     recordCpu('moCallback', performance.now() - __cpuStart);
     return;

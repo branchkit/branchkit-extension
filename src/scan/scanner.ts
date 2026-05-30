@@ -552,11 +552,17 @@ export interface ScanBatch {
  * doScan flow runs inclusion-rule queries once at scan start (avoiding
  * N querySelectorAll per batch — see investigation item 15) and passes
  * those refs here so the regular walk doesn't re-emit them.
+ *
+ * `isKnown` mirrors `scanElements`: when supplied, already-tracked
+ * elements are skipped during the walk (not just at attach time), so a
+ * batched rediscovery of a freshly-swapped page doesn't spend label/
+ * classify work on wrappers the store already holds.
  */
 export function* scanInBatches(
   root: Document | Element = document,
   batchSize: number = DEFAULT_SCAN_BATCH_SIZE,
   initialSeen?: ReadonlySet<Element>,
+  isKnown?: (el: Element) => boolean,
 ): Generator<ScanBatch, void, void> {
   // INCREMENTAL walk + filter. The previous implementation called
   // `collectHintables` upfront, walking the entire document and running
@@ -587,6 +593,7 @@ export function* scanInBatches(
   for (const el of allCandidates) {
     perfCounters.scanCandidatesSeen++;
     if (seen.has(el)) continue;
+    if (isKnown && isKnown(el)) { perfCounters.scanSkippedKnown++; continue; }
     if (el.matches(EXCLUDE_SELECTOR)) { perfCounters.scanRejectedExclude++; continue; }
     if (el.closest('[data-branchkit-hint]')) continue;
 

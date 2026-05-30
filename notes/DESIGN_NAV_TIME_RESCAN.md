@@ -11,8 +11,8 @@ YouTube's. This doc records the root cause and the fix.
 | 0 | Attribution gate (extension-off A/B control) | Done (2026-05-30) |
 | 1 | Root-cause trace | Done (2026-05-30) |
 | 2 | Design | This doc |
-| 3 | Implementation | Pending |
-| 4 | Verify on real Firefox (A/B re-run) | Pending |
+| 3 | Implementation | Done (2026-05-30) — Option A |
+| 4 | Verify on real Firefox | Done (2026-05-30) — measured, see below |
 
 ## Attribution (why this is ours)
 
@@ -119,16 +119,50 @@ walk itself sliceable and route HUGE_MUTATIONS through the normal
 plugin POST path untouched. The duplicated walk is the accepted cost; if a
 second caller ever needs sliced discovery we revisit Option C.
 
-Threshold: slice when `root === document.body` (the full-swap case) or the
-candidate count exceeds a batch-sized bound; otherwise keep the synchronous
-path. Tune against the A/B driver — target is heartbeat advance back near
-the control's ~250 ticks with no single watchdog stall over one batch's
-worth of work.
+## What shipped
 
-## Verification
+`discoverInSubtreeBatched` (`content.ts`) is the sliced variant: it drives
+`scanInBatches` (with a new optional `isKnown` predicate so the walk skips
+already-tracked elements, mirroring `scanElements`), attaches per batch via
+the shared `attachDiscovered` helper, and `await setTimeout(0)`s between
+batches. Inclusion-rule elements run once up front; exclusions apply per
+batch; limbo-rebind is shared with the synchronous path. Only the
+HUGE_MUTATIONS branch routes to it — `discoverInSubtree` (sync) and
+`drainDiscovery`'s per-root walk are unchanged, since their roots are small
+mutation subtrees where yielding only adds latency. No candidate-count
+threshold was needed: "full page swap" and "small mutation root" already
+arrive on separate code paths.
 
-Re-run `scripts/_drive-firefox-nav-ab.mjs` (control + `BK_NAV_EXT=1`) on the
-same `/watch → /watch` nav. Success = extension-on arm recovers reads, beat
-advances ~250, worst stall drops from 1171ms to a single-batch bound. The
-page wedges too hard to ship its own perf snapshot, so confirm out-of-band
-via the `cs_*` DEBUG_LOG lines in `actuator.log`.
+## Verification (measured 2026-05-30)
+
+The A/B driver (`scripts/_drive-firefox-nav-ab.mjs`) could not measure the
+fix: its isolated Playwright profile never connects to the plugin (no
+out-of-band breadcrumbs) and the renderer wedge kills the juggler protocol
+pipe (in-page reads hang). Measured instead in the user's real Firefox via
+temporary `pipeline.nav_*` DEBUG_LOG breadcrumbs (since removed), reading
+`actuator.log`.
+
+When the HUGE_MUTATIONS path actually fired on a real `/watch` load:
+
+```
+nav_huge_fired         {foreign:1671, filter_ms:3}
+nav_huge_discover_done {added:49, batches:4, max_sync_ms:20, wall_ms:70}
+```
+
+`max_sync_ms` (the longest uninterrupted main-thread span — the quantity
+that trips Firefox's unresponsive-script warning) was **20ms**, across 4
+batches, 70ms wall. The unsliced walk this replaced produced ~900–1100ms
+watchdog stalls. Fix confirmed.
+
+## Follow-up found during verification
+
+A `/watch → /watch` SPA swap does *not* always hit the HUGE_MUTATIONS path.
+The background `scheduleSpaRescan` (`background.ts:1222`) dispatches the
+rescan with `from_cache: 'true'`, so the content side takes the
+`rescanForNav` fast path (`content.ts:1596`): drop dead wrappers, republish
+the existing store, one 300ms-deferred reconcile. On a watch swap the whole
+recommendations rail is replaced, so the republish carried only the few
+surviving persistent elements and the reconcile scan found 0 new — most
+recommended-video links never became hints (observed: 9 elements registered,
+reconcile `kind=scan elements=0`). This is a separate "partial hints" bug in
+the SPA-nav rescan routing, tracked separately.
