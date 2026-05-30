@@ -88,7 +88,6 @@ export interface PerfCounters {
   scanRejectedRedundant: number;
   scanRejectedExtraNotClickable: number;
   scanSkippedKnown: number;          // already-tracked, skipped before any layout read
-  scanDeferredOffscreen: number;     // far from viewport, routed to attention IO instead of eager isVisible
   scanSingleCalls: number;           // scanSingle (per-element re-check via MO)
   isHintableExtraCalls: number;
   computedStyleCalls: number;        // total getComputedStyle calls (all sites)
@@ -105,7 +104,6 @@ const perfCounters: PerfCounters = {
   scanRejectedRedundant: 0,
   scanRejectedExtraNotClickable: 0,
   scanSkippedKnown: 0,
-  scanDeferredOffscreen: 0,
   scanSingleCalls: 0,
   isHintableExtraCalls: 0,
   computedStyleCalls: 0,
@@ -216,26 +214,6 @@ export function classifyCategory(el: Element): Category {
 // end so we can't leak references into the next scan (ancestor's opacity
 // may have changed between scans, and WeakSet has no API to drop entries).
 let visibilityCache: WeakSet<Element> | null = null;
-
-// Viewport-extended margin (in viewport heights) for the discovery
-// proximity gate. Matches AttentionObserver's `rootMargin: '200%'` (2
-// viewport-heights each side) so an element judged "far" here lands
-// exactly outside the attention region — guaranteeing the attention IO
-// picks it up as not-yet-near rather than leaving a dead band where it's
-// neither eagerly processed nor attention-tracked.
-const DISCOVERY_VIEWPORT_MARGIN_VH = 2;
-
-// Does this element's (already cache-warm) rect overlap the
-// viewport-extended attention region? Used by the discovery path to skip
-// the expensive isVisible ancestor walk + eager wrapper for elements far
-// from the viewport — they're routed to the attention observer and fully
-// processed lazily when they scroll near (see content.ts onEnter).
-function isNearViewport(rect: DOMRect): boolean {
-  const vh = window.innerHeight || 0;
-  const margin = vh * DISCOVERY_VIEWPORT_MARGIN_VH;
-  // Viewport spans [0, vh]; extended region is [-margin, vh + margin].
-  return rect.bottom >= -margin && rect.top <= vh + margin;
-}
 
 function isVisible(el: Element): boolean {
   // Peek the layout-cache first. Hit = cheap; miss = live read +
@@ -423,9 +401,8 @@ export function scanSingle(el: Element): ScannedElement | null {
 export function scanElements(
   root: Document | Element = document,
   isKnown?: (el: Element) => boolean,
-  viewportBounded = false,
 ): { elements: ScannedElement[]; refs: Element[]; invisibleCandidates: Element[] } {
-  return collectHintables(root, undefined, isKnown, viewportBounded);
+  return collectHintables(root, undefined, isKnown);
 }
 
 // Shared DOM walk + filter pipeline. Used by both the eager `scanElements`
@@ -443,7 +420,6 @@ function collectHintables(
   root: Document | Element,
   initialSeen?: ReadonlySet<Element>,
   isKnown?: (el: Element) => boolean,
-  viewportBounded = false,
 ): { elements: ScannedElement[]; refs: Element[]; invisibleCandidates: Element[] } {
   const elements: ScannedElement[] = [];
   const refs: Element[] = [];
@@ -484,22 +460,6 @@ function collectHintables(
 
   // Pass 2: layout-dependent filters, now hitting the warm cache.
   for (const el of survivors) {
-    // Viewport-bounded discovery: an element far from the viewport doesn't
-    // need an eager wrapper now. Skip the expensive isVisible ancestor walk
-    // and route it to the attention observer (via invisibleCandidates) — it
-    // gets fully processed by scanSingle on attention-enter when scrolled
-    // near. The rect is cache-warm from cacheVisibility above, so the gate
-    // is free. A cache miss (shouldn't happen for a seed) falls through to
-    // eager processing rather than risk dropping the element.
-    if (viewportBounded) {
-      const rect = peekCachedRect(el);
-      if (rect !== null && !isNearViewport(rect)) {
-        invisibleCandidates.push(el);
-        perfCounters.scanDeferredOffscreen++;
-        continue;
-      }
-    }
-
     // In extra-hints mode, the wider selector matches plenty of
     // non-interactive elements. Keep them only if they look clickable.
     if (extraHintsEnabled && !el.matches(HINTABLE_SELECTOR)) {

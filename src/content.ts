@@ -2336,7 +2336,7 @@ const rebindCounters: RebindCounters = newRebindCounters();
 function discoverInSubtree(root: Element): number {
   const __cpuStart = performance.now();
   let added = 0;
-  const result = scanElements(root, (el) => store.findWrapperFor(el) !== undefined, true);
+  const result = scanElements(root, (el) => store.findWrapperFor(el) !== undefined);
   applyUserRuleToScan(result, root);
 
   // Limbo wrappers seen by every iteration in this pass — gathered once
