@@ -453,11 +453,17 @@ throughout, and the final step deletes the scaffolding. No big-bang rewrite.
    liveness, resolve/activate, grammar-batch, and config into their own files;
    `content.ts` imports them. Pure relocation; counters become module exports
    or an injected sink. Lowest risk, immediately shrinks the monolith and makes
-   the rest legible. **Substantially done (2026-05-30):** `config.ts`,
-   `plugin/liveness.ts`, `plugin/resolve.ts`, and `debug/{perf,message}-counters`
-   are extracted; the `src/`-wide intent-based regrouping landed in the same
-   pass. Residual: `grammar-batch` and the perf `watchdog`/`longtask`/`cpu-share`
-   block still live inside `content.ts`.
+   the rest legible. **Done (2026-05-30):** `config.ts`, `plugin/liveness.ts`,
+   `plugin/resolve.ts`, and `debug/{perf,message}-counters` are extracted; the
+   `src/`-wide intent-based regrouping landed in the same pass. The two
+   residuals an earlier draft listed here are also extracted: grammar-batch is
+   `labels/label-sync.ts` (`scheduleSync`/`syncNow`/`postBatch` + the put/delete
+   queue; `content.ts`'s `schedulePushGrammar` is just a thin alias), and the
+   perf `watchdog`/`longtask`/`cpu-share` block is `debug/perf-counters.ts`
+   (installs the longtask observer + watchdog on import). What remains in
+   `content.ts` by design is `buildPerfSnapshot` — the integrator that stitches
+   the counter module's reads together with the store/lifecycle counters
+   `content.ts` owns; it is not a leaf concern to carve out.
 
 2. **Introduce the stage interfaces with the *current* code behind them.**
    Wrap existing discovery/lifecycle/label/render code in adapter objects that
