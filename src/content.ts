@@ -80,6 +80,7 @@ import { loadDomainRules, onDomainRulesChanged, ruleEqual } from './domain-rules
 import { sweepDisconnectedAfterBatch } from './batch-sweep';
 import { filterNewBatchRefs } from './batch-dedup';
 import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
+import { openLivenessPort } from './plugin/liveness';
 
 // --- Idempotency guard ---
 //
@@ -1704,70 +1705,19 @@ window.addEventListener('pageshow', (e) => {
 
 // --- Frame liveness Port ---
 //
-// One long-lived Port per content-script V8 context. We send no messages —
-// the Port's *lifetime* is the signal. When this context dies (iframe
-// removed, navigation, tab closed) Chrome closes the Port and the
-// background's onDisconnect handler releases this frame's labels and
-// clears its tabGrammars entry. See
-// docs/completed/DESIGN_BROWSER_FRAME_POOL_EXHAUSTION.md.
-//
-// The content-side onDisconnect handler below fires only when the SW
-// restarts (idle-terminated), not when this frame dies. On SW restart we
-// reopen a Port so the background can re-track us; we don't re-claim
-// labels because our existing claims survive in chrome.storage.session.
-
-const LIVENESS_PORT_NAME = 'frame-liveness';
-let livenessPort: chrome.runtime.Port | null = null;
-// Our own frameId, as told to us by the SW on connect. Used to detect
-// misrouted activate actions (registry id minted in a different frame).
-// null until the Port handshake completes; the activate path treats
-// "unknown" as "trust the routing" so dispatches that arrive before the
-// handshake aren't dropped.
+// Our own frameId, as told to us by the SW over the liveness Port on
+// connect. Used to detect misrouted activate actions (registry id minted
+// in a different frame). null until the Port handshake completes; the
+// activate path treats "unknown" as "trust the routing" so dispatches that
+// arrive before the handshake aren't dropped. Port mechanics live in
+// plugin/liveness.ts; the orphan teardown (quiesceOrphan) stays here
+// because it disconnects this file's observers.
 let myFrameId: number | null = null;
 
-function openLivenessPort(): void {
-  try {
-    const port = chrome.runtime.connect({ name: LIVENESS_PORT_NAME });
-    livenessPort = port;
-    port.onMessage.addListener((msg: unknown) => {
-      if (typeof msg !== 'object' || msg === null) return;
-      const m = msg as { type?: unknown; frameId?: unknown };
-      if (m.type === 'FRAME_ID' && typeof m.frameId === 'number') {
-        myFrameId = m.frameId;
-      }
-    });
-    port.onDisconnect.addListener(() => {
-      livenessPort = null;
-      // Discriminate between two disconnect causes:
-      //   1. Transient SW restart (idle timeout, browser sleep): Chrome
-      //      will start a new SW on the next API call. Reconnect after a
-      //      brief delay so the SW finishes its init pass.
-      //   2. Extension reload/uninstall: this content script's runtime
-      //      context is invalidated. `chrome.runtime` is undefined or
-      //      `chrome.runtime.id` is undefined. We can't reconnect from
-      //      here ever — the SW-side re-injection (background.ts) will
-      //      inject a fresh content script that opens its own port. Our
-      //      job is to self-quiesce so we stop polluting the page.
-      let stillValid = false;
-      try {
-        stillValid = typeof chrome !== 'undefined' && !!chrome.runtime?.id;
-      } catch {
-        stillValid = false;
-      }
-      if (!stillValid) {
-        quiesceOrphan();
-        return;
-      }
-      setTimeout(openLivenessPort, 500);
-    });
-  } catch {
-    // Extension context invalidated (e.g., extension reloaded mid-page).
-    // Page reload required to recover; nothing useful to do here.
-    livenessPort = null;
-  }
-}
-
-openLivenessPort();
+openLivenessPort({
+  onFrameId: (frameId) => { myFrameId = frameId; },
+  onOrphan: quiesceOrphan,
+});
 
 // --- Orphan self-quiesce ---
 //
