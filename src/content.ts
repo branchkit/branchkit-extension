@@ -7,7 +7,7 @@
 
 import { Category, HintVisibility, ScannedElement, Message, DispatchResult } from './types';
 import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from './words';
-import { scanElements, scanSingle, isHintable, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters } from './scanner';
+import { scanElements, scanSingle, isHintable, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters, subtreeMaybeHintable } from './scanner';
 import { ElementWrapper, WrapperStore, enterLimbo, isLimboExpired } from './element-wrapper';
 import * as idRegistry from './registry';
 import { computeFingerprint, fingerprintsEqual } from './registry';
@@ -2183,6 +2183,11 @@ let moForeignRecords = 0;
 let moRemoveRecordsSeen = 0;
 let moHugePathFired = 0;
 let processMutationsCalls = 0;
+// Discovery-drain reductions (DiscoveryStage step 4). `Deduped` = roots
+// dropped because a queued ancestor already covers them; `Skipped` =
+// roots whose light DOM held nothing hintable (cheap pre-filter bail).
+let discoveryRootsDeduped = 0;
+let discoveryRootsSkipped = 0;
 
 // CPU buckets / cpu-share / longtask / watchdog measurement primitives
 // live in telemetry/perf-counters.ts (imported at top). recordCpu is the
@@ -2373,14 +2378,39 @@ function drainDiscovery(): void {
   pendingDiscoveryRoots.clear();
   const __rootCount = roots.length;
 
+  // Ancestor-dedup: if a queued root is contained by another queued
+  // root, the ancestor's discoverInSubtree already deep-walks it. Drop
+  // the descendant so we don't walk the same subtree twice — YouTube
+  // /watch enqueues nested roots in bursts. parentElement stops at
+  // shadow boundaries, so a root inside another's shadow is
+  // conservatively kept (redundant, never wrong).
+  const rootSet = new Set(roots);
+  const workRoots: Element[] = [];
+  for (const root of roots) {
+    if (hasQueuedAncestor(root, rootSet)) {
+      discoveryRootsDeduped++;
+      continue;
+    }
+    workRoots.push(root);
+  }
+
   let dirty = false;
   let processed = 0;
-  for (const root of roots) {
+  for (const root of workRoots) {
     processed++;
     // Skip if the subtree got removed between enqueue and drain. The
     // childList path's dropDisconnectedWrappers will have handled any
     // wrappers that already lived inside it.
     if (!root.isConnected) continue;
+    // Cheap light-DOM pre-filter: skip the full discovery walk for roots
+    // that can't yield a hint. The deep walk (shadow pierce + limbo
+    // rebind + custom-element watch) is the expensive part, and on
+    // YouTube /watch almost no mutation root contains a hintable.
+    // Shadow-hosted hintables arrive via the SHADOW_EVENT path.
+    if (!subtreeMaybeHintable(root)) {
+      discoveryRootsSkipped++;
+      continue;
+    }
     if (discoverInSubtree(root) > 0) dirty = true;
     // Yield to the event loop once we've exceeded the budget — but
     // always do at least one root so we make forward progress even when
@@ -2390,8 +2420,8 @@ function drainDiscovery(): void {
   // Re-queue anything we didn't process this pass; the rAF below picks
   // it up on the next frame. Re-adding to a Set is idempotent so any
   // new arrivals between drain start and now coalesce naturally.
-  for (let i = processed; i < roots.length; i++) {
-    pendingDiscoveryRoots.add(roots[i]);
+  for (let i = processed; i < workRoots.length; i++) {
+    pendingDiscoveryRoots.add(workRoots[i]);
   }
   if (pendingDiscoveryRoots.size > 0 && discoveryFrame === null) {
     discoveryFrame = requestAnimationFrame(drainDiscovery);
@@ -2404,6 +2434,17 @@ function drainDiscovery(): void {
       __rootCount,
     );
   }
+}
+
+// True if any light-DOM ancestor of `el` is also a member of `set`.
+// parentElement deliberately does not cross shadow boundaries.
+function hasQueuedAncestor(el: Element, set: Set<Element>): boolean {
+  let p = el.parentElement;
+  while (p) {
+    if (set.has(p)) return true;
+    p = p.parentElement;
+  }
+  return false;
 }
 
 function processMutations(records: MutationRecord[]): void {
@@ -2622,6 +2663,8 @@ function resetLifecycleCounters(): void {
   moRemoveRecordsSeen = 0;
   moHugePathFired = 0;
   processMutationsCalls = 0;
+  discoveryRootsDeduped = 0;
+  discoveryRootsSkipped = 0;
 }
 
 // Scan / hintability perf snapshot. Counters are cumulative since CS load
@@ -2662,6 +2705,8 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
       moRemoveRecordsSeen,
       moHugePathFired,
       processMutationsCalls,
+      discoveryRootsDeduped,
+      discoveryRootsSkipped,
     },
     rebindCounters: { ...rebindCounters },
     messages: messageCountersSnapshot(),

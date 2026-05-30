@@ -180,6 +180,24 @@ export function deepQuerySelectorAll(root: ParentNode, selector: string): Elemen
 }
 
 /**
+ * Cheap light-DOM pre-filter for the childList discovery path. Returns
+ * false when `root`'s light DOM contains nothing the scanner could turn
+ * into a hint, letting the caller skip the full `discoverInSubtree` walk
+ * (deep shadow pierce + limbo rebind + custom-element watch).
+ *
+ * Light-DOM only by design: shadow-hosted hintables are discovered via
+ * the SHADOW_EVENT attach path (see content.ts), so the childList path
+ * doesn't need to pierce shadow to stay correct. This is a single native
+ * matches()+querySelector() that bails at the first hit — far cheaper
+ * than the full pipeline for the YouTube /watch case, where almost no
+ * mutation root yields a hintable.
+ */
+export function subtreeMaybeHintable(root: Element): boolean {
+  const sel = extraHintsEnabled ? EXTRA_SELECTOR : HINTABLE_SELECTOR;
+  return root.matches(sel) || root.querySelector(sel) !== null;
+}
+
+/**
  * Classify an element into a voice category.
  */
 export function classifyCategory(el: Element): Category {

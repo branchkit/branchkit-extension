@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { scanElements, scanInBatches, DEFAULT_SCAN_BATCH_SIZE } from './scanner';
+import { scanElements, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, subtreeMaybeHintable } from './scanner';
 
 function html(markup: string): void {
   document.body.innerHTML = markup;
@@ -43,6 +43,34 @@ beforeEach(() => {
 
 afterEach(() => {
   Element.prototype.getBoundingClientRect = originalGetRect;
+});
+
+describe('subtreeMaybeHintable', () => {
+  it('returns true when the root itself matches', () => {
+    html('<button id="root">x</button>');
+    const root = document.getElementById('root')!;
+    expect(subtreeMaybeHintable(root)).toBe(true);
+  });
+
+  it('returns true when a light-DOM descendant matches', () => {
+    html('<div id="root"><span><a href="#">link</a></span></div>');
+    const root = document.getElementById('root')!;
+    expect(subtreeMaybeHintable(root)).toBe(true);
+  });
+
+  it('returns false for a subtree with no hintable element', () => {
+    html('<div id="root"><span>text</span><p>more text</p></div>');
+    const root = document.getElementById('root')!;
+    expect(subtreeMaybeHintable(root)).toBe(false);
+  });
+
+  it('does not pierce shadow roots (shadow content handled elsewhere)', () => {
+    html('<div id="root"></div>');
+    const root = document.getElementById('root')!;
+    const shadow = root.attachShadow({ mode: 'open' });
+    shadow.innerHTML = '<button>shadow btn</button>';
+    expect(subtreeMaybeHintable(root)).toBe(false);
+  });
 });
 
 describe('scanInBatches', () => {
