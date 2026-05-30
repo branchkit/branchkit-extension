@@ -1577,6 +1577,14 @@ function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
       node.remove();
     }
   } catch { /* document gone */ }
+  // Release the idempotency guard so a subsequent injection (e.g. the lazy
+  // inject on tab activation after an extension reload) can re-initialize this
+  // isolated world. Without this, the orphan's lingering flag makes every fresh
+  // script bail on the "duplicate injection" throw — the tab stays dead until
+  // it's closed and reopened. We're tearing down, so we no longer own the frame.
+  try {
+    delete (window as unknown as { __branchkitContentInjected?: boolean }).__branchkitContentInjected;
+  } catch { /* window gone */ }
   console.warn(`[BranchKit] content script torn down (reason: ${reason}). Self-quiesced.`);
 }
 

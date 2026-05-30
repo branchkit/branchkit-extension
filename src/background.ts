@@ -796,12 +796,12 @@ async function notifyActiveTab(message: Message): Promise<void> {
  * a Firefox temporary add-on where `onInstalled` didn't reach this
  * tab.
  *
- * Does NOT clear `__branchkitContentInjected` (unlike the install-time
- * `reinjectContentScripts` path which does, to flush orphans). Lazy
- * injection assumes "if a content script is alive in this tab, leave
- * it alone." If the script is already loaded, content.ts's top-level
- * guard throws "duplicate injection" — we catch that quietly (it's not
- * an error in this context, just the guard doing its job).
+ * Does NOT clear `__branchkitContentInjected` itself — callers that reach
+ * a tab on a recovery path (`ensureContentScriptInjected`,
+ * `reinjectContentScripts`) flush the orphan guard via `flushOrphanGuard`
+ * first. If a healthy script is still loaded, content.ts's top-level guard
+ * throws "duplicate injection" — we catch that quietly (it's not an error
+ * in this context, just the guard doing its job).
  *
  * Returns true on success; false if the tab URL is restricted
  * (about:, chrome://, etc.) or injection failed for another reason.
@@ -880,13 +880,50 @@ async function pingContentScript(tabId: number): Promise<boolean> {
 }
 
 /**
+ * Best-effort clear of the `__branchkitContentInjected` idempotency guard
+ * across every frame in `tabId`. An orphaned content script from a previous
+ * extension generation leaves this flag set; until it's cleared a freshly
+ * injected content.js bails on the top-level "duplicate injection" throw,
+ * so the tab stays dead until the user closes and reopens it.
+ *
+ * Only call this on a recovery path where the live script (if any) is
+ * already known unreachable — clearing the guard out from under a healthy
+ * script would let a second copy initialize on top of it.
+ *
+ * On Firefox this routinely fails atomically on sites with CSP-locked
+ * iframes (YouTube ads, Netflix DRM frame, Cloudflare challenges); that's
+ * fine — the top-frame fallback in injectContentScriptFiles still runs.
+ */
+async function flushOrphanGuard(tabId: number): Promise<void> {
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: () => {
+        delete (window as unknown as { __branchkitContentInjected?: boolean }).__branchkitContentInjected;
+      },
+    });
+  } catch {
+    // Swallow — flush failure means orphans persist in some frames, not
+    // the end of the world; lazy-inject on a later activation retries.
+  }
+}
+
+/**
  * Proactive lazy-injection: if the tab doesn't have BranchKit's content
  * script yet (typically a pre-existing tab from before sideload), inject
  * it now so badges paint without the user needing to F5. No-op if the
  * script is already alive.
+ *
+ * If the ping fails, the tab either has no script or holds an orphan whose
+ * runtime was invalidated by an extension reload (the orphan no longer
+ * answers messages but its idempotency guard lingers). We flush that guard
+ * before injecting so the fresh script runs to completion — this is what
+ * lets already-open tabs recover voice control after an extension reload
+ * without a manual close-and-reopen.
  */
 async function ensureContentScriptInjected(tabId: number): Promise<void> {
   if (await pingContentScript(tabId)) return;
+  await flushOrphanGuard(tabId);
   await injectContentScriptFiles(tabId);
 }
 
@@ -1321,6 +1358,16 @@ async function init(): Promise<void> {
     hintVisibility = result.hintVisibility;
   }
 
+  // Arm the active-tab gate before any grammar batches arrive. After an
+  // SW restart (extension reload, browser startup) cachedActiveTabId is
+  // null, and the GRAMMAR_BATCH handler fails open in that state — so a
+  // reload's re-injection storm lets *every* open tab push into the global
+  // per-prefix hint collections at once, last-writer-wins. The losing tab
+  // is often the one the user is looking at, leaving its codewords
+  // unmatchable (the prefix degrades to a bare keyboard-alphabet keystroke).
+  // Resolving the active tab here closes that window.
+  await resolveActiveContentTab();
+
   const found = await discoverPlugin();
   branchkitConnected = found;
 
@@ -1340,24 +1387,26 @@ chrome.storage.onChanged.addListener((changes) => {
 });
 
 chrome.runtime.onInstalled.addListener((details) => {
-  init();
-  // Re-inject content scripts into already-open tabs on install/update so
-  // the user doesn't need to F5 every tab after reloading the extension.
-  // Canonical Chrome MV3 pattern — see
+  // Re-inject content scripts into already-open tabs on install/update so the
+  // user doesn't need to F5 every tab after reloading the extension. Canonical
+  // Chrome MV3 pattern — see
   // https://www.codestudy.net/blog/chrome-extension-content-script-re-injection-after-upgrade-or-install/
   //
-  // Orphan content scripts from the previous extension generation are still
-  // in those frames' isolated worlds; we explicitly clear their idempotency
-  // flag before file injection so the fresh content.js runs to completion.
-  // Pairs with the guard at the top of content.ts.
+  // Orphan content scripts from the previous extension generation are still in
+  // those frames' isolated worlds; reinjectContentScripts clears their
+  // idempotency flag (flushOrphanGuard) before file injection so the fresh
+  // content.js runs to completion. Pairs with the guard at the top of
+  // content.ts and the self-quiesce in liveness/quiesceOrphan.
   //
-  // Step A of the orphan-CS plan (port.onDisconnect self-quiesce) is still
-  // pending; until that lands, the orphan's bound observers/listeners keep
-  // firing — most calls into chrome.runtime fail silently (invalidated
-  // context) so the visible damage is limited to wasted CPU.
-  if (details.reason === 'install' || details.reason === 'update') {
-    void reinjectContentScripts();
-  }
+  // Crucially, we await init() first: it primes cachedActiveTabId so the
+  // GRAMMAR_BATCH active-tab gate is armed before the re-injection storm. Skip
+  // this ordering and every re-injected background tab pushes hint grammar
+  // into the global per-prefix collections at once (gate fails open while
+  // cachedActiveTabId is null), clobbering the focused tab's codewords.
+  const reinject = details.reason === 'install' || details.reason === 'update';
+  void init().then(() => {
+    if (reinject) void reinjectContentScripts();
+  });
 });
 chrome.runtime.onStartup.addListener(() => init());
 
@@ -1384,23 +1433,8 @@ async function reinjectContentScripts(): Promise<void> {
         || url.startsWith('view-source:')) {
       continue;
     }
-    // Best-effort orphan-guard flush across all frames. On Firefox this
-    // routinely fails atomically on sites with CSP-locked iframes
-    // (YouTube ads, Netflix DRM frame, Cloudflare challenges) — that's
-    // fine, the lazy-inject path on tab activation handles those tabs
-    // without trying to clear orphans (which a fresh tab doesn't have
-    // anyway).
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId, allFrames: true },
-        func: () => {
-          delete (window as unknown as { __branchkitContentInjected?: boolean }).__branchkitContentInjected;
-        },
-      });
-    } catch {
-      // swallow — flush failure means orphans persist in some frames,
-      // not the end of the world.
-    }
+    // Flush orphan guards across all frames before injecting fresh scripts.
+    await flushOrphanGuard(tabId);
     // Inject via the same fallback path lazy-inject uses, so YouTube /
     // Netflix / Cloudflare-challenged tabs get the top frame even when
     // allFrames refuses.
