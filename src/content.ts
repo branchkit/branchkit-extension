@@ -81,6 +81,7 @@ import { loadDomainRules, onDomainRulesChanged, ruleEqual } from './rules/domain
 import { filterNewBatchRefs } from './scan/batch-dedup';
 import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
 import { openLivenessPort } from './plugin/liveness';
+import { PageSession, TeardownReason } from './lifecycle/page-session';
 import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './debug/message-counters';
 import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot } from './debug/perf-counters';
 import { loadConfig, getDisplayMode, getHintVisibility } from './config';
@@ -1501,9 +1502,17 @@ window.addEventListener('pageshow', (e) => {
 // because it disconnects this file's observers.
 let myFrameId: number | null = null;
 
+// This frame's page-session lifecycle object. First transitional cut: it owns
+// the teardown transition (and its reason) while the observer/timer state still
+// lives in this module and is reached via the injected `teardown` hook. See
+// notes/DESIGN_EXTENSION_RESTRUCTURE.md §3.3.1.
+const pageSession = new PageSession({
+  teardown: (reason) => quiesceOrphan(reason),
+});
+
 openLivenessPort({
   onFrameId: (frameId) => { myFrameId = frameId; },
-  onOrphan: quiesceOrphan,
+  onOrphan: () => pageSession.teardown('orphan'),
 });
 
 // --- Orphan self-quiesce ---
@@ -1522,7 +1531,7 @@ openLivenessPort({
 // Idempotent: subsequent calls are no-ops. Each `try` block is independent
 // so a failure in one doesn't skip the others.
 let orphaned = false;
-function quiesceOrphan(): void {
+function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
   if (orphaned) return;
   orphaned = true;
   // Each module-scope observer that fires user-driven callbacks. Missing one
@@ -1546,7 +1555,7 @@ function quiesceOrphan(): void {
       node.remove();
     }
   } catch { /* document gone */ }
-  console.warn('[BranchKit] content script orphaned (extension reload). Self-quiesced.');
+  console.warn(`[BranchKit] content script torn down (reason: ${reason}). Self-quiesced.`);
 }
 
 // --- BK_ACTIVATE_PATH diagnostic ---

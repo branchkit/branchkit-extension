@@ -368,15 +368,22 @@ open question in favor of per-frame). It matches the current per-frame injection
 model and the plugin already aggregates across frames; no top-frame coordinator
 in this cut.
 
-**Sequencing (clean end state via transitional seam).** (1) Add
-`lifecycle/page-session.ts` with a `PageSession` that, on `start()`, calls the
-*existing* top-level boot statements (moved into the method body) and on
-`teardown()` calls the existing `quiesceOrphan` logic — behavior byte-identical,
-the module just instantiates one `PageSession` instead of running boot at import
-time. (2) Migrate the module-scope observer/timer state into the instance. (3)
-Route the `rescan` action and `pageshow` through `onUrlChange`/`restore`. Each
-step keeps `npm test` green and is independently revertable; the final commit
-leaves no module-scope lifecycle state behind.
+**Sequencing (clean end state via transitional seam).** (1) **Done
+2026-05-30.** Add `lifecycle/page-session.ts` with a `PageSession` that owns the
+lifecycle *transitions* (and the `TeardownReason`), wired to the existing code
+via injected hooks — **injection-first, not by relocating boot**. The original
+plan was to move the top-level boot statements into `start()` in this step;
+that was rejected during implementation because the boot is ~2,800 lines of
+entangled, non-contiguous top-level statements whose `const` observer bindings
+are referenced throughout the file — relocating them in one diff is exactly the
+freeze-risky monolith surgery the restructure exists to avoid. Instead the
+session delegates `teardown(reason)` to the existing `quiesceOrphan` body and
+the orphan path routes through `pageSession.teardown('orphan')`. Behavior
+byte-identical; `id` delegates to `label-sync.getSessionId`. (2) Migrate the
+module-scope observer/timer state into the instance, incrementally. (3) Route
+the `rescan` action and `pageshow` through `onUrlChange`/`restore`. Each step
+keeps `npm test` green and is independently revertable; the final commit leaves
+no module-scope lifecycle state behind.
 
 **Explicitly out of scope for this cut / do not touch:** the stage interfaces
 (§3.2 — `DiscoveryStage`/`LifecycleStage`/`LabelStage`/`RenderStage`) and
