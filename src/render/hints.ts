@@ -40,6 +40,55 @@ export function supportsAnchorPositioning(): boolean {
 }
 let _nextAnchorId = 0;
 
+// Firefox (through 150) advertises CSS Anchor Positioning but fails to resolve
+// `anchor()` when the anchored element references a target inside a
+// `position:fixed` containing block — the host collapses to the viewport
+// origin (0,0), so badges on fixed page chrome (YouTube's masthead, mini-guide,
+// chips bar) render stacked in the top-left corner instead of on their target.
+// Chromium resolves it correctly. Feature-detect the specific broken behavior
+// (no UA sniffing) so targets under a fixed ancestor fall back to the nesting
+// path, which Firefox renders fine. Sticky/transform containing blocks resolve
+// correctly in both engines and stay on the anchor path.
+let _anchorAcrossFixed: boolean | null = null;
+export function anchorResolvesAcrossFixed(): boolean {
+  if (_anchorAcrossFixed !== null) return _anchorAcrossFixed;
+  if (!supportsAnchorPositioning() || typeof document === 'undefined' || !document.body) {
+    // Only consulted when anchor is supported; assume ok until the DOM is ready.
+    return true;
+  }
+  const name = `--bk-probe-${_nextAnchorId++}`;
+  const anchor = document.createElement('div');
+  anchor.style.cssText = 'position:fixed;top:100px;left:120px;width:1px;height:1px;visibility:hidden;';
+  anchor.style.setProperty('anchor-name', name);
+  const host = document.createElement('div');
+  host.style.cssText =
+    `position:absolute;top:anchor(top);left:anchor(left);position-anchor:${name};width:1px;height:1px;visibility:hidden;`;
+  document.body.appendChild(anchor);
+  document.body.appendChild(host);
+  const a = anchor.getBoundingClientRect();
+  const h = host.getBoundingClientRect();
+  anchor.remove();
+  host.remove();
+  _anchorAcrossFixed = Math.abs(a.top - h.top) < 2 && Math.abs(a.left - h.left) < 2;
+  return _anchorAcrossFixed;
+}
+
+// Walk ancestors (piercing shadow boundaries) for a `position:fixed` element.
+export function hasFixedAncestor(target: Element): boolean {
+  let node: Element | null = target;
+  while (node) {
+    if (node instanceof HTMLElement && getCachedStyle(node).position === 'fixed') return true;
+    const parent: Element | null = node.parentElement;
+    if (parent) {
+      node = parent;
+    } else {
+      const root = node.getRootNode();
+      node = root instanceof ShadowRoot ? (root.host as Element) : null;
+    }
+  }
+  return false;
+}
+
 // Express placement's absolute viewport decision as a scroll-invariant offset
 // from the target's element rect, baked into the host's anchor() calc. The
 // compositor then carries the badge through scroll.
@@ -56,7 +105,8 @@ export function anchorOffsetCss(
 // CSS.supports returns true for everything, so tests must set the mode they
 // intend rather than relying on detection.
 export const __testing = {
-  setAnchorSupport(v: boolean | null): void { _anchorSupport = v; },
+  setAnchorSupport(v: boolean | null): void { _anchorSupport = v; _anchorAcrossFixed = null; },
+  setAnchorAcrossFixed(v: boolean | null): void { _anchorAcrossFixed = v; },
 };
 
 // --- Position debug log (temporary investigation) ---
@@ -382,8 +432,10 @@ export class HintBadge {
 
   // CSS Anchor Positioning fast-path. When `anchorMode` is true the host is
   // body-mounted and pinned to the target via `anchorName`; scroll-tracking
-  // is handled by the compositor, so reposition() is a no-op.
-  private readonly anchorMode: boolean = supportsAnchorPositioning();
+  // is handled by the compositor, so reposition() is a no-op. Disabled per
+  // target when the engine can't resolve anchor() across a fixed ancestor
+  // (Firefox) — those fall back to the nesting path. Set in the constructor.
+  private readonly anchorMode: boolean;
   private anchorName: string | null = null;
 
   // Scroll-tracking trim (nesting path). A badge nested in its target's
@@ -413,6 +465,8 @@ export class HintBadge {
     this.label = label;
     this.displayMode = displayMode;
     this.fontSize = computeBadgeFontSize(target);
+    this.anchorMode = supportsAnchorPositioning()
+      && (anchorResolvesAcrossFixed() || !hasFixedAncestor(target));
 
     this.host = document.createElement('div');
     this.host.setAttribute('data-branchkit-hint', 'true');
