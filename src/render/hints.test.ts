@@ -266,6 +266,16 @@ describe('HintBadge.retarget', () => {
     expect(targetTracker.isTracked(newBtn)).toBe(false);
     expect(hostTracker.isTracked(badge.host)).toBe(false);
   });
+
+  it('ensureBound is a no-op on the nesting path (no anchor-name to repair)', () => {
+    const root = mount('<div id="container"><button id="btn">click</button></div>');
+    const btn = root.querySelector('#btn')! as HTMLElement;
+
+    const badge = new HintBadge(btn, label, 'button', 'word');
+    expect(badge.ensureBound()).toBe(false);
+
+    badge.remove();
+  });
 });
 
 describe('HintBadge anchor mode (CSS Anchor Positioning fast-path)', () => {
@@ -340,6 +350,53 @@ describe('HintBadge anchor mode (CSS Anchor Positioning fast-path)', () => {
 
     expect(btn.style.getPropertyValue('anchor-name')).toBe('');
     expect(badge.host.parentElement).toBeNull();
+  });
+
+  it('ensureBound re-asserts a dangling anchor-name on the live target', () => {
+    // Simulates list virtualization: the target node loses the anchor-name
+    // (recreated/recycled underneath us) so position-anchor dangles. ensureBound
+    // detects the gap and re-writes the name; the compositor re-resolves anchor().
+    const root = mount('<div id="container"><button id="btn">click</button></div>');
+    const btn = root.querySelector('#btn')! as HTMLElement;
+
+    const badge = new HintBadge(btn, label, 'button', 'word');
+    const name = btn.style.getPropertyValue('anchor-name');
+    expect(name).toMatch(/^--bk-\d+$/);
+
+    // Page wiped our binding.
+    btn.style.removeProperty('anchor-name');
+    expect(btn.style.getPropertyValue('anchor-name')).toBe('');
+
+    const repaired = badge.ensureBound();
+
+    expect(repaired).toBe(true);
+    expect(btn.style.getPropertyValue('anchor-name')).toBe(name);
+
+    badge.remove();
+  });
+
+  it('ensureBound is a no-op when the binding is intact', () => {
+    const root = mount('<div id="container"><button id="btn">click</button></div>');
+    const btn = root.querySelector('#btn')! as HTMLElement;
+
+    const badge = new HintBadge(btn, label, 'button', 'word');
+    expect(badge.ensureBound()).toBe(false);
+
+    badge.remove();
+  });
+
+  it('ensureBound is a no-op when the target is disconnected', () => {
+    const root = mount('<div id="container"><button id="btn">click</button></div>');
+    const btn = root.querySelector('#btn')! as HTMLElement;
+
+    const badge = new HintBadge(btn, label, 'button', 'word');
+    btn.style.removeProperty('anchor-name');
+    btn.remove(); // target left the DOM — don't re-bind an orphan
+
+    expect(badge.ensureBound()).toBe(false);
+    expect(btn.style.getPropertyValue('anchor-name')).toBe('');
+
+    badge.remove();
   });
 
   it('bakes the placement offset into an anchor() calc relative to the target rect', () => {

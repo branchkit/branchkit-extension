@@ -76,6 +76,10 @@ interface WrapperRecord {
     anchorParentTag: string;
     anchorParentClasses: string;
     displayedAs: string;
+    positioningMethod: 'anchor' | 'nesting';
+    scrollSensitive: boolean;
+    geometryDependent: boolean;
+    bindingLive: boolean | null;
   } | null;
   containerResolution: ContainerResolutionDiag | null;
   isInViewport: boolean;
@@ -171,6 +175,10 @@ function captureWrapper(w: ElementWrapper): WrapperRecord {
       anchorParentTag: diag.anchorParentTag,
       anchorParentClasses: diag.anchorParentClasses,
       displayedAs: diag.displayedAs,
+      positioningMethod: diag.positioningMethod,
+      scrollSensitive: diag.scrollSensitive,
+      geometryDependent: diag.geometryDependent,
+      bindingLive: diag.bindingLive,
     };
   }
 

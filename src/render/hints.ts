@@ -906,6 +906,27 @@ export class HintBadge {
     return this.geometryDependent;
   }
 
+  // Anchor path only. The anchor relationship is carried by a single inline
+  // `anchor-name` written onto the target once at construction. List
+  // virtualization (YouTube scroll-back) recreates/recycles the target node
+  // without that style, so the host's `position-anchor` references a dead name
+  // and anchor() collapses to the document origin — the scroll-back stranding
+  // bug. This is an unobserved target-identity change: no scroll, no resize, no
+  // removal of our (body-mounted) host, so nothing else repairs it. Re-assert
+  // the binding on the live target; the compositor re-resolves anchor() on its
+  // own, so no reposition is needed. Mirrors retarget's untrack→write→re-track
+  // ordering so our own write isn't seen as a foreign mutation. gBCR-free —
+  // reads only the target's inline style. Returns true if it repaired a binding.
+  ensureBound(): boolean {
+    if (!this.anchorMode || !this.anchorName || !this.target.isConnected) return false;
+    const el = this.target as HTMLElement;
+    if (el.style?.getPropertyValue?.('anchor-name')?.trim() === this.anchorName) return false;
+    untrackTargetMutations(this.target);
+    el.style?.setProperty?.('anchor-name', this.anchorName);
+    trackTargetMutations(this.target);
+    return true;
+  }
+
   remove(): void {
     untrackContainerResize(this.anchorParent);
     if (this.scrollAncestor) {
@@ -935,12 +956,33 @@ export class HintBadge {
     anchorParentTag: string;
     anchorParentClasses: string;
     displayedAs: string;
+    // Which of the two positioning methods this badge uses: 'anchor' = CSS
+    // anchor() fast-path (host body-mounted, compositor tracks the target);
+    // 'nesting' = host physically nested in a resolved container and re-placed
+    // by JS on settle. The scroll-back stranding bug lives on whichever path
+    // can't follow a target moved by sibling reflow — this label disambiguates.
+    positioningMethod: 'anchor' | 'nesting';
+    scrollSensitive: boolean;
+    geometryDependent: boolean;
+    // Anchor-path only: does the live target still carry the `anchor-name`
+    // the host's `position-anchor` references? false ⇒ the binding dangled
+    // (target node recreated underneath us — sub-cause A); true ⇒ binding is
+    // intact, so a stranded badge means anchor() failed to re-resolve on
+    // reflow (sub-cause B). null on the nesting path (concept N/A).
+    bindingLive: boolean | null;
   } {
     const ir = this.inner.getBoundingClientRect();
     const or2 = this.outer.getBoundingClientRect();
     const ap = this.anchorParent;
     const apr = ap.getBoundingClientRect();
     const aps = getComputedStyle(ap);
+    let bindingLive: boolean | null = null;
+    if (this.anchorMode && this.anchorName) {
+      const live = getComputedStyle(this.target as Element)
+        .getPropertyValue('anchor-name')
+        .trim();
+      bindingLive = live === this.anchorName;
+    }
     return {
       innerRect: { x: Math.round(ir.left), y: Math.round(ir.top), w: Math.round(ir.width), h: Math.round(ir.height) },
       outerRect: { x: Math.round(or2.left), y: Math.round(or2.top), w: Math.round(or2.width), h: Math.round(or2.height) },
@@ -950,6 +992,10 @@ export class HintBadge {
       anchorParentTag: ap.tagName.toLowerCase(),
       anchorParentClasses: ap.className?.toString().slice(0, 200) ?? '',
       displayedAs: this.inner.textContent ?? '',
+      positioningMethod: this.anchorMode ? 'anchor' : 'nesting',
+      scrollSensitive: this.scrollSensitive,
+      geometryDependent: this.geometryDependent,
+      bindingLive,
     };
   }
 

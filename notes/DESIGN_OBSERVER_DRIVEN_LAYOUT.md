@@ -778,3 +778,180 @@ debug path opts in to live reads.
   do badges in *closed* shadow roots (our hint hosts) reach a light-DOM
   `anchor-name`? `_test-anchor-shadow.mjs` exists to answer this; result
   not yet recorded here.
+
+## Placement staleness: the anchor binding outlives the target (2026-05-31)
+
+This section is the design for the YouTube "scroll down, scroll back up,
+badges hang ~200px above their titles" bug, and it adjusts a load-bearing
+assumption in the "Anchor-first architecture" section above.
+
+### What the bug actually is
+
+A real signed-in Firefox snapshot (scroll down five viewports, scroll back,
+capture) decomposed every in-viewport badge into inner-vs-host and
+host-vs-target offsets, using the new `positioningMethod`/`scrollSensitive`/
+`geometryDependent` labels on the debug snapshot:
+
+- **23 of 24 stranded badges are on the `anchor` path**, not the nesting
+  path. Only one was nesting (a band-edge case). The earlier working theory
+  — "this is the doomed Firefox nesting path failing to JS-reposition" — is
+  wrong. These tiles are not under a fixed ancestor and Firefox here supports
+  `anchor()`, so they ride the same anchor fast-path Chromium uses.
+- In every stranded case `inner − host = 0` (the badge sits exactly on its
+  host) and the entire error is `host − target`: e.g. a 0×0 anchored host at
+  `y=208` while the target rect is at `y=6`. The host is pinned to where the
+  target *used to be* before the scroll-back reflow; the target moved and the
+  host did not follow.
+
+A correctly-bound, live anchor cannot be 200px off — per spec the compositor
+keeps `top:anchor(top)` glued to the anchor element's current box. So the
+anchor relationship is **broken**, not merely lagging.
+
+### Why this contradicts "tracking is free"
+
+The "Anchor-first architecture" section asserts the compositor tracks the
+target "through every overflow ancestor natively, so tracking is free." That
+is true for **position** changes of a **stable node**. It is not true across a
+change of **target identity**. The anchor relationship is carried by a single
+inline `anchor-name: --bk-N` written **once** onto the target element at badge
+construction (`hints.ts` ~568). YouTube's viewport virtualization destroys and
+rebuilds the rows above you on scroll-back; the rebuilt tile is a *new* DOM
+node that never received that inline style. The host's `position-anchor:--bk-N`
+now references a name that lives on a detached/dead node (or no node), so
+`anchor()` falls back to a static-ish position inside `ytd-page-manager` and
+the badge strands.
+
+This is a fifth blind spot the "Four Layout-Change Signals" table does not
+cover. The four signals all assume the target node *persists* and we are
+tracking its geometry. None fires for "the node carrying my anchor binding was
+replaced by an equivalent node, in place, with no scroll/resize and without
+removing my host." It is the placement-layer twin of the lifecycle gap the
+reconciler closed for *existence* — see
+[[notes/DESIGN_HINT_LIFECYCLE_RECONCILER.md]].
+
+### Why none of the existing repair paths catch it
+
+Two repair mechanisms exist today and both miss this case structurally:
+
+1. **`badgeReattachObserver`** (`content.ts` ~976) fires when *our badge host*
+   is removed from the DOM. On the nesting path the host is physically nested
+   in the target's container, so a rebuild removes it and this fires. On the
+   anchor path the host is mounted at `document.body`; virtualization rebuilds
+   tiles inside `ytd-page-manager`, never touching body, so our host is never
+   removed and this observer never fires.
+2. **Limbo rebind** (`rebindWrapper`/`retarget`, `content.ts` ~2686) re-applies
+   `anchor-name` to a replacement node — but it is triggered by the wrapper's
+   `.element` going **disconnected** (limbo on disconnect, rebind when a
+   fingerprint match reappears). In this bug the wrapper's `.element` reads as
+   connected and correctly placed at `y=6`; the desync is purely between the
+   host's frozen anchor and the live target. Whatever swap happened did not
+   route through the disconnect→limbo→rebind path, so the anchor-name was never
+   re-asserted.
+
+The honest gap: there is **no signal** today for "a present, connected target's
+identity or position changed underneath a body-mounted anchored host."
+
+### Open sub-question to nail before coding (one snapshot field away)
+
+I cannot fully distinguish two sub-mechanisms from a single snapshot, and the
+remediation primitive differs between them:
+
+- **(A) Dangling binding (node recreation).** The current `w.element` no longer
+  carries the `anchor-name` the host references (it was recreated). Fix: re-assert
+  `anchor-name` on the live target; `anchor()` re-resolves; cheap.
+- **(B) Firefox fails to re-resolve `anchor()` on this reflow even with an intact
+  binding.** Then the binding is fine and re-asserting it does nothing — the badge
+  needs a forced anchor re-resolution (toggle the property) or a fall-through to
+  JS absolute placement for that badge.
+
+Disambiguation is one debug-snapshot field: for each anchor badge, record
+whether `w.element`'s computed `anchor-name` still equals the host's
+`position-anchor` name (`bindingLive: boolean`). `false` ⇒ (A); `true` ⇒ (B).
+
+**RESOLVED 2026-05-31 — it is (A).** A re-capture with the `bindingLive` field
+(`…/snapshots/2026-05-31T19-11-01-213Z/snapshot.json`) shows all 3 genuinely
+stranded badges (parked at the document origin, `badge_y ≈ -12246` while their
+targets sit at `y=802`/`1158`, deep in the feed at `scrollY≈12246`) are
+`positioningMethod:'anchor'` with **`bindingLive:false`** — every one. The
+target nodes were recreated by virtualization and never received the
+`anchor-name`, so `position-anchor` references a dead name and `anchor()` falls
+back to the document origin. (`bindingLive:true` badges in the same capture were
+only ~16px off — placement noise, not stranding.) So the remediation is the
+cheap one: **re-assert `anchor-name` on the live target** via the existing
+`retarget`/`reposition` primitives; no forced re-anchor or JS fallback needed.
+The detector below is still required — it is what notices the dangling binding,
+since nothing else fires.
+
+### Proposed design: a level-triggered placement reconcile
+
+Mirror the lifecycle reconciler on the placement axis. The lifecycle reconciler
+converted edge-triggered existence mutation into one level-triggered pass that
+asks "for each wrapper, should a badge exist, and does it?" The placement
+reconcile asks the analogous question for *position*: **"for each badge that
+should be on screen, is it still glued to its target, and if not, re-glue it."**
+
+- **Scope:** the visible/hinted set only — never the whole store. Per-wrapper
+  `getBoundingClientRect` over the full store is the wedge cliff
+  ([[wedge-fix-load-bearing]]); honoring it is non-negotiable. The attention
+  region already bounds the candidate set; the reconcile reads only badges whose
+  targets are in (or near) the viewport.
+- **The check (read phase, batched):** for each in-band anchored badge, compare
+  the live target rect to where the badge actually sits (host rect, or the
+  target's `anchor-name` liveness per the disambiguation field). Read all first,
+  then act — no interleaved read/write that re-triggers layout per badge.
+- **The repair (write phase):** for a stale badge, re-assert `anchor-name` on the
+  live target and re-bake the offset (`updatePosition`), i.e. reuse the existing
+  `retarget`/`reposition` primitives without requiring a disconnect. If sub-cause
+  (B) is confirmed, add the forced-reanchor or JS-fallback primitive then.
+- **Trigger — the genuinely new part.** The check needs a clock, because the
+  defining property of this bug is that *no DOM signal fires*. Options, in order
+  of preference:
+  1. **Fold into the existing reconcile pass** ([[notes/DESIGN_HINT_LIFECYCLE_RECONCILER.md]]),
+     which already runs level-triggered on the signals we do catch (scroll-settle,
+     mutation-settle, claim changes). Add a bounded placement check to the same
+     pass. Cheapest; no new standing cost; but it only re-checks when *something*
+     triggered a reconcile, so a pure silent virtualization with no follow-on
+     signal could still lag until the next scroll-settle. Likely good enough
+     because scroll-back is itself a scroll, which already schedules a settle
+     reconcile.
+  2. **Floating-UI-style `autoUpdate` opt-in:** a bounded `requestAnimationFrame`
+     poll over the visible anchored set while the page is actively scrolling,
+     stopping on scroll-idle. This is exactly the "compositor-only / unobserved
+     change" escape hatch Floating UI ships as `animationFrame: true`, and the
+     "Reference Architecture" section already anticipates it. More robust, but a
+     standing per-frame cost — must be gated to scroll-active windows and the
+     visible set, or it reintroduces the very per-frame reflow this whole doc set
+     out to kill.
+
+  Recommendation: implement (1) first (a scroll-settle reconcile already exists
+  and scroll-back always produces a scroll), measure against the deterministic
+  repro, and only add (2) if a class of silent swaps still slips through.
+- **Where it lives:** the reconcile module (`lifecycle/reconcile.ts` decision +
+  `content.ts` execution), not `hints.ts`. `HintBadge` keeps its
+  `retarget`/`reposition`/`reattach` primitives; the reconcile decides *which*
+  badges need them. This keeps placement decisions in one level-triggered place
+  rather than scattering another edge-triggered observer.
+
+### What this does to the anchor-first plan
+
+It does **not** revive the nesting path or the `LayoutSignalRouter`. "Delete the
+nesting path and unify on `anchor()`" stays the trajectory — but with a correction:
+unifying on `anchor()` is necessary but **not sufficient**. The anchor model needs
+one companion guarantee the doc previously assumed the platform gave us for free —
+*the binding must survive target re-creation* — and the only portable way to
+guarantee that is a level-triggered placement reconcile over the visible set. So
+the placement reconcile is not legacy-path investment; it is the missing piece that
+makes the anchor model actually correct on virtualizing pages, on both engines.
+
+### Scope and non-goals
+
+- In scope: re-gluing present, in-viewport anchored badges whose target identity
+  or position changed without a caught signal.
+- Not in scope here: occlusion/overlap avoidance (a separate placement gap), the
+  clipping open question (`position-visibility`), and off-screen badges (lifecycle
+  reconciler territory).
+- Guardrails: the deterministic repro should become a scripted Playwright check
+  (extend `scripts/_test-scroll-back-drift.mjs` to assert zero stranded anchored
+  badges after scroll-back on a signed-in-equivalent fixture); the wedge test
+  (`_test-videos-tab-wedge.mjs`) and leak sweep must stay green; re-verify the
+  wedge does not return.

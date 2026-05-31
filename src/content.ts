@@ -1364,6 +1364,27 @@ function reconcileTeardown(): void {
   }
 }
 
+// Placement half of the level-triggered reconcile (DESIGN_OBSERVER_DRIVEN_LAYOUT
+// "Placement staleness: the anchor binding outlives the target"). The anchor
+// path pins the host to the target via an inline `anchor-name` set ONCE at
+// construction. List virtualization (YouTube scroll-back) recreates the target
+// node without that style, so `position-anchor` dangles and the badge collapses
+// to the document origin. That is an unobserved target-identity change — it
+// fires no scroll/resize and never removes our body-mounted host, so neither
+// `badgeReattachObserver` (host-removal) nor limbo-rebind (target-disconnect)
+// catches it. This pass re-asserts the binding over the bounded hinted set;
+// the compositor re-resolves anchor() on its own, so no reposition follows.
+// Wedge discipline: gBCR-free — ensureBound reads only the target's inline
+// style — and bounded to hinted+connected wrappers, never the whole store.
+function reconcilePlacement(): void {
+  let repaired = 0;
+  for (const w of store.all) {
+    if (!w.hint || w.disconnectedAt !== null) continue;
+    if (w.hint.ensureBound()) repaired++;
+  }
+  if (repaired > 0) firehoseStep('reconcile:placement:repaired', repaired, 1);
+}
+
 function updateBadgeLabels(): void {
   for (const w of store.all) {
     if (w.hint && w.label) {
@@ -2297,7 +2318,12 @@ function scheduleScrollReposition(): void {
     pageSession.scrollRepositionTimer = null;
     // Scroll-settle is the canonical viewport-exit moment: release hints that
     // scrolled out of band but whose IO exit event dropped (stale-TRUE).
-    if (pageSession.hintsVisible) reconcileTeardown();
+    if (pageSession.hintsVisible) {
+      reconcileTeardown();
+      // …and the canonical scroll-back moment: re-glue anchored badges whose
+      // target node was recreated by virtualization (binding dangled).
+      reconcilePlacement();
+    }
     scheduleReposition('drifted');
   }, DEFERRED_REPOSITION_DEBOUNCE_MS);
 }
@@ -2364,6 +2390,10 @@ function scheduleDeferredReposition(): void {
     // 'resize' handler stays 'all' for genuine global layout/clamping changes.
     if (pageSession.hintsVisible) {
       reconcileTeardown();
+      // A settle (container resize, target mutation, expanding rows) can also
+      // recreate a target node underneath an anchored badge — re-glue dangling
+      // bindings here too, not just on scroll.
+      reconcilePlacement();
       // focus/transition/resize can reveal new in-band hintables (dropdowns,
       // expanding rows). Converge claim+build over the settled layout; coalesced
       // so a churny burst collapses to one pass that acts on real deltas only.

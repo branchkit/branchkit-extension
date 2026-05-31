@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Anchor rebind fixture</title>
+<style>
+  body { margin: 0; font-family: sans-serif; }
+  .row {
+    display: block; padding: 16px 20px;
+    border-bottom: 1px solid #e5e5e5;
+    color: #333; text-decoration: none;
+  }
+  .row:hover { background: #e9e9e9; }
+</style>
+</head>
+<body>
+  <!-- Anchor-path targets: plain body-level links (no position:fixed ancestor),
+       so Chromium hints them via CSS anchor positioning — the path the
+       scroll-back stranding bug lives on. Tall enough to scroll the window. -->
+  <div id="list"></div>
+  <script>
+    const list = document.getElementById('list');
+    for (let i = 0; i < 40; i++) {
+      const a = document.createElement('a');
+      a.href = '#';
+      a.className = 'row';
+      a.id = 'row-' + i;
+      a.textContent = 'Row ' + i;
+      list.appendChild(a);
+    }
+  </script>
+</body>
+</html>
