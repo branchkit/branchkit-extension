@@ -1771,14 +1771,24 @@ function rescanForNav(fromCache: boolean, reason: string): void {
 
       // Reconciliation walk rebuilds wrappers for the new page. For spa_nav we
       // detached everything above, so this is the full rebuild path; for
-      // refocus it's the idempotent reconciliation we always did. The 300ms
-      // delay gives the page a chance to finish its render burst (per
-      // observation, YouTube's full-page swap settles in <300ms once we stop
-      // racing it).
-      setTimeout(() => {
+      // refocus it's the idempotent reconciliation we always did.
+      //
+      // Idle-scheduled instead of `setTimeout(300)`: on light pages the idle
+      // callback fires in <50ms so badges appear ~250ms sooner; on heavy
+      // pages (YouTube /featured) the browser holds off until it's actually
+      // idle, which is exactly what we want — no need for a fixed margin.
+      // The 300ms `timeout` caps the wait so we still reconcile even if the
+      // page is pathologically busy. Plan A3 (notes/PLAN_BROWSER_EXTENSION_PERF_OPTIMIZATION.md).
+      const scheduleDeferred = () => {
         void navStep('deferred_scan:start');
         void doScanBatched().then(() => navStep('deferred_scan:end'));
-      }, 300);
+      };
+      if (typeof (window as { requestIdleCallback?: unknown }).requestIdleCallback === 'function') {
+        (window as Window & { requestIdleCallback: (cb: () => void, opts?: { timeout: number }) => void })
+          .requestIdleCallback(scheduleDeferred, { timeout: 300 });
+      } else {
+        setTimeout(scheduleDeferred, 100);
+      }
     };
 
     if (typeof (window as { requestIdleCallback?: unknown }).requestIdleCallback === 'function') {
