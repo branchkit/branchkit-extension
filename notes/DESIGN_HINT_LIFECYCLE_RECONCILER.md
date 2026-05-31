@@ -400,6 +400,37 @@ settle-triggered reconcile — the signed-out Playwright harness doesn't exercis
 the actuator commit path. Needs a live-app pass (watch commit frequency on a
 churny page like YouTube /watch) before this phase is considered closed.
 
+**Phase 3b — Band-discovery backstop (landed, commit a9334d4).** The discover
+step `reconcile()` could not own: a hintable that entered the DOM while the
+doc-level MutationObserver dropped/coalesced its insertion record has no wrapper,
+so there is nothing for the converge pass to read. `scheduleBandDiscovery()`
+re-walks `document.body` through `discoverInSubtreeBatched` (the same wedge-safe
+sliced path the nav rescan uses — yields between batches, `isKnown` skip,
+idempotent `attachDiscovered`; a steady-state sweep attaches nothing and claims
+nothing, so no grammar churn). It is single-flight (`pageSession.discoverySweepPending`,
+cleared in `finally` at the *end* of the whole async walk so two walks can't race
+to attach the same element) and idle-scheduled (`runWhenIdle` = requestIdleCallback
+with a 500ms timeout, `setTimeout(100)` fallback for Firefox content scripts), so a
+long scroll runs at most one sweep and it never lands mid-reflow (the wedge guard).
+On `added > 0` it runs `reconcile()` → `tracker.flushNow()` → `showHints()`.
+Wired into `scheduleScrollReposition`'s settle, inside the `hintsVisible` block
+after `reconcileTeardown()` + `reconcilePlacement()` — scroll-settle is where
+infinite-scroll content lands. Distinct from the pre-existing
+`scheduleDiscovery(root)` (rAF drainer for subtree roots the MO *did* see; the
+name collision forced the `Band` qualifier).
+
+*Guardrail.* `scripts/_test-band-discovery.mjs` + `test-fixtures/band-discovery.html`
+synthesize a real gap deterministically: the doc MutationObserver does not observe
+inside a shadow root, but the scanner's `deepQuerySelectorAll` pierces OPEN ones,
+so appending an `<a href>` into an open shadow root post-baseline is a genuine
+discovery gap (hintable + in-band, no wrapper). Asserts the element is unbadged
+before the sweep and badged after (anchor-name `--bk-4`), attributing the badge to
+the discover step. Wedge + placement guardrails re-verified green; 463 unit tests
+green. **UNVERIFIED gate (same shape as Phase 5):** efficacy `discoveryGap → 0`
+does not reproduce on the signed-out harness — needs a live signed-in dense
+YouTube home (the Phase 0 caveat). Synthetic-gap correctness and wedge-safety are
+verified offline; the live efficacy check folds into Phase 6.
+
 **Phase 6 — Final parity sweep + doc reconciliation.** Wedge repro green; full
 `classify` sweep with all three lifecycle buckets ~0 and no catastrophic state;
 grammar-churn check; real-site spot check (YouTube home + a channel `/videos`
