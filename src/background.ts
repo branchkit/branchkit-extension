@@ -69,19 +69,19 @@ function rescanActiveTab(): void {
 
 const hasOffscreenAPI = typeof chrome !== 'undefined' && !!chrome.offscreen;
 
-// --- Browser Bundle ID Detection ---
-
-function detectBundleID(): string {
-  const ua = navigator.userAgent;
-  if (ua.includes('Chrome') && !ua.includes('Edg')) return 'com.google.Chrome';
-  if (ua.includes('Edg')) return 'com.microsoft.edgemac';
-  if (ua.includes('Safari') && !ua.includes('Chrome')) return 'com.apple.Safari';
-  if (ua.includes('Firefox')) return 'org.mozilla.firefox';
-  if (ua.includes('Arc')) return 'company.thebrowser.Browser';
-  return '';
-}
-
-const browserBundleID = detectBundleID();
+// --- Connection identity ---
+//
+// The extension never names its own browser. UA-sniffing the macOS bundle ID
+// is wrong for every fork of a supported engine (Brave reports as Chrome,
+// Firefox Nightly as firefox, etc.), which broke the plugin's cross-browser
+// focus gate. Instead we mint a connection nonce and let the OS-authoritative
+// focus event name the browser: when this browser gains OS focus we POST /focus
+// with connId, and the plugin binds connId to whatever bundle the OS reports as
+// frontmost. See notes/DESIGN_BROWSER_IDENTITY_FOCUS_HANDSHAKE.md.
+//
+// Stable for this background's lifetime. On SW restart it regenerates and the
+// SSE reconnect (init → connectSSE) re-establishes the mapping plugin-side.
+const connId = crypto.randomUUID();
 
 // --- Alphabet ---
 
@@ -526,16 +526,15 @@ async function postGrammarBatch(
     connectSSE();
   }
 
-  // Stamp the OS bundle ID here, not in the content script: the content
-  // script can't detect which browser it's running in, but the background
-  // can (browserBundleID). The plugin's cross-browser focus gate keys off
-  // this to accept grammar only from the OS-focused browser, so an empty
-  // value would defeat it. tab_id/frame_id come from the message sender.
+  // Stamp the connection nonce here, not in the content script. The plugin's
+  // cross-browser focus gate keys off the connId↔bundle binding (established
+  // by the focus handshake) to accept grammar only from the OS-focused
+  // browser. tab_id/frame_id come from the message sender.
   const fullRequest: GrammarBatchRequest = {
     ...request,
     tab_id: tabId,
     frame_id: frameId,
-    bundle_id: browserBundleID,
+    conn_id: connId,
   };
   try {
     const r = await fetch(`http://127.0.0.1:${pluginPort}/grammar/batch`, {
@@ -574,6 +573,38 @@ function inactiveResponse(
     succeeded: [],
     failed: request.elements.map(e => ({ codeword: e.codeword, reason: 'inactive' })),
   };
+}
+
+// Tell the plugin this browser's connection just gained (or lost) OS focus.
+// The plugin binds connId to the OS-focused bundle on a focused:true claim;
+// identity comes from the OS, this only says "which connection is focused now."
+// Best-effort: a dropped focus POST self-heals on the next focus transition.
+async function postFocus(focused: boolean): Promise<void> {
+  if (!pluginPort || !pluginToken) return;
+  try {
+    await fetch(`http://127.0.0.1:${pluginPort}/focus`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${pluginToken}`,
+      },
+      body: JSON.stringify({ conn_id: connId, focused }),
+    });
+  } catch {
+    // best-effort; next onFocusChanged re-asserts
+  }
+}
+
+// Claim focus at SSE-connect time if a window of this browser is currently the
+// OS-focused window. Covers cold start: the browser is already frontmost when
+// its extension connects, so no onFocusChanged fires to trigger the handshake.
+async function assertFocusIfFocused(): Promise<void> {
+  try {
+    const win = await chrome.windows.getLastFocused();
+    if (win.focused && win.type === 'normal') void postFocus(true);
+  } catch {
+    // window query unavailable; onFocusChanged covers subsequent transitions
+  }
 }
 
 // --- SSE Connection (browser-adaptive) ---
@@ -616,7 +647,7 @@ function notifyOffscreenConnect(): void {
     type: 'CONNECT_SSE',
     port: pluginPort,
     token: pluginToken,
-    bundleId: browserBundleID,
+    connId,
   }).catch(() => {});
 }
 
@@ -628,14 +659,16 @@ function connectDirectSSE(port: number, token: string): void {
     directSSE = null;
   }
 
-  // bundle_id lets the plugin scope dispatch/rescan to the OS-focused
-  // browser so a spoken command doesn't also fire in a background browser.
-  const url = `http://127.0.0.1:${port}/events?token=${token}&bundle_id=${encodeURIComponent(browserBundleID)}`;
+  // conn_id identifies this connection; the plugin binds it to the OS-focused
+  // bundle via the focus handshake so dispatch/rescan target only the focused
+  // browser and a spoken command doesn't also fire in a background browser.
+  const url = `http://127.0.0.1:${port}/events?token=${token}&conn_id=${encodeURIComponent(connId)}`;
   directSSE = new EventSource(url);
 
   directSSE.addEventListener('connected', () => {
     console.log('[BranchKit BG] SSE connected (direct)');
     branchkitConnected = true;
+    void assertFocusIfFocused();
     hydrateReferencesFromCollection().then(() => pushReferenceNames());
   });
 
@@ -1064,9 +1097,12 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     const wasConnected = branchkitConnected;
     branchkitConnected = message.branchkit ?? false;
 
-    // New connection — cancel any pending retry, hydrate, rescan
+    // New connection — cancel any pending retry, hydrate, rescan, and claim
+    // focus if this browser is currently frontmost (cold-start handshake; the
+    // offscreen doc holds the EventSource so onFocusChanged may never fire).
     if (!wasConnected && branchkitConnected) {
       cancelSSERetry();
+      void assertFocusIfFocused();
       hydrateReferencesFromCollection().then(() => pushReferenceNames());
       rescanActiveTab();
     }
@@ -1309,7 +1345,13 @@ function scheduleSpaRescan(tabId: number): void {
 }
 
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
-  if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+  // All browser windows lost OS focus (user switched to another app). Tell the
+  // plugin this connection is no longer focused so its grammar gate and
+  // dispatch scoping stop treating this browser as frontmost.
+  if (windowId === chrome.windows.WINDOW_ID_NONE) {
+    void postFocus(false);
+    return;
+  }
   try {
     // Only follow focus into normal browser windows. Devtools / popups
     // / extension panels would otherwise blank cachedActiveTabId (they
@@ -1318,6 +1360,11 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
     // known content tab stays cached.
     const win = await chrome.windows.get(windowId);
     if (win.type !== 'normal') return;
+
+    // This browser gained OS focus. Claim it so the plugin binds this
+    // connection to whatever bundle the OS reports as frontmost — the
+    // browser never names itself (see DESIGN_BROWSER_IDENTITY_FOCUS_HANDSHAKE).
+    void postFocus(true);
 
     const tabs = await chrome.tabs.query({ active: true, windowId });
     const newActive = tabs[0]?.id ?? null;

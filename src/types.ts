@@ -62,7 +62,15 @@ export interface GrammarBatchRequest {
   is_final: boolean;
   /** "scan" = full doScan replacement; "incremental" = MO-driven discovery. */
   kind: 'scan' | 'incremental';
-  bundle_id: string;
+  /**
+   * Extension-minted connection nonce, stable for this background's lifetime.
+   * Replaces the old self-reported bundle_id: the extension can't reliably name
+   * its own macOS bundle (UA-sniffing breaks for forks like Brave/Nightly), so
+   * it identifies its connection instead. The plugin binds this conn_id to the
+   * OS-focused bundle via the focus handshake (POST /focus). Stamped by the
+   * background SW, not the content script.
+   */
+  conn_id: string;
   hint_visibility: HintVisibility;
   app_id: string;
   table_id: string;
@@ -105,7 +113,7 @@ export type Message =
   | { type: 'HEALTH_STATUS'; branchkit: boolean }
   | { type: 'GRAMMAR_PUSH'; elements: ScannedElement[] }
   | { type: 'GET_HEALTH' }
-  | { type: 'CONNECT_SSE'; port: number; token: string }
+  | { type: 'CONNECT_SSE'; port: number; token: string; connId: string }
   // Content → background, after handling a BRANCHKIT_ACTION. Background
   // forwards to the browser plugin's POST /dispatch-result so the actuator
   // log carries end-to-end visibility (voice → match → dispatch → frame

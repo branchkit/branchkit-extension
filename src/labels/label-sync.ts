@@ -257,7 +257,7 @@ export async function syncNow(reason: string): Promise<void> {
   }
 
   const sessionMeta = {
-    bundle_id: '',
+    conn_id: '', // stamped by the background SW in postGrammarBatch
     hint_visibility: getHintVisibility(),
     app_id: '',
     table_id: '',
