@@ -457,6 +457,10 @@ export class HintBadge {
   public geometryDependent: boolean = false;
   private _lastTargetVp: { x: number; y: number } | null = null;
   private _lastOuterVp: { x: number; y: number } | null = null;
+  // Diagnostic-only: inputs of the last anchor-offset bake, so a snapshot can
+  // show what candidate/target the baked `calc(anchor() + Npx)` came from and
+  // whether the target rect read at bake time matches its live position now.
+  private _lastBake: { candidateY: number; targetTop: number } | null = null;
   private static readonly DRIFT_EPS = 0.5;
 
   constructor(target: Element, label: LabelAssignment, category: Category, displayMode: BadgeDisplayMode) {
@@ -611,7 +615,9 @@ export class HintBadge {
       // calc. The compositor then carries the badge through scroll. A
       // candidate-less call is the reposition path — a no-op here.
       if (!candidate) return;
-      const css = anchorOffsetCss(candidate, getCachedRect(this.target));
+      const tr = getCachedRect(this.target);
+      this._lastBake = { candidateY: candidate.y, targetTop: tr.top };
+      const css = anchorOffsetCss(candidate, tr);
       this.host.style.left = css.left;
       this.host.style.top = css.top;
       return;
@@ -970,6 +976,30 @@ export class HintBadge {
     // intact, so a stranded badge means anchor() failed to re-resolve on
     // reflow (sub-cause B). null on the nesting path (concept N/A).
     bindingLive: boolean | null;
+    // Anchor-path only: the host's literal inline `top`/`left` — the baked
+    // `calc(anchor(top) + Npx)`. Lets a stranded badge be decomposed: if the
+    // baked Npx is small but outerRect is far from the target, anchor()
+    // resolved to the WRONG element (duplicate name); if Npx is itself large,
+    // the offset bake was stale. null/'' on the nesting path.
+    hostTop: string;
+    hostLeft: string;
+    // Anchor-path only: how many OTHER connected elements carry this badge's
+    // `anchor-name` inline. >0 ⇒ a recycled/stale node is competing for the
+    // anchor and anchor() may resolve to it (last in tree order wins). null on
+    // the nesting path.
+    anchorNameDupes: number | null;
+    // Anchor-path bake forensics. `bakeCandidateY`/`bakeTargetTop` are the two
+    // inputs to the last `anchor(top)+Npx` bake (Npx = candidateY − targetTop).
+    // `liveTargetTop` is the target's gBCR.top read NOW. If the baked offset is
+    // stale-large, comparing these tells us which input was wrong: if
+    // bakeTargetTop ≈ liveTargetTop but bakeCandidateY is far off, the candidate
+    // was computed from a stale element rect; if bakeTargetTop ≠ liveTargetTop,
+    // the target rect read at bake time disagreed with the candidate's basis
+    // (cache-miss live-fallback or a target/element identity split).
+    bakeCandidateY: number | null;
+    bakeTargetTop: number | null;
+    liveTargetTop: number | null;
+    targetTag: string;
   } {
     const ir = this.inner.getBoundingClientRect();
     const or2 = this.outer.getBoundingClientRect();
@@ -977,11 +1007,23 @@ export class HintBadge {
     const apr = ap.getBoundingClientRect();
     const aps = getComputedStyle(ap);
     let bindingLive: boolean | null = null;
+    let anchorNameDupes: number | null = null;
     if (this.anchorMode && this.anchorName) {
       const live = getComputedStyle(this.target as Element)
         .getPropertyValue('anchor-name')
         .trim();
       bindingLive = live === this.anchorName;
+      // Count OTHER connected elements whose inline style carries this exact
+      // anchor-name. Diagnostic-only (manual snapshot path), so the bounded
+      // scan over badge-tagged targets is acceptable; the live placement path
+      // never runs this.
+      anchorNameDupes = 0;
+      for (const el of document.querySelectorAll<HTMLElement>('[style*="--bk-"]')) {
+        if (el === this.target) continue;
+        if (el.style?.getPropertyValue?.('anchor-name')?.trim() === this.anchorName) {
+          anchorNameDupes++;
+        }
+      }
     }
     return {
       innerRect: { x: Math.round(ir.left), y: Math.round(ir.top), w: Math.round(ir.width), h: Math.round(ir.height) },
@@ -996,6 +1038,13 @@ export class HintBadge {
       scrollSensitive: this.scrollSensitive,
       geometryDependent: this.geometryDependent,
       bindingLive,
+      hostTop: this.anchorMode ? (this.host.style.top ?? '') : '',
+      hostLeft: this.anchorMode ? (this.host.style.left ?? '') : '',
+      anchorNameDupes,
+      bakeCandidateY: this._lastBake ? Math.round(this._lastBake.candidateY) : null,
+      bakeTargetTop: this._lastBake ? Math.round(this._lastBake.targetTop) : null,
+      liveTargetTop: this.anchorMode ? Math.round(this.target.getBoundingClientRect().top) : null,
+      targetTag: this.target.tagName.toLowerCase(),
     };
   }
 

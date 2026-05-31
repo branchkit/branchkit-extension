@@ -67,8 +67,16 @@ export function computePlacement(inp: PlacementInputs): PlacementResult {
   // change the result — that badge is not geometry-dependent.
   const spaceClamped = clampedOffsetX < hintOffsetX || clampedOffsetY < hintOffsetY;
 
-  let x = Math.max(0, targetRect.left - clampedOffsetX);
-  let y = Math.max(0, targetRect.top - clampedOffsetY);
+  // Purely target-relative — NO viewport-origin floor. A `Math.max(0, …)` here
+  // would clamp the badge to the viewport's top-left when the target is
+  // scrolled above/left of it, and on the anchor path that clamp delta (how far
+  // the target was off-viewport at bake time) gets frozen into the
+  // scroll-invariant `anchor() + Npx` offset — stranding the badge by exactly
+  // that amount when the target scrolls back into view. Negative coordinates
+  // are correct: they mean "above/left of the target", which `anchor()` and the
+  // nesting re-place both resolve against the live target.
+  let x = targetRect.left - clampedOffsetX;
+  let y = targetRect.top - clampedOffsetY;
 
   const scrollSensitive = !!stickyBound;
   if (stickyBound) {

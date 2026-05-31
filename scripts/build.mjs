@@ -30,6 +30,11 @@ if (target !== 'chrome' && target !== 'firefox') {
 
 const outDir = resolve(root, 'dist', target);
 
+// Stamp every bundle with the build time. Surfaced in the debug snapshot
+// (`buildId`) so we can tell, from a captured snapshot, exactly which build
+// the running content script came from — and rule out a stale/orphaned CS.
+const buildId = new Date().toISOString();
+
 // Clean only this target's directory so a parallel `build:all` doesn't
 // race with itself.
 if (existsSync(outDir)) rmSync(outDir, { recursive: true });
@@ -51,6 +56,7 @@ await Promise.all(entries.map((e) =>
     bundle: true,
     format: e.format,
     logLevel: 'warning',
+    define: { __BUILD_ID__: JSON.stringify(buildId) },
   })
 ));
 

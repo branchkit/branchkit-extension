@@ -61,15 +61,36 @@ export function getOrComputeProbe(w: ElementWrapper): TextProbe {
     w.cachedProbe = { hasText: false };
     return probe;
   }
-  const el = getCachedRect(w.element);
+  // The probe's `range.getBoundingClientRect()` is a LIVE read that forced a
+  // synchronous layout. Measure the element rect LIVE here too, in that same
+  // flushed frame — NOT via `getCachedRect`, whose snapshot was taken by
+  // `cacheLayout()` before this read pass. On a quiescent page the two agree;
+  // but when the page reflows between `cacheLayout()` and this probe (YouTube
+  // scroll-back virtualization re-laying-out rows), a cached element rect
+  // mixed with a live text rect bakes the reflow delta into `offsetY`. That
+  // delta then rides the anchor host's `calc(anchor(top) + Δpx)` and strands
+  // the badge ~200px off its (correctly-bound) target — the bug this guards.
+  const elLive = w.element.getBoundingClientRect();
+  const offsetX = probe.rect.left - elLive.left;
+  const offsetY = probe.rect.top - elLive.top;
   w.cachedProbe = {
     hasText: true,
-    offsetX: probe.rect.left - el.left,
-    offsetY: probe.rect.top - el.top,
+    offsetX,
+    offsetY,
     width: probe.rect.width,
     height: probe.rect.height,
   };
-  return probe;
+  // Return the rect reconstructed on the pass-consistent cached element rect,
+  // matching the cached-hit branch above. This keeps the candidate,
+  // `computePlacement`'s `elementRect`, and `updatePosition`'s anchor-offset
+  // bake all on one basis, so the baked offset is the intended overhang and
+  // can't absorb a reflow delta even if `cacheLayout`'s snapshot is stale —
+  // `anchor()` re-resolves the live target at render time regardless.
+  const elCached = getCachedRect(w.element);
+  return {
+    hasText: true,
+    rect: new DOMRect(elCached.left + offsetX, elCached.top + offsetY, probe.rect.width, probe.rect.height),
+  };
 }
 
 /**

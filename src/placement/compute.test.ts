@@ -87,9 +87,23 @@ describe('computePlacement', () => {
     expect(r.y).toBe(120);
   });
 
-  it('never returns negative coordinates', () => {
+  it('stays target-relative (no viewport floor) when the overhang goes negative', () => {
+    // Target near the viewport origin: the outside overhang pushes the badge
+    // above-and-left of it, into negative viewport coords. That is correct —
+    // the offset must describe "up-and-left of the target", not be clamped to
+    // viewport (0,0). A floor here would bake a viewport-dependent delta into
+    // the scroll-invariant anchor offset and strand the badge on scroll-back.
     const r = computePlacement(base({ targetRect: { left: 2, top: 1 } }));
-    expect(r.x).toBe(0);
-    expect(r.y).toBe(0);
+    // x = 2 - 13 = -11; y = 1 - 12 = -11
+    expect(r).toEqual({ x: -11, y: -11, scrollSensitive: false, geometryDependent: false });
+  });
+
+  it('keeps a scrolled-above target relative, not pinned to the viewport top', () => {
+    // The strand repro: target scrolled above the viewport (negative top).
+    // Pre-fix this clamped y to 0 and the anchor bake froze the +|top| delta.
+    const r = computePlacement(base({ nudge: { kind: 'inside', x: 1, y: 1 }, hasText: false, targetRect: { left: 200, top: -43 } }));
+    // inside ratio 1 => offset 0 => badge sits exactly at the target top (-43),
+    // so the baked anchor offset is 0 and the badge tracks on scroll-back.
+    expect(r).toEqual({ x: 200, y: -43, scrollSensitive: false, geometryDependent: false });
   });
 });

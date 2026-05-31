@@ -80,6 +80,13 @@ interface WrapperRecord {
     scrollSensitive: boolean;
     geometryDependent: boolean;
     bindingLive: boolean | null;
+    hostTop: string;
+    hostLeft: string;
+    anchorNameDupes: number | null;
+    bakeCandidateY: number | null;
+    bakeTargetTop: number | null;
+    liveTargetTop: number | null;
+    targetTag: string;
   } | null;
   containerResolution: ContainerResolutionDiag | null;
   isInViewport: boolean;
@@ -112,9 +119,15 @@ interface DomSurveyElement {
   parentChain: string[];
 }
 
+/** Build timestamp injected by esbuild (`define`) at compile time. Lets a
+ *  captured snapshot prove which build the running content script came from. */
+declare const __BUILD_ID__: string;
+
 export interface DebugSnapshotPayload {
   snapshot_id: string;
   taken_at: string;
+  /** ISO build time of the running bundle (esbuild-injected). */
+  build_id: string;
   frame_url: string;
   viewport: { width: number; height: number; scrollX: number; scrollY: number };
   wrappers: WrapperRecord[];
@@ -179,6 +192,13 @@ function captureWrapper(w: ElementWrapper): WrapperRecord {
       scrollSensitive: diag.scrollSensitive,
       geometryDependent: diag.geometryDependent,
       bindingLive: diag.bindingLive,
+      hostTop: diag.hostTop,
+      hostLeft: diag.hostLeft,
+      anchorNameDupes: diag.anchorNameDupes,
+      bakeCandidateY: diag.bakeCandidateY,
+      bakeTargetTop: diag.bakeTargetTop,
+      liveTargetTop: diag.liveTargetTop,
+      targetTag: diag.targetTag,
     };
   }
 
@@ -311,6 +331,7 @@ export function buildSnapshotPayload(inputs: BuildInputs): DebugSnapshotPayload 
   return {
     snapshot_id: generateSnapshotId(now),
     taken_at: now.toISOString(),
+    build_id: typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : 'unknown',
     frame_url: inputs.frameUrl,
     viewport: {
       width: window.innerWidth,
