@@ -1128,7 +1128,7 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
       sendResponse({ labels: [] });
       return false;
     }
-    claimLabels(tabId, frameId, message.count)
+    claimLabels(tabId, frameId, message.count, message.preferred)
       .then(labels => sendResponse({ labels }))
       .catch(err => {
         console.warn('[BranchKit SW] CLAIM_LABELS error:', err);

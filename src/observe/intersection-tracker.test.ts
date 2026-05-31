@@ -158,7 +158,12 @@ describe('IntersectionTracker.refreshViewportClaims', () => {
       ([msg]) => msg.type === 'CLAIM_LABELS',
     );
     expect(claimCalls).toHaveLength(1);
-    expect(claimCalls[0][0]).toEqual({ type: 'CLAIM_LABELS', count: 5 });
+    expect(claimCalls[0][0]).toEqual({
+      type: 'CLAIM_LABELS',
+      count: 5,
+      // Fresh wrappers have no prior codeword, so preferred is all-empty.
+      preferred: ['', '', '', '', ''],
+    });
   });
 
   it('handles pool exhaustion by leaving tail wrappers unlabeled', async () => {
@@ -182,6 +187,39 @@ describe('IntersectionTracker.refreshViewportClaims', () => {
     expect(wrappers[1].scanned.codeword).toBe('b');
     expect(wrappers[2].scanned.codeword).toBe('');
     expect(wrappers[3].scanned.codeword).toBe('');
+  });
+
+  it('replays a released codeword as preferred on the next claim (sticky)', async () => {
+    const store = new WrapperStore();
+    const events = { onCodewordsChanged: vi.fn() };
+    const tracker = new IntersectionTracker(store, events);
+
+    const w = new ElementWrapper(fakeElement('w0'), fakeScanned());
+    w.isInViewport = true;
+    store.addWrapper(w);
+    tracker.observe(w.element);
+
+    setupClaimResponse(['arch bake']);
+    tracker.refreshViewportClaims();
+    await tracker.flushNow();
+    expect(w.scanned.codeword).toBe('arch bake');
+
+    // Scroll out of the viewport: IO exit clears the codeword but stashes it.
+    FakeIntersectionObserver.lastInstance!.fire(w.element, false);
+    await tracker.flushNow();
+    expect(w.scanned.codeword).toBe('');
+    expect(w.preferredCodeword).toBe('arch bake');
+
+    // Scroll back in: re-claim must request the same codeword as preferred.
+    w.isInViewport = true;
+    sendMessageMock.mockClear();
+    tracker.refreshViewportClaims();
+    await tracker.flushNow();
+
+    const claimCall = sendMessageMock.mock.calls.find(
+      ([msg]) => msg.type === 'CLAIM_LABELS',
+    );
+    expect(claimCall![0].preferred).toEqual(['arch bake']);
   });
 
   it('does not call onCodewordsChanged when nothing was claimed or released', async () => {

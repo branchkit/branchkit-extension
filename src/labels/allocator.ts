@@ -161,13 +161,15 @@ export type Metric<T> = (item: T) => number;
 // Metrics intentionally NOT shipped, with rationale:
 //
 // - **Stability** (prefer the codeword the candidate held last allocation):
-//   requires preserving `oldCodeword` past viewport-leave. The
-//   IntersectionTracker currently clears `wrapper.scanned.codeword`
-//   when an element exits the viewport, so the old assignment is gone
-//   by the next allocation pass. The pool's unshift-to-front behavior
-//   already gives us "scrolled out and back returns the same codeword"
-//   stability, which covers most real cases. Promote when an
-//   in-place re-allocation pass is added.
+//   now handled OUTSIDE this metric layer, at the pool. The
+//   IntersectionTracker stashes a wrapper's codeword into
+//   `ElementWrapper.preferredCodeword` on viewport-leave and replays it as
+//   the `preferred` array on the next CLAIM_LABELS; `claimLabels` pass 1
+//   re-grants it if still free (label-pool.ts). So an element keeps its
+//   letter across scroll-out/scroll-back regardless of how ranks reshuffle.
+//   This made an in-pipeline stability metric unnecessary. (If the
+//   multi-metric chooser is ever promoted, stability is already covered —
+//   don't re-add it here.)
 //
 // - **Avoid-stealing**: structurally moot. Content-side allocation only
 //   draws from the pool's free list; the pool never returns held

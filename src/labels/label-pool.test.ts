@@ -136,6 +136,47 @@ describe('label-pool', () => {
     });
   });
 
+  describe('sticky reclaim (preferred)', () => {
+    it('re-grants a preferred codeword that is still free', async () => {
+      const tabId = nextTabId();
+      const first = await claimLabels(tabId, 0, 3);
+      expect(first).toEqual(['arch arch', 'arch bake', 'bake bake']);
+
+      // Element holding 'bake bake' scrolls out, releasing it.
+      await releaseLabels(tabId, ['bake bake']);
+
+      // Two slots re-claim: one prefers the freed 'bake bake', one is new.
+      const next = await claimLabels(tabId, 0, 2, ['bake bake', '']);
+      // Slot 0 gets its preferred back regardless of pool order; slot 1 gets
+      // the next fresh front-of-pool codeword (not 'bake bake').
+      expect(next[0]).toBe('bake bake');
+      expect(next[1]).not.toBe('bake bake');
+      expect(next[1].length).toBeGreaterThan(0);
+    });
+
+    it('falls back to fresh when the preferred codeword is taken', async () => {
+      const tabId = nextTabId();
+      const a = await claimLabels(tabId, 0, 2); // ['arch arch', 'arch bake']
+      // Frame 1 prefers a codeword frame 0 still holds — not free, so fresh.
+      const b = await claimLabels(tabId, 1, 1, [a[0]]);
+      expect(b[0]).not.toBe(a[0]);
+      expect(b[0].length).toBeGreaterThan(0);
+    });
+
+    it('index-aligns grants when a preferred slot precedes fresh ones', async () => {
+      const tabId = nextTabId();
+      const first = await claimLabels(tabId, 0, 4);
+      await releaseLabels(tabId, first); // all four back, front-of-pool
+
+      // Slot 1 prefers a specific freed codeword; the rest are fresh and must
+      // fill the OTHER slots without clobbering slot 1's grant.
+      const next = await claimLabels(tabId, 0, 4, ['', 'bake arch', '', '']);
+      expect(next[1]).toBe('bake arch');
+      expect(new Set(next).size).toBe(4); // all distinct, none empty
+      expect(next.every(l => l.length > 0)).toBe(true);
+    });
+  });
+
   describe('concurrent claims serialize via withTabLock', () => {
     it('two frames claiming the same tab in parallel get disjoint labels', async () => {
       const tabId = nextTabId();
@@ -198,10 +239,16 @@ describe('label-pool', () => {
   });
 
   describe('pool overflow', () => {
-    it('returns at most pool capacity when more is requested', async () => {
+    it('grants at most pool capacity when more is requested', async () => {
       const tabId = nextTabId();
       const claimed = await claimLabels(tabId, 0, 800);
-      expect(claimed.length).toBe(676); // 26×26 pairs
+      // Result is index-aligned to the request (length 800); slots past the
+      // pool's 676 capacity come back empty.
+      expect(claimed.length).toBe(800);
+      const granted = claimed.filter(l => l.length > 0);
+      expect(granted.length).toBe(676); // 26×26 pairs
+      expect(new Set(granted).size).toBe(676); // all distinct
+      expect(claimed.slice(676).every(l => l === '')).toBe(true);
     });
 
     it('returns empty when alphabet is missing', async () => {

@@ -122,7 +122,11 @@ export type Message =
   // Frame label pool — content asks background for codewords so frames in
   // the same tab don't independently pick the same label. See
   // notes/DESIGN_BROWSER_FRAMES_AND_OBSERVERS.md section 2.
-  | { type: 'CLAIM_LABELS'; count: number }
+  // `preferred[i]` is the codeword wrapper i held before it left the
+  // viewport (or '' / absent for a brand-new element). The pool re-grants a
+  // preferred codeword if it's still free, so an element that scrolls out and
+  // back keeps its letter instead of being re-dealt a new one (kills flicker).
+  | { type: 'CLAIM_LABELS'; count: number; preferred?: string[] }
   | { type: 'RELEASE_LABELS'; labels: string[] }
   // Background → content ping. The focused frame answers true, others false.
   // Used to route keyboard-derived actions to whichever frame the user is
@@ -152,8 +156,9 @@ export type ResolveHintResponse =
   | { ok: false; reason: string };
 
 // Response to CLAIM_LABELS. Returned via sendResponse callback.
-// May be shorter than `count` if pool was partially exhausted; empty array
-// if the pool isn't ready (alphabet not loaded yet).
+// `labels` is index-aligned to the request: `labels[i]` is the codeword for
+// the i-th requested slot, or '' when the pool was exhausted before reaching
+// it. Empty array if the pool isn't ready (alphabet not loaded yet).
 export interface ClaimLabelsResponse {
   labels: string[];
 }

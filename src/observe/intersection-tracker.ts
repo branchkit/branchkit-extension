@@ -193,6 +193,9 @@ export class IntersectionTracker {
     this.pendingClaim.delete(wrapper);
     if (wrapper.scanned.codeword) {
       this.pendingRelease.push(wrapper.scanned.codeword);
+      // Remember the codeword so a scroll-back re-claim can re-grant the same
+      // letter (sticky reclaim — kills flicker). See claimLabels pass 1.
+      wrapper.preferredCodeword = wrapper.scanned.codeword;
       wrapper.scanned.codeword = '';
       wrapper.label = null;
       // The badge can't follow a wrapper that's lost its codeword — its
@@ -229,10 +232,12 @@ export class IntersectionTracker {
     const releasedCodewords: string[] = [];
     const newlyClaimed: ElementWrapper[] = [];
 
-    // Releases first so reclaimed labels are at the front of the pool's
-    // free list when the immediately-following claim fires. This is what
-    // keeps codeword identity stable across "leaves viewport, returns"
-    // for the same element.
+    // Releases first so a codeword freed in this same flush is back in the
+    // pool's free list before the immediately-following claim runs its
+    // sticky-reclaim pass (claimLabels pass 1). Without this ordering, a
+    // wrapper re-entering the viewport in the same coalesced flush that
+    // another wrapper released its old codeword couldn't re-grant it. This is
+    // what keeps codeword identity stable across "leaves viewport, returns".
     if (this.pendingRelease.length > 0) {
       const labels = this.pendingRelease;
       this.pendingRelease = [];
@@ -269,12 +274,16 @@ export class IntersectionTracker {
       }));
       pairs.sort((a, b) => cmp(a.candidate, b.candidate));
       const wrappers = pairs.map(p => p.wrapper);
+      // Sticky reclaim: ask the pool to re-grant each wrapper's previously-held
+      // codeword (if still free) so scroll-back keeps the same letter.
+      const preferred = wrappers.map(w => w.preferredCodeword);
 
       let labels: string[] = [];
       try {
         const response = await chrome.runtime.sendMessage({
           type: 'CLAIM_LABELS',
           count: wrappers.length,
+          preferred,
         });
         labels = Array.isArray(response?.labels) ? response.labels : [];
       } catch {

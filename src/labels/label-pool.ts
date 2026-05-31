@@ -119,22 +119,62 @@ async function getOrCreateStack(tabId: number): Promise<LabelStack | null> {
 }
 
 /**
- * Claim up to `count` labels from a tab's pool for a specific frame.
- * Returns fewer than `count` if the pool is partially exhausted, or empty
- * if the pool isn't ready.
+ * Claim `count` labels from a tab's pool for a specific frame. The result is
+ * index-aligned to the request: `result[i]` is the codeword for slot i, or ''
+ * when the pool ran out before reaching it. Returns [] if the pool isn't ready.
+ *
+ * `preferred[i]` is the codeword slot i held before it left the viewport.
+ * Pass 1 re-grants any preferred codeword still in the free list, so an
+ * element that scrolls out and back keeps the same letter (sticky reclaim —
+ * kills scroll flicker). Pass 2 fills the remaining slots front-of-pool in
+ * request order, preserving the balanced-grid ordering (and the closer-first
+ * priority the IntersectionTracker encodes via rank-sorted request order).
  */
-export async function claimLabels(tabId: number, frameId: number, count: number): Promise<string[]> {
+export async function claimLabels(
+  tabId: number,
+  frameId: number,
+  count: number,
+  preferred: string[] = [],
+): Promise<string[]> {
   return withTabLock(tabId, async () => {
     const stack = await getOrCreateStack(tabId);
     if (!stack) return [];
 
-    const take = Math.min(count, stack.free.length);
-    const claimed = stack.free.splice(0, take);
-    for (const label of claimed) stack.assigned[label] = frameId;
+    const result: string[] = new Array(count).fill('');
+    const granted = new Set<string>();
+    const freeSet = new Set(stack.free);
 
-    await saveStack(tabId, stack);
-    assignedCache.set(tabId, { ...stack.assigned });
-    return claimed;
+    // Pass 1 — sticky reclaim.
+    const needsFresh: number[] = [];
+    for (let i = 0; i < count; i++) {
+      const pref = preferred[i];
+      if (pref && freeSet.has(pref) && !granted.has(pref)) {
+        granted.add(pref);
+        result[i] = pref;
+      } else {
+        needsFresh.push(i);
+      }
+    }
+
+    // Pass 2 — fresh, front-of-pool in request order.
+    if (needsFresh.length > 0) {
+      let k = 0;
+      for (const label of stack.free) {
+        if (k >= needsFresh.length) break;
+        if (granted.has(label)) continue;
+        granted.add(label);
+        result[needsFresh[k]] = label;
+        k++;
+      }
+    }
+
+    if (granted.size > 0) {
+      for (const label of granted) stack.assigned[label] = frameId;
+      stack.free = stack.free.filter(l => !granted.has(l));
+      await saveStack(tabId, stack);
+      assignedCache.set(tabId, { ...stack.assigned });
+    }
+    return result;
   });
 }
 

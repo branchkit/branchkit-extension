@@ -60,6 +60,12 @@ export class ElementWrapper {
   // See `TextProbeOffset` doc above. `null` = not yet computed; set on the
   // first placement that probes this wrapper, cleared on target mutation.
   cachedProbe: TextProbeOffset | null = null;
+  // The codeword this wrapper last held, retained after a viewport-leave
+  // release. On re-claim the tracker asks the pool to re-grant it (if still
+  // free) so an element keeps the same letter across scroll-out/scroll-back
+  // instead of being re-dealt a fresh codeword. Set by the release paths;
+  // never cleared (a new release just overwrites it).
+  preferredCodeword: string = '';
 
   constructor(element: Element, scanned: ScannedElement) {
     this.element = element;
