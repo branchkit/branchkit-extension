@@ -922,7 +922,29 @@ function detachWrapper(element: Element): void {
  * mutation fires this MO, but each callback's work is bounded by the
  * removedNodes count and a one-pass store walk per matched host.
  */
+// Per-badge reattach rate-limiting. YouTube (and similar SPA-heavy sites)
+// continuously strip our badges from inside their managed DOM subtrees —
+// the target survives but our badge child gets removed every animation
+// frame. Without rate limiting we re-insert → page removes → re-insert →
+// ... at 80+ fires/sec × 7 reattaches each = 560+ reattach/reposition
+// pairs per second, which trips Firefox's slow-extension warning even
+// though the target itself is intact.
+//
+// Strategy: cap reattach to 1 per badge per second. If a badge requires
+// reattach more than 3 times in 5 seconds, the page is actively fighting
+// us — give up and detach the wrapper (voice activation on that element
+// will fail, but at least we stop wedging the browser).
+const REATTACH_COOLDOWN_MS = 1000;
+const REATTACH_GIVEUP_COUNT = 3;
+const REATTACH_GIVEUP_WINDOW_MS = 5000;
+const badgeReattachHistory = new WeakMap<HTMLElement, number[]>();
+
 const badgeReattachObserver = new MutationObserver((records) => {
+  let reattached = 0;
+  let skipped_cooldown = 0;
+  let skipped_dead_target = 0;
+  let gave_up = 0;
+  const now = performance.now();
   for (const r of records) {
     if (r.type !== 'childList' || r.removedNodes.length === 0) continue;
     for (const removed of r.removedNodes) {
@@ -930,9 +952,41 @@ const badgeReattachObserver = new MutationObserver((records) => {
       if (!removed.hasAttribute('data-branchkit-hint')) continue;
       const wrapper = store.all.find(w => w.hint?.host === removed);
       if (!wrapper?.hint) continue;
+      // Target element gone — don't reattach an orphan; let
+      // dropDisconnectedWrappers tidy up.
+      if (!wrapper.element.isConnected) {
+        skipped_dead_target++;
+        continue;
+      }
+      // Rate limit + giveup check.
+      const history = badgeReattachHistory.get(removed) ?? [];
+      const recent = history.filter(t => now - t < REATTACH_GIVEUP_WINDOW_MS);
+      if (recent.length >= REATTACH_GIVEUP_COUNT) {
+        // Page is actively fighting us — detach the whole wrapper so
+        // future removals stop firing this handler. The target stays in
+        // the DOM but loses its voice handle.
+        detachWrapper(wrapper.element);
+        badgeReattachHistory.delete(removed);
+        gave_up++;
+        continue;
+      }
+      if (recent.length > 0 && now - recent[recent.length - 1] < REATTACH_COOLDOWN_MS) {
+        skipped_cooldown++;
+        continue;
+      }
+      recent.push(now);
+      badgeReattachHistory.set(removed, recent);
       wrapper.hint.reattach();
       wrapper.hint.reposition();
+      reattached++;
     }
+  }
+  if (reattached > 0 || skipped_cooldown > 0 || skipped_dead_target > 5 || gave_up > 0) {
+    chrome.runtime.sendMessage({
+      type: 'DEBUG_LOG',
+      tag: 'pipeline.cs_firehose_step',
+      data: { step: 'badge_reattach', reattached, skipped_cooldown, skipped_dead_target, gave_up },
+    } as Message).catch(() => {});
   }
 });
 
@@ -1036,7 +1090,12 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
     .slice(0, MAX_BADGE_COUNT)
     .filter(w => w.scanned.codeword.length > 0);
 
+  // Breadcrumbs around the heavy per-batch paint: HintBadge construction
+  // (shadow root + DOM per badge) + placeBadges layout reads. Suspected wedge
+  // on heavy SPA targets (YouTube /@channel/videos with 80+ badges).
+  firehoseStep('showHints:start', renderable.length, 20);
   cacheLayout(renderable.map(w => w.element));
+  firehoseStep('showHints:cache_end', renderable.length, 20);
   try {
     for (const wrapper of renderable) {
       const label = poolLabelToAssignment(wrapper.scanned.codeword);
@@ -1055,12 +1114,14 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
 
       wrapper.hint.show();
     }
+    firehoseStep('showHints:mount_end', renderable.length, 20);
 
     setPositionCaller('showHints');
     const __pbStart = performance.now();
     try { placeBadges(renderable); } finally {
       recordCpu('placeBadges:show', performance.now() - __pbStart);
       clearPositionCaller();
+      firehoseStep('showHints:place_end', renderable.length, 20);
     }
     // Write-on-paint: seed the store with each painted target's current rect
     // from the warm cache. The attention IO writes targets at band-entry time
@@ -1243,7 +1304,7 @@ async function doScanBatched(): Promise<void> {
   dropDisconnectedWrappers();
 
   const sessionMeta = {
-    bundle_id: '',
+    conn_id: '', // stamped by the background SW in postGrammarBatch
     hint_visibility: getHintVisibility(),
     app_id: '',
     table_id: '',
@@ -1285,7 +1346,7 @@ async function doScanBatched(): Promise<void> {
       batch_index: batchIndex,
       is_final: true,
       kind: 'scan',
-      bundle_id: sessionMeta.bundle_id,
+      conn_id: sessionMeta.conn_id,
       hint_visibility: sessionMeta.hint_visibility,
       app_id: sessionMeta.app_id,
       table_id: sessionMeta.table_id,
@@ -1298,7 +1359,7 @@ async function doScanBatched(): Promise<void> {
 async function processScanBatch(
   batch: { refs: Element[]; elements: ScannedElement[]; isLast: boolean; invisibleCandidates: Element[] },
   sessionId: string, batchIndex: number,
-  sessionMeta: { bundle_id: string; hint_visibility: HintVisibility; app_id: string; table_id: string },
+  sessionMeta: { conn_id: string; hint_visibility: HintVisibility; app_id: string; table_id: string },
   adapter: ReturnType<typeof getActiveAdapter>,
 ): Promise<void> {
   // Active-tab scoping: a backgrounded tab must not push grammar (its REPLACE
@@ -1374,7 +1435,7 @@ async function processScanBatch(
     batch_index: batchIndex,
     is_final: batch.isLast,
     kind: 'scan',
-    bundle_id: sessionMeta.bundle_id,
+    conn_id: sessionMeta.conn_id,
     hint_visibility: sessionMeta.hint_visibility,
     app_id: sessionMeta.app_id,
     table_id: sessionMeta.table_id,
@@ -1611,6 +1672,33 @@ function trimFrameUrl(href: string): string {
   }
 }
 
+// Synchronous batch teardown of every wrapper's per-target observers
+// (IntersectionTracker, ResizeObserver, AttentionObserver). Called from two
+// points where a heavy DOM-swap is about to happen:
+//   1. The activate-click path (before the click that might trigger SPA nav),
+//      so we get ahead of the page's own dispatch+swap window.
+//   2. The SPA-nav rescan handler, as a safety net for navigations the
+//      activate path didn't initiate (mouse clicks, bookmarks, history nav).
+// Posts a breadcrumb so the actuator log shows whether the teardown ran and
+// how many wrappers it cleared. See notes/INVESTIGATION_YOUTUBE_WATCH_PERF.md.
+function preNavDetachAll(triggerReason: string): number {
+  const detached = store.all.length;
+  if (detached === 0) return 0;
+  const t0 = performance.now();
+  for (const w of [...store.all]) detachWrapper(w.element);
+  chrome.runtime.sendMessage({
+    type: 'DEBUG_LOG',
+    tag: 'pipeline.cs_nav_step',
+    data: {
+      step: 'pre_nav_detach',
+      reason: triggerReason,
+      detached,
+      took_ms: Math.round(performance.now() - t0),
+    },
+  } as Message).catch(() => {});
+  return detached;
+}
+
 // The same-document-nav rescan body, owned by `PageSession.onUrlChange`. The
 // background `webNavigation` SPA-nav signal arrives as the `rescan` action and
 // is dispatched here; this is the content-side handler, not the detector.
@@ -1619,42 +1707,86 @@ function rescanForNav(fromCache: boolean, reason: string): void {
   chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_rescan_received', data: { url: window.location.href, from_cache: fromCache, reason } } as Message).catch(() => {});
 
   if (fromCache) {
-    // Fast path for app-refocus rescans: drop dead wrappers, then
-    // republish the current wrapper store (no DOM walk).
+    // From-cache path: drop dead wrappers, republish the current wrapper
+    // store, then run a deferred reconciliation walk. Used for both
+    // app-refocus AND same-document SPA navs (background.ts hardcodes
+    // from_cache:'true' on every spa_nav dispatch — see
+    // notes/INVESTIGATION_YOUTUBE_WATCH_PERF.md). The two cases differ
+    // in cost: refocus touches an unchanged DOM, SPA nav lands during
+    // YouTube's full-page swap.
     //
-    // We DON'T hide/show hints — `syncNow` reuses the
-    // existing `sessionId` so the plugin doesn't wipe its per-prefix
-    // collections; the matcher's vocab is intact throughout the
-    // rescan and codewords stay matchable mid-flight. The previous
-    // hide-show cycle was UX signaling, not correctness, and it
-    // actively hurt: users saw badges blink and lost confidence,
-    // sometimes pausing mid-utterance or saying "show" to bring
-    // them back. A deferred doScanBatched() still runs as a
-    // reconciliation pass to heal any cache/DOM drift.
-    void (async () => {
+    // We DON'T hide/show hints — `syncNow` reuses the existing
+    // `sessionId` so the plugin doesn't wipe its per-prefix collections;
+    // the matcher's vocab is intact throughout the rescan and codewords
+    // stay matchable mid-flight.
+    //
+    // The body is idle-scheduled: a same-document URL change typically
+    // arrives in the middle of the page's own DOM swap, so doing any
+    // synchronous work right now puts our wrapper walk + grammar batch
+    // on the main thread alongside YouTube's reflow. requestIdleCallback
+    // waits for a quiet frame before we touch anything, which both
+    // (a) lets the page settle so isConnected checks aren't fighting a
+    // mid-mutation layout, and (b) lets YouTube's own task drain before
+    // we add ours. The 2s timeout caps the wait so we still reconcile
+    // even on pathologically busy pages. Cost: badges briefly painted on
+    // disconnected DOM during the idle wait (cosmetic; the user just
+    // clicked away from them anyway).
+    const runRescan = async () => {
       // Step breadcrumbs: posted to the service worker (which never wedges)
-      // BEFORE each heavy step, so a hard nav-time freeze still leaves a
-      // trail of the last step entered + the wall-clock gap to the previous
-      // one. The post-completion cs_scan_completed below never ships when
-      // the thread wedges, so it can't tell us where the time went — these
-      // can. See notes/INVESTIGATION_YOUTUBE_WATCH_PERF.md (nav-time wedge).
+      // around each heavy step, so a hard nav-time freeze leaves a trail
+      // naming the last step entered AND the last step that completed.
+      // A `:start` without matching `:end` pins the body that killed the
+      // main thread. The post-completion cs_scan_completed below never
+      // ships when the thread wedges. See nav-time wedge investigation.
       const navStep = (step: string) =>
         chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_nav_step', data: { step, reason, at_ms: Math.round(performance.now() - t0) } } as Message).catch(() => {});
 
-      void navStep('drop_disconnected');
-      dropDisconnectedWrappers();
-      void navStep('sync_now');
+      void navStep('idle_fired');
+
+      // Per-wrapper observer teardown for real content swaps. The activate
+      // click path runs `preNavDetachAll` BEFORE the click, so for
+      // voice-driven navs the store is already empty here. This call is the
+      // safety net for navs the activate path didn't initiate (mouse-driven
+      // tab clicks, history nav, bookmarks, etc.) — `detached:0` in the log
+      // means the pre-click teardown already ran. See preNavDetachAll above.
+      //
+      // Gated to spa_nav: refocus (the other from_cache caller) doesn't lose
+      // its targets, so the cheap reuse path is correct for refocus.
+      if (reason === 'spa_nav') {
+        void navStep('rescan_detach:start');
+        const detached = preNavDetachAll('rescan');
+        void navStep('rescan_detach:end');
+        chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_nav_step', data: { step: 'rescan_detach:count', reason, at_ms: Math.round(performance.now() - t0), detached } } as Message).catch(() => {});
+      } else {
+        void navStep('drop_disconnected:start');
+        dropDisconnectedWrappers();
+        void navStep('drop_disconnected:end');
+      }
+
+      void navStep('sync_now:start');
       await syncNow('refocus_from_cache');
+      void navStep('sync_now:end');
       const t1 = performance.now();
       chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_scan_completed', data: { elements: store.all.length, duration_ms: Math.round(t1 - t0), path: 'from_cache' } } as Message).catch(() => {});
 
-      // Reconciliation: a real DOM walk picks up anything the cache
-      // doesn't know about (lazy-loaded elements, post-blur DOM
-      // mutations that bypassed MutationObserver, framework-driven
-      // element replacement). Idempotent when cache was accurate —
-      // filterNewBatchRefs drops everything already wrapped.
-      setTimeout(() => { void navStep('deferred_scan'); void doScanBatched(); }, 300);
-    })();
+      // Reconciliation walk rebuilds wrappers for the new page. For spa_nav we
+      // detached everything above, so this is the full rebuild path; for
+      // refocus it's the idempotent reconciliation we always did. The 300ms
+      // delay gives the page a chance to finish its render burst (per
+      // observation, YouTube's full-page swap settles in <300ms once we stop
+      // racing it).
+      setTimeout(() => {
+        void navStep('deferred_scan:start');
+        void doScanBatched().then(() => navStep('deferred_scan:end'));
+      }, 300);
+    };
+
+    if (typeof (window as { requestIdleCallback?: unknown }).requestIdleCallback === 'function') {
+      (window as Window & { requestIdleCallback: (cb: () => void, opts?: { timeout: number }) => void })
+        .requestIdleCallback(() => { void runRescan(); }, { timeout: 2000 });
+    } else {
+      setTimeout(() => { void runRescan(); }, 100);
+    }
   } else {
     doScan();
     const t1 = performance.now();
@@ -1777,6 +1909,18 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
           taken = 'focus';
           delegation = 'focus-input';
         } else {
+          // Pre-click observer teardown: if the click triggers a SPA nav
+          // (Videos tab on a YouTube channel page is the canonical case), the
+          // page replaces its DOM and fires our per-wrapper observers
+          // (IntersectionTracker, ResizeObserver, AttentionObserver) for every
+          // disconnected target as a 600+ callback cascade interleaved with the
+          // page's reflow — the observed nav-time wedge. Doing the teardown
+          // here (synchronously, BEFORE the click that triggers the swap) gets
+          // ahead of the cascade entirely; the SPA-nav rescan handler then
+          // sees an empty store and the deferred_scan rebuilds the new page.
+          // Cost on a non-nav click: tearing down ~100 wrappers takes ~2ms and
+          // the post-click `scheduleHintRefresh` (always-mode) rebuilds them.
+          preNavDetachAll('activate_click');
           const result = activateElement(target);
           clickedEl = result.target;
           delegation = result.delegation;
@@ -1932,8 +2076,14 @@ function scheduleReposition(scope: RepositionScope = 'all'): void {
     if (visible.length === 0) return;
     setPositionCaller(scope === 'drifted' ? 'scrollReposition' : 'scheduleReposition');
     const __pbStart = performance.now();
+    // Reposition breadcrumbs: a `reposition:start` without matching
+    // `reposition:end` pins this as the wedge body. Size = visible badge
+    // count. Threshold-gated so steady-state scroll doesn't add 60
+    // sendMessages/sec just for telemetry.
+    firehoseStep(`reposition:${scope}:start`, visible.length, 20);
     try {
       cacheLayout(visible.map(w => w.element));
+      firehoseStep(`reposition:${scope}:cache_end`, visible.length, 20);
       // Phase 5 (router-via-scroll-rAF): reads share the cacheLayout
       // warm pass, so each write is essentially free.
       for (const w of visible) {
@@ -1942,12 +2092,14 @@ function scheduleReposition(scope: RepositionScope = 'all'): void {
       const toPlace = scope === 'drifted'
         ? visible.filter(w => w.hint!.needsScrollReposition())
         : visible.filter(w => w.hint!.needsLayoutReposition());
+      firehoseStep(`reposition:${scope}:place_start`, toPlace.length, 1);
       if (toPlace.length > 0) placeBadges(toPlace);
     } finally {
       clearLayoutCache();
       clearPositionCaller();
       recordCpu(scope === 'drifted' ? 'placeBadges:scroll' : 'placeBadges:reposition',
         performance.now() - __pbStart);
+      firehoseStep(`reposition:${scope}:end`, visible.length, 20);
     }
   });
 }
@@ -2576,6 +2728,25 @@ function scheduleDiscovery(root: Element): void {
 // indefinitely.
 const DRAIN_DISCOVERY_BUDGET_MS = 8;
 
+// Firehose breadcrumbs: posted to the SW around burst paths that can wedge
+// the main thread on a full-page DOM swap. A `:start` without a matching
+// `:end` in the actuator log pins which body wedged. See
+// notes/INVESTIGATION_YOUTUBE_WATCH_PERF.md (nav-time wedge, firehose).
+//
+// Per-step threshold: each caller picks its own minimum size. Default
+// lowered to 1 (effectively unconditional) for the nav-wedge diagnostic
+// pass — sub-100 MO bursts add up to seconds of cumulative CPU on
+// YouTube /featured even though no single batch trips the original 100
+// threshold. Worth the telemetry noise to catch it.
+function firehoseStep(step: string, size: number, threshold: number = 1): void {
+  if (size < threshold) return;
+  chrome.runtime.sendMessage({
+    type: 'DEBUG_LOG',
+    tag: 'pipeline.cs_firehose_step',
+    data: { step, size, ts: Math.round(performance.now()) },
+  } as Message).catch(() => {});
+}
+
 function drainDiscovery(): void {
   const __cpuStart = performance.now();
   pageSession.discoveryFrame = null;
@@ -2583,6 +2754,7 @@ function drainDiscovery(): void {
   const roots = [...pageSession.pendingDiscoveryRoots];
   pageSession.pendingDiscoveryRoots.clear();
   const __rootCount = roots.length;
+  firehoseStep('drainDiscovery:start', __rootCount);
 
   // Ancestor-dedup: if a queued root is contained by another queued
   // root, the ancestor's discoverInSubtree already deep-walks it. Drop
@@ -2640,6 +2812,7 @@ function drainDiscovery(): void {
       __rootCount,
     );
   }
+  firehoseStep('drainDiscovery:end', __rootCount);
 }
 
 // True if any light-DOM ancestor of `el` is also a member of `set`.
@@ -2656,6 +2829,7 @@ function hasQueuedAncestor(el: Element, set: Set<Element>): boolean {
 function processMutations(records: MutationRecord[]): void {
   const __cpuStart = performance.now();
   processMutationsCalls++;
+  firehoseStep('processMutations:start', records.length);
   let sawRemoval = false;
 
   for (const m of records) {
@@ -2691,11 +2865,40 @@ function processMutations(records: MutationRecord[]): void {
   // Grammar push for added subtrees now happens inside drainDiscovery
   // (deferred). Removals still push via dropDisconnectedWrappers above.
   recordCpu('processMutations', performance.now() - __cpuStart);
+  firehoseStep('processMutations:end', records.length);
 }
 
 const observer = new MutationObserver((records) => {
   const __cpuStart = performance.now();
   moCallbackInvocations++;
+  firehoseStep('moCallback:start', records.length);
+  // Diagnostic: sample the first record's type and target to find the source
+  // of the high-rate end_all_own loop on YouTube /featured. The 28-records-
+  // every-2ms pattern means something is mutating 28 of our badges in a tight
+  // microtask loop — discriminating childList vs attributes vs the attribute
+  // name pins which of our DOM operations is the trigger.
+  if (records.length > 0 && Math.random() < 0.05) {
+    const r0 = records[0];
+    const target0 = r0.target instanceof Element ? r0.target : null;
+    const tag = target0?.tagName?.toLowerCase() ?? '?';
+    const attrName = r0.type === 'attributes' ? r0.attributeName : null;
+    const added = r0.type === 'childList' ? r0.addedNodes.length : 0;
+    const removed = r0.type === 'childList' ? r0.removedNodes.length : 0;
+    chrome.runtime.sendMessage({
+      type: 'DEBUG_LOG',
+      tag: 'pipeline.cs_firehose_step',
+      data: {
+        step: 'moCallback:sample',
+        size: records.length,
+        rec_type: r0.type,
+        tag,
+        attr: attrName,
+        added,
+        removed,
+        has_own_attr: target0?.hasAttribute('data-branchkit-hint') ?? false,
+      },
+    } as Message).catch(() => {});
+  }
   // Hints are visible — behavior depends on visibility mode.
   // In "manual" mode, defer mutations so codewords don't shuffle while
   // the user is reading badges. hideHints() flushes via doScan().
@@ -2704,11 +2907,13 @@ const observer = new MutationObserver((records) => {
   if (pageSession.hintsVisible && getHintVisibility() === 'manual') {
     pendingMutation = true;
     recordCpu('moCallback', performance.now() - __cpuStart);
+    firehoseStep('moCallback:end_manual_deferred', records.length);
     return;
   }
 
   // Filter our own mutations early so the threshold isn't tripped by
   // badge mount/unmount churn.
+  firehoseStep('moCallback:filter_start', records.length);
   const foreign = records.filter(m => {
     if (m.type === 'childList') {
       const allOwnAdded = Array.from(m.addedNodes).every(isOwnMutation);
@@ -2717,14 +2922,20 @@ const observer = new MutationObserver((records) => {
     }
     return !isOwnMutation(m.target);
   });
+  firehoseStep('moCallback:filter_end', foreign.length);
   moForeignRecords += foreign.length;
-  if (foreign.length === 0) { recordCpu('moCallback', performance.now() - __cpuStart); return; }
+  if (foreign.length === 0) {
+    recordCpu('moCallback', performance.now() - __cpuStart);
+    firehoseStep('moCallback:end_all_own', records.length);
+    return;
+  }
 
   if (foreign.length >= HUGE_MUTATIONS_COUNT) {
     moHugePathFired++;
     if (pageSession.hugeMutationTimer) clearTimeout(pageSession.hugeMutationTimer);
     pageSession.hugeMutationTimer = setTimeout(() => {
       pageSession.hugeMutationTimer = null;
+      firehoseStep('huge_path:timer_fired', foreign.length);
       // Limbo entry doesn't change grammar (codewords are still claimed);
       // the finalize sweeper schedules push on actual detach. We only
       // need to push if discovery added new wrappers.
@@ -2732,13 +2943,16 @@ const observer = new MutationObserver((records) => {
       // Full-page rediscovery is sliced — a synchronous discoverInSubtree
       // over the whole fresh body froze Firefox ~1.1s on YouTube /watch
       // SPA nav (notes/DESIGN_NAV_TIME_RESCAN.md).
+      firehoseStep('huge_path:batched_start', foreign.length);
       void discoverInSubtreeBatched(document.body || document.documentElement)
         .then((added) => {
+          firehoseStep('huge_path:batched_end', added);
           if (added > 0) schedulePushGrammar();
           if (pageSession.hintsVisible) scheduleReposition();
         });
     }, HUGE_MUTATION_IDLE_MS);
     recordCpu('moCallback', performance.now() - __cpuStart);
+    firehoseStep('moCallback:end_huge_scheduled', foreign.length);
     return;
   }
 
@@ -2752,6 +2966,7 @@ const observer = new MutationObserver((records) => {
   // settle is the same trade already accepted for scroll/resize.
   if (pageSession.hintsVisible) scheduleDeferredReposition();
   recordCpu('moCallback', performance.now() - __cpuStart);
+  firehoseStep('moCallback:end_normal', foreign.length);
 });
 
 observer.observe(document.body || document.documentElement, {
