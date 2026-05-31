@@ -1385,6 +1385,60 @@ function reconcilePlacement(): void {
   if (repaired > 0) firehoseStep('reconcile:placement:repaired', repaired, 1);
 }
 
+// Run `cb` on the next idle frame, falling back to a short timeout where
+// requestIdleCallback is unavailable (Firefox content scripts historically).
+// `timeoutMs` caps the idle wait so a pathologically busy page still runs it.
+function runWhenIdle(cb: () => void, timeoutMs: number): void {
+  const ric = (window as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void })
+    .requestIdleCallback;
+  if (typeof ric === 'function') ric(cb, { timeout: timeoutMs });
+  else setTimeout(cb, 100);
+}
+
+const DISCOVERY_SWEEP_IDLE_TIMEOUT_MS = 500;
+
+// Discover step of the level-triggered reconciler (Phase 3b of
+// notes/DESIGN_HINT_LIFECYCLE_RECONCILER.md). `reconcile()` converges
+// {codeword, hint} over EXISTING wrappers; it cannot close the *discovery gap*
+// — a hintable element that entered the DOM while the MutationObserver
+// dropped/coalesced its insertion record under YouTube's mutation storm, so no
+// wrapper was ever created. This backstop re-walks the document via the
+// sliced/batched discovery (the same wedge-safe path the nav rescan uses — it
+// yields between batches and skips known elements via `isKnown`), idempotently
+// attaching any missed hintable. attachDiscovered skips elements that already
+// have a wrapper, so a steady-state sweep attaches nothing and claims nothing
+// (no grammar churn); only a genuinely-missed element drives a claim + build.
+//
+// Single-flight + idle-scheduled: scroll-settle fires repeatedly on a long
+// scroll, so we keep at most one sweep in flight (`discoverySweepPending`) and
+// coalesce the rest. requestIdleCallback waits for a quiet frame so the DOM
+// walk never lands on top of YouTube's reflow (the wedge guard); the timeout
+// caps the wait. Mirrors the nav-rescan deferred-scan tail.
+//
+// Distinct from `scheduleDiscovery(root)` (the rAF-coalesced drainer for
+// subtree roots the MutationObserver DID see): this is the backstop for the
+// records it DIDN'T.
+function scheduleBandDiscovery(): void {
+  if (pageSession.discoverySweepPending) return;
+  pageSession.discoverySweepPending = true;
+  runWhenIdle(() => {
+    void (async () => {
+      try {
+        if (pageSession.isTornDown || !document.body) return;
+        const added = await discoverInSubtreeBatched(document.body);
+        if (added === 0) return;
+        // New wrappers landed: claim codewords for the in-band ones and build
+        // their badges (reconcile), flush the claims, then paint.
+        reconcile();
+        await tracker.flushNow();
+        if (pageSession.hintsVisible) await showHints(activeCategory ?? undefined);
+      } finally {
+        pageSession.discoverySweepPending = false;
+      }
+    })();
+  }, DISCOVERY_SWEEP_IDLE_TIMEOUT_MS);
+}
+
 function updateBadgeLabels(): void {
   for (const w of store.all) {
     if (w.hint && w.label) {
@@ -2323,6 +2377,11 @@ function scheduleScrollReposition(): void {
       // …and the canonical scroll-back moment: re-glue anchored badges whose
       // target node was recreated by virtualization (binding dangled).
       reconcilePlacement();
+      // Scroll-settle is also where infinite-scroll content lands. Sweep the
+      // band for hintables the MutationObserver dropped under the mutation
+      // storm (the discovery gap) — coalesced + idle-scheduled, so a long
+      // scroll runs at most one sweep and it never thrashes mid-reflow.
+      scheduleBandDiscovery();
     }
     scheduleReposition('drifted');
   }, DEFERRED_REPOSITION_DEBOUNCE_MS);

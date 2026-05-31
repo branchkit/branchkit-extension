@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Band discovery fixture</title>
+<style>
+  body { margin: 0; font-family: sans-serif; }
+  .row {
+    display: block; padding: 16px 20px;
+    border-bottom: 1px solid #e5e5e5;
+    color: #333; text-decoration: none;
+  }
+  /* A below-the-fold spacer so the window is scrollable, but holds no
+     hintables — a small scroll-and-back never re-bands anything, so the
+     ONLY badge that can appear after the sweep is the one we inject. */
+  #spacer { height: 4000px; }
+</style>
+</head>
+<body>
+  <!-- A handful of in-viewport, body-level links: these are badged at
+       baseline via the normal scan. They stay in-band across the tiny test
+       scroll, so their badges are stable and don't pollute the delta. -->
+  <div id="static">
+    <a href="#" class="row" id="static-0">Static 0</a>
+    <a href="#" class="row" id="static-1">Static 1</a>
+    <a href="#" class="row" id="static-2">Static 2</a>
+  </div>
+
+  <!-- Open shadow-root host, in-viewport. The doc-level MutationObserver does
+       NOT observe inside a shadow root, so an <a> appended here at runtime is
+       a genuine discovery gap: hintable + in-band, but no insertion record
+       ever reached our observer, so no wrapper is created on the normal path.
+       Only the band-discovery sweep (deepQuerySelectorAll pierces open shadow
+       roots) can find it. The host starts EMPTY so baseline has nothing here. -->
+  <div id="shadow-host"></div>
+  <script>
+    const sr = document.getElementById('shadow-host').attachShadow({ mode: 'open' });
+    // start empty; the test injects the hintable post-baseline
+  </script>
+
+  <div id="spacer"></div>
+</body>
+</html>

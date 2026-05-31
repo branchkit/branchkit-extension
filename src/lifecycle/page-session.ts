@@ -82,6 +82,14 @@ export class PageSession {
   /** Debounce handle coalescing the level-triggered reconcile (claim + build). */
   reconcileTimer: ReturnType<typeof setTimeout> | null = null;
 
+  /**
+   * Single-flight guard for the band-discovery sweep (reconcile's discover
+   * step). True from the moment a sweep is scheduled until its async DOM walk
+   * completes, so settle bursts coalesce to one in-flight sweep — never two
+   * concurrent walks racing to attach the same element.
+   */
+  discoverySweepPending = false;
+
   /** Whether the visibility MutationObserver is currently connected. */
   visibilityMOConnected = false;
 
