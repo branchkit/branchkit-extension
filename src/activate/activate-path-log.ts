@@ -47,6 +47,11 @@ export interface ActivatePathEvent {
   resolved: ElementSnap | null;
   clicked: ElementSnap | null;
   delegation: ActivationResult['delegation'] | 'focus-input' | 'noop';
+  /** The `tr_` correlation id the actuator stamped on this activation's
+   * dispatch, carried over SSE. Lets a BK_ACTIVATE_PATH line be grepped
+   * against the matcher logs that produced it. Absent if the dispatch
+   * arrived without one (synthetic events, or an older plugin). */
+  correlationId?: string;
 }
 
 /** Q7: 10-event ring buffer the snapshot includes for "what just

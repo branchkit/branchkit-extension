@@ -1876,7 +1876,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
   }
 
   if (message.type === 'BRANCHKIT_ACTION') {
-    const { action, params } = message.payload;
+    const { action, params, correlation_id: correlationId } = message.payload;
     if (action === 'show_hints') {
       phraseSnapshot = takeSnapshot(store.all, performance.now());
       doScan();
@@ -1980,6 +1980,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
           resolved: elementSnap(target),
           clicked: elementSnap(clickedEl),
           delegation,
+          correlationId,
         });
       } else if (target) {
         elemTag = (target as Element).tagName.toLowerCase();
@@ -1994,6 +1995,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
           resolved: elementSnap(target),
           clicked: null,
           delegation: 'noop',
+          correlationId,
         });
       } else {
         emitActivatePath({
@@ -2006,6 +2008,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
           resolved: null,
           clicked: null,
           delegation: 'noop',
+          correlationId,
         });
       }
 

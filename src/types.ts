@@ -108,7 +108,7 @@ export type Message =
     }
   | { type: 'SHOW_HINTS'; category?: Category }
   | { type: 'HIDE_HINTS' }
-  | { type: 'BRANCHKIT_ACTION'; payload: { action: string; params: Record<string, string> } }
+  | { type: 'BRANCHKIT_ACTION'; payload: { action: string; params: Record<string, string>; correlation_id?: string } }
   | { type: 'SSE_EVENT'; data: unknown }
   | { type: 'HEALTH_STATUS'; branchkit: boolean }
   | { type: 'GRAMMAR_PUSH'; elements: ScannedElement[] }
