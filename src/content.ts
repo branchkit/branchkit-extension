@@ -1781,7 +1781,24 @@ function rescanForNav(fromCache: boolean, reason: string): void {
       // page is pathologically busy. Plan A3 (notes/PLAN_BROWSER_EXTENSION_PERF_OPTIMIZATION.md).
       const scheduleDeferred = () => {
         void navStep('deferred_scan:start');
-        void doScanBatched().then(() => navStep('deferred_scan:end'));
+        void doScanBatched().then(async () => {
+          // Codeword-claim backstop. The spa_nav teardown wiped every
+          // wrapper + codeword (preNavDetachAll); the rebuild above
+          // re-creates and re-observes wrappers, but claiming then depends
+          // entirely on the IntersectionObserver re-firing its initial
+          // entry for each freshly-observed element. Under the post-nav
+          // mutation storm those initial callbacks are delivered only
+          // partially, leaving in-viewport wrappers observed-but-unclaimed
+          // (no badge) with `isInViewport` stuck at its constructor default.
+          // refreshViewportClaims walks the store and queues a claim for
+          // any in-viewport wrapper still missing a codeword, independent
+          // of the IO — the same backstop the alphabet-changed path uses.
+          // Cheap no-op for wrappers that already claimed (refocus path).
+          tracker.refreshViewportClaims();
+          await tracker.flushNow();
+          if (pageSession.hintsVisible) showHints(activeCategory ?? undefined);
+          void navStep('deferred_scan:end');
+        });
       };
       if (typeof (window as { requestIdleCallback?: unknown }).requestIdleCallback === 'function') {
         (window as Window & { requestIdleCallback: (cb: () => void, opts?: { timeout: number }) => void })
