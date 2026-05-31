@@ -11,7 +11,7 @@
  * level-triggered reconcile pass that re-derives the desired state from
  * ground truth. These pure predicates ARE that desired state; both the legacy
  * edge handlers and the future reconcile() consume them so the two can never
- * diverge. See notes/DESIGN_HINT_LIFECYCLE_RECONCILER.md.
+ * diverge. See notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md.
  *
  * Note: "in viewport" here is the IntersectionObserver band notion
  * (`wrapper.isInViewport`, a 200px-margin flag), NOT showHints' fresh

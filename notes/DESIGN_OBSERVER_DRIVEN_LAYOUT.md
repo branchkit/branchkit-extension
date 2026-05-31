@@ -172,7 +172,7 @@ stopped short of attempting it. Two facts surfaced while scoping it:
    read source so the sweep can be deleted.
    *(Update 2026-05-31: no longer strictly zero — the hint-lifecycle reconciler's
    shadow band-divergence check reads warm rects to detect flag-vs-geometry
-   staleness; see `notes/DESIGN_HINT_LIFECYCLE_RECONCILER.md`. That is a
+   staleness; see `notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md`. That is a
    diagnostic-grade reader, not the placement read-cutover this section is about,
    so the cutover argument below stands.)*
 
@@ -827,7 +827,7 @@ tracking its geometry. None fires for "the node carrying my anchor binding was
 replaced by an equivalent node, in place, with no scroll/resize and without
 removing my host." It is the placement-layer twin of the lifecycle gap the
 reconciler closed for *existence* — see
-[[notes/DESIGN_HINT_LIFECYCLE_RECONCILER.md]].
+[[notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md]].
 
 ### Why none of the existing repair paths catch it
 
@@ -906,7 +906,7 @@ should be on screen, is it still glued to its target, and if not, re-glue it."**
 - **Trigger — the genuinely new part.** The check needs a clock, because the
   defining property of this bug is that *no DOM signal fires*. Options, in order
   of preference:
-  1. **Fold into the existing reconcile pass** ([[notes/DESIGN_HINT_LIFECYCLE_RECONCILER.md]]),
+  1. **Fold into the existing reconcile pass** ([[notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md]]),
      which already runs level-triggered on the signals we do catch (scroll-settle,
      mutation-settle, claim changes). Add a bounded placement check to the same
      pass. Cheapest; no new standing cost; but it only re-checks when *something*

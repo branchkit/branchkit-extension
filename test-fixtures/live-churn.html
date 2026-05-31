@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Live churn fixture</title>
+<style>
+  body { margin: 0; font-family: sans-serif; }
+  .row {
+    display: block; padding: 16px 20px;
+    border-bottom: 1px solid #e5e5e5;
+    color: #333; text-decoration: none;
+  }
+  /* Tall scroll region with no hintables: a scroll-and-back never re-bands the
+     in-viewport content, so steady-state scrolling should produce NO grammar
+     commits (Phase 5 gate). Churn comes only from elements we inject. */
+  #spacer { height: 6000px; }
+  #shadow-host { display: block; }
+</style>
+</head>
+<body>
+  <!-- In-viewport static links: badged at baseline, stable across the test. -->
+  <div id="static">
+    <a href="#" class="row" id="static-0">Static 0</a>
+    <a href="#" class="row" id="static-1">Static 1</a>
+    <a href="#" class="row" id="static-2">Static 2</a>
+  </div>
+
+  <!-- Open shadow-root host. The doc-level MutationObserver does not observe
+       inside it, so links appended here at runtime are genuine discovery gaps
+       (the mutation-storm-drops-the-record case), only closable by the
+       band-discovery sweep. The host sits in-viewport so injected links are
+       in-band and should get badged. -->
+  <div id="shadow-host"></div>
+  <script>
+    window.__sr = document.getElementById('shadow-host').attachShadow({ mode: 'open' });
+    // Helper the harness calls to inject a gap link the MO never sees.
+    window.__injectGap = (id) => {
+      const a = document.createElement('a');
+      a.href = '#';
+      a.id = id;
+      a.textContent = id;
+      a.style.cssText = 'display:block;padding:12px 20px;';
+      window.__sr.appendChild(a);
+    };
+    window.__countShadowBadges = () =>
+      window.__sr.querySelectorAll('[data-branchkit-hint]').length;
+    window.__countGapLinks = () =>
+      window.__sr.querySelectorAll('a[id^="gap-"]').length;
+    // How many injected gap links carry an inline anchor-name we assigned
+    // (anchor-path binding) — i.e., got a badge.
+    window.__countBoundGapLinks = () =>
+      Array.from(window.__sr.querySelectorAll('a[id^="gap-"]'))
+        .filter((a) => a.style.getPropertyValue('anchor-name').trim().startsWith('--bk-'))
+        .length;
+  </script>
+
+  <div id="spacer"></div>
+</body>
+</html>

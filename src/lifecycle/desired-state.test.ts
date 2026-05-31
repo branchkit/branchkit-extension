@@ -3,7 +3,7 @@
  *
  * Pins the pure level-triggered predicates that both the legacy edge
  * handlers and the future reconcile() consume. See desired-state.ts and
- * notes/DESIGN_HINT_LIFECYCLE_RECONCILER.md.
+ * notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md.
  *
  * Run: npm test
  */

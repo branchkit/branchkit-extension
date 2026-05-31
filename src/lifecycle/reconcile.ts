@@ -9,7 +9,7 @@
  *
  * This module computes the *plan* — the delta between actual and desired —
  * but DRIVES NOTHING. It is the shadow-mode step (Phase 2 of
- * notes/DESIGN_HINT_LIFECYCLE_RECONCILER.md): we surface the plan in
+ * notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md): we surface the plan in
  * snapshots so we can confirm reconcile computes correct state before it is
  * made authoritative (Phase 3+). It is also the first production reader of
  * TargetRectStore — the band-divergence check reads warm rects to see whether

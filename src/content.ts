@@ -1296,7 +1296,7 @@ function badgeNewlyCodeworded(): void {
 }
 
 // Build-up half of the level-triggered lifecycle reconciler (Phases 3+5 of
-// notes/DESIGN_HINT_LIFECYCLE_RECONCILER.md). This is THE single convergence
+// notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md). This is THE single convergence
 // entry for {codeword, hint} — every edge trigger (codewords-changed, nav-
 // settle, alphabet-change, label-sync catchup, focus/transition settle) routes
 // here rather than poking the claim or build step directly. `refreshViewportClaims`
@@ -1334,7 +1334,7 @@ function scheduleReconcile(): void {
 }
 
 // Tear-down half of the level-triggered lifecycle reconciler (Phase 4 of
-// notes/DESIGN_HINT_LIFECYCLE_RECONCILER.md). The IO exit branch is the cheap
+// notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md). The IO exit branch is the cheap
 // fast-path that releases on viewport-exit; this is the authoritative backstop
 // for the dropped/reordered exit events that leave `isInViewport` stale-TRUE
 // (flag says in, geometry says out) — the staleInViewport root.
@@ -1398,7 +1398,7 @@ function runWhenIdle(cb: () => void, timeoutMs: number): void {
 const DISCOVERY_SWEEP_IDLE_TIMEOUT_MS = 500;
 
 // Discover step of the level-triggered reconciler (Phase 3b of
-// notes/DESIGN_HINT_LIFECYCLE_RECONCILER.md). `reconcile()` converges
+// notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md). `reconcile()` converges
 // {codeword, hint} over EXISTING wrappers; it cannot close the *discovery gap*
 // — a hintable element that entered the DOM while the MutationObserver
 // dropped/coalesced its insertion record under YouTube's mutation storm, so no

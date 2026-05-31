@@ -431,11 +431,34 @@ does not reproduce on the signed-out harness — needs a live signed-in dense
 YouTube home (the Phase 0 caveat). Synthetic-gap correctness and wedge-safety are
 verified offline; the live efficacy check folds into Phase 6.
 
-**Phase 6 — Final parity sweep + doc reconciliation.** Wedge repro green; full
-`classify` sweep with all three lifecycle buckets ~0 and no catastrophic state;
-grammar-churn check; real-site spot check (YouTube home + a channel `/videos`
-nav). Update `DESIGN_OBSERVER_DRIVEN_LAYOUT.md` cross-references; relocate this
-note to `notes/completed/` if the lifecycle axis is settled.
+**Phase 6 — Final parity sweep + doc reconciliation (landed 2026-05-31).** Both
+of the unverified live gates carried from Phases 5 and 3b are now closed by a
+live probe (`scripts/_test-live-churn.mjs` + `test-fixtures/live-churn.html` — a
+manual, app-required probe, not a CI guardrail: it drives a Chromium with the
+dist extension against the running dev actuator and isolates its own grammar
+traffic by a byte-offset window into `actuator.log`).
+
+- *Phase 5 gate — grammar churn.* A steady-state scroll burst (8 scroll-and-back
+  cycles, no new content) produced **zero** grammar commits: `kind=scan=0`,
+  `kind=incremental=0`, `elements=0`. The settle-triggered reconcile does not
+  re-post grammar when nothing changed — the `grammar_already_owns` dedup on the
+  browser plugin absorbs it.
+- *Phase 3b gate — discovery efficacy + commit boundedness.* Injecting 6 gap
+  links into an open shadow root across a scroll burst (the doc MO never sees
+  them) got **all 6 discovered + badged** by the band-discovery sweep, via
+  **bounded incremental** commits only: `kind=scan=0`, `kind=incremental=6`,
+  `elements=6` (exactly one element per new link; 12 collection pushes = the
+  prefix + parity collections, 2 per element). No full-document rescan storm.
+
+Offline parity also green: wedge repro (`_test-videos-tab-wedge.mjs`), placement
+(`_test-anchor-rebind.mjs`), band-discovery (`_test-band-discovery.mjs`), 463
+unit tests. `DESIGN_OBSERVER_DRIVEN_LAYOUT.md` cross-references reviewed — the
+TargetRectStore-reader note (placement axis) and the "lifecycle gap the
+reconciler closed for *existence*" reference are both still accurate after Phase
+3b, no edits needed. The lifecycle axis is settled, so this note is relocated to
+`notes/completed/`. (A purely-visual signed-in real-site pass on YouTube home +
+a channel `/videos` nav remains a nice-to-have; the substantive grammar/discovery
+mechanism is verified through the real actuator path above.)
 
 ## Open questions
 

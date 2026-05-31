@@ -3,7 +3,7 @@
  *
  * The plan computes the actual→desired delta WITHOUT driving anything; these
  * pin each delta bucket and the band-divergence check. See reconcile.ts and
- * notes/DESIGN_HINT_LIFECYCLE_RECONCILER.md.
+ * notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md.
  *
  * Run: npm test
  */
