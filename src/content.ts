@@ -1632,7 +1632,18 @@ function rescanForNav(fromCache: boolean, reason: string): void {
     // them back. A deferred doScanBatched() still runs as a
     // reconciliation pass to heal any cache/DOM drift.
     void (async () => {
+      // Step breadcrumbs: posted to the service worker (which never wedges)
+      // BEFORE each heavy step, so a hard nav-time freeze still leaves a
+      // trail of the last step entered + the wall-clock gap to the previous
+      // one. The post-completion cs_scan_completed below never ships when
+      // the thread wedges, so it can't tell us where the time went — these
+      // can. See notes/INVESTIGATION_YOUTUBE_WATCH_PERF.md (nav-time wedge).
+      const navStep = (step: string) =>
+        chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_nav_step', data: { step, reason, at_ms: Math.round(performance.now() - t0) } } as Message).catch(() => {});
+
+      void navStep('drop_disconnected');
       dropDisconnectedWrappers();
+      void navStep('sync_now');
       await syncNow('refocus_from_cache');
       const t1 = performance.now();
       chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_scan_completed', data: { elements: store.all.length, duration_ms: Math.round(t1 - t0), path: 'from_cache' } } as Message).catch(() => {});
@@ -1642,7 +1653,7 @@ function rescanForNav(fromCache: boolean, reason: string): void {
       // mutations that bypassed MutationObserver, framework-driven
       // element replacement). Idempotent when cache was accurate —
       // filterNewBatchRefs drops everything already wrapped.
-      setTimeout(() => { void doScanBatched(); }, 300);
+      setTimeout(() => { void navStep('deferred_scan'); void doScanBatched(); }, 300);
     })();
   } else {
     doScan();
@@ -2342,6 +2353,8 @@ const LIMBO_DEADLINE_MS = 250;
  * sweeper does that when it actually detaches.
  */
 function dropDisconnectedWrappers(): number {
+  const __cpuStart = performance.now();
+  const __initialSize = store.all.length;
   let entered = 0;
   const now = Date.now();
   for (const w of store.all) {
@@ -2359,6 +2372,14 @@ function dropDisconnectedWrappers(): number {
   }
   dropDisconnectedCalls++;
   dropDisconnectedFound += entered;
+  // Labeled so a watchdog stall during a full-page DOM swap (where every
+  // wrapper disconnects at once) attributes here instead of falling into
+  // unattributedMs. This is one of the two synchronous steps the spa_nav
+  // from_cache rescan runs before the deferred walk — previously invisible
+  // to topLabels, which is why "us vs YouTube" couldn't be pinned on the
+  // nav-time wedge. See notes/INVESTIGATION_YOUTUBE_WATCH_PERF.md.
+  recordCpu('dropDisconnectedWrappers', performance.now() - __cpuStart);
+  if (__initialSize > 0) recordCpu(`dropDisconnectedWrappers:size:${__initialSize > 1000 ? '1000+' : __initialSize > 100 ? '100-1000' : '<100'}`, __initialSize);
   return entered;
 }
 

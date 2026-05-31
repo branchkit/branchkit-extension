@@ -14,8 +14,37 @@ mechanism and the fix.
 | 0 | Attribution (live actuator collection inspection) | Done (2026-05-30) |
 | 1 | Root-cause trace | Done (2026-05-30) |
 | 2 | Design | This doc |
-| 3 | Implementation | Not started |
-| 4 | Verify on real browser | Not started |
+| 3 | Implementation (Option A) | Done (2026-05-30) |
+| 3b | Cross-*browser* gate (Chrome+Firefox concurrent) | Done (2026-05-30) |
+| 3c | Always-reactivate on app-refocus | Done (2026-05-30) |
+| 4 | Verify on real browser | Done (2026-05-30) — user-confirmed on YouTube |
+
+> **Resolution (2026-05-30).** Shipped Option A (gate the grammar push to the
+> active tab) and went further. Three coupled fixes landed and were
+> user-verified:
+>
+> 1. **Option A cross-tab gate** — the extension stamps the active tab and the
+>    plugin rejects grammar batches from non-active tabs, so a background tab
+>    can no longer REPLACE the global per-prefix collections. `LastTabID`
+>    becomes correct for free (only the active tab pushes). Extension commits
+>    `7270943` (scope to active tab) + `3a124e0` (recover grammar after
+>    extension reload, closing the `cachedActiveTabId==null` fail-open window).
+> 2. **Cross-*browser* gate** — the per-tab gate is per-service-worker, so it
+>    can't stop Chrome + Firefox both POSTing to the same plugin. Added a
+>    plugin-side focus gate keyed on `FocusedBundleID` (the OS-focused app),
+>    primed at startup from `native.frontmost_app` so it isn't stuck failing
+>    open until the first focus change. Browsers stamp `bundle_id` on batches
+>    and on the SSE `/events` connect; dispatch/rescan fan out only to the
+>    focused browser's clients. Browser plugin `96655bb` + extension `c24c2bb`.
+> 3. **Always-reactivate on app-refocus** — `pushRescanToClients()` now always
+>    sends `reactivate` (full re-push) instead of a `from_cache` delta. The
+>    plugin clears a tab's grammar on browser switch, tab switch, AND session
+>    end, so a `from_cache` rescan after any of those sends zero elements and
+>    the per-prefix collections stay empty (badges paint but won't voice-match).
+>
+> The open questions below (where to gate, tab-switch republish, stale state on
+> deactivation, multi-window) were resolved in passing by the implementation;
+> retained for the rationale.
 
 ## Evidence (live, 2026-05-30)
 
