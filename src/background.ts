@@ -526,7 +526,17 @@ async function postGrammarBatch(
     connectSSE();
   }
 
-  const fullRequest: GrammarBatchRequest = { ...request, tab_id: tabId, frame_id: frameId };
+  // Stamp the OS bundle ID here, not in the content script: the content
+  // script can't detect which browser it's running in, but the background
+  // can (browserBundleID). The plugin's cross-browser focus gate keys off
+  // this to accept grammar only from the OS-focused browser, so an empty
+  // value would defeat it. tab_id/frame_id come from the message sender.
+  const fullRequest: GrammarBatchRequest = {
+    ...request,
+    tab_id: tabId,
+    frame_id: frameId,
+    bundle_id: browserBundleID,
+  };
   try {
     const r = await fetch(`http://127.0.0.1:${pluginPort}/grammar/batch`, {
       method: 'POST',
@@ -606,6 +616,7 @@ function notifyOffscreenConnect(): void {
     type: 'CONNECT_SSE',
     port: pluginPort,
     token: pluginToken,
+    bundleId: browserBundleID,
   }).catch(() => {});
 }
 
@@ -617,7 +628,9 @@ function connectDirectSSE(port: number, token: string): void {
     directSSE = null;
   }
 
-  const url = `http://127.0.0.1:${port}/events?token=${token}`;
+  // bundle_id lets the plugin scope dispatch/rescan to the OS-focused
+  // browser so a spoken command doesn't also fire in a background browser.
+  const url = `http://127.0.0.1:${port}/events?token=${token}&bundle_id=${encodeURIComponent(browserBundleID)}`;
   directSSE = new EventSource(url);
 
   directSSE.addEventListener('connected', () => {

@@ -8,13 +8,14 @@
 
 let source: EventSource | null = null;
 
-function connect(port: number, token: string): void {
+function connect(port: number, token: string, bundleId: string): void {
   if (source) {
     source.close();
     source = null;
   }
 
-  const url = `http://127.0.0.1:${port}/events?token=${token}`;
+  // bundle_id lets the plugin scope dispatch/rescan to the OS-focused browser.
+  const url = `http://127.0.0.1:${port}/events?token=${token}&bundle_id=${encodeURIComponent(bundleId)}`;
   source = new EventSource(url);
 
   source.addEventListener('connected', () => {
@@ -57,6 +58,6 @@ function connect(port: number, token: string): void {
 // Listen for connection info from service worker
 chrome.runtime.onMessage.addListener((message: any) => {
   if (message.type === 'CONNECT_SSE' && message.port && message.token) {
-    connect(message.port, message.token);
+    connect(message.port, message.token, message.bundleId ?? '');
   }
 });
