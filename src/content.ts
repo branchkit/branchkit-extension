@@ -952,12 +952,35 @@ const REATTACH_GIVEUP_COUNT = 3;
 const REATTACH_GIVEUP_WINDOW_MS = 5000;
 const badgeReattachHistory = new WeakMap<HTMLElement, number[]>();
 
+// Host-level circuit breaker. The per-badge limiter above keys on element
+// identity, so a site that strips badges off *fresh* elements every frame
+// never accumulates history on any single key — each new element gets an
+// immediate reattach (no cooldown), and the loop spins unbounded. The
+// breaker counts actual reattach operations across all badges in a rolling
+// 1-second window; if they exceed the budget the host is pathological, so we
+// suspend reattach for the rest of the session and disconnect the observer.
+// Badges may then disappear on this host without coming back, but the page
+// never wedges. The budget sits well above the largest legit single-nav
+// burst (~87 wrappers on YouTube /featured) and below the ~560/sec that trips
+// Firefox's slow-extension warning.
+const REATTACH_HOST_BUDGET_PER_SEC = 300;
+let reattachWindowStart = 0;
+let reattachWindowCount = 0;
+let reattachSuspended = false;
+
 const badgeReattachObserver = new MutationObserver((records) => {
+  // Breaker already tripped this session — a queued callback can still fire
+  // after disconnect, so bail before doing any work.
+  if (reattachSuspended) return;
   let reattached = 0;
   let skipped_cooldown = 0;
   let skipped_dead_target = 0;
   let gave_up = 0;
   const now = performance.now();
+  if (now - reattachWindowStart >= 1000) {
+    reattachWindowStart = now;
+    reattachWindowCount = 0;
+  }
   for (const r of records) {
     if (r.type !== 'childList' || r.removedNodes.length === 0) continue;
     for (const removed of r.removedNodes) {
@@ -992,6 +1015,23 @@ const badgeReattachObserver = new MutationObserver((records) => {
       wrapper.hint.reattach();
       wrapper.hint.reposition();
       reattached++;
+      // Host-level circuit breaker: trip when reattach ops blow the per-second
+      // budget. This catches the fresh-element pathology the per-badge limiter
+      // can't (distinct keys each frame never hit cooldown/giveup).
+      if (++reattachWindowCount > REATTACH_HOST_BUDGET_PER_SEC) {
+        reattachSuspended = true;
+        badgeReattachObserver.disconnect();
+        chrome.runtime.sendMessage({
+          type: 'DEBUG_LOG',
+          tag: 'pipeline.cs_firehose_step',
+          data: {
+            step: 'badge_reattach_circuit_broken',
+            host: location.host,
+            budget_per_sec: REATTACH_HOST_BUDGET_PER_SEC,
+          },
+        } as Message).catch(() => {});
+        return;
+      }
     }
   }
   if (reattached > 0 || skipped_cooldown > 0 || skipped_dead_target > 5 || gave_up > 0) {
