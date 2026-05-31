@@ -22,8 +22,7 @@
  * O(N).
  */
 
-import { ElementWrapper, WrapperStore, wrapperToCandidate } from '../scan/element-wrapper';
-import { HintCandidate, getFocusPoint, rankByDistance } from '../labels/allocator';
+import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
 import { wantsCodeword } from '../lifecycle/desired-state';
 
 const VIEWPORT_MARGIN = '200px';
@@ -254,26 +253,14 @@ export class IntersectionTracker {
       const queued = [...this.pendingClaim];
       this.pendingClaim.clear();
 
-      // Rank-aware allocation: closer-to-focus wrappers get the
-      // front-of-pool codewords. The pool is balanced square-fill (see
-      // label-pool.ts:buildPool), so the first claims form a grid of
-      // distinct prefixes × distinct suffixes; pairing that with rank
-      // order means the closest visible hints get the grid's cheapest
-      // codewords and both spoken stages stay meaningful. (Sprint C
-      // path 1; DESIGN_BROWSER_HINT_ALLOCATOR.md section 2.)
-      //
-      // getBoundingClientRect forces layout, so candidates are
-      // materialized once and reused for every comparison rather than
-      // recomputed inside the comparator.
-      const focus = getFocusPoint();
-      const cmp = rankByDistance(focus);
-      type Pair = { wrapper: ElementWrapper; candidate: HintCandidate };
-      const pairs: Pair[] = queued.map(w => ({
-        wrapper: w,
-        candidate: wrapperToCandidate(w),
-      }));
-      pairs.sort((a, b) => cmp(a.candidate, b.candidate));
-      const wrappers = pairs.map(p => p.wrapper);
+      // Claim in discovery order — no viewport-distance re-deal. Every
+      // codeword is a two-word pair of equal speaking cost, so there's no
+      // "give closer elements the cheaper codeword" to optimize; the old
+      // rank-and-pair sort was pure overhead (and forced a layout per
+      // wrapper). The pool's square-fill order (label-pool.ts:buildPool)
+      // keeps the live prefix×suffix grid balanced for the two-stage voice
+      // grammar regardless of which wrappers claim front-of-pool.
+      const wrappers = queued;
       // Sticky reclaim: ask the pool to re-grant each wrapper's previously-held
       // codeword (if still free) so scroll-back keeps the same letter.
       const preferred = wrappers.map(w => w.preferredCodeword);

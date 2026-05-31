@@ -456,78 +456,43 @@ describe('IntersectionTracker.disconnectAll', () => {
   });
 });
 
-describe('IntersectionTracker rank-aware allocation', () => {
-  // In a node test env without a DOM, getFocusPoint falls through to
-  // viewport center. With `typeof window === 'undefined'`, that center
-  // is (0, 0). Wrapper rects are interpreted relative to that origin —
-  // the closest-rect-center wrapper gets the cheapest codeword.
-
-  it('pairs rank-sorted wrappers with codewords from the pool', async () => {
+describe('IntersectionTracker claim ordering', () => {
+  it('assigns codewords in discovery order, independent of rect distance', async () => {
+    // No viewport-distance re-deal: codewords zip onto wrappers in the
+    // order they were discovered (store insertion order), regardless of
+    // where each element sits in the viewport. Rects here are deliberately
+    // "out of distance order" to prove they no longer influence assignment.
     const store = new WrapperStore();
     const events = { onCodewordsChanged: vi.fn() };
     const tracker = new IntersectionTracker(store, events);
 
-    // Three wrappers at increasing distance from viewport center (512, 384).
-    // happy-dom defaults to 1024x768, so getFocusPoint returns (512, 384).
-    // Note that codeword assignment is INDEPENDENT of insertion order:
-    // we deliberately add and queue them in reverse-distance order, then
-    // verify the closest gets the cheapest codeword regardless.
-    const far = new ElementWrapper(
-      fakeElement('far', { left: 0, top: 0, width: 10, height: 10 }),
+    const first = new ElementWrapper(
+      fakeElement('first', { left: 900, top: 700, width: 10, height: 10 }),
       fakeScanned({ id: 1 }),
     );
-    const mid = new ElementWrapper(
-      fakeElement('mid', { left: 400, top: 300, width: 10, height: 10 }),
+    const second = new ElementWrapper(
+      fakeElement('second', { left: 400, top: 300, width: 10, height: 10 }),
       fakeScanned({ id: 2 }),
     );
-    const near = new ElementWrapper(
-      fakeElement('near', { left: 507, top: 379, width: 10, height: 10 }),
+    const third = new ElementWrapper(
+      fakeElement('third', { left: 0, top: 0, width: 10, height: 10 }),
       fakeScanned({ id: 3 }),
     );
-    far.isInViewport = true;
-    mid.isInViewport = true;
-    near.isInViewport = true;
-    store.addWrapper(far);
-    store.addWrapper(mid);
-    store.addWrapper(near);
+    first.isInViewport = true;
+    second.isInViewport = true;
+    third.isInViewport = true;
+    store.addWrapper(first);
+    store.addWrapper(second);
+    store.addWrapper(third);
 
-    setupClaimResponse(['arch', 'bake', 'check']); // pool order: cheap → expensive
+    setupClaimResponse(['arch', 'bake', 'check']);
     tracker.refreshViewportClaims();
     await tracker.flushNow();
 
-    // Closest-to-origin wrapper gets the front-of-pool codeword.
-    expect(near.scanned.codeword).toBe('arch');
-    expect(mid.scanned.codeword).toBe('bake');
-    expect(far.scanned.codeword).toBe('check');
-  });
-
-  it('rank-sorts even when wrappers arrive in already-sorted insertion order', async () => {
-    // Sanity check: the sort doesn't break the trivially-already-sorted
-    // case. Closest first by insertion → still closest first by rank.
-    // Rects relative to viewport center (512, 384).
-    const store = new WrapperStore();
-    const events = { onCodewordsChanged: vi.fn() };
-    const tracker = new IntersectionTracker(store, events);
-
-    const a = new ElementWrapper(
-      fakeElement('a', { left: 507, top: 379, width: 10, height: 10 }),
-      fakeScanned({ id: 1 }),
-    );
-    const b = new ElementWrapper(
-      fakeElement('b', { left: 0, top: 0, width: 10, height: 10 }),
-      fakeScanned({ id: 2 }),
-    );
-    a.isInViewport = true;
-    b.isInViewport = true;
-    store.addWrapper(a);
-    store.addWrapper(b);
-
-    setupClaimResponse(['arch', 'bake']);
-    tracker.refreshViewportClaims();
-    await tracker.flushNow();
-
-    expect(a.scanned.codeword).toBe('arch');
-    expect(b.scanned.codeword).toBe('bake');
+    // Front-of-pool codeword goes to the first-discovered wrapper.
+    expect(first.scanned.codeword).toBe('arch');
+    expect(second.scanned.codeword).toBe('bake');
+    expect(third.scanned.codeword).toBe('check');
   });
 
   it('preserves codeword assignments across a no-op flush (stability regression)', async () => {
@@ -571,32 +536,5 @@ describe('IntersectionTracker rank-aware allocation', () => {
     // Codewords unchanged.
     expect(a.scanned.codeword).toBe(aFirst);
     expect(b.scanned.codeword).toBe(bFirst);
-  });
-
-  it('falls back to insertion order when all wrappers tie on distance', async () => {
-    // All wrappers at the same rect → identical distance → stable sort
-    // preserves insertion order. This is what existing tests (which use
-    // the default 0,0,10,10 rect on every fake element) rely on.
-    const store = new WrapperStore();
-    const events = { onCodewordsChanged: vi.fn() };
-    const tracker = new IntersectionTracker(store, events);
-
-    const w1 = new ElementWrapper(fakeElement('1'), fakeScanned({ id: 1 }));
-    const w2 = new ElementWrapper(fakeElement('2'), fakeScanned({ id: 2 }));
-    const w3 = new ElementWrapper(fakeElement('3'), fakeScanned({ id: 3 }));
-    w1.isInViewport = true;
-    w2.isInViewport = true;
-    w3.isInViewport = true;
-    store.addWrapper(w1);
-    store.addWrapper(w2);
-    store.addWrapper(w3);
-
-    setupClaimResponse(['arch', 'bake', 'check']);
-    tracker.refreshViewportClaims();
-    await tracker.flushNow();
-
-    expect(w1.scanned.codeword).toBe('arch');
-    expect(w2.scanned.codeword).toBe('bake');
-    expect(w3.scanned.codeword).toBe('check');
   });
 });

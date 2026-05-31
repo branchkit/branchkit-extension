@@ -127,8 +127,8 @@ async function getOrCreateStack(tabId: number): Promise<LabelStack | null> {
  * Pass 1 re-grants any preferred codeword still in the free list, so an
  * element that scrolls out and back keeps the same letter (sticky reclaim —
  * kills scroll flicker). Pass 2 fills the remaining slots front-of-pool in
- * request order, preserving the balanced-grid ordering (and the closer-first
- * priority the IntersectionTracker encodes via rank-sorted request order).
+ * request order, preserving the pool's balanced square-fill ordering so the
+ * live prefix×suffix grid stays balanced for the two-stage voice grammar.
  */
 export async function claimLabels(
   tabId: number,
