@@ -924,135 +924,6 @@ function detachWrapper(element: Element): void {
 }
 
 /**
- * Body-level safety net for badges that get yanked by hostile page
- * scripts. Some sites (Baidu, occasional Google products) enumerate
- * body and remove "unknown" nodes; without this rescue, our badges
- * would silently disappear and voice/keyboard activation would still
- * try to operate on them.
- *
- * Distinguishing intentional vs. page-driven removal: by the time this
- * MO fires, intentional removals have already cleared `wrapper.hint`
- * (HintBadge.remove → wrapper.hint = null in the calling code). If
- * `store.all.find` still claims a wrapper that owns the removed host,
- * the removal was page-driven. Re-append.
- *
- * Body-only childList observation is intentionally narrow: every body
- * mutation fires this MO, but each callback's work is bounded by the
- * removedNodes count and a one-pass store walk per matched host.
- */
-// Per-badge reattach rate-limiting. YouTube (and similar SPA-heavy sites)
-// continuously strip our badges from inside their managed DOM subtrees —
-// the target survives but our badge child gets removed every animation
-// frame. Without rate limiting we re-insert → page removes → re-insert →
-// ... at 80+ fires/sec × 7 reattaches each = 560+ reattach/reposition
-// pairs per second, which trips Firefox's slow-extension warning even
-// though the target itself is intact.
-//
-// Strategy: cap reattach to 1 per badge per second. If a badge requires
-// reattach more than 3 times in 5 seconds, the page is actively fighting
-// us — give up and detach the wrapper (voice activation on that element
-// will fail, but at least we stop wedging the browser).
-const REATTACH_COOLDOWN_MS = 1000;
-const REATTACH_GIVEUP_COUNT = 3;
-const REATTACH_GIVEUP_WINDOW_MS = 5000;
-const badgeReattachHistory = new WeakMap<HTMLElement, number[]>();
-
-// Host-level circuit breaker. The per-badge limiter above keys on element
-// identity, so a site that strips badges off *fresh* elements every frame
-// never accumulates history on any single key — each new element gets an
-// immediate reattach (no cooldown), and the loop spins unbounded. The
-// breaker counts actual reattach operations across all badges in a rolling
-// 1-second window; if they exceed the budget the host is pathological, so we
-// suspend reattach for the rest of the session and disconnect the observer.
-// Badges may then disappear on this host without coming back, but the page
-// never wedges. The budget sits well above the largest legit single-nav
-// burst (~87 wrappers on YouTube /featured) and below the ~560/sec that trips
-// Firefox's slow-extension warning.
-const REATTACH_HOST_BUDGET_PER_SEC = 300;
-let reattachWindowStart = 0;
-let reattachWindowCount = 0;
-let reattachSuspended = false;
-
-const badgeReattachObserver = new MutationObserver((records) => {
-  // Breaker already tripped this session — a queued callback can still fire
-  // after disconnect, so bail before doing any work.
-  if (reattachSuspended) return;
-  let reattached = 0;
-  let skipped_cooldown = 0;
-  let skipped_dead_target = 0;
-  let gave_up = 0;
-  const now = performance.now();
-  if (now - reattachWindowStart >= 1000) {
-    reattachWindowStart = now;
-    reattachWindowCount = 0;
-  }
-  for (const r of records) {
-    if (r.type !== 'childList' || r.removedNodes.length === 0) continue;
-    for (const removed of r.removedNodes) {
-      if (!(removed instanceof HTMLElement)) continue;
-      if (!removed.hasAttribute('data-branchkit-hint')) continue;
-      const wrapper = store.all.find(w => w.hint?.host === removed);
-      if (!wrapper?.hint) continue;
-      // Target element gone — don't reattach an orphan; let
-      // dropDisconnectedWrappers tidy up.
-      if (!wrapper.element.isConnected) {
-        skipped_dead_target++;
-        continue;
-      }
-      // Rate limit + giveup check.
-      const history = badgeReattachHistory.get(removed) ?? [];
-      const recent = history.filter(t => now - t < REATTACH_GIVEUP_WINDOW_MS);
-      if (recent.length >= REATTACH_GIVEUP_COUNT) {
-        // Page is actively fighting us — detach the whole wrapper so
-        // future removals stop firing this handler. The target stays in
-        // the DOM but loses its voice handle.
-        detachWrapper(wrapper.element);
-        badgeReattachHistory.delete(removed);
-        gave_up++;
-        continue;
-      }
-      if (recent.length > 0 && now - recent[recent.length - 1] < REATTACH_COOLDOWN_MS) {
-        skipped_cooldown++;
-        continue;
-      }
-      recent.push(now);
-      badgeReattachHistory.set(removed, recent);
-      wrapper.hint.reattach();
-      wrapper.hint.reposition();
-      reattached++;
-      // Host-level circuit breaker: trip when reattach ops blow the per-second
-      // budget. This catches the fresh-element pathology the per-badge limiter
-      // can't (distinct keys each frame never hit cooldown/giveup).
-      if (++reattachWindowCount > REATTACH_HOST_BUDGET_PER_SEC) {
-        reattachSuspended = true;
-        badgeReattachObserver.disconnect();
-        chrome.runtime.sendMessage({
-          type: 'DEBUG_LOG',
-          tag: 'pipeline.cs_firehose_step',
-          data: {
-            step: 'badge_reattach_circuit_broken',
-            host: location.host,
-            budget_per_sec: REATTACH_HOST_BUDGET_PER_SEC,
-          },
-        } as Message).catch(() => {});
-        return;
-      }
-    }
-  }
-  if (reattached > 0 || skipped_cooldown > 0 || skipped_dead_target > 5 || gave_up > 0) {
-    chrome.runtime.sendMessage({
-      type: 'DEBUG_LOG',
-      tag: 'pipeline.cs_firehose_step',
-      data: { step: 'badge_reattach', reattached, skipped_cooldown, skipped_dead_target, gave_up },
-    } as Message).catch(() => {});
-  }
-});
-
-function startBadgeReattachObserver(): void {
-  badgeReattachObserver.observe(document.documentElement, { childList: true, subtree: true });
-}
-
-/**
  * Full re-discovery of hintable elements in the document. Idempotent:
  * already-known elements keep their wrappers (and codewords); newly
  * discovered elements get fresh wrappers; elements no longer in the DOM
@@ -1314,9 +1185,42 @@ function badgeNewlyCodeworded(): void {
 // Tear-down is the separate gBCR pass `reconcileTeardown` (Phase 4); the IO
 // viewport-exit remains the cheap fast-path. Keep reconcile gBCR-free — it runs
 // on the frequent onCodewordsChanged cadence and the coalesced scheduleReconcile.
+// Reattach step of the reconciler: a hint whose host the page stripped out of
+// the DOM while the target element survives. SPA-heavy sites (YouTube on the
+// nesting path) continuously remove our nested badge hosts from inside their
+// managed subtrees — the target lives on but the badge child is yanked. The
+// host object is intact, so the build step skips it (`w.hint` is non-null);
+// this clause re-appends the existing host and re-places it.
+//
+// This replaces the standalone badgeReattachObserver + its per-badge rate
+// limiter + host-level circuit breaker. Those stopgaps existed because the
+// observer was edge-triggered and fired DURING the page's strip storm (~560
+// reattaches/sec at peak), so it had to throttle itself to avoid wedging the
+// renderer. The reconcile pass is debounced instead (scheduleReconcile / the
+// scheduleDeferredReposition settle): a host that strips every frame never lets
+// the mutation storm settle, so reconcile simply doesn't fire until it stops —
+// no spin, no rate limiter, no circuit breaker needed. Each pass is one bounded
+// O(detached) reattach. Reattach appends a `data-branchkit-hint` host, which
+// isOwnMutation filters out of the main firehose, so it can't self-feed.
+function reattachStrippedHosts(): void {
+  let reattached = 0;
+  for (const w of store.all) {
+    if (!w.hint || w.hint.host.isConnected) continue;
+    // Target gone — don't reattach an orphan; let teardown tidy up.
+    if (!w.element.isConnected) continue;
+    w.hint.reattach();
+    w.hint.reposition();
+    reattached++;
+  }
+  if (reattached > 0) firehoseStep('reconcile:reattach', reattached, 1);
+}
+
 function reconcile(): void {
   tracker.refreshViewportClaims();
-  if (pageSession.hintsVisible) badgeNewlyCodeworded();
+  if (pageSession.hintsVisible) {
+    badgeNewlyCodeworded();
+    reattachStrippedHosts();
+  }
 }
 
 // Coalesced entry for high-frequency edge signals (focus/transition/resize
@@ -1371,7 +1275,7 @@ function reconcileTeardown(): void {
 // node without that style, so `position-anchor` dangles and the badge collapses
 // to the document origin. That is an unobserved target-identity change — it
 // fires no scroll/resize and never removes our body-mounted host, so neither
-// `badgeReattachObserver` (host-removal) nor limbo-rebind (target-disconnect)
+// reattachStrippedHosts (host-removal) nor limbo-rebind (target-disconnect)
 // catches it. This pass re-asserts the binding over the bounded hinted set;
 // the compositor re-resolves anchor() on its own, so no reposition follows.
 // Wedge discipline: gBCR-free — ensureBound reads only the target's inline
@@ -1835,7 +1739,6 @@ function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
   // means the orphan keeps reacting to DOM changes / viewport shifts and
   // surfacing `Extension context invalidated` errors in the page console.
   try { observer.disconnect(); } catch { /* may not be initialized yet */ }
-  try { badgeReattachObserver.disconnect(); } catch { /* same */ }
   try { tracker.disconnectAll(); } catch { /* same */ }
   try { resizeObserver.disconnect(); } catch { /* same */ }
   if (pageSession.discoveryFrame !== null) {
@@ -3289,8 +3192,6 @@ observer.observe(document.body || document.documentElement, {
     'title', 'type',
   ],
 });
-
-startBadgeReattachObserver();
 
 // --- Dynamic shadow detection ---
 //
