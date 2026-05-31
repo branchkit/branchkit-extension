@@ -101,6 +101,7 @@ import {
   syncNow,
   getTabActive,
   setTabActive,
+  getTabActiveDeactivations,
 } from './labels/label-sync';
 
 // --- Idempotency guard ---
@@ -135,8 +136,20 @@ const store = new WrapperStore();
 const dispatcher = new ActionDispatcher();
 const registry = new CommandRegistry();
 const keyHandler = new KeyHandler(registry, dispatcher);
+// Claim-path instrumentation (badge-coverage regression diagnosis).
+// A wrapper acquires a codeword from exactly one of two paths; this splits
+// them so a snapshot can tell whether the scan path went silent (gated by
+// the active-tab check) while the viewport tracker kept a handful alive.
+// scanBatchGatedSkips counts processScanBatch early-returns on !tabActive.
+const claimCounters = {
+  scanPathClaimed: 0,
+  trackerPathClaimed: 0,
+  scanBatchGatedSkips: 0,
+};
+
 const tracker = new IntersectionTracker(store, {
   onCodewordsChanged: (claimed, released) => {
+    claimCounters.trackerPathClaimed += claimed.length;
     for (const w of claimed) queuePut(w);
     for (const cw of released) {
       // Only enqueue a real Delete if we'd actually told the plugin
@@ -1366,7 +1379,10 @@ async function processScanBatch(
   // would clobber the focused tab's global hint vocabulary). Skip the whole
   // batch — claim, POST, and paint. republishForActivation rebuilds on
   // reactivation. See notes/DESIGN_ACTIVE_TAB_GRAMMAR_SCOPING.md.
-  if (!getTabActive()) return;
+  if (!getTabActive()) {
+    claimCounters.scanBatchGatedSkips++;
+    return;
+  }
 
   // Sync slab 1: exclusions + dedup + candidate construction. Measured
   // separately from the surrounding awaits so the recorded ms reflects
@@ -1418,6 +1434,7 @@ async function processScanBatch(
     const label = i < labels.length ? labels[i] : '';
     if (!label) continue;  // pool exhausted; element stays unaddressable
     newElements[i].codeword = label;
+    claimCounters.scanPathClaimed++;
     candidates.push(new ElementWrapper(newRefs[i], newElements[i]));
   }
 
@@ -3136,14 +3153,33 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
   // finalize-sweeper that's falling behind.
   let limbo = 0;
   let sentinelDisconnected = 0;
+  let inViewport = 0;
+  let inViewportWithCodeword = 0;
   for (const w of store.all) {
     if (w.disconnectedAt !== null) limbo++;
     else if (!w.element.isConnected) sentinelDisconnected++;
+    if (w.isInViewport) {
+      inViewport++;
+      if (w.scanned.codeword) inViewportWithCodeword++;
+    }
   }
   return {
     ...getPerfCounters(),
     wrapperCount: store.all.length,
     wrapperLimboCount: limbo,
+    // Active-tab gate diagnostics. tabActive=false on a foreground tab is
+    // the active-tab-gate misattribution that strands the scan-path claim;
+    // deactivations counts how often it flipped this session. claim.* splits
+    // codeword acquisition by path so we can see if the scan path went
+    // silent while the viewport tracker kept the visible handful alive.
+    tabActive: getTabActive(),
+    tabActiveDeactivations: getTabActiveDeactivations(),
+    claim: { ...claimCounters },
+    // Direct symptom metric: of wrappers the tracker considers in-viewport
+    // (200px margin), how many actually hold a codeword. < 1.0 ratio = the
+    // visible-links-without-badges bug.
+    inViewportWrappers: inViewport,
+    inViewportWithCodeword,
     // Disconnected wrappers that aren't yet in limbo. Should be ≈ 0 in
     // steady state; nonzero means dropDisconnectedWrappers isn't being
     // called between detach and snapshot.

@@ -72,12 +72,23 @@ const pendingDeleteCodewords: string[] = [];
 // notes/DESIGN_ACTIVE_TAB_GRAMMAR_SCOPING.md.
 let tabActive = true;
 
+// Diagnostic: number of true→false transitions since CS load. A nonzero
+// count on a tab the user believes is foreground is the signature of the
+// active-tab-gate misattribution stranding the scan-path claim. Surfaced
+// in buildPerfSnapshot.
+let tabActiveDeactivations = 0;
+
 export function setTabActive(v: boolean): void {
+  if (tabActive && !v) tabActiveDeactivations++;
   tabActive = v;
 }
 
 export function getTabActive(): boolean {
   return tabActive;
+}
+
+export function getTabActiveDeactivations(): number {
+  return tabActiveDeactivations;
 }
 
 /** Enqueue a newly-codeworded wrapper for the next Put. */
