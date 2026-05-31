@@ -170,6 +170,11 @@ stopped short of attempting it. Two facts surfaced while scoping it:
    sweep's brute-force loop, 5b scroll writes) and read by nothing but the
    diagnostic drift sampler. The cutover's whole point is to *make* it the
    read source so the sweep can be deleted.
+   *(Update 2026-05-31: no longer strictly zero — the hint-lifecycle reconciler's
+   shadow band-divergence check reads warm rects to detect flag-vs-geometry
+   staleness; see `notes/DESIGN_HINT_LIFECYCLE_RECONCILER.md`. That is a
+   diagnostic-grade reader, not the placement read-cutover this section is about,
+   so the cutover argument below stands.)*
 
 2. **Placement reads ancestor geometry, not just the target rect.** The Rango
    strategy's `positionAtTopLeft` (`placement/rango.ts`) reads: clip-ancestor

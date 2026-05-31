@@ -48,7 +48,8 @@ import { getHintVisibility } from '../config';
 export interface LabelSyncDeps {
   store: WrapperStore;
   detachWrapper: (element: Element) => void;
-  badgeNewlyCodeworded: () => void;
+  /** Single level-triggered convergence pass (claim + build). */
+  reconcile: () => void;
   isHintsVisible: () => boolean;
 }
 
@@ -344,7 +345,7 @@ export async function syncNow(reason: string): Promise<void> {
     const succeededWrappers = chunk.filter(w => succeededSet.has(w.scanned.codeword));
     sweepDisconnectedAfterBatch(succeededWrappers, (el) => el.isConnected, pendingDeleteCodewords, deps.detachWrapper);
     if (deps.isHintsVisible() && resp.succeeded.length > 0) {
-      deps.badgeNewlyCodeworded();
+      deps.reconcile();
     }
     await new Promise(r => setTimeout(r, 0));
   }

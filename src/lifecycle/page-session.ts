@@ -79,6 +79,9 @@ export class PageSession {
   deferredRepositionTimer: ReturnType<typeof setTimeout> | null = null;
   hugeMutationTimer: ReturnType<typeof setTimeout> | null = null;
 
+  /** Debounce handle coalescing the level-triggered reconcile (claim + build). */
+  reconcileTimer: ReturnType<typeof setTimeout> | null = null;
+
   /** Whether the visibility MutationObserver is currently connected. */
   visibilityMOConnected = false;
 

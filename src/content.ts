@@ -9,6 +9,8 @@ import { Category, HintVisibility, ScannedElement, Message, DispatchResult } fro
 import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from './labels/words';
 import { scanElements, scanSingle, isHintable, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters, subtreeMaybeHintable } from './scan/scanner';
 import { ElementWrapper, WrapperStore, enterLimbo, isLimboExpired } from './scan/element-wrapper';
+import { wantsHint } from './lifecycle/desired-state';
+import { computeReconcilePlan, geometryInBand, RECONCILE_BAND_MARGIN_PX } from './lifecycle/reconcile';
 import * as idRegistry from './scan/registry';
 import { computeFingerprint, fingerprintsEqual } from './scan/registry';
 import { bumpRebindCounter, findLimboMatch, newRebindCounters, REBIND_DISTANCE_THRESHOLD_PX, type RebindCounters } from './labels/rebind';
@@ -158,7 +160,10 @@ const tracker = new IntersectionTracker(store, {
       if (hasSent(cw)) queueDelete(cw);
     }
     schedulePushGrammar();
-    if (pageSession.hintsVisible) badgeNewlyCodeworded();
+    // Build-up reconcile: codewords just landed, so build their badges and
+    // re-sweep for any in-band wrapper still missing a claim (closes the
+    // claim-gap-after-build window). reconcile guards build on hintsVisible.
+    reconcile();
   },
 });
 
@@ -188,13 +193,13 @@ setScrollBoundaryCallback((boundary) => {
 });
 
 // Wire the LabelStage's catchup sync to content.ts-owned collaborators.
-// detachWrapper/badgeNewlyCodeworded are hoisted function declarations;
-// store is defined above; the visibility flag (pageSession.hintsVisible) is
-// read lazily via the arrow.
+// detachWrapper/reconcile are hoisted function declarations; store is defined
+// above; the visibility flag (pageSession.hintsVisible) is read lazily via the
+// arrow. Catchup-built badges converge through the single reconcile entry.
 initLabelSync({
   store,
   detachWrapper,
-  badgeNewlyCodeworded,
+  reconcile,
   isHintsVisible: () => pageSession.hintsVisible,
 });
 
@@ -332,9 +337,9 @@ if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
       // script's lifetime where we want plugin-side cleanup.
       // Plugin clears its per-frame session on session_id change, so the
       // delta-sync mirror state on this side is now stale; rotateSession
-      // rotates the id and resets it. Subsequent IT.refreshViewportClaims
-      // will re-claim codewords for in-viewport wrappers and
-      // onCodewordsChanged will re-queue them as pending Puts.
+      // rotates the id and resets it. The subsequent reconcile() will
+      // re-claim codewords for in-viewport wrappers and onCodewordsChanged
+      // will re-queue them as pending Puts.
       rotateSession();
       for (const w of store.all) {
         w.scanned.codeword = '';
@@ -344,7 +349,7 @@ if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
           w.hint = null;
         }
       }
-      tracker.refreshViewportClaims();
+      reconcile();
       if (pageSession.hintsVisible) {
         // Re-render once the new codewords land.
         tracker.flushNow().then(() => {
@@ -1185,6 +1190,11 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
     clearLayoutCache();
   }
   pageSession.hintsVisible = true;
+  // showHints painted only the strict-viewport `renderable` slice. Converge
+  // the rest of the desired set: build badges for in-band (200px IO margin)
+  // codeworded wrappers that fell outside the strict viewport — the
+  // noHintObject set that otherwise stayed hintless until the next scroll.
+  reconcile();
 }
 
 // Reset narrowing/interaction state on existing hint badges without
@@ -1252,11 +1262,14 @@ function scheduleHintRefresh(): void {
   }, HINT_REFRESH_DELAY_MS);
 }
 
+// The build step of the reconciler. Called only by reconcile() — no longer an
+// independent edge-triggered backstop. Builds badges for every wrapper that
+// wants a hint (in-band, codeworded, category-matched) but lacks one.
 function badgeNewlyCodeworded(): void {
   const newBadges: ElementWrapper[] = [];
   for (const w of store.all) {
-    if (w.scanned.codeword && !w.hint && w.isInViewport) {
-      if (activeCategory && w.category !== activeCategory) continue;
+    // Delta against desired state: wants a hint but doesn't have one.
+    if (wantsHint(w, activeCategory) && !w.hint) {
       newBadges.push(w);
     }
   }
@@ -1279,6 +1292,75 @@ function badgeNewlyCodeworded(): void {
   } finally {
     clearLayoutCache();
     clearPositionCaller();
+  }
+}
+
+// Build-up half of the level-triggered lifecycle reconciler (Phases 3+5 of
+// notes/DESIGN_HINT_LIFECYCLE_RECONCILER.md). This is THE single convergence
+// entry for {codeword, hint} — every edge trigger (codewords-changed, nav-
+// settle, alphabet-change, label-sync catchup, focus/transition settle) routes
+// here rather than poking the claim or build step directly. `refreshViewportClaims`
+// and `badgeNewlyCodeworded` are now reconcile-owned steps, not independent
+// backstops. Idempotent:
+//   - claim: queue in-band wrappers that lack a codeword. The pool RPC is
+//     async; its completion re-enters here via onCodewordsChanged, so each pass
+//     builds whatever is currently buildable and queues the rest. Pool-
+//     exhausted claims don't re-fire the callback (doFlush gates on `dirty`),
+//     so this converges rather than spins.
+//   - build: construct badges for in-band codeworded wrappers that lack one —
+//     the set showHints' strict-viewport slice leaves behind (the noHintObject
+//     root): they sit in the 200px IO band but outside the strict viewport, so
+//     showHints never built them and nothing rebuilt until a scroll.
+// Tear-down is the separate gBCR pass `reconcileTeardown` (Phase 4); the IO
+// viewport-exit remains the cheap fast-path. Keep reconcile gBCR-free — it runs
+// on the frequent onCodewordsChanged cadence and the coalesced scheduleReconcile.
+function reconcile(): void {
+  tracker.refreshViewportClaims();
+  if (pageSession.hintsVisible) badgeNewlyCodeworded();
+}
+
+// Coalesced entry for high-frequency edge signals (focus/transition/resize
+// settle): a 100ms debounce collapses a churny burst into one reconcile so we
+// act on real {claim, build} deltas only — the steady state is a cheap O(store)
+// no-op walk; grammar churn happens solely when a genuinely new in-band wrapper
+// needs a codeword. Sites needing synchronous flush→showHints ordering (nav,
+// alphabet) call reconcile() directly instead.
+function scheduleReconcile(): void {
+  if (pageSession.reconcileTimer) return;
+  pageSession.reconcileTimer = setTimeout(() => {
+    pageSession.reconcileTimer = null;
+    reconcile();
+  }, DEFERRED_REPOSITION_DEBOUNCE_MS);
+}
+
+// Tear-down half of the level-triggered lifecycle reconciler (Phase 4 of
+// notes/DESIGN_HINT_LIFECYCLE_RECONCILER.md). The IO exit branch is the cheap
+// fast-path that releases on viewport-exit; this is the authoritative backstop
+// for the dropped/reordered exit events that leave `isInViewport` stale-TRUE
+// (flag says in, geometry says out) — the staleInViewport root.
+//
+// Cost discipline (the wedge guard): fresh getBoundingClientRect is read ONLY
+// over the bounded hinted set (at most a viewport+band's worth of elements,
+// never the whole store), and reads are batched read-all-then-act so we never
+// interleave a layout read with a write. Direction is stale-TRUE only; the
+// missed-enter (stale-FALSE) direction is a discovery concern (Phase 3b), and
+// Phase 2 showed warm rects go stale off-band so it can't be trusted here.
+function reconcileTeardown(): void {
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const hinted = store.all.filter(w => w.hint && w.disconnectedAt === null);
+  if (hinted.length === 0) return;
+
+  // Read all geometry first…
+  const offBand: ElementWrapper[] = [];
+  for (const w of hinted) {
+    const r = w.element.getBoundingClientRect();
+    if (!geometryInBand(r, vw, vh, RECONCILE_BAND_MARGIN_PX)) offBand.push(w);
+  }
+  // …then act. The IO flag was stale-TRUE; correct it and release.
+  for (const w of offBand) {
+    w.isInViewport = false;
+    tracker.queueRelease(w);
   }
 }
 
@@ -1548,7 +1630,7 @@ async function processScanBatch(
   // so the badge-implies-functional contract holds. Gated by
   // pageSession.hintsVisible so manual-mode batches don't paint until "show".
   if (pageSession.hintsVisible && attached.length > 0) {
-    badgeNewlyCodeworded();
+    reconcile();
   }
 
   // Surface terminal-batch invisibleCandidates to the
@@ -1847,11 +1929,12 @@ function rescanForNav(fromCache: boolean, reason: string): void {
           // mutation storm those initial callbacks are delivered only
           // partially, leaving in-viewport wrappers observed-but-unclaimed
           // (no badge) with `isInViewport` stuck at its constructor default.
-          // refreshViewportClaims walks the store and queues a claim for
-          // any in-viewport wrapper still missing a codeword, independent
-          // of the IO — the same backstop the alphabet-changed path uses.
-          // Cheap no-op for wrappers that already claimed (refocus path).
-          tracker.refreshViewportClaims();
+          // reconcile() walks the store and queues a claim for any in-viewport
+          // wrapper still missing a codeword, independent of the IO — the same
+          // convergence pass the alphabet-changed path uses. Build is a no-op
+          // here (codewords not flushed yet); showHints below paints once they
+          // land. Cheap no-op for wrappers that already claimed (refocus path).
+          reconcile();
           await tracker.flushNow();
           if (pageSession.hintsVisible) showHints(activeCategory ?? undefined);
           void navStep('deferred_scan:end');
@@ -2212,6 +2295,9 @@ function scheduleScrollReposition(): void {
   if (pageSession.scrollRepositionTimer) clearTimeout(pageSession.scrollRepositionTimer);
   pageSession.scrollRepositionTimer = setTimeout(() => {
     pageSession.scrollRepositionTimer = null;
+    // Scroll-settle is the canonical viewport-exit moment: release hints that
+    // scrolled out of band but whose IO exit event dropped (stale-TRUE).
+    if (pageSession.hintsVisible) reconcileTeardown();
     scheduleReposition('drifted');
   }, DEFERRED_REPOSITION_DEBOUNCE_MS);
 }
@@ -2276,6 +2362,13 @@ function scheduleDeferredReposition(): void {
     // relative to its badge produces drift and is re-placed; badges that moved
     // in flow with their target (the common case) correctly skip. The window
     // 'resize' handler stays 'all' for genuine global layout/clamping changes.
+    if (pageSession.hintsVisible) {
+      reconcileTeardown();
+      // focus/transition/resize can reveal new in-band hintables (dropdowns,
+      // expanding rows). Converge claim+build over the settled layout; coalesced
+      // so a churny burst collapses to one pass that acts on real deltas only.
+      scheduleReconcile();
+    }
     scheduleReposition('drifted');
   }, DEFERRED_REPOSITION_DEBOUNCE_MS);
 }
@@ -2388,6 +2481,13 @@ document.addEventListener('keyup', (e: KeyboardEvent) => {
 document.addEventListener('__branchkit__capture_snapshot', () => {
   try {
     const payload = captureDebugSnapshot(store, trimFrameUrl(window.location.href));
+    payload.reconcile_shadow = computeReconcilePlan(
+      store,
+      activeCategory,
+      targetRectStore,
+      { width: window.innerWidth, height: window.innerHeight },
+      RECONCILE_BAND_MARGIN_PX,
+    );
     document.documentElement.dataset.branchkitSnapshot = JSON.stringify(payload);
   } catch {
     // Snapshot build failed (detached store, serialization); leave the
@@ -3290,6 +3390,17 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
       // set) — confirms Phase 5b keeps the store warm where it matters.
       scrollAncestorDrift: targetRectStore.sampleDriftFor(registeredScrollTargets(), 10),
     },
+    // Shadow-mode reconcile plan (drives nothing; Phase 2 of the lifecycle
+    // reconciler). Surfaces the actual→desired delta the edge handlers left
+    // behind so we can confirm reconcile computes correct state before it is
+    // authoritative. Cheap: O(store), reads warm rects only.
+    reconcileShadow: computeReconcilePlan(
+      store,
+      activeCategory,
+      targetRectStore,
+      { width: window.innerWidth, height: window.innerHeight },
+      RECONCILE_BAND_MARGIN_PX,
+    ),
   };
 }
 (window as any).branchkitPerfStats = buildPerfSnapshot;

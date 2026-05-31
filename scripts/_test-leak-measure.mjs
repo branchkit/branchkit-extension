@@ -39,9 +39,25 @@ async function measure(page, label) {
     `working=${String(c.working).padStart(3)}  ` +
     `staleInView=${String(c.staleInViewport).padStart(3)}  ` +
     `discoveryGap=${String(c.discoveryGap).padStart(3)}  ` +
+    `noHint=${String(c.noHintObject).padStart(3)}  ` +
     `claimGap=${String(c.claimGapInViewport).padStart(3)}  ` +
     `offscreenReleased=${String(c.offscreenReleased).padStart(3)}`,
   );
+  // Shadow reconcile plan (Phase 2): the actual→desired delta the edge
+  // handlers left behind. Should track classify's leak buckets — needBuild
+  // ~ noHint, band.staleTrue ~ staleInView — confirming reconcile would have
+  // computed the right correction before it is made authoritative.
+  const r = snap.reconcile_shadow;
+  if (r) {
+    console.log(
+      `  ${' '.padEnd(16)} ~plan  ` +
+      `claim=${String(r.needClaim).padStart(3)}  ` +
+      `build=${String(r.needBuild).padStart(3)}  ` +
+      `release=${String(r.needRelease).padStart(3)}  ` +
+      `teardown=${String(r.needTeardown).padStart(3)}  ` +
+      `band(known/sT/sF)=${r.band.rectsKnown}/${r.band.staleTrue}/${r.band.staleFalse}`,
+    );
+  }
   return c;
 }
 

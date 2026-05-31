@@ -24,6 +24,7 @@
 
 import { ElementWrapper, WrapperStore, wrapperToCandidate } from '../scan/element-wrapper';
 import { HintCandidate, getFocusPoint, rankByDistance } from '../labels/allocator';
+import { wantsCodeword } from '../lifecycle/desired-state';
 
 const VIEWPORT_MARGIN = '200px';
 const FLUSH_DEBOUNCE_MS = 50;
@@ -106,14 +107,17 @@ export class IntersectionTracker {
   }
 
   /**
-   * Re-queue every viewport-visible wrapper for claim. Used after the
-   * pool is regenerated (e.g. alphabet changed) so the tracker walks
-   * the existing store rather than waiting for IO entries that won't
-   * fire until the user scrolls.
+   * Re-queue every viewport-visible wrapper for claim. The claim step of the
+   * level-triggered reconciler — called only by `reconcile()` in content.ts,
+   * not as an independent backstop. Walks the existing store rather than
+   * waiting for IO entries that won't fire until the user scrolls (e.g. after
+   * the pool is regenerated on an alphabet change, or a post-nav mutation storm
+   * drops the initial IO callbacks).
    */
   refreshViewportClaims(): void {
     for (const w of this.store.all) {
-      if (w.isInViewport && !w.scanned.codeword) {
+      // Delta against desired state: wants a codeword but doesn't hold one.
+      if (wantsCodeword(w) && !w.scanned.codeword) {
         this.pendingClaim.add(w);
       }
     }
@@ -167,27 +171,40 @@ export class IntersectionTracker {
           this.pendingClaim.add(wrapper);
         }
       } else {
-        // Cancel any pending claim — the wrapper went off-screen before
-        // we got around to claiming for it.
-        this.pendingClaim.delete(wrapper);
-        if (wrapper.scanned.codeword) {
-          this.pendingRelease.push(wrapper.scanned.codeword);
-          wrapper.scanned.codeword = '';
-          wrapper.label = null;
-          // The badge can't follow a wrapper that's lost its codeword —
-          // its label would resolve to "?". Tear it down; the next
-          // showHints will re-mount if the user scrolls back.
-          if (wrapper.hint) {
-            wrapper.hint.remove();
-            wrapper.hint = null;
-          }
-        }
+        this.queueRelease(wrapper);
       }
     }
     this.scheduleFlush();
     const rec = (globalThis as { __branchkitRecordCpu?: (label: string, ms: number) => void }).__branchkitRecordCpu;
     if (rec) rec('intersection:handleEntries', performance.now() - __t0);
   };
+
+  /**
+   * Release a wrapper's codeword + hint and queue the label for return to
+   * the pool. Shared by the IO exit branch and the level-triggered
+   * tear-down backstop (`reconcileTeardown` in content.ts). Cancels any
+   * pending claim, since the wrapper is leaving the band. Schedules a flush
+   * so the released label re-enters the pool; safe to call repeatedly
+   * (scheduleFlush is idempotent).
+   */
+  queueRelease(wrapper: ElementWrapper): void {
+    // Cancel any pending claim — the wrapper went off-screen before we got
+    // around to claiming for it.
+    this.pendingClaim.delete(wrapper);
+    if (wrapper.scanned.codeword) {
+      this.pendingRelease.push(wrapper.scanned.codeword);
+      wrapper.scanned.codeword = '';
+      wrapper.label = null;
+      // The badge can't follow a wrapper that's lost its codeword — its
+      // label would resolve to "?". Tear it down; the next showHints will
+      // re-mount if the user scrolls back.
+      if (wrapper.hint) {
+        wrapper.hint.remove();
+        wrapper.hint = null;
+      }
+    }
+    this.scheduleFlush();
+  }
 
   private scheduleFlush(): void {
     if (this.flushTimer) return;

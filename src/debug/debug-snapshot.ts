@@ -38,6 +38,7 @@ import {
   type ActivatePathEvent,
   type ElementSnap,
 } from '../activate/activate-path-log';
+import type { ReconcilePlan } from '../lifecycle/reconcile';
 
 // --- payload shape ---
 
@@ -118,6 +119,10 @@ export interface DebugSnapshotPayload {
   recent_activations: readonly ActivatePathEvent[];
   dom_survey?: DomSurveyElement[];
   position_log?: readonly PositionLogEntry[];
+  /** Shadow-mode reconcile plan (drives nothing; see lifecycle/reconcile.ts).
+   * Attached by the content-script capture path, which owns activeCategory +
+   * the rect store the plan reads. */
+  reconcile_shadow?: ReconcilePlan;
 }
 
 // --- id generation ---
