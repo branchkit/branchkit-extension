@@ -1315,21 +1315,36 @@ const DISCOVERY_SWEEP_IDLE_TIMEOUT_MS = 500;
 //
 // Single-flight + idle-scheduled: scroll-settle fires repeatedly on a long
 // scroll, so we keep at most one sweep in flight (`discoverySweepPending`) and
-// coalesce the rest. requestIdleCallback waits for a quiet frame so the DOM
-// walk never lands on top of YouTube's reflow (the wedge guard); the timeout
-// caps the wait. Mirrors the nav-rescan deferred-scan tail.
+// coalesce the rest into a single trailing re-run (`discoverySweepRerun`) — not
+// a silent drop, because a row re-rendered *during* a sweep would otherwise be
+// stranded (the scroll-back missing-badge gap). requestIdleCallback waits for a
+// quiet frame so the DOM walk never lands on top of YouTube's reflow (the wedge
+// guard); the timeout caps the wait. Mirrors the nav-rescan deferred-scan tail.
 //
 // Distinct from `scheduleDiscovery(root)` (the rAF-coalesced drainer for
 // subtree roots the MutationObserver DID see): this is the backstop for the
 // records it DIDN'T.
 function scheduleBandDiscovery(): void {
-  if (pageSession.discoverySweepPending) return;
+  if (pageSession.discoverySweepPending) {
+    // A request arrived while a sweep is in flight. Don't drop it: a row whose
+    // virtualization re-render lands *during* this sweep (after the batch that
+    // would have covered it already passed) — and whose own scroll-settle is
+    // coalesced here — would otherwise never be discovered (the scroll-back
+    // missing-badge gap). Mark a single trailing re-run; the in-flight sweep
+    // re-arms itself on completion.
+    pageSession.discoverySweepRerun = true;
+    firehoseStep('band_discovery:coalesced', 1);
+    return;
+  }
   pageSession.discoverySweepPending = true;
   runWhenIdle(() => {
     void (async () => {
       try {
         if (pageSession.isTornDown || !document.body) return;
         const added = await discoverInSubtreeBatched(document.body);
+        // Diagnostic: the sweep's added count INCLUDING zero, to correlate a
+        // miss against whether the walk actually attached anything.
+        firehoseStep('band_discovery:added', added, 0);
         if (added === 0) return;
         // New wrappers landed: claim codewords for the in-band ones and build
         // their badges (reconcile), flush the claims, then paint.
@@ -1338,6 +1353,15 @@ function scheduleBandDiscovery(): void {
         if (pageSession.hintsVisible) await showHints(activeCategory ?? undefined);
       } finally {
         pageSession.discoverySweepPending = false;
+        // If a request was coalesced while this sweep ran, run exactly one more
+        // pass (idle-scheduled + batched, same wedge-safe path). Bounded: rerun
+        // is only re-set by a fresh settle arriving during the next sweep, so a
+        // quiet page stops after one trailing walk; a churny one keeps pace with
+        // the churn and quiesces when it stops.
+        if (pageSession.discoverySweepRerun && !pageSession.isTornDown) {
+          pageSession.discoverySweepRerun = false;
+          scheduleBandDiscovery();
+        }
       }
     })();
   }, DISCOVERY_SWEEP_IDLE_TIMEOUT_MS);
