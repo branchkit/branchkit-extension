@@ -2323,6 +2323,35 @@ document.addEventListener('keyup', (e: KeyboardEvent) => {
   }
 }, true);
 
+// Programmatic snapshot trigger for test harnesses (Playwright). Content
+// scripts run in the ISOLATED world, so a `window.` global isn't reachable
+// from page.evaluate (MAIN world). We use the same cross-world idiom as the
+// shadow-attach bootstrap: the harness dispatches a CustomEvent on
+// `document`, and we mirror the freshly-built payload onto a dataset
+// attribute it reads back (the dataset.branchkitPerf channel, on demand).
+//
+// CustomEvent dispatch is synchronous and cross-world listeners fire during
+// the dispatch call, and captureDebugSnapshot builds its payload
+// synchronously — so a harness gets the full structured snapshot in a
+// single evaluate, with no keyboard focus, no mtime-guessing, and no
+// dependency on the plugin endpoint (the PNG half still lands on disk via
+// the SW path when reachable):
+//   const snap = await page.evaluate(() => {
+//     document.dispatchEvent(new CustomEvent('__branchkit__capture_snapshot'));
+//     return JSON.parse(document.documentElement.dataset.branchkitSnapshot);
+//   });
+// Unlike the Ctrl+Alt+A path this deliberately does NOT toggle the debug
+// overlay — a test driving captures shouldn't mutate the page's visuals.
+document.addEventListener('__branchkit__capture_snapshot', () => {
+  try {
+    const payload = captureDebugSnapshot(store, trimFrameUrl(window.location.href));
+    document.documentElement.dataset.branchkitSnapshot = JSON.stringify(payload);
+  } catch {
+    // Snapshot build failed (detached store, serialization); leave the
+    // previous mirror in place rather than wedging the page.
+  }
+}, true);
+
 // --- MutationObserver (discovery-only) ---
 //
 // The observer surgically reflects DOM changes into the wrapper store:

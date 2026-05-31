@@ -316,10 +316,12 @@ export function buildSnapshotPayload(inputs: BuildInputs): DebugSnapshotPayload 
 
 // --- trigger entrypoint ---
 
-/** Fire-and-forget: build the snapshot, send to background.ts for
- * forwarding to the plugin. Background does the screenshot capture
- * + POST sequence. */
-export function captureDebugSnapshot(store: WrapperStore, frameUrl: string): void {
+/** Build the snapshot and send it to background.ts for forwarding to the
+ * plugin (disk write + screenshot capture). Returns the built payload so
+ * callers — notably the `window.__branchkitCaptureSnapshot` test hook —
+ * can read the structured snapshot synchronously without waiting on the
+ * async disk-write/plugin-reachability path. */
+export function captureDebugSnapshot(store: WrapperStore, frameUrl: string): DebugSnapshotPayload {
   const knownIds = new Set<number>();
   for (const w of store.all) knownIds.add(w.scanned.id);
   for (const ev of getActivatePathBuffer()) {
@@ -335,4 +337,5 @@ export function captureDebugSnapshot(store: WrapperStore, frameUrl: string): voi
   } catch {
     // Extension context invalidated; nothing useful to do.
   }
+  return payload;
 }
