@@ -90,16 +90,6 @@ export class PageSession {
    */
   discoverySweepPending = false;
 
-  /**
-   * Trailing re-arm for the band-discovery sweep. Set when a settle/discovery
-   * request arrives while a sweep is already in flight. Without it the request
-   * is dropped, so a row whose virtualization re-render lands *during* the sweep
-   * (after the batch covering it already passed) — and whose own scroll-settle
-   * was coalesced — is never discovered. On completion the sweep re-runs once if
-   * this is set, guaranteeing one final walk after the last in-flight change.
-   */
-  discoverySweepRerun = false;
-
   /** Whether the visibility MutationObserver is currently connected. */
   visibilityMOConnected = false;
 

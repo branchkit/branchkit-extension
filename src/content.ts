@@ -1326,13 +1326,10 @@ const DISCOVERY_SWEEP_IDLE_TIMEOUT_MS = 500;
 // records it DIDN'T.
 function scheduleBandDiscovery(): void {
   if (pageSession.discoverySweepPending) {
-    // A request arrived while a sweep is in flight. Don't drop it: a row whose
-    // virtualization re-render lands *during* this sweep (after the batch that
-    // would have covered it already passed) — and whose own scroll-settle is
-    // coalesced here — would otherwise never be discovered (the scroll-back
-    // missing-badge gap). Mark a single trailing re-run; the in-flight sweep
-    // re-arms itself on completion.
-    pageSession.discoverySweepRerun = true;
+    // A sweep is already in flight; settle bursts coalesce to it. The breadcrumb
+    // stays (a coalesced request near a miss is the cause-A tell) but we do NOT
+    // re-arm a trailing pass: a trailing re-run chained sweep→reconcile→repaint
+    // into a codeword-churn loop (badges flashing / alternating letters).
     firehoseStep('band_discovery:coalesced', 1);
     return;
   }
@@ -1353,15 +1350,6 @@ function scheduleBandDiscovery(): void {
         if (pageSession.hintsVisible) await showHints(activeCategory ?? undefined);
       } finally {
         pageSession.discoverySweepPending = false;
-        // If a request was coalesced while this sweep ran, run exactly one more
-        // pass (idle-scheduled + batched, same wedge-safe path). Bounded: rerun
-        // is only re-set by a fresh settle arriving during the next sweep, so a
-        // quiet page stops after one trailing walk; a churny one keeps pace with
-        // the churn and quiesces when it stops.
-        if (pageSession.discoverySweepRerun && !pageSession.isTornDown) {
-          pageSession.discoverySweepRerun = false;
-          scheduleBandDiscovery();
-        }
       }
     })();
   }, DISCOVERY_SWEEP_IDLE_TIMEOUT_MS);
