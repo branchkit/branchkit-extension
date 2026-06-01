@@ -92,13 +92,17 @@ export interface GrammarBatchFailure {
 }
 
 export interface GrammarBatchResponse {
-  result: 'ok' | 'error' | 'inactive';
+  // 'ok' = stored and projected into the live collections (focused source).
+  // 'stored' = stored in the plugin's per-source session but not projected
+  // (the source isn't OS-focused); its codewords project when it gains focus.
+  // 'calibration_active' = short-circuited during a calibration trial.
+  result: 'ok' | 'error' | 'stored' | 'calibration_active';
   succeeded: string[];
   failed: GrammarBatchFailure[];
   // Codewords the plugin's cumulative REPLACE silently dropped from the
   // matchable collections. Their badges are still painted (the extension owns
   // them), so the extension must detach the stale wrappers. Absent on the
-  // synthetic transport/inactive responses the SW builds locally.
+  // synthetic transport response the SW builds locally.
   evicted?: string[];
 }
 

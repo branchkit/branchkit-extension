@@ -101,9 +101,6 @@ import {
   postBatch,
   scheduleSync,
   syncNow,
-  getTabActive,
-  setTabActive,
-  getTabActiveDeactivations,
 } from './labels/label-sync';
 
 // --- Idempotency guard ---
@@ -140,13 +137,11 @@ const registry = new CommandRegistry();
 const keyHandler = new KeyHandler(registry, dispatcher);
 // Claim-path instrumentation (badge-coverage regression diagnosis).
 // A wrapper acquires a codeword from exactly one of two paths; this splits
-// them so a snapshot can tell whether the scan path went silent (gated by
-// the active-tab check) while the viewport tracker kept a handful alive.
-// scanBatchGatedSkips counts processScanBatch early-returns on !tabActive.
+// them so a snapshot can tell whether the scan path went silent while the
+// viewport tracker kept a handful alive.
 const claimCounters = {
   scanPathClaimed: 0,
   trackerPathClaimed: 0,
-  scanBatchGatedSkips: 0,
 };
 
 const tracker = new IntersectionTracker(store, {
@@ -1505,15 +1500,6 @@ async function processScanBatch(
   sessionMeta: { conn_id: string; hint_visibility: HintVisibility; app_id: string; table_id: string },
   adapter: ReturnType<typeof getActiveAdapter>,
 ): Promise<void> {
-  // Active-tab scoping: a backgrounded tab must not push grammar (its REPLACE
-  // would clobber the focused tab's global hint vocabulary). Skip the whole
-  // batch — claim, POST, and paint. republishForActivation rebuilds on
-  // reactivation. See notes/DESIGN_ACTIVE_TAB_GRAMMAR_SCOPING.md.
-  if (!getTabActive()) {
-    claimCounters.scanBatchGatedSkips++;
-    return;
-  }
-
   // Sync slab 1: exclusions + dedup + candidate construction. Measured
   // separately from the surrounding awaits so the recorded ms reflects
   // actual main-thread block time, not wall-clock through claim+POST.
@@ -1588,15 +1574,6 @@ async function processScanBatch(
     table_id: sessionMeta.table_id,
     elements: candidates.map(w => w.scanned),
   });
-
-  if (resp.result === 'inactive') {
-    // Went inactive mid-scan (this tab was active when the batch started but
-    // got backgrounded before the push landed). Nothing reached the plugin:
-    // release the claimed labels without attaching or painting.
-    setTabActive(false);
-    for (const w of candidates) w.releaseLabel();
-    return;
-  }
 
   // Sync slab 2: response partitioning, attach loop, paint, observer
   // surfacing. Everything after the POST-await is synchronous; if any
@@ -1972,12 +1949,12 @@ function rescanForNav(fromCache: boolean, reason: string): void {
   }
 }
 
-// This tab just became the active tab. While backgrounded, the relay
-// suppressed every grammar push (active-tab scoping), so the plugin holds no
-// vocabulary for this tab and `tabActive` is false. Flip it back on and
-// re-push the whole store from a fresh session so this tab becomes the sole,
-// complete contributor to the global hint collections. Mirrors the
-// from-cache rescan path. See notes/DESIGN_ACTIVE_TAB_GRAMMAR_SCOPING.md.
+// This tab just became the active tab. The plugin already holds this tab's
+// grammar (every tab stores its batches under Option B) and reprojects it on
+// focus, so matchability is already restored by the time this fires. The
+// re-push here rotates to a fresh session and rebuilds the plugin's per-frame
+// view cleanly, then runs a reconciliation scan to pick up anything that
+// changed while backgrounded. Mirrors the from-cache rescan path.
 //
 // A reactivate is broadcast to *every* frame of the active tab (the plugin's
 // target=active fan-out carries no codeword, so the relay can't route it to a
@@ -1987,15 +1964,13 @@ function rescanForNav(fromCache: boolean, reason: string): void {
 let lastActivationScanAt = 0;
 const ACTIVATION_SCAN_COALESCE_MS = 1500;
 function republishForActivation(reason: string): void {
-  setTabActive(true);
   // Nothing claimed in this frame — no grammar to rebuild. Skip the rotate,
   // re-push, and reconciliation scan entirely so a refocus doesn't wake a
   // full DOM scan in every empty subframe of the page.
   if (!store.all.some(w => w.scanned.codeword)) return;
-  // The plugin cleared this tab's session when it was backgrounded; rotate to
-  // a fresh session id so the re-push rebuilds the plugin's per-frame view
-  // cleanly. rotateSession also resets the delta-sync mirror, so every live
-  // codeword needs re-Putting below.
+  // Rotate to a fresh session id so the re-push rebuilds the plugin's per-frame
+  // view cleanly. rotateSession also resets the delta-sync mirror, so every
+  // live codeword needs re-Putting below.
   rotateSession();
   void (async () => {
     dropDisconnectedWrappers();
@@ -3390,13 +3365,9 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
     ...getPerfCounters(),
     wrapperCount: store.all.length,
     wrapperLimboCount: limbo,
-    // Active-tab gate diagnostics. tabActive=false on a foreground tab is
-    // the active-tab-gate misattribution that strands the scan-path claim;
-    // deactivations counts how often it flipped this session. claim.* splits
-    // codeword acquisition by path so we can see if the scan path went
-    // silent while the viewport tracker kept the visible handful alive.
-    tabActive: getTabActive(),
-    tabActiveDeactivations: getTabActiveDeactivations(),
+    // claim.* splits codeword acquisition by path so we can see if the scan
+    // path went silent while the viewport tracker kept the visible handful
+    // alive.
     claim: { ...claimCounters },
     // Direct symptom metric: of wrappers the tracker considers in-viewport
     // (200px margin), how many actually hold a codeword. < 1.0 ratio = the

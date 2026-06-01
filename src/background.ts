@@ -562,19 +562,6 @@ function transportFailure(
   };
 }
 
-// The sender tab isn't the active tab, so its push was suppressed before
-// reaching the plugin. Distinct from `error` (a real failure): the content
-// script keeps its wrappers and pauses syncing rather than releasing labels.
-function inactiveResponse(
-  request: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'>,
-): GrammarBatchResponse {
-  return {
-    result: 'inactive',
-    succeeded: [],
-    failed: request.elements.map(e => ({ codeword: e.codeword, reason: 'inactive' })),
-  };
-}
-
 // Tell the plugin this browser's connection just gained (or lost) OS focus.
 // The plugin binds connId to the OS-focused bundle on a focused:true claim;
 // identity comes from the OS, this only says "which connection is focused now."
@@ -1045,17 +1032,10 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
       sendResponse(transportFailure(message.request));
       return false;
     }
-    // Active-tab scoping: the per-prefix hint collections are a global
-    // namespace, so only the active tab may push grammar — a background tab's
-    // REPLACE would clobber the focused tab's vocabulary (and LastTabID would
-    // route clicks to the wrong tab). Reject batches from non-active tabs with
-    // `inactive`; the content script then suppresses its push and flushes on
-    // reactivation. Fail open when we don't yet know the active tab (SW just
-    // started) so the first scan isn't silently dropped.
-    if (cachedActiveTabId != null && tabId !== cachedActiveTabId) {
-      sendResponse(inactiveResponse(message.request));
-      return false;
-    }
+    // No active-tab gate: every tab POSTs freely. The plugin stores each
+    // batch in its own per-source session and projects only the OS-focused
+    // source's grammar into the live collections (Option B), so a background
+    // tab's push can no longer clobber the focused tab's vocabulary.
     for (const el of message.request.elements) {
       el.frame_id = frameId;
     }
@@ -1454,14 +1434,11 @@ async function init(): Promise<void> {
     hintVisibility = result.hintVisibility;
   }
 
-  // Arm the active-tab gate before any grammar batches arrive. After an
-  // SW restart (extension reload, browser startup) cachedActiveTabId is
-  // null, and the GRAMMAR_BATCH handler fails open in that state — so a
-  // reload's re-injection storm lets *every* open tab push into the global
-  // per-prefix hint collections at once, last-writer-wins. The losing tab
-  // is often the one the user is looking at, leaving its codewords
-  // unmatchable (the prefix degrades to a bare keyboard-alphabet keystroke).
-  // Resolving the active tab here closes that window.
+  // Prime cachedActiveTabId so the first active_tab_id signal to the plugin
+  // (and rescanActiveTab) has a value before the first tabs.onActivated /
+  // onFocusChanged fires. No longer load-bearing for grammar correctness —
+  // the plugin projects only the focused source, so a stale/null active tab
+  // can't cause a clobber — but it keeps the focus signal accurate from boot.
   await resolveActiveContentTab();
 
   const found = await discoverPlugin();
@@ -1494,11 +1471,11 @@ chrome.runtime.onInstalled.addListener((details) => {
   // content.js runs to completion. Pairs with the guard at the top of
   // content.ts and the self-quiesce in liveness/quiesceOrphan.
   //
-  // Crucially, we await init() first: it primes cachedActiveTabId so the
-  // GRAMMAR_BATCH active-tab gate is armed before the re-injection storm. Skip
-  // this ordering and every re-injected background tab pushes hint grammar
-  // into the global per-prefix collections at once (gate fails open while
-  // cachedActiveTabId is null), clobbering the focused tab's codewords.
+  // We await init() first so the plugin connection + active-tab signal are
+  // primed before the re-injection storm. A background tab racing in early is
+  // now harmless: the plugin stores every source's grammar but projects only
+  // the focused one (Option B), so a re-injected background tab can't clobber
+  // the focused tab's codewords the way the old fail-open gate allowed.
   const reinject = details.reason === 'install' || details.reason === 'update';
   void init().then(() => {
     if (reinject) void reinjectContentScripts();
