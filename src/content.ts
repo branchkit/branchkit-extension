@@ -85,7 +85,7 @@ import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
 import { openLivenessPort } from './plugin/liveness';
 import { PageSession, TeardownReason } from './lifecycle/page-session';
 import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './debug/message-counters';
-import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot } from './debug/perf-counters';
+import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers } from './debug/perf-counters';
 import { loadConfig, getDisplayMode, getHintVisibility } from './config';
 import {
   initLabelSync,
@@ -128,6 +128,30 @@ if ((window as unknown as { __branchkitContentInjected?: boolean }).__branchkitC
   throw new Error('[BranchKit] content script duplicate injection — bailing');
 }
 (window as unknown as { __branchkitContentInjected: boolean }).__branchkitContentInjected = true;
+
+// Reference-identity check (safe cross-origin — reads no properties). The perf
+// trail + live dataset + standing watchdog/longtask observers are diagnostic
+// surfaces read only from the top frame; running them in every subframe spends
+// the per-frame budget that trips Firefox's slow-extension warning on ad-heavy
+// pages (1000+ ad/about:blank frames). Hint machinery still runs in every frame.
+const isTopFrame = window === window.top;
+if (isTopFrame) startPerfObservers();
+
+// Lever 1 (frame-skip): a subframe that is about:blank or renders below a
+// usable badge size (tracking pixels, collapsed/hidden ad slots) cannot show a
+// hint, so it skips the page-wide MutationObserver + initial scan + limbo
+// sweeper entirely. On ad-heavy pages ~1000 ad/about:blank frames were each
+// running that full machinery — the dominant driver of Firefox's slow-extension
+// warning. The top frame is always eligible. about:blank is self-healing:
+// navigating it to a real URL re-injects this script fresh, re-running the
+// check; a frame that grows past the threshold is woken via ResizeObserver.
+const MIN_FRAME_AREA_PX = 2500; // ~50x50 — below this no clickable badge fits
+function frameMayHoldHints(): boolean {
+  if (isTopFrame) return true;
+  if (location.href === 'about:blank') return false;
+  return window.innerWidth * window.innerHeight >= MIN_FRAME_AREA_PX;
+}
+let hintMachineryEnabled = false;
 
 // --- State ---
 
@@ -368,6 +392,9 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
   chrome.storage.local.get('alphabet', (result) => {
     if (Array.isArray(result.alphabet)) {
       setAlphabet(result.alphabet);
+      // Ineligible frame (tiny/about:blank subframe): no initial scan. If it
+      // later grows past the threshold the wake-on-resize path runs doScan.
+      if (!hintMachineryEnabled) return;
       // Defer the initial scan by one macrotask. Running doScan
       // synchronously inside the storage callback blocks the main thread
       // before the snapshot publisher's setInterval has a chance to
@@ -2835,8 +2862,8 @@ function finalizeExpiredLimboWrappers(): number {
   if (finalized > 0) schedulePushGrammar();
   return finalized;
 }
-
-setInterval(finalizeExpiredLimboWrappers, LIMBO_DEADLINE_MS);
+// The limbo sweeper starts in activateHintMachinery() so ineligible subframes
+// (which never scan and thus never create wrappers) don't run a 4Hz no-op timer.
 
 /**
  * Recompute hintability for an element whose attributes changed. Adds,
@@ -3213,21 +3240,50 @@ const observer = new MutationObserver((records) => {
   firehoseStep('moCallback:end_normal', foreign.length);
 });
 
-observer.observe(document.body || document.documentElement, {
-  childList: true,
-  subtree: true,
-  attributes: true,
-  // Watch attributes that flip hintability AND those that feed the
-  // fingerprint. Without aria-label/title/type in the filter, a button
-  // renamed from "Save" to "Save changes" would still register against
-  // its stale fingerprint and the WeakRef-dead-fingerprint-fallback
-  // path could never recover it.
-  attributeFilter: [
-    'disabled', 'aria-hidden', 'role', 'contenteditable', 'href',
-    'aria-label', 'aria-labelledby', 'aria-describedby', 'aria-roledescription',
-    'title', 'type',
-  ],
-});
+function attachPageMutationObserver(): void {
+  observer.observe(document.body || document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    // Watch attributes that flip hintability AND those that feed the
+    // fingerprint. Without aria-label/title/type in the filter, a button
+    // renamed from "Save" to "Save changes" would still register against
+    // its stale fingerprint and the WeakRef-dead-fingerprint-fallback
+    // path could never recover it.
+    attributeFilter: [
+      'disabled', 'aria-hidden', 'role', 'contenteditable', 'href',
+      'aria-label', 'aria-labelledby', 'aria-describedby', 'aria-roledescription',
+      'title', 'type',
+    ],
+  });
+}
+
+// Turn on the page-wide hint machinery for an eligible frame: the mutation
+// observer + the limbo sweeper. Idempotent. The 'resize' trigger means a
+// previously-ineligible frame grew, so it also kicks an initial scan (the
+// module-load alphabet callback already scans eligible-at-load frames).
+function activateHintMachinery(trigger: 'load' | 'resize'): void {
+  if (hintMachineryEnabled) return;
+  hintMachineryEnabled = true;
+  attachPageMutationObserver();
+  setInterval(finalizeExpiredLimboWrappers, LIMBO_DEADLINE_MS);
+  if (trigger === 'resize') setTimeout(() => doScan(), 0);
+}
+
+if (frameMayHoldHints()) {
+  activateHintMachinery('load');
+} else {
+  // Subframe too small / blank to hold a usable hint. Watch for it growing
+  // past the threshold (a collapsed slot expanding, a lazily-sized iframe) and
+  // activate then. Single ResizeObserver on documentElement; self-disconnects.
+  const wakeRO = new ResizeObserver(() => {
+    if (window.innerWidth * window.innerHeight >= MIN_FRAME_AREA_PX) {
+      wakeRO.disconnect();
+      activateHintMachinery('resize');
+    }
+  });
+  try { wakeRO.observe(document.documentElement); } catch { /* document not ready */ }
+}
 
 // --- Dynamic shadow detection ---
 //
@@ -3363,6 +3419,9 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
   }
   return {
     ...getPerfCounters(),
+    // Subframe count of this (top) frame — preserves the ad-frame-swarm signal
+    // now that subframes no longer ship their own trail entries.
+    frames: window.length,
     wrapperCount: store.all.length,
     wrapperLimboCount: limbo,
     // claim.* splits codeword acquisition by path so we can see if the scan
@@ -3444,8 +3503,13 @@ function publishPerfSnapshot(): void {
       JSON.stringify(buildPerfSnapshot());
   } catch { /* dom not ready */ }
 }
-setInterval(publishPerfSnapshot, 250);
-publishPerfSnapshot();
+// Top frame only: the dataset mirror exists for Playwright/in-page inspection,
+// which reads the top document's element. A subframe publishing to its own
+// (unread) documentElement is pure 4Hz waste across the ad-frame swarm.
+if (isTopFrame) {
+  setInterval(publishPerfSnapshot, 250);
+  publishPerfSnapshot();
+}
 
 // Periodic ship to the browser plugin's /perf-report endpoint so we have
 // a JSONL trail in `~/Library/Application Support/BranchKitDev/plugins/
@@ -3469,17 +3533,23 @@ function shipPerfReport(): void {
   }
 }
 const PERF_REPORT_INTERVAL_MS = 5000;
-setInterval(shipPerfReport, PERF_REPORT_INTERVAL_MS);
-// Reset trigger from main world — set the dataset to "1" and we reset.
-new MutationObserver(() => {
-  if (document.documentElement.dataset.branchkitResetPerf === '1') {
-    resetPerfCounters();
-    resetMessageCounters();
-    resetLifecycleCounters();
-    resetCpuCounters();
-    resetLongtask();
-    delete document.documentElement.dataset.branchkitResetPerf;
-    publishPerfSnapshot();
-  }
-}).observe(document.documentElement, { attributes: true, attributeFilter: ['data-branchkit-reset-perf'] });
+// Top frame only: each subframe shipping its own snapshot every 5s is what
+// flooded the trail with ~700 ad-frame entries per sample on ad-heavy pages.
+// The top-frame snapshot carries `frames` (subframe count) so the trail still
+// surfaces swarm size without 700 separate sendMessage round-trips.
+if (isTopFrame) {
+  setInterval(shipPerfReport, PERF_REPORT_INTERVAL_MS);
+  // Reset trigger from main world — set the dataset to "1" and we reset.
+  new MutationObserver(() => {
+    if (document.documentElement.dataset.branchkitResetPerf === '1') {
+      resetPerfCounters();
+      resetMessageCounters();
+      resetLifecycleCounters();
+      resetCpuCounters();
+      resetLongtask();
+      delete document.documentElement.dataset.branchkitResetPerf;
+      publishPerfSnapshot();
+    }
+  }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-branchkit-reset-perf'] });
+}
 

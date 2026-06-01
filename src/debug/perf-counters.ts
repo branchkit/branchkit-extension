@@ -169,23 +169,25 @@ let longtaskCount = 0;
 let longtaskTotalMs = 0;
 let longtaskMaxMs = 0;
 const longtaskTop: Array<{ ts: number; ms: number }> = [];
-try {
-  const supported = (PerformanceObserver as unknown as { supportedEntryTypes?: string[] }).supportedEntryTypes;
-  if (supported?.includes('longtask')) {
-    new PerformanceObserver((list) => {
-      for (const e of list.getEntries()) {
-        longtaskCount++;
-        longtaskTotalMs += e.duration;
-        if (e.duration > longtaskMaxMs) longtaskMaxMs = e.duration;
-        if (longtaskTop.length < CPU_TOP_N || e.duration > (longtaskTop[longtaskTop.length - 1]?.ms ?? 0)) {
-          longtaskTop.push({ ts: Date.now(), ms: e.duration });
-          longtaskTop.sort((a, x) => x.ms - a.ms);
-          if (longtaskTop.length > CPU_TOP_N) longtaskTop.length = CPU_TOP_N;
+function startLongtaskObserver(): void {
+  try {
+    const supported = (PerformanceObserver as unknown as { supportedEntryTypes?: string[] }).supportedEntryTypes;
+    if (supported?.includes('longtask')) {
+      new PerformanceObserver((list) => {
+        for (const e of list.getEntries()) {
+          longtaskCount++;
+          longtaskTotalMs += e.duration;
+          if (e.duration > longtaskMaxMs) longtaskMaxMs = e.duration;
+          if (longtaskTop.length < CPU_TOP_N || e.duration > (longtaskTop[longtaskTop.length - 1]?.ms ?? 0)) {
+            longtaskTop.push({ ts: Date.now(), ms: e.duration });
+            longtaskTop.sort((a, x) => x.ms - a.ms);
+            if (longtaskTop.length > CPU_TOP_N) longtaskTop.length = CPU_TOP_N;
+          }
         }
-      }
-    }).observe({ type: 'longtask', buffered: true });
-  }
-} catch { /* PerformanceObserver missing or longtask unsupported */ }
+      }).observe({ type: 'longtask', buffered: true });
+    }
+  } catch { /* PerformanceObserver missing or longtask unsupported */ }
+}
 
 export function resetLongtask(): void {
   longtaskCount = 0;
@@ -292,7 +294,23 @@ function watchdogTick(): void {
   watchdogVisibleOnLastFire = visible;
   setTimeout(watchdogTick, WATCHDOG_INTERVAL_MS);
 }
-setTimeout(watchdogTick, WATCHDOG_INTERVAL_MS);
+
+// Standing per-frame observers (watchdog timer loop + longtask PerformanceObserver)
+// are diagnostic-only and their output is read solely from the top frame's
+// snapshot. Subframes — especially the 1000+ ad/about:blank frames on ad-heavy
+// pages — would otherwise each run a 4Hz timer forever, inflating the very
+// per-frame CPU footprint that trips Firefox's slow-extension warning. The
+// caller gates this to the top frame; inline recordCpu marks stay everywhere
+// (cheap) so a frame promoted to top-of-its-process still has fresh attribution.
+let perfObserversStarted = false;
+export function startPerfObservers(): void {
+  if (perfObserversStarted) return;
+  perfObserversStarted = true;
+  watchdogLastFire = performance.now();
+  watchdogVisibleOnLastFire = document.visibilityState === 'visible';
+  setTimeout(watchdogTick, WATCHDOG_INTERVAL_MS);
+  startLongtaskObserver();
+}
 
 export function resetWatchdog(): void {
   watchdogStalls.length = 0;
