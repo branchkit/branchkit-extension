@@ -19,6 +19,9 @@ mechanism and the fix.
 | 3c | Always-reactivate on app-refocus | Done (2026-05-30) |
 | 4 | Verify on real browser | Done (2026-05-30) — user-confirmed on YouTube |
 | 5 | Clobber recurred (unbound `conn=""` client) — A-vs-B re-opened | Diagnosed (2026-06-01) — see amendment at end |
+| B1-B4 | Option B impl (store all, project focused) + gate removal | Done (2026-06-01) |
+| B5 | Routing repoint (`LastTabID`→`FocusedTabID`) + dead-code cleanup | Done (2026-06-01) |
+| B6 | Projection tests + docs | Done (2026-06-01) |
 
 > **Resolution (2026-05-30).** Shipped Option A (gate the grammar push to the
 > active tab) and went further. Three coupled fixes landed and were
@@ -202,6 +205,16 @@ tab). The one real cost is ensuring tab-switch activation republishes; the
   if activation reliably republishes.
 - **Multi-window.** `active:true` is per-window; the focused-app gate is
   global. Decide whether "active tab" means active-in-focused-window only.
+  **Resolved (2026-06-01): "focused tab" = the active tab in the OS-focused
+  window.** Under Option B the projected source is `(FocusedConnID,
+  FocusedTabID)`, and `FocusedTabID` comes from the extension's `/active-tab`
+  POST. The extension reports the active tab of the window that just gained OS
+  focus (`chrome.windows.onFocusChanged` / `tabs.onActivated`), so a second
+  background window in the same browser process never advances `FocusedTabID` —
+  its tab churn lands in `ConnActiveTab` for that conn but only the focused
+  window's report is the one fresh at focus time. No extra per-window keying
+  needed: one connection serves all windows of a browser, and the active-tab
+  signal already collapses to the focused window.
 
 ## Amendment (2026-06-01): the clobber recurred — Option A has an unbound-client hole
 
