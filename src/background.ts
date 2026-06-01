@@ -595,13 +595,39 @@ async function postFocus(focused: boolean): Promise<void> {
   }
 }
 
+// Tell the plugin which tab is active in this browser's window. Distinct from
+// postFocus: this carries no focus claim and never affects the plugin's
+// connection→bundle binding — it only updates the focused-tab signal the
+// per-source grammar projection (Option B) keys off. The plugin accepts it
+// only from the connection it currently treats as the focused browser, so
+// sending it from a background window is harmless. Best-effort.
+async function postActiveTab(tabId: number | null): Promise<void> {
+  if (!pluginPort || !pluginToken) return;
+  if (tabId == null) return;
+  try {
+    await fetch(`http://127.0.0.1:${pluginPort}/active-tab`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${pluginToken}`,
+      },
+      body: JSON.stringify({ conn_id: connId, tab_id: tabId }),
+    });
+  } catch {
+    // best-effort; the next tab switch / window focus re-asserts
+  }
+}
+
 // Claim focus at SSE-connect time if a window of this browser is currently the
 // OS-focused window. Covers cold start: the browser is already frontmost when
 // its extension connects, so no onFocusChanged fires to trigger the handshake.
 async function assertFocusIfFocused(): Promise<void> {
   try {
     const win = await chrome.windows.getLastFocused();
-    if (win.focused && win.type === 'normal') void postFocus(true);
+    if (win.focused && win.type === 'normal') {
+      void postFocus(true);
+      void postActiveTab(cachedActiveTabId);
+    }
   } catch {
     // window query unavailable; onFocusChanged covers subsequent transitions
   }
@@ -1259,6 +1285,9 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
   cachedActiveTabId = activeInfo.tabId;
   if (oldTabId !== activeInfo.tabId) {
     logTabSwitch('tab_activated', oldTabId, activeInfo.tabId);
+    // Report the new active tab to the plugin (accepted only if this is the
+    // focused browser). Authoritative focused-tab signal for Option B.
+    void postActiveTab(activeInfo.tabId);
     endHintSessionOnOldTab(oldTabId, 'tab_switch');
     // Always-mode: signal the new tab's content script that it became the
     // active tab. The session-start path resets per-tab plugin state.
@@ -1373,6 +1402,10 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
     const newActive = tabs[0]?.id ?? null;
     const oldTabId = cachedActiveTabId;
     cachedActiveTabId = newActive;
+    // This browser just gained OS focus — report its active tab so the plugin's
+    // focused-tab signal tracks the window switch even when the tab itself
+    // didn't change. Authoritative focused-tab source for Option B.
+    void postActiveTab(newActive);
     if (oldTabId != null && oldTabId !== newActive) {
       logTabSwitch('window_focus', oldTabId, newActive);
       endHintSessionOnOldTab(oldTabId, 'window_focus');
