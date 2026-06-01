@@ -1,8 +1,21 @@
 # Observation Footprint Reduction — Viewport as the Unit of Work
 
-Status: design (2026-06-01)
+Status: design (2026-06-01) — **Move 1 (B1) measured and rejected; see update below.**
+
+> **Update 2026-06-01 — Move 1 (B1) is dead; the document-level fold is rejected.**
+> Instrumentation (`notes/INVESTIGATION_OBSERVER_CONSOLIDATION.md`) measured the
+> per-wrapper MutationObserver fan-out on live heavy pages: it costs 2–11 ms over
+> a full session, while the existing *filtered* document-level `moCallback`
+> already costs 270–350 ms. So consolidating the per-wrapper observers saves
+> nothing, and folding their job into one document-level MO would *widen*
+> `moCallback`'s filter and inflate the dominant cost. If the warning recurs the
+> lever is the opposite of this note's Move 1 — scope `moCallback` *down* (B4),
+> not consolidate up. Moves 0 (A2, shipped), 2, and 3 are unaffected by this
+> verdict; only Move 1 and the "fold to a single doc-level MO" idea are retired.
 
 Companion docs:
+- `notes/INVESTIGATION_OBSERVER_CONSOLIDATION.md` — the measurement that retired
+  Move 1 (B1) and the document-level fold. Read this before re-reading Move 1.
 - `notes/PLAN_BROWSER_EXTENSION_PERF_OPTIMIZATION.md` — the Track A/B/C/D
   optimization menu this note picks a spine through.
 - `notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md` — the level-triggered
@@ -130,6 +143,11 @@ it shrinks every scan including the nav rescan we have not yet retired.
 
 ### Move 1 — B1 shared observer instances (per-wrapper MO consolidation)
 
+> **RETIRED 2026-06-01 (measured).** The premise below — that the per-wrapper MO
+> fan-out is "the biggest steady-state win" — is false. Measured cost is 2–11 ms
+> per full session vs. `moCallback`'s 270–350 ms. Do not implement this. See
+> `INVESTIGATION_OBSERVER_CONSOLIDATION.md`. The text is kept for the record.
+
 The verified hotspot: `IntersectionTracker` (`content.ts:171`) and
 `AttentionObserver` (`content.ts:857`) are *already* shared singletons, but
 `trackHostAttributes` (`host-attribute-tracker.ts:55`) and `trackTargetMutations`
@@ -162,6 +180,13 @@ This is the highest-payoff and highest-risk move — it must be last, behind a h
 wedge-repro gate, because the wedge fix exists precisely to survive the nav swap.
 
 ## Decision gate
+
+> **Resolved 2026-06-01.** The gate ran. Move 0 (A2) shipped; Move 1 (B1) was
+> instrumented instead of implemented and the measurement retired it (see the
+> update at the top and `INVESTIGATION_OBSERVER_CONSOLIDATION.md`). The warning
+> has not recurred. Net: do not pursue Move 1 or the document-level fold; if the
+> warning returns, the measured driver is `moCallback` (270–350 ms) and the lever
+> is B4 (scope it down). The original gate text follows.
 
 After Move 0 (A2) and Move 1 (B1) ship and the build is exercised on the live
 signed-in heavy pages (Rumble home + video, YouTube /watch, Gmail), re-measure

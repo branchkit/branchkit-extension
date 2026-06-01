@@ -81,6 +81,16 @@ Real performance ceiling moves. Each is independent and shippable on its own.
 
 ### B1. Shared observer instances
 
+**RETIRED 2026-06-01 (measured — do not implement).** The "~600 observer objects"
+figure below is wrong: only two observers are actually per-wrapper
+(HostAttribute + TargetMutation MutationObservers); IntersectionObserver,
+AttentionObserver, ContainerResize, and ScrollAncestor are already shared. And
+those two per-wrapper MOs cost 2–11 ms across a full session — not a cost driver.
+Consolidating them saves nothing, and the only clean shared shape (one
+document-level MO) would inflate the already-dominant `moCallback` (270–350 ms).
+Full record: `notes/INVESTIGATION_OBSERVER_CONSOLIDATION.md`. Original text kept
+below for the record.
+
 **Problem:** each wrapper creates its own `IntersectionObserver`, `ResizeObserver`, `AttentionObserver`, plus per-target trackers (HostAttribute, TargetMutation, ContainerResize, ScrollAncestor). ~7 instances × 87 wrappers = ~600 observer objects on YouTube `/featured`.
 
 **Approach:** consolidate to one instance per *kind*, watching N targets. Browser-side cost: one observer with N targets is dramatically cheaper than N observers with 1 target each. We already do this for some (`tracker` is a single IntersectionObserver) — extend to all.
@@ -116,6 +126,12 @@ Real performance ceiling moves. Each is independent and shippable on its own.
 **Risk:** low. Mostly refactoring existing teardown logic.
 
 ### B4. Scoped MutationObserver
+
+**ELEVATED 2026-06-01 (measured).** The observer-consolidation investigation
+identified the main MO (`moCallback`) as the single largest instrumented MO cost
+(270–350 ms per session on YouTube/Rumble/Gmail) — i.e. *this* is the real lever,
+not B1. If the Firefox warning recurs, scope `moCallback` down (this item) before
+anything else. See `notes/INVESTIGATION_OBSERVER_CONSOLIDATION.md`.
 
 **Problem:** the main MO observes `document.body` with `subtree: true`. Every YouTube page-chrome animation, every off-screen lazy-load, every comment thread expansion fires our callback even though we only care about regions where wrappers exist.
 
@@ -181,13 +197,19 @@ cross-origin widget losing hints. Revisit if D1+D2 don't clear the warning.
 
 ## Recommended order
 
+> **Revised 2026-06-01 after measurement.** A2 + Track D shipped and the warning
+> has not recurred. **B1 is retired** (measured — not a cost driver) and **B2 is
+> moot without it**. If the warning returns, the measured driver is the main MO
+> (`moCallback`, 270–350 ms), so **B4 is now the primary lever**, not "final
+> cleanup." See `notes/INVESTIGATION_OBSERVER_CONSOLIDATION.md`.
+
 1. **A3** (1 hour) — immediate UX win
 2. **A1** (1 day) — closes the badge-reattach class of bugs
-3. **A2** (3-4 days) — broad CPU win on media sites
-4. **B3** (2-3 days) — consolidates the lifecycle, prerequisite for B1/B2
-5. **B1** (1-2 weeks) — biggest steady-state win
-6. **B2** (1-2 weeks) — best follow-up to B1
-7. **B4** (1 week) — final cleanup
+3. **A2** (3-4 days) — broad CPU win on media sites — **SHIPPED**
+4. ~~**B1**~~ — **RETIRED** (measured: per-wrapper MO is ~free)
+5. ~~**B2**~~ — moot without B1
+6. **B4** (1 week) — **now the primary lever** if the warning recurs (scope `moCallback` down)
+7. **B3** (2-3 days) — lifecycle consolidation, independent; do if useful on its own merits
 
 Total: ~6-8 weeks of bounded work to take the extension from "usable" to "polished" on heavy SPAs.
 
