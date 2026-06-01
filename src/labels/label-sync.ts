@@ -342,6 +342,15 @@ export async function syncNow(reason: string): Promise<void> {
     if (resp.result === 'ok') {
       for (const cw of deletesRidingHere) sentCodewords.delete(cw);
     }
+    // Detach badges this REPLACE evicted from the grammar (badge-visible-implies
+    // -commandable). detachWrapper removes the badge + queues the Delete that
+    // clears the sent-set entry on its ack.
+    if (resp.evicted?.length) {
+      for (const cw of resp.evicted) {
+        const w = deps.store.byCodeword(cw);
+        if (w) deps.detachWrapper(w.element);
+      }
+    }
     const succeededWrappers = chunk.filter(w => succeededSet.has(w.scanned.codeword));
     sweepDisconnectedAfterBatch(succeededWrappers, (el) => el.isConnected, pendingDeleteCodewords, deps.detachWrapper);
     if (deps.isHintsVisible() && resp.succeeded.length > 0) {

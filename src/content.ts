@@ -923,6 +923,23 @@ function detachWrapper(element: Element): void {
   }
 }
 
+// Reconcile badges the plugin reports as silently evicted: a cumulative REPLACE
+// dropped a previously-pushed codeword that wasn't an explicit delete (e.g. a
+// reletter collision under scan churn, or a cross-tab clobber). The badge stays
+// painted while its voice command is gone — the badge-visible-implies-
+// commandable break the user hit ("drum g" badge, no `drum gust` codeword).
+// Detach the stale wrapper so the badge is removed and delta-sync bookkeeping
+// (queued Delete, sent-set) stays consistent; a still-hintable element is
+// re-discovered and re-badged by the next scan/reconcile pass. byCodeword
+// matches on the exact label pair, so a wrapper already re-lettered to a live
+// codeword is left untouched.
+function reconcileEvictedCodewords(evicted: string[]): void {
+  for (const cw of evicted) {
+    const w = store.byCodeword(cw);
+    if (w) detachWrapper(w.element);
+  }
+}
+
 /**
  * Full re-discovery of hintable elements in the document. Idempotent:
  * already-known elements keep their wrappers (and codewords); newly
@@ -1615,6 +1632,10 @@ async function processScanBatch(
     markSent(w.scanned.codeword);
     attached.push(w);
   }
+
+  // Detach badges this REPLACE evicted from the grammar (disjoint from the
+  // succeeded set above — an evicted codeword is gone from the new state).
+  if (resp.evicted?.length) reconcileEvictedCodewords(resp.evicted);
 
   // Paint the just-attached badges. Each one is now backed by a
   // successful plugin acknowledgement AND a still-connected element,
@@ -2394,6 +2415,14 @@ document.addEventListener('animationend', scheduleDeferredReposition, { passive:
 // cache so the next placement re-probes against the fresh layout.
 onTargetMutation((target) => {
   const w = store.findWrapperFor(target);
+  // Anchor self-heal: a re-rendering host (YouTube comments/player rewrite the
+  // target's inline `style` ~10x/sec) clobbers the `anchor-name` we injected, so
+  // `position-anchor` dangles and the badge collapses to the document origin
+  // until the next reconcile. That is a visible flash plus a 100ms
+  // reconcile↔reposition loop (this debounce is its heartbeat). Re-assert the
+  // binding synchronously: the MO callback runs before paint, so no frame shows
+  // it unbound, and the compositor re-resolves anchor() with no reposition owed.
+  if (w?.hint?.ensureBound()) return;
   if (w) invalidateProbe(w);
   scheduleDeferredReposition();
 });

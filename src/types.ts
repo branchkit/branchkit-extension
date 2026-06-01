@@ -95,6 +95,11 @@ export interface GrammarBatchResponse {
   result: 'ok' | 'error' | 'inactive';
   succeeded: string[];
   failed: GrammarBatchFailure[];
+  // Codewords the plugin's cumulative REPLACE silently dropped from the
+  // matchable collections. Their badges are still painted (the extension owns
+  // them), so the extension must detach the stale wrappers. Absent on the
+  // synthetic transport/inactive responses the SW builds locally.
+  evicted?: string[];
 }
 
 // --- Messages ---
@@ -110,6 +115,12 @@ export type Message =
   | { type: 'HIDE_HINTS' }
   | { type: 'BRANCHKIT_ACTION'; payload: { action: string; params: Record<string, string>; correlation_id?: string } }
   | { type: 'SSE_EVENT'; data: unknown }
+  // Diagnostic breadcrumbs — content/background → background, forwarded to the
+  // plugin's debug-log endpoints (see background.ts forwardDebugLog /
+  // forwardPluginDebugLog). `tag` is a dotted pipeline step name (e.g.
+  // "pipeline.cs_nav_step"); `data` is an arbitrary JSON payload for that step.
+  | { type: 'DEBUG_LOG'; tag: string; data?: unknown }
+  | { type: 'PLUGIN_DEBUG_LOG'; tag: string; data?: unknown; level?: string }
   | { type: 'HEALTH_STATUS'; branchkit: boolean }
   | { type: 'GRAMMAR_PUSH'; elements: ScannedElement[] }
   | { type: 'GET_HEALTH' }
