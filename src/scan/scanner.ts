@@ -92,6 +92,7 @@ export interface PerfCounters {
   isHintableExtraCalls: number;
   computedStyleCalls: number;        // total getComputedStyle calls (all sites)
   boundingRectCalls: number;         // total getBoundingClientRect (forces layout)
+  shadowHostPrunedSubtrees: number;  // opaque subtrees (svg/canvas/…) skipped in shadow-host walk
 }
 
 const perfCounters: PerfCounters = {
@@ -108,6 +109,7 @@ const perfCounters: PerfCounters = {
   isHintableExtraCalls: 0,
   computedStyleCalls: 0,
   boundingRectCalls: 0,
+  shadowHostPrunedSubtrees: 0,
 };
 
 export function getPerfCounters(): PerfCounters {
@@ -140,16 +142,43 @@ const COMMON_LEAF_TAGS = new Set([
   'thead', 'time', 'title', 'tr', 'track', 'u', 'ul', 'var', 'video', 'wbr',
 ]);
 
+// Opaque-content roots that can hold a deep light-DOM subtree (an <svg>
+// icon is hundreds of <path>/<g> nodes; MathML is similar) yet never host a
+// custom-element shadow root. The shadow-host walk REJECTs their whole
+// subtree — A2 skip-unhintable-subtree. The native hintable-selector pass is
+// unaffected (it never matched inside these tags anyway), so light-DOM
+// hintables in an SVG <foreignObject> are still found; only the
+// vanishingly-rare shadow-host-inside-opaque case is skipped.
+const OPAQUE_SUBTREE_TAGS = new Set([
+  'svg', 'math', 'canvas', 'video', 'audio', 'picture', 'iframe',
+]);
+
 function findShadowHosts(root: ParentNode): Element[] {
   const hosts: Element[] = [];
-  // querySelectorAll('*') only returns descendants. When `root` itself is
-  // a custom-element host (the case fired by the SHADOW_EVENT listener
-  // in content.ts on attachShadow), we'd miss its shadow root entirely.
+  // The TreeWalker below only visits descendants. When `root` itself is a
+  // custom-element host (the case fired by the SHADOW_EVENT listener in
+  // content.ts on attachShadow), we'd miss its shadow root entirely.
   if (root instanceof Element && !COMMON_LEAF_TAGS.has(root.tagName.toLowerCase()) && root.shadowRoot) {
     hosts.push(root);
   }
-  const candidates = root.querySelectorAll('*');
-  for (const el of candidates) {
+  // A TreeWalker (vs querySelectorAll('*')) lets us FILTER_REJECT opaque
+  // subtrees so their descendants are never visited — on media-heavy pages
+  // that skips the bulk of the elements the '*' enumeration used to touch.
+  const isDoc = root.nodeType === Node.DOCUMENT_NODE;
+  const doc = isDoc ? (root as Document) : root.ownerDocument;
+  if (!doc) return hosts;
+  const walkRoot: Node = isDoc ? ((root as Document).documentElement ?? root) : root;
+  const walker = doc.createTreeWalker(walkRoot, NodeFilter.SHOW_ELEMENT, {
+    acceptNode(node) {
+      if (OPAQUE_SUBTREE_TAGS.has((node as Element).tagName.toLowerCase())) {
+        perfCounters.shadowHostPrunedSubtrees++;
+        return NodeFilter.FILTER_REJECT;
+      }
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const el = node as Element;
     if (COMMON_LEAF_TAGS.has(el.tagName.toLowerCase())) continue;
     if (el.shadowRoot) hosts.push(el);
   }

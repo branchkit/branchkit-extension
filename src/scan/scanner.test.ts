@@ -11,7 +11,10 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { scanElements, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, subtreeMaybeHintable } from './scanner';
+import {
+  scanElements, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, subtreeMaybeHintable,
+  deepQuerySelectorAll, getPerfCounters, resetPerfCounters,
+} from './scanner';
 
 function html(markup: string): void {
   document.body.innerHTML = markup;
@@ -70,6 +73,38 @@ describe('subtreeMaybeHintable', () => {
     const shadow = root.attachShadow({ mode: 'open' });
     shadow.innerHTML = '<button>shadow btn</button>';
     expect(subtreeMaybeHintable(root)).toBe(false);
+  });
+});
+
+describe('deepQuerySelectorAll — opaque-subtree pruning (A2)', () => {
+  beforeEach(() => resetPerfCounters());
+
+  it('still pierces a shadow host in a normal subtree', () => {
+    html('<div id="host"></div>');
+    const host = document.getElementById('host')!;
+    host.attachShadow({ mode: 'open' }).innerHTML = '<button id="sb">x</button>';
+    const found = deepQuerySelectorAll(document, 'button');
+    expect(found.some(el => el.id === 'sb')).toBe(true);
+  });
+
+  it('skips the shadow-host walk inside an opaque <svg> subtree', () => {
+    // A custom-element host nested inside an <svg> would normally be pierced;
+    // the opaque-subtree prune means we never descend into the <svg> to find
+    // it. The counter records the pruned root.
+    html('<svg id="icon"><g><my-widget></my-widget></g></svg>');
+    const widget = document.querySelector('my-widget')!;
+    widget.attachShadow({ mode: 'open' }).innerHTML = '<button id="hidden">x</button>';
+    const found = deepQuerySelectorAll(document, 'button');
+    expect(found.some(el => el.id === 'hidden')).toBe(false);
+    expect(getPerfCounters().shadowHostPrunedSubtrees).toBeGreaterThan(0);
+  });
+
+  it('still finds light-DOM hintables (main pass is not pruned by opaque tags)', () => {
+    // The native selector pass is untouched: a real anchor anywhere in the
+    // document is still returned even when opaque subtrees are present.
+    html('<svg><circle /></svg><a id="link" href="#">go</a>');
+    const found = deepQuerySelectorAll(document, 'a[href]');
+    expect(found.some(el => el.id === 'link')).toBe(true);
   });
 });
 

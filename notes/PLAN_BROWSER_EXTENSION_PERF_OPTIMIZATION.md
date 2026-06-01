@@ -40,13 +40,30 @@ These are low-risk, contained, and provide immediate user-visible improvement.
 
 ### A2. Skip-unhintable-subtree pre-filter
 
+**Status:** landed (uncommitted, 2026-06-01). Move 0 of `DESIGN_OBSERVATION_FOOTPRINT.md`.
+
 **Problem:** `<video>`, `<canvas>`, `<svg>` content, and large media-only DOM subtrees can't contain hintable elements but we still walk them in `doScanBatched` and observe their mutations.
 
 **Approach:** at scan time, fast-reject subtrees rooted at element types known to contain no hintables (a static allowlist of opaque-content tags). Skip the deep walk; never attach observers to descendants.
 
-**Estimated win:** 30-50% reduction in scan time on media-heavy sites (YouTube, Netflix, Twitch).
+**What actually shipped (scope refinement):** the real per-scan cost from opaque
+content was `findShadowHosts`'s `querySelectorAll('*')` enumeration — it touched
+every `<path>`/`<g>` inside every `<svg>` icon (and MathML, etc.) doing a
+tag-lookup + `.shadowRoot` access per node. The native hintable-selector pass
+(`querySelectorAll(scanSelector)`) never matched inside opaque tags, so it needed
+no change. Fix: rewrote `findShadowHosts` to use a `TreeWalker` with
+`FILTER_REJECT` on an `OPAQUE_SUBTREE_TAGS` set (`svg, math, canvas, video,
+audio, picture, iframe`), so descendants of opaque roots are never visited. New
+perf counter `shadowHostPrunedSubtrees` (surfaced via `buildPerfSnapshot` → the
+perf trail) records pruned roots per scan for the before/after decision-gate
+measurement. Tradeoff (per the plan's intent): a shadow host nested inside an
+`<svg foreignObject>` is no longer pierced — vanishingly rare; light-DOM
+hintables in a foreignObject are still found by the untouched native pass.
+Unit-tested in `scanner.test.ts` ("opaque-subtree pruning (A2)", 3 cases).
 
-**Effort:** ~3-4 days. Touches `src/scan/scanner.ts` and `src/scan/find.ts`.
+**Estimated win:** 30-50% reduction in scan time on media-heavy sites (YouTube, Netflix, Twitch). **Pending live confirmation** — measure `shadowHostPrunedSubtrees` and scan time on Rumble/YouTube before deciding on Moves 1-3.
+
+**Effort:** ~3-4 days estimated; actual was contained (the cost localized to one function). Touched `src/scan/scanner.ts` (NOT `find.ts` — that's find-in-page, unrelated).
 
 ### A3. Adaptive deferred_scan delay
 
@@ -125,6 +142,42 @@ Currently we rescan on every MO batch via `scheduleDiscovery` → `drainDiscover
 ### C3. Per-site profiles
 
 Empirical config table: known-heavy hosts get more aggressive throttling, known-light hosts get tighter responsiveness. The opposite of today's one-size-fits-all approach. Risks fragmentation; only worth it if the simpler measures don't suffice.
+
+## Track D — Per-frame footprint (shipped 2026-06-01)
+
+Tracks A–C all reduce per-*page* cost. They miss the axis that actually drives
+the recurring Firefox slow-extension warning: the extension injects into *every*
+frame (`all_frames: true, match_about_blank: true` on `<all_urls>`), and an
+ad-heavy page (Rumble live) spawns ~1000 ad/about:blank frames. The warning's
+heuristic sums content-script CPU across all of them, so even cheap per-frame
+work ×1000 trips it. A perf-trail evaluation while scrolling Wikipedia confirmed
+Wikipedia itself is light (extension tracked 0ms across its stalls) — the cost
+was the still-open Rumble swarm plus our own per-frame diagnostics.
+
+### D1. Gate diagnostics to the top frame (done)
+
+The watchdog timer loop, longtask observer, the 250ms dataset publisher, and the
+5s perf-report ship all started on module load in every frame. None of their
+output is read in a subframe. Gated all four to the top frame
+(`window === window.top`). The top-frame snapshot now carries `frames`
+(`window.length`) so the trail still surfaces swarm size without one ship per
+subframe. Touches `content.ts` + `debug/perf-counters.ts` (`startPerfObservers`).
+
+### D2. Skip hint machinery in frames that can't hold a hint (done)
+
+A subframe that is `about:blank` or renders below ~2500px² (tracking pixels,
+collapsed/hidden ad slots) can't show a usable badge, so it skips the page-wide
+MutationObserver, the initial scan, and the limbo sweeper. The top frame is
+always eligible; large legit cross-origin embeds (Google Docs/Workspace, OAuth
+forms) stay fully active. `about:blank` is self-healing (navigating to a real
+URL re-injects the script fresh); a frame that grows past the threshold is woken
+by a one-shot `ResizeObserver`. Conservative threshold chosen to never strip
+hints from real embeds — sized named-ad frames still run. Touches `content.ts`
+(`frameMayHoldHints` / `activateHintMachinery`).
+
+Deferred more-aggressive option: also skip cross-origin frames below a
+banner-ad size cap (~300×300). Rejected for now — risks a small legit
+cross-origin widget losing hints. Revisit if D1+D2 don't clear the warning.
 
 ## Recommended order
 
