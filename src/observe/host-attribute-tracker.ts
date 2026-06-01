@@ -53,9 +53,16 @@ export function trackHostAttributes(host: HTMLElement, expectedDisplay = 'conten
   if (observers.has(host)) return;
   expectedDisplays.set(host, expectedDisplay);
   const observer = new MutationObserver((records) => {
+    // Callback-rate + cost instrumentation for the per-host MO fan-out, feeding
+    // the document-level-MO-fold decision (notes/INVESTIGATION_OBSERVER_CONSOLIDATION.md).
+    // Reported via the global recorder content.ts wires up (see
+    // __branchkitRecordCpu); no-op in tests / early boot.
+    const __t0 = performance.now();
     for (const r of records) {
       if (r.attributeName) reconcile(host, r.attributeName, expectedDisplay);
     }
+    const rec = (globalThis as { __branchkitRecordCpu?: (label: string, ms: number) => void }).__branchkitRecordCpu;
+    if (rec) rec('hostAttribute:callback', performance.now() - __t0);
   });
   observer.observe(host, { attributes: true });
   observers.set(host, observer);

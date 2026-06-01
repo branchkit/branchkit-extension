@@ -53,8 +53,19 @@ export function trackTargetMutations(target: Element): void {
   if (typeof MutationObserver === 'undefined') return;
   if (observers.has(target)) return;
   const observer = new MutationObserver((records) => {
-    if (isAllOwn(records)) return;
-    callback?.(target);
+    // Callback-rate + cost instrumentation. We record EVERY invocation
+    // (including the self-mutation-filtered ones), because the question this
+    // feeds is "what would a single document-level MO cost?" — and a doc-level
+    // MO fires on every page mutation regardless of our isAllOwn filter. The
+    // aggregate dCount across all per-target observers over-counts a doc-level
+    // MO (a mutation under M nested targets fires M times here, once there),
+    // but it bounds the page-mutation pressure we'd inherit. Reported via the
+    // global recorder content.ts wires up (see __branchkitRecordCpu); no-op in
+    // tests / early boot when the recorder isn't present.
+    const __t0 = performance.now();
+    if (!isAllOwn(records)) callback?.(target);
+    const rec = (globalThis as { __branchkitRecordCpu?: (label: string, ms: number) => void }).__branchkitRecordCpu;
+    if (rec) rec('targetMutation:callback', performance.now() - __t0);
   });
   observer.observe(target, { attributes: true, childList: true, subtree: true });
   observers.set(target, observer);
