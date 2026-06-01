@@ -1978,8 +1978,20 @@ function rescanForNav(fromCache: boolean, reason: string): void {
 // re-push the whole store from a fresh session so this tab becomes the sole,
 // complete contributor to the global hint collections. Mirrors the
 // from-cache rescan path. See notes/DESIGN_ACTIVE_TAB_GRAMMAR_SCOPING.md.
+//
+// A reactivate is broadcast to *every* frame of the active tab (the plugin's
+// target=active fan-out carries no codeword, so the relay can't route it to a
+// single frame). Most of those frames — ad iframes, about:blank, embeds with
+// no hints — have nothing to republish, so they early-out below; only frames
+// that actually hold claimed codewords do the session rotation + re-push.
+let lastActivationScanAt = 0;
+const ACTIVATION_SCAN_COALESCE_MS = 1500;
 function republishForActivation(reason: string): void {
   setTabActive(true);
+  // Nothing claimed in this frame — no grammar to rebuild. Skip the rotate,
+  // re-push, and reconciliation scan entirely so a refocus doesn't wake a
+  // full DOM scan in every empty subframe of the page.
+  if (!store.all.some(w => w.scanned.codeword)) return;
   // The plugin cleared this tab's session when it was backgrounded; rotate to
   // a fresh session id so the re-push rebuilds the plugin's per-frame view
   // cleanly. rotateSession also resets the delta-sync mirror, so every live
@@ -1992,7 +2004,15 @@ function republishForActivation(reason: string): void {
     }
     await syncNow(reason);
     // Reconciliation walk: pick up anything that changed while backgrounded.
-    setTimeout(() => { void doScanBatched(); }, 300);
+    // The re-push above already restored the known grammar (so matchability is
+    // never at risk here), making this scan best-effort — coalesce it across a
+    // burst of refocuses so rapid app-switching can't stack full DOM scans on
+    // the main thread.
+    const now = performance.now();
+    if (now - lastActivationScanAt >= ACTIVATION_SCAN_COALESCE_MS) {
+      lastActivationScanAt = now;
+      setTimeout(() => { void doScanBatched(); }, 300);
+    }
   })();
 }
 

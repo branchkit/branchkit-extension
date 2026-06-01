@@ -977,7 +977,10 @@ async function ensureContentScriptInjected(tabId: number): Promise<void> {
  * If the message is a hint activation that names a codeword, look up which
  * frame owns that codeword in the tab's label pool and return its frameId.
  * Returns null for actions that don't carry a codeword (show_hints, rescan,
- * etc.) — caller falls back to top-frame delivery.
+ * reactivate, etc.) — caller then sends with no frameId, which delivers to
+ * every frame in the tab (both Chrome and Firefox treat an omitted frameId as
+ * "all frames"). Frames with nothing to do early-out cheaply on their side
+ * (e.g. republishForActivation skips frames with no claimed codewords).
  *
  * The voice plugin sends `params.codeword` directly (the full string, e.g.
  * "arch" or "zone arch") per the Sprint A.5 protocol. Older keyboard-derived
