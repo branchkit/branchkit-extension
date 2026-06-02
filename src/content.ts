@@ -393,10 +393,16 @@ loadConfig({
   },
 });
 
-// Warm the per-frame label reservoir as soon as the content script runs so
-// the first scan's batch claim has codewords on hand without waiting for
-// the SW round-trip. Idempotent; refills happen lazily after this.
-if (typeof chrome !== 'undefined' && chrome.runtime) {
+// Warm the per-frame label reservoir so the first scan's batch claim has
+// codewords on hand without waiting for the SW round-trip.
+//
+// Gated to `frameMayHoldHints()` so the 1000+ ad/about:blank subframes on
+// heavy pages don't each fire CLAIM_LABELS for 100 codewords from a 676-
+// codeword pool — that storm exhausts the pool, swamps the SW with
+// serialized tab-lock IPCs, and contributes to Firefox's "extension is
+// slowing your browser" warning. Frames that grow past the eligibility
+// threshold later get warmed inside `activateHintMachinery` below.
+if (typeof chrome !== 'undefined' && chrome.runtime && frameMayHoldHints()) {
   void labelReservoir.ensureReady();
 }
 
@@ -500,9 +506,14 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
 
 // --- Register Commands (Slice B) ---
 
-registry.add({ keys: 'f', action: 'show_hints' });
+// `f` toggles hint visibility. `F` (shift-F) always shows with the new-tab
+// activation modifier armed — so pressing F while hints are already up
+// switches the activation target into new-tab mode without hiding first.
+// Escape used to bind to hide_hints, but Escape has browser-native
+// semantics (close modal, blur input, cancel find) that we shouldn't
+// shadow. Voice "hide" still works via the BRANCHKIT_ACTION pathway.
+registry.add({ keys: 'f', action: 'toggle_hints' });
 registry.add({ keys: 'F', action: 'show_hints_newtab' });
-registry.add({ keys: 'Escape', action: 'hide_hints' });
 
 // Scroll commands (Vimium-compatible)
 registry.add({ keys: 'j', action: 'scroll_down' });
@@ -542,6 +553,22 @@ dispatcher.register('show_hints_newtab', () => {
 dispatcher.register('hide_hints', () => {
   hideHints();
   keyHandler.exitHintMode();
+});
+
+// `f` toggle: branches on the live visibility state. Hides when shown,
+// shows when hidden. Keeps the new-tab modifier untouched so a stray
+// toggle doesn't re-arm new-tab activation. Voice "show"/"hide" continue
+// to route through the dedicated handlers above; this is the keyboard
+// affordance for users in manual visibility mode.
+dispatcher.register('toggle_hints', () => {
+  if (pageSession.hintsVisible) {
+    hideHints();
+    keyHandler.exitHintMode();
+  } else {
+    doScan();
+    showHints();
+    keyHandler.enterHintMode();
+  }
 });
 
 dispatcher.register('activate_first_visible', () => {
@@ -865,6 +892,18 @@ function scheduleHintVisibilityRecheck(): void {
 // even when its CSS hides it).
 function recheckHintedVisibility(): void {
   const __cpuStart = performance.now();
+  // Don't re-show badges the user just hid. Without this guard, hideHints()
+  // sets pageSession.hintsVisible=false and clears each badge's visible
+  // class — but the next visibilityMO tick (or periodic recheck) walks
+  // every wrapper, sees its target is CSS-visible, and calls hint.show()
+  // again. The user observes "I said hide and the badges flashed off then
+  // popped back on." This function exists to catch *page-script-driven*
+  // visibility changes (YouTube fade-out, dropdown close), NOT to override
+  // the user's explicit hide intent.
+  if (!pageSession.hintsVisible) {
+    recordCpu('recheckHintedVisibility', performance.now() - __cpuStart);
+    return;
+  }
   const wrappers = store.all;
   const hinted: Element[] = [];
   for (const w of wrappers) {
@@ -3542,7 +3581,16 @@ function activateHintMachinery(trigger: 'load' | 'resize'): void {
   hintMachineryEnabled = true;
   attachPageMutationObserver();
   setInterval(finalizeExpiredLimboWrappers, LIMBO_DEADLINE_MS);
-  if (trigger === 'resize') setTimeout(() => doScan(), 0);
+  if (trigger === 'resize') {
+    // Subframe that just grew past the eligibility threshold. The module-
+    // load reservoir warm-up was skipped (frame was too small / blank),
+    // so warm it now before the first scan so the IO claim path doesn't
+    // pay an IPC round-trip on its first batch.
+    if (typeof chrome !== 'undefined' && chrome.runtime) {
+      void labelReservoir.ensureReady();
+    }
+    setTimeout(() => doScan(), 0);
+  }
 }
 
 if (frameMayHoldHints()) {
