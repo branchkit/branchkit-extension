@@ -435,7 +435,7 @@ export class HintBadge {
   // is handled by the compositor, so reposition() is a no-op. Disabled per
   // target when the engine can't resolve anchor() across a fixed ancestor
   // (Firefox) — those fall back to the nesting path. Set in the constructor.
-  private readonly anchorMode: boolean;
+  public readonly anchorMode: boolean;
   private anchorName: string | null = null;
 
   // Scroll-tracking trim (nesting path). A badge nested in its target's

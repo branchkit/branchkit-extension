@@ -1,5 +1,5 @@
 import { ElementWrapper } from '../scan/element-wrapper';
-import { getCachedDims, getCachedRect, getCachedStyle, isClipAncestor } from '../layout-cache';
+import { getCachedRect, getCachedStyle, isClipAncestor } from '../layout-cache';
 import { PlacementStrategy } from './strategy';
 import { computePlacement, Nudge } from './compute';
 
@@ -104,24 +104,24 @@ export function invalidateProbe(w: ElementWrapper): void {
 function getNudge(element: Element, hasText: boolean): Nudge {
   const rect = getCachedRect(element);
   // Large icon-only elements (icon-only buttons big enough to host the
-  // badge inside): place hint at the top-left INSIDE the element.
+  // badge inside): place hint at the target's top-left INSIDE the element.
   // Matches Rango's "nudge=1" branch.
   if (rect.width > 30 && rect.height > 30 && !hasText) {
-    return { kind: 'inside', x: 1, y: 1 };
+    return { x: 1, y: 1 };
   }
 
-  // Everything else (text-bearing labels + small icon targets like
-  // collapse-chevrons) — place the badge OUTSIDE the element to the
-  // upper-left. `x` and `y` are absolute pixel overhang past the
-  // element's left/top edge; 0 means the badge ends exactly at the
-  // edge with no overlap. Smaller font sizes look fine with a tiny
-  // x-overhang (badge tucks into the leading); larger fonts need a
-  // bit more so the badge doesn't look detached.
+  // Everything else — Rango-style ratio nudge. Badge sits at the target's
+  // top-left with a fractional overhang up-and-left; the remainder of the
+  // badge sits ON the text. Rango's ratios assume a ~12px hint; BranchKit's
+  // hints are taller, so y is biased smaller (mostly-above) than Rango to
+  // keep overlap to the cap-height area rather than the full line. Bigger
+  // fonts can host more of the badge inside without occluding the glyphs,
+  // so the ratios slide toward 1.
   const style = getCachedStyle(element);
   const fontSize = parseInt(style.fontSize, 10);
-  if (fontSize < 15) return { kind: 'outside', x: 3, y: 0 };
-  if (fontSize < 20) return { kind: 'outside', x: 4, y: 0 };
-  return { kind: 'outside', x: 6, y: 0 };
+  if (fontSize < 15) return { x: 0.3, y: 0.2 };
+  if (fontSize < 20) return { x: 0.4, y: 0.3 };
+  return { x: 0.6, y: 0.5 };
 }
 
 export class RangoStrategy implements PlacementStrategy {
@@ -158,18 +158,27 @@ export class RangoStrategy implements PlacementStrategy {
 
   clear(): void {}
 
-  private getAvailableSpace(container: Element, rect: DOMRect): { left: number | undefined; top: number | undefined } {
-    let current: Element | null = container;
-    while (current) {
-      if (current === document.body || isClipAncestor(current)) {
-        const parentRect = getCachedRect(current);
-        const left = Math.max(0, rect.left - parentRect.left);
-        const top = Math.max(0, rect.top - parentRect.top);
-        return { left, top };
-      }
-      current = current.parentElement;
+  private getAvailableSpace(container: Element, rect: DOMRect, anchorMode: boolean): { left: number | undefined; top: number | undefined } {
+    // In CSS anchor-positioning mode the host is body-mounted (see
+    // setupAnchorHost), not nested inside anchorParent — so anchorParent
+    // never visually clips the badge. The clamp's only purpose was to keep
+    // the badge inside its mount container's visible area; without nesting
+    // there's nothing to escape. Return unbounded space so the nudge alone
+    // determines placement. This unblocks YouTube Shorts cards, where the
+    // title link is wrapped in an h3 with `overflow:hidden` and the chosen
+    // anchorParent often resolves to that h3 (no roomier ancestor exists
+    // for the title text — the thumbnail is a sibling container).
+    if (anchorMode) return { left: undefined, top: undefined };
+    // Nesting-path fallback (Firefox, or per-target anchor() bailout):
+    // measure inside the resolved container so the clamp prevents the
+    // badge from being clipped by anchorParent's overflow.
+    if (!isClipAncestor(container) && container !== document.body) {
+      return { left: undefined, top: undefined };
     }
-    return { left: undefined, top: undefined };
+    const containerRect = getCachedRect(container);
+    const left = Math.max(0, rect.left - containerRect.left);
+    const top = Math.max(0, rect.top - containerRect.top);
+    return { left, top };
   }
 
   private findStickyBound(container: Element): { left: number; top: number } | null {
@@ -185,42 +194,20 @@ export class RangoStrategy implements PlacementStrategy {
     return null;
   }
 
-  private isInScrollList(el: Element): boolean {
-    let current: Element | null = el;
-    while (current && current !== document.body) {
-      const s = getCachedStyle(current);
-      const { clientHeight, scrollHeight } = getCachedDims(current);
-      if (scrollHeight > clientHeight && /scroll|auto/.test(s.overflowY)) return true;
-      current = current.parentElement;
-    }
-    return false;
-  }
-
   private positionAtTopLeft(w: ElementWrapper, probe?: TextProbe): void {
     if (!w.hint) return;
     if (!probe) probe = getOrComputeProbe(w);
 
-    // Gather half: all DOM reads. The decision (corner/overhang/space clamp/
-    // sticky clamp/overlap fallback) lives in the pure computePlacement.
-    //   nudge — 'inside' (ratio, large icon-only targets) vs 'outside'
-    //     (absolute overhang, e.g. Gmail's Categories chevron sits
-    //     above-and-left of the icon, not on it).
+    // Gather half: all DOM reads. The decision (ratio offset / space clamp /
+    // sticky clamp) lives in the pure computePlacement.
     const targetRect = probe.hasText ? probe.rect : getCachedRect(w.element);
     const stickyBound = this.findStickyBound(w.hint.anchorParent);
     const result = computePlacement({
       targetRect,
-      elementRect: getCachedRect(w.element),
       badgeSize: w.hint.badgeSize,
       nudge: getNudge(w.element, probe.hasText),
-      availableSpace: this.getAvailableSpace(w.hint.anchorParent, targetRect),
+      availableSpace: this.getAvailableSpace(w.hint.anchorParent, targetRect, w.hint.anchorMode),
       stickyBound,
-      // isInScrollList is only consulted in the sticky overlap fallback; gate
-      // the ancestor walk on the cheap precondition so the common (non-sticky)
-      // path skips it, preserving the original short-circuit.
-      inScrollList: stickyBound !== null && probe.hasText
-        ? this.isInScrollList(w.hint.anchorParent)
-        : false,
-      hasText: probe.hasText,
     });
 
     // scrollSensitive marks a viewport-fixed clamp (sticky/fixed ancestor) so
