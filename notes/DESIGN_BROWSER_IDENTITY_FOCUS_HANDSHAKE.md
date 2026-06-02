@@ -142,7 +142,32 @@ The active-tab backstop must never register a new bundle — an active-tab POST
 proves a connection is *alive*, not *frontmost* (see
 [[project-active-tab-not-frontmost]], the bug fixed 2026-06-01).
 
-### 4. Release inferred by the plugin, not asserted by the extension
+### 4. Cold-start refresh: claim re-primes a stale OS bundle
+
+The §3 race resolution assumes both signals fire within `focusBindWindow` of
+each other. There is one case where they don't: the plugin is launched while a
+browser is already OS-focused, so no `_platform.app.focused` event ever fires —
+the bundle is stable, the OS has nothing to emit. `primeFocusedBundle` seeds
+`FocusedBundleID` at boot, but `FocusedBundleAt` is then the boot time, which
+ages out of the window long before the user's first focus interaction. When
+the extension's SSE connect then posts a `focused: true` claim (via the
+`document.hasFocus()` path in §2), the OS bundle is stale relative to the
+claim and `reconcileFocusBindingLocked` rejects the otherwise-correct binding.
+
+The fix is symmetric with §2: a fresh claim re-primes the OS side. On a
+`focused: true` claim, if `FocusedBundleAt` is older than `focusBindWindow`,
+synchronously call `native.frontmost_app` and refresh `FocusedBundleID` /
+`FocusedBundleAt` before reconciling. The wall-clock window stays the single
+freshness invariant; the only change is that the bundle side can be re-queried
+on demand when a claim arrives with no recent OS event to pair against.
+
+This closes the only path by which the seed was load-bearing rather than an
+optimization. Without it, dropping the seed strands cold-start arming — the
+exact masking the design exists to escape. With it, the cold-start case
+behaves identically to a normal claim-then-OS-event sequence, just with the
+"OS event" sourced via pull instead of push.
+
+### 5. Release inferred by the plugin, not asserted by the extension
 
 The weak link in making the handshake load-bearing is the **release** (blur)
 signal. Today `focused: false` is a best-effort `fetch` from `onFocusChanged`
@@ -167,6 +192,40 @@ This is the prerequisite for dropping the seed: the seed currently masks
 release-signal gaps because a re-focus of a seeded browser re-arms via
 `KnownBrowsers` regardless of binding state. Without the seed, release must be
 reliable on its own, and OS-inferred release provides that.
+
+### 6. Connection lifecycle clears the focused slot
+
+§5 covers the case where focus moves to another app while the focused conn is
+still alive. There is a third case: the **focused conn itself goes away** —
+browser closed, BranchKit restarted, extension reloaded mid-session, SSE
+channel reset. Today nothing clears `FocusedConnID` when its conn disconnects,
+so a defunct conn ID can stay in the focused slot indefinitely. The next time
+*any* browser sends a grammar batch, the plugin compares the live conn against
+the stale slot, finds they disagree, and stores the batch as "non-focused" —
+projection skips it, the canonical per-prefix collections stay empty, and any
+hint command falls through to whatever pattern matches the codeword globally
+(e.g. `<keys:keys|alphabet>` → letter press).
+
+This is the actual root cause of the 2026-06-01 hint-misfire incident: a stale
+`FocusedConnID` left over from an earlier browser session caused every Firefox
+grammar batch to be stored "non-focused" for 2+ minutes, until an unrelated
+app-focus event happened to re-bind the slot.
+
+The fix is plugin-local and trivial: on SSE channel close, if the closing conn
+matches `FocusedConnID`, clear it (and clear `FocusedTabID`, `ConnBundle[conn]`,
+`ConnActiveTab[conn]`, `SSEClientBundles[client]` while we're at it — they all
+refer to a conn that no longer exists). The next focus event from any live
+browser will re-establish the focused slot legitimately.
+
+This closes a gap §5 doesn't reach: §5 fires on **app-focus changes**, which
+don't always coincide with conn lifecycle. A user can quit Chrome while
+Firefox stays focused — no app-focus change, but Chrome's conn has gone away.
+Without §6, Chrome's conn keeps the focused slot until something else triggers
+release. With §6, the SSE close itself is the signal.
+
+The interaction with §5 is clean: if both fire (focused conn disconnects AND
+app focus shifts at the same time), they both clear the slot, idempotent. No
+ordering dependency.
 
 ## Behavior of each handshake consumer during the binding window
 
@@ -232,21 +291,20 @@ already does — which is what makes it safe to drop.
 - `bundle_id` on the SSE URL and grammar batch body, replaced by `conn_id`.
 - The static `KnownBrowsers` seed map (`main.go:197`). Its "is this a browser"
   role is replaced by bundles observed through `reconcileFocusBindingLocked`
-  (OS-sourced). **Prerequisite:** OS-inferred release (mechanism §4) must land
-  first, since the seed currently masks dropped-release gaps.
+  (OS-sourced). **Prerequisites:** cold-start refresh (mechanism §4) and
+  OS-inferred release (mechanism §5) and disconnect-clears-slot (mechanism §6)
+  must all land first — the seed currently masks the cold-start arming gap,
+  dropped-release gaps, AND stale-conn-survives-disconnect gaps.
 
 ## Open questions / sequencing
 
-1. **Release reliability is the gating dependency.** OS-inferred release (§4)
-   must be implemented and verified *before* the seed is dropped, otherwise a
-   dropped `focused: false` strands a binding with no seed to re-arm through. Land
-   and soak §4 first; drop the seed second.
-2. **First-ever focus of a fork, as the sole browser, cold.** With no seed and a
-   lagged OS event, the fork arms on its claim (good) but stays unbound until the
-   OS event lands. Confirm nothing downstream demands a bundle for a lone browser
-   in that window — the consumer analysis says no, but verify against
-   `buildTabPrefixState` / cleanup paths in code before deleting the seed.
-3. **Two forks of the same engine, both connected, before either binds.** Bounded
+1. **Three gating dependencies before the seed drops.** Cold-start refresh (§4)
+   closes the only path where the seed is load-bearing rather than an
+   optimization; OS-inferred release (§5) closes the dropped-`focused:false`
+   strand; disconnect clears (§6) closes the conn-died-while-focused strand.
+   Land §4, §5, §6, then drop the seed — in that order. §4–§6 can land
+   together since they're plugin-local and don't depend on each other.
+2. **Two forks of the same engine, both connected, before either binds.** Bounded
    broadcast window (consumer 2). Likely acceptable; flag for a soak test rather
    than a new mechanism.
 
@@ -257,6 +315,8 @@ already does — which is what makes it safe to drop.
   `detectBundleID`.
 - Plugin (plugins/browser, closed): `conn_id -> connId` map; `POST /focus`
   handler that arms `FocusedConnID` on claim; recency-reconciled lazy
-  `conn_id -> bundle` binding; OS-inferred release in `handleAppFocused`; repoint
-  dispatch/cleanup off the binding; remove the seed (last, after §4).
+  `conn_id -> bundle` binding; cold-start refresh in `handleFocusPost`;
+  OS-inferred release in `handleAppFocused`; SSE-close clears focused slot
+  (§6); repoint dispatch/cleanup off the binding; remove the seed (last,
+  after §4, §5, §6).
 - Actuator: no change. Stays generic; plugin + extension only.
