@@ -132,11 +132,15 @@ class LabelReservoir {
 
   /** Test-only: seed the reservoir with a specific set of labels and
    *  reset refill state. Lets unit tests skip the async ensureReady()
-   *  fetch and assert against deterministic codewords. */
+   *  fetch and assert against deterministic codewords.
+   *
+   *  Seeding with `[]` is interpreted as "fresh empty state" — initialReady
+   *  is null so a subsequent ensureReady() actually fetches. Seeding with
+   *  non-empty labels treats them as already-fetched (initialReady resolved). */
   _seedForTests(labels: string[]): void {
     this.free = [...labels];
     this.refillInFlight = null;
-    this.initialReady = Promise.resolve();
+    this.initialReady = labels.length > 0 ? Promise.resolve() : null;
   }
 
   private maybeRefill(): void {

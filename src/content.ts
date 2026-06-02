@@ -1848,12 +1848,10 @@ async function processScanBatch(
     markSent(w.scanned.codeword);
     // Voice layer: same ACK as above means this wrapper's codeword is
     // already live in the grammar by the time badgeNewlyCodeworded runs
-    // below. Without this flip the badge would paint with bk-pending and
-    // sit translucent until the wrapper happened to cycle through the IO
-    // path's claim → syncNow → ACK loop — which often takes seconds (or
-    // never) on a freshly-loaded page. The IO/syncNow path sets this in
-    // label-sync.ts:syncNow; this is the scan-path counterpart.
-    w.grammarReady = true;
+    // below. ElementWrapper.markGrammarReady sets the flag and clears the
+    // bk-pending class on the visible badge in one shot — mirrors the
+    // IO/syncNow path so the two ACK sites can't drift.
+    w.markGrammarReady();
     attached.push(w);
   }
 

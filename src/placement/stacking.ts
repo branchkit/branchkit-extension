@@ -39,11 +39,22 @@ export function createsStackingContext(element: Element): boolean {
 
   const style = getComputedStyle(element);
 
-  if (style.zIndex !== 'auto' && (style.position !== 'static' || isFlexOrGridChild(element))) {
+  // Normalize-to-default for unset properties. Real browsers return
+  // 'auto' for unset zIndex and 'static' for unset position; happy-dom
+  // (used by our unit tests) returns ''. Treating '' as the default
+  // makes the predicate work in both.
+  const zIndex = style.zIndex || 'auto';
+  const position = style.position || 'static';
+
+  if (zIndex !== 'auto' && (position !== 'static' || isFlexOrGridChild(element))) {
     return true;
   }
-  if (style.position === 'fixed' || style.position === 'sticky') return true;
-  if (Number(style.opacity) < 1) return true;
+  if (position === 'fixed' || position === 'sticky') return true;
+  // parseFloat('') is NaN — falsy under Number.isFinite, so unset opacity
+  // (which real browsers return as '1') skips this branch correctly in
+  // both environments.
+  const opacity = parseFloat(style.opacity);
+  if (Number.isFinite(opacity) && opacity < 1) return true;
   if (style.mixBlendMode && style.mixBlendMode !== 'normal') return true;
   if (style.transform && style.transform !== 'none') return true;
   if (style.filter && style.filter !== 'none') return true;

@@ -486,3 +486,135 @@ describe('HintBadge.needsScrollReposition (window-scroll trim)', () => {
     badge.remove();
   });
 });
+
+describe('HintBadge reuse contract (setLabel + clearLabel)', () => {
+  // The IO claim/release loop holds onto HintBadge instances across
+  // viewport cycles so scroll-back doesn't pay full shadow-DOM-creation
+  // cost. setLabel/clearLabel are the swap-text-without-recreate API.
+
+  const label1 = { letter: 'a', words: ['arch'], isSingle: true };
+  const label2 = { letter: 'b', words: ['bake'], isSingle: true };
+
+  afterEach(() => {
+    containerTracker.reset();
+    targetTracker.reset();
+    hostTracker.reset();
+  });
+
+  it('setLabel swaps inner text + invalidates badge size cache', () => {
+    const root = mount('<div id="c"><button id="btn">click</button></div>');
+    const badge = new HintBadge(root.querySelector('#btn')!, label1, 'button', 'word');
+    // Touch badgeSize so a _size value gets cached.
+    void badge.badgeSize;
+    expect((badge as unknown as { inner: HTMLDivElement }).inner.textContent).toBe('arch');
+
+    badge.setLabel(label2);
+
+    expect((badge as unknown as { inner: HTMLDivElement }).inner.textContent).toBe('bake');
+    // setLabel must invalidate _size so the next read re-measures with
+    // the new text width; the cached value from 'arch' (different width)
+    // would otherwise paint the badge with stale dimensions.
+    expect((badge as unknown as { _size: unknown })._size).toBe(null);
+    badge.remove();
+  });
+
+  it('clearLabel empties text + nulls the internal label without tearing down', () => {
+    const root = mount('<div id="c"><button id="btn">click</button></div>');
+    const badge = new HintBadge(root.querySelector('#btn')!, label1, 'button', 'word');
+    expect((badge as unknown as { inner: HTMLDivElement }).inner.textContent).toBe('arch');
+
+    badge.clearLabel();
+
+    // Text gone, but the host + shadow + observers all still in place.
+    expect((badge as unknown as { inner: HTMLDivElement }).inner.textContent).toBe('');
+    expect(badge.host.isConnected).toBe(true);
+    // The IO exit + show() cycle still works after clearLabel — the next
+    // setLabel + show paints text back without reconstructing.
+    badge.setLabel(label2);
+    badge.show();
+    expect((badge as unknown as { inner: HTMLDivElement }).inner.textContent).toBe('bake');
+    badge.remove();
+  });
+
+  it('setMatchedChars after clearLabel is a no-op (guards against label=null)', () => {
+    const root = mount('<div id="c"><button id="btn">click</button></div>');
+    const badge = new HintBadge(root.querySelector('#btn')!, label1, 'button', 'word');
+    badge.clearLabel();
+    // Race: text-search filter fires while the wrapper is dormant. With
+    // label cleared, setMatchedChars must short-circuit instead of
+    // throwing on a null label deref.
+    expect(() => badge.setMatchedChars(1)).not.toThrow();
+    badge.remove();
+  });
+
+  it('remove() unschedules pending refine + sets _removed so a late refine no-ops', () => {
+    // Force the scheduler back into deferred mode so refine isn't called
+    // inline. (beforeEach in the file flips it to immediate.)
+    __refineScheduler.setImmediate(false);
+    try {
+      const root = mount('<div id="c"><button id="btn">click</button></div>');
+      const badge = new HintBadge(root.querySelector('#btn')!, label1, 'button', 'word');
+      // refine is queued, not yet run; remove before it can fire.
+      badge.remove();
+      // Draining the scheduler now must not crash and must not register
+      // observers on the now-removed badge (no MO entries created).
+      __refineScheduler.drainNow();
+      // Indirect check: post-remove the host is detached and no observer
+      // was registered (the four trackers are all empty).
+      expect(badge.host.isConnected).toBe(false);
+      expect(containerTracker.getRefCount(badge.anchorParent)).toBe(0);
+    } finally {
+      __refineScheduler.setImmediate(true);
+    }
+  });
+});
+
+describe('HintBadge bk-pending opacity indicator (voice-not-ready state)', () => {
+  // Option B: badge paints translucent when the wrapper's codeword isn't
+  // yet ACK'd by the plugin's grammar. The bk-pending class drives the
+  // CSS opacity; markGrammarReady removes it when the ACK lands.
+
+  const label = { letter: 'a', words: ['arch'], isSingle: true };
+
+  afterEach(() => {
+    containerTracker.reset();
+    targetTracker.reset();
+    hostTracker.reset();
+  });
+
+  it('show(false) adds bk-pending; markGrammarReady removes it', async () => {
+    const root = mount('<div id="c"><button id="btn">click</button></div>');
+    const badge = new HintBadge(root.querySelector('#btn')!, label, 'button', 'word');
+    badge.show(false);
+    // show() schedules the visible class via rAF; wait one frame.
+    await new Promise(r => requestAnimationFrame(() => r(undefined)));
+    expect((badge as unknown as { inner: HTMLDivElement }).inner.classList.contains('bk-pending')).toBe(true);
+    expect((badge as unknown as { inner: HTMLDivElement }).inner.classList.contains('visible')).toBe(true);
+
+    badge.markGrammarReady();
+    expect((badge as unknown as { inner: HTMLDivElement }).inner.classList.contains('bk-pending')).toBe(false);
+    // visible stays — markGrammarReady only flips the pending state.
+    expect((badge as unknown as { inner: HTMLDivElement }).inner.classList.contains('visible')).toBe(true);
+    badge.remove();
+  });
+
+  it('show(true) skips bk-pending entirely (race: grammar ACK already landed)', async () => {
+    const root = mount('<div id="c"><button id="btn">click</button></div>');
+    const badge = new HintBadge(root.querySelector('#btn')!, label, 'button', 'word');
+    badge.show(true);
+    await new Promise(r => requestAnimationFrame(() => r(undefined)));
+    expect((badge as unknown as { inner: HTMLDivElement }).inner.classList.contains('bk-pending')).toBe(false);
+    expect((badge as unknown as { inner: HTMLDivElement }).inner.classList.contains('visible')).toBe(true);
+    badge.remove();
+  });
+
+  it('markGrammarReady is idempotent', () => {
+    const root = mount('<div id="c"><button id="btn">click</button></div>');
+    const badge = new HintBadge(root.querySelector('#btn')!, label, 'button', 'word');
+    badge.show(false);
+    badge.markGrammarReady();
+    expect(() => badge.markGrammarReady()).not.toThrow();
+    expect((badge as unknown as { inner: HTMLDivElement }).inner.classList.contains('bk-pending')).toBe(false);
+    badge.remove();
+  });
+});

@@ -80,6 +80,20 @@ export class ElementWrapper {
     this.scanned = scanned;
   }
 
+  /**
+   * Mark this wrapper as voice-ready: flip the grammarReady flag and,
+   * if its badge is currently visible (with the bk-pending class), tell
+   * the badge to clear the class and transition to full opacity.
+   *
+   * Two call sites: label-sync.syncNow's batch ACK loop (IO claim path)
+   * and content.ts:processScanBatch (scan path). Both need both effects;
+   * extracting the helper keeps them from drifting apart.
+   */
+  markGrammarReady(): void {
+    this.grammarReady = true;
+    if (this.hint?.isVisible) this.hint.markGrammarReady();
+  }
+
   get category(): Category {
     return this.scanned.category;
   }

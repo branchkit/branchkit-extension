@@ -441,6 +441,72 @@ describe('ElementWrapper.releaseLabel', () => {
   });
 });
 
+describe('ElementWrapper.markGrammarReady', () => {
+  // Helper extracted from the scan-path + IO-syncNow-ACK sites. Flips
+  // grammarReady and forwards to the badge's markGrammarReady when the
+  // badge is currently visible. Both effects are needed; testing the
+  // helper protects against the two ACK sites drifting apart.
+
+  it('flips grammarReady from false to true', () => {
+    const w = new ElementWrapper(fakeElement(), fakeScanned());
+    expect(w.grammarReady).toBe(false);
+    w.markGrammarReady();
+    expect(w.grammarReady).toBe(true);
+  });
+
+  it('calls hint.markGrammarReady when the badge is visible', () => {
+    const w = new ElementWrapper(fakeElement(), fakeScanned());
+    const markFn = vi.fn();
+    // Fake hint with the surface markGrammarReady reads (isVisible getter
+    // + markGrammarReady method). The wrapper only touches these two.
+    w.hint = {
+      isVisible: true,
+      markGrammarReady: markFn,
+    } as unknown as ElementWrapper['hint'];
+
+    w.markGrammarReady();
+    expect(markFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT call hint.markGrammarReady when the badge is not visible', () => {
+    const w = new ElementWrapper(fakeElement(), fakeScanned());
+    const markFn = vi.fn();
+    w.hint = {
+      isVisible: false,
+      markGrammarReady: markFn,
+    } as unknown as ElementWrapper['hint'];
+
+    w.markGrammarReady();
+    // Flag still flips so the next show() can read it and skip bk-pending,
+    // but the hint surface is left alone (it's not visible).
+    expect(w.grammarReady).toBe(true);
+    expect(markFn).not.toHaveBeenCalled();
+  });
+
+  it('is safe when the wrapper has no hint at all', () => {
+    const w = new ElementWrapper(fakeElement(), fakeScanned());
+    w.hint = null;
+    expect(() => w.markGrammarReady()).not.toThrow();
+    expect(w.grammarReady).toBe(true);
+  });
+
+  it('is idempotent — calling twice is the same as calling once', () => {
+    const w = new ElementWrapper(fakeElement(), fakeScanned());
+    const markFn = vi.fn();
+    w.hint = {
+      isVisible: true,
+      markGrammarReady: markFn,
+    } as unknown as ElementWrapper['hint'];
+
+    w.markGrammarReady();
+    w.markGrammarReady();
+    // Wrapper flag stays true; hint is told twice but the underlying
+    // class-remove is itself idempotent (separate test in hints.test.ts).
+    expect(w.grammarReady).toBe(true);
+    expect(markFn).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('scoreTextMatch', () => {
   it('returns 0 for empty label', () => {
     expect(scoreTextMatch('', 'foo')).toBe(0);

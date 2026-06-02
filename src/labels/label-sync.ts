@@ -299,14 +299,11 @@ export async function syncNow(reason: string): Promise<void> {
       for (const cw of deletesRidingHere) sentCodewords.delete(cw);
     }
     // Voice-layer ACK: codewords the plugin just confirmed are live in the
-    // grammar. Flip the wrapper's grammarReady flag and, if its badge is
-    // visible with the bk-pending class, clear the class to upgrade from
-    // translucent (paint-only) to opaque (voice will now match it).
+    // grammar. ElementWrapper.markGrammarReady flips the flag and, if the
+    // badge is visible with bk-pending, clears the class to transition to
+    // full opacity.
     for (const w of chunk) {
-      if (succeededSet.has(w.scanned.codeword)) {
-        w.grammarReady = true;
-        if (w.hint?.isVisible) w.hint.markGrammarReady();
-      }
+      if (succeededSet.has(w.scanned.codeword)) w.markGrammarReady();
     }
     // Detach badges this REPLACE evicted from the grammar (badge-visible-implies
     // -commandable). detachWrapper removes the badge + queues the Delete that

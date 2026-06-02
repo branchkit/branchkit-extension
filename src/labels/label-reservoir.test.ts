@@ -1,0 +1,204 @@
+/**
+ * BranchKit Browser — label-reservoir tests.
+ *
+ * The reservoir is the local per-frame cache that replaces the
+ * CLAIM_LABELS round-trip on the hot path. Tests pin the synchronous
+ * claim/release contract, sticky reclaim, refill triggering, and clear
+ * behavior.
+ *
+ * `chrome.runtime.sendMessage` is mocked — the reservoir treats its
+ * response (`{ labels }`) as the source of fresh codewords, and a
+ * rejection as "SW unreachable, stay at current depth."
+ */
+
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { labelReservoir } from './label-reservoir';
+
+let sendMessageMock: ReturnType<typeof vi.fn>;
+
+beforeEach(() => {
+  sendMessageMock = vi.fn();
+  (globalThis as unknown as { chrome: unknown }).chrome = {
+    runtime: { sendMessage: sendMessageMock },
+  };
+  // Reset reservoir to a known empty state between tests.
+  labelReservoir._seedForTests([]);
+});
+
+describe('LabelReservoir.claim', () => {
+  it('returns codewords in queue order when seeded', () => {
+    labelReservoir._seedForTests(['a', 'b', 'c', 'd']);
+    expect(labelReservoir.claim(3)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('returns empty strings for slots beyond available codewords', () => {
+    labelReservoir._seedForTests(['only-one']);
+    expect(labelReservoir.claim(3)).toEqual(['only-one', '', '']);
+  });
+
+  it('sticky reclaim: returns preferred codeword in its requested slot', () => {
+    labelReservoir._seedForTests(['a', 'b', 'c', 'd']);
+    // Slot 1 prefers 'c'. Sticky pass pulls 'c' into slot 1; remaining
+    // slots fill front-of-pool in request order (excluding the granted
+    // 'c'). So slot 0 gets 'a' (front), slot 1 gets 'c' (sticky), slot 2
+    // gets 'b' (next non-granted front-of-pool).
+    expect(labelReservoir.claim(3, ['', 'c', ''])).toEqual(['a', 'c', 'b']);
+  });
+
+  it('sticky reclaim falls through to fresh when preferred is not free', () => {
+    labelReservoir._seedForTests(['a', 'b', 'c']);
+    // 'z' isn't in the reservoir — sticky pass doesn't find it, slot
+    // gets a fresh front-of-pool codeword instead.
+    expect(labelReservoir.claim(1, ['z'])).toEqual(['a']);
+  });
+
+  it('returns empty array for count=0 without touching the reservoir', () => {
+    labelReservoir._seedForTests(['a', 'b']);
+    expect(labelReservoir.claim(0)).toEqual([]);
+    // Reservoir untouched.
+    expect(labelReservoir.stats().free).toBe(2);
+  });
+
+  it('depletes the reservoir as labels are claimed', () => {
+    labelReservoir._seedForTests(['a', 'b', 'c']);
+    labelReservoir.claim(2);
+    expect(labelReservoir.stats().free).toBe(1);
+  });
+
+  it('does NOT redeal the same codeword in a single claim batch', () => {
+    labelReservoir._seedForTests(['a', 'b', 'c']);
+    const r = labelReservoir.claim(3, ['a', 'b', 'c']);
+    expect(new Set(r).size).toBe(3); // all distinct
+    // No duplicate from sticky-reclaim accidentally taking same codeword
+    // for two slots.
+  });
+});
+
+describe('LabelReservoir.release', () => {
+  it('returns labels to the front of the reservoir (sticky semantics)', () => {
+    labelReservoir._seedForTests(['c', 'd']);
+    sendMessageMock.mockResolvedValue(undefined);
+    labelReservoir.release(['a', 'b']);
+    // 'a' and 'b' unshifted to front; next claim picks them up first.
+    expect(labelReservoir.claim(4)).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('async-notifies SW with RELEASE_LABELS', () => {
+    labelReservoir._seedForTests([]);
+    sendMessageMock.mockResolvedValue(undefined);
+    labelReservoir.release(['x', 'y']);
+    const releaseCall = sendMessageMock.mock.calls.find(
+      ([m]) => m.type === 'RELEASE_LABELS',
+    );
+    expect(releaseCall).toBeDefined();
+    expect(releaseCall![0]).toEqual({ type: 'RELEASE_LABELS', labels: ['x', 'y'] });
+  });
+
+  it('filters out empty / falsy labels from the release set', () => {
+    labelReservoir._seedForTests([]);
+    sendMessageMock.mockResolvedValue(undefined);
+    labelReservoir.release(['', 'real', '']);
+    // Only 'real' lands in the reservoir; the SW notify also only carries 'real'.
+    expect(labelReservoir.stats().free).toBe(1);
+    const releaseCall = sendMessageMock.mock.calls.find(([m]) => m.type === 'RELEASE_LABELS');
+    expect(releaseCall![0].labels).toEqual(['real']);
+  });
+
+  it('is a no-op for an empty release set', () => {
+    labelReservoir._seedForTests(['a']);
+    labelReservoir.release([]);
+    expect(labelReservoir.stats().free).toBe(1);
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  it('does not throw when chrome.runtime is unavailable (orphan content script)', () => {
+    (globalThis as unknown as { chrome: unknown }).chrome = undefined;
+    labelReservoir._seedForTests([]);
+    expect(() => labelReservoir.release(['a'])).not.toThrow();
+    // Local state still updated (codeword effectively held by this
+    // frame's reservoir until real teardown via port-disconnect).
+    expect(labelReservoir.stats().free).toBe(1);
+  });
+});
+
+describe('LabelReservoir.ensureReady', () => {
+  it('skips fetch when reservoir already has codewords', async () => {
+    labelReservoir._seedForTests(['a']);
+    await labelReservoir.ensureReady();
+    expect(sendMessageMock).not.toHaveBeenCalled();
+  });
+
+  it('fetches initial reservation via CLAIM_LABELS when empty', async () => {
+    sendMessageMock.mockResolvedValue({ labels: ['a', 'b'] });
+    await labelReservoir.ensureReady();
+    const claim = sendMessageMock.mock.calls.find(([m]) => m.type === 'CLAIM_LABELS');
+    expect(claim).toBeDefined();
+    expect(labelReservoir.stats().free).toBeGreaterThan(0);
+  });
+
+  it('concurrent callers share the same fetch (idempotent)', async () => {
+    sendMessageMock.mockResolvedValue({ labels: ['a', 'b'] });
+    await Promise.all([
+      labelReservoir.ensureReady(),
+      labelReservoir.ensureReady(),
+      labelReservoir.ensureReady(),
+    ]);
+    const claims = sendMessageMock.mock.calls.filter(([m]) => m.type === 'CLAIM_LABELS');
+    // Exactly one fetch despite three concurrent callers.
+    expect(claims).toHaveLength(1);
+  });
+
+  it('absorbs SW rejection — reservoir stays empty, doesn\'t throw', async () => {
+    sendMessageMock.mockRejectedValue(new Error('SW asleep'));
+    await expect(labelReservoir.ensureReady()).resolves.toBeUndefined();
+    expect(labelReservoir.stats().free).toBe(0);
+  });
+});
+
+describe('LabelReservoir.clear', () => {
+  it('drops every queued codeword + resets refill state', () => {
+    labelReservoir._seedForTests(['a', 'b', 'c']);
+    labelReservoir.clear();
+    expect(labelReservoir.stats().free).toBe(0);
+    expect(labelReservoir.stats().refillInFlight).toBe(false);
+  });
+
+  it('allows a fresh ensureReady after clear (no cached promise)', async () => {
+    sendMessageMock.mockResolvedValue({ labels: ['fresh'] });
+    await labelReservoir.ensureReady(); // initial
+    labelReservoir.clear();
+    sendMessageMock.mockClear();
+    sendMessageMock.mockResolvedValue({ labels: ['fresh2'] });
+    await labelReservoir.ensureReady(); // post-clear — must fetch again
+    const claims = sendMessageMock.mock.calls.filter(([m]) => m.type === 'CLAIM_LABELS');
+    expect(claims.length).toBeGreaterThan(0);
+  });
+});
+
+describe('LabelReservoir refill threshold', () => {
+  it('triggers an async refill when claim drains the reservoir below threshold', async () => {
+    // Seed below the REFILL_THRESHOLD so any claim trips the refill.
+    labelReservoir._seedForTests(['a']);
+    sendMessageMock.mockResolvedValue({ labels: ['b', 'c', 'd'] });
+    labelReservoir.claim(1);
+    // Drain remaining microtasks so the async refill IPC completes.
+    await new Promise(r => setTimeout(r, 0));
+    const claims = sendMessageMock.mock.calls.filter(([m]) => m.type === 'CLAIM_LABELS');
+    expect(claims.length).toBeGreaterThan(0);
+    // After refill, reservoir has the new codewords.
+    expect(labelReservoir.stats().free).toBeGreaterThan(0);
+  });
+
+  it('does NOT trigger a second refill while one is in-flight', async () => {
+    labelReservoir._seedForTests([]);
+    // The mock never resolves — the in-flight promise stays pending.
+    sendMessageMock.mockReturnValue(new Promise(() => {}));
+    labelReservoir.claim(1); // triggers refill #1
+    labelReservoir.claim(1); // should NOT trigger refill #2 (already in flight)
+    labelReservoir.claim(1);
+    // Allow microtasks to flush.
+    await new Promise(r => setTimeout(r, 0));
+    const claims = sendMessageMock.mock.calls.filter(([m]) => m.type === 'CLAIM_LABELS');
+    expect(claims).toHaveLength(1);
+  });
+});
