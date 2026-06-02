@@ -39,6 +39,11 @@ function reconcile(host: HTMLElement, attributeName: string, expectedDisplay = '
     if (host.getAttribute('data-branchkit-hint') !== 'true') {
       host.setAttribute('data-branchkit-hint', 'true');
     }
+  } else if (attributeName === 'data-bk-shown') {
+    // Owned by HintBadge.show()/hide(); the tracker MO sees our own
+    // writes echo back, so it must allow them through. Tests + dev
+    // tools can also query `[data-bk-shown="true"]` to find currently-
+    // visible badges without peeking into the closed shadow root.
   } else if (attributeName === 'style') {
     if (host.style.display !== expectedDisplay) {
       host.style.display = expectedDisplay;

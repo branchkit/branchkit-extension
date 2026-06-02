@@ -80,6 +80,10 @@ import {
   type RuleEntry,
 } from './rules/domain-rules';
 import { loadDomainRules, onDomainRulesChanged, ruleEqual } from './rules/domain-rules-storage';
+import { loadBadgeSettings, onBadgeSettingsChanged } from './badge-settings-storage';
+import { setBadgeSizingFromSettings } from './render/hints';
+import { setNudgesFromSettings } from './placement/rango';
+import { labelReservoir } from './labels/label-reservoir';
 import { filterNewBatchRefs } from './scan/batch-dedup';
 import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
 import { openLivenessPort } from './plugin/liveness';
@@ -307,7 +311,7 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
     const rule = matchRule(window.location.href, rules);
     applyMatchedRule(rule);
     if (rule) {
-      doScan();
+      scheduleDoScan();
       schedulePushGrammar();
     }
   });
@@ -324,8 +328,24 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
         if (isExcludedByRule(w.element, compiledRule.excludes)) detachWrapper(w.element);
       }
     }
-    doScan();
+    scheduleDoScan();
     schedulePushGrammar();
+  });
+
+  // Badge appearance settings — read once at startup, then live-update on
+  // change. On change we detach every wrapper so the next doScan() rebuilds
+  // badges with the new font size / nudge values (badge dimensions and
+  // initial CSS are cached per-instance — wholesale rebuild is the
+  // simplest path to a clean re-render).
+  loadBadgeSettings().then((s) => {
+    setBadgeSizingFromSettings(s);
+    setNudgesFromSettings(s);
+  });
+  onBadgeSettingsChanged((s) => {
+    setBadgeSizingFromSettings(s);
+    setNudgesFromSettings(s);
+    for (const w of [...store.all]) detachWrapper(w.element);
+    scheduleDoScan();
   });
 }
 
@@ -369,9 +389,16 @@ loadConfig({
     // Clear the store so already-hinted elements that no longer qualify
     // get torn down, then re-scan with the new selector breadth.
     store.clear();
-    doScan();
+    scheduleDoScan();
   },
 });
+
+// Warm the per-frame label reservoir as soon as the content script runs so
+// the first scan's batch claim has codewords on hand without waiting for
+// the SW round-trip. Idempotent; refills happen lazily after this.
+if (typeof chrome !== 'undefined' && chrome.runtime) {
+  void labelReservoir.ensureReady();
+}
 
 // Alphabet adoption (not a user setting; stays here, coupled to delta-sync
 // session state). BranchKit pushed a new alphabet — adopt it. The pool was
@@ -383,6 +410,11 @@ if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
   chrome.storage.onChanged.addListener((changes) => {
     if (changes.alphabet?.newValue) {
       setAlphabet(changes.alphabet.newValue);
+      // Reservoir codewords were built from the old alphabet; SW already
+      // wiped the central pool, so even sending the old strings back as
+      // RELEASE_LABELS would be a no-op. Clear locally and re-fetch.
+      labelReservoir.clear();
+      void labelReservoir.ensureReady();
       // Problem 3 (notes/DESIGN_OPTION_B_REATTEMPT.md): the previous
       // alphabet's codewords are now invalid, and the plugin still
       // holds them in `browser_hints_<old-prefix>` for this frame.
@@ -446,7 +478,10 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
       // scanInBatches' chunked walk + the per-batch await yield the
       // event loop between batches.
       setTimeout(() => {
-        doScan();
+        // Coalesced — any domain-rules-change or badge-settings-change
+        // event that arrived in the same tick will fold into this scan
+        // instead of triggering a second back-to-back doScanBatched.
+        scheduleDoScan();
         if (getHintVisibility() === 'always') {
           whenDOMSettles(() => {
             tracker.flushNow().then(() => {
@@ -829,7 +864,12 @@ function recheckHintedVisibility(): void {
   const wrappers = store.all;
   const hinted: Element[] = [];
   for (const w of wrappers) {
-    if (w.hint && w.element.isConnected) hinted.push(w.element);
+    // Only consider wrappers IO says are in-viewport. With hint reuse
+    // (DESIGN_HINT_REUSE.md), `w.hint` persists for out-of-viewport
+    // wrappers in dormant state — including them here would let the
+    // `visible && !showing` branch below re-show a hint for a wrapper
+    // the IO already released, painting badges off-screen.
+    if (w.hint && w.isInViewport && w.element.isConnected) hinted.push(w.element);
   }
   if (hinted.length === 0) {
     recordCpu('recheckHintedVisibility', performance.now() - __cpuStart);
@@ -839,7 +879,7 @@ function recheckHintedVisibility(): void {
   let transitions = 0;
   try {
     for (const w of wrappers) {
-      if (!w.hint || !w.element.isConnected) continue;
+      if (!w.hint || !w.isInViewport || !w.element.isConnected) continue;
       const visible = isVisible(w.element);
       const showing = w.hint.isVisible;
       if (visible && !showing) {
@@ -859,7 +899,9 @@ function recheckHintedVisibility(): void {
 
 function anyHintedWrapperVisible(): boolean {
   for (const w of store.all) {
-    if (w.hint) return true;
+    // Dormant reused hints exist but aren't visible — only currently-
+    // showing hints count toward "visible" here.
+    if (w.hint?.isVisible) return true;
   }
   return false;
 }
@@ -1093,6 +1135,30 @@ function doScan(): void {
   void doScanBatched();
 }
 
+/**
+ * Coalesce multiple doScan triggers that fire close together (storage
+ * onChanged for alphabet + domain rules + badge settings all delivered
+ * within a tick is the common case) into a single rescan. Without this,
+ * each storage event runs its own ~500-900 ms doScanBatched and the user
+ * sees a back-to-back stall pair right at page load. The 50 ms window is
+ * tight enough to feel immediate but wide enough to fold all chrome
+ * storage events from one logical change.
+ *
+ * Callers that need the scan to have completed before continuing should
+ * still call doScan() directly. The chrome.storage listeners do not —
+ * they kick the scan and let the rest of the page-state recovery (DOM
+ * settle, show, etc.) wait on its own timers.
+ */
+let doScanCoalesceTimer: ReturnType<typeof setTimeout> | null = null;
+const DO_SCAN_COALESCE_MS = 50;
+function scheduleDoScan(): void {
+  if (doScanCoalesceTimer) return;
+  doScanCoalesceTimer = setTimeout(() => {
+    doScanCoalesceTimer = null;
+    doScan();
+  }, DO_SCAN_COALESCE_MS);
+}
+
 // Apply the current compiled rule's exclusions + inclusions to a scan
 // result. Mutates result in place. Used by both doScan (full document)
 // and discoverInSubtree (added subtree). Cheap no-op when no rule is
@@ -1298,8 +1364,13 @@ function scheduleHintRefresh(): void {
 function badgeNewlyCodeworded(): void {
   const newBadges: ElementWrapper[] = [];
   for (const w of store.all) {
-    // Delta against desired state: wants a hint but doesn't have one.
-    if (wantsHint(w, activeCategory) && !w.hint) {
+    // Delta against desired state: wants a hint but isn't currently
+    // visible. With hint reuse (DESIGN_HINT_REUSE.md), a wrapper's
+    // `w.hint` persists across viewport exit/re-enter cycles, so the old
+    // `!w.hint` filter would skip every dormant hint forever. The new
+    // filter catches both first-time hints (w.hint absent) and reused
+    // dormant hints (w.hint present but hidden + cleared).
+    if (wantsHint(w, activeCategory) && !w.hint?.isVisible) {
       newBadges.push(w);
     }
   }
@@ -1314,7 +1385,16 @@ function badgeNewlyCodeworded(): void {
       const w = newBadges[i];
       const label = poolLabelToAssignment(w.scanned.codeword);
       w.label = label;
-      w.hint = new HintBadge(w.element, label, w.category, getDisplayMode());
+      // Fast path: existing dormant hint just needs its label swapped and
+      // a show. Slow path (first-time): construct the badge. The reuse
+      // skips shadow DOM creation, observer wire-up, anchorParent walk,
+      // z-index walk, and APCA color recomputation — all of which add up
+      // to ~5-10ms per badge on scroll-back.
+      if (w.hint) {
+        w.hint.setLabel(label);
+      } else {
+        w.hint = new HintBadge(w.element, label, w.category, getDisplayMode());
+      }
       w.hint.show();
       placeOne(w, existingCount + i);
       targetRectStore.write(w.element, getCachedRect(w.element)); // write-on-paint
@@ -1411,7 +1491,11 @@ function scheduleReconcile(): void {
 function reconcileTeardown(): void {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  const hinted = store.all.filter(w => w.hint && w.disconnectedAt === null);
+  // Filter on `.isVisible` (not just `.hint`) so dormant reused hints
+  // (DESIGN_HINT_REUSE.md) — already hidden + label-cleared after their
+  // IO exit — aren't re-released here. They have no codeword and would
+  // be a no-op release plus an unnecessary scheduleFlush.
+  const hinted = store.all.filter(w => w.hint?.isVisible && w.disconnectedAt === null);
   if (hinted.length === 0) return;
 
   // Read all geometry first…
@@ -1442,7 +1526,11 @@ function reconcileTeardown(): void {
 function reconcilePlacement(): void {
   let repaired = 0;
   for (const w of store.all) {
-    if (!w.hint || w.disconnectedAt !== null) continue;
+    // Dormant reused hints (DESIGN_HINT_REUSE.md) don't need anchor
+    // re-binding — they're hidden and will be re-placed via badgeNewly-
+    // Codeworded on the next viewport entry, which re-runs `placeOne`.
+    // Skip them here.
+    if (!w.hint?.isVisible || w.disconnectedAt !== null) continue;
     if (w.hint.ensureBound()) repaired++;
   }
   if (repaired > 0) firehoseStep('reconcile:placement:repaired', repaired, 1);
@@ -2533,17 +2621,24 @@ window.addEventListener('scroll', scheduleScrollReposition, { passive: true });
 onContainerResize(scheduleDeferredReposition);
 
 // Inner-pane scroll → keep TargetRectStore warm for that pane's targets
-// (DESIGN_OBSERVER_DRIVEN_LAYOUT Phase 5b). `scroll` doesn't bubble, so the
-// window listener above misses overflow-container scroll; nesting-path badges
-// ride the compositor visually but their store rects would otherwise go stale.
-// The tracker hands us one rAF-coalesced batch of the scrolled containers'
-// targets; this is a read-only pass (store writes, no DOM writes) so the
-// getBoundingClientRect reads don't thrash layout. Store is not yet read in
-// production — additive warmth ahead of the positioning cutover.
+// AND fire the same scroll-settle backstops the window scroll listener
+// runs. Without this, sites with inner overflow scrollers (QuickBase
+// tables, Slack channel list, Gmail mail list, GitHub file tree) never
+// triggered `scheduleBandDiscovery` — the level-triggered backstop that
+// catches rows dropped by `drainDiscovery` during a heavy virtualization
+// burst. `scroll` doesn't bubble, so the window listener above misses
+// these scrollers entirely; this callback is the only place inner-pane
+// scroll-settle is observed.
+//
+// The tracker hands us one rAF-coalesced batch per scroll; the rect write
+// stays in this synchronous handler (compositor-tracked, no thrash), the
+// backstops are debounced inside scheduleScrollReposition so a long
+// virtualization scroll coalesces to one sweep at settle.
 onScrollAncestor((targets) => {
   for (const el of targets) {
     if (el.isConnected) targetRectStore.write(el, el.getBoundingClientRect());
   }
+  scheduleScrollReposition();
 });
 
 // Deferred reposition for signals that hint "layout is about to settle":

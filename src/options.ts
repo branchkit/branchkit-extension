@@ -33,6 +33,14 @@ import {
   setFeedbackError,
   clearFeedback,
 } from './rules/rule-ui';
+import {
+  type BadgeSettings,
+  DEFAULT_BADGE_SETTINGS,
+  loadBadgeSettings,
+  saveBadgeSettings,
+  resetBadgeSettings,
+  onBadgeSettingsChanged,
+} from './badge-settings-storage';
 
 // --- State ---
 
@@ -448,6 +456,98 @@ async function init(): Promise<void> {
     if (rulesEqual(incoming, rules)) return;
     rules = incoming;
     render();
+  });
+
+  await initBadgeSettings();
+}
+
+// --- Badge appearance ---
+
+const BADGE_FIELDS: Array<keyof BadgeSettings> = [
+  'scale', 'fontMin', 'fontMax',
+  'nudgeXSmall', 'nudgeYSmall',
+  'nudgeXMed', 'nudgeYMed',
+  'nudgeXLarge', 'nudgeYLarge',
+];
+
+const BADGE_SAVE_DEBOUNCE_MS = 250;
+let badgeSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let suppressBadgeChangeEcho = false;
+
+function readBadgeForm(): BadgeSettings {
+  const out = { ...DEFAULT_BADGE_SETTINGS };
+  for (const key of BADGE_FIELDS) {
+    const el = document.getElementById(`bs-${key}`) as HTMLInputElement | null;
+    if (!el) continue;
+    const v = parseFloat(el.value);
+    if (Number.isFinite(v)) (out as Record<string, number>)[key] = v;
+  }
+  return out;
+}
+
+function writeBadgeForm(s: BadgeSettings): void {
+  for (const key of BADGE_FIELDS) {
+    const el = document.getElementById(`bs-${key}`) as HTMLInputElement | null;
+    if (!el) continue;
+    el.value = String(s[key]);
+  }
+  updateBadgePreview(s);
+}
+
+function updateBadgePreview(s: BadgeSettings): void {
+  const badge = document.getElementById('bs-preview-badge') as HTMLSpanElement | null;
+  const text = document.getElementById('bs-preview-text') as HTMLSpanElement | null;
+  if (!badge || !text) return;
+  // Preview pegs to a 14px target — the "small font" bucket — to match
+  // what the user sees on body text. computeBadgeFontSize applies the
+  // scale × 14, then clamps to [fontMin, fontMax].
+  const targetFont = 14;
+  const scaled = Math.round(targetFont * s.scale);
+  const badgeFont = Math.min(Math.max(scaled, s.fontMin), s.fontMax);
+  badge.style.fontSize = `${badgeFont}px`;
+  // Use the small-font nudge ratios for the preview.
+  const badgeW = badge.offsetWidth || 16;
+  const badgeH = badge.offsetHeight || 14;
+  const offsetX = badgeW * (1 - s.nudgeXSmall);
+  const offsetY = badgeH * (1 - s.nudgeYSmall);
+  badge.style.left = `${-offsetX}px`;
+  badge.style.top = `${-offsetY}px`;
+}
+
+async function initBadgeSettings(): Promise<void> {
+  const current = await loadBadgeSettings();
+  writeBadgeForm(current);
+
+  for (const key of BADGE_FIELDS) {
+    const el = document.getElementById(`bs-${key}`) as HTMLInputElement | null;
+    if (!el) continue;
+    el.addEventListener('input', () => {
+      const next = readBadgeForm();
+      updateBadgePreview(next);
+      if (badgeSaveTimer) clearTimeout(badgeSaveTimer);
+      badgeSaveTimer = setTimeout(() => {
+        suppressBadgeChangeEcho = true;
+        saveBadgeSettings(next);
+      }, BADGE_SAVE_DEBOUNCE_MS);
+    });
+  }
+
+  const resetBtn = document.getElementById('bs-reset') as HTMLButtonElement | null;
+  if (resetBtn) {
+    resetBtn.addEventListener('click', () => {
+      resetBadgeSettings();
+      writeBadgeForm(DEFAULT_BADGE_SETTINGS);
+    });
+  }
+
+  onBadgeSettingsChanged((incoming) => {
+    if (suppressBadgeChangeEcho) {
+      // Skip echo of our own save — keeps the form from clobbering an
+      // in-flight edit the user is still typing.
+      suppressBadgeChangeEcho = false;
+      return;
+    }
+    writeBadgeForm(incoming);
   });
 }
 

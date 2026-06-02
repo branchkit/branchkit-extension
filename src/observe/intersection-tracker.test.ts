@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
 import { IntersectionTracker } from './intersection-tracker';
 import { ScannedElement } from '../types';
+import { labelReservoir } from '../labels/label-reservoir';
 
 let sendMessageMock: ReturnType<typeof vi.fn>;
 
@@ -82,13 +83,21 @@ beforeEach(() => {
   };
   (globalThis as unknown as { IntersectionObserver: unknown }).IntersectionObserver =
     FakeIntersectionObserver;
+  // Reset the module-level reservoir between tests so each test starts
+  // with a known label set instead of inheriting state from the prior one.
+  labelReservoir._seedForTests([]);
 });
 
+/** Seed the per-frame reservoir with deterministic labels for this test.
+ *  Replaces the old SW-mocked CLAIM_LABELS response now that claims are
+ *  served from the local reservoir. */
 function setupClaimResponse(labels: string[]): void {
-  // CLAIM_LABELS gets the first matching response; RELEASE_LABELS doesn't
-  // need a response value but we resolve undefined so awaits don't hang.
+  labelReservoir._seedForTests(labels);
+  // RELEASE_LABELS is still IPC-bound (async SW notify). Stub it so
+  // sendMessage calls during release don't hang.
   sendMessageMock.mockImplementation((msg: { type: string }) => {
-    if (msg.type === 'CLAIM_LABELS') return Promise.resolve({ labels });
+    if (msg.type === 'RELEASE_LABELS') return Promise.resolve(undefined);
+    if (msg.type === 'CLAIM_LABELS') return Promise.resolve({ labels: [] });
     return Promise.resolve(undefined);
   });
 }
@@ -139,31 +148,34 @@ describe('IntersectionTracker.refreshViewportClaims', () => {
     expect(empty.scanned.codeword).toBe('arch');
   });
 
-  it('issues exactly one CLAIM_LABELS for the whole batch', async () => {
+  it('assigns codewords in queue order for the whole batch', async () => {
+    // Post-reservoir: claims are served synchronously from the local pool —
+    // zero IPC per flush batch. The behavioral contract that still holds is
+    // "one claim operation per batch produces consistent labels in queue
+    // order" (so reading the codewords back lines up with how they were
+    // queued). Verified end-to-end without inspecting the (now-absent)
+    // CLAIM_LABELS IPC call.
     const store = new WrapperStore();
     const events = { onCodewordsChanged: vi.fn() };
     const tracker = new IntersectionTracker(store, events);
 
+    const wrappers: ElementWrapper[] = [];
     for (let i = 0; i < 5; i++) {
       const w = new ElementWrapper(fakeElement(`w${i}`), fakeScanned());
       w.isInViewport = true;
       store.addWrapper(w);
+      wrappers.push(w);
     }
 
     setupClaimResponse(['a', 'b', 'c', 'd', 'e']);
     tracker.refreshViewportClaims();
     await tracker.flushNow();
 
-    const claimCalls = sendMessageMock.mock.calls.filter(
-      ([msg]) => msg.type === 'CLAIM_LABELS',
-    );
-    expect(claimCalls).toHaveLength(1);
-    expect(claimCalls[0][0]).toEqual({
-      type: 'CLAIM_LABELS',
-      count: 5,
-      // Fresh wrappers have no prior codeword, so preferred is all-empty.
-      preferred: ['', '', '', '', ''],
-    });
+    expect(wrappers.map(w => w.scanned.codeword)).toEqual(['a', 'b', 'c', 'd', 'e']);
+    // A CLAIM_LABELS refill IPC may be in-flight after the claim depletes
+    // the local reservoir below threshold, but the claim itself returned
+    // synchronously — no await-on-IPC during the flush. Not asserted here
+    // because the refill behavior is covered by the reservoir's own tests.
   });
 
   it('handles pool exhaustion by leaving tail wrappers unlabeled', async () => {
@@ -189,7 +201,7 @@ describe('IntersectionTracker.refreshViewportClaims', () => {
     expect(wrappers[3].scanned.codeword).toBe('');
   });
 
-  it('replays a released codeword as preferred on the next claim (sticky)', async () => {
+  it('replays a released codeword on the next claim (sticky reclaim)', async () => {
     const store = new WrapperStore();
     const events = { onCodewordsChanged: vi.fn() };
     const tracker = new IntersectionTracker(store, events);
@@ -199,27 +211,27 @@ describe('IntersectionTracker.refreshViewportClaims', () => {
     store.addWrapper(w);
     tracker.observe(w.element);
 
-    setupClaimResponse(['arch bake']);
+    // Seed two labels so the reservoir has choice — sticky reclaim should
+    // pull the preferred one out of order even when other free labels exist.
+    setupClaimResponse(['arch bake', 'other']);
     tracker.refreshViewportClaims();
     await tracker.flushNow();
     expect(w.scanned.codeword).toBe('arch bake');
 
-    // Scroll out of the viewport: IO exit clears the codeword but stashes it.
+    // Scroll out of the viewport: IO exit clears the codeword but stashes
+    // it, and the reservoir takes the label back (front of pool).
     FakeIntersectionObserver.lastInstance!.fire(w.element, false);
     await tracker.flushNow();
     expect(w.scanned.codeword).toBe('');
     expect(w.preferredCodeword).toBe('arch bake');
 
-    // Scroll back in: re-claim must request the same codeword as preferred.
+    // Scroll back in: the reservoir's sticky-reclaim pass should hand us
+    // the same codeword the wrapper held before, NOT the other free label.
     w.isInViewport = true;
-    sendMessageMock.mockClear();
     tracker.refreshViewportClaims();
     await tracker.flushNow();
 
-    const claimCall = sendMessageMock.mock.calls.find(
-      ([msg]) => msg.type === 'CLAIM_LABELS',
-    );
-    expect(claimCall![0].preferred).toEqual(['arch bake']);
+    expect(w.scanned.codeword).toBe('arch bake');
   });
 
   it('does not call onCodewordsChanged when nothing was claimed or released', async () => {
@@ -377,55 +389,29 @@ describe('IntersectionTracker.unobserve', () => {
 });
 
 describe('IntersectionTracker.flushNow', () => {
-  it('drains pending work that arrives during an in-flight flush', async () => {
-    // Regression for the showHints race. Without flushNow's drain loop,
-    // a doFlush mid-await on CLAIM_LABELS while a new IO entry queues a
-    // second claim would let flushNow return after only the first
-    // claim resolves — showHints would then render badges for wrappers
-    // whose codewords haven't landed yet.
+  it('drains pending work that arrives between flushes', async () => {
+    // Post-reservoir: claims are synchronous, so the old "mid-IPC suspend"
+    // race shape is gone. What flushNow's drain loop still guarantees is
+    // that two batches of IO entries — one before flushNow starts, one
+    // queued during its run — both get claimed before flushNow returns.
     const store = new WrapperStore();
     const events = { onCodewordsChanged: vi.fn() };
     const tracker = new IntersectionTracker(store, events);
     const io = FakeIntersectionObserver.lastInstance!;
 
+    setupClaimResponse(['first', 'second']);
+
     const w1 = new ElementWrapper(fakeElement('w1'), fakeScanned());
     store.addWrapper(w1);
     tracker.observe(w1.element);
-
-    let resolveFirst: (v: { labels: string[] }) => void = () => {};
-    let firstClaimSeen = false;
-    sendMessageMock.mockImplementation((msg: { type: string }) => {
-      if (msg.type === 'CLAIM_LABELS' && !firstClaimSeen) {
-        firstClaimSeen = true;
-        return new Promise<{ labels: string[] }>(r => { resolveFirst = r; });
-      }
-      if (msg.type === 'CLAIM_LABELS') {
-        return Promise.resolve({ labels: ['second'] });
-      }
-      return Promise.resolve(undefined);
-    });
-
-    // Fire intersect for w1 → queues a claim → schedules a 50ms flush.
     io.fire(w1.element, true);
 
-    // flushNow clears the timer and starts the first doFlush.
-    const flushPromise = tracker.flushNow();
-
-    // Yield until doFlush has issued sendMessage and is suspended on it.
-    await Promise.resolve();
-    await Promise.resolve();
-
-    // Mid-flight: a new wrapper intersects. handleEntries skips wrappers
-    // that already hold a codeword, so w1 won't be re-queued — only w2.
     const w2 = new ElementWrapper(fakeElement('w2'), fakeScanned());
     store.addWrapper(w2);
     tracker.observe(w2.element);
     io.fire(w2.element, true);
 
-    // Resolve the first claim. flushNow's drain loop should then pick
-    // up w2 in a second doFlush before resolving.
-    resolveFirst({ labels: ['first'] });
-    await flushPromise;
+    await tracker.flushNow();
 
     expect(w1.scanned.codeword).toBe('first');
     expect(w2.scanned.codeword).toBe('second');

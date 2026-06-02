@@ -12,6 +12,7 @@ import { Category, BadgeDisplayMode } from '../types';
 import { LabelAssignment, labelToDisplay } from '../labels/words';
 import { getCachedRect, getCachedStyle, getCachedDims, isClipAncestor } from '../layout-cache';
 import { computeBadgeColors } from './badge-colors';
+import { type BadgeSettings, DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
 import { leaderLineGeometry } from '../placement/geometry';
 import { trackContainerResize, untrackContainerResize } from '../observe/container-resize-tracker';
 import { trackScrollAncestor, untrackScrollAncestor } from '../observe/scroll-ancestor-tracker';
@@ -391,18 +392,120 @@ export function resolveBadgeContext(target: Element, host: HTMLElement, outer: H
 
 const BADGE_OFFSET = 24;
 
-const MAX_BADGE_FONT = 14;
-const MIN_BADGE_FONT = 11;
+// --- Refinement scheduler (phase 3 of the two-pass paint plan) ---
+//
+// Newly-constructed HintBadges enqueue themselves here; the scheduler runs
+// `badge.refine()` on idle time. Refinement is the page-mutation-defense
+// half of badge setup — 4 observer registrations (~2-4 ms per badge) —
+// work that doesn't change what's painted this frame but catches page
+// scripts that strip our DOM or layout shifts that move our anchor.
+//
+// APCA color computation stays in the synchronous show() path because
+// Rango paints with accurate colors from the first frame and deferring
+// them introduces a visible flash from default-palette → APCA colors.
+// The observer dance has no visible effect at first paint, so deferring
+// it is invisible while still saving the majority of per-badge CPU.
+//
+// Budget per pass: ~4 ms of CPU before yielding. `requestIdleCallback`
+// supplies its own deadline; the setTimeout fallback (Firefox-historic and
+// jsdom) uses a wall-clock budget of the same magnitude.
+
+const pendingRefine = new Set<HintBadge>();
+let refineScheduled = false;
+const REFINE_BUDGET_MS = 4;
+
+/** Sync-mode flag for tests: when true, the constructor calls `refine()`
+ *  inline instead of enqueueing. Tests assert observer state immediately
+ *  after construction, which is incompatible with deferred refinement.
+ *  Off in production. */
+let refineImmediately = false;
+
+function scheduleRefine(badge: HintBadge): void {
+  pendingRefine.add(badge);
+  if (refineScheduled) return;
+  refineScheduled = true;
+  scheduleRefineDrain();
+}
+
+function unscheduleRefine(badge: HintBadge): void {
+  pendingRefine.delete(badge);
+}
+
+function scheduleRefineDrain(): void {
+  const ric = (globalThis as { requestIdleCallback?: (cb: (d: IdleDeadline) => void, opts?: { timeout: number }) => number }).requestIdleCallback;
+  if (ric) {
+    ric((deadline) => drainPendingRefines(deadline), { timeout: 200 });
+  } else {
+    setTimeout(() => drainPendingRefines(), 16);
+  }
+}
+
+function drainPendingRefines(deadline?: IdleDeadline): void {
+  refineScheduled = false;
+  const start = performance.now();
+  for (const badge of pendingRefine) {
+    pendingRefine.delete(badge);
+    badge.refine();
+    const remaining = deadline?.timeRemaining?.()
+      ?? Math.max(0, REFINE_BUDGET_MS - (performance.now() - start));
+    if (remaining <= 0.5) break;
+  }
+  if (pendingRefine.size > 0) {
+    refineScheduled = true;
+    scheduleRefineDrain();
+  }
+}
+
+export const __refineScheduler = {
+  /** Force-sync mode for unit tests. Existing pending entries are drained
+   *  immediately. Subsequent constructions call refine() inline until
+   *  cleared. */
+  setImmediate(enabled: boolean): void {
+    refineImmediately = enabled;
+    if (enabled && pendingRefine.size > 0) {
+      // Drain anything already queued so tests see a refined state.
+      for (const badge of pendingRefine) {
+        pendingRefine.delete(badge);
+        badge.refine();
+      }
+    }
+  },
+  /** Test helper: synchronously drain the queue (for tests that want to
+   *  exercise the deferred path without a fake clock). */
+  drainNow(): void {
+    for (const badge of pendingRefine) {
+      pendingRefine.delete(badge);
+      badge.refine();
+    }
+  },
+  pendingCount(): number {
+    return pendingRefine.size;
+  },
+};
+
+// Live badge sizing state — initialized from DEFAULT_BADGE_SETTINGS and
+// overwritten by the content-script bootstrap once storage has been read.
+// Constants are mutable refs (not literals) so settings changes propagate
+// without re-importing or re-wiring callers.
+let badgeFontScale = DEFAULT_BADGE_SETTINGS.scale;
+let badgeFontMin = DEFAULT_BADGE_SETTINGS.fontMin;
+let badgeFontMax = DEFAULT_BADGE_SETTINGS.fontMax;
+
+export function setBadgeSizingFromSettings(s: BadgeSettings): void {
+  badgeFontScale = s.scale;
+  badgeFontMin = s.fontMin;
+  badgeFontMax = s.fontMax;
+}
 
 function computeBadgeFontSize(target: Element): number {
   // Targets with font-size: 0 (the common a11y-text-hiding trick on
   // role=checkbox / role=button divs) would otherwise yield a 0px or
   // tiny badge — `0 || 12` would fall back to 12 but only when targetSize
-  // is exactly 0. Floor at MIN_BADGE_FONT so any sub-readable value
-  // (parsing oddities, 0px declarations, vw/em < 11) lifts to readable.
+  // is exactly 0. Floor at the configured min so any sub-readable value
+  // (parsing oddities, 0px declarations, vw/em below floor) lifts up.
   const targetSize = parseFloat(getCachedStyle(target).fontSize) || 12;
-  const scaled = Math.round(targetSize * 0.85);
-  return Math.min(Math.max(scaled, MIN_BADGE_FONT), MAX_BADGE_FONT);
+  const scaled = Math.round(targetSize * badgeFontScale);
+  return Math.min(Math.max(scaled, badgeFontMin), badgeFontMax);
 }
 
 export class HintBadge {
@@ -425,8 +528,23 @@ export class HintBadge {
   private category: Category;
   private _visible: boolean = false;
   private _size: { w: number; h: number } | null = null;
+  // Has the deferrable refinement (observer registration, etc.) run yet?
+  // Production: false until the rIC-scheduled drain runs `refine()`.
+  // Tests: refineImmediately makes the constructor call refine() inline
+  // so observer state is asserted right after `new HintBadge(...)`.
+  private _refined: boolean = false;
+  // Has remove() been called? Refinement on a removed badge would register
+  // observers on a torn-down host — wasted work and a memory leak. The
+  // scheduler can't atomically pull a badge out of its pending set during
+  // a synchronous remove() call, so refine() guards on this flag instead.
+  private _removed: boolean = false;
 
-  private label: LabelAssignment;
+  // Nullable: set by the constructor (a HintBadge always starts with a label),
+  // optionally cleared by `clearLabel()` when the wrapper exits the viewport
+  // and we keep the badge alive for reuse on scroll-back. While null the badge
+  // is dormant — `setMatchedChars` short-circuits, the inner text is empty,
+  // and `hide()` has been called.
+  private label: LabelAssignment | null;
   private displayMode: BadgeDisplayMode;
   private fontSize: number;
 
@@ -522,7 +640,6 @@ export class HintBadge {
         border-width: 1px;
         border-style: solid;
         opacity: 0;
-        transition: opacity 0.15s ease-in;
       }
       .bk-inner.visible {
         opacity: 1;
@@ -581,6 +698,36 @@ export class HintBadge {
       }
     }
 
+    // Defer the heavy half of setup (4 observer registrations + APCA color
+    // computation, ~5-10 ms total) onto idle time via the module-level
+    // scheduler. The badge paints immediately with default colors and
+    // generic placement; refine() upgrades it within a few frames. Tests
+    // can flip `refineImmediately` to force sync behavior so they can
+    // assert observer state right after construction.
+    if (refineImmediately) this.refine();
+    else scheduleRefine(this);
+  }
+
+  /**
+   * The deferrable half of badge setup — work that doesn't affect the
+   * first visible paint but is needed for ongoing correctness:
+   *
+   *   - container-resize observer: detects layout shifts not driven by
+   *     scroll/resize (animated dropdowns, sibling expansion, :focus-within).
+   *   - scroll-ancestor observer (nesting path only): keeps TargetRectStore
+   *     warm for inner-pane scroll so anchor offsets stay accurate.
+   *   - target mutation observer: catches the page mutating the target's
+   *     class/style/aria-label so the wrapper's hintability can be re-checked.
+   *   - host attribute defender: restores attributes/styles the page tries
+   *     to strip from our shadow host.
+   *
+   * Idempotent — calling `refine()` twice is a no-op for the second call.
+   * Today it's called inline at the end of the constructor (preserving
+   * current behavior). A future phase will defer this to idle time.
+   */
+  refine(): void {
+    if (this._refined || this._removed) return;
+    this._refined = true;
     trackContainerResize(this.anchorParent);
     if (!this.anchorMode) {
       this.scrollAncestor = findScrollAncestor(this.target);
@@ -593,6 +740,8 @@ export class HintBadge {
     // Anchor hosts need a real box (position:absolute → display block);
     // nesting hosts stay display:contents.
     trackHostAttributes(this.host, this.anchorMode ? 'block' : 'contents');
+    // Colors are NOT touched here — they were already applied accurately
+    // (APCA) at show() time. Refinement is observer-only now.
   }
 
   // Body-mount the host and pin it to the target via anchor(). outer/inner
@@ -740,6 +889,13 @@ export class HintBadge {
     trackTargetMutations(this.target);
     // host-attribute tracker is keyed on the host (unchanged); no swap.
 
+    // retarget wires observers up itself, so the deferred refine() pass is
+    // no longer needed. Mark refined and pull off the pending queue.
+    if (!this._refined) {
+      this._refined = true;
+      unscheduleRefine(this);
+    }
+
     this.reposition();
   }
 
@@ -751,6 +907,11 @@ export class HintBadge {
     this._size = null;
     requestAnimationFrame(() => {
       this.inner.classList.add('visible');
+      // Mirror the visibility state onto the light-DOM host so tools that
+      // can't peek into the closed shadow root (Playwright tests, dev-tool
+      // selectors) can query `[data-bk-shown]`. Allowed by the host-
+      // attribute tracker's reconcile.
+      this.host.setAttribute('data-bk-shown', 'true');
     });
   }
 
@@ -769,6 +930,12 @@ export class HintBadge {
     return this._size;
   }
 
+  /** APCA-accurate page-aware colors. Walks the target's ancestors to
+   *  resolve the effective background, then tunes foreground contrast.
+   *  ~1-2 ms per badge. Runs synchronously in show() because deferring it
+   *  produced a visible flash from default colors to the accurate ones
+   *  (see DESIGN_HINT_REUSE.md / phase 3 of the two-pass paint refactor).
+   *  Rango does the same — synchronous APCA at construction, no flash. */
   private applyColors(): void {
     const colors = computeBadgeColors(this.target);
     this.inner.style.background = colors.bg;
@@ -779,6 +946,7 @@ export class HintBadge {
   hide(): void {
     this._visible = false;
     this.inner.classList.remove('visible');
+    this.host.removeAttribute('data-bk-shown');
   }
 
   setFiltered(filtered: boolean): void {
@@ -815,7 +983,40 @@ export class HintBadge {
     this._size = null;
   }
 
+  /**
+   * Update the displayed label without changing display mode. Used by the
+   * scroll-back fast path: when a wrapper re-enters the viewport and the
+   * codeword pool grants a (possibly-different) codeword, swap the text
+   * without recreating the badge. Cheap — one `textContent` write + size
+   * cache invalidation. The shadow DOM, observers, anchorParent, colors,
+   * and z-index all persist from the prior visibility cycle.
+   *
+   * Pair with `clearLabel()` on viewport exit; both keep the badge object
+   * alive so the next show()+setLabel() avoids the full construction cost.
+   */
+  setLabel(label: LabelAssignment): void {
+    this.label = label;
+    this.inner.textContent = labelToDisplay(label, this.displayMode);
+    this._size = null;
+  }
+
+  /**
+   * Drop the current label without tearing down the badge. Pair with
+   * `hide()` at viewport exit when we want to keep the DOM + observers
+   * around for a likely scroll-back. Doesn't touch the host's DOM
+   * connection or observer subscriptions — those persist for the next
+   * `show() + setLabel()`. Idempotent.
+   */
+  clearLabel(): void {
+    this.label = null;
+    this.inner.textContent = '';
+  }
+
   setMatchedChars(count: number): void {
+    // Dormant (cleared) badge — caller may have raced with viewport exit.
+    // Nothing to highlight; the next show()+setLabel() resets text content.
+    if (!this.label) return;
+
     if (count === 0) {
       this.inner.textContent = labelToDisplay(this.label, this.displayMode);
       this._size = null;
@@ -934,6 +1135,11 @@ export class HintBadge {
   }
 
   remove(): void {
+    this._removed = true;
+    unscheduleRefine(this);
+    // Untracks are no-ops when the corresponding track* was never called
+    // (refine() may not have run yet), so it's safe to call them
+    // unconditionally — they just clean up whichever subscriptions exist.
     untrackContainerResize(this.anchorParent);
     if (this.scrollAncestor) {
       untrackScrollAncestor(this.scrollAncestor, this.target);

@@ -65,6 +65,12 @@ const storageKey = (tabId: number) => `labelStack:${tabId}`;
 // action. Mutators (claim/release/clear/regenerate) keep this in sync.
 const assignedCache = new Map<number, Record<string, number>>();
 
+// In-memory mirror of each tab's full LabelStack. Avoids chrome.storage.session
+// reads + writes on every claim/release (each was ~5-15ms, the dominant chunk
+// of badge-paint latency during scroll). storage.session is still the durable
+// store — we write through asynchronously so an SW restart restores state.
+const stackCache = new Map<number, LabelStack>();
+
 // Per-tab promise chain that serializes all mutations on that tab.
 // Two frames calling CLAIM_LABELS at the same time can't both splice the
 // same labels because their work runs sequentially in this chain.
@@ -81,13 +87,27 @@ export function withTabLock<T>(tabId: number, fn: () => Promise<T>): Promise<T> 
 }
 
 async function loadStack(tabId: number): Promise<LabelStack | null> {
+  const cached = stackCache.get(tabId);
+  if (cached) return cached;
   const key = storageKey(tabId);
   const result = await chrome.storage.session.get(key);
-  return (result[key] as LabelStack | undefined) ?? null;
+  const stack = (result[key] as LabelStack | undefined) ?? null;
+  if (stack) stackCache.set(tabId, stack);
+  return stack;
 }
 
 async function saveStack(tabId: number, stack: LabelStack): Promise<void> {
-  await chrome.storage.session.set({ [storageKey(tabId)]: stack });
+  // Update the in-memory cache synchronously — that's what subsequent
+  // claims/releases will read. Persist to storage.session asynchronously
+  // (fire-and-forget) so an SW restart can rebuild the cache. We do NOT
+  // await the storage write because doing so was the dominant per-claim
+  // cost on the hot path, with no functional consequence: the worst case
+  // of a missed write is one tab's stack reset to free-pool on SW restart,
+  // which is bounded by the level-triggered reconciler's re-claim.
+  stackCache.set(tabId, stack);
+  chrome.storage.session.set({ [storageKey(tabId)]: stack }).catch(() => {
+    /* SW context invalidated during shutdown — write was best-effort */
+  });
 }
 
 async function getAlphabet(): Promise<string[] | null> {
@@ -255,6 +275,7 @@ export async function releaseFrame(tabId: number, frameId: number): Promise<void
 export async function clearStack(tabId: number): Promise<void> {
   return withTabLock(tabId, async () => {
     assignedCache.delete(tabId);
+    stackCache.delete(tabId);
     await chrome.storage.session.remove(storageKey(tabId));
   });
 }
@@ -276,6 +297,7 @@ export async function clearStack(tabId: number): Promise<void> {
  */
 export async function clearAllStacks(): Promise<void> {
   assignedCache.clear();
+  stackCache.clear();
   const all = await chrome.storage.session.get();
   const stackKeys = Object.keys(all).filter(k => k.startsWith('labelStack:'));
   if (stackKeys.length > 0) {
@@ -325,8 +347,10 @@ export async function regenerateAllStacks(): Promise<void> {
   await Promise.all(tabIds.map(tabId =>
     withTabLock(tabId, async () => {
       assignedCache.set(tabId, {});
+      const fresh: LabelStack = { free: [...newPool], assigned: {} };
+      stackCache.set(tabId, fresh);
       await chrome.storage.session.set({
-        [storageKey(tabId)]: { free: [...newPool], assigned: {} },
+        [storageKey(tabId)]: fresh,
       });
     })
   ));

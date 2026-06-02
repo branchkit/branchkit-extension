@@ -39,6 +39,7 @@ import { isAlphabetLoaded } from './words';
 import { DEFAULT_SCAN_BATCH_SIZE } from '../scan/scanner';
 import { sweepDisconnectedAfterBatch } from '../scan/batch-sweep';
 import { getHintVisibility } from '../config';
+import { labelReservoir } from './label-reservoir';
 
 /**
  * Content.ts-owned collaborators the catchup sync needs. Injected once at
@@ -142,12 +143,13 @@ export function rotateSession(): void {
 
 export async function claimLabels(count: number): Promise<string[]> {
   if (count === 0) return [];
-  try {
-    const resp = await chrome.runtime.sendMessage({ type: 'CLAIM_LABELS', count });
-    return Array.isArray(resp?.labels) ? resp.labels : [];
-  } catch {
-    return [];
-  }
+  // Synchronous local claim — no IPC. The reservoir warms via
+  // ensureReady() at content-script bootstrap; when the reservoir runs
+  // dry, claim() returns '' for the overflow slots and the caller leaves
+  // those wrappers unhinted (level-triggered reconcile re-queues them on
+  // the next pass after the async refill arrives). Function stays async
+  // for backwards compat with the call site's existing await.
+  return labelReservoir.claim(count);
 }
 
 function drainPendingDeletes(): string[] {

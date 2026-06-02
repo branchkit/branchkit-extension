@@ -7,6 +7,7 @@ import {
   HintBadge,
   anchorOffsetCss,
   __testing as hintsTesting,
+  __refineScheduler,
 } from './hints';
 import { __testing as containerTracker } from '../observe/container-resize-tracker';
 import { __testing as targetTracker } from '../observe/target-mutation-tracker';
@@ -25,9 +26,19 @@ function mount(html: string): Element {
   return wrapper;
 }
 
+// Force `HintBadge` construction to run `refine()` synchronously instead of
+// queueing onto requestIdleCallback. The tests assert observer state right
+// after `new HintBadge(...)`, which the production deferred-refine path
+// doesn't satisfy until the scheduler drains. This flag flips the
+// constructor back to the inline-refine behavior that the tests pin.
+beforeEach(() => {
+  __refineScheduler.setImmediate(true);
+});
+
 afterEach(() => {
   for (const el of mounted) el.remove();
   mounted.length = 0;
+  __refineScheduler.setImmediate(false);
 });
 
 describe('findBadgeContainer', () => {

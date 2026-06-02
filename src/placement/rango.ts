@@ -2,8 +2,8 @@ import { ElementWrapper } from '../scan/element-wrapper';
 import { getCachedRect, getCachedStyle, isClipAncestor } from '../layout-cache';
 import { PlacementStrategy } from './strategy';
 import { computePlacement, Nudge } from './compute';
-
-const BASE_Z = 2147483000;
+import { calculateZIndex } from './stacking';
+import { type BadgeSettings, DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
 
 export type TextProbe = { hasText: true; rect: DOMRect } | { hasText: false };
 
@@ -101,6 +101,25 @@ export function invalidateProbe(w: ElementWrapper): void {
   w.cachedProbe = null;
 }
 
+// Live nudge state — initialized from DEFAULT_BADGE_SETTINGS and overwritten
+// by the content-script bootstrap once storage has been read. Mutable refs
+// so settings changes propagate without re-wiring callers.
+let nudgeXSmall = DEFAULT_BADGE_SETTINGS.nudgeXSmall;
+let nudgeYSmall = DEFAULT_BADGE_SETTINGS.nudgeYSmall;
+let nudgeXMed = DEFAULT_BADGE_SETTINGS.nudgeXMed;
+let nudgeYMed = DEFAULT_BADGE_SETTINGS.nudgeYMed;
+let nudgeXLarge = DEFAULT_BADGE_SETTINGS.nudgeXLarge;
+let nudgeYLarge = DEFAULT_BADGE_SETTINGS.nudgeYLarge;
+
+export function setNudgesFromSettings(s: BadgeSettings): void {
+  nudgeXSmall = s.nudgeXSmall;
+  nudgeYSmall = s.nudgeYSmall;
+  nudgeXMed = s.nudgeXMed;
+  nudgeYMed = s.nudgeYMed;
+  nudgeXLarge = s.nudgeXLarge;
+  nudgeYLarge = s.nudgeYLarge;
+}
+
 function getNudge(element: Element, hasText: boolean): Nudge {
   const rect = getCachedRect(element);
   // Large icon-only elements (icon-only buttons big enough to host the
@@ -110,18 +129,16 @@ function getNudge(element: Element, hasText: boolean): Nudge {
     return { x: 1, y: 1 };
   }
 
-  // Everything else — Rango-style ratio nudge. Badge sits at the target's
-  // top-left with a fractional overhang up-and-left; the remainder of the
-  // badge sits ON the text. Rango's ratios assume a ~12px hint; BranchKit's
-  // hints are taller, so y is biased smaller (mostly-above) than Rango to
-  // keep overlap to the cap-height area rather than the full line. Bigger
-  // fonts can host more of the badge inside without occluding the glyphs,
+  // Everything else — Rango-style ratio nudge per font-size bucket.
+  // Badge sits at the target's top-left with a fractional overhang
+  // up-and-left; the remainder of the badge sits ON the text. Bigger
+  // fonts can host more of the badge inside without occluding glyphs,
   // so the ratios slide toward 1.
   const style = getCachedStyle(element);
   const fontSize = parseInt(style.fontSize, 10);
-  if (fontSize < 15) return { x: 0.3, y: 0.2 };
-  if (fontSize < 20) return { x: 0.4, y: 0.3 };
-  return { x: 0.6, y: 0.5 };
+  if (fontSize < 15) return { x: nudgeXSmall, y: nudgeYSmall };
+  if (fontSize < 20) return { x: nudgeXMed, y: nudgeYMed };
+  return { x: nudgeXLarge, y: nudgeYLarge };
 }
 
 export class RangoStrategy implements PlacementStrategy {
@@ -145,7 +162,7 @@ export class RangoStrategy implements PlacementStrategy {
       if (!w.hint) continue;
       this.positionAtTopLeft(w, probes[i]);
       w.hint.hideLeader();
-      w.hint.host.style.zIndex = String(BASE_Z + i);
+      w.hint.host.style.zIndex = String(calculateZIndex(w.element, w.hint.host) + i);
     }
   }
 
@@ -153,7 +170,7 @@ export class RangoStrategy implements PlacementStrategy {
     if (!wrapper.hint) return;
     this.positionAtTopLeft(wrapper);
     wrapper.hint.hideLeader();
-    wrapper.hint.host.style.zIndex = String(BASE_Z + readingIndex);
+    wrapper.hint.host.style.zIndex = String(calculateZIndex(wrapper.element, wrapper.hint.host) + readingIndex);
   }
 
   clear(): void {}

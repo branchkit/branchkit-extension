@@ -24,9 +24,9 @@
 
 import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
 import { wantsCodeword } from '../lifecycle/desired-state';
+import { labelReservoir } from '../labels/label-reservoir';
 
 const VIEWPORT_MARGIN = '200px';
-const FLUSH_DEBOUNCE_MS = 50;
 
 export interface TrackerEvents {
   /**
@@ -50,7 +50,7 @@ export class IntersectionTracker {
   // Codewords waiting to release. Strings, not wrappers — the wrapper may
   // already have been GC'd by the time we flush.
   private pendingRelease: string[] = [];
-  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private flushScheduled = false;
   // Promise chain that serializes every doFlush. Without this, a flush
   // started by scheduleFlush's timer can be in mid-await on
   // CLAIM_LABELS while flushNow's `await this.flush()` starts a second
@@ -130,10 +130,10 @@ export class IntersectionTracker {
    * it returns; we loop so showHints sees a quiescent tracker.
    */
   async flushNow(): Promise<void> {
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = null;
-    }
+    // Drop any pending microtask flush — we're going to drive flushes directly.
+    // The microtask might still fire and call enqueueFlush again, but
+    // enqueueFlush is idempotent (no-op when both queues are empty).
+    this.flushScheduled = false;
     do {
       await this.enqueueFlush();
     } while (this.pendingClaim.size > 0 || this.pendingRelease.length > 0);
@@ -197,23 +197,37 @@ export class IntersectionTracker {
       wrapper.preferredCodeword = wrapper.scanned.codeword;
       wrapper.scanned.codeword = '';
       wrapper.label = null;
-      // The badge can't follow a wrapper that's lost its codeword — its
-      // label would resolve to "?". Tear it down; the next showHints will
-      // re-mount if the user scrolls back.
+      // Keep the badge object alive across visibility cycles (notes/
+      // DESIGN_HINT_REUSE.md): drop visibility + label content, but leave
+      // the shadow DOM, observers, anchorParent, and color computation
+      // intact for the likely scroll-back. The next viewport entry takes
+      // the fast path in `badgeNewlyCodeworded` (`setLabel` + `show`
+      // instead of `new HintBadge`). Final teardown still happens via
+      // `ElementWrapper.destroy()` when the wrapper itself is dropped.
       if (wrapper.hint) {
-        wrapper.hint.remove();
-        wrapper.hint = null;
+        wrapper.hint.hide();
+        wrapper.hint.clearLabel();
       }
     }
     this.scheduleFlush();
   }
 
   private scheduleFlush(): void {
-    if (this.flushTimer) return;
-    this.flushTimer = setTimeout(() => {
-      this.flushTimer = null;
+    if (this.flushScheduled) return;
+    this.flushScheduled = true;
+    // queueMicrotask runs at the end of the current task — after the IO
+    // callback finishes its synchronous entry loop, so all entries from
+    // one callback still coalesce into one flush. The setTimeout(16ms)
+    // it replaced was dead time for the common case (single IO callback)
+    // because no new entries arrive between callback end and timer fire.
+    // The rare "two adjacent IO callbacks within a frame" case is still
+    // covered: the second callback's adds land in pendingClaim while the
+    // first flush's CLAIM_LABELS IPC is in-flight; flushChain's
+    // serialization picks them up on the next pass.
+    queueMicrotask(() => {
+      this.flushScheduled = false;
       this.enqueueFlush();
-    }, FLUSH_DEBOUNCE_MS);
+    });
   }
 
   /**
@@ -233,20 +247,19 @@ export class IntersectionTracker {
 
     // Releases first so a codeword freed in this same flush is back in the
     // pool's free list before the immediately-following claim runs its
-    // sticky-reclaim pass (claimLabels pass 1). Without this ordering, a
-    // wrapper re-entering the viewport in the same coalesced flush that
-    // another wrapper released its old codeword couldn't re-grant it. This is
-    // what keeps codeword identity stable across "leaves viewport, returns".
+    // sticky-reclaim pass. Without this ordering, a wrapper re-entering
+    // the viewport in the same coalesced flush that another wrapper
+    // released its old codeword couldn't re-grant it. This is what keeps
+    // codeword identity stable across "leaves viewport, returns".
     if (this.pendingRelease.length > 0) {
       const labels = this.pendingRelease;
       this.pendingRelease = [];
       releasedCodewords.push(...labels);
       dirty = true;
-      try {
-        await chrome.runtime.sendMessage({ type: 'RELEASE_LABELS', labels });
-      } catch {
-        /* extension context may be invalidated */
-      }
+      // Local + async SW notify. Returns codewords to the reservoir front
+      // (so the immediately-following claim's sticky-reclaim can pick them
+      // up) and fire-and-forgets the SW release.
+      labelReservoir.release(labels);
     }
 
     if (this.pendingClaim.size > 0) {
@@ -261,21 +274,17 @@ export class IntersectionTracker {
       // keeps the live prefix×suffix grid balanced for the two-stage voice
       // grammar regardless of which wrappers claim front-of-pool.
       const wrappers = queued;
-      // Sticky reclaim: ask the pool to re-grant each wrapper's previously-held
-      // codeword (if still free) so scroll-back keeps the same letter.
-      const preferred = wrappers.map(w => w.preferredCodeword);
+      // Sticky reclaim: ask the reservoir to re-grant each wrapper's
+      // previously-held codeword (if still in the local pool) so scroll-back
+      // keeps the same letter.
+      const preferred = wrappers.map(w => w.preferredCodeword ?? '');
 
-      let labels: string[] = [];
-      try {
-        const response = await chrome.runtime.sendMessage({
-          type: 'CLAIM_LABELS',
-          count: wrappers.length,
-          preferred,
-        });
-        labels = Array.isArray(response?.labels) ? response.labels : [];
-      } catch {
-        labels = [];
-      }
+      // Synchronous local claim — no IPC. The reservoir refills async when
+      // it drops below threshold. If the pool is exhausted (no codewords
+      // available locally yet), some slots come back as '' and those
+      // wrappers stay unhinted until the next refill arrives; the level-
+      // triggered reconcile will re-queue them on the next claim cycle.
+      const labels = labelReservoir.claim(wrappers.length, preferred);
 
       for (let i = 0; i < wrappers.length; i++) {
         const wrapper = wrappers[i];
