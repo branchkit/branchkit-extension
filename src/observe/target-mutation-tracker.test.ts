@@ -110,13 +110,13 @@ describe('track / untrack', () => {
 });
 
 describe('callback firing', () => {
-  it('fires the callback when a tracked target gets a foreign class change', async () => {
+  it('fires when the tracked target gets an inline style change', async () => {
     const cb = vi.fn();
     onTargetMutation(cb);
     const a = mkTarget();
     trackTargetMutations(a);
 
-    a.className = 'changed';
+    a.style.color = 'red';
 
     // MutationObserver delivers via microtask.
     await Promise.resolve();
@@ -125,7 +125,21 @@ describe('callback firing', () => {
     expect(cb).toHaveBeenCalledWith(a);
   });
 
-  it('fires when a child is added to the tracked subtree', async () => {
+  it('does not fire on class changes (out of attributeFilter)', async () => {
+    const cb = vi.fn();
+    onTargetMutation(cb);
+    const a = mkTarget();
+    trackTargetMutations(a);
+
+    a.className = 'changed';
+
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(cb).not.toHaveBeenCalled();
+  });
+
+  it('does not fire on subtree mutations (subtree:true dropped to avoid descendant churn)', async () => {
     const cb = vi.fn();
     onTargetMutation(cb);
     const a = mkTarget();
@@ -133,11 +147,12 @@ describe('callback firing', () => {
 
     const child = document.createElement('span');
     a.appendChild(child);
+    child.style.color = 'red';
 
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(cb).toHaveBeenCalledWith(a);
+    expect(cb).not.toHaveBeenCalled();
   });
 
   it('does not fire after untrack', async () => {
@@ -147,7 +162,7 @@ describe('callback firing', () => {
     trackTargetMutations(a);
     untrackTargetMutations(a);
 
-    a.className = 'changed';
+    a.style.color = 'red';
     await Promise.resolve();
     await Promise.resolve();
 
