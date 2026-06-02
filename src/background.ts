@@ -834,8 +834,12 @@ async function notifyActiveTab(message: Message): Promise<void> {
         console.warn('[BranchKit SW] sendMessage failed:', e.message);
         return;
       }
-      const injected = await injectContentScriptFiles(tid);
-      if (!injected) {
+      // Lazy-inject under the per-tab lock so a concurrent reinject/lazy
+      // recovery doesn't race us and double-inject this tab. If lock was held
+      // (returns undefined), another caller is injecting — proceed to the
+      // retry send anyway; the in-flight inject will satisfy it.
+      const injected = await withInjectLock(tid, () => injectContentScriptFiles(tid));
+      if (injected === false) {
         console.warn('[BranchKit SW] sendMessage failed and lazy-inject did not apply:', e.message);
         return;
       }
@@ -939,6 +943,33 @@ async function pingContentScript(tabId: number): Promise<boolean> {
 }
 
 /**
+ * Per-tab in-flight inject tracker. Multiple SW paths (`onInstalled.update`
+ * → `reinjectContentScripts`, `tabs.onUpdated{status:'complete'}` →
+ * `ensureContentScriptInjected`, `notifyActiveTab`'s sendMessage-failure
+ * recovery) can all decide to flush+inject the same tab within the same
+ * extension reload. If they interleave, the second path's `flushOrphanGuard`
+ * deletes the guard flag the first path's CS just set, letting a second CS
+ * instance pass the duplicate guard — observed via the page-world debug
+ * bridge as two `cs_id` entries loaded ~90ms apart, each minting its own
+ * session_id and ping-ponging cleanups in the plugin's per-prefix grammar.
+ *
+ * The fix: any flush-then-inject path acquires the tab's slot in this set
+ * first. A concurrent caller that finds the slot occupied skips entirely —
+ * the in-flight injector covers the work for both.
+ */
+const inflightInjects = new Set<number>();
+
+async function withInjectLock<T>(tabId: number, fn: () => Promise<T>): Promise<T | undefined> {
+  if (inflightInjects.has(tabId)) return undefined;
+  inflightInjects.add(tabId);
+  try {
+    return await fn();
+  } finally {
+    inflightInjects.delete(tabId);
+  }
+}
+
+/**
  * Best-effort clear of the `__branchkitContentInjected` idempotency guard
  * across every frame in `tabId`. An orphaned content script from a previous
  * extension generation leaves this flag set; until it's cleared a freshly
@@ -947,7 +978,10 @@ async function pingContentScript(tabId: number): Promise<boolean> {
  *
  * Only call this on a recovery path where the live script (if any) is
  * already known unreachable — clearing the guard out from under a healthy
- * script would let a second copy initialize on top of it.
+ * script would let a second copy initialize on top of it. Callers should
+ * be inside a `withInjectLock(tabId, ...)` block; without that, a second
+ * concurrent caller can flush the guard the first caller's just-injected
+ * CS set, producing two CS instances in the same frame.
  *
  * On Firefox this routinely fails atomically on sites with CSP-locked
  * iframes (YouTube ads, Netflix DRM frame, Cloudflare challenges); that's
@@ -979,11 +1013,34 @@ async function flushOrphanGuard(tabId: number): Promise<void> {
  * before injecting so the fresh script runs to completion — this is what
  * lets already-open tabs recover voice control after an extension reload
  * without a manual close-and-reopen.
+ *
+ * Retry-then-flush: a freshly-loading content script doesn't register its
+ * runtime.onMessage listener until module init completes (~tens of ms,
+ * longer on heavy pages). If `tabs.onUpdated{status:'complete'}` fires
+ * faster than that — common on cache-warm reloads — the first ping arrives
+ * mid-init and times out, exactly when the CS *is* about to come alive on
+ * its own. The original code went straight to flush + inject in that
+ * window, racing the manifest's auto-injection and producing two CS
+ * instances in the same frame (one with its session_id, one with another),
+ * which then ping-pong wipe each other's per-prefix grammar via
+ * session_id_changed cleanups. Empirically verified on Netflix /watch via
+ * the RDP debug bridge: two cs_ids loaded 72ms apart in the same top
+ * frame. Retrying the ping after a short delay covers the "still loading"
+ * case without affecting the genuine-orphan case (orphans never answer).
  */
+const PING_RETRY_DELAY_MS = 500;
+
 async function ensureContentScriptInjected(tabId: number): Promise<void> {
   if (await pingContentScript(tabId)) return;
-  await flushOrphanGuard(tabId);
-  await injectContentScriptFiles(tabId);
+  await new Promise<void>((resolve) => setTimeout(resolve, PING_RETRY_DELAY_MS));
+  if (await pingContentScript(tabId)) return;
+  await withInjectLock(tabId, async () => {
+    // Re-check inside the lock: the holder of the lock might have just
+    // injected, so the CS is healthy by the time we get in here.
+    if (await pingContentScript(tabId)) return;
+    await flushOrphanGuard(tabId);
+    await injectContentScriptFiles(tabId);
+  });
 }
 
 /**
@@ -1507,11 +1564,16 @@ async function reinjectContentScripts(): Promise<void> {
       continue;
     }
     // Flush orphan guards across all frames before injecting fresh scripts.
-    await flushOrphanGuard(tabId);
-    // Inject via the same fallback path lazy-inject uses, so YouTube /
-    // Netflix / Cloudflare-challenged tabs get the top frame even when
-    // allFrames refuses.
-    await injectContentScriptFiles(tabId);
+    // Wrapped in withInjectLock so a concurrent ensureContentScriptInjected
+    // (e.g. from tabs.onUpdated firing during the reload) doesn't race us
+    // and double-inject the same tab.
+    await withInjectLock(tabId, async () => {
+      await flushOrphanGuard(tabId);
+      // Inject via the same fallback path lazy-inject uses, so YouTube /
+      // Netflix / Cloudflare-challenged tabs get the top frame even when
+      // allFrames refuses.
+      await injectContentScriptFiles(tabId);
+    });
   }
 }
 
