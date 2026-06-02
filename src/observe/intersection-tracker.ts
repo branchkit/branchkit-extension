@@ -26,7 +26,15 @@ import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
 import { wantsCodeword } from '../lifecycle/desired-state';
 import { labelReservoir } from '../labels/label-reservoir';
 
-const VIEWPORT_MARGIN = '200px';
+// Wide rootMargin to match Rango's lazy-construction model: catch elements
+// while they're still ~5 viewport-line-rows away, so the per-badge work
+// (codeword claim, HintBadge construction, observer refinement) happens
+// during the "approach" window instead of at the moment of visibility.
+// Same total CPU as the old 200 px margin — just shifted earlier so the
+// user doesn't perceive it as "paint lag" lining up with their scroll.
+// Was 200 px; Rango uses 1000 px (`addWrappersIntersectionObserver` in
+// ElementWrapper.ts) and feels noticeably smoother on long scrolls.
+const VIEWPORT_MARGIN = '1000px';
 
 export interface TrackerEvents {
   /**
