@@ -135,6 +135,42 @@ if ((window as unknown as { __branchkitContentInjected?: boolean }).__branchkitC
 // the per-frame budget that trips Firefox's slow-extension warning on ad-heavy
 // pages (1000+ ad/about:blank frames). Hint machinery still runs in every frame.
 const isTopFrame = window === window.top;
+
+// Page-world debug bridge. Each CS instance appends an entry to
+// `window.__branchkitDebugJSON` (a string-encoded JSON array) at module-load
+// time, so an external inspector (e.g. RDP probing via console.evaluate in the
+// page main world) can see how many CS instances are alive in this frame —
+// directly detecting the dual-CS race where flushOrphanGuard + lazy-inject get
+// past the duplicate guard. On Firefox the page world only sees us through
+// `wrappedJSObject` (Xray-vision boundary); object properties set from the
+// isolated world aren't transparently readable from the page main world without
+// `cloneInto`, so we encode as a primitive string — strings cross the Xray
+// boundary cleanly. Failures here are non-fatal: this is diagnostic, not
+// load-bearing for any feature.
+try {
+  const pageWindow = ((window as unknown as { wrappedJSObject?: Window }).wrappedJSObject ?? window) as unknown as {
+    __branchkitDebugJSON?: string;
+  };
+  const csId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  const entry = {
+    cs_id: csId,
+    loaded_at: performance.now(),
+    is_top_frame: isTopFrame,
+    initial_url: location.href,
+  };
+  let existing: typeof entry[] = [];
+  if (typeof pageWindow.__branchkitDebugJSON === 'string') {
+    try { existing = JSON.parse(pageWindow.__branchkitDebugJSON); } catch { existing = []; }
+  }
+  if (!Array.isArray(existing)) existing = [];
+  existing.push(entry);
+  pageWindow.__branchkitDebugJSON = JSON.stringify(existing);
+} catch {
+  // ignore — debug surface only, no behavior depends on it
+}
+
 if (isTopFrame) startPerfObservers();
 
 // Lever 1 (frame-skip): a subframe that is about:blank or renders below a
