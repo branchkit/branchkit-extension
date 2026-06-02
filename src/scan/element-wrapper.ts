@@ -66,6 +66,15 @@ export class ElementWrapper {
   // never cleared (a new release just overwrites it).
   preferredCodeword: string = '';
 
+  // True when this wrapper's codeword has been acknowledged by the native
+  // plugin's grammar (i.e., voice will actually match it). Decouples the
+  // visual layer (badge paints immediately on claim) from the voice layer
+  // (codeword goes live after the async POST round-trip). Badges paint
+  // translucent (`bk-pending` class) while this is false and snap to full
+  // opacity when label-sync's ACK callback flips it. Cleared on label
+  // release (clearLabel) and on alphabet change (rotateSession).
+  grammarReady: boolean = false;
+
   constructor(element: Element, scanned: ScannedElement) {
     this.element = element;
     this.scanned = scanned;

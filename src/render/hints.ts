@@ -643,6 +643,16 @@ export class HintBadge {
       }
       .bk-inner.visible {
         opacity: 1;
+        transition: opacity 0.12s ease-out;
+      }
+      /* Voice-pending: badge is painted but the native plugin hasn't yet
+       * acknowledged its codeword in the grammar. The translucent state
+       * communicates "visible, identifiable, but voice may not match this
+       * yet" — the keyboard layer can still operate on it. Removed when
+       * the grammar push ACK arrives via wrapper.grammarReady → markGrammarReady.
+       */
+      .bk-inner.visible.bk-pending {
+        opacity: 0.55;
       }
       .bk-inner.filtered {
         display: none;
@@ -899,12 +909,25 @@ export class HintBadge {
     this.reposition();
   }
 
-  show(): void {
+  /**
+   * Show the badge.
+   *
+   * @param grammarReady — does the codeword already have a confirmed
+   *   place in the native plugin's voice grammar? If false (typical
+   *   first-paint case), the badge paints translucent (`bk-pending`
+   *   class) so the user can tell the visual is there but voice isn't
+   *   ready yet. When `markGrammarReady()` is called later (from the
+   *   grammar push ACK), the class is removed and the badge transitions
+   *   to full opacity. If true (rare race where ACK landed before the
+   *   first show — or alphabet-stable post-rotate path), paint opaque.
+   */
+  show(grammarReady = false): void {
     if (this._visible) return;
     this._visible = true;
     this.inner.classList.remove('filtered');
     this.applyColors();
     this._size = null;
+    if (!grammarReady) this.inner.classList.add('bk-pending');
     requestAnimationFrame(() => {
       this.inner.classList.add('visible');
       // Mirror the visibility state onto the light-DOM host so tools that
@@ -913,6 +936,13 @@ export class HintBadge {
       // attribute tracker's reconcile.
       this.host.setAttribute('data-bk-shown', 'true');
     });
+  }
+
+  /** Clear the `bk-pending` class on the inner. Called from content.ts
+   *  when the grammar push ACK for this wrapper's codeword lands —
+   *  signalling that voice will now match it. Idempotent. */
+  markGrammarReady(): void {
+    this.inner.classList.remove('bk-pending');
   }
 
   get badgeSize(): { w: number; h: number } {

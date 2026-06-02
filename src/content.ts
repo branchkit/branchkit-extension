@@ -431,6 +431,10 @@ if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
       for (const w of store.all) {
         w.scanned.codeword = '';
         w.label = null;
+        // Every wrapper's codeword is invalidated — voice layer goes back
+        // to pending until each wrapper's fresh codeword gets a grammar
+        // ACK from the plugin.
+        w.grammarReady = false;
         if (w.hint) {
           w.hint.remove();
           w.hint = null;
@@ -883,7 +887,7 @@ function recheckHintedVisibility(): void {
       const visible = isVisible(w.element);
       const showing = w.hint.isVisible;
       if (visible && !showing) {
-        w.hint.show();
+        w.hint.show(w.grammarReady);
         transitions++;
       } else if (!visible && showing) {
         w.hint.hide();
@@ -1259,7 +1263,7 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
         wrapper.hint.updateLabel(label, getDisplayMode());
       }
 
-      wrapper.hint.show();
+      wrapper.hint.show(wrapper.grammarReady);
     }
     firehoseStep('showHints:mount_end', renderable.length, 20);
 
@@ -1395,7 +1399,7 @@ function badgeNewlyCodeworded(): void {
       } else {
         w.hint = new HintBadge(w.element, label, w.category, getDisplayMode());
       }
-      w.hint.show();
+      w.hint.show(w.grammarReady);
       placeOne(w, existingCount + i);
       targetRectStore.write(w.element, getCachedRect(w.element)); // write-on-paint
     }
@@ -1842,6 +1846,14 @@ async function processScanBatch(
     // it so future detaches know to send a Delete and future syncs
     // skip re-Putting it.
     markSent(w.scanned.codeword);
+    // Voice layer: same ACK as above means this wrapper's codeword is
+    // already live in the grammar by the time badgeNewlyCodeworded runs
+    // below. Without this flip the badge would paint with bk-pending and
+    // sit translucent until the wrapper happened to cycle through the IO
+    // path's claim → syncNow → ACK loop — which often takes seconds (or
+    // never) on a freshly-loaded page. The IO/syncNow path sets this in
+    // label-sync.ts:syncNow; this is the scan-path counterpart.
+    w.grammarReady = true;
     attached.push(w);
   }
 
