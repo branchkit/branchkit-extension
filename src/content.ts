@@ -7,7 +7,7 @@
 
 import { Category, HintVisibility, ScannedElement, Message, DispatchResult } from './types';
 import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from './labels/words';
-import { scanElements, scanSingle, isHintable, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters, subtreeMaybeHintable } from './scan/scanner';
+import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters, subtreeMaybeHintable } from './scan/scanner';
 import { ElementWrapper, WrapperStore, enterLimbo, isLimboExpired } from './scan/element-wrapper';
 import { wantsHint } from './lifecycle/desired-state';
 import { computeReconcilePlan, geometryInBand, RECONCILE_BAND_MARGIN_PX } from './lifecycle/reconcile';
@@ -25,7 +25,7 @@ import { onTargetMutation } from './observe/target-mutation-tracker';
 import { cacheLayout, cacheVisibility, clearLayoutCache, peekCachedRect, getCachedRect } from './layout-cache';
 import { placeBadges, placeOne, clearPlacement } from './placement';
 import { invalidateProbe } from './placement/rango';
-import { activateElement, type ActivationResult } from './activate/event-sequence';
+import { activateElement, dispatchHover, type ActivationResult } from './activate/event-sequence';
 import {
   emitActivatePath,
   elementSnap,
@@ -789,10 +789,80 @@ const visibilityIO = new IntersectionObserver((entries) => {
 }, { root: null, rootMargin: '200px', threshold: 0 });
 
 const visibilityMO = new MutationObserver(() => {
-  if (visibilityRafPending) return;
-  visibilityRafPending = true;
-  requestAnimationFrame(recheckPendingVisibility);
+  if (!visibilityRafPending) {
+    visibilityRafPending = true;
+    requestAnimationFrame(recheckPendingVisibility);
+  }
+  // Schedule a hint-visibility recheck on a separate, slower throttle than
+  // recheckPendingVisibility's rAF cadence. On heavy pages (YouTube
+  // /watch's ad iframes, page-load reflow storms) the MO fires many times
+  // per second; coupling the hint recheck to rAF (16ms) compounded that
+  // into ~200ms cumulative CPU per minute and tripped Firefox's slow-extension
+  // warning (reverted 2026-06-02). 100ms throttle matches Rango's
+  // debouncedRefresh interval — 10Hz upper bound keeps the recheck cost
+  // bounded to ~30ms/sec even on the worst-case ad-storm pages.
+  scheduleHintVisibilityRecheck();
 });
+
+// Throttle state for the hint-visibility recheck. Single pending flag; many
+// visibilityMO fires within a 100ms window collapse to one recheck.
+let hintVisibilityRecheckPending = false;
+const HINT_VISIBILITY_RECHECK_THROTTLE_MS = 100;
+
+function scheduleHintVisibilityRecheck(): void {
+  if (hintVisibilityRecheckPending) return;
+  hintVisibilityRecheckPending = true;
+  setTimeout(() => {
+    hintVisibilityRecheckPending = false;
+    recheckHintedVisibility();
+  }, HINT_VISIBILITY_RECHECK_THROTTLE_MS);
+}
+
+// Iterate hinted wrappers, hide/show their badges based on current
+// isVisible(). Matches Rango's updateShouldBeHinted semantics — the
+// codeword in the matcher's grammar stays untouched, only the visual
+// is gated, so voice activation still works on invisible elements
+// (e.g., a hover-revealed pause button whose click handler is live
+// even when its CSS hides it).
+function recheckHintedVisibility(): void {
+  const __cpuStart = performance.now();
+  const wrappers = store.all;
+  const hinted: Element[] = [];
+  for (const w of wrappers) {
+    if (w.hint && w.element.isConnected) hinted.push(w.element);
+  }
+  if (hinted.length === 0) {
+    recordCpu('recheckHintedVisibility', performance.now() - __cpuStart);
+    return;
+  }
+  cacheVisibility(hinted);
+  let transitions = 0;
+  try {
+    for (const w of wrappers) {
+      if (!w.hint || !w.element.isConnected) continue;
+      const visible = isVisible(w.element);
+      const showing = w.hint.isVisible;
+      if (visible && !showing) {
+        w.hint.show();
+        transitions++;
+      } else if (!visible && showing) {
+        w.hint.hide();
+        transitions++;
+      }
+    }
+  } finally {
+    clearLayoutCache();
+  }
+  recordCpu('recheckHintedVisibility', performance.now() - __cpuStart);
+  if (transitions > 0) recordCpu(`recheckHintedVisibility:transitions:${transitions > 10 ? '10+' : '<10'}`, transitions);
+}
+
+function anyHintedWrapperVisible(): boolean {
+  for (const w of store.all) {
+    if (w.hint) return true;
+  }
+  return false;
+}
 
 function connectVisibilityMO(): void {
   if (visibilityAbandonTimer) clearTimeout(visibilityAbandonTimer);
@@ -812,6 +882,13 @@ function connectVisibilityMO(): void {
 
 function disconnectVisibilityMO(): void {
   if (!pageSession.visibilityMOConnected) return;
+  // Stay connected while any wrapper owns a hint — the throttled
+  // recheckHintedVisibility relies on this MO to catch class/style
+  // transitions that hide/show hinted targets (YouTube player controls,
+  // sticky headers, sliding sidebars). Cost is bounded by the 100ms
+  // throttle, so leaving the MO connected on a hinted page costs at most
+  // ~30ms CPU per second of activity.
+  if (anyHintedWrapperVisible()) return;
   visibilityMO.disconnect();
   pageSession.visibilityMOConnected = false;
   if (visibilityAbandonTimer) {
@@ -1119,6 +1196,13 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
       wrapper.hint.show();
     }
     firehoseStep('showHints:mount_end', renderable.length, 20);
+
+    // Ensure visibilityMO is running so the throttled recheckHintedVisibility
+    // catches class/style-driven visibility transitions (YouTube controls
+    // fading out, etc.). Idempotent — no-op if already connected, just
+    // refreshes the abandon timer. The recheck itself runs at most every
+    // 100ms; this just keeps the MO active to feed it.
+    if (renderable.length > 0) connectVisibilityMO();
 
     setPositionCaller('showHints');
     const __pbStart = performance.now();
@@ -2211,6 +2295,56 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         detail,
         fp,
       });
+    } else if (action === 'hover') {
+      // Hover voice action: resolve the codeword to a wrapper and dispatch
+      // the pointer-in event sequence (pointerover/enter/move + mouse
+      // equivalents) on the target. Reveals hover-state UI (YouTube
+      // player controls, dropdown menus, slide-out panels) that the site
+      // hides until cursor presence — without forcing the user to grab
+      // the mouse. Mirrors Rango's hoverElement. Resolution uses the
+      // same three-tier lookup as activate so codewords stay consistent
+      // across the two actions. Does NOT teardown wrappers (no pre-nav
+      // detach), does NOT hide hints (always-mode keeps badges so user
+      // can follow up with activate on whatever the hover just exposed).
+      const codeword = params?.codeword ?? '';
+      const idParam = parseInt(params?.id ?? '0', 10);
+      const frameIdParam = params?.frame_id != null ? parseInt(params.frame_id, 10) : -1;
+      const resolved = resolveTarget(
+        idParam, frameIdParam, codeword,
+        {
+          myFrameId: pageSession.myFrameId,
+          registry: {
+            get: idRegistry.get,
+            rebindRef: idRegistry.rebindRef,
+            unregister: idRegistry.unregister,
+            fingerprintFallback: idRegistry.fingerprintFallback,
+            fingerprintToString: idRegistry.fingerprintToString,
+          },
+          candidates: () => deepQuerySelectorAll(document, '*'),
+          resolveFromSnapshot: (cw) => resolveFromSnapshot(phraseSnapshot, cw, performance.now()),
+          resolveFromStore: (cw) => store.byCodeword(cw),
+        },
+      );
+      const target = resolved.target;
+      if (target instanceof HTMLElement) {
+        store.findWrapperFor(target)?.hint?.flash();
+        dispatchHover(target);
+        reportDispatchResult({
+          action, codeword, resolution: resolved.resolution, elem_tag: target.tagName.toLowerCase(),
+          taken: 'click', ok: true,
+          frame: trimFrameUrl(window.location.href),
+          detail: 'hover dispatched',
+          fp: resolved.fp,
+        });
+      } else {
+        reportDispatchResult({
+          action, codeword, resolution: resolved.resolution, elem_tag: '',
+          taken: 'skipped', ok: false,
+          frame: trimFrameUrl(window.location.href),
+          detail: resolved.detail || 'hover target not resolved',
+          fp: resolved.fp,
+        });
+      }
     } else if (action === 'noop') {
       const prefix = params?.prefix;
       if (prefix) {

@@ -262,7 +262,7 @@ export function classifyCategory(el: Element): Category {
 // may have changed between scans, and WeakSet has no API to drop entries).
 let visibilityCache: WeakSet<Element> | null = null;
 
-function isVisible(el: Element): boolean {
+export function isVisible(el: Element): boolean {
   // Peek the layout-cache first. Hit = cheap; miss = live read +
   // counter bump. The cache is populated by the rAF-coalesced
   // attribute drain so a batch of same-tree mutations shares the
