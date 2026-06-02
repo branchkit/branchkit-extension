@@ -13,3 +13,10 @@ dist.pem
 *.crx
 *.pem
 test-fixtures/output/
+
+# Local dev / repro scripts. The leading-underscore convention (`_test-*`,
+# `_drive-*`, `_snapshot.mjs`, `_verify-*`, `_watch-*`) marks files that
+# are dated ad-hoc repros for specific bugs/incidents — they reference
+# user reports by date and aren't part of the test suite. Keep them out
+# of the repo so `git status` stays meaningful when working in scripts/.
+scripts/_*
