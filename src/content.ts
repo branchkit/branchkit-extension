@@ -6,6 +6,7 @@
  */
 
 import { Category, HintVisibility, ScannedElement, Message, DispatchResult } from './types';
+import { safeSendMessage } from './messaging/safe-send';
 import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from './labels/words';
 import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters, subtreeMaybeHintable } from './scan/scanner';
 import { ElementWrapper, WrapperStore, enterLimbo, isLimboExpired } from './scan/element-wrapper';
@@ -242,7 +243,7 @@ setFindCallbacks({
 
 setScrollBoundaryCallback((boundary) => {
   try {
-    chrome.runtime.sendMessage({
+    safeSendMessage({
       type: 'SCROLL_BOUNDARY',
       boundary,
     } as Message);
@@ -1972,10 +1973,10 @@ let windowHasFocus = document.hasFocus();
 
 window.addEventListener('focus', (e) => {
   if (e.target === window) windowHasFocus = true;
-}, true);
+}, { capture: true, signal: pageSession.eventSignal });
 window.addEventListener('blur', (e) => {
   if (e.target === window) windowHasFocus = false;
-}, true);
+}, { capture: true, signal: pageSession.eventSignal });
 
 // --- bfcache restore ---
 //
@@ -1995,7 +1996,7 @@ window.addEventListener('blur', (e) => {
 window.addEventListener('pageshow', (e) => {
   if (!e.persisted) return;
   pageSession.restore();
-});
+}, { signal: pageSession.eventSignal });
 
 // The bfcache-restore body, owned by `PageSession.restore`.
 function restoreFromBfcache(): void {
@@ -2082,13 +2083,16 @@ function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
   try { observer.disconnect(); } catch { /* may not be initialized yet */ }
   try { tracker.disconnectAll(); } catch { /* same */ }
   try { resizeObserver.disconnect(); } catch { /* same */ }
-  if (pageSession.discoveryFrame !== null) {
-    try { cancelAnimationFrame(pageSession.discoveryFrame); } catch { /* same */ }
-    pageSession.discoveryFrame = null;
-    pageSession.pendingDiscoveryRoots.clear();
-  }
   try { visibilityIO.disconnect(); } catch { /* same */ }
   try { visibilityMO.disconnect(); } catch { /* same */ }
+  // Cancel all pending timers + abort all owned document/window event
+  // listeners (scroll, focusin/focusout, transitionend/animationend,
+  // keydown/keyup, pageshow, snapshot, shadow-attach). Without this, the
+  // orphan's setTimeout chains and DOM event handlers keep firing, each
+  // call to chrome.runtime.sendMessage throws synchronously on the dead
+  // context, and the error cascade renders the tab unresponsive. See
+  // PageSession.cancelScheduled.
+  pageSession.cancelScheduled();
   // Remove badge hosts so the new content script's initial DOM-clear sweep
   // (content.ts ~line 2230) doesn't have to fight visible artifacts.
   try {
@@ -2144,7 +2148,7 @@ function preNavDetachAll(triggerReason: string): number {
   if (detached === 0) return 0;
   const t0 = performance.now();
   for (const w of [...store.all]) detachWrapper(w.element);
-  chrome.runtime.sendMessage({
+  safeSendMessage({
     type: 'DEBUG_LOG',
     tag: 'pipeline.cs_nav_step',
     data: {
@@ -2162,7 +2166,7 @@ function preNavDetachAll(triggerReason: string): number {
 // is dispatched here; this is the content-side handler, not the detector.
 function rescanForNav(fromCache: boolean, reason: string): void {
   const t0 = performance.now();
-  chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_rescan_received', data: { url: window.location.href, from_cache: fromCache, reason } } as Message).catch(() => {});
+  safeSendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_rescan_received', data: { url: window.location.href, from_cache: fromCache, reason } } as Message).catch(() => {});
 
   if (fromCache) {
     // From-cache path: drop dead wrappers, republish the current wrapper
@@ -2197,7 +2201,7 @@ function rescanForNav(fromCache: boolean, reason: string): void {
       // main thread. The post-completion cs_scan_completed below never
       // ships when the thread wedges. See nav-time wedge investigation.
       const navStep = (step: string) =>
-        chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_nav_step', data: { step, reason, at_ms: Math.round(performance.now() - t0) } } as Message).catch(() => {});
+        safeSendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_nav_step', data: { step, reason, at_ms: Math.round(performance.now() - t0) } } as Message).catch(() => {});
 
       void navStep('idle_fired');
 
@@ -2214,7 +2218,7 @@ function rescanForNav(fromCache: boolean, reason: string): void {
         void navStep('rescan_detach:start');
         const detached = preNavDetachAll('rescan');
         void navStep('rescan_detach:end');
-        chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_nav_step', data: { step: 'rescan_detach:count', reason, at_ms: Math.round(performance.now() - t0), detached } } as Message).catch(() => {});
+        safeSendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_nav_step', data: { step: 'rescan_detach:count', reason, at_ms: Math.round(performance.now() - t0), detached } } as Message).catch(() => {});
       } else {
         void navStep('drop_disconnected:start');
         dropDisconnectedWrappers();
@@ -2225,7 +2229,7 @@ function rescanForNav(fromCache: boolean, reason: string): void {
       await syncNow('refocus_from_cache');
       void navStep('sync_now:end');
       const t1 = performance.now();
-      chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_scan_completed', data: { elements: store.all.length, duration_ms: Math.round(t1 - t0), path: 'from_cache' } } as Message).catch(() => {});
+      safeSendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_scan_completed', data: { elements: store.all.length, duration_ms: Math.round(t1 - t0), path: 'from_cache' } } as Message).catch(() => {});
 
       // Reconciliation walk rebuilds wrappers for the new page. For spa_nav we
       // detached everything above, so this is the full rebuild path; for
@@ -2276,7 +2280,7 @@ function rescanForNav(fromCache: boolean, reason: string): void {
   } else {
     doScan();
     const t1 = performance.now();
-    chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_scan_completed', data: { elements: store.all.length, duration_ms: Math.round(t1 - t0) } } as Message).catch(() => {});
+    safeSendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_scan_completed', data: { elements: store.all.length, duration_ms: Math.round(t1 - t0) } } as Message).catch(() => {});
   }
 }
 
@@ -2564,13 +2568,13 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         const refs = await listReferences();
         const ref = refs[refName];
         try {
-          chrome.runtime.sendMessage({
+          safeSendMessage({
             type: 'REFERENCE_SAVED',
             host: window.location.hostname,
             name: refName,
             reference: ref as unknown as Record<string, unknown>,
           } as Message);
-          chrome.runtime.sendMessage({ type: 'REFERENCE_NAMES_CHANGED' } as Message);
+          safeSendMessage({ type: 'REFERENCE_NAMES_CHANGED' } as Message);
         } catch { /* context invalidated */ }
       });
     } else if (action === 'resolve_reference') {
@@ -2660,7 +2664,7 @@ function scheduleReposition(scope: RepositionScope = 'all'): void {
     }
   });
 }
-window.addEventListener('resize', () => scheduleReposition('all'), { passive: true });
+window.addEventListener('resize', () => scheduleReposition('all'), { passive: true, signal: pageSession.eventSignal });
 
 // Scroll runs a 'drifted'-scoped reposition: badges already follow scroll via
 // CSS positioning in their scroll ancestor, so the compositor tracks them for
@@ -2698,7 +2702,7 @@ function scheduleScrollReposition(): void {
     scheduleReposition('drifted');
   }, DEFERRED_REPOSITION_DEBOUNCE_MS);
 }
-window.addEventListener('scroll', scheduleScrollReposition, { passive: true });
+window.addEventListener('scroll', scheduleScrollReposition, { passive: true, signal: pageSession.eventSignal });
 
 // Per-container resize: each HintBadge registers its anchor with the
 // shared tracker. Catches CSS-only and container-scoped layout shifts
@@ -2780,10 +2784,10 @@ function scheduleDeferredReposition(): void {
     scheduleReposition('drifted');
   }, DEFERRED_REPOSITION_DEBOUNCE_MS);
 }
-document.addEventListener('focusin', scheduleDeferredReposition, { passive: true });
-document.addEventListener('focusout', scheduleDeferredReposition, { passive: true });
-document.addEventListener('transitionend', scheduleDeferredReposition, { passive: true });
-document.addEventListener('animationend', scheduleDeferredReposition, { passive: true });
+document.addEventListener('focusin', scheduleDeferredReposition, { passive: true, signal: pageSession.eventSignal });
+document.addEventListener('focusout', scheduleDeferredReposition, { passive: true, signal: pageSession.eventSignal });
+document.addEventListener('transitionend', scheduleDeferredReposition, { passive: true, signal: pageSession.eventSignal });
+document.addEventListener('animationend', scheduleDeferredReposition, { passive: true, signal: pageSession.eventSignal });
 
 // Per-target mutation: each HintBadge registers its target with the
 // shared tracker. Catches class/style/subtree changes that move a
@@ -2844,7 +2848,7 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
     // even when the snapshot chain fails downstream (no captureVisibleTab
     // permission, plugin endpoint unreachable, etc.).
     const url = trimFrameUrl(window.location.href);
-    chrome.runtime.sendMessage({
+    safeSendMessage({
       type: 'PLUGIN_DEBUG_LOG',
       tag: 'BK_SNAPSHOT_REQUESTED',
       data: { url, ts: performance.now() },
@@ -2865,7 +2869,7 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
     setKeyHeld(true);
   }
   keyHandler.handleKeyDown(e);
-}, true);
+}, { capture: true, signal: pageSession.eventSignal });
 
 document.addEventListener('keyup', (e: KeyboardEvent) => {
   if (pageSession.isTornDown) return;
@@ -2873,7 +2877,7 @@ document.addEventListener('keyup', (e: KeyboardEvent) => {
     heldKeys.delete(e.key);
     setKeyHeld(false);
   }
-}, true);
+}, { capture: true, signal: pageSession.eventSignal });
 
 // Programmatic snapshot trigger for test harnesses (Playwright). Content
 // scripts run in the ISOLATED world, so a `window.` global isn't reachable
@@ -2909,7 +2913,7 @@ document.addEventListener('__branchkit__capture_snapshot', () => {
     // Snapshot build failed (detached store, serialization); leave the
     // previous mirror in place rather than wedging the page.
   }
-}, true);
+}, { capture: true, signal: pageSession.eventSignal });
 
 // --- MutationObserver (discovery-only) ---
 //
@@ -3372,7 +3376,7 @@ const DRAIN_DISCOVERY_BUDGET_MS = 8;
 // threshold. Worth the telemetry noise to catch it.
 function firehoseStep(step: string, size: number, threshold: number = 1): void {
   if (size < threshold) return;
-  chrome.runtime.sendMessage({
+  safeSendMessage({
     type: 'DEBUG_LOG',
     tag: 'pipeline.cs_firehose_step',
     data: { step, size, ts: Math.round(performance.now()) },
@@ -3516,7 +3520,7 @@ const observer = new MutationObserver((records) => {
     const attrName = r0.type === 'attributes' ? r0.attributeName : null;
     const added = r0.type === 'childList' ? r0.addedNodes.length : 0;
     const removed = r0.type === 'childList' ? r0.removedNodes.length : 0;
-    chrome.runtime.sendMessage({
+    safeSendMessage({
       type: 'DEBUG_LOG',
       tag: 'pipeline.cs_firehose_step',
       data: {
@@ -3706,7 +3710,7 @@ document.addEventListener(SHADOW_EVENT, (event) => {
       if (added > 0) schedulePushGrammar();
     }
   });
-}, true);
+}, { capture: true, signal: pageSession.eventSignal });
 
 const watchedUndefinedTags = new Set<string>();
 
@@ -3902,7 +3906,7 @@ function shipPerfReport(): void {
     const snapshot = buildPerfSnapshot(true);
     const ua = navigator.userAgent;
     const browser = /Firefox\//i.test(ua) ? 'firefox' : /Chrome\//i.test(ua) ? 'chrome' : 'other';
-    chrome.runtime.sendMessage({
+    safeSendMessage({
       type: 'PERF_REPORT',
       url: location.href,
       browser,
