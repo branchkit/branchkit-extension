@@ -15,7 +15,6 @@ import { WrapperStore } from '../scan/element-wrapper';
 import { generateSelector } from '../scan/selector-generator';
 import { accessibleName } from '../scan/accessible-name';
 import { DispatchResult, Message, ResolveHintResponse } from '../types';
-import { safeSendMessage } from '../messaging/safe-send';
 
 /**
  * Resolve a visible-hint codeword to a stable selector. Used by the
@@ -48,8 +47,12 @@ export function resolveHintLocally(store: WrapperStore, codeword: string): Resol
  * user-facing flow.
  */
 export function reportDispatchResult(result: DispatchResult): void {
-  void safeSendMessage({
-    type: 'DISPATCH_RESULT',
-    payload: result,
-  } as Message);
+  try {
+    chrome.runtime.sendMessage({
+      type: 'DISPATCH_RESULT',
+      payload: result,
+    } as Message);
+  } catch {
+    // Extension context invalidated; nothing useful to do.
+  }
 }

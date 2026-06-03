@@ -96,24 +96,6 @@ export class PageSession {
   /** The mode flag — "user wants hints showing." */
   hintsVisible = false;
 
-  /**
-   * AbortController for every module-level `addEventListener` in this
-   * frame's content script. Each listener registers itself with
-   * `{ signal: pageSession.eventAbortController.signal }`; orphan teardown
-   * calls `abort()` to atomically remove all of them. Without this, the
-   * orphan keeps calling its handlers (scroll, focusin/focusout, transitionend,
-   * keydown, etc.) which call `chrome.runtime.sendMessage` — which throws
-   * synchronously on an invalidated context, surfacing as uncaught errors
-   * that saturate the page and make the tab unresponsive.
-   */
-  readonly eventAbortController = new AbortController();
-
-  /** Convenience alias for the controller's signal — passed as the `signal`
-   * option to `addEventListener`. */
-  get eventSignal(): AbortSignal {
-    return this.eventAbortController.signal;
-  }
-
   constructor(private readonly hooks: PageSessionHooks) {}
 
   /**
@@ -133,30 +115,6 @@ export class PageSession {
    */
   get isTornDown(): boolean {
     return this.toreDown;
-  }
-
-  /**
-   * Cancel every owned timer + abort every owned event listener. Called by
-   * `quiesceOrphan` (orphan content-script self-cleanup) so the dying
-   * isolated world stops firing setTimeout chains + DOM listeners that
-   * each call into the dead `chrome.runtime.*` and throw synchronously.
-   *
-   * Idempotent. Independent of `teardown` (which fires the caller's hook
-   * for higher-level cleanup) — this only kills timers + listeners, not
-   * observers/state.
-   */
-  cancelScheduled(): void {
-    if (this.scrollRepositionTimer !== null) { clearTimeout(this.scrollRepositionTimer); this.scrollRepositionTimer = null; }
-    if (this.deferredRepositionTimer !== null) { clearTimeout(this.deferredRepositionTimer); this.deferredRepositionTimer = null; }
-    if (this.hugeMutationTimer !== null) { clearTimeout(this.hugeMutationTimer); this.hugeMutationTimer = null; }
-    if (this.reconcileTimer !== null) { clearTimeout(this.reconcileTimer); this.reconcileTimer = null; }
-    if (this.discoveryFrame !== null) {
-      try { cancelAnimationFrame(this.discoveryFrame); } catch { /* may not exist */ }
-      this.discoveryFrame = null;
-    }
-    this.pendingDiscoveryRoots.clear();
-    // abort() is idempotent on AbortController (no-op after first call).
-    try { this.eventAbortController.abort(); } catch { /* never throws but be defensive */ }
   }
 
   /** Tear down this frame's session. Idempotent. */
