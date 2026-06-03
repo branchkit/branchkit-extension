@@ -924,10 +924,20 @@ export class HintBadge {
   show(grammarReady = false): void {
     if (this._visible) return;
     this._visible = true;
+    // Catch container drift before painting. On sites that render the
+    // anchor first and wrap it in additional ancestors later (YouTube
+    // channel /videos h3), construction-time `resolveContainer` walked
+    // past the bare anchor up to a far ancestor like `ytd-page-manager`,
+    // leaving the host parked there. Re-resolve at show-time so the
+    // badge always paints inside the correct local container.
+    this.ensureContainer();
     this.inner.classList.remove('filtered');
     this.applyColors();
     this._size = null;
-    if (!grammarReady) this.inner.classList.add('bk-pending');
+    if (!grammarReady) {
+      this.inner.classList.add('bk-pending');
+      this.host.setAttribute('data-bk-pending', 'true');
+    }
     requestAnimationFrame(() => {
       this.inner.classList.add('visible');
       // Mirror the visibility state onto the light-DOM host so tools that
@@ -943,6 +953,7 @@ export class HintBadge {
    *  signalling that voice will now match it. Idempotent. */
   markGrammarReady(): void {
     this.inner.classList.remove('bk-pending');
+    this.host.removeAttribute('data-bk-pending');
   }
 
   get badgeSize(): { w: number; h: number } {
@@ -976,7 +987,9 @@ export class HintBadge {
   hide(): void {
     this._visible = false;
     this.inner.classList.remove('visible');
+    this.inner.classList.remove('bk-pending');
     this.host.removeAttribute('data-bk-shown');
+    this.host.removeAttribute('data-bk-pending');
   }
 
   setFiltered(filtered: boolean): void {
@@ -1161,6 +1174,43 @@ export class HintBadge {
     untrackTargetMutations(this.target);
     el.style?.setProperty?.('anchor-name', this.anchorName);
     trackTargetMutations(this.target);
+    return true;
+  }
+
+  // Nesting path only. The host is appended to `anchorParent` (chosen by
+  // `resolveContainer`) at construction time. On sites where YouTube
+  // renders the anchor first and wraps it in additional ancestors later
+  // (channel /videos uses `yt-lockup-view-model` + a deferred `<h3>`
+  // wrapper around `a.ytLockupMetadataViewModelTitle`), the construction-
+  // time walk escalates past the bare anchor up to a far ancestor like
+  // `ytd-page-manager`, then the correct local container appears post
+  // hoc and the host is left stranded — connected (so reattach skips it)
+  // but in the wrong parent (so the inline-flow badge paints nowhere
+  // near its target). Re-resolve and migrate the host if the correct
+  // container has changed since construction. Returns true if it moved.
+  //
+  // gBCR-free: `resolveContainer` reads computed styles (warm cache when
+  // called from a layout-reading window like reconcilePlacement) but not
+  // `getBoundingClientRect`. Mirrors retarget's untrack→write→re-track
+  // ordering so our own appendChild isn't seen as a foreign mutation by
+  // the old container's resize observer.
+  ensureContainer(): boolean {
+    if (this.anchorMode || !this.target.isConnected) return false;
+    const desired = resolveContainer(this.target);
+    // Two drift sources: (a) the cached `anchorParent` is stale because
+    // resolution now picks a different container; (b) the host was moved
+    // out of `anchorParent` externally (page framework reparented it).
+    // Either way, the fix is the same: park the host in the currently-
+    // correct container. Skip only when both already agree.
+    if (desired === this.anchorParent && this.host.parentElement === desired) return false;
+    if (desired !== this.anchorParent) {
+      untrackContainerResize(this.anchorParent);
+      this.anchorParent = desired;
+      trackContainerResize(this.anchorParent);
+    }
+    if (this.host.parentElement !== desired) {
+      desired.appendChild(this.host);
+    }
     return true;
   }
 

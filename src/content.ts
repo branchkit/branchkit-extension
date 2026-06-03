@@ -1519,62 +1519,109 @@ function scheduleReconcile(): void {
   }, DEFERRED_REPOSITION_DEBOUNCE_MS);
 }
 
-// Tear-down half of the level-triggered lifecycle reconciler (Phase 4 of
-// notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md). The IO exit branch is the cheap
-// fast-path that releases on viewport-exit; this is the authoritative backstop
-// for the dropped/reordered exit events that leave `isInViewport` stale-TRUE
-// (flag says in, geometry says out) — the staleInViewport root.
+// Tear-down + missed-enter backstop for the lifecycle reconciler (Phase 4 of
+// notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md). The IO entry/exit
+// branches are the cheap fast-path; this is the authoritative backstop for
+// dropped/reordered IO events that leave `isInViewport` desynced in EITHER
+// direction:
 //
-// Cost discipline (the wedge guard): fresh getBoundingClientRect is read ONLY
-// over the bounded hinted set (at most a viewport+band's worth of elements,
-// never the whole store), and reads are batched read-all-then-act so we never
-// interleave a layout read with a write. Direction is stale-TRUE only; the
-// missed-enter (stale-FALSE) direction is a discovery concern (Phase 3b), and
-// Phase 2 showed warm rects go stale off-band so it can't be trusted here.
+//   stale-TRUE  (flag=in,  geometry=out) → release codeword + tear down hint
+//   stale-FALSE (flag=out, geometry=in)  → flip flag to true; next reconcile
+//                                          will re-claim a codeword and rebuild
+//                                          the hint
+//
+// The stale-FALSE case shows up on YouTube post-scroll: a video tile wrapper
+// scrolled out (codeword released, hint went dormant via hint reuse), then
+// scrolled back in but the IO never re-fired enter (mutation-storm dropped it,
+// or YouTube reparented the element through a structure the IO didn't follow).
+// Without this correction the wrapper stays stuck — `wantsCodeword` reads the
+// stale flag, `refreshViewportClaims` skips it, and the dormant hint never
+// gets re-shown.
+//
+// Cost discipline (the wedge guard): fresh getBoundingClientRect runs over the
+// bounded hinted set (visible + dormant — both are scroll-history-bounded by
+// the IO-exit-marks-dormant path); we never sweep the full store. Reads are
+// batched read-all-then-act so we don't interleave a layout read with a write.
+// Phase 2 noted `band.staleFalse` was unreliable from the warm rect store, so
+// we read FRESH geometry here — that constraint applies to the warm store, not
+// to the gBCR pass.
 function reconcileTeardown(): void {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  // Filter on `.isVisible` (not just `.hint`) so dormant reused hints
-  // (DESIGN_HINT_REUSE.md) — already hidden + label-cleared after their
-  // IO exit — aren't re-released here. They have no codeword and would
-  // be a no-op release plus an unnecessary scheduleFlush.
-  const hinted = store.all.filter(w => w.hint?.isVisible && w.disconnectedAt === null);
+  // Include dormant reused hints (DESIGN_HINT_REUSE.md): they were torn down
+  // by an IO exit but the badge object survived for scroll-back. If the user
+  // scrolled them back in and the IO missed the enter, the wrapper has
+  // `isInViewport=false` + no codeword + dormant hint — exactly the stale-FALSE
+  // signature. We need them in the set to detect and fix that.
+  const hinted = store.all.filter(w => w.hint && w.disconnectedAt === null);
   if (hinted.length === 0) return;
 
   // Read all geometry first…
   const offBand: ElementWrapper[] = [];
+  const missedEnter: ElementWrapper[] = [];
   for (const w of hinted) {
     const r = w.element.getBoundingClientRect();
-    if (!geometryInBand(r, vw, vh, RECONCILE_BAND_MARGIN_PX)) offBand.push(w);
+    const inBand = geometryInBand(r, vw, vh, RECONCILE_BAND_MARGIN_PX);
+    if (inBand) {
+      // Stale-FALSE candidate: IO flag says out but geometry says in.
+      // Only act when the flag actually disagrees with geometry; in-band
+      // hints with the flag correctly TRUE are the steady state we skip.
+      if (!w.isInViewport) missedEnter.push(w);
+    } else {
+      // Stale-TRUE candidate (visible hints only — dormant hints have already
+      // released their codeword and torn down on the IO exit; releasing again
+      // would be a no-op + an unnecessary scheduleFlush).
+      if (w.hint?.isVisible) offBand.push(w);
+    }
   }
-  // …then act. The IO flag was stale-TRUE; correct it and release.
+  // …then act.
   for (const w of offBand) {
     w.isInViewport = false;
     tracker.queueRelease(w);
   }
+  for (const w of missedEnter) {
+    w.isInViewport = true;
+  }
+  // If we corrected any stale-FALSE flags, run reconcile so the just-recovered
+  // wrappers go through claim + build (refreshViewportClaims gates on the
+  // flag, so the fix has to land before reconcile reads it).
+  if (missedEnter.length > 0) reconcile();
 }
 
 // Placement half of the level-triggered reconcile (DESIGN_OBSERVER_DRIVEN_LAYOUT
-// "Placement staleness: the anchor binding outlives the target"). The anchor
-// path pins the host to the target via an inline `anchor-name` set ONCE at
-// construction. List virtualization (YouTube scroll-back) recreates the target
-// node without that style, so `position-anchor` dangles and the badge collapses
-// to the document origin. That is an unobserved target-identity change — it
-// fires no scroll/resize and never removes our body-mounted host, so neither
-// reattachStrippedHosts (host-removal) nor limbo-rebind (target-disconnect)
-// catches it. This pass re-asserts the binding over the bounded hinted set;
-// the compositor re-resolves anchor() on its own, so no reposition follows.
-// Wedge discipline: gBCR-free — ensureBound reads only the target's inline
-// style — and bounded to hinted+connected wrappers, never the whole store.
+// "Placement staleness: the anchor binding outlives the target"). Two failure
+// modes, one per positioning method:
+//
+//   anchor mode  — `ensureBound`: list virtualization (YouTube scroll-back)
+//     recreates the target node without our inline `anchor-name`, so the
+//     host's `position-anchor` dangles and the badge collapses to the
+//     document origin. Re-write the anchor-name on the live target.
+//
+//   nesting mode — `ensureContainer`: when YouTube renders the anchor first
+//     and wraps it in additional ancestors later (channel /videos `<h3>`),
+//     construction-time `resolveContainer` walks past the bare anchor up to a
+//     far ancestor like `ytd-page-manager`. The correct local container
+//     appears post hoc but nothing detects the drift — the host is connected
+//     (so reattach skips it) but in the wrong parent, so the inline-flow
+//     badge paints nowhere near its target. Re-resolve and migrate.
+//
+// Both are unobserved structural shifts that fire no scroll/resize and don't
+// remove our host, so neither `reattachStrippedHosts` nor the limbo-rebind
+// path catches them. The compositor (anchor) / next reposition (nesting)
+// re-resolves position once the binding/container is repaired.
+//
+// Wedge discipline: gBCR-free — `ensureBound` reads only the target's inline
+// style; `ensureContainer` reads computed styles via `resolveContainer`'s
+// ancestor walk but no per-element `getBoundingClientRect`. Bounded to
+// hinted+connected wrappers, never the whole store.
 function reconcilePlacement(): void {
   let repaired = 0;
   for (const w of store.all) {
-    // Dormant reused hints (DESIGN_HINT_REUSE.md) don't need anchor
-    // re-binding — they're hidden and will be re-placed via badgeNewly-
-    // Codeworded on the next viewport entry, which re-runs `placeOne`.
-    // Skip them here.
+    // Dormant reused hints (DESIGN_HINT_REUSE.md) don't need re-binding —
+    // they're hidden and will be re-placed via badgeNewlyCodeworded on the
+    // next viewport entry, which re-runs `placeOne`. Skip them here.
     if (!w.hint?.isVisible || w.disconnectedAt !== null) continue;
-    if (w.hint.ensureBound()) repaired++;
+    if (w.hint.ensureBound() || w.hint.ensureContainer()) repaired++;
   }
   if (repaired > 0) firehoseStep('reconcile:placement:repaired', repaired, 1);
 }
@@ -3533,7 +3580,17 @@ const observer = new MutationObserver((records) => {
         .then((added) => {
           firehoseStep('huge_path:batched_end', added);
           if (added > 0) schedulePushGrammar();
-          if (pageSession.hintsVisible) scheduleReposition();
+          if (pageSession.hintsVisible) {
+            // Huge-batch settle is the canonical "page structure just
+            // changed a lot" moment. Re-check placement bindings on the
+            // same cadence the normal moCallback path does — without
+            // this, sites whose mutation batches always exceed
+            // HUGE_MUTATIONS_COUNT (YouTube channel /videos lazy-loaded
+            // tiles) never trip reconcilePlacement and the nesting-path
+            // container-drift fix never runs.
+            reconcilePlacement();
+            scheduleReposition();
+          }
         });
     }, HUGE_MUTATION_IDLE_MS);
     recordCpu('moCallback', performance.now() - __cpuStart);

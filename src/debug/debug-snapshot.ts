@@ -28,7 +28,7 @@
 
 import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
 import * as idRegistry from '../scan/registry';
-import { enumerateAlmostHintable, isHintable, type AlmostHintable } from '../scan/scanner';
+import { enumerateAlmostHintable, isHintable, isVisible, type AlmostHintable } from '../scan/scanner';
 import { accessibleName } from '../scan/accessible-name';
 import { diagnoseContainerResolution, getPositionLog, type ContainerResolutionDiag, type PositionLogEntry } from '../render/hints';
 import {
@@ -68,6 +68,19 @@ interface WrapperRecord {
   fingerprint: idRegistry.Fingerprint | null;
   element: (ElementSnap & { closestAnchor: ClosestAnchorInfo | null }) | null;
   hint: {
+    /** True when `show()` was called and `hide()` hasn't been since — i.e.
+     * the badge currently believes itself to be painted. Used to diagnose
+     * the hover-revealed-UI visibility recheck (notes/...): if a player
+     * control element is CSS-invisible (opacity:0 via `ytp-autohide`) but
+     * its hint reports `isVisible: true`, recheckHintedVisibility didn't
+     * catch the transition. Mirrors the host's `data-bk-shown` attribute. */
+    isVisible: boolean;
+    /** True when the target element passes `isVisible()` *right now*. If
+     * `isVisible` and `targetCssVisible` disagree, the visibility recheck
+     * has drifted from CSS reality — typically the hover-reveal/autohide
+     * timing race (opacity transition mid-flight when the throttled recheck
+     * sampled). */
+    targetCssVisible: boolean;
     innerRect: { x: number; y: number; w: number; h: number };
     outerRect: { x: number; y: number; w: number; h: number };
     anchorParentRect: { x: number; y: number; w: number; h: number };
@@ -179,7 +192,13 @@ function captureWrapper(w: ElementWrapper): WrapperRecord {
   let hint: WrapperRecord['hint'] = null;
   if (w.hint) {
     const diag = w.hint.diagnostics;
+    let targetCssVisible = false;
+    try {
+      if (el.isConnected) targetCssVisible = isVisible(el);
+    } catch { /* detached or stale element */ }
     hint = {
+      isVisible: w.hint.isVisible,
+      targetCssVisible,
       innerRect: diag.innerRect,
       outerRect: diag.outerRect,
       anchorParentRect: diag.anchorParentRect,
