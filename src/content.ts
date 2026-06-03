@@ -134,6 +134,18 @@ if ((window as unknown as { __branchkitContentInjected?: boolean }).__branchkitC
 }
 (window as unknown as { __branchkitContentInjected: boolean }).__branchkitContentInjected = true;
 
+// PageSession holds the AbortController used by every module-level
+// addEventListener below — must exist before those listeners register, so
+// it's hoisted up here. The hooks reference functions defined later but
+// are stored as arrow closures (evaluated lazily on first call), and
+// `quiesceOrphan` / `rescanForNav` / `restoreFromBfcache` are `function`
+// declarations (hoisted), so out-of-order reference is safe.
+const pageSession = new PageSession({
+  teardown: (reason) => quiesceOrphan(reason),
+  onUrlChange: (fromCache, reason) => rescanForNav(fromCache, reason),
+  restore: () => restoreFromBfcache(),
+});
+
 // Reference-identity check (safe cross-origin — reads no properties). The perf
 // trail + live dataset + standing watchdog/longtask observers are diagnostic
 // surfaces read only from the top frame; running them in every subframe spends
@@ -2048,11 +2060,9 @@ function restoreFromBfcache(): void {
 // wiring flag). The observer singletons and boot logic still live in this
 // module and reach the session via the module-level reference. See
 // notes/DESIGN_EXTENSION_RESTRUCTURE.md §3.3.1.
-const pageSession = new PageSession({
-  teardown: (reason) => quiesceOrphan(reason),
-  onUrlChange: (fromCache, reason) => rescanForNav(fromCache, reason),
-  restore: () => restoreFromBfcache(),
-});
+// (pageSession moved up — instantiated near the top of the file because
+// module-level addEventListener calls reference `pageSession.eventSignal`
+// and would otherwise hit the temporal dead zone.)
 
 openLivenessPort({
   onFrameId: (frameId) => { pageSession.myFrameId = frameId; },
