@@ -2433,6 +2433,13 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       chrome.storage.sync.set({ badgeDisplayMode: params.mode });
     } else if (action === 'scroll' || action === 'scroll_to_element' || action === 'scroll_to_percent') {
       dispatcher.dispatch(action, params);
+    } else if (action === 'history_back') {
+      // history.back() steps through the full history stack regardless of
+      // skippable flags. The browser's UI back button skips entries whose
+      // pushState ran without sticky user activation, which is every voice
+      // click (synthetic events are isTrusted=false). Routing back through
+      // a JS call recovers the entries the UI button walks past.
+      history.back();
     } else if (action === 'find_open' || action === 'find_close' || action === 'find_next' || action === 'find_previous' || action === 'find_immediate') {
       dispatcher.dispatch(action, params);
     } else if (action === 'activate') {
