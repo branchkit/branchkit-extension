@@ -90,6 +90,24 @@ export class PageSession {
    */
   discoverySweepPending = false;
 
+  /**
+   * Set true when a coalesced scheduleBandDiscovery request arrives during an
+   * in-flight sweep. The finally block reads this to decide whether to schedule
+   * one bounded retry — the dropped request might have been triggered by a row
+   * insertion that landed after the sweep's enumeration pass (the scroll-back
+   * missing-badge gap). Reset to false on each new sweep start.
+   */
+  discoverySweepRerun = false;
+
+  /**
+   * Retry depth for the bounded band-discovery re-arm chain. Incremented when
+   * the finally block schedules a retry, capped at MAX_RETRY_DEPTH to prevent
+   * indefinite chaining under sustained scroll/mutation. Reset to 0 on any
+   * sweep that completes without needing a retry — so steady-state pages don't
+   * carry a stale depth into the next scroll-back event.
+   */
+  discoveryRetryDepth = 0;
+
   /** Whether the visibility MutationObserver is currently connected. */
   visibilityMOConnected = false;
 

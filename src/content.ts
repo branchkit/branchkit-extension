@@ -1700,30 +1700,38 @@ const DISCOVERY_SWEEP_IDLE_TIMEOUT_MS = 500;
 //
 // Single-flight + idle-scheduled: scroll-settle fires repeatedly on a long
 // scroll, so we keep at most one sweep in flight (`discoverySweepPending`) and
-// coalesce the rest into a single trailing re-run (`discoverySweepRerun`) — not
-// a silent drop, because a row re-rendered *during* a sweep would otherwise be
-// stranded (the scroll-back missing-badge gap). requestIdleCallback waits for a
-// quiet frame so the DOM walk never lands on top of YouTube's reflow (the wedge
-// guard); the timeout caps the wait. Mirrors the nav-rescan deferred-scan tail.
+// coalesce the rest. A coalesced request can mean a row was re-rendered DURING
+// the in-flight sweep (after the sweep's enumeration pass already passed over
+// that region), so we record the coalesce on `discoverySweepRerun` and, in the
+// `finally`, conditionally re-arm — but ONLY when the sweep added nothing AND
+// a coalesce happened (strongest signal of a race-missed node). When the sweep
+// added nodes, we DO NOT retry: reconcile()/showHints() can ripple into more
+// scroll-settles and chained reruns produced the codeword-churn loop the
+// earlier retry attempt was reverted for. Retries are also depth-capped and
+// cooldown-gated so even worst-case the chain terminates quickly.
+// requestIdleCallback waits for a quiet frame so the DOM walk never lands on
+// top of YouTube's reflow (the wedge guard); the timeout caps the wait.
+// Mirrors the nav-rescan deferred-scan tail.
 //
 // Distinct from `scheduleDiscovery(root)` (the rAF-coalesced drainer for
 // subtree roots the MutationObserver DID see): this is the backstop for the
 // records it DIDN'T.
+const DISCOVERY_RETRY_COOLDOWN_MS = 300;
+const DISCOVERY_MAX_RETRY_DEPTH = 2;
 function scheduleBandDiscovery(): void {
   if (pageSession.discoverySweepPending) {
-    // A sweep is already in flight; settle bursts coalesce to it. The breadcrumb
-    // stays (a coalesced request near a miss is the cause-A tell) but we do NOT
-    // re-arm a trailing pass: a trailing re-run chained sweep→reconcile→repaint
-    // into a codeword-churn loop (badges flashing / alternating letters).
+    pageSession.discoverySweepRerun = true;
     firehoseStep('band_discovery:coalesced', 1);
     return;
   }
   pageSession.discoverySweepPending = true;
+  pageSession.discoverySweepRerun = false;
   runWhenIdle(() => {
     void (async () => {
+      let added = 0;
       try {
         if (pageSession.isTornDown || !document.body) return;
-        const added = await discoverInSubtreeBatched(document.body);
+        added = await discoverInSubtreeBatched(document.body);
         // Diagnostic: the sweep's added count INCLUDING zero, to correlate a
         // miss against whether the walk actually attached anything.
         firehoseStep('band_discovery:added', added, 0);
@@ -1735,6 +1743,24 @@ function scheduleBandDiscovery(): void {
         if (pageSession.hintsVisible) await showHints(activeCategory ?? undefined);
       } finally {
         pageSession.discoverySweepPending = false;
+        // Conditional re-arm: retry only when (a) a coalesce happened during this
+        // sweep — without it there's no evidence a race occurred — AND (b) this
+        // sweep added zero new wrappers, which means the work we did do is NOT
+        // the source of any churn the retry might amplify. Retries when added>0
+        // chained the codeword-churn loop in 73cf6e7 → b813e29. Cap depth + add
+        // cooldown so even a pathological scroll settle pattern terminates.
+        const shouldRetry =
+          pageSession.discoverySweepRerun &&
+          added === 0 &&
+          !pageSession.isTornDown &&
+          pageSession.discoveryRetryDepth < DISCOVERY_MAX_RETRY_DEPTH;
+        if (shouldRetry) {
+          pageSession.discoveryRetryDepth++;
+          firehoseStep('band_discovery:retry', pageSession.discoveryRetryDepth);
+          setTimeout(() => scheduleBandDiscovery(), DISCOVERY_RETRY_COOLDOWN_MS);
+        } else {
+          pageSession.discoveryRetryDepth = 0;
+        }
       }
     })();
   }, DISCOVERY_SWEEP_IDLE_TIMEOUT_MS);
