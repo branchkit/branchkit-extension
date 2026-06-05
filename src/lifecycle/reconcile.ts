@@ -1,19 +1,33 @@
 /**
- * BranchKit Browser — level-triggered reconcile pass (shadow mode).
+ * BranchKit Browser — diagnostic shadow of the hint lifecycle reconciler.
  *
- * The hint lifecycle is edge-triggered: 7+ handlers mutate the
- * {observed, inViewport, codeword, hint} sub-states off independent event
- * sources, and a dropped/reordered event leaves them desynced (discovery gap,
- * stale isInViewport, noHintObject). The fix is one level-triggered pass that
- * re-derives the desired state from ground truth and converges actual→desired.
+ * The authoritative reconcile lives in content.ts:
+ *   reconcile()           — claim (refreshViewportClaims) + build
+ *                           (badgeNewlyCodeworded), wired into onCodewordsChanged,
+ *                           scan-batch paint, label-sync, alphabet-change,
+ *                           nav deferred-scan, and the scheduleReconcile settle.
+ *   reconcileTeardown()   — gBCR-bounded teardown for the hinted set; fixes
+ *                           dropped IO exit (stale-TRUE → release codeword +
+ *                           tear down hint) and dropped IO enter (stale-FALSE →
+ *                           flip flag, let next reconcile re-claim + rebuild).
+ *   scheduleBandDiscovery() — re-walks the document via the wedge-safe sliced
+ *                           discovery to close the discovery gap when the
+ *                           MutationObserver dropped an insertion record.
+ *   reconcilePlacement()  — anchor / nesting placement repair.
  *
- * This module computes the *plan* — the delta between actual and desired —
- * but DRIVES NOTHING. It is the shadow-mode step (Phase 2 of
- * notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md): we surface the plan in
- * snapshots so we can confirm reconcile computes correct state before it is
- * made authoritative (Phase 3+). It is also the first production reader of
- * TargetRectStore — the band-divergence check reads warm rects to see whether
- * the IO `isInViewport` flag has gone stale relative to geometry.
+ * This module DRIVES NOTHING. `computeReconcilePlan` re-derives the desired
+ * state (desired-state.ts) and reports the actual-vs-desired delta as counts
+ * — surfaced on `DebugSnapshotPayload.reconcile_shadow` and the perf
+ * snapshot's `reconcileShadow`. In steady state every count is zero; a
+ * non-zero count is a tripwire for a {claim, build, release, teardown} the
+ * authoritative paths missed.
+ *
+ * It is also the only production reader of TargetRectStore: the band check
+ * reads warm rects to flag whether the IO `isInViewport` flag has gone stale
+ * relative to geometry. `band.staleFalse` is unreliable off-band (the store
+ * doesn't re-warm off-band rects) — trust the warm store only for the
+ * in-band / staleTrue direction. Fresh-geometry release lives in
+ * `reconcileTeardown`, not here.
  *
  * Cost contract: O(store) with NO forced layout. It reads only cached warm
  * rects from TargetRectStore (never getBoundingClientRect) and the wrappers'
