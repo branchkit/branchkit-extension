@@ -437,8 +437,9 @@ async function handleDebugSnapshot(
 //     a stale tab's hints anymore.
 //   - frame-scoped: pass `frameId`. Plugin Deletes only that frame's
 //     codewords; hints tag stays held if other frames in the tab are
-//     still live. Used by future frame-removal detection (the label-
-//     pool's releaseFrame mention).
+//     still live. Used on iframe removal / cross-document nav / bfcache
+//     evict via the frame-liveness Port's onDisconnect — siblings in
+//     the same tab may still be live.
 //
 // Both scopes are part of the Option B C7 cleanup story
 // (notes/DESIGN_HINT_PIPELINE_RESYNC.md). The tab-wide call replaces
@@ -1276,13 +1277,19 @@ function purgeTab(tabId: number): void {
 
 // Per-frame liveness via long-lived Port. Each content-script context opens
 // one Port at startup; when the context dies (iframe removed, navigation,
-// tab closed) Chrome closes the Port and onDisconnect fires here. Without
-// this, dead frames' codewords leak from the per-tab label pool until tab
-// close. See docs/completed/DESIGN_BROWSER_FRAME_POOL_EXHAUSTION.md.
+// tab closed, bfcache evict) Chrome closes the Port and onDisconnect fires
+// here. Two cleanups run on disconnect: the per-tab label pool
+// (`releaseFrame`) and the browser plugin's per-frame hint session
+// (`forwardHintsSessionEnd`). Without either, dead frames' state leaks —
+// label codewords until the next tab close, hint-session per-prefix
+// contributions until the plugin's 30s TTL backstop fires.
+// See docs/completed/DESIGN_BROWSER_FRAME_POOL_EXHAUSTION.md for the
+// label-pool half.
 //
 // The Port carries no messages — its lifetime IS the signal. Service worker
 // idle-termination is a known small leak window (frames that die while the
-// SW is asleep don't get cleaned), accepted for v1.
+// SW is asleep don't get cleaned by either path); the browser plugin's TTL
+// backstop catches its share, the label pool's gap is accepted for v1.
 const LIVENESS_PORT_NAME = 'frame-liveness';
 
 chrome.runtime.onConnect.addListener((port) => {
@@ -1302,6 +1309,7 @@ chrome.runtime.onConnect.addListener((port) => {
   }
   port.onDisconnect.addListener(() => {
     releaseFrame(tabId, frameId).catch(() => {});
+    forwardHintsSessionEnd('frame_liveness_disconnect', tabId, frameId).catch(() => {});
   });
 });
 
