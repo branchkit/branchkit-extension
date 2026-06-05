@@ -234,12 +234,23 @@ function captureWrapper(w: ElementWrapper): WrapperRecord {
       codeword: w.scanned.codeword,
       type: w.scanned.type,
       adapter: w.scanned.adapter,
+      // Strict-viewport flag: the value most recently computed for this
+      // wrapper. Independent of `isInViewport` (the IO band's 200px-margin
+      // flag) — the strict bit governs which entries land in the
+      // `browser_hints_<prefix>_strict` companion collection driving voice
+      // matching + Discovery HUD. Distinguishes "badge painted for
+      // scroll-ahead but not voice-matchable" from "actually matchable".
+      in_strict_viewport: w.scanned.in_strict_viewport,
     },
     fingerprint,
     element: baseSnap ? { ...baseSnap, closestAnchor } : null,
     hint,
     containerResolution,
     isInViewport: w.isInViewport,
+    // What was last pushed to the plugin for this wrapper. A divergence
+    // between `scanned.in_strict_viewport` (current) and `lastSentStrictViewport`
+    // means a reconcile re-push is pending or missed.
+    lastSentStrictViewport: w.lastSentStrictViewport,
   };
 }
 

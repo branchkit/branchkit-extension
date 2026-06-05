@@ -75,6 +75,13 @@ export class ElementWrapper {
   // release (clearLabel) and on alphabet change (rotateSession).
   grammarReady: boolean = false;
 
+  // The in_strict_viewport flag value last pushed to the plugin (or
+  // undefined if never pushed). Lets `reconcileStrictViewport` queue a
+  // re-push iff the wrapper's current strict-viewport status diverges
+  // from what the plugin's _strict collection currently reflects. Set by
+  // `stampStrictViewport` after the corresponding postBatch.
+  lastSentStrictViewport: boolean | undefined = undefined;
+
   constructor(element: Element, scanned: ScannedElement) {
     this.element = element;
     this.scanned = scanned;

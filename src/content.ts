@@ -11,7 +11,7 @@ import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, 
 import { ElementWrapper, WrapperStore, enterLimbo, isLimboExpired } from './scan/element-wrapper';
 import { wantsHint } from './lifecycle/desired-state';
 import { computeReconcilePlan, geometryInBand, RECONCILE_BAND_MARGIN_PX } from './lifecycle/reconcile';
-import { stampStrictViewport } from './lifecycle/strict-viewport';
+import { stampStrictViewport, collectStrictViewportDelta } from './lifecycle/strict-viewport';
 import * as idRegistry from './scan/registry';
 import { computeFingerprint, fingerprintsEqual } from './scan/registry';
 import { bumpRebindCounter, findLimboMatch, newRebindCounters, REBIND_DISTANCE_THRESHOLD_PX, type RebindCounters } from './labels/rebind';
@@ -1627,6 +1627,22 @@ function reconcilePlacement(): void {
   if (repaired > 0) firehoseStep('reconcile:placement:repaired', repaired, 1);
 }
 
+// Strict-viewport reconciler: scroll moves wrappers across the strict/band
+// boundary without changing their codeword. The plugin's `_strict` companion
+// collection (which now drives both voice matching and the Discovery HUD)
+// reflects the last-pushed strict-viewport flag, so a wrapper that scrolled
+// into strict — or out of strict but still in band — needs a re-push for
+// the _strict membership to converge. Walks the store, queues any wrapper
+// whose current strict status differs from the last-sent value, and triggers
+// a debounced sync. Codeword set is unchanged; this is a flag refresh.
+function reconcileStrictViewport(): void {
+  const delta = collectStrictViewportDelta(store.all);
+  if (delta.length === 0) return;
+  firehoseStep('strict-viewport:delta', delta.length, 1);
+  for (const w of delta) queuePut(w);
+  scheduleSync('strict-viewport-change');
+}
+
 // Run `cb` on the next idle frame, falling back to a short timeout where
 // requestIdleCallback is unavailable (Firefox content scripts historically).
 // `timeoutMs` caps the idle wait so a pathologically busy page still runs it.
@@ -2696,6 +2712,14 @@ function scheduleScrollReposition(): void {
       // storm (the discovery gap) — coalesced + idle-scheduled, so a long
       // scroll runs at most one sweep and it never thrashes mid-reflow.
       scheduleBandDiscovery();
+      // Re-push wrappers whose strict-viewport flag changed across this
+      // scroll, so the plugin's _strict companion collection converges to
+      // current viewport reality (drives both voice matching and the
+      // Discovery HUD post-PR-2). Gated on hintsVisible: the activate
+      // command requires the hints tag, so voice can't match when hints
+      // are down — strict membership being stale doesn't matter, and the
+      // next `show` re-scans from scratch.
+      reconcileStrictViewport();
     }
     scheduleReposition('drifted');
   }, DEFERRED_REPOSITION_DEBOUNCE_MS);
@@ -2778,6 +2802,12 @@ function scheduleDeferredReposition(): void {
       // expanding rows). Converge claim+build over the settled layout; coalesced
       // so a churny burst collapses to one pass that acts on real deltas only.
       scheduleReconcile();
+      // Layout shifts from container resize / focus / transition / browser
+      // zoom can push a wrapper across the strict-viewport boundary without
+      // a scroll event. Re-push the strict flag for changed wrappers so the
+      // _strict companion collection — and the Discovery HUD that reads it —
+      // converges to the post-settle viewport reality.
+      reconcileStrictViewport();
     }
     scheduleReposition('drifted');
   }, DEFERRED_REPOSITION_DEBOUNCE_MS);
@@ -2786,6 +2816,11 @@ document.addEventListener('focusin', scheduleDeferredReposition, { passive: true
 document.addEventListener('focusout', scheduleDeferredReposition, { passive: true });
 document.addEventListener('transitionend', scheduleDeferredReposition, { passive: true });
 document.addEventListener('animationend', scheduleDeferredReposition, { passive: true });
+// Window resize covers genuine viewport changes (drag corner, device
+// rotation, DevTools open/close) AND browser zoom (Cmd+= reflows the
+// layout and changes innerWidth/innerHeight in CSS pixels). Route through
+// the deferred path so the strict-viewport reconciler runs.
+window.addEventListener('resize', scheduleDeferredReposition, { passive: true });
 
 // Per-target mutation: each HintBadge registers its target with the
 // shared tracker. Catches class/style/subtree changes that move a
