@@ -83,11 +83,39 @@ class LabelReservoir {
       this.free = this.free.filter(l => !granted.has(l));
     }
 
-    // Pass 2 — fresh, front-of-pool in request order.
+    // Pass 2 — fresh, front-of-pool in request order. The `granted` Set
+    // check guards against returning a codeword that pass 1 already used
+    // OR an in-reservoir duplicate that slipped past prior dedup (refill
+    // and release both dedup now, but an existing reservoir from a
+    // pre-fix session could still hold dupes — drain them safely instead
+    // of handing them to two wrappers).
     for (const idx of need) {
-      const next = this.free.shift();
+      let next: string | undefined;
+      while ((next = this.free.shift()) !== undefined) {
+        if (!granted.has(next)) break;
+      }
       if (next === undefined) break; // reservoir exhausted; rest stay ''
+      granted.add(next);
       result[idx] = next;
+    }
+
+    // Confirm to the SW that these codewords are now wrapper-held, not just
+    // reservoir-reserved. The promotion from reserved → assigned makes them
+    // routable for voice activations; without it, the SW's getFrameForLabel
+    // would return null and actions would fall through to the broadcast
+    // fallback. Fire-and-forget — if the SW is temporarily unreachable
+    // (orphan content script, SW restart mid-session), the next claim
+    // burst's confirm catches up, and the worst-case interim is the
+    // broadcast fallback handles the action anyway.
+    const claimed = result.filter(l => l !== '');
+    if (claimed.length > 0) {
+      try {
+        chrome.runtime.sendMessage({ type: 'CONFIRM_LABELS', labels: claimed }).catch(() => {
+          // SW asleep / extension reload — best-effort.
+        });
+      } catch {
+        // chrome.runtime missing (orphan post-reload) — same fallback.
+      }
     }
 
     this.maybeRefill();
@@ -102,7 +130,21 @@ class LabelReservoir {
   release(labels: string[]): void {
     const valid = labels.filter(l => l && l.length > 0);
     if (valid.length === 0) return;
-    this.free.unshift(...valid);
+    // Defensive dedup against the reservoir AND within the release set.
+    // Two paths produce a duplicate-prone release: (a) the reservoir
+    // already holds the codeword (a pre-fix duplicate or a release racing
+    // a refill), (b) two distinct wrappers somehow share the codeword and
+    // both pushed it to pendingRelease. Either way, the reservoir should
+    // hold each codeword at most once after this call.
+    const fresh: string[] = [];
+    const seen = new Set(this.free);
+    for (const l of valid) {
+      if (!seen.has(l)) {
+        fresh.push(l);
+        seen.add(l);
+      }
+    }
+    if (fresh.length > 0) this.free.unshift(...fresh);
     try {
       chrome.runtime.sendMessage({ type: 'RELEASE_LABELS', labels: valid }).catch(() => {
         // SW asleep / extension reload — codewords still effectively held
@@ -155,8 +197,24 @@ class LabelReservoir {
     try {
       const resp = await chrome.runtime.sendMessage({ type: 'CLAIM_LABELS', count });
       if (Array.isArray(resp?.labels)) {
+        // Dedup against the current reservoir: a release happens locally
+        // (reservoir.free gets the codeword back immediately) AND sends
+        // RELEASE_LABELS to the SW asynchronously. The SW also lists the
+        // codeword as free post-RELEASE. A refill round-trip can then race
+        // the SW into returning the codeword that's already in
+        // this.free — without this check it lands twice, and a later
+        // claim pass 2 hands it to two different wrappers, leaving them
+        // with the same codeword. That breaks `store.byCodeword` (only
+        // the first match resolves) AND the plugin's StrictCodewords
+        // semantics (an off-strict duplicate wipes the strict ones from
+        // the companion collection). QuickBase table virtualization made
+        // this routinely reproduce 2026-06-05.
+        const seen = new Set(this.free);
         for (const l of resp.labels) {
-          if (typeof l === 'string' && l.length > 0) this.free.push(l);
+          if (typeof l === 'string' && l.length > 0 && !seen.has(l)) {
+            this.free.push(l);
+            seen.add(l);
+          }
         }
       }
     } catch {

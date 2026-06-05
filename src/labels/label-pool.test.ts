@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   buildPool,
   claimLabels,
+  confirmLabels,
   releaseLabels,
   releaseFrame,
   getFrameForLabel,
@@ -200,16 +201,51 @@ describe('label-pool', () => {
       expect(combined).toEqual(expected);
     });
 
-    it('routing map reflects which frame owns each codeword', async () => {
+    it('routing map reflects which frame owns each codeword (after confirm)', async () => {
       const tabId = nextTabId();
       const a = await claimLabels(tabId, 0, 3);
       const b = await claimLabels(tabId, 1, 3);
+
+      // Pre-confirm: routing returns null — labels are reserved, not
+      // yet wrapper-confirmed. This is the PR-6 invariant: unused
+      // reservoir-pre-allocations can't capture voice routing meant
+      // for a sibling frame.
+      for (const label of a) {
+        expect(await getFrameForLabel(tabId, label)).toBeNull();
+      }
+
+      // Confirm promotes reserved → assigned and routing locks to the
+      // confirming frame.
+      await confirmLabels(tabId, 0, a);
+      await confirmLabels(tabId, 1, b);
 
       for (const label of a) {
         expect(await getFrameForLabel(tabId, label)).toBe(0);
       }
       for (const label of b) {
         expect(await getFrameForLabel(tabId, label)).toBe(1);
+      }
+    });
+
+    it('confirmLabels ignores labels reserved to a different frame', async () => {
+      // Defensive: an out-of-order or stale CONFIRM_LABELS from frame B
+      // for labels that are reserved to frame A must not steal ownership.
+      const tabId = nextTabId();
+      const a = await claimLabels(tabId, 0, 3);
+
+      // Frame 1 tries to confirm frame 0's reserved labels.
+      await confirmLabels(tabId, 1, a);
+
+      // Still nobody owns them — frame 0 hasn't confirmed, frame 1's
+      // confirm was silently rejected.
+      for (const label of a) {
+        expect(await getFrameForLabel(tabId, label)).toBeNull();
+      }
+
+      // Frame 0's own confirm still works.
+      await confirmLabels(tabId, 0, a);
+      for (const label of a) {
+        expect(await getFrameForLabel(tabId, label)).toBe(0);
       }
     });
   });
@@ -219,6 +255,10 @@ describe('label-pool', () => {
       const tabId = nextTabId();
       const frameAClaim = await claimLabels(tabId, 0, 3);
       const frameBClaim = await claimLabels(tabId, 1, 3);
+      // Confirm so getFrameForLabel routes (the assertion below depends
+      // on frame 1's labels being routable post-release of frame 0).
+      await confirmLabels(tabId, 0, frameAClaim);
+      await confirmLabels(tabId, 1, frameBClaim);
 
       await releaseFrame(tabId, 0);
 
@@ -235,6 +275,22 @@ describe('label-pool', () => {
       // return them in their original order before reaching new ones.
       const reclaimed = await claimLabels(tabId, 99, 3);
       expect(reclaimed).toEqual(frameAClaim);
+    });
+
+    it('releases reservoir-reserved labels on frame disconnect', async () => {
+      // Reserved-but-not-confirmed labels must come back on releaseFrame
+      // too — they were pre-allocated to the dying frame's reservoir and
+      // no wrapper ever committed.
+      const tabId = nextTabId();
+      const reserved = await claimLabels(tabId, 0, 3);
+      // No confirm — labels stay in `reserved` state.
+
+      await releaseFrame(tabId, 0);
+
+      // After release, re-claim from a different frame should return
+      // the same labels (they're back at the front of free).
+      const reclaimed = await claimLabels(tabId, 1, 3);
+      expect(reclaimed).toEqual(reserved);
     });
   });
 

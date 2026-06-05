@@ -202,3 +202,66 @@ describe('LabelReservoir refill threshold', () => {
     expect(claims).toHaveLength(1);
   });
 });
+
+describe('LabelReservoir duplicate-codeword defenses', () => {
+  it('refill dedups SW-returned codewords already in the reservoir', async () => {
+    // Reproduces the race: a release added the codeword back locally, the
+    // SW released it server-side, and the refill returns the same codeword
+    // that's already in the reservoir. Pre-fix, this.free ended up with
+    // a duplicate; pass 2's shift() then handed it to two wrappers.
+    labelReservoir._seedForTests(['kind gust', 'b']);
+    sendMessageMock.mockResolvedValue({ labels: ['kind gust', 'c', 'd'] });
+    // Force a refill by claiming enough to dip below threshold.
+    labelReservoir.claim(1);
+    await new Promise(r => setTimeout(r, 0));
+    // 'kind gust' must appear exactly once in the reservoir.
+    const seedCount = sendMessageMock.mock.calls
+      .filter(([m]) => m.type === 'CLAIM_LABELS').length;
+    expect(seedCount).toBeGreaterThan(0);
+    // Drain everything; nothing should come out as a duplicate.
+    const drained: string[] = [];
+    let next: string[];
+    do {
+      next = labelReservoir.claim(10);
+      for (const l of next) if (l !== '') drained.push(l);
+    } while (next.some(l => l !== ''));
+    const counts = drained.reduce<Record<string, number>>((acc, l) => {
+      acc[l] = (acc[l] ?? 0) + 1;
+      return acc;
+    }, {});
+    for (const [label, n] of Object.entries(counts)) {
+      expect(n, `${label} should appear exactly once`).toBe(1);
+    }
+  });
+
+  it('release dedups against codewords already in the reservoir', () => {
+    labelReservoir._seedForTests(['a', 'kind gust']);
+    // Some path released 'kind gust' even though it's already in free.
+    // Pre-fix, this.free would gain a second copy via unshift.
+    labelReservoir.release(['kind gust']);
+    // Drain and count.
+    const drained = labelReservoir.claim(5).filter(l => l !== '');
+    expect(drained.filter(l => l === 'kind gust')).toHaveLength(1);
+  });
+
+  it('release dedups within its own argument set', () => {
+    // Two wrappers somehow both held the same codeword (the pre-fix
+    // state) and both pushed it to pendingRelease. doFlush hands the
+    // duplicated list to reservoir.release in one call. Each codeword
+    // should land in the reservoir exactly once regardless.
+    labelReservoir._seedForTests([]);
+    labelReservoir.release(['kind gust', 'kind gust', 'other']);
+    const drained = labelReservoir.claim(10).filter(l => l !== '');
+    expect(drained.filter(l => l === 'kind gust')).toHaveLength(1);
+    expect(drained.filter(l => l === 'other')).toHaveLength(1);
+  });
+
+  it('claim pass 2 drains in-reservoir duplicates without returning them twice', () => {
+    // Simulate an existing reservoir that already contains duplicates
+    // (the pre-fix steady state on a churn-heavy page). pass 2 must walk
+    // past the second copy rather than handing it to two slots.
+    labelReservoir._seedForTests(['kind gust', 'b', 'kind gust', 'c']);
+    const result = labelReservoir.claim(3);
+    expect(result.filter(l => l === 'kind gust')).toHaveLength(1);
+  });
+});

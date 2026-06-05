@@ -132,21 +132,34 @@ async function getOrCreateStack(tabId: number): Promise<LabelStack | null> {
   const pool = buildPool(alphabet);
   if (!pool) return null;
 
-  const stack: LabelStack = { free: pool, assigned: {} };
+  const stack: LabelStack = { free: pool, reserved: {}, assigned: {} };
   await saveStack(tabId, stack);
   assignedCache.set(tabId, {});
   return stack;
 }
 
+/** Defensive: pre-PR-6 stacks loaded from chrome.storage.session have no
+ * `reserved` field. Initialise it lazily on first access so the migration
+ * is a no-op for users with persisted state. */
+function ensureReservedField(stack: LabelStack): void {
+  if (!stack.reserved) stack.reserved = {};
+}
+
 /**
- * Claim `count` labels from a tab's pool for a specific frame. The result is
+ * Reserve `count` labels from a tab's pool for a specific frame. The result is
  * index-aligned to the request: `result[i]` is the codeword for slot i, or ''
  * when the pool ran out before reaching it. Returns [] if the pool isn't ready.
  *
+ * Reserved codewords are NOT routable yet — the frame's reservoir holds them
+ * but no wrapper has committed. Voice activations for reserved-only codewords
+ * fall through to the broadcast-to-all-frames fallback. A subsequent
+ * CONFIRM_LABELS message promotes the entries from `reserved` to `assigned`,
+ * at which point routing locks to the confirming frame.
+ *
  * `preferred[i]` is the codeword slot i held before it left the viewport.
- * Pass 1 re-grants any preferred codeword still in the free list, so an
- * element that scrolls out and back keeps the same letter (sticky reclaim —
- * kills scroll flicker). Pass 2 fills the remaining slots front-of-pool in
+ * Pass 1 re-grants any preferred codeword still in the free list OR already
+ * reserved to this frame (the latter handles the sticky-reclaim-across-
+ * reservoir-refills case). Pass 2 fills the remaining slots front-of-pool in
  * request order, preserving the pool's balanced square-fill ordering so the
  * live prefix×suffix grid stays balanced for the two-stage voice grammar.
  */
@@ -159,16 +172,20 @@ export async function claimLabels(
   return withTabLock(tabId, async () => {
     const stack = await getOrCreateStack(tabId);
     if (!stack) return [];
+    ensureReservedField(stack);
 
     const result: string[] = new Array(count).fill('');
     const granted = new Set<string>();
     const freeSet = new Set(stack.free);
 
-    // Pass 1 — sticky reclaim.
+    // Pass 1 — sticky reclaim. Includes codewords this frame already has
+    // reserved (a reservoir-internal cycle) so a wrapper that came back
+    // into viewport before a reservoir refill flushed gets the same letter.
     const needsFresh: number[] = [];
     for (let i = 0; i < count; i++) {
       const pref = preferred[i];
-      if (pref && freeSet.has(pref) && !granted.has(pref)) {
+      const stillReservedToThisFrame = pref && stack.reserved[pref] === frameId;
+      if (pref && (freeSet.has(pref) || stillReservedToThisFrame) && !granted.has(pref)) {
         granted.add(pref);
         result[i] = pref;
       } else {
@@ -189,12 +206,46 @@ export async function claimLabels(
     }
 
     if (granted.size > 0) {
-      for (const label of granted) stack.assigned[label] = frameId;
+      for (const label of granted) stack.reserved[label] = frameId;
       stack.free = stack.free.filter(l => !granted.has(l));
+      await saveStack(tabId, stack);
+      // assignedCache still mirrors `stack.assigned` only — reserved
+      // entries aren't routable until confirmed.
+    }
+    return result;
+  });
+}
+
+/**
+ * Promote labels from this frame's reservoir-reservation to wrapper-assigned.
+ * Called by the extension's reservoir after `claim()` actually hands codewords
+ * to wrappers (vs. just refilling the local cache). Only labels whose
+ * `stack.reserved[label] === frameId` are promoted; mismatches are silently
+ * ignored (the wrapper got the codeword from somewhere else, or the SW already
+ * reassigned it via a stale path).
+ */
+export async function confirmLabels(
+  tabId: number,
+  frameId: number,
+  labels: string[],
+): Promise<void> {
+  return withTabLock(tabId, async () => {
+    const stack = await loadStack(tabId);
+    if (!stack) return;
+    ensureReservedField(stack);
+
+    let changed = false;
+    for (const label of labels) {
+      if (stack.reserved[label] === frameId) {
+        delete stack.reserved[label];
+        stack.assigned[label] = frameId;
+        changed = true;
+      }
+    }
+    if (changed) {
       await saveStack(tabId, stack);
       assignedCache.set(tabId, { ...stack.assigned });
     }
-    return result;
   });
 }
 
@@ -209,11 +260,18 @@ export async function releaseLabels(tabId: number, labels: string[]): Promise<vo
   return withTabLock(tabId, async () => {
     const stack = await loadStack(tabId);
     if (!stack) return;
+    ensureReservedField(stack);
 
     const toReturn: string[] = [];
     for (const label of labels) {
+      // Assigned takes precedence; a label can be in exactly one of
+      // assigned / reserved / free at a time, but release is idempotent
+      // so we check both maps and free in whatever state the label is.
       if (label in stack.assigned) {
         delete stack.assigned[label];
+        toReturn.push(label);
+      } else if (label in stack.reserved) {
+        delete stack.reserved[label];
         toReturn.push(label);
       }
     }
@@ -251,6 +309,7 @@ export async function releaseFrame(tabId: number, frameId: number): Promise<void
   return withTabLock(tabId, async () => {
     const stack = await loadStack(tabId);
     if (!stack) return;
+    ensureReservedField(stack);
 
     const toRelease: string[] = [];
     for (const [label, owner] of Object.entries(stack.assigned)) {
@@ -258,6 +317,15 @@ export async function releaseFrame(tabId: number, frameId: number): Promise<void
     }
     for (const label of toRelease) {
       delete stack.assigned[label];
+    }
+    // Reservoir-held labels for the dying frame must also come back — they
+    // were pre-allocated to this frame's reservoir, no wrapper ever
+    // confirmed, and now there's no frame left to confirm them.
+    for (const [label, owner] of Object.entries(stack.reserved)) {
+      if (owner === frameId) toRelease.push(label);
+    }
+    for (const label of toRelease) {
+      delete stack.reserved[label];
     }
     if (toRelease.length > 0) {
       stack.free.unshift(...toRelease);
@@ -347,7 +415,7 @@ export async function regenerateAllStacks(): Promise<void> {
   await Promise.all(tabIds.map(tabId =>
     withTabLock(tabId, async () => {
       assignedCache.set(tabId, {});
-      const fresh: LabelStack = { free: [...newPool], assigned: {} };
+      const fresh: LabelStack = { free: [...newPool], reserved: {}, assigned: {} };
       stackCache.set(tabId, fresh);
       await chrome.storage.session.set({
         [storageKey(tabId)]: fresh,

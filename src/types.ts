@@ -194,14 +194,37 @@ export interface ClaimLabelsResponse {
  * Per-tab pool of voice-recognizable codewords. Stored in
  * chrome.storage.session at key `labelStack:${tabId}`.
  *
- * `assigned` doubles as a routing table: when an action references a
- * codeword, the background looks up `assigned[codeword]` to find the
- * frame that owns it and routes the action there.
+ * Three states track a codeword's relationship to a frame:
+ *   - `free` — available to any frame's next refill
+ *   - `reserved` — a frame's reservoir has the codeword but no wrapper
+ *     has actually committed to using it. NOT routable: voice
+ *     activations for reserved codewords fall through to the
+ *     broadcast-to-all-frames fallback so the frame that DOES have a
+ *     matching wrapper (typically a different one — iframes routinely
+ *     pre-fetch codewords they never use) gets the chance to handle it.
+ *   - `assigned` — a wrapper in a specific frame has claimed the
+ *     codeword and confirmed via CONFIRM_LABELS. The frame is the
+ *     routable owner.
+ *
+ * Pre-PR-6 the reserved/assigned distinction didn't exist; refill
+ * marked codewords assigned-to-frame immediately, so iframe reservoirs
+ * accumulated phantom ownership of codewords no wrapper would ever use
+ * and voice routing landed there. See actuator.log 2026-06-05T17:18:37
+ * for the QuickBase `fine jury` failure that motivated this split.
  */
 export interface LabelStack {
   /** Unclaimed codewords. Singles first, pairs at the end. */
   free: string[];
-  /** Claimed codewords mapped to their owning frameId. */
+  /**
+   * Codewords held in a frame's reservoir but not yet claimed by a
+   * wrapper. The map's value is the holding frameId so `releaseFrame`
+   * can free them on frame disconnect, but the SW's `getFrameForLabel`
+   * routing intentionally does NOT consult this map — that's the whole
+   * point of the split. Confirmation via CONFIRM_LABELS promotes
+   * reserved → assigned.
+   */
+  reserved: Record<string, number>;
+  /** Wrapper-confirmed codewords mapped to their owning frameId. */
   assigned: Record<string, number>;
 }
 

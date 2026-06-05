@@ -1171,12 +1171,43 @@ function reconcileEvictedCodewords(evicted: string[]): void {
  * job, gated by viewport intersection. doScan only ensures every
  * hintable element has a wrapper that the tracker is observing.
  */
-function doScan(): void {
-  // Fire-and-forget — the batched path is async (per-batch awaits a
-  // codeword claim + POST round-trip), but doScan's existing callers
-  // are sync. doScanBatched schedules itself onto the microtask queue
-  // and runs to completion in the background.
-  void doScanBatched();
+// Promise-chain lock for doScanBatched. Multiple call sites (chrome.storage
+// onChanged for alphabet/rules/badge settings; MO settle; focus restore; nav
+// recovery; explicit triggers from messages) can fire within the same tick.
+// Pre-fix the chained scans overlapped: each got the same getSessionId(),
+// each ran its own batch generator, and they posted batches with overlapping
+// batch_indices. The plugin processed both, and the same DOM element ended
+// up with two distinct wrappers each holding a different "real" codeword —
+// either neither could cleanly invalidate the other or, depending on
+// attach-order timing, the same codeword landed on two wrappers. QuickBase
+// table virtualization reliably reproduced this 2026-06-05T17:00:42.
+//
+// Pattern: one scan runs at a time; if more triggers arrive while a scan is
+// in flight, they collapse into a single pending re-run that fires after
+// the current scan completes. Two triggers that arrive during one in-flight
+// scan still produce only one re-run — the scheduling is idempotent for the
+// pending slot.
+let scanChain: Promise<void> = Promise.resolve();
+let scanPending = false;
+function doScan(): Promise<void> {
+  // If a scan is in flight and another is already pending, fold this
+  // trigger into the existing pending re-run.
+  if (scanPending) return scanChain;
+  scanPending = true;
+  scanChain = scanChain.then(async () => {
+    // Clear the pending flag at the START of the run, so triggers that
+    // arrive DURING this scan can schedule the next re-run. Triggers that
+    // arrived before we got here have already been folded; the flag's
+    // role from here forward is "is the NEXT slot taken."
+    scanPending = false;
+    try {
+      await doScanBatched();
+    } catch {
+      // Swallow so a failed scan doesn't break the chain. The next
+      // trigger still gets a fresh attempt.
+    }
+  });
+  return scanChain;
 }
 
 /**
@@ -2257,7 +2288,12 @@ function rescanForNav(fromCache: boolean, reason: string): void {
       // page is pathologically busy. Plan A3 (notes/PLAN_BROWSER_EXTENSION_PERF_OPTIMIZATION.md).
       const scheduleDeferred = () => {
         void navStep('deferred_scan:start');
-        void doScanBatched().then(async () => {
+        // Route through doScan() so the SPA-nav rebuild can't race a
+        // concurrent storage-onChanged scan with the same session_id.
+        // Pre-fix the two ran in parallel, emitting batches with
+        // overlapping session+batch_index pairs and producing duplicate
+        // codeword assignments. See actuator.log 2026-06-05T17:30:11.
+        void doScan().then(async () => {
           // Codeword-claim backstop. The spa_nav teardown wiped every
           // wrapper + codeword (preNavDetachAll); the rebuild above
           // re-creates and re-observes wrappers, but claiming then depends
@@ -2335,7 +2371,9 @@ function republishForActivation(reason: string): void {
     const now = performance.now();
     if (now - lastActivationScanAt >= ACTIVATION_SCAN_COALESCE_MS) {
       lastActivationScanAt = now;
-      setTimeout(() => { void doScanBatched(); }, 300);
+      // Route through doScan() so this reconciliation walk serializes
+      // with any other in-flight scan (storage-onChanged, MO settle).
+      setTimeout(() => { void doScan(); }, 300);
     }
   })();
 }

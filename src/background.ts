@@ -9,7 +9,7 @@
  */
 
 import { Message, ScannedElement, HintVisibility, DispatchResult, GrammarBatchRequest, GrammarBatchResponse } from './types';
-import { claimLabels, releaseLabels, releaseFrame, clearStack, clearAllStacks, regenerateAllStacks, getFrameForLabel, alphabetsEqual } from './labels/label-pool';
+import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearStack, clearAllStacks, regenerateAllStacks, getFrameForLabel, alphabetsEqual } from './labels/label-pool';
 
 const ACTUATOR_URL = 'http://127.0.0.1:21551';
 
@@ -1208,6 +1208,25 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     if (typeof tabId !== 'number') return false;
     releaseLabels(tabId, message.labels).catch(err => {
       console.warn('[BranchKit SW] RELEASE_LABELS error:', err);
+    });
+    return false;
+  }
+
+  if (message.type === 'CONFIRM_LABELS') {
+    // Sent by the content script's reservoir after `claim()` actually hands
+    // codewords to wrappers. Promotes the labels from reserved (pre-allocated
+    // to this frame's reservoir) to assigned (wrapper-confirmed, routable).
+    // Unconfirmed reserved labels are NOT routable — the SW falls back to
+    // broadcasting actions to all frames so iframe reservoirs holding
+    // unused codewords don't capture activations meant for a sibling
+    // frame's wrapper. See docs/completed/DESIGN_ELEMENT_IDENTITY_REGISTRY.md
+    // and the QuickBase `fine jury` failure 2026-06-05T17:18:37.
+    const tabId = _sender.tab?.id;
+    const frameId = _sender.frameId;
+    if (typeof tabId !== 'number' || typeof frameId !== 'number') return false;
+    if (!Array.isArray(message.labels)) return false;
+    confirmLabels(tabId, frameId, message.labels).catch(err => {
+      console.warn('[BranchKit SW] CONFIRM_LABELS error:', err);
     });
     return false;
   }
