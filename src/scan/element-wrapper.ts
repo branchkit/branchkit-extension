@@ -8,6 +8,7 @@
 import { Category, ScannedElement } from '../types';
 import { LabelAssignment } from '../labels/words';
 import { HintBadge } from '../render/hints';
+import { labelReservoir } from '../labels/label-reservoir';
 
 /**
  * Scroll-invariant cache of `RangoStrategy.probeFirstVisibleText`.
@@ -113,24 +114,23 @@ export class ElementWrapper {
    * Release this wrapper's pool codeword (if any) back to the per-tab pool
    * and clear it locally. Idempotent: pool's RELEASE_LABELS handler
    * silently ignores codewords it doesn't currently track.
+   *
+   * Routes through the local reservoir (which unshifts to its `free` AND
+   * fires RELEASE_LABELS to the SW). Going direct to chrome.runtime would
+   * skip the reservoir, leaving its refill-dedup blind: when the SW later
+   * recycles this codeword into a CLAIM_LABELS response, PR 5's
+   * `seen = new Set(this.free)` check can't catch it because the codeword
+   * was never in `this.free` while the wrapper held it. That handed the
+   * same codeword to two wrappers (QuickBase 2026-06-05 — six attach
+   * events for "fine kind" in 93ms, same scan; batch.go saw adds=['fine kind']
+   * deletes=['fine kind'] in the same batch).
    */
   releaseLabel(): void {
     const codeword = this.scanned.codeword;
     if (!codeword) return;
     this.scanned.codeword = '';
     this.label = null;
-    // chrome.runtime.sendMessage THROWS SYNCHRONOUSLY when the extension
-    // context is invalidated (orphan content script after extension reload).
-    // The `.catch()` only handles async rejection — the sync throw escapes
-    // and surfaces as an uncaught error from whatever observer callback
-    // happened to call us. Wrap in try/catch for safety.
-    try {
-      chrome.runtime.sendMessage({ type: 'RELEASE_LABELS', labels: [codeword] })
-        .catch(() => {/* extension context may be invalidated */});
-    } catch {
-      // Orphan content script post-reload. Nothing to do — label tracking
-      // already cleared locally, and the orphan's SW connection is dead.
-    }
+    labelReservoir.release([codeword]);
   }
 
   destroy(): void {

@@ -32,6 +32,18 @@ const REFILL_AMOUNT = 60;
 class LabelReservoir {
   /** Available codewords for synchronous claim, front-of-array first. */
   private free: string[] = [];
+  /** Codewords currently held by wrappers in this frame (granted out but not
+   *  yet released). Refill dedup checks `free ∪ outstanding` so the SW
+   *  re-issuing a codeword we already handed to a wrapper can't slip past:
+   *  the SW's CONFIRM_LABELS handler is no-op when the codeword sits in
+   *  `stack.free` (because RELEASE landed before CONFIRM), so after a
+   *  release-then-local-reclaim cycle the SW thinks the codeword is free
+   *  and a later refill would dup-issue it. Tracking grants locally closes
+   *  that race without a synchronous SW round-trip. QuickBase 2026-06-05 —
+   *  6 wrappers all attached with "cap each" in 260ms, which then evicted
+   *  `each` from `browser_hints_cap_strict` and made the CE hint
+   *  unreachable. */
+  private outstanding: Set<string> = new Set();
   /** In-flight refill, so we don't pile up redundant CLAIM_LABELS while
    *  one is already on the wire. */
   private refillInFlight: Promise<void> | null = null;
@@ -109,6 +121,10 @@ class LabelReservoir {
     // broadcast fallback handles the action anyway.
     const claimed = result.filter(l => l !== '');
     if (claimed.length > 0) {
+      // Track outstanding grants so refill-dedup can reject SW-side re-issues
+      // of a codeword we already have on a wrapper. See the `outstanding`
+      // field comment for why the SW's CONFIRM is racey.
+      for (const l of claimed) this.outstanding.add(l);
       try {
         chrome.runtime.sendMessage({ type: 'CONFIRM_LABELS', labels: claimed }).catch(() => {
           // SW asleep / extension reload — best-effort.
@@ -130,6 +146,11 @@ class LabelReservoir {
   release(labels: string[]): void {
     const valid = labels.filter(l => l && l.length > 0);
     if (valid.length === 0) return;
+    // The wrapper no longer holds these — drop from outstanding so a
+    // subsequent refill can legitimately re-introduce them. Done before
+    // the dedup below so a re-released codeword the reservoir already
+    // holds in `free` correctly clears its outstanding bit.
+    for (const l of valid) this.outstanding.delete(l);
     // Defensive dedup against the reservoir AND within the release set.
     // Two paths produce a duplicate-prone release: (a) the reservoir
     // already holds the codeword (a pre-fix duplicate or a release racing
@@ -163,6 +184,7 @@ class LabelReservoir {
    */
   clear(): void {
     this.free.length = 0;
+    this.outstanding.clear();
     this.initialReady = null;
     this.refillInFlight = null;
   }
@@ -197,19 +219,20 @@ class LabelReservoir {
     try {
       const resp = await chrome.runtime.sendMessage({ type: 'CLAIM_LABELS', count });
       if (Array.isArray(resp?.labels)) {
-        // Dedup against the current reservoir: a release happens locally
-        // (reservoir.free gets the codeword back immediately) AND sends
-        // RELEASE_LABELS to the SW asynchronously. The SW also lists the
-        // codeword as free post-RELEASE. A refill round-trip can then race
-        // the SW into returning the codeword that's already in
-        // this.free — without this check it lands twice, and a later
-        // claim pass 2 hands it to two different wrappers, leaving them
-        // with the same codeword. That breaks `store.byCodeword` (only
-        // the first match resolves) AND the plugin's StrictCodewords
-        // semantics (an off-strict duplicate wipes the strict ones from
-        // the companion collection). QuickBase table virtualization made
-        // this routinely reproduce 2026-06-05.
+        // Dedup against `free ∪ outstanding`. The SW can re-issue a
+        // codeword we already have outstanding on a wrapper when a
+        // release-then-local-reclaim race nukes the CONFIRM_LABELS
+        // handler's reserved-match: RELEASE moves SW state to free, the
+        // local reservoir hands the codeword to a new wrapper, and the
+        // CONFIRM that follows is a no-op (no reserved entry to promote).
+        // The SW then keeps the codeword in `stack.free` and a later
+        // refill picks it up despite our local wrapper still holding it.
+        // Dedup against `free` alone misses this case because the
+        // codeword isn't in `free` while a wrapper holds it — it's in
+        // `outstanding`. QuickBase 2026-06-05 — 6 wrappers all attached
+        // with "cap each" in 260ms.
         const seen = new Set(this.free);
+        for (const l of this.outstanding) seen.add(l);
         for (const l of resp.labels) {
           if (typeof l === 'string' && l.length > 0 && !seen.has(l)) {
             this.free.push(l);
