@@ -1,11 +1,20 @@
 /**
  * BranchKit Browser — Activate-resolution tier tests.
  *
- * Pins the three-tier algorithm and its side effects: invalidate-on-
- * unknown-id (the "stale_grammar" protocol), lazy-delete on dead WeakRef
- * with no fingerprint match, registry rebind on successful fingerprint
- * fallback, frame-mismatch skip, and the tier-3 snapshot/live-store
- * fallthrough.
+ * Pins the codeword-first resolution algorithm:
+ *   1. codeword → snapshot
+ *   2. codeword → live store
+ *   3. registry id → WeakRef
+ *   4. registry id → fingerprint fallback
+ *
+ * And its side effects: registry rebind on successful fingerprint
+ * fallback, lazy-delete on dead WeakRef with no fingerprint match,
+ * frame-mismatch early-return.
+ *
+ * Older test names refer to a former id-first order — kept intact
+ * because each test's id vs codeword setup makes the relevant tier
+ * exclusive regardless of priority. The "codeword wins over id" block
+ * is what locks the priority change itself.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -222,7 +231,13 @@ describe('resolveTarget — tier 3 (codeword fallthrough)', () => {
     expect(r.resolution).toBe('live_store');
   });
 
-  it('skips tier 3 when frame_id mismatches, even with a codeword', () => {
+  it('codeword resolves regardless of frame_id mismatch (codeword IS ownership)', () => {
+    // Reproduces the QuickBase frame-mismatch failure: cache entry's
+    // params.frame_id is stale (frozen at original-claim time) but the
+    // codeword's actual owner per the label-pool is THIS frame, which
+    // is why the SW routed the action here. If `store.byCodeword` finds
+    // the wrapper, we own it — the stale params.frame_id is noise that
+    // would otherwise drop a legitimate dispatch.
     const el = fakeElement();
     const { deps } = makeDeps({
       myFrameId: 0,
@@ -231,8 +246,8 @@ describe('resolveTarget — tier 3 (codeword fallthrough)', () => {
 
     const r = resolveTarget(0, 7, 'arch', deps);
 
-    expect(r.target).toBeNull();
-    expect(r.resolution).toBe('none');
+    expect(r.target).toBe(el);
+    expect(r.resolution).toBe('live_store');
   });
 
   it('still hits tier 3 when tier 1 missed AND a codeword is present', () => {
@@ -245,5 +260,85 @@ describe('resolveTarget — tier 3 (codeword fallthrough)', () => {
 
     expect(r.target).toBe(el);
     expect(r.resolution).toBe('live_store');
+  });
+});
+
+describe('resolveTarget — codeword wins over id (priority change)', () => {
+  it('snapshot wins over a valid registry hit', () => {
+    const cwEl = fakeElement();
+    const idEl = fakeElement();
+    const { deps, state } = makeDeps({
+      resolveFromSnapshot: () => fakeWrapper(cwEl),
+    });
+    state.registryEntries.set(42, entry(idEl));
+
+    const r = resolveTarget(42, 0, 'arch', deps);
+
+    expect(r.target).toBe(cwEl);
+    expect(r.resolution).toBe('snapshot');
+    // Registry untouched — no rebind, no unregister, no fingerprint string.
+    expect(state.rebindCalls).toEqual([]);
+    expect(state.unregisterCalls).toEqual([]);
+    expect(r.fp).toBe('');
+  });
+
+  it('live_store wins over a valid registry hit when snapshot misses', () => {
+    const cwEl = fakeElement();
+    const idEl = fakeElement();
+    const { deps, state } = makeDeps({
+      resolveFromStore: () => fakeWrapper(cwEl),
+    });
+    state.registryEntries.set(42, entry(idEl));
+
+    const r = resolveTarget(42, 0, 'arch', deps);
+
+    expect(r.target).toBe(cwEl);
+    expect(r.resolution).toBe('live_store');
+    expect(state.rebindCalls).toEqual([]);
+  });
+
+  it('the harp_pit case: id=0 with valid codeword resolves via live_store', () => {
+    // Reproduces the QuickBase failure mode where the cache entry was
+    // pushed pre-attachWrapper so id="0" in dispatched params, but the
+    // wrapper exists in the live store with the dispatched codeword.
+    const el = fakeElement();
+    const { deps } = makeDeps({
+      resolveFromStore: (cw) => cw === 'harp pit' ? fakeWrapper(el) : undefined,
+    });
+
+    const r = resolveTarget(0, 0, 'harp pit', deps);
+
+    expect(r.target).toBe(el);
+    expect(r.resolution).toBe('live_store');
+  });
+
+  it('falls back to registry id only when codeword has no resolution', () => {
+    const el = fakeElement();
+    const { deps, state } = makeDeps();
+    state.registryEntries.set(42, entry(el));
+
+    // Codeword present but neither snapshot nor store resolves it.
+    const r = resolveTarget(42, 0, 'unknown-codeword', deps);
+
+    expect(r.target).toBe(el);
+    expect(r.resolution).toBe('registry');
+  });
+
+  it('frame mismatch still gates registry-id fallback when codeword misses', () => {
+    // Safety check: when codeword resolution fails AND params.frame_id
+    // disagrees with myFrameId, the registry-id tiers must NOT fire.
+    // Otherwise a sibling frame could activate against an id that
+    // happens to exist in its registry but addresses someone else's
+    // wrapper.
+    const el = fakeElement();
+    const { deps, state } = makeDeps({ myFrameId: 0 });
+    state.registryEntries.set(42, entry(el));
+
+    const r = resolveTarget(42, 7, 'unknown-codeword', deps);
+
+    expect(r.target).toBeNull();
+    expect(r.resolution).toBe('none');
+    expect(r.detail).toContain('frame 7');
+    expect(r.detail).toContain('this is frame 0');
   });
 });
