@@ -23,6 +23,44 @@
  * reservoir can't fill. The caller leaves the wrapper unhinted; the
  * level-triggered reconcile (`refreshViewportClaims`) re-queues those
  * wrappers on the next `onCodewordsChanged` after a refill arrives.
+ *
+ * ---
+ *
+ * SINGLE-SENDER INVARIANT
+ *
+ * This file is the only sender of `CLAIM_LABELS`, `RELEASE_LABELS`, and
+ * `CONFIRM_LABELS` over `chrome.runtime.sendMessage`. Modules that need to
+ * mutate label-pool state must call `labelReservoir.claim()` /
+ * `labelReservoir.release()` rather than constructing the message
+ * themselves. Enforced by `label-ipc-isolation.test.ts`.
+ *
+ * Why it's load-bearing — two coupled state machines:
+ *
+ *   - The reservoir owns two local pieces of state: the `free` queue and
+ *     the `outstanding` set of codewords currently held by wrappers in
+ *     this frame. Refill dedup is computed against `free ∪ outstanding`.
+ *
+ *   - The SW owns the per-tab `stack.{free, reserved, assigned}` map.
+ *     Each label is in exactly one of those at any time. The reservoir's
+ *     CLAIM/CONFIRM/RELEASE sequence is what keeps the two views in sync.
+ *
+ * A bypassing sender breaks the invariant in three distinct ways:
+ *
+ *   - Direct RELEASE: local `free` never restored, `outstanding` never
+ *     cleared. Local-vs-SW state diverges; refill dedup misses.
+ *   - Direct CONFIRM: races the local CLAIM/CONFIRM round-trip. If
+ *     RELEASE lands before CONFIRM, the codeword sits in `stack.free`
+ *     (not `stack.reserved`), CONFIRM's promote-step is a no-op, the SW
+ *     keeps the codeword as free, and the next refill re-issues it to a
+ *     frame that already holds it.
+ *   - Direct CLAIM: SW promotes `free → reserved[frame]` but `outstanding`
+ *     never registers. The codeword can sit in `reserved` indefinitely
+ *     (no SW-side TTL), and refill-dedup can't see it.
+ *
+ * The same invariant — "the reservoir is the single in-process owner of
+ * the local label state, and only it talks to the SW pool" — closes all
+ * three. If you're tempted to add a fourth sender, re-read this comment
+ * and decide whether the invariant still holds. The default answer is no.
  */
 
 const INITIAL_RESERVATION = 100;

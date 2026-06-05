@@ -153,6 +153,7 @@ export type Message =
   // back keeps its letter instead of being re-dealt a new one (kills flicker).
   | { type: 'CLAIM_LABELS'; count: number; preferred?: string[] }
   | { type: 'RELEASE_LABELS'; labels: string[] }
+  | { type: 'CONFIRM_LABELS'; labels: string[] }
   // Background → content ping. The focused frame answers true, others false.
   // Used to route keyboard-derived actions to whichever frame the user is
   // actually interacting with (vs. chrome's default top-frame routing).
