@@ -11,6 +11,7 @@ import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, 
 import { ElementWrapper, WrapperStore, enterLimbo, isLimboExpired } from './scan/element-wrapper';
 import { wantsHint } from './lifecycle/desired-state';
 import { computeReconcilePlan, geometryInBand, RECONCILE_BAND_MARGIN_PX } from './lifecycle/reconcile';
+import { stampStrictViewport } from './lifecycle/strict-viewport';
 import * as idRegistry from './scan/registry';
 import { computeFingerprint, fingerprintsEqual } from './scan/registry';
 import { bumpRebindCounter, findLimboMatch, newRebindCounters, REBIND_DISTANCE_THRESHOLD_PX, type RebindCounters } from './labels/rebind';
@@ -1888,6 +1889,7 @@ async function processScanBatch(
   const adapterName = adapter?.name ?? '';
   void adapterName; // reserved for plugin-side adapter-aware routing
 
+  stampStrictViewport(candidates);
   const resp = await postBatch({
     session_id: sessionId,
     batch_index: batchIndex,
@@ -3851,10 +3853,11 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
       // set) — confirms Phase 5b keeps the store warm where it matters.
       scrollAncestorDrift: targetRectStore.sampleDriftFor(registeredScrollTargets(), 10),
     },
-    // Shadow-mode reconcile plan (drives nothing; Phase 2 of the lifecycle
-    // reconciler). Surfaces the actual→desired delta the edge handlers left
-    // behind so we can confirm reconcile computes correct state before it is
-    // authoritative. Cheap: O(store), reads warm rects only.
+    // Diagnostic shadow of the authoritative reconcile (content.ts:reconcile +
+    // reconcileTeardown + scheduleBandDiscovery). Drives nothing; surfaces the
+    // actual→desired delta as a tripwire — steady-state counts are all zero, a
+    // non-zero count flags a {claim, build, release, teardown} the authoritative
+    // paths missed. Cheap: O(store), reads warm rects only.
     reconcileShadow: computeReconcilePlan(
       store,
       activeCategory,

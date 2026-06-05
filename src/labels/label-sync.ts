@@ -34,6 +34,7 @@
  */
 
 import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
+import { stampStrictViewport } from '../lifecycle/strict-viewport';
 import { GrammarBatchRequest, GrammarBatchResponse, Message } from '../types';
 import { isAlphabetLoaded } from './words';
 import { DEFAULT_SCAN_BATCH_SIZE } from '../scan/scanner';
@@ -279,6 +280,7 @@ export async function syncNow(reason: string): Promise<void> {
     // empties pendingDeleteCodewords for us. We track the snapshot so
     // sentCodewords can be updated on a successful response.
     const deletesRidingHere = start === 0 ? pendingDeleteCodewords.slice() : [];
+    stampStrictViewport(chunk);
     const resp = await postBatch({
       session_id: sessionId,
       batch_index: Math.floor(start / DEFAULT_SCAN_BATCH_SIZE),

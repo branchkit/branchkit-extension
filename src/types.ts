@@ -38,6 +38,16 @@ export interface ScannedElement {
    * can route back to the right frame.
    */
   frame_id?: number;
+  /**
+   * True if the element's rect intersects the strict viewport at batch-
+   * send time. Independent of `isInViewport` (the IO band flag, which
+   * uses a 200px margin for scroll-ahead). The plugin pushes only
+   * strict-viewport entries into the `browser_hints_<prefix>_strict`
+   * companion collection that drives the Discovery HUD and the activate
+   * command's dependent capture — band-only entries get badges painted
+   * (scroll-ahead) but stay outside the matchable set.
+   */
+  in_strict_viewport?: boolean;
 }
 
 // --- Per-batch grammar protocol (Option B) ---
