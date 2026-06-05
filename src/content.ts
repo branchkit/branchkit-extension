@@ -2789,6 +2789,20 @@ function scheduleScrollReposition(): void {
   }, DEFERRED_REPOSITION_DEBOUNCE_MS);
 }
 window.addEventListener('scroll', scheduleScrollReposition, { passive: true });
+// Capture-phase document listener catches scroll events on nested overflow
+// containers (QuickBase's mainBodyDiv table scroll, Gmail's pane scrolls,
+// any modern web-app sidebar / data-grid pattern). Scroll events don't
+// bubble, but they DO participate in capture, so a document-level capture
+// handler sees every scroll target regardless of who scrolled. Without
+// this the only nested-scroll signal was `onScrollAncestor` — which tracks
+// the scroll ancestors of *already-anchored* badges, so a row with the
+// discovery gap (no badge yet) contributed nothing and the band-discovery
+// sweep never fired. QuickBase 2026-06-05: 15 reposition:drifted events
+// from scheduleDeferredReposition but ZERO band_discovery:entered, because
+// scroll never reached scheduleScrollReposition. The handler is the same
+// debounced scheduleScrollReposition the window listener uses, so the
+// 100 ms coalescing keeps cost bounded even on multi-pane scroll bursts.
+document.addEventListener('scroll', scheduleScrollReposition, { passive: true, capture: true });
 
 // Per-container resize: each HintBadge registers its anchor with the
 // shared tracker. Catches CSS-only and container-scoped layout shifts
