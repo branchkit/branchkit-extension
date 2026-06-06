@@ -1,14 +1,15 @@
 # Codeword Stability Across Navigation
 
-**Status (2026-06-06):** Regime B (SW-memory, ~62%) and Regime A **mouse**
-table-switch (DOM-survivor spare, `7af5cb8`) are landed. A soft-detach fix for
-the **voice** table-switch was implemented, trace-confirmed to work, then
-**reverted** — it caused a YouTube steady-state regression. **Re-attempt now
-UNBLOCKED** by the positioning migration (reconcile-only; `reconcilePlacement`/
-`ensureBound` deleted) — the revert cause is gone. Grounded re-attempt plan below
-("Re-attempt plan, post positioning-migration"); awaiting build.
+**Status (2026-06-06):** Regime B (SW-memory, ~62%), Regime A **mouse**
+table-switch (DOM-survivor spare, `7af5cb8`), and now Regime A **voice**
+table-switch (soft-detach, `9ff5b89`) are all landed — the voice re-attempt is
+**LANDED and user-confirmed working** (sidebar codewords stay stable across a
+voice table-switch). The original soft-detach revert (YouTube steady-state
+regression) was caused by the placement limbo-skip (`reconcilePlacement`/
+`ensureBound`), which the positioning migration deleted; reconcile positions on
+`target.isConnected`, so a limbo survivor stays glued. Plan + research below.
 
-## Re-attempt plan, post positioning-migration (2026-06-06) — AWAITING BUILD
+## Re-attempt plan, post positioning-migration (2026-06-06) — LANDED `9ff5b89` (user-confirmed)
 
 **Why the revert cause is gone.** The soft-detach was reverted because it parked
 persistent chrome in limbo, and `reconcilePlacement` → `ensureBound` (the
