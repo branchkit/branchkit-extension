@@ -30,7 +30,7 @@ import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
 import * as idRegistry from '../scan/registry';
 import { enumerateAlmostHintable, isHintable, isVisible, type AlmostHintable } from '../scan/scanner';
 import { accessibleName } from '../scan/accessible-name';
-import { diagnoseContainerResolution, getPositionLog, type ContainerResolutionDiag, type PositionLogEntry } from '../render/hints';
+import { diagnoseContainerResolution, type ContainerResolutionDiag } from '../render/hints';
 import {
   elementSnap,
   parentChainSig,
@@ -148,7 +148,6 @@ export interface DebugSnapshotPayload {
   orphans: OrphanRecord[];
   recent_activations: readonly ActivatePathEvent[];
   dom_survey?: DomSurveyElement[];
-  position_log?: readonly PositionLogEntry[];
   /** Shadow-mode reconcile plan (drives nothing; see lifecycle/reconcile.ts).
    * Attached by the content-script capture path, which owns activeCategory +
    * the rect store the plan reads. */
@@ -374,7 +373,6 @@ export function buildSnapshotPayload(inputs: BuildInputs): DebugSnapshotPayload 
     orphans: findOrphans(inputs.store, inputs.knownRegistryIds),
     recent_activations: getActivatePathBuffer(),
     dom_survey: captureDomSurvey(inputs.store),
-    position_log: getPositionLog(),
   };
 }
 

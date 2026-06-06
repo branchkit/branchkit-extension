@@ -21,7 +21,7 @@ import { resolveTarget } from './activate/activate-resolution';
 import { IntersectionTracker } from './observe/intersection-tracker';
 import { AttentionObserver } from './observe/attention-observer';
 import { TargetRectStore } from './observe/target-rect-store';
-import { HintBadge, setPositionCaller, clearPositionCaller } from './render/hints';
+import { HintBadge } from './render/hints';
 import { reconcilePass, drain as drainReconcilePositioner, reconcileRegistrySize } from './render/reconcile-positioner';
 import { onContainerResize } from './observe/container-resize-tracker';
 import { onTargetMutation } from './observe/target-mutation-tracker';
@@ -1405,11 +1405,9 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
     // 100ms; this just keeps the MO active to feed it.
     if (renderable.length > 0) connectVisibilityMO();
 
-    setPositionCaller('showHints');
     const __pbStart = performance.now();
     try { placeBadges(renderable); } finally {
       recordCpu('placeBadges:show', performance.now() - __pbStart);
-      clearPositionCaller();
       firehoseStep('showHints:place_end', renderable.length, 20);
     }
     // Write-on-paint: seed the store with each painted target's current rect
@@ -1513,7 +1511,6 @@ function badgeNewlyCodeworded(): void {
 
   const existingCount = store.all.filter(w => w.hint?.isVisible).length;
 
-  setPositionCaller('badgeNewlyCodeworded');
   try {
     cacheLayout(newBadges.map(w => w.element));
     for (let i = 0; i < newBadges.length; i++) {
@@ -1536,7 +1533,6 @@ function badgeNewlyCodeworded(): void {
     }
   } finally {
     clearLayoutCache();
-    clearPositionCaller();
   }
 }
 
@@ -2814,7 +2810,6 @@ function scheduleReposition(scope: RepositionScope = 'all'): void {
     reconcilePass();
     const visible = store.all.filter(w => w.hint?.isVisible);
     if (visible.length === 0) return;
-    setPositionCaller(scope === 'drifted' ? 'scrollReposition' : 'scheduleReposition');
     const __pbStart = performance.now();
     // Reposition breadcrumbs: a `reposition:start` without matching
     // `reposition:end` pins this as the wedge body. Size = visible badge
@@ -2836,7 +2831,6 @@ function scheduleReposition(scope: RepositionScope = 'all'): void {
       if (toPlace.length > 0) placeBadges(toPlace);
     } finally {
       clearLayoutCache();
-      clearPositionCaller();
       recordCpu(scope === 'drifted' ? 'placeBadges:scroll' : 'placeBadges:reposition',
         performance.now() - __pbStart);
       firehoseStep(`reposition:${scope}:end`, visible.length, 20);

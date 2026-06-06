@@ -44,29 +44,6 @@ function hasViewportPinnedAncestor(target: Element): boolean {
 }
 
 
-// --- Position debug log (temporary investigation) ---
-export interface PositionLogEntry {
-  ts: number;
-  caller: string;
-  scrollY: number;
-  target: { tag: string; name: string; vpY: number };
-  container: { tag: string; id: string; vpY: number; display: string; position: string };
-  outer: { vpY: number; h: number; w: number };
-  computed: { vpX: number; vpY: number; innerTop: string; innerLeft: string };
-  result: { innerVpY: number; diff: number };
-}
-const POSITION_LOG_MAX = 200;
-const positionLog: PositionLogEntry[] = [];
-function pushPositionLog(entry: PositionLogEntry): void {
-  positionLog.push(entry);
-  if (positionLog.length > POSITION_LOG_MAX) positionLog.shift();
-}
-export function getPositionLog(): readonly PositionLogEntry[] { return positionLog; }
-let _positionCaller = '';
-export function setPositionCaller(c: string): void { _positionCaller = c; }
-export function clearPositionCaller(): void { _positionCaller = ''; }
-
-
 export function findBadgeContainer(target: Element): HTMLElement {
   let current: Node | null = target.parentNode;
   while (current) {
