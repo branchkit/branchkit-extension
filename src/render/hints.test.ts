@@ -218,6 +218,109 @@ describe('HintBadge.retarget (reconcile mode)', () => {
   });
 });
 
+describe('HintBadge.reconcileRead (positioning math)', () => {
+  // The crux of the pure-JS reconcile model: convert the live target rect +
+  // baked offset into the host's transform coords. Anchoring is per-target —
+  // flow targets get DOCUMENT coords (rect + page scroll) so the absolute host
+  // rides window scroll on the compositor; viewport-pinned targets get VIEWPORT
+  // coords (rect only, no scroll term) so the fixed host stays with the pinned
+  // target. Both must be scroll-invariant for their target — no per-frame chase.
+  const label = { letter: 'a', words: ['arch'], isSingle: true };
+
+  function rectStub(left: number, top: number): DOMRect {
+    return {
+      left, top, right: left + 20, bottom: top + 14, width: 20, height: 14,
+      x: left, y: top, toJSON() { /* DOMRect shape */ },
+    } as DOMRect;
+  }
+  function setScroll(x: number, y: number): void {
+    Object.defineProperty(window, 'scrollX', { value: x, configurable: true });
+    Object.defineProperty(window, 'scrollY', { value: y, configurable: true });
+  }
+
+  afterEach(() => {
+    setScroll(0, 0);
+    containerTracker.reset();
+    targetTracker.reset();
+    hostTracker.reset();
+  });
+
+  it('flow target: document coords stay constant as the window scrolls (rides scroll, no chase)', () => {
+    const root = mount('<div id="c"><button id="btn">click</button></div>');
+    const btn = root.querySelector('#btn')! as HTMLElement;
+    setScroll(0, 0);
+    btn.getBoundingClientRect = () => rectStub(100, 200);
+
+    const badge = new HintBadge(btn, label, 'button', 'word');
+    badge.show();
+    badge.updatePosition({ x: 90, y: 190 }); // badge nudged up-left of the target
+
+    expect(badge.reconcileRead()).toMatchObject({ x: 90, y: 190 });
+
+    // Page scrolls down 300 / right 50: a flow target's viewport rect shifts by
+    // -scroll, and reconcileRead adds +scroll, so the document coords (and thus
+    // the host transform) are invariant — the badge tracks the target for free.
+    setScroll(50, 300);
+    btn.getBoundingClientRect = () => rectStub(100 - 50, 200 - 300);
+    expect(badge.reconcileRead()).toMatchObject({ x: 90, y: 190 });
+
+    badge.remove();
+  });
+
+  it('viewport-pinned target (fixed ancestor): no scroll term — host stays put on scroll', () => {
+    const root = mount('<div id="fixed" style="position:fixed"><button id="btn">x</button></div>');
+    const btn = root.querySelector('#btn')! as HTMLElement;
+    setScroll(0, 0);
+    btn.getBoundingClientRect = () => rectStub(40, 60);
+
+    const badge = new HintBadge(btn, label, 'button', 'word');
+    badge.show();
+    badge.updatePosition({ x: 30, y: 50 });
+    expect(badge.reconcileRead()).toMatchObject({ x: 30, y: 50 });
+
+    // A fixed target keeps its viewport rect as the window scrolls; reconcileRead
+    // must NOT fold in the scroll offset (adding scrollX=50 would yield x=80).
+    setScroll(50, 300);
+    expect(badge.reconcileRead()).toMatchObject({ x: 30, y: 50 });
+
+    badge.remove();
+  });
+
+  it('returns null while hidden (not yet shown)', () => {
+    const root = mount('<div><button id="btn">x</button></div>');
+    const btn = root.querySelector('#btn')! as HTMLElement;
+    btn.getBoundingClientRect = () => rectStub(10, 10);
+    const badge = new HintBadge(btn, label, 'button', 'word');
+    badge.updatePosition({ x: 5, y: 5 }); // baked, but never shown
+    expect(badge.reconcileRead()).toBeNull();
+    badge.remove();
+  });
+
+  it('returns null once the target disconnects from the DOM (soft-detach survivor stays glued, dead target does not)', () => {
+    const root = mount('<div><button id="btn">x</button></div>');
+    const btn = root.querySelector('#btn')! as HTMLElement;
+    btn.getBoundingClientRect = () => rectStub(10, 10);
+    const badge = new HintBadge(btn, label, 'button', 'word');
+    badge.show();
+    badge.updatePosition({ x: 5, y: 5 });
+    expect(badge.reconcileRead()).not.toBeNull();
+
+    btn.remove(); // target leaves the DOM
+    expect(badge.reconcileRead()).toBeNull();
+    badge.remove();
+  });
+
+  it('returns null before any offset has been baked (no updatePosition yet)', () => {
+    const root = mount('<div><button id="btn">x</button></div>');
+    const btn = root.querySelector('#btn')! as HTMLElement;
+    btn.getBoundingClientRect = () => rectStub(10, 10);
+    const badge = new HintBadge(btn, label, 'button', 'word');
+    badge.show(); // visible + connected, but no baked offset
+    expect(badge.reconcileRead()).toBeNull();
+    badge.remove();
+  });
+});
+
 describe('HintBadge reuse contract (setLabel + clearLabel)', () => {
   // The IO claim/release loop holds onto HintBadge instances across
   // viewport cycles so scroll-back doesn't pay full shadow-DOM-creation
