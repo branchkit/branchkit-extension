@@ -103,7 +103,7 @@ class LabelReservoir {
     // its fingerprints held before the reload. The SW falls back to front-of-
     // pool for the remaining slots. Only the *initial* fill carries preferred;
     // hot-path refills (maybeRefill) stay generic. See
-    // notes/DESIGN_CODEWORD_STABILITY.md.
+    // notes/completed/DESIGN_CODEWORD_STABILITY.md.
     this.initialReady = this.refill(INITIAL_RESERVATION, preferred);
     return this.initialReady;
   }

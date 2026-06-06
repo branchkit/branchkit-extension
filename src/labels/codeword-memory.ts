@@ -8,7 +8,7 @@
  * fingerprint held before the reload. Keyed per frame because reloads are
  * per-frame; LRU-capped per frame to bound growth on long-lived tabs.
  *
- * Phase 1 of Regime B (notes/DESIGN_CODEWORD_STABILITY.md): the store only.
+ * Phase 1 of Regime B (notes/completed/DESIGN_CODEWORD_STABILITY.md): the store only.
  * The write wiring (CS sends fingerprints when a wrapper takes a codeword) is
  * phase 2; the confidence-ladder match on recall is phase 3 and lives
  * content-script side (where `fingerprintsEqual` + the position tiebreak are),

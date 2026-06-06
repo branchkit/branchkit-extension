@@ -440,7 +440,7 @@ export class HintBadge {
   public readonly anchorMode: boolean;
   private anchorName: string | null = null;
 
-  // Option 3 (notes/DESIGN_HINT_POSITIONING_REARCH.md). Mutually exclusive with
+  // Option 3 (notes/completed/DESIGN_HINT_POSITIONING_REARCH.md). Mutually exclusive with
   // anchorMode: when true the host is body-mounted (position:absolute, document-
   // anchored so it rides window scroll on the compositor) and the batched JS
   // reconciler writes its transform from the live target rect + page scroll +

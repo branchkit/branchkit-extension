@@ -1,5 +1,5 @@
 /**
- * Option 3 (notes/DESIGN_HINT_POSITIONING_REARCH.md): a batched reconcile that
+ * Option 3 (notes/completed/DESIGN_HINT_POSITIONING_REARCH.md): a batched reconcile that
  * pins each registered badge host to its target by reading the live target rect
  * and writing a composited `transform`. This is the pure-JS positioning model
  * that would replace CSS Anchor Positioning (and the Firefox nesting path) under

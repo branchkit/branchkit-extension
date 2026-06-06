@@ -1,7 +1,13 @@
-# Hint Badge Positioning — Re-architecture Proposal
+# Hint Badge Positioning — Re-architecture
 
-**Status:** Proposed (2026-06-06). Investigation complete; awaiting direction
-before any implementation. No code changes yet.
+**Status:** LANDED (2026-06-06). Migrated to the unified pure-JS reconcile model
+(Option 3): anchor + nesting paths, the scroll-ancestor tracker, `reconcilePlacement`/
+`ensureBound`, and the `bkJsPosition` flag are all deleted; reconcile is the only
+positioning model. Per-target viewport-vs-document anchoring fixes both flow and
+fixed/sticky targets (user-verified on YouTube). Residual follow-ups noted inline:
+sticky-transition / true inner-overflow-scroller wiggle, and a vestigial-field
+cleanup (anchorMode/anchorName/reconcileMode + the diagnostics anchor fields +
+scrollSensitive/geometryDependent in compute/rango).
 
 ## Why this note exists
 

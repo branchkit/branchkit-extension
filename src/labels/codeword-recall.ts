@@ -8,7 +8,7 @@
  * `preferredCodeword` is then carried into the claim so the element can reclaim
  * the codeword it held before the reload.
  *
- * Phase 3 of Regime B (notes/DESIGN_CODEWORD_STABILITY.md). Resolving the
+ * Phase 3 of Regime B (notes/completed/DESIGN_CODEWORD_STABILITY.md). Resolving the
  * preference is all this does; actually granting the remembered codeword (the
  * targeted preferred-refill through the reservoir) is phase 4.
  */
