@@ -575,11 +575,12 @@ export class HintBadge {
   public readonly anchorMode: boolean;
   private anchorName: string | null = null;
 
-  // Option 3 spike (notes/DESIGN_HINT_POSITIONING_REARCH.md). Mutually exclusive
-  // with anchorMode: when true the host is body-mounted (position:fixed) and the
-  // batched JS reconciler writes its transform from the live target rect + this
-  // baked offset (candidate minus target top-left), instead of CSS anchor() or
-  // the nesting path. Set in the constructor from the bkJsPosition flag.
+  // Option 3 (notes/DESIGN_HINT_POSITIONING_REARCH.md). Mutually exclusive with
+  // anchorMode: when true the host is body-mounted (position:absolute, document-
+  // anchored so it rides window scroll on the compositor) and the batched JS
+  // reconciler writes its transform from the live target rect + page scroll +
+  // this baked offset (candidate minus target top-left), instead of CSS anchor()
+  // or the nesting path. Set in the constructor from the bkJsPosition flag.
   public readonly reconcileMode: boolean;
   private _reconcileOffset: { x: number; y: number } | null = null;
 
@@ -804,13 +805,17 @@ export class HintBadge {
     document.body.appendChild(this.host);
   }
 
-  // Option 3 spike. Body-mount the host as a viewport-fixed 0x0 box; the
-  // reconciler writes `transform: translate(vpX, vpY)` from the live target rect
-  // each pass. position:fixed makes the transform viewport-relative, so the
-  // target's getBoundingClientRect coords feed in directly. No anchor-name.
+  // Option 3. Body-mount the host as a 0x0 box at the document origin and write
+  // `transform: translate(docX, docY)` from the live target rect PLUS the page
+  // scroll offset. position:absolute (NOT fixed) anchors the host to the
+  // document, so on window scroll it rides the compositor in lockstep with the
+  // page content: the document position is scroll-invariant, so the badge stays
+  // glued to its target with zero main-thread lag (no scroll "wiggle"). JS only
+  // re-pins when the target moves WITHIN the document (layout / inner-pane
+  // scroll). No anchor-name — nothing for the page's inline-style rewrites to strip.
   private setupReconcileHost(): void {
     this.host.style.cssText =
-      `display:block;position:fixed;top:0;left:0;width:0;height:0;pointer-events:none;`;
+      `display:block;position:absolute;top:0;left:0;width:0;height:0;pointer-events:none;`;
     this.outer.style.position = 'absolute';
     this.outer.style.top = '0';
     this.outer.style.left = '0';
@@ -824,10 +829,15 @@ export class HintBadge {
   reconcileRead(): ReconcileWrite | null {
     if (!this._reconcileOffset || !this._visible || !this.target.isConnected) return null;
     const r = this.target.getBoundingClientRect();
+    // Document-relative coords (viewport rect + page scroll). The host is
+    // position:absolute, so writing the DOCUMENT position lets it ride window
+    // scroll on the compositor — scroll-invariant, so there's no per-frame chase
+    // and no wiggle. (window.scrollX/Y move with scroll exactly as r.left/top do,
+    // so the sum stays constant while the target isn't moving in the document.)
     return {
       host: this.host,
-      x: Math.round(r.left + this._reconcileOffset.x),
-      y: Math.round(r.top + this._reconcileOffset.y),
+      x: Math.round(r.left + window.scrollX + this._reconcileOffset.x),
+      y: Math.round(r.top + window.scrollY + this._reconcileOffset.y),
     };
   }
 
@@ -1289,8 +1299,9 @@ export class HintBadge {
   // ordering so our own appendChild isn't seen as a foreign mutation by
   // the old container's resize observer.
   ensureContainer(): boolean {
-    // reconcile-mode hosts are body-mounted (position:fixed), never nested in a
-    // page container, so there is no container to re-resolve.
+    // reconcile-mode hosts are body-mounted (position:absolute, document-
+    // anchored), never nested in a page container, so there is no container to
+    // re-resolve.
     if (this.anchorMode || this.reconcileMode || !this.target.isConnected) return false;
     const desired = resolveContainer(this.target);
     // Two drift sources: (a) the cached `anchorParent` is stale because

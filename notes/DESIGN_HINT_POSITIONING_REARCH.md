@@ -285,6 +285,27 @@ headline evidence.
   style rewrites now fall through to the settle/reconcile path — verify the trigger
   rate doesn't spike (the 100ms debounce should absorb it).
 
+## Step 1 refinement (2026-06-06): document-anchored host (kills the scroll wiggle)
+
+Real-Chrome testing of the step-1 landing showed a visible scroll "wiggle": the
+badge lagged the content by ~1 frame and caught up. Cause: the spike mounted the
+host `position:fixed` (viewport-anchored) and wrote viewport coords, so every
+scroll frame the badge had to be re-chased by main-thread JS — and main-thread
+reposition always trails the compositor's scroll by a frame.
+
+Fix (landed): mount the reconcile host `position:absolute` (document-anchored)
+and write DOCUMENT coords (`getBoundingClientRect` + `window.scrollX/Y` + baked
+offset). The document position is scroll-invariant, so on window scroll the host
+rides the compositor in lockstep with the page content — zero main-thread lag,
+no wiggle. `reconcilePass()` writing the same scroll-invariant value mid-scroll is
+now harmless (correct regardless of timing). JS re-pin is only needed when the
+target moves *within* the document — layout changes and **inner-pane (overflow
+container) scrolls**, where an document-anchored host does NOT ride the inner
+scroller and the scroll-active loop still chases (residual wiggle possible there;
+revisit with the Option 2 wrapper if inner-pane wiggle proves perceptible).
+Touches `setupReconcileHost` + `reconcileRead` only; flag still gates; tests +
+the Playwright scroll-tracking check stay green.
+
 ## Relationship to prior notes
 
 - Supersedes the positioning halves of `DESIGN_OBSERVER_DRIVEN_LAYOUT`,
