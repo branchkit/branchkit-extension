@@ -1561,6 +1561,15 @@ chrome.runtime.onInstalled.addListener((details) => {
   // the focused one (Option B), so a re-injected background tab can't clobber
   // the focused tab's codewords the way the old fail-open gate allowed.
   const reinject = details.reason === 'install' || details.reason === 'update';
+  // One-time cleanup: a 2026-06-05 experiment registered dynamic content
+  // scripts under these IDs (bk-bootstrap, bk-content) with
+  // persistAcrossSessions:true. The experiment was reverted but persisted
+  // registrations survive extension reload, causing double-injection +
+  // page-hang on heavy pages. Safe no-op for clean installs (the ids are
+  // not registered) and for instances that never ran the experiment.
+  void chrome.scripting
+    .unregisterContentScripts({ ids: ['bk-bootstrap', 'bk-content'] })
+    .catch(() => {});
   void init().then(() => {
     if (reinject) void reinjectContentScripts();
   });
