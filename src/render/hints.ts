@@ -19,119 +19,6 @@ import { trackTargetMutations, untrackTargetMutations } from '../observe/target-
 import { trackHostAttributes, untrackHostAttributes } from '../observe/host-attribute-tracker';
 import { register as registerReconcile, unregister as unregisterReconcile, type ReconcileWrite } from './reconcile-positioner';
 
-// --- CSS Anchor Positioning fast-path (Chromium 125+) ---
-//
-// When the engine supports CSS Anchor Positioning we pin each badge host to
-// its target via `anchor-name`/`anchor()` instead of physically nesting the
-// host inside the target's scroll-ancestor. The compositor then carries the
-// badge through *every* overflow ancestor with zero JS scroll work — solving
-// the "Hard" inner-pane scroll case (Phase 5b) natively. The anchor CSS must
-// live on the light-DOM host: `anchor()` does not pierce up out of a shadow
-// tree to a light-DOM `anchor-name` (verified open + closed). Firefox (no
-// `anchor()`) keeps the nesting + settle-reposition path unchanged.
-let _anchorSupport: boolean | null = null;
-export function supportsAnchorPositioning(): boolean {
-  if (_anchorSupport !== null) return _anchorSupport;
-  _anchorSupport =
-    typeof CSS !== 'undefined' &&
-    typeof CSS.supports === 'function' &&
-    CSS.supports('anchor-name', '--x') &&
-    CSS.supports('top', 'anchor(top)');
-  return _anchorSupport;
-}
-let _nextAnchorId = 0;
-
-// Migration flag (notes/DESIGN_HINT_POSITIONING_REARCH.md). When enabled, badges
-// follow their target via the batched JS reconciler (reconcile-positioner.ts) —
-// the unified pure-JS model — instead of CSS anchor mode or the nesting path.
-// Default ON: reconcile is now the model. The legacy anchor/nesting path can be
-// opted back into per-origin with `localStorage.bkJsPosition = '0'` (then reload)
-// during the migration; this flag and the legacy paths are deleted together once
-// the migration lands. `localStorage` is shared per-origin between the page and
-// the content script's isolated world.
-let _jsReposition: boolean | null = null;
-export function jsRepositionEnabled(): boolean {
-  if (_jsReposition !== null) return _jsReposition;
-  try {
-    _jsReposition = typeof localStorage === 'undefined' || localStorage.getItem('bkJsPosition') !== '0';
-  } catch {
-    _jsReposition = true;
-  }
-  return _jsReposition;
-}
-
-// Firefox (through 150) advertises CSS Anchor Positioning but fails to resolve
-// `anchor()` when the anchored element references a target inside a
-// `position:fixed` containing block — the host collapses to the viewport
-// origin (0,0), so badges on fixed page chrome (YouTube's masthead, mini-guide,
-// chips bar) render stacked in the top-left corner instead of on their target.
-// Chromium resolves it correctly. Feature-detect the specific broken behavior
-// (no UA sniffing) so targets under a fixed ancestor fall back to the nesting
-// path, which Firefox renders fine. Sticky/transform containing blocks resolve
-// correctly in both engines and stay on the anchor path.
-let _anchorAcrossFixed: boolean | null = null;
-export function anchorResolvesAcrossFixed(): boolean {
-  if (_anchorAcrossFixed !== null) return _anchorAcrossFixed;
-  if (!supportsAnchorPositioning() || typeof document === 'undefined' || !document.body) {
-    // Only consulted when anchor is supported; assume ok until the DOM is ready.
-    return true;
-  }
-  const name = `--bk-probe-${_nextAnchorId++}`;
-  const anchor = document.createElement('div');
-  anchor.style.cssText = 'position:fixed;top:100px;left:120px;width:1px;height:1px;visibility:hidden;';
-  anchor.style.setProperty('anchor-name', name);
-  const host = document.createElement('div');
-  host.style.cssText =
-    `position:absolute;top:anchor(top);left:anchor(left);position-anchor:${name};width:1px;height:1px;visibility:hidden;`;
-  document.body.appendChild(anchor);
-  document.body.appendChild(host);
-  const a = anchor.getBoundingClientRect();
-  const h = host.getBoundingClientRect();
-  anchor.remove();
-  host.remove();
-  _anchorAcrossFixed = Math.abs(a.top - h.top) < 2 && Math.abs(a.left - h.left) < 2;
-  return _anchorAcrossFixed;
-}
-
-// Walk ancestors (piercing shadow boundaries) for a `position:fixed` element.
-export function hasFixedAncestor(target: Element): boolean {
-  let node: Element | null = target;
-  while (node) {
-    if (node instanceof HTMLElement && getCachedStyle(node).position === 'fixed') return true;
-    const parent: Element | null = node.parentElement;
-    if (parent) {
-      node = parent;
-    } else {
-      const root = node.getRootNode();
-      node = root instanceof ShadowRoot ? (root.host as Element) : null;
-    }
-  }
-  return false;
-}
-
-// Express placement's absolute viewport decision as a scroll-invariant offset
-// from the target's element rect, baked into the host's anchor() calc. The
-// compositor then carries the badge through scroll.
-export function anchorOffsetCss(
-  candidate: { x: number; y: number },
-  elRect: { left: number; top: number },
-): { left: string; top: string } {
-  const offX = Math.round(candidate.x - elRect.left);
-  const offY = Math.round(candidate.y - elRect.top);
-  return { left: `calc(anchor(left) + ${offX}px)`, top: `calc(anchor(top) + ${offY}px)` };
-}
-
-// Test hook: pin anchor support on/off (or null to re-detect). happy-dom's
-// CSS.supports returns true for everything, so tests must set the mode they
-// intend rather than relying on detection.
-export const __testing = {
-  setAnchorSupport(v: boolean | null): void { _anchorSupport = v; _anchorAcrossFixed = null; },
-  setAnchorAcrossFixed(v: boolean | null): void { _anchorAcrossFixed = v; },
-  // Pin the reconcile flag (null = re-detect). Legacy anchor/nesting tests pin
-  // this false so they keep exercising those paths now that reconcile is the
-  // production default. Removed with the flag once the migration lands.
-  setJsReposition(v: boolean | null): void { _jsReposition = v; },
-};
 
 // --- Position debug log (temporary investigation) ---
 export interface PositionLogEntry {
@@ -155,12 +42,6 @@ let _positionCaller = '';
 export function setPositionCaller(c: string): void { _positionCaller = c; }
 export function clearPositionCaller(): void { _positionCaller = ''; }
 
-export type PositionMode = 'absolute' | 'relative';
-
-export interface BadgeContext {
-  container: HTMLElement;
-  positionMode: PositionMode;
-}
 
 export function findBadgeContainer(target: Element): HTMLElement {
   let current: Node | null = target.parentNode;
@@ -370,33 +251,6 @@ export function diagnoseContainerResolution(target: Element): ContainerResolutio
   };
 }
 
-export function resolveBadgeContext(target: Element, host: HTMLElement, outer: HTMLElement): BadgeContext {
-  const container = resolveContainer(target);
-  container.appendChild(host);
-  // Always use relative positioning (Rango/Vimium pattern). The outer's
-  // visual position is driven by its DOM placement — which is INSIDE
-  // the container, which is inside whatever scrolling content the
-  // target lives in. Both scroll together natively; no JS reposition
-  // needed for in-context tracking.
-  //
-  // Previous absolute-default broke on Gmail because the outer's
-  // containing block (under closed shadow DOM, anchored to the nearest
-  // positioned ancestor outside the shadow tree) didn't move with
-  // internal pane scrolls. Switching to relative makes the outer
-  // participate in normal flow inside the container, which is the case
-  // Rango has shipped reliably across the same hard targets (Gmail,
-  // Slack, etc.) for years.
-  //
-  // The `outer.offsetParent` open-shadow check remains for completeness
-  // — in test environments using open shadow it preserves the original
-  // behavior, while production closed-shadow falls through to relative.
-  const outerOffsetParent = outer.offsetParent;
-  const positionMode: PositionMode = outerOffsetParent && container.contains(outerOffsetParent)
-    ? 'absolute'  // open-shadow test path: outer's offsetParent is inside container
-    : 'relative'; // closed-shadow production path (offsetParent null) OR offsetParent outside container
-  return { container, positionMode };
-}
-
 const BADGE_OFFSET = 24;
 
 // --- Refinement scheduler (phase 3 of the two-pass paint plan) ---
@@ -571,30 +425,14 @@ export class HintBadge {
   public readonly reconcileMode: boolean;
   private _reconcileOffset: { x: number; y: number } | null = null;
 
-  // Scroll-tracking trim (nesting path). A badge nested in its target's
-  // scroll context translates with the target via the compositor, so the
-  // window-scroll reposition is redundant for it. needsScrollReposition()
-  // detects the badges that DO need a JS reposition on scroll: those whose
-  // placement is clamped by a sticky/fixed ancestor (clamp point is
-  // viewport-fixed, so it engages/disengages as the target scrolls past it),
-  // and those whose host drifted relative to the target (scroll-context
-  // mismatch). `scrollSensitive` is set by the placement strategy when it
-  // resolves a sticky bound; the *Vp fields snapshot the last placement so
-  // drift can be measured as a delta-of-deltas.
+  // Placement outputs, surfaced in diagnostics: scrollSensitive = the offset
+  // rode a sticky/fixed bound; geometryDependent = it rode ancestor geometry
+  // (clamp or sticky bound). Set by the placement strategy.
   public scrollSensitive: boolean = false;
-  // Set by the placement strategy when the resolved offset actually rode
-  // ancestor geometry (available-space clamp bit, or a sticky/fixed bound
-  // applied). Such a badge must be re-placed on the 'all' layout sweep even on
-  // the anchor path, because a resize can move that ancestor geometry. When
-  // false, the offset is purely target-relative and the compositor carries it.
   public geometryDependent: boolean = false;
-  private _lastTargetVp: { x: number; y: number } | null = null;
-  private _lastOuterVp: { x: number; y: number } | null = null;
-  // Diagnostic-only: inputs of the last anchor-offset bake, so a snapshot can
-  // show what candidate/target the baked `calc(anchor() + Npx)` came from and
-  // whether the target rect read at bake time matches its live position now.
+  // Diagnostic-only: inputs of the last bake (candidate/target), surfaced in a
+  // snapshot to compare against the live target rect.
   private _lastBake: { candidateY: number; targetTop: number } | null = null;
-  private static readonly DRIFT_EPS = 0.5;
 
   constructor(target: Element, label: LabelAssignment, category: Category, displayMode: BadgeDisplayMode) {
     this.target = target;
@@ -747,22 +585,9 @@ export class HintBadge {
     // would treat our own setAttribute/style writes as page tampering.
     // Anchor/reconcile hosts need a real box (position → display block);
     // nesting hosts stay display:contents.
-    trackHostAttributes(this.host, (this.anchorMode || this.reconcileMode) ? 'block' : 'contents');
+    trackHostAttributes(this.host, 'block');
     // Colors are NOT touched here — they were already applied accurately
     // (APCA) at show() time. Refinement is observer-only now.
-  }
-
-  // Body-mount the host and pin it to the target via anchor(). outer/inner
-  // sit at the host's origin; updatePosition writes the placement offset into
-  // the host's anchor() calc. Idempotent enough to reuse from reattach.
-  private setupAnchorHost(): void {
-    this.host.style.cssText =
-      `display:block;position:absolute;top:anchor(top);left:anchor(left);` +
-      `position-anchor:${this.anchorName};width:0;height:0;pointer-events:none;`;
-    this.outer.style.position = 'absolute';
-    this.outer.style.top = '0';
-    this.outer.style.left = '0';
-    document.body.appendChild(this.host);
   }
 
   // Option 3. Body-mount the host as a 0x0 box at the document origin and write
@@ -872,13 +697,6 @@ export class HintBadge {
   show(grammarReady = false): void {
     if (this._visible) return;
     this._visible = true;
-    // Catch container drift before painting. On sites that render the
-    // anchor first and wrap it in additional ancestors later (YouTube
-    // channel /videos h3), construction-time `resolveContainer` walked
-    // past the bare anchor up to a far ancestor like `ytd-page-manager`,
-    // leaving the host parked there. Re-resolve at show-time so the
-    // badge always paints inside the correct local container.
-    this.ensureContainer();
     this.inner.classList.remove('filtered');
     this.applyColors();
     this._size = null;
@@ -1063,13 +881,8 @@ export class HintBadge {
   }
 
   reposition(): void {
-    // Anchor-mode badges follow their target via the compositor; reconcile-mode
-    // badges follow via the JS reconciler. Either way a candidate-less
-    // reposition has no offset to apply, so it's a no-op for both.
-    if (this.anchorMode || this.reconcileMode) return;
-    if (this._visible) {
-      this.updatePosition();
-    }
+    // Reconcile badges follow their target via the JS reconciler; a
+    // candidate-less reposition has no offset to apply, so it's a no-op.
   }
 
   // Does this badge need a JS reposition on a window scroll? For the nesting
@@ -1082,16 +895,8 @@ export class HintBadge {
   //  - drifted badges: the outer moved by a different delta than the target
   //    since the last placement (scroll-context mismatch).
   needsScrollReposition(): boolean {
-    // reconcile mode follows the target via the rAF reconciler, not the window
-    // scroll path — never needs a JS scroll reposition here.
-    if (this.anchorMode || this.reconcileMode || !this._visible) return false;
-    if (this.scrollSensitive) return true;
-    if (!this._lastTargetVp || !this._lastOuterVp) return true;
-    const t = getCachedRect(this.target);
-    const o = this.outer.getBoundingClientRect();
-    const driftX = (t.left - this._lastTargetVp.x) - (o.left - this._lastOuterVp.x);
-    const driftY = (t.top - this._lastTargetVp.y) - (o.top - this._lastOuterVp.y);
-    return Math.abs(driftX) > HintBadge.DRIFT_EPS || Math.abs(driftY) > HintBadge.DRIFT_EPS;
+    // Reconcile follows the target via the rAF reconciler — no JS scroll reposition.
+    return false;
   }
 
   // Does this badge need a JS re-place on an 'all' layout sweep (resize,
@@ -1102,72 +907,8 @@ export class HintBadge {
   // available space, or pinned to a sticky/fixed bound) — a resize can move
   // that geometry, so it must be recomputed.
   needsLayoutReposition(): boolean {
-    // reconcile mode re-reads the target rect every pass, so a layout sweep
-    // needs no special handling for it.
-    if (this.reconcileMode) return false;
-    if (!this.anchorMode || !this._visible) return true;
-    return this.geometryDependent;
-  }
-
-  // Anchor path only. The anchor relationship is carried by a single inline
-  // `anchor-name` written onto the target once at construction. List
-  // virtualization (YouTube scroll-back) recreates/recycles the target node
-  // without that style, so the host's `position-anchor` references a dead name
-  // and anchor() collapses to the document origin — the scroll-back stranding
-  // bug. This is an unobserved target-identity change: no scroll, no resize, no
-  // removal of our (body-mounted) host, so nothing else repairs it. Re-assert
-  // the binding on the live target; the compositor re-resolves anchor() on its
-  // own, so no reposition is needed. Mirrors retarget's untrack→write→re-track
-  // ordering so our own write isn't seen as a foreign mutation. gBCR-free —
-  // reads only the target's inline style. Returns true if it repaired a binding.
-  ensureBound(): boolean {
-    if (!this.anchorMode || !this.anchorName || !this.target.isConnected) return false;
-    const el = this.target as HTMLElement;
-    if (el.style?.getPropertyValue?.('anchor-name')?.trim() === this.anchorName) return false;
-    untrackTargetMutations(this.target);
-    el.style?.setProperty?.('anchor-name', this.anchorName);
-    trackTargetMutations(this.target);
-    return true;
-  }
-
-  // Nesting path only. The host is appended to `anchorParent` (chosen by
-  // `resolveContainer`) at construction time. On sites where YouTube
-  // renders the anchor first and wraps it in additional ancestors later
-  // (channel /videos uses `yt-lockup-view-model` + a deferred `<h3>`
-  // wrapper around `a.ytLockupMetadataViewModelTitle`), the construction-
-  // time walk escalates past the bare anchor up to a far ancestor like
-  // `ytd-page-manager`, then the correct local container appears post
-  // hoc and the host is left stranded — connected (so reattach skips it)
-  // but in the wrong parent (so the inline-flow badge paints nowhere
-  // near its target). Re-resolve and migrate the host if the correct
-  // container has changed since construction. Returns true if it moved.
-  //
-  // gBCR-free: `resolveContainer` reads computed styles (warm cache when
-  // called from a layout-reading window like reconcilePlacement) but not
-  // `getBoundingClientRect`. Mirrors retarget's untrack→write→re-track
-  // ordering so our own appendChild isn't seen as a foreign mutation by
-  // the old container's resize observer.
-  ensureContainer(): boolean {
-    // reconcile-mode hosts are body-mounted (position:absolute, document-
-    // anchored), never nested in a page container, so there is no container to
-    // re-resolve.
-    if (this.anchorMode || this.reconcileMode || !this.target.isConnected) return false;
-    const desired = resolveContainer(this.target);
-    // Two drift sources: (a) the cached `anchorParent` is stale because
-    // resolution now picks a different container; (b) the host was moved
-    // out of `anchorParent` externally (page framework reparented it).
-    // Either way, the fix is the same: park the host in the currently-
-    // correct container. Skip only when both already agree.
-    if (desired === this.anchorParent && this.host.parentElement === desired) return false;
-    if (desired !== this.anchorParent) {
-      untrackContainerResize(this.anchorParent);
-      this.anchorParent = desired;
-      trackContainerResize(this.anchorParent);
-    }
-    if (this.host.parentElement !== desired) {
-      desired.appendChild(this.host);
-    }
-    return true;
+    // Reconcile re-reads the target rect every pass — no layout-sweep reposition.
+    return false;
   }
 
   remove(): void {
@@ -1179,12 +920,7 @@ export class HintBadge {
     untrackContainerResize(this.anchorParent);
     untrackTargetMutations(this.target);
     untrackHostAttributes(this.host);
-    if (this.anchorMode) {
-      // Untrack the target mutation observer first (above) so clearing our
-      // anchor-name write isn't observed as a foreign mutation.
-      (this.target as HTMLElement).style?.removeProperty?.('anchor-name');
-    }
-    if (this.reconcileMode) unregisterReconcile(this);
+    unregisterReconcile(this);
     this.host.remove();
   }
 

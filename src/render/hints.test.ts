@@ -4,7 +4,6 @@ import {
   findLimitParent,
   resolveContainer,
   HintBadge,
-  __testing as hintsTesting,
   __refineScheduler,
 } from './hints';
 import { __testing as containerTracker } from '../observe/container-resize-tracker';
@@ -31,17 +30,12 @@ function mount(html: string): Element {
 // constructor back to the inline-refine behavior that the tests pin.
 beforeEach(() => {
   __refineScheduler.setImmediate(true);
-  // Reconcile is the production default now; these tests exercise the legacy
-  // anchor/nesting paths, so pin the flag off. (Reconcile positioning is
-  // covered by reconcile-positioner.test.ts.)
-  hintsTesting.setJsReposition(false);
 });
 
 afterEach(() => {
   for (const el of mounted) el.remove();
   mounted.length = 0;
   __refineScheduler.setImmediate(false);
-  hintsTesting.setJsReposition(null);
 });
 
 describe('findBadgeContainer', () => {
