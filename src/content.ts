@@ -24,7 +24,6 @@ import { TargetRectStore } from './observe/target-rect-store';
 import { HintBadge, setPositionCaller, clearPositionCaller } from './render/hints';
 import { reconcilePass, drain as drainReconcilePositioner, reconcileRegistrySize } from './render/reconcile-positioner';
 import { onContainerResize } from './observe/container-resize-tracker';
-import { onScrollAncestor, scrollAncestorStats, registeredScrollTargets } from './observe/scroll-ancestor-tracker';
 import { onTargetMutation } from './observe/target-mutation-tracker';
 import { cacheLayout, cacheVisibility, clearLayoutCache, peekCachedRect, getCachedRect } from './layout-cache';
 import { placeBadges, placeOne, clearPlacement } from './placement';
@@ -2938,12 +2937,11 @@ window.addEventListener('scroll', scheduleScrollReposition, { passive: true });
 // any modern web-app sidebar / data-grid pattern). Scroll events don't
 // bubble, but they DO participate in capture, so a document-level capture
 // handler sees every scroll target regardless of who scrolled. Without
-// this the only nested-scroll signal was `onScrollAncestor` — which tracks
-// the scroll ancestors of *already-anchored* badges, so a row with the
-// discovery gap (no badge yet) contributed nothing and the band-discovery
-// sweep never fired. QuickBase 2026-06-05: 15 reposition:drifted events
-// from scheduleDeferredReposition but ZERO band_discovery:entered, because
-// scroll never reached scheduleScrollReposition. The handler is the same
+// this, inner-pane scroll has NO signal — it never reaches
+// scheduleScrollReposition, so a row revealed by inner-pane scroll never
+// fires the band-discovery sweep. QuickBase 2026-06-05: 15 reposition:drifted
+// events from scheduleDeferredReposition but ZERO band_discovery:entered,
+// because scroll never reached scheduleScrollReposition. The handler is the same
 // debounced scheduleScrollReposition the window listener uses, so the
 // 100 ms coalescing keeps cost bounded even on multi-pane scroll bursts.
 document.addEventListener('scroll', scheduleScrollReposition, { passive: true, capture: true });
@@ -2963,27 +2961,6 @@ document.addEventListener('scroll', scheduleScrollReposition, { passive: true, c
 // layout settles trades a ~100ms lag on resize-driven repositions —
 // imperceptible mid-scroll, same trade already accepted for scroll.
 onContainerResize(scheduleDeferredReposition);
-
-// Inner-pane scroll → keep TargetRectStore warm for that pane's targets
-// AND fire the same scroll-settle backstops the window scroll listener
-// runs. Without this, sites with inner overflow scrollers (QuickBase
-// tables, Slack channel list, Gmail mail list, GitHub file tree) never
-// triggered `scheduleBandDiscovery` — the level-triggered backstop that
-// catches rows dropped by `drainDiscovery` during a heavy virtualization
-// burst. `scroll` doesn't bubble, so the window listener above misses
-// these scrollers entirely; this callback is the only place inner-pane
-// scroll-settle is observed.
-//
-// The tracker hands us one rAF-coalesced batch per scroll; the rect write
-// stays in this synchronous handler (compositor-tracked, no thrash), the
-// backstops are debounced inside scheduleScrollReposition so a long
-// virtualization scroll coalesces to one sweep at settle.
-onScrollAncestor((targets) => {
-  for (const el of targets) {
-    if (el.isConnected) targetRectStore.write(el, el.getBoundingClientRect());
-  }
-  scheduleScrollReposition();
-});
 
 // Deferred reposition for signals that hint "layout is about to settle":
 // - focusin/focusout: :focus-within can resize parents, focus-driven
@@ -4105,10 +4082,6 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
       size: targetRectStore.size,
       subscribers: targetRectStore.subscriberCount,
       drift: targetRectStore.sampleDrift(10),
-      scrollAncestors: scrollAncestorStats(),
-      // Drift scoped to inner-pane-registered targets (the placement-relevant
-      // set) — confirms Phase 5b keeps the store warm where it matters.
-      scrollAncestorDrift: targetRectStore.sampleDriftFor(registeredScrollTargets(), 10),
     },
     // Diagnostic shadow of the authoritative reconcile (content.ts:reconcile +
     // reconcileTeardown + scheduleBandDiscovery). Drives nothing; surfaces the

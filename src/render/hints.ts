@@ -15,7 +15,6 @@ import { computeBadgeColors } from './badge-colors';
 import { type BadgeSettings, DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
 import { leaderLineGeometry } from '../placement/geometry';
 import { trackContainerResize, untrackContainerResize } from '../observe/container-resize-tracker';
-import { trackScrollAncestor, untrackScrollAncestor } from '../observe/scroll-ancestor-tracker';
 import { trackTargetMutations, untrackTargetMutations } from '../observe/target-mutation-tracker';
 import { trackHostAttributes, untrackHostAttributes } from '../observe/host-attribute-tracker';
 import { register as registerReconcile, unregister as unregisterReconcile, type ReconcileWrite } from './reconcile-positioner';
@@ -196,22 +195,6 @@ function isScrollContainer(el: Element): boolean {
     (scrollWidth > clientWidth && /scroll|auto/.test(s.overflowX)) ||
     (scrollHeight > clientHeight && /scroll|auto/.test(s.overflowY))
   );
-}
-
-/**
- * Nearest scrollable ancestor of `target`, or null if the only scroller is
- * the document (window scroll, handled separately in content.ts). Used to
- * register the badge with the scroll-ancestor tracker so inner-pane scroll
- * keeps TargetRectStore warm. Reads layout via the warm cache — call only
- * inside a cacheLayout window (badge construction / retarget run there).
- */
-export function findScrollAncestor(target: Element): HTMLElement | null {
-  let current: Element | null = target.parentElement;
-  while (current && current !== document.body && current !== document.documentElement) {
-    if (current instanceof HTMLElement && isScrollContainer(current)) return current;
-    current = current.parentElement;
-  }
-  return null;
 }
 
 const ENOUGH_LEFT = 15;
@@ -543,7 +526,6 @@ export class HintBadge {
   // scroll-ancestor tracker so inner-pane scroll keeps TargetRectStore warm.
   // Null on the anchor path (compositor-tracked, store not read for it) and
   // when the only scroller is the document.
-  private scrollAncestor: HTMLElement | null = null;
   private shadow: ShadowRoot;
   private outer: HTMLDivElement;
   private inner: HTMLDivElement;
@@ -782,10 +764,6 @@ export class HintBadge {
     if (this._refined || this._removed) return;
     this._refined = true;
     trackContainerResize(this.anchorParent);
-    if (!this.anchorMode && !this.reconcileMode) {
-      this.scrollAncestor = findScrollAncestor(this.target);
-      if (this.scrollAncestor) trackScrollAncestor(this.scrollAncestor, this.target);
-    }
     trackTargetMutations(this.target);
     // Start the host-attribute defender AFTER all setup is done — the
     // observer fires on real mutations only, but starting it earlier
@@ -960,10 +938,6 @@ export class HintBadge {
    */
   retarget(newEl: Element): void {
     untrackContainerResize(this.anchorParent);
-    if (this.scrollAncestor) {
-      untrackScrollAncestor(this.scrollAncestor, this.target);
-      this.scrollAncestor = null;
-    }
     untrackTargetMutations(this.target);
 
     if (this.reconcileMode) {
@@ -996,10 +970,6 @@ export class HintBadge {
     }
 
     trackContainerResize(this.anchorParent);
-    if (!this.anchorMode && !this.reconcileMode) {
-      this.scrollAncestor = findScrollAncestor(this.target);
-      if (this.scrollAncestor) trackScrollAncestor(this.scrollAncestor, this.target);
-    }
     trackTargetMutations(this.target);
     // host-attribute tracker is keyed on the host (unchanged); no swap.
 
@@ -1333,10 +1303,6 @@ export class HintBadge {
     // (refine() may not have run yet), so it's safe to call them
     // unconditionally — they just clean up whichever subscriptions exist.
     untrackContainerResize(this.anchorParent);
-    if (this.scrollAncestor) {
-      untrackScrollAncestor(this.scrollAncestor, this.target);
-      this.scrollAncestor = null;
-    }
     untrackTargetMutations(this.target);
     untrackHostAttributes(this.host);
     if (this.anchorMode) {
