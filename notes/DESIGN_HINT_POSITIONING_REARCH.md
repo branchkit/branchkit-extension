@@ -306,7 +306,27 @@ revisit with the Option 2 wrapper if inner-pane wiggle proves perceptible).
 Touches `setupReconcileHost` + `reconcileRead` only; flag still gates; tests +
 the Playwright scroll-tracking check stay green.
 
-## Deferred (tracked, NOT abandoned): inner-pane / sticky wiggle
+## Viewport-pinned wiggle — FIXED 2026-06-06 (per-target anchoring)
+
+**Update:** the document-anchored host fixed flow targets but *regressed*
+viewport-pinned ones — a `position:fixed` target (YouTube's left rail) holds a
+constant viewport position while the page scrolls, so a document-anchored host
+(`absolute` + scroll offset) rides the scroll *away* from it. Fixed by choosing
+the host's anchoring **per target** (within the reconcile model, still
+body-mounted, no anchor-name): `hasViewportPinnedAncestor` (fixed/sticky ancestor)
+→ `position:fixed` + viewport coords (no scroll term); flow targets →
+`position:absolute` + document coords. Both are scroll-invariant for their target,
+so neither needs a per-frame chase. User-verified on YouTube's left sidebar.
+
+**Residual:** (a) a `sticky` target during its *transition* phase (scrolling in
+before it pins) — viewport-anchoring is correct while pinned but drifts during the
+unpinned scroll; the per-frame scroll loop still chases it, so it's the small
+remaining wiggle. (b) a target inside a true *inner overflow scroller* (not
+fixed/sticky) — still document-anchored, so it drifts on inner-pane scroll. Both
+are the genuine clip-vs-drift cases; revisit with the scroll-driven-animation
+candidate if they prove perceptible.
+
+## Deferred (superseded by the fix above): inner-pane / sticky notes
 
 The document-anchored host kills the wiggle for window scroll but not for targets
 that move within the document during scroll — `position:sticky` sidebars and inner

@@ -19,6 +19,30 @@ import { trackTargetMutations, untrackTargetMutations } from '../observe/target-
 import { trackHostAttributes, untrackHostAttributes } from '../observe/host-attribute-tracker';
 import { register as registerReconcile, unregister as unregisterReconcile, type ReconcileWrite } from './reconcile-positioner';
 
+// Walk ancestors (piercing shadow boundaries) for a position:fixed or sticky
+// element. Such a target holds a constant viewport position as the window
+// scrolls, so its badge host must be viewport-anchored (position:fixed + viewport
+// coords) — a document-anchored host would ride the page scroll away from the
+// pinned target (the YouTube left-rail drift). Uses the warm style cache;
+// evaluated once at construction / retarget.
+function hasViewportPinnedAncestor(target: Element): boolean {
+  let node: Element | null = target;
+  while (node) {
+    if (node instanceof HTMLElement) {
+      const pos = getCachedStyle(node).position;
+      if (pos === 'fixed' || pos === 'sticky') return true;
+    }
+    const parent: Element | null = node.parentElement;
+    if (parent) {
+      node = parent;
+    } else {
+      const r = node.getRootNode();
+      node = r instanceof ShadowRoot ? (r.host as Element) : null;
+    }
+  }
+  return false;
+}
+
 
 // --- Position debug log (temporary investigation) ---
 export interface PositionLogEntry {
@@ -424,6 +448,9 @@ export class HintBadge {
   // or the nesting path. Set in the constructor from the bkJsPosition flag.
   public readonly reconcileMode: boolean;
   private _reconcileOffset: { x: number; y: number } | null = null;
+  // True when the target is viewport-pinned (fixed/sticky ancestor): the host is
+  // position:fixed + viewport coords instead of position:absolute + doc coords.
+  private _viewportFixed = false;
 
   // Placement outputs, surfaced in diagnostics: scrollSensitive = the offset
   // rode a sticky/fixed bound; geometryDependent = it rode ancestor geometry
@@ -544,6 +571,10 @@ export class HintBadge {
     // Body-mount the host; the JS reconciler follows the target. No page-DOM
     // write (no anchor-name) — nothing for the page's inline-style rewrites to
     // strip. anchorParent is still resolved for container-resize tracking.
+    // Viewport-pinned (fixed/sticky) targets get a viewport-anchored host so it
+    // doesn't ride the page scroll away from them; flow targets get a
+    // document-anchored host that rides the scroll with them.
+    this._viewportFixed = hasViewportPinnedAncestor(target);
     this.anchorParent = resolveContainer(target);
     this.setupReconcileHost();
     registerReconcile(this);
@@ -590,17 +621,18 @@ export class HintBadge {
     // (APCA) at show() time. Refinement is observer-only now.
   }
 
-  // Option 3. Body-mount the host as a 0x0 box at the document origin and write
-  // `transform: translate(docX, docY)` from the live target rect PLUS the page
-  // scroll offset. position:absolute (NOT fixed) anchors the host to the
-  // document, so on window scroll it rides the compositor in lockstep with the
-  // page content: the document position is scroll-invariant, so the badge stays
-  // glued to its target with zero main-thread lag (no scroll "wiggle"). JS only
-  // re-pins when the target moves WITHIN the document (layout / inner-pane
-  // scroll). No anchor-name — nothing for the page's inline-style rewrites to strip.
+  // Option 3. Body-mount a 0x0 box and write `transform: translate(x, y)` from
+  // the live target rect each pass. Anchoring is chosen per target:
+  //   - flow targets: position:absolute + DOCUMENT coords (rect + page scroll),
+  //     so the host rides window scroll on the compositor in lockstep — no chase.
+  //   - viewport-pinned targets (fixed/sticky ancestor): position:fixed +
+  //     VIEWPORT coords (rect only), so the host stays put with the pinned target.
+  // Either is scroll-invariant for its target, so no per-frame chase / no wiggle.
+  // No anchor-name — nothing for the page's inline-style rewrites to strip.
   private setupReconcileHost(): void {
+    const position = this._viewportFixed ? 'fixed' : 'absolute';
     this.host.style.cssText =
-      `display:block;position:absolute;top:0;left:0;width:0;height:0;pointer-events:none;`;
+      `display:block;position:${position};top:0;left:0;width:0;height:0;pointer-events:none;`;
     this.outer.style.position = 'absolute';
     this.outer.style.top = '0';
     this.outer.style.left = '0';
@@ -614,15 +646,16 @@ export class HintBadge {
   reconcileRead(): ReconcileWrite | null {
     if (!this._reconcileOffset || !this._visible || !this.target.isConnected) return null;
     const r = this.target.getBoundingClientRect();
-    // Document-relative coords (viewport rect + page scroll). The host is
-    // position:absolute, so writing the DOCUMENT position lets it ride window
-    // scroll on the compositor — scroll-invariant, so there's no per-frame chase
-    // and no wiggle. (window.scrollX/Y move with scroll exactly as r.left/top do,
-    // so the sum stays constant while the target isn't moving in the document.)
+    // Coords match the host's anchoring (see setupReconcileHost): document coords
+    // (rect + page scroll) for a flow target so it rides window scroll; viewport
+    // coords (rect only) for a viewport-pinned target so it stays with it. Both
+    // are scroll-invariant for their target, so no per-frame chase / no wiggle.
+    const sx = this._viewportFixed ? 0 : window.scrollX;
+    const sy = this._viewportFixed ? 0 : window.scrollY;
     return {
       host: this.host,
-      x: Math.round(r.left + window.scrollX + this._reconcileOffset.x),
-      y: Math.round(r.top + window.scrollY + this._reconcileOffset.y),
+      x: Math.round(r.left + sx + this._reconcileOffset.x),
+      y: Math.round(r.top + sy + this._reconcileOffset.y),
     };
   }
 
@@ -667,6 +700,13 @@ export class HintBadge {
     // its next pass.
     this.target = newEl;
     this.anchorParent = resolveContainer(newEl);
+    // Re-evaluate viewport-pinning for the new target; flip the host's anchoring
+    // mode if it changed (e.g. rebind from a flow node to a fixed one).
+    const wasViewportFixed = this._viewportFixed;
+    this._viewportFixed = hasViewportPinnedAncestor(newEl);
+    if (this._viewportFixed !== wasViewportFixed) {
+      this.host.style.position = this._viewportFixed ? 'fixed' : 'absolute';
+    }
 
     trackContainerResize(this.anchorParent);
     trackTargetMutations(this.target);
