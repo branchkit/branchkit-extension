@@ -306,6 +306,33 @@ revisit with the Option 2 wrapper if inner-pane wiggle proves perceptible).
 Touches `setupReconcileHost` + `reconcileRead` only; flag still gates; tests +
 the Playwright scroll-tracking check stay green.
 
+## Deferred (tracked, NOT abandoned): inner-pane / sticky wiggle
+
+The document-anchored host kills the wiggle for window scroll but not for targets
+that move within the document during scroll — `position:sticky` sidebars and inner
+overflow scrollers (YouTube's secondary column is the live example). This is ugly
+enough to need an eventual fix; it is deferred deliberately, with reasons:
+
+- **It's in direct tension with the north star (codeword stability).** The only
+  true fix is to make the badge ride the inner scroller, and the obvious way —
+  nest the badge in the page subtree (Option 2 / co-location) — is exactly the
+  page-owned-node fragility (page recreate/remove on nav/virtualization) that
+  REGRESSES codeword stability. So the obvious fix is the wrong fix. (Empirically,
+  2026-06-06 Firefox probes: the existing nesting path escalates the host to body
+  anyway → it doesn't even fix the inner-pane case without adding clip-management.)
+- **It should be designed once, against the unified single-reconcile model** the
+  migration produces — not bolted onto the 3-model code about to be deleted.
+- Cosmetic, vs the load-bearing codeword-stability goal.
+
+**Scheduled slot:** after the migration collapses to one reconcile model AND the
+codeword-stability soft-detach re-lands. **Leading candidate (resolves the
+tension):** CSS scroll-driven animation (`animation-timeline: scroll(nearest …)`)
+binding the host's transform to the inner scroller's scroll position on the
+compositor, while keeping the host body-mounted — rides inner scroll WITHOUT
+subtree injection. Verify Chrome/Firefox support + interaction with reconcile
+transform writes. Fallback: scoped co-location for inner-pane targets only,
+accepting the binding tradeoff there.
+
 ## Relationship to prior notes
 
 - Supersedes the positioning halves of `DESIGN_OBSERVER_DRIVEN_LAYOUT`,

@@ -175,17 +175,16 @@ export class RangoStrategy implements PlacementStrategy {
 
   clear(): void {}
 
-  private getAvailableSpace(container: Element, rect: DOMRect, anchorMode: boolean): { left: number | undefined; top: number | undefined } {
-    // In CSS anchor-positioning mode the host is body-mounted (see
-    // setupAnchorHost), not nested inside anchorParent — so anchorParent
-    // never visually clips the badge. The clamp's only purpose was to keep
-    // the badge inside its mount container's visible area; without nesting
-    // there's nothing to escape. Return unbounded space so the nudge alone
-    // determines placement. This unblocks YouTube Shorts cards, where the
-    // title link is wrapped in an h3 with `overflow:hidden` and the chosen
-    // anchorParent often resolves to that h3 (no roomier ancestor exists
-    // for the title text — the thumbnail is a sibling container).
-    if (anchorMode) return { left: undefined, top: undefined };
+  private getAvailableSpace(container: Element, rect: DOMRect, bodyMounted: boolean): { left: number | undefined; top: number | undefined } {
+    // Body-mounted hosts — CSS anchor mode AND the reconcile model — sit on
+    // document.body, NOT nested inside anchorParent, so anchorParent never
+    // visually clips the badge and the container space-clamp is wrong-by-
+    // construction (it would clamp to a box the host isn't in). Return unbounded
+    // space so the nudge alone determines placement. Also unblocks YouTube
+    // Shorts cards, where the title link's chosen anchorParent is an h3 with
+    // overflow:hidden and no roomier ancestor exists. (Once nesting is deleted
+    // every host is body-mounted, so this clamp + findStickyBound go dead.)
+    if (bodyMounted) return { left: undefined, top: undefined };
     // Nesting-path fallback (Firefox, or per-target anchor() bailout):
     // measure inside the resolved container so the clamp prevents the
     // badge from being clipped by anchorParent's overflow.
@@ -223,7 +222,7 @@ export class RangoStrategy implements PlacementStrategy {
       targetRect,
       badgeSize: w.hint.badgeSize,
       nudge: getNudge(w.element, probe.hasText),
-      availableSpace: this.getAvailableSpace(w.hint.anchorParent, targetRect, w.hint.anchorMode),
+      availableSpace: this.getAvailableSpace(w.hint.anchorParent, targetRect, w.hint.anchorMode || w.hint.reconcileMode),
       stickyBound,
     });
 
