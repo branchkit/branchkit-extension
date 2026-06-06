@@ -2281,6 +2281,33 @@ function preNavDetachAll(triggerReason: string, sparePersistent = false): number
   return targets.length;
 }
 
+// Soft-detach for the voice activate-click path (DESIGN_CODEWORD_STABILITY).
+// Does the SAME synchronous per-element observer teardown as preNavDetachAll —
+// the nav-time wedge preempt — but instead of releasing each wrapper's codeword
+// + identity, it drops every wrapper into limbo. Persistent chrome whose DOM
+// node survives the nav keeps its codeword and is graduated + re-observed by
+// finalizeExpiredLimboWrappers; swapped-out content is reaped or
+// fingerprint-rebound via the generic limbo path. No getBoundingClientRect here
+// — lastRect is already warm from the IO, so the teardown stays layout-free (the
+// whole point of the preempt).
+function softDetachAllForNav(triggerReason: string): number {
+  const now = Date.now();
+  const targets = [...store.all];
+  for (const w of targets) {
+    resizeObserver.unobserve(w.element);
+    tracker.unobserve(w.element);
+    attentionObserver.unobserve(w.element);
+    if (!w.lastRect) w.lastRect = peekCachedRect(w.element);
+    enterLimbo(w, now);
+  }
+  chrome.runtime.sendMessage({
+    type: 'DEBUG_LOG',
+    tag: 'pipeline.cs_nav_step',
+    data: { step: 'soft_detach', reason: triggerReason, softened: targets.length },
+  } as Message).catch(() => {});
+  return targets.length;
+}
+
 // The same-document-nav rescan body, owned by `PageSession.onUrlChange`. The
 // background `webNavigation` SPA-nav signal arrives as the `rescan` action and
 // is dispatched here; this is the content-side handler, not the detector.
@@ -2572,7 +2599,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
           // sees an empty store and the deferred_scan rebuilds the new page.
           // Cost on a non-nav click: tearing down ~100 wrappers takes ~2ms and
           // the post-click `scheduleHintRefresh` (always-mode) rebuilds them.
-          preNavDetachAll('activate_click');
+          softDetachAllForNav('activate_click');
           const result = activateElement(target);
           clickedEl = result.target;
           delegation = result.delegation;
@@ -3220,7 +3247,11 @@ async function discoverInSubtreeBatched(root: Element): Promise<number> {
 function collectLimboWrappers(): ElementWrapper[] {
   const out: ElementWrapper[] = [];
   for (const w of store.all) {
-    if (w.disconnectedAt !== null && w.scanned.id > 0) out.push(w);
+    // Only DISCONNECTED limbo wrappers are rebind-eligible. A soft-detached nav
+    // survivor (still connected, parked in limbo for the wedge preempt) must be
+    // excluded, or new content with a colliding fingerprint could rebind-steal
+    // its codeword + badge off the live element.
+    if (w.disconnectedAt !== null && !w.element.isConnected && w.scanned.id > 0) out.push(w);
   }
   return out;
 }
@@ -3387,14 +3418,18 @@ function finalizeExpiredLimboWrappers(): number {
   let finalized = 0;
   for (const w of [...store.all]) {
     if (!isLimboExpired(w, now, LIMBO_DEADLINE_MS)) continue;
-    // Defensive de-limbo: if the same DOM node reconnected during the
-    // window (rare — React typically swaps to a new element, but plain
-    // DOM moves don't), graduate the wrapper back to connected rather
-    // than tearing it down. The fingerprint-based rebind (step 3)
-    // handles the new-element case.
+    // Graduate a still-connected limbo wrapper back to live. Covers both the
+    // same-node-reconnect case and soft-detached nav survivors (persistent
+    // chrome). Clear disconnectedAt FIRST, then re-attach the observers
+    // softDetach/teardown removed — so the IntersectionObserver's mandatory
+    // initial callback runs with the wrapper non-limbo and the idempotent claim
+    // (claims only when no codeword is held) can't double-claim. Mirror
+    // attachWrapper: tracker + resize (attentionObserver is managed elsewhere).
     if (w.element.isConnected) {
       w.disconnectedAt = null;
       w.lastRect = null;
+      tracker.observe(w.element);
+      resizeObserver.observe(w.element);
       continue;
     }
     detachWrapper(w.element);

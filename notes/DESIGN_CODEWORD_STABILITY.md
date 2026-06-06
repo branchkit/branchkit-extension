@@ -3,10 +3,77 @@
 **Status (2026-06-06):** Regime B (SW-memory, ~62%) and Regime A **mouse**
 table-switch (DOM-survivor spare, `7af5cb8`) are landed. A soft-detach fix for
 the **voice** table-switch was implemented, trace-confirmed to work, then
-**reverted** — it caused a YouTube steady-state regression. So voice table→table
-sidebar codewords currently reshuffle; full reloads (records / app entry) get the
-~62% Regime B reclaim. Next lever is Regime B, not more teardown surgery. Details
-below.
+**reverted** — it caused a YouTube steady-state regression. **Re-attempt now
+UNBLOCKED** by the positioning migration (reconcile-only; `reconcilePlacement`/
+`ensureBound` deleted) — the revert cause is gone. Grounded re-attempt plan below
+("Re-attempt plan, post positioning-migration"); awaiting build.
+
+## Re-attempt plan, post positioning-migration (2026-06-06) — AWAITING BUILD
+
+**Why the revert cause is gone.** The soft-detach was reverted because it parked
+persistent chrome in limbo, and `reconcilePlacement` → `ensureBound` (the
+anchor-name re-writer) deliberately skipped limbo wrappers, so those badges
+dangled to the document origin. The positioning migration deleted
+`reconcilePlacement`/`ensureBound` entirely. `reconcileRead` positions on
+`target.isConnected` (NOT `disconnectedAt`), so a soft-detached-but-connected
+survivor is still positioned every reconcile pass. The plan is therefore viable
+and **simpler than the original** — no `observersSuspended` flag is needed (it
+existed only to keep placement running for suspended survivors; placement is gone).
+Reusing `disconnectedAt` + an `isConnected` guard on the rebind pool is sufficient.
+
+**The change (4 edits + a breadcrumb), grounded against the current tree:**
+
+1. **`softDetachAllForNav()`** — for each `store.all` wrapper:
+   `resizeObserver`/`tracker`/`attentionObserver`.unobserve (the same wedge preempt
+   `detachWrapper` does, content.ts:1188-1190), seed `lastRect` from the warm
+   layout cache, then `enterLimbo(w, now)`. Do NOT call `removeWrapperByElement` —
+   codeword, registry id, and pending Put/Delete state are untouched (identity
+   retained; no `queueDelete`).
+2. **Activate-click swap** — replace `preNavDetachAll('activate_click')`
+   (content.ts:2575) with `softDetachAllForNav()`. The pre-click unobserve (wedge
+   preempt) is byte-for-byte preserved; only the identity release is dropped.
+3. **Finalize re-observe** — `finalizeExpiredLimboWrappers` (content.ts:3395)
+   graduates a still-connected expired-limbo wrapper (`disconnectedAt=null`) but
+   does NOT re-observe it → blind. Add `tracker.observe` + `resizeObserver.observe`
+   (clear `disconnectedAt` first, mirroring `attachWrapper`; not attentionObserver).
+   Level-triggered backstop: a survivor un-blinds within ≤250ms (LIMBO_DEADLINE_MS).
+4. **Rebind-steal guard** — `collectLimboWrappers` (content.ts:3223) adds
+   `&& !w.element.isConnected` so a live survivor in limbo can't be
+   fingerprint-rebind-stolen by new content. No-op for today's behavior (limbo only
+   ever held disconnected elements); a guard for the new path.
+
+Plus a `pipeline.cs_nav_step {step:'soft_detach'}` breadcrumb.
+
+**Behavior:** voice table-switch keeps the persistent sidebar's codewords (no
+reshuffle); badges stay positioned via reconcile during the ≤250ms window; doomed
+swapped-out content reaps/rebinds via the generic limbo path (bonus: content-rebind
+by fingerprint now also covers the voice path).
+
+**Carried constraints / test gate:** wedge preempt preserved — re-verify YouTube
+channel "Videos" voice-activate does NOT freeze; soft-detach queues no Delete so
+codewords stay matchable across the nav; no double-claim on re-observe (IO skips
+limbo + claims only when no codeword held — order: clear `disconnectedAt` before
+`observe`). Residual watch: the ≤250ms blind window (scroll/resize during it won't
+reposition — low impact for a table-switch) and a brief pool overlap (doomed +
+survivor codewords both claimed until finalize).
+
+**Research validation (2026-06-06).** Cloned Rango + surveyed Vimium / Vimium C /
+Surfingkeys / Tridactyl / Talon + identity/observer best practices. Outcome: label
+stability across SPA nav is greenfield — Rango deliberately resets labels on nav
+and keys identity on the live `Element` object (no fingerprint, only bfcache
+heap-restore); Vimium's maintainer says there's "no good general solution." So our
+fingerprint + limbo + confidence-ladder is ahead of the field and the right shape —
+nothing to copy. Rango's `ElementWrapper.suspend()` (unobserve + keep-object +
+re-observe) validates the soft-detach pattern, and no tool uses a separate
+"observers suspended" flag — confirming **Choice A** (reuse `disconnectedAt` + an
+`isConnected` rebind-pool guard) over the original `observersSuspended` proposal
+(which only existed for the now-deleted placement limbo-skip). Reinforced
+guardrails: (a) the IntersectionObserver initial-callback is THE double-claim
+gotcha — clear `disconnectedAt` before `observe` in finalize, keep claim idempotent
+(already so); (b) ambiguous fingerprint ties ⇒ fall back to a fresh codeword, never
+guess (our `refuse_distance` already does this); (c) follow-up fingerprint-quality
+fix — normalize counts out of accessible names ("Issues 42→43"), already a known
+risk.
 
 ## Soft-detach attempt — implemented, confirmed, then reverted (2026-06-06)
 
