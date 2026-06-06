@@ -1,6 +1,43 @@
 # Codeword Stability Across Navigation
 
-**Status:** Proposed.
+**Status:** Both regimes landed 2026-06-06 (see Outcome). Soaking.
+
+## Outcome (2026-06-06)
+
+- **Regime B (full reloads — record open/close, app entry): landed, phases 1–4.**
+  SW-persisted per-frame fingerprint→codeword memory (`labels/codeword-memory.ts`),
+  write path (REMEMBER_CODEWORDS on claim), read path (RECALL_CODEWORDS →
+  `labels/codeword-recall.ts` confidence ladder → `preferredCodeword`), and the
+  reservoir initial preferred-fill. Live result on QuickBase record open/close:
+  **~62% reclaim** (148/239 of memory-matched elements), best-effort — the misses
+  are release-before-claim ordering + the newest-100 fill cap. Commits up to
+  `f1c132c`.
+- **Regime A (same-document navs — sidebar / table-switch): landed, but NOT via
+  the limbo-lite carry sketched below.** The actual fix was simpler: on the
+  spa_nav rescan, `preNavDetachAll` now **spares wrappers whose element is still
+  connected** (commit `7af5cb8`). The persistent sidebar keeps its wrappers +
+  codewords with no memory, no reclaim, **flicker-free**. Live-verified: sidebar
+  stable on mouse table-switch (`spared:~290`).
+  - **Caveat (timing):** the spare is effective only when the sidebar DOM persists
+    AND the idle-scheduled rescan runs before limbo finalizes the store. An
+    earlier run spared 0 (rescan ~2s late, store already churned). A *re-rendering*
+    sidebar still falls back to limbo-rebind, which the diagnosis showed is
+    unreliable (mostly `no_match`/`refuse` on the swapped content). Committed as
+    the low-risk increment; harden the re-render path only if churn recurs in use.
+  - **Two earlier Regime-A attempts that missed** (kept here so we don't repeat
+    them): (1) reclaim-after-wipe via a recall refresh on spa_nav — *flickered*
+    (badge painted fresh then corrected); (2) the spare-connected change targeted
+    `preNavDetachAll`, which on a slow rescan finds the store already emptied by
+    the page's own mutation path. The teardown is distributed across the
+    mutation observer + deferred doScan + rescan (the "nav-rebuild smell").
+
+**Soak watch-items:** (a) any *unrelated* steady-state browsing breakage (the
+nav-teardown change is in the high-blast-radius area); (b) sidebar codewords
+churning again on table-switch (would mean the re-render path needs hardening).
+
+---
+
+**Original design below (Proposed).**
 
 When you navigate within a JS-framework app — switching views in a React/Vue SPA,
 or moving between tables/reports/forms in QuickBase — the persistent page chrome
