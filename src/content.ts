@@ -22,6 +22,7 @@ import { IntersectionTracker } from './observe/intersection-tracker';
 import { AttentionObserver } from './observe/attention-observer';
 import { TargetRectStore } from './observe/target-rect-store';
 import { HintBadge, setPositionCaller, clearPositionCaller } from './render/hints';
+import { reconcilePass, drain as drainReconcilePositioner, reconcileRegistrySize } from './render/reconcile-positioner';
 import { onContainerResize } from './observe/container-resize-tracker';
 import { onScrollAncestor, scrollAncestorStats, registeredScrollTargets } from './observe/scroll-ancestor-tracker';
 import { onTargetMutation } from './observe/target-mutation-tracker';
@@ -2224,6 +2225,20 @@ function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
   }
   try { visibilityIO.disconnect(); } catch { /* same */ }
   try { visibilityMO.disconnect(); } catch { /* same */ }
+  // Stop the reconcile scroll loop and drop every reconcile-mode badge from the
+  // positioner registry. The host-removal sweep below removes hosts via raw DOM
+  // (bypassing HintBadge.remove(), the only per-badge unregister site), so
+  // without this the registry would retain dead badges and a stray settle/scroll
+  // pass could iterate and reflow detached frames. drain() is a no-op when the
+  // flag is off (empty registry).
+  try {
+    if (reconcileScrollRaf !== null) {
+      cancelAnimationFrame(reconcileScrollRaf);
+      reconcileScrollRaf = null;
+    }
+    reconcileScrollActive = false;
+    drainReconcilePositioner();
+  } catch { /* same */ }
   // Remove badge hosts so the new content script's initial DOM-clear sweep
   // (content.ts ~line 2230) doesn't have to fight visible artifacts.
   try {
@@ -2801,6 +2816,14 @@ function scheduleReposition(scope: RepositionScope = 'all'): void {
     repositionRafPending = false;
     const scope = pendingScope;
     pendingScope = 'drifted';
+    // Reconcile mode (bkJsPosition): the JS positioner owns badge placement.
+    // Drive one batched pass here so it rides the shared 100ms-debounce + rAF
+    // single-flight the four settle handlers funnel into — one coalescing
+    // policy, wedge-safe by construction. A no-op (and cheap) when the flag is
+    // off (registry empty); reconcileRead() short-circuits hidden badges before
+    // any gBCR. The anchor/nesting sweep below is per-badge no-op'd in reconcile
+    // mode (needsScroll/LayoutReposition return false), so the two never overlap.
+    reconcilePass();
     const visible = store.all.filter(w => w.hint?.isVisible);
     if (visible.length === 0) return;
     setPositionCaller(scope === 'drifted' ? 'scrollReposition' : 'scheduleReposition');
@@ -2834,6 +2857,33 @@ function scheduleReposition(scope: RepositionScope = 'all'): void {
 }
 window.addEventListener('resize', () => scheduleReposition('all'), { passive: true });
 
+// Reconcile mode (bkJsPosition) scroll tracking. Reconcile hosts are
+// position:fixed and do NOT ride the compositor like anchor/nesting badges, so
+// during a continuous scroll they must be re-pinned to their targets every
+// frame — the trailing-edge 100ms settle below would leave them detached from
+// the viewport until scroll stops. This runs a per-frame reconcilePass() ONLY
+// while scroll events are arriving and only when reconcile badges exist; it
+// self-cancels ~1 frame after the last scroll event, so it is bounded and NOT a
+// free-running rAF (the nav-time wedge discipline). When the flag is off the
+// registry is empty, so anchor/nesting sessions never arm it — zero overhead.
+let reconcileScrollRaf: number | null = null;
+let reconcileScrollActive = false;
+function noteReconcileScroll(): void {
+  if (reconcileRegistrySize() === 0) return;
+  reconcileScrollActive = true;
+  if (reconcileScrollRaf === null) reconcileScrollRaf = requestAnimationFrame(reconcileScrollFrame);
+}
+function reconcileScrollFrame(): void {
+  reconcileScrollRaf = null;
+  reconcilePass();
+  // Re-arm for one more frame if a scroll event landed since the last pass;
+  // a quiet frame (no new event) clears the flag and lets the loop stop.
+  if (reconcileScrollActive) {
+    reconcileScrollActive = false;
+    reconcileScrollRaf = requestAnimationFrame(reconcileScrollFrame);
+  }
+}
+
 // Scroll runs a 'drifted'-scoped reposition: badges already follow scroll via
 // CSS positioning in their scroll ancestor, so the compositor tracks them for
 // free and only the genuinely scroll-sensitive subset (sticky/fixed clamps,
@@ -2851,6 +2901,10 @@ window.addEventListener('resize', () => scheduleReposition('all'), { passive: tr
 // scroll-sensitive badges lag by ~100ms but settle correctly when scroll
 // stops, which the user can't perceive mid-scroll anyway.
 function scheduleScrollReposition(): void {
+  // Reconcile badges need per-frame re-pinning during the scroll itself (they
+  // don't ride the compositor); this fires on every scroll event, before the
+  // trailing-edge settle below. No-op when the flag is off (empty registry).
+  noteReconcileScroll();
   if (pageSession.scrollRepositionTimer) clearTimeout(pageSession.scrollRepositionTimer);
   pageSession.scrollRepositionTimer = setTimeout(() => {
     pageSession.scrollRepositionTimer = null;
