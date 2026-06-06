@@ -248,6 +248,94 @@ a mutation that D3 re-expresses as a derivation. The dead-binding bug (#2) is no
 separately fixed; it cannot occur once the recompute only ever considers live
 conns.
 
+## Step 3 — the focused-source recompute (concrete design)
+
+Implementation status as of 2026-06-06: native method (D2 core), SSE-accept
+assertion + `bundleForConn` seam, and the asserted-identity *veto* (containment)
+are all shipped. The veto stops the bleeding by refusing a binding that
+contradicts the OS; step 3 removes the thing being vetoed.
+
+### The insight that kills the race
+
+Every mispairing came from *correlating two signals about different things*: the
+extension's claim ("conn X's window is focused") and the OS event ("bundle B is
+frontmost"), paired by a wall-clock window. When they referred to different apps
+(X is Chrome, B is the agent that just stole focus), the pairing was a lie.
+
+Asserted identity collapses the two signals onto one referent. The `/focus`
+claim no longer needs a *separate* OS bundle to pair against — the claiming
+connection already carries its own OS-resolved bundle in `AssertedBundle[X]`. So:
+
+- `/focus(X, true)` ⇒ `FocusedConnID = X`, `FocusedBundleID = AssertedBundle[X]`.
+  Unlagged (rides `onFocusChanged`), and **unpairable** — it reads X's own
+  identity, never another app's focus event.
+- `app.focused(B)` ⇒ focused conn = the live conn whose `AssertedBundle == B`,
+  or none (B is a non-browser, or a browser without our extension).
+
+These two entry points can no longer disagree into a mispairing, because neither
+correlates across referents. The Warp/CoreLocationAgent case: `/focus(Chrome)`
+sets the source to Chrome via Chrome's own asserted bundle; a subsequent
+`app.focused(CoreLocationAgent)` finds no conn asserting that bundle and clears
+the source (Chrome genuinely isn't frontmost anymore) — it never pins Chrome's
+conn to the agent.
+
+### The recompute
+
+One level-triggered function, `recomputeFocusedSourceLocked()`, replaces the
+scattered mutations. Inputs (all already maintained):
+
+- `FocusedBundleID` — OS frontmost bundle (from `app.focused`).
+- `AssertedBundle[conn]` — per *live* conn, OS-resolved (cleared on disconnect,
+  so its key set IS the live-browser set — no `KnownBrowsers` needed).
+- `ConnActiveTab[conn]` — per conn active tab.
+
+```
+recomputeFocusedSourceLocked():
+    osBundle := FocusedBundleID
+    focusedConn := the conn c with AssertedBundle[c] == osBundle   // "" if none
+    if focusedConn != "":
+        FocusedConnID         = focusedConn
+        BrowserFocused        = true
+        FocusedBrowserBundleID = osBundle
+        FocusedTabID          = ConnActiveTab[focusedConn]
+        SSEClientBundles[client(focusedConn)] = osBundle
+    else:
+        FocusedConnID  = ""        // OS frontmost isn't a connected browser
+        FocusedTabID   = 0
+        BrowserFocused = false
+    reprojectFocusedSourceLocked() + drive the active/hints tag transition
+```
+
+Called on every input change: `app.focused`, `/active-tab`, SSE connect/
+disconnect, and asserted-bundle resolution. The `/focus` claim is kept as an
+unlagged fast-path that sets `FocusedConnID = X` / `FocusedBundleID =
+AssertedBundle[X]` directly (covers the Firefox >1s `app.focused` lag), then
+recomputes. Arming for a freshly-connected browser waits on its async assertion
+(tens of ms); an already-connected browser refocuses with no delay.
+
+### What gets deleted
+
+`reconcileFocusBindingLocked`, `bindConnBundleLocked`, `assertedVetoesBindLocked`
+(folded away — nothing to veto), `ConnBundle`, `KnownBrowsers` + its seed,
+`LastFocusConnID` / `LastFocusAt` / `FocusedBundleAt`, `focusBindWindow`, the
+cold-start-refresh dance, and the extension's UA table. `adoptFocusedSourceLocked`
+collapses into the recompute (a disconnect/turnover just re-derives the source).
+
+### Migration sequencing (bisectable, one behavior change)
+
+1. Add `recomputeFocusedSourceLocked` and route `app.focused` / `/active-tab` /
+   `/focus` / SSE-accept through it, still alongside the correlation (assert the
+   two agree via the existing tripwire — should be silent now that the veto
+   holds).
+2. Flip the readers (projection gate, dispatch scoping) onto the recomputed
+   source.
+3. Delete the correlation machinery and the seed in one commit — the final state
+   is strictly smaller.
+
+Each step builds and passes tests; only step 2 changes behavior, so a regression
+bisects to one commit. Long-soak after step 2 before step 3's deletions, per the
+orphan-teardown discipline.
+
 ## Open questions
 
 1. ~~**D2 helper-process attribution.**~~ **Resolved 2026-06-06** (see D2 spike):
