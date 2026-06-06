@@ -1680,44 +1680,6 @@ function reconcileTeardown(): void {
   if (missedEnter.length > 0) reconcile();
 }
 
-// Placement half of the level-triggered reconcile (DESIGN_OBSERVER_DRIVEN_LAYOUT
-// "Placement staleness: the anchor binding outlives the target"). Two failure
-// modes, one per positioning method:
-//
-//   anchor mode  — `ensureBound`: list virtualization (YouTube scroll-back)
-//     recreates the target node without our inline `anchor-name`, so the
-//     host's `position-anchor` dangles and the badge collapses to the
-//     document origin. Re-write the anchor-name on the live target.
-//
-//   nesting mode — `ensureContainer`: when YouTube renders the anchor first
-//     and wraps it in additional ancestors later (channel /videos `<h3>`),
-//     construction-time `resolveContainer` walks past the bare anchor up to a
-//     far ancestor like `ytd-page-manager`. The correct local container
-//     appears post hoc but nothing detects the drift — the host is connected
-//     (so reattach skips it) but in the wrong parent, so the inline-flow
-//     badge paints nowhere near its target. Re-resolve and migrate.
-//
-// Both are unobserved structural shifts that fire no scroll/resize and don't
-// remove our host, so neither `reattachStrippedHosts` nor the limbo-rebind
-// path catches them. The compositor (anchor) / next reposition (nesting)
-// re-resolves position once the binding/container is repaired.
-//
-// Wedge discipline: gBCR-free — `ensureBound` reads only the target's inline
-// style; `ensureContainer` reads computed styles via `resolveContainer`'s
-// ancestor walk but no per-element `getBoundingClientRect`. Bounded to
-// hinted+connected wrappers, never the whole store.
-function reconcilePlacement(): void {
-  let repaired = 0;
-  for (const w of store.all) {
-    // Dormant reused hints (DESIGN_HINT_REUSE.md) don't need re-binding —
-    // they're hidden and will be re-placed via badgeNewlyCodeworded on the
-    // next viewport entry, which re-runs `placeOne`. Skip them here.
-    if (!w.hint?.isVisible || w.disconnectedAt !== null) continue;
-    if (w.hint.ensureBound() || w.hint.ensureContainer()) repaired++;
-  }
-  if (repaired > 0) firehoseStep('reconcile:placement:repaired', repaired, 1);
-}
-
 // Strict-viewport reconciler: scroll moves wrappers across the strict/band
 // boundary without changing their codeword. The plugin's `_strict` companion
 // collection (which now drives both voice matching and the Discovery HUD)
@@ -2911,9 +2873,6 @@ function scheduleScrollReposition(): void {
     // scrolled out of band but whose IO exit event dropped (stale-TRUE).
     if (pageSession.hintsVisible) {
       reconcileTeardown();
-      // …and the canonical scroll-back moment: re-glue anchored badges whose
-      // target node was recreated by virtualization (binding dangled).
-      reconcilePlacement();
       // Scroll-settle is also where infinite-scroll content lands. Sweep the
       // band for hintables the MutationObserver dropped under the mutation
       // storm (the discovery gap) — coalesced + idle-scheduled, so a long
@@ -2993,10 +2952,6 @@ function scheduleDeferredReposition(): void {
     // 'resize' handler stays 'all' for genuine global layout/clamping changes.
     if (pageSession.hintsVisible) {
       reconcileTeardown();
-      // A settle (container resize, target mutation, expanding rows) can also
-      // recreate a target node underneath an anchored badge — re-glue dangling
-      // bindings here too, not just on scroll.
-      reconcilePlacement();
       // focus/transition/resize can reveal new in-band hintables (dropdowns,
       // expanding rows). Converge claim+build over the settled layout; coalesced
       // so a churny burst collapses to one pass that acts on real deltas only.
@@ -3034,14 +2989,6 @@ window.addEventListener('resize', scheduleDeferredReposition, { passive: true })
 // cache so the next placement re-probes against the fresh layout.
 onTargetMutation((target) => {
   const w = store.findWrapperFor(target);
-  // Anchor self-heal: a re-rendering host (YouTube comments/player rewrite the
-  // target's inline `style` ~10x/sec) clobbers the `anchor-name` we injected, so
-  // `position-anchor` dangles and the badge collapses to the document origin
-  // until the next reconcile. That is a visible flash plus a 100ms
-  // reconcile↔reposition loop (this debounce is its heartbeat). Re-assert the
-  // binding synchronously: the MO callback runs before paint, so no frame shows
-  // it unbound, and the compositor re-resolves anchor() with no reposition owed.
-  if (w?.hint?.ensureBound()) return;
   if (w) invalidateProbe(w);
   scheduleDeferredReposition();
 });
@@ -3817,14 +3764,6 @@ const observer = new MutationObserver((records) => {
           firehoseStep('huge_path:batched_end', added);
           if (added > 0) schedulePushGrammar();
           if (pageSession.hintsVisible) {
-            // Huge-batch settle is the canonical "page structure just
-            // changed a lot" moment. Re-check placement bindings on the
-            // same cadence the normal moCallback path does — without
-            // this, sites whose mutation batches always exceed
-            // HUGE_MUTATIONS_COUNT (YouTube channel /videos lazy-loaded
-            // tiles) never trip reconcilePlacement and the nesting-path
-            // container-drift fix never runs.
-            reconcilePlacement();
             scheduleReposition();
           }
         });
