@@ -2274,22 +2274,35 @@ function trimFrameUrl(href: string): string {
 //      activate path didn't initiate (mouse clicks, bookmarks, history nav).
 // Posts a breadcrumb so the actuator log shows whether the teardown ran and
 // how many wrappers it cleared. See notes/INVESTIGATION_YOUTUBE_WATCH_PERF.md.
-function preNavDetachAll(triggerReason: string): number {
-  const detached = store.all.length;
-  if (detached === 0) return 0;
+//
+// `sparePersistent` (the SPA-nav rescan, which runs AFTER the swap): keep
+// wrappers whose DOM element is still connected — the persistent page chrome
+// (e.g. a sidebar that survives the nav). Such elements never disconnected, so
+// they never contributed to the observer cascade this teardown preempts; wiping
+// them only churns their codewords (DESIGN_CODEWORD_STABILITY Regime A).
+// Wrappers already in limbo are also spared — the generic limbo/rebind path owns
+// them — so we only clean up the rare disconnected-but-not-yet-limbo'd wrapper.
+// The activate-click path passes false: full teardown BEFORE the swap, when
+// nothing has disconnected yet, to preempt the cascade.
+function preNavDetachAll(triggerReason: string, sparePersistent = false): number {
+  const targets = sparePersistent
+    ? store.all.filter(w => !w.element.isConnected && w.disconnectedAt === null)
+    : [...store.all];
+  const spared = sparePersistent ? store.all.length - targets.length : 0;
   const t0 = performance.now();
-  for (const w of [...store.all]) detachWrapper(w.element);
+  for (const w of targets) detachWrapper(w.element);
   chrome.runtime.sendMessage({
     type: 'DEBUG_LOG',
     tag: 'pipeline.cs_nav_step',
     data: {
       step: 'pre_nav_detach',
       reason: triggerReason,
-      detached,
+      detached: targets.length,
+      spared,
       took_ms: Math.round(performance.now() - t0),
     },
   } as Message).catch(() => {});
-  return detached;
+  return targets.length;
 }
 
 // The same-document-nav rescan body, owned by `PageSession.onUrlChange`. The
@@ -2347,7 +2360,12 @@ function rescanForNav(fromCache: boolean, reason: string): void {
       // its targets, so the cheap reuse path is correct for refocus.
       if (reason === 'spa_nav') {
         void navStep('rescan_detach:start');
-        const detached = preNavDetachAll('rescan');
+        // sparePersistent=true: this rescan runs AFTER the page's swap, so
+        // wrappers whose element is still connected are the persistent chrome
+        // (sidebar) that survived the nav — keep them and their codewords. The
+        // disconnected, swapped-out content is owned by the generic limbo/rebind
+        // path. DESIGN_CODEWORD_STABILITY Regime A.
+        const detached = preNavDetachAll('rescan', true);
         void navStep('rescan_detach:end');
         chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_nav_step', data: { step: 'rescan_detach:count', reason, at_ms: Math.round(performance.now() - t0), detached } } as Message).catch(() => {});
       } else {
