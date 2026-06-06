@@ -131,4 +131,28 @@ describe('codeword-memory', () => {
     expect(await recallCodewords(TAB, 3127)).toEqual([]);
     expect(await recallCodewords(99, 0)).toHaveLength(1); // other tab untouched
   });
+
+  it('serializes concurrent writes to the same frame — no lost update', async () => {
+    // Two REMEMBER_CODEWORDS for the same (tab, frame) overlap (the steady-state
+    // case: rememberClaimedCodewords fires per onCodewordsChanged flush). Without
+    // per-frame serialization both load the same base array and the second set()
+    // clobbers the first's addition. Each call carries a distinct fingerprint, so
+    // a correct store keeps both.
+    await Promise.all([
+      rememberCodewords(TAB, FRAME, [entry('First', 'aa bb')]),
+      rememberCodewords(TAB, FRAME, [entry('Second', 'cc dd')]),
+    ]);
+    const recalled = await recallCodewords(TAB, FRAME);
+    expect(recalled.map(e => e.codeword).sort()).toEqual(['aa bb', 'cc dd']);
+  });
+
+  it('serializes a burst of concurrent writes — every distinct entry survives', async () => {
+    const N = 12;
+    await Promise.all(
+      Array.from({ length: N }, (_, i) => rememberCodewords(TAB, FRAME, [entry(`e${i}`, `cw${i}`)])),
+    );
+    const recalled = await recallCodewords(TAB, FRAME);
+    expect(recalled).toHaveLength(N);
+    expect(new Set(recalled.map(e => e.codeword)).size).toBe(N);
+  });
 });

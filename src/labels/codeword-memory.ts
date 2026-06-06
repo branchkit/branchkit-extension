@@ -59,19 +59,48 @@ async function load(tabId: number, frameId: number): Promise<CodewordMemoryEntry
   return Array.isArray(v) ? (v as CodewordMemoryEntry[]) : [];
 }
 
+// Per-frame write serialization. `rememberCodewords` is a load-modify-write on
+// chrome.storage.session, and the content script fires it per onCodewordsChanged
+// flush (frequent during scroll), so two calls for the same frame can interleave
+// at the awaits — both load the same base array and the second `set` clobbers the
+// first's additions (a silent lost update that lowers the reclaim rate). Chaining
+// each frame's writes onto the previous one makes the load-modify-write atomic
+// per frame without a cross-frame bottleneck.
+const writeChains = new Map<string, Promise<void>>();
+
 /**
  * Remember (or refresh) fingerprint→codeword for a frame. Upserts by
  * fingerprint identity: re-remembering an element moves it to most-recent and
  * updates its codeword/rect rather than duplicating. Entries are ordered
  * oldest→newest; the front (oldest) is evicted beyond `MEMORY_CAP_PER_FRAME`.
- * Empty input is a no-op.
+ * Empty input is a no-op. Concurrent calls for the same frame are serialized
+ * (see `writeChains`) so no write is lost.
  */
-export async function rememberCodewords(
+export function rememberCodewords(
   tabId: number,
   frameId: number,
   entries: CodewordMemoryEntry[],
 ): Promise<void> {
-  if (entries.length === 0) return;
+  if (entries.length === 0) return Promise.resolve();
+  const key = memKey(tabId, frameId);
+  // Chain onto the prior write for this frame (error-swallowed so one failure
+  // doesn't poison the queue), then run this frame's load-modify-write.
+  const run = (writeChains.get(key) ?? Promise.resolve())
+    .catch(() => {})
+    .then(() => applyRemember(tabId, frameId, entries));
+  writeChains.set(key, run);
+  // Drop the chain entry once this write is the settled tail, bounding the map.
+  void run.catch(() => {}).finally(() => {
+    if (writeChains.get(key) === run) writeChains.delete(key);
+  });
+  return run;
+}
+
+async function applyRemember(
+  tabId: number,
+  frameId: number,
+  entries: CodewordMemoryEntry[],
+): Promise<void> {
   const existing = await load(tabId, frameId);
   // Ordered map: re-inserting a key must move it to newest, so delete-then-set.
   const ordered = new Map<string, CodewordMemoryEntry>();
