@@ -1,6 +1,10 @@
 # Browser identity & focus hardening
 
-Status: proposal (2026-06-06)
+Status: implemented (2026-06-06). D2 (native `bundle_for_remote_port`) + the full
+D3 recompute landed via the three-step migration below; the focus correlation
+(reconcile / `KnownBrowsers` / `focusBindWindow` / veto) is deleted. The focused
+source is now derived from one input — the OS-asserted bundle per live
+connection — so the mispairing class is structurally impossible.
 
 Follow-on to `DESIGN_BROWSER_IDENTITY_FOCUS_HANDSHAKE.md` ("the handshake doc").
 That doc decoupled *arming* (claim-driven, unlagged) from *identity* (OS-driven,
