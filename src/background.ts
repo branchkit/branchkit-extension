@@ -1618,33 +1618,34 @@ async function reinjectContentScripts(): Promise<void> {
     console.warn('[BranchKit] reinject: tabs.query failed', e);
     return;
   }
-  for (const tab of tabs) {
-    if (typeof tab.id !== 'number') continue;
+  const targets = tabs.filter((tab): tab is chrome.tabs.Tab & { id: number } => {
+    if (typeof tab.id !== 'number') return false;
     // Firefox aggressively discards inactive tabs to save memory;
     // executeScript can't reach a discarded tab. Skip — the lazy-inject
     // on tabs.onActivated handles them when the user clicks back in
     // (Firefox restores the tab from disk first).
-    if (tab.discarded) continue;
-    const tabId = tab.id;
+    if (tab.discarded) return false;
     const url = tab.url ?? '';
-    if (url.startsWith('chrome://') || url.startsWith('chrome-extension://')
-        || url.startsWith('moz-extension://') || url.startsWith('edge://')
-        || url.startsWith('about:') || url.startsWith('devtools://')
-        || url.startsWith('view-source:')) {
-      continue;
-    }
-    // Flush orphan guards across all frames before injecting fresh scripts.
-    // Wrapped in withInjectLock so a concurrent ensureContentScriptInjected
-    // (e.g. from tabs.onUpdated firing during the reload) doesn't race us
-    // and double-inject the same tab.
-    await withInjectLock(tabId, async () => {
-      await flushOrphanGuard(tabId);
-      // Inject via the same fallback path lazy-inject uses, so YouTube /
-      // Netflix / Cloudflare-challenged tabs get the top frame even when
-      // allFrames refuses.
-      await injectContentScriptFiles(tabId);
-    });
-  }
+    return !(url.startsWith('chrome://') || url.startsWith('chrome-extension://')
+      || url.startsWith('moz-extension://') || url.startsWith('edge://')
+      || url.startsWith('about:') || url.startsWith('devtools://')
+      || url.startsWith('view-source:'));
+  });
+  void forwardDebugLog('pipeline.bg_reinject_dispatched', { count: targets.length });
+  // Fan the tabs out concurrently. Each goes through the ping-first idempotent
+  // path (ensureContentScriptInjected: ping → retry → withInjectLock → re-ping
+  // → flushOrphanGuard → inject), so a tab that already carries a fresh CS is
+  // never double-injected — double-injection + page-hang was the failure mode
+  // of the reverted 2026-06-05 registerContentScripts experiment. An orphan
+  // from the previous generation can't answer the ping (its runtime context is
+  // dead), so it correctly falls through to a fresh inject. Concurrency keeps
+  // the per-tab ping-retry latency from serializing across every open tab;
+  // withInjectLock still serializes per-tab against a lazy-inject racing in
+  // from tabs.onUpdated during the reload. See notes/DESIGN_EXTENSION_RELOAD_SURVIVAL.md.
+  await Promise.all(targets.map(async (tab) => {
+    void forwardDebugLog('pipeline.bg_reinject_tab', { tab_id: tab.id });
+    await ensureContentScriptInjected(tab.id);
+  }));
 }
 
 // Safety net: check connection every 30s

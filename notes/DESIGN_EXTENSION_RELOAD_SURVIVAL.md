@@ -1,8 +1,9 @@
 # Extension Reload / Auto-Update Survival
 
-**Status:** Stub — forward design. Approach deliberately undetermined; this doc
-opens with the Phase 0 repro question because committing to a fix before knowing
-the real production trigger risks designing for the wrong one.
+**Status:** Layer 1 (SW-side reinjection robustness) decided + implemented
+2026-06-06; Layers 2–3 (orphan teardown) remain forward-design, deferred behind a
+soak. The Phase 0 framing below is retained — it still gates the *risky* layers;
+Layer 1 is deliberately the slice that does NOT require resolving it first.
 
 ## Goal
 
@@ -123,6 +124,57 @@ Not chosen; recorded so Phase 1 starts from options, not a blank page.
   that some orphan work still runs harmlessly until navigation.
 - **Lean on Chrome's own lifecycle** where possible (does a newer MV3 give a
   cleaner orphan signal than `runtime.id` going undefined?). Research item.
+
+## Decision (2026-06-06) — scope to dev reload, ship SW-side reinjection robustness first
+
+**Phase 0 resolved pragmatically for the dev case.** The immediate target is the
+dev `chrome://extensions` **reload**, which the developer hits constantly. We are
+not blocking the lowest-risk layer on a packed-CRX auto-update repro: auto-update
+orphans open tabs the same way, so a dev-reload fix is expected to carry over, and
+Layer 1 is chosen precisely because it is correct regardless of which symptom
+(cascade vs. no-CS) dominates.
+
+**Layering — one at a time, soak between (per the constraints list above):**
+
+- **Layer 1 (implemented this change; SW-side only; low blast radius): make
+  reinjection reliable, idempotent, and legible.** Route the per-tab work in
+  `reinjectContentScripts` through the ping-first `ensureContentScriptInjected`
+  path (ping → retry → `withInjectLock` → re-ping → `flushOrphanGuard` → inject)
+  instead of the blunt `flushOrphanGuard + injectContentScriptFiles`, so a tab that
+  already carries a fresh CS is never double-injected — double-injection was the
+  named failure mode of the reverted 2026-06-05 `registerContentScripts`
+  experiment. Fan the tabs out concurrently (`Promise.all`) so the ping-retry
+  latency doesn't serialize across every open tab. Add `pipeline.bg_reinject_*`
+  breadcrumbs so the next reload shows, in the firehose, how many tabs were
+  reinjected and whether `cs_rescan_received` follows per tab. This layer runs
+  entirely in the service worker, so it cannot start an orphan sync-throw cascade
+  in the page; the worst case is a no-op.
+
+- **Layer 2 (deferred; needs soak): orphan blast-radius minimization.** Only if
+  Layer 1's breadcrumbs show symptom 1 (the cascade) still hangs a tab: gate the
+  highest-frequency observer emitters behind a cheap `chrome.runtime?.id` check so
+  an orphan that outlives its quiesce can't start the cascade — WITHOUT changing
+  `sendMessage`'s throw semantics (constraint 2; the throw may be load-bearing
+  backpressure).
+
+- **Layer 3 (deferred; needs soak; highest risk): complete the teardown.** Track
+  every `setTimeout`/rAF/listener on the page session and abort them atomically on
+  orphan (the retrospective's direction). Last resort, only if 1+2 are insufficient.
+
+**Note (stale code comment corrected):** `content.ts:124-127` claims the
+`port.onDisconnect` teardown is unbuilt "follow-up work (step A)". It has since
+landed — `plugin/liveness.ts:56-77` discriminates orphan vs. transient SW restart
+and calls `onOrphan()` → `quiesceOrphan`. The remaining gap is timing/ordering and
+the teardown's known coverage holes (untracked timers/listeners), not the absence
+of a teardown trigger.
+
+**How the developer tests Layer 1 (one reload):** with a busy tab (YouTube /watch)
+and an idle tab open, reload at `chrome://extensions` and watch the firehose:
+`pipeline.bg_reinject_dispatched` (count) then `pipeline.bg_reinject_tab` →
+`pipeline.cs_rescan_received` per tab. Both tabs recovering without close+reopen ⇒
+Layer 1 sufficed. A hung tab ⇒ Layer 2 (cascade). A tab that reinjects but whose
+later F5 yields no CS ⇒ symptom 2 (separate Chrome quirk; see Open questions). Git
+is the backstop — revert if steady-state browsing regresses over a soak.
 
 ## Open questions
 
