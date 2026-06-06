@@ -165,6 +165,126 @@ auto-follow remains the fallback if a per-frame variant proves janky in real Chr
    model. Re-verify the nav-time wedge (YouTube channel "Videos" voice-activate).
 4. 30+ min real-use soak on YouTube/QuickBase (Chrome AND Firefox) before merge.
 
+## Migration plan (synthesized from the audit workflow, 2026-06-06)
+
+A 5-dimension parallel audit scoped the deletion of the anchor + nesting paths.
+The full reports are in the workflow output; the load-bearing conclusions:
+
+### The one decision to make first — placement clamp
+
+Today placement (`placement/rango.ts` `getAvailableSpace`) clamps a badge to its
+`anchorParent`'s available space *unless* `anchorMode` is true (body-mounted →
+unbounded). **Latent bug in the landed spike:** reconcile mode passes
+`anchorMode=false`, so its body-mounted host is clamped to a container it isn't
+nested in — wrong-by-construction. The migration must make **"body-mounted ⇒
+unbounded space" universal** (since the reconcile host is always body-mounted).
+
+That single change determines how much deletes:
+- **Recommended:** drop the container space-clamp universally. Then
+  `resolveContainer`'s clip-escalation, `findBadgeContainer`, `findLimitParent`,
+  `getSpaceInAncestor`, `findScrollAncestor`, the `anchorParent` field, and the
+  `container-resize-tracker` registration all become deletable.
+- **Open sub-question (decide at phase 5):** keep sticky/fixed clamping
+  (`findStickyBound`)? A gBCR-following reconciler arguably makes it redundant (a
+  target scrolling under a sticky header is simply followed). If kept, retain a
+  *minimal* "nearest clip/sticky ancestor" resolver — NOT the clip-escalation
+  `resolveContainer`. If dropped, `anchorParent` + all the container helpers go.
+
+### Production cadence (replaces the spike's free-running rAF)
+
+Make the reconciler a **pure `reconcilePass()` invoked by the existing content.ts
+settle handlers** (`scheduleScrollReposition`, `scheduleDeferredReposition`,
+`onScrollAncestor`, the huge-mutation `.then`), reusing their already-tuned 100ms
+debounce + rAF single-flight — so there's ONE coalescing policy and it's
+wedge-safe by construction (it only runs when a settle handler that already
+yields after the storm calls it). **IO-gate** the pass to the visible set
+(`wrapper.isInViewport`), keeping the batched read-all-then-write-all structure.
+Do **not** keep a self-rescheduling rAF. (Optional later: escalate to per-frame
+only *while actively scrolling*, if soak shows perceptible trailing.)
+
+### Keep-list — do NOT delete (would break the build or reopen fixed bugs)
+
+- `src/lifecycle/reconcile.ts` — the LIFECYCLE band reconciler (name collision
+  with the positioner; it's the only production reader of `TargetRectStore`).
+- `TargetRectStore` — still backs the lifecycle band check (drop only the
+  scroll-ancestor drift-sampler readers).
+- `compute.ts` no-viewport-floor (`Math.max(0,…)` removal) — load-bearing scroll-
+  back fix (`d35201a`); shared by all models. Only update its anchor-flavored comments.
+- `host-attribute-tracker` — survives (defends our body-mounted host), reduced role:
+  display arg collapses to always `'block'`.
+- The settle handlers' non-positioning backstops — `reconcileTeardown`,
+  `scheduleBandDiscovery`, `reconcileStrictViewport` — excise only the positioning lines.
+- `placeBadges`/`placeOne` (build path), `anchorParent` *iff* the sticky-clamp is kept.
+
+### Orphan-teardown gap (must fix — high blast radius)
+
+`quiesceOrphan` (`content.ts:~2213`) removes hosts via raw
+`querySelectorAll('[data-branchkit-hint]').remove()`, bypassing `HintBadge.remove()`
+— the only `unregisterReconcile` site. So the reconciler registry would leak and a
+settle-driven pass could spin on a dead frame. Add a `reconcile-positioner` drain/stop
+to `quiesceOrphan`. (Relates to the orphan-teardown blast-radius memory.)
+
+### Deletion sequence (build green at every step; one layer at a time)
+
+1. **Cadence first, still flag-gated:** rewire `reconcile-positioner.ts` from
+   free-rAF to settle-gated + IO-gated; add `reconcile-positioner.test.ts`; add the
+   `quiesceOrphan` drain. Anchor/nesting untouched. Soak.
+2. **Flip `bkJsPosition` default ON**, anchor/nesting still present as fallback.
+   30+ min soak on YouTube + QuickBase, **Chrome AND Firefox**; re-run the wedge
+   repro (`scripts/_test-videos-tab-wedge.mjs` / YouTube channel "Videos" voice-activate).
+3. **Delete the Firefox layer** (`anchorResolvesAcrossFixed`, `hasFixedAncestor`,
+   nesting constructor/retarget/reattach branches, `resolveBadgeContext`,
+   `scrollAncestor` field + `scroll-ancestor-tracker`). Lowest risk — reconcile
+   already replaces it and Firefox already paid the JS cost. Re-verify the wedge.
+4. **Delete the anchor layer** (`supportsAnchorPositioning`, `anchorOffsetCss`,
+   `setupAnchorHost`, anchor branches, `anchorName`, `ensureBound`).
+5. **Delete the shared repair/cadence scaffolding** (`reconcilePlacement` + its 4
+   call sites, `ensureContainer`, `needsScrollReposition`/`needsLayoutReposition` +
+   the `drifted`/`all` `scheduleReposition` split, and `scrollSensitive`/
+   `geometryDependent` **in lockstep with `placement/rango.ts` + `compute.ts`**).
+   Resolve the sticky-clamp sub-question here. Re-verify the wedge.
+6. **Delete dead diagnostics + the flag** (`pushPositionLog`/`getPositionLog`/
+   `setPositionCaller`, anchor diagnostics in `hints.ts` + `debug-snapshot.ts`,
+   `jsRepositionEnabled`/`bkJsPosition`). Reconcile is now the default-and-only model.
+
+### Tests
+
+- **Delete:** `hints.test.ts` anchor-mode describe (~292–424), `needsScrollReposition`
+  describe (~426–488), `ensureBound` cases; `scroll-ancestor-tracker.test.ts`,
+  `container-resize-tracker.test.ts`, `target-mutation-tracker.test.ts`.
+- **Update:** the retarget describe (assert reconcile-mode: host stays body-mounted,
+  target swaps, registry membership preserved) + remove every `setAnchorSupport` pin;
+  `host-attribute-tracker.test.ts` (display `contents`→`block`); `compute.test.ts`
+  (drop `scrollSensitive`/`geometryDependent` assertions iff those fields are dropped).
+- **Add:** `reconcile-positioner.test.ts` — batched read-then-write ordering, IO-gate
+  skip (hidden/disconnected/no-offset → `reconcileRead` null), settle-debounce
+  coalescing, registry empties ⇒ no scheduled work.
+- No `content.test.ts` exists, so `content.ts` deletions have no unit net — the
+  **soak is the regression gate**.
+
+### Soak gates (pass/fail)
+
+(a) no watchdog stall above the control baseline; nav-time `max_sync_ms` stays ~20–70ms;
+(b) `reconcilePositioner:tick` median ≤1ms, p95 within frame budget on YouTube /watch +
+search grid and QuickBase table scroll; (c) no Firefox "extension is slowing things
+down" warning over 30+ min; (d) badges visibly track on fast scroll on BOTH engines;
+(e) the YouTube channel-"Videos" voice-activate wedge does NOT return. The
+`placeBadges:*` CPU buckets should drop to ~0 (reposition path retired) and
+`reconcilePositioner:tick` should absorb a small bounded cost — that delta is the
+headline evidence.
+
+### Watch-outs
+
+- **isInViewport desync** as the gate input can freeze a visible badge (stale-FALSE);
+  let the band reconciler (`content.ts:~1617`) converge `isInViewport` first / gate on
+  the in-band geometric set right after a nav.
+- **Chromium regression caveat:** this moves Chromium *from* zero-JS compositor scroll
+  *to* JS reconcile (Firefox is neutral-to-better). C3 says affordable; confirm scroll
+  stays smooth on a dense Chromium grid.
+- Removing the `onTargetMutation` `ensureBound` early-return means YouTube's ~10×/sec
+  style rewrites now fall through to the settle/reconcile path — verify the trigger
+  rate doesn't spike (the 100ms debounce should absorb it).
+
 ## Relationship to prior notes
 
 - Supersedes the positioning halves of `DESIGN_OBSERVER_DRIVEN_LAYOUT`,
