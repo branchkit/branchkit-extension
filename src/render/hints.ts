@@ -602,10 +602,8 @@ export class HintBadge {
     this.label = label;
     this.displayMode = displayMode;
     this.fontSize = computeBadgeFontSize(target);
-    this.reconcileMode = jsRepositionEnabled();
-    this.anchorMode = !this.reconcileMode
-      && supportsAnchorPositioning()
-      && (anchorResolvesAcrossFixed() || !hasFixedAncestor(target));
+    this.reconcileMode = true;
+    this.anchorMode = false;
 
     this.host = document.createElement('div');
     this.host.setAttribute('data-branchkit-hint', 'true');
@@ -705,33 +703,12 @@ export class HintBadge {
     this.outer.appendChild(this.inner);
     this.shadow.appendChild(this.outer);
 
-    if (this.reconcileMode) {
-      // Body-mount the host; the JS reconciler follows the target. No page-DOM
-      // write at all (no anchor-name) — this is the whole point: nothing for the
-      // page's inline-style rewrites to strip. anchorParent is still resolved so
-      // placement's space/sticky clamping reads work unchanged.
-      this.anchorParent = resolveContainer(target);
-      this.setupReconcileHost();
-      registerReconcile(this);
-    } else if (this.anchorMode) {
-      // Pin the host to the target via CSS Anchor Positioning. anchorParent
-      // is still resolved (placement reads it for space/sticky clamping) but
-      // the host is mounted at body, not nested in the container.
-      this.anchorName = `--bk-${_nextAnchorId++}`;
-      // One-time page-DOM write, BEFORE trackTargetMutations starts so it
-      // isn't seen as a foreign mutation. The per-placement offset lives on
-      // our own host, so the target is never mutated again until remove().
-      (this.target as HTMLElement).style?.setProperty?.('anchor-name', this.anchorName);
-      this.anchorParent = resolveContainer(target);
-      this.setupAnchorHost();
-    } else {
-      const ctx = resolveBadgeContext(target, this.host, this.outer);
-      this.anchorParent = ctx.container;
-      if (ctx.positionMode === 'relative') {
-        this.outer.style.position = 'relative';
-        this.outer.style.display = 'inline';
-      }
-    }
+    // Body-mount the host; the JS reconciler follows the target. No page-DOM
+    // write (no anchor-name) — nothing for the page's inline-style rewrites to
+    // strip. anchorParent is still resolved for container-resize tracking.
+    this.anchorParent = resolveContainer(target);
+    this.setupReconcileHost();
+    registerReconcile(this);
 
     // Defer the heavy half of setup (4 observer registrations + APCA color
     // computation, ~5-10 ms total) onto idle time via the module-level
@@ -824,103 +801,22 @@ export class HintBadge {
     };
   }
 
-  updatePosition(candidate?: { x: number; y: number }, caller?: string): void {
-    if (this.reconcileMode) {
-      // Bake the placement offset (candidate relative to the target's top-left);
-      // the reconciler applies it against the live target rect each pass. A
-      // candidate-less call is the reposition path — the reconciler owns it.
-      if (!candidate) return;
-      const tr = getCachedRect(this.target);
-      this._reconcileOffset = { x: candidate.x - tr.left, y: candidate.y - tr.top };
-      // Paint at the right spot immediately (if already visible) so it doesn't
-      // wait a frame for the next reconcile tick.
-      const w = this.reconcileRead();
-      if (w) this.host.style.transform = `translate(${w.x}px,${w.y}px)`;
-      return;
-    }
-    if (this.anchorMode) {
-      // Express placement's absolute decision as a scroll-invariant offset
-      // from the target's element rect and bake it into the host's anchor()
-      // calc. The compositor then carries the badge through scroll. A
-      // candidate-less call is the reposition path — a no-op here.
-      if (!candidate) return;
-      const tr = getCachedRect(this.target);
-      this._lastBake = { candidateY: candidate.y, targetTop: tr.top };
-      const css = anchorOffsetCss(candidate, tr);
-      this.host.style.left = css.left;
-      this.host.style.top = css.top;
-      return;
-    }
-
-    let vpX: number;
-    let vpY: number;
-
-    if (candidate) {
-      vpX = candidate.x;
-      vpY = candidate.y;
-    } else {
-      const targetRect = getCachedRect(this.target);
-      vpX = targetRect.left - BADGE_OFFSET;
-      vpY = targetRect.top + 2;
-    }
-
-    const outerRect = this.outer.getBoundingClientRect();
-    this.inner.style.left = `${vpX - outerRect.left}px`;
-    this.inner.style.top = `${vpY - outerRect.top}px`;
-
-    // Snapshot target + outer viewport origin so a later scroll can decide,
-    // via delta-of-deltas, whether the badge tracked the target on its own.
-    const tRect = getCachedRect(this.target);
-    this._lastTargetVp = { x: tRect.left, y: tRect.top };
-    this._lastOuterVp = { x: outerRect.left, y: outerRect.top };
-
-    const elRect = this.target.getBoundingClientRect();
-    const containerRect = this.anchorParent.getBoundingClientRect();
-    pushPositionLog({
-      ts: Date.now(),
-      caller: caller ?? (_positionCaller || '?'),
-      scrollY: Math.round(window.scrollY),
-      target: {
-        tag: this.target.tagName.toLowerCase(),
-        name: (this.target as HTMLElement).innerText?.slice(0, 30) ?? '',
-        vpY: Math.round(elRect.top),
-      },
-      container: {
-        tag: this.anchorParent.tagName.toLowerCase(),
-        id: this.anchorParent.id.slice(0, 20),
-        vpY: Math.round(containerRect.top),
-        display: getComputedStyle(this.anchorParent).display,
-        position: getComputedStyle(this.anchorParent).position,
-      },
-      outer: {
-        vpY: Math.round(outerRect.top),
-        h: Math.round(outerRect.height),
-        w: Math.round(outerRect.width),
-      },
-      computed: {
-        vpX: Math.round(vpX),
-        vpY: Math.round(vpY),
-        innerTop: `${Math.round(vpY - outerRect.top)}`,
-        innerLeft: `${Math.round(vpX - outerRect.left)}`,
-      },
-      result: {
-        innerVpY: Math.round(outerRect.top + (vpY - outerRect.top)),
-        diff: Math.round(Math.abs(elRect.top - (outerRect.top + (vpY - outerRect.top)))),
-      },
-    });
+  updatePosition(candidate?: { x: number; y: number }, _caller?: string): void {
+    // Bake the placement offset (candidate relative to the target's top-left);
+    // the reconciler applies it against the live target rect each pass. A
+    // candidate-less call is the reposition path — the reconciler owns it.
+    if (!candidate) return;
+    const tr = getCachedRect(this.target);
+    this._reconcileOffset = { x: candidate.x - tr.left, y: candidate.y - tr.top };
+    // Paint at the right spot immediately (if already visible) so it doesn't
+    // wait a frame for the next reconcile tick.
+    const w = this.reconcileRead();
+    if (w) this.host.style.transform = `translate(${w.x}px,${w.y}px)`;
   }
 
   reattach(): void {
-    if (this.reconcileMode) {
-      // Body-mount again; the reconciler re-applies the transform next tick.
-      this.setupReconcileHost();
-      return;
-    }
-    if (this.anchorMode) {
-      this.setupAnchorHost();
-      return;
-    }
-    this.anchorParent.appendChild(this.host);
+    // Body-mount again; the reconciler re-applies the transform next tick.
+    this.setupReconcileHost();
   }
 
   /**
@@ -940,34 +836,12 @@ export class HintBadge {
     untrackContainerResize(this.anchorParent);
     untrackTargetMutations(this.target);
 
-    if (this.reconcileMode) {
-      // No page-DOM binding to move (no anchor-name); just swap the tracked
-      // target. The baked offset is target-relative, so it stays valid for a
-      // same-fingerprint replacement; the reconciler follows the new target on
-      // its next pass.
-      this.target = newEl;
-      this.anchorParent = resolveContainer(newEl);
-    } else if (this.anchorMode) {
-      // Move the anchor name from the old target to the new one (reuse the
-      // same name so the host's position-anchor stays valid). Set it before
-      // trackTargetMutations so it isn't seen as a foreign mutation.
-      (this.target as HTMLElement).style?.removeProperty?.('anchor-name');
-      this.target = newEl;
-      if (this.anchorName) (newEl as HTMLElement).style?.setProperty?.('anchor-name', this.anchorName);
-      this.anchorParent = resolveContainer(newEl);
-    } else {
-      this.target = newEl;
-      const ctx = resolveBadgeContext(newEl, this.host, this.outer);
-      this.anchorParent = ctx.container;
-      if (ctx.positionMode === 'relative') {
-        this.outer.style.position = 'relative';
-        this.outer.style.display = 'inline';
-      } else {
-        // Reset in case the prior context was relative.
-        this.outer.style.position = 'absolute';
-        this.outer.style.display = 'block';
-      }
-    }
+    // No page-DOM binding to move (no anchor-name); just swap the tracked
+    // target. The baked offset is target-relative, so it stays valid for a
+    // same-fingerprint replacement; the reconciler follows the new target on
+    // its next pass.
+    this.target = newEl;
+    this.anchorParent = resolveContainer(newEl);
 
     trackContainerResize(this.anchorParent);
     trackTargetMutations(this.target);
