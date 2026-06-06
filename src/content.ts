@@ -13,6 +13,7 @@ import { wantsHint } from './lifecycle/desired-state';
 import { computeReconcilePlan, geometryInBand, RECONCILE_BAND_MARGIN_PX } from './lifecycle/reconcile';
 import { stampStrictViewport, collectStrictViewportDelta } from './lifecycle/strict-viewport';
 import * as idRegistry from './scan/registry';
+import type { CodewordMemoryEntry } from './labels/codeword-memory';
 import { computeFingerprint, fingerprintsEqual } from './scan/registry';
 import { bumpRebindCounter, findLimboMatch, newRebindCounters, REBIND_DISTANCE_THRESHOLD_PX, type RebindCounters } from './labels/rebind';
 import { resolveTarget } from './activate/activate-resolution';
@@ -209,10 +210,38 @@ const claimCounters = {
   trackerPathClaimed: 0,
 };
 
+// Regime B (DESIGN_CODEWORD_STABILITY phase 2): persist fingerprint→codeword for
+// newly-claimed wrappers so a fresh content script after a full-document (Regime B)
+// reload can reclaim the same codeword. The fingerprint is already in the registry
+// (no recompute). REMEMBER_CODEWORDS is not a pool-mutating message, so it stays
+// clear of the reservoir's single-sender invariant. Fire-and-forget.
+function rememberClaimedCodewords(claimed: ElementWrapper[]): void {
+  const entries: CodewordMemoryEntry[] = [];
+  for (const w of claimed) {
+    const codeword = w.scanned.codeword;
+    if (!codeword || w.scanned.id <= 0) continue;
+    const fp = idRegistry.get(w.scanned.id)?.fingerprint;
+    if (!fp) continue;
+    const r = w.lastRect;
+    entries.push({
+      fp,
+      codeword,
+      rect: r ? { x: r.left, y: r.top, w: r.width, h: r.height } : null,
+    });
+  }
+  if (entries.length === 0) return;
+  try {
+    chrome.runtime.sendMessage({ type: 'REMEMBER_CODEWORDS', entries } as Message).catch(() => {});
+  } catch {
+    // Extension context invalidated (orphan post-reload) — best-effort.
+  }
+}
+
 const tracker = new IntersectionTracker(store, {
   onCodewordsChanged: (claimed, released) => {
     claimCounters.trackerPathClaimed += claimed.length;
     for (const w of claimed) queuePut(w);
+    rememberClaimedCodewords(claimed);
     for (const cw of released) {
       // Only enqueue a real Delete if we'd actually told the plugin
       // about this codeword; if the claim happened and immediately got

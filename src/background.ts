@@ -10,6 +10,7 @@
 
 import { Message, ScannedElement, HintVisibility, DispatchResult, GrammarBatchRequest, GrammarBatchResponse } from './types';
 import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearStack, clearAllStacks, regenerateAllStacks, getFrameForLabel, alphabetsEqual } from './labels/label-pool';
+import { rememberCodewords, clearCodewordMemory } from './labels/codeword-memory';
 
 const ACTUATOR_URL = 'http://127.0.0.1:21551';
 
@@ -1232,6 +1233,21 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     return false;
   }
 
+  if (message.type === 'REMEMBER_CODEWORDS') {
+    // Regime B (DESIGN_CODEWORD_STABILITY): persist this frame's
+    // fingerprint→codeword pairs so a fresh content script after a
+    // full-document reload can reclaim the same codewords. Separate from the
+    // LabelStack (not pool-mutating), so no single-sender concern.
+    const tabId = _sender.tab?.id;
+    const frameId = _sender.frameId;
+    if (typeof tabId !== 'number' || typeof frameId !== 'number') return false;
+    if (!Array.isArray(message.entries)) return false;
+    rememberCodewords(tabId, frameId, message.entries).catch(err => {
+      console.warn('[BranchKit SW] REMEMBER_CODEWORDS error:', err);
+    });
+    return false;
+  }
+
   if (message.type === 'RESOLVE_HINT_FROM_TAB') {
     resolveHintFromTab(message.tabId, message.codeword)
       .then(sendResponse)
@@ -1273,6 +1289,9 @@ async function resolveHintFromTab(tabId: number, codeword: string) {
 // §5 step 3 (dropped 2026-05-30).
 function purgeTab(tabId: number): void {
   clearStack(tabId).catch(() => {});
+  // Codeword memory is meant to survive frame teardown (the point of Regime B),
+  // but not the tab's whole lifetime — drop it on tab close.
+  clearCodewordMemory(tabId).catch(() => {});
 }
 
 // Per-frame liveness via long-lived Port. Each content-script context opens

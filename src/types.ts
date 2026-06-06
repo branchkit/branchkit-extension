@@ -2,6 +2,8 @@
  * BranchKit Browser — Message protocol and shared types.
  */
 
+import type { CodewordMemoryEntry } from './labels/codeword-memory';
+
 // --- Categories ---
 
 export type Category = 'link' | 'button' | 'input' | 'tab' | 'edit' | 'view' | 'tables';
@@ -154,6 +156,7 @@ export type Message =
   | { type: 'CLAIM_LABELS'; count: number; preferred?: string[] }
   | { type: 'RELEASE_LABELS'; labels: string[] }
   | { type: 'CONFIRM_LABELS'; labels: string[] }
+  | { type: 'REMEMBER_CODEWORDS'; entries: CodewordMemoryEntry[] }
   // Background → content ping. The focused frame answers true, others false.
   // Used to route keyboard-derived actions to whichever frame the user is
   // actually interacting with (vs. chrome's default top-frame routing).
