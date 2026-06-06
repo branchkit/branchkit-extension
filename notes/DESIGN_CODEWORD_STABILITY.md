@@ -87,23 +87,41 @@ returns the dead frame's codewords to free. There's no limbo wrapper to rebind
 against, so stability needs the association persisted somewhere the frame teardown
 doesn't reach — the service worker.
 
-## QuickBase
+## QuickBase (measured 2026-06-06, trace breadcrumbs on the live app)
 
-QuickBase is the reason Regime B matters as much as A, not as an afterthought:
+The navigation model was determined empirically with `trace.cs_init` +
+`trace.webnav` breadcrumbs on the user's real QuickBase instance. The earlier
+guess — that QuickBase content lives in reloading iframes (Regime B) — was **wrong
+on the mechanism but right on the conclusion**: the table content is a **top-frame
+React SPA**, not a reloading iframe; QuickBase still needs the Regime B fix, but
+because *record* views do full top-frame reloads, not because of iframes.
 
-- It is **iframe-heavy** (confirmed in prior work: the EH-ghost and harp_pit
-  multi-frame cases were real nested-iframe wrappers). The per-frame
-  `_strict`-viewport aggregation already exists because of this.
-- Its navigation model is **mixed and must be determined empirically**: classic
-  surfaces tend toward full page loads / iframe content swaps (Regime B), while
-  newer app surfaces may be History-API SPA (Regime A). Whether a given
-  table→report→form move is A or B per frame is the first thing to measure — the
-  fix differs by regime.
+Measured regime per transition:
 
-Implication: for QuickBase, an inner content frame reloading its own document is
-Regime B even while the top frame is Regime A. The SW-persisted memory below is
-therefore not an "optional ambitious tier" for QuickBase — it is likely the
-primary mechanism for the inner frames where the user's hints actually live.
+| Transition | Regime | Content script |
+|---|---|---|
+| Enter app shell (overview → table) | **B** | full top-frame load, `cs_init` |
+| Table ↔ table (same `action/td`) | **A** | `same_document` on frame 0, CS **survives**, no `cs_init` |
+| Table → record (`action/td` → `action/dr`) | **B** | same-doc route, then a `client_redirect` `committed` → full top load + `cs_init` |
+| Record → table (back) | **B** | full top-frame load, `cs_init` |
+| App overview / home page | **B** | embeds a classic `/db/` iframe that loads its own document |
+
+Corrections to the original hypothesis:
+- Table report views (`/nav/app/.../table/.../action/td`) are **top-frame React**,
+  navigated **same-document** — switching tables is Regime A, the CS survives, no
+  reloading content iframe involved.
+- The `/db/` iframe (classic UI) only appears on the **overview/home** page, not
+  the table flow — so "inner content frame reloading" applies to legacy dashboard
+  surfaces, not where the user works.
+- **Record open/close is the Regime B surface that matters:** QuickBase routes
+  same-document to the record, then a client-side redirect forces a hard top-frame
+  reload (to attach `?rid=...`), destroying + recreating the CS.
+
+**Conclusion: QuickBase needs BOTH fixes.** The Regime A fix (limbo-lite identity
+carry; stop `preNavDetachAll` wiping) gives stable codewords across **table
+switches**; the Regime B fix (per-frame SW-persisted fingerprint→codeword memory)
+gives them across **record open/close** and app entry. Neither alone covers the
+daily workflow.
 
 ## Proposed mechanism
 
@@ -188,19 +206,22 @@ resolver, not a scope boundary.
 
 ## Phasing
 
-1. **Determine the regime on QuickBase** (and a second React SPA) by trace. Use
-   the existing `RebindCounters` plus the `pipeline.cs_nav_step` breadcrumbs to
-   answer, per frame: does navigation fire `spa_nav` (Regime A) or destroy the
-   frame's content script (Regime B)? This decides which mechanism leads. Do not
-   write code first.
+1. **Determine the regime on QuickBase** by trace. **DONE 2026-06-06** (see the
+   QuickBase section above). Result: table↔table is Regime A (top-frame
+   same-document, CS survives); record open/close and app entry are Regime B
+   (full top-frame reload); the classic `/db/` iframe is Regime B but only on the
+   overview/home page. QuickBase needs both fixes.
 2. **Confirm the detach-bypass empirically** on a Regime-A surface: a `spa_nav`
    should show `pre_nav_detach detached=N` followed by a reconcile that rebinds 0
-   (all fresh codewords). That nails the root cause in the user's own environment.
+   (all fresh codewords). Trace breadcrumbs are stripped; re-confirm with a
+   temporary `pipeline.cs_nav_step` capture when implementing step 3.
 3. **Regime A fix** — limbo-lite identity carry + DOM-survivor short-circuit +
    nav-keyed retention, replacing the unconditional `preNavDetachAll`. Nav-soak
-   for wedge regressions.
-4. **Regime B fix** — per-frame SW-persisted fingerprint→codeword memory. Likely
-   the higher-value half for QuickBase's inner frames.
+   for wedge regressions. Gives stable codewords across QuickBase table switches
+   (and GitHub / general React-Vue SPAs).
+4. **Regime B fix** — per-frame SW-persisted fingerprint→codeword memory. Covers
+   QuickBase **record open/close + app entry** (full top-frame reloads) and the
+   legacy `/db/` dashboard iframes.
 5. **Measure** codeword stability across nav on QuickBase + one more SPA, and the
    nav-time main-thread span (must not regress).
 
