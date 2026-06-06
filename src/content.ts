@@ -14,6 +14,7 @@ import { computeReconcilePlan, geometryInBand, RECONCILE_BAND_MARGIN_PX } from '
 import { stampStrictViewport, collectStrictViewportDelta } from './lifecycle/strict-viewport';
 import * as idRegistry from './scan/registry';
 import type { CodewordMemoryEntry } from './labels/codeword-memory';
+import { loadRecall, isRecallLoaded, resolvePreferredCodeword } from './labels/codeword-recall';
 import { computeFingerprint, fingerprintsEqual } from './scan/registry';
 import { bumpRebindCounter, findLimboMatch, newRebindCounters, REBIND_DISTANCE_THRESHOLD_PX, type RebindCounters } from './labels/rebind';
 import { resolveTarget } from './activate/activate-resolution';
@@ -434,6 +435,13 @@ loadConfig({
 // threshold later get warmed inside `activateHintMachinery` below.
 if (typeof chrome !== 'undefined' && chrome.runtime && frameMayHoldHints()) {
   void labelReservoir.ensureReady();
+  // Regime B phase 3: load this frame's codeword memory, then seed
+  // preferredCodeword on wrappers already attached before the recall arrived
+  // (the first scan can race this fetch). Wrappers attached afterwards are
+  // seeded inline by attachWrapper.
+  void loadRecall().then(() => {
+    for (const w of store.all) seedPreferredFromMemory(w);
+  });
 }
 
 // Alphabet adoption (not a user setting; stays here, coupled to delta-sync
@@ -1133,6 +1141,23 @@ const attentionObserver = new AttentionObserver({
  * element already exists; IntersectionObserver.observe is similarly
  * tolerant of duplicate observe calls.
  */
+// Regime B phase 3 (DESIGN_CODEWORD_STABILITY): seed a wrapper's
+// preferredCodeword from the SW-persisted memory so it reclaims the codeword
+// its fingerprint held before a full-document reload. Only when the recall has
+// loaded, the wrapper has no within-page preference and no codeword yet, and the
+// confidence ladder resolves a remembered codeword. Granting it is phase 4.
+function seedPreferredFromMemory(wrapper: ElementWrapper): void {
+  if (!isRecallLoaded()) return;
+  if (wrapper.preferredCodeword || wrapper.scanned.codeword) return;
+  if (wrapper.scanned.id <= 0) return;
+  const fp = idRegistry.get(wrapper.scanned.id)?.fingerprint;
+  if (!fp) return;
+  const r = wrapper.lastRect;
+  const rect = r ? { x: r.left, y: r.top, w: r.width, h: r.height } : null;
+  const cw = resolvePreferredCodeword(fp, rect);
+  if (cw) wrapper.preferredCodeword = cw;
+}
+
 function attachWrapper(wrapper: ElementWrapper): void {
   // Mint the registry id first. A rejected registration (id=0) means the
   // fingerprint validator couldn't disambiguate this element from another
@@ -1141,6 +1166,7 @@ function attachWrapper(wrapper: ElementWrapper): void {
   // is the canonical case: same role/name/tag as the toolbar div, no
   // distinguisher.
   idRegistry.register(wrapper);
+  seedPreferredFromMemory(wrapper);
   store.addWrapper(wrapper);
   tracker.observe(wrapper.element);
   resizeObserver.observe(wrapper.element);

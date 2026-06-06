@@ -41,14 +41,14 @@ const memKey = (tabId: number, frameId: number): string =>
   `codewordMemory:${tabId}:${frameId}`;
 
 /**
- * Canonical key for a fingerprint — used only for upsert dedup (the same
- * element remembered twice replaces, not duplicates). Fields match
- * `scan/registry.ts` `fingerprintsEqual`. The `\x1f` unit separator can't
- * appear in the values: role/tag/inputType are tokens, `text` is
- * whitespace-collapsed by `visibleText`, and a control char never appears in
- * an href or accessible name.
+ * Canonical key for a fingerprint — exact equality on the same fields as
+ * `scan/registry.ts` `fingerprintsEqual`, so a key match IS a fingerprint
+ * match. Used for upsert dedup here (SW) and for the recall lookup CS-side.
+ * The `\x1f` unit separator can't appear in the values: role/tag/inputType
+ * are tokens, `text` is whitespace-collapsed by `visibleText`, and a control
+ * char never appears in an href or accessible name.
  */
-function fpKey(fp: Fingerprint): string {
+export function fingerprintKey(fp: Fingerprint): string {
   return [fp.role, fp.name, fp.tag, fp.text, fp.href ?? '', fp.inputType ?? ''].join('\x1f');
 }
 
@@ -75,9 +75,9 @@ export async function rememberCodewords(
   const existing = await load(tabId, frameId);
   // Ordered map: re-inserting a key must move it to newest, so delete-then-set.
   const ordered = new Map<string, CodewordMemoryEntry>();
-  for (const e of existing) ordered.set(fpKey(e.fp), e);
+  for (const e of existing) ordered.set(fingerprintKey(e.fp), e);
   for (const e of entries) {
-    const k = fpKey(e.fp);
+    const k = fingerprintKey(e.fp);
     ordered.delete(k);
     ordered.set(k, e);
   }

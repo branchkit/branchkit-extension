@@ -10,7 +10,7 @@
 
 import { Message, ScannedElement, HintVisibility, DispatchResult, GrammarBatchRequest, GrammarBatchResponse } from './types';
 import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearStack, clearAllStacks, regenerateAllStacks, getFrameForLabel, alphabetsEqual } from './labels/label-pool';
-import { rememberCodewords, clearCodewordMemory } from './labels/codeword-memory';
+import { rememberCodewords, clearCodewordMemory, recallCodewords } from './labels/codeword-memory';
 
 const ACTUATOR_URL = 'http://127.0.0.1:21551';
 
@@ -1246,6 +1246,21 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
       console.warn('[BranchKit SW] REMEMBER_CODEWORDS error:', err);
     });
     return false;
+  }
+
+  if (message.type === 'RECALL_CODEWORDS') {
+    // A fresh content script (post Regime-B reload) asks for this frame's
+    // remembered fingerprint→codeword entries so it can seed preferredCodeword.
+    const tabId = _sender.tab?.id;
+    const frameId = _sender.frameId;
+    if (typeof tabId !== 'number' || typeof frameId !== 'number') {
+      sendResponse({ entries: [] });
+      return false;
+    }
+    recallCodewords(tabId, frameId)
+      .then(entries => sendResponse({ entries }))
+      .catch(() => sendResponse({ entries: [] }));
+    return true;
   }
 
   if (message.type === 'RESOLVE_HINT_FROM_TAB') {

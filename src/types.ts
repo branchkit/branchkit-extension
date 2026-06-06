@@ -157,6 +157,7 @@ export type Message =
   | { type: 'RELEASE_LABELS'; labels: string[] }
   | { type: 'CONFIRM_LABELS'; labels: string[] }
   | { type: 'REMEMBER_CODEWORDS'; entries: CodewordMemoryEntry[] }
+  | { type: 'RECALL_CODEWORDS' }
   // Background → content ping. The focused frame answers true, others false.
   // Used to route keyboard-derived actions to whichever frame the user is
   // actually interacting with (vs. chrome's default top-frame routing).
