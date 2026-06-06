@@ -1,8 +1,188 @@
 # Codeword Stability Across Navigation
 
-**Status:** Both regimes landed 2026-06-06 (see Outcome). Soaking.
+**Status (2026-06-06):** Regime B (SW-memory, ~62%) and Regime A **mouse**
+table-switch (DOM-survivor spare, `7af5cb8`) are landed. A soft-detach fix for
+the **voice** table-switch was implemented, trace-confirmed to work, then
+**reverted** — it caused a YouTube steady-state regression. So voice table→table
+sidebar codewords currently reshuffle; full reloads (records / app entry) get the
+~62% Regime B reclaim. Next lever is Regime B, not more teardown surgery. Details
+below.
 
-## Outcome (2026-06-06)
+## Soft-detach attempt — implemented, confirmed, then reverted (2026-06-06)
+
+The voice table-switch reshuffle was correctly diagnosed (see "Voice-path
+finding"), a soft-detach fix was built, and a live trace confirmed it fixed the
+voice table→table case (`softened:281`, **zero** re-minted sidebar wrappers on a
+same-document switch). It was then **reverted** because of a steady-state
+regression on YouTube.
+
+**Why it was reverted — the limbo/placement collision.** Badges glue to their
+target via an inline `anchor-name` on the target; YouTube rewrites target inline
+styles ~10×/sec, constantly stripping it. `reconcilePlacement` → `ensureBound`
+(content.ts) re-writes the `anchor-name` every scroll/resize tick to keep the
+badge glued — but it **deliberately skips limbo wrappers** (`disconnectedAt !==
+null`). The soft-detach parked *every* wrapper (including persistent chrome like
+the YouTube left rail) in limbo, so for that window the anchor-repair stopped
+running for exactly those elements → their badges dangled to the document origin
+and "scrolled off."
+
+**Root conflict:** `disconnectedAt` conflates two states — "disconnected,
+rebind-eligible" (which placement *should* skip) and "live survivor with
+observers suspended for the wedge preempt" (which placement must *not* skip).
+Soft-detach overloaded the first to mean the second. Any future revival must NOT
+reuse `disconnectedAt`: use a separate `observersSuspended` flag, keep
+`reconcilePlacement`/`ensureBound` running for suspended-but-connected survivors,
+and re-observe on graduate. That is more surgery in the highest-blast-radius area
+and needs its own nav-soak + YouTube wedge re-verify.
+
+**Also corrected — the QuickBase regime reality (Playwright + live traces).** The
+original "Regime A re-render" premise was wrong: on a same-document table→table
+switch QuickBase does **not** re-render the sidebar — the table-list nodes persist
+(same nodes, same `anchor-name`s), so the mouse-spare keeps them stable. The
+reshuffle is **Regime B full reloads**: `overview→table` (fresh-tab/myqb entry)
+and **record open/close** both hard-reload the top frame (new content script),
+which is the dominant real-world churn. Voice vs mouse is a red herring for the
+regime; source-page type decides it (table view = same-document, overview/record
+= full reload). So the highest-value next work is raising Regime B reclaim above
+~62%, which covers records + entry for both mouse and voice.
+
+---
+
+## Voice-path finding (2026-06-06, trace-confirmed)
+
+The earlier Outcome below said Regime A "landed, flicker-free." That was verified
+on **mouse** table-switch only. A `trace.nav_lc` probe on a live voice
+table-switch (QuickBase, `chdiinc.quickbase.com`, sidebar of `*Workflows*`
+tables) shows the voice path is **not** fixed, and the mechanism is **not** what
+this note hypothesized (re-render + limbo-rebind miss).
+
+**What the trace shows.** Across the session the sidebar links (role `link`)
+logged **531 `fresh`** but only **3 `limbo_in` / 3 `limbo_fin` / 4 `rebind`**.
+`Agreement Workflows` got six `fresh` wrappers (new registry id each time) and
+**never once** entered limbo or rebound. The sidebar DOM survives the nav — but
+its wrappers are thrown away anyway, before the rebinder can see them.
+
+**Mechanism.** The voice activate path runs **`preNavDetachAll('activate_click')`
+*before* the click** (`content.ts`, the non-input branch of the BRANCHKIT_ACTION
+handler) with `sparePersistent = false`. It hard-detaches **every** wrapper —
+including the persistent sidebar — and `detachWrapper` releases each codeword to
+the pool and unregisters its id immediately. There is **no limbo entry**, so the
+deferred rediscovery's `tryRebindFromLimbo` has no candidate and mints fresh
+codewords. The trace:
+
+```
+15:50:25.921  pre_nav_detach  reason=activate_click  detached:332  spared:0
+15:50:26.202  pre_nav_detach  reason=rescan          detached:0    spared:7
+```
+
+**Why the spare fix missed it.** Commit `7af5cb8` added `sparePersistent` only to
+the **rescan** call (`preNavDetachAll('rescan', true)`). The earlier conclusion
+"detached:0 everywhere — NOT the teardown" was reading that rescan call; the
+*activate_click* call (a separate, earlier `preNavDetachAll`) is the one that
+wipes the store on voice. Mouse navigation has no activate_click teardown, so the
+rescan-path spare covers it — consistent with the mouse `spared:~290` result.
+
+**Also relevant (root-causes the bypass):** the nav rescan's deferred
+`doScan → processScanBatch` path never consults limbo at all — it filters out
+refs that already have a wrapper, then claims *fresh* codewords for the rest.
+Limbo-rebind lives only in the MutationObserver discovery path
+(`discoverInSubtree`/`discoverInSubtreeBatched` → `attachDiscovered` →
+`tryRebindFromLimbo`). So even if limbo retention were extended, the ~2s deferred
+nav scan could not reclaim through it.
+
+## Proposed fix: soft-detach in the activate_click path
+
+The activate_click teardown exists to tear down per-wrapper observers
+**synchronously before the swap** (the wedge preempt). At pre-click time
+*everything is still connected*, so a `sparePersistent` filter would spare
+everything (`detached:0`) and lose the preempt. The spare trick structurally
+can't help here.
+
+So replace the *hard* detach with a **soft detach** that preserves the preempt
+while retaining identity:
+
+1. **`softDetachAllForNav()`** — for each wrapper: `tracker.unobserve` +
+   `resizeObserver.unobserve` + `attentionObserver.unobserve` (the exact
+   observer teardown the wedge needs, unchanged), seed `lastRect` from the layout
+   cache, then `enterLimbo(w, now)`. Do **not** remove from the store, release the
+   codeword, unregister the id, or queue a delete. Call it from the activate_click
+   path instead of `preNavDetachAll('activate_click')`.
+2. **Re-observe survivors** — `finalizeExpiredLimboWrappers` already graduates a
+   still-connected limbo wrapper back (`disconnectedAt = null`) but does **not**
+   re-`observe` it. Add the `tracker.observe` + `resizeObserver.observe` there so
+   a survivor regains its observers. This 4Hz sweep is the backstop that closes
+   the "missed re-observe path → blind wrapper" risk. (Optionally also graduate
+   proactively in the deferred rescan to shrink the blind window from ≤250 ms to
+   ~16–40 ms.)
+
+**Why this beats the two dead ends.**
+- vs **reclaim-after-wipe** (flickered): the codeword is *never released*, so the
+  badge never repaints fresh-then-corrected. No flicker by construction.
+- vs the earlier **"suspend observers, keep wrappers"** rejection (blind-wrapper
+  risk): the finalize sweeper's re-observe is a level-triggered backstop, so a
+  survivor can't stay blind even if a proactive re-observe is missed.
+
+**Bonus.** Swapped-out content now *does* enter limbo (instead of hard-detach), so
+new content nodes can rebind by fingerprint through the existing MO path — which
+also covers the mouse re-render case the original note worried about. This widens
+the surface, so the first shipped layer may want to keep scope to sidebar
+survival and treat content-rebind as observed-not-relied-on.
+
+**Risks to watch in soak.**
+- **Wedge regression** — the `unobserve` loop is byte-for-byte the work hard-detach
+  did, so the preempt should be intact; must still re-verify on a YouTube channel
+  "Videos" voice-activate (must not freeze).
+- **Blind window** — sidebar wrappers are observer-less until graduated (≤250 ms
+  via finalize, less if proactive). Scroll/resize in that window won't reposition
+  badges; low impact for a table-switch.
+- **Pool/grammar churn** — limbo wrappers keep codewords claimed until finalize;
+  brief overlap with fresh content claims. Bounded by the 250 ms deadline.
+
+### Verified against code before implementing (2026-06-06)
+
+Four assumptions the design rests on, checked in source:
+
+- **No double-claim on re-observe (safe).** `IntersectionTracker.handleEntries`
+  skips limbo wrappers outright (`if (wrapper.disconnectedAt !== null) continue`,
+  `intersection-tracker.ts:164`) and only claims when no codeword is held
+  (`if (!wrapper.scanned.codeword)`, `:177`). Re-observing a survivor that still
+  holds its codeword cannot mint a second one. **Implementation order matters:**
+  in the finalize graduate-back, clear `disconnectedAt` *before* `tracker.observe`
+  + `resizeObserver.observe`, so the fresh initial IO callback runs with the
+  wrapper non-limbo and updates `isInViewport`/`lastRect` cleanly. Mirror
+  `attachWrapper`: re-observe tracker + resize only, **not** attentionObserver.
+- **Codewords stay matchable across the nav (safe).** `syncNow`
+  (`label-sync.ts:219`) is delta-based — it pushes only queued Puts/Deletes; the
+  plugin's grammar is cumulative on `sentCodewords`. Soft-detach queues no Delete,
+  so survivor + doomed codewords stay live until an explicit Delete. Doomed
+  content's Delete is queued by `detachWrapper` at finalize; survivors graduate and
+  are never deleted. `reconcileTeardown` only walks `disconnectedAt === null`
+  wrappers (`content.ts:1670`), so it won't release a survivor.
+- **Rebind-steal (real — must fix as part of layer 1).** After soft-detach the
+  limbo pool contains the **still-connected survivors** alongside the doomed
+  content. `collectLimboWrappers` filters only on `disconnectedAt !== null`
+  (`content.ts:3267`), and `rebindWrapper` does not check `isConnected` — so new
+  content with a colliding fingerprint could `consume` + rebind a *live* sidebar
+  wrapper, yanking its badge onto content. Rare (distinct text+href) but a
+  correctness bug. **Fix:** add `&& w.element.isConnected === false` to
+  `collectLimboWrappers`. No-op for today's behavior (limbo only ever held
+  disconnected elements); a guard for the new path.
+- **Pool pressure (graceful, watch on huge pages).** During the overlap window
+  doomed codewords stay claimed while new content claims fresh. `labelReservoir`
+  returns `''` on exhaustion and the wrapper stays unhinted, retried by the
+  level-triggered reconcile after finalize frees the doomed codewords — no crash,
+  no dup. On a normal ~332-wrapper page the transient ~2× is well under the 676
+  pool; only a very large page risks a brief unhinted-content window. Soft-detach
+  never touches the reservoir, so its single-sender + dedup invariants are
+  unaffected.
+
+The bfcache-restore path (`content.ts:2168`) hard-detaches any limbo wrapper, but
+it fires on `pageshow{persisted:true}` — a different trigger than a table-switch,
+no interaction.
+
+---
+
+## Outcome (2026-06-06) — superseded for Regime A voice by the finding above
 
 - **Regime B (full reloads — record open/close, app entry): landed, phases 1–4.**
   SW-persisted per-frame fingerprint→codeword memory (`labels/codeword-memory.ts`),
@@ -12,12 +192,14 @@
   **~62% reclaim** (148/239 of memory-matched elements), best-effort — the misses
   are release-before-claim ordering + the newest-100 fill cap. Commits up to
   `f1c132c`.
-- **Regime A (same-document navs — sidebar / table-switch): landed, but NOT via
-  the limbo-lite carry sketched below.** The actual fix was simpler: on the
-  spa_nav rescan, `preNavDetachAll` now **spares wrappers whose element is still
-  connected** (commit `7af5cb8`). The persistent sidebar keeps its wrappers +
-  codewords with no memory, no reclaim, **flicker-free**. Live-verified: sidebar
-  stable on mouse table-switch (`spared:~290`).
+- **Regime A (same-document navs — sidebar / table-switch): landed for MOUSE
+  only.** On the spa_nav rescan, `preNavDetachAll` now **spares wrappers whose
+  element is still connected** (commit `7af5cb8`). The persistent sidebar keeps
+  its wrappers + codewords with no memory, no reclaim, **flicker-free**.
+  Live-verified: sidebar stable on **mouse** table-switch (`spared:~290`).
+  **The VOICE table-switch is NOT fixed** — see "Voice-path finding" above; the
+  spare was applied to the rescan call but the voice path's *earlier*
+  `preNavDetachAll('activate_click')` still hard-detaches the whole store.
   - **Caveat (timing):** the spare is effective only when the sidebar DOM persists
     AND the idle-scheduled rescan runs before limbo finalizes the store. An
     earlier run spared 0 (rescan ~2s late, store already churned). A *re-rendering*
