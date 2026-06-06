@@ -42,20 +42,21 @@ export function supportsAnchorPositioning(): boolean {
 }
 let _nextAnchorId = 0;
 
-// Option 3 spike flag (notes/DESIGN_HINT_POSITIONING_REARCH.md). When set, badges
-// skip BOTH anchor mode and the nesting path and instead follow their target via
-// the batched JS reconciler (reconcile-positioner.ts) — the unified pure-JS model
-// under evaluation. Default OFF, so normal sessions are untouched. Per-site,
-// console-settable in real Chrome (`localStorage.bkJsPosition = '1'`, then reload)
-// so the model can be A/B'd against anchor mode without a rebuild. `localStorage`
-// is shared per-origin between the page and the content script's isolated world.
+// Migration flag (notes/DESIGN_HINT_POSITIONING_REARCH.md). When enabled, badges
+// follow their target via the batched JS reconciler (reconcile-positioner.ts) —
+// the unified pure-JS model — instead of CSS anchor mode or the nesting path.
+// Default ON: reconcile is now the model. The legacy anchor/nesting path can be
+// opted back into per-origin with `localStorage.bkJsPosition = '0'` (then reload)
+// during the migration; this flag and the legacy paths are deleted together once
+// the migration lands. `localStorage` is shared per-origin between the page and
+// the content script's isolated world.
 let _jsReposition: boolean | null = null;
 export function jsRepositionEnabled(): boolean {
   if (_jsReposition !== null) return _jsReposition;
   try {
-    _jsReposition = typeof localStorage !== 'undefined' && localStorage.getItem('bkJsPosition') === '1';
+    _jsReposition = typeof localStorage === 'undefined' || localStorage.getItem('bkJsPosition') !== '0';
   } catch {
-    _jsReposition = false;
+    _jsReposition = true;
   }
   return _jsReposition;
 }
@@ -127,6 +128,10 @@ export function anchorOffsetCss(
 export const __testing = {
   setAnchorSupport(v: boolean | null): void { _anchorSupport = v; _anchorAcrossFixed = null; },
   setAnchorAcrossFixed(v: boolean | null): void { _anchorAcrossFixed = v; },
+  // Pin the reconcile flag (null = re-detect). Legacy anchor/nesting tests pin
+  // this false so they keep exercising those paths now that reconcile is the
+  // production default. Removed with the flag once the migration lands.
+  setJsReposition(v: boolean | null): void { _jsReposition = v; },
 };
 
 // --- Position debug log (temporary investigation) ---
