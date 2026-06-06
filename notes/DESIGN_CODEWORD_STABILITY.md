@@ -161,20 +161,83 @@ Two refinements fall out:
 
 ### Regime B: service-worker-persisted fingerprint→codeword memory
 
-For full reloads and inner-iframe reloads (the QuickBase primary case), persist
-the association where frame teardown can't reach it:
+For full reloads (the QuickBase record open/close + app-entry case), persist the
+association where content-script teardown can't reach it:
 
 - A per-tab, **per-frame** artifact in `chrome.storage.session` (alongside
   `LabelStack`): a bounded list of `{fingerprint, codeword, lastRect}`.
-- **Write** as wrappers confirm codewords.
-- **Read** on fresh content-script startup: for each newly-discovered element,
-  compute its fingerprint, run the *same* confidence ladder against the memory,
-  and set `wrapper.preferredCodeword` on a confident match. The existing
-  `claimLabels` Pass 1 honors it if the codeword is still free.
+- **Write** as wrappers take codewords. The fingerprint is computed content-script
+  side (`scan/registry.ts`), so the CS must send it with the codeword — a protocol
+  addition (e.g. carry fingerprints on `CONFIRM_LABELS`, or a new
+  `REMEMBER_CODEWORDS` message). The SW records `fingerprint→codeword` in the
+  per-frame memory.
+- **Read** on fresh content-script startup: load the memory, and for each
+  newly-discovered element compute its fingerprint and run the *same* confidence
+  ladder against it (CS-side, where `fingerprintsEqual` + `findLimboMatch` live) to
+  pick a remembered codeword → set `wrapper.preferredCodeword`.
 
-Keying is per-frame because iframe reloads are per-frame; tab+frame is the natural
-key. Per-host is a further dial (survives across tabs) but adds staleness across
+**The reservoir wrinkle (corrects the original "Pass 1 just honors it").** Claims
+do **not** go straight to the SW pool — they go through the per-frame
+`label-reservoir.ts`, a *synchronous local cache* of front-of-pool codewords.
+`reservoir.claim(count, preferred)` Pass 1 only re-grants a preferred codeword that
+is already in the **local** reservoir `free`. After a Regime B nav the fresh CS has
+an empty reservoir filled with arbitrary front-of-pool codewords; the remembered
+codeword is back in the **SW pool** `stack.free` (returned by `releaseFrame` on the
+old frame's Port disconnect) but **not** in the local reservoir. So setting
+`preferredCodeword` alone reclaims nothing across a nav.
+
+The remembered codewords have to be pulled from the SW deliberately. The SW-side
+`claimLabels(tabId, frameId, count, preferred)` (`label-pool.ts:166`) *already* has
+a Pass 1 that grants preferred codewords from `stack.free` — but the reservoir's
+`refill()` calls `CLAIM_LABELS {count}` with **no** `preferred`. The fix is a
+**targeted preferred-refill**: after the first scan resolves remembered codewords,
+the reservoir issues `CLAIM_LABELS {count, preferred:[remembered…]}` so the SW
+grants those specific codewords into the reservoir; the existing
+reconcile-after-refill (`refreshViewportClaims` / `onCodewordsChanged`) then
+re-claims the affected wrappers and local Pass 1 hands each its remembered codeword.
+
+**Risk note:** this threads new behavior through the reservoir, which is
+race-prone and load-bearing — it carries the single-sender invariant and a history
+of QuickBase dup-issue races (`outstanding` set, CONFIRM/RELEASE ordering). The
+targeted-refill path must preserve those invariants (still the only CLAIM sender,
+still dedups against `free ∪ outstanding`). So Regime B is additive (no nav-time
+wedge path) but **not** trivially low-risk; it needs the reservoir's existing
+dedup/ordering tests extended.
+
+Keying is per-frame because reloads are per-frame; tab+frame is the natural key.
+Per-host is a further dial (survives across tabs) but adds staleness across
 redesigns — not needed for v1.
+
+**Phased build (Regime B):**
+1. SW per-frame `codewordMemory` store in `chrome.storage.session` + LRU cap;
+   read/write helpers, unit-tested in isolation. No wiring yet.
+2. Write path: carry fingerprints CS→SW on codeword take; SW records
+   `fingerprint→codeword`. Verify the memory populates (no reclaim yet).
+3. Read path: CS startup loads memory, resolves `preferredCodeword` per element via
+   the confidence ladder. Verify the right codewords are *requested* (logging).
+4. Targeted preferred-refill in the reservoir + reconcile re-claim; extend the
+   reservoir dedup/ordering tests. This is the step that actually reclaims.
+5. Live-verify on QuickBase record open/close; confirm no reservoir dup-issue
+   regression (the `cap each` class).
+
+**Reservoir keep/remove — measured 2026-06-06, verdict: KEEP.** We probed whether
+the reservoir's sync-claim is worth its complexity (the question was whether to
+delete it and claim straight from the SW, which would have collapsed Regime B).
+Dense-scroll probe (`perf.reservoir_probe`): reservoir claim is effectively free
+(`avg_claim_ms` 0.03–0.04), badge paint is `avg_paint_ms` 17–30 per ~12-badge
+batch, and the `CLAIM_LABELS` IPC is a cheap 1–13 ms median **but spikes to
+95–208 ms during heavy scroll** (SW per-tab-lock contention / backlog). With the
+reservoir those spikes ride the async refill and never touch placement; without
+it every batch's claim is that round-trip, so the tail lands on the hot path AND
+gets more frequent (per-batch lock contention instead of one batched refill per
+~70 claims). So the reservoir earns its keep on the **tail**, not the median —
+exactly the dense-fast-scroll case it exists for. Removing it would reintroduce
+scroll hitches. **Consequence:** Regime B keeps the targeted preferred-refill
+(phase 4) — but that reclaim runs **once at CS startup**, before the rapid
+claim/release/refill window where the reservoir's races live, so it's
+materially lower-risk than a hot-path change. It only adds `preferred` to the
+already-existing refill message (SW `claimLabels` Pass 1 already honors it) and
+preserves the dedup (`free ∪ outstanding`) + single-sender invariants.
 
 ## Contention ordering (where "prioritize the header" survives)
 
