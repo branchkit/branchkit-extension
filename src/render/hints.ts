@@ -18,6 +18,7 @@ import { trackContainerResize, untrackContainerResize } from '../observe/contain
 import { trackScrollAncestor, untrackScrollAncestor } from '../observe/scroll-ancestor-tracker';
 import { trackTargetMutations, untrackTargetMutations } from '../observe/target-mutation-tracker';
 import { trackHostAttributes, untrackHostAttributes } from '../observe/host-attribute-tracker';
+import { register as registerReconcile, unregister as unregisterReconcile, type ReconcileWrite } from './reconcile-positioner';
 
 // --- CSS Anchor Positioning fast-path (Chromium 125+) ---
 //
@@ -40,6 +41,24 @@ export function supportsAnchorPositioning(): boolean {
   return _anchorSupport;
 }
 let _nextAnchorId = 0;
+
+// Option 3 spike flag (notes/DESIGN_HINT_POSITIONING_REARCH.md). When set, badges
+// skip BOTH anchor mode and the nesting path and instead follow their target via
+// the batched JS reconciler (reconcile-positioner.ts) — the unified pure-JS model
+// under evaluation. Default OFF, so normal sessions are untouched. Per-site,
+// console-settable in real Chrome (`localStorage.bkJsPosition = '1'`, then reload)
+// so the model can be A/B'd against anchor mode without a rebuild. `localStorage`
+// is shared per-origin between the page and the content script's isolated world.
+let _jsReposition: boolean | null = null;
+export function jsRepositionEnabled(): boolean {
+  if (_jsReposition !== null) return _jsReposition;
+  try {
+    _jsReposition = typeof localStorage !== 'undefined' && localStorage.getItem('bkJsPosition') === '1';
+  } catch {
+    _jsReposition = false;
+  }
+  return _jsReposition;
+}
 
 // Firefox (through 150) advertises CSS Anchor Positioning but fails to resolve
 // `anchor()` when the anchored element references a target inside a
@@ -556,6 +575,14 @@ export class HintBadge {
   public readonly anchorMode: boolean;
   private anchorName: string | null = null;
 
+  // Option 3 spike (notes/DESIGN_HINT_POSITIONING_REARCH.md). Mutually exclusive
+  // with anchorMode: when true the host is body-mounted (position:fixed) and the
+  // batched JS reconciler writes its transform from the live target rect + this
+  // baked offset (candidate minus target top-left), instead of CSS anchor() or
+  // the nesting path. Set in the constructor from the bkJsPosition flag.
+  public readonly reconcileMode: boolean;
+  private _reconcileOffset: { x: number; y: number } | null = null;
+
   // Scroll-tracking trim (nesting path). A badge nested in its target's
   // scroll context translates with the target via the compositor, so the
   // window-scroll reposition is redundant for it. needsScrollReposition()
@@ -587,7 +614,9 @@ export class HintBadge {
     this.label = label;
     this.displayMode = displayMode;
     this.fontSize = computeBadgeFontSize(target);
-    this.anchorMode = supportsAnchorPositioning()
+    this.reconcileMode = jsRepositionEnabled();
+    this.anchorMode = !this.reconcileMode
+      && supportsAnchorPositioning()
       && (anchorResolvesAcrossFixed() || !hasFixedAncestor(target));
 
     this.host = document.createElement('div');
@@ -688,7 +717,15 @@ export class HintBadge {
     this.outer.appendChild(this.inner);
     this.shadow.appendChild(this.outer);
 
-    if (this.anchorMode) {
+    if (this.reconcileMode) {
+      // Body-mount the host; the JS reconciler follows the target. No page-DOM
+      // write at all (no anchor-name) — this is the whole point: nothing for the
+      // page's inline-style rewrites to strip. anchorParent is still resolved so
+      // placement's space/sticky clamping reads work unchanged.
+      this.anchorParent = resolveContainer(target);
+      this.setupReconcileHost();
+      registerReconcile(this);
+    } else if (this.anchorMode) {
       // Pin the host to the target via CSS Anchor Positioning. anchorParent
       // is still resolved (placement reads it for space/sticky clamping) but
       // the host is mounted at body, not nested in the container.
@@ -739,7 +776,7 @@ export class HintBadge {
     if (this._refined || this._removed) return;
     this._refined = true;
     trackContainerResize(this.anchorParent);
-    if (!this.anchorMode) {
+    if (!this.anchorMode && !this.reconcileMode) {
       this.scrollAncestor = findScrollAncestor(this.target);
       if (this.scrollAncestor) trackScrollAncestor(this.scrollAncestor, this.target);
     }
@@ -747,9 +784,9 @@ export class HintBadge {
     // Start the host-attribute defender AFTER all setup is done — the
     // observer fires on real mutations only, but starting it earlier
     // would treat our own setAttribute/style writes as page tampering.
-    // Anchor hosts need a real box (position:absolute → display block);
+    // Anchor/reconcile hosts need a real box (position → display block);
     // nesting hosts stay display:contents.
-    trackHostAttributes(this.host, this.anchorMode ? 'block' : 'contents');
+    trackHostAttributes(this.host, (this.anchorMode || this.reconcileMode) ? 'block' : 'contents');
     // Colors are NOT touched here — they were already applied accurately
     // (APCA) at show() time. Refinement is observer-only now.
   }
@@ -767,7 +804,47 @@ export class HintBadge {
     document.body.appendChild(this.host);
   }
 
+  // Option 3 spike. Body-mount the host as a viewport-fixed 0x0 box; the
+  // reconciler writes `transform: translate(vpX, vpY)` from the live target rect
+  // each pass. position:fixed makes the transform viewport-relative, so the
+  // target's getBoundingClientRect coords feed in directly. No anchor-name.
+  private setupReconcileHost(): void {
+    this.host.style.cssText =
+      `display:block;position:fixed;top:0;left:0;width:0;height:0;pointer-events:none;`;
+    this.outer.style.position = 'absolute';
+    this.outer.style.top = '0';
+    this.outer.style.left = '0';
+    document.body.appendChild(this.host);
+  }
+
+  // Read half for the batched reconciler: compute the host's desired viewport
+  // coords from the live target rect + baked offset WITHOUT writing, so the
+  // reconciler can batch all reads before any composited writes. Null when the
+  // badge shouldn't be placed this pass (hidden / disconnected / not yet baked).
+  reconcileRead(): ReconcileWrite | null {
+    if (!this._reconcileOffset || !this._visible || !this.target.isConnected) return null;
+    const r = this.target.getBoundingClientRect();
+    return {
+      host: this.host,
+      x: Math.round(r.left + this._reconcileOffset.x),
+      y: Math.round(r.top + this._reconcileOffset.y),
+    };
+  }
+
   updatePosition(candidate?: { x: number; y: number }, caller?: string): void {
+    if (this.reconcileMode) {
+      // Bake the placement offset (candidate relative to the target's top-left);
+      // the reconciler applies it against the live target rect each pass. A
+      // candidate-less call is the reposition path — the reconciler owns it.
+      if (!candidate) return;
+      const tr = getCachedRect(this.target);
+      this._reconcileOffset = { x: candidate.x - tr.left, y: candidate.y - tr.top };
+      // Paint at the right spot immediately (if already visible) so it doesn't
+      // wait a frame for the next reconcile tick.
+      const w = this.reconcileRead();
+      if (w) this.host.style.transform = `translate(${w.x}px,${w.y}px)`;
+      return;
+    }
     if (this.anchorMode) {
       // Express placement's absolute decision as a scroll-invariant offset
       // from the target's element rect and bake it into the host's anchor()
@@ -841,6 +918,11 @@ export class HintBadge {
   }
 
   reattach(): void {
+    if (this.reconcileMode) {
+      // Body-mount again; the reconciler re-applies the transform next tick.
+      this.setupReconcileHost();
+      return;
+    }
     if (this.anchorMode) {
       this.setupAnchorHost();
       return;
@@ -869,7 +951,14 @@ export class HintBadge {
     }
     untrackTargetMutations(this.target);
 
-    if (this.anchorMode) {
+    if (this.reconcileMode) {
+      // No page-DOM binding to move (no anchor-name); just swap the tracked
+      // target. The baked offset is target-relative, so it stays valid for a
+      // same-fingerprint replacement; the reconciler follows the new target on
+      // its next pass.
+      this.target = newEl;
+      this.anchorParent = resolveContainer(newEl);
+    } else if (this.anchorMode) {
       // Move the anchor name from the old target to the new one (reuse the
       // same name so the host's position-anchor stays valid). Set it before
       // trackTargetMutations so it isn't seen as a foreign mutation.
@@ -892,7 +981,7 @@ export class HintBadge {
     }
 
     trackContainerResize(this.anchorParent);
-    if (!this.anchorMode) {
+    if (!this.anchorMode && !this.reconcileMode) {
       this.scrollAncestor = findScrollAncestor(this.target);
       if (this.scrollAncestor) trackScrollAncestor(this.scrollAncestor, this.target);
     }
@@ -1115,10 +1204,10 @@ export class HintBadge {
   }
 
   reposition(): void {
-    // Anchor-mode badges follow their target via the compositor; a
-    // candidate-less reposition would have no offset to apply (and
-    // updatePosition guards against it anyway).
-    if (this.anchorMode) return;
+    // Anchor-mode badges follow their target via the compositor; reconcile-mode
+    // badges follow via the JS reconciler. Either way a candidate-less
+    // reposition has no offset to apply, so it's a no-op for both.
+    if (this.anchorMode || this.reconcileMode) return;
     if (this._visible) {
       this.updatePosition();
     }
@@ -1134,7 +1223,9 @@ export class HintBadge {
   //  - drifted badges: the outer moved by a different delta than the target
   //    since the last placement (scroll-context mismatch).
   needsScrollReposition(): boolean {
-    if (this.anchorMode || !this._visible) return false;
+    // reconcile mode follows the target via the rAF reconciler, not the window
+    // scroll path — never needs a JS scroll reposition here.
+    if (this.anchorMode || this.reconcileMode || !this._visible) return false;
     if (this.scrollSensitive) return true;
     if (!this._lastTargetVp || !this._lastOuterVp) return true;
     const t = getCachedRect(this.target);
@@ -1152,6 +1243,9 @@ export class HintBadge {
   // available space, or pinned to a sticky/fixed bound) — a resize can move
   // that geometry, so it must be recomputed.
   needsLayoutReposition(): boolean {
+    // reconcile mode re-reads the target rect every pass, so a layout sweep
+    // needs no special handling for it.
+    if (this.reconcileMode) return false;
     if (!this.anchorMode || !this._visible) return true;
     return this.geometryDependent;
   }
@@ -1195,7 +1289,9 @@ export class HintBadge {
   // ordering so our own appendChild isn't seen as a foreign mutation by
   // the old container's resize observer.
   ensureContainer(): boolean {
-    if (this.anchorMode || !this.target.isConnected) return false;
+    // reconcile-mode hosts are body-mounted (position:fixed), never nested in a
+    // page container, so there is no container to re-resolve.
+    if (this.anchorMode || this.reconcileMode || !this.target.isConnected) return false;
     const desired = resolveContainer(this.target);
     // Two drift sources: (a) the cached `anchorParent` is stale because
     // resolution now picks a different container; (b) the host was moved
@@ -1232,6 +1328,7 @@ export class HintBadge {
       // anchor-name write isn't observed as a foreign mutation.
       (this.target as HTMLElement).style?.removeProperty?.('anchor-name');
     }
+    if (this.reconcileMode) unregisterReconcile(this);
     this.host.remove();
   }
 
