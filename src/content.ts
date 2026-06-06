@@ -2440,6 +2440,11 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       // click (synthetic events are isTrusted=false). Routing back through
       // a JS call recovers the entries the UI button walks past.
       history.back();
+    } else if (action === 'history_forward') {
+      // Same rationale as history_back: the UI forward button skips
+      // voice-navigated SPA entries (synthetic clicks are isTrusted=false),
+      // so route forward through a JS call to step the full stack.
+      history.forward();
     } else if (action === 'find_open' || action === 'find_close' || action === 'find_next' || action === 'find_previous' || action === 'find_immediate') {
       dispatcher.dispatch(action, params);
     } else if (action === 'activate') {
