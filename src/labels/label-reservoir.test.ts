@@ -265,3 +265,28 @@ describe('LabelReservoir duplicate-codeword defenses', () => {
     expect(result.filter(l => l === 'kind gust')).toHaveLength(1);
   });
 });
+
+describe('LabelReservoir.ensureReady (Regime B preferred initial fill)', () => {
+  it('threads preferred codewords into the initial CLAIM_LABELS', async () => {
+    sendMessageMock.mockResolvedValue({ labels: ['gust harp', 'air ink', 'p1'] });
+    await labelReservoir.ensureReady(['gust harp', 'air ink']);
+    const claimCall = sendMessageMock.mock.calls.find(c => c[0]?.type === 'CLAIM_LABELS');
+    expect(claimCall).toBeTruthy();
+    expect(claimCall![0].preferred).toEqual(['gust harp', 'air ink']);
+  });
+
+  it('makes a remembered codeword reclaimable by a subsequent preferred claim', async () => {
+    // SW granted the remembered codewords into the initial fill.
+    sendMessageMock.mockResolvedValue({ labels: ['gust harp', 'air ink', 'fresh1'] });
+    await labelReservoir.ensureReady(['gust harp', 'air ink']);
+    // A wrapper whose fingerprint resolved to "air ink" reclaims it (pass 1).
+    expect(labelReservoir.claim(1, ['air ink'])).toEqual(['air ink']);
+  });
+
+  it('omits preferred on a generic (no-arg) warm-up', async () => {
+    sendMessageMock.mockResolvedValue({ labels: ['a', 'b'] });
+    await labelReservoir.ensureReady();
+    const claimCall = sendMessageMock.mock.calls.find(c => c[0]?.type === 'CLAIM_LABELS');
+    expect(claimCall![0].preferred).toBeUndefined();
+  });
+});

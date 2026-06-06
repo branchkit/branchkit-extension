@@ -21,6 +21,10 @@ import { REBIND_DISTANCE_THRESHOLD_PX } from './rebind';
 // `isRecallLoaded()` so a not-yet-loaded recall never masquerades as "no
 // memory" (which would let a wrapper claim fresh and miss its reclaim).
 let byKey: Map<string, CodewordMemoryEntry[]> | null = null;
+// Remembered codewords, newest-first and deduped — for the reservoir's initial
+// preferred-fill (phase 4). Newest-first because recently-seen elements are the
+// likeliest to reappear in the new page's viewport after a reload.
+let allCodewords: string[] = [];
 
 /**
  * Fetch this frame's remembered entries from the SW and index them by
@@ -43,6 +47,23 @@ export async function loadRecall(): Promise<void> {
     else map.set(k, [e]);
   }
   byKey = map;
+
+  // Flatten to newest-first, deduped codewords for the reservoir initial fill.
+  const seen = new Set<string>();
+  allCodewords = [];
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const cw = entries[i].codeword;
+    if (cw && !seen.has(cw)) {
+      seen.add(cw);
+      allCodewords.push(cw);
+    }
+  }
+}
+
+/** Remembered codewords (newest-first, deduped) for the reservoir's initial
+ *  preferred-fill. Empty until `loadRecall` has run. */
+export function recalledCodewords(): string[] {
+  return allCodewords;
 }
 
 export function isRecallLoaded(): boolean {
@@ -81,4 +102,5 @@ export function resolvePreferredCodeword(fp: Fingerprint, rect: Rect | null): st
 /** Test-only: reset the loaded state. */
 export function _resetForTests(): void {
   byKey = null;
+  allCodewords = [];
 }

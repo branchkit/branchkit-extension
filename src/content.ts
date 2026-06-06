@@ -14,7 +14,7 @@ import { computeReconcilePlan, geometryInBand, RECONCILE_BAND_MARGIN_PX } from '
 import { stampStrictViewport, collectStrictViewportDelta } from './lifecycle/strict-viewport';
 import * as idRegistry from './scan/registry';
 import type { CodewordMemoryEntry } from './labels/codeword-memory';
-import { loadRecall, isRecallLoaded, resolvePreferredCodeword } from './labels/codeword-recall';
+import { loadRecall, isRecallLoaded, resolvePreferredCodeword, recalledCodewords } from './labels/codeword-recall';
 import { computeFingerprint, fingerprintsEqual } from './scan/registry';
 import { bumpRebindCounter, findLimboMatch, newRebindCounters, REBIND_DISTANCE_THRESHOLD_PX, type RebindCounters } from './labels/rebind';
 import { resolveTarget } from './activate/activate-resolution';
@@ -434,12 +434,17 @@ loadConfig({
 // slowing your browser" warning. Frames that grow past the eligibility
 // threshold later get warmed inside `activateHintMachinery` below.
 if (typeof chrome !== 'undefined' && chrome.runtime && frameMayHoldHints()) {
-  void labelReservoir.ensureReady();
-  // Regime B phase 3: load this frame's codeword memory, then seed
-  // preferredCodeword on wrappers already attached before the recall arrived
-  // (the first scan can race this fetch). Wrappers attached afterwards are
-  // seeded inline by attachWrapper.
+  // Regime B (phases 3-4): load this frame's codeword memory FIRST, then warm
+  // the reservoir requesting the remembered codewords as `preferred` so the
+  // initial fill reclaims them (the SW grants the ones still free in the pool).
+  // Loading recall before the (single) warm-up means wrappers never get an
+  // arbitrary codeword they'd later swap — no flicker. Wrappers that claim
+  // before the fill lands hit the empty reservoir, return '', and are
+  // re-claimed by the level-triggered reconcile once the remembered codewords
+  // are in the reservoir. Wrappers attached after recall are seeded inline by
+  // attachWrapper; the sweep covers those attached during the in-flight fetch.
   void loadRecall().then(() => {
+    void labelReservoir.ensureReady(recalledCodewords());
     for (const w of store.all) seedPreferredFromMemory(w);
   });
 }

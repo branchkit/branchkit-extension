@@ -94,10 +94,17 @@ class LabelReservoir {
    * concurrent callers share one fetch. Call early in content-script
    * bootstrap so the reservoir is warm before the first scan-claim batch.
    */
-  ensureReady(): Promise<void> {
+  ensureReady(preferred?: string[]): Promise<void> {
     if (this.free.length > 0) return Promise.resolve();
     if (this.initialReady) return this.initialReady;
-    this.initialReady = this.refill(INITIAL_RESERVATION);
+    // `preferred` (Regime B startup reclaim): the SW grants these specific
+    // codewords into the initial fill if they're still free in the pool, so a
+    // fresh content script after a full-document reload reclaims the codewords
+    // its fingerprints held before the reload. The SW falls back to front-of-
+    // pool for the remaining slots. Only the *initial* fill carries preferred;
+    // hot-path refills (maybeRefill) stay generic. See
+    // notes/DESIGN_CODEWORD_STABILITY.md.
+    this.initialReady = this.refill(INITIAL_RESERVATION, preferred);
     return this.initialReady;
   }
 
@@ -253,9 +260,9 @@ class LabelReservoir {
     });
   }
 
-  private async refill(count: number): Promise<void> {
+  private async refill(count: number, preferred?: string[]): Promise<void> {
     try {
-      const resp = await chrome.runtime.sendMessage({ type: 'CLAIM_LABELS', count });
+      const resp = await chrome.runtime.sendMessage({ type: 'CLAIM_LABELS', count, preferred });
       if (Array.isArray(resp?.labels)) {
         // Dedup against `free ∪ outstanding`. The SW can re-issue a
         // codeword we already have outstanding on a wrapper when a
