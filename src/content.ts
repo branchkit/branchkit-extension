@@ -8,19 +8,19 @@
 import { Category, HintVisibility, ScannedElement, Message, DispatchResult } from './types';
 import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from './labels/words';
 import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters, subtreeMaybeHintable } from './scan/scanner';
-import { ElementWrapper, enterLimbo, isLimboExpired } from './scan/element-wrapper';
+import { ElementWrapper, enterLimbo } from './scan/element-wrapper';
 import { wantsHint } from './lifecycle/desired-state';
 import { computeReconcilePlan, geometryInBand, RECONCILE_BAND_MARGIN_PX } from './lifecycle/reconcile';
 import { stampStrictViewport, collectStrictViewportDelta } from './lifecycle/strict-viewport';
 import * as idRegistry from './scan/registry';
 import type { CodewordMemoryEntry } from './labels/codeword-memory';
 import { loadRecall, isRecallLoaded, resolvePreferredCodeword, recalledCodewords } from './labels/codeword-recall';
-import { computeFingerprint, fingerprintsEqual } from './scan/registry';
-import { bumpRebindCounter, findLimboMatch, newRebindCounters, REBIND_DISTANCE_THRESHOLD_PX, type RebindCounters } from './labels/rebind';
+import { type RebindCounters } from './labels/rebind';
 import { resolveTarget } from './activate/activate-resolution';
 import { IntersectionTracker } from './observe/intersection-tracker';
 import { AttentionObserver } from './observe/attention-observer';
 import { initVisibilityTracker, trackPendingCandidate, untrackPendingCandidate, connectVisibilityMO, teardownVisibilityTracker } from './observe/visibility-tracker';
+import { initLimbo, rebindCounters, LIMBO_DEADLINE_MS, collectLimboWrappers, tryRebindFromLimbo, dropDisconnectedWrappers, finalizeExpiredLimboWrappers } from './observe/limbo';
 import { store } from './core/store';
 import { HintBadge } from './render/hints';
 import { reconcilePass, drain as drainReconcilePositioner, reconcileRegistrySize } from './render/reconcile-positioner';
@@ -1928,6 +1928,10 @@ const pageSession = new PageSession({
 // injection seam — see notes/DESIGN_EXTENSION_RESTRUCTURE.md (Tier 1).
 initVisibilityTracker({ pageSession, attachWrapper, showHints });
 
+// Wire limbo/rebind with detachWrapper + the two observers it re-anchors on,
+// which still live in content.ts (become imports once those lift in Tier 1/3).
+initLimbo({ detachWrapper, tracker, resizeObserver });
+
 openLivenessPort({
   onFrameId: (frameId) => { pageSession.myFrameId = frameId; },
   onOrphan: () => pageSession.teardown('orphan'),
@@ -2922,14 +2926,6 @@ function isOwnMutation(n: Node): boolean {
   return n instanceof HTMLElement && n.hasAttribute('data-branchkit-hint');
 }
 
-// --- Rebind instrumentation (step 5) ---
-//
-// Per-bucket counters fed by `tryRebindFromLimbo` and the finalize
-// sweeper. Read via `window.branchkitRebindStats()` (console) and the
-// debug overlay's stats panel. The thresholds and bucket ratios drive
-// the soak-time tuning of REBIND_DISTANCE_THRESHOLD_PX.
-const rebindCounters: RebindCounters = newRebindCounters();
-
 // Rebind-or-attach a batch of freshly-scanned hintables. Shared by the
 // synchronous `discoverInSubtree` and the sliced
 // `discoverInSubtreeBatched` so the limbo-rebind/eager-attach semantics
@@ -3018,191 +3014,6 @@ async function discoverInSubtreeBatched(root: Element): Promise<number> {
   recordCpu('discoverInSubtreeBatched', performance.now() - __cpuStart);
   return added;
 }
-
-function collectLimboWrappers(): ElementWrapper[] {
-  const out: ElementWrapper[] = [];
-  for (const w of store.all) {
-    // Only DISCONNECTED limbo wrappers are rebind-eligible. A soft-detached nav
-    // survivor (still connected, parked in limbo for the wedge preempt) must be
-    // excluded, or new content with a colliding fingerprint could rebind-steal
-    // its codeword + badge off the live element.
-    if (w.disconnectedAt !== null && !w.element.isConnected && w.scanned.id > 0) out.push(w);
-  }
-  return out;
-}
-
-/**
- * Probe `pool` for a limbo wrapper whose fingerprint (and, on multi-
- * match, last position) matches `newEl`. On a successful rebind, the
- * wrapper is consumed from `pool` and `rebindWrapper` is run. On
- * `refuse_distance`, the ambiguous candidates are finalized in place
- * (their last positions are too scrambled to safely pick one). Returns
- * true iff the new element was rebound; false means the caller should
- * create a fresh wrapper.
- */
-function tryRebindFromLimbo(newEl: Element, pool: ElementWrapper[]): boolean {
-  const newFp = computeFingerprint(newEl);
-  const matches: ElementWrapper[] = [];
-  for (const w of pool) {
-    const entry = idRegistry.get(w.scanned.id);
-    if (!entry) continue;
-    if (fingerprintsEqual(entry.fingerprint, newFp)) matches.push(w);
-  }
-  if (matches.length === 0) return false;
-
-  // One getBoundingClientRect read per discovery — paid only when there's
-  // at least one fingerprint match. Single-match case ignores it.
-  const newRect = matches.length === 1 ? null : newEl.getBoundingClientRect();
-  const outcome = findLimboMatch(matches, newRect, REBIND_DISTANCE_THRESHOLD_PX);
-
-  bumpRebindCounter(rebindCounters, outcome);
-  switch (outcome.kind) {
-    case 'rebind_clean':
-    case 'rebind_position': {
-      rebindWrapper(outcome.wrapper, newEl);
-      consume(pool, outcome.wrapper);
-      return true;
-    }
-    case 'refuse_distance': {
-      for (const c of outcome.candidates) {
-        consume(pool, c);
-        detachWrapper(c.element);
-      }
-      return false;
-    }
-    case 'no_candidates':
-      return false;
-  }
-}
-
-function consume(pool: ElementWrapper[], w: ElementWrapper): void {
-  const idx = pool.indexOf(w);
-  if (idx >= 0) pool.splice(idx, 1);
-}
-
-/**
- * Re-anchor `w` to `newEl`. The wrapper's codeword, badge, label, and
- * registry id all survive — only the DOM-identity edges swap. Mirrors
- * the algorithm in `notes/completed/DESIGN_WRAPPER_IDENTITY_STABILITY.md`
- * "Rebind operation". Order matters: store + registry first (so the
- * tracker callbacks can find the wrapper by newEl), then observers,
- * then the badge swap, then the mutable `.element` pointer.
- */
-function rebindWrapper(w: ElementWrapper, newEl: Element): void {
-  const oldEl = w.element;
-
-  store.rebindElement(oldEl, newEl, w);
-  if (w.scanned.id > 0) {
-    idRegistry.rebindRef(w.scanned.id, newEl);
-    idRegistry.refreshFingerprint(w.scanned.id, newEl);
-  }
-
-  tracker.unobserve(oldEl);
-  tracker.observe(newEl);
-  resizeObserver.unobserve(oldEl);
-  resizeObserver.observe(newEl);
-
-  if (w.hint) w.hint.retarget(newEl);
-
-  w.element = newEl;
-  w.disconnectedAt = null;
-  w.lastRect = null;
-}
-
-const LIMBO_DEADLINE_MS = 250;
-
-/**
- * Move disconnected wrappers into limbo. Per
- * `notes/completed/DESIGN_WRAPPER_IDENTITY_STABILITY.md` steps 1–2, a disconnect
- * no longer immediately tears down the wrapper — codeword and badge are
- * held so a follow-up React render or DOM move can re-attach the same
- * logical identity (step 3+) without churning the codeword pool. The
- * finalize sweeper (`finalizeExpiredLimboWrappers`) reaps any wrapper
- * still disconnected after `LIMBO_DEADLINE_MS`.
- *
- * Returns the count of wrappers that newly entered limbo. Grammar
- * doesn't change on limbo entry (the codeword stays claimed), so callers
- * should NOT use the return value to schedule a grammar push — the
- * sweeper does that when it actually detaches.
- */
-function dropDisconnectedWrappers(): number {
-  const __cpuStart = performance.now();
-  const __initialSize = store.all.length;
-  let entered = 0;
-  const now = Date.now();
-  for (const w of store.all) {
-    if (w.disconnectedAt !== null) continue;
-    if (!w.element.isConnected) {
-      // lastRect is normally already populated by the IntersectionTracker
-      // from a recent IO entry. Only fall back to the layout cache for
-      // wrappers that disconnected before IO had a chance to fire (race
-      // during heavy first-paint mutation churn). If neither has a rect,
-      // multi-match rebinds for this wrapper will refuse on distance.
-      if (!w.lastRect) w.lastRect = peekCachedRect(w.element);
-      enterLimbo(w, now);
-      entered++;
-    }
-  }
-  lifecycleCounters.dropDisconnectedCalls++;
-  lifecycleCounters.dropDisconnectedFound += entered;
-  // Labeled so a watchdog stall during a full-page DOM swap (where every
-  // wrapper disconnects at once) attributes here instead of falling into
-  // unattributedMs. This is one of the two synchronous steps the spa_nav
-  // from_cache rescan runs before the deferred walk — previously invisible
-  // to topLabels, which is why "us vs YouTube" couldn't be pinned on the
-  // nav-time wedge. See notes/INVESTIGATION_YOUTUBE_WATCH_PERF.md.
-  recordCpu('dropDisconnectedWrappers', performance.now() - __cpuStart);
-  if (__initialSize > 0) recordCpu(`dropDisconnectedWrappers:size:${__initialSize > 1000 ? '1000+' : __initialSize > 100 ? '100-1000' : '<100'}`, __initialSize);
-  return entered;
-}
-
-// Lifecycle event counters live in debug/perf-counters.ts (`lifecycleCounters`,
-// imported at top), alongside the CPU/cpu-share/longtask/watchdog measurement
-// primitives. recordCpu is the injected sink; buildPerfSnapshot reads via
-// computeCpuShare / cpuBucketsSnapshot / longtaskSnapshot.
-
-/**
- * Finalize sweeper. Detaches any wrapper whose limbo deadline has
- * elapsed without a rebind. Runs on a fixed interval — short enough
- * that the codeword pool can't be starved by held-but-dead wrappers
- * (worst case: 676 codewords × 250ms ≈ ¼-second blocking window).
- *
- * Increments `refuse_no_match` per finalization. A high rate on a
- * given site suggests the fingerprint is too tight (rebind never finds
- * a match) — see the open question on fingerprint refresh in the
- * design doc.
- */
-function finalizeExpiredLimboWrappers(): number {
-  const now = Date.now();
-  // Iterate a copy so we can mutate `store` mid-loop.
-  let finalized = 0;
-  for (const w of [...store.all]) {
-    if (!isLimboExpired(w, now, LIMBO_DEADLINE_MS)) continue;
-    // Graduate a still-connected limbo wrapper back to live. Covers both the
-    // same-node-reconnect case and soft-detached nav survivors (persistent
-    // chrome). Clear disconnectedAt FIRST, then re-attach the observers
-    // softDetach/teardown removed — so the IntersectionObserver's mandatory
-    // initial callback runs with the wrapper non-limbo and the idempotent claim
-    // (claims only when no codeword is held) can't double-claim. Mirror
-    // attachWrapper: tracker + resize (attentionObserver is managed elsewhere).
-    if (w.element.isConnected) {
-      w.disconnectedAt = null;
-      w.lastRect = null;
-      tracker.observe(w.element);
-      resizeObserver.observe(w.element);
-      continue;
-    }
-    detachWrapper(w.element);
-    rebindCounters.refuse_no_match++;
-    finalized++;
-  }
-  lifecycleCounters.finalizeSweeps++;
-  lifecycleCounters.finalizeDetached += finalized;
-  if (finalized > 0) schedulePushGrammar();
-  return finalized;
-}
-// The limbo sweeper starts in activateHintMachinery() so ineligible subframes
-// (which never scan and thus never create wrappers) don't run a 4Hz no-op timer.
 
 /**
  * Recompute hintability for an element whose attributes changed. Adds,

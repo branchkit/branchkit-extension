@@ -220,9 +220,10 @@ src/
   core/                      // NEW dir — the model + the graph
     store.ts                 //   (exists) WrapperStore instance; delta emitter lands here in Tier 2
     singletons.ts            //   (exists) dispatcher/registry/keyHandler/targetRectStore instances
-    wrapper-lifecycle.ts     //   NEW: attach/detach/limbo/rebind (the old SCC core),
-                             //        as store mutations — calls store.attach/detach,
-                             //        no longer calls grammar/render directly
+    wrapper-lifecycle.ts     //   NEW: attach/detach + the discovery walk (the SCC
+                             //        core); limbo/rebind already split to observe/limbo.ts.
+                             //        Eventually emits store deltas instead of calling
+                             //        grammar/render directly (Tier 2)
 
   lifecycle/                 // (exists) the per-frame session + reconcile policy
     page-session.ts          //   (exists) owns start/teardown/onUrlChange/restore
@@ -232,6 +233,7 @@ src/
     intersection-tracker.ts, attention-observer.ts       // (exist)
     target-rect-store.ts, *-tracker.ts                   // (exist)
     visibility-tracker.ts    //   (exists) pendingVisibility + visibility IO/MO
+    limbo.ts                 //   (exists) limbo/rebind/finalize over the store
     mutation-source.ts       //   NEW: the discovery MutationObserver + drain (extract)
 
   scan/                      // (exists) pure DOM → candidates (a source's helper)
@@ -285,9 +287,12 @@ own nothing" end state before doing it to `content.ts`.
 Sequenced so each step ships independently, the extension stays working, the
 final step deletes the scaffolding, and the risky change (the delta cut) lands
 only after the cheap de-risking moves. Each step keeps `npm test` green and is
-independently revertable. Per the project's soak discipline, any step that
-touches lifecycle, observers, or teardown gets a 30-minute real-browser soak
-before merge — not just unit green.
+independently revertable. Per the project's soak discipline, work that touches
+lifecycle, observers, or teardown gets a 30-minute real-browser soak before merge
+— not just unit green. **Decision 2026-06-06:** for the Tier 1 lifts (each
+behavior-equivalent and unit-verified), the soak is batched once at the end of
+the tier rather than after every commit. The lifts land back-to-back behind green
+tests + clean builds; nothing is pushed until the consolidated soak passes.
 
 **Tier 0 — enabling moves (mechanical, no behavior change, do first).**
 These carry essentially no risk and unblock everything after them.
@@ -309,7 +314,7 @@ These carry essentially no risk and unblock everything after them.
    is also read by `render/debug-overlay.ts`; move them only if a later extraction
    needs them, to keep this step's blast radius to content.ts alone.
 
-**Tier 1 — lift the satellites (medium risk, soak each).**
+**Tier 1 — lift the satellites (medium risk, one soak at end of tier).**
 With `store` importable, each satellite cluster becomes a one-file lift that
 still calls the core imperatively (no delta cut yet):
 3. `observe/visibility-tracker.ts` — the `pendingVisibility` + visibility IO/MO
@@ -323,30 +328,50 @@ still calls the core imperatively (no delta cut yet):
    stray-timer fix). Shipped with a 5-test spec; tsc clean, 543 tests green.
    **Soak still owed** before this is trusted/pushed — it touches the
    visibility-observer + teardown paths the project flags as high-blast-radius.
-4. `observe/mutation-source.ts` — the discovery MutationObserver + drain +
-   reevaluation coalescing.
-5. `core/wrapper-lifecycle.ts` — attach/detach/limbo/rebind/discover, moved as a
-   cohesive unit (they are the SCC core and belong together).
+4. `observe/limbo.ts` — limbo / rebind / finalize orchestration over the store.
+   **Landed 2026-06-06**: `collectLimboWrappers` / `tryRebindFromLimbo` /
+   `rebindWrapper` / `dropDisconnectedWrappers` / `finalizeExpiredLimboWrappers`
+   and the `rebindCounters` instance moved out (~185 lines); the pure
+   rebind-distance decision already lived in `labels/rebind.ts`. `detachWrapper`
+   and the two observers it re-anchors on (`tracker`, `resizeObserver`) are
+   injected via `initLimbo`. Shipped with a 6-test spec; tsc clean, 549 tests
+   green. **Soak owed** (batched — see above).
+5. `core/wrapper-lifecycle.ts` — attach/detach (and the discovery walk
+   `attachDiscovered`/`discoverInSubtree`). **Order correction (2026-06-06):**
+   this must precede `mutation-source` below, not follow it. `mutation-source`'s
+   `processMutations` → `drainDiscovery` → `discoverInSubtree` → `attachWrapper` /
+   `tryRebindFromLimbo`, and `drainReevaluations` → `reevaluateAttribute` →
+   `attachWrapper` / `detachWrapper` — i.e. the source sits *on top of* the
+   lifecycle. Extracting lifecycle first lets `mutation-source` import it instead
+   of injecting a large surface. Note the cost: `attachWrapper`/`detachWrapper`
+   reach `tracker` / `resizeObserver` / `attentionObserver`, which stay in
+   content.ts until Tier 3 — so this lift injects those three observers (the
+   `limbo` lift already injects two). That growing observer-injection surface is
+   the signal that Tier 3 (observer relocation) is the natural close of this arc.
+6. `observe/mutation-source.ts` — the discovery MutationObserver + drain +
+   reevaluation coalescing, imported on top of the lifecycle module above.
 
 **Tier 2 — the delta cut (the architecture change, highest value).**
-6. Add the delta emitter to `core/store.ts`. Mutators emit; nothing subscribes
+7. Add the delta emitter to `core/store.ts`. Mutators emit; nothing subscribes
    yet (deltas are dead). Pure addition, behavior-identical.
-7. Make `label-sync` and `badge-manager` **subscribe** to deltas, while the
+8. Make `label-sync` and `badge-manager` **subscribe** to deltas, while the
    imperative `scheduleSync` / reposition calls still fire (transitional
    double-drive). Verify subscribers produce the same pushes/paints as the
    imperative calls.
-8. **Delete the imperative calls.** This is the commit that breaks the cycle:
+9. **Delete the imperative calls.** This is the commit that breaks the cycle:
    sources mutate the store, reactions subscribe, lifecycle no longer references
-   grammar or render. The transitional double-drive from step 7 is removed here.
+   grammar or render. The transitional double-drive from step 8 is removed here.
 
 **Tier 3 — finish the wiring.**
-9. Move source construction (the six observers, with their now-thin callbacks)
-   onto `PageSession.start()`. This was the "entangled boot" the previous plan
-   deferred — it is safe *now* because steps 5–8 made the observer callbacks thin
-   (mutate the store, no reaching into render/grammar).
-10. `background.ts` extraction (Tier-0-equivalent risk; can run in parallel any
+10. Move source construction (the six observers, with their now-thin callbacks)
+    onto `PageSession.start()`. This was the "entangled boot" the previous plan
+    deferred — it is safe *now* because steps 5–9 made the observer callbacks thin
+    (mutate the store, no reaching into render/grammar). This also retires the
+    growing observer-injection surface the Tier 1 lifts accumulated (`limbo` and
+    wrapper-lifecycle inject `tracker` / `resizeObserver` / `attentionObserver`).
+11. `background.ts` extraction (Tier-0-equivalent risk; can run in parallel any
     time — see section 4).
-11. **Delete the residue.** `content.ts` and `background.ts` become construct-and-
+12. **Delete the residue.** `content.ts` and `background.ts` become construct-and-
     wire only; transitional shims are gone.
 
 The previous plan's stage interfaces (`DiscoveryStage` / `LifecycleStage` /
