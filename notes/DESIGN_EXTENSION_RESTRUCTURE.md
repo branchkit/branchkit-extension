@@ -260,8 +260,17 @@ counters it reads move into `debug/perf-counters.ts`.
 ## 4. The background service worker
 
 `background.ts` gets the same treatment at lower risk, because its coupling is to
-~8 connection globals rather than a shared DOM model. Target extractions, each
-testable with a faked `chrome.*`:
+~8 connection globals rather than a shared DOM model.
+
+**Enabling step — landed 2026-06-07:** the cross-cutting connection/tab state
+(`branchkitConnected`, `cachedActiveTabId`, `connId`) moved into `background/state.ts`
+(a `bgState` object + `connId` const), the background analog of content.ts's Tier 0
+singleton promotion. Router / tab-sessions / SSE all read+write this state, so it
+had to become importable before they could lift cleanly. Behavior-equivalent
+relocation (a mutable object so call sites assign fields directly); 573 tests
+green, both builds clean.
+
+Target extractions, each testable with a faked `chrome.*`:
 
 - `plugin/actuator-client.ts` — **Landed 2026-06-07.** Owns the connection
   (`pluginPort` / `pluginToken`, `discoverPlugin`) and the authed-POST boilerplate

@@ -13,11 +13,14 @@ import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearStack, cl
 import { rememberCodewords, clearCodewordMemory, recallCodewords } from './labels/codeword-memory';
 import { discoverPlugin, ensureConnected, postToPlugin, getPluginPort, getPluginToken } from './plugin/actuator-client';
 import { isInjectableURL, injectContentScriptFiles, withInjectLock, ensureContentScriptInjected } from './background/injection';
+import { bgState, connId } from './background/state';
 
 // --- State ---
+//
+// The shared connection/tab state (bgState + connId, imported above) lives in
+// background/state.ts so the extracted background modules share it — see
+// notes/DESIGN_EXTENSION_RESTRUCTURE.md (Tier 3).
 
-let branchkitConnected = false;
-let cachedActiveTabId: number | null = null;
 let hintVisibility: HintVisibility = 'always';
 
 // Firefox direct SSE (no offscreen document needed)
@@ -45,7 +48,7 @@ function scheduleSSERetry(): void {
     sseRetryTimer = null;
     const found = await discoverPlugin();
     if (found) {
-      branchkitConnected = true;
+      bgState.branchkitConnected = true;
       cancelSSERetry();
       connectSSE();
       rescanActiveTab();
@@ -56,9 +59,9 @@ function scheduleSSERetry(): void {
 }
 
 function rescanActiveTab(): void {
-  if (cachedActiveTabId == null) return;
-  forwardDebugLog('pipeline.bg_rescan_dispatched', { tab_id: cachedActiveTabId, source: 'rescanActiveTab' });
-  chrome.tabs.sendMessage(cachedActiveTabId, {
+  if (bgState.cachedActiveTabId == null) return;
+  forwardDebugLog('pipeline.bg_rescan_dispatched', { tab_id: bgState.cachedActiveTabId, source: 'rescanActiveTab' });
+  chrome.tabs.sendMessage(bgState.cachedActiveTabId, {
     type: 'BRANCHKIT_ACTION',
     payload: { action: 'rescan' },
   }).catch(() => {});
@@ -67,20 +70,6 @@ function rescanActiveTab(): void {
 // --- Feature Detection ---
 
 const hasOffscreenAPI = typeof chrome !== 'undefined' && !!chrome.offscreen;
-
-// --- Connection identity ---
-//
-// The extension never names its own browser. UA-sniffing the macOS bundle ID
-// is wrong for every fork of a supported engine (Brave reports as Chrome,
-// Firefox Nightly as firefox, etc.), which broke the plugin's cross-browser
-// focus gate. Instead we mint a connection nonce and let the OS-authoritative
-// focus event name the browser: when this browser gains OS focus we POST /focus
-// with connId, and the plugin binds connId to whatever bundle the OS reports as
-// frontmost. See notes/DESIGN_BROWSER_IDENTITY_FOCUS_HANDSHAKE.md.
-//
-// Stable for this background's lifetime. On SW restart it regenerates and the
-// SSE reconnect (init → connectSSE) re-establishes the mapping plugin-side.
-const connId = crypto.randomUUID();
 
 // --- Alphabet ---
 
@@ -369,7 +358,7 @@ async function postGrammarBatch(
   if (!getPluginPort() || !getPluginToken()) {
     const found = await discoverPlugin();
     if (!found) return transportFailure(request);
-    branchkitConnected = true;
+    bgState.branchkitConnected = true;
     connectSSE();
   }
 
@@ -431,7 +420,7 @@ async function assertFocusIfFocused(): Promise<void> {
     const win = await chrome.windows.getLastFocused();
     if (win.focused && win.type === 'normal') {
       void postFocus(true);
-      void postActiveTab(cachedActiveTabId);
+      void postActiveTab(bgState.cachedActiveTabId);
     }
   } catch {
     // window query unavailable; onFocusChanged covers subsequent transitions
@@ -502,7 +491,7 @@ function connectDirectSSE(port: number, token: string): void {
 
   directSSE.addEventListener('connected', () => {
     console.log('[BranchKit BG] SSE connected (direct)');
-    branchkitConnected = true;
+    bgState.branchkitConnected = true;
     void assertFocusIfFocused();
     hydrateReferencesFromCollection().then(() => pushReferenceNames());
   });
@@ -533,7 +522,7 @@ function connectDirectSSE(port: number, token: string): void {
       directSSE.close();
       directSSE = null;
     }
-    branchkitConnected = false;
+    bgState.branchkitConnected = false;
     scheduleSSERetry();
   };
 }
@@ -594,7 +583,7 @@ async function broadcastToAllTabs(message: Message): Promise<void> {
  */
 async function resolveActiveContentTab(): Promise<number | null> {
   // Cached value, set by tabs.onActivated, is usually correct.
-  if (cachedActiveTabId !== null) return cachedActiveTabId;
+  if (bgState.cachedActiveTabId !== null) return bgState.cachedActiveTabId;
 
   try {
     const windows = await chrome.windows.getAll({
@@ -610,7 +599,7 @@ async function resolveActiveContentTab(): Promise<number | null> {
       const tab = w.tabs?.find(t => t.active);
       if (tab?.id === undefined) continue;
       if (!isInjectableURL(tab.url ?? '')) continue;
-      cachedActiveTabId = tab.id;
+      bgState.cachedActiveTabId = tab.id;
       return tab.id;
     }
   } catch {
@@ -780,13 +769,13 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   }
 
   if (message.type === 'HEALTH_STATUS') {
-    const wasConnected = branchkitConnected;
-    branchkitConnected = message.branchkit ?? false;
+    const wasConnected = bgState.branchkitConnected;
+    bgState.branchkitConnected = message.branchkit ?? false;
 
     // New connection — cancel any pending retry, hydrate, rescan, and claim
     // focus if this browser is currently frontmost (cold-start handshake; the
     // offscreen doc holds the EventSource so onFocusChanged may never fire).
-    if (!wasConnected && branchkitConnected) {
+    if (!wasConnected && bgState.branchkitConnected) {
       cancelSSERetry();
       void assertFocusIfFocused();
       hydrateReferencesFromCollection().then(() => pushReferenceNames());
@@ -794,14 +783,14 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     }
 
     // SSE dropped — retry with exponential backoff until plugin is back
-    if (wasConnected && !branchkitConnected) {
+    if (wasConnected && !bgState.branchkitConnected) {
       scheduleSSERetry();
     }
     return false;
   }
 
   if (message.type === 'GET_HEALTH') {
-    sendResponse({ branchkit: branchkitConnected });
+    sendResponse({ branchkit: bgState.branchkitConnected });
     return false;
   }
 
@@ -997,8 +986,8 @@ async function logTabSwitch(reason: string, oldTabId: number | null, newTabId: n
 }
 
 chrome.tabs.onActivated.addListener((activeInfo) => {
-  const oldTabId = cachedActiveTabId;
-  cachedActiveTabId = activeInfo.tabId;
+  const oldTabId = bgState.cachedActiveTabId;
+  bgState.cachedActiveTabId = activeInfo.tabId;
   if (oldTabId !== activeInfo.tabId) {
     logTabSwitch('tab_activated', oldTabId, activeInfo.tabId);
     // Report the new active tab to the plugin (accepted only if this is the
@@ -1102,7 +1091,7 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
   }
   try {
     // Only follow focus into normal browser windows. Devtools / popups
-    // / extension panels would otherwise blank cachedActiveTabId (they
+    // / extension panels would otherwise blank the active-tab cache (they
     // either have no tabs or their "tab" is an about:* URL), breaking
     // voice routing while devtools is open. Skip the update; the last
     // known content tab stays cached.
@@ -1116,8 +1105,8 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
 
     const tabs = await chrome.tabs.query({ active: true, windowId });
     const newActive = tabs[0]?.id ?? null;
-    const oldTabId = cachedActiveTabId;
-    cachedActiveTabId = newActive;
+    const oldTabId = bgState.cachedActiveTabId;
+    bgState.cachedActiveTabId = newActive;
     // This browser just gained OS focus — report its active tab so the plugin's
     // focused-tab signal tracks the window switch even when the tab itself
     // didn't change. Authoritative focused-tab source for Option B.
@@ -1131,16 +1120,16 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
       }
     }
   } catch {
-    // Don't blank cachedActiveTabId on error — fall back to the last
+    // Don't blank the active-tab cache on error — fall back to the last
     // known content tab so voice routing keeps working through transient
     // window state.
   }
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  const wasActive = cachedActiveTabId === tabId;
+  const wasActive = bgState.cachedActiveTabId === tabId;
   if (wasActive) {
-    cachedActiveTabId = null;
+    bgState.cachedActiveTabId = null;
     // Tab closed: end its hint session (no badges to hide — tab is gone —
     // but the plugin's hints tag still needs clearing).
     forwardHintsSessionEnd('tab_closed', tabId);
@@ -1170,7 +1159,7 @@ async function init(): Promise<void> {
     hintVisibility = result.hintVisibility;
   }
 
-  // Prime cachedActiveTabId so the first active_tab_id signal to the plugin
+  // Prime the active-tab cache so the first active_tab_id signal to the plugin
   // (and rescanActiveTab) has a value before the first tabs.onActivated /
   // onFocusChanged fires. No longer load-bearing for grammar correctness —
   // the plugin projects only the focused source, so a stale/null active tab
@@ -1178,7 +1167,7 @@ async function init(): Promise<void> {
   await resolveActiveContentTab();
 
   const found = await discoverPlugin();
-  branchkitConnected = found;
+  bgState.branchkitConnected = found;
 
   if (hasOffscreenAPI) {
     await ensureOffscreen();
@@ -1275,7 +1264,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     }
 
     // Kick off retry loop if not connected and no retry is pending
-    if (!branchkitConnected) {
+    if (!bgState.branchkitConnected) {
       scheduleSSERetry();
     }
   }
