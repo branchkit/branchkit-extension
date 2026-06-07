@@ -26,8 +26,7 @@ import { reconcilePass, drain as drainReconcilePositioner, reconcileRegistrySize
 import { onContainerResize } from './observe/container-resize-tracker';
 import { onTargetMutation } from './observe/target-mutation-tracker';
 import { cacheLayout, cacheVisibility, clearLayoutCache, peekCachedRect, getCachedRect } from './layout-cache';
-import { placeBadges, placeOne, clearPlacement } from './placement';
-import { invalidateProbe } from './placement/rango';
+import { placeBadges, placeOne, invalidateProbe } from './placement';
 import { activateElement, dispatchHover, type ActivationResult } from './activate/event-sequence';
 import {
   emitActivatePath,
@@ -85,7 +84,7 @@ import {
 import { loadDomainRules, onDomainRulesChanged, ruleEqual } from './rules/domain-rules-storage';
 import { loadBadgeSettings, onBadgeSettingsChanged } from './badge-settings-storage';
 import { setBadgeSizingFromSettings } from './render/hints';
-import { setNudgesFromSettings } from './placement/rango';
+import { setNudgesFromSettings } from './placement';
 import { labelReservoir } from './labels/label-reservoir';
 import { filterNewBatchRefs } from './scan/batch-dedup';
 import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
@@ -1453,7 +1452,6 @@ function hideHints(): void {
   clearHintFilter();
   pageSession.hintsVisible = false;
   activeCategory = null;
-  clearPlacement();
   for (const w of store.all) {
     w.hint?.hideLeader();
     w.hint?.hide();

@@ -11,7 +11,7 @@ import { HintBadge } from '../render/hints';
 import { labelReservoir } from '../labels/label-reservoir';
 
 /**
- * Scroll-invariant cache of `RangoStrategy.probeFirstVisibleText`.
+ * Scroll-invariant cache of `probeFirstVisibleText`.
  *
  * The probe finds the first visible text node inside an element and reads
  * its `Range.getBoundingClientRect()`. Range rect reads always force
@@ -33,8 +33,8 @@ import { labelReservoir } from '../labels/label-reservoir';
  * reflow on container resize, and a subsequent mutation will re-probe if
  * the text actually moved.
  *
- * See `placement/rango.ts:probeFirstVisibleText` for the canonical compute
- * path, and `placement/rango.ts:getOrComputeProbe` for the cache read.
+ * See `placement/position.ts:probeFirstVisibleText` for the canonical compute
+ * path, and `placement/position.ts:getOrComputeProbe` for the cache read.
  */
 export type TextProbeOffset =
   | { hasText: false }
