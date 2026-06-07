@@ -234,7 +234,7 @@ src/
     target-rect-store.ts, *-tracker.ts                   // (exist)
     visibility-tracker.ts    //   (exists) pendingVisibility + visibility IO/MO
     limbo.ts                 //   (exists) limbo/rebind/finalize over the store
-    mutation-source.ts       //   NEW: the discovery MutationObserver + drain (extract)
+    mutation-source.ts       //   (exists) the discovery MutationObserver + drain + coalesce
 
   scan/                      // (exists) pure DOM → candidates (a source's helper)
   placement/                 // (exists) position math (a render helper)
@@ -356,7 +356,27 @@ still calls the core imperatively (no delta cut yet):
    `attentionObserver`) is the signal that Tier 3 (observer relocation) is the
    natural close of this arc.
 6. `observe/mutation-source.ts` — the discovery MutationObserver + drain +
-   reevaluation coalescing, imported on top of the lifecycle module above.
+   reevaluation coalescing, importing the lifecycle/limbo modules above.
+   **Landed 2026-06-06**: the page `observer`, `processMutations`,
+   `scheduleDiscovery`/`drainDiscovery`, `scheduleReevaluation`/`drainReevaluations`,
+   `isOwnMutation`, `hasQueuedAncestor`, and the huge-mutation short-circuit moved
+   out (~357 lines). Scoped to the *source* machinery: the discovery walk
+   (`discoverInSubtree`/`discoverInSubtreeBatched`), `reevaluateAttribute`, and the
+   reposition schedulers stay in content.ts (rules/attention/shadow + reposition
+   coupled) and are injected via `initMutationSource`. Two supporting moves fell
+   out: `firehoseStep` (used all over content.ts) became the shared
+   `debug/firehose.ts`, and the manual-mode `pendingMutation` flag moved onto
+   `PageSession` (consolidating per-frame flags, avoiding an extra inject).
+   `teardownMutationSource` disconnects the observer for quiesceOrphan. 4-test
+   routing spec; tsc clean, 557 tests green. **Soak owed** (batched). This is the
+   perf-critical firehose (YouTube-freeze territory) — the highest-priority thing
+   to watch in the consolidated soak.
+
+**Tier 1 is now complete.** `content.ts` is down from 4,134 → 3,225 lines; the
+satellites + lifecycle/limbo/mutation source live in their own modules behind
+injection seams. The four behavior-affecting commits (visibility, limbo,
+wrapper-lifecycle, mutation-source) await the one batched real-browser soak
+before anything is pushed.
 
 **Tier 2 — the delta cut (the architecture change, highest value).**
 7. Add the delta emitter to `core/store.ts`. Mutators emit; nothing subscribes

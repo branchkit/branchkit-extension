@@ -114,6 +114,13 @@ export class PageSession {
   /** The mode flag — "user wants hints showing." */
   hintsVisible = false;
 
+  /**
+   * Manual-mode defer flag: set when the mutation observer sees a mutation
+   * while hints are showing in `manual` visibility mode, so codewords don't
+   * shuffle under the user's eyes. doScan() flushes and clears it.
+   */
+  pendingMutation = false;
+
   constructor(private readonly hooks: PageSessionHooks) {}
 
   /**
