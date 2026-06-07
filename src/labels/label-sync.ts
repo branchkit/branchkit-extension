@@ -142,7 +142,7 @@ export function rotateSession(): void {
 
 // --- Transport ---
 
-export async function claimLabels(count: number): Promise<string[]> {
+export async function claimLabels(count: number, preferred: string[] = []): Promise<string[]> {
   if (count === 0) return [];
   // Synchronous local claim — no IPC. The reservoir warms via
   // ensureReady() at content-script bootstrap; when the reservoir runs
@@ -150,7 +150,13 @@ export async function claimLabels(count: number): Promise<string[]> {
   // those wrappers unhinted (level-triggered reconcile re-queues them on
   // the next pass after the async refill arrives). Function stays async
   // for backwards compat with the call site's existing await.
-  return labelReservoir.claim(count);
+  //
+  // `preferred[i]` is the codeword slot i wants back (Regime B reclaim across a
+  // reload — the scan path resolves it per element from the SW-persisted recall).
+  // Pass 1 of the reservoir grants it if still free, so the RIGHT element gets
+  // its own letter rather than whatever sits front-of-pool. Without this the
+  // scan path reused recalled codewords in pool order — i.e. mismatched.
+  return labelReservoir.claim(count, preferred);
 }
 
 function drainPendingDeletes(): string[] {

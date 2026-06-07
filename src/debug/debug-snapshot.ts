@@ -30,6 +30,7 @@ import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
 import * as idRegistry from '../scan/registry';
 import { rebindCounters } from '../observe/limbo';
 import type { RebindCounters } from '../labels/rebind';
+import { persistedCodeword } from '../labels/codeword-recall';
 import { enumerateAlmostHintable, isHintable, isVisible, type AlmostHintable } from '../scan/scanner';
 import { accessibleName } from '../scan/accessible-name';
 import { diagnoseContainerResolution, type ContainerResolutionDiag } from '../render/hints';
@@ -138,6 +139,19 @@ interface DomSurveyElement {
  *  captured snapshot prove which build the running content script came from. */
 declare const __BUILD_ID__: string;
 
+export interface RecallStats {
+  /** Got its pre-reload codeword back. */
+  reclaimed: number;
+  /** Had a remembered codeword but was assigned a different one (the leak). */
+  missed: number;
+  /** No memory for this fingerprint — not a reclaim opportunity. */
+  no_memory: number;
+  /** reclaimed, restricted to near-viewport elements (the user-facing number). */
+  viewport_reclaimed: number;
+  /** missed, restricted to near-viewport elements. */
+  viewport_missed: number;
+}
+
 export interface DebugSnapshotPayload {
   snapshot_id: string;
   taken_at: string;
@@ -153,6 +167,10 @@ export interface DebugSnapshotPayload {
    *  rebind_key is the key-ownership transfer count — handy for spotting churn
    *  vs stable re-mounts in a snapshot. See DESIGN_CODEWORD_KEY_OWNERSHIP.md. */
   rebind_counters: RebindCounters;
+  /** Regime-B reclaim metric across a reload (DESIGN_REGIME_B_RECALL.md).
+   *  viewport_reclaimed / (viewport_reclaimed + viewport_missed) is the
+   *  user-facing reclaim rate this layer drives upward. */
+  recall_stats: RecallStats;
   dom_survey?: DomSurveyElement[];
   /** Shadow-mode reconcile plan (drives nothing; see lifecycle/reconcile.ts).
    * Attached by the content-script capture path, which owns activeCategory +
@@ -361,6 +379,37 @@ interface BuildInputs {
   now?: Date;
 }
 
+/**
+ * Regime-B reclaim metric (DESIGN_REGIME_B_RECALL.md). For each codeworded
+ * wrapper, compare its assigned codeword against what the SW-persisted memory
+ * held for its fingerprint at page load. "reclaimed" = got its pre-reload letter
+ * back; "missed" = had a remembered letter but got a different one (the leak we
+ * tune); "no_memory" = nothing remembered (not a reclaim opportunity). The
+ * `viewport_*` split is the user-facing number — what they actually see. Uses
+ * the tracker's near-viewport flag (no extra layout read).
+ */
+export function computeRecallStats(store: WrapperStore): RecallStats {
+  const s: RecallStats = {
+    reclaimed: 0, missed: 0, no_memory: 0,
+    viewport_reclaimed: 0, viewport_missed: 0,
+  };
+  for (const w of store.all) {
+    if (w.scanned.id <= 0 || !w.scanned.codeword) continue;
+    const fp = idRegistry.get(w.scanned.id)?.fingerprint;
+    if (!fp) continue;
+    const remembered = persistedCodeword(fp);
+    if (remembered == null) { s.no_memory++; continue; }
+    if (remembered === w.scanned.codeword) {
+      s.reclaimed++;
+      if (w.isInViewport) s.viewport_reclaimed++;
+    } else {
+      s.missed++;
+      if (w.isInViewport) s.viewport_missed++;
+    }
+  }
+  return s;
+}
+
 export function buildSnapshotPayload(inputs: BuildInputs): DebugSnapshotPayload {
   const now = inputs.now ?? new Date();
   return {
@@ -380,6 +429,7 @@ export function buildSnapshotPayload(inputs: BuildInputs): DebugSnapshotPayload 
     recent_activations: getActivatePathBuffer(),
     dom_survey: captureDomSurvey(inputs.store),
     rebind_counters: { ...rebindCounters },
+    recall_stats: computeRecallStats(inputs.store),
   };
 }
 

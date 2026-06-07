@@ -17,6 +17,7 @@ import {
   isRecallLoaded,
   resolvePreferredCodeword,
   rememberLive,
+  persistedCodeword,
   _resetForTests,
 } from './codeword-recall';
 
@@ -135,6 +136,33 @@ describe('codeword-recall', () => {
     it('ignores empty-codeword entries', () => {
       rememberLive([{ fp: fp({ text: 'Users' }), codeword: '', rect: null }]);
       expect(resolvePreferredCodeword(fp({ text: 'Users' }), null)).toBeNull();
+    });
+  });
+
+  describe('persistedCodeword (frozen as-loaded, for the reclaim metric)', () => {
+    it('returns the SW-persisted value from page load', async () => {
+      const f = fp({ text: 'Users' });
+      mockRecall([{ fp: f, codeword: 'harp bat', rect: null }]);
+      await loadRecall();
+      expect(persistedCodeword(f)).toBe('harp bat');
+    });
+
+    it('stays frozen even after rememberLive rewrites the live index', async () => {
+      const f = fp({ text: 'Users' });
+      mockRecall([{ fp: f, codeword: 'harp bat', rect: null }]);
+      await loadRecall();
+      // A fresh claim this session overwrites the LIVE index...
+      rememberLive([{ fp: f, codeword: 'cap ink', rect: null }]);
+      // ...but the metric baseline must still report the pre-reload letter,
+      // otherwise every element would score as "reclaimed" against itself.
+      expect(resolvePreferredCodeword(f, null)).toBe('cap ink'); // live moved
+      expect(persistedCodeword(f)).toBe('harp bat');             // frozen held
+    });
+
+    it('returns null when nothing was persisted for the fingerprint', async () => {
+      mockRecall([{ fp: fp({ text: 'Users' }), codeword: 'harp bat', rect: null }]);
+      await loadRecall();
+      expect(persistedCodeword(fp({ text: 'Unknown' }))).toBeNull();
     });
   });
 });

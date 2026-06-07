@@ -289,4 +289,28 @@ describe('LabelReservoir.ensureReady (Regime B preferred initial fill)', () => {
     const claimCall = sendMessageMock.mock.calls.find(c => c[0]?.type === 'CLAIM_LABELS');
     expect(claimCall![0].preferred).toBeUndefined();
   });
+
+  it('sizes the initial fill to the recalled set when it exceeds the default (fix A2)', async () => {
+    sendMessageMock.mockResolvedValue({ labels: [] });
+    const preferred = Array.from({ length: 130 }, (_, i) => 'cw' + i);
+    await labelReservoir.ensureReady(preferred);
+    const claimCall = sendMessageMock.mock.calls.find(c => c[0]?.type === 'CLAIM_LABELS');
+    expect(claimCall![0].count).toBe(130); // not the 100 default — covers all remembered
+    expect(claimCall![0].preferred).toEqual(preferred);
+  });
+
+  it('keeps the default fill size when the recalled set is small', async () => {
+    sendMessageMock.mockResolvedValue({ labels: [] });
+    await labelReservoir.ensureReady(['gust harp', 'air ink']);
+    const claimCall = sendMessageMock.mock.calls.find(c => c[0]?.type === 'CLAIM_LABELS');
+    expect(claimCall![0].count).toBe(100);
+  });
+
+  it('caps the initial fill so a pathological recall can not request unbounded', async () => {
+    sendMessageMock.mockResolvedValue({ labels: [] });
+    const preferred = Array.from({ length: 500 }, (_, i) => 'cw' + i);
+    await labelReservoir.ensureReady(preferred);
+    const claimCall = sendMessageMock.mock.calls.find(c => c[0]?.type === 'CLAIM_LABELS');
+    expect(claimCall![0].count).toBe(300); // MAX_INITIAL_RESERVATION
+  });
 });

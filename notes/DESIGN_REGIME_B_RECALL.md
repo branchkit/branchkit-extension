@@ -1,9 +1,35 @@
 # Regime B recall — raise codeword reclaim across full reloads (Layer 3)
 
-**Status:** proposal (2026-06-07). Options with tradeoffs, not a locked plan.
-Extends `notes/completed/DESIGN_CODEWORD_STABILITY.md` (Regime A/B model) and
-follows `notes/DESIGN_CODEWORD_KEY_OWNERSHIP.md` (Layer 1, same-document
-re-mounts). This is the lever that note deferred: the **full-reload** case.
+**Status:** metric + fix A LANDED 2026-06-07 (soak-owed for push). Extends
+`notes/completed/DESIGN_CODEWORD_STABILITY.md` (Regime A/B model) and follows
+`notes/DESIGN_CODEWORD_KEY_OWNERSHIP.md` (Layer 1, same-document re-mounts). This
+is the lever that note deferred: the **full-reload** case.
+
+## Landed (2026-06-07)
+
+Built the reclaim metric first, then fix A in two parts, measured each on a
+130-link reloading fixture (`scripts/_test-regime-b-recall.mjs`):
+
+- **Metric:** `recall_stats` in the debug snapshot (reclaimed / missed /
+  no_memory, plus viewport split), compared against a frozen "as-loaded"
+  persisted recall (`persistedCodeword`) so the live in-session index can't make
+  everything look reclaimed. `rebind_counters` also added to the snapshot.
+- **Finding that sharpened the fix:** baseline reclaim was **0%**, not the ~70%
+  the QuickBase snapshot suggested. The scan path was claiming recalled codewords
+  in *pool order*, not per element — so links got recycled letters, just the
+  *wrong* ones. The leak was scan-path mismatch, more than the refill cap.
+- **A1 — scan path requests per-element preferred** (`content.ts` resolves each
+  element's remembered codeword by fingerprint; `claimLabels`/reservoir forward
+  it). 0% → **54%**.
+- **A2 — size the initial fill to the recalled set** (`label-reservoir.ts`
+  `ensureReady`, capped at `MAX_INITIAL_RESERVATION=300`), so every remembered
+  codeword reaches `free` instead of only the first 100. 54% → **100%** on the
+  fixture.
+
+Net: 0% → 100% reclaim across a full reload on the fixture. 614 unit tests,
+chrome+firefox builds clean. Covers up to the 200-fingerprint memory cap; pages
+beyond that need fix C below. B (prioritize visible) wasn't needed to hit target
+on the fixture — revisit if real pages past the memory cap fall short.
 
 ## Why this exists
 

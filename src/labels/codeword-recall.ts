@@ -25,6 +25,12 @@ let byKey: Map<string, CodewordMemoryEntry[]> | null = null;
 // preferred-fill (phase 4). Newest-first because recently-seen elements are the
 // likeliest to reappear in the new page's viewport after a reload.
 let allCodewords: string[] = [];
+// Frozen snapshot of the SW-persisted memory as it was at page load (before any
+// in-session `rememberLive` updates overwrote `byKey`). The reclaim metric
+// compares each element's assigned codeword against THIS — i.e. "did we give it
+// back the letter it had before the reload" — which the live `byKey` can't
+// answer because rememberLive rewrites it to match whatever just got claimed.
+let loadedPersisted: Map<string, string> = new Map();
 
 /**
  * Fetch this frame's remembered entries from the SW and index them by
@@ -55,6 +61,13 @@ export async function loadRecall(): Promise<void> {
   if (!byKey) byKey = new Map();
   for (const [k, list] of swMap) {
     if (!byKey.has(k)) byKey.set(k, list);
+  }
+
+  // Freeze the as-loaded persisted memory for the reclaim metric (one codeword
+  // per key, last wins — coarse but enough to score "reclaimed vs missed").
+  loadedPersisted = new Map();
+  for (const e of entries) {
+    if (e.codeword) loadedPersisted.set(fingerprintKey(e.fp), e.codeword);
   }
 
   // Flatten to newest-first, deduped codewords for the reservoir initial fill.
@@ -111,6 +124,16 @@ export function isRecallLoaded(): boolean {
 }
 
 /**
+ * The codeword the SW-persisted memory held for this fingerprint at page load
+ * (before in-session updates), or null. The reclaim metric uses this to score
+ * whether an element got its pre-reload letter back. NOT for the claim path —
+ * that's `resolvePreferredCodeword`, which reads the live index.
+ */
+export function persistedCodeword(fp: Fingerprint): string | null {
+  return loadedPersisted.get(fingerprintKey(fp)) ?? null;
+}
+
+/**
  * Resolve the remembered codeword for an element via the confidence ladder:
  *   - exactly one fingerprint match → its codeword;
  *   - several (same fingerprint, different elements) → nearest by per-axis
@@ -143,4 +166,5 @@ export function resolvePreferredCodeword(fp: Fingerprint, rect: Rect | null): st
 export function _resetForTests(): void {
   byKey = null;
   allCodewords = [];
+  loadedPersisted = new Map();
 }

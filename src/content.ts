@@ -14,7 +14,7 @@ import { computeReconcilePlan, geometryInBand, RECONCILE_BAND_MARGIN_PX } from '
 import { stampStrictViewport, collectStrictViewportDelta } from './lifecycle/strict-viewport';
 import * as idRegistry from './scan/registry';
 import type { CodewordMemoryEntry } from './labels/codeword-memory';
-import { loadRecall, recalledCodewords, rememberLive } from './labels/codeword-recall';
+import { loadRecall, recalledCodewords, rememberLive, resolvePreferredCodeword, isRecallLoaded } from './labels/codeword-recall';
 import { type RebindCounters } from './labels/rebind';
 import { resolveTarget } from './activate/activate-resolution';
 import { IntersectionTracker } from './observe/intersection-tracker';
@@ -1651,7 +1651,16 @@ async function processScanBatch(
 
   // Pool-claim codewords for the batch. claimLabels serializes per
   // tab via withTabLock so multi-frame pages don't collide.
-  const labels = await claimLabels(newRefs.length);
+  //
+  // Regime B reclaim (DESIGN_REGIME_B_RECALL.md): resolve each element's
+  // remembered codeword by fingerprint and request it, so after a reload the
+  // RIGHT element gets its own letter back instead of whatever sits front-of-
+  // pool. Skipped when nothing is remembered (fresh page) so we don't pay the
+  // per-element fingerprint read for no reclaim.
+  const scanPreferred = isRecallLoaded()
+    ? newRefs.map((el) => resolvePreferredCodeword(idRegistry.computeFingerprint(el), null) ?? '')
+    : [];
+  const labels = await claimLabels(newRefs.length, scanPreferred);
 
   // Build candidate wrappers with codewords assigned but DO NOT
   // attach to the store yet. Wrappers in the store with codewords

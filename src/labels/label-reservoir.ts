@@ -66,6 +66,11 @@
 const INITIAL_RESERVATION = 100;
 const REFILL_THRESHOLD = 30;
 const REFILL_AMOUNT = 60;
+// Upper bound on the initial fill when sized to the recalled set (Regime B
+// reclaim, DESIGN_REGIME_B_RECALL.md). Caps a pathological recall from
+// requesting an unbounded first fill; comfortably above MEMORY_CAP_PER_FRAME
+// (200), so the full remembered set fits.
+const MAX_INITIAL_RESERVATION = 300;
 
 class LabelReservoir {
   /** Available codewords for synchronous claim, front-of-array first. */
@@ -103,8 +108,17 @@ class LabelReservoir {
     // its fingerprints held before the reload. The SW falls back to front-of-
     // pool for the remaining slots. Only the *initial* fill carries preferred;
     // hot-path refills (maybeRefill) stay generic. See
-    // notes/completed/DESIGN_CODEWORD_STABILITY.md.
-    this.initialReady = this.refill(INITIAL_RESERVATION, preferred);
+    // notes/completed/DESIGN_CODEWORD_STABILITY.md +
+    // notes/DESIGN_REGIME_B_RECALL.md.
+    //
+    // Size the fill to cover the FULL recalled set (capped), not just the first
+    // INITIAL_RESERVATION — otherwise remembered codewords past slot 100 never
+    // reach `free`, so their elements can't reclaim them (the cap leak, fix A2).
+    // Fresh pages (no preferred) keep the cheap default fill.
+    const want = preferred && preferred.length > INITIAL_RESERVATION
+      ? Math.min(preferred.length, MAX_INITIAL_RESERVATION)
+      : INITIAL_RESERVATION;
+    this.initialReady = this.refill(want, preferred);
     return this.initialReady;
   }
 
