@@ -273,9 +273,18 @@ testable with a faked `chrome.*`:
   (`branchkitConnected` stays in background.ts — it's SSE state, not plugin-HTTP.)
 - `plugin/sse-transport.ts` — the offscreen-vs-direct SSE split
   (`ensureOffscreen` / `connectDirectSSE` / `handleSSEEvent` + retry/backoff).
-- `background/injection.ts` — `injectContentScriptFiles` / `tryInject` /
-  `pingContentScript` / `withInjectLock` / `ensureContentScriptInjected` /
-  `reinjectContentScripts` (the inject-lock state machine).
+- `background/injection.ts` — **Landed 2026-06-07.** The inject-lock /
+  orphan-recovery state machine (`isInjectableURL`, `injectContentScriptFiles`,
+  `tryInject`, `pingContentScript`, `withInjectLock`, `flushOrphanGuard`,
+  `ensureContentScriptInjected`) — a verbatim, behavior-identical relocation,
+  self-contained over chrome.* + the in-flight lock set. `reinjectContentScripts`
+  stays in background.ts (it uses `forwardDebugLog`). 8-test spec; background.ts
+  1,506 → 1,305. **This is the extension-reload-survival / orphan-teardown code —
+  the single highest-blast-radius area** (see
+  notes/DESIGN_ORPHAN_CS_TEARDOWN_RETROSPECTIVE.md); the relocation changes no
+  logic, but the consolidated soak MUST exercise the
+  reload path (reload at chrome://extensions, confirm already-open heavy tabs
+  recover without close+reopen and no double-CS).
 - `background/frame-router.ts` — `routeFrameForAction` / `resolveHintFromTab` /
   `broadcastToAllTabs` / `notifyActiveTab` / `resolveActiveContentTab`.
 - `background/tab-sessions.ts` — `purgeTab` / `endHintSessionOnOldTab` /
