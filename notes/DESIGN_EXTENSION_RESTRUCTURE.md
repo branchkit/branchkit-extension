@@ -220,10 +220,10 @@ src/
   core/                      // NEW dir — the model + the graph
     store.ts                 //   (exists) WrapperStore instance; delta emitter lands here in Tier 2
     singletons.ts            //   (exists) dispatcher/registry/keyHandler/targetRectStore instances
-    wrapper-lifecycle.ts     //   NEW: attach/detach + the discovery walk (the SCC
-                             //        core); limbo/rebind already split to observe/limbo.ts.
-                             //        Eventually emits store deltas instead of calling
-                             //        grammar/render directly (Tier 2)
+    wrapper-lifecycle.ts     //   (exists) attach/detach (the SCC core); limbo/rebind
+                             //        in observe/limbo.ts, the discovery walk still in
+                             //        content.ts. Eventually emits store deltas instead
+                             //        of calling grammar/render directly (Tier 2)
 
   lifecycle/                 // (exists) the per-frame session + reconcile policy
     page-session.ts          //   (exists) owns start/teardown/onUrlChange/restore
@@ -336,18 +336,25 @@ still calls the core imperatively (no delta cut yet):
    and the two observers it re-anchors on (`tracker`, `resizeObserver`) are
    injected via `initLimbo`. Shipped with a 6-test spec; tsc clean, 549 tests
    green. **Soak owed** (batched — see above).
-5. `core/wrapper-lifecycle.ts` — attach/detach (and the discovery walk
-   `attachDiscovered`/`discoverInSubtree`). **Order correction (2026-06-06):**
+5. `core/wrapper-lifecycle.ts` — attach/detach. **Order correction (2026-06-06):**
    this must precede `mutation-source` below, not follow it. `mutation-source`'s
    `processMutations` → `drainDiscovery` → `discoverInSubtree` → `attachWrapper` /
    `tryRebindFromLimbo`, and `drainReevaluations` → `reevaluateAttribute` →
    `attachWrapper` / `detachWrapper` — i.e. the source sits *on top of* the
    lifecycle. Extracting lifecycle first lets `mutation-source` import it instead
-   of injecting a large surface. Note the cost: `attachWrapper`/`detachWrapper`
-   reach `tracker` / `resizeObserver` / `attentionObserver`, which stay in
-   content.ts until Tier 3 — so this lift injects those three observers (the
-   `limbo` lift already injects two). That growing observer-injection surface is
-   the signal that Tier 3 (observer relocation) is the natural close of this arc.
+   of injecting a large surface. **Landed 2026-06-06**: `attachWrapper`,
+   `detachWrapper`, `seedPreferredFromMemory`, `reconcileEvictedCodewords`, and
+   `attachDiscovered` moved out (~112 lines); the three observers
+   (`tracker` / `resizeObserver` / `attentionObserver`) are injected via
+   `initWrapperLifecycle`. Scoped tighter than the original sketch: the discovery
+   *walk* (`discoverInSubtree` / `discoverInSubtreeBatched`) and
+   `reevaluateAttribute` stayed in content.ts — they reach the rules / attention /
+   shadow surfaces and move with `mutation-source` (step 6), which keeps this
+   lift's injection to the three observers. 4-test spec; tsc clean, 553 tests
+   green. **Soak owed** (batched). Note the accumulating observer-injection
+   surface (`limbo` + this lift inject `tracker`/`resizeObserver`/
+   `attentionObserver`) is the signal that Tier 3 (observer relocation) is the
+   natural close of this arc.
 6. `observe/mutation-source.ts` — the discovery MutationObserver + drain +
    reevaluation coalescing, imported on top of the lifecycle module above.
 
