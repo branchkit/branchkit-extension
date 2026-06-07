@@ -166,6 +166,7 @@ describe('bumpRebindCounter', () => {
       rebind_position: 1,
       refuse_distance: 1,
       refuse_no_match: 0,
+      rebind_key: 0,
     });
   });
 
@@ -180,19 +181,22 @@ describe('bumpRebindCounter', () => {
       rebind_position: 0,
       refuse_distance: 0,
       refuse_no_match: 0,
+      rebind_key: 0,
     });
   });
 
-  it('counter keys match the four LimboMatchOutcome buckets', () => {
-    // Locks the relationship: every counter except refuse_no_match must
-    // correspond to a kind the matcher can return. If a new outcome
-    // kind is added without a counter, this test guards the gap.
+  it('counter keys cover the matcher buckets plus the externally-bumped ones', () => {
+    // Locks the relationship: every counter except the externally-bumped
+    // refuse_no_match (finalize sweeper) and rebind_key (key-ownership path)
+    // must correspond to a kind the matcher can return. If a new matcher
+    // outcome kind is added without a counter, this test guards the gap.
     const c = newRebindCounters();
     const matcherBuckets = ['rebind_clean', 'rebind_position', 'refuse_distance'] as const;
     for (const k of matcherBuckets) expect(c).toHaveProperty(k);
     expect(c).toHaveProperty('refuse_no_match');
+    expect(c).toHaveProperty('rebind_key');
     expect(Object.keys(c).sort()).toEqual([
-      'rebind_clean', 'rebind_position', 'refuse_distance', 'refuse_no_match',
+      'rebind_clean', 'rebind_position', 'refuse_distance', 'refuse_no_match', 'rebind_key',
     ].sort());
   });
 });

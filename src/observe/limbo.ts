@@ -19,7 +19,7 @@
 
 import { ElementWrapper, enterLimbo, isLimboExpired } from '../scan/element-wrapper';
 import * as idRegistry from '../scan/registry';
-import { computeFingerprint, fingerprintsEqual } from '../scan/registry';
+import { computeFingerprint, fingerprintsEqual, computeStrongKey } from '../scan/registry';
 import { bumpRebindCounter, findLimboMatch, newRebindCounters, REBIND_DISTANCE_THRESHOLD_PX, type RebindCounters } from '../labels/rebind';
 import { peekCachedRect } from '../layout-cache';
 import { lifecycleCounters, recordCpu } from '../debug/perf-counters';
@@ -139,6 +139,67 @@ function rebindWrapper(w: ElementWrapper, newEl: Element): void {
   w.element = newEl;
   w.disconnectedAt = null;
   w.lastRect = null;
+}
+
+// --- Key-ownership rebind (DESIGN_CODEWORD_KEY_OWNERSHIP.md) ---
+
+// Ping-pong guard. When tryRebindByStrongKey transfers a wrapper onto a new node,
+// the predecessor node is briefly connected but wrapper-less; without this it
+// could be re-discovered the next pass and bounce the wrapper back. Discovery
+// skips a node orphaned within this window. WeakMap so entries GC with the node.
+const orphanedByKeyRebind = new WeakMap<Element, number>();
+const ORPHAN_SKIP_MS = 2000;
+
+export function isRecentlyOrphaned(el: Element): boolean {
+  const t = orphanedByKeyRebind.get(el);
+  return t !== undefined && Date.now() - t < ORPHAN_SKIP_MS;
+}
+
+/**
+ * Index: strong key → the single wrapper that holds it, or `null` when 2+
+ * wrappers share the key (a genuine duplicate, not a re-mount). Built once per
+ * discovery pass from the live store; only single-holder keys are rebind-
+ * eligible. Cheap — `computeStrongKey` reads an attribute, no accessible-name.
+ */
+export function collectStrongKeyIndex(): Map<string, ElementWrapper | null> {
+  const index = new Map<string, ElementWrapper | null>();
+  for (const w of store.all) {
+    if (w.scanned.id <= 0) continue;
+    const key = computeStrongKey(w.element);
+    if (!key) continue;
+    index.set(key, index.has(key) ? null : w);
+  }
+  return index;
+}
+
+/**
+ * Transfer an existing wrapper's codeword + identity onto a freshly-discovered
+ * node that shares its strong key. The key-ownership fast path: it sidesteps the
+ * codeword pool (the predecessor still holds the letter, so a fresh claim can't
+ * reclaim it) by re-anchoring the live wrapper instead. Returns true iff rebound;
+ * false means fall through to the fingerprint-limbo path / fresh attach.
+ *
+ * Fires only when exactly one wrapper holds the key (index stored a wrapper, not
+ * `null`) and it's a different node. Consumes the entry from both the index and
+ * the limbo pool so a second same-key node and the fingerprint path can't also
+ * grab it. Marks the orphaned predecessor for the ping-pong guard.
+ */
+export function tryRebindByStrongKey(
+  newEl: Element,
+  keyIndex: Map<string, ElementWrapper | null>,
+  limboPool: ElementWrapper[],
+): boolean {
+  const key = computeStrongKey(newEl);
+  if (!key) return false;
+  const w = keyIndex.get(key);
+  if (!w) return false;              // undefined (no holder) or null (ambiguous)
+  if (w.element === newEl) return false;
+  keyIndex.delete(key);
+  consume(limboPool, w);
+  if (w.element.isConnected) orphanedByKeyRebind.set(w.element, Date.now());
+  rebindCounters.rebind_key++;
+  rebindWrapper(w, newEl);
+  return true;
 }
 
 /**

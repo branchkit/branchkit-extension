@@ -17,6 +17,9 @@ import { store } from '../core/store';
 import {
   initLimbo,
   collectLimboWrappers,
+  collectStrongKeyIndex,
+  tryRebindByStrongKey,
+  isRecentlyOrphaned,
   dropDisconnectedWrappers,
   finalizeExpiredLimboWrappers,
   rebindCounters,
@@ -35,6 +38,24 @@ function makeWrapper(connected: boolean, id = 1): ElementWrapper {
   return w;
 }
 
+/** Wrapper backed by an anchor with a strong key (href). */
+function makeAnchor(href: string, id: number): ElementWrapper {
+  const el = document.createElement('a');
+  el.setAttribute('href', href);
+  document.body.appendChild(el);
+  const w = new ElementWrapper(el, scanned(id));
+  store.addWrapper(w);
+  return w;
+}
+
+/** A connected anchor with no wrapper yet (a freshly re-mounted node). */
+function freeAnchor(href: string): HTMLAnchorElement {
+  const el = document.createElement('a');
+  el.setAttribute('href', href);
+  document.body.appendChild(el);
+  return el;
+}
+
 let detachWrapper: ReturnType<typeof vi.fn>;
 let trackerObserve: ReturnType<typeof vi.fn>;
 let resizeObserve: ReturnType<typeof vi.fn>;
@@ -50,6 +71,7 @@ beforeEach(() => {
     resizeObserver: { observe: resizeObserve, unobserve: vi.fn(), disconnect: vi.fn() } as unknown as ResizeObserver,
   });
   rebindCounters.refuse_no_match = 0;
+  rebindCounters.rebind_key = 0;
 });
 
 afterEach(() => {
@@ -133,5 +155,75 @@ describe('finalizeExpiredLimboWrappers', () => {
 
     expect(finalized).toBe(0);
     expect(detachWrapper).not.toHaveBeenCalled();
+  });
+});
+
+describe('collectStrongKeyIndex', () => {
+  it('maps a single-holder key to its wrapper', () => {
+    const w = makeAnchor('/users', 1);
+    expect(collectStrongKeyIndex().get('h:/users')).toBe(w);
+  });
+
+  it('marks a key held by 2+ wrappers as ambiguous (null)', () => {
+    makeAnchor('/home', 1);
+    makeAnchor('/home', 2);
+    expect(collectStrongKeyIndex().get('h:/home')).toBeNull();
+  });
+
+  it('omits wrappers with no strong key or no registry id', () => {
+    makeWrapper(true, 1);        // div — no href
+    makeAnchor('/x', 0);         // anchor but id <= 0
+    expect([...collectStrongKeyIndex().keys()]).toEqual([]);
+  });
+});
+
+describe('tryRebindByStrongKey', () => {
+  it('transfers the wrapper (codeword + id) onto a re-mounted same-href node', () => {
+    const w = makeAnchor('/users', 7);
+    w.scanned.codeword = 'harp bat';
+    const oldEl = w.element;
+    const index = collectStrongKeyIndex();
+    const newEl = freeAnchor('/users');
+
+    const ok = tryRebindByStrongKey(newEl, index, []);
+
+    expect(ok).toBe(true);
+    expect(w.element).toBe(newEl);                  // re-anchored to the new node
+    expect(w.scanned.codeword).toBe('harp bat');    // codeword preserved
+    expect(w.scanned.id).toBe(7);                   // identity preserved
+    expect(store.findWrapperFor(newEl)).toBe(w);
+    expect(store.findWrapperFor(oldEl)).toBeUndefined();
+    expect(rebindCounters.rebind_key).toBe(1);
+    expect(isRecentlyOrphaned(oldEl)).toBe(true);   // ping-pong guard armed
+  });
+
+  it('refuses when the key is ambiguous (2+ holders)', () => {
+    makeAnchor('/home', 1);
+    makeAnchor('/home', 2);
+    const index = collectStrongKeyIndex();
+    expect(tryRebindByStrongKey(freeAnchor('/home'), index, [])).toBe(false);
+  });
+
+  it('refuses an element with no strong key', () => {
+    makeAnchor('/users', 1);
+    const index = collectStrongKeyIndex();
+    const div = document.createElement('div');
+    document.body.appendChild(div);
+    expect(tryRebindByStrongKey(div, index, [])).toBe(false);
+  });
+
+  it('consumes the entry so a second same-key node falls through to fresh', () => {
+    makeAnchor('/users', 1);
+    const index = collectStrongKeyIndex();
+    expect(tryRebindByStrongKey(freeAnchor('/users'), index, [])).toBe(true);
+    expect(tryRebindByStrongKey(freeAnchor('/users'), index, [])).toBe(false);
+  });
+
+  it('also removes the rebound wrapper from the limbo pool', () => {
+    const w = makeAnchor('/users', 1);
+    const pool = [w];
+    const ok = tryRebindByStrongKey(freeAnchor('/users'), collectStrongKeyIndex(), pool);
+    expect(ok).toBe(true);
+    expect(pool).toEqual([]); // consumed, so the fingerprint path can't double-bind it
   });
 });

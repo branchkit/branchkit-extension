@@ -106,6 +106,11 @@ export interface RebindCounters {
   rebind_position: number;
   refuse_distance: number;
   refuse_no_match: number;
+  /** Key-ownership transfers (DESIGN_CODEWORD_KEY_OWNERSHIP.md): a new node
+   *  inherited a predecessor's codeword via its strong key, bypassing the
+   *  fingerprint/position path. Tracked separately so soak data can tell the
+   *  two rebind routes apart. */
+  rebind_key: number;
 }
 
 export function newRebindCounters(): RebindCounters {
@@ -114,6 +119,7 @@ export function newRebindCounters(): RebindCounters {
     rebind_position: 0,
     refuse_distance: 0,
     refuse_no_match: 0,
+    rebind_key: 0,
   };
 }
 

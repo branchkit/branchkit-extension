@@ -19,7 +19,7 @@ import { ScannedElement } from '../types';
 import * as idRegistry from '../scan/registry';
 import { isRecallLoaded, resolvePreferredCodeword } from '../labels/codeword-recall';
 import { dropPendingPut, hasSent, queueDelete } from '../labels/label-sync';
-import { tryRebindFromLimbo } from '../observe/limbo';
+import { tryRebindFromLimbo, tryRebindByStrongKey, isRecentlyOrphaned } from '../observe/limbo';
 import { store } from './store';
 import { targetRectStore } from './singletons';
 import type { IntersectionTracker } from '../observe/intersection-tracker';
@@ -137,11 +137,20 @@ export function reconcileEvictedCodewords(evicted: string[]): void {
 // number of wrappers newly attached (rebinds don't count as added).
 export function attachDiscovered(
   refs: Element[], elements: ScannedElement[], limboPool: ElementWrapper[],
+  keyIndex: Map<string, ElementWrapper | null>,
 ): number {
   let added = 0;
   for (let i = 0; i < refs.length; i++) {
     const ref = refs[i];
+    // Skip a node we just transferred a wrapper *off* of (key-ownership rebind).
+    // Re-grabbing it would bounce the wrapper back; the page removes it shortly
+    // and the guard window covers the gap. See DESIGN_CODEWORD_KEY_OWNERSHIP.md.
+    if (isRecentlyOrphaned(ref)) continue;
     if (store.findWrapperFor(ref)) continue;
+    // Key-ownership: a re-mounted node inherits its predecessor's codeword by
+    // strong key (href), ahead of the fingerprint/position path. Sidesteps the
+    // pool-availability race that churns the QuickBase sidebar.
+    if (tryRebindByStrongKey(ref, keyIndex, limboPool)) continue;
     if (limboPool.length > 0 && tryRebindFromLimbo(ref, limboPool)) continue;
     // Eager attach (Rango/Vimium model). Wrappers stay alive while their
     // element is in the DOM — scroll-out doesn't release them. The

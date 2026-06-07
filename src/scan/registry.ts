@@ -90,6 +90,25 @@ export function computeFingerprint(el: Element): Fingerprint {
   return fp;
 }
 
+/**
+ * A strong, stable, action-equivalent identity key, or null if the element
+ * lacks one. Used by the key-ownership rebind (DESIGN_CODEWORD_KEY_OWNERSHIP.md):
+ * a re-mounted element with the same key inherits its predecessor's codeword.
+ *
+ * Layer 1 is `href` only. Two elements with the same href do the same thing when
+ * activated (navigate there), so transferring a codeword between them is harmless
+ * even on a wrong guess — and href is stable across a re-mount. `id` is
+ * deliberately excluded for now: framework-generated ids (`:r1:`, `ember123`)
+ * change across re-mounts and would *cause* churn if treated as identity.
+ */
+export function computeStrongKey(el: Element): string | null {
+  if (el.tagName.toLowerCase() === 'a') {
+    const href = (el as HTMLAnchorElement).getAttribute('href');
+    if (href) return 'h:' + href;
+  }
+  return null;
+}
+
 export function fingerprintsEqual(a: Fingerprint, b: Fingerprint): boolean {
   return (
     a.role === b.role &&

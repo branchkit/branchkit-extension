@@ -20,7 +20,7 @@ import { resolveTarget } from './activate/activate-resolution';
 import { IntersectionTracker } from './observe/intersection-tracker';
 import { AttentionObserver } from './observe/attention-observer';
 import { initVisibilityTracker, trackPendingCandidate, untrackPendingCandidate, connectVisibilityMO, teardownVisibilityTracker } from './observe/visibility-tracker';
-import { initLimbo, rebindCounters, LIMBO_DEADLINE_MS, collectLimboWrappers, dropDisconnectedWrappers, finalizeExpiredLimboWrappers } from './observe/limbo';
+import { initLimbo, rebindCounters, LIMBO_DEADLINE_MS, collectLimboWrappers, collectStrongKeyIndex, dropDisconnectedWrappers, finalizeExpiredLimboWrappers } from './observe/limbo';
 import { initWrapperLifecycle, attachWrapper, detachWrapper, seedPreferredFromMemory, reconcileEvictedCodewords, attachDiscovered } from './core/wrapper-lifecycle';
 import { initMutationSource, attachPageMutationObserver, teardownMutationSource } from './observe/mutation-source';
 import { firehoseStep } from './debug/firehose';
@@ -2891,7 +2891,7 @@ function discoverInSubtree(root: Element): number {
   const __cpuStart = performance.now();
   const result = scanElements(root, (el) => store.findWrapperFor(el) !== undefined);
   applyUserRuleToScan(result, root);
-  const added = attachDiscovered(result.refs, result.elements, collectLimboWrappers());
+  const added = attachDiscovered(result.refs, result.elements, collectLimboWrappers(), collectStrongKeyIndex());
   observeInvisibleCandidates(result.invisibleCandidates);
   watchUndefinedCustomElements(root);
   recordCpu('discoverInSubtree', performance.now() - __cpuStart);
@@ -2916,6 +2916,9 @@ async function discoverInSubtreeBatched(root: Element): Promise<number> {
   const __cpuStart = performance.now();
   let added = 0;
   const limboPool = collectLimboWrappers();
+  // Built once for the whole sliced walk (mirrors limboPool); consumed as
+  // strong-key rebinds fire across batches. See DESIGN_CODEWORD_KEY_OWNERSHIP.md.
+  const keyIndex = collectStrongKeyIndex();
   const cr = compiledRule;
   const isKnown = (el: Element) => store.findWrapperFor(el) !== undefined;
 
@@ -2929,14 +2932,14 @@ async function discoverInSubtreeBatched(root: Element): Promise<number> {
       for (const w of store.all) seen.add(w.element);
     }
     const inc = collectInclusions(seen, cr.includeSelector, root);
-    added += attachDiscovered(inc.refs, inc.elements, limboPool);
+    added += attachDiscovered(inc.refs, inc.elements, limboPool, keyIndex);
     initialSeen = new Set(inc.refs);
   }
 
   let invisibleCandidates: Element[] = [];
   for (const batch of scanInBatches(root, DEFAULT_SCAN_BATCH_SIZE, initialSeen, isKnown)) {
     if (cr?.excludes.length) applyExclusions(batch.refs, batch.elements, cr.excludes);
-    added += attachDiscovered(batch.refs, batch.elements, limboPool);
+    added += attachDiscovered(batch.refs, batch.elements, limboPool, keyIndex);
     if (batch.isLast) invisibleCandidates = batch.invisibleCandidates;
     // Yield so the main thread frees between batches — this is the whole
     // point of the sliced path.

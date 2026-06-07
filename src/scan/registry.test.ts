@@ -275,3 +275,21 @@ describe('bfcache re-registration (regression for stale wrapper ids)', () => {
     expect(idA).not.toBe(idB);
   });
 });
+
+describe('registry.computeStrongKey', () => {
+  it('returns an href key for an anchor with href', () => {
+    const a = document.createElement('a');
+    a.setAttribute('href', '/nav/users');
+    expect(registry.computeStrongKey(a)).toBe('h:/nav/users');
+  });
+
+  it('returns null for an anchor without href', () => {
+    expect(registry.computeStrongKey(document.createElement('a'))).toBeNull();
+  });
+
+  it('returns null for non-anchor elements (id is deferred in Layer 1)', () => {
+    const btn = document.createElement('button');
+    btn.id = 'save';
+    expect(registry.computeStrongKey(btn)).toBeNull();
+  });
+});

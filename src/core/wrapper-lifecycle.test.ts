@@ -89,7 +89,7 @@ describe('attachDiscovered', () => {
     const a = el('a');
     const b = el('b');
 
-    const added = attachDiscovered([a, b], [scanned('a'), scanned('b')], []);
+    const added = attachDiscovered([a, b], [scanned('a'), scanned('b')], [], new Map<string, ElementWrapper | null>());
 
     expect(added).toBe(2);
     expect(store.findWrapperFor(a)).toBeDefined();
@@ -101,7 +101,7 @@ describe('attachDiscovered', () => {
     store.addWrapper(new ElementWrapper(known, scanned('known')));
     const fresh = el('fresh');
 
-    const added = attachDiscovered([known, fresh], [scanned('known'), scanned('fresh')], []);
+    const added = attachDiscovered([known, fresh], [scanned('known'), scanned('fresh')], [], new Map<string, ElementWrapper | null>());
 
     expect(added).toBe(1); // only `fresh` is new
     expect(store.findWrapperFor(fresh)).toBeDefined();

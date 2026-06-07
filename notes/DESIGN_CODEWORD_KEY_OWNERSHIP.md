@@ -180,3 +180,57 @@ matters.
    fix for the churn.
 2. Layer 2 (soft-detach shrink / path unification) as the cleanup Layer 1
    unlocks, once Layer 1 has soaked.
+
+## Layer 1 implementation plan (shape b — transfer via rebind) — 2026-06-07
+
+Scoping at the reservoir confirmed the mechanism: `claim`'s preferred-reclaim only
+grants a letter that's in the `free` queue (`label-reservoir.ts`). During the
+overlap the predecessor holds the letter in `outstanding`, not `free`, so the
+successor can't reclaim it. Shape (b) sidesteps the pool entirely: transfer the
+existing wrapper (letter + id) onto the new node via the existing `rebindWrapper`.
+
+**Refinement found while scoping — the safety gate is "one wrapper per key," not
+"unique on page."** By the time the successor is discovered, the predecessor is
+usually *live* again: on the voice path it has graduated out of soft-detach
+(250ms) before QuickBase's later swap; on the mouse path it was never parked. So
+we can't gate on limbo state, and we can't assume the predecessor is gone. The
+gate that actually works: **rebind only when exactly one existing wrapper holds
+the new node's strong key.**
+
+- Transient overlap → exactly 1 predecessor wrapper with the key → rebind. Fixes
+  both voice and mouse with no graduation-deferral.
+- Genuine duplicate (header + footer both linking home) → 2+ wrappers with the
+  key → ambiguous → skip, claim fresh (they keep distinct letters).
+- This subsumes the earlier "unique on page" idea and removes the need for a new
+  key-absence release sweeper — release stays the existing limbo→finalize path
+  (the predecessor's old node is orphaned and reaped normally).
+
+**Key scope:** `href` only for Layer 1 (links). It's action-equivalent (two same-
+href elements do the same thing, so a wrong guess is harmless) and stable. `id`
+is deferred — framework-generated ids (`:r1:`, `ember123`) are unstable and would
+*cause* churn if used as a key.
+
+**Ping-pong guard:** after transferring the wrapper to the new node, the old node
+is briefly connected but wrapper-less. Mark it orphaned (`WeakMap<Element,
+number>`); discovery skips recently-orphaned nodes for a short window
+(~2s) so it isn't immediately re-grabbed and bounced back. Known residual edge:
+two same-href nodes that both persist long-term *and* appear sequentially could
+oscillate once per window — action-safe (same href), accepted.
+
+**Touch points:**
+- `scan/registry.ts` — `computeStrongKey(el): string | null` (href → `h:<href>`,
+  else null for Layer 1).
+- `observe/limbo.ts` — `collectStrongKeyIndex(): Map<string, ElementWrapper|null>`
+  (null marks a key held by 2+ wrappers = ambiguous); `tryRebindByStrongKey(newEl,
+  keyIndex, limboPool)` (consume from both index and limboPool on success, mark
+  old node orphaned, call existing `rebindWrapper`); the orphaned WeakMap +
+  `isRecentlyOrphaned`.
+- `core/wrapper-lifecycle.ts` — `attachDiscovered` gains the orphan-skip and the
+  strong-key step (before the fingerprint-limbo step), plus a `keyIndex` param.
+- `content.ts` — `discoverInSubtree` / `discoverInSubtreeBatched` build the index
+  (`collectStrongKeyIndex()`) once and pass it (mirroring `limboPool`).
+- No change to the release path; no new sweeper.
+
+**Invariant preserved:** one letter ↔ one element throughout (transfer, never
+share), so grammar/delta-sync/routing are untouched. `rebindWrapper` keeps the id
+and codeword, so no grammar re-push is needed for a transfer.
