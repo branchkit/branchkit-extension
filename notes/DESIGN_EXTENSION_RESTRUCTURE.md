@@ -1,591 +1,439 @@
-# Extension Restructure — module boundaries and the content-script pipeline
+# Extension Restructure — a store-centric reactive architecture
 
-**Status:** partially landed (updated 2026-05-30). The diagnosis (§1–2) still
-holds, but reality has moved past the original "nothing built yet":
-- **Module grouping shipped** — `src/` is now organized into intent-based dirs
-  (`scan/ observe/ placement/ labels/ render/ activate/ rules/ debug/`, plus
-  `adapters/` and `plugin/`). The names differ from the original §3.1 sketch
-  (see the updated §3.1); the shipped names are now ground truth.
-- **Step-1 leaf extraction substantially done** — `config.ts`, `plugin/liveness.ts`,
-  `plugin/resolve.ts`, and the `debug/` telemetry files are out of the monolith.
-  `content.ts` is down from 3,265 lines to ~2,854.
-- **Step-3 SPA-nav fix built** — `webNavigation.onHistoryStateUpdated`
-  (+`onReferenceFragmentUpdated`) feed a debounced bounded rescan
-  (`background.ts` `scheduleSpaRescan`). **Step 3c (nav-time label-pool purge)
-  was investigated and dropped 2026-05-30 as both redundant and unsafe** — see
-  §5 step 3. The premise ("codewords leak across SPA navs") was true only
-  *before* 3a/3b: now that the rescan is wired, the content script — which
-  stays alive across same-document nav — drops disconnected wrappers and
-  releases their codewords through the normal limbo→finalize path within
-  ~500ms. A background-side `purgeTab`/`releaseFrame` at nav time would race
-  that content-side ownership and corrupt the grammar (see §5 step 3 for the
-  delete-collision).
+**Status:** partially landed; re-conceived 2026-06-06. The original diagnosis
+(a content script with no internal boundaries) still holds and has gotten
+worse, not better. This revision replaces the earlier "linear stage pipeline"
+target with a model that actually matches the code — a shared store with signal
+sources feeding it and reactions responding to it — and folds in a testing plan,
+because the investigation found that the untested code and the un-extracted code
+are the same code.
 
-**Still unbuilt (the high-value remainder):** the stage interfaces (§3.2), the
-`PageSession` lifecycle object (§3.3), and reducing `content.ts` to wiring (§5
-steps 2, 4-residual, 5).
-
-**Motivation in one line:** the YouTube unresponsive-script freeze is not a
-bug we keep failing to fix — it's the symptom of a content script that has
-no internal boundaries, so the one hot path that matters (discover → filter →
-attach → observe) can't be isolated, measured, or replaced without touching a
-3,265-line file that also owns config, badges, grammar sync, perf telemetry,
-and frame liveness.
-
-This doc is about **structure**, not a new perf trick. The perf work already
-has good design thinking behind it (`DESIGN_OBSERVER_DRIVEN_LAYOUT.md`,
-`INVESTIGATION_YOUTUBE_WATCH_PERF.md`, `PLAN_RANGO_TECHNIQUES.md`). The problem
-is that those designs land *inside* a monolith, so each lands as another
-top-level function and another module-scoped observer next to the others, and
-the system gets harder to reason about with every fix. We restructure so the
-remaining perf work (and everything after it) lands against interfaces instead
-of into a pile.
+**One-line motivation:** every bug fix lands as another top-level function and
+another module-scoped observer inside `content.ts`, so the system gets harder to
+reason about with every fix. We restructure so the remaining work lands against
+a boundary instead of into a pile.
 
 ---
 
-## 1. Current state, honestly
+## 1. Current state, measured
 
-### 1.1 The monolith
+### 1.1 The monoliths are regrowing
 
-`src/content.ts` is 3,265 lines. A top-level scan of its declarations shows it
-owns, interleaved, at least these distinct concerns:
+| File | Lines | Role | Tests |
+|---|---|---|---|
+| `content.ts` | **4,134** | per-frame content script: owns ~15 concerns | none |
+| `background.ts` | **1,687** | service worker: transport, routing, injection | none |
+| everything else | ≤1,083 | extracted feature modules | mostly good |
 
-| # | Concern | Representative symbols |
-|---|---------|------------------------|
-| 1 | Subsystem ownership | `store`, `dispatcher`, `registry`, `keyHandler`, `tracker`, `resizeObserver`, `visibilityIO`, `visibilityMO`, `attentionObserver`, `targetRectStore`, `badgeReattachObserver`, `observer` |
-| 2 | Config / storage wiring | `chrome.storage.sync/local` get + onChanged blocks |
-| 3 | Domain rules | `applyMatchedRule`, `getExcludes` |
-| 4 | Scan orchestration | `doScan`, `doScanBatched`, `processScanBatch`, `applyUserRuleToScan` |
-| 5 | Wrapper lifecycle | `attachWrapper`, `detachWrapper`, `discoverInSubtree`, `tryRebindFromLimbo`, `rebindWrapper`, `dropDisconnectedWrappers`, `finalizeExpiredLimboWrappers` |
-| 6 | Invisible-candidate visibility | `pendingVisibility`, `recheckPendingVisibility`, `observeInvisibleCandidates`, `visibilityMO/IO` |
-| 7 | Badge show/hide/position | `showHints`, `hideHints`, `scheduleReposition`, `scheduleDeferredReposition`, `badgeNewlyCodeworded`, `updateBadgeLabels` |
-| 8 | Mutation handling | `observer`, `processMutations`, `scheduleDiscovery`, `drainDiscovery`, `scheduleReevaluation`, `drainReevaluations` |
-| 9 | Grammar / state sync | `scheduleBatchedSync`, `batchedStateSync`, `postGrammarBatch`, `claimLabelsForBatch`, `drainPendingDeletes`, `sessionId` |
-| 10 | Label assignment | `poolLabelToAssignment`, `viewportSort` |
-| 11 | Frame liveness / orphan | `openLivenessPort`, `quiesceOrphan`, `myFrameId` |
-| 12 | Hint resolution / activation | `resolveHintLocally`, `activateWrapper`, `reportDispatchResult` |
-| 13 | Perf instrumentation | `recordCpu`, `buildPerfSnapshot`, `publishPerfSnapshot`, `shipPerfReport`, watchdog, longtask, cpu-share (~200 lines) |
-| 14 | Custom-element watching | `watchUndefinedCustomElements` |
-| 15 | Messaging plumbing | `ensureSendMessageWrapped`, message router |
+`content.ts` was ~2,854 lines on 2026-05-30, when the previous version of this
+doc declared "step-1 leaf extraction substantially done." It is now 4,134 — a
+45% regrowth in a week, entirely from the badge-lifecycle / occlusion /
+scroll-back fixes that all landed as new top-level functions in the monolith.
+This is the thesis demonstrating itself: with no boundary, fixes accrete in the
+one file, and the previous restructure's gains were erased by a normal week of
+bug-fixing. A plan that doesn't change where fixes *land* will lose this race
+again.
 
-These talk to each other through module-scoped mutable variables
-(`hintsVisible`, `sessionId`, `pendingVisibility`, `compiledRule`, a dozen
-counters). There is no seam. A change to the lifecycle touches the same file
-and often the same shared state as a change to badge positioning or grammar
-sync.
+### 1.2 The shape of `content.ts`: one core, a ring of satellites
 
-### 1.2 The observer zoo
+A coupling analysis (which top-level block touches which module-level state)
+shows `content.ts` is not 15 separable concerns. It is one **strongly-connected
+core** with satellites:
 
-Roughly ten observers are instantiated at module scope, with responsibilities
-that overlap and were added in different sessions:
+- **The core (the tangle).** `store` (the `WrapperStore` instance) is referenced
+  by **52 of ~70 top-level blocks**. Around it sit the lifecycle functions
+  (`attachWrapper` / `detachWrapper`), the render orchestrators (`showHints` /
+  `hideHints`), and the six observers whose inline callbacks call all of those.
+  They reference each other through `store` and through direct calls, so none of
+  them lifts out alone.
+- **The satellites.** Limbo/rebind, visibility-recovery, reposition scheduling,
+  and discovery/mutation-drain each own a small pocket of private state but reach
+  into the core by calling 2–4 of its functions (`attachWrapper`, `detachWrapper`,
+  `showHints`, `scheduleSync`).
 
-- `observer` (global MutationObserver, ~line 2885) — discovery + reevaluation triggers
-- `visibilityMO` (line 702) — re-check invisible candidates on attribute change
-- `visibilityIO` (line 679) — invisible candidate became visible
-- `attentionObserver` (`rootMargin '200%'`, line 806) — wrapper attach/detach candidacy
-- `tracker` / IntersectionTracker (`rootMargin '200px'`, line 118) — codeword claim/release
-- `resizeObserver` (line 640) — anchor-parent resize
-- `badgeReattachObserver` (line 914) — re-mount badges the page tore out
-- a `PerformanceObserver` (line 2567, longtask) plus two further inline
-  MutationObservers (lines 241, 3254)
+Two facts from the analysis make the path tractable:
 
-Note the class/instantiation split: several of these (`IntersectionTracker`,
-`AttentionObserver`, the `*-tracker.ts` helpers, `target-rect-store.ts`,
-`layout-cache.ts`, `placement/`, `adapters/`) already live in their own files —
-content.ts only *instantiates and wires* them. The codebase has already been
-drifting toward extraction; what's missing is a spine that owns the wiring and
-the order. This restructure finishes a migration that's underway, it does not
-crack open a virgin monolith — which is why the nested-directory layout in §3.1
-is a continuation of the existing `placement/` + `adapters/` convention, not a
-new one.
+- **All 11 hub singletons are declared once and never reassigned** — `store`,
+  `tracker`, `observer`, `resizeObserver`, `attentionObserver`, `targetRectStore`,
+  `visibilityIO`, `visibilityMO`, `registry`, `dispatcher`, `keyHandler`. They are
+  stable references, not mutable state, so they are safe to make importable.
+- **`schedulePushGrammar` is a one-line alias** to `scheduleSync` (already in
+  `labels/label-sync.ts`). The lifecycle's "tell the grammar to update" edge is
+  already a thin call into an extracted module — it just isn't modeled as a
+  subscription yet.
 
-`DESIGN_OBSERVER_DRIVEN_LAYOUT.md` already recognizes this and proposes
-collapsing the layout/lifecycle observers into a `LayoutSignalRouter` +
-`TargetRectStore` (Phases 3–6, not yet cut over). That design is correct and
-this doc does not relitigate it. But it currently has nowhere clean to live —
-it would be three more module-scoped singletons inside `content.ts`.
+### 1.3 Why the satellites are coupled: imperative fan-out
 
-### 1.3 Concrete gaps found while debugging the freeze (2026-05-29/30)
+The reason the core is strongly connected is that **state mutation and reaction
+are interleaved imperatively**. `attachWrapper` does not just add a wrapper to
+the store — it also calls `scheduleSync()` (push grammar) and, on some paths,
+`scheduleReposition()` / `showHints()` (paint). `detachWrapper` does the same in
+reverse. Every site that changes the wrapper set must remember to also poke
+grammar and render. That "remember to also poke" is the coupling, repeated at ~50
+call sites.
 
-- **No SPA URL-change handler.** The content script re-establishes scan +
-  grammar only on a full document load (the `chrome.storage.local.get('alphabet')`
-  boot block) or via the MutationObserver firehose. On a YouTube in-site
-  navigation (History API, no reload) there is no "the page is now a different
-  page" signal — the script relies entirely on absorbing ~4000 mutations/sec,
-  which is exactly the path that trips the unresponsive-script killer. The gap
-  is on both sides: content.ts has no `popstate`/`pushState`/`replaceState`
-  listener, and `background.ts`'s `tabs.onUpdated` (line 1162) fires only on
-  `changeInfo.status === 'complete'` (full load), so the SPA case is unhandled.
-  **Detection correction (2026-05-30, Playwright):** `tabs.onUpdated` cannot
-  distinguish a History-API nav from a full load. On a YouTube in-site nav it
-  reports `{status:'loading', url}` then `{status:'complete'}` — byte-identical
-  to a full document load — so any `changeInfo.url` guess either misses real SPA
-  navs or fires redundant rescans on every full load. The correct signal is
-  `chrome.webNavigation.onHistoryStateUpdated` (+ `onReferenceFragmentUpdated`
-  for hash routes), which fire *only* for same-document URL changes; this needs
-  the `webNavigation` permission (added 2026-05-30). **Good news
-  for step 3:** the reconcile machinery partly exists. content.ts already
-  handles a `rescan` action (`content.ts:1596`), today
-  triggered only by plugin-connect/focus. `onUrlChange` can route into that
-  existing bounded path rather than build a new one.
-- **Per-tab label pool is purged only on tab close (`chrome.tabs.onRemoved` →
-  `purgeTab`), and that is correct.** An earlier read of this file took the
-  stale `background.ts:1058` comment ("clear … when the tab is closed or starts
-  navigating") at face value and concluded codewords leak across navigations.
-  They do not, in either nav shape:
-    - *Same-document (SPA) nav:* the content script stays alive. Old elements
-      disconnect → limbo → finalize → `releaseLabel` (`element-wrapper.ts:82`),
-      reclaiming codewords within ~500ms. The `scheduleSpaRescan` rescan
-      (`from_cache` path, `content.ts:1600`) actively drives `dropDisconnectedWrappers`.
-    - *Cross-document nav / tab close:* the content script dies. Per-frame
-      reclamation runs through the liveness Port `onDisconnect` →
-      `releaseFrame` (`background.ts:1091`), and `purgeTab` on tab close.
-  The `background.ts:1058` comment is stale (says "or starts navigating") and
-  the `releaseFrame` doc-comment in `label-pool.ts` is stale (says "Currently
-  NOT wired") — both are corrected. The one residual is the long-known
-  SW-idle window on Port `onDisconnect`, which is independent of navigation.
-- **Perf trail is unbounded.** `extension-perf.jsonl` was 242 MB / 94,740 lines.
-  `perf_report.go` keeps every sample by design ("clearing is manual").
+### 1.4 The testability gap is the extraction gap
 
-These are not unrelated one-offs. They're all "lifecycle of a page/session was
-never modeled as a thing" — which is itself a structural absence.
+Unit coverage by directory:
+
+```
+scan/      9 src,  9 test      observe/   6 src, 4 test
+labels/    7 src,  7 test      placement/ 5 src, 4 test
+activate/  6 src,  5 test      render/    5 src, 3 test
+lifecycle/ 4 src,  3 test      rules/     4 src, 2 test
+debug/     3 src,  1 test
+adapters/  2 src,  0 test      plugin/    2 src, 0 test
+src/ root 11 src,  0 test   ← content.ts, background.ts, options, popup, …
+```
+
+The extracted modules are well-tested (538 tests total). The untested surface is
+precisely the code that hasn't been extracted: both monoliths, the entry points,
+adapters, and the plugin transport. The lifecycle logic that causes the most
+production incidents (limbo, rebind, visibility, nav) is only reachable through
+the monolith, so it can only be exercised by the ad-hoc Playwright drivers, not
+by unit tests. **Extraction is the lever for testability** — the two goals are
+the same move.
+
+### 1.5 Supporting gaps found while investigating
+
+- **No CI.** There is no `.github/workflows`. The 538-test suite runs only when
+  someone types `npm test`. Nothing gates a merge.
+- **Integration tests are 52 throwaway repros.** `scripts/` holds 52
+  `_test-*` / `_drive-firefox-*` Playwright drivers (vs. 6 maintained harnesses).
+  Each was written to reproduce one hard bug, then left to rot. The "30-minute
+  soak before merge" discipline this project relies on (orphan-teardown and nav
+  changes have repeatedly broken steady-state browsing despite green unit tests)
+  is run by hand against these, with no shared fixtures and no guarantee any
+  given script still works.
+- **`background.ts` is a second, lighter monolith.** It is mostly async functions
+  over ~8 connection-state globals (`pluginPort`, `pluginToken`,
+  `branchkitConnected`, `cachedActiveTabId`, `directSSE`, the retry timers). Its
+  seams are cleaner than `content.ts`'s because it is procedural and stateless-ish,
+  but it is untested and growing.
 
 ---
 
-## 2. What's actually wrong (the diagnosis under the symptoms)
+## 2. The improved concept: store-centric reactive
 
-1. **No pipeline.** The flow from "DOM changed" to "badge painted + grammar
-   pushed" exists, but only as a call graph spread across 15 concerns. You
-   cannot point at "the discovery stage" and swap its implementation; you edit
-   `discoverInSubtree`, which reaches into `store`, `attentionObserver`,
-   `targetRectStore`, counters, and `schedulePushGrammar` directly.
+A content script is a small reactive system. Signals come in (DOM mutations,
+viewport/scroll/resize, navigation, voice/keyboard commands, page-driven
+visibility changes); two outputs go out (badges painted, grammar pushed to the
+plugin). The previous doc modeled this as a **linear pipeline** of stages
+(Discovery → Lifecycle → Label → Render). That framing is wrong for this code:
+limbo/rebind and visibility-recovery are *feedback loops* (a disconnect parks a
+wrapper, a later mutation rebinds it; an invisible candidate later becomes
+visible and is promoted), and several signals (scroll, resize, command) skip
+"discovery" entirely. Forcing them into a 4-stage line is why the previous plan
+stalled at the interfaces.
 
-2. **Lifecycle is implicit.** "A page" and "a hinting session for a page" are
-   not objects. Their setup is the top-level execution of `content.ts`; their
-   teardown is the V8 context dying. SPA navigation has neither, so it falls
-   through every crack.
+The accurate model is **one store, many sources, a few reactions**:
 
-3. **Layout reads aren't disciplined.** `getComputedStyle`/`getBoundingClientRect`
-   are called from ~15 sites. `layout-cache.ts` helps within a batch but isn't
-   on the discovery filter path (`scanner.ts` `isVisible`/`isRedundant` read
-   live). There's no single place that owns "when are we allowed to force a
-   reflow." `DESIGN_OBSERVER_DRIVEN_LAYOUT` fixes this for positioning; nothing
-   fixes it for discovery.
+```
+            sources                         the model                 reactions
+  ┌───────────────────────────┐         ┌──────────────┐        ┌──────────────┐
+  │ MutationObserver           │         │              │        │ grammar sync  │
+  │ IntersectionTracker        │ mutate  │ WrapperStore │ emit   │ (label-sync)  │
+  │ AttentionObserver          ├────────►│   + deltas   ├───────►│              │
+  │ visibility IO/MO           │         │              │ delta  │ render/place  │
+  │ resize / scroll            │         │ single source│        │ (badge paint) │
+  │ message listener (cmd/nav) │         │ of truth     │        │              │
+  └───────────────────────────┘         └──────────────┘        └──────────────┘
+```
 
-4. **Instrumentation is load-bearing and tangled.** The perf telemetry (~200
-   lines + a watchdog + a longtask observer + cpu-share math) lives next to the
-   logic it measures, sharing counters as module globals. It's the only reason
-   we can debug at all, but it makes the file bigger and the hot functions
-   noisier (`recordCpu` calls threaded through everything).
+- **The store is the single source of truth** for "what hintable elements exist
+  and what state each is in" (live / limbo / in-viewport / codeworded / hinted).
+  It already exists as `WrapperStore`; today it is a passive container.
+- **A Source translates one external signal into store mutations** and nothing
+  else. The observers, the discovery walk, and the message listener are sources.
+  A source's only job is "the world changed → tell the store."
+- **A Reaction responds to store deltas** to produce an output. There are exactly
+  two: grammar-sync (push codewords to the plugin) and render (mount / position /
+  tear down badges). Reactions never mutate the wrapper set; they only read it
+  and emit side effects.
 
-The throughline: **every fix has to be performed open-heart, on shared mutable
-state, inside the file that does everything.** That's the "flimsy" feeling.
+### 2.1 The surgical cut: make the store emit deltas
+
+The single change that dissolves the strongly-connected core is to give the
+store an **observable delta stream**:
+
+```ts
+type WrapperDelta =
+  | { kind: 'attached';   wrapper: ElementWrapper }
+  | { kind: 'detached';   wrapper: ElementWrapper }
+  | { kind: 'rebound';    wrapper: ElementWrapper; from: Element }
+  | { kind: 'visibility'; wrapper: ElementWrapper; visible: boolean };
+
+store.attach(w);         // mutates the set AND emits { kind: 'attached', … }
+store.subscribe(onDelta) // grammar-sync and render subscribe here
+```
+
+Today `attachWrapper` is `store.add(w)` plus an imperative `scheduleSync()` plus
+sometimes `scheduleReposition()`. After the cut, `attachWrapper` is just
+`store.attach(w)`; grammar-sync and render are subscribers that decide for
+themselves what an `attached` delta means (sync debounces a grammar push; render
+schedules a paint). The ~50 "remember to also poke grammar/render" call sites
+collapse into one subscription per reaction.
+
+This is what converts the core from a cycle into a flow:
+
+```
+   before (cycle)                         after (flow)
+   attachWrapper ─► scheduleSync          source ─► store.attach
+        ▲   │  └──► showHints                          │ emits delta
+        │   ▼                                          ▼
+   observers ◄─ rebindWrapper             grammar-sync   render   (subscribers)
+   (everyone calls everyone)             (one-way; no back-edges to lifecycle)
+```
+
+It is also the change that makes the lifecycle unit-testable: a test mutates a
+fake store and asserts on the emitted deltas, with no observers, no DOM paint,
+and no plugin transport in the picture.
+
+### 2.2 PageSession owns the wiring and the lifecycle
+
+`PageSession` (already exists, `lifecycle/page-session.ts`) is the per-frame
+object that constructs the store, the sources, and the reactions, wires the
+subscriptions, and owns the lifecycle transitions (`start` / `onUrlChange` /
+`restore` / `teardown`). It is currently a transitional injection seam — it holds
+per-frame timer/flag state but delegates the actual logic to free functions in
+`content.ts` via hooks. The end state is that `content.ts` constructs one
+`PageSession` and does nothing else; the session owns the graph.
 
 ---
 
-## 3. Target architecture
+## 3. Target file structure
 
-A content script is, structurally, a small reactive system: signals come in
-(DOM mutations, viewport/resize/scroll, navigation, voice/keyboard commands),
-and two outputs go out (painted badges, grammar/state pushed to the plugin).
-Model it as an explicit pipeline of owned stages behind interfaces, plus an
-explicit page-session lifecycle.
-
-### 3.1 Module layout
-
-The directory grouping below shipped 2026-05-30. The original sketch used
-`core/ discover/ lifecycle/ layout/ telemetry/`; the names that actually landed
-(`scan/ observe/ placement/ debug/`, config + layout-cache at root) are shown
-here as ground truth. `(exists)` = file present today; `NEW` = still unbuilt,
-shown in the dir it would land in.
+The directory grouping is already good — `scan/ observe/ placement/ labels/
+render/ activate/ rules/ lifecycle/ plugin/ debug/ adapters/` are intent-based
+and mostly one-concern-per-file. The restructure does **not** rename these; it
+fills the gaps and assigns each file a role (source / reaction / model /
+wiring). `(exists)` = present today; `NEW` = to be extracted from a monolith.
 
 ```
 src/
-  content.ts                  // GOAL: thin — wire stages, own nothing but the graph
-  config.ts                   // (exists) storage-backed settings — was core/config
-  layout-cache.ts             // (exists) cross-stage rect/style cache — stays at root
-  types.ts                    // (exists) shared types — stays at root
-  core/                       // NEW dir — (re)introduced when these two land; that
-    page-session.ts           //   NEW: lifecycle object (boot, navigate, teardown)
-    pipeline.ts               //   NEW: stage interfaces + the orchestrator. (We
-                              //   folded the lone config.ts up to root in the reorg;
-                              //   core/ earns its place again as a ≥2-file boundary
-                              //   once the lifecycle/orchestrator objects exist.)
-  scan/                       // was "discover/"
-    scanner.ts                // (exists) pure DOM→candidates, no side effects
-    find.ts, references.ts, element-wrapper.ts, registry.ts, ...  // (exist)
-    discovery.ts              // NEW: owns scheduleDiscovery/drain, ancestor-dedup,
-                              //      the cheap pre-filter on added roots
-  observe/                    // was "lifecycle/" + "layout/" (the observer zoo)
-    attention-observer.ts     // (exists) attach/detach candidacy
-    target-rect-store.ts      // (exists) the one canonical rect cache
-    intersection-tracker.ts, *-tracker.ts  // (exist)
-    limbo.ts                  // NEW: rebind/limbo/finalize (extract from content.ts)
-  placement/                  // (exists) position math — index, compute, rango, ...
+  content.ts                 // GOAL: construct one PageSession, nothing else
+  background.ts              // GOAL: construct the SW objects below, nothing else
+  types.ts                   // (exists) shared types — stays at root
+  layout-cache.ts            // (exists) cross-cut rect/style cache — stays at root
+  config.ts, bootstrap.ts    // (exists) storage-backed settings + boot entry
+
+  core/                      // NEW dir — the model + the graph
+    store.ts                 //   (exists) WrapperStore instance; delta emitter lands here in Tier 2
+    singletons.ts            //   (exists) dispatcher/registry/keyHandler/targetRectStore instances
+    wrapper-lifecycle.ts     //   NEW: attach/detach/limbo/rebind (the old SCC core),
+                             //        as store mutations — calls store.attach/detach,
+                             //        no longer calls grammar/render directly
+
+  lifecycle/                 // (exists) the per-frame session + reconcile policy
+    page-session.ts          //   (exists) owns start/teardown/onUrlChange/restore
+    reconcile.ts, strict-viewport.ts, desired-state.ts   // (exist)
+
+  observe/                   // SOURCES — translate one signal into store mutations
+    intersection-tracker.ts, attention-observer.ts       // (exist)
+    target-rect-store.ts, *-tracker.ts                   // (exist)
+    visibility-tracker.ts    //   NEW: pendingVisibility + visibility IO/MO (extract)
+    mutation-source.ts       //   NEW: the discovery MutationObserver + drain (extract)
+
+  scan/                      // (exists) pure DOM → candidates (a source's helper)
+  placement/                 // (exists) position math (a render helper)
   labels/
-    label-pool.ts             // (exists) square-fill pool
-    label-sync.ts             // (exists) claim/release batching, sessionId, grammar push
+    label-sync.ts            // (exists) REACTION: subscribe to deltas → grammar push
+    label-pool.ts, rebind.ts, …                          // (exist)
   render/
-    hints.ts                  // (exists) badge element
-    badge-colors.ts           // (exists)
-    badge-manager.ts          // NEW: show/hide/reposition orchestration
-  activate/                   // NEW grouping — the "act on a chosen target" stage
-    resolve.ts?               // resolveHintLocally + activate + report (see note*)
-    event-sequence.ts, scroller.ts, keyboard.ts, snapshot.ts  // (exist)
-  rules/                      // domain include/exclude/reveal + options UI (exist)
-  plugin/
-    liveness.ts               // (exists) Port + orphan handling
-    resolve.ts                // (exists) plugin-side resolve  (*resolution currently
-                              //   lives here, not activate/ — revisit when the
-                              //   activate stage is formalized)
-    grammar-batch.ts          // NEW: postGrammarBatch + delta-sync (extract)
-  debug/                      // was "telemetry/" — diagnostics + perf
-    perf-counters.ts, message-counters.ts  // (exist)
-    debug-snapshot.ts         // (exists)
-    perf.ts                   // NEW: snapshot, cpu-share, watchdog, longtask sink
+    hints.ts, badge-colors.ts                            // (exist)
+    badge-manager.ts         //   NEW: REACTION: subscribe to deltas → mount/position
+  activate/                  // (exists) act-on-a-chosen-target stage
+  rules/, plugin/, debug/, adapters/                     // (exist)
 ```
 
-This is a target, not a literal commit list. The point is **one concern per
-file, behind an interface, with `content.ts` reduced to wiring.** Naming note:
-the reorg chose stage-verb dirs (`scan/observe/placement/render/activate`) over
-the original noun sketch (`discover/lifecycle/layout/render`); they describe the
-same pipeline.
-
-### 3.2 The pipeline
-
-Define the stages as interfaces so each is independently testable and
-replaceable (the observer-driven-layout cutover becomes "swap the layout
-stage," not "rewrite content.ts"):
-
-```ts
-interface DiscoveryStage {
-  // Given roots that may contain new candidates, emit hintable candidates.
-  // Owns the cheap pre-filter + ancestor-dedup. Pure w.r.t. DOM reads it
-  // declares; performs no attach.
-  discover(roots: Iterable<Element>): CandidateBatch;
-}
-
-interface LifecycleStage {
-  // Decides which candidates become live wrappers (attention region) and
-  // which get torn down. Owns limbo/rebind. Emits attach/detach events.
-  reconcile(batch: CandidateBatch): LifecycleDelta;
-}
-
-interface LabelStage {
-  // Claims/releases codewords for attached/detached wrappers, batched.
-  // Owns sessionId + the per-batch grammar push.
-  sync(delta: LifecycleDelta): Promise<void>;
-}
-
-interface RenderStage {
-  // Mounts/positions/tears down badges for currently-codeworded wrappers.
-  // Reads geometry ONLY from TargetRectStore.
-  render(delta: LifecycleDelta): void;
-}
-```
-
-The orchestrator (`pipeline.ts`) is the only thing that knows the order. Each
-signal source (mutation, navigation, command) feeds the front of the pipeline;
-the orchestrator runs stages and routes deltas. Stage internals own their own
-debouncing/time-slicing, but the orchestrator owns back-pressure (the thing the
-investigation doc keeps reaching for: "stop walking subtrees that yield
-nothing").
-
-### 3.3 Page session as a first-class object
-
-```ts
-class PageSession {
-  readonly id: string;          // replaces module-scoped sessionId
-  start(): void;                // boot: config, initial scan, observers on
-  onUrlChange(href: string): void;  // SPA nav: reconcile as a soft teardown+rescan
-  teardown(reason): void;       // detach all, release codewords, observers off
-}
-```
-
-`onUrlChange` is the missing signal. Wire it from a `popstate` +
-patched-`history.pushState`/`replaceState` listener (the standard SPA-hint
-approach; Rango/Vimium do this). On URL change we do a **bounded** reconcile:
-release codewords for wrappers no longer in the DOM, rescan the viewport-near
-region once, push grammar once — instead of absorbing the mutation firehose.
-This directly addresses "page 2 doesn't register" and removes the dependency on
-the 4000-mutations/sec path for the common navigation case.
-
-Codeword reclamation on navigation is the **content-side** half of this
-lifecycle, not a background purge. `PageSession.onUrlChange`/`teardown` releases
-the gone wrappers' codewords through the existing `releaseLabel` path (the
-content script owns codeword truth; the pool is a derived cache). An earlier
-draft of this section proposed a SW-side `purgeTab`/`releaseFrame` on nav as
-"the authoritative signal" — that was investigated and rejected 2026-05-30 (see
-§5 step 3): a background purge races the content script's local codeword
-ownership and corrupts the plugin grammar. Background `purgeTab` stays wired to
-`onRemoved` (tab close) only.
-
-#### 3.3.1 Concrete scoping (2026-05-30) — mapping to the code as it stands
-
-The original §3.3 sketch predates several things that have since landed. This
-subsection grounds `PageSession` in `content.ts` as it actually exists today so
-the extraction is a mechanical lift, not a redesign. **Scope of this first
-cut: introduce the object as a transitional adapter that *owns* the existing
-boot/teardown/nav surface; do not yet collapse the observer zoo or build the
-stage interfaces (§3.2).** Those follow once the seam exists.
-
-**What already exists (so PageSession wraps it, doesn't invent it):**
-- **`teardown()` already exists as `quiesceOrphan` (`content.ts:1525`).** It is
-  idempotent and disconnects every module-scope observer (`observer`,
-  `badgeReattachObserver`, `tracker.disconnectAll`, `resizeObserver`,
-  `visibilityIO`, `visibilityMO`), cancels `discoveryFrame`, and removes badge
-  hosts. This is the teardown body; `PageSession.teardown(reason)` generalizes
-  it (orphan-reload is one `reason`; nav-unload and a future explicit stop are
-  others).
-- **`onUrlChange` detection already ships.** `background.ts` listens on
-  `webNavigation.onHistoryStateUpdated`/`onReferenceFragmentUpdated` (top-frame,
-  correctly distinguishes SPA nav from full load) → `scheduleSpaRescan` →
-  dispatches the bounded `rescan` action into `content.ts:1596` (the `from_cache`
-  path: `dropDisconnectedWrappers` + `syncNow`). `PageSession.onUrlChange`
-  becomes the **content-side handler** for that dispatched action — it does NOT
-  re-implement detection. **Decision: keep the background-driven signal; do not
-  monkey-patch `history.pushState`/`replaceState` in the page main world** as the
-  original §3.3 suggested. The background `webNavigation` signal is already
-  correct, permissioned, and avoids reaching into the page's globals.
-- **`id` is already extracted.** The module-scoped `sessionId` the sketch wanted
-  to replace now lives in `labels/label-sync.ts` (`getSessionId`/`rotateSession`).
-  `PageSession` references it rather than owning a second copy; `rotateSession`
-  stays the alphabet-swap reset.
-- **bfcache restore (`pageshow` persisted, `content.ts:1460`)** is a fourth
-  lifecycle entry point the sketch omitted. `PageSession` owns it as a
-  `restore()`/soft-rescan path alongside `onUrlChange`.
-
-**What PageSession absorbs from module scope (the lift):** the observer/timer
-zoo currently free-floating at module top — `observer`, `badgeReattachObserver`,
-`tracker`, `resizeObserver`, `visibilityIO`/`visibilityMO`(+`visibilityMOConnected`),
-`attentionObserver`, the reposition timers (`scrollRepositionTimer`,
-`deferredRepositionTimer`, `hugeMutationTimer`), `discoveryFrame`, `hintsVisible`,
-`myFrameId`, and `orphaned`. Construction of these moves into `start()`; their
-teardown is the existing `quiesceOrphan` body.
-
-**Per-frame.** One `PageSession` per content-script context (resolves the §7
-open question in favor of per-frame). It matches the current per-frame injection
-model and the plugin already aggregates across frames; no top-frame coordinator
-in this cut.
-
-**Sequencing (clean end state via transitional seam).** (1) **Done
-2026-05-30.** Add `lifecycle/page-session.ts` with a `PageSession` that owns the
-lifecycle *transitions* (and the `TeardownReason`), wired to the existing code
-via injected hooks — **injection-first, not by relocating boot**. The original
-plan was to move the top-level boot statements into `start()` in this step;
-that was rejected during implementation because the boot is ~2,800 lines of
-entangled, non-contiguous top-level statements whose `const` observer bindings
-are referenced throughout the file — relocating them in one diff is exactly the
-freeze-risky monolith surgery the restructure exists to avoid. Instead the
-session delegates `teardown(reason)` to the existing `quiesceOrphan` body and
-the orphan path routes through `pageSession.teardown('orphan')`. Behavior
-byte-identical; `id` delegates to `label-sync.getSessionId`. (2) **Mutable
-lifecycle state done 2026-05-30.** Migrate the module-scope observer/timer
-state into the instance, incrementally. Landed across three revertable commits:
-the per-frame primitives (`myFrameId`, discovery rAF scheduling, the three
-reposition timers, `visibilityMOConnected`), then `hintsVisible`, then the
-`orphaned` flag (folded into `PageSession.toreDown` via the `isTornDown`
-getter). **What deliberately stays in module scope: the eight observer
-singletons** (`store`, `tracker`, `observer`, `resizeObserver`, `visibilityIO`,
-`visibilityMO`, `attentionObserver`, `badgeReattachObserver`). They were
-verified to be `const`, never reassigned — i.e. stable references, not mutable
-*state*; their only lifecycle interaction is disconnect-on-teardown, already
-routed through `quiesceOrphan`. Relocating their *construction* (each carries a
-multi-hundred-line inline callback referencing free functions defined all over
-the file) onto the instance is the entangled-boot relocation step (1) explicitly
-deferred, and is coupled to the §3.2 stage extraction — so it waits for the boot
-relocation / stage cut rather than being forced as field assignment now. (3)
-**Done 2026-05-30.** Route the `rescan` action and `pageshow` through
-`onUrlChange`/`restore`. Same injection-seam pattern as `teardown`: the SPA-nav
-rescan body (`rescanForNav`) and the bfcache-restore body (`restoreFromBfcache`)
-are now named functions wired as `PageSessionHooks.onUrlChange`/`restore`; the
-message listener and `pageshow` listener delegate to `pageSession.onUrlChange`/
-`restore`. Detection is unchanged — the background `webNavigation` signal still
-fires the `rescan` action and `pageshow` is still the bfcache trigger; only the
-handler ownership moved onto the session. Behavior byte-identical. Each step
-kept `npm test` green and is independently revertable; the final commit (after
-boot relocation) leaves no module-scope lifecycle state behind.
-
-**Explicitly out of scope for this cut / do not touch:** the stage interfaces
-(§3.2 — `DiscoveryStage`/`LifecycleStage`/`LabelStage`/`RenderStage`) and
-`pipeline.ts`; the `LayoutSignalRouter` collapse; the telemetry sink injection
-(§3.4); any change to the matcher/grammar protocol. This cut is purely
-"lifecycle becomes an object," nothing more.
-
-### 3.4 Telemetry as an injected sink, not ambient globals
-
-Stages take a `record(label, ms)` function by injection. `telemetry/perf.ts`
-owns the buckets, cpu-share, watchdog, longtask observer, and the bounded trail
-(rotate/cap — fix the 242 MB file). In tests and in non-dev builds the sink is a
-no-op, so the hot functions aren't threaded with measurement noise. The
-diagnostic value we depend on is preserved; it just stops living inside the
-logic.
+New files are few and each is a lift of an existing cluster, not a green-field
+abstraction: `core/store.ts` (the delta cut), `core/wrapper-lifecycle.ts`,
+`observe/visibility-tracker.ts`, `observe/mutation-source.ts`,
+`render/badge-manager.ts`. The integrator `buildPerfSnapshot` stays in
+`content.ts` (it reads counters from everywhere by design); the data-only
+counters it reads move into `debug/perf-counters.ts`.
 
 ---
 
-## 4. How this relates to existing docs
+## 4. The background service worker
 
-- **`DESIGN_OBSERVER_DRIVEN_LAYOUT.md`** — its `LayoutSignalRouter` +
-  `TargetRectStore` are the implementation of the `layout/` modules and the
-  `RenderStage`'s read discipline. This restructure gives that design a home
-  (the `layout/` dir + the stage interface) so Phases 4–6 cut over by swapping
-  the layout stage behind the interface rather than editing the monolith.
-- **`INVESTIGATION_YOUTUBE_WATCH_PERF.md`** — its unresolved /watch worst case
-  ("4000 mutations/sec, almost none yield hintables") is the `DiscoveryStage`'s
-  problem to own: the cheap pre-filter on added roots and ancestor-dedup it
-  recommends become methods on one stage with one place to measure, instead of
-  edits to `discoverInSubtree` + `drainDiscovery` + `processMutations`.
-- **`PLAN_RANGO_TECHNIQUES.md`** — done; informs `RenderStage`/`scroller`.
+`background.ts` gets the same treatment at lower risk, because its coupling is to
+~8 connection globals rather than a shared DOM model. Target extractions, each
+testable with a faked `chrome.*`:
 
-The restructure is the substrate that makes the rest of the perf roadmap
-landable cleanly. It is explicitly *not* a rewrite of the algorithms — limbo,
-rebind, square-fill pool, attention region, delta-sync all move largely intact
-into their owning modules.
+- `plugin/actuator-client.ts` — all `forward*` / `post*` functions become one
+  `ActuatorClient` over the connection state (`pluginPort`, `pluginToken`,
+  `branchkitConnected`). Today these are a dozen near-identical fetch wrappers.
+- `plugin/sse-transport.ts` — the offscreen-vs-direct SSE split
+  (`ensureOffscreen` / `connectDirectSSE` / `handleSSEEvent` + retry/backoff).
+- `background/injection.ts` — `injectContentScriptFiles` / `tryInject` /
+  `pingContentScript` / `withInjectLock` / `ensureContentScriptInjected` /
+  `reinjectContentScripts` (the inject-lock state machine).
+- `background/frame-router.ts` — `routeFrameForAction` / `resolveHintFromTab` /
+  `broadcastToAllTabs` / `notifyActiveTab` / `resolveActiveContentTab`.
+- `background/tab-sessions.ts` — `purgeTab` / `endHintSessionOnOldTab` /
+  `logTabSwitch` / `scheduleSpaRescan` and the per-tab maps.
+
+`background.ts` then constructs these and registers the chrome listeners. This is
+mostly mechanical and is the cheapest place to demonstrate the "construct objects,
+own nothing" end state before doing it to `content.ts`.
 
 ---
 
 ## 5. Migration sequence (clean end state via transitional seams)
 
-Sequenced so each step ships independently, the extension stays working
-throughout, and the final step deletes the scaffolding. No big-bang rewrite.
+Sequenced so each step ships independently, the extension stays working, the
+final step deletes the scaffolding, and the risky change (the delta cut) lands
+only after the cheap de-risking moves. Each step keeps `npm test` green and is
+independently revertable. Per the project's soak discipline, any step that
+touches lifecycle, observers, or teardown gets a 30-minute real-browser soak
+before merge — not just unit green.
 
-1. **Carve out leaf concerns with zero behavior change.** Move telemetry,
-   liveness, resolve/activate, grammar-batch, and config into their own files;
-   `content.ts` imports them. Pure relocation; counters become module exports
-   or an injected sink. Lowest risk, immediately shrinks the monolith and makes
-   the rest legible. **Done (2026-05-30):** `config.ts`, `plugin/liveness.ts`,
-   `plugin/resolve.ts`, and `debug/{perf,message}-counters` are extracted; the
-   `src/`-wide intent-based regrouping landed in the same pass. The two
-   residuals an earlier draft listed here are also extracted: grammar-batch is
-   `labels/label-sync.ts` (`scheduleSync`/`syncNow`/`postBatch` + the put/delete
-   queue; `content.ts`'s `schedulePushGrammar` is just a thin alias), and the
-   perf `watchdog`/`longtask`/`cpu-share` block is `debug/perf-counters.ts`
-   (installs the longtask observer + watchdog on import). What remains in
-   `content.ts` by design is `buildPerfSnapshot` — the integrator that stitches
-   the counter module's reads together with the store/lifecycle counters
-   `content.ts` owns; it is not a leaf concern to carve out.
+**Tier 0 — enabling moves (mechanical, no behavior change, do first).**
+These carry essentially no risk and unblock everything after them.
+1. **Promote the plain singletons** (`store`, `targetRectStore`, `registry`,
+   `dispatcher`, `keyHandler`) into importable modules. `store` alone is the
+   52-block import barrier; these five have no inline callbacks, so the move is a
+   pure relocation. (The six observers carry page-coupled inline callbacks — they
+   move later, with their source clusters.) **Landed 2026-06-06**: `core/store.ts`
+   holds `store`; `core/singletons.ts` holds the other four; `content.ts` imports
+   them. Behavior-identical, suite green.
+2. **Move the data-only counters** (`mo*`, `finalize*`, `dropDisconnected*`,
+   `discoveryRoots*`, `claimCounters`, `rebindCounters`) into
+   `debug/perf-counters.ts`; blocks bump imported counters, `buildPerfSnapshot`
+   reads them. Removes a whole fan-out cluster and makes the integrator's inputs
+   explicit.
 
-2. **Introduce the stage interfaces with the *current* code behind them.**
-   Wrap existing discovery/lifecycle/label/render code in adapter objects that
-   satisfy the interfaces but call today's functions. The orchestrator runs the
-   adapters. Behavior identical; the seam now exists.
+**Tier 1 — lift the satellites (medium risk, soak each).**
+With `store` importable, each satellite cluster becomes a one-file lift that
+still calls the core imperatively (no delta cut yet):
+3. `observe/visibility-tracker.ts` — the `pendingVisibility` + visibility IO/MO
+   recovery loop.
+4. `observe/mutation-source.ts` — the discovery MutationObserver + drain +
+   reevaluation coalescing.
+5. `core/wrapper-lifecycle.ts` — attach/detach/limbo/rebind/discover, moved as a
+   cohesive unit (they are the SCC core and belong together).
 
-3. **Introduce `PageSession`** owning boot/teardown and, newly, `onUrlChange`.
-   Wire SPA navigation. This is the first behavior change and the one that fixes
-   the user-visible "page 2" bug — ship and validate it on its own. Concretely
-   this is two small wires, not a new subsystem:
-   (a) detect the URL change via `chrome.webNavigation.onHistoryStateUpdated`
-   (+ `onReferenceFragmentUpdated`), top-frame only — *not* a `tabs.onUpdated`
-   `changeInfo.url` guess, which can't separate SPA navs from full loads (see
-   §1.3 detection correction); (b) route it into the *existing* bounded `rescan`
-   action path (`content.ts:1596`) instead of the mutation firehose.
+**Tier 2 — the delta cut (the architecture change, highest value).**
+6. Add the delta emitter to `core/store.ts`. Mutators emit; nothing subscribes
+   yet (deltas are dead). Pure addition, behavior-identical.
+7. Make `label-sync` and `badge-manager` **subscribe** to deltas, while the
+   imperative `scheduleSync` / reposition calls still fire (transitional
+   double-drive). Verify subscribers produce the same pushes/paints as the
+   imperative calls.
+8. **Delete the imperative calls.** This is the commit that breaks the cycle:
+   sources mutate the store, reactions subscribe, lifecycle no longer references
+   grammar or render. The transitional double-drive from step 7 is removed here.
 
-   **Status (2026-05-30):** (a) and (b) are built and the content-side handler
-   now lives on `PageSession.onUrlChange` (the `rescan` action routes through
-   it; the detection still fires from `background.ts`'s `webNavigation`
-   listeners → debounced `scheduleSpaRescan`).
+**Tier 3 — finish the wiring.**
+9. Move source construction (the six observers, with their now-thin callbacks)
+   onto `PageSession.start()`. This was the "entangled boot" the previous plan
+   deferred — it is safe *now* because steps 5–8 made the observer callbacks thin
+   (mutate the store, no reaching into render/grammar).
+10. `background.ts` extraction (Tier-0-equivalent risk; can run in parallel any
+    time — see section 4).
+11. **Delete the residue.** `content.ts` and `background.ts` become construct-and-
+    wire only; transitional shims are gone.
 
-   **Verified on real Firefox (2026-05-30).** Driving a real Firefox with the
-   live extension (`scripts/_drive-firefox-nav.mjs`), clicking a YouTube
-   recommendation produced, in `actuator.log`:
-   `[pipeline.cs_rescan_received] {"url":".../watch?v=qQDrqV5Hw4c","reason":"spa_nav"}`
-   — i.e. the full chain fires end-to-end: same-document nav → `webNavigation`
-   detect → bounded `rescan` dispatch → `PageSession.onUrlChange` receive. The
-   reconcile *triggers* correctly.
-
-   **Caveat — the reconcile triggers, but completing it on a fresh heavy page
-   stalls hard.** After the nav into a new YouTube video the page shipped *zero*
-   perf snapshots (the first video shipped 149) and Playwright lost the renderer
-   — the main thread was blocked too completely to introspect. This is not a
-   reconcile-path defect; it is the *same* per-page scan cost the
-   unresponsive-script investigation is chasing, now reproduced at nav time
-   rather than only under scroll soak. The nav fix is correct; the heavy-page
-   scan cost underneath it is the open work (see `DESIGN_OBSERVER_DRIVEN_LAYOUT`
-   and the perf harness). Validating responsiveness across a hard SPA nav can't
-   be done by introspecting the wedged page — confirm the trigger out-of-band
-   via the `cs_rescan_received` log, as above.
-
-   **A third wire (c) — a nav-time `purgeTab`/`releaseFrame` from
-   `background.ts` — was planned here but dropped 2026-05-30 after
-   investigation.** It is both redundant and unsafe:
-   - *Redundant.* The leak it targeted only existed before (a)/(b). Now that
-     the rescan is wired, a same-document nav keeps the content script alive;
-     its `dropDisconnectedWrappers` (driven by the `from_cache` rescan,
-     `content.ts:1600`) sends the old elements to limbo, and finalize releases
-     their codewords (`element-wrapper.ts:82`) within ~500ms. The content
-     script owns codeword truth; the pool is a derived cache it keeps in step.
-   - *Unsafe.* Releasing frame 0's codewords from `background.ts` at nav time
-     returns them to `free` while limbo wrappers still hold them locally. A new
-     wrapper then re-claims a head-of-pool codeword (e.g. `"a b"`) that an old
-     limbo wrapper also holds; when that old wrapper finalizes ~250ms later, its
-     `queueDelete("a b")` deletes the *new* badge's codeword from the plugin
-     grammar — the fresh badge goes voice-unmatchable. A genuine correctness
-     regression, so the literal step 3c is not the right shape.
-
-   If transient pool pressure during the ~500ms limbo window ever proves to
-   matter on a hard SPA nav (where rebind is pointless because the page truly
-   changed), the *safe* refinement is content-side: on `reason:'spa_nav'`,
-   release disconnected wrappers immediately instead of through limbo. The same
-   owner does release-then-reclaim in order, so no collision. Not currently
-   needed — flag if SPA-heavy sites show pool starvation.
-
-4. **Replace stage internals one at a time** behind the stable interfaces:
-   DiscoveryStage gets the pre-filter + ancestor-dedup (done 2026-05-30,
-   commit `8fe4e4c` — even ahead of the step-2 seam; landed directly in
-   `content.ts`). RenderStage's cutover to LayoutSignalRouter/TargetRectStore
-   was re-scoped on 2026-05-30 — see `DESIGN_OBSERVER_DRIVEN_LAYOUT.md`
-   "Course correction": the standalone flag-gated Phase 4 is dropped as
-   behaviorally inert, and the positioning axis now forks into a
-   cross-browser store path (Phases 5+5b together) and a Chromium CSS
-   Anchor Positioning fast-path. Each swap is measured against the perf
-   harness with the others held fixed.
-
-5. **Delete the adapters and the residual `content.ts` logic.** Final commit:
-   `content.ts` is wiring only; the transitional shims from step 2 are gone.
-
-Per the project's "clean end state via sequencing" preference, the adapters in
-step 2 are explicitly temporary and removed in step 5 — they exist only to keep
-the tree green between refactors.
+The previous plan's stage interfaces (`DiscoveryStage` / `LifecycleStage` /
+`LabelStage` / `RenderStage`) are **dropped** — the source/reaction split plus
+the delta stream is the boundary, and four parallel interfaces over a feedback
+system added indirection without matching the data flow.
 
 ---
 
-## 6. What we preserve / risks
+## 6. Testing plan (improve as we go)
 
-- **Algorithms stay.** Square-fill pool, limbo/rebind identity stability,
-  attention-region lifecycle, delta-sync grammar, the two-IO split (claim vs
-  candidacy) all migrate intact. This is a boundary change, not a logic change —
-  except for step 3's deliberate SPA-nav fix.
-- **Test coverage is the safety net.** The suite is large (412 tests across
-  scanner, allocator, label-pool, intersection-tracker, rebind, etc.). Each
-  relocation step must keep it green; the interfaces in step 2 should make more
-  of the lifecycle unit-testable than it is today (currently much is only
-  reachable through the monolith).
-- **Risk: the SPA-nav reconcile (step 3) is genuinely new behavior.**
-  *Trigger verified on real Firefox 2026-05-30* (see §5 step 3): a YouTube
-  recommendation click fires the full detect→dispatch→`onUrlChange` chain. Still
-  unverified by direct observation: that badges + grammar fully re-establish and
-  the pool reclaims the prior page's codewords — because completing the rescan
-  on a heavy page wedges the renderer past the point Playwright can read it.
-  Confirm those out-of-band (grammar-batch logs, pool counters) rather than by
-  introspecting the page. The pool reclaim is the content-side limbo→finalize
-  release the rescan drives — *not* a background purge; see §5 step 3 for why a
-  background purge corrupts the grammar.
-- **Risk: hidden coupling via module globals.** Extraction will surface
-  implicit dependencies (e.g. who reads `hintsVisible`). Expected; the point is
-  to make them explicit parameters/state instead of ambient.
+The restructure is also the testing fix; these are not separate projects.
+
+- **Unit-testability falls out of extraction.** Each Tier-1/Tier-2 module lands
+  with its own spec: `wrapper-lifecycle` (attach → limbo → rebind → finalize,
+  asserting on emitted deltas against a fake store), `visibility-tracker`
+  (candidate → promote), `badge-manager` (delta → mount/position via the existing
+  `placement` tests' fixtures). Today none of this is reachable without the
+  monolith. Rule for the migration: **a cluster is not "extracted" until it has a
+  spec** — the move and the test land in the same commit.
+- **The delta cut makes the core logic pure.** After step 6, the
+  source→store→reaction contract is testable end-to-end in `happy-dom` with no
+  observers and no plugin transport: drive a fake source, assert the deltas, then
+  assert the subscribers' outputs. This is the highest-value new coverage and is
+  impossible before the cut.
+- **`background.ts` becomes testable with a faked `chrome.*`.** `ActuatorClient`,
+  `injection`, and `frame-router` are async functions over chrome APIs; a thin
+  `fake-chrome` test helper (a few hundred lines, shared) unlocks all of them. No
+  such helper exists today, which is why `background.ts` has zero tests.
+- **Promote the load-bearing Playwright repros into a maintained suite.** The 52
+  ad-hoc drivers encode real regressions (nav-time wedge, scroll-back missing /
+  stranded badges, codeword stability, perf soak). Pick the ~8 that map to
+  hard-won fixes, give them shared fixtures and a runner, and delete the rest.
+  The soak-before-merge step then runs a known-good harness, not whatever script
+  last worked. This is the integration analogue of "a cluster isn't extracted
+  until it has a spec."
+- **Add CI.** A GitHub Actions workflow running `npm test` and `tsc --noEmit` on
+  every PR. The suite is large and currently gates nothing; wiring it as a
+  required check is a few lines and stops the next regression from depending on
+  someone remembering to run tests locally. (The maintained integration suite can
+  follow as a separate, slower, manually-triggered job once it exists.)
 
 ---
 
-## 7. Open questions
+## 7. What we preserve, what we drop, and the risks
 
-- Does `IntersectionTracker` (claim/release) stay separate from the
-  `LayoutSignalRouter`, or do they share one IO instance? `DESIGN_OBSERVER_DRIVEN_LAYOUT`
-  §"Open Questions" leans separate-but-sharing-the-IO; the stage split here is
-  compatible either way.
-- ~~Is `PageSession` per-frame or is cross-frame state left to the
-  background/plugin?~~ **Resolved 2026-05-30 (see §3.3.1): per-frame, no
-  top-frame coordinator in the first cut.** Matches the per-frame injection
-  model; the plugin already aggregates across frames.
-- How much of step 1 is worth doing before getting agreement on steps 2–5?
-  Step 1 is pure upside regardless, so it could start immediately; 2–5 want
-  sign-off on the stage shape first.
+**Preserved intact (this is a boundary change, not a logic change).** Square-fill
+label pool, limbo/rebind identity stability, the attention-region lifecycle,
+delta-sync grammar, the two-IO split (narrow-margin claim vs. wide-margin
+candidacy), the CSS-anchor / reconcile positioning model. They move into their
+owning modules unchanged.
+
+**Carried forward from prior work (do not relitigate):**
+- **SPA-nav detection stays background-driven.** `chrome.webNavigation.
+  onHistoryStateUpdated` (+ `onReferenceFragmentUpdated`) is the correct signal —
+  `tabs.onUpdated` cannot distinguish a History-API nav from a full load. It
+  routes into the existing bounded `rescan` action; `PageSession.onUrlChange` is
+  the content-side handler. Do **not** monkey-patch `history.pushState` in the
+  page world.
+- **Codeword reclamation on navigation is content-side.** A same-document nav
+  keeps the content script alive; disconnected wrappers go limbo → finalize →
+  `releaseLabel` within ~500ms. The content script owns codeword truth; the
+  background pool is a derived cache. Background `purgeTab` stays wired to tab
+  close (`onRemoved`) only.
+- **The dropped nav-time background purge (former "step 3c") stays dropped.**
+  Releasing a frame's codewords from `background.ts` at nav time races the
+  content script's local ownership: a new wrapper re-claims a head-of-pool
+  codeword that an old limbo wrapper still holds, and the old wrapper's finalize
+  `queueDelete` then deletes the *new* badge's codeword — a real
+  voice-unmatchable regression. If transient pool pressure ever bites on a hard
+  SPA nav, the safe refinement is content-side: on `reason:'spa_nav'`, release
+  disconnected wrappers immediately instead of through limbo (same owner,
+  release-then-reclaim in order, no collision).
+
+**Dropped from the previous plan:** the four-stage pipeline interfaces (replaced
+by source/reaction + delta stream, section 2).
+
+**Risks.**
+- *The delta cut (steps 6–8) is the real behavior-equivalence test.* Mitigated by
+  the transitional double-drive (step 7): both the old imperative calls and the
+  new subscribers run, and we verify identical pushes/paints before deleting the
+  imperative path. Soak required.
+- *Hidden coupling via module globals surfaces during extraction* (e.g. who reads
+  `hintsVisible`). Expected and desired — the point is to make these explicit
+  subscriptions or parameters. `hintsVisible` already moved onto `PageSession`.
+- *Observer-construction relocation (step 9) was the freeze-risky part.* It is
+  deliberately last, after the callbacks are thin, so the relocation moves nearly
+  inert closures rather than the entangled boot it would have moved if attempted
+  first.
+
+---
+
+## 8. Open questions
+
+- Does `IntersectionTracker` (claim/release) share one IO instance with the
+  attention observer, or stay separate? The source/reaction split is compatible
+  either way; defer to the perf harness.
+- Delta granularity: is `{ kind: 'visibility' }` one delta type, or do grammar
+  and render want different visibility events? Start with one; split only if a
+  subscriber needs to distinguish.
+- Should `core/store.ts` deltas be synchronous (emit inside the mutator) or
+  micro-task-batched? Synchronous is simpler to reason about and to test; the
+  reactions already debounce their own outputs, so batching at the store adds
+  little. Start synchronous.

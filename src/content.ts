@@ -8,7 +8,7 @@
 import { Category, HintVisibility, ScannedElement, Message, DispatchResult } from './types';
 import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from './labels/words';
 import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters, subtreeMaybeHintable } from './scan/scanner';
-import { ElementWrapper, WrapperStore, enterLimbo, isLimboExpired } from './scan/element-wrapper';
+import { ElementWrapper, enterLimbo, isLimboExpired } from './scan/element-wrapper';
 import { wantsHint } from './lifecycle/desired-state';
 import { computeReconcilePlan, geometryInBand, RECONCILE_BAND_MARGIN_PX } from './lifecycle/reconcile';
 import { stampStrictViewport, collectStrictViewportDelta } from './lifecycle/strict-viewport';
@@ -20,7 +20,7 @@ import { bumpRebindCounter, findLimboMatch, newRebindCounters, REBIND_DISTANCE_T
 import { resolveTarget } from './activate/activate-resolution';
 import { IntersectionTracker } from './observe/intersection-tracker';
 import { AttentionObserver } from './observe/attention-observer';
-import { TargetRectStore } from './observe/target-rect-store';
+import { store } from './core/store';
 import { HintBadge } from './render/hints';
 import { reconcilePass, drain as drainReconcilePositioner, reconcileRegistrySize } from './render/reconcile-positioner';
 import { onContainerResize } from './observe/container-resize-tracker';
@@ -40,8 +40,7 @@ import {
   takeSnapshot,
   resolveFromSnapshot,
 } from './activate/snapshot';
-import { ActionDispatcher, CommandRegistry } from './dispatcher';
-import { KeyHandler } from './activate/keyboard';
+import { dispatcher, registry, keyHandler, targetRectStore } from './core/singletons';
 import { getActiveAdapter, scanWithAdapter } from './adapters';
 import {
   scroll,
@@ -196,11 +195,11 @@ function frameMayHoldHints(): boolean {
 let hintMachineryEnabled = false;
 
 // --- State ---
+//
+// The stable runtime singletons (store, dispatcher, registry, keyHandler,
+// targetRectStore) are constructed in core/ and imported above — see
+// notes/DESIGN_EXTENSION_RESTRUCTURE.md (Tier 0).
 
-const store = new WrapperStore();
-const dispatcher = new ActionDispatcher();
-const registry = new CommandRegistry();
-const keyHandler = new KeyHandler(registry, dispatcher);
 // Claim-path instrumentation (badge-coverage regression diagnosis).
 // A wrapper acquires a codeword from exactly one of two paths; this splits
 // them so a snapshot can tell whether the scan path went silent while the
@@ -1087,12 +1086,6 @@ function observeInvisibleCandidates(candidates: Element[]): void {
 // from the IntersectionTracker (narrow-margin IO for codeword claim/
 // release) by design — different concerns, different margins. See
 // notes/DESIGN_OBSERVER_DRIVEN_LAYOUT.md.
-
-// Phase 3 shadow: rect cache populated by the attention IO's onRect.
-// No production read path consumes it yet. The drift sampler in
-// buildPerfSnapshot reports `{ size, subscribers, drift }` so we can
-// see whether the store would have been correct before any cutover.
-const targetRectStore = new TargetRectStore();
 
 const attentionObserver = new AttentionObserver({
   onEnter: (el) => {
