@@ -34,8 +34,13 @@ export interface CodewordMemoryEntry {
 
 /** Max remembered fingerprints per frame. Beyond this, the least-recently
  *  remembered entries are evicted. It's data, not pool slots, so this can be
- *  generous; 200 comfortably covers a dense page's distinctive elements. */
-export const MEMORY_CAP_PER_FRAME = 200;
+ *  generous. Raised 200→1000 (fix C, DESIGN_REGIME_B_RECALL.md): on a large
+ *  reload-heavy page (QuickBase, ~655 hintable elements) the old 200 cap evicted
+ *  the stable sidebar — remembered early, then pushed out by churny body content
+ *  — so it had no memory to reclaim across a reload (measured: ~76% no-memory,
+ *  sidebar ~48% stable). 1000 covers such pages whole; the codeword pool
+ *  (alphabet²) bounds how many elements can carry a codeword anyway. */
+export const MEMORY_CAP_PER_FRAME = 1000;
 
 const memKey = (tabId: number, frameId: number): string =>
   `codewordMemory:${tabId}:${frameId}`;

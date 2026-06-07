@@ -114,6 +114,17 @@ describe('codeword-memory', () => {
     expect(codewords).toContain('cwNew');
   });
 
+  it('remembers a full QuickBase-scale page without eviction (fix C)', async () => {
+    // The old 200 cap evicted stable chrome on a ~655-element page; the raised
+    // cap keeps the whole page so the sidebar survives across a reload.
+    const n = 655;
+    expect(n).toBeLessThanOrEqual(MEMORY_CAP_PER_FRAME);
+    const all = Array.from({ length: n }, (_, i) => entry(`e${i}`, `cw${i}`));
+    await rememberCodewords(TAB, FRAME, all);
+    const recalled = await recallCodewords(TAB, FRAME);
+    expect(recalled).toHaveLength(n); // nothing evicted — every element reclaimable
+  });
+
   it('clears a single frame, leaving siblings intact', async () => {
     await rememberCodewords(TAB, 0, [entry('Top', 'aa bb')]);
     await rememberCodewords(TAB, 3127, [entry('Iframe', 'cc dd')]);

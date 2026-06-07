@@ -44,10 +44,21 @@ Covers up to the 200-fingerprint memory cap; pages beyond that need fix C below.
     `?t=`): same-content reload 140/140 = 100% (A1/A2 intact), and the sidebar
     survives a body change **20/20 = 100%** (was ~45% before A3).
 
-618 unit tests, chrome+firefox builds clean. B (prioritize visible) still not
-needed to hit target; revisit only if real pages past the 200 memory cap fall
-short. Dup-fingerprint elements (table cells) remain an inherent partial-reclaim
-ceiling — they need distinct letters, so recall can only return one.
+- **C — raise the memory cap (200 → 1000), added after a real QuickBase voice
+  test.** With A1/A2/A3 in, the QuickBase sidebar STILL churned ~48% on a
+  cross-table voice switch. The snapshot `recall_stats` localized it: of elements
+  WITH memory, 86% reclaimed (only 3 lost — A3 working), but **126 of 147 had
+  no_memory**. Fingerprints were stable (33/33), so it wasn't drift — the stable
+  sidebar was being **evicted** from the 200-fingerprint cap by churny body
+  content on a ~655-element page. Raised `MEMORY_CAP_PER_FRAME` to 1000 so such
+  pages are remembered whole (the codeword pool bounds real usage anyway).
+  Unit-tested (a 655-element page evicts nothing); real-world reclaim to be
+  confirmed on QuickBase.
+
+619 unit tests, chrome+firefox builds clean. B (prioritize visible) still not
+needed; revisit only for pages past the 1000 cap. Dup-fingerprint elements (table
+cells) remain an inherent partial-reclaim ceiling — they need distinct letters,
+so recall can only return one.
 
 ## Why this exists
 
