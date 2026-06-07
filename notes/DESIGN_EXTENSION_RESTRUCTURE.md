@@ -410,7 +410,12 @@ before anything is pushed.
 
 **Tier 2 — the delta cut (the architecture change, highest value).**
 7. Add the delta emitter to `core/store.ts`. Mutators emit; nothing subscribes
-   yet (deltas are dead). Pure addition, behavior-identical.
+   yet (deltas are dead). Pure addition, behavior-identical. **Landed 2026-06-07:**
+   `ObservableWrapperStore` subclasses `WrapperStore` and emits one delta per
+   *real* mutation — `attached` (guarded against the duplicate-add no-op),
+   `detached` (only when something was removed), `rebound` (carries the old
+   element). 6-test spec; 584 tests green. The base `WrapperStore` (and its tests)
+   are untouched; only the `store` singleton is observable.
 8. Make `label-sync` and `badge-manager` **subscribe** to deltas, while the
    imperative `scheduleSync` / reposition calls still fire (transitional
    double-drive). Verify subscribers produce the same pushes/paints as the
