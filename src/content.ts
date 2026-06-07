@@ -838,7 +838,6 @@ function poolLabelToAssignment(codeword: string): LabelAssignment {
  * attached to invisible elements would leak the budget.
  */
 const resizeObserver = new ResizeObserver((entries) => {
-  let dirty = false;
   for (const entry of entries) {
     const el = entry.target;
     const wrapper = store.findWrapperFor(el);
@@ -849,15 +848,14 @@ const resizeObserver = new ResizeObserver((entries) => {
     // lifecycle.
     if (wrapper.disconnectedAt !== null) continue;
     if (!isHintable(el)) {
+      // detachWrapper emits a store detach delta → grammar sync (Tier 2).
       detachWrapper(el);
-      dirty = true;
       continue;
     }
     // Phase 5 (router-via-RO): the engine just resized this element. The
     // read here follows the layout pass it triggered, so it's warm.
     targetRectStore.write(el, el.getBoundingClientRect());
   }
-  if (dirty) schedulePushGrammar();
 });
 
 function observeInvisibleCandidates(candidates: Element[]): void {
@@ -888,8 +886,8 @@ const attentionObserver = new AttentionObserver({
     if (store.findWrapperFor(el)) return;
     const scanned = scanSingle(el);
     if (scanned) {
+      // attachWrapper emits a store attach delta → grammar sync (Tier 2).
       attachWrapper(new ElementWrapper(el, scanned));
-      schedulePushGrammar();
       return;
     }
     // Still not hintable (visibility:hidden, opacity:0, etc.). Bounded
@@ -1863,6 +1861,16 @@ initMutationSource({
   reevaluateAttribute,
   scheduleReposition,
   scheduleDeferredReposition,
+});
+
+// Grammar reaction (Tier 2 delta cut): a wrapper attach/detach means the
+// per-frame vocabulary changed, so debounce a grammar sync. This replaces the
+// scattered "if (changed) schedulePushGrammar()" calls the lifecycle/discovery/
+// visibility/limbo paths used to fire imperatively — those now just mutate the
+// store. A rebind keeps the same codeword, so it needs no sync. Non-lifecycle
+// syncs (codeword claim, rule apply, republish, viewport) stay where they are.
+store.subscribe((delta) => {
+  if (delta.kind === 'attached' || delta.kind === 'detached') schedulePushGrammar();
 });
 
 openLivenessPort({
@@ -3020,8 +3028,8 @@ document.addEventListener(SHADOW_EVENT, (event) => {
   // reflects post-attach state.
   queueMicrotask(() => {
     if (host.shadowRoot) {
-      const added = discoverInSubtree(host);
-      if (added > 0) schedulePushGrammar();
+      // Newly-attached wrappers emit store deltas → grammar sync (Tier 2).
+      discoverInSubtree(host);
     }
   });
 }, true);
@@ -3044,11 +3052,10 @@ function watchUndefinedCustomElements(root: Element | Document): void {
     if (watchedUndefinedTags.has(tag)) continue;
     watchedUndefinedTags.add(tag);
     customElements.whenDefined(tag).then(() => {
-      let dirty = false;
+      // Newly-attached wrappers emit store deltas → grammar sync (Tier 2).
       for (const instance of document.querySelectorAll(tag)) {
-        if (discoverInSubtree(instance) > 0) dirty = true;
+        discoverInSubtree(instance);
       }
-      if (dirty) schedulePushGrammar();
     }).catch(() => {/* whenDefined rejects on invalid tag names */});
   }
 }

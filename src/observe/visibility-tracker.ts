@@ -25,7 +25,6 @@
 import { ElementWrapper } from '../scan/element-wrapper';
 import { scanSingle, isVisible } from '../scan/scanner';
 import { cacheVisibility, clearLayoutCache } from '../layout-cache';
-import { scheduleSync } from '../labels/label-sync';
 import { recordCpu } from '../debug/perf-counters';
 import { store } from '../core/store';
 import type { PageSession } from '../lifecycle/page-session';
@@ -69,10 +68,8 @@ const visibilityIO = new IntersectionObserver((entries) => {
     pendingVisibility.delete(el);
     dirty = true;
   }
-  if (dirty) {
-    scheduleSync('visibility-tracker');
-    if (pageSession.hintsVisible) showHints();
-  }
+  // attachWrapper above emits a store attach delta → grammar sync (Tier 2).
+  if (dirty && pageSession.hintsVisible) showHints();
   if (pendingVisibility.size === 0) disconnectVisibilityMO();
 }, { root: null, rootMargin: '200px', threshold: 0 });
 
@@ -237,10 +234,8 @@ function recheckPendingVisibility(): void {
   } finally {
     clearLayoutCache();
   }
-  if (dirty) {
-    scheduleSync('visibility-tracker');
-    if (pageSession.hintsVisible) showHints();
-  }
+  // attachWrapper above emits a store attach delta → grammar sync (Tier 2).
+  if (dirty && pageSession.hintsVisible) showHints();
   if (pendingVisibility.size === 0) disconnectVisibilityMO();
   recordCpu('recheckPendingVisibility', performance.now() - __cpuStart);
   if (__initialSize > 0) recordCpu(`recheckPendingVisibility:size:${__initialSize > 1000 ? '1000+' : __initialSize > 100 ? '100-1000' : '<100'}`, __initialSize);

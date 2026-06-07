@@ -416,13 +416,27 @@ before anything is pushed.
    `detached` (only when something was removed), `rebound` (carries the old
    element). 6-test spec; 584 tests green. The base `WrapperStore` (and its tests)
    are untouched; only the `store` singleton is observable.
-8. Make `label-sync` and `badge-manager` **subscribe** to deltas, while the
-   imperative `scheduleSync` / reposition calls still fire (transitional
-   double-drive). Verify subscribers produce the same pushes/paints as the
-   imperative calls.
-9. **Delete the imperative calls.** This is the commit that breaks the cycle:
-   sources mutate the store, reactions subscribe, lifecycle no longer references
-   grammar or render. The transitional double-drive from step 8 is removed here.
+8. Subscribe the grammar reaction to deltas; 9. delete the lifecycle-mutation
+   imperative sync calls. **Landed 2026-06-07 (steps 8–9 together).**
+   **Key finding — the delta cut is grammar-only, not "grammar + render":**
+   tracing the actual code, only `scheduleSync` (grammar) was lifecycle-driven
+   (scattered `if (changed) schedulePushGrammar()` in `drainDiscovery`,
+   `drainReevaluations`, visibility recovery, limbo finalize, the resize/attention
+   observers, the shadow-discovery paths). Render is *already* decoupled — badges
+   paint via the IntersectionTracker + reconcile (viewport-driven), not per-attach
+   — so the doc's "badge-manager subscribes to deltas" doesn't fit and was dropped.
+   What landed: `content.ts` wires `store.subscribe(d => if attached|detached →
+   schedulePushGrammar())`, and the ten lifecycle-mutation sync calls were deleted
+   across content.ts / mutation-source / limbo / visibility-tracker. The
+   lifecycle/discovery/limbo/visibility code now just mutates the store — the
+   **lifecycle→grammar back-edge of the SCC is cut.** Deliberately KEPT (not
+   lifecycle-mutation triggers, so not part of the cut): codeword-claim sync (the
+   IntersectionTracker), rule-apply, republish, strict-viewport. Conservative rule
+   applied: only delete a sync provably covered by an attach/detach delta — a
+   redundant sync is harmless (debounced), a missing one is a grammar bug. tsc
+   clean, 584 tests green. **Soak owed** — `attachWrapper` fires from paths that
+   didn't all sync before (initial scan uses the batch POST), so the consolidated
+   soak must confirm no over-/under-syncing of the plugin grammar.
 
 **Tier 3 — finish the wiring.**
 10. Move source construction (the six observers, with their now-thin callbacks)

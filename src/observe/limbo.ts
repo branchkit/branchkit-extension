@@ -22,7 +22,6 @@ import * as idRegistry from '../scan/registry';
 import { computeFingerprint, fingerprintsEqual } from '../scan/registry';
 import { bumpRebindCounter, findLimboMatch, newRebindCounters, REBIND_DISTANCE_THRESHOLD_PX, type RebindCounters } from '../labels/rebind';
 import { peekCachedRect } from '../layout-cache';
-import { scheduleSync } from '../labels/label-sync';
 import { lifecycleCounters, recordCpu } from '../debug/perf-counters';
 import { store } from '../core/store';
 import type { IntersectionTracker } from './intersection-tracker';
@@ -224,6 +223,6 @@ export function finalizeExpiredLimboWrappers(): number {
   }
   lifecycleCounters.finalizeSweeps++;
   lifecycleCounters.finalizeDetached += finalized;
-  if (finalized > 0) scheduleSync('limbo');
+  // The detachWrapper above emits a store detach delta → grammar sync (Tier 2).
   return finalized;
 }

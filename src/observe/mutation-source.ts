@@ -19,7 +19,6 @@ import { detachWrapper } from '../core/wrapper-lifecycle';
 import { dropDisconnectedWrappers } from './limbo';
 import { subtreeMaybeHintable } from '../scan/scanner';
 import { cacheVisibility, clearLayoutCache } from '../layout-cache';
-import { scheduleSync } from '../labels/label-sync';
 import { getHintVisibility } from '../config';
 import { recordCpu, lifecycleCounters } from '../debug/perf-counters';
 import { firehoseStep } from '../debug/firehose';
@@ -102,7 +101,6 @@ function drainReevaluations(): void {
   // optimization — correctness doesn't depend on cache presence.
   cacheVisibility(targets);
 
-  let dirty = false;
   try {
     for (const t of targets) {
       if (!t.isConnected) {
@@ -110,18 +108,16 @@ function drainReevaluations(): void {
         // detach it. (dropDisconnectedWrappers usually catches this
         // via the childList path, but mutation order may leave it for
         // us when the disconnect was an attribute-only side-effect.)
-        if (store.findWrapperFor(t)) {
-          detachWrapper(t);
-          dirty = true;
-        }
+        // The store detach delta drives the grammar sync (Tier 2 delta cut).
+        if (store.findWrapperFor(t)) detachWrapper(t);
         continue;
       }
-      if (reevaluateAttribute(t)) dirty = true;
+      // attach/detach inside reevaluateAttribute emits a store delta → sync.
+      reevaluateAttribute(t);
     }
   } finally {
     clearLayoutCache();
   }
-  if (dirty) scheduleSync('mutation-source');
   recordCpu('drainReevaluations', performance.now() - __cpuStart);
   if (__targetCount > 0) recordCpu(`drainReevaluations:size:${__targetCount > 1000 ? '1000+' : __targetCount > 100 ? '100-1000' : '<100'}`, __targetCount);
 }
@@ -183,7 +179,6 @@ function drainDiscovery(): void {
     workRoots.push(root);
   }
 
-  let dirty = false;
   let processed = 0;
   for (const root of workRoots) {
     processed++;
@@ -200,7 +195,8 @@ function drainDiscovery(): void {
       lifecycleCounters.discoveryRootsSkipped++;
       continue;
     }
-    if (discoverInSubtree(root) > 0) dirty = true;
+    // Newly-attached wrappers emit store deltas → grammar sync (Tier 2 delta cut).
+    discoverInSubtree(root);
     // Yield to the event loop once we've exceeded the budget — but
     // always do at least one root so we make forward progress even when
     // a single root is heavy enough to blow the budget by itself.
@@ -215,7 +211,6 @@ function drainDiscovery(): void {
   if (pageSession.pendingDiscoveryRoots.size > 0 && pageSession.discoveryFrame === null) {
     pageSession.discoveryFrame = requestAnimationFrame(drainDiscovery);
   }
-  if (dirty) scheduleSync('mutation-source');
   recordCpu('drainDiscovery', performance.now() - __cpuStart);
   if (__rootCount > 0) {
     recordCpu(
@@ -358,7 +353,7 @@ const observer = new MutationObserver((records) => {
       void discoverInSubtreeBatched(document.body || document.documentElement)
         .then((added) => {
           firehoseStep('huge_path:batched_end', added);
-          if (added > 0) scheduleSync('mutation-source');
+          // Newly-attached wrappers emit store deltas → grammar sync.
           if (pageSession.hintsVisible) {
             scheduleReposition();
           }
