@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>codeword key-ownership fixture</title>
+  <style>
+    body { margin: 0; font: 14px/1.4 system-ui, sans-serif; }
+    nav { display: flex; flex-direction: column; width: 260px; padding: 8px; }
+    nav a { display: block; padding: 10px 12px; color: #0a58ca; text-decoration: none; }
+    nav a:hover { background: #eef3ff; }
+  </style>
+</head>
+<body>
+  <!-- A faux table sidebar: each link has a stable, unique href (the strong key)
+       and visible text. Modeled on the QuickBase sidebar shape. The test
+       re-mounts one of these in place (remove + re-add with the same href, no
+       page reload) to exercise the key-ownership transfer. -->
+  <nav id="sidebar">
+    <a href="/app/users" data-label="Users">Users</a>
+    <a href="/app/settings" data-label="Settings">Settings</a>
+    <a href="/app/reports" data-label="Reports">Reports</a>
+    <a href="/app/billing" data-label="Billing">Billing</a>
+    <a href="/app/teams" data-label="Teams">Teams</a>
+    <a href="/app/audit" data-label="Audit Log">Audit Log</a>
+  </nav>
+</body>
+</html>

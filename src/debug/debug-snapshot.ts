@@ -28,6 +28,8 @@
 
 import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
 import * as idRegistry from '../scan/registry';
+import { rebindCounters } from '../observe/limbo';
+import type { RebindCounters } from '../labels/rebind';
 import { enumerateAlmostHintable, isHintable, isVisible, type AlmostHintable } from '../scan/scanner';
 import { accessibleName } from '../scan/accessible-name';
 import { diagnoseContainerResolution, type ContainerResolutionDiag } from '../render/hints';
@@ -147,6 +149,10 @@ export interface DebugSnapshotPayload {
   almost_hintable: AlmostHintableRecord[];
   orphans: OrphanRecord[];
   recent_activations: readonly ActivatePathEvent[];
+  /** Cumulative rebind-route tallies (clean/position/distance/no-match/key).
+   *  rebind_key is the key-ownership transfer count — handy for spotting churn
+   *  vs stable re-mounts in a snapshot. See DESIGN_CODEWORD_KEY_OWNERSHIP.md. */
+  rebind_counters: RebindCounters;
   dom_survey?: DomSurveyElement[];
   /** Shadow-mode reconcile plan (drives nothing; see lifecycle/reconcile.ts).
    * Attached by the content-script capture path, which owns activeCategory +
@@ -373,6 +379,7 @@ export function buildSnapshotPayload(inputs: BuildInputs): DebugSnapshotPayload 
     orphans: findOrphans(inputs.store, inputs.knownRegistryIds),
     recent_activations: getActivatePathBuffer(),
     dom_survey: captureDomSurvey(inputs.store),
+    rebind_counters: { ...rebindCounters },
   };
 }
 
