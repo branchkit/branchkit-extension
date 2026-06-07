@@ -82,12 +82,14 @@ same page, watch `refuse_no_match` climb.)
 
 ## Fix options
 
-**A. Flash (the user-visible bug) — small, targeted, recommended first.**
-Two candidates:
-- *Minimal:* in `scheduleReposition`, narrow the filter to
-  `w.hint?.isVisible && w.element.isConnected`. A badge whose target is gone keeps
-  its last position through the limbo window (imperceptible) instead of jumping to
-  origin; rebind retargets it or finalize destroys it. One-line, low-risk.
+**A. Flash (the user-visible bug) — LANDED 2026-06-07.**
+`scheduleReposition`'s filter narrowed to
+`w.hint?.isVisible && w.element.isConnected`. A badge whose target is gone keeps
+its last position through the limbo window (imperceptible) instead of jumping to
+origin; rebind retargets it or finalize destroys it. tsc clean, 584 tests green.
+Addresses the observed nesting-mode strand; if anchor/reconcile-mode strands turn
+up, the more robust option below (hide on limbo entry) is the follow-up.
+Earlier-considered alternative:
 - *Cleaner:* hide the badge on limbo entry (`enterLimbo` → `w.hint?.hide()`), so a
   disconnected wrapper shows nothing while parked. Requires confirming the rebind
   path re-shows on retarget (`rebindWrapper` → `hint.retarget`); slightly larger.

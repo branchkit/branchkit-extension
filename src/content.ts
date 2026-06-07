@@ -2534,7 +2534,13 @@ function scheduleReposition(scope: RepositionScope = 'all'): void {
     // any gBCR. The anchor/nesting sweep below is per-badge no-op'd in reconcile
     // mode (needsScroll/LayoutReposition return false), so the two never overlap.
     reconcilePass();
-    const visible = store.all.filter(w => w.hint?.isVisible);
+    // Skip wrappers whose element has left the DOM. A limbo wrapper (disconnected,
+    // badge still visible for the ~250ms rebind window) would otherwise be
+    // repositioned to getBoundingClientRect()=={0,0,0,0} — the flashing
+    // left-edge badge pile on churny pages (YouTube comments). The badge keeps
+    // its last position until finalize destroys it or rebind retargets it.
+    // See notes/INVESTIGATION_LIMBO_BADGE_FLASH.md.
+    const visible = store.all.filter(w => w.hint?.isVisible && w.element.isConnected);
     if (visible.length === 0) return;
     const __pbStart = performance.now();
     // Reposition breadcrumbs: a `reposition:start` without matching
