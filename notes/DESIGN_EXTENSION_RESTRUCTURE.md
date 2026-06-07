@@ -294,8 +294,12 @@ Target extractions, each testable with a faked `chrome.*`:
   logic, but the consolidated soak MUST exercise the
   reload path (reload at chrome://extensions, confirm already-open heavy tabs
   recover without close+reopen and no double-CS).
-- `background/frame-router.ts` — `routeFrameForAction` / `resolveHintFromTab` /
-  `broadcastToAllTabs` / `notifyActiveTab` / `resolveActiveContentTab`.
+- `background/frame-router.ts` — **Landed 2026-06-07.** `republishActiveTab`,
+  `broadcastToAllTabs`, `resolveActiveContentTab`, `notifyActiveTab`,
+  `routeFrameForAction` (internal), `resolveHintFromTab` — reads the active-tab
+  cache from `bgState`, the inject helpers from `background/injection`, and
+  `getFrameForLabel` from the label pool. 5-test spec (cache-hit / window-pick /
+  restricted-skip / broadcast filter). background.ts 1,294 → 1,135.
 - `background/tab-sessions.ts` — `purgeTab` / `endHintSessionOnOldTab` /
   `logTabSwitch` / `scheduleSpaRescan` and the per-tab maps.
 
