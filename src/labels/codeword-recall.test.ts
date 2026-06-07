@@ -16,6 +16,7 @@ import {
   loadRecall,
   isRecallLoaded,
   resolvePreferredCodeword,
+  rememberLive,
   _resetForTests,
 } from './codeword-recall';
 
@@ -98,5 +99,42 @@ describe('codeword-recall', () => {
     await loadRecall();
     expect(isRecallLoaded()).toBe(true); // loaded, just empty
     expect(resolvePreferredCodeword(fp(), null)).toBeNull();
+  });
+
+  describe('rememberLive (in-session index)', () => {
+    it('makes a claimed codeword resolvable in-session, before any loadRecall', () => {
+      expect(isRecallLoaded()).toBe(false);
+      rememberLive([{ fp: fp({ text: 'Users' }), codeword: 'harp bat', rect: null }]);
+      expect(isRecallLoaded()).toBe(true);
+      expect(resolvePreferredCodeword(fp({ text: 'Users' }), null)).toBe('harp bat');
+    });
+
+    it('latest claim wins for the same fingerprint', () => {
+      const f = fp({ text: 'Users' });
+      rememberLive([{ fp: f, codeword: 'harp bat', rect: null }]);
+      rememberLive([{ fp: f, codeword: 'ink air', rect: null }]);
+      expect(resolvePreferredCodeword(f, null)).toBe('ink air');
+    });
+
+    it('a live entry is not clobbered by a stale persisted one on loadRecall', async () => {
+      const f = fp({ text: 'Users' });
+      rememberLive([{ fp: f, codeword: 'live cw', rect: null }]);
+      mockRecall([{ fp: f, codeword: 'stale cw', rect: null }]);
+      await loadRecall();
+      expect(resolvePreferredCodeword(f, null)).toBe('live cw');
+    });
+
+    it('loadRecall still fills fingerprints the live index has not seen', async () => {
+      rememberLive([{ fp: fp({ text: 'Users' }), codeword: 'live cw', rect: null }]);
+      mockRecall([{ fp: fp({ text: 'Settings' }), codeword: 'persisted cw', rect: null }]);
+      await loadRecall();
+      expect(resolvePreferredCodeword(fp({ text: 'Users' }), null)).toBe('live cw');
+      expect(resolvePreferredCodeword(fp({ text: 'Settings' }), null)).toBe('persisted cw');
+    });
+
+    it('ignores empty-codeword entries', () => {
+      rememberLive([{ fp: fp({ text: 'Users' }), codeword: '', rect: null }]);
+      expect(resolvePreferredCodeword(fp({ text: 'Users' }), null)).toBeNull();
+    });
   });
 });

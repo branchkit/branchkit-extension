@@ -39,14 +39,23 @@ export async function loadRecall(): Promise<void> {
   } catch {
     // SW unreachable (orphan / asleep) — treat as no memory.
   }
-  const map = new Map<string, CodewordMemoryEntry[]>();
+  // Group the persisted entries by key (a shared fingerprint keeps several,
+  // for the position tiebreak), then merge into the index rather than
+  // overwrite: `rememberLive` may have already seeded a live in-session entry
+  // (a claim that beat this boot fetch). A live entry reflects the current
+  // page, so a stale persisted group for the same fingerprint must not clobber
+  // it.
+  const swMap = new Map<string, CodewordMemoryEntry[]>();
   for (const e of entries) {
     const k = fingerprintKey(e.fp);
-    const list = map.get(k);
+    const list = swMap.get(k);
     if (list) list.push(e);
-    else map.set(k, [e]);
+    else swMap.set(k, [e]);
   }
-  byKey = map;
+  if (!byKey) byKey = new Map();
+  for (const [k, list] of swMap) {
+    if (!byKey.has(k)) byKey.set(k, list);
+  }
 
   // Flatten to newest-first, deduped codewords for the reservoir initial fill.
   const seen = new Set<string>();
@@ -57,6 +66,37 @@ export async function loadRecall(): Promise<void> {
       seen.add(cw);
       allCodewords.push(cw);
     }
+  }
+}
+
+// Cap on the live in-session index. Keyed by distinct fingerprint, so a churny
+// page (dup-fingerprint comment buttons) collapses to one entry per key and
+// this is rarely approached; the bound just stops a long-lived SPA session from
+// growing the index without limit. LRU: re-claiming a fingerprint moves it to
+// newest, so eviction drops the least-recently-seen.
+const LIVE_RECALL_CAP = 1000;
+
+/**
+ * Update the in-session index when codewords are claimed, so a wrapper that
+ * re-attaches later in the SAME session (e.g. an SPA sidebar that re-mounts
+ * outside the limbo-rebind window) can reclaim its codeword by fingerprint via
+ * `seedPreferredFromMemory` — independent of limbo timing. Mirrors the SW
+ * upsert: one entry per fingerprint key, latest wins. Complements the SW-
+ * persisted store (which only loads at boot, after a full-document reload).
+ */
+export function rememberLive(entries: CodewordMemoryEntry[]): void {
+  if (entries.length === 0) return;
+  if (!byKey) byKey = new Map();
+  for (const e of entries) {
+    if (!e.codeword) continue;
+    const k = fingerprintKey(e.fp);
+    byKey.delete(k);        // re-insert moves key to newest (LRU ordering)
+    byKey.set(k, [e]);
+  }
+  while (byKey.size > LIVE_RECALL_CAP) {
+    const oldest = byKey.keys().next().value;
+    if (oldest === undefined) break;
+    byKey.delete(oldest);
   }
 }
 

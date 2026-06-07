@@ -14,7 +14,7 @@ import { computeReconcilePlan, geometryInBand, RECONCILE_BAND_MARGIN_PX } from '
 import { stampStrictViewport, collectStrictViewportDelta } from './lifecycle/strict-viewport';
 import * as idRegistry from './scan/registry';
 import type { CodewordMemoryEntry } from './labels/codeword-memory';
-import { loadRecall, recalledCodewords } from './labels/codeword-recall';
+import { loadRecall, recalledCodewords, rememberLive } from './labels/codeword-recall';
 import { type RebindCounters } from './labels/rebind';
 import { resolveTarget } from './activate/activate-resolution';
 import { IntersectionTracker } from './observe/intersection-tracker';
@@ -233,6 +233,11 @@ function rememberClaimedCodewords(claimed: ElementWrapper[]): void {
     });
   }
   if (entries.length === 0) return;
+  // Live in-session index: lets a wrapper that re-attaches later this session
+  // (SPA re-mount outside the limbo-rebind window) reclaim its codeword by
+  // fingerprint. Synchronous + in-memory; the SW persist below is the across-
+  // reload counterpart.
+  rememberLive(entries);
   try {
     chrome.runtime.sendMessage({ type: 'REMEMBER_CODEWORDS', entries } as Message).catch(() => {});
   } catch {
@@ -1728,6 +1733,13 @@ async function processScanBatch(
     w.markGrammarReady();
     attached.push(w);
   }
+
+  // Record the scan-path claims in the codeword memory (SW + live index). The
+  // tracker path does this via its onCodewordsChanged callback; the scan path
+  // claims labels upfront (claimLabels), so without this its codewords would
+  // never seed a future reclaim — the SPA-rebuild churn the QuickBase sidebar
+  // hit. See rememberClaimedCodewords / codeword-recall.
+  if (attached.length > 0) rememberClaimedCodewords(attached);
 
   // Detach badges this REPLACE evicted from the grammar (disjoint from the
   // succeeded set above — an evicted codeword is gone from the new state).
