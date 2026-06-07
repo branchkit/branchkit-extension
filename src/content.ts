@@ -2534,12 +2534,10 @@ function scheduleReposition(scope: RepositionScope = 'all'): void {
     // any gBCR. The anchor/nesting sweep below is per-badge no-op'd in reconcile
     // mode (needsScroll/LayoutReposition return false), so the two never overlap.
     reconcilePass();
-    // Skip wrappers whose element has left the DOM. A limbo wrapper (disconnected,
-    // badge still visible for the ~250ms rebind window) would otherwise be
-    // repositioned to getBoundingClientRect()=={0,0,0,0} — the flashing
-    // left-edge badge pile on churny pages (YouTube comments). The badge keeps
-    // its last position until finalize destroys it or rebind retargets it.
-    // See notes/INVESTIGATION_LIMBO_BADGE_FLASH.md.
+    // Skip wrappers whose element has left the DOM (a limbo wrapper, badge held
+    // for the ~250ms rebind window) — placement would otherwise put the badge at
+    // getBoundingClientRect()=={0,0,0,0}. Off-screen-but-connected elements are
+    // handled below. See notes/INVESTIGATION_LIMBO_BADGE_FLASH.md.
     const visible = store.all.filter(w => w.hint?.isVisible && w.element.isConnected);
     if (visible.length === 0) return;
     const __pbStart = performance.now();
@@ -2551,14 +2549,27 @@ function scheduleReposition(scope: RepositionScope = 'all'): void {
     try {
       cacheLayout(visible.map(w => w.element));
       firehoseStep(`reposition:${scope}:cache_end`, visible.length, 20);
+      // Hide + skip badges whose element is fully off-screen — e.g. YouTube's
+      // collapsed nav drawer parked at x=-228. Placement would otherwise clamp
+      // them to the viewport edge, producing the flashing left-edge badge
+      // column. The IO re-shows them on viewport re-entry.
+      const vw = window.innerWidth, vh = window.innerHeight;
+      const onscreen = visible.filter(w => {
+        const r = getCachedRect(w.element);
+        if (r.right <= 0 || r.left >= vw || r.bottom <= 0 || r.top >= vh) {
+          w.hint!.hide();
+          return false;
+        }
+        return true;
+      });
       // Phase 5 (router-via-scroll-rAF): reads share the cacheLayout
       // warm pass, so each write is essentially free.
-      for (const w of visible) {
+      for (const w of onscreen) {
         targetRectStore.write(w.element, getCachedRect(w.element));
       }
       const toPlace = scope === 'drifted'
-        ? visible.filter(w => w.hint!.needsScrollReposition())
-        : visible.filter(w => w.hint!.needsLayoutReposition());
+        ? onscreen.filter(w => w.hint!.needsScrollReposition())
+        : onscreen.filter(w => w.hint!.needsLayoutReposition());
       firehoseStep(`reposition:${scope}:place_start`, toPlace.length, 1);
       if (toPlace.length > 0) placeBadges(toPlace);
     } finally {
