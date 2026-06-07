@@ -320,3 +320,48 @@ export function resetWatchdog(): void {
 export function watchdogSnapshot(): { stalls: WatchdogStall[] } {
   return { stalls: watchdogStalls.map(s => ({ ...s, topLabels: s.topLabels.map(t => ({ ...t })) })) };
 }
+
+/**
+ * Lifecycle event counters, written from the wrapper-lifecycle / mutation /
+ * discovery paths and read once per `buildPerfSnapshot`. Promoted out of
+ * content.ts module scope (Tier 0 of notes/DESIGN_EXTENSION_RESTRUCTURE.md) so
+ * the integrator's inputs are explicit and the bump sites can live in the
+ * modules being extracted instead of the monolith. A mutable object (not
+ * exported `let`s) so importers can increment fields directly.
+ */
+export interface LifecycleCounters {
+  dropDisconnectedCalls: number;
+  dropDisconnectedFound: number;
+  finalizeSweeps: number;
+  finalizeDetached: number;
+  moCallbackInvocations: number;
+  moForeignRecords: number;
+  moRemoveRecordsSeen: number;
+  moHugePathFired: number;
+  processMutationsCalls: number;
+  // Discovery-drain reductions. `Deduped` = roots dropped because a queued
+  // ancestor already covers them; `Skipped` = roots whose light DOM held
+  // nothing hintable (cheap pre-filter bail).
+  discoveryRootsDeduped: number;
+  discoveryRootsSkipped: number;
+}
+
+export const lifecycleCounters: LifecycleCounters = {
+  dropDisconnectedCalls: 0,
+  dropDisconnectedFound: 0,
+  finalizeSweeps: 0,
+  finalizeDetached: 0,
+  moCallbackInvocations: 0,
+  moForeignRecords: 0,
+  moRemoveRecordsSeen: 0,
+  moHugePathFired: 0,
+  processMutationsCalls: 0,
+  discoveryRootsDeduped: 0,
+  discoveryRootsSkipped: 0,
+};
+
+export function resetLifecycleCounters(): void {
+  for (const k of Object.keys(lifecycleCounters) as (keyof LifecycleCounters)[]) {
+    lifecycleCounters[k] = 0;
+  }
+}

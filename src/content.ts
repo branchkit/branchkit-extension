@@ -90,7 +90,7 @@ import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
 import { openLivenessPort } from './plugin/liveness';
 import { PageSession, TeardownReason } from './lifecycle/page-session';
 import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './debug/message-counters';
-import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers } from './debug/perf-counters';
+import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, lifecycleCounters, resetLifecycleCounters } from './debug/perf-counters';
 import { loadConfig, getDisplayMode, getHintVisibility } from './config';
 import {
   initLabelSync,
@@ -3353,8 +3353,8 @@ function dropDisconnectedWrappers(): number {
       entered++;
     }
   }
-  dropDisconnectedCalls++;
-  dropDisconnectedFound += entered;
+  lifecycleCounters.dropDisconnectedCalls++;
+  lifecycleCounters.dropDisconnectedFound += entered;
   // Labeled so a watchdog stall during a full-page DOM swap (where every
   // wrapper disconnects at once) attributes here instead of falling into
   // unattributedMs. This is one of the two synchronous steps the spa_nav
@@ -3366,25 +3366,10 @@ function dropDisconnectedWrappers(): number {
   return entered;
 }
 
-let dropDisconnectedCalls = 0;
-let dropDisconnectedFound = 0;
-let finalizeSweeps = 0;
-let finalizeDetached = 0;
-let moCallbackInvocations = 0;
-let moForeignRecords = 0;
-let moRemoveRecordsSeen = 0;
-let moHugePathFired = 0;
-let processMutationsCalls = 0;
-// Discovery-drain reductions (DiscoveryStage step 4). `Deduped` = roots
-// dropped because a queued ancestor already covers them; `Skipped` =
-// roots whose light DOM held nothing hintable (cheap pre-filter bail).
-let discoveryRootsDeduped = 0;
-let discoveryRootsSkipped = 0;
-
-// CPU buckets / cpu-share / longtask / watchdog measurement primitives
-// live in telemetry/perf-counters.ts (imported at top). recordCpu is the
-// injected sink; buildPerfSnapshot reads via computeCpuShare /
-// cpuBucketsSnapshot / longtaskSnapshot.
+// Lifecycle event counters live in debug/perf-counters.ts (`lifecycleCounters`,
+// imported at top), alongside the CPU/cpu-share/longtask/watchdog measurement
+// primitives. recordCpu is the injected sink; buildPerfSnapshot reads via
+// computeCpuShare / cpuBucketsSnapshot / longtaskSnapshot.
 
 /**
  * Finalize sweeper. Detaches any wrapper whose limbo deadline has
@@ -3421,8 +3406,8 @@ function finalizeExpiredLimboWrappers(): number {
     rebindCounters.refuse_no_match++;
     finalized++;
   }
-  finalizeSweeps++;
-  finalizeDetached += finalized;
+  lifecycleCounters.finalizeSweeps++;
+  lifecycleCounters.finalizeDetached += finalized;
   if (finalized > 0) schedulePushGrammar();
   return finalized;
 }
@@ -3601,7 +3586,7 @@ function drainDiscovery(): void {
   const workRoots: Element[] = [];
   for (const root of roots) {
     if (hasQueuedAncestor(root, rootSet)) {
-      discoveryRootsDeduped++;
+      lifecycleCounters.discoveryRootsDeduped++;
       continue;
     }
     workRoots.push(root);
@@ -3621,7 +3606,7 @@ function drainDiscovery(): void {
     // YouTube /watch almost no mutation root contains a hintable.
     // Shadow-hosted hintables arrive via the SHADOW_EVENT path.
     if (!subtreeMaybeHintable(root)) {
-      discoveryRootsSkipped++;
+      lifecycleCounters.discoveryRootsSkipped++;
       continue;
     }
     if (discoverInSubtree(root) > 0) dirty = true;
@@ -3663,7 +3648,7 @@ function hasQueuedAncestor(el: Element, set: Set<Element>): boolean {
 
 function processMutations(records: MutationRecord[]): void {
   const __cpuStart = performance.now();
-  processMutationsCalls++;
+  lifecycleCounters.processMutationsCalls++;
   firehoseStep('processMutations:start', records.length);
   let sawRemoval = false;
 
@@ -3678,7 +3663,7 @@ function processMutations(records: MutationRecord[]): void {
       for (const node of m.removedNodes) {
         if (isOwnMutation(node)) continue;
         if (node instanceof Element) {
-          moRemoveRecordsSeen++;
+          lifecycleCounters.moRemoveRecordsSeen++;
           sawRemoval = true;
         }
       }
@@ -3705,7 +3690,7 @@ function processMutations(records: MutationRecord[]): void {
 
 const observer = new MutationObserver((records) => {
   const __cpuStart = performance.now();
-  moCallbackInvocations++;
+  lifecycleCounters.moCallbackInvocations++;
   firehoseStep('moCallback:start', records.length);
   // Diagnostic: sample the first record's type and target to find the source
   // of the high-rate end_all_own loop on YouTube /featured. The 28-records-
@@ -3758,7 +3743,7 @@ const observer = new MutationObserver((records) => {
     return !isOwnMutation(m.target);
   });
   firehoseStep('moCallback:filter_end', foreign.length);
-  moForeignRecords += foreign.length;
+  lifecycleCounters.moForeignRecords += foreign.length;
   if (foreign.length === 0) {
     recordCpu('moCallback', performance.now() - __cpuStart);
     firehoseStep('moCallback:end_all_own', records.length);
@@ -3766,7 +3751,7 @@ const observer = new MutationObserver((records) => {
   }
 
   if (foreign.length >= HUGE_MUTATIONS_COUNT) {
-    moHugePathFired++;
+    lifecycleCounters.moHugePathFired++;
     if (pageSession.hugeMutationTimer) clearTimeout(pageSession.hugeMutationTimer);
     pageSession.hugeMutationTimer = setTimeout(() => {
       pageSession.hugeMutationTimer = null;
@@ -3952,19 +3937,6 @@ watchUndefinedCustomElements(document);
 // Wrap eagerly here so calls from this point on are counted (idempotent).
 ensureSendMessageWrapped();
 
-function resetLifecycleCounters(): void {
-  dropDisconnectedCalls = 0;
-  dropDisconnectedFound = 0;
-  finalizeSweeps = 0;
-  finalizeDetached = 0;
-  moCallbackInvocations = 0;
-  moForeignRecords = 0;
-  moRemoveRecordsSeen = 0;
-  moHugePathFired = 0;
-  processMutationsCalls = 0;
-  discoveryRootsDeduped = 0;
-  discoveryRootsSkipped = 0;
-}
 
 // Scan / hintability perf snapshot. Counters are cumulative since CS load
 // (or last reset). Useful diff sequence: reset → interact for N seconds →
@@ -4012,19 +3984,7 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
     // steady state; nonzero means dropDisconnectedWrappers isn't being
     // called between detach and snapshot.
     wrapperDisconnectedOutOfLimbo: sentinelDisconnected,
-    lifecycleCounters: {
-      dropDisconnectedCalls,
-      dropDisconnectedFound,
-      finalizeSweeps,
-      finalizeDetached,
-      moCallbackInvocations,
-      moForeignRecords,
-      moRemoveRecordsSeen,
-      moHugePathFired,
-      processMutationsCalls,
-      discoveryRootsDeduped,
-      discoveryRootsSkipped,
-    },
+    lifecycleCounters: { ...lifecycleCounters },
     rebindCounters: { ...rebindCounters },
     messages: messageCountersSnapshot(),
     cpu: {

@@ -299,10 +299,15 @@ These carry essentially no risk and unblock everything after them.
    holds `store`; `core/singletons.ts` holds the other four; `content.ts` imports
    them. Behavior-identical, suite green.
 2. **Move the data-only counters** (`mo*`, `finalize*`, `dropDisconnected*`,
-   `discoveryRoots*`, `claimCounters`, `rebindCounters`) into
-   `debug/perf-counters.ts`; blocks bump imported counters, `buildPerfSnapshot`
-   reads them. Removes a whole fan-out cluster and makes the integrator's inputs
-   explicit.
+   `discoveryRoots*`) into `debug/perf-counters.ts`; blocks bump fields on the
+   imported `lifecycleCounters` object, `buildPerfSnapshot` spreads it. Removes a
+   whole fan-out cluster and makes the integrator's inputs explicit. **Landed
+   2026-06-06**: the eleven bare-`let` counters became the `lifecycleCounters`
+   object in `debug/perf-counters.ts` (with `resetLifecycleCounters`). Note:
+   `claimCounters` and `rebindCounters` were deliberately left in place — they are
+   already objects (no exported-`let` reassignment problem) and `rebindCounters`
+   is also read by `render/debug-overlay.ts`; move them only if a later extraction
+   needs them, to keep this step's blast radius to content.ts alone.
 
 **Tier 1 — lift the satellites (medium risk, soak each).**
 With `store` importable, each satellite cluster becomes a one-file lift that
