@@ -231,7 +231,7 @@ src/
   observe/                   // SOURCES — translate one signal into store mutations
     intersection-tracker.ts, attention-observer.ts       // (exist)
     target-rect-store.ts, *-tracker.ts                   // (exist)
-    visibility-tracker.ts    //   NEW: pendingVisibility + visibility IO/MO (extract)
+    visibility-tracker.ts    //   (exists) pendingVisibility + visibility IO/MO
     mutation-source.ts       //   NEW: the discovery MutationObserver + drain (extract)
 
   scan/                      // (exists) pure DOM → candidates (a source's helper)
@@ -313,7 +313,16 @@ These carry essentially no risk and unblock everything after them.
 With `store` importable, each satellite cluster becomes a one-file lift that
 still calls the core imperatively (no delta cut yet):
 3. `observe/visibility-tracker.ts` — the `pendingVisibility` + visibility IO/MO
-   recovery loop.
+   recovery loop. **Landed 2026-06-06**: the set, both visibility observers, and
+   the recheck/throttle logic moved out; `content.ts`'s attention observer feeds
+   it via `trackPendingCandidate` / `untrackPendingCandidate`, and `attachWrapper`
+   / `showHints` / `pageSession` are injected via `initVisibilityTracker` (the
+   transitional seam). `observeInvisibleCandidates` stays in `content.ts` with the
+   attention observer it drives. Teardown now also clears the pending set and the
+   abandon timer (the inline version only disconnected the observers — a latent
+   stray-timer fix). Shipped with a 5-test spec; tsc clean, 543 tests green.
+   **Soak still owed** before this is trusted/pushed — it touches the
+   visibility-observer + teardown paths the project flags as high-blast-radius.
 4. `observe/mutation-source.ts` — the discovery MutationObserver + drain +
    reevaluation coalescing.
 5. `core/wrapper-lifecycle.ts` — attach/detach/limbo/rebind/discover, moved as a
