@@ -263,9 +263,14 @@ counters it reads move into `debug/perf-counters.ts`.
 ~8 connection globals rather than a shared DOM model. Target extractions, each
 testable with a faked `chrome.*`:
 
-- `plugin/actuator-client.ts` — all `forward*` / `post*` functions become one
-  `ActuatorClient` over the connection state (`pluginPort`, `pluginToken`,
-  `branchkitConnected`). Today these are a dozen near-identical fetch wrappers.
+- `plugin/actuator-client.ts` — **Landed 2026-06-07.** Owns the connection
+  (`pluginPort` / `pluginToken`, `discoverPlugin`) and the authed-POST boilerplate
+  the ~12 `forward*` / `post*` / reference forwarders duplicated. Two postures
+  preserved: `ensureConnected()` (discover-on-miss) for the diagnostic/grammar/
+  reference pushes, and bare `postToPlugin()` (bail-on-miss) for focus / active-tab.
+  `background.ts` reads the connection via `getPluginPort`/`getPluginToken` (SSE
+  path). 8-test spec with a faked `fetch`; background.ts 1,687 → 1,506 lines.
+  (`branchkitConnected` stays in background.ts — it's SSE state, not plugin-HTTP.)
 - `plugin/sse-transport.ts` — the offscreen-vs-direct SSE split
   (`ensureOffscreen` / `connectDirectSSE` / `handleSSEEvent` + retry/backoff).
 - `background/injection.ts` — `injectContentScriptFiles` / `tryInject` /
@@ -289,10 +294,13 @@ final step deletes the scaffolding, and the risky change (the delta cut) lands
 only after the cheap de-risking moves. Each step keeps `npm test` green and is
 independently revertable. Per the project's soak discipline, work that touches
 lifecycle, observers, or teardown gets a 30-minute real-browser soak before merge
-— not just unit green. **Decision 2026-06-06:** for the Tier 1 lifts (each
-behavior-equivalent and unit-verified), the soak is batched once at the end of
-the tier rather than after every commit. The lifts land back-to-back behind green
-tests + clean builds; nothing is pushed until the consolidated soak passes.
+— not just unit green. **Decision 2026-06-06:** the soak is batched once at the
+end of the *whole refactor* (Tiers 1–3, each step behavior-equivalent and
+unit-verified) rather than after every commit or tier. Steps land back-to-back
+behind green tests + clean builds; nothing is pushed until that single
+consolidated real-Chrome soak passes. Tier 2's delta cut keeps a transitional
+double-drive (new subscribers alongside the old imperative calls, verified equal
+before deletion) so it too stays behavior-equivalent and inside the one soak.
 
 **Tier 0 — enabling moves (mechanical, no behavior change, do first).**
 These carry essentially no risk and unblock everything after them.

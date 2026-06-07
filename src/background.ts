@@ -11,13 +11,10 @@
 import { Message, ScannedElement, HintVisibility, DispatchResult, GrammarBatchRequest, GrammarBatchResponse } from './types';
 import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearStack, clearAllStacks, regenerateAllStacks, getFrameForLabel, alphabetsEqual } from './labels/label-pool';
 import { rememberCodewords, clearCodewordMemory, recallCodewords } from './labels/codeword-memory';
-
-const ACTUATOR_URL = 'http://127.0.0.1:21551';
+import { discoverPlugin, ensureConnected, postToPlugin, getPluginPort, getPluginToken } from './plugin/actuator-client';
 
 // --- State ---
 
-let pluginPort: number | null = null;
-let pluginToken: string | null = null;
 let branchkitConnected = false;
 let cachedActiveTabId: number | null = null;
 let hintVisibility: HintVisibility = 'always';
@@ -143,49 +140,18 @@ async function loadAllReferenceNames(): Promise<string[]> {
 }
 
 async function saveReferenceToCollection(host: string, name: string, reference: Record<string, unknown>): Promise<void> {
-  if (!pluginPort || !pluginToken) {
-    const found = await discoverPlugin();
-    if (!found) return;
-  }
-  try {
-    await fetch(`http://127.0.0.1:${pluginPort}/reference/save`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${pluginToken}`,
-      },
-      body: JSON.stringify({ host, name, reference }),
-    });
-  } catch {
-    // Plugin may be down
-  }
+  if (!(await ensureConnected())) return;
+  await postToPlugin('/reference/save', { host, name, reference });
 }
 
 async function pushReferenceNames(): Promise<void> {
-  if (!pluginPort || !pluginToken) {
-    const found = await discoverPlugin();
-    if (!found) return;
-  }
+  if (!(await ensureConnected())) return;
   const names = await loadAllReferenceNames();
-  try {
-    await fetch(`http://127.0.0.1:${pluginPort}/references`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${pluginToken}`,
-      },
-      body: JSON.stringify({ names }),
-    });
-  } catch {
-    // Plugin may be down
-  }
+  await postToPlugin('/references', { names });
 }
 
 async function hydrateReferencesFromCollection(): Promise<void> {
-  if (!pluginPort || !pluginToken) {
-    const found = await discoverPlugin();
-    if (!found) return;
-  }
+  if (!(await ensureConnected())) return;
   try {
     const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     const tab = tabs[0];
@@ -193,8 +159,9 @@ async function hydrateReferencesFromCollection(): Promise<void> {
     const host = new URL(tab.url).hostname;
     if (!host) return;
 
+    // GET with query-param token (the references read endpoint's auth style).
     const resp = await fetch(
-      `http://127.0.0.1:${pluginPort}/references?host=${encodeURIComponent(host)}&token=${pluginToken}`,
+      `http://127.0.0.1:${getPluginPort()}/references?host=${encodeURIComponent(host)}&token=${getPluginToken()}`,
     );
     if (!resp.ok) return;
     const data = await resp.json();
@@ -217,60 +184,16 @@ async function hydrateReferencesFromCollection(): Promise<void> {
   }
 }
 
-// --- Plugin Discovery ---
-
-async function discoverPlugin(): Promise<boolean> {
-  try {
-    const resp = await fetch(`${ACTUATOR_URL}/v1/plugins/browser/status`);
-    if (!resp.ok) return false;
-    const data = await resp.json();
-    if (!data.enabled || !data.listen) return false;
-    pluginPort = data.listen.port;
-    pluginToken = data.listen.token;
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // Forward a content-script dispatch outcome to the plugin's POST
 // /dispatch-result. Best-effort; the plugin can survive missing reports.
 async function forwardDispatchResult(result: DispatchResult): Promise<void> {
-  if (!pluginPort || !pluginToken) {
-    const found = await discoverPlugin();
-    if (!found) return;
-  }
-  try {
-    await fetch(`http://127.0.0.1:${pluginPort}/dispatch-result`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${pluginToken}`,
-      },
-      body: JSON.stringify(result),
-    });
-  } catch {
-    // Plugin may be down; observability isn't worth retrying.
-  }
+  if (!(await ensureConnected())) return;
+  await postToPlugin('/dispatch-result', result);
 }
 
 async function forwardDebugLog(tag: string, data: unknown): Promise<void> {
-  if (!pluginPort || !pluginToken) {
-    const found = await discoverPlugin();
-    if (!found) return;
-  }
-  try {
-    await fetch(`http://127.0.0.1:${pluginPort}/debug-log`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${pluginToken}`,
-      },
-      body: JSON.stringify({ tag, data }),
-    });
-  } catch {
-    // Plugin may be down; diagnostic-only, no retry.
-  }
+  if (!(await ensureConnected())) return;
+  await postToPlugin('/debug-log', { tag, data });
 }
 
 // Sibling of forwardDebugLog. Pumps the content script's perf snapshot
@@ -278,22 +201,8 @@ async function forwardDebugLog(tag: string, data: unknown): Promise<void> {
 // for offline analysis. See plugins/browser/src/perf_report.go and
 // src/content.ts (search PERF_REPORT). Diagnostic-only, no retry.
 async function forwardPerfReport(payload: { url: string; tab_id: number; browser: string; snapshot: unknown }): Promise<void> {
-  if (!pluginPort || !pluginToken) {
-    const found = await discoverPlugin();
-    if (!found) return;
-  }
-  try {
-    await fetch(`http://127.0.0.1:${pluginPort}/perf-report`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${pluginToken}`,
-      },
-      body: JSON.stringify(payload),
-    });
-  } catch {
-    // Plugin may be down; diagnostic-only, no retry.
-  }
+  if (!(await ensureConnected())) return;
+  await postToPlugin('/perf-report', payload);
 }
 
 // Sibling of forwardDebugLog that targets the per-plugin debug log
@@ -311,22 +220,8 @@ async function forwardPluginDebugLog(
   data: unknown,
   level: string = 'debug',
 ): Promise<void> {
-  if (!pluginPort || !pluginToken) {
-    const found = await discoverPlugin();
-    if (!found) return;
-  }
-  try {
-    await fetch(`http://127.0.0.1:${pluginPort}/plugin-debug-log`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${pluginToken}`,
-      },
-      body: JSON.stringify({ tag, data, level }),
-    });
-  } catch {
-    // Plugin may be down; diagnostic-only, no retry.
-  }
+  if (!(await ensureConnected())) return;
+  await postToPlugin('/plugin-debug-log', { tag, data, level });
 }
 
 // Hint-diagnostics snapshot (Phase 2b). Content script fires a
@@ -351,12 +246,9 @@ async function handleDebugSnapshot(
 ): Promise<void> {
   // Snapshots can be triggered at any time — including before plugin
   // discovery has run. Auto-discover before bailing.
-  if (!pluginPort || !pluginToken) {
-    const found = await discoverPlugin();
-    if (!found) {
-      console.warn('[branchkit] debug snapshot: plugin not discovered');
-      return;
-    }
+  if (!(await ensureConnected())) {
+    console.warn('[branchkit] debug snapshot: plugin not discovered');
+    return;
   }
   const snapshotId =
     typeof payload === 'object' && payload !== null && 'snapshot_id' in payload
@@ -368,21 +260,13 @@ async function handleDebugSnapshot(
   }
 
   // Step 1: structured-state POST.
-  try {
-    const res = await fetch(`http://127.0.0.1:${pluginPort}/debug-snapshot`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${pluginToken}`,
-      },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) {
-      console.warn(`[branchkit] debug-snapshot POST failed: HTTP ${res.status}`);
-      return;
-    }
-  } catch (e) {
-    console.warn(`[branchkit] debug-snapshot POST exception: ${e}`);
+  const res = await postToPlugin('/debug-snapshot', payload);
+  if (!res) {
+    console.warn('[branchkit] debug-snapshot POST exception');
+    return;
+  }
+  if (!res.ok) {
+    console.warn(`[branchkit] debug-snapshot POST failed: HTTP ${res.status}`);
     return;
   }
 
@@ -417,18 +301,7 @@ async function handleDebugSnapshot(
   const body: Record<string, string> = { snapshot_id: snapshotId };
   if (captured) body.png_base64 = pngBase64;
   else body.error = captureError || 'unknown';
-  try {
-    await fetch(`http://127.0.0.1:${pluginPort}/debug-snapshot/screenshot`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${pluginToken}`,
-      },
-      body: JSON.stringify(body),
-    });
-  } catch (e) {
-    console.warn(`[branchkit] debug-snapshot screenshot POST exception: ${e}`);
-  }
+  await postToPlugin('/debug-snapshot/screenshot', body);
 }
 
 // Tell the plugin to end a hint session. Two scopes:
@@ -447,24 +320,10 @@ async function handleDebugSnapshot(
 // the implicit "stop pushing" cleanup the old whole-grammar path did
 // via diffPrefixesToDelete.
 async function forwardHintsSessionEnd(reason: string, tabId: number, frameId?: number): Promise<void> {
-  if (!pluginPort || !pluginToken) {
-    const found = await discoverPlugin();
-    if (!found) return;
-  }
+  if (!(await ensureConnected())) return;
   const body: { reason: string; tab_id: number; frame_id?: number } = { reason, tab_id: tabId };
   if (typeof frameId === 'number') body.frame_id = frameId;
-  try {
-    await fetch(`http://127.0.0.1:${pluginPort}/hints/session_end`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${pluginToken}`,
-      },
-      body: JSON.stringify(body),
-    });
-  } catch {
-    // Plugin may be down; the hints tag will eventually clear via other paths.
-  }
+  await postToPlugin('/hints/session_end', body);
 }
 
 // Tell the plugin to pre-arm the hints tag for an imminent hints-eligible
@@ -474,23 +333,8 @@ async function forwardHintsSessionEnd(reason: string, tabId: number, frameId?: n
 // grammar push arrives. If grammar doesn't arrive within the eager-arm
 // timeout (2s), the plugin auto-clears.
 async function forwardHintsSessionStart(reason: string, tabId: number): Promise<void> {
-  if (!pluginPort || !pluginToken) {
-    const found = await discoverPlugin();
-    if (!found) return;
-  }
-  try {
-    await fetch(`http://127.0.0.1:${pluginPort}/hints/session_start`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${pluginToken}`,
-      },
-      body: JSON.stringify({ reason, tab_id: tabId }),
-    });
-  } catch {
-    // Plugin may be down; grammar push will eventually set the tag if/when
-    // it arrives. We just lose the eager-arm bridge for this one switch.
-  }
+  if (!(await ensureConnected())) return;
+  await postToPlugin('/hints/session_start', { reason, tab_id: tabId });
 }
 
 // Tell the newly-active tab to republish its grammar. Because the relay drops
@@ -521,7 +365,7 @@ async function postGrammarBatch(
   frameId: number,
   request: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'>,
 ): Promise<GrammarBatchResponse> {
-  if (!pluginPort || !pluginToken) {
+  if (!getPluginPort() || !getPluginToken()) {
     const found = await discoverPlugin();
     if (!found) return transportFailure(request);
     branchkitConnected = true;
@@ -538,16 +382,9 @@ async function postGrammarBatch(
     frame_id: frameId,
     conn_id: connId,
   };
+  const r = await postToPlugin('/grammar/batch', fullRequest);
+  if (!r || !r.ok) return transportFailure(request);
   try {
-    const r = await fetch(`http://127.0.0.1:${pluginPort}/grammar/batch`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${pluginToken}`,
-      },
-      body: JSON.stringify(fullRequest),
-    });
-    if (!r.ok) return transportFailure(request);
     return await r.json() as GrammarBatchResponse;
   } catch {
     return transportFailure(request);
@@ -569,19 +406,8 @@ function transportFailure(
 // identity comes from the OS, this only says "which connection is focused now."
 // Best-effort: a dropped focus POST self-heals on the next focus transition.
 async function postFocus(focused: boolean): Promise<void> {
-  if (!pluginPort || !pluginToken) return;
-  try {
-    await fetch(`http://127.0.0.1:${pluginPort}/focus`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${pluginToken}`,
-      },
-      body: JSON.stringify({ conn_id: connId, focused }),
-    });
-  } catch {
-    // best-effort; next onFocusChanged re-asserts
-  }
+  // Bail-on-miss (no discovery): focus claims only matter when already connected.
+  await postToPlugin('/focus', { conn_id: connId, focused });
 }
 
 // Tell the plugin which tab is active in this browser's window. Distinct from
@@ -591,20 +417,9 @@ async function postFocus(focused: boolean): Promise<void> {
 // only from the connection it currently treats as the focused browser, so
 // sending it from a background window is harmless. Best-effort.
 async function postActiveTab(tabId: number | null): Promise<void> {
-  if (!pluginPort || !pluginToken) return;
   if (tabId == null) return;
-  try {
-    await fetch(`http://127.0.0.1:${pluginPort}/active-tab`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${pluginToken}`,
-      },
-      body: JSON.stringify({ conn_id: connId, tab_id: tabId }),
-    });
-  } catch {
-    // best-effort; the next tab switch / window focus re-asserts
-  }
+  // Bail-on-miss (no discovery): never affects the connection→bundle binding.
+  await postToPlugin('/active-tab', { conn_id: connId, tab_id: tabId });
 }
 
 // Claim focus at SSE-connect time if a window of this browser is currently the
@@ -626,14 +441,16 @@ async function assertFocusIfFocused(): Promise<void> {
 
 /** Connect to the plugin's SSE stream using the best available method. */
 function connectSSE(): void {
-  if (!pluginPort || !pluginToken) return;
+  const port = getPluginPort();
+  const token = getPluginToken();
+  if (!port || !token) return;
 
   if (hasOffscreenAPI) {
     // Chrome: delegate to offscreen document
     ensureOffscreen().then(() => notifyOffscreenConnect());
   } else {
     // Firefox: open EventSource directly in background script
-    connectDirectSSE(pluginPort, pluginToken);
+    connectDirectSSE(port, token);
   }
 }
 
@@ -657,11 +474,13 @@ async function ensureOffscreen(): Promise<void> {
 
 // Tell offscreen doc to connect (or reconnect) with current plugin info
 function notifyOffscreenConnect(): void {
-  if (!pluginPort || !pluginToken) return;
+  const port = getPluginPort();
+  const token = getPluginToken();
+  if (!port || !token) return;
   chrome.runtime.sendMessage({
     type: 'CONNECT_SSE',
-    port: pluginPort,
-    token: pluginToken,
+    port,
+    token,
     connId,
   }).catch(() => {});
 }
