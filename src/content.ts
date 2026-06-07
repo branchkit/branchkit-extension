@@ -29,7 +29,7 @@ import { HintBadge } from './render/hints';
 import { reconcilePass, drain as drainReconcilePositioner, reconcileRegistrySize } from './render/reconcile-positioner';
 import { onContainerResize } from './observe/container-resize-tracker';
 import { onTargetMutation } from './observe/target-mutation-tracker';
-import { cacheLayout, clearLayoutCache, peekCachedRect, getCachedRect } from './layout-cache';
+import { cacheLayout, clearLayoutCache, peekCachedRect, getCachedRect, isRectOnScreen } from './layout-cache';
 import { placeBadges, placeOne, invalidateProbe } from './placement';
 import { activateElement, dispatchHover, type ActivationResult } from './activate/event-sequence';
 import {
@@ -800,10 +800,7 @@ function viewportSort(wrappers: ElementWrapper[]): ElementWrapper[] {
   const vh = window.innerHeight;
   const vw = window.innerWidth;
   return wrappers
-    .filter(w => {
-      const r = w.element.getBoundingClientRect();
-      return r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
-    })
+    .filter(w => isRectOnScreen(w.element.getBoundingClientRect(), vw, vh))
     .sort((a, b) => {
       const ra = a.element.getBoundingClientRect();
       const rb = b.element.getBoundingClientRect();
@@ -1205,8 +1202,14 @@ function badgeNewlyCodeworded(): void {
 
   try {
     cacheLayout(newBadges.map(w => w.element));
+    const vw = window.innerWidth, vh = window.innerHeight;
     for (let i = 0; i < newBadges.length; i++) {
       const w = newBadges[i];
+      // Don't paint a badge for an element that's in the 200px IO band but
+      // off the actual viewport (e.g. YouTube's collapsed nav drawer at
+      // x=-228); placement would clamp it to the edge. It keeps its codeword
+      // and paints when it scrolls on-screen. Same gate as every paint path.
+      if (!isRectOnScreen(getCachedRect(w.element), vw, vh)) continue;
       const label = poolLabelToAssignment(w.scanned.codeword);
       w.label = label;
       // Fast path: existing dormant hint just needs its label swapped and
@@ -2552,11 +2555,10 @@ function scheduleReposition(scope: RepositionScope = 'all'): void {
       // Hide + skip badges whose element is fully off-screen — e.g. YouTube's
       // collapsed nav drawer parked at x=-228. Placement would otherwise clamp
       // them to the viewport edge, producing the flashing left-edge badge
-      // column. The IO re-shows them on viewport re-entry.
+      // column. Same predicate every paint path uses (see isRectOnScreen).
       const vw = window.innerWidth, vh = window.innerHeight;
       const onscreen = visible.filter(w => {
-        const r = getCachedRect(w.element);
-        if (r.right <= 0 || r.left >= vw || r.bottom <= 0 || r.top >= vh) {
+        if (!isRectOnScreen(getCachedRect(w.element), vw, vh)) {
           w.hint!.hide();
           return false;
         }

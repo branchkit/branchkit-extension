@@ -1,9 +1,49 @@
-# Investigation — flashing left-edge badges on YouTube /watch (comment churn)
+# Investigation — flashing left-edge badges on YouTube /watch
+
+**Status:** FIXED 2026-06-07. The user-visible flash was misdiagnosed twice
+before the snapshot pinned it. See "Root cause 3 (the actual flash)" — that's
+what shipped the fix. Root causes 1 and 2 below are real but were NOT the
+left-edge column the user saw; the limbo-strand guard (fix A) stays as a cheap
+correctness guard.
+
+## Root cause 3 (the actual user-visible flash) — off-screen nav drawer, paint-gate conflation
+
+A Ctrl+Option+A snapshot on a `/watch` tab showed the flashing column was
+YouTube's **collapsed left nav drawer** — Home / Shorts / Subscriptions / You /
+History / Playlists / etc. — parked at `x=-228, w=204` (right edge at -24, fully
+off the left of the viewport) but still **connected** and **CSS-visible**. Their
+badges were painted at `hintx=0` (clamped to the viewport edge).
+
+The conflation: the IntersectionTracker sets `wrapper.isInViewport` from an IO
+with `rootMargin: 200px` (for codeword pre-claim / lazy badge construction). An
+element 228px off-screen is within that 200px margin, so `isInViewport=true`.
+Two paint paths used that flag (or no geometry gate at all) as the *badge paint*
+gate:
+
+- `recheckHintedVisibility` (visibility-tracker.ts) — gated show on `isVisible()`
+  + `isInViewport`, so it re-showed the drawer badges every 100ms.
+- `badgeNewlyCodeworded` (content.ts) — painted any `wantsHint` wrapper with no
+  geometry gate.
+
+`scheduleReposition` (correctly) hides off-screen badges; those two paths
+re-showed them → the **flicker** (hide ↔ show, paced by 100ms recheck + page
+churn). `showHints`/`viewportSort` already used actual geometry and was fine.
+
+**Fix:** one shared predicate `isRectOnScreen(rect)` in `layout-cache.ts` (the
+actual-viewport overlap test that `viewportSort` already used inline). Every
+paint path now routes through it: viewportSort, scheduleReposition (hide),
+recheckHintedVisibility (paint gate), badgeNewlyCodeworded (skip). The drawer
+badges no longer paint; their codewords stay in grammar (voice still works), and
+they paint normally if the drawer is opened on-screen. tsc clean, 589 tests
+(+5 predicate tests), chrome+firefox builds clean.
+
+---
+
+## (earlier hypotheses, kept for the record)
 
 **Status:** root-caused 2026-06-07 during the restructure soak. Two distinct,
 **pre-existing** bugs (neither introduced by the restructure — see "Restructure
-innocence" below). Fix not yet landed; deliberately deferred so it doesn't muddy
-the in-progress restructure soak.
+innocence" below).
 
 ## Symptom
 

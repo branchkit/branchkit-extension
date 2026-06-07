@@ -24,7 +24,7 @@
 
 import { ElementWrapper } from '../scan/element-wrapper';
 import { scanSingle, isVisible } from '../scan/scanner';
-import { cacheVisibility, clearLayoutCache } from '../layout-cache';
+import { cacheVisibility, clearLayoutCache, getCachedRect, isRectOnScreen } from '../layout-cache';
 import { recordCpu } from '../debug/perf-counters';
 import { store } from '../core/store';
 import type { PageSession } from '../lifecycle/page-session';
@@ -138,11 +138,18 @@ function recheckHintedVisibility(): void {
     return;
   }
   cacheVisibility(hinted);
+  // cacheVisibility warms each seed element's rect too, so getCachedRect below
+  // is free. Gate paint on actual viewport geometry, not the tracker's 200px-
+  // margin isInViewport flag: an element parked off-screen but within that
+  // margin (YouTube's collapsed nav drawer at x=-228) is isInViewport-true yet
+  // must not paint a badge clamped to the edge. Without this the reposition
+  // pass hides it and this loop re-shows it 100ms later — the flashing column.
+  const vw = window.innerWidth, vh = window.innerHeight;
   let transitions = 0;
   try {
     for (const w of wrappers) {
       if (!w.hint || !w.isInViewport || !w.element.isConnected) continue;
-      const visible = isVisible(w.element);
+      const visible = isVisible(w.element) && isRectOnScreen(getCachedRect(w.element), vw, vh);
       const showing = w.hint.isVisible;
       if (visible && !showing) {
         w.hint.show(w.grammarReady);
