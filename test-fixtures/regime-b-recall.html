@@ -4,24 +4,36 @@
   <meta charset="utf-8" />
   <title>Regime B recall fixture</title>
   <style>
-    body { margin: 0; font: 13px/1.3 system-ui, sans-serif; }
-    nav { display: flex; flex-direction: column; }
-    nav a { display: block; padding: 4px 10px; color: #0a58ca; text-decoration: none; }
+    body { margin: 0; font: 13px/1.3 system-ui, sans-serif; display: flex; }
+    nav, main { display: flex; flex-direction: column; }
+    nav { width: 200px; }
+    a { display: block; padding: 4px 10px; color: #0a58ca; text-decoration: none; }
   </style>
 </head>
 <body>
-  <!-- Many links with stable, unique hrefs. The harness claims codewords for
-       them, persists the fingerprint->codeword memory, full-reloads the page,
-       and measures how many got their letter back. Count is deliberately above
-       the reservoir's 100-codeword initial preferred-fill so the cap shows. -->
+  <!-- A STABLE sidebar (same hrefs on every load) plus a body whose links
+       DEPEND on the ?t= query param, so a navigation to a different `t` is a
+       full reload with the SAME sidebar but DIFFERENT body content — the
+       QuickBase "switch tables" shape. The body has no memory on the new load,
+       so it claims fresh; A3 (reserved codewords) must stop it from stealing the
+       sidebar's letters out of the pool. -->
   <nav id="sidebar"></nav>
+  <main id="body"></main>
   <script>
-    const nav = document.getElementById('sidebar');
-    for (let i = 0; i < 130; i++) {
+    const param = new URLSearchParams(location.search).get('t') || 'A';
+    const sb = document.getElementById('sidebar');
+    for (let i = 0; i < 20; i++) {
       const a = document.createElement('a');
-      a.setAttribute('href', '/app/table/' + i);
-      a.textContent = 'Table ' + i;
-      nav.appendChild(a);
+      a.setAttribute('href', '/s/' + i);          // stable across loads
+      a.textContent = 'Side ' + i;
+      sb.appendChild(a);
+    }
+    const body = document.getElementById('body');
+    for (let i = 0; i < 120; i++) {
+      const a = document.createElement('a');
+      a.setAttribute('href', '/b/' + param + '/' + i); // changes with ?t=
+      a.textContent = 'Body ' + param + ' ' + i;
+      body.appendChild(a);
     }
   </script>
 </body>

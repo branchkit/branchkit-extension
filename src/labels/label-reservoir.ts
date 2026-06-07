@@ -87,6 +87,13 @@ class LabelReservoir {
    *  `each` from `browser_hints_cap_strict` and made the CE hint
    *  unreachable. */
   private outstanding: Set<string> = new Set();
+  /** Recalled codewords earmarked for a remembered fingerprint (Regime B,
+   *  A3 in DESIGN_REGIME_B_RECALL.md). These sit in `free` but a fresh,
+   *  no-memory claim must NOT consume them — only their owner (via `preferred`)
+   *  or, if generic runs dry, the starvation fallback. Without this, after a
+   *  cross-table reload the new table's body content (no memory) grabs the
+   *  recalled codewords front-of-pool and steals the sidebar's letters. */
+  private reserved: Set<string> = new Set();
   /** In-flight refill, so we don't pile up redundant CLAIM_LABELS while
    *  one is already on the wire. */
   private refillInFlight: Promise<void> | null = null;
@@ -118,7 +125,14 @@ class LabelReservoir {
     const want = preferred && preferred.length > INITIAL_RESERVATION
       ? Math.min(preferred.length, MAX_INITIAL_RESERVATION)
       : INITIAL_RESERVATION;
-    this.initialReady = this.refill(want, preferred);
+    this.initialReady = this.refill(want, preferred).then(() => {
+      // Earmark the recalled codewords that landed in `free` so a fresh claim
+      // can't steal them from their remembered owner (A3).
+      if (preferred && preferred.length > 0) {
+        const pref = new Set(preferred);
+        for (const cw of this.free) if (pref.has(cw)) this.reserved.add(cw);
+      }
+    });
     return this.initialReady;
   }
 
@@ -154,21 +168,35 @@ class LabelReservoir {
       this.free = this.free.filter(l => !granted.has(l));
     }
 
-    // Pass 2 — fresh, front-of-pool in request order. The `granted` Set
-    // check guards against returning a codeword that pass 1 already used
-    // OR an in-reservoir duplicate that slipped past prior dedup (refill
-    // and release both dedup now, but an existing reservoir from a
-    // pre-fix session could still hold dupes — drain them safely instead
-    // of handing them to two wrappers).
+    // Pass 2 — fresh, front-of-pool in request order. Prefer a GENERIC
+    // (non-reserved) codeword; leave recalled-reserved ones for their
+    // remembered owners (A3). Fall back to a reserved one only when generic is
+    // exhausted (starvation guard) so the pool can't deadlock. The `granted`
+    // check guards against a codeword pass 1 already used OR an in-reservoir
+    // duplicate that slipped past prior dedup.
     for (const idx of need) {
-      let next: string | undefined;
-      while ((next = this.free.shift()) !== undefined) {
-        if (!granted.has(next)) break;
+      let pick = -1;
+      for (let j = 0; j < this.free.length; j++) {
+        const cand = this.free[j];
+        if (granted.has(cand) || this.reserved.has(cand)) continue;
+        pick = j;
+        break;
       }
-      if (next === undefined) break; // reservoir exhausted; rest stay ''
+      if (pick === -1) {
+        // No generic left — take the first non-granted (reserved) codeword.
+        for (let j = 0; j < this.free.length; j++) {
+          if (!granted.has(this.free[j])) { pick = j; break; }
+        }
+      }
+      if (pick === -1) break; // reservoir exhausted; rest stay ''
+      const next = this.free.splice(pick, 1)[0];
       granted.add(next);
       result[idx] = next;
     }
+
+    // Anything granted (own reclaim or starvation fallback) is no longer
+    // reserved-for-an-owner.
+    for (const g of granted) this.reserved.delete(g);
 
     // Confirm to the SW that these codewords are now wrapper-held, not just
     // reservoir-reserved. The promotion from reserved → assigned makes them
@@ -210,6 +238,9 @@ class LabelReservoir {
     // the dedup below so a re-released codeword the reservoir already
     // holds in `free` correctly clears its outstanding bit.
     for (const l of valid) this.outstanding.delete(l);
+    // A released codeword returns to the generic pool — it's no longer
+    // earmarked for a remembered owner (A3).
+    for (const l of valid) this.reserved.delete(l);
     // Defensive dedup against the reservoir AND within the release set.
     // Two paths produce a duplicate-prone release: (a) the reservoir
     // already holds the codeword (a pre-fix duplicate or a release racing
@@ -244,6 +275,7 @@ class LabelReservoir {
   clear(): void {
     this.free.length = 0;
     this.outstanding.clear();
+    this.reserved.clear();
     this.initialReady = null;
     this.refillInFlight = null;
   }
@@ -260,8 +292,10 @@ class LabelReservoir {
    *  Seeding with `[]` is interpreted as "fresh empty state" — initialReady
    *  is null so a subsequent ensureReady() actually fetches. Seeding with
    *  non-empty labels treats them as already-fetched (initialReady resolved). */
-  _seedForTests(labels: string[]): void {
+  _seedForTests(labels: string[], reserved: string[] = []): void {
     this.free = [...labels];
+    this.outstanding.clear();
+    this.reserved = new Set(reserved);
     this.refillInFlight = null;
     this.initialReady = labels.length > 0 ? Promise.resolve() : null;
   }

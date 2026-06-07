@@ -314,3 +314,32 @@ describe('LabelReservoir.ensureReady (Regime B preferred initial fill)', () => {
     expect(claimCall![0].count).toBe(300); // MAX_INITIAL_RESERVATION
   });
 });
+
+describe('LabelReservoir.claim — recalled reservation (A3)', () => {
+  it('a fresh claim skips reserved codewords and takes a generic one', () => {
+    // res* are reserved for remembered owners; gen* are generic. A fresh claim
+    // (no preferred) must not consume res1 even though it's front-of-pool.
+    labelReservoir._seedForTests(['res1', 'gen1', 'res2', 'gen2'], ['res1', 'res2']);
+    expect(labelReservoir.claim(1)).toEqual(['gen1']);
+  });
+
+  it('two fresh claims take the generics and leave the reserved for their owners', () => {
+    labelReservoir._seedForTests(['res1', 'gen1', 'res2', 'gen2'], ['res1', 'res2']);
+    expect(labelReservoir.claim(2)).toEqual(['gen1', 'gen2']);
+    // The remembered owners can still reclaim their letters — not stolen.
+    expect(labelReservoir.claim(2, ['res1', 'res2'])).toEqual(['res1', 'res2']);
+  });
+
+  it('a preferred claim reclaims its reserved codeword and clears the reservation', () => {
+    labelReservoir._seedForTests(['res1', 'gen1'], ['res1']);
+    expect(labelReservoir.claim(1, ['res1'])).toEqual(['res1']);
+    // res1 is now claimed, no longer reserved — a later fresh claim could use
+    // gen1 (still there) without contention.
+    expect(labelReservoir.claim(1)).toEqual(['gen1']);
+  });
+
+  it('falls back to a reserved codeword when generic is exhausted (no starvation)', () => {
+    labelReservoir._seedForTests(['res1', 'res2'], ['res1', 'res2']);
+    expect(labelReservoir.claim(1)).toEqual(['res1']); // only reserved left → take one
+  });
+});

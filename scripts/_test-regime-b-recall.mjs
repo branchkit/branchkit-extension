@@ -1,15 +1,15 @@
 // Measures Regime B codeword reclaim across a FULL page reload (Layer 3 of
-// notes/DESIGN_REGIME_B_RECALL.md).
+// notes/DESIGN_REGIME_B_RECALL.md). Two scenarios:
 //
-// A reload destroys the content script, so reclaim can only come from the
-// SW-persisted fingerprint->codeword memory. This loads a page of 130 links
-// (above the reservoir's 100-codeword initial preferred-fill so the cap shows),
-// lets them claim + persist, then reloads and reads the recall_stats metric:
-// reclaimed = got its pre-reload letter back, missed = had a remembered letter
-// but got a different one. The reclaim rate is what this layer drives up.
+//  1. SAME-content reload (?t=A -> ?t=A): every element is remembered, so all
+//     reclaim. Regression guard for fix A1/A2.
+//  2. CROSS-content reload (?t=A -> ?t=B): the SIDEBAR is stable but the BODY
+//     content changes (no memory) — the QuickBase "switch tables" shape. The
+//     new body claims fresh; fix A3 (reserved codewords) must stop it from
+//     stealing the sidebar's letters. Asserts the sidebar keeps its codewords.
 //
-// Deterministic, no app: seeds the alphabet straight into extension storage.
-// Reads state via the cross-world snapshot channel (dataset.branchkitSnapshot).
+// Deterministic, no app: seeds the alphabet into extension storage. Reads state
+// via the cross-world snapshot channel (dataset.branchkitSnapshot).
 //
 // Run: node scripts/_test-regime-b-recall.mjs
 
@@ -23,7 +23,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
 const EXT = resolve(root, 'dist/chrome');
 const PROFILE = '/tmp/branchkit-regime-b-recall-profile';
-const TARGET_RATE = 0.90; // viewport reclaim we want this layer to reach
+const SIDEBAR_TARGET = 0.90; // sidebar reclaim we require across a cross-content reload
 
 const fixtureHtml = readFileSync(resolve(root, 'test-fixtures/regime-b-recall.html'), 'utf8');
 const server = createServer((_req, res) => {
@@ -31,7 +31,7 @@ const server = createServer((_req, res) => {
   res.end(fixtureHtml);
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
-const FIXTURE = `http://127.0.0.1:${server.address().port}/`;
+const BASE = `http://127.0.0.1:${server.address().port}/`;
 
 if (existsSync(PROFILE)) rmSync(PROFILE, { recursive: true });
 
@@ -53,61 +53,64 @@ await sw.evaluate(async (a) => {
 }, ALPHABET);
 
 const page = await ctx.newPage();
-await page.setViewportSize({ width: 1280, height: 3000 });
+await page.setViewportSize({ width: 1280, height: 4000 });
 
-async function recallStats() {
+// Map href -> codeword for the live store, via the cross-world snapshot channel.
+async function codewordsByHref() {
   return await page.evaluate(() => {
     document.dispatchEvent(new CustomEvent('__branchkit__capture_snapshot'));
     const raw = document.documentElement.dataset.branchkitSnapshot;
-    if (!raw) return null;
+    if (!raw) return {};
     const p = JSON.parse(raw);
-    const codeworded = (p.wrappers || []).filter((w) => w.scanned && w.scanned.codeword).length;
-    return { ...(p.recall_stats || {}), codeworded };
+    const out = {};
+    for (const w of (p.wrappers || [])) {
+      const href = w.fingerprint && w.fingerprint.href;
+      if (href && w.scanned && w.scanned.codeword) out[href] = w.scanned.codeword;
+    }
+    return out;
   });
 }
-const rate = (s) => {
-  const denom = s.viewport_reclaimed + s.viewport_missed;
-  return denom > 0 ? s.viewport_reclaimed / denom : null;
+const pick = (m, pred) => Object.fromEntries(Object.entries(m).filter(([h]) => pred(h)));
+const stableFrac = (before, after) => {
+  const common = Object.keys(before).filter((h) => h in after);
+  if (!common.length) return { n: 0, stable: 0, frac: null };
+  const stable = common.filter((h) => before[h] === after[h]).length;
+  return { n: common.length, stable, frac: stable / common.length };
 };
 
-console.log('[2] first load — claim + persist codewords (settle 7s)');
-await page.goto(FIXTURE, { waitUntil: 'domcontentloaded' });
+console.log('[2] load ?t=A — claim + persist (settle 7s)');
+await page.goto(BASE + '?t=A', { waitUntil: 'domcontentloaded' });
 await page.waitForTimeout(7000);
-const first = await recallStats();
-console.log('    first-load stats:', JSON.stringify(first));
-if (!first || first.codeworded < 100) {
-  fail(`expected >=100 codeworded links on first load, got ${first ? first.codeworded : 'null'} (claim/alphabet issue?)`);
-}
+const A1 = await codewordsByHref();
+console.log(`    sidebar links: ${Object.keys(pick(A1, h => h.startsWith('/s/'))).length}, body links: ${Object.keys(pick(A1, h => h.startsWith('/b/'))).length}`);
 
-if (!failed) {
-  console.log('[3] FULL RELOAD — content script is rebuilt; only the SW memory survives');
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.waitForTimeout(7000);
+console.log('[3] SAME-content reload (?t=A -> ?t=A)');
+await page.goto(BASE + '?t=A', { waitUntil: 'domcontentloaded' });
+await page.waitForTimeout(7000);
+const A2 = await codewordsByHref();
+const sameAll = stableFrac(A1, A2);
+console.log(`    all links stable: ${sameAll.stable}/${sameAll.n}` + (sameAll.frac != null ? ` = ${(sameAll.frac * 100).toFixed(0)}%` : ''));
+if (sameAll.frac != null && sameAll.frac >= 0.95) pass('same-content reload reclaims ~everything (A1/A2 intact)');
+else fail(`same-content reclaim regressed: ${sameAll.frac != null ? (sameAll.frac * 100).toFixed(0) + '%' : 'n/a'}`);
 
-  const after = await recallStats();
-  console.log('    after-reload stats:', JSON.stringify(after));
-  const r = rate(after);
-  const overallDenom = after.reclaimed + after.missed;
-  const overall = overallDenom > 0 ? after.reclaimed / overallDenom : null;
-
-  console.log(`    viewport reclaim: ${after.viewport_reclaimed}/${after.viewport_reclaimed + after.viewport_missed}` +
-    (r != null ? ` = ${(r * 100).toFixed(0)}%` : ' (n/a)'));
-  console.log(`    overall reclaim:  ${after.reclaimed}/${overallDenom}` +
-    (overall != null ? ` = ${(overall * 100).toFixed(0)}%` : ' (n/a)'));
-
-  if (r == null) {
-    fail('no remembered-and-present viewport elements after reload — nothing to score (persist/recall broke)');
-  } else if (r >= TARGET_RATE) {
-    pass(`viewport reclaim ${(r * 100).toFixed(0)}% >= target ${(TARGET_RATE * 100).toFixed(0)}%`);
-  } else {
-    fail(`viewport reclaim ${(r * 100).toFixed(0)}% < target ${(TARGET_RATE * 100).toFixed(0)}% — the cap/refill leak (Layer 3 fix A)`);
-  }
+console.log('[4] CROSS-content reload (?t=A -> ?t=B): same sidebar, different body');
+await page.goto(BASE + '?t=B', { waitUntil: 'domcontentloaded' });
+await page.waitForTimeout(7000);
+const B = await codewordsByHref();
+const sb = stableFrac(pick(A2, h => h.startsWith('/s/')), pick(B, h => h.startsWith('/s/')));
+console.log(`    SIDEBAR stable across body change: ${sb.stable}/${sb.n}` + (sb.frac != null ? ` = ${(sb.frac * 100).toFixed(0)}%` : ''));
+if (sb.frac == null) {
+  fail('no sidebar links to compare after cross-content reload');
+} else if (sb.frac >= SIDEBAR_TARGET) {
+  pass(`sidebar reclaim ${(sb.frac * 100).toFixed(0)}% >= target ${(SIDEBAR_TARGET * 100).toFixed(0)}% — body did not steal its letters (A3 holds)`);
+} else {
+  fail(`sidebar reclaim ${(sb.frac * 100).toFixed(0)}% < target ${(SIDEBAR_TARGET * 100).toFixed(0)}% — new body content stole reserved codewords (A3 leak)`);
 }
 
 console.log('\n=== VERDICT ===');
 console.log(failed
-  ? '  ✗ BELOW TARGET — Regime B reclaim needs the fix-A work (preferred through refills / scan path)'
-  : '  ✓ AT TARGET — Regime B reclaim meets the goal');
+  ? '  ✗ FAIL — Regime B reclaim not solid across content change'
+  : '  ✓ PASS — same-content fully reclaims AND the sidebar survives a body change');
 
 await page.screenshot({ path: '/tmp/branchkit-regime-b-recall.png' });
 await ctx.close();

@@ -26,10 +26,28 @@ Built the reclaim metric first, then fix A in two parts, measured each on a
   codeword reaches `free` instead of only the first 100. 54% → **100%** on the
   fixture.
 
-Net: 0% → 100% reclaim across a full reload on the fixture. 614 unit tests,
-chrome+firefox builds clean. Covers up to the 200-fingerprint memory cap; pages
-beyond that need fix C below. B (prioritize visible) wasn't needed to hit target
-on the fixture — revisit if real pages past the memory cap fall short.
+Net: 0% → 100% reclaim across a full reload on the (same-content) fixture.
+Covers up to the 200-fingerprint memory cap; pages beyond that need fix C below.
+
+- **A3 — reserve recalled codewords from fresh claims (added after a real test
+  exposed the gap).** Driving voice table-switches on QuickBase, the *sidebar*
+  still churned ~45% even with A1/A2. Cause: a table-switch is a reload to a page
+  with the SAME sidebar but DIFFERENT body content. The new body has no memory,
+  so it claims fresh — and A2 had just pre-filled the pool with every recalled
+  codeword, so the body grabbed the sidebar's reserved letters front-of-pool
+  before the sidebar claimed them. A2 helped same-content but *widened* this.
+  Fix: the reservoir marks recalled codewords as `reserved`; a fresh (no-memory)
+  claim prefers generic codewords and skips reserved ones, falling back to them
+  only when generic is exhausted (starvation guard). The remembered owner still
+  reclaims via `preferred`; a released codeword un-reserves.
+  - Verified by a cross-content fixture (stable sidebar + body that changes with
+    `?t=`): same-content reload 140/140 = 100% (A1/A2 intact), and the sidebar
+    survives a body change **20/20 = 100%** (was ~45% before A3).
+
+618 unit tests, chrome+firefox builds clean. B (prioritize visible) still not
+needed to hit target; revisit only if real pages past the 200 memory cap fall
+short. Dup-fingerprint elements (table cells) remain an inherent partial-reclaim
+ceiling — they need distinct letters, so recall can only return one.
 
 ## Why this exists
 
