@@ -13,6 +13,14 @@
  * reopen a Port so the background can re-track us; we don't re-claim
  * labels because our existing claims survive in chrome.storage.session.
  *
+ * The grammar, however, does NOT survive: our port closing made the SW's
+ * onDisconnect fire `frame_liveness_disconnect` → /hints/session_end, which
+ * deletes this frame's per-prefix grammar collections on the plugin side.
+ * Our delta-sync shadow (`sentCodewords`) still thinks it's all live, so it
+ * would never re-emit — leaving painted badges un-matchable until a manual
+ * rescan. So a reconnect fires `onResync`, letting the caller rebuild the
+ * grammar (rotate the session + re-Put every live wrapper).
+ *
  * This module owns the Port mechanics + the orphan-vs-transient
  * discrimination only. The orphan *teardown* (disconnecting the content
  * script's observers, removing badge hosts) is the caller's responsibility,
@@ -38,11 +46,19 @@ export interface LivenessHandlers {
    * script runs alone.
    */
   onOrphan: () => void;
+  /**
+   * We reopened the Port after a transient SW restart. The plugin wiped
+   * this frame's grammar when the prior Port dropped (frame_liveness_disconnect
+   * → session_end), so the caller must rebuild it: rotate the delta-sync
+   * session and re-emit every live wrapper. Not called on the initial open.
+   */
+  onResync: () => void;
 }
 
 let livenessPort: chrome.runtime.Port | null = null;
 
-export function openLivenessPort(handlers: LivenessHandlers): void {
+export function openLivenessPort(handlers: LivenessHandlers, isReconnect = false): void {
+  let connected = false;
   try {
     const port = chrome.runtime.connect({ name: LIVENESS_PORT_NAME });
     livenessPort = port;
@@ -58,7 +74,9 @@ export function openLivenessPort(handlers: LivenessHandlers): void {
       // Discriminate between two disconnect causes:
       //   1. Transient SW restart (idle timeout, browser sleep): Chrome
       //      will start a new SW on the next API call. Reconnect after a
-      //      brief delay so the SW finishes its init pass.
+      //      brief delay so the SW finishes its init pass. The reconnect
+      //      carries `isReconnect=true` so the caller resyncs the grammar
+      //      the plugin wiped when this Port dropped.
       //   2. Extension reload/uninstall: this content script's runtime
       //      context is invalidated. `chrome.runtime` is undefined or
       //      `chrome.runtime.id` is undefined. We can't reconnect from
@@ -75,11 +93,17 @@ export function openLivenessPort(handlers: LivenessHandlers): void {
         handlers.onOrphan();
         return;
       }
-      setTimeout(() => openLivenessPort(handlers), 500);
+      setTimeout(() => openLivenessPort(handlers, true), 500);
     });
+    connected = true;
   } catch {
     // Extension context invalidated (e.g., extension reloaded mid-page).
     // Page reload required to recover; nothing useful to do here.
     livenessPort = null;
+  }
+  // Run the resync outside the try so a throwing handler can't be mistaken
+  // for context invalidation. Only after a real reconnect, never first open.
+  if (connected && isReconnect) {
+    handlers.onResync();
   }
 }

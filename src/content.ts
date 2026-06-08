@@ -1900,6 +1900,20 @@ store.subscribe((delta) => {
 openLivenessPort({
   onFrameId: (frameId) => { pageSession.myFrameId = frameId; },
   onOrphan: () => pageSession.teardown('orphan'),
+  // SW restarted: the plugin wiped this frame's grammar when our prior
+  // liveness Port dropped (frame_liveness_disconnect → session_end). Our
+  // codewords are still valid but the delta-sync shadow thinks they're all
+  // live, so nothing would re-emit and painted badges stay un-matchable.
+  // Rotate to a fresh session (race-safe vs the old session's wipe, and it
+  // clears sentCodewords) and re-queue every live wrapper so the next sync
+  // rebuilds the per-prefix grammar collections.
+  onResync: () => {
+    rotateSession();
+    for (const w of store.all) {
+      if (w.scanned.codeword && w.disconnectedAt === null) queuePut(w);
+    }
+    scheduleSync('sw_restart_resync');
+  },
 });
 
 // --- Orphan self-quiesce ---
