@@ -41,6 +41,7 @@ import { DEFAULT_SCAN_BATCH_SIZE } from '../scan/scanner';
 import { sweepDisconnectedAfterBatch } from '../scan/batch-sweep';
 import { getHintVisibility } from '../config';
 import { labelReservoir } from './label-reservoir';
+import { bkLog } from '../debug/bk-log';
 
 /**
  * Content.ts-owned collaborators the catchup sync needs. Injected once at
@@ -134,10 +135,13 @@ export function getSessionId(): string {
  * in-viewport wrappers as pending Puts.
  */
 export function rotateSession(): void {
+  const from = sessionId;
   sessionId = generateSessionId();
+  const sentCount = sentCodewords.size;
   sentCodewords.clear();
   pendingPuts.clear();
   pendingDeleteCodewords.length = 0;
+  bkLog('BK_SESSION_ROTATE', { from, to: sessionId, clearedSent: sentCount });
 }
 
 // --- Transport ---

@@ -30,6 +30,8 @@
  * carve leaf concerns). See notes/DESIGN_EXTENSION_RESTRUCTURE.md.
  */
 
+import { bkLog } from '../debug/bk-log';
+
 const LIVENESS_PORT_NAME = 'frame-liveness';
 
 export interface LivenessHandlers {
@@ -89,6 +91,10 @@ export function openLivenessPort(handlers: LivenessHandlers, isReconnect = false
       } catch {
         stillValid = false;
       }
+      // Best-effort breadcrumb. When the cause is an SW death this won't
+      // reach browser.log (the SW is the transport) — the matching
+      // BK_LIVENESS_RECONNECT below lands on recovery and implies it.
+      bkLog('BK_LIVENESS_DISCONNECT', { orphan: !stillValid });
       if (!stillValid) {
         handlers.onOrphan();
         return;
@@ -104,6 +110,7 @@ export function openLivenessPort(handlers: LivenessHandlers, isReconnect = false
   // Run the resync outside the try so a throwing handler can't be mistaken
   // for context invalidation. Only after a real reconnect, never first open.
   if (connected && isReconnect) {
+    bkLog('BK_LIVENESS_RECONNECT', {});
     handlers.onResync();
   }
 }

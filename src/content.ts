@@ -24,6 +24,7 @@ import { initLimbo, rebindCounters, LIMBO_DEADLINE_MS, collectLimboWrappers, col
 import { initWrapperLifecycle, attachWrapper, detachWrapper, seedPreferredFromMemory, reconcileEvictedCodewords, attachDiscovered } from './core/wrapper-lifecycle';
 import { initMutationSource, attachPageMutationObserver, teardownMutationSource } from './observe/mutation-source';
 import { firehoseStep } from './debug/firehose';
+import { bkLog } from './debug/bk-log';
 import { store } from './core/store';
 import { HintBadge } from './render/hints';
 import { reconcilePass, drain as drainReconcilePositioner, reconcileRegistrySize } from './render/reconcile-positioner';
@@ -1897,9 +1898,13 @@ store.subscribe((delta) => {
   if (delta.kind === 'attached' || delta.kind === 'detached') schedulePushGrammar();
 });
 
+// Content-script boot breadcrumb. Lets browser.log distinguish a fresh
+// re-injection (new V8 context, new session) from a same-context SW reconnect.
+bkLog('BK_CS_BOOT', { session: getSessionId(), url: trimFrameUrl(window.location.href) });
+
 openLivenessPort({
   onFrameId: (frameId) => { pageSession.myFrameId = frameId; },
-  onOrphan: () => pageSession.teardown('orphan'),
+  onOrphan: () => { bkLog('BK_LIVENESS_ORPHAN', {}); pageSession.teardown('orphan'); },
   // SW restarted: the plugin wiped this frame's grammar when our prior
   // liveness Port dropped (frame_liveness_disconnect → session_end). Our
   // codewords are still valid but the delta-sync shadow thinks they're all
@@ -1909,9 +1914,14 @@ openLivenessPort({
   // rebuilds the per-prefix grammar collections.
   onResync: () => {
     rotateSession();
+    let requeued = 0;
     for (const w of store.all) {
-      if (w.scanned.codeword && w.disconnectedAt === null) queuePut(w);
+      if (w.scanned.codeword && w.disconnectedAt === null) {
+        queuePut(w);
+        requeued++;
+      }
     }
+    bkLog('BK_LIVENESS_RESYNC', { requeued, wrappers: store.all.length });
     scheduleSync('sw_restart_resync');
   },
 });
