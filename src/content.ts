@@ -2273,6 +2273,8 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       // voice-navigated SPA entries (synthetic clicks are isTrusted=false),
       // so route forward through a JS call to step the full stack.
       history.forward();
+    } else if (action === 'refresh') {
+      location.reload();
     } else if (action === 'find_open' || action === 'find_close' || action === 'find_next' || action === 'find_previous' || action === 'find_immediate') {
       dispatcher.dispatch(action, params);
     } else if (action === 'activate') {
