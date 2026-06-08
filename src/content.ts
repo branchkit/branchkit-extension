@@ -1807,6 +1807,31 @@ window.addEventListener('pageshow', (e) => {
   pageSession.restore();
 });
 
+// Full grammar re-push. Used when the plugin's per-frame grammar was wiped
+// out from under us while our delta-sync shadow (`sentCodewords`) still
+// believes it's all live — so a plain `scheduleSync` computes an empty delta
+// and transmits nothing, leaving painted badges un-matchable. Two triggers
+// share this exact recovery:
+//   - transient SW restart (liveness Port reconnect → frame_liveness_disconnect
+//     wiped the grammar before we reconnected), and
+//   - bfcache restore (navigate-away ran purgeTab + session_end, then the
+//     frozen V8 context — shadow and all — was reactivated on back/forward).
+// `rotateSession` drops the stale shadow and hands the plugin a fresh
+// session_id so its `ensureFrameSession` clears stale per-prefix entries;
+// then re-queue every live, hintable wrapper for the next sync.
+function republishAllGrammar(reason: string): void {
+  rotateSession();
+  let requeued = 0;
+  for (const w of store.all) {
+    if (w.scanned.codeword && w.disconnectedAt === null) {
+      queuePut(w);
+      requeued++;
+    }
+  }
+  bkLog('BK_GRAMMAR_REPUBLISH', { reason, requeued, wrappers: store.all.length });
+  scheduleSync(reason);
+}
+
 // The bfcache-restore body, owned by `PageSession.restore`.
 function restoreFromBfcache(): void {
   // Finalize any limbo wrappers before the existing re-registration
@@ -1837,7 +1862,10 @@ function restoreFromBfcache(): void {
     idRegistry.register(w);
   }
   doScan();
-  schedulePushGrammar();
+  // NOT schedulePushGrammar(): re-registering wrappers in place enqueues no
+  // pending Puts, so the delta sync would skip as an empty delta while the
+  // plugin holds the grammar it wiped on navigate-away. Force a full re-push.
+  republishAllGrammar('bfcache_restore');
 }
 
 // --- Frame liveness Port ---
@@ -1906,24 +1934,10 @@ openLivenessPort({
   onFrameId: (frameId) => { pageSession.myFrameId = frameId; },
   onOrphan: () => { bkLog('BK_LIVENESS_ORPHAN', {}); pageSession.teardown('orphan'); },
   // SW restarted: the plugin wiped this frame's grammar when our prior
-  // liveness Port dropped (frame_liveness_disconnect → session_end). Our
-  // codewords are still valid but the delta-sync shadow thinks they're all
-  // live, so nothing would re-emit and painted badges stay un-matchable.
-  // Rotate to a fresh session (race-safe vs the old session's wipe, and it
-  // clears sentCodewords) and re-queue every live wrapper so the next sync
-  // rebuilds the per-prefix grammar collections.
-  onResync: () => {
-    rotateSession();
-    let requeued = 0;
-    for (const w of store.all) {
-      if (w.scanned.codeword && w.disconnectedAt === null) {
-        queuePut(w);
-        requeued++;
-      }
-    }
-    bkLog('BK_LIVENESS_RESYNC', { requeued, wrappers: store.all.length });
-    scheduleSync('sw_restart_resync');
-  },
+  // liveness Port dropped (frame_liveness_disconnect → session_end), but our
+  // delta-sync shadow still thinks the codewords are live. Same recovery as
+  // the bfcache path — see republishAllGrammar.
+  onResync: () => republishAllGrammar('sw_restart_resync'),
 });
 
 // --- Orphan self-quiesce ---
