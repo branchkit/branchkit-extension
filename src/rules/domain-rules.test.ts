@@ -439,6 +439,54 @@ describe('applyExclusions', () => {
   });
 });
 
+describe('text matcher modes (exact vs contains)', () => {
+  function textExcludes(
+    value: string,
+    mode: 'exact' | 'contains' | undefined,
+    caseSensitive = false,
+  ): RuleEntry[] {
+    const matcher: RuleEntry['matcher'] = mode
+      ? { type: 'text', value, caseSensitive, mode }
+      : { type: 'text', value, caseSensitive };
+    return [...compile(rule({ entries: [{ id: rid(), kind: 'exclude', matcher }] })).excludes];
+  }
+
+  it('contains matches a substring (case-insensitive default)', () => {
+    document.body.innerHTML = `<button>Delete all items</button>`;
+    const el = document.querySelector('button')!;
+    expect(isExcludedByRule(el, textExcludes('delete', 'contains'))).toBe(true);
+  });
+
+  it('contains does not match when the needle is absent', () => {
+    document.body.innerHTML = `<button>Save changes</button>`;
+    const el = document.querySelector('button')!;
+    expect(isExcludedByRule(el, textExcludes('delete', 'contains'))).toBe(false);
+  });
+
+  it('contains respects caseSensitive', () => {
+    document.body.innerHTML = `<button>DELETE row</button>`;
+    const el = document.querySelector('button')!;
+    expect(isExcludedByRule(el, textExcludes('delete', 'contains', true))).toBe(false);
+    expect(isExcludedByRule(el, textExcludes('DELETE', 'contains', true))).toBe(true);
+  });
+
+  it('exact requires the whole trimmed text to match', () => {
+    document.body.innerHTML = `<button>Delete all</button><button>Delete</button>`;
+    const [a, b] = document.querySelectorAll('button');
+    const excludes = textExcludes('Delete', 'exact');
+    expect(isExcludedByRule(a, excludes)).toBe(false);
+    expect(isExcludedByRule(b, excludes)).toBe(true);
+  });
+
+  it('treats an absent mode as exact (back-compat with pre-mode rules)', () => {
+    document.body.innerHTML = `<button>Delete all</button><button>Delete</button>`;
+    const [a, b] = document.querySelectorAll('button');
+    const excludes = textExcludes('Delete', undefined);
+    expect(isExcludedByRule(a, excludes)).toBe(false);
+    expect(isExcludedByRule(b, excludes)).toBe(true);
+  });
+});
+
 describe('collectInclusions', () => {
   it('collects elements matching CSS include selectors', () => {
     document.body.innerHTML = `

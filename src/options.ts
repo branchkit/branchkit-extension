@@ -12,6 +12,7 @@ import type {
   Matcher,
   RuleEntry,
   RevealMethod,
+  TextMatchMode,
 } from './rules/domain-rules';
 import { urlMatchesPattern } from './rules/domain-rules';
 import {
@@ -235,6 +236,8 @@ function wireAddEntry(rule: DomainRule, ruleNode: HTMLElement): void {
   const kindSelect = ruleNode.querySelector('.kind-select') as HTMLSelectElement;
   const matcherTypeSelect = ruleNode.querySelector('.matcher-type') as HTMLSelectElement;
   const matcherTypeLabel = ruleNode.querySelector('.matcher-type-label') as HTMLElement;
+  const matchModeLabel = ruleNode.querySelector('.match-mode-label') as HTMLElement;
+  const matchModeSelect = ruleNode.querySelector('.match-mode') as HTMLSelectElement;
   const revealMethodLabel = ruleNode.querySelector('.reveal-method-label') as HTMLElement;
   const revealMethodSelect = ruleNode.querySelector('.reveal-method') as HTMLSelectElement;
   const matcherInput = ruleNode.querySelector('input.matcher') as HTMLInputElement;
@@ -246,6 +249,7 @@ function wireAddEntry(rule: DomainRule, ruleNode: HTMLElement): void {
     const kind = kindSelect.value as RuleEntry['kind'];
     if (kind === 'exclude') {
       matcherTypeLabel.hidden = false;
+      matchModeLabel.hidden = matcherTypeSelect.value !== 'text';
       revealMethodLabel.hidden = true;
       matcherInput.placeholder = matcherTypeSelect.value === 'css'
         ? 'button.gear'
@@ -253,10 +257,12 @@ function wireAddEntry(rule: DomainRule, ruleNode: HTMLElement): void {
     } else if (kind === 'include') {
       // Includes are CSS-only in v1.
       matcherTypeLabel.hidden = true;
+      matchModeLabel.hidden = true;
       revealMethodLabel.hidden = true;
       matcherInput.placeholder = '[data-clickable]';
     } else {
       matcherTypeLabel.hidden = true;
+      matchModeLabel.hidden = true;
       revealMethodLabel.hidden = false;
       matcherInput.placeholder = 'button.settings-button';
     }
@@ -290,7 +296,12 @@ function wireAddEntry(rule: DomainRule, ruleNode: HTMLElement): void {
         }
         matcher = { type: 'css', selector: value };
       } else if (matcherType === 'text') {
-        matcher = { type: 'text', value, caseSensitive: false };
+        matcher = {
+          type: 'text',
+          value,
+          caseSensitive: false,
+          mode: matchModeSelect.value as TextMatchMode,
+        };
       } else {
         matcher = { type: 'class', name: value.replace(/^\./, '') };
       }

@@ -36,8 +36,17 @@ export type RevealMethod = 'opacity' | 'visibility' | 'display';
 
 export type Matcher =
   | { type: 'css'; selector: string }
-  | { type: 'text'; value: string; caseSensitive: boolean }
+  | { type: 'text'; value: string; caseSensitive: boolean; mode?: TextMatchMode }
   | { type: 'class'; name: string };
+
+/**
+ * How a text matcher compares against an element's trimmed text.
+ * `contains` (substring) is the UI default for new entries — real
+ * Delete/Save buttons often carry icon text or whitespace that exact
+ * equality would miss. Absent `mode` is treated as `exact` so any rule
+ * authored before this field existed keeps its original behavior.
+ */
+export type TextMatchMode = 'exact' | 'contains';
 
 /**
  * The matched rule set pre-split into per-kind buckets and a single
@@ -216,8 +225,13 @@ function matchesMatcher(el: Element, matcher: Matcher): boolean {
       }
     case 'text': {
       const text = el.textContent?.trim() ?? '';
-      if (matcher.caseSensitive) return text === matcher.value;
-      return text.toLowerCase() === matcher.value.toLowerCase();
+      const contains = matcher.mode === 'contains';
+      if (matcher.caseSensitive) {
+        return contains ? text.includes(matcher.value) : text === matcher.value;
+      }
+      const haystack = text.toLowerCase();
+      const needle = matcher.value.toLowerCase();
+      return contains ? haystack.includes(needle) : haystack === needle;
     }
     case 'class':
       return el.classList.contains(matcher.name);

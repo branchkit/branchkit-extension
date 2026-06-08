@@ -24,7 +24,12 @@ export const KIND_META: Record<RuleEntry['kind'], { glyph: string; label: string
 export function matcherSummary(matcher: Matcher): string {
   switch (matcher.type) {
     case 'css':   return matcher.selector;
-    case 'text':  return `text="${matcher.value}"${matcher.caseSensitive ? '' : ' (case-insensitive)'}`;
+    case 'text': {
+      const ci = matcher.caseSensitive ? '' : ' (case-insensitive)';
+      return matcher.mode === 'contains'
+        ? `text contains "${matcher.value}"${ci}`
+        : `text="${matcher.value}"${ci}`;
+    }
     case 'class': return `.${matcher.name}`;
   }
 }
