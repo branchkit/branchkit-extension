@@ -8,7 +8,7 @@
 import { Category, HintVisibility, ScannedElement, Message, DispatchResult } from './types';
 import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from './labels/words';
 import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters } from './scan/scanner';
-import { ElementWrapper, enterLimbo } from './scan/element-wrapper';
+import { ElementWrapper } from './scan/element-wrapper';
 import { wantsHint } from './lifecycle/desired-state';
 import { computeReconcilePlan, geometryInBand, RECONCILE_BAND_MARGIN_PX } from './lifecycle/reconcile';
 import { stampStrictViewport, collectStrictViewportDelta } from './lifecycle/strict-viewport';
@@ -29,7 +29,7 @@ import { HintBadge } from './render/hints';
 import { reconcilePass, drain as drainReconcilePositioner, reconcileRegistrySize } from './render/reconcile-positioner';
 import { onContainerResize } from './observe/container-resize-tracker';
 import { onTargetMutation } from './observe/target-mutation-tracker';
-import { cacheLayout, clearLayoutCache, peekCachedRect, getCachedRect, isRectOnScreen } from './layout-cache';
+import { cacheLayout, clearLayoutCache, getCachedRect, isRectOnScreen } from './layout-cache';
 import { placeBadges, placeOne, invalidateProbe } from './placement';
 import { activateElement, dispatchHover, type ActivationResult } from './activate/event-sequence';
 import {
@@ -2027,29 +2027,30 @@ function preNavDetachAll(triggerReason: string, sparePersistent = false): number
   return targets.length;
 }
 
-// Soft-detach for the voice activate-click path (DESIGN_CODEWORD_STABILITY).
-// Does the SAME synchronous per-element observer teardown as preNavDetachAll —
-// the nav-time wedge preempt — but instead of releasing each wrapper's codeword
-// + identity, it drops every wrapper into limbo. Persistent chrome whose DOM
-// node survives the nav keeps its codeword and is graduated + re-observed by
-// finalizeExpiredLimboWrappers; swapped-out content is reaped or
-// fingerprint-rebound via the generic limbo path. No getBoundingClientRect here
-// — lastRect is already warm from the IO, so the teardown stays layout-free (the
-// whole point of the preempt).
-function softDetachAllForNav(triggerReason: string): number {
-  const now = Date.now();
+// Pre-nav observer teardown for the voice activate-click path (Layer 2 of
+// DESIGN_CODEWORD_KEY_OWNERSHIP.md). Synchronously unobserves every wrapper's
+// per-element observers BEFORE the simulated click triggers the DOM swap, getting
+// ahead of the nav-time wedge (the 600+ observer-callback cascade interleaved
+// with the page's reflow).
+//
+// It used to ALSO park every wrapper in limbo to preserve codewords across the
+// nav — but that's now redundant and was actively fragile (graduation un-parked
+// at 250ms, ahead of slow swaps like QuickBase). Codeword stability is handled
+// the same way the mouse path handles it: reactively, via dropDisconnectedWrappers
+// on the actual disconnect, then Layer 1 key-ownership / limbo-rebind /
+// Regime-B recall. So the voice path now converges on the known-good mouse path
+// for stability, and the only voice-specific bit left is this wedge preempt.
+function preNavObserverTeardown(triggerReason: string): number {
   const targets = [...store.all];
   for (const w of targets) {
     resizeObserver.unobserve(w.element);
     tracker.unobserve(w.element);
     attentionObserver.unobserve(w.element);
-    if (!w.lastRect) w.lastRect = peekCachedRect(w.element);
-    enterLimbo(w, now);
   }
   chrome.runtime.sendMessage({
     type: 'DEBUG_LOG',
     tag: 'pipeline.cs_nav_step',
-    data: { step: 'soft_detach', reason: triggerReason, softened: targets.length },
+    data: { step: 'nav_observer_teardown', reason: triggerReason, torn_down: targets.length },
   } as Message).catch(() => {});
   return targets.length;
 }
@@ -2341,11 +2342,11 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
           // disconnected target as a 600+ callback cascade interleaved with the
           // page's reflow — the observed nav-time wedge. Doing the teardown
           // here (synchronously, BEFORE the click that triggers the swap) gets
-          // ahead of the cascade entirely; the SPA-nav rescan handler then
-          // sees an empty store and the deferred_scan rebuilds the new page.
+          // ahead of the cascade entirely; the disconnect that follows flows
+          // through the generic limbo/rebind/recall path (same as a mouse nav).
           // Cost on a non-nav click: tearing down ~100 wrappers takes ~2ms and
           // the post-click `scheduleHintRefresh` (always-mode) rebuilds them.
-          softDetachAllForNav('activate_click');
+          preNavObserverTeardown('activate_click');
           const result = activateElement(target);
           clickedEl = result.target;
           delegation = result.delegation;

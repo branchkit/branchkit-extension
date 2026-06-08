@@ -121,6 +121,20 @@ disconnects. Sub-frame overlap, never user-visible.
 
 ## Layer 2 — shrink soft-detach / unify the voice and mouse paths
 
+**LANDED 2026-06-07.** `softDetachAllForNav` → `preNavObserverTeardown`: it now
+only does the synchronous per-element observer teardown (the wedge preempt) and
+no longer parks wrappers in limbo. Codeword stability across a voice nav flows
+through the same reactive path as a mouse nav (dropDisconnectedWrappers on the
+real disconnect → Layer 1 key-ownership / limbo-rebind / Regime-B recall), so the
+voice path converges on the known-good mouse path and the graduation-timing
+fragility (limbo un-parked at 250ms, ahead of slow swaps) is gone. The QuickBase
+97% is unaffected — that comes from Regime-B *reload* reclaim, not the soft-detach
+limbo. Dropped the now-dead `enterLimbo`/`peekCachedRect` imports in content.ts.
+619 tests, both builds clean. Not fixture-coverable (content.ts voice path) — a
+quick real-voice re-test is the only end-to-end check.
+
+(Original analysis below.)
+
 Enabled by Layer 1; not a standalone change.
 
 Voice and mouse already converge at the shared `spa_nav` rescan. The only
