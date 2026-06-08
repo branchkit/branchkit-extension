@@ -11,7 +11,7 @@
  */
 
 import {
-  matchRule,
+  urlMatchesPattern,
   type DomainRule,
   type RuleEntry,
   type RevealMethod,
@@ -97,9 +97,13 @@ function activeHost(): string {
   try { return new URL(activeTab.url).host; } catch { return ''; }
 }
 
-function activeRule(): DomainRule | null {
-  if (!activeTab?.url) return null;
-  return matchRule(activeTab.url, rules);
+// Every rule whose pattern matches the active tab, enabled or not, so a
+// disabled rule still shows (greyed) and can be re-enabled from here. The
+// cascade — which rules actually apply — filters enabled in content.ts.
+function activeRules(): DomainRule[] {
+  if (!activeTab?.url) return [];
+  const url = activeTab.url;
+  return rules.filter((r) => urlMatchesPattern(url, r.pattern));
 }
 
 function render(): void {
@@ -114,12 +118,12 @@ function render(): void {
   }
   hostEl.textContent = host;
 
-  const rule = activeRule();
-  if (!rule) {
+  const matched = activeRules();
+  if (matched.length === 0) {
     bodyEl.replaceChildren(noRuleNode());
     return;
   }
-  bodyEl.replaceChildren(renderRuleCard(rule));
+  bodyEl.replaceChildren(...matched.map(renderRuleCard));
 }
 
 function noRuleNode(message?: string): HTMLElement {

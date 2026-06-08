@@ -75,8 +75,8 @@ import {
 } from './scan/find';
 import { saveReference, resolveReference, listReferences } from './scan/references';
 import {
-  matchRule,
-  compileRule,
+  matchRules,
+  compileRules,
   applyExclusions,
   collectInclusions,
   isExcludedByRule,
@@ -85,7 +85,7 @@ import {
   type DomainRule,
   type RuleEntry,
 } from './rules/domain-rules';
-import { loadDomainRules, onDomainRulesChanged, ruleEqual } from './rules/domain-rules-storage';
+import { loadDomainRules, onDomainRulesChanged, rulesEqual } from './rules/domain-rules-storage';
 import { loadBadgeSettings, onBadgeSettingsChanged } from './badge-settings-storage';
 import { setBadgeSizingFromSettings } from './render/hints';
 import { setNudgesFromSettings } from './placement';
@@ -329,39 +329,39 @@ function getExcludes(): readonly RuleEntry[] {
   return compiledRule?.excludes ?? [];
 }
 
-function applyMatchedRule(rule: DomainRule | null): void {
+function applyMatchedRules(matched: DomainRule[]): void {
   // Sweep any prior reveal stylesheet — covers both our previous match
   // and orphan nodes left by an earlier content-script generation
   // (extension reload re-injects JS but leaves the DOM).
   for (const old of document.querySelectorAll('style[data-branchkit-reveal]')) {
     old.remove();
   }
-  if (!rule) {
+  if (matched.length === 0) {
     compiledRule = null;
     return;
   }
-  compiledRule = compileRule(rule);
+  compiledRule = compileRules(matched);
   const style = injectRevealStyles(compiledRule.reveals);
   if (style && document.head) document.head.appendChild(style);
 }
 
 if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
   loadDomainRules().then((rules) => {
-    const rule = matchRule(window.location.href, rules);
-    applyMatchedRule(rule);
-    if (rule) {
+    const matched = matchRules(window.location.href, rules);
+    applyMatchedRules(matched);
+    if (matched.length > 0) {
       scheduleDoScan();
       schedulePushGrammar();
     }
   });
 
   onDomainRulesChanged((rules) => {
-    const nextRule = matchRule(window.location.href, rules);
-    // Skip if THIS frame's matched rule is unchanged — a user editing
+    const nextMatched = matchRules(window.location.href, rules);
+    // Skip if THIS frame's matched rule SET is unchanged — a user editing
     // *.github.com's rule shouldn't trigger a re-scan stampede on every
     // quickbase.com tab.
-    if (ruleEqual(nextRule, compiledRule?.rule ?? null)) return;
-    applyMatchedRule(nextRule);
+    if (rulesEqual(nextMatched, compiledRule?.rules ?? [])) return;
+    applyMatchedRules(nextMatched);
     if (compiledRule) {
       for (const w of [...store.all]) {
         if (isExcludedByRule(w.element, compiledRule.excludes)) detachWrapper(w.element);

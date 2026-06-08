@@ -13,7 +13,7 @@ import type {
   RuleEntry,
   RevealMethod,
 } from './rules/domain-rules';
-import { matchRule } from './rules/domain-rules';
+import { urlMatchesPattern } from './rules/domain-rules';
 import {
   loadDomainRules,
   saveDomainRules,
@@ -224,7 +224,7 @@ function updateMatchDot(rule: DomainRule, ruleNode: HTMLElement): void {
     dot.title = 'No active tab';
     return;
   }
-  const matched = matchRule(activeTabUrl, [rule]) !== null;
+  const matched = urlMatchesPattern(activeTabUrl, rule.pattern);
   dot.classList.toggle('match', matched);
   dot.title = matched ? 'Matches the current tab' : 'Does not match the current tab';
 }
@@ -344,7 +344,7 @@ function wireResolvePanel(rule: DomainRule, ruleNode: HTMLElement): void {
     const matched: chrome.tabs.Tab[] = [];
     const others: chrome.tabs.Tab[] = [];
     for (const tab of eligible) {
-      if (rule.pattern && matchRule(tab.url!, [{ ...rule, enabled: true }])) {
+      if (rule.pattern && urlMatchesPattern(tab.url!, rule.pattern)) {
         matched.push(tab);
       } else {
         others.push(tab);

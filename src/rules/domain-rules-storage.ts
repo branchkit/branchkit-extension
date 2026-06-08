@@ -38,17 +38,10 @@ export function onDomainRulesChanged(cb: (rules: DomainRule[]) => void): () => v
 }
 
 /**
- * Structural equality on a single rule (or null). JSON-based — cheap
- * for small payloads; key order is stable across writes because we
- * always construct rule objects via the same field order.
+ * Structural equality on a list of rules. JSON-based — cheap for small
+ * payloads; key order is stable across writes because we always
+ * construct rule objects via the same field order.
  */
-export function ruleEqual(a: DomainRule | null, b: DomainRule | null): boolean {
-  if (a === b) return true;
-  if (!a || !b) return false;
-  return JSON.stringify(a) === JSON.stringify(b);
-}
-
-/** Structural equality on a list of rules. */
 export function rulesEqual(a: DomainRule[], b: DomainRule[]): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }

@@ -40,13 +40,17 @@ export type Matcher =
   | { type: 'class'; name: string };
 
 /**
- * Rule pre-split into per-kind buckets and a single joined include
- * selector. Producer is `compileRule`; consumed by scan-time helpers so
- * the hot path doesn't re-filter entries on every call. Build once per
- * rule change, reuse on every doScan / MO callback.
+ * The matched rule set pre-split into per-kind buckets and a single
+ * joined include selector. Producer is `compileRules`; consumed by
+ * scan-time helpers so the hot path doesn't re-filter entries on every
+ * call. Build once per rule change, reuse on every doScan / MO callback.
+ *
+ * Holds the UNION of every rule matching the frame's URL — see
+ * "Cascade Semantics" in the design doc.
  */
 export interface CompiledRule {
-  rule: DomainRule;
+  /** The matched rules, in declaration order. Used only for change detection. */
+  rules: DomainRule[];
   excludes: readonly RuleEntry[];
   reveals: readonly RuleEntry[];
   /** Joined CSS selector for all valid include entries, or null. */
@@ -56,26 +60,46 @@ export interface CompiledRule {
 // --- Pattern matching ---
 
 /**
- * Find the first enabled rule matching this URL. Patterns:
+ * Every enabled rule matching this URL, in declaration order. Patterns:
  *   *.example.com       → any subdomain (not bare host)
  *   example.com         → exact hostname
  *   example.com/path/*  → hostname + path prefix
+ *
+ * Multiple rules can match (e.g. a general `*.quickbase.com` and a
+ * specific `acme.quickbase.com`); the caller merges them via
+ * `compileRules`. See "Cascade Semantics" in the design doc.
  */
-export function matchRule(url: string, rules: DomainRule[]): DomainRule | null {
+export function matchRules(url: string, rules: DomainRule[]): DomainRule[] {
   let parsed: URL;
   try {
     parsed = new URL(url);
   } catch {
-    return null;
+    return [];
   }
   const host = parsed.hostname;
   const hostPath = host + parsed.pathname;
 
+  const matched: DomainRule[] = [];
   for (const rule of rules) {
     if (!rule.enabled) continue;
-    if (matchesPattern(rule.pattern, host, hostPath)) return rule;
+    if (matchesPattern(rule.pattern, host, hostPath)) matched.push(rule);
   }
-  return null;
+  return matched;
+}
+
+/**
+ * Does a single pattern match this URL? Ignores the enabled flag — the
+ * options page uses it to light up the "matches current tab" indicator
+ * on every rule row, enabled or not.
+ */
+export function urlMatchesPattern(url: string, pattern: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  return matchesPattern(pattern, parsed.hostname, parsed.hostname + parsed.pathname);
 }
 
 function matchesPattern(pattern: string, host: string, hostPath: string): boolean {
@@ -102,32 +126,39 @@ function matchesPattern(pattern: string, host: string, hostPath: string): boolea
 // --- Compile ---
 
 /**
- * Bucket a rule's entries by kind, validate CSS selectors, and join
- * the valid include selectors into a single string. Validating up-front
- * lets `collectInclusions` use one querySelectorAll instead of N and
- * keeps invalid exclude/include selectors from throwing on every
- * element checked.
+ * Merge the matched rule set into one CompiledRule: bucket every rule's
+ * entries by kind, validate CSS selectors, and join the valid include
+ * selectors into a single string. Validating up-front lets
+ * `collectInclusions` use one querySelectorAll instead of N and keeps
+ * invalid exclude/include selectors from throwing on every element
+ * checked.
+ *
+ * The merge is a pure union (excludes/reveals concatenate, includes
+ * join) — order-independent, no precedence to resolve. Passing a single
+ * rule is just the one-element case.
  */
-export function compileRule(rule: DomainRule): CompiledRule {
+export function compileRules(matched: DomainRule[]): CompiledRule {
   const excludes: RuleEntry[] = [];
   const reveals: RuleEntry[] = [];
   const includeSelectors: string[] = [];
 
-  for (const entry of rule.entries) {
-    if (entry.kind === 'exclude') {
-      if (entry.matcher.type === 'css' && !isValidCSSSelector(entry.matcher.selector)) continue;
-      excludes.push(entry);
-    } else if (entry.kind === 'reveal') {
-      reveals.push(entry);
-    } else if (entry.kind === 'include' && entry.matcher.type === 'css') {
-      if (isValidCSSSelector(entry.matcher.selector)) {
-        includeSelectors.push(entry.matcher.selector);
+  for (const rule of matched) {
+    for (const entry of rule.entries) {
+      if (entry.kind === 'exclude') {
+        if (entry.matcher.type === 'css' && !isValidCSSSelector(entry.matcher.selector)) continue;
+        excludes.push(entry);
+      } else if (entry.kind === 'reveal') {
+        reveals.push(entry);
+      } else if (entry.kind === 'include' && entry.matcher.type === 'css') {
+        if (isValidCSSSelector(entry.matcher.selector)) {
+          includeSelectors.push(entry.matcher.selector);
+        }
       }
     }
   }
 
   return {
-    rule,
+    rules: matched,
     excludes,
     reveals,
     includeSelector: includeSelectors.length > 0 ? includeSelectors.join(', ') : null,

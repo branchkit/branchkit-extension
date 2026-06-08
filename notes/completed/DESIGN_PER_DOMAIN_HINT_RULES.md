@@ -6,6 +6,10 @@ and revealed elements become visible to the scanner.
 
 **Status:** Shipped. This doc describes the as-built design.
 
+**Revised 2026-06-08:** Rule matching changed from first-match-only to
+cascade — every enabled rule whose pattern matches the URL now
+contributes. See Decision #2 and "Cascade Semantics".
+
 ## Problem
 
 The hint system applies the same scanning logic everywhere.
@@ -32,10 +36,14 @@ Resolved questions that shaped this design:
    was added when testing revealed that bouncing to a separate tab
    broke the connection between rule editing and the page being fixed.
 
-2. **Multiple rules per domain.** Only one rule per domain pattern.
-   The popup edits the rule matched by the active tab; the options
-   page is where you'd add a more specific override (e.g., a
-   `demo.quickbase.com` rule alongside an existing `*.quickbase.com`).
+2. **Cascade: all matching rules merge.** Every enabled rule whose
+   pattern matches the URL contributes. A general `*.quickbase.com`
+   rule and a specific `acme.quickbase.com` rule both apply on
+   `acme.quickbase.com` — their excludes, reveals, and includes are
+   unioned. The popup lists every rule matching the active tab; the
+   options page is the cross-site list. (This started as first-match-
+   only, which silently dropped the more-specific override this very
+   decision was meant to deliver. Fixed 2026-06-08.)
 
 3. **Seed rules delivery.** **No defaults ship.** Users who want a
    QuickBase or other site-specific rule add it themselves. Shipping
@@ -119,17 +127,18 @@ the valid ones into a single selector string so the runtime can use one
 
 ```typescript
 interface CompiledRule {
-  rule: DomainRule;
+  rules: DomainRule[];             // the matched set, in declaration order
   excludes: readonly RuleEntry[];
   reveals: readonly RuleEntry[];
   includeSelector: string | null;  // joined CSS, or null if no valid includes
 }
 
-function compileRule(rule: DomainRule): CompiledRule;
+function compileRules(matched: DomainRule[]): CompiledRule;
 ```
 
-The content script holds at most one compiled rule (`compiledRule`)
-matched to the frame's URL. Recompilation happens once per rule change.
+The content script holds one merged compiled rule (`compiledRule`) for
+the frame's URL — the union of every matching rule. Recompilation
+happens once per rule change.
 
 ## Pattern Matching
 
@@ -142,6 +151,27 @@ Patterns match against `window.location.hostname` (not the full URL).
    `hostname + pathname`.
 
 Implementation is ~20 lines in `src/domain-rules.ts`. No glob library.
+
+## Cascade Semantics
+
+`matchRules(url, rules)` returns every enabled rule whose pattern
+matches, in declaration order. `compileRules(matched)` merges them into
+one `CompiledRule`: excludes concatenate, reveals concatenate, and the
+include selectors join into a single `querySelectorAll`.
+
+The merge is a pure union — a rule can only ADD exclusions, reveals, or
+includes; nothing subtracts. So the outcome is order-independent (union
+is commutative) and there are no precedence conflicts to resolve. This
+is why the model needs none of Vimium's passKey reconciliation: an
+exclude is just "no badge", and two rules excluding overlapping sets is
+identical to one rule excluding their union.
+
+One deliberate nuance: includes run after excludes in the pipeline
+(steps 5 then 6). A specific rule's `include` therefore re-adds an
+element that a general rule's `exclude` removed — the only available
+"override" gesture. It stays order-independent because
+`collectInclusions` re-queries the DOM rather than reading the
+post-exclude list.
 
 ## Storage
 
@@ -191,11 +221,15 @@ Order of operations at scan time:
 ```typescript
 // src/domain-rules.ts
 
-// Find the first enabled rule matching this URL.
-export function matchRule(url: string, rules: DomainRule[]): DomainRule | null;
+// Every enabled rule matching this URL, in declaration order.
+export function matchRules(url: string, rules: DomainRule[]): DomainRule[];
 
-// Bucket entries + validate + join include selectors. Cache the result.
-export function compileRule(rule: DomainRule): CompiledRule;
+// Does one pattern match this URL? (options page per-row indicator.)
+export function urlMatchesPattern(url: string, pattern: string): boolean;
+
+// Merge the matched set: bucket entries + validate + join include
+// selectors across all rules. Cache the result.
+export function compileRules(matched: DomainRule[]): CompiledRule;
 
 // Build a <style data-branchkit-reveal> from reveal entries. Caller
 // inserts into <head>. Returns null when there are no usable reveals.
@@ -223,15 +257,16 @@ export function isExcludedByRule(el: Element, excludes: readonly RuleEntry[]): b
 
 **On init:**
 1. Load rules from `chrome.storage.sync`.
-2. Call `matchRule(location.href, rules)` and `compileRule()` if matched.
+2. Call `matchRules(location.href, rules)` and `compileRules()` on the
+   matched set (skipped when nothing matches).
 3. Inject reveal styles if any.
 4. Run `doScan()` again (the boot-time scan ran before storage returned).
 
 **On `chrome.storage.onChanged`:**
 1. Re-match and compile.
-2. Short-circuit if the matched rule for this frame is structurally
-   identical to the previous one — avoids the multi-tab stampede when
-   the user edits a rule unrelated to this frame's URL.
+2. Short-circuit if the matched rule *set* for this frame is
+   structurally identical to the previous one — avoids the multi-tab
+   stampede when the user edits a rule unrelated to this frame's URL.
 3. Sweep previous `[data-branchkit-reveal]` stylesheets, inject the new one.
 4. Detach wrappers that the new rule excludes; `doScan` picks up the rest.
 

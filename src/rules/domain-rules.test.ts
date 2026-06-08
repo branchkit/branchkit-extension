@@ -2,15 +2,17 @@
  * BranchKit Browser — Per-domain hint rules tests.
  *
  * Pins pattern matching (subdomain wildcard, exact host, host+path),
- * compileRule bucketing + selector validation, exclusion across
- * CSS/text/class matchers, CSS inclusions, single-element
- * isExcludedByRule consistency, and reveal stylesheet generation.
+ * cascade merge across the matched set, compileRules bucketing +
+ * selector validation, exclusion across CSS/text/class matchers, CSS
+ * inclusions, single-element isExcludedByRule consistency, and reveal
+ * stylesheet generation.
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
-  matchRule,
-  compileRule,
+  matchRules,
+  compileRules,
+  urlMatchesPattern,
   applyExclusions,
   collectInclusions,
   isExcludedByRule,
@@ -33,6 +35,12 @@ function rule(overrides: Partial<DomainRule> = {}): DomainRule {
     entries: [],
     ...overrides,
   };
+}
+
+// Compile one or more rules into the merged CompiledRule. Most tests
+// pass a single rule; cascade tests pass several.
+function compile(...rules: DomainRule[]): ReturnType<typeof compileRules> {
+  return compileRules(rules);
 }
 
 function excludeEntry(matcher: RuleEntry['matcher']): RuleEntry {
@@ -71,82 +79,117 @@ beforeEach(() => {
   document.body.innerHTML = '';
 });
 
-describe('matchRule — subdomain wildcard *.example.com', () => {
+describe('matchRules — subdomain wildcard *.example.com', () => {
   const rules = [rule({ pattern: '*.example.com' })];
 
   it('matches a subdomain', () => {
-    expect(matchRule('https://app.example.com/foo', rules)).toBe(rules[0]);
+    expect(matchRules('https://app.example.com/foo', rules)).toEqual([rules[0]]);
   });
 
   it('matches a deeply nested subdomain', () => {
-    expect(matchRule('https://a.b.example.com/', rules)).toBe(rules[0]);
+    expect(matchRules('https://a.b.example.com/', rules)).toEqual([rules[0]]);
   });
 
   it('does NOT match the bare host', () => {
-    expect(matchRule('https://example.com/', rules)).toBeNull();
+    expect(matchRules('https://example.com/', rules)).toEqual([]);
   });
 
   it('does not match an unrelated domain that ends with the same suffix as a substring', () => {
-    expect(matchRule('https://notexample.com/', rules)).toBeNull();
-    expect(matchRule('https://fakeexample.com/', rules)).toBeNull();
+    expect(matchRules('https://notexample.com/', rules)).toEqual([]);
+    expect(matchRules('https://fakeexample.com/', rules)).toEqual([]);
   });
 });
 
-describe('matchRule — exact host example.com', () => {
+describe('matchRules — exact host example.com', () => {
   const rules = [rule({ pattern: 'example.com' })];
 
   it('matches the exact host', () => {
-    expect(matchRule('https://example.com/', rules)).toBe(rules[0]);
+    expect(matchRules('https://example.com/', rules)).toEqual([rules[0]]);
   });
 
   it('does not match a subdomain', () => {
-    expect(matchRule('https://app.example.com/', rules)).toBeNull();
+    expect(matchRules('https://app.example.com/', rules)).toEqual([]);
   });
 
   it('matches regardless of path', () => {
-    expect(matchRule('https://example.com/deep/path?x=1', rules)).toBe(rules[0]);
+    expect(matchRules('https://example.com/deep/path?x=1', rules)).toEqual([rules[0]]);
   });
 });
 
-describe('matchRule — host + path prefix example.com/app/*', () => {
+describe('matchRules — host + path prefix example.com/app/*', () => {
   const rules = [rule({ pattern: 'example.com/app/*' })];
 
   it('matches when path starts with /app/', () => {
-    expect(matchRule('https://example.com/app/home', rules)).toBe(rules[0]);
-    expect(matchRule('https://example.com/app/', rules)).toBe(rules[0]);
+    expect(matchRules('https://example.com/app/home', rules)).toEqual([rules[0]]);
+    expect(matchRules('https://example.com/app/', rules)).toEqual([rules[0]]);
   });
 
   it('does not match a different path prefix', () => {
-    expect(matchRule('https://example.com/api/foo', rules)).toBeNull();
+    expect(matchRules('https://example.com/api/foo', rules)).toEqual([]);
   });
 
   it('does not match a subdomain', () => {
-    expect(matchRule('https://app.example.com/app/foo', rules)).toBeNull();
+    expect(matchRules('https://app.example.com/app/foo', rules)).toEqual([]);
   });
 });
 
-describe('matchRule — rule ordering and enabled flag', () => {
-  it('returns the first enabled match', () => {
+describe('matchRules — enabled flag and empties', () => {
+  it('skips disabled rules but keeps enabled ones', () => {
     const a = rule({ id: 'a', pattern: '*.example.com', enabled: false });
     const b = rule({ id: 'b', pattern: '*.example.com' });
-    expect(matchRule('https://x.example.com/', [a, b])).toBe(b);
+    expect(matchRules('https://x.example.com/', [a, b])).toEqual([b]);
   });
 
-  it('skips disabled rules', () => {
+  it('returns empty when only a disabled rule matches', () => {
     const a = rule({ pattern: 'example.com', enabled: false });
-    expect(matchRule('https://example.com/', [a])).toBeNull();
+    expect(matchRules('https://example.com/', [a])).toEqual([]);
   });
 
-  it('returns null when no rule matches', () => {
-    expect(matchRule('https://other.com/', [rule()])).toBeNull();
+  it('returns empty when no rule matches', () => {
+    expect(matchRules('https://other.com/', [rule()])).toEqual([]);
   });
 
-  it('returns null for an unparseable URL', () => {
-    expect(matchRule('not a url', [rule()])).toBeNull();
+  it('returns empty for an unparseable URL', () => {
+    expect(matchRules('not a url', [rule()])).toEqual([]);
   });
 });
 
-describe('compileRule', () => {
+describe('matchRules — cascade (general + specific both apply)', () => {
+  const general = rule({ id: 'gen', pattern: '*.quickbase.com' });
+  const specific = rule({ id: 'spec', pattern: 'acme.quickbase.com' });
+
+  it('returns every matching rule in declaration order', () => {
+    expect(matchRules('https://acme.quickbase.com/db', [general, specific]))
+      .toEqual([general, specific]);
+  });
+
+  it('declaration order does not change membership', () => {
+    expect(matchRules('https://acme.quickbase.com/db', [specific, general]))
+      .toEqual([specific, general]);
+  });
+
+  it('only the general rule applies on a non-specific subdomain', () => {
+    expect(matchRules('https://other.quickbase.com/db', [general, specific]))
+      .toEqual([general]);
+  });
+});
+
+describe('urlMatchesPattern', () => {
+  it('reports a match regardless of any enabled flag', () => {
+    expect(urlMatchesPattern('https://acme.quickbase.com/', '*.quickbase.com')).toBe(true);
+    expect(urlMatchesPattern('https://acme.quickbase.com/', 'acme.quickbase.com')).toBe(true);
+  });
+
+  it('reports a non-match', () => {
+    expect(urlMatchesPattern('https://example.com/', '*.quickbase.com')).toBe(false);
+  });
+
+  it('returns false for an unparseable URL', () => {
+    expect(urlMatchesPattern('not a url', 'example.com')).toBe(false);
+  });
+});
+
+describe('compileRules', () => {
   it('buckets entries by kind', () => {
     const r = rule({
       entries: [
@@ -156,7 +199,7 @@ describe('compileRule', () => {
         excludeEntry({ type: 'class', name: 'bad' }),
       ],
     });
-    const c = compileRule(r);
+    const c = compile(r);
     expect(c.excludes).toHaveLength(2);
     expect(c.reveals).toHaveLength(1);
     expect(c.includeSelector).toBe('button');
@@ -166,14 +209,14 @@ describe('compileRule', () => {
     const r = rule({
       entries: [includeEntry('[data-clickable]'), includeEntry('.widget')],
     });
-    expect(compileRule(r).includeSelector).toBe('[data-clickable], .widget');
+    expect(compile(r).includeSelector).toBe('[data-clickable], .widget');
   });
 
   it('drops invalid include selectors but keeps valid siblings', () => {
     const r = rule({
       entries: [includeEntry('button'), includeEntry('!!nope!!')],
     });
-    expect(compileRule(r).includeSelector).toBe('button');
+    expect(compile(r).includeSelector).toBe('button');
   });
 
   it('drops invalid exclude CSS selectors so they don\'t throw per-element at scan time', () => {
@@ -184,7 +227,7 @@ describe('compileRule', () => {
         excludeEntry({ type: 'class', name: 'still-here' }),
       ],
     });
-    const c = compileRule(r);
+    const c = compile(r);
     expect(c.excludes).toHaveLength(2);
     expect((c.excludes[0].matcher as { selector: string }).selector).toBe('button.kept');
     expect(c.excludes[1].matcher.type).toBe('class');
@@ -192,7 +235,7 @@ describe('compileRule', () => {
 
   it('returns null includeSelector when there are no valid includes', () => {
     const r = rule({ entries: [excludeEntry({ type: 'css', selector: 'a' })] });
-    expect(compileRule(r).includeSelector).toBeNull();
+    expect(compile(r).includeSelector).toBeNull();
   });
 
   it('ignores non-CSS include matchers (v1 is CSS-only for includes)', () => {
@@ -201,7 +244,63 @@ describe('compileRule', () => {
         { id: rid(), kind: 'include', matcher: { type: 'text', value: 'X', caseSensitive: false } },
       ],
     });
-    expect(compileRule(r).includeSelector).toBeNull();
+    expect(compile(r).includeSelector).toBeNull();
+  });
+
+  it('records the matched rule set on the compiled result', () => {
+    const a = rule({ id: 'a' });
+    const b = rule({ id: 'b' });
+    expect(compile(a, b).rules).toEqual([a, b]);
+  });
+});
+
+describe('compileRules — merge across the matched set', () => {
+  it('unions excludes from every rule', () => {
+    const general = rule({
+      id: 'gen',
+      entries: [excludeEntry({ type: 'text', value: 'Delete', caseSensitive: false })],
+    });
+    const specific = rule({
+      id: 'spec',
+      entries: [excludeEntry({ type: 'css', selector: 'button.freeze-ops' })],
+    });
+    const c = compile(general, specific);
+    expect(c.excludes).toHaveLength(2);
+  });
+
+  it('unions reveals from every rule', () => {
+    const a = rule({ id: 'a', entries: [revealEntry('.gear-a', 'opacity')] });
+    const b = rule({ id: 'b', entries: [revealEntry('.gear-b', 'visibility')] });
+    expect(compile(a, b).reveals).toHaveLength(2);
+  });
+
+  it('joins include selectors across rules into one selector', () => {
+    const a = rule({ id: 'a', entries: [includeEntry('[data-a]')] });
+    const b = rule({ id: 'b', entries: [includeEntry('.widget-b')] });
+    expect(compile(a, b).includeSelector).toBe('[data-a], .widget-b');
+  });
+
+  it('merge is order-independent for the resulting exclude set', () => {
+    const a = rule({ id: 'a', entries: [excludeEntry({ type: 'class', name: 'x' })] });
+    const b = rule({ id: 'b', entries: [excludeEntry({ type: 'class', name: 'y' })] });
+
+    document.body.innerHTML = `<button class="x">A</button><button class="y">B</button><button>C</button>`;
+    const run = (rules: DomainRule[]): string[] => {
+      const refs = Array.from(document.querySelectorAll('button'));
+      const elements = refs.map(() => scanned());
+      applyExclusions(refs, elements, compileRules(rules).excludes);
+      return refs.map(e => e.textContent || '');
+    };
+    expect(run([a, b])).toEqual(['C']);
+    expect(run([b, a])).toEqual(['C']);
+  });
+
+  it('compiles an empty matched set to an inert rule', () => {
+    const c = compileRules([]);
+    expect(c.rules).toEqual([]);
+    expect(c.excludes).toHaveLength(0);
+    expect(c.reveals).toHaveLength(0);
+    expect(c.includeSelector).toBeNull();
   });
 });
 
@@ -214,7 +313,7 @@ describe('applyExclusions', () => {
     `;
     const refs = Array.from(document.querySelectorAll('button'));
     const elements = refs.map(r => scanned(r.textContent || ''));
-    const { excludes } = compileRule(rule({
+    const { excludes } = compile(rule({
       entries: [excludeEntry({ type: 'css', selector: 'button.drop' })],
     }));
 
@@ -232,7 +331,7 @@ describe('applyExclusions', () => {
     `;
     const refs = Array.from(document.querySelectorAll('a'));
     const elements = refs.map(r => scanned(r.textContent || ''));
-    const { excludes } = compileRule(rule({
+    const { excludes } = compile(rule({
       entries: [excludeEntry({ type: 'text', value: 'Delete', caseSensitive: false })],
     }));
 
@@ -245,7 +344,7 @@ describe('applyExclusions', () => {
     document.body.innerHTML = `<a>Delete</a><a>delete</a>`;
     const refs = Array.from(document.querySelectorAll('a'));
     const elements = refs.map(r => scanned(r.textContent || ''));
-    const { excludes } = compileRule(rule({
+    const { excludes } = compile(rule({
       entries: [excludeEntry({ type: 'text', value: 'Delete', caseSensitive: true })],
     }));
 
@@ -262,7 +361,7 @@ describe('applyExclusions', () => {
     `;
     const refs = Array.from(document.querySelectorAll('button'));
     const elements = refs.map(r => scanned(r.textContent || ''));
-    const { excludes } = compileRule(rule({
+    const { excludes } = compile(rule({
       entries: [excludeEntry({ type: 'class', name: 'danger' })],
     }));
 
@@ -279,7 +378,7 @@ describe('applyExclusions', () => {
       scanned('elem-b'),
       scanned('elem-c'),
     ];
-    const { excludes } = compileRule(rule({
+    const { excludes } = compile(rule({
       entries: [excludeEntry({ type: 'css', selector: 'a.x' })],
     }));
 
@@ -301,7 +400,7 @@ describe('applyExclusions', () => {
     `;
     const refs = Array.from(document.querySelectorAll('button'));
     const elements = refs.map(r => scanned(r.textContent || ''));
-    const { excludes } = compileRule(rule({
+    const { excludes } = compile(rule({
       entries: [
         excludeEntry({ type: 'class', name: 'drop' }),
         excludeEntry({ type: 'text', value: 'Delete', caseSensitive: false }),
@@ -317,7 +416,7 @@ describe('applyExclusions', () => {
     document.body.innerHTML = `<button>A</button>`;
     const refs = Array.from(document.querySelectorAll('button'));
     const elements = refs.map(() => scanned('a'));
-    const { excludes } = compileRule(rule({
+    const { excludes } = compile(rule({
       entries: [includeEntry('button'), revealEntry('button', 'opacity')],
     }));
 
@@ -331,7 +430,7 @@ describe('applyExclusions', () => {
     document.body.innerHTML = `<button>A</button>`;
     const refs = Array.from(document.querySelectorAll('button'));
     const elements = refs.map(() => scanned('a'));
-    const { excludes } = compileRule(rule({
+    const { excludes } = compile(rule({
       entries: [excludeEntry({ type: 'css', selector: '!!not a selector!!' })],
     }));
 
@@ -347,7 +446,7 @@ describe('collectInclusions', () => {
       <div data-clickable id="b">B</div>
       <div id="c">C</div>
     `;
-    const { includeSelector } = compileRule(rule({
+    const { includeSelector } = compile(rule({
       entries: [includeEntry('[data-clickable]')],
     }));
 
@@ -360,7 +459,7 @@ describe('collectInclusions', () => {
 
   it('skips elements already in the seen set', () => {
     document.body.innerHTML = `<div data-x id="a"></div><div data-x id="b"></div>`;
-    const { includeSelector } = compileRule(rule({
+    const { includeSelector } = compile(rule({
       entries: [includeEntry('[data-x]')],
     }));
     const seen = new Set<Element>([document.getElementById('a')!]);
@@ -373,7 +472,7 @@ describe('collectInclusions', () => {
 
   it('dedupes elements matched by multiple include selectors', () => {
     document.body.innerHTML = `<div data-x class="y" id="a"></div>`;
-    const { includeSelector } = compileRule(rule({
+    const { includeSelector } = compile(rule({
       entries: [includeEntry('[data-x]'), includeEntry('.y')],
     }));
 
@@ -394,7 +493,7 @@ describe('collectInclusions', () => {
       <a data-link href="#">link</a>
       <input data-field type="text" />
     `;
-    const { includeSelector } = compileRule(rule({
+    const { includeSelector } = compile(rule({
       entries: [includeEntry('[data-link]'), includeEntry('[data-field]')],
     }));
 
@@ -412,7 +511,7 @@ describe('isExcludedByRule', () => {
       <button class="danger" id="b">Delete</button>
       <button id="c">Other</button>
     `;
-    const { excludes } = compileRule(rule({
+    const { excludes } = compile(rule({
       entries: [
         excludeEntry({ type: 'class', name: 'danger' }),
         excludeEntry({ type: 'text', value: 'Save', caseSensitive: false }),
@@ -435,7 +534,7 @@ describe('isExcludedByRule', () => {
 
   it('returns false when no entries match', () => {
     document.body.innerHTML = `<button>X</button>`;
-    const { excludes } = compileRule(rule({
+    const { excludes } = compile(rule({
       entries: [excludeEntry({ type: 'css', selector: 'a' })],
     }));
     expect(isExcludedByRule(document.querySelector('button')!, excludes)).toBe(false);
@@ -449,14 +548,14 @@ describe('isExcludedByRule', () => {
 
 describe('injectRevealStyles', () => {
   it('returns null when no reveal entries', () => {
-    const { reveals } = compileRule(rule({
+    const { reveals } = compile(rule({
       entries: [excludeEntry({ type: 'css', selector: 'a' })],
     }));
     expect(injectRevealStyles(reveals)).toBeNull();
   });
 
   it('builds an opacity rule from a reveal entry', () => {
-    const { reveals } = compileRule(rule({
+    const { reveals } = compile(rule({
       entries: [revealEntry('button.gear', 'opacity')],
     }));
     const style = injectRevealStyles(reveals)!;
@@ -469,7 +568,7 @@ describe('injectRevealStyles', () => {
   });
 
   it('builds a visibility rule from a reveal entry', () => {
-    const { reveals } = compileRule(rule({
+    const { reveals } = compile(rule({
       entries: [revealEntry('.hidden', 'visibility')],
     }));
     const style = injectRevealStyles(reveals)!;
@@ -479,14 +578,14 @@ describe('injectRevealStyles', () => {
   });
 
   it('omits display reveals (deferred to v2)', () => {
-    const { reveals } = compileRule(rule({
+    const { reveals } = compile(rule({
       entries: [revealEntry('.foo', 'display')],
     }));
     expect(injectRevealStyles(reveals)).toBeNull();
   });
 
   it('joins multiple reveal rules with newlines', () => {
-    const { reveals } = compileRule(rule({
+    const { reveals } = compile(rule({
       entries: [revealEntry('.a', 'opacity'), revealEntry('.b', 'visibility')],
     }));
     const style = injectRevealStyles(reveals)!;
@@ -497,7 +596,7 @@ describe('injectRevealStyles', () => {
   });
 
   it('drops display entries but keeps mixed opacity/visibility ones', () => {
-    const { reveals } = compileRule(rule({
+    const { reveals } = compile(rule({
       entries: [revealEntry('.dropped', 'display'), revealEntry('.kept', 'opacity')],
     }));
     const style = injectRevealStyles(reveals)!;
