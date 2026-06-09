@@ -720,6 +720,19 @@ export class HintBadge {
     this.host.removeAttribute('data-bk-accel');
   }
 
+  // Write the host's transform NOW from the live target rect, instead of waiting
+  // for the next reconcile pass. Critical right after arm/disarm: the accelerator
+  // couples two transforms — the host base (`docY0`, with `+scrollTop`) and the
+  // `outer` animation (`-scrollTop`). They must flip together. If `outer` gains
+  // the `-scrollTop` animation while the host still holds the non-accelerated
+  // base (no `+scrollTop`), the badge jumps up by `scrollTop` and renders
+  // off-screen until a scroll triggers a reconcile. No-op when not yet
+  // placed/visible (`reconcileRead` returns null).
+  private repositionHostNow(): void {
+    const w = this.reconcileRead();
+    if (w) this.host.style.transform = `translate(${w.x}px,${w.y}px)`;
+  }
+
   updatePosition(candidate?: { x: number; y: number }, _caller?: string): void {
     // Bake the placement offset (candidate relative to the target's top-left);
     // the reconciler applies it against the live target rect each pass. A
@@ -728,13 +741,12 @@ export class HintBadge {
     const tr = getCachedRect(this.target);
     this._reconcileOffset = { x: candidate.x - tr.left, y: candidate.y - tr.top };
     // Offset is baked — arm the inner-scroll accelerator (no-op when the flag is
-    // off or the target has no inner scroller). Must precede reconcileRead so the
-    // immediate paint below uses the accelerated (docY0) base when armed.
+    // off or the target has no inner scroller). Must precede the paint so it uses
+    // the accelerated (docY0) base when armed, consistent with `outer`'s -scrollTop.
     this.armScrollAccel();
     // Paint at the right spot immediately (if already visible) so it doesn't
     // wait a frame for the next reconcile tick.
-    const w = this.reconcileRead();
-    if (w) this.host.style.transform = `translate(${w.x}px,${w.y}px)`;
+    this.repositionHostNow();
   }
 
   reattach(): void {
@@ -780,7 +792,8 @@ export class HintBadge {
     trackTargetMutations(this.target);
     // host-attribute tracker is keyed on the host (unchanged); no swap.
     // Re-detect the accelerator for the new node (no-op when flag off / no
-    // inner scroller / viewport-pinned).
+    // inner scroller). Disarm above + this re-arm flip `outer`'s animation, so
+    // the host base must be repainted in lockstep (below).
     this.armScrollAccel();
 
     // retarget wires observers up itself, so the deferred refine() pass is
@@ -790,7 +803,13 @@ export class HintBadge {
       unscheduleRefine(this);
     }
 
-    this.reposition();
+    // Paint the new target's host now (flag on only), keeping the base
+    // consistent with the (re-armed or cleared) accelerator animation — the
+    // old-target disarm + new-target re-arm flip `outer`'s -scrollTop, so the
+    // base must move in lockstep. Flag off keeps today's behavior: `reposition()`
+    // is a no-op and the next reconcile pass moves the host to the new target.
+    if (scrollAccelEnabled) this.repositionHostNow();
+    else this.reposition();
   }
 
   /**
@@ -813,8 +832,14 @@ export class HintBadge {
     this._size = null;
     // Arm the accelerator on show too (idempotent): a badge reused via the
     // scroll-back fast path (clearLabel→hide→show+setLabel) was disarmed in
-    // hide() and needs re-detection now that it's visible again.
+    // hide() and needs re-detection now that it's visible again. Repaint right
+    // after (flag on only): arming adds `outer`'s -scrollTop, so the host base
+    // must adopt the +scrollTop (docY0) in the same frame or the badge renders
+    // off-screen (the host here may still hold a non-accelerated base from a
+    // prior render). Gated on the flag so flag-off `show()` is unchanged — today
+    // it does not touch the host transform here.
     this.armScrollAccel();
+    if (scrollAccelEnabled) this.repositionHostNow();
     if (!grammarReady) {
       this.inner.classList.add('bk-pending');
       this.host.setAttribute('data-bk-pending', 'true');
