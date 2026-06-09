@@ -1157,6 +1157,10 @@ export class HintBadge {
     scrollAccelArmed: boolean;
     scrollAccelMax: number | null;
     scrollAccelScrollerTop: number | null;
+    // True when the occlusion hit-test has hidden this badge (.bk-occluded). With
+    // isVisible (the logical show state) this disambiguates "shown" from "shown
+    // but visually hidden because covered" — the ghost-badge diagnosis.
+    occluded: boolean;
   } {
     const ir = this.inner.getBoundingClientRect();
     const or2 = this.outer.getBoundingClientRect();
@@ -1210,6 +1214,7 @@ export class HintBadge {
       scrollAccelArmed: this._scrollAccel != null,
       scrollAccelMax: this._scrollAccel ? Math.round(this._scrollAccel.max) : null,
       scrollAccelScrollerTop: this._scrollAccel ? Math.round(this._scrollAccel.scroller.scrollTop) : null,
+      occluded: this.inner.classList.contains('bk-occluded'),
     };
   }
 
