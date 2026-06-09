@@ -190,11 +190,20 @@ That single change determines how much deletes:
   `resolveContainer`'s clip-escalation, `findBadgeContainer`, `findLimitParent`,
   `getSpaceInAncestor`, `findScrollAncestor`, the `anchorParent` field, and the
   `container-resize-tracker` registration all become deletable.
-- **Open sub-question (decide at phase 5):** keep sticky/fixed clamping
-  (`findStickyBound`)? A gBCR-following reconciler arguably makes it redundant (a
-  target scrolling under a sticky header is simply followed). If kept, retain a
-  *minimal* "nearest clip/sticky ancestor" resolver — NOT the clip-escalation
-  `resolveContainer`. If dropped, `anchorParent` + all the container helpers go.
+- **Sub-question — RESOLVED 2026-06-09 (dropped for body-mounted hosts):** the
+  sticky/fixed clamp (`findStickyBound` → `computePlacement`'s
+  `Math.max(stickyBound.top, y)`) is **redundant and actively harmful** for the
+  reconcile model. The clamp point is viewport-fixed, but it's baked into a
+  target-relative offset; a body-mounted host that follows the live target each
+  pass then freezes the bake-time `(bound − target)` gap, so once the target
+  scrolls relative to the bound the badge drifts off-target by the scroll delta.
+  Real-Chrome repro: QuickBase's left sidebar (fixed app-shell pane) stranded its
+  badges ~71px below target after scroll-up — snapshot forensics showed
+  `reconcileOffset.y ≈ +71`, `viewportFixed=true` on every strayed badge. Fix:
+  `positionAtTopLeft` passes `stickyBound = null` for body-mounted hosts (gated
+  like `availableSpace`); the reconciler follows the target under a sticky header
+  on its own. `findStickyBound` is now dead for all live (reconcile) badges and
+  can be deleted with `anchorParent` + the container helpers in a later cleanup.
 
 ### Production cadence (replaces the spike's free-running rAF)
 
