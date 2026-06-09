@@ -1261,21 +1261,28 @@ function badgeNewlyCodeworded(): void {
     const vw = window.innerWidth, vh = window.innerHeight;
     for (let i = 0; i < newBadges.length; i++) {
       const w = newBadges[i];
-      // Don't paint a badge for an element that's in the 200px IO band but
-      // off the actual viewport (e.g. YouTube's collapsed nav drawer at
-      // x=-228); placement would clamp it to the edge. It keeps its codeword
-      // and paints when it scrolls on-screen. Same gate as every paint path.
-      if (!isRectOnScreen(getCachedRect(w.element), vw, vh)) continue;
       const label = poolLabelToAssignment(w.scanned.codeword);
       w.label = label;
-      // Fast path: existing dormant hint just needs its label swapped and
-      // a show. Slow path (first-time): construct the badge. The reuse
-      // skips shadow DOM creation, observer wire-up, anchorParent walk,
-      // z-index walk, and APCA color recomputation — all of which add up
-      // to ~5-10ms per badge on scroll-back.
+      const onScreen = isRectOnScreen(getCachedRect(w.element), vw, vh);
+      // Restore the label on an existing dormant (scroll-back) hint even when
+      // the element is off the actual viewport. A dormant hint was clearLabel()d
+      // on viewport exit; if its codeword is re-granted while it sits in the
+      // 200px IO band but below/above the viewport, skipping the label here (the
+      // 116b321 regression) leaves it null — and recheckHintedVisibility shows it
+      // as an empty box when it later scrolls in. The label is just data on a
+      // hidden badge; only show()/placement waits for the actual viewport.
       if (w.hint) {
         w.hint.setLabel(label);
-      } else {
+      }
+      // Don't construct/paint a badge for an element that's in the 200px IO band
+      // but off the actual viewport (e.g. YouTube's collapsed nav drawer at
+      // x=-228); placement would clamp it to the edge. It keeps its codeword +
+      // (restored) label and paints when it scrolls on-screen.
+      if (!onScreen) continue;
+      // Slow path (first-time): construct the badge. The reuse fast path above
+      // skips shadow DOM creation, observer wire-up, anchorParent walk, z-index
+      // walk, and APCA color recomputation — ~5-10ms per badge on scroll-back.
+      if (!w.hint) {
         w.hint = new HintBadge(w.element, label, w.category, getDisplayMode());
       }
       w.hint.show(w.grammarReady);
