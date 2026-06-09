@@ -92,6 +92,57 @@ describe('isOccluded — flag gate', () => {
   });
 });
 
+describe('isOccluded — multi-point sampling', () => {
+  const origEFP = document.elementFromPoint;
+  afterEach(() => {
+    document.elementFromPoint = origEFP;
+    setOcclusionEnabled(false);
+  });
+
+  // Stub elementFromPoint: points at/below `coverFromY` return `cover`, else the
+  // target. The box is 100x100 at (100,100); sample y's are 120/150/180.
+  function stub(t: Element, cover: Element, coverFromY: number): void {
+    Object.defineProperty(t, 'getBoundingClientRect', {
+      value: () => new DOMRect(100, 100, 100, 100),
+      configurable: true,
+    });
+    document.elementFromPoint = ((_x: number, y: number) =>
+      y >= coverFromY ? cover : t) as typeof document.elementFromPoint;
+  }
+
+  it('occluded when most points are covered (center + bottom corners)', () => {
+    setOcclusionEnabled(true);
+    const root = mount('<button id="t">x</button><div id="c">c</div>');
+    const t = root.querySelector('#t')!;
+    const c = root.querySelector('#c')!;
+    // cover y>=150: center(150) + both bottom corners(180) = 3 of 5 → occluded
+    stub(t, c, 150);
+    expect(isOccluded(t)).toBe(true);
+  });
+
+  it('NOT occluded when only a minority (bottom corners) is covered', () => {
+    setOcclusionEnabled(true);
+    const root = mount('<button id="t">x</button><div id="c">c</div>');
+    const t = root.querySelector('#t')!;
+    const c = root.querySelector('#c')!;
+    // cover y>=180: only the two bottom corners = 2 of 5 → not occluded
+    stub(t, c, 180);
+    expect(isOccluded(t)).toBe(false);
+  });
+
+  it('NOT occluded when nothing covers it (all points hit the target)', () => {
+    setOcclusionEnabled(true);
+    const root = mount('<button id="t">x</button>');
+    const t = root.querySelector('#t')!;
+    Object.defineProperty(t, 'getBoundingClientRect', {
+      value: () => new DOMRect(100, 100, 100, 100),
+      configurable: true,
+    });
+    document.elementFromPoint = (() => t) as typeof document.elementFromPoint;
+    expect(isOccluded(t)).toBe(false);
+  });
+});
+
 describe('applyOcclusion — combine overlay + clip signals', () => {
   it('neither signal → not occluded, no badge write', () => {
     const { w, shown } = fakeWrapper({});

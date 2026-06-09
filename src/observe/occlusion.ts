@@ -8,11 +8,14 @@
  * clipping it). Because badges are body-mounted at max z-index, they paint ABOVE
  * the covering layer → "ghost" badges floating on targets the user can't see.
  *
- * Detection is a `document.elementFromPoint` hit-test at the target's center,
- * mirroring Link Hints. If the topmost element there is the target (or its own
- * ancestor/descendant — same visible thing), it's not occluded; anything else on
- * top means occluded. `opacity:0` ancestors still receive hit-tests, so a
- * hover-revealed control (the user runs always-mode) correctly stays NOT occluded.
+ * Detection is `document.elementFromPoint` hit-tests at several points across the
+ * target (center + four interior corners), mirroring Link Hints. The target is
+ * occluded when a MAJORITY of the in-viewport sample points are covered by
+ * something other than the target (or its own ancestor/descendant — same visible
+ * thing). Multi-point beats center-only on PARTIAL occlusion: an overlay that
+ * covers most of the box but leaves the center in a visible sliver (the QuickBase
+ * sidebar case) is caught by the corner samples. `opacity:0` ancestors still
+ * receive hit-tests, so a hover-revealed control (always-mode) stays NOT occluded.
  *
  * Flag-gated (`bkOcclusion`, default off) and consumed by two layers: the visual
  * pass hides occluded badges, and the strict-viewport computation drops them so
@@ -66,12 +69,26 @@ export function isHitOccluding(target: Element, hit: Element | null): boolean {
   return true;
 }
 
+// Sample points as fractions of the target's box. Center + four interior corners,
+// inset to 0.2/0.8 so they probe the box's extent without landing on a border or
+// an adjacent element. A point off the viewport hit-tests to null (counts as
+// not-covered) — a partially-off-viewport target won't be aggressively hidden.
+const SAMPLE_FRACTIONS: ReadonlyArray<readonly [number, number]> = [
+  [0.5, 0.5],
+  [0.2, 0.2],
+  [0.8, 0.2],
+  [0.2, 0.8],
+  [0.8, 0.8],
+];
+const OCCLUDED_MAJORITY = 3; // of SAMPLE_FRACTIONS.length (5)
+
 /**
- * Hit-test a target's center to decide if it's visually covered. Returns false
- * when the flag is off, the target has no area, or its center is outside the
- * viewport (elementFromPoint would return null there — defer). One synchronous
- * layout read (`elementFromPoint`); callers must gate to the visible set and
- * debounce (see `reconcileOcclusion`).
+ * Hit-test several points across a target to decide if it's visually covered.
+ * Occluded when a majority of the sample points are covered by another element.
+ * Returns false when the flag is off or the target has no area. Up to 5
+ * synchronous `elementFromPoint` reads (early-exits once the majority is decided,
+ * so typically 3–4); callers must gate to the visible set and debounce (see
+ * `reconcileOcclusion`).
  */
 export function isOccluded(el: Element): boolean {
   if (!occlusionEnabled) return false;
@@ -82,14 +99,25 @@ export function isOccluded(el: Element): boolean {
     return false;
   }
   if (r.width < 1 || r.height < 1) return false;
-  const cx = r.left + r.width / 2;
-  const cy = r.top + r.height / 2;
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  // A center outside the viewport hit-tests to null; defer instead of hiding.
-  if (cx < 0 || cy < 0 || cx > vw || cy > vh) return false;
   const doc = el.ownerDocument;
   if (!doc) return false;
-  const hit = doc.elementFromPoint(cx, cy);
-  return isHitOccluding(el, hit);
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+
+  let covered = 0;
+  let checked = 0;
+  for (const [fx, fy] of SAMPLE_FRACTIONS) {
+    checked++;
+    const x = r.left + r.width * fx;
+    const y = r.top + r.height * fy;
+    // Off-viewport points hit-test to null → not-covered (don't hide a target
+    // that's partly scrolled past the viewport edge).
+    const inViewport = x >= 0 && y >= 0 && x <= vw && y <= vh;
+    const hit = inViewport ? doc.elementFromPoint(x, y) : null;
+    if (isHitOccluding(el, hit)) covered++;
+    if (covered >= OCCLUDED_MAJORITY) return true;
+    // Once enough points are confirmed NOT covered, a majority is impossible.
+    if (checked - covered >= SAMPLE_FRACTIONS.length - OCCLUDED_MAJORITY + 1) return false;
+  }
+  return covered >= OCCLUDED_MAJORITY;
 }

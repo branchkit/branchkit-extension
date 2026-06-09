@@ -138,7 +138,9 @@ technique recovers.
 
 1. **`bkClipObserver` (landed, prototype)** — IO-root=scroller clip detection.
    Soak on grid-scroll pages; this is the biggest, cleanest win.
-2. **Multi-point upgrade to `occlusion.ts`** (center → center+corners). Soak.
+2. **Multi-point upgrade to `occlusion.ts`** (center → center+corners) — LANDED
+   2026-06-09. Majority-of-5 sample points, early-exit; catches partial occlusion.
+   Soak (still under `bkOcclusion`).
 3. **Compose + flip defaults** once both soak clean: fold `bkClipObserver` and
    `bkOcclusion` toward default-on (like the accelerator), or merge into one
    `bkOcclusion` flag.
