@@ -96,7 +96,7 @@ import { openLivenessPort } from './plugin/liveness';
 import { PageSession, TeardownReason } from './lifecycle/page-session';
 import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './debug/message-counters';
 import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, lifecycleCounters, resetLifecycleCounters } from './debug/perf-counters';
-import { loadConfig, getDisplayMode, getHintVisibility } from './config';
+import { loadConfig, getDisplayMode, getHintVisibility, getHintsShown, setHintsShown } from './config';
 import {
   initLabelSync,
   queuePut,
@@ -412,18 +412,42 @@ function whenDOMSettles(callback: () => void): void {
 
 // --- User settings from storage (core/config.ts) ---
 
+// Hints appear on their own — on a fresh page or after an action — only in
+// "always" mode AND when the user hasn't switched them off with F. "manual"
+// mode never auto-shows; an F-hide suppresses always-mode auto-show globally.
+function shouldAutoShowHints(): boolean {
+  return getHintVisibility() === 'always' && getHintsShown();
+}
+
+// Bring this frame's visibility in line with the persisted F state. Run when
+// hintsShown loads at boot and whenever it changes (including from F in
+// another frame/tab). Hides on F-off; shows on F-on only in always mode
+// (manual reveals are per-page and must not auto-show here).
+function applyHintsShownState(): void {
+  if (!getHintsShown()) {
+    if (pageSession.hintsVisible) hideHints();
+  } else if (getHintVisibility() === 'always' && !pageSession.hintsVisible) {
+    doScan();
+    showHints();
+  }
+}
+
 loadConfig({
   onDisplayModeChange: () => {
     if (pageSession.hintsVisible) updateBadgeLabels();
   },
   onHintVisibilityChange: () => {
     const v = getHintVisibility();
-    if (v === 'always' && !pageSession.hintsVisible) {
-      showHints();
+    if (v === 'always') {
+      // Re-picking "Always visible" is an explicit show intent — clear any
+      // prior F-hide so hints come back (and stay back on later pages).
+      setHintsShown(true);
+      if (!pageSession.hintsVisible) showHints();
     } else if (v === 'manual' && pageSession.hintsVisible) {
       hideHints();
     }
   },
+  onHintsShownChange: () => applyHintsShownState(),
   onAggressiveHintsChange: () => {
     // Clear the store so already-hinted elements that no longer qualify
     // get torn down, then re-scan with the new selector breadth.
@@ -543,10 +567,10 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
         // event that arrived in the same tick will fold into this scan
         // instead of triggering a second back-to-back doScanBatched.
         scheduleDoScan();
-        if (getHintVisibility() === 'always') {
+        if (shouldAutoShowHints()) {
           whenDOMSettles(() => {
             tracker.flushNow().then(() => {
-              if (getHintVisibility() === 'always' && !pageSession.hintsVisible) showHints();
+              if (shouldAutoShowHints() && !pageSession.hintsVisible) showHints();
             });
           });
         }
@@ -615,10 +639,12 @@ dispatcher.register('toggle_hints', () => {
   if (pageSession.hintsVisible) {
     hideHints();
     keyHandler.exitHintMode();
+    setHintsShown(false);  // sticky: stay hidden across navigation
   } else {
     doScan();
     showHints();
     keyHandler.enterHintMode();
+    setHintsShown(true);
   }
 });
 
@@ -1180,7 +1206,7 @@ function scheduleHintRefresh(): void {
   hintRefreshScheduled = true;
   setTimeout(() => {
     hintRefreshScheduled = false;
-    if (getHintVisibility() !== 'always') return;
+    if (!shouldAutoShowHints()) return;
     doScan();
     showHints();
   }, HINT_REFRESH_DELAY_MS);
@@ -1501,7 +1527,7 @@ function activateWrapper(wrapper: ElementWrapper): void {
   // Visibility handoff: same rules as the SSE activate path above. In
   // always-mode we clear narrowing/keyboard state and schedule a refresh;
   // in manual-mode we fully hide so the user can re-summon explicitly.
-  if (getHintVisibility() === 'always') {
+  if (shouldAutoShowHints()) {
     clearHintFilter();
     scheduleHintRefresh();
   } else {
@@ -2355,7 +2381,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         //    autocomplete dropdown) get reflected in the next badge set.
         //  - Manual-mode: full hide. Activate is the "I'm done" gesture;
         //    user re-summons via "show" or the f keybind.
-        if (getHintVisibility() === 'always') {
+        if (shouldAutoShowHints()) {
           clearHintFilter();
           scheduleHintRefresh();
         } else {

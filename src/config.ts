@@ -22,6 +22,10 @@ import { setExtraHintsEnabled } from './scan/scanner';
 
 let displayMode: BadgeDisplayMode = 'letter';
 let hintVisibility: HintVisibility = 'always';
+// F-driven sticky show/hide. The mode (always/manual) decides what a fresh
+// page does on its own; this is the user's explicit "hints on/off" intent,
+// which overrides always-mode auto-show. Default on.
+let hintsShown = true;
 
 export function getDisplayMode(): BadgeDisplayMode {
   return displayMode;
@@ -31,11 +35,27 @@ export function getHintVisibility(): HintVisibility {
   return hintVisibility;
 }
 
+export function getHintsShown(): boolean {
+  return hintsShown;
+}
+
+// Persist the F state to storage.local (per-machine UI state, not a synced
+// preference) so a hide/show survives navigation and browser restart. Read
+// on every page load; propagates to other open frames/tabs via onChanged.
+export function setHintsShown(value: boolean): void {
+  hintsShown = value;
+  if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+    chrome.storage.local.set({ hintsShown: value });
+  }
+}
+
 export interface ConfigHandlers {
   /** badgeDisplayMode changed — re-label currently visible badges. */
   onDisplayModeChange: () => void;
   /** hintVisibility changed — show or hide hints to match the new value. */
   onHintVisibilityChange: () => void;
+  /** hintsShown loaded or changed (incl. cross-tab) — reconcile visibility. */
+  onHintsShownChange: () => void;
   /** aggressiveHints toggled — re-scan so the wider/narrower selector applies. */
   onAggressiveHintsChange: () => void;
 }
@@ -60,6 +80,13 @@ export function loadConfig(handlers: ConfigHandlers): void {
     setExtraHintsEnabled(result.aggressiveHints === true);
   });
 
+  if (chrome.storage?.local) {
+    chrome.storage.local.get(['hintsShown'], (result) => {
+      if (typeof result.hintsShown === 'boolean') hintsShown = result.hintsShown;
+      handlers.onHintsShownChange();
+    });
+  }
+
   chrome.storage.onChanged.addListener((changes) => {
     if (changes.badgeDisplayMode) {
       displayMode = changes.badgeDisplayMode.newValue || 'letter';
@@ -68,6 +95,10 @@ export function loadConfig(handlers: ConfigHandlers): void {
     if (changes.hintVisibility) {
       hintVisibility = changes.hintVisibility.newValue || 'always';
       handlers.onHintVisibilityChange();
+    }
+    if (changes.hintsShown) {
+      hintsShown = changes.hintsShown.newValue !== false;  // absent/removed → on
+      handlers.onHintsShownChange();
     }
     if (changes.aggressiveHints) {
       // Toggle changed → re-scan so the wider/narrower selector takes
