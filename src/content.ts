@@ -88,6 +88,7 @@ import {
 import { loadDomainRules, onDomainRulesChanged, rulesEqual } from './rules/domain-rules-storage';
 import { loadBadgeSettings, onBadgeSettingsChanged } from './badge-settings-storage';
 import { setBadgeSizingFromSettings, setScrollAccelEnabled } from './render/hints';
+import { isScrollTimelineSupported } from './render/scroll-accel';
 import { setNudgesFromSettings } from './placement';
 import { labelReservoir } from './labels/label-reservoir';
 import { filterNewBatchRefs } from './scan/batch-dedup';
@@ -587,7 +588,18 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
 // support at arm time, so this gate alone never activates it on Firefox stable.
 if (typeof chrome !== 'undefined' && chrome.storage?.local) {
   chrome.storage.local.get('bkScrollAccel', (result) => {
-    setScrollAccelEnabled(result.bkScrollAccel === true);
+    const enabled = result.bkScrollAccel === true;
+    setScrollAccelEnabled(enabled);
+    // Page-visible diagnostic marker on <html>: lets the user confirm from the
+    // ordinary page console (no content-script context switch) whether the
+    // accelerator can engage. 'on' = flag set + ScrollTimeline supported;
+    // 'unsupported' = flag set but no ScrollTimeline (Firefox stable); 'off' =
+    // flag not set. Pair with `document.querySelectorAll('[data-bk-accel]').length`
+    // to count badges that actually armed.
+    document.documentElement.setAttribute(
+      'data-bk-scroll-accel',
+      enabled ? (isScrollTimelineSupported() ? 'on' : 'unsupported') : 'off',
+    );
   });
 }
 

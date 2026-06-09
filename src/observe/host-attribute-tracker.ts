@@ -39,11 +39,16 @@ function reconcile(host: HTMLElement, attributeName: string, expectedDisplay = '
     if (host.getAttribute('data-branchkit-hint') !== 'true') {
       host.setAttribute('data-branchkit-hint', 'true');
     }
-  } else if (attributeName === 'data-bk-shown' || attributeName === 'data-bk-pending') {
-    // Owned by HintBadge.show()/hide()/markGrammarReady(); the tracker MO
-    // sees our own writes echo back, so it must allow them through. Tests
-    // + dev tools can query `[data-bk-shown="true"]` and `[data-bk-pending]`
-    // to inspect badge state without peeking into the closed shadow root.
+  } else if (
+    attributeName === 'data-bk-shown' ||
+    attributeName === 'data-bk-pending' ||
+    attributeName === 'data-bk-accel'
+  ) {
+    // Owned by HintBadge.show()/hide()/markGrammarReady() and the inner-scroll
+    // accelerator arm/disarm; the tracker MO sees our own writes echo back, so
+    // it must allow them through. Tests + dev tools can query `[data-bk-shown]`,
+    // `[data-bk-pending]`, and `[data-bk-accel]` to inspect badge state without
+    // peeking into the closed shadow root.
   } else if (attributeName === 'style') {
     if (host.style.display !== expectedDisplay) {
       host.style.display = expectedDisplay;

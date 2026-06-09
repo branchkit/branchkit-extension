@@ -692,6 +692,14 @@ export class HintBadge {
   private armScrollAccel(): void {
     if (!scrollAccelEnabled || this._viewportFixed || this._scrollAccel) return;
     this._scrollAccel = createScrollAccel(this.target, this.outer);
+    // Diagnostic mirror on the light-DOM host: a badge that found an inner
+    // scroller and armed carries `data-bk-accel="<max>"`, so the accelerated set
+    // is countable from the page console
+    // (`document.querySelectorAll('[data-bk-accel]').length`) without peeking
+    // into the closed shadow root. Allowed by the host-attribute tracker.
+    if (this._scrollAccel) {
+      this.host.setAttribute('data-bk-accel', String(this._scrollAccel.max));
+    }
   }
 
   // Tear down the accelerator (cancel the compositor animation, drop the
@@ -701,6 +709,7 @@ export class HintBadge {
     if (!this._scrollAccel) return;
     teardownScrollAccel(this._scrollAccel);
     this._scrollAccel = null;
+    this.host.removeAttribute('data-bk-accel');
   }
 
   updatePosition(candidate?: { x: number; y: number }, _caller?: string): void {
