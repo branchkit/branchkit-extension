@@ -581,14 +581,14 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
 }
 
 // Adopt the inner-scroll accelerator flag (notes/DESIGN_INNER_SCROLL_ACCELERATOR.md).
-// Default OFF: when absent or false, badge positioning is byte-for-byte today's
-// chase. Flip on for testing via `chrome.storage.local.set({ bkScrollAccel: true })`.
-// Read once at load (per-machine, like the alphabet); no live re-read needed since
-// the user reloads to test. The accelerator additionally requires ScrollTimeline
-// support at arm time, so this gate alone never activates it on Firefox stable.
+// Default ON: the accelerator is the validated wiggle fix, so only an explicit
+// `bkScrollAccel: false` disables it (escape hatch). It still requires
+// ScrollTimeline support at arm time, so this never activates on Firefox stable —
+// it falls back to the JS chase there with no errors. Read once at load
+// (per-machine, like the alphabet); the user reloads to change it.
 if (typeof chrome !== 'undefined' && chrome.storage?.local) {
   chrome.storage.local.get('bkScrollAccel', (result) => {
-    const enabled = result.bkScrollAccel === true;
+    const enabled = result.bkScrollAccel !== false;
     setScrollAccelEnabled(enabled);
     // Page-visible diagnostic marker on <html>: lets the user confirm from the
     // ordinary page console (no content-script context switch) whether the

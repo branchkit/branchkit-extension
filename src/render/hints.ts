@@ -367,11 +367,12 @@ export function setBadgeSizingFromSettings(s: BadgeSettings): void {
 }
 
 // Inner-scroll accelerator gate (notes/DESIGN_INNER_SCROLL_ACCELERATOR.md).
-// Default OFF — when off, no accelerator is ever armed and badge behavior is
-// byte-for-byte identical to today's chase. Flipped once at content-script init
-// from the `bkScrollAccel` flag in chrome.storage.local (mirrors the alphabet
-// adoption pattern). A mutable module ref so the flag propagates without
-// re-wiring callers.
+// Production default is ON, set at content-script init from the `bkScrollAccel`
+// flag (only an explicit `false` disables it). This module ref initializes false
+// as a pre-read safety value — off until that init read confirms — so a badge
+// built before the storage read doesn't arm prematurely; it re-arms on its next
+// show()/updatePosition once the flag resolves. A mutable ref so the flag
+// propagates without re-wiring callers.
 let scrollAccelEnabled = false;
 
 export function setScrollAccelEnabled(enabled: boolean): void {
