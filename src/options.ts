@@ -49,6 +49,7 @@ import {
 let rules: DomainRule[] = [];
 let activeTabUrl: string | null = null;
 let draggedRuleId: string | null = null;
+let draggedEntry: { ruleId: string; entryId: string } | null = null;
 const PATTERN_SAVE_DEBOUNCE_MS = 350;
 const patternSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -183,7 +184,63 @@ function wireDragReorder(rule: DomainRule, node: HTMLElement): void {
 }
 
 function clearDragMarkers(): void {
-  for (const el of rulesEl.querySelectorAll('.drag-over, .dragging')) {
+  for (const el of rulesEl.querySelectorAll('.rule.drag-over, .rule.dragging')) {
+    el.classList.remove('drag-over', 'dragging');
+  }
+}
+
+// Drag-and-drop reordering of entries WITHIN a rule. Mirrors wireDragReorder
+// but scoped per-rule: a drag started in one card can only drop in that same
+// card's entry list. Order is organizational only, same as rule order.
+function wireEntryDragReorder(rule: DomainRule, entry: RuleEntry, node: HTMLElement): void {
+  const handle = node.querySelector('.entry-drag') as HTMLElement;
+
+  handle.addEventListener('dragstart', (e) => {
+    draggedEntry = { ruleId: rule.id, entryId: entry.id };
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', entry.id);  // Firefox needs data to start a drag
+      e.dataTransfer.setDragImage(node, 12, 8);
+    }
+    node.classList.add('dragging');
+  });
+
+  handle.addEventListener('dragend', () => {
+    draggedEntry = null;
+    clearEntryDragMarkers();
+  });
+
+  const sameRuleTarget = (): boolean =>
+    !!draggedEntry && draggedEntry.ruleId === rule.id && draggedEntry.entryId !== entry.id;
+
+  node.addEventListener('dragover', (e) => {
+    if (!sameRuleTarget()) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    const container = node.parentElement;
+    if (container) {
+      for (const el of container.querySelectorAll('.drag-over')) {
+        if (el !== node) el.classList.remove('drag-over');
+      }
+    }
+    node.classList.add('drag-over');
+  });
+
+  node.addEventListener('drop', (e) => {
+    if (!sameRuleTarget()) return;
+    e.preventDefault();
+    const draggedId = draggedEntry!.entryId;
+    draggedEntry = null;
+    clearEntryDragMarkers();
+    rule.entries = reorderRules(rule.entries, draggedId, entry.id);
+    save();
+    const entriesEl = node.closest('.rule')!.querySelector('.entries') as HTMLElement;
+    renderEntries(rule, entriesEl);
+  });
+}
+
+function clearEntryDragMarkers(): void {
+  for (const el of rulesEl.querySelectorAll('.entry.drag-over, .entry.dragging')) {
     el.classList.remove('drag-over', 'dragging');
   }
 }
@@ -204,6 +261,8 @@ function renderEntries(rule: DomainRule, container: HTMLElement): void {
 function renderEntry(rule: DomainRule, entry: RuleEntry): HTMLElement {
   const node = entryTpl.content.firstElementChild!.cloneNode(true) as HTMLElement;
   if (entry.enabled === false) node.classList.add('entry-off');
+
+  wireEntryDragReorder(rule, entry, node);
 
   const toggle = node.querySelector('.entry-toggle') as HTMLInputElement;
   toggle.checked = entry.enabled !== false;

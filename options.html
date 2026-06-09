@@ -138,6 +138,17 @@
       border-radius: 6px;
     }
     .entry:hover { background: rgba(0,0,0,0.025); }
+    .entry.dragging { opacity: 0.4; }
+    .entry.drag-over { box-shadow: inset 0 2px 0 #0078ff; }
+    .entry-drag {
+      cursor: grab;
+      color: var(--fg-muted);
+      user-select: none;
+      flex-shrink: 0;
+      font-size: 12px;
+      line-height: 1;
+    }
+    .entry-drag:active { cursor: grabbing; }
     .entry-toggle { margin: 0; flex-shrink: 0; cursor: pointer; }
     .entry-off .entry-desc { opacity: 0.45; text-decoration: line-through; }
     .entry-off .entry-kind { opacity: 0.4; }
@@ -425,6 +436,7 @@
 
     <template id="entry-template">
       <div class="entry">
+        <span class="entry-drag" draggable="true" title="Drag to reorder">⠿</span>
         <input type="checkbox" class="entry-toggle" title="Apply this entry">
         <span class="entry-kind"></span>
         <span class="entry-desc"></span>
