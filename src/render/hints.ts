@@ -1120,6 +1120,20 @@ export class HintBadge {
     bakeTargetTop: number | null;
     liveTargetTop: number | null;
     targetTag: string;
+    // Reconcile-model forensics (the live positioning model). `reconcileOffset`
+    // is the baked candidate-minus-target offset the reconciler applies each
+    // pass; a scroll-back-stranded badge typically shows a stale offset here
+    // (e.g. offset.y ~= the scroll delta instead of the small placement nudge).
+    // `hostTransform` is what the reconciler last wrote. `viewportFixed` picks
+    // the host's anchoring (fixed vs absolute). The `scrollAccel*` fields show
+    // whether the inner-scroll accelerator is armed and its live scroll state —
+    // an armed badge's on-screen position is host base + outer's -scrollerTop.
+    reconcileOffset: { x: number; y: number } | null;
+    hostTransform: string;
+    viewportFixed: boolean;
+    scrollAccelArmed: boolean;
+    scrollAccelMax: number | null;
+    scrollAccelScrollerTop: number | null;
   } {
     const ir = this.inner.getBoundingClientRect();
     const or2 = this.outer.getBoundingClientRect();
@@ -1165,6 +1179,14 @@ export class HintBadge {
       bakeTargetTop: this._lastBake ? Math.round(this._lastBake.targetTop) : null,
       liveTargetTop: this.anchorMode ? Math.round(this.target.getBoundingClientRect().top) : null,
       targetTag: this.target.tagName.toLowerCase(),
+      reconcileOffset: this._reconcileOffset
+        ? { x: Math.round(this._reconcileOffset.x), y: Math.round(this._reconcileOffset.y) }
+        : null,
+      hostTransform: this.host.style.transform ?? '',
+      viewportFixed: this._viewportFixed,
+      scrollAccelArmed: this._scrollAccel != null,
+      scrollAccelMax: this._scrollAccel ? Math.round(this._scrollAccel.max) : null,
+      scrollAccelScrollerTop: this._scrollAccel ? Math.round(this._scrollAccel.scroller.scrollTop) : null,
     };
   }
 

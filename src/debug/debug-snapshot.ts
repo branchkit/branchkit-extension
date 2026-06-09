@@ -103,6 +103,12 @@ interface WrapperRecord {
     bakeTargetTop: number | null;
     liveTargetTop: number | null;
     targetTag: string;
+    reconcileOffset: { x: number; y: number } | null;
+    hostTransform: string;
+    viewportFixed: boolean;
+    scrollAccelArmed: boolean;
+    scrollAccelMax: number | null;
+    scrollAccelScrollerTop: number | null;
   } | null;
   containerResolution: ContainerResolutionDiag | null;
   isInViewport: boolean;
@@ -241,6 +247,12 @@ function captureWrapper(w: ElementWrapper): WrapperRecord {
       bakeTargetTop: diag.bakeTargetTop,
       liveTargetTop: diag.liveTargetTop,
       targetTag: diag.targetTag,
+      reconcileOffset: diag.reconcileOffset,
+      hostTransform: diag.hostTransform,
+      viewportFixed: diag.viewportFixed,
+      scrollAccelArmed: diag.scrollAccelArmed,
+      scrollAccelMax: diag.scrollAccelMax,
+      scrollAccelScrollerTop: diag.scrollAccelScrollerTop,
     };
   }
 
