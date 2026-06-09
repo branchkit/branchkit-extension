@@ -83,13 +83,21 @@ export class ElementWrapper {
   // `stampStrictViewport` after the corresponding postBatch.
   lastSentStrictViewport: boolean | undefined = undefined;
 
-  // True when the occlusion hit-test most recently found this wrapper's target
-  // covered by another element (notes/DESIGN_HINT_OCCLUSION_FILTERING.md). Drives
-  // two consumers: the badge is visually hidden (setOccluded), and the
-  // strict-viewport computation forces in_strict_viewport=false so voice can't
-  // match a target the user can't see. Set by `reconcileOcclusion`; always false
-  // when the bkOcclusion flag is off.
+  // EFFECTIVE occlusion (notes/DESIGN_HINT_OCCLUSION_FILTERING.md): the OR of the
+  // two input signals below, recomputed by `applyOcclusion`. Drives the two
+  // consumers — the badge is visually hidden (setOccluded), and strict-viewport
+  // forces in_strict_viewport=false so voice can't match a target the user can't
+  // see. Both inputs default false, so this is false unless a flag is on.
   occluded: boolean = false;
+  // Input A — `overlayCovered`: the elementFromPoint hit-test found the target
+  // covered by another (hit-testable) element. Set by `reconcileOcclusion`
+  // (settle-debounced); gated by bkOcclusion.
+  overlayCovered: boolean = false;
+  // Input B — `clipped`: an IntersectionObserver rooted at the target's scroll
+  // container reports the target scrolled out of that container (clipped).
+  // Compositor-driven, continuous, flicker-free. Set by the clip-observer; gated
+  // by bkClipObserver.
+  clipped: boolean = false;
 
   constructor(element: Element, scanned: ScannedElement) {
     this.element = element;

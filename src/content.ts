@@ -30,7 +30,8 @@ import { HintBadge } from './render/hints';
 import { reconcilePass, drain as drainReconcilePositioner, reconcileRegistrySize } from './render/reconcile-positioner';
 import { onContainerResize } from './observe/container-resize-tracker';
 import { onTargetMutation } from './observe/target-mutation-tracker';
-import { isOccluded, isOcclusionEnabled, setOcclusionEnabled } from './observe/occlusion';
+import { isOccluded, isOcclusionEnabled, setOcclusionEnabled, applyOcclusion } from './observe/occlusion';
+import { reconcileClipObservation, drainClipObservers, setClipObserverEnabled } from './observe/clip-observer';
 import { cacheLayout, clearLayoutCache, getCachedRect, isRectOnScreen } from './layout-cache';
 import { placeBadges, placeOne, invalidateProbe } from './placement';
 import { activateElement, dispatchHover, type ActivationResult } from './activate/event-sequence';
@@ -595,6 +596,14 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
     // `chrome.storage.local.set({ bkOcclusion: true })`.
     setOcclusionEnabled(result.bkOcclusion === true);
     document.documentElement.setAttribute('data-bk-occlusion', result.bkOcclusion === true ? 'on' : 'off');
+  });
+  chrome.storage.local.get('bkClipObserver', (result) => {
+    // Scroll-container clip detection (IO-root=scroller, Rango's idea). NEW
+    // prototype, default OFF; enable with `chrome.storage.local.set({ bkClipObserver: true })`.
+    // Separate flag from bkOcclusion so the IO-clip path can be A/B'd against the
+    // elementFromPoint overlay path; they compose when both are on.
+    setClipObserverEnabled(result.bkClipObserver === true);
+    document.documentElement.setAttribute('data-bk-clip-observer', result.bkClipObserver === true ? 'on' : 'off');
   });
   chrome.storage.local.get('bkScrollAccel', (result) => {
     const enabled = result.bkScrollAccel !== false;
@@ -1473,17 +1482,17 @@ function reconcileStrictViewport(): void {
 // so occlusion is moot) to keep the synchronous reads bounded.
 function reconcileOcclusion(): void {
   if (!isOcclusionEnabled()) return;
-  const changed: ElementWrapper[] = [];
+  // Read pass: hit-test all visible in-band badges, record the overlay signal.
+  const candidates: ElementWrapper[] = [];
   for (const w of store.all) {
     if (!w.hint || !w.hint.isVisible || !w.isInViewport || !w.element.isConnected) continue;
-    const occluded = isOccluded(w.element);
-    if (occluded !== w.occluded) {
-      w.occluded = occluded;
-      changed.push(w);
-    }
+    w.overlayCovered = isOccluded(w.element);
+    candidates.push(w);
   }
-  for (const w of changed) w.hint!.setOccluded(w.occluded);
-  if (changed.length > 0) firehoseStep('occlusion:delta', changed.length, 1);
+  // Write pass: fold into the effective state (composes with the clip signal).
+  let changed = 0;
+  for (const w of candidates) if (applyOcclusion(w)) changed++;
+  if (changed > 0) firehoseStep('occlusion:delta', changed, 1);
 }
 
 // Run `cb` on the next idle frame, falling back to a short timeout where
@@ -2076,6 +2085,7 @@ function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
     }
     reconcileScrollActive = false;
     drainReconcilePositioner();
+    drainClipObservers();
   } catch { /* same */ }
   // Remove badge hosts so the new content script's initial DOM-clear sweep
   // (content.ts ~line 2230) doesn't have to fight visible artifacts.
@@ -2815,9 +2825,13 @@ function scheduleScrollReposition(): void {
       // command requires the hints tag, so voice can't match when hints
       // are down — strict membership being stale doesn't matter, and the
       // next `show` re-scans from scratch.
-      // Occlusion before strict-viewport: hit-test covered targets and flag them
-      // so the strict-viewport delta below drops them from voice (and hides the
-      // ghost badge). No-op when the bkOcclusion flag is off.
+      // Occlusion before strict-viewport: flag covered/clipped targets so the
+      // strict-viewport delta below drops them from voice (and hides the ghost
+      // badge). reconcileClipObservation only syncs IO membership — the observers
+      // drive `clipped` continuously between settles (flicker-free); reconcileOcclusion
+      // is the settle-debounced elementFromPoint overlay pass. No-ops when their
+      // flags are off.
+      reconcileClipObservation(store.all);
       reconcileOcclusion();
       reconcileStrictViewport();
     }
@@ -2895,9 +2909,13 @@ function scheduleDeferredReposition(): void {
       // a scroll event. Re-push the strict flag for changed wrappers so the
       // _strict companion collection — and the Discovery HUD that reads it —
       // converges to the post-settle viewport reality.
-      // Occlusion before strict-viewport: hit-test covered targets and flag them
-      // so the strict-viewport delta below drops them from voice (and hides the
-      // ghost badge). No-op when the bkOcclusion flag is off.
+      // Occlusion before strict-viewport: flag covered/clipped targets so the
+      // strict-viewport delta below drops them from voice (and hides the ghost
+      // badge). reconcileClipObservation only syncs IO membership — the observers
+      // drive `clipped` continuously between settles (flicker-free); reconcileOcclusion
+      // is the settle-debounced elementFromPoint overlay pass. No-ops when their
+      // flags are off.
+      reconcileClipObservation(store.all);
       reconcileOcclusion();
       reconcileStrictViewport();
     }

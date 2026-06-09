@@ -1,0 +1,127 @@
+/**
+ * BranchKit Browser — scroll-container clip detection (Rango's IO-root=scroller
+ * idea, adapted to body-mounted badges).
+ *
+ * The body-mounted badge escapes the page's clipping, so when its target scrolls
+ * out of an inner overflow pane the badge keeps painting where the (now-clipped)
+ * target's rect is — a ghost. Rango avoids this by NESTING the hint in the
+ * target's container (so it clips with it); we keep body-mounting (binding
+ * robustness) and instead DETECT the clip with an `IntersectionObserver` whose
+ * `root` is the target's scroll container. When the target leaves that container
+ * the IO reports `isIntersecting: false` → we flag the wrapper `clipped`.
+ *
+ * Why IO and not the elementFromPoint pass: IO is compositor-driven and
+ * overflow-clip-aware — it updates continuously and in sync with scroll (no
+ * settle-debounce, no per-frame JS, no flicker), and it sees clipping that
+ * `elementFromPoint` misses on `pointer-events:none` covers. It does NOT catch
+ * arbitrary overlays (that stays the elementFromPoint job); the two signals
+ * compose via `applyOcclusion` (effective = overlayCovered || clipped).
+ *
+ * Flag-gated (`bkClipObserver`, default off). One shared observer per scroll
+ * container root (like Rango's `scrollIntersectionObservers`).
+ */
+
+import type { ElementWrapper } from '../scan/element-wrapper';
+import { findScrollableAncestor } from '../render/scroll-accel';
+import { applyOcclusion } from './occlusion';
+
+let clipObserverEnabled = false;
+
+export function setClipObserverEnabled(enabled: boolean): void {
+  clipObserverEnabled = enabled;
+  if (!enabled) drainClipObservers();
+}
+
+export function isClipObserverEnabled(): boolean {
+  return clipObserverEnabled;
+}
+
+const observersByRoot = new Map<Element, IntersectionObserver>();
+const rootByTarget = new Map<Element, Element>();
+const wrapperByTarget = new Map<Element, ElementWrapper>();
+
+function getObserver(root: Element): IntersectionObserver {
+  let io = observersByRoot.get(root);
+  if (!io) {
+    io = new IntersectionObserver(onClipIntersection, { root, threshold: 0 });
+    observersByRoot.set(root, io);
+  }
+  return io;
+}
+
+function onClipIntersection(entries: IntersectionObserverEntry[]): void {
+  for (const e of entries) {
+    const w = wrapperByTarget.get(e.target);
+    if (!w) continue;
+    // Clipped = the target is NOT intersecting its scroll container's visible box
+    // (scrolled out of the pane / under a scroll-clipping header). The initial
+    // IO callback on observe() also lands here, so an already-clipped target is
+    // hidden immediately.
+    w.clipped = !e.isIntersecting;
+    applyOcclusion(w);
+  }
+}
+
+function unobserveTarget(el: Element): void {
+  const root = rootByTarget.get(el);
+  if (root) observersByRoot.get(root)?.unobserve(el);
+  rootByTarget.delete(el);
+  const w = wrapperByTarget.get(el);
+  wrapperByTarget.delete(el);
+  // Clear the clip signal so dropping observation can't strand a hidden badge.
+  if (w && w.clipped) {
+    w.clipped = false;
+    applyOcclusion(w);
+  }
+}
+
+/**
+ * Level-triggered sync: observe every currently-hinted, connected target that
+ * lives inside an inner scroll container; drop targets that are gone. Called
+ * from the settle handlers. The IO drives `clipped` continuously between calls —
+ * this only reconciles the membership. `findScrollableAncestor` (reused from the
+ * accelerator) runs once per newly-observed target; already-observed ones are
+ * skipped, so per-settle cost is bounded to churn. No-op (and drains) when off.
+ */
+export function reconcileClipObservation(wrappers: Iterable<ElementWrapper>): void {
+  if (!clipObserverEnabled) {
+    if (rootByTarget.size > 0) drainClipObservers();
+    return;
+  }
+  const wanted = new Set<Element>();
+  for (const w of wrappers) {
+    if (!w.hint || !w.element.isConnected) continue;
+    wanted.add(w.element);
+    if (rootByTarget.has(w.element)) continue;
+    const root = findScrollableAncestor(w.element);
+    if (!root) continue; // viewport-only clipping is already covered by isInViewport
+    rootByTarget.set(w.element, root);
+    wrapperByTarget.set(w.element, w);
+    getObserver(root).observe(w.element);
+  }
+  for (const el of [...rootByTarget.keys()]) {
+    if (!wanted.has(el)) unobserveTarget(el);
+  }
+}
+
+/**
+ * Disconnect every clip observer in one shot. For orphan/navigate teardown
+ * (`quiesceOrphan` sweeps hosts via raw DOM, bypassing per-wrapper unobserve) and
+ * when the flag flips off. Clears the clip signal on anything still flagged.
+ */
+export function drainClipObservers(): void {
+  for (const io of observersByRoot.values()) io.disconnect();
+  observersByRoot.clear();
+  for (const w of wrapperByTarget.values()) {
+    if (w.clipped) {
+      w.clipped = false;
+      applyOcclusion(w);
+    }
+  }
+  rootByTarget.clear();
+  wrapperByTarget.clear();
+}
+
+export function clipObserverDebug(): { roots: number; targets: number } {
+  return { roots: observersByRoot.size, targets: rootByTarget.size };
+}

@@ -19,10 +19,28 @@
  * voice can't match a hidden target.
  */
 
+import type { ElementWrapper } from '../scan/element-wrapper';
+
 let occlusionEnabled = false;
 
 export function setOcclusionEnabled(enabled: boolean): void {
   occlusionEnabled = enabled;
+}
+
+/**
+ * Recompute a wrapper's effective occlusion as the OR of its two input signals —
+ * `overlayCovered` (elementFromPoint hit-test) and `clipped` (IO rooted at the
+ * scroll container) — and, when it changed, hide/show the badge to match. The
+ * single writer of `w.occluded` + `setOccluded`, called by both producers so they
+ * compose instead of fighting. Voice (strict-viewport) reads `w.occluded`
+ * directly on the next settle. Returns true if the effective state flipped.
+ */
+export function applyOcclusion(w: ElementWrapper): boolean {
+  const eff = w.overlayCovered || w.clipped;
+  if (eff === w.occluded) return false;
+  w.occluded = eff;
+  w.hint?.setOccluded(eff);
+  return true;
 }
 
 export function isOcclusionEnabled(): boolean {

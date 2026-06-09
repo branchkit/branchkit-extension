@@ -1,5 +1,20 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { isHitOccluding, isOccluded, setOcclusionEnabled } from './occlusion';
+import { isHitOccluding, isOccluded, setOcclusionEnabled, applyOcclusion } from './occlusion';
+import type { ElementWrapper } from '../scan/element-wrapper';
+
+function fakeWrapper(init: { overlayCovered?: boolean; clipped?: boolean }): {
+  w: ElementWrapper;
+  shown: boolean[];
+} {
+  const shown: boolean[] = [];
+  const w = {
+    overlayCovered: init.overlayCovered ?? false,
+    clipped: init.clipped ?? false,
+    occluded: false,
+    hint: { setOccluded: (b: boolean) => shown.push(b) },
+  } as unknown as ElementWrapper;
+  return { w, shown };
+}
 
 const mounted: Element[] = [];
 function mount(html: string): Element {
@@ -74,5 +89,50 @@ describe('isOccluded — flag gate', () => {
       configurable: true,
     });
     expect(isOccluded(t)).toBe(false);
+  });
+});
+
+describe('applyOcclusion — combine overlay + clip signals', () => {
+  it('neither signal → not occluded, no badge write', () => {
+    const { w, shown } = fakeWrapper({});
+    expect(applyOcclusion(w)).toBe(false);
+    expect(w.occluded).toBe(false);
+    expect(shown).toEqual([]);
+  });
+
+  it('overlayCovered alone → occluded, hides the badge', () => {
+    const { w, shown } = fakeWrapper({ overlayCovered: true });
+    expect(applyOcclusion(w)).toBe(true);
+    expect(w.occluded).toBe(true);
+    expect(shown).toEqual([true]);
+  });
+
+  it('clipped alone → occluded (the IO signal)', () => {
+    const { w, shown } = fakeWrapper({ clipped: true });
+    expect(applyOcclusion(w)).toBe(true);
+    expect(w.occluded).toBe(true);
+    expect(shown).toEqual([true]);
+  });
+
+  it('both signals → occluded once', () => {
+    const { w } = fakeWrapper({ overlayCovered: true, clipped: true });
+    expect(applyOcclusion(w)).toBe(true);
+    expect(w.occluded).toBe(true);
+  });
+
+  it('is idempotent — no write when effective state is unchanged', () => {
+    const { w, shown } = fakeWrapper({ clipped: true });
+    applyOcclusion(w);
+    expect(applyOcclusion(w)).toBe(false);
+    expect(shown).toEqual([true]);
+  });
+
+  it('clearing both un-hides the badge', () => {
+    const { w, shown } = fakeWrapper({ overlayCovered: true });
+    applyOcclusion(w);
+    w.overlayCovered = false;
+    expect(applyOcclusion(w)).toBe(true);
+    expect(w.occluded).toBe(false);
+    expect(shown).toEqual([true, false]);
   });
 });
