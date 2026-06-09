@@ -150,6 +150,15 @@ function renderEntries(rule: DomainRule, container: HTMLElement): void {
 
 function renderEntry(rule: DomainRule, entry: RuleEntry): HTMLElement {
   const node = entryTpl.content.firstElementChild!.cloneNode(true) as HTMLElement;
+  if (entry.enabled === false) node.classList.add('entry-off');
+
+  const toggle = node.querySelector('.entry-toggle') as HTMLInputElement;
+  toggle.checked = entry.enabled !== false;
+  toggle.addEventListener('change', () => {
+    entry.enabled = toggle.checked;
+    save();
+    node.classList.toggle('entry-off', !toggle.checked);
+  });
 
   const kindEl = node.querySelector('.entry-kind') as HTMLElement;
   kindEl.classList.add(entry.kind);
@@ -168,8 +177,15 @@ function renderEntry(rule: DomainRule, entry: RuleEntry): HTMLElement {
     desc.appendChild(document.createTextNode(` (${entry.reveal})`));
   }
 
+  const editBtn = node.querySelector('.edit-entry') as HTMLButtonElement;
+  editBtn.addEventListener('click', () => {
+    const ruleNode = node.closest('.rule') as HTMLElement;
+    beginEdit(rule, entry, ruleNode, node);
+  });
+
   const del = node.querySelector('.delete-entry') as HTMLButtonElement;
   del.addEventListener('click', () => {
+    if (editSession?.entryId === entry.id) clearEdit();
     rule.entries = rule.entries.filter(e => e.id !== entry.id);
     save();
     const wrapper = del.closest('.rule')!;
@@ -228,6 +244,58 @@ function updateMatchDot(rule: DomainRule, ruleNode: HTMLElement): void {
   const matched = urlMatchesPattern(activeTabUrl, rule.pattern);
   dot.classList.toggle('match', matched);
   dot.title = matched ? 'Matches the current tab' : 'Does not match the current tab';
+}
+
+// --- Entry editing ---
+
+interface EditSession { ruleId: string; entryId: string; }
+let editSession: EditSession | null = null;
+
+// Pull an existing entry back into its rule's add-entry form for in-place
+// editing. Reuses the form's change-driven show/hide by dispatching a
+// synthetic `change` after setting the controls, so we don't duplicate
+// syncKindUI's logic.
+function beginEdit(
+  rule: DomainRule,
+  entry: RuleEntry,
+  ruleNode: HTMLElement,
+  entryRow: HTMLElement,
+): void {
+  clearEdit();
+  editSession = { ruleId: rule.id, entryId: entry.id };
+
+  const kindSelect = ruleNode.querySelector('.kind-select') as HTMLSelectElement;
+  const matcherTypeSelect = ruleNode.querySelector('.matcher-type') as HTMLSelectElement;
+  const matchModeSelect = ruleNode.querySelector('.match-mode') as HTMLSelectElement;
+  const revealMethodSelect = ruleNode.querySelector('.reveal-method') as HTMLSelectElement;
+  const matcherInput = ruleNode.querySelector('input.matcher') as HTMLInputElement;
+  const labelInput = ruleNode.querySelector('input.entry-label') as HTMLInputElement;
+  const addBtn = ruleNode.querySelector('.add-entry-btn') as HTMLButtonElement;
+  const cancelBtn = ruleNode.querySelector('.cancel-edit-btn') as HTMLButtonElement;
+
+  const m = entry.matcher;
+  kindSelect.value = entry.kind;
+  if (entry.kind === 'exclude') matcherTypeSelect.value = m.type;
+  matcherInput.value = m.type === 'css' ? m.selector : m.type === 'text' ? m.value : m.name;
+  labelInput.value = entry.label ?? '';
+  if (entry.kind === 'reveal') revealMethodSelect.value = entry.reveal ?? 'opacity';
+  if (m.type === 'text') matchModeSelect.value = m.mode ?? 'exact';
+  kindSelect.dispatchEvent(new Event('change'));  // re-run the form's show/hide
+
+  addBtn.textContent = 'Save changes';
+  cancelBtn.hidden = false;
+  entryRow.classList.add('editing');
+  matcherInput.focus();
+}
+
+// Leave edit mode and restore every rule's form to its default "Add" state.
+// Resetting all forms (not just the active one) keeps this simple — only one
+// entry is ever edited at a time.
+function clearEdit(): void {
+  editSession = null;
+  for (const e of document.querySelectorAll('.entry.editing')) e.classList.remove('editing');
+  for (const b of document.querySelectorAll('.add-entry-btn')) (b as HTMLElement).textContent = 'Add';
+  for (const b of document.querySelectorAll('.cancel-edit-btn')) (b as HTMLButtonElement).hidden = true;
 }
 
 // --- Add entry ---
@@ -325,13 +393,33 @@ function wireAddEntry(rule: DomainRule, ruleNode: HTMLElement): void {
       entry.reveal = revealMethodSelect.value as RevealMethod;
     }
 
-    rule.entries.push(entry);
+    if (editSession && editSession.ruleId === rule.id) {
+      const idx = rule.entries.findIndex(e => e.id === editSession!.entryId);
+      if (idx >= 0) {
+        entry.id = rule.entries[idx].id;            // keep identity
+        entry.enabled = rule.entries[idx].enabled;  // keep on/off state
+        rule.entries[idx] = entry;
+      } else {
+        rule.entries.push(entry);  // edited entry was removed meanwhile
+      }
+      clearEdit();
+    } else {
+      rule.entries.push(entry);
+    }
     save();
     matcherInput.value = '';
     labelInput.value = '';
     matcherErr.textContent = '';
     const entriesEl = ruleNode.querySelector('.entries') as HTMLElement;
     renderEntries(rule, entriesEl);
+  });
+
+  const cancelBtn = ruleNode.querySelector('.cancel-edit-btn') as HTMLButtonElement;
+  cancelBtn.addEventListener('click', () => {
+    clearEdit();
+    matcherInput.value = '';
+    labelInput.value = '';
+    matcherErr.textContent = '';
   });
 }
 

@@ -30,6 +30,8 @@ export interface RuleEntry {
   matcher: Matcher;
   reveal?: RevealMethod;
   label?: string;
+  /** Absent or true = applied. false = kept in the rule but not applied. */
+  enabled?: boolean;
 }
 
 export type RevealMethod = 'opacity' | 'visibility' | 'display';
@@ -153,6 +155,7 @@ export function compileRules(matched: DomainRule[]): CompiledRule {
 
   for (const rule of matched) {
     for (const entry of rule.entries) {
+      if (entry.enabled === false) continue;  // kept but switched off
       if (entry.kind === 'exclude') {
         if (entry.matcher.type === 'css' && !isValidCSSSelector(entry.matcher.selector)) continue;
         excludes.push(entry);

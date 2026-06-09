@@ -127,6 +127,10 @@
       border-radius: 6px;
     }
     .entry:hover { background: rgba(0,0,0,0.025); }
+    .entry-toggle { margin: 0; flex-shrink: 0; cursor: pointer; }
+    .entry-off .entry-desc { opacity: 0.45; text-decoration: line-through; }
+    .entry-off .entry-kind { opacity: 0.4; }
+    .entry.editing { background: rgba(0, 120, 255, 0.08); }
     .entry-kind {
       width: 14px;
       height: 14px;
@@ -389,6 +393,7 @@
             <input type="text" class="matcher" placeholder="button.gear">
             <input type="text" class="entry-label" placeholder="Label (optional)">
             <button class="add-entry-btn primary">Add</button>
+            <button class="cancel-edit-btn" hidden>Cancel</button>
           </div>
           <div class="matcher-error"></div>
           <details class="resolve-panel">
@@ -408,9 +413,11 @@
 
     <template id="entry-template">
       <div class="entry">
+        <input type="checkbox" class="entry-toggle" title="Apply this entry">
         <span class="entry-kind"></span>
         <span class="entry-desc"></span>
         <span class="entry-actions">
+          <button class="edit-entry">Edit</button>
           <button class="delete-entry danger">Remove</button>
         </span>
       </div>

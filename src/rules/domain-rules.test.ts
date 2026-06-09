@@ -295,6 +295,32 @@ describe('compileRules — merge across the matched set', () => {
     expect(run([b, a])).toEqual(['C']);
   });
 
+  it('skips entries that are switched off (enabled: false)', () => {
+    const r = rule({
+      entries: [
+        { ...excludeEntry({ type: 'css', selector: 'a' }), enabled: false },
+        excludeEntry({ type: 'css', selector: 'b' }),
+        { ...revealEntry('.gear', 'opacity'), enabled: false },
+        { ...includeEntry('[data-x]'), enabled: false },
+      ],
+    });
+    const c = compile(r);
+    expect(c.excludes).toHaveLength(1);
+    expect((c.excludes[0].matcher as { selector: string }).selector).toBe('b');
+    expect(c.reveals).toHaveLength(0);
+    expect(c.includeSelector).toBeNull();
+  });
+
+  it('treats absent or true enabled as applied', () => {
+    const r = rule({
+      entries: [
+        excludeEntry({ type: 'css', selector: 'a' }),                    // absent → on
+        { ...excludeEntry({ type: 'css', selector: 'b' }), enabled: true },
+      ],
+    });
+    expect(compile(r).excludes).toHaveLength(2);
+  });
+
   it('compiles an empty matched set to an inert rule', () => {
     const c = compileRules([]);
     expect(c.rules).toEqual([]);

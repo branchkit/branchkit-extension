@@ -260,6 +260,19 @@ function renderEntries(rule: DomainRule, container: HTMLElement): void {
 function renderEntry(rule: DomainRule, entry: RuleEntry, entriesEl: HTMLElement): HTMLElement {
   const node = document.createElement('div');
   node.className = 'entry';
+  if (entry.enabled === false) node.classList.add('entry-off');
+
+  const toggle = document.createElement('input');
+  toggle.type = 'checkbox';
+  toggle.className = 'entry-toggle';
+  toggle.checked = entry.enabled !== false;
+  toggle.title = 'Apply this entry';
+  toggle.addEventListener('change', () => {
+    entry.enabled = toggle.checked;
+    saveRules();
+    node.classList.toggle('entry-off', !toggle.checked);
+  });
+  node.appendChild(toggle);
 
   const kind = document.createElement('span');
   kind.className = `entry-kind ${entry.kind}`;
