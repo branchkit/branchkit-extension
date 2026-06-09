@@ -449,12 +449,14 @@ export class HintBadge {
   private _viewportFixed = false;
 
   // Inner-scroll accelerator (notes/DESIGN_INNER_SCROLL_ACCELERATOR.md). Non-null
-  // only when armed: flag on, ScrollTimeline supported, target NOT viewport-pinned,
-  // and the target sits inside an inner overflow scroller. When armed, the
-  // reconcile base writes the scroll-0 docY0 (scroll-invariant under inner scroll)
-  // and the compositor animation on `outer` supplies translateY(-scrollTop). When
-  // it dies (scroller recreated/detached) the badge falls back to the chase — the
-  // accel is non-load-bearing; the chase base is always correct.
+  // only when armed: flag on, ScrollTimeline supported, and the target sits inside
+  // an inner overflow scroller — which holds even when that scroller is itself
+  // inside a fixed/sticky app-shell pane (the host's window-scroll anchoring and
+  // the inner-scroll delta are orthogonal). When armed, the reconcile base writes
+  // the scroll-0 docY0 (scroll-invariant under inner scroll) and the compositor
+  // animation on `outer` supplies translateY(-scrollTop). When it dies (scroller
+  // recreated/detached) the badge falls back to the chase — the accel is
+  // non-load-bearing; the chase base is always correct.
   private _scrollAccel: ScrollAccel | null = null;
 
   // Placement outputs, surfaced in diagnostics: scrollSensitive = the offset
@@ -685,12 +687,18 @@ export class HintBadge {
   }
 
   // Arm the inner-scroll accelerator if eligible. Idempotent — a no-op when the
-  // flag is off, the target is viewport-pinned (orthogonal fixed/sticky path),
-  // an accel is already armed, or `createScrollAccel` finds no inner scroller /
-  // ScrollTimeline support. Called from `updatePosition` (offset baked) and
-  // `show`; both gates plus the scroller lookup live in `createScrollAccel`.
+  // flag is off, an accel is already armed, or `createScrollAccel` finds no inner
+  // scroller / ScrollTimeline support. The presence of an inner scroller (via
+  // `findScrollableAncestor`) is the SOLE gate; a viewport-pinned host
+  // (`_viewportFixed`) is NOT excluded, because the host's window-scroll
+  // anchoring (absolute vs fixed) and the inner-scroll delta (the `outer`
+  // animation) are orthogonal and compose correctly — an app-shell pane is
+  // position:fixed yet still scrolls its content internally. A truly pinned
+  // target with no inner scroller returns null here and arms nothing, so the
+  // dropped exclusion only newly covers fixed/sticky panes that DO inner-scroll.
+  // Called from `updatePosition` (offset baked) and `show`.
   private armScrollAccel(): void {
-    if (!scrollAccelEnabled || this._viewportFixed || this._scrollAccel) return;
+    if (!scrollAccelEnabled || this._scrollAccel) return;
     this._scrollAccel = createScrollAccel(this.target, this.outer);
     // Diagnostic mirror on the light-DOM host: a badge that found an inner
     // scroller and armed carries `data-bk-accel="<max>"`, so the accelerated set

@@ -115,9 +115,10 @@ Pure and unit-testable.
 New field: `_scrollAccel: { scroller, timeline, anim, max } | null`.
 
 - **Setup** — in `updatePosition` (offset baked) / `show`: if flag on AND
-  `ScrollTimeline` supported AND target is NOT viewport-pinned AND
-  `findScrollableAncestor` returns a scroller → create timeline + animation;
-  else leave null (chase).
+  `ScrollTimeline` supported AND `findScrollableAncestor` returns a scroller →
+  create timeline + animation; else leave null (chase). (See the 2026-06-09
+  revision below: the original "AND target is NOT viewport-pinned" clause was
+  dropped — the inner scroller is the sole gate.)
 - **`healthy()`** — `_scrollAccel != null && scroller.isConnected &&
   findScrollableAncestor(target) === scroller`. Called from `reconcileRead`
   each pass. False → fallback base, and flag for re-setup at next settle.
@@ -126,8 +127,10 @@ New field: `_scrollAccel: { scroller, timeline, anim, max } | null`.
 - **Teardown** — `hide()` / `remove()` / `retarget()`: `anim.cancel()`, drop
   the timeline, null `_scrollAccel`. `retarget` then re-detects for the new node.
 
-Viewport-pinned (fixed/sticky) targets keep the `position:fixed` host and are
-**excluded** from the accelerator — orthogonal path.
+Viewport-pinned (fixed/sticky) targets keep the `position:fixed` host. The host's
+window-scroll anchoring (`absolute` vs `fixed`) and the inner-scroll delta (the
+`outer` animation) are orthogonal — see the 2026-06-09 revision below for why a
+fixed/sticky ancestor does NOT exclude the accelerator.
 
 ## Feature detection + flag
 
@@ -178,3 +181,37 @@ v1.)
 
 Only merge after 1–4 pass + a soak; the positioning core is the highest-blast-
 radius area in the codebase.
+
+## Revision (2026-06-09): viewport-pinned exclusion was too broad
+
+First real-Chrome test on a QuickBase report (app-shell layout) showed the
+wiggle everywhere — grid AND sidebar — with only 2 of dozens of badges armed.
+Diagnosis (page-console enumeration of scrollers + the new `data-bk-accel`
+markers): detection was fine (the grid `tbody.tableBody` and sidebar
+`ul.css-7huxaa` both read `overflow-y: auto`, `wouldMatch: true`), but almost
+every badge was being excluded by the **"target is NOT viewport-pinned"** gate.
+
+The original exclusion assumed *fixed/sticky ancestor ⇒ the target holds a
+constant viewport position, so it needs no accelerator*. That is **false for an
+app-shell**: the grid/sidebar panes are nested inside a `position:fixed`/`sticky`
+shell, yet their content still scrolls inside an inner overflow scroller. So the
+target is "viewport-pinned" by the ancestor test while genuinely inner-scrolling
+— precisely the case the accelerator exists for — and was wrongly skipped.
+
+**Resolution:** the inner scroller (`findScrollableAncestor` non-null) is the
+SOLE arming gate; `_viewportFixed` no longer excludes. The host's window-scroll
+anchoring (`position:absolute` for flow targets, `position:fixed` for pinned)
+and the inner-scroll delta (the `outer` `translateY(-scrollTop)` animation) are
+orthogonal and compose: with `_viewportFixed` true, `reconcileRead` already drops
+the `scrollY` term (`sx/sy = 0`) and the base becomes `rect.top + offset +
+scrollTop` — scroll-invariant under inner scroll — while the animation supplies
+`-scrollTop`. A truly pinned target with no inner scroller still returns `null`
+from `findScrollableAncestor` and arms nothing, so dropping the exclusion only
+newly covers fixed/sticky panes that actually inner-scroll. The sticky-transition
+case (residual (a) in `DESIGN_HINT_POSITIONING_REARCH.md`) is unchanged — still
+on the chase, no worse than before.
+
+Diagnostics added alongside (permanent, parallel to `data-bk-shown`):
+`<html data-bk-scroll-accel="on|off|unsupported">` (flag + support resolved at
+init) and `data-bk-accel="<max>"` on each armed badge host, both queryable from
+the ordinary page console.
