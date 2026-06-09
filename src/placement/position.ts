@@ -211,12 +211,22 @@ function positionAtTopLeft(w: ElementWrapper, probe?: TextProbe): void {
   // Gather half: all DOM reads. The decision (ratio offset / space clamp /
   // sticky clamp) lives in the pure computePlacement.
   const targetRect = probe.hasText ? probe.rect : getCachedRect(w.element);
-  const stickyBound = findStickyBound(w.hint.anchorParent);
+  // Body-mounted hosts (the reconcile model, and the legacy anchor fast-path)
+  // follow the live target every pass, so a viewport-fixed sticky/fixed clamp is
+  // wrong for them: baking a viewport-fixed clamp point into a target-relative
+  // offset freezes the bake-time (bound − target) gap, and once the target
+  // scrolls relative to the bound the badge drifts off its target by the scroll
+  // delta (the +71px left-sidebar strand on scroll-back). The reconciler simply
+  // follows the target under a sticky header instead — see the sticky-clamp
+  // sub-question in notes/completed/DESIGN_HINT_POSITIONING_REARCH.md. Gated the
+  // same way availableSpace is.
+  const bodyMounted = w.hint.anchorMode || w.hint.reconcileMode;
+  const stickyBound = bodyMounted ? null : findStickyBound(w.hint.anchorParent);
   const result = computePlacement({
     targetRect,
     badgeSize: w.hint.badgeSize,
     nudge: getNudge(w.element, probe.hasText),
-    availableSpace: getAvailableSpace(w.hint.anchorParent, targetRect, w.hint.anchorMode || w.hint.reconcileMode),
+    availableSpace: getAvailableSpace(w.hint.anchorParent, targetRect, bodyMounted),
     stickyBound,
   });
 
