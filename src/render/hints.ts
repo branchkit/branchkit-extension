@@ -18,6 +18,13 @@ import { trackContainerResize, untrackContainerResize } from '../observe/contain
 import { trackTargetMutations, untrackTargetMutations } from '../observe/target-mutation-tracker';
 import { trackHostAttributes, untrackHostAttributes } from '../observe/host-attribute-tracker';
 import { register as registerReconcile, unregister as unregisterReconcile, type ReconcileWrite } from './reconcile-positioner';
+import {
+  type ScrollAccel,
+  createScrollAccel,
+  recomputeScrollAccel,
+  teardownScrollAccel,
+  scrollAccelHealthy,
+} from './scroll-accel';
 
 // Walk ancestors (piercing shadow boundaries) for a position:fixed or sticky
 // element. Such a target holds a constant viewport position as the window
@@ -359,6 +366,18 @@ export function setBadgeSizingFromSettings(s: BadgeSettings): void {
   badgeFontMax = s.fontMax;
 }
 
+// Inner-scroll accelerator gate (notes/DESIGN_INNER_SCROLL_ACCELERATOR.md).
+// Default OFF — when off, no accelerator is ever armed and badge behavior is
+// byte-for-byte identical to today's chase. Flipped once at content-script init
+// from the `bkScrollAccel` flag in chrome.storage.local (mirrors the alphabet
+// adoption pattern). A mutable module ref so the flag propagates without
+// re-wiring callers.
+let scrollAccelEnabled = false;
+
+export function setScrollAccelEnabled(enabled: boolean): void {
+  scrollAccelEnabled = enabled;
+}
+
 function computeBadgeFontSize(target: Element): number {
   // Targets with font-size: 0 (the common a11y-text-hiding trick on
   // role=checkbox / role=button divs) would otherwise yield a 0px or
@@ -428,6 +447,15 @@ export class HintBadge {
   // True when the target is viewport-pinned (fixed/sticky ancestor): the host is
   // position:fixed + viewport coords instead of position:absolute + doc coords.
   private _viewportFixed = false;
+
+  // Inner-scroll accelerator (notes/DESIGN_INNER_SCROLL_ACCELERATOR.md). Non-null
+  // only when armed: flag on, ScrollTimeline supported, target NOT viewport-pinned,
+  // and the target sits inside an inner overflow scroller. When armed, the
+  // reconcile base writes the scroll-0 docY0 (scroll-invariant under inner scroll)
+  // and the compositor animation on `outer` supplies translateY(-scrollTop). When
+  // it dies (scroller recreated/detached) the badge falls back to the chase — the
+  // accel is non-load-bearing; the chase base is always correct.
+  private _scrollAccel: ScrollAccel | null = null;
 
   // Placement outputs, surfaced in diagnostics: scrollSensitive = the offset
   // rode a sticky/fixed bound; geometryDependent = it rode ancestor geometry
@@ -629,11 +657,50 @@ export class HintBadge {
     // are scroll-invariant for their target, so no per-frame chase / no wiggle.
     const sx = this._viewportFixed ? 0 : window.scrollX;
     const sy = this._viewportFixed ? 0 : window.scrollY;
+    let y = r.top + sy + this._reconcileOffset.y;
+    // Inner-scroll accelerator, evaluated every pass (level-triggered).
+    if (this._scrollAccel) {
+      if (scrollAccelHealthy(this._scrollAccel, this.target)) {
+        // Healthy: write the scroll-0 base docY0 = rect.top + scrollY + offset +
+        // scrollTop. As the pane scrolls, rect.top drops by ΔS while scrollTop
+        // rises by ΔS, so docY0 is constant (scroll-invariant under inner scroll);
+        // the compositor animation on `outer` supplies translateY(-scrollTop), so
+        // the net is the live position with no main-thread chase. Refresh the
+        // keyframe if the scroller's max changed (rare; reflow only).
+        recomputeScrollAccel(this._scrollAccel, this.outer);
+        y += this._scrollAccel.scroller.scrollTop;
+      } else {
+        // Broken (scroller recreated/detached): drop the accel so `outer`'s
+        // animated delta reverts to 0 and the chase base (current position) is
+        // correct — wiggly, but never a dangle. Re-detected on the next arm
+        // (settle/show). This is the graceful-degradation contract.
+        this.disarmScrollAccel();
+      }
+    }
     return {
       host: this.host,
       x: Math.round(r.left + sx + this._reconcileOffset.x),
-      y: Math.round(r.top + sy + this._reconcileOffset.y),
+      y: Math.round(y),
     };
+  }
+
+  // Arm the inner-scroll accelerator if eligible. Idempotent — a no-op when the
+  // flag is off, the target is viewport-pinned (orthogonal fixed/sticky path),
+  // an accel is already armed, or `createScrollAccel` finds no inner scroller /
+  // ScrollTimeline support. Called from `updatePosition` (offset baked) and
+  // `show`; both gates plus the scroller lookup live in `createScrollAccel`.
+  private armScrollAccel(): void {
+    if (!scrollAccelEnabled || this._viewportFixed || this._scrollAccel) return;
+    this._scrollAccel = createScrollAccel(this.target, this.outer);
+  }
+
+  // Tear down the accelerator (cancel the compositor animation, drop the
+  // reference). Safe to call when none is armed. The chase base alone is correct
+  // afterward.
+  private disarmScrollAccel(): void {
+    if (!this._scrollAccel) return;
+    teardownScrollAccel(this._scrollAccel);
+    this._scrollAccel = null;
   }
 
   updatePosition(candidate?: { x: number; y: number }, _caller?: string): void {
@@ -643,6 +710,10 @@ export class HintBadge {
     if (!candidate) return;
     const tr = getCachedRect(this.target);
     this._reconcileOffset = { x: candidate.x - tr.left, y: candidate.y - tr.top };
+    // Offset is baked — arm the inner-scroll accelerator (no-op when the flag is
+    // off or the target has no inner scroller). Must precede reconcileRead so the
+    // immediate paint below uses the accelerated (docY0) base when armed.
+    this.armScrollAccel();
     // Paint at the right spot immediately (if already visible) so it doesn't
     // wait a frame for the next reconcile tick.
     const w = this.reconcileRead();
@@ -670,6 +741,9 @@ export class HintBadge {
   retarget(newEl: Element): void {
     untrackContainerResize(this.anchorParent);
     untrackTargetMutations(this.target);
+    // The accelerator is bound to the OLD target's scroller; drop it before the
+    // swap and re-detect for the new node below.
+    this.disarmScrollAccel();
 
     // No page-DOM binding to move (no anchor-name); just swap the tracked
     // target. The baked offset is target-relative, so it stays valid for a
@@ -688,6 +762,9 @@ export class HintBadge {
     trackContainerResize(this.anchorParent);
     trackTargetMutations(this.target);
     // host-attribute tracker is keyed on the host (unchanged); no swap.
+    // Re-detect the accelerator for the new node (no-op when flag off / no
+    // inner scroller / viewport-pinned).
+    this.armScrollAccel();
 
     // retarget wires observers up itself, so the deferred refine() pass is
     // no longer needed. Mark refined and pull off the pending queue.
@@ -717,6 +794,10 @@ export class HintBadge {
     this.inner.classList.remove('filtered');
     this.applyColors();
     this._size = null;
+    // Arm the accelerator on show too (idempotent): a badge reused via the
+    // scroll-back fast path (clearLabel→hide→show+setLabel) was disarmed in
+    // hide() and needs re-detection now that it's visible again.
+    this.armScrollAccel();
     if (!grammarReady) {
       this.inner.classList.add('bk-pending');
       this.host.setAttribute('data-bk-pending', 'true');
@@ -773,6 +854,10 @@ export class HintBadge {
     this.inner.classList.remove('bk-pending');
     this.host.removeAttribute('data-bk-shown');
     this.host.removeAttribute('data-bk-pending');
+    // Drop the accelerator while dormant; a hidden badge isn't reconciled, so a
+    // live ScrollTimeline animation would just hold a stale delta. Re-armed on
+    // the next show().
+    this.disarmScrollAccel();
   }
 
   setFiltered(filtered: boolean): void {
@@ -938,6 +1023,7 @@ export class HintBadge {
     untrackTargetMutations(this.target);
     untrackHostAttributes(this.host);
     unregisterReconcile(this);
+    this.disarmScrollAccel();
     this.host.remove();
   }
 

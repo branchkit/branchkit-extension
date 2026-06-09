@@ -87,7 +87,7 @@ import {
 } from './rules/domain-rules';
 import { loadDomainRules, onDomainRulesChanged, rulesEqual } from './rules/domain-rules-storage';
 import { loadBadgeSettings, onBadgeSettingsChanged } from './badge-settings-storage';
-import { setBadgeSizingFromSettings } from './render/hints';
+import { setBadgeSizingFromSettings, setScrollAccelEnabled } from './render/hints';
 import { setNudgesFromSettings } from './placement';
 import { labelReservoir } from './labels/label-reservoir';
 import { filterNewBatchRefs } from './scan/batch-dedup';
@@ -576,6 +576,18 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
         }
       }, 0);
     }
+  });
+}
+
+// Adopt the inner-scroll accelerator flag (notes/DESIGN_INNER_SCROLL_ACCELERATOR.md).
+// Default OFF: when absent or false, badge positioning is byte-for-byte today's
+// chase. Flip on for testing via `chrome.storage.local.set({ bkScrollAccel: true })`.
+// Read once at load (per-machine, like the alphabet); no live re-read needed since
+// the user reloads to test. The accelerator additionally requires ScrollTimeline
+// support at arm time, so this gate alone never activates it on Firefox stable.
+if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+  chrome.storage.local.get('bkScrollAccel', (result) => {
+    setScrollAccelEnabled(result.bkScrollAccel === true);
   });
 }
 
