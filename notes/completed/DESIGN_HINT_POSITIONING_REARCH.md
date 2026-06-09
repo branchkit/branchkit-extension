@@ -359,6 +359,46 @@ subtree injection. Verify Chrome/Firefox support + interaction with reconcile
 transform writes. Fallback: scoped co-location for inner-pane targets only,
 accepting the binding tradeoff there.
 
+### Decision (2026-06-09): scroll-driven animation DEFERRED, not built yet
+
+First reaction was to reject it as "the anchor trap reborn" — building it now
+means "scroll-timeline (Chrome) + JS-chase (Firefox)," structurally the same
+Chrome-vs-Firefox positioning split this re-architecture deleted (anchor +
+nesting + `strategy.ts`, ~15 commits ending `1415422`), which would fail the
+same **C2 — Cross-browser uniformity** criterion that drove the unification.
+
+**But the browser-support picture is materially different from anchor** (web
+research, 2026-06-09): scroll-driven animations are NOT Chromium-only.
+- Chrome/Edge 115+: shipped. Opera 101+: shipped. **Safari 26: shipped.**
+- **Firefox: fully implemented**, behind `layout.css.scroll-driven-animations.enabled`,
+  **on-by-default in Nightly**, converging toward stable.
+
+So unlike CSS Anchor Positioning (which Firefox never implemented — a *permanent*
+gap), this gap is *closing*. The split it would create today is **transient**:
+when Firefox flips the flag in stable, scroll-timeline becomes the SINGLE model
+for every engine, which is exactly C2's goal — a unification, not a permanent
+branch.
+
+**Why still deferred (not built now):** stable Firefox today is still behind the
+flag, so shipping now does create a temporary split + a second code path to
+carry until Firefox lands. The inner-scroller wiggle is cosmetic and at least
+cross-browser CONSISTENT today, so the cost of waiting is low.
+
+**Re-visit trigger (now "soon", not "someday"):** when Firefox ships
+scroll-driven animations in stable (it's close), adopt scroll-timeline as the
+single inner-scroll model — replacing, not branching, the JS-chase. If the
+wiggle becomes intolerable before then, early-adopting with a transient Firefox
+fallback is a *defensible* call (a converging standard, not the permanent anchor
+gap) — distinct from the trap, and the team can make that call with eyes open.
+
+Also confirmed (research): the JS-chase wiggle is the **industry-standard
+limitation**, not our bug — Floating UI (the de-facto positioning library) does
+the same scroll-listener chase and has the same "wobble around reference during
+scrolling" even with per-frame updates (floating-ui#2530). No JS technique
+removes it; only compositor binding (nesting or scroll-timeline) does. The new
+`@container scroll-state` query is discrete state (stuck/snapped/direction), not
+continuous positioning, so it does not help here.
+
 ## Relationship to prior notes
 
 - Supersedes the positioning halves of `DESIGN_OBSERVER_DRIVEN_LAYOUT`,
