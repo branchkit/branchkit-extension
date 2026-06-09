@@ -224,3 +224,75 @@ Until then: known issue, documented mechanism, clear fix path.
 - [Effective JavaScript Techniques for Determining DOM Element Visibility](https://sqlpey.com/javascript/effective-javascript-techniques-for-determining-dom-element-visibility/) — overview of DOM visibility detection patterns.
 - Rango's `isVisible`: `/tmp/rango/src/content/dom/isVisible.ts` (vendored reference).
 - BranchKit's z-index port: `src/placement/stacking.ts` (the solved sibling problem).
+
+## Robustness investigation (2026-06-09) — why center-point hit-test isn't enough
+
+Real-Chrome testing of the landed v1 (center-point `elementFromPoint` on settle)
+surfaced two failures the user reported, and a web-platform investigation
+explains both and points to a more robust architecture.
+
+### Observed failures
+
+1. **Flicker during scroll.** Occlusion is computed only on scroll/mutation
+   *settle* (debounced ~100ms). During an active scroll the `.bk-occluded`
+   state is stale, and scroll-ahead pre-paints fresh badges that haven't been
+   hit-tested — so previously-hidden hints reappear mid-scroll and re-hide when
+   scrolling stops. Distracting.
+2. **Settled-state false negatives.** Snapshot forensics: of 168 visible badges,
+   52 were correctly occluded, but specific ghosts (e.g. `BM` "Populate SBO Crew
+   Labor", `PV/QV/RV` table cells) read `occluded=false` AND `isInViewport=true`.
+   They are CSS-visible, geometrically in the viewport, and the IO does NOT
+   consider them clipped — they are **overlaid** by a hit-test-transparent layer.
+
+### Web-platform findings
+
+- **`elementFromPoint` skips `pointer-events:none`.** Per the CSSWG discussion,
+  an element with `pointer-events:none` is ignored and the element *beneath* is
+  returned. So a pointer-events-transparent overlay (common) is invisible to the
+  hit-test — it returns the target itself → false negative. This is structural,
+  not a bug in our code. Center-point sampling also misses **partial** occlusion
+  (the center can land in a still-visible sliver while most of the box is covered
+  — exactly the `BM` case: its center y≈59 sits just above the covering nav at
+  y≈60).
+- **`IntersectionObserver` is overflow-clip-aware and compositor-driven.** The
+  intersection rect is the target's box clipped by every intervening containing
+  block's `overflow` *before* intersecting the root (MDN). So an element scrolled
+  out of an `overflow:hidden/auto` ancestor reports `intersectionRatio:0` even
+  when its `getBoundingClientRect` is within the viewport — and it updates in sync
+  with scroll, **no flicker, no per-frame JS, no hit-test**. This is the robust
+  primitive for the **clipping** case (target scrolled out of a pane / under a
+  scroll-clipping header).
+- **`Element.checkVisibility()`** (Chrome 105+/widely shipped) natively reports
+  self-visibility incl. `opacityProperty`, `visibilityProperty`,
+  `contentVisibilityAuto` — but **NOT occlusion** by other elements. Good for the
+  ancestor-`opacity:0` / `content-visibility` patterns (Option B), replacing
+  fragile manual ancestor walks; does nothing for overlays.
+- **No web primitive detects overlay-occlusion by a `pointer-events:none` layer.**
+  Prior art confirms it's unsolved: Vimium has open z-index/visibility issues
+  (#60, #3690), Link Hints uses `elementFromPoint`+idle (same blind spot), Rango
+  doesn't filter at all.
+
+### Recommended robust architecture (layered, replaces center-point-only)
+
+1. **Self-visibility → `checkVisibility({opacityProperty, visibilityProperty,
+   contentVisibilityAuto})`** at scan/recheck. Native, cheap, no hit-test; catches
+   the ancestor-opacity / content-visibility hides robustly.
+2. **Clipping → IntersectionObserver (zero-margin, overflow-aware).** Observe each
+   hinted target; `gBCR-in-viewport && intersectionRatio==0` ⇒ clipped ⇒ occluded.
+   Compositor-driven ⇒ FLICKER-FREE and continuous during scroll. This is the main
+   win and the fix for the flicker. Distinguishes clip (hide) from below-fold
+   (scroll-ahead pre-paint, keep) because below-fold targets are gBCR-out-of-viewport.
+   Reuse the existing IO machinery in `src/observe/`.
+3. **Overlay → `elementFromPoint` backstop**, improved with multi-point sampling
+   (center + corners; occluded if a majority are covered) and run **on show** (not
+   just settle) to cut the pre-paint flicker. DOCUMENT that `pointer-events:none`
+   overlays remain undetectable — a web-platform gap, best-effort only.
+
+### Honest scope
+
+Layers 1–2 make the **clipping** case (the majority of real-world ghosts, and the
+flicker) robust and flicker-free. The **overlay** case — QuickBase's two stacked
+nav lists, where the covering layer is hit-test-transparent — has **no clean
+solution** on today's web platform; layer 3 is best-effort and will still miss
+some. Worth deciding explicitly whether that residual is acceptable or whether the
+overlay case should stay a documented known-limitation.
