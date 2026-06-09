@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { findScrollableAncestor, isScrollTimelineSupported } from './scroll-accel';
+import { findScrollableAncestor, findScrollableAncestors, isScrollTimelineSupported } from './scroll-accel';
 
 // happy-dom gives real DOM APIs but does no layout: scrollHeight/clientHeight are
 // always 0 and getComputedStyle returns inline styles only. So we stub the
@@ -129,6 +129,38 @@ describe('findScrollableAncestor', () => {
     shadow.appendChild(btn);
 
     expect(findScrollableAncestor(btn)).toBe(scroller);
+  });
+});
+
+describe('findScrollableAncestors (chain)', () => {
+  it('returns all scroller ancestors innermost-first', () => {
+    const root = mount('<div id="outer"><div id="mid"><div id="inner"><button id="btn">x</button></div></div></div>');
+    const outer = root.querySelector('#outer')!;
+    const inner = root.querySelector('#inner')!;
+    setScroller(outer, { overflowY: 'auto', scrollHeight: 2000, clientHeight: 500 });
+    setScroller(inner, { overflowY: 'scroll', scrollHeight: 1000, clientHeight: 300 });
+    const btn = root.querySelector('#btn')!;
+    expect(findScrollableAncestors(btn)).toEqual([inner, outer]);
+  });
+
+  it('returns a single-element array for one scroller', () => {
+    const root = mount('<div id="s"><button id="btn">x</button></div>');
+    const s = root.querySelector('#s')!;
+    setScroller(s, { overflowY: 'auto', scrollHeight: 1000, clientHeight: 300 });
+    expect(findScrollableAncestors(root.querySelector('#btn')!)).toEqual([s]);
+  });
+
+  it('returns empty when there is no scroller', () => {
+    const root = mount('<div id="a"><button id="btn">x</button></div>');
+    expect(findScrollableAncestors(root.querySelector('#btn')!)).toEqual([]);
+  });
+
+  it('excludes documentElement/body from the chain', () => {
+    const root = mount('<div id="s"><button id="btn">x</button></div>');
+    const s = root.querySelector('#s')!;
+    setScroller(s, { overflowY: 'auto', scrollHeight: 1000, clientHeight: 300 });
+    setScroller(document.body, { overflowY: 'auto', scrollHeight: 5000, clientHeight: 800 });
+    expect(findScrollableAncestors(root.querySelector('#btn')!)).toEqual([s]);
   });
 });
 

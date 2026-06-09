@@ -155,8 +155,16 @@ v1.)
 ## Scope / deferred
 
 - Horizontal (`inline`) axis — deferred.
-- Nested scrollers (target inside scroller-in-scroller) — handle the nearest
-  scroller only; nested needs composed timelines — deferred.
+- Nested scrollers (target inside scroller-in-scroller) — PROTOTYPED 2026-06-09
+  behind `bkScrollAccelNested` (default off). Rides the whole scroller chain
+  (`findScrollableAncestors`) via composed ScrollTimelines: one additive
+  (`composite: 'add'`) `translateY(-scrollTop)` animation per scroller on `outer`
+  (the translateYs concatenate → `-Σ scrollTop`), and the reconcile base adds
+  `Σ scrollTop`. Default single-scroller path stays `replace` and untouched. The
+  unverified bit is whether `composite: 'add'` composes ScrollTimeline-driven
+  translateYs in real Chrome — hence flag-gated. If it doesn't, fall back to
+  nested transform layers (one per scroller). Fixes the wiggle when an OUTER
+  overflow ancestor scrolls a target in an inner pane.
 - Skipping the chase reflow for healthy accelerators (perf) — deferred.
 
 ## Files

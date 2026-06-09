@@ -24,6 +24,7 @@ import {
   recomputeScrollAccel,
   teardownScrollAccel,
   scrollAccelHealthy,
+  scrollAccelScrollOffset,
 } from './scroll-accel';
 
 // Walk ancestors (piercing shadow boundaries) for a position:fixed or sticky
@@ -379,6 +380,18 @@ export function setScrollAccelEnabled(enabled: boolean): void {
   scrollAccelEnabled = enabled;
 }
 
+// Nested-scroller support for the accelerator: ride the WHOLE chain of scroller
+// ancestors (composed additive ScrollTimelines), not just the nearest. Fixes the
+// wiggle when an OUTER overflow ancestor scrolls a target that lives in an inner
+// pane. Separate flag, default OFF — the multi-scroller path relies on
+// `composite: 'add'` (unverified in the wild), so it stays opt-in until soaked;
+// the default single-scroller path is unaffected.
+let scrollAccelNestedEnabled = false;
+
+export function setScrollAccelNestedEnabled(enabled: boolean): void {
+  scrollAccelNestedEnabled = enabled;
+}
+
 function computeBadgeFontSize(target: Element): number {
   // Targets with font-size: 0 (the common a11y-text-hiding trick on
   // role=checkbox / role=button divs) would otherwise yield a 0px or
@@ -671,13 +684,13 @@ export class HintBadge {
     if (this._scrollAccel) {
       if (scrollAccelHealthy(this._scrollAccel, this.target)) {
         // Healthy: write the scroll-0 base docY0 = rect.top + scrollY + offset +
-        // scrollTop. As the pane scrolls, rect.top drops by ΔS while scrollTop
-        // rises by ΔS, so docY0 is constant (scroll-invariant under inner scroll);
-        // the compositor animation on `outer` supplies translateY(-scrollTop), so
-        // the net is the live position with no main-thread chase. Refresh the
-        // keyframe if the scroller's max changed (rare; reflow only).
+        // Σ scrollTop (over the ridden scroller chain). As any ridden pane scrolls,
+        // rect.top drops by ΔS while its scrollTop rises by ΔS, so docY0 is
+        // constant (scroll-invariant under the chain's scrolls); the compositor
+        // animations on `outer` supply translateY(-Σ scrollTop), so the net is the
+        // live position with no main-thread chase. Refresh keyframes on max change.
         recomputeScrollAccel(this._scrollAccel, this.outer);
-        y += this._scrollAccel.scroller.scrollTop;
+        y += scrollAccelScrollOffset(this._scrollAccel);
       } else {
         // Broken (scroller recreated/detached): drop the accel so `outer`'s
         // animated delta reverts to 0 and the chase base (current position) is
@@ -706,14 +719,14 @@ export class HintBadge {
   // Called from `updatePosition` (offset baked) and `show`.
   private armScrollAccel(): void {
     if (!scrollAccelEnabled || this._scrollAccel) return;
-    this._scrollAccel = createScrollAccel(this.target, this.outer);
+    this._scrollAccel = createScrollAccel(this.target, this.outer, scrollAccelNestedEnabled);
     // Diagnostic mirror on the light-DOM host: a badge that found an inner
-    // scroller and armed carries `data-bk-accel="<max>"`, so the accelerated set
-    // is countable from the page console
-    // (`document.querySelectorAll('[data-bk-accel]').length`) without peeking
-    // into the closed shadow root. Allowed by the host-attribute tracker.
+    // scroller and armed carries `data-bk-accel="<layerCount>"`, so the accelerated
+    // set is countable from the page console
+    // (`document.querySelectorAll('[data-bk-accel]').length`) and a value >1 marks
+    // a nested-scroller chain. Allowed by the host-attribute tracker.
     if (this._scrollAccel) {
-      this.host.setAttribute('data-bk-accel', String(this._scrollAccel.max));
+      this.host.setAttribute('data-bk-accel', String(this._scrollAccel.layers.length));
     }
   }
 
@@ -1212,8 +1225,10 @@ export class HintBadge {
       hostTransform: this.host.style.transform ?? '',
       viewportFixed: this._viewportFixed,
       scrollAccelArmed: this._scrollAccel != null,
-      scrollAccelMax: this._scrollAccel ? Math.round(this._scrollAccel.max) : null,
-      scrollAccelScrollerTop: this._scrollAccel ? Math.round(this._scrollAccel.scroller.scrollTop) : null,
+      scrollAccelMax: this._scrollAccel
+        ? Math.round(this._scrollAccel.layers.reduce((s, l) => s + l.max, 0))
+        : null,
+      scrollAccelScrollerTop: this._scrollAccel ? Math.round(scrollAccelScrollOffset(this._scrollAccel)) : null,
       occluded: this.inner.classList.contains('bk-occluded'),
     };
   }

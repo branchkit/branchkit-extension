@@ -89,7 +89,7 @@ import {
 } from './rules/domain-rules';
 import { loadDomainRules, onDomainRulesChanged, rulesEqual } from './rules/domain-rules-storage';
 import { loadBadgeSettings, onBadgeSettingsChanged } from './badge-settings-storage';
-import { setBadgeSizingFromSettings, setScrollAccelEnabled } from './render/hints';
+import { setBadgeSizingFromSettings, setScrollAccelEnabled, setScrollAccelNestedEnabled } from './render/hints';
 import { isScrollTimelineSupported } from './render/scroll-accel';
 import { setNudgesFromSettings } from './placement';
 import { labelReservoir } from './labels/label-reservoir';
@@ -604,6 +604,13 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
     // elementFromPoint overlay path; they compose when both are on.
     setClipObserverEnabled(result.bkClipObserver === true);
     document.documentElement.setAttribute('data-bk-clip-observer', result.bkClipObserver === true ? 'on' : 'off');
+  });
+  chrome.storage.local.get('bkScrollAccelNested', (result) => {
+    // Nested-scroller accelerator (composed ScrollTimelines). NEW, default OFF —
+    // the multi-scroller path relies on `composite: 'add'` (unverified), so it's
+    // opt-in until soaked. Enable: `chrome.storage.local.set({ bkScrollAccelNested: true })`.
+    setScrollAccelNestedEnabled(result.bkScrollAccelNested === true);
+    document.documentElement.setAttribute('data-bk-scroll-accel-nested', result.bkScrollAccelNested === true ? 'on' : 'off');
   });
   chrome.storage.local.get('bkScrollAccel', (result) => {
     const enabled = result.bkScrollAccel !== false;
