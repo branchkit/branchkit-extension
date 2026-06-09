@@ -123,7 +123,41 @@ function render(): void {
     bodyEl.replaceChildren(noRuleNode());
     return;
   }
-  bodyEl.replaceChildren(...matched.map(renderRuleCard));
+  const nodes: Node[] = matched.map(renderRuleCard);
+  const addSpecific = addSpecificRuleNode();
+  if (addSpecific) nodes.push(addSpecific);
+  bodyEl.replaceChildren(...nodes);
+}
+
+// When a broader rule (e.g. *.quickbase.com) already matches, offer a
+// one-click way to add a rule scoped to this exact host — the realm-
+// specific override that otherwise required the options page. Hidden
+// once such a rule exists. Returns null when there's no usable hostname.
+function addSpecificRuleNode(): HTMLElement | null {
+  if (!activeTab?.url) return null;
+  let host: string;
+  try { host = new URL(activeTab.url).hostname; } catch { return null; }
+  if (!host) return null;
+  if (rules.some((r) => r.pattern === host)) return null;
+
+  const row = document.createElement('div');
+  row.className = 'add-rule-row';
+  const btn = document.createElement('button');
+  btn.textContent = `+ Add rule for ${host}`;
+  btn.title = `Create a rule that applies only to ${host}`;
+  btn.addEventListener('click', () => {
+    const fresh: DomainRule = {
+      id: crypto.randomUUID(),
+      pattern: host,
+      enabled: true,
+      entries: [],
+    };
+    rules = [fresh, ...rules];
+    saveRules();
+    render();
+  });
+  row.appendChild(btn);
+  return row;
 }
 
 function noRuleNode(message?: string): HTMLElement {
