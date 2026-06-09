@@ -32,6 +32,13 @@ import {
 let activeTab: chrome.tabs.Tab | null = null;
 let rules: DomainRule[] = [];
 
+// A rule just created by a "create/add rule" button is a draft: it lives
+// in `rules` for rendering but is NOT persisted until it has at least one
+// entry. So clicking a create button and then closing the popup (or never
+// adding anything) leaves storage untouched — the empty rule evaporates
+// instead of lingering. Cleared once the draft gains an entry.
+let draftRuleId: string | null = null;
+
 // --- Global settings (existing) ---
 
 async function checkStatus(): Promise<void> {
@@ -89,7 +96,16 @@ async function loadRules(): Promise<void> {
 }
 
 function saveRules(): void {
-  saveDomainRules(rules);
+  // A draft that has gained an entry graduates to a real, persisted rule.
+  if (draftRuleId !== null) {
+    const draft = rules.find((r) => r.id === draftRuleId);
+    if (!draft || draft.entries.length > 0) draftRuleId = null;
+  }
+  // Never write an empty draft to storage.
+  const toPersist = draftRuleId !== null
+    ? rules.filter((r) => r.id !== draftRuleId)
+    : rules;
+  saveDomainRules(toPersist);
 }
 
 function activeHost(): string {
@@ -152,9 +168,9 @@ function addSpecificRuleNode(): HTMLElement | null {
       enabled: true,
       entries: [],
     };
+    draftRuleId = fresh.id;
     rules = [fresh, ...rules];
-    saveRules();
-    render();
+    render();  // draft — persisted once it gets its first entry
   });
   row.appendChild(btn);
   return row;
@@ -190,9 +206,9 @@ function noRuleNode(message?: string): HTMLElement {
       enabled: true,
       entries: [],
     };
+    draftRuleId = fresh.id;
     rules = [fresh, ...rules];
-    saveRules();
-    render();
+    render();  // draft — persisted once it gets its first entry
   });
   wrap.appendChild(btn);
   return wrap;
