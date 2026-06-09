@@ -419,6 +419,22 @@ function sameElements(a: readonly Element[], b: readonly Element[]): boolean {
   return true;
 }
 
+// Test affordance: open the badge's shadow root so integration tests (Playwright)
+// can measure the PAINTED badge's true viewport position — including the
+// accelerator's compositor transform on `outer`, which the body-mounted host's
+// own rect does NOT reflect (the host carries the docY0 base). Closed in
+// production (keeps hostile pages out of badge internals). Read once at module
+// load from a localStorage flag the test sets before the content script boots
+// (localStorage is shared between the page and the CS isolated world).
+const SHADOW_MODE: ShadowRootMode = (() => {
+  try {
+    return typeof localStorage !== 'undefined' && localStorage.getItem('bkOpenShadow') === '1'
+      ? 'open' : 'closed';
+  } catch {
+    return 'closed';
+  }
+})();
+
 function computeBadgeFontSize(target: Element): number {
   // Targets with font-size: 0 (the common a11y-text-hiding trick on
   // role=checkbox / role=button divs) would otherwise yield a 0px or
@@ -522,7 +538,7 @@ export class HintBadge {
     this.host.setAttribute('data-branchkit-hint', 'true');
     this.host.style.cssText = 'display:contents;';
 
-    this.shadow = this.host.attachShadow({ mode: 'closed' });
+    this.shadow = this.host.attachShadow({ mode: SHADOW_MODE });
 
     this.outer = document.createElement('div');
     this.outer.className = 'bk-outer';
