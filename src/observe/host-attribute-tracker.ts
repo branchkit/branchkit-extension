@@ -42,7 +42,8 @@ function reconcile(host: HTMLElement, attributeName: string, expectedDisplay = '
   } else if (
     attributeName === 'data-bk-shown' ||
     attributeName === 'data-bk-pending' ||
-    attributeName === 'data-bk-accel'
+    attributeName === 'data-bk-accel' ||
+    attributeName === 'data-bk-occluded'
   ) {
     // Owned by HintBadge.show()/hide()/markGrammarReady() and the inner-scroll
     // accelerator arm/disarm; the tracker MO sees our own writes echo back, so

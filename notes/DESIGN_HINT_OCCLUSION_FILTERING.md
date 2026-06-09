@@ -1,10 +1,31 @@
 # Hint Occlusion Filtering
 
-**Status:** Proposed, deferred. Z-index stacking-context fix landed 2026-06-02
+**Status:** Subcase 2 IMPLEMENTED 2026-06-09, flag-gated (`bkOcclusion`, default
+off), pending soak. Z-index stacking-context fix landed 2026-06-02
 (`src/placement/stacking.ts`, ported from Rango). This document covers the
 remaining case the z-index fix doesn't address: badges painting on top of
 targets that are physically present in the DOM but visually hidden within
 the same stacking context.
+
+**Revisit trigger met 2026-06-09:** user reported "ghost" badges on QuickBase —
+sidebar + report-table targets that scroll under a covering layer stay
+`targetCssVisible=true` (CSS-visible) while body-mounted max-z-index badges paint
+on top. Implemented **Option D + voice drop** (the user chose visual + voice):
+- `src/observe/occlusion.ts` — `isOccluded(el)` = `elementFromPoint` hit-test at
+  the target center + `isHitOccluding(target, hit)` decision (hit is target /
+  ancestor / descendant → not occluded; else occluded; null → defer). Flag-gated.
+- `reconcileOcclusion()` (`content.ts`) — batched read-then-write pass over the
+  visible in-band badge set, run from the scroll-settle and deferred-reposition
+  settle handlers (debounced, IO-gated) right before `reconcileStrictViewport`.
+- Visual: `HintBadge.setOccluded` toggles `.bk-occluded` (display:none) +
+  `data-bk-occluded` host attr.
+- Voice: `ElementWrapper.occluded` forces `in_strict_viewport=false` in
+  `stampStrictViewport`/`collectStrictViewportDelta`, so occluded targets drop
+  from `browser_hints_*_strict` and voice can't match them — reusing the existing
+  strict-viewport push plumbing (no new release path).
+Open follow-ups: first-paint occlusion (currently only settle-driven), partial
+occlusion (center-point only), cross-shadow `contains` edge cases, and the
+`pointer-events:none` covering-layer blind spot. Soak before defaulting on.
 
 ## Problem
 

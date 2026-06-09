@@ -545,6 +545,12 @@ export class HintBadge {
       .bk-inner.filtered {
         display: none;
       }
+      /* Occlusion: the target is covered by another element (hit-test), so the
+       * badge would float on top of whatever hides it. Hidden entirely —
+       * orthogonal to .filtered (text-match) and the .visible opacity gate. */
+      .bk-inner.bk-occluded {
+        display: none;
+      }
       .bk-inner.text-match {
         outline: 1px solid currentColor;
       }
@@ -908,6 +914,22 @@ export class HintBadge {
       this.inner.classList.add('filtered');
     } else {
       this.inner.classList.remove('filtered');
+    }
+  }
+
+  // Visually hide a badge whose target is covered by another element (the
+  // occlusion hit-test, notes/DESIGN_HINT_OCCLUSION_FILTERING.md). Distinct from
+  // hide()/_visible (the badge stays "shown" in the visibility-tracker's sense,
+  // so it un-hides the instant the cover moves) and from setFiltered (text-match
+  // filtering). Mirrors the occluded state onto the light-DOM host as
+  // data-bk-occluded for diagnostics. Idempotent.
+  setOccluded(occluded: boolean): void {
+    if (occluded) {
+      this.inner.classList.add('bk-occluded');
+      this.host.setAttribute('data-bk-occluded', 'true');
+    } else {
+      this.inner.classList.remove('bk-occluded');
+      this.host.removeAttribute('data-bk-occluded');
     }
   }
 

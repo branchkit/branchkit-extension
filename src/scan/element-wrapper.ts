@@ -83,6 +83,14 @@ export class ElementWrapper {
   // `stampStrictViewport` after the corresponding postBatch.
   lastSentStrictViewport: boolean | undefined = undefined;
 
+  // True when the occlusion hit-test most recently found this wrapper's target
+  // covered by another element (notes/DESIGN_HINT_OCCLUSION_FILTERING.md). Drives
+  // two consumers: the badge is visually hidden (setOccluded), and the
+  // strict-viewport computation forces in_strict_viewport=false so voice can't
+  // match a target the user can't see. Set by `reconcileOcclusion`; always false
+  // when the bkOcclusion flag is off.
+  occluded: boolean = false;
+
   constructor(element: Element, scanned: ScannedElement) {
     this.element = element;
     this.scanned = scanned;

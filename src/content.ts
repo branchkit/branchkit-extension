@@ -30,6 +30,7 @@ import { HintBadge } from './render/hints';
 import { reconcilePass, drain as drainReconcilePositioner, reconcileRegistrySize } from './render/reconcile-positioner';
 import { onContainerResize } from './observe/container-resize-tracker';
 import { onTargetMutation } from './observe/target-mutation-tracker';
+import { isOccluded, isOcclusionEnabled, setOcclusionEnabled } from './observe/occlusion';
 import { cacheLayout, clearLayoutCache, getCachedRect, isRectOnScreen } from './layout-cache';
 import { placeBadges, placeOne, invalidateProbe } from './placement';
 import { activateElement, dispatchHover, type ActivationResult } from './activate/event-sequence';
@@ -587,6 +588,14 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
 // it falls back to the JS chase there with no errors. Read once at load
 // (per-machine, like the alphabet); the user reloads to change it.
 if (typeof chrome !== 'undefined' && chrome.storage?.local) {
+  chrome.storage.local.get('bkOcclusion', (result) => {
+    // Occlusion filtering (notes/DESIGN_HINT_OCCLUSION_FILTERING.md). NEW + high
+    // blast radius (false positives would hide real badges), so default OFF until
+    // soaked — only an explicit `true` enables it. Flip on to test via
+    // `chrome.storage.local.set({ bkOcclusion: true })`.
+    setOcclusionEnabled(result.bkOcclusion === true);
+    document.documentElement.setAttribute('data-bk-occlusion', result.bkOcclusion === true ? 'on' : 'off');
+  });
   chrome.storage.local.get('bkScrollAccel', (result) => {
     const enabled = result.bkScrollAccel !== false;
     setScrollAccelEnabled(enabled);
@@ -1448,6 +1457,33 @@ function reconcileStrictViewport(): void {
   firehoseStep('strict-viewport:delta', delta.length, 1);
   for (const w of delta) queuePut(w);
   scheduleSync('strict-viewport-change');
+}
+
+// Occlusion pass (notes/DESIGN_HINT_OCCLUSION_FILTERING.md). Hit-test each
+// visible in-band badge: if its target is covered by another element, hide the
+// badge (visual) and flag the wrapper occluded so the strict-viewport pass that
+// follows drops it from the voice-matchable `_strict` collection (voice). Runs
+// from the same debounced settle handlers as reconcileStrictViewport, BEFORE it,
+// so collectStrictViewportDelta reads a fresh `occluded`. No-op when the
+// bkOcclusion flag is off (isOccluded short-circuits → nothing ever flips).
+//
+// Batched read-then-write: all elementFromPoint reads first (one layout flush),
+// then the setOccluded class writes — so a hide doesn't dirty layout between
+// hit-tests. IO-gated to the visible set (hidden/off-band badges aren't painted,
+// so occlusion is moot) to keep the synchronous reads bounded.
+function reconcileOcclusion(): void {
+  if (!isOcclusionEnabled()) return;
+  const changed: ElementWrapper[] = [];
+  for (const w of store.all) {
+    if (!w.hint || !w.hint.isVisible || !w.isInViewport || !w.element.isConnected) continue;
+    const occluded = isOccluded(w.element);
+    if (occluded !== w.occluded) {
+      w.occluded = occluded;
+      changed.push(w);
+    }
+  }
+  for (const w of changed) w.hint!.setOccluded(w.occluded);
+  if (changed.length > 0) firehoseStep('occlusion:delta', changed.length, 1);
 }
 
 // Run `cb` on the next idle frame, falling back to a short timeout where
@@ -2779,6 +2815,10 @@ function scheduleScrollReposition(): void {
       // command requires the hints tag, so voice can't match when hints
       // are down — strict membership being stale doesn't matter, and the
       // next `show` re-scans from scratch.
+      // Occlusion before strict-viewport: hit-test covered targets and flag them
+      // so the strict-viewport delta below drops them from voice (and hides the
+      // ghost badge). No-op when the bkOcclusion flag is off.
+      reconcileOcclusion();
       reconcileStrictViewport();
     }
     scheduleReposition('drifted');
@@ -2855,6 +2895,10 @@ function scheduleDeferredReposition(): void {
       // a scroll event. Re-push the strict flag for changed wrappers so the
       // _strict companion collection — and the Discovery HUD that reads it —
       // converges to the post-settle viewport reality.
+      // Occlusion before strict-viewport: hit-test covered targets and flag them
+      // so the strict-viewport delta below drops them from voice (and hides the
+      // ghost badge). No-op when the bkOcclusion flag is off.
+      reconcileOcclusion();
       reconcileStrictViewport();
     }
     scheduleReposition('drifted');

@@ -93,7 +93,11 @@ export function stampStrictViewport(wrappers: ElementWrapper[]): void {
   });
   wrappers.forEach((w, i) => {
     const r = rects[i];
-    const inStrict = ancestorOk
+    // `!w.occluded`: a target covered by another element (occlusion hit-test) is
+    // off-strict so voice can't match a hint the user can't see — same rule as
+    // below-the-fold, applied to visually-covered targets. No-op when the
+    // bkOcclusion flag is off (occluded stays false).
+    const inStrict = ancestorOk && !w.occluded
       && r != null && r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
     w.scanned.in_strict_viewport = inStrict;
     // The reconciler reads `lastSentStrictViewport` to decide whether a
@@ -127,7 +131,9 @@ export function collectStrictViewportDelta(
     if (w.disconnectedAt !== null) continue;
     if (!w.scanned.codeword) continue;
     let inStrict = false;
-    if (ancestorOk) {
+    // Occluded targets are off-strict (see stampStrictViewport) — a covered hint
+    // shouldn't be voice-matchable. No-op when the flag is off.
+    if (ancestorOk && !w.occluded) {
       try {
         const r = w.element.getBoundingClientRect();
         inStrict =
