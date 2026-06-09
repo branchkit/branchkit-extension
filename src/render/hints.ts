@@ -25,6 +25,8 @@ import {
   teardownScrollAccel,
   scrollAccelHealthy,
   scrollAccelScrollOffset,
+  findScrollableAncestor,
+  findScrollableAncestors,
 } from './scroll-accel';
 
 // Walk ancestors (piercing shadow boundaries) for a position:fixed or sticky
@@ -389,7 +391,32 @@ export function setScrollAccelEnabled(enabled: boolean): void {
 let scrollAccelNestedEnabled = false;
 
 export function setScrollAccelNestedEnabled(enabled: boolean): void {
+  if (scrollAccelNestedEnabled === enabled) return;
   scrollAccelNestedEnabled = enabled;
+  // Re-detect every live badge's chain so a flag flip (or a late flag read)
+  // takes effect without waiting for each badge to be re-shown.
+  for (const b of liveReconcileBadges) b.syncScrollAccel();
+}
+
+// Registry of live reconcile badges, so the accelerator can be re-detected
+// level-triggered (a scroller that became scrollable after a badge first armed,
+// a chain that grew/shrank, or a flag flip) instead of only edge-triggered at
+// show time. Added in the constructor, removed in remove().
+const liveReconcileBadges = new Set<HintBadge>();
+
+/** Re-detect the accelerator chain for every visible live badge. Called from the
+ *  settle handlers so arming is level-triggered: a badge whose scroller wasn't
+ *  scrollable yet at show time (content still loading) gets accelerated once it
+ *  is, and a chain that changed is rebuilt. No-op when the flag is off. */
+export function reconcileScrollAccel(): void {
+  if (!scrollAccelEnabled) return;
+  for (const b of liveReconcileBadges) b.syncScrollAccel();
+}
+
+function sameElements(a: readonly Element[], b: readonly Element[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
 
 function computeBadgeFontSize(target: Element): number {
@@ -605,6 +632,7 @@ export class HintBadge {
     this.anchorParent = resolveContainer(target);
     this.setupReconcileHost();
     registerReconcile(this);
+    liveReconcileBadges.add(this);
 
     // Defer the heavy half of setup (4 observer registrations + APCA color
     // computation, ~5-10 ms total) onto idle time via the module-level
@@ -738,6 +766,25 @@ export class HintBadge {
     teardownScrollAccel(this._scrollAccel);
     this._scrollAccel = null;
     this.host.removeAttribute('data-bk-accel');
+  }
+
+  // Level-triggered re-detection: rebuild the accelerator if its scroller chain
+  // changed since it armed. Catches a scroller that became scrollable AFTER this
+  // badge first armed (content still loading at show time — the main reason a
+  // body-mounted badge ends up un-accelerated and wiggling on a scroll it should
+  // ride), a chain that grew/shrank, and late flag reads. Only visible badges;
+  // hidden ones (re)arm on show. Called from the settle handlers via the module
+  // `reconcileScrollAccel`, and on a flag flip.
+  syncScrollAccel(): void {
+    if (!scrollAccelEnabled || !this._visible) return;
+    const desired = scrollAccelNestedEnabled
+      ? findScrollableAncestors(this.target)
+      : ((s) => (s ? [s] : []))(findScrollableAncestor(this.target));
+    const current = this._scrollAccel ? this._scrollAccel.layers.map((l) => l.scroller) : [];
+    if (sameElements(current, desired)) return;
+    this.disarmScrollAccel();
+    this.armScrollAccel();
+    if (this._scrollAccel) this.repositionHostNow();
   }
 
   // Write the host's transform NOW from the live target rect, instead of waiting
@@ -1101,6 +1148,7 @@ export class HintBadge {
     untrackTargetMutations(this.target);
     untrackHostAttributes(this.host);
     unregisterReconcile(this);
+    liveReconcileBadges.delete(this);
     this.disarmScrollAccel();
     this.host.remove();
   }

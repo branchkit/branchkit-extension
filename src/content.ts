@@ -89,7 +89,7 @@ import {
 } from './rules/domain-rules';
 import { loadDomainRules, onDomainRulesChanged, rulesEqual } from './rules/domain-rules-storage';
 import { loadBadgeSettings, onBadgeSettingsChanged } from './badge-settings-storage';
-import { setBadgeSizingFromSettings, setScrollAccelEnabled, setScrollAccelNestedEnabled } from './render/hints';
+import { setBadgeSizingFromSettings, setScrollAccelEnabled, setScrollAccelNestedEnabled, reconcileScrollAccel } from './render/hints';
 import { isScrollTimelineSupported } from './render/scroll-accel';
 import { setNudgesFromSettings } from './placement';
 import { labelReservoir } from './labels/label-reservoir';
@@ -605,26 +605,23 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
     setClipObserverEnabled(result.bkClipObserver === true);
     document.documentElement.setAttribute('data-bk-clip-observer', result.bkClipObserver === true ? 'on' : 'off');
   });
-  chrome.storage.local.get('bkScrollAccelNested', (result) => {
-    // Nested-scroller accelerator (composed ScrollTimelines). NEW, default OFF —
-    // the multi-scroller path relies on `composite: 'add'` (unverified), so it's
-    // opt-in until soaked. Enable: `chrome.storage.local.set({ bkScrollAccelNested: true })`.
-    setScrollAccelNestedEnabled(result.bkScrollAccelNested === true);
-    document.documentElement.setAttribute('data-bk-scroll-accel-nested', result.bkScrollAccelNested === true ? 'on' : 'off');
-  });
-  chrome.storage.local.get('bkScrollAccel', (result) => {
+  // Both accelerator flags in ONE get so they're set atomically — otherwise a
+  // badge can arm between the two callbacks with the base flag on but the nested
+  // flag not-yet-set, caching a single-layer accelerator. bkScrollAccel default
+  // ON; bkScrollAccelNested (composed ScrollTimelines for nested scrollers) NEW,
+  // default OFF (opt-in until the composite:'add' path is soaked).
+  chrome.storage.local.get(['bkScrollAccel', 'bkScrollAccelNested'], (result) => {
     const enabled = result.bkScrollAccel !== false;
     setScrollAccelEnabled(enabled);
-    // Page-visible diagnostic marker on <html>: lets the user confirm from the
-    // ordinary page console (no content-script context switch) whether the
-    // accelerator can engage. 'on' = flag set + ScrollTimeline supported;
-    // 'unsupported' = flag set but no ScrollTimeline (Firefox stable); 'off' =
-    // flag not set. Pair with `document.querySelectorAll('[data-bk-accel]').length`
-    // to count badges that actually armed.
+    setScrollAccelNestedEnabled(result.bkScrollAccelNested === true);
+    // Page-visible diagnostic markers on <html>: 'on' = flag set + ScrollTimeline
+    // supported; 'unsupported' = no ScrollTimeline (Firefox stable); 'off' = not
+    // set. Pair with `document.querySelectorAll('[data-bk-accel]').length`.
     document.documentElement.setAttribute(
       'data-bk-scroll-accel',
       enabled ? (isScrollTimelineSupported() ? 'on' : 'unsupported') : 'off',
     );
+    document.documentElement.setAttribute('data-bk-scroll-accel-nested', result.bkScrollAccelNested === true ? 'on' : 'off');
   });
 }
 
@@ -2840,6 +2837,11 @@ function scheduleScrollReposition(): void {
       // flags are off.
       reconcileClipObservation(store.all);
       reconcileOcclusion();
+      // Level-triggered accelerator re-detection: arm badges whose scroller only
+      // became scrollable after they were shown (content loaded), and rebuild
+      // chains that changed. Cheap post-settle (cached layout/style reads); no-op
+      // when scrollAccel is off.
+      reconcileScrollAccel();
       reconcileStrictViewport();
     }
     scheduleReposition('drifted');
@@ -2924,6 +2926,11 @@ function scheduleDeferredReposition(): void {
       // flags are off.
       reconcileClipObservation(store.all);
       reconcileOcclusion();
+      // Level-triggered accelerator re-detection: arm badges whose scroller only
+      // became scrollable after they were shown (content loaded), and rebuild
+      // chains that changed. Cheap post-settle (cached layout/style reads); no-op
+      // when scrollAccel is off.
+      reconcileScrollAccel();
       reconcileStrictViewport();
     }
     scheduleReposition('drifted');
