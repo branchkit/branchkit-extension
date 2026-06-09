@@ -419,10 +419,10 @@ function shouldAutoShowHints(): boolean {
   return getHintVisibility() === 'always' && getHintsShown();
 }
 
-// Bring this frame's visibility in line with the persisted F state. Run when
-// hintsShown loads at boot and whenever it changes (including from F in
-// another frame/tab). Hides on F-off; shows on F-on only in always mode
-// (manual reveals are per-page and must not auto-show here).
+// Bring this frame's visibility in line with the persisted F state. Run once
+// after hintsShown loads at boot (corrects a racing boot-time auto-show when
+// the persisted state was an F-hide). Hides on F-off; shows on F-on only in
+// always mode (manual reveals are per-page and must not auto-show here).
 function applyHintsShownState(): void {
   if (!getHintsShown()) {
     if (pageSession.hintsVisible) hideHints();
@@ -447,7 +447,7 @@ loadConfig({
       hideHints();
     }
   },
-  onHintsShownChange: () => applyHintsShownState(),
+  onHintsShownLoaded: () => applyHintsShownState(),
   onAggressiveHintsChange: () => {
     // Clear the store so already-hinted elements that no longer qualify
     // get torn down, then re-scan with the new selector breadth.
@@ -2125,6 +2125,15 @@ function preNavObserverTeardown(triggerReason: string): number {
 function rescanForNav(fromCache: boolean, reason: string): void {
   const t0 = performance.now();
   chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_rescan_received', data: { url: window.location.href, from_cache: fromCache, reason } } as Message).catch(() => {});
+
+  // A same-document nav is a new page: in manual mode (or always-mode with an
+  // active F-hide) it should start hidden. The SPA nav keeps this content
+  // script alive, so F-shown hints from the previous URL would otherwise
+  // linger. Refocus (the other from_cache caller) is NOT a new page — only
+  // reset on spa_nav.
+  if (reason === 'spa_nav' && !shouldAutoShowHints() && pageSession.hintsVisible) {
+    hideHints();
+  }
 
   if (fromCache) {
     // From-cache path: drop dead wrappers, republish the current wrapper

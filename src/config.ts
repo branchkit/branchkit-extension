@@ -54,8 +54,8 @@ export interface ConfigHandlers {
   onDisplayModeChange: () => void;
   /** hintVisibility changed — show or hide hints to match the new value. */
   onHintVisibilityChange: () => void;
-  /** hintsShown loaded or changed (incl. cross-tab) — reconcile visibility. */
-  onHintsShownChange: () => void;
+  /** hintsShown loaded from storage — reconcile this page's initial visibility. */
+  onHintsShownLoaded: () => void;
   /** aggressiveHints toggled — re-scan so the wider/narrower selector applies. */
   onAggressiveHintsChange: () => void;
 }
@@ -83,7 +83,7 @@ export function loadConfig(handlers: ConfigHandlers): void {
   if (chrome.storage?.local) {
     chrome.storage.local.get(['hintsShown'], (result) => {
       if (typeof result.hintsShown === 'boolean') hintsShown = result.hintsShown;
-      handlers.onHintsShownChange();
+      handlers.onHintsShownLoaded();
     });
   }
 
@@ -97,8 +97,12 @@ export function loadConfig(handlers: ConfigHandlers): void {
       handlers.onHintVisibilityChange();
     }
     if (changes.hintsShown) {
+      // Keep the value current for this frame's next decision (e.g. an SPA
+      // nav), but DON'T live-reconcile visibility here: reacting to our own
+      // storage echo can hide a just-shown toggle, and manual mode can't
+      // re-show. The F handler applies show/hide locally; new page loads
+      // read this value via onHintsShownLoaded.
       hintsShown = changes.hintsShown.newValue !== false;  // absent/removed → on
-      handlers.onHintsShownChange();
     }
     if (changes.aggressiveHints) {
       // Toggle changed → re-scan so the wider/narrower selector takes
