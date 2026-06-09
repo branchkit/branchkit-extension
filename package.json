@@ -16,7 +16,8 @@
     "package:firefox": "npm run build:firefox && npx --yes web-ext build --source-dir=dist/firefox --artifacts-dir=artifacts --overwrite-dest",
     "test:placement": "npm run build:chrome && node scripts/test-placement.mjs",
     "test:perf": "npm run build:chrome && node scripts/test-perf.mjs",
-    "test:scroll-accel": "npm run build:chrome && node scripts/test-scroll-accel.mjs"
+    "test:scroll-accel": "npm run build:chrome && node scripts/test-scroll-accel.mjs",
+    "test:scroll-accel-nested": "npm run build:chrome && node scripts/test-scroll-accel-nested.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.268",
