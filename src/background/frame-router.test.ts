@@ -16,15 +16,18 @@ import { resolveActiveContentTab, broadcastToAllTabs, resolveHintFromTab } from 
 let getAll: ReturnType<typeof vi.fn>;
 let query: ReturnType<typeof vi.fn>;
 let sendMessage: ReturnType<typeof vi.fn>;
+let getAllFrames: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   bgState.cachedActiveTabId = null;
   getAll = vi.fn();
   query = vi.fn();
   sendMessage = vi.fn().mockResolvedValue(undefined);
+  getAllFrames = vi.fn().mockResolvedValue([{ frameId: 0 }]);
   vi.stubGlobal('chrome', {
     windows: { getAll },
     tabs: { query, sendMessage },
+    webNavigation: { getAllFrames },
   });
 });
 afterEach(() => {
@@ -76,5 +79,49 @@ describe('resolveHintFromTab', () => {
     const res = await resolveHintFromTab(1, '   ');
     expect(res).toEqual({ ok: false, reason: 'Codeword is empty.' });
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('asks every frame and returns the first ok match', async () => {
+    getAllFrames.mockResolvedValue([{ frameId: 0 }, { frameId: 7 }]);
+    sendMessage.mockReset();
+    sendMessage
+      .mockResolvedValueOnce({ ok: false, reason: 'not in top frame' })
+      .mockResolvedValueOnce({ ok: true, selector: 'button#x', tagName: 'button', accessibleName: 'X' });
+
+    const res = await resolveHintFromTab(3, 'cg');
+
+    expect(res).toMatchObject({ ok: true, selector: 'button#x' });
+    expect(sendMessage.mock.calls.map(c => c[2]?.frameId)).toEqual([0, 7]);
+  });
+
+  it('skips frames with no content script and keeps going', async () => {
+    getAllFrames.mockResolvedValue([{ frameId: 0 }, { frameId: 9 }]);
+    sendMessage.mockReset();
+    sendMessage
+      .mockRejectedValueOnce(new Error('Receiving end does not exist'))
+      .mockResolvedValueOnce({ ok: true, selector: '#y', tagName: 'a', accessibleName: '' });
+
+    const res = await resolveHintFromTab(3, 'cg');
+    expect(res).toMatchObject({ ok: true, selector: '#y' });
+  });
+
+  it('returns a not-visible reason when no frame recognizes it', async () => {
+    getAllFrames.mockResolvedValue([{ frameId: 0 }]);
+    sendMessage.mockReset();
+    sendMessage.mockResolvedValue({ ok: false, reason: 'Codeword "cg" not visible in this frame.' });
+
+    const res = await resolveHintFromTab(3, 'cg');
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toMatch(/not visible/i);
+  });
+
+  it('falls back to the top frame when getAllFrames is unavailable', async () => {
+    getAllFrames.mockRejectedValue(new Error('no webNavigation'));
+    sendMessage.mockReset();
+    sendMessage.mockResolvedValue({ ok: true, selector: '#z', tagName: 'button', accessibleName: '' });
+
+    const res = await resolveHintFromTab(3, 'cg');
+    expect(res).toMatchObject({ ok: true });
+    expect(sendMessage.mock.calls.map(c => c[2]?.frameId)).toEqual([0]);
   });
 });

@@ -46,6 +46,24 @@ export interface LabelAssignment {
 }
 
 /**
+ * Rebuild a LabelAssignment from a stored codeword string (the spoken
+ * word form, e.g. "charlie golf" or "arch"). Used by the codeword
+ * resolver to recompute a wrapper's displayed form for any mode.
+ * Returns null for unknown words or more than two words.
+ */
+export function codewordToAssignment(codeword: string): LabelAssignment | null {
+  const words = codeword.trim().split(/\s+/).filter(w => w.length > 0);
+  if (words.length < 1 || words.length > 2) return null;
+  let letter = '';
+  for (const w of words) {
+    const l = WORD_TO_LETTER[w];
+    if (!l) return null;
+    letter += l;
+  }
+  return { words, letter, isSingle: words.length === 1 };
+}
+
+/**
  * Format label for display based on display mode.
  */
 export function labelToDisplay(assignment: LabelAssignment, mode: BadgeDisplayMode): string {

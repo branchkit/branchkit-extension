@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { setAlphabet, labelToDisplay, LabelAssignment, WORD_TO_LETTER } from './words';
+import {
+  setAlphabet,
+  labelToDisplay,
+  codewordToAssignment,
+  LabelAssignment,
+  WORD_TO_LETTER,
+} from './words';
 
 const ALPHABET = [
   'arch', 'bake', 'cape', 'dune', 'elm', 'frog', 'glad', 'half', 'iron', 'jake',
@@ -48,5 +54,48 @@ describe('labelToDisplay — existing modes unchanged', () => {
   it('both mode for single word shows letter + word', () => {
     const label: LabelAssignment = { words: ['arch'], letter: 'a', isSingle: true };
     expect(labelToDisplay(label, 'both')).toBe('a arch');
+  });
+});
+
+describe('codewordToAssignment', () => {
+  it('rebuilds a pair assignment with its letter form', () => {
+    expect(codewordToAssignment('cape glad')).toEqual({
+      words: ['cape', 'glad'],
+      letter: 'cg',
+      isSingle: false,
+    });
+  });
+
+  it('rebuilds a single assignment', () => {
+    expect(codewordToAssignment('arch')).toEqual({
+      words: ['arch'],
+      letter: 'a',
+      isSingle: true,
+    });
+  });
+
+  it('tolerates extra whitespace', () => {
+    expect(codewordToAssignment('  cape   glad ')).toEqual({
+      words: ['cape', 'glad'],
+      letter: 'cg',
+      isSingle: false,
+    });
+  });
+
+  it('round-trips through labelToDisplay for every mode', () => {
+    const a = codewordToAssignment('cape glad')!;
+    expect(labelToDisplay(a, 'letter')).toBe('cg');
+    expect(labelToDisplay(a, 'word')).toBe('cape glad');
+    expect(labelToDisplay(a, 'first-word')).toBe('cape g');
+  });
+
+  it('returns null for an unknown word', () => {
+    expect(codewordToAssignment('cape zzz')).toBeNull();
+    expect(codewordToAssignment('nope')).toBeNull();
+  });
+
+  it('returns null for empty or more than two words', () => {
+    expect(codewordToAssignment('')).toBeNull();
+    expect(codewordToAssignment('cape glad arch')).toBeNull();
   });
 });

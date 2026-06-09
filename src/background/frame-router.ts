@@ -9,7 +9,7 @@
  * from background/state and the inject helpers from background/injection.
  */
 
-import { Message } from '../types';
+import { Message, ResolveHintResponse } from '../types';
 import { getFrameForLabel } from '../labels/label-pool';
 import { bgState } from './state';
 import { isInjectableURL, withInjectLock, injectContentScriptFiles } from './injection';
@@ -153,17 +153,37 @@ async function routeFrameForAction(tabId: number, message: Message): Promise<num
 export async function resolveHintFromTab(tabId: number, codeword: string) {
   const trimmed = codeword.trim();
   if (!trimmed) return { ok: false, reason: 'Codeword is empty.' };
-  const frameId = await getFrameForLabel(tabId, trimmed);
-  if (frameId == null) {
-    return { ok: false, reason: `Codeword "${trimmed}" is not visible in that tab. Make sure hints are showing.` };
-  }
+
+  // We don't pre-route via getFrameForLabel: the typed codeword is usually
+  // the displayed badge form (e.g. "cg" in letter mode), which the label
+  // pool doesn't key on (its keys are spoken word pairs). Instead ask every
+  // frame to resolve it against its own visible badges and take the first
+  // that recognizes it. This also reaches badges inside iframes (QuickBase)
+  // transparently. Only the manual picker uses this path; voice/keyboard
+  // routing still goes through getFrameForLabel.
+  let frameIds: number[];
   try {
-    return await chrome.tabs.sendMessage(
-      tabId,
-      { type: 'RESOLVE_HINT', codeword: trimmed },
-      { frameId },
-    );
-  } catch (err) {
-    return { ok: false, reason: `Could not reach tab frame: ${String((err as Error)?.message ?? err)}` };
+    const frames = await chrome.webNavigation.getAllFrames({ tabId });
+    frameIds = frames && frames.length > 0 ? frames.map(f => f.frameId) : [0];
+  } catch {
+    frameIds = [0];
   }
+
+  let lastReason = `Codeword "${trimmed}" is not visible in that tab. Make sure hints are showing.`;
+  for (const frameId of frameIds) {
+    let resp: ResolveHintResponse;
+    try {
+      resp = await chrome.tabs.sendMessage(
+        tabId,
+        { type: 'RESOLVE_HINT', codeword: trimmed },
+        { frameId },
+      );
+    } catch {
+      // Frame has no content script (cross-origin / not injectable) — skip.
+      continue;
+    }
+    if (resp?.ok) return resp;
+    if (resp?.reason) lastReason = resp.reason;
+  }
+  return { ok: false, reason: lastReason };
 }

@@ -11,18 +11,59 @@
  * carve leaf concerns). See notes/DESIGN_EXTENSION_RESTRUCTURE.md.
  */
 
-import { WrapperStore } from '../scan/element-wrapper';
+import { WrapperStore, ElementWrapper } from '../scan/element-wrapper';
 import { generateSelector } from '../scan/selector-generator';
 import { accessibleName } from '../scan/accessible-name';
-import { DispatchResult, Message, ResolveHintResponse } from '../types';
+import { codewordToAssignment, labelToDisplay } from '../labels/words';
+import { BadgeDisplayMode, DispatchResult, Message, ResolveHintResponse } from '../types';
+
+function normalizeCodeword(s: string): string {
+  return s.trim().toLowerCase().replace(/\s+/g, '');
+}
+
+/**
+ * Find the wrapper a typed codeword refers to. Accepts two forms so the
+ * user can type whatever the badge shows them (WYSIWYG):
+ *   1. The canonical spoken word pair ("charlie golf") — exact, fast,
+ *      mode-independent.
+ *   2. The displayed form for the active mode ("cg" in letter mode,
+ *      "charlie g" in first-word mode) — matched against each wrapper's
+ *      recomputed display string.
+ * Codewords are unique per tab, so the first display-form match is
+ * unambiguous.
+ */
+function findWrapper(
+  store: WrapperStore,
+  codeword: string,
+  displayMode: BadgeDisplayMode,
+): ElementWrapper | undefined {
+  const direct = store.byCodeword(codeword);
+  if (direct) return direct;
+
+  const target = normalizeCodeword(codeword);
+  if (!target) return undefined;
+  for (const w of store.all) {
+    const cw = w.scanned.codeword;
+    if (!cw) continue;
+    const assignment = codewordToAssignment(cw);
+    if (!assignment) continue;
+    if (normalizeCodeword(labelToDisplay(assignment, displayMode)) === target) return w;
+  }
+  return undefined;
+}
 
 /**
  * Resolve a visible-hint codeword to a stable selector. Used by the
- * options page (via background) to convert "ape deck" into something like
+ * options page (via background) to convert a typed codeword — the
+ * displayed badge form for the active mode — into something like
  * `a.deleteBtn` for a domain rule entry.
  */
-export function resolveHintLocally(store: WrapperStore, codeword: string): ResolveHintResponse {
-  const wrapper = store.byCodeword(codeword);
+export function resolveHintLocally(
+  store: WrapperStore,
+  codeword: string,
+  displayMode: BadgeDisplayMode,
+): ResolveHintResponse {
+  const wrapper = findWrapper(store, codeword, displayMode);
   if (!wrapper) {
     return { ok: false, reason: `Codeword "${codeword.trim()}" not visible in this frame.` };
   }

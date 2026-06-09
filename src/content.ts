@@ -2279,7 +2279,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
   }
 
   if (message.type === 'RESOLVE_HINT') {
-    sendResponse(resolveHintLocally(store, message.codeword));
+    sendResponse(resolveHintLocally(store, message.codeword, getDisplayMode()));
     return false;
   }
 
