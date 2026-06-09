@@ -41,6 +41,27 @@ export function suggestPattern(url: string): string | null {
 }
 
 /**
+ * Reorder a list by moving the item with `draggedId` to just before
+ * `targetId` (drop-before semantics). Returns a new array; a plain copy when
+ * an id is missing or the two are the same. Generic over `{ id }` so it stays
+ * free of any rule-type import and is trivially unit-testable.
+ */
+export function reorderRules<T extends { id: string }>(
+  items: T[],
+  draggedId: string,
+  targetId: string,
+): T[] {
+  const next = items.slice();
+  if (draggedId === targetId) return next;
+  const from = next.findIndex(r => r.id === draggedId);
+  if (from < 0) return next;
+  const [moved] = next.splice(from, 1);
+  const to = next.findIndex(r => r.id === targetId);
+  next.splice(to < 0 ? next.length : to, 0, moved);
+  return next;
+}
+
+/**
  * Validate a CSS selector by handing it to `document.querySelector` in a
  * try/catch. The browser's parser is the source of truth — no point
  * reimplementing it.

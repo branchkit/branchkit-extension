@@ -1,5 +1,40 @@
 import { describe, it, expect } from 'vitest';
-import { suggestPattern, isValidSelector, validatePattern } from './options-helpers';
+import { suggestPattern, isValidSelector, validatePattern, reorderRules } from './options-helpers';
+
+describe('reorderRules', () => {
+  const ids = (arr: { id: string }[]) => arr.map(r => r.id);
+  const list = () => [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+
+  it('moves an item down (before a later target)', () => {
+    expect(ids(reorderRules(list(), 'a', 'c'))).toEqual(['b', 'a', 'c']);
+  });
+
+  it('moves an item up (before an earlier target)', () => {
+    expect(ids(reorderRules(list(), 'c', 'a'))).toEqual(['c', 'a', 'b']);
+  });
+
+  it('swaps adjacent items', () => {
+    expect(ids(reorderRules([{ id: 'a' }, { id: 'b' }], 'b', 'a'))).toEqual(['b', 'a']);
+  });
+
+  it('is a no-op when dragged === target', () => {
+    expect(ids(reorderRules(list(), 'b', 'b'))).toEqual(['a', 'b', 'c']);
+  });
+
+  it('is a no-op when the dragged id is missing', () => {
+    expect(ids(reorderRules(list(), 'zzz', 'b'))).toEqual(['a', 'b', 'c']);
+  });
+
+  it('appends when the target id is missing', () => {
+    expect(ids(reorderRules(list(), 'a', 'zzz'))).toEqual(['b', 'c', 'a']);
+  });
+
+  it('does not mutate the input array', () => {
+    const original = list();
+    reorderRules(original, 'a', 'c');
+    expect(ids(original)).toEqual(['a', 'b', 'c']);
+  });
+});
 
 describe('suggestPattern', () => {
   it('uses wildcard for subdomain hosts', () => {

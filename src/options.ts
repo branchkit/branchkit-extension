@@ -25,6 +25,7 @@ import {
   suggestPattern,
   isValidSelector,
   validatePattern,
+  reorderRules,
 } from './rules/options-helpers';
 import {
   KIND_META,
@@ -47,6 +48,7 @@ import {
 
 let rules: DomainRule[] = [];
 let activeTabUrl: string | null = null;
+let draggedRuleId: string | null = null;
 const PATTERN_SAVE_DEBOUNCE_MS = 350;
 const patternSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -97,6 +99,8 @@ function renderRule(rule: DomainRule): HTMLElement {
   node.dataset.ruleId = rule.id;
   if (!rule.enabled) node.classList.add('disabled');
 
+  wireDragReorder(rule, node);
+
   const patternInput = node.querySelector('.pattern-input') as HTMLInputElement;
   patternInput.value = rule.pattern;
   patternInput.addEventListener('input', () => onPatternInput(rule, patternInput, node));
@@ -133,6 +137,55 @@ function renderRule(rule: DomainRule): HTMLElement {
   validatePatternUI(rule, patternInput, node);
 
   return node;
+}
+
+// Drag-and-drop reordering. The handle is the draggable element; any rule
+// card is a drop target ("drop before this rule"). Order is organizational
+// only — the cascade merges every matching rule regardless of position.
+function wireDragReorder(rule: DomainRule, node: HTMLElement): void {
+  const handle = node.querySelector('.drag-handle') as HTMLElement;
+
+  handle.addEventListener('dragstart', (e) => {
+    draggedRuleId = rule.id;
+    if (e.dataTransfer) {
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', rule.id);  // Firefox needs data to start a drag
+      e.dataTransfer.setDragImage(node, 12, 12);
+    }
+    node.classList.add('dragging');
+  });
+
+  handle.addEventListener('dragend', () => {
+    draggedRuleId = null;
+    clearDragMarkers();
+  });
+
+  node.addEventListener('dragover', (e) => {
+    if (!draggedRuleId || draggedRuleId === rule.id) return;
+    e.preventDefault();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+    for (const el of rulesEl.querySelectorAll('.drag-over')) {
+      if (el !== node) el.classList.remove('drag-over');
+    }
+    node.classList.add('drag-over');
+  });
+
+  node.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const dragged = draggedRuleId;
+    draggedRuleId = null;
+    clearDragMarkers();
+    if (!dragged || dragged === rule.id) return;
+    rules = reorderRules(rules, dragged, rule.id);
+    save();
+    render();
+  });
+}
+
+function clearDragMarkers(): void {
+  for (const el of rulesEl.querySelectorAll('.drag-over, .dragging')) {
+    el.classList.remove('drag-over', 'dragging');
+  }
 }
 
 function renderEntries(rule: DomainRule, container: HTMLElement): void {

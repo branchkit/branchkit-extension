@@ -77,6 +77,17 @@
       overflow: hidden;
     }
     .rule.disabled { opacity: 0.55; }
+    .rule.dragging { opacity: 0.4; }
+    .rule.drag-over { box-shadow: inset 0 2px 0 #0078ff; }
+    .drag-handle {
+      cursor: grab;
+      color: var(--fg-muted);
+      user-select: none;
+      font-size: 14px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+    .drag-handle:active { cursor: grabbing; }
     .rule-header {
       display: flex;
       align-items: center;
@@ -347,6 +358,7 @@
     <template id="rule-template">
       <div class="rule">
         <div class="rule-header">
+          <span class="drag-handle" draggable="true" title="Drag to reorder">⠿</span>
           <span class="match-dot" title="Matches the current tab"></span>
           <span class="pattern">
             <input type="text" class="pattern-input" spellcheck="false">
