@@ -19,7 +19,7 @@ import { type RebindCounters } from './labels/rebind';
 import { resolveTarget } from './activate/activate-resolution';
 import { IntersectionTracker } from './observe/intersection-tracker';
 import { AttentionObserver } from './observe/attention-observer';
-import { initVisibilityTracker, recheckHintedVisibility, trackPendingCandidate, untrackPendingCandidate, connectVisibilityMO, teardownVisibilityTracker } from './observe/visibility-tracker';
+import { initVisibilityTracker, recheckHintedVisibility, scheduleHintVisibilityRecheck, trackPendingCandidate, untrackPendingCandidate, connectVisibilityMO, teardownVisibilityTracker } from './observe/visibility-tracker';
 import { initLimbo, rebindCounters, LIMBO_DEADLINE_MS, collectLimboWrappers, collectStrongKeyIndex, dropDisconnectedWrappers, finalizeExpiredLimboWrappers } from './observe/limbo';
 import { initWrapperLifecycle, attachWrapper, detachWrapper, seedPreferredFromMemory, reconcileEvictedCodewords, attachDiscovered } from './core/wrapper-lifecycle';
 import { initMutationSource, attachPageMutationObserver, teardownMutationSource } from './observe/mutation-source';
@@ -2985,6 +2985,17 @@ document.addEventListener('focusin', scheduleDeferredReposition, { passive: true
 document.addEventListener('focusout', scheduleDeferredReposition, { passive: true });
 document.addEventListener('transitionend', scheduleDeferredReposition, { passive: true });
 document.addEventListener('animationend', scheduleDeferredReposition, { passive: true });
+// Pointer-driven visibility recheck. A CSS `:hover` reveal (QuickBase widget
+// action bars, dropdown menus) flips a target from visibility:hidden to visible
+// with NO DOM mutation and often no transition — so neither the class/style
+// MutationObserver nor transitionend fires, and the badge for that target would
+// never appear (or only after some incidental mutation primes it). pointerover
+// fires on entering any element (not per-pixel like mousemove) and is throttled
+// to 100ms, so this catches hover-reveals cheaply: the recheck shows the now-
+// visible badge (and re-pushes its strict-viewport/voice membership via the
+// onVisibilityChanged callback), and hides it again on pointer-out. Lightweight
+// (recheck only) — NOT the full reposition/occlusion settle pass.
+document.addEventListener('pointerover', scheduleHintVisibilityRecheck, { passive: true, capture: true });
 // Window resize covers genuine viewport changes (drag corner, device
 // rotation, DevTools open/close) AND browser zoom (Cmd+= reflows the
 // layout and changes innerWidth/innerHeight in CSS pixels). Route through

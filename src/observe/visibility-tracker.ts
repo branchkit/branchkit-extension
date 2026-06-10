@@ -101,7 +101,7 @@ const visibilityMO = new MutationObserver(() => {
 let hintVisibilityRecheckPending = false;
 const HINT_VISIBILITY_RECHECK_THROTTLE_MS = 100;
 
-function scheduleHintVisibilityRecheck(): void {
+export function scheduleHintVisibilityRecheck(): void {
   if (hintVisibilityRecheckPending) return;
   hintVisibilityRecheckPending = true;
   setTimeout(() => {

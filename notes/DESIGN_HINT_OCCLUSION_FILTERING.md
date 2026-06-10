@@ -360,6 +360,20 @@ button). User decision 2026-06-10: "if a badge is hidden, remove it from voice t
   `reconcileStrictViewport` when a badge flips shown/hidden, and the recheck now
   also runs on both settle paths (scroll-settle, deferred-reposition-settle) right
   before the strict pass — so a hover-out drops voice without waiting for a scroll.
+- **Showing on hover (the reveal trigger).** Gating paint on `isVisible` exposed a
+  latent gap: a CSS `:hover` reveal (the widget action bar appears when you hover
+  the widget) flips visibility:hidden→visible with NO DOM mutation and often no
+  transition, so neither the class/style MutationObserver nor transitionend fires —
+  the recheck never runs, and the now-visible badge never appears (symptom: had to
+  physically hover the *icon* to prime it once, after which incidental mutations
+  kept it tracking). Fix: a throttled `pointerover` (capture, passive) document
+  listener → `scheduleHintVisibilityRecheck`. pointerover fires on entering any
+  element (not per-pixel), 100ms-throttled, so hovering the widget reveals the bar
+  and the recheck shows its badge — and hides it on pointer-out. Lightweight
+  (recheck only, not the full reposition/occlusion settle). Before the paint gate
+  this was masked because the badge was always painted (the ghost). NOTE for soak:
+  this runs the recheck ~10Hz during mouse movement on always-mode dense pages —
+  same envelope as the existing visibilityMO path, but watch CPU.
 
 **`cssHidden` vs `occluded`:** siblings feeding the same `in_strict_viewport=false`
 rule. `occluded` = a *visible* target *covered* by another element (overlay/clip
