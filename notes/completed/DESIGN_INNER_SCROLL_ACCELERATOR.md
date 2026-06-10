@@ -1,7 +1,20 @@
 # Inner-Scroll Accelerator (scroll-timeline, non-load-bearing)
 
-**Status:** Proposal (2026-06-09). Not yet implemented. Flag-gated, Chrome/Safari
-first, with a transparent fallback to today's behavior everywhere else.
+**Status:** LANDED (2026-06-09). The inner-overflow wiggle fix shipped: badges in
+an inner scroller ride the compositor via `ScrollTimeline`-driven `translateY`
+while the body-mounted reconcile base stays the source of truth. Implemented in
+`src/render/scroll-accel.ts` (+ `scroll-accel.test.ts` and the
+`scripts/test-scroll-accel*.mjs` integration suite), wired into `hints.ts`
+(`_scrollAccel` lifecycle, health-gated base in `reconcileRead`) and `content.ts`
+(flag adoption). Multi-scroller chains use **nested wrapper elements**, one
+`composite:'replace'` animation each — NOT `composite:'add'`, which composed
+positionally but fell to main-thread sampling and regressed every outer-scroll
+badge (reverted; see the 2026-06-09 revisions below). Both flags
+(`bkScrollAccel`, `bkScrollAccelNested`) ship **default-ON** — only an explicit
+`false` disables — and arming still requires `ScrollTimeline` at runtime, so
+Firefox stable transparently falls back to the JS chase. Confirmed in real Chrome
+on QuickBase app-shell reports (grid + sidebar). Self-contained, non-load-bearing,
+graceful-degradation contract held throughout.
 
 Fixes the inner-overflow-scroller wiggle (QuickBase data-table grids) by riding
 the inner scroller on the **compositor** via a CSS scroll-driven animation,
@@ -136,10 +149,11 @@ fixed/sticky ancestor does NOT exclude the accelerator.
 
 - Feature: `typeof ScrollTimeline !== 'undefined'`. Absent (Firefox stable) →
   never enter accelerated mode. No errors, no behavior change.
-- Flag: `bkScrollAccel` boolean in `chrome.storage.local`, **default off** (read
-  once at init, mirrors the `alphabet` pattern at `content.ts:545`). Off →
-  identical to today. The user flips it to test:
-  `chrome.storage.local.set({ bkScrollAccel: true })`.
+- Flag: `bkScrollAccel` boolean in `chrome.storage.local`, **default ON** as
+  shipped (read once at init, mirrors the `alphabet` pattern; only an explicit
+  `false` disables). The first sketch proposed default-off behind a manual opt-in;
+  once real-Chrome verification passed it was flipped on as the validated wiggle
+  fix. Setting `{ bkScrollAccel: false }` is the escape hatch back to today's chase.
 
 Both gates must pass to arm the accelerator. Either failing = today's behavior.
 
@@ -155,8 +169,8 @@ v1.)
 ## Scope / deferred
 
 - Horizontal (`inline`) axis — deferred.
-- Nested scrollers (target inside scroller-in-scroller) — PROTOTYPED 2026-06-09
-  behind `bkScrollAccelNested` (default off). Rides the whole scroller chain
+- Nested scrollers (target inside scroller-in-scroller) — LANDED 2026-06-09
+  behind `bkScrollAccelNested` (default ON). Rides the whole scroller chain
   (`findScrollableAncestors`) via composed ScrollTimelines: one additive
   (`composite: 'add'`) `translateY(-scrollTop)` animation per scroller on `outer`
   (the translateYs concatenate → `-Σ scrollTop`), and the reconcile base adds
