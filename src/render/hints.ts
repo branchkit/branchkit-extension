@@ -413,6 +413,21 @@ export function reconcileScrollAccel(): void {
   for (const b of liveReconcileBadges) b.syncScrollAccel();
 }
 
+/** Scoped variant of `reconcileScrollAccel`: re-detect only badges whose target
+ *  lives inside `scroller`. Called from the scroll handler at gesture START with
+ *  the element that just scrolled. A scroller that only becomes scrollable on
+ *  pointer hover (QuickBase classic report grids flip overflow:hidden->auto under
+ *  :hover) emits no mutation and — with overlay scrollbars — no reflow, so the
+ *  settle-time `reconcileScrollAccel` hasn't armed it when the gesture begins.
+ *  Re-detecting the moment that scroller first scrolls rides it from the first
+ *  frame instead of after the ~100ms settle, killing the first-gesture chase.
+ *  Scoped to the scrolled subtree so the common case (window / already-ridden
+ *  page scroller) costs one cheap `contains` check per badge, no layout reads. */
+export function reconcileScrollAccelForScroller(scroller: Element): void {
+  if (!scrollAccelEnabled) return;
+  for (const b of liveReconcileBadges) b.syncScrollAccelInside(scroller);
+}
+
 function sameElements(a: readonly Element[], b: readonly Element[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
@@ -801,6 +816,16 @@ export class HintBadge {
     this.disarmScrollAccel();
     this.armScrollAccel();
     if (this._scrollAccel) this.repositionHostNow();
+  }
+
+  // Re-detect only if this badge's target lives inside `scroller` (the element
+  // that just scrolled). The `contains` guard keeps the gesture-start fast path
+  // cheap: badges outside the scrolled subtree skip the layout-reading chain
+  // walk entirely. See `reconcileScrollAccelForScroller`.
+  syncScrollAccelInside(scroller: Element): void {
+    if (!scrollAccelEnabled || !this._visible) return;
+    if (!scroller.contains(this.target)) return;
+    this.syncScrollAccel();
   }
 
   // Write the host's transform NOW from the live target rect, instead of waiting

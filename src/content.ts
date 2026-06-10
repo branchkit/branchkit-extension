@@ -89,7 +89,7 @@ import {
 } from './rules/domain-rules';
 import { loadDomainRules, onDomainRulesChanged, rulesEqual } from './rules/domain-rules-storage';
 import { loadBadgeSettings, onBadgeSettingsChanged } from './badge-settings-storage';
-import { setBadgeSizingFromSettings, setScrollAccelEnabled, setScrollAccelNestedEnabled, reconcileScrollAccel } from './render/hints';
+import { setBadgeSizingFromSettings, setScrollAccelEnabled, setScrollAccelNestedEnabled, reconcileScrollAccel, reconcileScrollAccelForScroller } from './render/hints';
 import { isScrollTimelineSupported } from './render/scroll-accel';
 import { setNudgesFromSettings } from './placement';
 import { labelReservoir } from './labels/label-reservoir';
@@ -2805,11 +2805,23 @@ function reconcileScrollFrame(): void {
 // the burst (~30 events/sec during fast scrolling) into one reposition;
 // scroll-sensitive badges lag by ~100ms but settle correctly when scroll
 // stops, which the user can't perceive mid-scroll anyway.
-function scheduleScrollReposition(): void {
+function scheduleScrollReposition(e?: Event): void {
   // Reconcile badges need per-frame re-pinning during the scroll itself (they
   // don't ride the compositor); this fires on every scroll event, before the
   // trailing-edge settle below. No-op when the flag is off (empty registry).
   noteReconcileScroll();
+  // Gesture-start accelerator re-detection (timer null = first event of this
+  // scroll burst). A scroller that only became scrollable on hover (QuickBase
+  // classic report grids flip overflow:hidden->auto under :hover) emits no
+  // mutation and, under overlay scrollbars, no reflow — so the settle-time
+  // reconcileScrollAccel below hasn't armed it yet and the badge would chase
+  // (wiggle) this whole first gesture. Re-arm the badges inside the scroller
+  // that just scrolled NOW, so they ride the compositor from the first frame.
+  // Scoped to e.target's subtree, so window/document scroll and already-ridden
+  // scrollers cost only a cheap contains-check per badge.
+  if (pageSession.scrollRepositionTimer == null && e && e.target instanceof Element) {
+    reconcileScrollAccelForScroller(e.target);
+  }
   if (pageSession.scrollRepositionTimer) clearTimeout(pageSession.scrollRepositionTimer);
   pageSession.scrollRepositionTimer = setTimeout(() => {
     pageSession.scrollRepositionTimer = null;
