@@ -81,20 +81,33 @@ const visibilityIO = new IntersectionObserver((entries) => {
 }, { root: null, rootMargin: '200px', threshold: 0 });
 
 const visibilityMO = new MutationObserver(() => {
+  scheduleVisibilitySweep();
+});
+
+// A "visibility may have changed" signal does two distinct things, on two
+// cadences:
+//   1. PROMOTE — re-scan `pendingVisibility` so a candidate that just became
+//      visible turns into a hinted wrapper (rAF-coalesced; `recheckPendingVisibility`).
+//   2. RE-SHOW — re-check already-hinted badges to show/hide them to match
+//      current isVisible (100ms-throttled; `recheckHintedVisibility`).
+// The class/style MutationObserver fires this for mutation-driven reveals.
+// Pointer events fire it too (content.ts) for pure CSS `:hover` reveals, which
+// produce NO mutation — without the PROMOTE half, a freshly-:hover-revealed
+// element that was never scanned-while-visible never becomes a wrapper, so the
+// recheck has nothing to show (the temperamental "hover the report, no hint").
+//
+// The 100ms throttle on the re-show is separate from the rAF promote because on
+// heavy pages (YouTube /watch ad iframes, reflow storms) the MO fires many times
+// per second; coupling the re-show to rAF (16ms) compounded into ~200ms CPU/min
+// and tripped Firefox's slow-extension warning (reverted 2026-06-02). 100ms
+// (Rango's debouncedRefresh interval) keeps it bounded to ~30ms/sec worst case.
+export function scheduleVisibilitySweep(): void {
   if (!visibilityRafPending) {
     visibilityRafPending = true;
     requestAnimationFrame(recheckPendingVisibility);
   }
-  // Schedule a hint-visibility recheck on a separate, slower throttle than
-  // recheckPendingVisibility's rAF cadence. On heavy pages (YouTube
-  // /watch's ad iframes, page-load reflow storms) the MO fires many times
-  // per second; coupling the hint recheck to rAF (16ms) compounded that
-  // into ~200ms cumulative CPU per minute and tripped Firefox's slow-extension
-  // warning (reverted 2026-06-02). 100ms throttle matches Rango's
-  // debouncedRefresh interval — 10Hz upper bound keeps the recheck cost
-  // bounded to ~30ms/sec even on the worst-case ad-storm pages.
   scheduleHintVisibilityRecheck();
-});
+}
 
 // Throttle state for the hint-visibility recheck. Single pending flag; many
 // visibilityMO fires within a 100ms window collapse to one recheck.

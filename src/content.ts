@@ -19,7 +19,7 @@ import { type RebindCounters } from './labels/rebind';
 import { resolveTarget } from './activate/activate-resolution';
 import { IntersectionTracker } from './observe/intersection-tracker';
 import { AttentionObserver } from './observe/attention-observer';
-import { initVisibilityTracker, recheckHintedVisibility, scheduleHintVisibilityRecheck, trackPendingCandidate, untrackPendingCandidate, connectVisibilityMO, teardownVisibilityTracker } from './observe/visibility-tracker';
+import { initVisibilityTracker, recheckHintedVisibility, scheduleVisibilitySweep, trackPendingCandidate, untrackPendingCandidate, connectVisibilityMO, teardownVisibilityTracker } from './observe/visibility-tracker';
 import { initLimbo, rebindCounters, LIMBO_DEADLINE_MS, collectLimboWrappers, collectStrongKeyIndex, dropDisconnectedWrappers, finalizeExpiredLimboWrappers } from './observe/limbo';
 import { initWrapperLifecycle, attachWrapper, detachWrapper, seedPreferredFromMemory, reconcileEvictedCodewords, attachDiscovered } from './core/wrapper-lifecycle';
 import { initMutationSource, attachPageMutationObserver, teardownMutationSource } from './observe/mutation-source';
@@ -2985,27 +2985,27 @@ document.addEventListener('focusin', scheduleDeferredReposition, { passive: true
 document.addEventListener('focusout', scheduleDeferredReposition, { passive: true });
 document.addEventListener('transitionend', scheduleDeferredReposition, { passive: true });
 document.addEventListener('animationend', scheduleDeferredReposition, { passive: true });
-// Pointer-driven visibility recheck. A CSS `:hover` reveal (QuickBase widget
-// action bars, dropdown menus) flips a target from visibility:hidden to visible
+// Pointer-driven visibility sweep. A CSS `:hover` reveal (QuickBase widget
+// action bars, dropdown menus) flips targets from visibility:hidden to visible
 // with NO DOM mutation and often no transition — so neither the class/style
-// MutationObserver nor transitionend fires, and the badge for that target would
-// never appear (or only after some incidental mutation primes it). pointerover
-// fires on entering any element (not per-pixel like mousemove) and is throttled
-// to 100ms, so this catches hover-reveals cheaply: the recheck shows the now-
-// visible badge (and re-pushes its strict-viewport/voice membership via the
-// onVisibilityChanged callback), and hides it again on pointer-out. Lightweight
-// (recheck only) — NOT the full reposition/occlusion settle pass.
-document.addEventListener('pointerover', scheduleHintVisibilityRecheck, { passive: true, capture: true });
+// MutationObserver nor transitionend fires. scheduleVisibilitySweep does BOTH
+// halves the MutationObserver does: it PROMOTES a freshly-revealed candidate from
+// pendingVisibility into a hinted wrapper (so a never-scanned-while-visible
+// element actually gets a badge — the fix for the temperamental "hover the
+// report, no hint") and RE-SHOWS already-hinted badges. pointerover fires on
+// entering any element (not per-pixel like mousemove), and the sweep's two halves
+// are rAF- and 100ms-throttled, so this stays cheap.
+document.addEventListener('pointerover', scheduleVisibilitySweep, { passive: true, capture: true });
 // Pointer left the window entirely: the `:hover` reveal collapses back to
 // visibility:hidden, but no further `pointerover` fires to catch it, so the badge
 // would linger until the next settle. `pointerout` with a null `relatedTarget`
-// means the pointer exited to outside the document — re-check then so the badge
+// means the pointer exited to outside the document — sweep then so the badge
 // hides promptly. Mirrors how Rango pairs focusin with focusout. The IN-PAGE
 // un-hover case needs no handler: moving onto any other element fires another
 // `pointerover`. Gated on the null check so ordinary in-page pointerouts (every
-// element boundary crossing) don't double the recheck rate.
+// element boundary crossing) don't double the sweep rate.
 document.addEventListener('pointerout', (e: PointerEvent) => {
-  if (e.relatedTarget === null) scheduleHintVisibilityRecheck();
+  if (e.relatedTarget === null) scheduleVisibilitySweep();
 }, { passive: true, capture: true });
 // Window resize covers genuine viewport changes (drag corner, device
 // rotation, DevTools open/close) AND browser zoom (Cmd+= reflows the
