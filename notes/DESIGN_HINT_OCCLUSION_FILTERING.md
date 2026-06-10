@@ -380,6 +380,40 @@ rule. `occluded` = a *visible* target *covered* by another element (overlay/clip
 hit-test, flag-gated). `cssHidden` = the target is itself CSS-invisible
 (visibility:hidden / opacity:0 / display:none), always evaluated.
 
+**Prior-art check (2026-06-10, 3-agent fan-out — Rango/Vimium source + web).**
+Validated that the `pointerover`-triggered recheck is the right primitive; we're
+ahead of the field, not behind it:
+- **Rango** (`/tmp/rango/src`) has the SAME blind spot. Its triggers are
+  MutationObserver (attributes/childList/subtree), a per-hintable ResizeObserver,
+  debounced focusin/focusout (added specifically for `:focus-within` reveals), and
+  scroll IO. NO mouse/pointer listener anywhere — the pointer code in
+  `dispatchEvents.ts` only *emits* synthetic hover. Rango catches `display:none`→
+  shown via the ResizeObserver (box-size change) and `:focus-within` via focusin,
+  but a pure CSS `:hover` `visibility`/`opacity` reveal (no box change, no mutation,
+  no focus) fires none of its triggers. It never built the hover equivalent. Its
+  `isVisible` is the same shape as ours (getComputedStyle visibility/opacity + a
+  4-ancestor opacity walk). Idea worth stealing: pair our `pointerover` with
+  `pointerout`/`pointerleave` the way Rango pairs focusin with focusout, to re-hide
+  promptly when the pointer leaves the window (the in-page un-hover case is already
+  covered — moving to any other element fires another `pointerover`).
+- **Vimium / Vimium-C** sidestep the problem via the ON-DEMAND model: the user
+  hovers, THEN presses "f", so the toolbar is already revealed at scan time and
+  passes `visibility === "visible"`. Nothing transferable for *detection* in an
+  always-on model. Reusable bits: Vimium-C's opt-in `kHidden`/`evenHidden_` bitmask
+  ("scan hidden elements but tag them") and both extensions' `elementFromPoint`
+  center+corners occlusion filter (we already have this as `bkOcclusion`).
+- **Web platform:** there is NO event/observer that fires on a CSS `:hover` entry/
+  exit — pointer events are the only signal, so pointer-driven re-check is the
+  de-facto standard (Link Hints uses MutationObserver+IntersectionObserver+
+  requestIdleCallback but still can't see a mutation-less `:hover` reveal). IO v2
+  `trackVisibility` is a poor fit (100ms floor, conservative false-negatives, no
+  Firefox). `Element.checkVisibility({opacityProperty, visibilityProperty,
+  contentVisibilityAuto})` is the most complete pull-based per-element gate and a
+  candidate to replace our hand-rolled `isVisible` later (Firefox 125+; verify floor
+  before adopting). Prefer `pointerover` over `mousemove`; scoping the re-check to
+  the hovered subtree (vs all in-viewport hinted wrappers) is the perf lever if a
+  soak shows CPU on dense always-mode pages.
+
 **Status:** tsc + full unit suite (707) + both builds green; 4 new strict-viewport
 tests pin the `cssHidden`/`occluded` gate. NOT real-Chrome verified — the
 strict-viewport + paint path is the highest-blast-radius area; soak before merge.
