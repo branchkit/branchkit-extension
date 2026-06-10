@@ -20,7 +20,8 @@
     "test:scroll-accel-nested": "npm run build:chrome && node scripts/test-scroll-accel-nested.mjs",
     "test:scroll-accel-hover": "npm run build:chrome && node scripts/test-scroll-accel-hover.mjs",
     "test:scroll-accel-chainchange": "npm run build:chrome && node scripts/test-scroll-accel-chainchange.mjs",
-    "test:scroll-accel-churn": "npm run build:chrome && node scripts/test-scroll-accel-churn.mjs"
+    "test:scroll-accel-churn": "npm run build:chrome && node scripts/test-scroll-accel-churn.mjs",
+    "test:scroll-accel-stability": "npm run build:chrome && node scripts/test-scroll-accel-stability.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.268",
