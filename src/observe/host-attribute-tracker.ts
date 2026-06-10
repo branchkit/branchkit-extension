@@ -44,7 +44,6 @@ function reconcile(host: HTMLElement, attributeName: string, expectedDisplay = '
     attributeName === 'data-bk-pending' ||
     attributeName === 'data-bk-accel' ||
     attributeName === 'data-bk-accel-rearms' ||
-    attributeName === 'data-bk-accel-builds' ||
     attributeName === 'data-bk-occluded'
   ) {
     // Owned by HintBadge.show()/hide()/markGrammarReady() and the inner-scroll
