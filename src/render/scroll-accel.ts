@@ -126,16 +126,17 @@ function buildAnim(
   outer: HTMLElement,
   timeline: AnimationTimeline,
   max: number,
-  composite: CompositeOperation,
 ): Animation {
   // At scroll progress p = S/max the interpolated transform is
   // translateY(-p*max) = translateY(-S); composited, no main-thread work.
   // `fill: 'both'` holds the end transform past the range; `duration: 1` is the
-  // non-zero duration Firefox requires for a scroll-driven animation. `composite`
-  // is `add` for nested chains so each layer's translateY sums (transform `add`
-  // concatenates the lists, and stacked translateYs sum); `replace` for the lone
-  // single-scroller case (identical to before).
-  const options = { timeline, duration: 1, fill: 'both', composite } as unknown as KeyframeAnimationOptions;
+  // non-zero duration Firefox requires for a scroll-driven animation.
+  // composite:'add' ALWAYS (even a lone layer): each layer's translateY sums on
+  // `outer`, whose base transform is identity (.bk-outer sets none), so a single
+  // 'add' layer is visually identical to 'replace'. Uniform 'add' is what lets a
+  // layer be added/removed INCREMENTALLY (updateScrollAccelChain) without
+  // disturbing the others' running anims — the cure for hover-gated re-arm churn.
+  const options = { timeline, duration: 1, fill: 'both', composite: 'add' } as unknown as KeyframeAnimationOptions;
   return outer.animate(
     [{ transform: 'translateY(0px)' }, { transform: `translateY(${-max}px)` }],
     options,
@@ -157,15 +158,47 @@ export function createScrollAccel(target: Element, outer: HTMLElement, nested: b
   if (!nearest) return null;
   const scrollers = nested ? findScrollableAncestors(target) : [nearest];
   if (scrollers.length === 0) return null;
-  // Multiple scrollers must compose additively; a lone scroller stays `replace`
-  // so the default path is byte-identical and never relies on `composite: add`.
-  const composite: CompositeOperation = scrollers.length > 1 ? 'add' : 'replace';
   const layers: ScrollAccelLayer[] = scrollers.map((scroller) => {
     const max = scrollMax(scroller);
     const timeline = new Ctor({ source: scroller, axis: 'block' });
-    return { scroller, timeline, anim: buildAnim(outer, timeline, max, composite), max };
+    return { scroller, timeline, anim: buildAnim(outer, timeline, max), max };
   });
   return { layers };
+}
+
+/**
+ * Reconcile `accel.layers` to `desired` (innermost-first) IN PLACE, touching only
+ * the layers that changed: cancel + drop layers whose scroller left the chain,
+ * build + add layers for new scrollers, and leave UNCHANGED layers' running anims
+ * alone. This is the churn cure: when a hover-gated inner scroller flaps during an
+ * OUTER scroll (QuickBase report grid sliding under the cursor), only the inner
+ * layer is added/removed — the outer layer's ScrollTimeline keeps running, so the
+ * outer scroll never hitches. The old path (disarm-all + arm-all) tore down the
+ * still-running outer layer every flap, a 1-frame jump each time = the wiggle.
+ * Returns the number of anims built (added), for the diagnostic build counter.
+ * Layers are reordered to `desired` so layers[0] stays the innermost scroller
+ * (the invariant scrollAccelHealthy checks).
+ */
+export function updateScrollAccelChain(accel: ScrollAccel, desired: readonly Element[], outer: HTMLElement): number {
+  const Ctor = getScrollTimelineCtor();
+  if (!Ctor) return 0;
+  for (let i = accel.layers.length - 1; i >= 0; i--) {
+    if (!desired.includes(accel.layers[i].scroller)) {
+      accel.layers[i].anim.cancel();
+      accel.layers.splice(i, 1);
+    }
+  }
+  let built = 0;
+  const have = new Set(accel.layers.map((l) => l.scroller));
+  for (const scroller of desired) {
+    if (have.has(scroller)) continue;
+    const max = scrollMax(scroller);
+    const timeline = new Ctor({ source: scroller, axis: 'block' });
+    accel.layers.push({ scroller, timeline, anim: buildAnim(outer, timeline, max), max });
+    built++;
+  }
+  accel.layers.sort((a, b) => desired.indexOf(a.scroller) - desired.indexOf(b.scroller));
+  return built;
 }
 
 /**
@@ -174,15 +207,17 @@ export function createScrollAccel(target: Element, outer: HTMLElement, nested: b
  * exception, not per-frame work. Reuses each layer's timeline; only the keyframe
  * (which encodes `max`) is rebuilt.
  */
-export function recomputeScrollAccel(accel: ScrollAccel, outer: HTMLElement): void {
-  const composite: CompositeOperation = accel.layers.length > 1 ? 'add' : 'replace';
+export function recomputeScrollAccel(accel: ScrollAccel, outer: HTMLElement): number {
+  let rebuilt = 0;
   for (const layer of accel.layers) {
     const max = scrollMax(layer.scroller);
     if (max === layer.max) continue;
     layer.anim.cancel();
-    layer.anim = buildAnim(outer, layer.timeline, max, composite);
+    layer.anim = buildAnim(outer, layer.timeline, max);
     layer.max = max;
+    rebuilt++;
   }
+  return rebuilt;
 }
 
 /** Tear down every layer's compositor animation, reverting `outer`'s transform to
