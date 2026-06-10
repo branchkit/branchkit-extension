@@ -434,6 +434,16 @@ function sameElements(a: readonly Element[], b: readonly Element[]): boolean {
   return true;
 }
 
+/** Short `tag#id.class.class` descriptor for a scroller, for the debug snapshot's
+ *  per-layer accelerator chain. Diagnostic-only. */
+function describeScroller(el: Element): string {
+  const id = el.id ? `#${el.id}` : '';
+  const cls = typeof el.className === 'string' && el.className
+    ? '.' + el.className.trim().split(/\s+/).slice(0, 2).join('.')
+    : '';
+  return `${el.tagName.toLowerCase()}${id}${cls}`;
+}
+
 // Test affordance: open the badge's shadow root so integration tests (Playwright)
 // can measure the PAINTED badge's true viewport position — including the
 // accelerator's compositor transform on `outer`, which the body-mounted host's
@@ -1279,6 +1289,12 @@ export class HintBadge {
     scrollAccelArmed: boolean;
     scrollAccelMax: number | null;
     scrollAccelScrollerTop: number | null;
+    // The ridden scroller chain, innermost first — one entry per layer. Lets a
+    // snapshot answer "is the OUTER scroller actually in this badge's chain?"
+    // (the aggregate scrollAccelMax/ScrollerTop above can't, being summed). A
+    // report badge that should ride [report, outer] but shows only [report] is a
+    // nested-composition gap (flag off or an ancestor not detected).
+    scrollAccelLayers: { scroller: string; max: number; scrollTop: number }[] | null;
     // True when the occlusion hit-test has hidden this badge (.bk-occluded). With
     // isVisible (the logical show state) this disambiguates "shown" from "shown
     // but visually hidden because covered" — the ghost-badge diagnosis.
@@ -1338,6 +1354,13 @@ export class HintBadge {
         ? Math.round(this._scrollAccel.layers.reduce((s, l) => s + l.max, 0))
         : null,
       scrollAccelScrollerTop: this._scrollAccel ? Math.round(scrollAccelScrollOffset(this._scrollAccel)) : null,
+      scrollAccelLayers: this._scrollAccel
+        ? this._scrollAccel.layers.map((l) => ({
+            scroller: describeScroller(l.scroller),
+            max: Math.round(l.max),
+            scrollTop: Math.round(l.scroller.scrollTop),
+          }))
+        : null,
       occluded: this.inner.classList.contains('bk-occluded'),
     };
   }

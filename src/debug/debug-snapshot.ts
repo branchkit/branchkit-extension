@@ -110,6 +110,7 @@ interface WrapperRecord {
     scrollAccelArmed: boolean;
     scrollAccelMax: number | null;
     scrollAccelScrollerTop: number | null;
+    scrollAccelLayers: { scroller: string; max: number; scrollTop: number }[] | null;
     occluded: boolean;
   } | null;
   containerResolution: ContainerResolutionDiag | null;
@@ -180,6 +181,11 @@ export interface DebugSnapshotPayload {
    *  viewport_reclaimed / (viewport_reclaimed + viewport_missed) is the
    *  user-facing reclaim rate this layer drives upward. */
   recall_stats: RecallStats;
+  /** Accelerator flag state at capture ("on"/"off"/"unsupported"/undefined),
+   *  mirrored from the documentElement data-attrs. Makes a snapshot self-describing:
+   *  a single-layer ridden chain on a deeply-nested target means nested was off,
+   *  not a detection bug. */
+  scroll_accel_flags: { enabled: string | null; nested: string | null };
   dom_survey?: DomSurveyElement[];
   /** Shadow-mode reconcile plan (drives nothing; see lifecycle/reconcile.ts).
    * Attached by the content-script capture path, which owns activeCategory +
@@ -256,6 +262,7 @@ function captureWrapper(w: ElementWrapper): WrapperRecord {
       scrollAccelArmed: diag.scrollAccelArmed,
       scrollAccelMax: diag.scrollAccelMax,
       scrollAccelScrollerTop: diag.scrollAccelScrollerTop,
+      scrollAccelLayers: diag.scrollAccelLayers,
       occluded: diag.occluded,
     };
   }
@@ -438,6 +445,10 @@ export function buildSnapshotPayload(inputs: BuildInputs): DebugSnapshotPayload 
       height: window.innerHeight,
       scrollX: window.scrollX,
       scrollY: window.scrollY,
+    },
+    scroll_accel_flags: {
+      enabled: document.documentElement.getAttribute('data-bk-scroll-accel'),
+      nested: document.documentElement.getAttribute('data-bk-scroll-accel-nested'),
     },
     wrappers: inputs.store.all.map(captureWrapper),
     almost_hintable: captureAlmostHintable(),
