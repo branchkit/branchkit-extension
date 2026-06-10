@@ -19,7 +19,7 @@ import { type RebindCounters } from './labels/rebind';
 import { resolveTarget } from './activate/activate-resolution';
 import { IntersectionTracker } from './observe/intersection-tracker';
 import { AttentionObserver } from './observe/attention-observer';
-import { initVisibilityTracker, recheckHintedVisibility, scheduleVisibilitySweep, trackPendingCandidate, untrackPendingCandidate, connectVisibilityMO, teardownVisibilityTracker } from './observe/visibility-tracker';
+import { initVisibilityTracker, recheckHintedVisibility, schedulePointerVisibilitySweep, trackPendingCandidate, untrackPendingCandidate, connectVisibilityMO, teardownVisibilityTracker } from './observe/visibility-tracker';
 import { initLimbo, rebindCounters, LIMBO_DEADLINE_MS, collectLimboWrappers, collectStrongKeyIndex, dropDisconnectedWrappers, finalizeExpiredLimboWrappers } from './observe/limbo';
 import { initWrapperLifecycle, attachWrapper, detachWrapper, seedPreferredFromMemory, reconcileEvictedCodewords, attachDiscovered } from './core/wrapper-lifecycle';
 import { initMutationSource, attachPageMutationObserver, teardownMutationSource } from './observe/mutation-source';
@@ -2988,14 +2988,15 @@ document.addEventListener('animationend', scheduleDeferredReposition, { passive:
 // Pointer-driven visibility sweep. A CSS `:hover` reveal (QuickBase widget
 // action bars, dropdown menus) flips targets from visibility:hidden to visible
 // with NO DOM mutation and often no transition — so neither the class/style
-// MutationObserver nor transitionend fires. scheduleVisibilitySweep does BOTH
-// halves the MutationObserver does: it PROMOTES a freshly-revealed candidate from
-// pendingVisibility into a hinted wrapper (so a never-scanned-while-visible
+// MutationObserver nor transitionend fires. schedulePointerVisibilitySweep does
+// BOTH halves the MutationObserver does: it PROMOTES a freshly-revealed candidate
+// from pendingVisibility into a hinted wrapper (so a never-scanned-while-visible
 // element actually gets a badge — the fix for the temperamental "hover the
 // report, no hint") and RE-SHOWS already-hinted badges. pointerover fires on
-// entering any element (not per-pixel like mousemove), and the sweep's two halves
-// are rAF- and 100ms-throttled, so this stays cheap.
-document.addEventListener('pointerover', scheduleVisibilitySweep, { passive: true, capture: true });
+// entering any element (not per-pixel like mousemove), and the pointer variant
+// throttles BOTH halves to 100ms (the promote doesn't need rAF cadence here), so
+// movement-driven cost stays bounded.
+document.addEventListener('pointerover', schedulePointerVisibilitySweep, { passive: true, capture: true });
 // Pointer left the window entirely: the `:hover` reveal collapses back to
 // visibility:hidden, but no further `pointerover` fires to catch it, so the badge
 // would linger until the next settle. `pointerout` with a null `relatedTarget`
@@ -3005,7 +3006,7 @@ document.addEventListener('pointerover', scheduleVisibilitySweep, { passive: tru
 // `pointerover`. Gated on the null check so ordinary in-page pointerouts (every
 // element boundary crossing) don't double the sweep rate.
 document.addEventListener('pointerout', (e: PointerEvent) => {
-  if (e.relatedTarget === null) scheduleVisibilitySweep();
+  if (e.relatedTarget === null) schedulePointerVisibilitySweep();
 }, { passive: true, capture: true });
 // Window resize covers genuine viewport changes (drag corner, device
 // rotation, DevTools open/close) AND browser zoom (Cmd+= reflows the

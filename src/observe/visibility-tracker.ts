@@ -101,11 +101,38 @@ const visibilityMO = new MutationObserver(() => {
 // per second; coupling the re-show to rAF (16ms) compounded into ~200ms CPU/min
 // and tripped Firefox's slow-extension warning (reverted 2026-06-02). 100ms
 // (Rango's debouncedRefresh interval) keeps it bounded to ~30ms/sec worst case.
-export function scheduleVisibilitySweep(): void {
+// MutationObserver path: fast rAF promote (keep up with mutation storms) + the
+// shared 100ms-throttled re-show. The pointer path uses the throttled variant
+// below.
+function scheduleVisibilitySweep(): void {
   if (!visibilityRafPending) {
     visibilityRafPending = true;
     requestAnimationFrame(recheckPendingVisibility);
   }
+  scheduleHintVisibilityRecheck();
+}
+
+// Pointer-driven sweep variant. Same two halves, but the PROMOTE runs on a 100ms
+// throttle instead of rAF: pointer events fire on every element-boundary crossing
+// during mouse movement, and at rAF cadence the promote scan would run ~60×/sec
+// while the cursor moves over a dense page. A hover-revealed badge appearing
+// ~100ms after the hover is imperceptible, so the fast cadence buys no UX — the
+// throttle cuts that movement-driven cost ~6× while leaving the MutationObserver
+// on its fast rAF promote (which must keep up with mutation storms). The re-show
+// half is already 100ms-throttled and shared.
+let promoteThrottlePending = false;
+const PROMOTE_THROTTLE_MS = 100;
+function schedulePromoteThrottled(): void {
+  if (promoteThrottlePending) return;
+  promoteThrottlePending = true;
+  setTimeout(() => {
+    promoteThrottlePending = false;
+    recheckPendingVisibility();
+  }, PROMOTE_THROTTLE_MS);
+}
+
+export function schedulePointerVisibilitySweep(): void {
+  schedulePromoteThrottled();
   scheduleHintVisibilityRecheck();
 }
 
