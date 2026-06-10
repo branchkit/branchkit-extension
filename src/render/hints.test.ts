@@ -381,6 +381,25 @@ describe('HintBadge reuse contract (setLabel + clearLabel)', () => {
     badge.remove();
   });
 
+  it('show() on a dormant (cleared-label) badge stays hidden — no empty box', () => {
+    const root = mount('<div id="c"><button id="btn">click</button></div>');
+    const badge = new HintBadge(root.querySelector('#btn')!, label1, 'button', 'word');
+    badge.clearLabel();
+    // The recheck / pointerover show path can race ahead of the setLabel the
+    // claim pipeline issues (a hover-revealed sidebar item mid-reclaim). A
+    // label-less show() must NOT paint — otherwise the badge box appears with
+    // no letters (the QuickBase URL-bar empty-box symptom).
+    badge.show();
+    expect(badge.isVisible).toBe(false);
+    expect((badge as unknown as { inner: HTMLDivElement }).inner.textContent).toBe('');
+    // Once the label is restored, show() paints normally.
+    badge.setLabel(label2);
+    badge.show();
+    expect(badge.isVisible).toBe(true);
+    expect((badge as unknown as { inner: HTMLDivElement }).inner.textContent).toBe('bake');
+    badge.remove();
+  });
+
   it('remove() unschedules pending refine + sets _removed so a late refine no-ops', () => {
     // Force the scheduler back into deferred mode so refine isn't called
     // inline. (beforeEach in the file flips it to immediate.)
