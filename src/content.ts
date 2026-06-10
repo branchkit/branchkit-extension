@@ -582,36 +582,44 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
   });
 }
 
-// Adopt the inner-scroll accelerator flag (notes/DESIGN_INNER_SCROLL_ACCELERATOR.md).
-// Default ON: the accelerator is the validated wiggle fix, so only an explicit
-// `bkScrollAccel: false` disables it (escape hatch). It still requires
-// ScrollTimeline support at arm time, so this never activates on Firefox stable —
-// it falls back to the JS chase there with no errors. Read once at load
-// (per-machine, like the alphabet); the user reloads to change it.
+// Feature-flag registry (chrome.storage.local; read once at load, reload to
+// apply; per-machine, not synced). Pre-launch dogfood posture: everything
+// defaults ON, so a fresh reload is a known "all on" state and you isolate a
+// problem by flipping ONE flag to `false`. Stored values override these defaults
+// — run `chrome.storage.local.remove([...keys])` to reset to a clean baseline.
+//
+// bkScrollAccel / bkScrollAccelNested - default ON, GRADUATED (real-Chrome
+//   confirmed). The off-path (JS chase) is also the Firefox fallback, gated
+//   independently by isScrollTimelineSupported(). EXIT: delete these flags after
+//   a clean soak (~2026-06-17), keeping the feature-detect.
+// bkOcclusion - default ON, validated helpful but still watching for FALSE
+//   POSITIVES (a real badge wrongly hidden = voice silently can't match it).
+//   EXIT: keep on if the soak stays clean, else investigate; reconfirm at launch.
+// bkClipObserver - default ON, composes with bkOcclusion (IO-clip vs
+//   elementFromPoint hit-test). Same exit as bkOcclusion.
 if (typeof chrome !== 'undefined' && chrome.storage?.local) {
   chrome.storage.local.get('bkOcclusion', (result) => {
-    // Occlusion filtering (notes/DESIGN_HINT_OCCLUSION_FILTERING.md). NEW + high
-    // blast radius (false positives would hide real badges), so default OFF until
-    // soaked — only an explicit `true` enables it. Flip on to test via
-    // `chrome.storage.local.set({ bkOcclusion: true })`.
-    setOcclusionEnabled(result.bkOcclusion === true);
-    document.documentElement.setAttribute('data-bk-occlusion', result.bkOcclusion === true ? 'on' : 'off');
+    // Occlusion filtering (notes/DESIGN_HINT_OCCLUSION_FILTERING.md). Default ON
+    // for the dogfood phase; only an explicit `false` disables. Watch for false
+    // positives (a real badge hidden) — `chrome.storage.local.set({ bkOcclusion: false })`
+    // to rule it out.
+    setOcclusionEnabled(result.bkOcclusion !== false);
+    document.documentElement.setAttribute('data-bk-occlusion', result.bkOcclusion !== false ? 'on' : 'off');
   });
   chrome.storage.local.get('bkClipObserver', (result) => {
-    // Scroll-container clip detection (IO-root=scroller, Rango's idea). NEW
-    // prototype, default OFF; enable with `chrome.storage.local.set({ bkClipObserver: true })`.
-    // Separate flag from bkOcclusion so the IO-clip path can be A/B'd against the
-    // elementFromPoint overlay path; they compose when both are on.
-    setClipObserverEnabled(result.bkClipObserver === true);
-    document.documentElement.setAttribute('data-bk-clip-observer', result.bkClipObserver === true ? 'on' : 'off');
+    // Scroll-container clip detection (IO-root=scroller, Rango's idea). Default ON;
+    // only an explicit `false` disables. Composes with bkOcclusion — the IO-clip
+    // path and the elementFromPoint overlay path both feed the effective occlusion.
+    setClipObserverEnabled(result.bkClipObserver !== false);
+    document.documentElement.setAttribute('data-bk-clip-observer', result.bkClipObserver !== false ? 'on' : 'off');
   });
   // Both accelerator flags in ONE get so they're set atomically — otherwise a
   // badge can arm between the two callbacks with the base flag on but the nested
   // flag not-yet-set, caching a single-layer accelerator. Both default ON (only an
   // explicit `false` disables): real app shells (QuickBase, Gmail) nest an inner
   // pane inside an outer page scroller, so a badge in the inner pane needs the
-  // WHOLE chain ridden or the outer scroll chases it. composite:'add' is verified
-  // by the nested integration test; default-on still wants a soak before merge.
+  // WHOLE chain ridden or the outer scroll chases it. Landed + real-Chrome
+  // confirmed via the nested-wrapper model (see the flag registry above).
   chrome.storage.local.get(['bkScrollAccel', 'bkScrollAccelNested'], (result) => {
     const enabled = result.bkScrollAccel !== false;
     const nested = result.bkScrollAccelNested !== false;
