@@ -607,13 +607,16 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
   });
   // Both accelerator flags in ONE get so they're set atomically — otherwise a
   // badge can arm between the two callbacks with the base flag on but the nested
-  // flag not-yet-set, caching a single-layer accelerator. bkScrollAccel default
-  // ON; bkScrollAccelNested (composed ScrollTimelines for nested scrollers) NEW,
-  // default OFF (opt-in until the composite:'add' path is soaked).
+  // flag not-yet-set, caching a single-layer accelerator. Both default ON (only an
+  // explicit `false` disables): real app shells (QuickBase, Gmail) nest an inner
+  // pane inside an outer page scroller, so a badge in the inner pane needs the
+  // WHOLE chain ridden or the outer scroll chases it. composite:'add' is verified
+  // by the nested integration test; default-on still wants a soak before merge.
   chrome.storage.local.get(['bkScrollAccel', 'bkScrollAccelNested'], (result) => {
     const enabled = result.bkScrollAccel !== false;
+    const nested = result.bkScrollAccelNested !== false;
     setScrollAccelEnabled(enabled);
-    setScrollAccelNestedEnabled(result.bkScrollAccelNested === true);
+    setScrollAccelNestedEnabled(nested);
     // Page-visible diagnostic markers on <html>: 'on' = flag set + ScrollTimeline
     // supported; 'unsupported' = no ScrollTimeline (Firefox stable); 'off' = not
     // set. Pair with `document.querySelectorAll('[data-bk-accel]').length`.
@@ -621,7 +624,7 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
       'data-bk-scroll-accel',
       enabled ? (isScrollTimelineSupported() ? 'on' : 'unsupported') : 'off',
     );
-    document.documentElement.setAttribute('data-bk-scroll-accel-nested', result.bkScrollAccelNested === true ? 'on' : 'off');
+    document.documentElement.setAttribute('data-bk-scroll-accel-nested', nested ? 'on' : 'off');
   });
 }
 

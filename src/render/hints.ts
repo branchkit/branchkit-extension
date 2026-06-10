@@ -385,9 +385,10 @@ export function setScrollAccelEnabled(enabled: boolean): void {
 // Nested-scroller support for the accelerator: ride the WHOLE chain of scroller
 // ancestors (composed additive ScrollTimelines), not just the nearest. Fixes the
 // wiggle when an OUTER overflow ancestor scrolls a target that lives in an inner
-// pane. Separate flag, default OFF — the multi-scroller path relies on
-// `composite: 'add'` (unverified in the wild), so it stays opt-in until soaked;
-// the default single-scroller path is unaffected.
+// pane (the QuickBase report-in-#mainBodyDiv case). Default ON, set from the
+// `bkScrollAccelNested` flag in content.ts (only an explicit `false` disables).
+// The multi-scroller path relies on `composite: 'add'`, verified by the nested
+// integration test. This module ref initializes false as a pre-read safety value.
 let scrollAccelNestedEnabled = false;
 
 export function setScrollAccelNestedEnabled(enabled: boolean): void {
@@ -540,6 +541,11 @@ export class HintBadge {
   // recreated/detached) the badge falls back to the chase — the accel is
   // non-load-bearing; the chase base is always correct.
   private _scrollAccel: ScrollAccel | null = null;
+  // Count of chain-change re-arms over this badge's life (diagnostic only). A
+  // badge on a hover-gated inner scroller (QuickBase report grid) that flaps as an
+  // outer scroll slides the pane under the cursor re-arms repeatedly — a high
+  // count here vs ~0 on a stable badge is the signature of the residual wiggle.
+  private _scrollAccelRearms = 0;
 
   // Placement outputs, surfaced in diagnostics: scrollSensitive = the offset
   // rode a sticky/fixed bound; geometryDependent = it rode ancestor geometry
@@ -831,6 +837,7 @@ export class HintBadge {
       : ((s) => (s ? [s] : []))(findScrollableAncestor(this.target));
     const current = this._scrollAccel ? this._scrollAccel.layers.map((l) => l.scroller) : [];
     if (sameElements(current, desired)) return;
+    this.bumpRearm();
     this.disarmScrollAccel();
     this.armScrollAccel();
     if (this._scrollAccel) this.repositionHostNow();
@@ -854,8 +861,18 @@ export class HintBadge {
   // reposition here would be redundant and re-entrant. Disarms fully when nothing
   // is scrollable now (armScrollAccel finds no scroller → chase base).
   private rearmScrollAccelInPlace(): void {
+    this.bumpRearm();
     this.disarmScrollAccel();
     this.armScrollAccel();
+  }
+
+  // Tally a chain-change re-arm and mirror it on the host as `data-bk-accel-rearms`
+  // so tests + the page console can spot hover-churn (a report badge whose count
+  // climbs as an outer scroll flaps its hover-gated inner scroller) without reading
+  // the closed shadow root. Allowed by the host-attribute tracker.
+  private bumpRearm(): void {
+    this._scrollAccelRearms++;
+    this.host.setAttribute('data-bk-accel-rearms', String(this._scrollAccelRearms));
   }
 
   // Write the host's transform NOW from the live target rect, instead of waiting
@@ -1295,6 +1312,9 @@ export class HintBadge {
     // report badge that should ride [report, outer] but shows only [report] is a
     // nested-composition gap (flag off or an ancestor not detected).
     scrollAccelLayers: { scroller: string; max: number; scrollTop: number }[] | null;
+    // Lifetime count of chain-change re-arms (see _scrollAccelRearms). High on a
+    // report badge whose hover-gated inner scroller flaps during an outer scroll.
+    scrollAccelRearms: number;
     // True when the occlusion hit-test has hidden this badge (.bk-occluded). With
     // isVisible (the logical show state) this disambiguates "shown" from "shown
     // but visually hidden because covered" — the ghost-badge diagnosis.
@@ -1361,6 +1381,7 @@ export class HintBadge {
             scrollTop: Math.round(l.scroller.scrollTop),
           }))
         : null,
+      scrollAccelRearms: this._scrollAccelRearms,
       occluded: this.inner.classList.contains('bk-occluded'),
     };
   }
