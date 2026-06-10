@@ -59,6 +59,59 @@ describe('activateElement delegation classification', () => {
     expect(r.target).not.toBe(span);
   });
 
+  it('clicks the nested control directly (delegation=none) for a button inside an anchor', () => {
+    // The QuickBase table-shortcuts shape: a <button> (e.g. the
+    // table-settings dropdown trigger) lives INSIDE the table-name link.
+    // The button is interactive in its own right, so delegating up to the
+    // anchor would navigate to the table instead of opening the dropdown.
+    const a = document.createElement('a');
+    a.href = '/nav/app/x/table/y/action/td';
+    a.className = 'custom-link';
+    const wrap = document.createElement('div');
+    wrap.className = 'container-buttons';
+    const btn = document.createElement('button');
+    btn.setAttribute('aria-label', 'Contacts table settings');
+    wrap.appendChild(btn);
+    a.appendChild(wrap);
+    document.body.appendChild(a);
+
+    const r = activateElement(btn);
+
+    expect(r.delegation).toBe('none');
+    expect(r.target).toBe(btn);
+    expect(r.target).not.toBe(a);
+  });
+
+  it('clicks a nested role=button directly (delegation=none) inside an anchor', () => {
+    const a = document.createElement('a');
+    a.href = '#row';
+    const div = document.createElement('div');
+    div.setAttribute('role', 'button');
+    div.textContent = 'settings';
+    a.appendChild(div);
+    document.body.appendChild(a);
+
+    const r = activateElement(div);
+
+    expect(r.delegation).toBe('none');
+    expect(r.target).toBe(div);
+  });
+
+  it('still delegates to the anchor for a non-interactive child even with newTab', () => {
+    // newTab on a presentational descendant should still open the anchor.
+    const a = document.createElement('a');
+    a.href = 'https://example.com/page';
+    const span = document.createElement('span');
+    span.textContent = 'open';
+    a.appendChild(span);
+    document.body.appendChild(a);
+
+    const r = activateElement(span, { newTab: true });
+
+    expect(r.delegation).toBe('anchor');
+    expect(r.target).toBe(a);
+  });
+
   it('returns delegation=file-picker for file inputs', () => {
     const input = document.createElement('input');
     input.type = 'file';

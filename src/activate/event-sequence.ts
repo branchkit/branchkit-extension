@@ -113,10 +113,37 @@ export interface ActivationResult {
   delegation: 'none' | 'anchor' | 'file-picker' | 'select';
 }
 
+// ARIA roles that mark an element as an interactive control in its own
+// right — something with activation semantics distinct from a wrapping
+// anchor's navigation. `link` is included so a nested role=link (a
+// secondary navigation target inside an outer anchor) is clicked
+// directly rather than delegated upward.
+const INTERACTIVE_ROLES = new Set([
+  'button', 'checkbox', 'radio', 'switch', 'tab', 'menuitem',
+  'menuitemcheckbox', 'menuitemradio', 'option', 'link', 'combobox',
+  'slider', 'spinbutton', 'textbox', 'searchbox',
+]);
+const INTERACTIVE_TAGS = new Set(['button', 'select', 'textarea', 'summary', 'input']);
+
+/**
+ * True when `el` is an interactive control in its own right, not just a
+ * presentational descendant (icon/span/text) of an anchor. Anchor
+ * delegation must be suppressed for these: a <button> nested inside an
+ * <a> (QuickBase's table-settings button lives in the table-name link)
+ * has its own click handler, and delegating up to the anchor would fire
+ * navigation instead of the control.
+ */
+function isIndependentlyInteractive(el: Element): boolean {
+  const role = el.getAttribute('role');
+  if (role && INTERACTIVE_ROLES.has(role.toLowerCase())) return true;
+  return INTERACTIVE_TAGS.has(el.tagName.toLowerCase());
+}
+
 /**
  * Click an element using the appropriate strategy:
  * - New-tab anchors: window.open() for explicit tab control
- * - Anchors wrapping a child element: delegate to the anchor
+ * - Anchors wrapping a non-interactive child: delegate to the anchor
+ * - Interactive controls nested in an anchor: click the control directly
  * - File inputs: .click() (triggers file picker)
  * - Selects: focus + synthetic open
  * - Everything else (including anchors): full event sequence
@@ -139,14 +166,20 @@ export function activateElement(
   }
 
   const anchor = el.closest('a') as HTMLAnchorElement | null;
+  // Delegate to a wrapping anchor only when `el` is a non-interactive
+  // descendant of it. `anchor === el` (el is itself the anchor) keeps
+  // its own navigation; an interactive control nested in an anchor is
+  // clicked directly.
+  const navTarget =
+    anchor && (anchor === el || !isIndependentlyInteractive(el)) ? anchor : null;
 
-  if (opts.newTab && anchor?.href) {
-    window.open(anchor.href, '_blank');
-    return { target: anchor ?? el, delegation: anchor !== el ? 'anchor' : 'none' };
+  if (opts.newTab && navTarget?.href) {
+    window.open(navTarget.href, '_blank');
+    return { target: navTarget, delegation: navTarget !== el ? 'anchor' : 'none' };
   }
 
-  const target = (anchor && anchor !== el) ? anchor : el;
-  const delegation = (anchor && anchor !== el) ? 'anchor' as const : 'none' as const;
+  const target = (navTarget && navTarget !== el) ? navTarget : el;
+  const delegation = (navTarget && navTarget !== el) ? 'anchor' as const : 'none' as const;
 
   dispatchHover(target);
   dispatchClick(target);
