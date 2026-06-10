@@ -741,21 +741,29 @@ export class HintBadge {
     let y = r.top + sy + this._reconcileOffset.y;
     // Inner-scroll accelerator, evaluated every pass (level-triggered).
     if (this._scrollAccel) {
-      if (scrollAccelHealthy(this._scrollAccel, this.target)) {
-        // Healthy: write the scroll-0 base docY0 = rect.top + scrollY + offset +
-        // Σ scrollTop (over the ridden scroller chain). As any ridden pane scrolls,
-        // rect.top drops by ΔS while its scrollTop rises by ΔS, so docY0 is
-        // constant (scroll-invariant under the chain's scrolls); the compositor
-        // animations on `outer` supply translateY(-Σ scrollTop), so the net is the
-        // live position with no main-thread chase. Refresh keyframes on max change.
+      if (!scrollAccelHealthy(this._scrollAccel, this.target)) {
+        // Chain went stale THIS pass — most often a hover-activated inner
+        // scroller dropping out because an OUTER scroll slid the pane out from
+        // under the cursor, flipping its :hover off (QuickBase classic report
+        // grids flip overflow:hidden<->auto under :hover). Re-arm to whatever is
+        // scrollable RIGHT NOW rather than degrading to the JS chase until the
+        // next settle — a mid-gesture disarm would make the badge chase (wiggle)
+        // the rest of the scroll. If nothing is scrollable now, this disarms
+        // fully and the chase base alone is correct (graceful degradation — never
+        // a dangle). In place: no repositionHostNow, since this read pass writes
+        // the fresh position anyway.
+        this.rearmScrollAccelInPlace();
+      }
+      if (this._scrollAccel) {
+        // Healthy (or freshly re-armed): write the scroll-0 base docY0 = rect.top
+        // + scrollY + offset + Σ scrollTop (over the ridden scroller chain). As any
+        // ridden pane scrolls, rect.top drops by ΔS while its scrollTop rises by
+        // ΔS, so docY0 is constant (scroll-invariant under the chain's scrolls);
+        // the compositor animations on `outer` supply translateY(-Σ scrollTop), so
+        // the net is the live position with no main-thread chase. Refresh keyframes
+        // on max change.
         recomputeScrollAccel(this._scrollAccel, this.outer);
         y += scrollAccelScrollOffset(this._scrollAccel);
-      } else {
-        // Broken (scroller recreated/detached): drop the accel so `outer`'s
-        // animated delta reverts to 0 and the chase base (current position) is
-        // correct — wiggly, but never a dangle. Re-detected on the next arm
-        // (settle/show). This is the graceful-degradation contract.
-        this.disarmScrollAccel();
       }
     }
     return {
@@ -826,6 +834,18 @@ export class HintBadge {
     if (!scrollAccelEnabled || !this._visible) return;
     if (!scroller.contains(this.target)) return;
     this.syncScrollAccel();
+  }
+
+  // Re-detect and re-arm to the CURRENT scroller chain in place, WITHOUT
+  // repositioning the host. Distinct from `syncScrollAccel` (the settle-path
+  // entry, which calls repositionHostNow and would re-enter reconcileRead):
+  // this is called FROM reconcileRead when the armed chain went stale during an
+  // active gesture, and that same read pass writes the fresh position — so a
+  // reposition here would be redundant and re-entrant. Disarms fully when nothing
+  // is scrollable now (armScrollAccel finds no scroller → chase base).
+  private rearmScrollAccelInPlace(): void {
+    this.disarmScrollAccel();
+    this.armScrollAccel();
   }
 
   // Write the host's transform NOW from the live target rect, instead of waiting
