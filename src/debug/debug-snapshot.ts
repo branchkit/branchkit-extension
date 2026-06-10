@@ -67,6 +67,7 @@ interface WrapperRecord {
     codeword: string;
     type: string;
     adapter: string | null;
+    in_strict_viewport: boolean | undefined;
   };
   fingerprint: idRegistry.Fingerprint | null;
   element: (ElementSnap & { closestAnchor: ClosestAnchorInfo | null }) | null;
@@ -113,6 +114,7 @@ interface WrapperRecord {
   } | null;
   containerResolution: ContainerResolutionDiag | null;
   isInViewport: boolean;
+  lastSentStrictViewport: boolean | undefined;
 }
 
 interface AlmostHintableRecord {
