@@ -2,7 +2,10 @@
 
 **Status:** Subcase 2 IMPLEMENTED 2026-06-09, flag-gated (`bkOcclusion`, default
 off), pending soak. Z-index stacking-context fix landed 2026-06-02
-(`src/placement/stacking.ts`, ported from Rango). This document covers the
+(`src/placement/stacking.ts`, ported from Rango). A third, distinct case —
+**CSS-hidden targets** (visibility:hidden / opacity:0 hover-reveal action bars,
+the QuickBase WidgetActions ghost badges) — was fixed 2026-06-10 (NOT flag-gated;
+`cssHidden`); see the dated section at the end. This document covers the
 remaining case the z-index fix doesn't address: badges painting on top of
 targets that are physically present in the DOM but visually hidden within
 the same stacking context.
@@ -199,6 +202,12 @@ Skip if any of these conditions apply:
   zero layout, so the scanner already drops them — no badge to filter.
   Hover-reveals that hide via `visibility: hidden`? Scanner currently
   drops those too. So hover-reveal compatibility appears safe.
+  **WRONG — see "CSS-hidden hover-reveal targets (2026-06-10)" below.** The
+  scanner only checks at *scan* time; a target hinted while visible (hovered,
+  or promoted by the visibility tracker) that then goes visibility:hidden was
+  NOT re-dropped — strict-viewport didn't gate on CSS visibility, and the paint
+  sites painted it because they only checked `isRectOnScreen`. This is the
+  QuickBase WidgetActions ghost. Resolved by the `cssHidden` work below.
 
 - **Do we trigger on initial paint?** Many pages are still settling when
   the first scan completes. A target that's currently `display: none`
@@ -296,3 +305,69 @@ nav lists, where the covering layer is hit-test-transparent — has **no clean
 solution** on today's web platform; layer 3 is best-effort and will still miss
 some. Worth deciding explicitly whether that residual is acceptable or whether the
 overlay case should stay a documented known-limitation.
+
+## CSS-hidden hover-reveal targets (2026-06-10) — `cssHidden`: voice drop + paint-site gate
+
+A FOURTH distinct phenomenon, separate from the three above (cross-stacking-context
+z-index, same-context overlay/clip occlusion). Not flag-gated — it's a correctness
+fix that couples voice to the existing visual decision.
+
+**Symptom.** QuickBase dashboard report: each widget's hover-reveal action bar
+(`div.WidgetActions > div.WidgetViewHandleBar`, the "open in new window" / menu
+links) is `visibility:hidden` at rest. Badges (`ym`/`au`/`nx`, then `ki`/`ll` after
+codeword rotation) painted on these hidden links at the widget top-right corners,
+stayed voice-matchable, and flickered on scroll.
+
+**Why occlusion does NOT catch it.** The target is genuinely CSS-invisible
+(`visibility:hidden`), not *covered*. `elementFromPoint` at its center returns the
+`WidgetBase` ancestor → `isHitOccluding` says not-occluded (ancestor = same visible
+thing). And `opacity:0` is deliberately preserved by the hit-test (hover-reveal
+controls in always-mode must survive — see Option A "does not catch (correctly)").
+So this is the visibility layer's job, not occlusion's.
+
+**Two root causes.**
+1. **Voice:** `stampStrictViewport` / `collectStrictViewportDelta` gated on
+   `!occluded` + rect-in-viewport but NOT CSS visibility, so a hidden-but-on-screen
+   target stayed `in_strict_viewport=true`.
+2. **Visual:** the recheck (`recheckHintedVisibility`) only hides on a visibility
+   *transition* (it's driven by the class/style `MutationObserver`). A target that
+   is `visibility:hidden` **from the start** (never hovered) fires no mutation, so
+   the recheck never runs — and the paint sites (`showHints`,
+   `badgeNewlyCodeworded`) had already painted it because they gated only on
+   `isRectOnScreen`, not CSS visibility. So the badge stayed painted (and flickered
+   as scroll re-ran the paint paths) on something the user can't see.
+
+**Policy reversal.** Previously the recheck deliberately kept the codeword live for
+CSS-hidden targets (Rango's `updateShouldBeHinted` — voice-activate a hover-revealed
+control whose click handler is live even when CSS hides it, e.g. a YouTube pause
+button). User decision 2026-06-10: "if a badge is hidden, remove it from voice too."
+
+**Fix (mirrors the `occluded` single-input pattern).**
+- `ElementWrapper.cssHidden` — written `= !isVisible(el)` wherever a badge's paint
+  decision is made: the recheck AND both paint sites (`showHints`,
+  `badgeNewlyCodeworded`). Using the same `isVisible` predicate that governs the
+  visual badge means voice can never disagree with what's painted — no new
+  predicate, no new false-negative risk.
+- **Voice:** strict-viewport gate adds `!w.cssHidden` (both `stampStrictViewport`
+  and `collectStrictViewportDelta`) — drops the target from `browser_hints_*_strict`.
+- **Visual (the flicker):** gate the paint at the SOURCE. `showHints` and
+  `badgeNewlyCodeworded` skip `show()` for a CSS-hidden target (and `showHints`
+  hides a stale-visible one). Painting-then-letting-the-recheck-clean-up doesn't
+  work here because the recheck is transition-triggered and never fires for a
+  never-revealed target. `isVisible` is cache-warm at both sites (both call
+  `cacheLayout` first, which warms ancestor styles 10 levels).
+- **Promptness:** the recheck fires an `onVisibilityChanged` callback →
+  `reconcileStrictViewport` when a badge flips shown/hidden, and the recheck now
+  also runs on both settle paths (scroll-settle, deferred-reposition-settle) right
+  before the strict pass — so a hover-out drops voice without waiting for a scroll.
+
+**`cssHidden` vs `occluded`:** siblings feeding the same `in_strict_viewport=false`
+rule. `occluded` = a *visible* target *covered* by another element (overlay/clip
+hit-test, flag-gated). `cssHidden` = the target is itself CSS-invisible
+(visibility:hidden / opacity:0 / display:none), always evaluated.
+
+**Status:** tsc + full unit suite (707) + both builds green; 4 new strict-viewport
+tests pin the `cssHidden`/`occluded` gate. NOT real-Chrome verified — the
+strict-viewport + paint path is the highest-blast-radius area; soak before merge.
+(The `rejected` pills next to the badges in the report are QuickBase page content,
+not BranchKit badges — zero snapshot mentions.)

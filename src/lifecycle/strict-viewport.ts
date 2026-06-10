@@ -11,6 +11,12 @@
  * them drop silently — saying "gust harp" when harp is below the fold is a
  * no-op, not a click on something the user can't see.
  *
+ * Two more "can't see it" cuts share this rule, each read off a wrapper flag set
+ * by its own settle pass: `occluded` (a visible target covered by an overlay) and
+ * `cssHidden` (a target that is visibility:hidden / opacity:0 — a hover-reveal
+ * action bar whose badge the visibility recheck has hidden). Either forces
+ * in_strict_viewport=false: if the badge isn't shown, voice doesn't match it.
+ *
  * Iframe behavior: a wrapper's own rect being in the iframe's viewport is
  * necessary but not sufficient. The iframe element itself must be visible in
  * its parent's viewport (recursively up to the top frame). Pages like
@@ -97,7 +103,10 @@ export function stampStrictViewport(wrappers: ElementWrapper[]): void {
     // off-strict so voice can't match a hint the user can't see — same rule as
     // below-the-fold, applied to visually-covered targets. No-op when the
     // bkOcclusion flag is off (occluded stays false).
-    const inStrict = ancestorOk && !w.occluded
+    // `!w.cssHidden`: same rule for a CSS-invisible target (visibility:hidden /
+    // opacity:0 — a hover-reveal action bar) whose badge the visibility recheck
+    // has hidden. If the user can't see the badge, voice shouldn't match it.
+    const inStrict = ancestorOk && !w.occluded && !w.cssHidden
       && r != null && r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
     w.scanned.in_strict_viewport = inStrict;
     // The reconciler reads `lastSentStrictViewport` to decide whether a
@@ -131,9 +140,10 @@ export function collectStrictViewportDelta(
     if (w.disconnectedAt !== null) continue;
     if (!w.scanned.codeword) continue;
     let inStrict = false;
-    // Occluded targets are off-strict (see stampStrictViewport) — a covered hint
-    // shouldn't be voice-matchable. No-op when the flag is off.
-    if (ancestorOk && !w.occluded) {
+    // Occluded (covered) and cssHidden (visibility:hidden/opacity:0, badge hidden
+    // by the visibility recheck) targets are both off-strict — see
+    // stampStrictViewport. A hint the user can't see shouldn't be voice-matchable.
+    if (ancestorOk && !w.occluded && !w.cssHidden) {
       try {
         const r = w.element.getBoundingClientRect();
         inStrict =

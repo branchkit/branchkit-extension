@@ -48,6 +48,8 @@ function makeWrapper(opts: {
   lastSent?: boolean;
   disconnected?: number | null;
   category?: Category;
+  cssHidden?: boolean;
+  occluded?: boolean;
 }): ElementWrapper {
   const scanned: ScannedElement = {
     label: 'a',
@@ -60,6 +62,8 @@ function makeWrapper(opts: {
   const w = new ElementWrapper(fakeElement(opts.rect), scanned);
   w.lastSentStrictViewport = opts.lastSent;
   if (opts.disconnected !== undefined) w.disconnectedAt = opts.disconnected;
+  if (opts.cssHidden !== undefined) w.cssHidden = opts.cssHidden;
+  if (opts.occluded !== undefined) w.occluded = opts.occluded;
   return w;
 }
 
@@ -114,6 +118,47 @@ describe('collectStrictViewportDelta — inclusion semantics', () => {
     const w = makeWrapper({
       rect: { top: -500, left: 100, width: 50, height: 20 },
       lastSent: undefined,
+    });
+    expect(collectStrictViewportDelta([w])).toEqual([w]);
+  });
+});
+
+describe('collectStrictViewportDelta — visibility gate (cssHidden / occluded)', () => {
+  it('drops a CSS-hidden target the recheck flagged, even fully in-viewport', () => {
+    // The QuickBase WidgetActions case: rect is squarely in the viewport, but the
+    // hover-reveal action bar is visibility:hidden so the badge is hidden — voice
+    // must not match it. lastSent=true → it was in _strict, now flips out → delta.
+    const w = makeWrapper({
+      rect: { top: 100, left: 100, width: 50, height: 20 },
+      lastSent: true,
+      cssHidden: true,
+    });
+    expect(collectStrictViewportDelta([w])).toEqual([w]);
+  });
+
+  it('keeps a cssHidden target out of strict with no delta once already out', () => {
+    const w = makeWrapper({
+      rect: { top: 100, left: 100, width: 50, height: 20 },
+      lastSent: false,
+      cssHidden: true,
+    });
+    expect(collectStrictViewportDelta([w])).toEqual([]);
+  });
+
+  it('re-admits a target whose cssHidden cleared (badge re-shown on hover)', () => {
+    const w = makeWrapper({
+      rect: { top: 100, left: 100, width: 50, height: 20 },
+      lastSent: false,
+      cssHidden: false,
+    });
+    expect(collectStrictViewportDelta([w])).toEqual([w]);
+  });
+
+  it('drops an occluded target the same way (parity with cssHidden)', () => {
+    const w = makeWrapper({
+      rect: { top: 100, left: 100, width: 50, height: 20 },
+      lastSent: true,
+      occluded: true,
     });
     expect(collectStrictViewportDelta([w])).toEqual([w]);
   });
@@ -197,6 +242,17 @@ describe('stampStrictViewport', () => {
 
   it('records false when the element rect throws (detached path)', () => {
     const w = makeWrapper({ rect: null, lastSent: true });
+    stampStrictViewport([w]);
+    expect(w.scanned.in_strict_viewport).toBe(false);
+    expect(w.lastSentStrictViewport).toBe(false);
+  });
+
+  it('stamps a CSS-hidden but in-viewport target as off-strict', () => {
+    const w = makeWrapper({
+      rect: { top: 100, left: 100, width: 50, height: 20 },
+      lastSent: undefined,
+      cssHidden: true,
+    });
     stampStrictViewport([w]);
     expect(w.scanned.in_strict_viewport).toBe(false);
     expect(w.lastSentStrictViewport).toBe(false);

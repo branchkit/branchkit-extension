@@ -32,11 +32,17 @@ import type { PageSession } from '../lifecycle/page-session';
 let pageSession!: PageSession;
 let attachWrapper!: (w: ElementWrapper) => void;
 let showHints!: () => void;
+let onVisibilityChanged: (() => void) | undefined;
 
 export interface VisibilityTrackerDeps {
   pageSession: PageSession;
   attachWrapper: (w: ElementWrapper) => void;
   showHints: () => void;
+  /** Called after `recheckHintedVisibility` flips any badge's shown/hidden
+   * state. Lets content.ts re-push the strict-viewport delta so a target the
+   * recheck just hid (or re-showed) drops from (or rejoins) the voice-matchable
+   * `_strict` collection promptly — without waiting for the next scroll-settle. */
+  onVisibilityChanged?: () => void;
 }
 
 /** Wire the still-in-content.ts dependencies. Call once at boot, before any
@@ -45,6 +51,7 @@ export function initVisibilityTracker(deps: VisibilityTrackerDeps): void {
   pageSession = deps.pageSession;
   attachWrapper = deps.attachWrapper;
   showHints = deps.showHints;
+  onVisibilityChanged = deps.onVisibilityChanged;
 }
 
 const pendingVisibility = new Set<Element>();
@@ -104,12 +111,17 @@ function scheduleHintVisibilityRecheck(): void {
 }
 
 // Iterate hinted wrappers, hide/show their badges based on current
-// isVisible(). Matches Rango's updateShouldBeHinted semantics — the
-// codeword in the matcher's grammar stays untouched, only the visual
-// is gated, so voice activation still works on invisible elements
-// (e.g., a hover-revealed pause button whose click handler is live
-// even when its CSS hides it).
-function recheckHintedVisibility(): void {
+// isVisible(). Also writes `w.cssHidden` (so do the paint sites — showHints,
+// badgeNewlyCodeworded): a target hidden because it's CSS-invisible
+// (visibility:hidden/opacity:0 — a hover-reveal action bar) is flagged so the
+// strict-viewport pass drops it from the voice-matchable `_strict` collection.
+// We previously kept the codeword live for
+// CSS-hidden targets (Rango's updateShouldBeHinted semantics — voice-activate a
+// hover-revealed control you can't see); the QuickBase WidgetActions ghost-badge
+// report changed that policy to "if the badge is hidden, voice can't match it
+// either." When any badge flips shown/hidden, fire `onVisibilityChanged` so the
+// strict delta re-pushes without waiting for the next scroll-settle.
+export function recheckHintedVisibility(): void {
   const __cpuStart = performance.now();
   // Don't re-show badges the user just hid. Without this guard, hideHints()
   // sets pageSession.hintsVisible=false and clears each badge's visible
@@ -149,7 +161,12 @@ function recheckHintedVisibility(): void {
   try {
     for (const w of wrappers) {
       if (!w.hint || !w.isInViewport || !w.element.isConnected) continue;
-      const visible = isVisible(w.element) && isRectOnScreen(getCachedRect(w.element), vw, vh);
+      // Split the two reasons a badge hides: CSS-invisible (visibility/opacity —
+      // voice should drop it) vs merely off the real viewport (the band-margin
+      // clamp — geometry already drops it from strict, so don't flag cssHidden).
+      const cssVisible = isVisible(w.element);
+      const visible = cssVisible && isRectOnScreen(getCachedRect(w.element), vw, vh);
+      w.cssHidden = !cssVisible;
       const showing = w.hint.isVisible;
       if (visible && !showing) {
         w.hint.show(w.grammarReady);
@@ -163,7 +180,13 @@ function recheckHintedVisibility(): void {
     clearLayoutCache();
   }
   recordCpu('recheckHintedVisibility', performance.now() - __cpuStart);
-  if (transitions > 0) recordCpu(`recheckHintedVisibility:transitions:${transitions > 10 ? '10+' : '<10'}`, transitions);
+  if (transitions > 0) {
+    recordCpu(`recheckHintedVisibility:transitions:${transitions > 10 ? '10+' : '<10'}`, transitions);
+    // A badge flipped shown/hidden → its strict-viewport eligibility may have
+    // changed too. Re-push the strict delta now (debounced downstream) so voice
+    // converges with the visual without waiting for a scroll-settle.
+    onVisibilityChanged?.();
+  }
 }
 
 function anyHintedWrapperVisible(): boolean {

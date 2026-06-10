@@ -19,7 +19,7 @@ import { type RebindCounters } from './labels/rebind';
 import { resolveTarget } from './activate/activate-resolution';
 import { IntersectionTracker } from './observe/intersection-tracker';
 import { AttentionObserver } from './observe/attention-observer';
-import { initVisibilityTracker, trackPendingCandidate, untrackPendingCandidate, connectVisibilityMO, teardownVisibilityTracker } from './observe/visibility-tracker';
+import { initVisibilityTracker, recheckHintedVisibility, trackPendingCandidate, untrackPendingCandidate, connectVisibilityMO, teardownVisibilityTracker } from './observe/visibility-tracker';
 import { initLimbo, rebindCounters, LIMBO_DEADLINE_MS, collectLimboWrappers, collectStrongKeyIndex, dropDisconnectedWrappers, finalizeExpiredLimboWrappers } from './observe/limbo';
 import { initWrapperLifecycle, attachWrapper, detachWrapper, seedPreferredFromMemory, reconcileEvictedCodewords, attachDiscovered } from './core/wrapper-lifecycle';
 import { initMutationSource, attachPageMutationObserver, teardownMutationSource } from './observe/mutation-source';
@@ -1165,7 +1165,18 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
         wrapper.hint.updateLabel(label, getDisplayMode());
       }
 
-      wrapper.hint.show(wrapper.grammarReady);
+      // Don't paint a badge on a CSS-invisible target (visibility:hidden /
+      // opacity:0 — a hover-reveal action bar). These never fire a mutation
+      // (they're hidden from the start, never hovered), so the throttled
+      // visibility recheck never gets a transition to clean them up — the badge
+      // would stay painted (and flicker on scroll) on something the user can't
+      // see. Gate at the paint source instead. `cssHidden` (same flag the recheck
+      // writes) keeps voice in lockstep via the strict-viewport pass; the cache is
+      // warm from cacheLayout above, so isVisible is cheap here.
+      const cssVisible = isVisible(wrapper.element);
+      wrapper.cssHidden = !cssVisible;
+      if (cssVisible) wrapper.hint.show(wrapper.grammarReady);
+      else wrapper.hint.hide();
     }
     firehoseStep('showHints:mount_end', renderable.length, 20);
 
@@ -1289,6 +1300,12 @@ function badgeNewlyCodeworded(): void {
       const label = poolLabelToAssignment(w.scanned.codeword);
       w.label = label;
       const onScreen = isRectOnScreen(getCachedRect(w.element), vw, vh);
+      // A CSS-invisible target (visibility:hidden / opacity:0 hover-reveal) must
+      // not paint — same reason as showHints: no visibility transition fires for
+      // a never-revealed target, so the recheck never cleans it up. `cssHidden`
+      // keeps the voice (strict-viewport) gate in lockstep.
+      const cssVisible = isVisible(w.element);
+      w.cssHidden = !cssVisible;
       // Restore the label on an existing dormant (scroll-back) hint even when
       // the element is off the actual viewport. A dormant hint was clearLabel()d
       // on viewport exit; if its codeword is re-granted while it sits in the
@@ -1302,8 +1319,9 @@ function badgeNewlyCodeworded(): void {
       // Don't construct/paint a badge for an element that's in the 200px IO band
       // but off the actual viewport (e.g. YouTube's collapsed nav drawer at
       // x=-228); placement would clamp it to the edge. It keeps its codeword +
-      // (restored) label and paints when it scrolls on-screen.
-      if (!onScreen) continue;
+      // (restored) label and paints when it scrolls on-screen. Same skip for a
+      // CSS-hidden target.
+      if (!onScreen || !cssVisible) continue;
       // Slow path (first-time): construct the badge. The reuse fast path above
       // skips shadow DOM creation, observer wire-up, anchorParent walk, z-index
       // walk, and APCA color recomputation — ~5-10ms per badge on scroll-back.
@@ -2003,7 +2021,7 @@ const pageSession = new PageSession({
 // Wire the visibility-recovery source with the dependencies that still live in
 // content.ts (the wrapper-lifecycle and render orchestration). Transitional
 // injection seam — see notes/DESIGN_EXTENSION_RESTRUCTURE.md (Tier 1).
-initVisibilityTracker({ pageSession, attachWrapper, showHints });
+initVisibilityTracker({ pageSession, attachWrapper, showHints, onVisibilityChanged: reconcileStrictViewport });
 
 // Wire the wrapper-lifecycle ops with the three observers they drive, which
 // still live in content.ts (become imports when observer construction relocates
@@ -2857,6 +2875,12 @@ function scheduleScrollReposition(e?: Event): void {
       // chains that changed. Cheap post-settle (cached layout/style reads); no-op
       // when scrollAccel is off.
       reconcileScrollAccel();
+      // Re-evaluate CSS visibility before the strict pass: a hover-reveal target
+      // that went visibility:hidden gets its badge hidden AND `cssHidden` set, so
+      // reconcileStrictViewport below drops it from voice in lockstep with the
+      // visual hide. Also re-hides any badge a mid-scroll reposition re-showed on
+      // a hidden target (the on-scroll flash). No-op when no hinted badge flipped.
+      recheckHintedVisibility();
       reconcileStrictViewport();
     }
     scheduleReposition('drifted');
@@ -2946,6 +2970,12 @@ function scheduleDeferredReposition(): void {
       // chains that changed. Cheap post-settle (cached layout/style reads); no-op
       // when scrollAccel is off.
       reconcileScrollAccel();
+      // Re-evaluate CSS visibility before the strict pass: a hover-reveal target
+      // that went visibility:hidden gets its badge hidden AND `cssHidden` set, so
+      // reconcileStrictViewport below drops it from voice in lockstep with the
+      // visual hide. Also re-hides any badge a mid-scroll reposition re-showed on
+      // a hidden target (the on-scroll flash). No-op when no hinted badge flipped.
+      recheckHintedVisibility();
       reconcileStrictViewport();
     }
     scheduleReposition('drifted');
