@@ -392,10 +392,11 @@ ahead of the field, not behind it:
   but a pure CSS `:hover` `visibility`/`opacity` reveal (no box change, no mutation,
   no focus) fires none of its triggers. It never built the hover equivalent. Its
   `isVisible` is the same shape as ours (getComputedStyle visibility/opacity + a
-  4-ancestor opacity walk). Idea worth stealing: pair our `pointerover` with
-  `pointerout`/`pointerleave` the way Rango pairs focusin with focusout, to re-hide
-  promptly when the pointer leaves the window (the in-page un-hover case is already
-  covered — moving to any other element fires another `pointerover`).
+  4-ancestor opacity walk). Idea stolen + IMPLEMENTED: we pair our `pointerover`
+  with a `pointerout` listener gated on `relatedTarget === null` (pointer left the
+  window) the way Rango pairs focusin with focusout, so the badge hides promptly
+  when the cursor leaves the window. The in-page un-hover case needs no handler —
+  moving to any other element fires another `pointerover`.
 - **Vimium / Vimium-C** sidestep the problem via the ON-DEMAND model: the user
   hovers, THEN presses "f", so the toolbar is already revealed at scan time and
   passes `visibility === "visible"`. Nothing transferable for *detection* in an

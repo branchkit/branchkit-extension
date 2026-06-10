@@ -2996,6 +2996,17 @@ document.addEventListener('animationend', scheduleDeferredReposition, { passive:
 // onVisibilityChanged callback), and hides it again on pointer-out. Lightweight
 // (recheck only) — NOT the full reposition/occlusion settle pass.
 document.addEventListener('pointerover', scheduleHintVisibilityRecheck, { passive: true, capture: true });
+// Pointer left the window entirely: the `:hover` reveal collapses back to
+// visibility:hidden, but no further `pointerover` fires to catch it, so the badge
+// would linger until the next settle. `pointerout` with a null `relatedTarget`
+// means the pointer exited to outside the document — re-check then so the badge
+// hides promptly. Mirrors how Rango pairs focusin with focusout. The IN-PAGE
+// un-hover case needs no handler: moving onto any other element fires another
+// `pointerover`. Gated on the null check so ordinary in-page pointerouts (every
+// element boundary crossing) don't double the recheck rate.
+document.addEventListener('pointerout', (e: PointerEvent) => {
+  if (e.relatedTarget === null) scheduleHintVisibilityRecheck();
+}, { passive: true, capture: true });
 // Window resize covers genuine viewport changes (drag corner, device
 // rotation, DevTools open/close) AND browser zoom (Cmd+= reflows the
 // layout and changes innerWidth/innerHeight in CSS pixels). Route through
