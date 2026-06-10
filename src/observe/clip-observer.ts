@@ -22,7 +22,7 @@
  */
 
 import type { ElementWrapper } from '../scan/element-wrapper';
-import { findScrollableAncestor } from '../render/scroll-accel';
+import { findClippingScroller } from '../render/scroll-accel';
 import { applyOcclusion } from './occlusion';
 
 let clipObserverEnabled = false;
@@ -93,8 +93,12 @@ export function reconcileClipObservation(wrappers: Iterable<ElementWrapper>): vo
     if (!w.hint || !w.element.isConnected) continue;
     wanted.add(w.element);
     if (rootByTarget.has(w.element)) continue;
-    const root = findScrollableAncestor(w.element);
-    if (!root) continue; // viewport-only clipping is already covered by isInViewport
+    // The scroll container that actually CLIPS this target. Returns null for a
+    // position:fixed target (or one nested under a fixed popup) — ancestor
+    // overflow doesn't clip it, so rooting an IO at an ancestor scroller would
+    // false-flag it `clipped` whenever it floats outside that scroller's box.
+    const root = findClippingScroller(w.element);
+    if (!root) continue; // viewport-only / fixed: clipping is covered by isInViewport
     rootByTarget.set(w.element, root);
     wrapperByTarget.set(w.element, w);
     getObserver(root).observe(w.element);

@@ -66,6 +66,22 @@ describe('reconcileClipObservation', () => {
     expect(clipObserverDebug().targets).toBe(0);
   });
 
+  it('does not observe a position:fixed popup nested inside a scroll container', () => {
+    // QuickBase renders a table's settings dropdown as a fixed popup inline
+    // inside the sidebar's scroll <ul>. Ancestor overflow does not clip a fixed
+    // element, so the clip IO must not root at that scroller — otherwise the
+    // menu items get false-flagged `clipped` and their badges vanish.
+    setClipObserverEnabled(true);
+    const scroller = makeScroller();
+    const popup = document.createElement('div');
+    popup.style.position = 'fixed';
+    const item = document.createElement('a');
+    popup.appendChild(item);
+    scroller.appendChild(popup);
+    reconcileClipObservation([wrapperFor(item)]);
+    expect(clipObserverDebug().targets).toBe(0);
+  });
+
   it('drops observation when the target is no longer in the wanted set', () => {
     setClipObserverEnabled(true);
     const scroller = makeScroller();

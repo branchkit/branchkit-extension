@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { findScrollableAncestor, findScrollableAncestors, isScrollTimelineSupported } from './scroll-accel';
+import { findScrollableAncestor, findScrollableAncestors, findClippingScroller, isScrollTimelineSupported } from './scroll-accel';
 
 // happy-dom gives real DOM APIs but does no layout: scrollHeight/clientHeight are
 // always 0 and getComputedStyle returns inline styles only. So we stub the
@@ -161,6 +161,48 @@ describe('findScrollableAncestors (chain)', () => {
     setScroller(s, { overflowY: 'auto', scrollHeight: 1000, clientHeight: 300 });
     setScroller(document.body, { overflowY: 'auto', scrollHeight: 5000, clientHeight: 800 });
     expect(findScrollableAncestors(root.querySelector('#btn')!)).toEqual([s]);
+  });
+});
+
+describe('findClippingScroller', () => {
+  it('returns the scroller for a normal (non-fixed) descendant', () => {
+    const root = mount('<div id="scroller"><div id="mid"><button id="btn">x</button></div></div>');
+    const scroller = root.querySelector('#scroller')!;
+    setScroller(scroller, { overflowY: 'auto', scrollHeight: 1000, clientHeight: 400 });
+    expect(findClippingScroller(root.querySelector('#btn')!)).toBe(scroller);
+  });
+
+  it('returns null when a position:fixed element sits between target and scroller', () => {
+    // The QuickBase shape: a fixed popup nested inside the sidebar's scroll
+    // container. Ancestor overflow does not clip a fixed element, so no scroller
+    // clips the menu item — clip-detection must not root an IO at the scroller.
+    const root = mount(
+      '<div id="scroller"><div id="popup"><a id="item">Structure</a></div></div>',
+    );
+    const scroller = root.querySelector('#scroller')!;
+    setScroller(scroller, { overflowY: 'auto', scrollHeight: 1000, clientHeight: 400 });
+    (root.querySelector('#popup') as HTMLElement).style.position = 'fixed';
+    expect(findClippingScroller(root.querySelector('#item')!)).toBeNull();
+  });
+
+  it('returns null when the target itself is position:fixed', () => {
+    const root = mount('<div id="scroller"><button id="btn">x</button></div>');
+    const scroller = root.querySelector('#scroller')!;
+    setScroller(scroller, { overflowY: 'auto', scrollHeight: 1000, clientHeight: 400 });
+    (root.querySelector('#btn') as HTMLElement).style.position = 'fixed';
+    expect(findClippingScroller(root.querySelector('#btn')!)).toBeNull();
+  });
+
+  it('still clips a non-fixed target nested below a fixed sibling subtree', () => {
+    // A fixed element elsewhere in the scroller must not disable clipping for a
+    // normal target that really is in the scroller's flow.
+    const root = mount(
+      '<div id="scroller"><div id="fixed">f</div><button id="btn">x</button></div>',
+    );
+    const scroller = root.querySelector('#scroller')!;
+    setScroller(scroller, { overflowY: 'auto', scrollHeight: 1000, clientHeight: 400 });
+    (root.querySelector('#fixed') as HTMLElement).style.position = 'fixed';
+    expect(findClippingScroller(root.querySelector('#btn')!)).toBe(scroller);
   });
 });
 

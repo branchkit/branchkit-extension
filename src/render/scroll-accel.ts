@@ -136,6 +136,37 @@ export function findScrollableAncestors(el: Element): Element[] {
   return out;
 }
 
+/**
+ * Like {@link findScrollableAncestor}, but for OVERFLOW-CLIP detection rather
+ * than scroll-riding: the nearest ancestor scroller that actually CLIPS `el`,
+ * or null. A `position: fixed` element — and everything inside it — is laid out
+ * against the viewport, so ancestor `overflow` does NOT clip it. Once the walk
+ * crosses a fixed element we return null: no ancestor scroller clips the target.
+ *
+ * Without this, a fixed-positioned popup rendered inline inside a scroll
+ * container (QuickBase renders a table's settings dropdown as a `position:fixed`
+ * menu nested in the sidebar's scroll `<ul>`) gets clip-tested against that
+ * scroller's box and reported clipped the instant it floats outside it — hiding
+ * every badge on the open menu. The scroller's own `position` is not checked: a
+ * fixed scroller still clips its non-fixed descendants normally.
+ */
+export function findClippingScroller(el: Element): Element | null {
+  const doc = el.ownerDocument;
+  const docEl = doc ? doc.documentElement : null;
+  const body = doc ? doc.body : null;
+  let node: Element | null = el;
+  while (node) {
+    if (getComputedStyle(node).position === 'fixed') return null;
+    const parent = parentPiercingShadow(node);
+    if (!parent) return null;
+    if (parent !== docEl && parent !== body && isVerticalScroller(parent)) {
+      return parent;
+    }
+    node = parent;
+  }
+  return null;
+}
+
 function buildLayerAnim(
   element: HTMLElement,
   timeline: AnimationTimeline,
