@@ -223,3 +223,44 @@ Diagnostics added alongside (permanent, parallel to `data-bk-shown`):
 `<html data-bk-scroll-accel="on|off|unsupported">` (flag + support resolved at
 init) and `data-bk-accel="<max>"` on each armed badge host, both queryable from
 the ordinary page console.
+
+## Revision (2026-06-09): nested scrollers — element chain, not `composite:'add'`
+
+Riding MORE than one scroller (target in scroller-in-scroller; the QuickBase
+report grid inside `#mainBodyDiv` is the canonical case, but every app shell —
+Gmail, Notion, Jira — nests an inner pane in an outer page scroller) needs the
+sum `-Σ scrollTop`, driven on the compositor.
+
+**Failed approach — additive animations on one element.** First attempt stacked N
+`ScrollTimeline` animations on `outer` via `composite:'add'`. It *composes*
+positionally (the nested integration test passed) but is NOT compositor-smooth:
+real-Chrome testing showed making every single-layer badge `'add'` regressed
+**all** outer-scroll badges to a slight wiggle. `composite:'add'` transforms
+apparently fall to main-thread sampling; the original `composite:'replace'`
+single-layer path is what stays on the compositor. Reverted.
+
+**Chosen approach — nested wrapper elements, one `'replace'` anim each.** Compose
+multiple scrollers by NESTING elements, not by stacking animations. Each scroller
+gets its own element carrying a single `composite:'replace'` `translateY(-scrollTop)`
+animation; CSS transforms cascade down the DOM tree, so the nested translateYs sum
+to `-Σ scrollTop` — and every layer is a lone `'replace'` anim, i.e. the path
+already known smooth. DOM for `[report, #mainBodyDiv]`:
+`outer(rides #mainBodyDiv) > wrapper(rides report) > inner`.
+
+Key properties:
+- **OUTERMOST scroller → `outer`** (the existing element). The page scroll the
+  user actually drags maps to the stable, never-rebuilt element. Inner scrollers
+  get nested wrappers between `outer` and `inner`.
+- **Single-scroller path is byte-identical** to before (one `'replace'` anim on
+  `outer`, no wrappers) — so the common case cannot regress.
+- **Incremental updates** (`updateScrollAccelChain`): when a hover-gated inner
+  scroller flaps, keep `outer`'s layer + running anim (outermost unchanged) and
+  rebuild only the inner wrapper. The outer scroll never hitches. Falls back to a
+  full rebuild only if the outermost scroller itself changes (rare).
+
+Diagnostics: each layer anim carries `id="bk-accel-<n>"`; `data-bk-accel-builds`
+(cumulative anims built) + `data-bk-accel-rearms` (chain changes) on the host.
+`test:scroll-accel-stability` asserts the `.bk-outer` anim id is CONSTANT across
+inner flaps (outermost layer reused) while builds climb — verified red→green vs a
+forced full teardown. Whether `'replace'`-per-element genuinely stays on the
+compositor is the one thing the harness can't judge — confirmed in real Chrome.

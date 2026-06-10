@@ -112,6 +112,7 @@ interface WrapperRecord {
     scrollAccelScrollerTop: number | null;
     scrollAccelLayers: { scroller: string; max: number; scrollTop: number }[] | null;
     scrollAccelRearms: number;
+    scrollAccelAnimBuilds: number;
     occluded: boolean;
   } | null;
   containerResolution: ContainerResolutionDiag | null;
@@ -265,6 +266,7 @@ function captureWrapper(w: ElementWrapper): WrapperRecord {
       scrollAccelScrollerTop: diag.scrollAccelScrollerTop,
       scrollAccelLayers: diag.scrollAccelLayers,
       scrollAccelRearms: diag.scrollAccelRearms,
+      scrollAccelAnimBuilds: diag.scrollAccelAnimBuilds,
       occluded: diag.occluded,
     };
   }

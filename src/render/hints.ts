@@ -21,6 +21,7 @@ import { register as registerReconcile, unregister as unregisterReconcile, type 
 import {
   type ScrollAccel,
   createScrollAccel,
+  updateScrollAccelChain,
   recomputeScrollAccel,
   teardownScrollAccel,
   scrollAccelHealthy,
@@ -541,11 +542,15 @@ export class HintBadge {
   // recreated/detached) the badge falls back to the chase — the accel is
   // non-load-bearing; the chase base is always correct.
   private _scrollAccel: ScrollAccel | null = null;
-  // Count of chain-change re-arms over this badge's life (diagnostic only). A
-  // badge on a hover-gated inner scroller (QuickBase report grid) that flaps as an
-  // outer scroll slides the pane under the cursor re-arms repeatedly — a high
-  // count here vs ~0 on a stable badge is the signature of the residual wiggle.
+  // Count of chain-change events over this badge's life (diagnostic only). Climbs
+  // when a hover-gated inner scroller (QuickBase report grid) flaps as an outer
+  // scroll slides the pane under the cursor.
   private _scrollAccelRearms = 0;
+  // Cumulative ScrollTimeline anims BUILT over this badge's life (diagnostic). The
+  // nested model rebuilds only the inner wrapper that flaps and reuses the
+  // outermost layer's anim, so this climbs ~1 per flap while the OUTER layer's
+  // anim id stays constant — the proof the page-scroll layer is never torn down.
+  private _scrollAccelAnimBuilds = 0;
 
   // Placement outputs, surfaced in diagnostics: scrollSensitive = the offset
   // rode a sticky/fixed bound; geometryDependent = it rode ancestor geometry
@@ -758,27 +763,25 @@ export class HintBadge {
     // Inner-scroll accelerator, evaluated every pass (level-triggered).
     if (this._scrollAccel) {
       if (!scrollAccelHealthy(this._scrollAccel, this.target)) {
-        // Chain went stale THIS pass — most often a hover-activated inner
-        // scroller dropping out because an OUTER scroll slid the pane out from
-        // under the cursor, flipping its :hover off (QuickBase classic report
-        // grids flip overflow:hidden<->auto under :hover). Re-arm to whatever is
-        // scrollable RIGHT NOW rather than degrading to the JS chase until the
-        // next settle — a mid-gesture disarm would make the badge chase (wiggle)
-        // the rest of the scroll. If nothing is scrollable now, this disarms
-        // fully and the chase base alone is correct (graceful degradation — never
-        // a dangle). In place: no repositionHostNow, since this read pass writes
-        // the fresh position anyway.
-        this.rearmScrollAccelInPlace();
+        // Chain went stale THIS pass — most often a hover-activated inner scroller
+        // dropping out because an OUTER scroll slid the pane out from under the
+        // cursor, flipping its :hover off (QuickBase report grids flip
+        // overflow:hidden<->auto under :hover). Incrementally reconcile: the
+        // outermost layer (the page scroll being dragged) keeps its running anim,
+        // only the inner wrapper is rebuilt, so the outer scroll never hitches. If
+        // nothing is scrollable now this disarms fully (graceful degradation). No
+        // repositionHostNow — this read pass writes the fresh position.
+        this.syncScrollAccelChain();
       }
       if (this._scrollAccel) {
-        // Healthy (or freshly re-armed): write the scroll-0 base docY0 = rect.top
+        // Healthy (or freshly reconciled): write the scroll-0 base docY0 = rect.top
         // + scrollY + offset + Σ scrollTop (over the ridden scroller chain). As any
-        // ridden pane scrolls, rect.top drops by ΔS while its scrollTop rises by
-        // ΔS, so docY0 is constant (scroll-invariant under the chain's scrolls);
-        // the compositor animations on `outer` supply translateY(-Σ scrollTop), so
+        // ridden pane scrolls, rect.top drops by ΔS while its scrollTop rises by ΔS,
+        // so docY0 is constant (scroll-invariant under the chain's scrolls); the
+        // per-layer compositor animations cascade to translateY(-Σ scrollTop), so
         // the net is the live position with no main-thread chase. Refresh keyframes
-        // on max change.
-        recomputeScrollAccel(this._scrollAccel, this.outer);
+        // on max change (counts toward the anim-build diagnostic).
+        this._scrollAccelAnimBuilds += recomputeScrollAccel(this._scrollAccel);
         y += scrollAccelScrollOffset(this._scrollAccel);
       }
     }
@@ -802,45 +805,36 @@ export class HintBadge {
   // Called from `updatePosition` (offset baked) and `show`.
   private armScrollAccel(): void {
     if (!scrollAccelEnabled || this._scrollAccel) return;
-    this._scrollAccel = createScrollAccel(this.target, this.outer, scrollAccelNestedEnabled);
+    this._scrollAccel = createScrollAccel(this.target, this.outer, this.inner, scrollAccelNestedEnabled);
     // Diagnostic mirror on the light-DOM host: a badge that found an inner
     // scroller and armed carries `data-bk-accel="<layerCount>"`, so the accelerated
     // set is countable from the page console
     // (`document.querySelectorAll('[data-bk-accel]').length`) and a value >1 marks
     // a nested-scroller chain. Allowed by the host-attribute tracker.
     if (this._scrollAccel) {
+      this._scrollAccelAnimBuilds += this._scrollAccel.layers.length;
       this.host.setAttribute('data-bk-accel', String(this._scrollAccel.layers.length));
+      this.host.setAttribute('data-bk-accel-builds', String(this._scrollAccelAnimBuilds));
     }
   }
 
-  // Tear down the accelerator (cancel the compositor animation, drop the
-  // reference). Safe to call when none is armed. The chase base alone is correct
-  // afterward.
+  // Tear down the accelerator (cancel every layer's animation, reparent `inner`
+  // back under `outer`, drop the wrapper elements). Safe to call when none is
+  // armed. The chase base alone is correct afterward.
   private disarmScrollAccel(): void {
     if (!this._scrollAccel) return;
-    teardownScrollAccel(this._scrollAccel);
+    teardownScrollAccel(this._scrollAccel, this.outer, this.inner);
     this._scrollAccel = null;
     this.host.removeAttribute('data-bk-accel');
   }
 
-  // Level-triggered re-detection: rebuild the accelerator if its scroller chain
-  // changed since it armed. Catches a scroller that became scrollable AFTER this
-  // badge first armed (content still loading at show time — the main reason a
-  // body-mounted badge ends up un-accelerated and wiggling on a scroll it should
-  // ride), a chain that grew/shrank, and late flag reads. Only visible badges;
-  // hidden ones (re)arm on show. Called from the settle handlers via the module
-  // `reconcileScrollAccel`, and on a flag flip.
+  // Level-triggered re-detection (settle path): reconcile the chain if it changed
+  // since arming. Catches a scroller that became scrollable after show, a chain
+  // that grew/shrank, and late flag reads. Repositions after, since this is not
+  // called from inside reconcileRead.
   syncScrollAccel(): void {
     if (!scrollAccelEnabled || !this._visible) return;
-    const desired = scrollAccelNestedEnabled
-      ? findScrollableAncestors(this.target)
-      : ((s) => (s ? [s] : []))(findScrollableAncestor(this.target));
-    const current = this._scrollAccel ? this._scrollAccel.layers.map((l) => l.scroller) : [];
-    if (sameElements(current, desired)) return;
-    this.bumpRearm();
-    this.disarmScrollAccel();
-    this.armScrollAccel();
-    if (this._scrollAccel) this.repositionHostNow();
+    if (this.syncScrollAccelChain() && this._scrollAccel) this.repositionHostNow();
   }
 
   // Re-detect only if this badge's target lives inside `scroller` (the element
@@ -853,23 +847,37 @@ export class HintBadge {
     this.syncScrollAccel();
   }
 
-  // Re-detect and re-arm to the CURRENT scroller chain in place, WITHOUT
-  // repositioning the host. Distinct from `syncScrollAccel` (the settle-path
-  // entry, which calls repositionHostNow and would re-enter reconcileRead):
-  // this is called FROM reconcileRead when the armed chain went stale during an
-  // active gesture, and that same read pass writes the fresh position — so a
-  // reposition here would be redundant and re-entrant. Disarms fully when nothing
-  // is scrollable now (armScrollAccel finds no scroller → chase base).
-  private rearmScrollAccelInPlace(): void {
+  // Reconcile the armed chain to the CURRENT scrollable ancestors. When already
+  // armed, this updates INCREMENTALLY (updateScrollAccelChain): the outermost
+  // layer (`outer`, the page scroll the user drags) keeps its running animation
+  // when its scroller is unchanged, and only the inner wrapper(s) are rebuilt — so
+  // a hover-gated inner scroller flapping never hitches the outer scroll. Returns
+  // true if the chain changed. Does NOT reposition (callers decide). Fully disarms
+  // when nothing is scrollable now (→ chase base, graceful degradation).
+  private syncScrollAccelChain(): boolean {
+    const desired = scrollAccelNestedEnabled
+      ? findScrollableAncestors(this.target)
+      : ((s) => (s ? [s] : []))(findScrollableAncestor(this.target));
+    const current = this._scrollAccel ? this._scrollAccel.layers.map((l) => l.scroller) : [];
+    if (sameElements(current, desired)) return false;
     this.bumpRearm();
-    this.disarmScrollAccel();
-    this.armScrollAccel();
+    if (desired.length === 0) {
+      this.disarmScrollAccel();
+      return true;
+    }
+    if (!this._scrollAccel) {
+      this.armScrollAccel();
+      return true;
+    }
+    this._scrollAccelAnimBuilds += updateScrollAccelChain(this._scrollAccel, desired, this.outer, this.inner);
+    this.host.setAttribute('data-bk-accel', String(this._scrollAccel.layers.length));
+    this.host.setAttribute('data-bk-accel-builds', String(this._scrollAccelAnimBuilds));
+    return true;
   }
 
-  // Tally a chain-change re-arm and mirror it on the host as `data-bk-accel-rearms`
-  // so tests + the page console can spot hover-churn (a report badge whose count
-  // climbs as an outer scroll flaps its hover-gated inner scroller) without reading
-  // the closed shadow root. Allowed by the host-attribute tracker.
+  // Tally a chain-change event and mirror it on the host as `data-bk-accel-rearms`
+  // so tests + the page console can spot hover-churn without reading the closed
+  // shadow root. Allowed by the host-attribute tracker.
   private bumpRearm(): void {
     this._scrollAccelRearms++;
     this.host.setAttribute('data-bk-accel-rearms', String(this._scrollAccelRearms));
@@ -1312,9 +1320,12 @@ export class HintBadge {
     // report badge that should ride [report, outer] but shows only [report] is a
     // nested-composition gap (flag off or an ancestor not detected).
     scrollAccelLayers: { scroller: string; max: number; scrollTop: number }[] | null;
-    // Lifetime count of chain-change re-arms (see _scrollAccelRearms). High on a
+    // Lifetime count of chain-change events (see _scrollAccelRearms). Climbs on a
     // report badge whose hover-gated inner scroller flaps during an outer scroll.
     scrollAccelRearms: number;
+    // Lifetime count of ScrollTimeline anims built (see _scrollAccelAnimBuilds).
+    // LOW relative to rearms = inner wrappers rebuilt but the outermost layer reused.
+    scrollAccelAnimBuilds: number;
     // True when the occlusion hit-test has hidden this badge (.bk-occluded). With
     // isVisible (the logical show state) this disambiguates "shown" from "shown
     // but visually hidden because covered" — the ghost-badge diagnosis.
@@ -1382,6 +1393,7 @@ export class HintBadge {
           }))
         : null,
       scrollAccelRearms: this._scrollAccelRearms,
+      scrollAccelAnimBuilds: this._scrollAccelAnimBuilds,
       occluded: this.inner.classList.contains('bk-occluded'),
     };
   }

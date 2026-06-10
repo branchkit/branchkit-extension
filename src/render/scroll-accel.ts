@@ -42,23 +42,37 @@ export interface ScrollAccelLayer {
   readonly scroller: Element;
   /** The `ScrollTimeline` bound to `scroller` (stable across keyframe rebuilds). */
   readonly timeline: AnimationTimeline;
-  /** The compositor animation on the shadow `outer` element; rebuilt when `max`
+  /** The compositor animation on this layer's `element`; rebuilt when `max`
    *  changes (content reflow), so it is mutable. */
   anim: Animation;
   /** `scrollHeight - clientHeight` captured in the current keyframe. */
   max: number;
+  /** The shadow element this layer's `translateY(-scrollTop)` animates. The
+   *  OUTERMOST layer animates `outer` (the existing badge element); each inner
+   *  scroller gets its own nested wrapper div. One `composite:'replace'` anim per
+   *  element keeps every layer on the COMPOSITOR — stacking N `composite:'add'`
+   *  anims on one element instead drops to the main thread (the wiggle we fixed). */
+  readonly element: HTMLElement;
 }
 
 export interface ScrollAccel {
   /** Scroller chain, innermost first. One layer = the single-scroller case
-   *  (default). Multiple layers = NESTED scrollers (target inside scroller-in-
-   *  scroller): each layer rides one scroller, composed via ADDITIVE transform
-   *  animations on `outer` (the per-layer `translateY(-scrollTop)` values
-   *  concatenate, summing to `-Σ scrollTop`). The reconcile base in hints.ts adds
-   *  `Σ scrollTop` so the net is the live position under any combination of the
-   *  chain's scrolls. Single-layer uses a plain `replace` animation (unchanged). */
-  readonly layers: ScrollAccelLayer[];
+   *  (default), animating `outer` directly — byte-identical to the pre-nesting
+   *  path. Multiple layers = NESTED scrollers (target inside scroller-in-scroller):
+   *  each scroller rides its OWN nested wrapper element with a single
+   *  `composite:'replace'` animation, and the per-element `translateY(-scrollTop)`
+   *  values compose down the DOM tree (parent transform cascades to children),
+   *  summing to `-Σ scrollTop` — all on the compositor. The reconcile base in
+   *  hints.ts adds `Σ scrollTop` so the net is the live position under any
+   *  combination of the chain's scrolls. The OUTERMOST scroller maps to `outer`
+   *  and is never rebuilt when an inner hover-gated scroller flaps. */
+  layers: ScrollAccelLayer[];
 }
+
+// Monotonic build id, stamped on every animation so a test (or the page console)
+// can tell whether a layer's anim was REBUILT (id changed) or reused across a
+// chain change. Module-scope counter — no Date/Math.random (those break resume).
+let animBuildSeq = 0;
 
 function scrollMax(scroller: Element): number {
   return Math.max(0, scroller.scrollHeight - scroller.clientHeight);
@@ -122,73 +136,161 @@ export function findScrollableAncestors(el: Element): Element[] {
   return out;
 }
 
-function buildAnim(
-  outer: HTMLElement,
+function buildLayerAnim(
+  element: HTMLElement,
   timeline: AnimationTimeline,
   max: number,
-  composite: CompositeOperation,
 ): Animation {
   // At scroll progress p = S/max the interpolated transform is
   // translateY(-p*max) = translateY(-S); composited, no main-thread work.
   // `fill: 'both'` holds the end transform past the range; `duration: 1` is the
-  // non-zero duration Firefox requires for a scroll-driven animation. `composite`
-  // is `add` for nested chains so each layer's translateY sums (transform `add`
-  // concatenates the lists, and stacked translateYs sum); `replace` for the lone
-  // single-scroller case (identical to before).
-  const options = { timeline, duration: 1, fill: 'both', composite } as unknown as KeyframeAnimationOptions;
-  return outer.animate(
+  // non-zero duration Firefox requires for a scroll-driven animation. ALWAYS
+  // `composite:'replace'` — a single replace anim per element stays on the
+  // compositor; composing multiple scrollers is done by NESTING elements (their
+  // transforms cascade), not by stacking additive anims on one element.
+  const options = { timeline, duration: 1, fill: 'both', composite: 'replace' } as unknown as KeyframeAnimationOptions;
+  const anim = element.animate(
     [{ transform: 'translateY(0px)' }, { transform: `translateY(${-max}px)` }],
     options,
   );
+  anim.id = `bk-accel-${++animBuildSeq}`;
+  return anim;
+}
+
+/** A transparent passthrough wrapper for one inner scroller's layer: 0-offset,
+ *  absolutely positioned so it establishes a containing block for its descendants
+ *  and carries only the `translateY(-scrollTop)` animation. Nested between `outer`
+ *  and the badge `inner`, its transform cascades to everything below it. */
+function createLayerWrapper(doc: Document): HTMLElement {
+  const w = doc.createElement('div');
+  w.className = 'bk-accel-layer';
+  w.style.cssText = 'position:absolute;top:0;left:0;transform-origin:0 0;';
+  return w;
+}
+
+function makeLayer(scroller: Element, element: HTMLElement, Ctor: ScrollTimelineCtor): ScrollAccelLayer {
+  const max = scrollMax(scroller);
+  const timeline = new Ctor({ source: scroller, axis: 'block' });
+  return { scroller, timeline, anim: buildLayerAnim(element, timeline, max), max, element };
+}
+
+// Build the nested element chain for `scrollers` (innermost-first): the OUTERMOST
+// scroller animates `outer`; each successively-inner scroller gets a wrapper
+// nested one level deeper, and the badge `inner` is reparented into the deepest
+// wrapper. Returns layers innermost-first (layers[0] = nearest scroller). DOM
+// after, for [report, mainBody]: outer(mainBody) > wrapper(report) > inner.
+function buildLayerChain(
+  scrollers: readonly Element[],
+  outer: HTMLElement,
+  inner: HTMLElement,
+  Ctor: ScrollTimelineCtor,
+): ScrollAccelLayer[] {
+  const ordered = [...scrollers].reverse(); // outermost-first, for DOM nesting
+  const doc = outer.ownerDocument;
+  const layers: ScrollAccelLayer[] = [makeLayer(ordered[0], outer, Ctor)];
+  let parent: HTMLElement = outer;
+  for (let i = 1; i < ordered.length; i++) {
+    const wrapper = createLayerWrapper(doc);
+    parent.appendChild(wrapper);
+    layers.push(makeLayer(ordered[i], wrapper, Ctor));
+    parent = wrapper;
+  }
+  parent.appendChild(inner); // move the badge into the deepest wrapper (no-op when single)
+  layers.reverse(); // innermost-first
+  return layers;
 }
 
 /**
- * Create an accelerator for `target`'s inner scroller(s), animating `outer`'s
- * transform on the compositor. With `nested` false (default), rides only the
- * NEAREST scroller (one `replace` layer — unchanged behavior). With `nested`
- * true, rides the WHOLE chain of scroller ancestors (one additive layer each).
- * Returns null when `ScrollTimeline` is unsupported or `target` has no inner
- * scroller. Caller owns the flag gate and viewport-pinned exclusion.
+ * Create an accelerator for `target`'s inner scroller(s) as a nested element
+ * chain animated on the compositor. With `nested` false (default), rides only the
+ * NEAREST scroller (one `replace` layer on `outer` — byte-identical to before).
+ * With `nested` true, rides the WHOLE chain: the outermost scroller animates
+ * `outer`, each inner scroller a nested wrapper, and `inner` is reparented into
+ * the deepest wrapper. Returns null when `ScrollTimeline` is unsupported or
+ * `target` has no inner scroller. Caller owns the flag gate.
  */
-export function createScrollAccel(target: Element, outer: HTMLElement, nested: boolean): ScrollAccel | null {
+export function createScrollAccel(target: Element, outer: HTMLElement, inner: HTMLElement, nested: boolean): ScrollAccel | null {
   const Ctor = getScrollTimelineCtor();
   if (!Ctor) return null;
   const nearest = findScrollableAncestor(target);
   if (!nearest) return null;
   const scrollers = nested ? findScrollableAncestors(target) : [nearest];
   if (scrollers.length === 0) return null;
-  // Multiple scrollers must compose additively; a lone scroller stays `replace`
-  // so the default path is byte-identical and never relies on `composite: add`.
-  const composite: CompositeOperation = scrollers.length > 1 ? 'add' : 'replace';
-  const layers: ScrollAccelLayer[] = scrollers.map((scroller) => {
-    const max = scrollMax(scroller);
-    const timeline = new Ctor({ source: scroller, axis: 'block' });
-    return { scroller, timeline, anim: buildAnim(outer, timeline, max, composite), max };
-  });
-  return { layers };
+  return { layers: buildLayerChain(scrollers, outer, inner, Ctor) };
+}
+
+/**
+ * Incrementally reconcile the ridden chain to `desired` (innermost-first) while
+ * KEEPING the outermost layer (`outer`) and its running animation untouched when
+ * its scroller is unchanged — so the page scroll the user is actually dragging
+ * never hitches as a hover-gated inner scroller flaps. Only the inner wrappers
+ * (below `outer`) are rebuilt. Falls back to a full rebuild when the outermost
+ * scroller itself changed (rare). Returns the number of anims built.
+ */
+export function updateScrollAccelChain(accel: ScrollAccel, desired: readonly Element[], outer: HTMLElement, inner: HTMLElement): number {
+  const Ctor = getScrollTimelineCtor();
+  if (!Ctor || desired.length === 0) return 0;
+  const desiredOutermost = desired[desired.length - 1];
+  const outerLayer = accel.layers.find((l) => l.element === outer);
+  // Outermost unchanged → keep `outer`'s layer + anim; rebuild only inner wrappers.
+  if (outerLayer && outerLayer.scroller === desiredOutermost && outerLayer.scroller.isConnected) {
+    for (const layer of accel.layers) {
+      if (layer.element !== outer) layer.anim.cancel();
+    }
+    if (inner.parentElement !== outer) outer.appendChild(inner);
+    for (const layer of accel.layers) {
+      if (layer.element !== outer) layer.element.remove();
+    }
+    const innerScrollers = [...desired.slice(0, desired.length - 1)].reverse(); // outermost-of-inner first
+    const layers: ScrollAccelLayer[] = [outerLayer];
+    let parent: HTMLElement = outer;
+    let built = 0;
+    for (const scroller of innerScrollers) {
+      const wrapper = createLayerWrapper(outer.ownerDocument);
+      parent.appendChild(wrapper);
+      layers.push(makeLayer(scroller, wrapper, Ctor));
+      parent = wrapper;
+      built++;
+    }
+    parent.appendChild(inner);
+    layers.reverse(); // innermost-first
+    accel.layers = layers;
+    return built;
+  }
+  // Outermost changed — full rebuild.
+  teardownScrollAccel(accel, outer, inner);
+  accel.layers = buildLayerChain(desired, outer, inner, Ctor);
+  return accel.layers.length;
 }
 
 /**
  * Refresh each layer's keyframe when its scroller's max scroll changed (content
- * loaded/reflowed). No-op for unchanged layers — recreation is the rare
- * exception, not per-frame work. Reuses each layer's timeline; only the keyframe
- * (which encodes `max`) is rebuilt.
+ * loaded/reflowed). No-op for unchanged layers — recreation is the rare exception,
+ * not per-frame work. Reuses each layer's timeline; only the keyframe (which
+ * encodes `max`) is rebuilt, on that layer's own element. Returns the rebuild count.
  */
-export function recomputeScrollAccel(accel: ScrollAccel, outer: HTMLElement): void {
-  const composite: CompositeOperation = accel.layers.length > 1 ? 'add' : 'replace';
+export function recomputeScrollAccel(accel: ScrollAccel): number {
+  let rebuilt = 0;
   for (const layer of accel.layers) {
     const max = scrollMax(layer.scroller);
     if (max === layer.max) continue;
     layer.anim.cancel();
-    layer.anim = buildAnim(outer, layer.timeline, max, composite);
+    layer.anim = buildLayerAnim(layer.element, layer.timeline, max);
     layer.max = max;
+    rebuilt++;
   }
+  return rebuilt;
 }
 
-/** Tear down every layer's compositor animation, reverting `outer`'s transform to
- *  its base (no delta) so the chase base alone is correct. */
-export function teardownScrollAccel(accel: ScrollAccel): void {
+/** Tear down every layer's compositor animation, reparent `inner` back under
+ *  `outer`, and drop the inner wrapper elements — leaving the chase base alone
+ *  correct. Safe regardless of current nesting depth. */
+export function teardownScrollAccel(accel: ScrollAccel, outer: HTMLElement, inner: HTMLElement): void {
   for (const layer of accel.layers) layer.anim.cancel();
+  if (inner.parentElement !== outer) outer.appendChild(inner);
+  for (const layer of accel.layers) {
+    if (layer.element !== outer) layer.element.remove();
+  }
 }
 
 /** Σ of the chain's live `scrollTop`s — the value the reconcile base adds so the
