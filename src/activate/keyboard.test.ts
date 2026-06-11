@@ -158,6 +158,52 @@ describe('hint mode — enter', () => {
   });
 });
 
+describe('passive typing — hints visible without entering hint mode (f)', () => {
+  it('letters filter when hints are visible, without enterHintMode', () => {
+    const cb = vi.fn();
+    handler.setFilterCallback(cb);
+    handler.setHintsVisible(() => true);
+
+    const result = handler.handleKeyDown(makeKey('a'));
+    expect(result).toBe(true);
+    expect(handler.getMode()).toBe('normal'); // never entered explicit hint mode
+    expect(cb).toHaveBeenCalledWith('a', false);
+  });
+
+  it('a letter filters instead of firing its nav keybind when hints are visible', () => {
+    registry.add({ keys: 'j', action: 'scroll_down' });
+    const cb = vi.fn();
+    handler.setFilterCallback(cb);
+    handler.setHintsVisible(() => true);
+
+    const result = handler.handleKeyDown(makeKey('j'));
+    expect(result).toBe(true);
+    expect(cb).toHaveBeenCalledWith('j', false);
+    expect(dispatchSpy).not.toHaveBeenCalledWith('scroll_down', {});
+  });
+
+  it('Escape stays native under passive typing (does NOT hide)', () => {
+    handler.setHintsVisible(() => true);
+    const result = handler.handleKeyDown(makeKey('Escape'));
+    expect(result).toBe(false);
+    expect(dispatchSpy).not.toHaveBeenCalledWith('hide_hints');
+  });
+
+  it('passive typing yields to editable fields (insert mode passes through)', () => {
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    input.focus();
+    const cb = vi.fn();
+    handler.setFilterCallback(cb);
+    handler.setHintsVisible(() => true);
+
+    const result = handler.handleKeyDown(makeKey('a'));
+    expect(result).toBe(false);
+    expect(cb).not.toHaveBeenCalled();
+    input.remove();
+  });
+});
+
 describe('normal mode — command sequences', () => {
   it('exact match dispatches action', () => {
     registry.add({ keys: 'f', action: 'show_hints' });

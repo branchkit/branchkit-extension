@@ -453,6 +453,7 @@ async function init(): Promise<void> {
   checkStatus();
   initSyncedSelect('hint-visibility', 'hintVisibility');
   initSyncedSelect('hint-mode', 'badgeDisplayMode');
+  initSyncedSelect('hide-key', 'hintHideKey');
   initSyncedCheckbox('aggressive-hints', 'aggressiveHints');
   initOptionsLink();
 

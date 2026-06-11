@@ -36,6 +36,10 @@ export class KeyHandler {
   private registry: CommandRegistry;
   private dispatcher: ActionDispatcher;
   private onFilterChange: ((prefix: string, byText: boolean) => void) | null = null;
+  // Whether hints are currently painted. When true, typed letters filter
+  // badges even without the explicit `f`-entered hint mode — so always-visible
+  // hints are keyboard-reachable without first pressing `f`. Set by content.ts.
+  private hintsVisible: () => boolean = () => false;
 
   constructor(registry: CommandRegistry, dispatcher: ActionDispatcher) {
     this.registry = registry;
@@ -44,6 +48,10 @@ export class KeyHandler {
 
   setFilterCallback(cb: (prefix: string, byText: boolean) => void): void {
     this.onFilterChange = cb;
+  }
+
+  setHintsVisible(fn: () => boolean): void {
+    this.hintsVisible = fn;
   }
 
   isFilteringByText(): boolean {
@@ -71,11 +79,15 @@ export class KeyHandler {
     // Always let modifier combos through (Cmd+C, Ctrl+V, etc.)
     if (e.metaKey || e.ctrlKey || e.altKey) return false;
 
-    // Insert mode: pass through
+    // Insert mode: pass through. Only the explicitly-entered `hint` mode (the
+    // user pressed `f`) intercepts inside an editable field; passive typing
+    // driven by always-visible hints must NOT hijack keystrokes meant for a
+    // search box.
     if (this.mode !== 'hint' && isInsertMode()) return false;
 
-    // Hint mode
-    if (this.mode === 'hint') {
+    // Hint-typing is active in explicit hint mode OR whenever hints are
+    // painted — so always-visible hints are typeable without pressing `f`.
+    if (this.mode === 'hint' || this.hintsVisible()) {
       return this.handleHintKey(e);
     }
 
@@ -85,6 +97,11 @@ export class KeyHandler {
 
   private handleHintKey(e: KeyboardEvent): boolean {
     if (e.key === 'Escape') {
+      // Only the explicitly-entered hint mode treats Escape as "hide hints".
+      // Under passive always-visible typing, Escape stays native (close a
+      // dropdown/dialog, cancel find) — hiding is the configurable chord
+      // handled in content.ts instead.
+      if (this.mode !== 'hint') return false;
       e.preventDefault();
       e.stopPropagation();
       this.dispatcher.dispatch('hide_hints');

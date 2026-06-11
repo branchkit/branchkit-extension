@@ -99,7 +99,7 @@ import { openLivenessPort } from './plugin/liveness';
 import { PageSession, TeardownReason } from './lifecycle/page-session';
 import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './debug/message-counters';
 import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, lifecycleCounters, resetLifecycleCounters } from './debug/perf-counters';
-import { loadConfig, getDisplayMode, getHintVisibility, getHintsShown, setHintsShown } from './config';
+import { loadConfig, getDisplayMode, getHintVisibility, getHintsShown, setHintsShown, getHintHideKey } from './config';
 import {
   initLabelSync,
   queuePut,
@@ -833,6 +833,11 @@ dispatcher.register('show_hints_category', (params) => {
 });
 
 // --- Keyboard Filter Callback ---
+
+// Keyboard hint-typing is gated on whether hints are actually painted, not on
+// the `f`-entered hint mode — so always-visible hints accept typed codewords
+// immediately, no `f` first.
+keyHandler.setHintsVisible(() => pageSession.hintsVisible);
 
 keyHandler.setFilterCallback((prefix: string, byText: boolean) => {
   if (!pageSession.hintsVisible) return;
@@ -3044,6 +3049,16 @@ onTargetMutation((target) => {
 const scrollKeys = new Set(['j', 'k', 'd', 'u', 'h', 'l']);
 const heldKeys = new Set<string>();
 
+// Match the user's configured hide chord. `ctrl+f` keys off `e.code` (layout-
+// independent: macOS Alt/Ctrl can mangle `e.key`) and requires no other
+// modifier. `escape` is a bare Escape with no modifiers.
+function matchesHideKey(e: KeyboardEvent, spec: string): boolean {
+  if (spec === 'escape') {
+    return e.key === 'Escape' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
+  }
+  return e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.code === 'KeyF';
+}
+
 document.addEventListener('keydown', (e: KeyboardEvent) => {
   if (pageSession.isTornDown) return;
   if (handlePostFindKey(e)) return;
@@ -3086,6 +3101,19 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
     // The rebind-counters panel rides along — see step 5 of
     // notes/completed/DESIGN_WRAPPER_IDENTITY_STABILITY.md.
     toggleOverlay(store, rebindCounters);
+    return;
+  }
+
+  // Configurable show/hide chord (default Ctrl+F). Plain `f` is a codeword
+  // filter letter once hints are visible, so toggling needs its own chord.
+  // It's a full toggle (shows when hidden, hides when shown). Escape is the
+  // exception: it only acts while hints are visible, so it stays native
+  // (close dropdown/dialog, cancel find) the rest of the time.
+  const hideKey = getHintHideKey();
+  if (matchesHideKey(e, hideKey) && (hideKey !== 'escape' || pageSession.hintsVisible)) {
+    e.preventDefault();
+    e.stopPropagation();
+    dispatcher.dispatch('toggle_hints');
     return;
   }
 

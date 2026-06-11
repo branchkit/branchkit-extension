@@ -17,7 +17,7 @@
  * carve leaf concerns). See notes/DESIGN_EXTENSION_RESTRUCTURE.md.
  */
 
-import { BadgeDisplayMode, HintVisibility } from './types';
+import { BadgeDisplayMode, HintHideKey, HintVisibility } from './types';
 import { setExtraHintsEnabled } from './scan/scanner';
 
 let displayMode: BadgeDisplayMode = 'letter';
@@ -26,6 +26,13 @@ let hintVisibility: HintVisibility = 'always';
 // page does on its own; this is the user's explicit "hints on/off" intent,
 // which overrides always-mode auto-show. Default on.
 let hintsShown = true;
+// Keyboard chord that hides hints while they're visible. Needed because once
+// keyboard hint-typing is active whenever hints are shown, plain `f` becomes a
+// codeword filter letter and can no longer double as the hide key. `ctrl+f` is
+// the default (free on macOS — find is cmd+f — and doesn't collide with any
+// single-letter codeword). `escape` is offered too but shadows the page's
+// native Escape, so it's opt-in.
+let hintHideKey: HintHideKey = 'ctrl+f';
 
 export function getDisplayMode(): BadgeDisplayMode {
   return displayMode;
@@ -33,6 +40,10 @@ export function getDisplayMode(): BadgeDisplayMode {
 
 export function getHintVisibility(): HintVisibility {
   return hintVisibility;
+}
+
+export function getHintHideKey(): HintHideKey {
+  return hintHideKey;
 }
 
 export function getHintsShown(): boolean {
@@ -70,12 +81,15 @@ export interface ConfigHandlers {
 export function loadConfig(handlers: ConfigHandlers): void {
   if (typeof chrome === 'undefined' || !chrome.storage?.sync) return;
 
-  chrome.storage.sync.get(['badgeDisplayMode', 'hintVisibility', 'aggressiveHints'], (result) => {
+  chrome.storage.sync.get(['badgeDisplayMode', 'hintVisibility', 'aggressiveHints', 'hintHideKey'], (result) => {
     if (result.badgeDisplayMode) {
       displayMode = result.badgeDisplayMode;
     }
     if (result.hintVisibility) {
       hintVisibility = result.hintVisibility;
+    }
+    if (result.hintHideKey) {
+      hintHideKey = result.hintHideKey;
     }
     setExtraHintsEnabled(result.aggressiveHints === true);
   });
@@ -95,6 +109,10 @@ export function loadConfig(handlers: ConfigHandlers): void {
     if (changes.hintVisibility) {
       hintVisibility = changes.hintVisibility.newValue || 'always';
       handlers.onHintVisibilityChange();
+    }
+    if (changes.hintHideKey) {
+      // Read live by the keydown listener — no side effect to apply here.
+      hintHideKey = changes.hintHideKey.newValue || 'ctrl+f';
     }
     if (changes.hintsShown) {
       // Keep the value current for this frame's next decision (e.g. an SPA
