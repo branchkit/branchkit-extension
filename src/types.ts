@@ -45,7 +45,7 @@ export interface ScannedElement {
   /**
    * True if the element's rect intersects the strict viewport at batch-
    * send time. Independent of `isInViewport` (the IO band flag, which
-   * uses a 200px margin for scroll-ahead). The plugin pushes only
+   * uses a wide margin — VIEWPORT_MARGIN_PX — for scroll-ahead). The plugin pushes only
    * strict-viewport entries into the `browser_hints_<prefix>_strict`
    * companion collection that drives the Discovery HUD and the activate
    * command's dependent capture — band-only entries get badges painted

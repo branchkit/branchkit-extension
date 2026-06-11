@@ -285,7 +285,7 @@ function captureWrapper(w: ElementWrapper): WrapperRecord {
       type: w.scanned.type,
       adapter: w.scanned.adapter,
       // Strict-viewport flag: the value most recently computed for this
-      // wrapper. Independent of `isInViewport` (the IO band's 200px-margin
+      // wrapper. Independent of `isInViewport` (the IO band's wide-margin
       // flag) — the strict bit governs which entries land in the
       // `browser_hints_<prefix>_strict` companion collection driving voice
       // matching + Discovery HUD. Distinguishes "badge painted for

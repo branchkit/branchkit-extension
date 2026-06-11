@@ -57,7 +57,7 @@ export function getCachedRect(el: Element): DOMRect {
 /**
  * True when a rect overlaps the actual visible viewport. This is the badge
  * *paint* gate, and is deliberately distinct from the IntersectionTracker's
- * `isInViewport` flag, which is set by a 200px-rootMargin IO for codeword
+ * `isInViewport` flag, which is set by a wide-rootMargin IO (VIEWPORT_MARGIN_PX) for codeword
  * pre-claim / lazy badge construction. An element parked off-screen but within
  * that margin (e.g. YouTube's collapsed left nav drawer at x=-228) is
  * `isInViewport`-true yet must NOT paint a badge — placement would clamp it to

@@ -34,7 +34,14 @@ import { labelReservoir } from '../labels/label-reservoir';
 // user doesn't perceive it as "paint lag" lining up with their scroll.
 // Was 200 px; Rango uses 1000 px (`addWrappersIntersectionObserver` in
 // ElementWrapper.ts) and feels noticeably smoother on long scrolls.
-const VIEWPORT_MARGIN = '1000px';
+//
+// VIEWPORT_MARGIN_PX is the single source of truth for the band width:
+// every geometry check that backstops this IO's `isInViewport` flag
+// (reconcileTeardown, computeReconcilePlan) must use the same margin, or
+// the backstop disagrees with IO ground truth for the ring between the
+// two values (the 200-vs-1000 drift bug, 2026-06-11).
+export const VIEWPORT_MARGIN_PX = 1000;
+const VIEWPORT_MARGIN = `${VIEWPORT_MARGIN_PX}px`;
 
 export interface TrackerEvents {
   /**

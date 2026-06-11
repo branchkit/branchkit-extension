@@ -272,7 +272,7 @@ const tracker = new IntersectionTracker(store, {
 // (Strict-viewport tracker removed — it was meant to narrow the
 // scheduleReposition set on heavy pages, but on YouTube /watch the
 // added per-wrapper observation (a second IO per element, on top of
-// the IntersectionTracker's 200px-margin IO) appeared to saturate
+// the IntersectionTracker's wide-margin IO) appeared to saturate
 // the process when wrap counts climbed past ~250 during scroll-driven
 // lazy-load. The scroll-debounce coalesces reposition bursts into one
 // call per scroll-end now, which makes per-call cost much less critical
@@ -1227,7 +1227,7 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
   }
   pageSession.hintsVisible = true;
   // showHints painted only the strict-viewport `renderable` slice. Converge
-  // the rest of the desired set: build badges for in-band (200px IO margin)
+  // the rest of the desired set: build badges for in-band (IO-margin)
   // codeworded wrappers that fell outside the strict viewport — the
   // noHintObject set that otherwise stayed hintless until the next scroll.
   reconcile();
@@ -1334,14 +1334,14 @@ function badgeNewlyCodeworded(): void {
       // Restore the label on an existing dormant (scroll-back) hint even when
       // the element is off the actual viewport. A dormant hint was clearLabel()d
       // on viewport exit; if its codeword is re-granted while it sits in the
-      // 200px IO band but below/above the viewport, skipping the label here (the
+      // IO band but below/above the viewport, skipping the label here (the
       // 116b321 regression) leaves it null — and recheckHintedVisibility shows it
       // as an empty box when it later scrolls in. The label is just data on a
       // hidden badge; only show()/placement waits for the actual viewport.
       if (w.hint) {
         w.hint.setLabel(label);
       }
-      // Don't construct/paint a badge for an element that's in the 200px IO band
+      // Don't construct/paint a badge for an element that's in the IO band
       // but off the actual viewport (e.g. YouTube's collapsed nav drawer at
       // x=-228); placement would clamp it to the edge. It keeps its codeword +
       // (restored) label and paints when it scrolls on-screen. Same skip for a
@@ -1376,7 +1376,7 @@ function badgeNewlyCodeworded(): void {
 //     so this converges rather than spins.
 //   - build: construct badges for in-band codeworded wrappers that lack one —
 //     the set showHints' strict-viewport slice leaves behind (the noHintObject
-//     root): they sit in the 200px IO band but outside the strict viewport, so
+//     root): they sit in the IO band but outside the strict viewport, so
 //     showHints never built them and nothing rebuilt until a scroll.
 // Tear-down is the separate gBCR pass `reconcileTeardown` (Phase 4); the IO
 // viewport-exit remains the cheap fast-path. Keep reconcile gBCR-free — it runs
@@ -3451,7 +3451,7 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
     // alive.
     claim: { ...claimCounters },
     // Direct symptom metric: of wrappers the tracker considers in-viewport
-    // (200px margin), how many actually hold a codeword. < 1.0 ratio = the
+    // (IO band margin), how many actually hold a codeword. < 1.0 ratio = the
     // visible-links-without-badges bug.
     inViewportWrappers: inViewport,
     inViewportWithCodeword,

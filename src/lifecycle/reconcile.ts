@@ -38,12 +38,15 @@
 import { Category } from '../types';
 import { WrapperStore } from '../scan/element-wrapper';
 import { TargetRectStore } from '../observe/target-rect-store';
+import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { wantsCodeword, wantsHint } from './desired-state';
 
-/** Viewport band margin, in px. Mirrors the IntersectionObserver rootMargin
- * (`VIEWPORT_MARGIN = '200px'` in observe/intersection-tracker.ts) so the
- * geometry band-check agrees with the flag the IO actually sets. */
-export const RECONCILE_BAND_MARGIN_PX = 200;
+/** Viewport band margin, in px. Derived from the IntersectionObserver
+ * rootMargin so the geometry band-check agrees with the flag the IO
+ * actually sets. (Was a hardcoded 200 that silently drifted when the IO
+ * widened to 1000px — the backstops then disagreed with IO ground truth
+ * for the 200-1000px ring.) */
+export const RECONCILE_BAND_MARGIN_PX = VIEWPORT_MARGIN_PX;
 
 export interface ReconcilePlan {
   /** In-band wrappers with no codeword — the claim the edge handlers missed. */

@@ -191,7 +191,7 @@ export function recheckHintedVisibility(): void {
   }
   cacheVisibility(hinted);
   // cacheVisibility warms each seed element's rect too, so getCachedRect below
-  // is free. Gate paint on actual viewport geometry, not the tracker's 200px-
+  // is free. Gate paint on actual viewport geometry, not the tracker's wide-
   // margin isInViewport flag: an element parked off-screen but within that
   // margin (YouTube's collapsed nav drawer at x=-228) is isInViewport-true yet
   // must not paint a badge clamped to the edge. Without this the reposition
