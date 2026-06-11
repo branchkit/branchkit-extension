@@ -2847,6 +2847,66 @@ function reconcileScrollFrame(): void {
 // the burst (~30 events/sec during fast scrolling) into one reposition;
 // scroll-sensitive badges lag by ~100ms but settle correctly when scroll
 // stops, which the user can't perceive mid-scroll anyway.
+
+// THE settle pipeline: one ordered convergence pass shared by every debounced
+// settle signal (scroll settle and the focus/transition/resize/container-
+// mutation settle). Previously duplicated verbatim in the two handlers, where
+// the step ordering lived only in comments and the copies were one bug-fix
+// away from drifting (2026-06-11 review).
+//
+// Step order is load-bearing:
+//   1. reconcileTeardown — release/repair hints whose IO viewport flag went
+//      stale in either direction (the gBCR-bounded backstop).
+//   2. discovery — close whichever gap this settle kind can open (see below).
+//   3. reconcileClipObservation / reconcileOcclusion — flag covered/clipped
+//      targets BEFORE the strict pass so collectStrictViewportDelta reads a
+//      fresh `occluded` and drops them from voice with the visual hide.
+//      Clip only syncs IO membership (the observers drive `clipped` between
+//      settles); occlusion is the settle-debounced elementFromPoint pass.
+//      Both no-op when their flags are off.
+//   4. reconcileScrollAccel — level-triggered accelerator re-detection: arm
+//      badges whose scroller only became scrollable after they were shown,
+//      rebuild changed chains. Cheap post-settle; no-op when accel is off.
+//   5. recheckHintedVisibility — re-evaluate CSS visibility BEFORE the strict
+//      pass so a hover-reveal target that went visibility:hidden gets its
+//      badge hidden AND `cssHidden` set, keeping voice in lockstep with the
+//      visual hide. Also re-hides any badge a mid-scroll reposition re-showed
+//      on a hidden target.
+//   6. reconcileStrictViewport — re-push wrappers whose strict-viewport flag
+//      changed so the plugin's `_strict` companion collection (voice matching
+//      + Discovery HUD) converges to post-settle viewport reality.
+//   7. scheduleReposition('drifted') — re-place only badges that didn't track
+//      their target on their own (runs even when hints are hidden; it owns
+//      the off-screen-hide sweep).
+//
+// The `discovery` parameter is the single difference between the two settle
+// kinds:
+//   'band'  — scroll settle: infinite-scroll content lands here, so sweep the
+//             band for hintables the MutationObserver dropped under the
+//             mutation storm (the discovery gap). Coalesced + idle-scheduled;
+//             a long scroll runs at most one sweep.
+//   'store' — focus/transition/resize settle: these signals reveal new
+//             in-band hintables among EXISTING wrappers (dropdowns, expanding
+//             rows), so converge claim+build over the store. Coalesced so a
+//             churny burst collapses to one pass acting on real deltas only.
+//
+// Steps 1-6 are gated on hintsVisible: the activate command requires the
+// hints tag, so voice can't match while hints are down — stale strict
+// membership doesn't matter, and the next `show` re-scans from scratch.
+function runSettlePipeline(discovery: 'band' | 'store'): void {
+  if (pageSession.hintsVisible) {
+    reconcileTeardown();
+    if (discovery === 'band') scheduleBandDiscovery();
+    else scheduleReconcile();
+    reconcileClipObservation(store.all);
+    reconcileOcclusion();
+    reconcileScrollAccel();
+    recheckHintedVisibility();
+    reconcileStrictViewport();
+  }
+  scheduleReposition('drifted');
+}
+
 function scheduleScrollReposition(e?: Event): void {
   // Reconcile badges need per-frame re-pinning during the scroll itself (they
   // don't ride the compositor); this fires on every scroll event, before the
@@ -2867,44 +2927,9 @@ function scheduleScrollReposition(e?: Event): void {
   if (pageSession.scrollRepositionTimer) clearTimeout(pageSession.scrollRepositionTimer);
   pageSession.scrollRepositionTimer = setTimeout(() => {
     pageSession.scrollRepositionTimer = null;
-    // Scroll-settle is the canonical viewport-exit moment: release hints that
-    // scrolled out of band but whose IO exit event dropped (stale-TRUE).
-    if (pageSession.hintsVisible) {
-      reconcileTeardown();
-      // Scroll-settle is also where infinite-scroll content lands. Sweep the
-      // band for hintables the MutationObserver dropped under the mutation
-      // storm (the discovery gap) — coalesced + idle-scheduled, so a long
-      // scroll runs at most one sweep and it never thrashes mid-reflow.
-      scheduleBandDiscovery();
-      // Re-push wrappers whose strict-viewport flag changed across this
-      // scroll, so the plugin's _strict companion collection converges to
-      // current viewport reality (drives both voice matching and the
-      // Discovery HUD post-PR-2). Gated on hintsVisible: the activate
-      // command requires the hints tag, so voice can't match when hints
-      // are down — strict membership being stale doesn't matter, and the
-      // next `show` re-scans from scratch.
-      // Occlusion before strict-viewport: flag covered/clipped targets so the
-      // strict-viewport delta below drops them from voice (and hides the ghost
-      // badge). reconcileClipObservation only syncs IO membership — the observers
-      // drive `clipped` continuously between settles (flicker-free); reconcileOcclusion
-      // is the settle-debounced elementFromPoint overlay pass. No-ops when their
-      // flags are off.
-      reconcileClipObservation(store.all);
-      reconcileOcclusion();
-      // Level-triggered accelerator re-detection: arm badges whose scroller only
-      // became scrollable after they were shown (content loaded), and rebuild
-      // chains that changed. Cheap post-settle (cached layout/style reads); no-op
-      // when scrollAccel is off.
-      reconcileScrollAccel();
-      // Re-evaluate CSS visibility before the strict pass: a hover-reveal target
-      // that went visibility:hidden gets its badge hidden AND `cssHidden` set, so
-      // reconcileStrictViewport below drops it from voice in lockstep with the
-      // visual hide. Also re-hides any badge a mid-scroll reposition re-showed on
-      // a hidden target (the on-scroll flash). No-op when no hinted badge flipped.
-      recheckHintedVisibility();
-      reconcileStrictViewport();
-    }
-    scheduleReposition('drifted');
+    // Scroll-settle is the canonical viewport-exit moment (stale-TRUE release)
+    // AND where infinite-scroll content lands (band discovery).
+    runSettlePipeline('band');
   }, DEFERRED_REPOSITION_DEBOUNCE_MS);
 }
 window.addEventListener('scroll', scheduleScrollReposition, { passive: true });
@@ -2957,49 +2982,15 @@ function scheduleDeferredReposition(): void {
   if (pageSession.deferredRepositionTimer) clearTimeout(pageSession.deferredRepositionTimer);
   pageSession.deferredRepositionTimer = setTimeout(() => {
     pageSession.deferredRepositionTimer = null;
-    // 'drifted', not 'all'. These signals (container resize, target mutation,
-    // focus/transition settle) fire continuously on churny pages — YouTube
-    // /watch lazy-loading comments resizes containers ~constantly. Re-placing
-    // every visible badge each time made this the dominant extension CPU cost
-    // at scale (2404ms over a 60s soak at ~208 badges, vs 765ms for the already
-    // -trimmed scroll path). needsScrollReposition() is general drift detection,
-    // not scroll-specific: a resize/mutation that genuinely moves a target
-    // relative to its badge produces drift and is re-placed; badges that moved
-    // in flow with their target (the common case) correctly skip. The window
-    // 'resize' handler stays 'all' for genuine global layout/clamping changes.
-    if (pageSession.hintsVisible) {
-      reconcileTeardown();
-      // focus/transition/resize can reveal new in-band hintables (dropdowns,
-      // expanding rows). Converge claim+build over the settled layout; coalesced
-      // so a churny burst collapses to one pass that acts on real deltas only.
-      scheduleReconcile();
-      // Layout shifts from container resize / focus / transition / browser
-      // zoom can push a wrapper across the strict-viewport boundary without
-      // a scroll event. Re-push the strict flag for changed wrappers so the
-      // _strict companion collection — and the Discovery HUD that reads it —
-      // converges to the post-settle viewport reality.
-      // Occlusion before strict-viewport: flag covered/clipped targets so the
-      // strict-viewport delta below drops them from voice (and hides the ghost
-      // badge). reconcileClipObservation only syncs IO membership — the observers
-      // drive `clipped` continuously between settles (flicker-free); reconcileOcclusion
-      // is the settle-debounced elementFromPoint overlay pass. No-ops when their
-      // flags are off.
-      reconcileClipObservation(store.all);
-      reconcileOcclusion();
-      // Level-triggered accelerator re-detection: arm badges whose scroller only
-      // became scrollable after they were shown (content loaded), and rebuild
-      // chains that changed. Cheap post-settle (cached layout/style reads); no-op
-      // when scrollAccel is off.
-      reconcileScrollAccel();
-      // Re-evaluate CSS visibility before the strict pass: a hover-reveal target
-      // that went visibility:hidden gets its badge hidden AND `cssHidden` set, so
-      // reconcileStrictViewport below drops it from voice in lockstep with the
-      // visual hide. Also re-hides any badge a mid-scroll reposition re-showed on
-      // a hidden target (the on-scroll flash). No-op when no hinted badge flipped.
-      recheckHintedVisibility();
-      reconcileStrictViewport();
-    }
-    scheduleReposition('drifted');
+    // 'store' discovery: container resize / focus / transition / zoom reveal
+    // new in-band hintables among existing wrappers and can push wrappers
+    // across the strict boundary without a scroll event. The pipeline ends in
+    // scheduleReposition('drifted'), not 'all': re-placing every visible badge
+    // on these continuously-firing signals was the dominant extension CPU cost
+    // at scale (2404ms over a 60s soak at ~208 badges); drift detection
+    // re-places only badges that genuinely moved relative to their target.
+    // The window 'resize' handler stays 'all' for global layout changes.
+    runSettlePipeline('store');
   }, DEFERRED_REPOSITION_DEBOUNCE_MS);
 }
 document.addEventListener('focusin', scheduleDeferredReposition, { passive: true });
