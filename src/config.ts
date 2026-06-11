@@ -19,6 +19,14 @@
 
 import { BadgeDisplayMode, HintHideKey, HintVisibility } from './types';
 import { setExtraHintsEnabled } from './scan/scanner';
+import { DEFAULT_HIDE_KEY, isComboAllowed, parseCombo } from './activate/key-combo';
+
+/** Accept a stored combo only if it still passes the guardrail; else default. */
+function sanitizeHideKey(value: unknown): HintHideKey {
+  if (typeof value !== 'string') return DEFAULT_HIDE_KEY;
+  const c = parseCombo(value);
+  return c && isComboAllowed(c) ? value : DEFAULT_HIDE_KEY;
+}
 
 let displayMode: BadgeDisplayMode = 'letter';
 let hintVisibility: HintVisibility = 'always';
@@ -26,13 +34,11 @@ let hintVisibility: HintVisibility = 'always';
 // page does on its own; this is the user's explicit "hints on/off" intent,
 // which overrides always-mode auto-show. Default on.
 let hintsShown = true;
-// Keyboard chord that hides hints while they're visible. Needed because once
-// keyboard hint-typing is active whenever hints are shown, plain `f` becomes a
-// codeword filter letter and can no longer double as the hide key. `ctrl+f` is
-// the default (free on macOS — find is cmd+f — and doesn't collide with any
-// single-letter codeword). `escape` is offered too but shadows the page's
-// native Escape, so it's opt-in.
-let hintHideKey: HintHideKey = 'ctrl+f';
+// User-chosen chord that toggles hints. Captured from a real keypress and
+// stored as a combo string (see activate/key-combo.ts). Must carry a
+// Ctrl/Alt/Meta modifier — bare keys collide with codeword typing in
+// always-visible mode. Default Ctrl+F.
+let hintHideKey: HintHideKey = DEFAULT_HIDE_KEY;
 
 export function getDisplayMode(): BadgeDisplayMode {
   return displayMode;
@@ -89,7 +95,7 @@ export function loadConfig(handlers: ConfigHandlers): void {
       hintVisibility = result.hintVisibility;
     }
     if (result.hintHideKey) {
-      hintHideKey = result.hintHideKey;
+      hintHideKey = sanitizeHideKey(result.hintHideKey);
     }
     setExtraHintsEnabled(result.aggressiveHints === true);
   });
@@ -112,7 +118,7 @@ export function loadConfig(handlers: ConfigHandlers): void {
     }
     if (changes.hintHideKey) {
       // Read live by the keydown listener — no side effect to apply here.
-      hintHideKey = changes.hintHideKey.newValue || 'ctrl+f';
+      hintHideKey = sanitizeHideKey(changes.hintHideKey.newValue);
     }
     if (changes.hintsShown) {
       // Keep the value current for this frame's next decision (e.g. an SPA

@@ -100,6 +100,7 @@ import { PageSession, TeardownReason } from './lifecycle/page-session';
 import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './debug/message-counters';
 import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, lifecycleCounters, resetLifecycleCounters } from './debug/perf-counters';
 import { loadConfig, getDisplayMode, getHintVisibility, getHintsShown, setHintsShown, getHintHideKey } from './config';
+import { matchesCombo } from './activate/key-combo';
 import {
   initLabelSync,
   queuePut,
@@ -638,13 +639,14 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
 
 // --- Register Commands (Slice B) ---
 
-// `f` toggles hint visibility. `F` (shift-F) always shows with the new-tab
-// activation modifier armed — so pressing F while hints are already up
-// switches the activation target into new-tab mode without hiding first.
-// Escape used to bind to hide_hints, but Escape has browser-native
-// semantics (close modal, blur input, cancel find) that we shouldn't
-// shadow. Voice "hide" still works via the BRANCHKIT_ACTION pathway.
-registry.add({ keys: 'f', action: 'toggle_hints' });
+// Hint visibility is toggled by the configurable show/hide chord (default
+// Ctrl+F; handled in the keydown listener) — deliberately NOT a plain letter.
+// In always-visible mode every bare letter is consumed as a codeword filter,
+// so a single-key binding would be eaten and never fire; the toggle has to
+// live in a disjoint keyspace (a modifier chord or a non-letter like Escape).
+// That's why the setting is a curated dropdown, not a free key-capture.
+// `F` (shift-F) shows with the new-tab activation modifier armed. Escape stays
+// native (close modal, blur input, cancel find); voice "hide" also works.
 registry.add({ keys: 'F', action: 'show_hints_newtab' });
 
 // Scroll commands (Vimium-compatible)
@@ -667,10 +669,20 @@ registry.add({ keys: 'N', action: 'find_previous' });
 
 // --- Register Action Handlers ---
 
+// The modal `hint` mode (where Escape dismisses all hints) only makes sense
+// when the user explicitly summoned hints — i.e. manual visibility mode. In
+// always-visible mode hints are persistent and there's a dedicated hide chord,
+// so the handler stays in normal mode: Escape keeps its native behavior (close
+// a dropdown mid-utterance, etc.) instead of nuking every badge. Typing still
+// works in always mode via the hints-visible predicate, independent of mode.
+function enterHintModeIfManual(): void {
+  if (getHintVisibility() !== 'always') keyHandler.enterHintMode();
+}
+
 dispatcher.register('show_hints', () => {
   doScan();
   showHints();
-  keyHandler.enterHintMode();
+  enterHintModeIfManual();
 });
 
 let activateInNewTab = false;
@@ -679,7 +691,7 @@ dispatcher.register('show_hints_newtab', () => {
   activateInNewTab = true;
   doScan();
   showHints();
-  keyHandler.enterHintMode();
+  enterHintModeIfManual();
 });
 
 dispatcher.register('hide_hints', () => {
@@ -700,7 +712,7 @@ dispatcher.register('toggle_hints', () => {
   } else {
     doScan();
     showHints();
-    keyHandler.enterHintMode();
+    enterHintModeIfManual();
     setHintsShown(true);
   }
 });
@@ -3049,16 +3061,6 @@ onTargetMutation((target) => {
 const scrollKeys = new Set(['j', 'k', 'd', 'u', 'h', 'l']);
 const heldKeys = new Set<string>();
 
-// Match the user's configured hide chord. `ctrl+f` keys off `e.code` (layout-
-// independent: macOS Alt/Ctrl can mangle `e.key`) and requires no other
-// modifier. `escape` is a bare Escape with no modifiers.
-function matchesHideKey(e: KeyboardEvent, spec: string): boolean {
-  if (spec === 'escape') {
-    return e.key === 'Escape' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
-  }
-  return e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.code === 'KeyF';
-}
-
 document.addEventListener('keydown', (e: KeyboardEvent) => {
   if (pageSession.isTornDown) return;
   if (handlePostFindKey(e)) return;
@@ -3104,13 +3106,11 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
     return;
   }
 
-  // Configurable show/hide chord (default Ctrl+F). Plain `f` is a codeword
-  // filter letter once hints are visible, so toggling needs its own chord.
-  // It's a full toggle (shows when hidden, hides when shown). Escape is the
-  // exception: it only acts while hints are visible, so it stays native
-  // (close dropdown/dialog, cancel find) the rest of the time.
-  const hideKey = getHintHideKey();
-  if (matchesHideKey(e, hideKey) && (hideKey !== 'escape' || pageSession.hintsVisible)) {
+  // User-configured show/hide chord (default Ctrl+F). Plain `f` is a codeword
+  // filter letter once hints are visible, so toggling needs its own chord. The
+  // chord always carries a Ctrl/Alt/Meta modifier (enforced at capture time),
+  // so it never collides with codeword typing. Full toggle, works any time.
+  if (matchesCombo(e, getHintHideKey())) {
     e.preventDefault();
     e.stopPropagation();
     dispatcher.dispatch('toggle_hints');

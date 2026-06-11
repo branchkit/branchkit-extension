@@ -59,6 +59,26 @@
       border-radius: 4px;
       background: #fff;
     }
+    .setting button.keycapture {
+      font-size: 12px;
+      font-family: inherit;
+      padding: 2px 8px;
+      min-width: 92px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      background: #fff;
+      cursor: pointer;
+    }
+    .setting button.keycapture.capturing {
+      border-color: #4a90d9;
+      color: #888;
+      font-style: italic;
+    }
+    .setting-hint {
+      font-size: 11px;
+      color: var(--danger);
+      padding: 0 0 6px;
+    }
 
     /* --- Per-site rule section --- */
     .rules-section {
@@ -305,13 +325,11 @@
       <option value="both">Both</option>
     </select>
   </div>
-  <div class="setting" title="Which key hides hints. Plain f types codewords once hints are visible, so hiding needs its own key.">
-    <label for="hide-key">Hide hints key</label>
-    <select id="hide-key">
-      <option value="ctrl+f">Ctrl+F</option>
-      <option value="escape">Escape</option>
-    </select>
+  <div class="setting" title="Key that shows/hides hints. Click, then press a combo. It must include Ctrl, Alt, or Cmd — bare keys type codewords in always-visible mode.">
+    <label for="hide-key">Show/hide hints</label>
+    <button type="button" id="hide-key" class="keycapture">Ctrl+F</button>
   </div>
+  <div class="setting-hint" id="hide-key-hint" hidden></div>
   <div class="setting" title="Hint extra elements (divs with click handlers, jsaction targets, cursor:pointer items). Helps on Gmail, Slack, GitHub — anywhere div elements act like buttons.">
     <label for="aggressive-hints">Aggressive hints</label>
     <input type="checkbox" id="aggressive-hints">
