@@ -111,23 +111,6 @@ export function detachWrapper(element: Element): void {
   }
 }
 
-// Reconcile badges the plugin reports as silently evicted: a cumulative REPLACE
-// dropped a previously-pushed codeword that wasn't an explicit delete (e.g. a
-// reletter collision under scan churn, or a cross-tab clobber). The badge stays
-// painted while its voice command is gone — the badge-visible-implies-
-// commandable break the user hit ("drum g" badge, no `drum gust` codeword).
-// Detach the stale wrapper so the badge is removed and delta-sync bookkeeping
-// (queued Delete, sent-set) stays consistent; a still-hintable element is
-// re-discovered and re-badged by the next scan/reconcile pass. byCodeword
-// matches on the exact label pair, so a wrapper already re-lettered to a live
-// codeword is left untouched.
-export function reconcileEvictedCodewords(evicted: string[]): void {
-  for (const cw of evicted) {
-    const w = store.byCodeword(cw);
-    if (w) detachWrapper(w.element);
-  }
-}
-
 // Rebind-or-attach a batch of freshly-scanned hintables. Shared by the
 // synchronous `discoverInSubtree` and the sliced
 // `discoverInSubtreeBatched` so the limbo-rebind/eager-attach semantics

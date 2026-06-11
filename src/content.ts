@@ -21,7 +21,7 @@ import { IntersectionTracker } from './observe/intersection-tracker';
 import { AttentionObserver } from './observe/attention-observer';
 import { initVisibilityTracker, recheckHintedVisibility, schedulePointerVisibilitySweep, trackPendingCandidate, untrackPendingCandidate, connectVisibilityMO, teardownVisibilityTracker } from './observe/visibility-tracker';
 import { initLimbo, rebindCounters, LIMBO_DEADLINE_MS, collectLimboWrappers, collectStrongKeyIndex, dropDisconnectedWrappers, finalizeExpiredLimboWrappers } from './observe/limbo';
-import { initWrapperLifecycle, attachWrapper, detachWrapper, seedPreferredFromMemory, reconcileEvictedCodewords, attachDiscovered } from './core/wrapper-lifecycle';
+import { initWrapperLifecycle, attachWrapper, detachWrapper, seedPreferredFromMemory, attachDiscovered } from './core/wrapper-lifecycle';
 import { initMutationSource, attachPageMutationObserver, teardownMutationSource } from './observe/mutation-source';
 import { firehoseStep } from './debug/firehose';
 import { bkLog } from './debug/bk-log';
@@ -1902,10 +1902,6 @@ async function processScanBatch(
   // never seed a future reclaim — the SPA-rebuild churn the QuickBase sidebar
   // hit. See rememberClaimedCodewords / codeword-recall.
   if (attached.length > 0) rememberClaimedCodewords(attached);
-
-  // Detach badges this REPLACE evicted from the grammar (disjoint from the
-  // succeeded set above — an evicted codeword is gone from the new state).
-  if (resp.evicted?.length) reconcileEvictedCodewords(resp.evicted);
 
   // Paint the just-attached badges. Each one is now backed by a
   // successful plugin acknowledgement AND a still-connected element,

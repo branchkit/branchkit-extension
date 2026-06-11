@@ -113,11 +113,6 @@ export interface GrammarBatchResponse {
   result: 'ok' | 'error' | 'stored' | 'calibration_active';
   succeeded: string[];
   failed: GrammarBatchFailure[];
-  // Codewords the plugin's cumulative REPLACE silently dropped from the
-  // matchable collections. Their badges are still painted (the extension owns
-  // them), so the extension must detach the stale wrappers. Absent on the
-  // synthetic transport response the SW builds locally.
-  evicted?: string[];
 }
 
 // --- Messages ---
