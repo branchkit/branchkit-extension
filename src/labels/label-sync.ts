@@ -218,14 +218,21 @@ function scheduleRefusalRetry(): void {
 
 /**
  * Wholesale refusal: the plugin answered but applied nothing — no per-codeword
- * verdicts (`calibration_active` is the only current case; transport failures
- * synthesize a populated `failed` instead and take the detach path). The
- * drained delta must be restored or it silently vanishes: the wrappers keep
- * their painted (bk-pending) badges but their codewords never reach the
- * grammar — permanently unmatchable until an unrelated session rotation.
+ * verdicts (`calibration_active` is the only current case). The drained delta
+ * must be restored or it silently vanishes: the wrappers keep their painted
+ * (bk-pending) badges but their codewords never reach the grammar —
+ * permanently unmatchable until an unrelated session rotation.
+ *
+ * 'error' is excluded explicitly: that's the synthetic transport-failure
+ * response, where postBatch has ALREADY restored the drained deletes and
+ * populated `failed` for any puts. On a pure-delete batch its `failed` is
+ * empty (no elements), so without this exclusion the refusal path would
+ * restore the deletes a second time — and the 2s retry loop would double the
+ * queue on every attempt while the SW is unreachable.
  */
 function isWholesaleRefusal(resp: GrammarBatchResponse): boolean {
-  return resp.result !== 'ok' && resp.result !== 'stored' && resp.failed.length === 0;
+  return resp.result !== 'ok' && resp.result !== 'stored' && resp.result !== 'error'
+    && resp.failed.length === 0;
 }
 
 /**
