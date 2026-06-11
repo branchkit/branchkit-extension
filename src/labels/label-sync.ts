@@ -200,6 +200,34 @@ export async function postBatch(
 let batchedSyncTimer: ReturnType<typeof setTimeout> | null = null;
 const BATCHED_SYNC_DEBOUNCE_MS = 80;
 
+// Retry pacing for a wholesale plugin refusal (`calibration_active`): the
+// plugin received the batch but applied nothing, so the delta must be re-sent
+// once calibration releases the grammar surface. 2s keeps the retry loop to
+// one POST per 2s for the duration of a calibration session and self-
+// terminates on the first accepted batch.
+const REFUSAL_RETRY_MS = 2000;
+let refusalRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleRefusalRetry(): void {
+  if (refusalRetryTimer) return;
+  refusalRetryTimer = setTimeout(() => {
+    refusalRetryTimer = null;
+    scheduleSync('refusal_retry');
+  }, REFUSAL_RETRY_MS);
+}
+
+/**
+ * Wholesale refusal: the plugin answered but applied nothing — no per-codeword
+ * verdicts (`calibration_active` is the only current case; transport failures
+ * synthesize a populated `failed` instead and take the detach path). The
+ * drained delta must be restored or it silently vanishes: the wrappers keep
+ * their painted (bk-pending) badges but their codewords never reach the
+ * grammar — permanently unmatchable until an unrelated session rotation.
+ */
+function isWholesaleRefusal(resp: GrammarBatchResponse): boolean {
+  return resp.result !== 'ok' && resp.result !== 'stored' && resp.failed.length === 0;
+}
+
 /**
  * Debounced entry point for every grammar-relevant change (MO mutations,
  * IT codeword claims, finalize-sweep detaches, bfcache restore). Coalesces
@@ -275,6 +303,12 @@ export async function syncNow(reason: string): Promise<void> {
     // source) applied the deletes to the session just like 'ok' did.
     if (resp.result === 'ok' || resp.result === 'stored') {
       for (const cw of drainedDeletes) sentCodewords.delete(cw);
+    } else if (isWholesaleRefusal(resp)) {
+      // Refused without error (calibration): the deletes were drained by
+      // postBatch but never applied — restore and retry after calibration.
+      pendingDeleteCodewords.push(...drainedDeletes);
+      bkLog('BK_SYNC_REFUSED', { result: resp.result, deletes: drainedDeletes.length });
+      scheduleRefusalRetry();
     }
     void reason;
     return;
@@ -299,6 +333,19 @@ export async function syncNow(reason: string): Promise<void> {
       ...sessionMeta,
       elements: chunk.map(w => w.scanned),
     });
+    if (isWholesaleRefusal(resp)) {
+      // Nothing in this chunk (or any later one) was applied. Re-queue every
+      // remaining put — the drain-time validity filter handles wrappers that
+      // detach in the meantime — restore the deletes that rode this batch,
+      // and retry once calibration has had a chance to finish.
+      for (const w of puts.slice(start)) pendingPuts.add(w);
+      pendingDeleteCodewords.push(...deletesRidingHere);
+      bkLog('BK_SYNC_REFUSED', {
+        result: resp.result, requeued: puts.length - start, deletes: deletesRidingHere.length,
+      });
+      scheduleRefusalRetry();
+      return;
+    }
     if (resp.failed.length > 0) {
       const failedSet = new Set(resp.failed.map(f => f.codeword));
       for (const w of chunk) {
