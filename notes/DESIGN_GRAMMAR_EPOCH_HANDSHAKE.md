@@ -17,6 +17,42 @@ Mismatches there are true positives. Phase 2b (acting on mismatch) is
 BLOCKED until the install-time dual-injection race is fixed — two CSes
 would ping-pong republishes. Long-lived single-CS tabs are unaffected.
 
+## Tripwire catch #2 (2026-06-12 evening): the resync trigger has rotted
+
+Production evidence from the 2a soak, chased via browser.log +
+actuator.log:
+
+- The plugin wipes frame sessions on `frame_liveness_disconnect`
+  MULTIPLE TIMES PER MINUTE on active tabs — MV3 service-worker idle churn
+  drops every liveness Port each time the SW unloads.
+- `BK_GRAMMAR_REPUBLISH {reason: sw_restart_resync}` has not fired since
+  13:42 despite that churn — the enumerated trigger that exists for exactly
+  this case is silent. Some healing arrives via the `reactivate` path
+  (BK_SESSION_ROTATE without republish breadcrumbs), but it races the next
+  wipe: same frame cleaned seconds apart with different session ids
+  (cleared=51, then 53...).
+- Net state: the plugin's per-frame grammar oscillates between wiped and
+  partially-repushed subsets while the CS shadow holds the full set — the
+  persistent bouncing mismatches (shadow 306 vs plugin 170/172/157...).
+  Badges look fine (paint is CS-local); VOICE matching on those tabs is
+  silently degraded much of the time. The triggers did not catch it; the
+  tripwire did, within hours.
+
+Implications, in priority order:
+1. Diagnose/fix why onResync (liveness reconnect → sw_restart_resync) no
+   longer fires — likely the biggest voice-reliability bug currently live.
+2. This is the strongest possible case for 2b: a level-triggered
+   epoch_mismatch republish heals every variant of this without anyone
+   enumerating SW lifecycle cases. 2b stays gated on the dual-CS install
+   race fix, which is therefore promoted too.
+3. The mismatch breadcrumb needs tab/frame/url context (current lines
+   can't be attributed to a frame without cross-referencing) — add before
+   the next soak round.
+4. Latent, separate: a partially-failed per-prefix sync can leave the
+   ACTUATOR collection missing entries that both session map and shadow
+   still hold — invisible to the epoch (it compares CS↔plugin, not
+   plugin↔actuator). Park for the bug list.
+
 ## The disease, restated
 
 The content script's delta-sync shadow (`sentCodewords`, label-sync.ts) and
