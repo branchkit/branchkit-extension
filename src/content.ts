@@ -1437,12 +1437,14 @@ function scheduleReconcile(): void {
 // gets re-shown.
 //
 // Cost discipline (the wedge guard): fresh getBoundingClientRect runs over the
-// bounded hinted set (visible + dormant — both are scroll-history-bounded by
-// the IO-exit-marks-dormant path); we never sweep the full store. Reads are
-// batched read-all-then-act so we don't interleave a layout read with a write.
-// Phase 2 noted `band.staleFalse` was unreliable from the warm rect store, so
-// we read FRESH geometry here — that constraint applies to the warm store, not
-// to the gBCR pass.
+// hinted set (visible + dormant — both scroll-history-bounded by the
+// IO-exit-marks-dormant path) plus the codeword-less never-hinted wrappers —
+// the only set that can hold the missed-INITIAL-enter desync. The first gBCR
+// pays the (single) forced reflow; every read after it is a cheap
+// clean-layout lookup, and the whole pass is batched read-all-then-act so a
+// layout read never interleaves with a write. Wrappers with a codeword but no
+// hint are deliberately NOT swept: a codeword implies the IO delivered an
+// enter, and its exit/release flows through the IO + the hinted sweep.
 function reconcileTeardown(): void {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
@@ -1452,7 +1454,15 @@ function reconcileTeardown(): void {
   // `isInViewport=false` + no codeword + dormant hint — exactly the stale-FALSE
   // signature. We need them in the set to detect and fix that.
   const hinted = store.all.filter(w => w.hint && w.disconnectedAt === null);
-  if (hinted.length === 0) return;
+  // Never-hinted stale-FALSE candidates: a wrapper that missed its INITIAL IO
+  // enter (mutation-storm drop before any codeword/hint existed) has no hint
+  // for the sweep above to see — `wantsCodeword` reads the stale flag,
+  // `refreshViewportClaims` skips it, and nothing else ever repairs it (the
+  // residual scroll-back-missing-badge mode, 2026-06-11 review bug 4).
+  const unhinted = store.all.filter(w =>
+    !w.hint && w.disconnectedAt === null && !w.isInViewport &&
+    w.scanned.codeword.length === 0 && w.element.isConnected);
+  if (hinted.length === 0 && unhinted.length === 0) return;
 
   // Read all geometry first…
   const offBand: ElementWrapper[] = [];
@@ -1472,6 +1482,16 @@ function reconcileTeardown(): void {
       if (w.hint?.isVisible) offBand.push(w);
     }
   }
+  for (const w of unhinted) {
+    const r = w.element.getBoundingClientRect();
+    // A boxless element (display:none collapsed menu) reads as the all-zero
+    // rect, which the band test would call "in band" — but the IO never
+    // intersects a boxless element, so flipping the flag here would claim
+    // codewords for invisible targets. Skip; if it regains a box, this pass
+    // (or the IO) catches it then.
+    if (r.width === 0 && r.height === 0 && r.top === 0 && r.left === 0) continue;
+    if (geometryInBand(r, vw, vh, RECONCILE_BAND_MARGIN_PX)) missedEnter.push(w);
+  }
   // …then act.
   for (const w of offBand) {
     w.isInViewport = false;
@@ -1483,7 +1503,10 @@ function reconcileTeardown(): void {
   // If we corrected any stale-FALSE flags, run reconcile so the just-recovered
   // wrappers go through claim + build (refreshViewportClaims gates on the
   // flag, so the fix has to land before reconcile reads it).
-  if (missedEnter.length > 0) reconcile();
+  if (missedEnter.length > 0) {
+    firehoseStep('reconcile:stale_false_repair', missedEnter.length, 1);
+    reconcile();
+  }
 }
 
 // Strict-viewport reconciler: scroll moves wrappers across the strict/band
