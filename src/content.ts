@@ -3008,6 +3008,7 @@ document.addEventListener('keyup', (e: KeyboardEvent) => {
 document.addEventListener('__branchkit__capture_snapshot', () => {
   try {
     const payload = captureDebugSnapshot(store, trimFrameUrl(window.location.href));
+    payload.grammar_epoch = grammarEpochStats();
     payload.reconcile_applied = {
       passes: reconcileApplied.passes,
       last: { ...reconcileApplied.last },

@@ -187,6 +187,15 @@ export interface DebugSnapshotPayload {
     last: Record<string, number>;
     total: Record<string, number>;
   };
+  /** Grammar-epoch tripwire counters (Phase 2a of
+   * DESIGN_GRAMMAR_EPOCH_HANDSHAKE.md) — checks/mismatches/skippedBusy plus
+   * the last mismatch detail. Attached by the capture path. */
+  grammar_epoch?: {
+    checks: number;
+    mismatches: number;
+    skippedBusy: number;
+    lastMismatch: Record<string, unknown> | null;
+  };
 }
 
 // --- id generation ---
