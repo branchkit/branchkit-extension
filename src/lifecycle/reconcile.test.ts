@@ -1,102 +1,30 @@
 /**
- * BranchKit Browser — shadow reconcile-plan unit tests.
+ * BranchKit Browser — settle-plan unit tests.
  *
- * The plan computes the actual→desired delta WITHOUT driving anything; these
- * pin each delta bucket. See reconcile.ts and
- * notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md.
+ * Pins the plan's per-action-class derivation (the settle pipeline's engine
+ * — see reconcile.ts and notes/DESIGN_UNIFIED_RECONCILER.md): real connected
+ * elements (the candidate/shown predicates read isConnected) + a synthetic
+ * gather snapshot so the plan never falls back to live layout reads. Rects
+ * are plain DOMRect-shaped objects in a 1000×800 viewport.
  *
  * Run: npm test
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
-import { ScannedElement, Category } from '../types';
+import { ScannedElement } from '../types';
 import { HintBadge } from '../render/hints';
-import { computeReconcilePlan } from './reconcile';
-
-let nextEl = 0;
-function makeWrapper(opts: {
-  inViewport: boolean;
-  codeword: string;
-  hint?: boolean;
-  category?: Category;
-  disconnected?: boolean;
-}): ElementWrapper {
-  const el = { tagName: 'A', __n: nextEl++ } as unknown as Element;
-  const scanned: ScannedElement = {
-    label: 'x',
-    id: nextEl,
-    category: opts.category ?? 'link',
-    type: 'link',
-    adapter: null,
-    codeword: opts.codeword,
-  };
-  const w = new ElementWrapper(el, scanned);
-  w.isInViewport = opts.inViewport;
-  if (opts.hint) w.hint = {} as HintBadge;
-  if (opts.disconnected) w.disconnectedAt = 1;
-  return w;
-}
+import {
+  computeReconcilePlanLists,
+  type ReconcilePlanLists,
+} from './reconcile';
+import type { SettleGather } from './gather';
 
 function storeOf(wrappers: ElementWrapper[]): WrapperStore {
   const store = new WrapperStore();
   for (const w of wrappers) store.addWrapper(w);
   return store;
 }
-
-describe('computeReconcilePlan', () => {
-  it('returns an all-zero plan for a perfectly-synced store', () => {
-    const store = storeOf([
-      makeWrapper({ inViewport: true, codeword: 'ape', hint: true }),
-      makeWrapper({ inViewport: false, codeword: '' }),
-    ]);
-    const plan = computeReconcilePlan(store, null);
-    expect(plan.needClaim).toBe(0);
-    expect(plan.needBuild).toBe(0);
-    expect(plan.needRelease).toBe(0);
-    expect(plan.needTeardown).toBe(0);
-  });
-
-  it('counts needClaim for an in-band wrapper with no codeword', () => {
-    const store = storeOf([makeWrapper({ inViewport: true, codeword: '' })]);
-    expect(computeReconcilePlan(store, null).needClaim).toBe(1);
-  });
-
-  it('counts needBuild for the noHintObject case', () => {
-    const store = storeOf([makeWrapper({ inViewport: true, codeword: 'ape', hint: false })]);
-    expect(computeReconcilePlan(store, null).needBuild).toBe(1);
-  });
-
-  it('counts needRelease for an off-band wrapper still holding a codeword', () => {
-    const store = storeOf([makeWrapper({ inViewport: false, codeword: 'ape' })]);
-    expect(computeReconcilePlan(store, null).needRelease).toBe(1);
-  });
-
-  it('counts needTeardown for a hint the category filter now excludes', () => {
-    const store = storeOf([makeWrapper({ inViewport: true, codeword: 'ape', hint: true, category: 'link' })]);
-    expect(computeReconcilePlan(store, 'button').needTeardown).toBe(1);
-  });
-
-  it('ignores limbo (disconnected) wrappers', () => {
-    const store = storeOf([makeWrapper({ inViewport: true, codeword: '', disconnected: true })]);
-    const plan = computeReconcilePlan(store, null);
-    expect(plan.needClaim).toBe(0);
-  });
-});
-
-// --- Plan-as-lists (Phase C of notes/DESIGN_UNIFIED_RECONCILER.md) ---
-//
-// Real connected elements (the candidate/shown predicates read isConnected)
-// + a synthetic gather snapshot so the plan never falls back to live layout
-// reads. Rects are plain DOMRect-shaped objects in a 1000×800 viewport.
-
-import { afterEach } from 'vitest';
-import {
-  computeReconcilePlanLists,
-  diffShadow,
-  type ReconcilePlanLists,
-} from './reconcile';
-import type { SettleGather } from './gather';
 
 const VW = 1000;
 const VH = 800;
@@ -368,37 +296,5 @@ describe('strictDelta (folded into the plan, cutover 4/4)', () => {
   it('queues a never-pushed wrapper as a delta (undefined lastSent counts as a change)', () => {
     const w = liveWrapper({ codeword: 'ape', hint: 'visible', inViewport: true, lastSent: undefined });
     expect(strictOf(w, IN_BAND_OFF_SCREEN)).toEqual([w]); // off-strict vs undefined
-  });
-});
-
-describe('diffShadow', () => {
-  it('reports zero for matching lists regardless of order', () => {
-    const a = liveWrapper({ codeword: 'ape' });
-    const b = liveWrapper({ codeword: 'oak' });
-    const lists: ReconcilePlanLists = {
-      toRelease: [a, b], toRepair: [], toClaim: [], toBuild: [], toShow: [], toHide: [],
-      cssHiddenDelta: [], strictDelta: [],
-    };
-    const diff = diffShadow(lists, {
-      released: [b, a], repaired: [], shown: [], hidden: [], strictDelta: [],
-    });
-    expect(diff.total).toBe(0);
-  });
-
-  it('splits divergence into planOnly and liveOnly with samples', () => {
-    const planned = liveWrapper({ codeword: 'ape' });
-    const acted = liveWrapper({ codeword: 'oak' });
-    const lists: ReconcilePlanLists = {
-      toRelease: [], toRepair: [], toClaim: [], toBuild: [], toShow: [planned], toHide: [],
-      cssHiddenDelta: [], strictDelta: [],
-    };
-    const diff = diffShadow(lists, {
-      released: [], repaired: [], shown: [acted], hidden: [], strictDelta: [],
-    });
-    expect(diff.show.planOnly).toBe(1);
-    expect(diff.show.liveOnly).toBe(1);
-    expect(diff.show.planOnlySample).toEqual(['ape']);
-    expect(diff.show.liveOnlySample).toEqual(['oak']);
-    expect(diff.total).toBe(2);
   });
 });

@@ -1,38 +1,25 @@
 /**
- * BranchKit Browser — diagnostic shadow of the hint lifecycle reconciler.
+ * BranchKit Browser — the settle pass's PLAN phase.
  *
- * The authoritative reconcile lives in content.ts:
- *   reconcile()           — claim (refreshViewportClaims) + build
- *                           (badgeNewlyCodeworded), wired into onCodewordsChanged,
- *                           scan-batch paint, label-sync, alphabet-change,
- *                           nav deferred-scan, and the scheduleReconcile settle.
- *   reconcileTeardown()   — gBCR-bounded teardown for the hinted set; fixes
- *                           dropped IO exit (stale-TRUE → release codeword +
- *                           tear down hint) and dropped IO enter (stale-FALSE →
- *                           flip flag, let next reconcile re-claim + rebuild).
- *   scheduleBandDiscovery() — re-walks the document via the wedge-safe sliced
- *                           discovery to close the discovery gap when the
- *                           MutationObserver dropped an insertion record.
+ * `computeReconcilePlanLists` is the one desired-state derivation: given the
+ * gather snapshot, it decides per action class WHICH wrappers the settle
+ * pipeline's thin appliers act on (content.ts:runSettlePipeline). It is the
+ * engine of the unified reconciler (notes/DESIGN_UNIFIED_RECONCILER.md) —
+ * built as a verified shadow in Phase C (every list diffed against the live
+ * steps to zero divergence at real volume), made authoritative by the Phase
+ * D cutovers, with the between-settle backstops demoted onto the same pass
+ * in Phase E.
  *
- * This module DRIVES NOTHING. `computeReconcilePlan` re-derives the desired
- * state (desired-state.ts) and reports the actual-vs-desired delta as counts
- * — surfaced on `DebugSnapshotPayload.reconcile_shadow` and the perf
- * snapshot's `reconcileShadow`. In steady state every count is zero; a
- * non-zero count is a tripwire for a {claim, build, release, teardown} the
- * authoritative paths missed.
- *
- * Cost contract: O(store) with NO layout reads — only the wrappers'
- * already-resolved sub-states — so it is safe to run on the perf cadence and
- * on every snapshot without reintroducing a layout-thrash wedge. Geometry
- * divergence (a stale `isInViewport` flag) is reconcileTeardown's job; it
- * reads fresh gBCR over the bounded hinted set precisely because an IO-fed
- * cache cannot police dropped IO events.
+ * Cost contract: O(store) over the gather's already-read geometry. The only
+ * layout reads are the bounded lazy fallbacks for wrappers the gather
+ * couldn't see (the rare repair case), counted via the
+ * reconcilePlan:size:lazyReads bucket as a tripwire.
  */
 
 import { Category } from '../types';
 import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
-import { wantsCodeword, wantsHint, wantsShown, wantsStrict } from './desired-state';
+import { wantsShown, wantsStrict } from './desired-state';
 import { isVisible } from '../scan/scanner';
 import { isRectOnScreen } from '../layout-cache';
 import { recordCpu } from '../debug/perf-counters';
@@ -44,26 +31,6 @@ import type { SettleGather } from './gather';
  * widened to 1000px — the backstops then disagreed with IO ground truth
  * for the 200-1000px ring.) */
 export const RECONCILE_BAND_MARGIN_PX = VIEWPORT_MARGIN_PX;
-
-export interface ReconcilePlan {
-  /** In-band wrappers with no codeword — the claim the edge handlers missed. */
-  needClaim: number;
-  /** In-band codeworded wrappers with no hint — the noHintObject delta. */
-  needBuild: number;
-  /** Off-band wrappers still holding a codeword — release the edge missed. */
-  needRelease: number;
-  /** Wrappers with a hint that desired-state no longer wants — stale teardown. */
-  needTeardown: number;
-}
-
-export function emptyPlan(): ReconcilePlan {
-  return {
-    needClaim: 0,
-    needBuild: 0,
-    needRelease: 0,
-    needTeardown: 0,
-  };
-}
 
 /** True if a viewport-relative rect falls within the viewport ± margin band. */
 export function geometryInBand(
@@ -78,26 +45,6 @@ export function geometryInBand(
     r.right > -marginPx &&
     r.left < vw + marginPx
   );
-}
-
-export function computeReconcilePlan(
-  store: WrapperStore,
-  activeCategory: Category | null,
-): ReconcilePlan {
-  const plan = emptyPlan();
-
-  for (const w of store.all) {
-    // Limbo wrappers hold their state by design — exclude from the plan.
-    if (w.disconnectedAt !== null) continue;
-
-    const hasCodeword = w.scanned.codeword.length > 0;
-    if (wantsCodeword(w) && !hasCodeword) plan.needClaim++;
-    if (!wantsCodeword(w) && hasCodeword) plan.needRelease++;
-    if (wantsHint(w, activeCategory) && !w.hint) plan.needBuild++;
-    if (w.hint && !wantsHint(w, activeCategory)) plan.needTeardown++;
-  }
-
-  return plan;
 }
 
 // --- Plan-as-lists (Phase C of notes/DESIGN_UNIFIED_RECONCILER.md) ---
@@ -273,73 +220,4 @@ export function computeReconcilePlanLists(
 
   if (lazy.reads > 0) recordCpu('reconcilePlan:size:lazyReads', lazy.reads);
   return lists;
-}
-
-// --- Shadow diff (plan lists vs what the live steps actually did) ---
-
-export interface ShadowClassDiff {
-  /** List sizes (planned vs live-acted) — proof the diff compared real
-   * volume, and the future applied-counts telemetry (decision 4). */
-  planned: number;
-  acted: number;
-  planOnly: number;
-  liveOnly: number;
-  planOnlySample: string[];
-  liveOnlySample: string[];
-}
-
-export interface ShadowDiff {
-  release: ShadowClassDiff;
-  repair: ShadowClassDiff;
-  show: ShadowClassDiff;
-  hide: ShadowClassDiff;
-  strict: ShadowClassDiff;
-  /** Sum of every class's planOnly + liveOnly — zero means the plan's lists
-   * exactly matched the live steps this settle. */
-  total: number;
-}
-
-function wrapperTag(w: ElementWrapper): string {
-  return w.scanned.codeword || `#${w.scanned.id}`;
-}
-
-function diffClass(plan: ElementWrapper[], live: ElementWrapper[]): ShadowClassDiff {
-  const planSet = new Set(plan);
-  const liveSet = new Set(live);
-  const planOnly: ElementWrapper[] = plan.filter(w => !liveSet.has(w));
-  const liveOnly: ElementWrapper[] = live.filter(w => !planSet.has(w));
-  return {
-    planned: plan.length,
-    acted: live.length,
-    planOnly: planOnly.length,
-    liveOnly: liveOnly.length,
-    planOnlySample: planOnly.slice(0, 3).map(wrapperTag),
-    liveOnlySample: liveOnly.slice(0, 3).map(wrapperTag),
-  };
-}
-
-export interface LiveSettleActions {
-  released: ElementWrapper[];
-  repaired: ElementWrapper[];
-  shown: ElementWrapper[];
-  hidden: ElementWrapper[];
-  strictDelta: ElementWrapper[];
-}
-
-export function diffShadow(
-  lists: ReconcilePlanLists,
-  live: LiveSettleActions,
-): ShadowDiff {
-  const release = diffClass(lists.toRelease, live.released);
-  const repair = diffClass(lists.toRepair, live.repaired);
-  const show = diffClass(lists.toShow, live.shown);
-  const hide = diffClass(lists.toHide, live.hidden);
-  const strict = diffClass(lists.strictDelta, live.strictDelta);
-  const total =
-    release.planOnly + release.liveOnly +
-    repair.planOnly + repair.liveOnly +
-    show.planOnly + show.liveOnly +
-    hide.planOnly + hide.liveOnly +
-    strict.planOnly + strict.liveOnly;
-  return { release, repair, show, hide, strict, total };
 }

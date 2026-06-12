@@ -11,13 +11,10 @@ import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, 
 import { ElementWrapper } from './scan/element-wrapper';
 import { wantsHint } from './lifecycle/desired-state';
 import {
-  computeReconcilePlan,
   computeReconcilePlanLists,
-  diffShadow,
   geometryInBand,
   RECONCILE_BAND_MARGIN_PX,
   type ReconcilePlanLists,
-  type ShadowDiff,
 } from './lifecycle/reconcile';
 import { gatherSettleReads, SettleGather } from './lifecycle/gather';
 import { stampStrictViewport } from './lifecycle/strict-viewport';
@@ -2742,42 +2739,35 @@ function reconcileScrollFrame(): void {
 // Steps 1-6 are gated on hintsVisible: the activate command requires the
 // hints tag, so voice can't match while hints are down — stale strict
 // membership doesn't matter, and the next `show` re-scans from scratch.
-// Shadow-diff record (Phase C of notes/DESIGN_UNIFIED_RECONCILER.md): each
-// pipeline run diffs the plan's lists against the live steps' actions. The
-// last diff + cumulative totals are surfaced on the debug snapshot
-// (reconcile_shadow_diff) and the perf snapshot; a non-zero diff also drops a
-// firehose breadcrumb. Steady state is all-zero — any divergence is either a
-// live-step bug or a desired-state nuance the plan hasn't encoded yet, and
-// must be understood before Phase D makes the plan authoritative.
-const shadowDiffTotals = {
-  settles: 0,
-  divergentSettles: 0,
-  /** Cumulative list volumes — proof the zero-diff settles compared real
-   * work, not empty-vs-empty. */
-  planned: 0,
-  acted: 0,
-  release: { planOnly: 0, liveOnly: 0 },
-  repair: { planOnly: 0, liveOnly: 0 },
-  show: { planOnly: 0, liveOnly: 0 },
-  hide: { planOnly: 0, liveOnly: 0 },
-  strict: { planOnly: 0, liveOnly: 0 },
+// Applied-counts telemetry (Phase E of notes/DESIGN_UNIFIED_RECONCILER.md,
+// decision 4): with the plan authoritative, the shadow-vs-live comparison is
+// meaningless — the surface now reports what each pass DID. Surfaced on the
+// debug snapshot (reconcile_applied) and the perf snapshot. The note's
+// "remaining budget" half stays unimplemented per its own open question
+// (trust the bounded sets; measure before adding a budget) — until one
+// exists, `last` spiking against a quiet page is the tripwire.
+const reconcileApplied = {
+  passes: 0,
+  last: { release: 0, repair: 0, claim: 0, build: 0, show: 0, hide: 0, cssHidden: 0, strict: 0 },
+  total: { release: 0, repair: 0, claim: 0, build: 0, show: 0, hide: 0, cssHidden: 0, strict: 0 },
 };
-let lastShadowDiff: ShadowDiff | null = null;
 
-function recordShadowDiff(diff: ShadowDiff): void {
-  lastShadowDiff = diff;
-  shadowDiffTotals.settles++;
-  for (const k of ['release', 'repair', 'show', 'hide', 'strict'] as const) {
-    shadowDiffTotals.planned += diff[k].planned;
-    shadowDiffTotals.acted += diff[k].acted;
+function recordApplied(lists: ReconcilePlanLists): void {
+  reconcileApplied.passes++;
+  const last = {
+    release: lists.toRelease.length,
+    repair: lists.toRepair.length,
+    claim: lists.toClaim.length,
+    build: lists.toBuild.length,
+    show: lists.toShow.length,
+    hide: lists.toHide.length,
+    cssHidden: lists.cssHiddenDelta.length,
+    strict: lists.strictDelta.length,
+  };
+  reconcileApplied.last = last;
+  for (const k of Object.keys(last) as Array<keyof typeof last>) {
+    reconcileApplied.total[k] += last[k];
   }
-  if (diff.total === 0) return;
-  shadowDiffTotals.divergentSettles++;
-  for (const k of ['release', 'repair', 'show', 'hide', 'strict'] as const) {
-    shadowDiffTotals[k].planOnly += diff[k].planOnly;
-    shadowDiffTotals[k].liveOnly += diff[k].liveOnly;
-  }
-  firehoseStep('reconcile_shadow:diff', diff.total, 1);
 }
 
 function runSettlePipeline(discovery: 'band' | 'store'): void {
@@ -2808,16 +2798,7 @@ function runSettlePipeline(discovery: 'band' | 'store'): void {
     reconcileScrollAccel();
     applyVisibilityPlan(planLists);
     applyStrictPlan(planLists.strictDelta);
-    recordShadowDiff(diffShadow(planLists, {
-      // Every class is tautological since its cutover (the appliers execute
-      // the plan's lists); kept so planned/acted volumes stay comparable.
-      // The whole shadow comparison dies in Phase E.
-      released: planLists.toRelease,
-      repaired: planLists.toRepair,
-      shown: planLists.toShow,
-      hidden: planLists.toHide,
-      strictDelta: planLists.strictDelta,
-    }));
+    recordApplied(planLists);
   }
   scheduleReposition();
 }
@@ -3049,8 +3030,11 @@ document.addEventListener('keyup', (e: KeyboardEvent) => {
 document.addEventListener('__branchkit__capture_snapshot', () => {
   try {
     const payload = captureDebugSnapshot(store, trimFrameUrl(window.location.href));
-    payload.reconcile_shadow = computeReconcilePlan(store, activeCategory);
-    payload.reconcile_shadow_diff = { last: lastShadowDiff, totals: shadowDiffTotals };
+    payload.reconcile_applied = {
+      passes: reconcileApplied.passes,
+      last: { ...reconcileApplied.last },
+      total: { ...reconcileApplied.total },
+    };
     document.documentElement.dataset.branchkitSnapshot = JSON.stringify(payload);
   } catch {
     // Snapshot build failed (detached store, serialization); leave the
@@ -3362,15 +3346,14 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
       longtask: longtaskSnapshot(),
       watchdog: watchdogSnapshot(),
     },
-    // Diagnostic shadow of the authoritative reconcile (content.ts:reconcile +
-    // reconcileTeardown + scheduleBandDiscovery). Drives nothing; surfaces the
-    // actual→desired delta as a tripwire — steady-state counts are all zero, a
-    // non-zero count flags a {claim, build, release, teardown} the authoritative
-    // paths missed. Cheap: O(store), no layout reads.
-    reconcileShadow: computeReconcilePlan(store, activeCategory),
-    // Cumulative plan-vs-live divergence totals (Phase C shadow diff). All
-    // zeros in steady state; see recordShadowDiff.
-    reconcileShadowDiff: { ...shadowDiffTotals },
+    // What the settle pass DID (Phase E, decision 4 of the unified-reconciler
+    // note): per-class applied counts for the last pass + cumulative. The
+    // plan is authoritative, so this replaces the old shadow counts/diff.
+    reconcileApplied: {
+      passes: reconcileApplied.passes,
+      last: { ...reconcileApplied.last },
+      total: { ...reconcileApplied.total },
+    },
   };
 }
 (window as any).branchkitPerfStats = buildPerfSnapshot;
