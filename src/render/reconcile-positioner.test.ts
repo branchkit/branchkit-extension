@@ -36,7 +36,9 @@ function makeBadge(id: string, coords: { x: number; y: number } | null) {
     reconcileRead(): ReconcileWrite | null {
       reads++;
       log.push(`read:${id}`);
-      return coords ? { host, x: coords.x, y: coords.y } : null;
+      return coords
+        ? { host, x: coords.x, y: coords.y, targetRect: new DOMRect(coords.x, coords.y, 10, 10) }
+        : null;
     },
   };
   return {
@@ -92,7 +94,7 @@ describe('reconcilePass', () => {
       },
     } as unknown as HTMLElement;
     const badge: ReconcileBadge = {
-      reconcileRead: () => ({ host, x: coords.x, y: coords.y }),
+      reconcileRead: () => ({ host, x: coords.x, y: coords.y, targetRect: new DOMRect(coords.x, coords.y, 10, 10) }),
     };
     register(badge);
 
@@ -118,10 +120,25 @@ describe('reconcilePass', () => {
     expect(shown.transform).toBe('translate(7px,8px)');
   });
 
-  it('is a no-op when the registry is empty (flag off)', () => {
+  it('is a no-op when the registry is empty', () => {
     expect(reconcileRegistrySize()).toBe(0);
-    expect(() => reconcilePass()).not.toThrow();
+    expect(reconcilePass().size).toBe(0);
     expect(log).toEqual([]);
+  });
+
+  it('returns the target rect for each placed badge (and omits declined badges)', () => {
+    const placed = makeBadge('placed', { x: 7, y: 8 });
+    const hidden = makeBadge('hidden', null);
+    register(placed.badge);
+    register(hidden.badge);
+
+    const rects = reconcilePass();
+
+    expect(rects.size).toBe(1);
+    const r = rects.get(placed.badge);
+    expect(r).toBeInstanceOf(DOMRect);
+    expect({ x: r!.x, y: r!.y }).toEqual({ x: 7, y: 8 });
+    expect(rects.has(hidden.badge)).toBe(false);
   });
 
   it('does no work after the last badge unregisters', () => {

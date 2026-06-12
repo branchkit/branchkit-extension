@@ -1,5 +1,5 @@
 import { ElementWrapper } from '../scan/element-wrapper';
-import { getCachedRect, getCachedStyle, isClipAncestor } from '../layout-cache';
+import { getCachedRect, getCachedStyle } from '../layout-cache';
 import { computePlacement, Nudge } from './compute';
 import { calculateZIndex } from './stacking';
 import { type BadgeSettings, DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
@@ -169,72 +169,20 @@ export function placeOne(wrapper: ElementWrapper, readingIndex: number): void {
   wrapper.hint.host.style.zIndex = String(calculateZIndex(wrapper.element, wrapper.hint.host) + readingIndex);
 }
 
-function getAvailableSpace(container: Element, rect: DOMRect, bodyMounted: boolean): { left: number | undefined; top: number | undefined } {
-  // Body-mounted hosts — CSS anchor mode AND the reconcile model — sit on
-  // document.body, NOT nested inside anchorParent, so anchorParent never
-  // visually clips the badge and the container space-clamp is wrong-by-
-  // construction (it would clamp to a box the host isn't in). Return unbounded
-  // space so the nudge alone determines placement. Also unblocks YouTube
-  // Shorts cards, where the title link's chosen anchorParent is an h3 with
-  // overflow:hidden and no roomier ancestor exists. (Once nesting is deleted
-  // every host is body-mounted, so this clamp + findStickyBound go dead.)
-  if (bodyMounted) return { left: undefined, top: undefined };
-  // Nesting-path fallback (Firefox, or per-target anchor() bailout):
-  // measure inside the resolved container so the clamp prevents the
-  // badge from being clipped by anchorParent's overflow.
-  if (!isClipAncestor(container) && container !== document.body) {
-    return { left: undefined, top: undefined };
-  }
-  const containerRect = getCachedRect(container);
-  const left = Math.max(0, rect.left - containerRect.left);
-  const top = Math.max(0, rect.top - containerRect.top);
-  return { left, top };
-}
-
-function findStickyBound(container: Element): { left: number; top: number } | null {
-  let current: Element | null = container.parentElement;
-  while (current && current !== document.body) {
-    const s = getCachedStyle(current);
-    if (s.position === 'sticky' || s.position === 'fixed') {
-      const r = getCachedRect(current);
-      return { left: r.left, top: r.top };
-    }
-    current = current.parentElement;
-  }
-  return null;
-}
-
 function positionAtTopLeft(w: ElementWrapper, probe?: TextProbe): void {
   if (!w.hint) return;
   if (!probe) probe = getOrComputeProbe(w);
 
-  // Gather half: all DOM reads. The decision (ratio offset / space clamp /
-  // sticky clamp) lives in the pure computePlacement.
+  // Gather half: all DOM reads. The ratio-offset decision lives in the pure
+  // computePlacement. Hosts are body-mounted and follow the live target every
+  // reconcile pass, so no container space-clamp or sticky/fixed bound applies —
+  // see the sticky-clamp sub-question in
+  // notes/completed/DESIGN_HINT_POSITIONING_REARCH.md.
   const targetRect = probe.hasText ? probe.rect : getCachedRect(w.element);
-  // Body-mounted hosts (the reconcile model, and the legacy anchor fast-path)
-  // follow the live target every pass, so a viewport-fixed sticky/fixed clamp is
-  // wrong for them: baking a viewport-fixed clamp point into a target-relative
-  // offset freezes the bake-time (bound − target) gap, and once the target
-  // scrolls relative to the bound the badge drifts off its target by the scroll
-  // delta (the +71px left-sidebar strand on scroll-back). The reconciler simply
-  // follows the target under a sticky header instead — see the sticky-clamp
-  // sub-question in notes/completed/DESIGN_HINT_POSITIONING_REARCH.md. Gated the
-  // same way availableSpace is.
-  const bodyMounted = w.hint.anchorMode || w.hint.reconcileMode;
-  const stickyBound = bodyMounted ? null : findStickyBound(w.hint.anchorParent);
   const result = computePlacement({
     targetRect,
     badgeSize: w.hint.badgeSize,
     nudge: getNudge(w.element, probe.hasText),
-    availableSpace: getAvailableSpace(w.hint.anchorParent, targetRect, bodyMounted),
-    stickyBound,
   });
-
-  // scrollSensitive marks a viewport-fixed clamp (sticky/fixed ancestor) so
-  // the window-scroll reposition doesn't skip it as compositor-tracked.
-  // geometryDependent marks placements whose offset rode ancestor geometry,
-  // so the 'all' layout sweep must re-place them even on the anchor path.
-  w.hint.scrollSensitive = result.scrollSensitive;
-  w.hint.geometryDependent = result.geometryDependent;
-  w.hint.updatePosition({ x: result.x, y: result.y }, 'placement.positionAtTopLeft');
+  w.hint.updatePosition({ x: result.x, y: result.y });
 }

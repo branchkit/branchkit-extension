@@ -1405,7 +1405,6 @@ function reattachStrippedHosts(): void {
     // Target gone — don't reattach an orphan; let teardown tidy up.
     if (!w.element.isConnected) continue;
     w.hint.reattach();
-    w.hint.reposition();
     reattached++;
   }
   if (reattached > 0) firehoseStep('reconcile:reattach', reattached, 1);
@@ -2721,98 +2720,61 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
 });
 
 // --- Reposition ---
-// Badges live in their target's scroll ancestor, so scroll is handled by the
-// compositor. Window resize and DOM mutations that shift layout require JS
-// repositioning.
-
-// Reposition scope:
-//  - 'all'     — re-place every visible badge. Used when layout actually
-//                changed (resize, DOM mutation, focus/transition settle,
-//                container resize): badge sizes, available space, and sticky
-//                bounds can all shift, so the full placement must re-run.
-//  - 'drifted' — only re-place badges that didn't track their target on their
-//                own (HintBadge.needsScrollReposition). Used for window scroll,
-//                where geometry translates uniformly and nested badges ride
-//                the compositor for free — re-placing all of them was the
-//                dominant scroll-time CPU bucket on heavy pages.
-type RepositionScope = 'all' | 'drifted';
+// The JS reconcile positioner owns badge placement: one batched pass reads
+// every registered badge's live target rect and writes composited transforms.
+// scheduleReposition drives that pass on a rAF single-flight so the settle
+// handlers' shared 100ms debounce funnels into one coalescing policy —
+// wedge-safe by construction. The pass's rects also feed the off-screen-hide
+// sweep, so no extra layout reads happen here.
 let repositionRafPending = false;
-let pendingScope: RepositionScope = 'drifted';
-function scheduleReposition(scope: RepositionScope = 'all'): void {
+function scheduleReposition(): void {
   if (!pageSession.hintsVisible) return;
-  // 'all' supersedes a queued 'drifted' — a real layout change needs the full
-  // sweep even if a scroll already queued the cheap path.
-  if (scope === 'all') pendingScope = 'all';
   if (repositionRafPending) return;
   repositionRafPending = true;
   requestAnimationFrame(() => {
     repositionRafPending = false;
-    const scope = pendingScope;
-    pendingScope = 'drifted';
-    // Reconcile mode (bkJsPosition): the JS positioner owns badge placement.
-    // Drive one batched pass here so it rides the shared 100ms-debounce + rAF
-    // single-flight the four settle handlers funnel into — one coalescing
-    // policy, wedge-safe by construction. A no-op (and cheap) when the flag is
-    // off (registry empty); reconcileRead() short-circuits hidden badges before
-    // any gBCR. The anchor/nesting sweep below is per-badge no-op'd in reconcile
-    // mode (needsScroll/LayoutReposition return false), so the two never overlap.
-    reconcilePass();
-    // Skip wrappers whose element has left the DOM (a limbo wrapper, badge held
-    // for the ~250ms rebind window) — placement would otherwise put the badge at
-    // getBoundingClientRect()=={0,0,0,0}. Off-screen-but-connected elements are
-    // handled below. See notes/INVESTIGATION_LIMBO_BADGE_FLASH.md.
-    const visible = store.all.filter(w => w.hint?.isVisible && w.element.isConnected);
-    if (visible.length === 0) return;
-    const __pbStart = performance.now();
     // Reposition breadcrumbs: a `reposition:start` without matching
-    // `reposition:end` pins this as the wedge body. Size = visible badge
-    // count. Threshold-gated so steady-state scroll doesn't add 60
-    // sendMessages/sec just for telemetry.
-    firehoseStep(`reposition:${scope}:start`, visible.length, 20);
-    try {
-      cacheLayout(visible.map(w => w.element));
-      firehoseStep(`reposition:${scope}:cache_end`, visible.length, 20);
-      // Hide + skip badges whose element is fully off-screen — e.g. YouTube's
-      // collapsed nav drawer parked at x=-228. Placement would otherwise clamp
-      // them to the viewport edge, producing the flashing left-edge badge
-      // column. Same predicate every paint path uses (see isRectOnScreen).
-      const vw = window.innerWidth, vh = window.innerHeight;
-      const onscreen = visible.filter(w => {
-        if (!isRectOnScreen(getCachedRect(w.element), vw, vh)) {
-          w.hint!.hide();
-          return false;
-        }
-        return true;
-      });
-      // Phase 5 (router-via-scroll-rAF): reads share the cacheLayout
-      // warm pass, so each write is essentially free.
-      for (const w of onscreen) {
-        targetRectStore.write(w.element, getCachedRect(w.element));
+    // `reposition:end` pins this as the wedge body. Threshold-gated so
+    // steady-state scroll doesn't add 60 sendMessages/sec just for telemetry.
+    firehoseStep('reposition:start', reconcileRegistrySize(), 20);
+    const __start = performance.now();
+    // One batched pass: reads all target rects, writes all transforms, and
+    // returns the rects it read. reconcileRead() short-circuits hidden badges
+    // and disconnected targets before any gBCR (limbo wrappers — badge held
+    // for the ~250ms rebind window — never reach placement; see
+    // notes/INVESTIGATION_LIMBO_BADGE_FLASH.md).
+    const rects = reconcilePass();
+    // Hide badges whose element is fully off-screen — e.g. YouTube's collapsed
+    // nav drawer parked at x=-228; the reconciler would otherwise pin them at
+    // the live off-screen coords where partial overhang can bleed into the
+    // viewport edge. Same predicate every paint path uses (see isRectOnScreen).
+    // On-screen rects also keep TargetRectStore warm (router-via-scroll-rAF),
+    // reusing the rects the pass above already paid for.
+    const vw = window.innerWidth, vh = window.innerHeight;
+    for (const w of store.all) {
+      if (!w.hint?.isVisible) continue;
+      const r = rects.get(w.hint);
+      if (!r) continue;
+      if (!isRectOnScreen(r, vw, vh)) {
+        w.hint.hide();
+        continue;
       }
-      const toPlace = scope === 'drifted'
-        ? onscreen.filter(w => w.hint!.needsScrollReposition())
-        : onscreen.filter(w => w.hint!.needsLayoutReposition());
-      firehoseStep(`reposition:${scope}:place_start`, toPlace.length, 1);
-      if (toPlace.length > 0) placeBadges(toPlace);
-    } finally {
-      clearLayoutCache();
-      recordCpu(scope === 'drifted' ? 'placeBadges:scroll' : 'placeBadges:reposition',
-        performance.now() - __pbStart);
-      firehoseStep(`reposition:${scope}:end`, visible.length, 20);
+      targetRectStore.write(w.element, r);
     }
+    recordCpu('reposition:sweep', performance.now() - __start);
+    firehoseStep('reposition:end', rects.size, 20);
   });
 }
-window.addEventListener('resize', () => scheduleReposition('all'), { passive: true });
+window.addEventListener('resize', () => scheduleReposition(), { passive: true });
 
-// Reconcile mode (bkJsPosition) scroll tracking. Reconcile hosts are
-// position:fixed and do NOT ride the compositor like anchor/nesting badges, so
-// during a continuous scroll they must be re-pinned to their targets every
-// frame — the trailing-edge 100ms settle below would leave them detached from
-// the viewport until scroll stops. This runs a per-frame reconcilePass() ONLY
-// while scroll events are arriving and only when reconcile badges exist; it
-// self-cancels ~1 frame after the last scroll event, so it is bounded and NOT a
-// free-running rAF (the nav-time wedge discipline). When the flag is off the
-// registry is empty, so anchor/nesting sessions never arm it — zero overhead.
+// Scroll tracking. A viewport-pinned badge host (position:fixed) does not ride
+// the compositor, and an inner-pane scroll moves flow targets without moving
+// their document-anchored hosts — so during a continuous scroll badges must be
+// re-pinned to their targets every frame; the trailing-edge 100ms settle below
+// would leave them detached until scroll stops. This runs a per-frame
+// reconcilePass() ONLY while scroll events are arriving and only when badges
+// exist; it self-cancels ~1 frame after the last scroll event, so it is bounded
+// and NOT a free-running rAF (the nav-time wedge discipline).
 let reconcileScrollRaf: number | null = null;
 let reconcileScrollActive = false;
 function noteReconcileScroll(): void {
@@ -2831,22 +2793,14 @@ function reconcileScrollFrame(): void {
   }
 }
 
-// Scroll runs a 'drifted'-scoped reposition: badges already follow scroll via
-// CSS positioning in their scroll ancestor, so the compositor tracks them for
-// free and only the genuinely scroll-sensitive subset (sticky/fixed clamps,
-// scroll-context mismatch — see HintBadge.needsScrollReposition) needs a JS
-// re-place. Re-placing ALL visible badges on every scroll settle made
-// placeBadges the dominant CPU bucket during scroll on heavy pages (~565ms
-// over a 15s soak on YouTube /watch with ~280 badges on the nesting path);
-// scoping to drifted badges keeps the per-settle cost to cheap rect reads.
-//
-// Still debounced. Firing on every rAF during scroll burned ~22% sustained
-// CPU at wrap=99 on YouTube /watch, tripped Firefox's "extension is slowing
-// things down" warning, and starved YouTube's own scroll-driven lazy-loading
-// so content below the fold failed to render. The 100ms debounce coalesces
-// the burst (~30 events/sec during fast scrolling) into one reposition;
-// scroll-sensitive badges lag by ~100ms but settle correctly when scroll
-// stops, which the user can't perceive mid-scroll anyway.
+// The scroll settle is debounced. Running the full settle pipeline on every
+// rAF during scroll burned ~22% sustained CPU at wrap=99 on YouTube /watch,
+// tripped Firefox's "extension is slowing things down" warning, and starved
+// YouTube's own scroll-driven lazy-loading so content below the fold failed
+// to render. The 100ms debounce coalesces the burst (~30 events/sec during
+// fast scrolling) into one settle after scroll stops; per-frame target
+// tracking during the scroll itself is the bounded reconcileScrollFrame loop
+// above, not the pipeline.
 
 // THE settle pipeline: one ordered convergence pass shared by every debounced
 // settle signal (scroll settle and the focus/transition/resize/container-
@@ -2875,9 +2829,8 @@ function reconcileScrollFrame(): void {
 //   6. reconcileStrictViewport — re-push wrappers whose strict-viewport flag
 //      changed so the plugin's `_strict` companion collection (voice matching
 //      + Discovery HUD) converges to post-settle viewport reality.
-//   7. scheduleReposition('drifted') — re-place only badges that didn't track
-//      their target on their own (runs even when hints are hidden; it owns
-//      the off-screen-hide sweep).
+//   7. scheduleReposition — drive the batched positioner pass + the
+//      off-screen-hide sweep over the rects that pass read.
 //
 // The `discovery` parameter is the single difference between the two settle
 // kinds:
@@ -2904,7 +2857,7 @@ function runSettlePipeline(discovery: 'band' | 'store'): void {
     recheckHintedVisibility();
     reconcileStrictViewport();
   }
-  scheduleReposition('drifted');
+  scheduleReposition();
 }
 
 function scheduleScrollReposition(e?: Event): void {
@@ -2956,11 +2909,9 @@ document.addEventListener('scroll', scheduleScrollReposition, { passive: true, c
 // Debounced (not direct scheduleReposition) for the same reason scroll
 // is: on churny pages (YouTube /watch, where comment threads + player +
 // chapters resize continuously during scroll as content lazy-loads) the
-// RO fires ~15/sec, and each direct call repositions every visible badge
-// (400-1100 in always-mode). That made placeBadges:reposition the
-// dominant CPU bucket during scroll. Coalescing to one reposition after
-// layout settles trades a ~100ms lag on resize-driven repositions —
-// imperceptible mid-scroll, same trade already accepted for scroll.
+// RO fires ~15/sec. Coalescing to one settle after layout stabilizes
+// trades a ~100ms lag on resize-driven repositions — imperceptible
+// mid-scroll, same trade already accepted for scroll.
 onContainerResize(scheduleDeferredReposition);
 
 // Deferred reposition for signals that hint "layout is about to settle":
@@ -2984,12 +2935,7 @@ function scheduleDeferredReposition(): void {
     pageSession.deferredRepositionTimer = null;
     // 'store' discovery: container resize / focus / transition / zoom reveal
     // new in-band hintables among existing wrappers and can push wrappers
-    // across the strict boundary without a scroll event. The pipeline ends in
-    // scheduleReposition('drifted'), not 'all': re-placing every visible badge
-    // on these continuously-firing signals was the dominant extension CPU cost
-    // at scale (2404ms over a 60s soak at ~208 badges); drift detection
-    // re-places only badges that genuinely moved relative to their target.
-    // The window 'resize' handler stays 'all' for global layout changes.
+    // across the strict boundary without a scroll event.
     runSettlePipeline('store');
   }, DEFERRED_REPOSITION_DEBOUNCE_MS);
 }

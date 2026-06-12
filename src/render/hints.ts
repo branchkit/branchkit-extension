@@ -2,10 +2,10 @@
  * BranchKit Browser — Shadow DOM hint badges.
  *
  * Each badge lives in a closed Shadow DOM to prevent page CSS interference.
- * Badges mount in their target's nearest block-level ancestor (like Rango's
- * getAptContainer) so they sit close to the target in the DOM tree and
- * naturally follow any scroll mechanism — CSS overflow, JS-driven, or
- * transform-based. No JS scroll listeners needed.
+ * Hosts are body-mounted; the batched JS reconciler (reconcile-positioner.ts)
+ * pins each host to its target's live rect every pass. Container resolution
+ * (resolveContainer) still runs per badge — its anchorParent drives the
+ * container-resize tracker.
  */
 
 import { Category, BadgeDisplayMode } from '../types';
@@ -480,10 +480,6 @@ export class HintBadge {
   // step 4). Same host stays attached; the host's parent and the
   // tracked target both move.
   public anchorParent: HTMLElement;
-  // Nearest scrollable ancestor on the nesting path, registered with the
-  // scroll-ancestor tracker so inner-pane scroll keeps TargetRectStore warm.
-  // Null on the anchor path (compositor-tracked, store not read for it) and
-  // when the only scroller is the document.
   private shadow: ShadowRoot;
   private outer: HTMLDivElement;
   private inner: HTMLDivElement;
@@ -512,21 +508,10 @@ export class HintBadge {
   private displayMode: BadgeDisplayMode;
   private fontSize: number;
 
-  // CSS Anchor Positioning fast-path. When `anchorMode` is true the host is
-  // body-mounted and pinned to the target via `anchorName`; scroll-tracking
-  // is handled by the compositor, so reposition() is a no-op. Disabled per
-  // target when the engine can't resolve anchor() across a fixed ancestor
-  // (Firefox) — those fall back to the nesting path. Set in the constructor.
-  public readonly anchorMode: boolean;
-  private anchorName: string | null = null;
-
-  // Option 3 (notes/completed/DESIGN_HINT_POSITIONING_REARCH.md). Mutually exclusive with
-  // anchorMode: when true the host is body-mounted (position:absolute, document-
-  // anchored so it rides window scroll on the compositor) and the batched JS
-  // reconciler writes its transform from the live target rect + page scroll +
-  // this baked offset (candidate minus target top-left), instead of CSS anchor()
-  // or the nesting path. Set in the constructor from the bkJsPosition flag.
-  public readonly reconcileMode: boolean;
+  // The reconcile positioning model (notes/completed/DESIGN_HINT_POSITIONING_REARCH.md):
+  // the host is body-mounted and the batched JS reconciler writes its transform
+  // from the live target rect + page scroll + this baked offset (candidate
+  // minus target top-left).
   private _reconcileOffset: { x: number; y: number } | null = null;
   // True when the target is viewport-pinned (fixed/sticky ancestor): the host is
   // position:fixed + viewport coords instead of position:absolute + doc coords.
@@ -552,23 +537,12 @@ export class HintBadge {
   // anim id stays constant — the proof the page-scroll layer is never torn down.
   private _scrollAccelAnimBuilds = 0;
 
-  // Placement outputs, surfaced in diagnostics: scrollSensitive = the offset
-  // rode a sticky/fixed bound; geometryDependent = it rode ancestor geometry
-  // (clamp or sticky bound). Set by the placement strategy.
-  public scrollSensitive: boolean = false;
-  public geometryDependent: boolean = false;
-  // Diagnostic-only: inputs of the last bake (candidate/target), surfaced in a
-  // snapshot to compare against the live target rect.
-  private _lastBake: { candidateY: number; targetTop: number } | null = null;
-
   constructor(target: Element, label: LabelAssignment, category: Category, displayMode: BadgeDisplayMode) {
     this.target = target;
     this.category = category;
     this.label = label;
     this.displayMode = displayMode;
     this.fontSize = computeBadgeFontSize(target);
-    this.reconcileMode = true;
-    this.anchorMode = false;
 
     this.host = document.createElement('div');
     this.host.setAttribute('data-branchkit-hint', 'true');
@@ -789,6 +763,7 @@ export class HintBadge {
       host: this.host,
       x: Math.round(r.left + sx + this._reconcileOffset.x),
       y: Math.round(y),
+      targetRect: r,
     };
   }
 
@@ -896,7 +871,7 @@ export class HintBadge {
     if (w) this.host.style.transform = `translate(${w.x}px,${w.y}px)`;
   }
 
-  updatePosition(candidate?: { x: number; y: number }, _caller?: string): void {
+  updatePosition(candidate?: { x: number; y: number }): void {
     // Bake the placement offset (candidate relative to the target's top-left);
     // the reconciler applies it against the live target rect each pass. A
     // candidate-less call is the reposition path — the reconciler owns it.
@@ -966,13 +941,12 @@ export class HintBadge {
       unscheduleRefine(this);
     }
 
-    // Paint the new target's host now (flag on only), keeping the base
-    // consistent with the (re-armed or cleared) accelerator animation — the
-    // old-target disarm + new-target re-arm flip `outer`'s -scrollTop, so the
-    // base must move in lockstep. Flag off keeps today's behavior: `reposition()`
-    // is a no-op and the next reconcile pass moves the host to the new target.
+    // Paint the new target's host now when the accelerator is enabled, keeping
+    // the base consistent with the (re-armed or cleared) accelerator animation —
+    // the old-target disarm + new-target re-arm flip `outer`'s -scrollTop, so
+    // the base must move in lockstep. Accel off: the next reconcile pass moves
+    // the host to the new target.
     if (scrollAccelEnabled) this.repositionHostNow();
-    else this.reposition();
   }
 
   /**
@@ -1211,37 +1185,6 @@ export class HintBadge {
     this._size = null;
   }
 
-  reposition(): void {
-    // Reconcile badges follow their target via the JS reconciler; a
-    // candidate-less reposition has no offset to apply, so it's a no-op.
-  }
-
-  // Does this badge need a JS reposition on a window scroll? For the nesting
-  // path the host rides the scroll-ancestor compositor, so the common badge
-  // tracks its target for free. Returns true only for badges the compositor
-  // can't keep correct on its own:
-  //  - anchor mode never needs it (compositor + anchor()), always false;
-  //  - sticky/fixed-clamped badges: the clamp point is viewport-fixed, so it
-  //    must be recomputed as the target scrolls relative to it;
-  //  - drifted badges: the outer moved by a different delta than the target
-  //    since the last placement (scroll-context mismatch).
-  needsScrollReposition(): boolean {
-    // Reconcile follows the target via the rAF reconciler — no JS scroll reposition.
-    return false;
-  }
-
-  // Does this badge need a JS re-place on an 'all' layout sweep (resize,
-  // huge-mutation settle)? The nesting path always does — its host position is
-  // computed in JS. The anchor path normally does not: the compositor carries a
-  // target-relative offset through layout changes for free. The exception is a
-  // badge whose offset rode ancestor geometry (clamped to a clip ancestor's
-  // available space, or pinned to a sticky/fixed bound) — a resize can move
-  // that geometry, so it must be recomputed.
-  needsLayoutReposition(): boolean {
-    // Reconcile re-reads the target rect every pass — no layout-sweep reposition.
-    return false;
-  }
-
   remove(): void {
     this._removed = true;
     unscheduleRefine(this);
@@ -1270,43 +1213,6 @@ export class HintBadge {
     anchorParentTag: string;
     anchorParentClasses: string;
     displayedAs: string;
-    // Which of the two positioning methods this badge uses: 'anchor' = CSS
-    // anchor() fast-path (host body-mounted, compositor tracks the target);
-    // 'nesting' = host physically nested in a resolved container and re-placed
-    // by JS on settle. The scroll-back stranding bug lives on whichever path
-    // can't follow a target moved by sibling reflow — this label disambiguates.
-    positioningMethod: 'anchor' | 'nesting';
-    scrollSensitive: boolean;
-    geometryDependent: boolean;
-    // Anchor-path only: does the live target still carry the `anchor-name`
-    // the host's `position-anchor` references? false ⇒ the binding dangled
-    // (target node recreated underneath us — sub-cause A); true ⇒ binding is
-    // intact, so a stranded badge means anchor() failed to re-resolve on
-    // reflow (sub-cause B). null on the nesting path (concept N/A).
-    bindingLive: boolean | null;
-    // Anchor-path only: the host's literal inline `top`/`left` — the baked
-    // `calc(anchor(top) + Npx)`. Lets a stranded badge be decomposed: if the
-    // baked Npx is small but outerRect is far from the target, anchor()
-    // resolved to the WRONG element (duplicate name); if Npx is itself large,
-    // the offset bake was stale. null/'' on the nesting path.
-    hostTop: string;
-    hostLeft: string;
-    // Anchor-path only: how many OTHER connected elements carry this badge's
-    // `anchor-name` inline. >0 ⇒ a recycled/stale node is competing for the
-    // anchor and anchor() may resolve to it (last in tree order wins). null on
-    // the nesting path.
-    anchorNameDupes: number | null;
-    // Anchor-path bake forensics. `bakeCandidateY`/`bakeTargetTop` are the two
-    // inputs to the last `anchor(top)+Npx` bake (Npx = candidateY − targetTop).
-    // `liveTargetTop` is the target's gBCR.top read NOW. If the baked offset is
-    // stale-large, comparing these tells us which input was wrong: if
-    // bakeTargetTop ≈ liveTargetTop but bakeCandidateY is far off, the candidate
-    // was computed from a stale element rect; if bakeTargetTop ≠ liveTargetTop,
-    // the target rect read at bake time disagreed with the candidate's basis
-    // (cache-miss live-fallback or a target/element identity split).
-    bakeCandidateY: number | null;
-    bakeTargetTop: number | null;
-    liveTargetTop: number | null;
     targetTag: string;
     // Reconcile-model forensics (the live positioning model). `reconcileOffset`
     // is the baked candidate-minus-target offset the reconciler applies each
@@ -1344,25 +1250,6 @@ export class HintBadge {
     const ap = this.anchorParent;
     const apr = ap.getBoundingClientRect();
     const aps = getComputedStyle(ap);
-    let bindingLive: boolean | null = null;
-    let anchorNameDupes: number | null = null;
-    if (this.anchorMode && this.anchorName) {
-      const live = getComputedStyle(this.target as Element)
-        .getPropertyValue('anchor-name')
-        .trim();
-      bindingLive = live === this.anchorName;
-      // Count OTHER connected elements whose inline style carries this exact
-      // anchor-name. Diagnostic-only (manual snapshot path), so the bounded
-      // scan over badge-tagged targets is acceptable; the live placement path
-      // never runs this.
-      anchorNameDupes = 0;
-      for (const el of document.querySelectorAll<HTMLElement>('[style*="--bk-"]')) {
-        if (el === this.target) continue;
-        if (el.style?.getPropertyValue?.('anchor-name')?.trim() === this.anchorName) {
-          anchorNameDupes++;
-        }
-      }
-    }
     return {
       innerRect: { x: Math.round(ir.left), y: Math.round(ir.top), w: Math.round(ir.width), h: Math.round(ir.height) },
       outerRect: { x: Math.round(or2.left), y: Math.round(or2.top), w: Math.round(or2.width), h: Math.round(or2.height) },
@@ -1372,16 +1259,6 @@ export class HintBadge {
       anchorParentTag: ap.tagName.toLowerCase(),
       anchorParentClasses: ap.className?.toString().slice(0, 200) ?? '',
       displayedAs: this.inner.textContent ?? '',
-      positioningMethod: this.anchorMode ? 'anchor' : 'nesting',
-      scrollSensitive: this.scrollSensitive,
-      geometryDependent: this.geometryDependent,
-      bindingLive,
-      hostTop: this.anchorMode ? (this.host.style.top ?? '') : '',
-      hostLeft: this.anchorMode ? (this.host.style.left ?? '') : '',
-      anchorNameDupes,
-      bakeCandidateY: this._lastBake ? Math.round(this._lastBake.candidateY) : null,
-      bakeTargetTop: this._lastBake ? Math.round(this._lastBake.targetTop) : null,
-      liveTargetTop: this.anchorMode ? Math.round(this.target.getBoundingClientRect().top) : null,
       targetTag: this.target.tagName.toLowerCase(),
       reconcileOffset: this._reconcileOffset
         ? { x: Math.round(this._reconcileOffset.x), y: Math.round(this._reconcileOffset.y) }

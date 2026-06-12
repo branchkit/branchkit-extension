@@ -1,9 +1,7 @@
 /**
- * Option 3 (notes/completed/DESIGN_HINT_POSITIONING_REARCH.md): a batched reconcile that
- * pins each registered badge host to its target by reading the live target rect
- * and writing a composited `transform`. This is the pure-JS positioning model
- * that would replace CSS Anchor Positioning (and the Firefox nesting path) under
- * the `bkJsPosition` flag.
+ * The positioning model (notes/completed/DESIGN_HINT_POSITIONING_REARCH.md): a
+ * batched reconcile that pins each registered badge host to its target by
+ * reading the live target rect and writing a composited `transform`.
  *
  * Batching is the whole point: read ALL target rects first (one forced reflow
  * per pass when layout is dirty — clean reads are cached), THEN write ALL
@@ -30,6 +28,11 @@ export interface ReconcileWrite {
   host: HTMLElement;
   x: number;
   y: number;
+  /** The live target rect read for this badge, in viewport coords. Returned
+   *  to the caller of reconcilePass so settle-time consumers (the off-screen-
+   *  hide sweep) reuse the rects this pass already paid for instead of
+   *  re-reading layout. */
+  targetRect: DOMRect;
 }
 
 export interface ReconcileBadge {
@@ -68,17 +71,25 @@ export function drain(): void {
 /**
  * One batched reconcile pass: read all target rects (Phase 1), then write all
  * composited transforms (Phase 2). Pure and synchronous — the caller decides
- * when it runs. A no-op when nothing is registered (flag off), and cheap for
+ * when it runs. A no-op when nothing is registered, and cheap for
  * hidden/off-screen badges (`reconcileRead` short-circuits before gBCR).
+ *
+ * Returns the live target rect read for each placed badge, keyed by badge, so
+ * callers can reuse the rects this pass already paid for (the settle-time
+ * off-screen-hide sweep) instead of re-reading layout.
  */
-export function reconcilePass(): void {
-  if (registry.size === 0) return;
+export function reconcilePass(): Map<ReconcileBadge, DOMRect> {
+  const rects = new Map<ReconcileBadge, DOMRect>();
+  if (registry.size === 0) return rects;
   const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
   // Phase 1 — batched reads (gBCR). One forced reflow per pass if layout is dirty.
   const writes: ReconcileWrite[] = [];
   for (const b of registry) {
     const w = b.reconcileRead();
-    if (w) writes.push(w);
+    if (w) {
+      writes.push(w);
+      rects.set(b, w.targetRect);
+    }
   }
   // Phase 2 — batched composited writes. transform does not dirty layout, so
   // this can't re-trigger reflow between entries.
@@ -87,4 +98,5 @@ export function reconcilePass(): void {
   }
   const rec = (globalThis as { __branchkitRecordCpu?: (label: string, ms: number) => void }).__branchkitRecordCpu;
   if (rec && t0) rec('reconcilePositioner:tick', performance.now() - t0);
+  return rects;
 }

@@ -93,16 +93,6 @@ interface WrapperRecord {
     anchorParentTag: string;
     anchorParentClasses: string;
     displayedAs: string;
-    positioningMethod: 'anchor' | 'nesting';
-    scrollSensitive: boolean;
-    geometryDependent: boolean;
-    bindingLive: boolean | null;
-    hostTop: string;
-    hostLeft: string;
-    anchorNameDupes: number | null;
-    bakeCandidateY: number | null;
-    bakeTargetTop: number | null;
-    liveTargetTop: number | null;
     targetTag: string;
     reconcileOffset: { x: number; y: number } | null;
     hostTransform: string;
@@ -247,16 +237,6 @@ function captureWrapper(w: ElementWrapper): WrapperRecord {
       anchorParentTag: diag.anchorParentTag,
       anchorParentClasses: diag.anchorParentClasses,
       displayedAs: diag.displayedAs,
-      positioningMethod: diag.positioningMethod,
-      scrollSensitive: diag.scrollSensitive,
-      geometryDependent: diag.geometryDependent,
-      bindingLive: diag.bindingLive,
-      hostTop: diag.hostTop,
-      hostLeft: diag.hostLeft,
-      anchorNameDupes: diag.anchorNameDupes,
-      bakeCandidateY: diag.bakeCandidateY,
-      bakeTargetTop: diag.bakeTargetTop,
-      liveTargetTop: diag.liveTargetTop,
       targetTag: diag.targetTag,
       reconcileOffset: diag.reconcileOffset,
       hostTransform: diag.hostTransform,
