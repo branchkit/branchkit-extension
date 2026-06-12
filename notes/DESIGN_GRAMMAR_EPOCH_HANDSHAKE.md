@@ -38,9 +38,33 @@ actuator.log:
   silently degraded much of the time. The triggers did not catch it; the
   tripwire did, within hours.
 
+DIAGNOSIS COMPLETE (same evening): onResync is INNOCENT — it worked in
+perfect lockstep all morning (disconnect = reconnect = republish, 3252
+firings) and went quiet only because the SW stopped restarting after ~13:42
+(kept alive by something; not itself a bug). The real defect is the
+TAB-SWITCH WIPE / REFOCUS DELTA ASYMMETRY:
+
+- On tab switch the SW posts session_end(tab_switch) and the plugin's
+  cleanupFrameSessionLocked EMPTIES session.Codewords in-place
+  (bridge.go:511 → batch.go cleanup; log: session_end_tab_tab_switch
+  cleared=284).
+- On switch-back the refocus path is a DELTA sync against an intact CS
+  shadow → empty delta → nothing re-pushed. The plugin re-accumulates only
+  strict-crossing re-puts — the scrolled-through subset (the observed
+  plugin≈170 vs shadow≈306).
+- Every tab switch therefore leaves most of the tab's codewords VOICE-DEAD
+  until an unrelated full rotation heals it. The morning's constant
+  SW-restart republishes masked the hole; when they stopped, it became
+  permanent and the tripwire lit up.
+- This contradicts the Option B read-time focused-source projection design
+  (sessions kept, collections re-projected on focus): the destructive
+  tab_switch wipe looks like a pre-Option-B remnant. Design-correct fix:
+  de-project on tab switch (the SweptStale keep-but-deproject pattern)
+  instead of emptying session state. Plugin-side; coordinate with the
+  session that owns clearHintsState/sweeper work.
+
 Implications, in priority order:
-1. Diagnose/fix why onResync (liveness reconnect → sw_restart_resync) no
-   longer fires — likely the biggest voice-reliability bug currently live.
+1. Fix the tab-switch wipe → de-projection (above). onResync needs nothing.
 2. This is the strongest possible case for 2b: a level-triggered
    epoch_mismatch republish heals every variant of this without anyone
    enumerating SW lifecycle cases. 2b stays gated on the dual-CS install
