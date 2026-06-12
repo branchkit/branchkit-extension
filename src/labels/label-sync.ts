@@ -35,6 +35,7 @@
 
 import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
 import { stampStrictViewport } from '../lifecycle/strict-viewport';
+import { epochHashOf } from './grammar-epoch';
 import { GrammarBatchRequest, GrammarBatchResponse, Message } from '../types';
 import { isAlphabetLoaded } from './words';
 import { DEFAULT_SCAN_BATCH_SIZE } from '../scan/scanner';
@@ -180,6 +181,7 @@ export async function postBatch(
   const drainedDeletes = drainPendingDeletes();
   const fullRequest: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'> =
     drainedDeletes.length > 0 ? { ...request, delete_codewords: drainedDeletes } : request;
+  inFlightBatches++;
   try {
     return await chrome.runtime.sendMessage({ type: 'GRAMMAR_BATCH', request: fullRequest } as Message);
   } catch {
@@ -192,6 +194,8 @@ export async function postBatch(
       succeeded: [],
       failed: request.elements.map(e => ({ codeword: e.codeword, reason: 'sendMessage_failed' })),
     };
+  } finally {
+    inFlightBatches--;
   }
 }
 
@@ -233,6 +237,72 @@ function scheduleRefusalRetry(): void {
 function isWholesaleRefusal(resp: GrammarBatchResponse): boolean {
   return resp.result !== 'ok' && resp.result !== 'stored' && resp.result !== 'error'
     && resp.failed.length === 0;
+}
+
+// --- Grammar epoch tripwire (Phase 2a of DESIGN_GRAMMAR_EPOCH_HANDSHAKE.md) ---
+//
+// Detect-only: compares the plugin's post-batch epoch against this frame's
+// delta-sync shadow on final-chunk responses. A mismatch means the shadow
+// has diverged from the plugin's grammar — the class healed today by the
+// enumerated full-republish triggers (sw_restart_resync, bfcache_restore,
+// the plugin's sse_connect reactivate). This tripwire measures whether the
+// handshake would catch each of those firings (and any unknown desync) BEFORE
+// Phase 2b lets a mismatch trigger the republish itself. Counters ride the
+// perf snapshot; mismatch detail goes to browser.log. Known tolerable noise:
+// a session rotation racing a mid-flight sync compares an old-session
+// response against the cleared shadow — detect-only exists to measure
+// exactly this kind of thing.
+interface EpochStats {
+  checks: number;
+  mismatches: number;
+  /** Comparisons skipped because other grammar traffic was in flight. */
+  skippedBusy: number;
+  lastMismatch: {
+    pluginCount: number; pluginHash: string;
+    shadowCount: number; shadowHash: string;
+    reason: string;
+  } | null;
+}
+const epochStats: EpochStats = { checks: 0, mismatches: 0, skippedBusy: 0, lastMismatch: null };
+
+/** GRAMMAR_BATCH posts currently awaiting a response (scan + sync paths
+ * both route through postBatch). */
+let inFlightBatches = 0;
+
+/** Snapshot for the perf surface (content.ts buildPerfSnapshot). */
+export function grammarEpochStats(): EpochStats {
+  return { ...epochStats, lastMismatch: epochStats.lastMismatch ? { ...epochStats.lastMismatch } : null };
+}
+
+function checkGrammarEpoch(resp: GrammarBatchResponse, reason: string): void {
+  const remote = resp.epoch;
+  if (!remote) return; // refusal, or a plugin build predating the handshake
+  if (resp.result !== 'ok' && resp.result !== 'stored') return;
+  // Quiescence gate: the scan pipeline, incremental syncs, and strict
+  // re-pushes interleave by design, so a response's epoch describes a state
+  // other in-flight batches are still moving — comparing there measures the
+  // interleave, not divergence (first live smoke: 10/10 false mismatches
+  // within 500ms of concurrent traffic). Compare only when this was the
+  // sole in-flight batch and nothing further is queued; a genuinely
+  // diverged grammar is diverged at rest, which is exactly when this fires.
+  if (inFlightBatches > 0 || pendingPuts.size > 0 || pendingDeleteCodewords.length > 0) {
+    epochStats.skippedBusy++;
+    return;
+  }
+  epochStats.checks++;
+  const shadowCount = sentCodewords.size;
+  // Count comparison is free; hash only when counts agree (and at mismatch
+  // time for the breadcrumb).
+  if (remote.count === shadowCount && epochHashOf(sentCodewords) === remote.hash) return;
+  epochStats.mismatches++;
+  epochStats.lastMismatch = {
+    pluginCount: remote.count,
+    pluginHash: remote.hash,
+    shadowCount,
+    shadowHash: epochHashOf(sentCodewords),
+    reason,
+  };
+  bkLog('BK_GRAMMAR_EPOCH_MISMATCH', epochStats.lastMismatch);
 }
 
 /**
@@ -310,6 +380,7 @@ export async function syncNow(reason: string): Promise<void> {
     // source) applied the deletes to the session just like 'ok' did.
     if (resp.result === 'ok' || resp.result === 'stored') {
       for (const cw of drainedDeletes) sentCodewords.delete(cw);
+      checkGrammarEpoch(resp, reason);
     } else if (isWholesaleRefusal(resp)) {
       // Refused without error (calibration): the deletes were drained by
       // postBatch but never applied — restore and retry after calibration.
@@ -373,6 +444,9 @@ export async function syncNow(reason: string): Promise<void> {
     }
     const succeededWrappers = chunk.filter(w => succeededSet.has(w.scanned.codeword));
     sweepDisconnectedAfterBatch(succeededWrappers, (el) => el.isConnected, pendingDeleteCodewords, deps.detachWrapper);
+    // Epoch tripwire on the final chunk only — intermediate responses
+    // describe a half-applied sync by construction.
+    if (isLast) checkGrammarEpoch(resp, reason);
     if (deps.isHintsVisible() && resp.succeeded.length > 0) {
       deps.reconcile();
     }

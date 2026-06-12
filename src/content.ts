@@ -107,6 +107,7 @@ import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuSh
 import { loadConfig, getDisplayMode, getHintVisibility, getHintsShown, setHintsShown, getHintHideKey } from './config';
 import { matchesCombo } from './activate/key-combo';
 import {
+  grammarEpochStats,
   initLabelSync,
   queuePut,
   dropPendingPut,
@@ -3323,6 +3324,11 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
       longtask: longtaskSnapshot(),
       watchdog: watchdogSnapshot(),
     },
+    // Grammar-epoch tripwire (Phase 2a of DESIGN_GRAMMAR_EPOCH_HANDSHAKE.md):
+    // checks should climb with sync traffic; mismatches should stay 0 except
+    // around the enumerated republish triggers — those firings are the
+    // evidence Phase 3 needs before retiring them.
+    grammarEpoch: grammarEpochStats(),
     // What the settle pass DID (Phase E, decision 4 of the unified-reconciler
     // note): per-class applied counts for the last pass + cumulative. The
     // plan is authoritative, so this replaces the old shadow counts/diff.

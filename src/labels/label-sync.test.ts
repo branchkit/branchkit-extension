@@ -166,3 +166,75 @@ describe('syncNow wholesale refusal (calibration_active)', () => {
     expect(batchCalls()).toHaveLength(1);
   });
 });
+
+// --- Grammar epoch tripwire (Phase 2a of DESIGN_GRAMMAR_EPOCH_HANDSHAKE.md) ---
+
+import { grammarEpochStats } from './label-sync';
+import { epochHashOf } from './grammar-epoch';
+
+describe('grammar epoch tripwire (detect-only)', () => {
+  let store: WrapperStore;
+  let sendMessage: ReturnType<typeof vi.fn>;
+  let nextResp: Resp & { epoch?: { count: number; hash: string } };
+
+  beforeEach(() => {
+    // Real timers: the success path's chunk loop awaits a setTimeout(0)
+    // yield, which never fires under fake timers (the refusal suite above
+    // returns before reaching it).
+    setAlphabet(ALPHABET);
+    store = new WrapperStore();
+    sendMessage = vi.fn((msg: { type: string }) => {
+      if (msg.type !== 'GRAMMAR_BATCH') return Promise.resolve(undefined);
+      return Promise.resolve(nextResp);
+    });
+    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+    initLabelSync({
+      store,
+      detachWrapper: vi.fn(),
+      reconcile: vi.fn(),
+      isHintsVisible: () => false,
+    });
+    rotateSession(); // clear sentCodewords between tests
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('matching epoch on the final chunk passes silently', async () => {
+    const w = makeWrapper('arch', store);
+    queuePut(w);
+    nextResp = { ...ok(['arch']), epoch: { count: 1, hash: epochHashOf(['arch']) } };
+    const before = grammarEpochStats();
+    await syncNow('test');
+    const after = grammarEpochStats();
+    expect(after.checks).toBe(before.checks + 1);
+    expect(after.mismatches).toBe(before.mismatches);
+  });
+
+  it('diverged epoch records a mismatch with both views, and does NOT republish', async () => {
+    const w = makeWrapper('bake', store);
+    queuePut(w);
+    // Plugin claims a different membership than the shadow will hold.
+    nextResp = { ...ok(['bake']), epoch: { count: 3, hash: 'deadbeefdeadbeef' } };
+    const before = grammarEpochStats();
+    await syncNow('test');
+    const after = grammarEpochStats();
+    expect(after.mismatches).toBe(before.mismatches + 1);
+    expect(after.lastMismatch?.pluginCount).toBe(3);
+    expect(after.lastMismatch?.shadowCount).toBe(1);
+    expect(after.lastMismatch?.shadowHash).toBe(epochHashOf(['bake']));
+    // Detect-only: exactly the sync's own batch posts — no republish storm.
+    const batchPosts = sendMessage.mock.calls.filter((c) => c[0]?.type === 'GRAMMAR_BATCH');
+    expect(batchPosts.length).toBe(1);
+  });
+
+  it('absent epoch (old plugin build / refusal) skips the check entirely', async () => {
+    const w = makeWrapper('cave', store);
+    queuePut(w);
+    nextResp = ok(['cave']);
+    const before = grammarEpochStats();
+    await syncNow('test');
+    expect(grammarEpochStats().checks).toBe(before.checks);
+  });
+});

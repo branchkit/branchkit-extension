@@ -1,8 +1,21 @@
 # Grammar epoch handshake — level-triggered grammar convergence
 
 Date: 2026-06-12
-Status: proposal (arc 2 of `REVIEW_ARCHITECTURE_2026-06-11.md`; unlocked by
-the unified reconciler + nav-wipe retirement)
+Status: Phases 0-2a IMPLEMENTED 2026-06-12. Phase 0 was already done by
+parallel sessions (calibration refusal handling + evicted-field deletion).
+Phase 1 live (plugin emits epoch, golden vectors pinned both sides, epoch on
+the batch log line). Phase 2a live detect-only with a QUIESCENCE GATE added
+on first-smoke evidence: scan/sync/strict traffic interleaves by design, so
+the comparison only runs when no other batch is in flight and nothing is
+queued (skippedBusy counts the rest).
+FIRST CATCH + 2b BLOCKER: in a fresh-profile harness the tripwire exposed a
+REAL pre-existing dual-CS boot race — two content scripts in one frame
+(manifest injection racing the SW's programmatic inject; cs=2 in the
+page-world bridge), each with its own session id, thrashing the plugin's
+per-frame session (epoch=0 resets as C7 cleanup flips between them).
+Mismatches there are true positives. Phase 2b (acting on mismatch) is
+BLOCKED until the install-time dual-injection race is fixed — two CSes
+would ping-pong republishes. Long-lived single-CS tabs are unaffected.
 
 ## The disease, restated
 
