@@ -98,8 +98,51 @@ or is there an Xray/attribute-visibility subtlety? Next diagnostic:
 provenance-mark each copy (manifest vs injected) and record
 document.documentElement identity/readyState at guard time.
 
-2b remains blocked on closing this fully. The repro harness pattern
-(streaming fixture + bridge boot/abort counts) is the gate.
+## Dual-CS race CLOSED (2026-06-12, follow-up session): the flush was the killer
+
+Diagnosis (flush/boot/abort markers on the page-world bridge +
+`scripts/_test-dual-cs-race.mjs`, the streaming-fixture repro promoted to a
+tracked acceptance gate): NEITHER open question was real. Attribute
+visibility was reliable in 30/30 instrumented tabs — every abort correctly
+saw a guard set ~20ms earlier in the same frame, killing both the
+stale-document and Xray hypotheses. The actual mechanism: on a
+still-loading page, `flushOrphanGuard`'s executeScript (issued ~1s in,
+after the ping ladder fails against a manifest CS that hasn't run yet) is
+DEFERRED to document_idle — the exact convergence point of the manifest
+boot and the queued injection. The bridge timeline is always
+`flush → boot(+1-3ms) → second copy(+~20ms)`; scheduler order around the
+manifest boot picks the outcome:
+- flush first → injected copy boots, manifest copy ABORTS (a wasted full
+  inject+abort cycle per fresh tab — every tab on this machine's timing);
+- flush in between → it DELETES the manifest script's just-set guard and
+  the injection boots a second live CS. This is the "blind to a 17ms-old
+  attribute" state: the attribute wasn't invisible, it was gone.
+flushOrphanGuard is the only guard-deleter in the system; ping-failure
+means "didn't answer", not "orphan" — a healthy CS mid-init fails pings
+too. The flush's correctness assumption was unsound on any loading tab.
+
+Fix (commit 3bcf51f), two layers:
+1. **Status gate (prevention).** `ensureContentScriptInjected` bails while
+   `tab.status === 'loading'`: a loading tab's manifest CS is guaranteed
+   to arrive at document_idle and a fresh document cannot carry a stale
+   guard, so there is nothing to recover; `onUpdated{status:'complete'}`
+   re-enters for genuine orphans/pre-existing tabs (which are never
+   'loading').
+2. **Guard keeper (level-triggered invariant).** The CS re-checks the
+   guard attribute every 2.5s: missing → reclaim (a flush hit a live
+   script; the queued sibling injection then aborts on the restored
+   guard); foreign id → self-quiesce (TeardownReason 'superseded' — elder
+   yields, exactly one survivor either way); dead context → quiesce, never
+   reclaim (an orphan must not strand its successor). Converges ANY dual
+   interleaving — including ones not yet discovered — to a single CS,
+   mirroring the level-triggered posture of the reconciler and of this
+   handshake itself.
+Ride-along: the guard value is now the instance cs_id, so abort/flush
+markers carry ownership and quiesceOrphan releases only its own guard.
+
+Gate result: 30/30 tabs single-boot, zero flushes, zero aborts, across
+25-chunk (~2.5s) and 10-chunk (~1s, load completing exactly at the ping
+ladder's decision point) stream profiles. **2b is UNBLOCKED.**
 
 ## Tripwire catch #3 (2026-06-12 night): response-loss ghost entries
 
