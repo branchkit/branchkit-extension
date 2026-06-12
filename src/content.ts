@@ -401,6 +401,10 @@ initLabelSync({
   detachWrapper,
   reconcile,
   isHintsVisible: () => pageSession.hintsVisible,
+  // Phase 2b (DESIGN_GRAMMAR_EPOCH_HANDSHAKE.md): a quiescent epoch mismatch
+  // fires the same full-republish recovery the enumerated triggers use.
+  // republishAllGrammar is a hoisted declaration below.
+  republishAll: (reason) => republishAllGrammar(reason),
 });
 
 let activeCategory: Category | null = null;

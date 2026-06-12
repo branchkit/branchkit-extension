@@ -43,6 +43,7 @@ import { sweepDisconnectedAfterBatch } from '../scan/batch-sweep';
 import { getHintVisibility } from '../config';
 import { labelReservoir } from './label-reservoir';
 import { bkLog } from '../debug/bk-log';
+import { firehoseStep } from '../debug/firehose';
 
 /**
  * Content.ts-owned collaborators the catchup sync needs. Injected once at
@@ -55,6 +56,12 @@ export interface LabelSyncDeps {
   /** Single level-triggered convergence pass (claim + build). */
   reconcile: () => void;
   isHintsVisible: () => boolean;
+  /**
+   * Full grammar republish (content.ts republishAllGrammar): rotate the
+   * session and re-queue every live wrapper. Phase 2b's epoch_mismatch
+   * recovery — the same body the enumerated triggers call.
+   */
+  republishAll: (reason: string) => void;
 }
 
 let deps: LabelSyncDeps;
@@ -257,6 +264,10 @@ interface EpochStats {
   mismatches: number;
   /** Comparisons skipped because other grammar traffic was in flight. */
   skippedBusy: number;
+  /** Phase 2b: epoch_mismatch republishes fired by this instance. */
+  republishes: number;
+  /** Phase 2b: the consecutive-republish cap tripped (loud-bug state). */
+  capExhausted: boolean;
   lastMismatch: {
     pluginCount: number; pluginHash: string;
     shadowCount: number; shadowHash: string;
@@ -277,7 +288,48 @@ function trimUrlForLog(href: string): string {
     return href.slice(0, 120);
   }
 }
-const epochStats: EpochStats = { checks: 0, mismatches: 0, skippedBusy: 0, lastMismatch: null };
+const epochStats: EpochStats = {
+  checks: 0, mismatches: 0, skippedBusy: 0, republishes: 0, capExhausted: false, lastMismatch: null,
+};
+
+// --- Phase 2b: mismatch acts (DESIGN_GRAMMAR_EPOCH_HANDSHAKE.md decisions 4+5) ---
+//
+// A confirmed quiescent mismatch fires the same recovery the enumerated
+// triggers use — republishAllGrammar('epoch_mismatch') via deps.republishAll
+// — making grammar convergence level-triggered: any desync, known or future,
+// heals within one batch round-trip of the next quiescent sync instead of
+// waiting for its class to be discovered, named, and wired to a trigger.
+// The enumerated triggers stay (decision 4) until telemetry proves them
+// redundant.
+//
+// Loop guards (decision 5): a republish is itself a full re-Put whose final
+// chunk re-runs this comparison, so a persistent disagreement (plugin bug,
+// the latent plugin↔actuator divergence the epoch can't see) would otherwise
+// republish forever:
+//   - cooldown: at most one epoch_mismatch republish per 5s;
+//   - consecutive cap: after 3 republishes with no clean check in between,
+//     stop acting and go LOUD (BK_GRAMMAR_EPOCH_CAP + firehose breadcrumb).
+//     A mismatch that survives a full republish is a real bug we want
+//     visible, not a silent republish storm. Any clean check resets the cap,
+//     so a long-lived page whose occasional desyncs DO heal never exhausts
+//     it; detect-only logging continues even when capped.
+const EPOCH_REPUBLISH_COOLDOWN_MS = 5000;
+const EPOCH_REPUBLISH_MAX_CONSECUTIVE = 3;
+let lastEpochRepublishAt = -Infinity;
+let consecutiveEpochRepublishes = 0;
+
+/** Test seam: module state is per-page in production (one module instance
+ * per content script) but shared across a vitest file. */
+export function resetGrammarEpochActForTest(): void {
+  lastEpochRepublishAt = -Infinity;
+  consecutiveEpochRepublishes = 0;
+  epochStats.checks = 0;
+  epochStats.mismatches = 0;
+  epochStats.skippedBusy = 0;
+  epochStats.republishes = 0;
+  epochStats.capExhausted = false;
+  epochStats.lastMismatch = null;
+}
 
 /** GRAMMAR_BATCH posts currently awaiting a response (scan + sync paths
  * both route through postBatch). */
@@ -307,7 +359,15 @@ function checkGrammarEpoch(resp: GrammarBatchResponse, reason: string): void {
   const shadowCount = sentCodewords.size;
   // Count comparison is free; hash only when counts agree (and at mismatch
   // time for the breadcrumb).
-  if (remote.count === shadowCount && epochHashOf(sentCodewords) === remote.hash) return;
+  if (remote.count === shadowCount && epochHashOf(sentCodewords) === remote.hash) {
+    // Clean check: the grammar converged, so any republish run is over.
+    if (epochStats.capExhausted) {
+      bkLog('BK_GRAMMAR_EPOCH_CAP_CLEARED', { afterRepublishes: consecutiveEpochRepublishes });
+    }
+    consecutiveEpochRepublishes = 0;
+    epochStats.capExhausted = false;
+    return;
+  }
   epochStats.mismatches++;
   epochStats.lastMismatch = {
     pluginCount: remote.count,
@@ -319,6 +379,25 @@ function checkGrammarEpoch(resp: GrammarBatchResponse, reason: string): void {
     frame: window === window.top ? 'top' : 'iframe',
   };
   bkLog('BK_GRAMMAR_EPOCH_MISMATCH', epochStats.lastMismatch);
+
+  // Phase 2b: act on the mismatch (cooldown + consecutive cap, above).
+  if (consecutiveEpochRepublishes >= EPOCH_REPUBLISH_MAX_CONSECUTIVE) {
+    if (!epochStats.capExhausted) {
+      epochStats.capExhausted = true;
+      bkLog('BK_GRAMMAR_EPOCH_CAP', {
+        republishes: consecutiveEpochRepublishes, ...epochStats.lastMismatch,
+      });
+      firehoseStep('grammar_epoch:cap_exhausted', consecutiveEpochRepublishes);
+    }
+    return;
+  }
+  const now = performance.now();
+  if (now - lastEpochRepublishAt < EPOCH_REPUBLISH_COOLDOWN_MS) return;
+  lastEpochRepublishAt = now;
+  consecutiveEpochRepublishes++;
+  epochStats.republishes++;
+  firehoseStep('grammar_epoch:republish', consecutiveEpochRepublishes);
+  deps.republishAll('epoch_mismatch');
 }
 
 /**

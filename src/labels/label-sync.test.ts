@@ -79,6 +79,7 @@ describe('syncNow wholesale refusal (calibration_active)', () => {
       detachWrapper: vi.fn(),
       reconcile: vi.fn(),
       isHintsVisible: () => false,
+      republishAll: vi.fn(),
     });
     // Clear module-level delta-sync state from prior tests.
     rotateSession();
@@ -167,14 +168,15 @@ describe('syncNow wholesale refusal (calibration_active)', () => {
   });
 });
 
-// --- Grammar epoch tripwire (Phase 2a of DESIGN_GRAMMAR_EPOCH_HANDSHAKE.md) ---
+// --- Grammar epoch handshake (Phases 2a+2b of DESIGN_GRAMMAR_EPOCH_HANDSHAKE.md) ---
 
-import { grammarEpochStats } from './label-sync';
+import { grammarEpochStats, resetGrammarEpochActForTest } from './label-sync';
 import { epochHashOf } from './grammar-epoch';
 
-describe('grammar epoch tripwire (detect-only)', () => {
+describe('grammar epoch handshake', () => {
   let store: WrapperStore;
   let sendMessage: ReturnType<typeof vi.fn>;
+  let republishAll: ReturnType<typeof vi.fn<(reason: string) => void>>;
   let nextResp: Resp & { epoch?: { count: number; hash: string } };
 
   beforeEach(() => {
@@ -183,6 +185,7 @@ describe('grammar epoch tripwire (detect-only)', () => {
     // returns before reaching it).
     setAlphabet(ALPHABET);
     store = new WrapperStore();
+    republishAll = vi.fn<(reason: string) => void>();
     sendMessage = vi.fn((msg: { type: string }) => {
       if (msg.type !== 'GRAMMAR_BATCH') return Promise.resolve(undefined);
       return Promise.resolve(nextResp);
@@ -193,8 +196,10 @@ describe('grammar epoch tripwire (detect-only)', () => {
       detachWrapper: vi.fn(),
       reconcile: vi.fn(),
       isHintsVisible: () => false,
+      republishAll,
     });
     rotateSession(); // clear sentCodewords between tests
+    resetGrammarEpochActForTest();
   });
 
   afterEach(() => {
@@ -210,9 +215,10 @@ describe('grammar epoch tripwire (detect-only)', () => {
     const after = grammarEpochStats();
     expect(after.checks).toBe(before.checks + 1);
     expect(after.mismatches).toBe(before.mismatches);
+    expect(republishAll).not.toHaveBeenCalled();
   });
 
-  it('diverged epoch records a mismatch with both views, and does NOT republish', async () => {
+  it('diverged epoch records a mismatch with both views and fires the epoch_mismatch republish', async () => {
     const w = makeWrapper('bake', store);
     queuePut(w);
     // Plugin claims a different membership than the shadow will hold.
@@ -224,9 +230,26 @@ describe('grammar epoch tripwire (detect-only)', () => {
     expect(after.lastMismatch?.pluginCount).toBe(3);
     expect(after.lastMismatch?.shadowCount).toBe(1);
     expect(after.lastMismatch?.shadowHash).toBe(epochHashOf(['bake']));
-    // Detect-only: exactly the sync's own batch posts — no republish storm.
-    const batchPosts = sendMessage.mock.calls.filter((c) => c[0]?.type === 'GRAMMAR_BATCH');
-    expect(batchPosts.length).toBe(1);
+    // Phase 2b: the mismatch acts — exactly one republish, via the dep.
+    expect(republishAll).toHaveBeenCalledTimes(1);
+    expect(republishAll).toHaveBeenCalledWith('epoch_mismatch');
+    expect(after.republishes).toBe(1);
+  });
+
+  it('a second mismatch inside the cooldown window does not republish again', async () => {
+    const w = makeWrapper('dove', store);
+    queuePut(w);
+    nextResp = { ...ok(['dove']), epoch: { count: 9, hash: 'deadbeefdeadbeef' } };
+    await syncNow('test');
+    expect(republishAll).toHaveBeenCalledTimes(1);
+
+    const w2 = makeWrapper('echo', store);
+    queuePut(w2);
+    nextResp = { ...ok(['echo']), epoch: { count: 9, hash: 'deadbeefdeadbeef' } };
+    await syncNow('test');
+    // Mismatch still recorded, but the act is cooldown-suppressed.
+    expect(grammarEpochStats().mismatches).toBe(2);
+    expect(republishAll).toHaveBeenCalledTimes(1);
   });
 
   it('absent epoch (old plugin build / refusal) skips the check entirely', async () => {
@@ -236,5 +259,95 @@ describe('grammar epoch tripwire (detect-only)', () => {
     const before = grammarEpochStats();
     await syncNow('test');
     expect(grammarEpochStats().checks).toBe(before.checks);
+    expect(republishAll).not.toHaveBeenCalled();
+  });
+});
+
+describe('grammar epoch 2b loop guards (cap + reset)', () => {
+  // Fake timers INCLUDING performance: the cooldown stamps performance.now(),
+  // and the cap requires the cooldown to elapse between acts.
+  let store: WrapperStore;
+  let sendMessage: ReturnType<typeof vi.fn>;
+  let republishAll: ReturnType<typeof vi.fn<(reason: string) => void>>;
+  let nextResp: Resp & { epoch?: { count: number; hash: string } };
+  const sent: string[] = [];
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    setAlphabet(ALPHABET);
+    store = new WrapperStore();
+    sent.length = 0;
+    republishAll = vi.fn<(reason: string) => void>();
+    sendMessage = vi.fn((msg: { type: string }) => {
+      if (msg.type !== 'GRAMMAR_BATCH') return Promise.resolve(undefined);
+      return Promise.resolve(nextResp);
+    });
+    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+    initLabelSync({
+      store,
+      detachWrapper: vi.fn(),
+      reconcile: vi.fn(),
+      isHintsVisible: () => false,
+      republishAll,
+    });
+    rotateSession();
+    resetGrammarEpochActForTest();
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = '';
+  });
+
+  // One sync round: put a fresh codeword; the plugin answers ok + the given
+  // epoch (lazy — evaluated AFTER this round's codeword joins `sent`, so a
+  // clean epoch reflects the post-batch shadow). Advances past the chunk
+  // loop's setTimeout(0) yield.
+  async function syncRound(codeword: string, epoch: () => { count: number; hash: string }): Promise<void> {
+    const w = makeWrapper(codeword, store);
+    queuePut(w);
+    sent.push(codeword);
+    nextResp = { ...ok([codeword]), epoch: epoch() };
+    const p = syncNow('test');
+    await vi.advanceTimersByTimeAsync(10);
+    await p;
+  }
+
+  const MISMATCH = () => ({ count: 999, hash: 'deadbeefdeadbeef' });
+  const cleanEpoch = () => ({ count: sent.length, hash: epochHashOf(sent) });
+
+  it('caps consecutive republishes, goes loud, and resets on a clean check', async () => {
+    // Three mismatches, each past the 5s cooldown → three republishes.
+    await syncRound('arch', MISMATCH);
+    await vi.advanceTimersByTimeAsync(6000);
+    await syncRound('bake', MISMATCH);
+    await vi.advanceTimersByTimeAsync(6000);
+    await syncRound('cave', MISMATCH);
+    expect(republishAll).toHaveBeenCalledTimes(3);
+    expect(grammarEpochStats().capExhausted).toBe(false);
+
+    // Fourth consecutive mismatch: cap trips — no act, loud flag.
+    await vi.advanceTimersByTimeAsync(6000);
+    await syncRound('dove', MISMATCH);
+    expect(republishAll).toHaveBeenCalledTimes(3);
+    expect(grammarEpochStats().capExhausted).toBe(true);
+
+    // Still detect-only while capped.
+    await vi.advanceTimersByTimeAsync(6000);
+    await syncRound('echo', MISMATCH);
+    expect(republishAll).toHaveBeenCalledTimes(3);
+    expect(grammarEpochStats().mismatches).toBe(5);
+
+    // A clean check clears the cap...
+    await vi.advanceTimersByTimeAsync(6000);
+    await syncRound('fern', cleanEpoch);
+    expect(grammarEpochStats().capExhausted).toBe(false);
+
+    // ...and the next mismatch acts again.
+    await vi.advanceTimersByTimeAsync(6000);
+    await syncRound('gulf', MISMATCH);
+    expect(republishAll).toHaveBeenCalledTimes(4);
   });
 });
