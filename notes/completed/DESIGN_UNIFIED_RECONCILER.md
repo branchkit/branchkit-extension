@@ -1,11 +1,11 @@
 # Unified Reconciler — the plan becomes the engine
 
 Date: 2026-06-12
-Status: IMPLEMENTED through Phase E (2026-06-12, branch
-`unified-reconciler-2026-06`); Phase F's automated gates are green and the
-ONE end-of-arc real-browser soak is the outstanding item — relocate this
-note to `notes/completed/` once it passes. See "Landed" at the bottom for
-outcomes, deviations, and the churn-probe finding.
+Status: COMPLETE (2026-06-12, branch `unified-reconciler-2026-06`). All
+phases landed, Phase F's automated gates green, and the end-of-arc
+real-browser soak passed 2026-06-12 (which also surfaced + fixed the
+pre-existing no-badges-on-refresh boot race, 01ada52). See "Landed" at the
+bottom for outcomes, deviations, and the churn-probe finding.
 (structural arc 1 of `REVIEW_ARCHITECTURE_2026-06-11.md`)
 Successor to: `notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md` (the
 {claim, build, release, teardown} axis — phases 0-6 landed and verified).
@@ -357,6 +357,6 @@ Numbers and findings:
   meantime by the applied-counts surface (zero-delta passes queue no puts —
   `grammar_already_owns` absorption unchanged).
 
-Outstanding: the ONE batched real-browser soak (Chrome + Firefox), then
-relocate this note to `notes/completed/`. After that, the unlocked
-dependents: nav-wipe retirement and the grammar epoch handshake (arc 2).
+The end-of-arc soak passed 2026-06-12. Unlocked dependents, in order:
+nav-wipe retirement (`project_nav_rebuild_smell` — its own change, its own
+soak) and the grammar epoch handshake (arc 2, its own note).
