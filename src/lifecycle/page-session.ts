@@ -36,12 +36,15 @@ import { getSessionId } from '../labels/label-sync';
  * Why a session is tearing down. Carried so the teardown body (and its log
  * line) can distinguish the cases that today all funnel through the same
  * observer-disconnect path:
- *   - 'orphan'   — extension reloaded; our chrome.* context is dead but the
- *                  JS context lives on (the original quiesceOrphan trigger).
- *   - 'navigate' — hard same-origin/cross-document unload (future use).
- *   - 'unload'   — page going away (future use).
+ *   - 'orphan'     — extension reloaded; our chrome.* context is dead but the
+ *                    JS context lives on (the original quiesceOrphan trigger).
+ *   - 'navigate'   — hard same-origin/cross-document unload (future use).
+ *   - 'unload'     — page going away (future use).
+ *   - 'superseded' — the guard keeper found another content script owning
+ *                    this frame's idempotency guard; the elder copy converges
+ *                    the frame back to a single CS by quiescing itself.
  */
-export type TeardownReason = 'orphan' | 'navigate' | 'unload';
+export type TeardownReason = 'orphan' | 'navigate' | 'unload' | 'superseded';
 
 /**
  * The content.ts-owned orchestration the session and its observers drive.

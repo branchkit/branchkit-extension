@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { isInjectableURL, withInjectLock, injectContentScriptFiles } from './injection';
+import { isInjectableURL, withInjectLock, injectContentScriptFiles, ensureContentScriptInjected } from './injection';
 
 describe('isInjectableURL', () => {
   it('accepts ordinary web URLs', () => {
@@ -86,5 +86,60 @@ describe('injectContentScriptFiles', () => {
     (chrome.tabs.get as ReturnType<typeof vi.fn>).mockResolvedValue({ url: 'https://x.com', discarded: false });
     expect(await injectContentScriptFiles(7)).toBe(true);
     expect(executeScript).toHaveBeenCalledTimes(2); // bootstrap.js + content.js (allFrames)
+  });
+});
+
+describe('ensureContentScriptInjected — loading-tab status gate', () => {
+  // The dual-CS install race (epoch tripwire catch #1): on a slow-loading
+  // page the ping ladder fails before the manifest CS has run, and the
+  // flush+inject sequence gets deferred into the same document_idle window
+  // the manifest script boots in — scheduler order then decides between a
+  // wasted inject+abort cycle and TWO live content scripts. The gate: a tab
+  // whose status is still 'loading' must never be flushed or injected (its
+  // manifest CS is guaranteed to arrive; onUpdated{'complete'} re-enters).
+  // Real-browser end-to-end: scripts/_test-dual-cs-race.mjs.
+  let executeScript: ReturnType<typeof vi.fn>;
+  let sendMessage: ReturnType<typeof vi.fn>;
+  let tabsGet: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    executeScript = vi.fn().mockResolvedValue(undefined);
+    sendMessage = vi.fn().mockRejectedValue(new Error('Receiving end does not exist'));
+    tabsGet = vi.fn();
+    vi.stubGlobal('chrome', {
+      tabs: { get: tabsGet, sendMessage },
+      scripting: { executeScript },
+    });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  async function runEnsure(tabId: number): Promise<void> {
+    const p = ensureContentScriptInjected(tabId);
+    await vi.runAllTimersAsync(); // drive the ping-retry delay
+    await p;
+  }
+
+  it('skips flush + inject while the tab is still loading', async () => {
+    tabsGet.mockResolvedValue({ url: 'https://x.com', status: 'loading', discarded: false });
+    await runEnsure(7);
+    expect(executeScript).not.toHaveBeenCalled();
+  });
+
+  it('proceeds to flush + inject for a complete tab that fails pings', async () => {
+    tabsGet.mockResolvedValue({ url: 'https://x.com', status: 'complete', discarded: false });
+    await runEnsure(7);
+    // flushOrphanGuard (func) + bootstrap.js + content.js (allFrames path)
+    expect(executeScript).toHaveBeenCalledTimes(3);
+  });
+
+  it('does nothing when the first ping answers', async () => {
+    sendMessage.mockResolvedValue({ ok: true });
+    await runEnsure(7);
+    expect(tabsGet).not.toHaveBeenCalled();
+    expect(executeScript).not.toHaveBeenCalled();
   });
 });

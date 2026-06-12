@@ -146,7 +146,16 @@ import {
 // The SW's recovery paths clear the attribute (flushOrphanGuard) only after
 // a ping-retry proves the holder is an unreachable orphan.
 const CS_GUARD_ATTR = 'data-branchkit-cs';
-if (document.documentElement.hasAttribute(CS_GUARD_ATTR)) {
+// Per-instance id. Doubles as the guard-attribute VALUE so every diagnostic
+// surface (abort markers, flushOrphanGuard's bridge marker) can attribute the
+// guard to the instance that set it, and so quiesceOrphan releases only its
+// own guard — an orphan tearing down late must not strand a healthy
+// successor's guard.
+const BK_CS_ID = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+  ? crypto.randomUUID()
+  : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+const guardOwner = document.documentElement.getAttribute(CS_GUARD_ATTR);
+if (guardOwner !== null) {
   // A content script already owns this frame. Leave an aborted-marker on the
   // page-world bridge (diagnostic — lets harnesses count guard trips), then
   // throw to abort the IIFE without re-binding listeners. No-op for the page.
@@ -155,12 +164,12 @@ if (document.documentElement.hasAttribute(CS_GUARD_ATTR)) {
       __branchkitDebugJSON?: string;
     };
     const arr = JSON.parse(pw.__branchkitDebugJSON ?? '[]');
-    arr.push({ aborted_at: performance.now(), ready: document.readyState });
+    arr.push({ aborted_at: performance.now(), ready: document.readyState, owner: guardOwner });
     pw.__branchkitDebugJSON = JSON.stringify(arr);
   } catch { /* diagnostic only */ }
   throw new Error('[BranchKit] content script duplicate injection — bailing');
 }
-document.documentElement.setAttribute(CS_GUARD_ATTR, '1');
+document.documentElement.setAttribute(CS_GUARD_ATTR, BK_CS_ID);
 
 // Reference-identity check (safe cross-origin — reads no properties). The perf
 // trail + live dataset + standing watchdog/longtask observers are diagnostic
@@ -184,14 +193,12 @@ try {
   const pageWindow = ((window as unknown as { wrappedJSObject?: Window }).wrappedJSObject ?? window) as unknown as {
     __branchkitDebugJSON?: string;
   };
-  const csId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   const entry = {
-    cs_id: csId,
+    cs_id: BK_CS_ID,
     loaded_at: performance.now(),
     is_top_frame: isTopFrame,
     initial_url: location.href,
+    ready: document.readyState,
   };
   let existing: typeof entry[] = [];
   if (typeof pageWindow.__branchkitDebugJSON === 'string') {
@@ -203,6 +210,74 @@ try {
 } catch {
   // ignore — debug surface only, no behavior depends on it
 }
+
+// Append a diagnostic entry to the page-world bridge (see boot entry above
+// for the Xray/string-encoding rationale). Non-fatal by construction.
+function pushDebugBridge(entry: Record<string, unknown>): void {
+  try {
+    const pw = ((window as unknown as { wrappedJSObject?: Window }).wrappedJSObject ?? window) as unknown as {
+      __branchkitDebugJSON?: string;
+    };
+    const arr = JSON.parse(pw.__branchkitDebugJSON ?? '[]');
+    arr.push(entry);
+    pw.__branchkitDebugJSON = JSON.stringify(arr);
+  } catch { /* diagnostic only */ }
+}
+
+// --- Guard keeper: level-triggered single-CS-per-frame invariant ---
+//
+// The boot-time guard above is edge-triggered: it only helps if the guard
+// attribute is still intact at the instant a duplicate copy boots. The SW's
+// orphan-recovery flush (background/injection.ts flushOrphanGuard) deletes
+// the attribute whenever its ping ladder concludes the frame is empty — and
+// a ping failure only proves "didn't answer", not "orphan": a healthy CS
+// mid-init (slow page, loaded machine) fails pings too. When that happens
+// the flush deletes a LIVE guard and the queued injection boots a second CS
+// (the dual-CS install race; the status gate in ensureContentScriptInjected
+// closes the known loading-tab window, this keeper enforces the invariant
+// against every other interleaving, known or future).
+//
+// Level-triggered repair, checked on a slow cadence:
+//   - guard missing  → reclaim it (we are alive; whoever flushed was wrong —
+//     a queued sibling injection will then abort on the restored guard)
+//   - guard foreign  → a successor copy owns the frame; converge to one CS
+//     by self-quiescing (elder yields, exactly one survivor either way)
+//   - context dead   → we are a true orphan; never reclaim (that would
+//     permanently block the successor) — quiesce instead.
+const GUARD_KEEPER_INTERVAL_MS = 2500;
+const guardKeeper = setInterval(() => {
+  if (pageSession.isTornDown) {
+    clearInterval(guardKeeper);
+    return;
+  }
+  try {
+    chrome.runtime.getURL('');
+  } catch {
+    clearInterval(guardKeeper);
+    pushDebugBridge({ keeper_orphaned_at: performance.now(), orphan_of: BK_CS_ID });
+    pageSession.teardown('orphan');
+    return;
+  }
+  let owner: string | null = null;
+  try {
+    owner = document.documentElement.getAttribute(CS_GUARD_ATTR);
+  } catch {
+    return; // document in teardown; unload path owns cleanup
+  }
+  if (owner === BK_CS_ID) return;
+  if (owner === null) {
+    try {
+      document.documentElement.setAttribute(CS_GUARD_ATTR, BK_CS_ID);
+      pushDebugBridge({ reclaimed_at: performance.now(), by: BK_CS_ID });
+      bkLog('BK_GUARD_RECLAIMED', { cs_id: BK_CS_ID });
+    } catch { /* document gone */ }
+    return;
+  }
+  clearInterval(guardKeeper);
+  pushDebugBridge({ superseded_at: performance.now(), elder: BK_CS_ID, successor: owner });
+  bkLog('BK_GUARD_SUPERSEDED', { elder: BK_CS_ID, successor: owner });
+  pageSession.teardown('superseded');
+}, GUARD_KEEPER_INTERVAL_MS);
 
 if (isTopFrame) startPerfObservers();
 
@@ -2090,9 +2165,13 @@ function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
   // inject on tab activation after an extension reload) can re-initialize this
   // frame. Without this, the orphan's lingering guard makes every fresh
   // script bail on the "duplicate injection" throw — the tab stays dead until
-  // it's closed and reopened. We're tearing down, so we no longer own the frame.
+  // it's closed and reopened. We're tearing down, so we no longer own the
+  // frame. Ownership check: if a successor already replaced the guard with its
+  // own id, leave it — removing it would let yet another copy boot on top.
   try {
-    document.documentElement.removeAttribute(CS_GUARD_ATTR);
+    if (document.documentElement.getAttribute(CS_GUARD_ATTR) === BK_CS_ID) {
+      document.documentElement.removeAttribute(CS_GUARD_ATTR);
+    }
   } catch { /* document gone */ }
   console.warn(`[BranchKit] content script torn down (reason: ${reason}). Self-quiesced.`);
 }

@@ -165,6 +165,24 @@ async function flushOrphanGuard(tabId: number): Promise<void> {
     await chrome.scripting.executeScript({
       target: { tabId, allFrames: true },
       func: () => {
+        // Diagnostic: leave a flushed_at marker on the page-world bridge so
+        // dual-CS harnesses can see exactly where this flush landed relative
+        // to content-script boots — the install-race smoking gun is a flush
+        // executing BETWEEN the manifest script's guard-set and the queued
+        // injection's guard-check. had_attr records whose guard (if any) is
+        // being deleted.
+        try {
+          const pw = ((window as unknown as { wrappedJSObject?: Window }).wrappedJSObject ?? window) as unknown as {
+            __branchkitDebugJSON?: string;
+          };
+          const arr = JSON.parse(pw.__branchkitDebugJSON ?? '[]');
+          arr.push({
+            flushed_at: performance.now(),
+            had_attr: document.documentElement.getAttribute('data-branchkit-cs'),
+            ready: document.readyState,
+          });
+          pw.__branchkitDebugJSON = JSON.stringify(arr);
+        } catch { /* diagnostic only */ }
         // The guard is a DOM attribute (shared across sandboxes/worlds —
         // see content.ts's idempotency guard); the legacy window expando is
         // cleared too so an old-generation orphan can't strand a tab
@@ -216,6 +234,25 @@ export async function ensureContentScriptInjected(tabId: number): Promise<void> 
     // Re-check inside the lock: the holder of the lock might have just
     // injected, so the CS is healthy by the time we get in here.
     if (await pingContentScript(tabId)) return;
+    // Status gate: a still-LOADING tab cannot need recovery — its manifest
+    // content script is guaranteed to arrive at document_idle, and a fresh
+    // document cannot carry a stale guard. Proceeding here is what created
+    // the dual-CS install race: on a slow page the ping ladder fails (the
+    // manifest CS hasn't run yet), then flushOrphanGuard + executeScript are
+    // DEFERRED by Firefox into the very document_idle window where the
+    // manifest script boots. Scheduler order then decides the outcome —
+    // flush-first wastes a full inject+abort cycle; flush-in-between deletes
+    // the manifest script's just-set guard and the queued injection boots a
+    // second live CS (the epoch tripwire's catch #1, deterministic via
+    // scripts/_test-dual-cs-race.mjs). Skipping is safe: a genuine orphan /
+    // pre-existing tab is not 'loading', and tabs.onUpdated{status:'complete'}
+    // re-enters this path once the load finishes.
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab.status === 'loading') return;
+    } catch {
+      return; // tab gone
+    }
     await flushOrphanGuard(tabId);
     await injectContentScriptFiles(tabId);
   });
