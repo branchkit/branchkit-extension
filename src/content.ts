@@ -2227,30 +2227,17 @@ function rescanForNav(fromCache: boolean, reason: string): void {
 
       void navStep('idle_fired');
 
-      // Per-wrapper observer teardown for real content swaps. The activate
-      // click path runs `preNavDetachAll` BEFORE the click, so for
-      // voice-driven navs the store is already empty here. This call is the
-      // safety net for navs the activate path didn't initiate (mouse-driven
-      // tab clicks, history nav, bookmarks, etc.) — `detached:0` in the log
-      // means the pre-click teardown already ran. See preNavDetachAll above.
-      //
-      // Gated to spa_nav: refocus (the other from_cache caller) doesn't lose
-      // its targets, so the cheap reuse path is correct for refocus.
-      if (reason === 'spa_nav') {
-        void navStep('rescan_detach:start');
-        // sparePersistent=true: this rescan runs AFTER the page's swap, so
-        // wrappers whose element is still connected are the persistent chrome
-        // (sidebar) that survived the nav — keep them and their codewords. The
-        // disconnected, swapped-out content is owned by the generic limbo/rebind
-        // path. DESIGN_CODEWORD_STABILITY Regime A.
-        const detached = preNavDetachAll('rescan', true);
-        void navStep('rescan_detach:end');
-        chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_nav_step', data: { step: 'rescan_detach:count', reason, at_ms: Math.round(performance.now() - t0), detached } } as Message).catch(() => {});
-      } else {
-        void navStep('drop_disconnected:start');
-        dropDisconnectedWrappers();
-        void navStep('drop_disconnected:end');
-      }
+      // Both rescan kinds converge on the generic disconnection path
+      // (nav-wipe retirement, step 2): swapped-out content parks in limbo,
+      // where key-ownership / fingerprint rebind preserve codeword identity
+      // onto the new page's matching controls — the same best-effort
+      // stability every other regime gets. (The old spa_nav-only hard
+      // detach released those codewords instead.) The MutationObserver's
+      // removal path usually parked them long before this idle callback;
+      // this sweep is the cheap idempotent backstop.
+      void navStep('drop_disconnected:start');
+      dropDisconnectedWrappers();
+      void navStep('drop_disconnected:end');
 
       void navStep('sync_now:start');
       await syncNow('refocus_from_cache');
@@ -2258,42 +2245,35 @@ function rescanForNav(fromCache: boolean, reason: string): void {
       const t1 = performance.now();
       chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_scan_completed', data: { elements: store.all.length, duration_ms: Math.round(t1 - t0), path: 'from_cache' } } as Message).catch(() => {});
 
-      // Reconciliation walk rebuilds wrappers for the new page. For spa_nav we
-      // detached everything above, so this is the full rebuild path; for
-      // refocus it's the idempotent reconciliation we always did.
-      //
-      // Idle-scheduled instead of `setTimeout(300)`: on light pages the idle
-      // callback fires in <50ms so badges appear ~250ms sooner; on heavy
-      // pages (YouTube /featured) the browser holds off until it's actually
-      // idle, which is exactly what we want — no need for a fixed margin.
-      // The 300ms `timeout` caps the wait so we still reconcile even if the
-      // page is pathologically busy. Plan A3 (notes/PLAN_BROWSER_EXTENSION_PERF_OPTIMIZATION.md).
+      // Deferred convergence. Idle-scheduled instead of `setTimeout(300)`:
+      // on light pages the idle callback fires in <50ms; on heavy pages the
+      // browser holds off until actually idle. The 300ms `timeout` caps the
+      // wait. Plan A3 (notes/PLAN_BROWSER_EXTENSION_PERF_OPTIMIZATION.md).
       const scheduleDeferred = () => {
         void navStep('deferred_scan:start');
-        // Route through doScan() so the SPA-nav rebuild can't race a
-        // concurrent storage-onChanged scan with the same session_id.
-        // Pre-fix the two ran in parallel, emitting batches with
-        // overlapping session+batch_index pairs and producing duplicate
-        // codeword assignments. See actuator.log 2026-06-05T17:30:11.
-        void doScan().then(async () => {
-          // Codeword-claim backstop. The spa_nav teardown wiped every
-          // wrapper + codeword (preNavDetachAll); the rebuild above
-          // re-creates and re-observes wrappers, but claiming then depends
-          // entirely on the IntersectionObserver re-firing its initial
-          // entry for each freshly-observed element. Under the post-nav
-          // mutation storm those initial callbacks are delivered only
-          // partially, leaving in-viewport wrappers observed-but-unclaimed
-          // (no badge) with `isInViewport` stuck at its constructor default.
-          // reconcile() walks the store and queues a claim for any in-viewport
-          // wrapper still missing a codeword, independent of the IO — the same
-          // convergence pass the alphabet-changed path uses. Build is a no-op
-          // here (codewords not flushed yet); showHints below paints once they
-          // land. Cheap no-op for wrappers that already claimed (refocus path).
-          reconcile();
-          await pageSession.tracker.flushNow();
-          if (pageSession.hintsVisible) showHints(activeCategory ?? undefined);
+        if (reason === 'spa_nav') {
+          // Nav-wipe retirement, step 2: no full-document doScan and no
+          // one-shot claim backstop. The swap's discovery rides the
+          // MutationObserver huge-path that already fired; the band sweep
+          // is the dropped-records backstop it is everywhere else; and the
+          // settle pass — which applies toClaim every run — converges
+          // claims + badges. A SPA nav is just a large mutation batch with
+          // a scheduling hint attached.
+          scheduleBandDiscovery();
+          schedulePassSoon();
           void navStep('deferred_scan:end');
-        });
+        } else {
+          // Refocus: the idempotent full reconciliation we always did.
+          // Route through doScan() so it can't race a concurrent
+          // storage-onChanged scan with the same session_id (duplicate
+          // codeword assignments — actuator.log 2026-06-05T17:30:11).
+          void doScan().then(async () => {
+            reconcile();
+            await pageSession.tracker.flushNow();
+            if (pageSession.hintsVisible) showHints(activeCategory ?? undefined);
+            void navStep('deferred_scan:end');
+          });
+        }
       };
       if (typeof (window as { requestIdleCallback?: unknown }).requestIdleCallback === 'function') {
         (window as Window & { requestIdleCallback: (cb: () => void, opts?: { timeout: number }) => void })
