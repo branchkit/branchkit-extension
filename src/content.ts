@@ -2106,45 +2106,10 @@ function trimFrameUrl(href: string): string {
   }
 }
 
-// Synchronous batch teardown of every wrapper's per-target observers
-// (IntersectionTracker, ResizeObserver, AttentionObserver). Called from two
-// points where a heavy DOM-swap is about to happen:
-//   1. The activate-click path (before the click that might trigger SPA nav),
-//      so we get ahead of the page's own dispatch+swap window.
-//   2. The SPA-nav rescan handler, as a safety net for navigations the
-//      activate path didn't initiate (mouse clicks, bookmarks, history nav).
-// Posts a breadcrumb so the actuator log shows whether the teardown ran and
-// how many wrappers it cleared. See notes/INVESTIGATION_YOUTUBE_WATCH_PERF.md.
-//
-// `sparePersistent` (the SPA-nav rescan, which runs AFTER the swap): keep
-// wrappers whose DOM element is still connected — the persistent page chrome
-// (e.g. a sidebar that survives the nav). Such elements never disconnected, so
-// they never contributed to the observer cascade this teardown preempts; wiping
-// them only churns their codewords (DESIGN_CODEWORD_STABILITY Regime A).
-// Wrappers already in limbo are also spared — the generic limbo/rebind path owns
-// them — so we only clean up the rare disconnected-but-not-yet-limbo'd wrapper.
-// The activate-click path passes false: full teardown BEFORE the swap, when
-// nothing has disconnected yet, to preempt the cascade.
-function preNavDetachAll(triggerReason: string, sparePersistent = false): number {
-  const targets = sparePersistent
-    ? store.all.filter(w => !w.element.isConnected && w.disconnectedAt === null)
-    : [...store.all];
-  const spared = sparePersistent ? store.all.length - targets.length : 0;
-  const t0 = performance.now();
-  for (const w of targets) detachWrapper(w.element);
-  chrome.runtime.sendMessage({
-    type: 'DEBUG_LOG',
-    tag: 'pipeline.cs_nav_step',
-    data: {
-      step: 'pre_nav_detach',
-      reason: triggerReason,
-      detached: targets.length,
-      spared,
-      took_ms: Math.round(performance.now() - t0),
-    },
-  } as Message).catch(() => {});
-  return targets.length;
-}
+// (preNavDetachAll is gone — notes/DESIGN_NAV_WIPE_RETIREMENT.md step 3. The
+// spa_nav hard detach it implemented was freeze-investigation residue; the
+// generic limbo/rebind path owns swapped-out content now, and the wedge
+// preempt below is the only nav-specific machinery left.)
 
 // Pre-nav observer teardown for the voice activate-click path (Layer 2 of
 // DESIGN_CODEWORD_KEY_OWNERSHIP.md). Synchronously unobserves every wrapper's
