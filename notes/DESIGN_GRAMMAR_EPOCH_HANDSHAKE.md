@@ -77,6 +77,30 @@ Implications, in priority order:
    still hold — invisible to the epoch (it compares CS↔plugin, not
    plugin↔actuator). Park for the bug list.
 
+## Dual-CS race: lab repro + partial fix (2026-06-12 night)
+
+REPRODUCED DETERMINISTICALLY: fresh-profile install + slow streaming page
+(local fixture, body trickles ~2.5s) → 5/6 tabs boot TWO content scripts,
+~25ms apart, both at document_idle. Mechanism: the SW's lazy injection
+(issued mid-load, deferred by executeScript to document_idle) lands
+back-to-back with the manifest script, and on Firefox the two run in
+SEPARATE SANDBOXES — the window-expando idempotency guard is invisible
+across them.
+
+Fix landed (partial): the guard is now a `data-branchkit-cs` attribute on
+documentElement (shared across sandboxes/worlds), with an aborted-marker on
+the page-world bridge. It demonstrably catches duplicates the expando could
+not (repro shows boot+ABORT pairs) — but most repro tabs STILL dual-boot,
+the second copy blind to an attribute set ~17ms earlier in the same frame.
+Open question: does Firefox hand the late executeScript copy a stale
+document reference (injection queued against the pre-navigation document),
+or is there an Xray/attribute-visibility subtlety? Next diagnostic:
+provenance-mark each copy (manifest vs injected) and record
+document.documentElement identity/readyState at guard time.
+
+2b remains blocked on closing this fully. The repro harness pattern
+(streaming fixture + bridge boot/abort counts) is the gate.
+
 ## Tripwire catch #3 (2026-06-12 night): response-loss ghost entries
 
 Post-fix residual mismatches show the INVERSE signature — plugin LARGER
