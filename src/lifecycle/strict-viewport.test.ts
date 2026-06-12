@@ -219,6 +219,42 @@ describe('collectStrictViewportDelta — rect boundary semantics', () => {
   });
 });
 
+describe('collectStrictViewportDelta — settle-gather snapshot path', () => {
+  function gatherFor(w: ElementWrapper, rect: FakeRect): Parameters<typeof collectStrictViewportDelta>[1] {
+    return {
+      vw: VW,
+      vh: VH,
+      ancestorChainVisible: true,
+      rects: new Map([[w, fakeElement(rect).getBoundingClientRect()]]),
+      cssVisible: new Map(),
+    };
+  }
+
+  it('decides from the snapshot rect without a live layout read', () => {
+    // The element's own gBCR throws — proof the snapshot path never reads live.
+    const w = makeWrapper({ rect: null, lastSent: false });
+    const g = gatherFor(w, { top: 100, left: 100, width: 50, height: 20 });
+    expect(collectStrictViewportDelta([w], g)).toEqual([w]);
+  });
+
+  it('falls back to a live read for a wrapper the snapshot missed', () => {
+    const w = makeWrapper({
+      rect: { top: 100, left: 100, width: 50, height: 20 },
+      lastSent: false,
+    });
+    const other = makeWrapper({ rect: null, lastSent: true });
+    const g = gatherFor(other, { top: 100, left: 100, width: 50, height: 20 });
+    expect(collectStrictViewportDelta([w], g)).toEqual([w]);
+  });
+
+  it('still reads flags live: a cssHidden wrapper is off-strict even with an on-screen snapshot rect', () => {
+    const w = makeWrapper({ rect: null, lastSent: true, cssHidden: true });
+    const g = gatherFor(w, { top: 100, left: 100, width: 50, height: 20 });
+    // lastSent=true, now off-strict (cssHidden) → delta, decided without any read.
+    expect(collectStrictViewportDelta([w], g)).toEqual([w]);
+  });
+});
+
 describe('stampStrictViewport', () => {
   it('writes both in_strict_viewport (current) and lastSentStrictViewport (baseline) in one pass', () => {
     const w = makeWrapper({

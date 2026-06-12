@@ -32,6 +32,7 @@ import { recordCpu } from '../debug/perf-counters';
 import { store } from '../core/store';
 import { attachWrapper } from '../core/wrapper-lifecycle';
 import { pageSession } from '../lifecycle/page-session';
+import type { SettleGather } from '../lifecycle/gather';
 
 const pendingVisibility = new Set<Element>();
 const VISIBILITY_ABANDON_MS = 30_000;
@@ -148,7 +149,11 @@ export function scheduleHintVisibilityRecheck(): void {
 // report changed that policy to "if the badge is hidden, voice can't match it
 // either." When any badge flips shown/hidden, fire `onVisibilityChanged` so the
 // strict delta re-pushes without waiting for the next scroll-settle.
-export function recheckHintedVisibility(): void {
+// The settle pipeline passes its gather snapshot (Phase B of
+// notes/DESIGN_UNIFIED_RECONCILER.md) so the style/rect reads come out of the
+// once-per-settle batched pass; the throttled out-of-pipeline callers run the
+// legacy self-read path. Wrapper flags are always read live.
+export function recheckHintedVisibility(gather?: SettleGather): void {
   const __cpuStart = performance.now();
   // Don't re-show badges the user just hid. Without this guard, hideHints()
   // sets pageSession.hintsVisible=false and clears each badge's visible
@@ -176,14 +181,17 @@ export function recheckHintedVisibility(): void {
     recordCpu('recheckHintedVisibility', performance.now() - __cpuStart);
     return;
   }
-  cacheVisibility(hinted);
+  // Reads come from the settle gather when present (snapshot taken at
+  // pipeline start; misses fall back live). Legacy path warms the layout
+  // cache itself.
+  if (!gather) cacheVisibility(hinted);
   // cacheVisibility warms each seed element's rect too, so getCachedRect below
   // is free. Gate paint on actual viewport geometry, not the tracker's wide-
   // margin isInViewport flag: an element parked off-screen but within that
   // margin (YouTube's collapsed nav drawer at x=-228) is isInViewport-true yet
   // must not paint a badge clamped to the edge. Without this the reposition
   // pass hides it and this loop re-shows it 100ms later — the flashing column.
-  const vw = window.innerWidth, vh = window.innerHeight;
+  const vw = gather?.vw ?? window.innerWidth, vh = gather?.vh ?? window.innerHeight;
   let transitions = 0;
   try {
     for (const w of wrappers) {
@@ -191,8 +199,9 @@ export function recheckHintedVisibility(): void {
       // Split the two reasons a badge hides: CSS-invisible (visibility/opacity —
       // voice should drop it) vs merely off the real viewport (the band-margin
       // clamp — geometry already drops it from strict, so don't flag cssHidden).
-      const cssVisible = isVisible(w.element);
-      const visible = cssVisible && isRectOnScreen(getCachedRect(w.element), vw, vh);
+      const cssVisible = gather?.cssVisible.get(w) ?? isVisible(w.element);
+      const rect = gather?.rects.get(w) ?? getCachedRect(w.element);
+      const visible = cssVisible && isRectOnScreen(rect, vw, vh);
       w.cssHidden = !cssVisible;
       const showing = w.hint.isVisible;
       if (visible && !showing) {

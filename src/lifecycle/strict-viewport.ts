@@ -34,6 +34,7 @@
  */
 
 import { ElementWrapper } from '../scan/element-wrapper';
+import type { SettleGather } from './gather';
 
 /**
  * True iff every iframe in this window's ancestor chain has its `<iframe>`
@@ -126,16 +127,22 @@ export function stampStrictViewport(wrappers: ElementWrapper[]): void {
  * `getBoundingClientRect` because the IO band's `isInViewport` flag is
  * the band notion, not the strict-viewport notion this function tracks.
  *
- * Cost: O(codeworded wrappers) gBCRs in one read pass. Called from
- * scroll-settle and other reposition triggers, both already debounced.
+ * Cost: O(codeworded wrappers) gBCRs in one read pass — or zero layout reads
+ * when the settle pipeline passes its gather snapshot (Phase B of
+ * notes/DESIGN_UNIFIED_RECONCILER.md), which already read the codeworded
+ * set's rects in the same settle. Flags (`occluded`, `cssHidden`,
+ * `lastSentStrictViewport`) are always read live — earlier settle steps
+ * write them after the gather. Called from scroll-settle and other
+ * reposition triggers, both already debounced.
  */
 export function collectStrictViewportDelta(
   wrappers: Iterable<ElementWrapper>,
+  gather?: SettleGather,
 ): ElementWrapper[] {
   const delta: ElementWrapper[] = [];
-  const ancestorOk = isAncestorChainInVisibleViewport(window);
-  const vh = window.innerHeight;
-  const vw = window.innerWidth;
+  const ancestorOk = gather?.ancestorChainVisible ?? isAncestorChainInVisibleViewport(window);
+  const vh = gather?.vh ?? window.innerHeight;
+  const vw = gather?.vw ?? window.innerWidth;
   for (const w of wrappers) {
     if (w.disconnectedAt !== null) continue;
     if (!w.scanned.codeword) continue;
@@ -144,12 +151,18 @@ export function collectStrictViewportDelta(
     // by the visibility recheck) targets are both off-strict — see
     // stampStrictViewport. A hint the user can't see shouldn't be voice-matchable.
     if (ancestorOk && !w.occluded && !w.cssHidden) {
-      try {
-        const r = w.element.getBoundingClientRect();
+      const cached = gather?.rects.get(w);
+      if (cached) {
         inStrict =
-          r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
-      } catch {
-        inStrict = false;
+          cached.bottom > 0 && cached.top < vh && cached.right > 0 && cached.left < vw;
+      } else {
+        try {
+          const r = w.element.getBoundingClientRect();
+          inStrict =
+            r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
+        } catch {
+          inStrict = false;
+        }
       }
     }
     if (inStrict !== w.lastSentStrictViewport) delta.push(w);

@@ -11,6 +11,7 @@ import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, 
 import { ElementWrapper } from './scan/element-wrapper';
 import { wantsHint } from './lifecycle/desired-state';
 import { computeReconcilePlan, geometryInBand, RECONCILE_BAND_MARGIN_PX } from './lifecycle/reconcile';
+import { gatherSettleReads, SettleGather } from './lifecycle/gather';
 import { stampStrictViewport, collectStrictViewportDelta } from './lifecycle/strict-viewport';
 import * as idRegistry from './scan/registry';
 import type { CodewordMemoryEntry } from './labels/codeword-memory';
@@ -1383,9 +1384,9 @@ function scheduleReconcile(): void {
 // layout read never interleaves with a write. Wrappers with a codeword but no
 // hint are deliberately NOT swept: a codeword implies the IO delivered an
 // enter, and its exit/release flows through the IO + the hinted sweep.
-function reconcileTeardown(): void {
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
+function reconcileTeardown(gather?: SettleGather): void {
+  const vw = gather?.vw ?? window.innerWidth;
+  const vh = gather?.vh ?? window.innerHeight;
   // Include dormant reused hints (DESIGN_HINT_REUSE.md): they were torn down
   // by an IO exit but the badge object survived for scroll-back. If the user
   // scrolled them back in and the IO missed the enter, the wrapper has
@@ -1402,11 +1403,12 @@ function reconcileTeardown(): void {
     w.scanned.codeword.length === 0 && w.element.isConnected);
   if (hinted.length === 0 && unhinted.length === 0) return;
 
-  // Read all geometry first…
+  // Read all geometry first… (from the settle gather when present — the
+  // once-per-settle batched read; live fallback for wrappers it missed)
   const offBand: ElementWrapper[] = [];
   const missedEnter: ElementWrapper[] = [];
   for (const w of hinted) {
-    const r = w.element.getBoundingClientRect();
+    const r = gather?.rects.get(w) ?? w.element.getBoundingClientRect();
     const inBand = geometryInBand(r, vw, vh, RECONCILE_BAND_MARGIN_PX);
     if (inBand) {
       // Stale-FALSE candidate: IO flag says out but geometry says in.
@@ -1421,7 +1423,7 @@ function reconcileTeardown(): void {
     }
   }
   for (const w of unhinted) {
-    const r = w.element.getBoundingClientRect();
+    const r = gather?.rects.get(w) ?? w.element.getBoundingClientRect();
     // A boxless element (display:none collapsed menu) reads as the all-zero
     // rect, which the band test would call "in band" — but the IO never
     // intersects a boxless element, so flipping the flag here would claim
@@ -1455,8 +1457,8 @@ function reconcileTeardown(): void {
 // the _strict membership to converge. Walks the store, queues any wrapper
 // whose current strict status differs from the last-sent value, and triggers
 // a debounced sync. Codeword set is unchanged; this is a flag refresh.
-function reconcileStrictViewport(): void {
-  const delta = collectStrictViewportDelta(store.all);
+function reconcileStrictViewport(gather?: SettleGather): void {
+  const delta = collectStrictViewportDelta(store.all, gather);
   if (delta.length === 0) return;
   firehoseStep('strict-viewport:delta', delta.length, 1);
   for (const w of delta) queuePut(w);
@@ -2771,14 +2773,23 @@ function reconcileScrollFrame(): void {
 // membership doesn't matter, and the next `show` re-scans from scratch.
 function runSettlePipeline(discovery: 'band' | 'store'): void {
   if (pageSession.hintsVisible) {
-    reconcileTeardown();
+    // GATHER (Phase B of notes/DESIGN_UNIFIED_RECONCILER.md): one batched
+    // layout read over the steps' bounded sets, shared by teardown (1),
+    // recheck (5), and strict (6) — previously three separate read passes
+    // over heavily-overlapping sets. Taken before any step writes; safe to
+    // share because the steps' writes (badge DOM, flag repairs, queued
+    // releases) never move target elements within this synchronous task.
+    // Steps read live wrapper FLAGS as before — only geometry/styles come
+    // from the snapshot, with live fallback for wrappers it missed.
+    const gather = gatherSettleReads(store.all);
+    reconcileTeardown(gather);
     if (discovery === 'band') scheduleBandDiscovery();
     else scheduleReconcile();
     reconcileClipObservation(store.all);
     reconcileOcclusion();
     reconcileScrollAccel();
-    recheckHintedVisibility();
-    reconcileStrictViewport();
+    recheckHintedVisibility(gather);
+    reconcileStrictViewport(gather);
   }
   scheduleReposition();
 }
