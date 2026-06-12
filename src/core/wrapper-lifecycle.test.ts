@@ -17,12 +17,14 @@ import { ScannedElement } from '../types';
 import { store } from './store';
 import * as idRegistry from '../scan/registry';
 import {
-  initWrapperLifecycle,
   attachWrapper,
   detachWrapper,
   attachDiscovered,
 } from './wrapper-lifecycle';
-import { initLimbo, collectLimboWrappers, collectStrongKeyIndex } from '../observe/limbo';
+import { collectLimboWrappers, collectStrongKeyIndex } from '../observe/limbo';
+import { pageSession } from '../lifecycle/page-session';
+import type { IntersectionTracker } from '../observe/intersection-tracker';
+import type { AttentionObserver } from '../observe/attention-observer';
 
 function scanned(label: string): ScannedElement {
   return { label, id: 0, category: 'button', type: 'button', adapter: null, codeword: '' };
@@ -59,18 +61,11 @@ beforeEach(() => {
   resizeObserve = vi.fn();
   resizeUnobserve = vi.fn();
   attentionUnobserve = vi.fn();
-  initWrapperLifecycle({
-    tracker: { observe: trackerObserve, unobserve: trackerUnobserve } as unknown as Parameters<typeof initWrapperLifecycle>[0]['tracker'],
-    resizeObserver: { observe: resizeObserve, unobserve: resizeUnobserve, disconnect: vi.fn() } as unknown as ResizeObserver,
-    attentionObserver: { unobserve: attentionUnobserve } as unknown as Parameters<typeof initWrapperLifecycle>[0]['attentionObserver'],
-  });
-  // The key-ownership transfer routes through limbo's rebindWrapper, which uses
-  // limbo's own injected observers — wire them to the same mocks.
-  initLimbo({
-    detachWrapper: detachWrapper as unknown as (element: Element) => void,
-    tracker: { observe: trackerObserve, unobserve: trackerUnobserve } as unknown as Parameters<typeof initLimbo>[0]['tracker'],
-    resizeObserver: { observe: resizeObserve, unobserve: resizeUnobserve, disconnect: vi.fn() } as unknown as ResizeObserver,
-  });
+  // Both wrapper-lifecycle and limbo's rebindWrapper reach the observers
+  // through the pageSession singleton (Tier 3) — install fakes directly.
+  pageSession.tracker = { observe: trackerObserve, unobserve: trackerUnobserve } as unknown as IntersectionTracker;
+  pageSession.resizeObserver = { observe: resizeObserve, unobserve: resizeUnobserve, disconnect: vi.fn() } as unknown as ResizeObserver;
+  pageSession.attentionObserver = { unobserve: attentionUnobserve } as unknown as AttentionObserver;
 });
 
 describe('attachWrapper', () => {

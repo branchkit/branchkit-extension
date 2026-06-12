@@ -14,8 +14,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ElementWrapper, enterLimbo } from '../scan/element-wrapper';
 import { ScannedElement } from '../types';
 import { store } from '../core/store';
+import { pageSession } from '../lifecycle/page-session';
+import type { IntersectionTracker } from './intersection-tracker';
 import {
-  initLimbo,
   collectLimboWrappers,
   collectStrongKeyIndex,
   tryRebindByStrongKey,
@@ -24,6 +25,13 @@ import {
   finalizeExpiredLimboWrappers,
   rebindCounters,
 } from './limbo';
+import { detachWrapper } from '../core/wrapper-lifecycle';
+
+// limbo imports detachWrapper directly from core/wrapper-lifecycle (Tier 3 —
+// the initLimbo seam is gone); stub the module so the finalize/refuse paths
+// don't run the real detach against the store. attachWrapper is stubbed too:
+// page-session/visibility-tracker import it in this module graph.
+vi.mock('../core/wrapper-lifecycle', () => ({ detachWrapper: vi.fn(), attachWrapper: vi.fn() }));
 
 function scanned(id: number): ScannedElement {
   return { label: 'x', id, category: 'button', type: 'button', adapter: null, codeword: '' };
@@ -56,20 +64,18 @@ function freeAnchor(href: string): HTMLAnchorElement {
   return el;
 }
 
-let detachWrapper: ReturnType<typeof vi.fn>;
 let trackerObserve: ReturnType<typeof vi.fn>;
 let resizeObserve: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   store.clear();
-  detachWrapper = vi.fn();
+  vi.mocked(detachWrapper).mockClear();
   trackerObserve = vi.fn();
   resizeObserve = vi.fn();
-  initLimbo({
-    detachWrapper: detachWrapper as unknown as (element: Element) => void,
-    tracker: { observe: trackerObserve, unobserve: vi.fn() } as unknown as Parameters<typeof initLimbo>[0]['tracker'],
-    resizeObserver: { observe: resizeObserve, unobserve: vi.fn(), disconnect: vi.fn() } as unknown as ResizeObserver,
-  });
+  // limbo reaches the observers through the pageSession singleton (Tier 3) —
+  // install fakes directly.
+  pageSession.tracker = { observe: trackerObserve, unobserve: vi.fn() } as unknown as IntersectionTracker;
+  pageSession.resizeObserver = { observe: resizeObserve, unobserve: vi.fn(), disconnect: vi.fn() } as unknown as ResizeObserver;
   rebindCounters.refuse_no_match = 0;
   rebindCounters.rebind_key = 0;
 });

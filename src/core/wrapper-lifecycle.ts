@@ -7,11 +7,11 @@
  * (Tier 1 of notes/DESIGN_EXTENSION_RESTRUCTURE.md).
  *
  * The three observers it drives (`tracker`, `resizeObserver`,
- * `attentionObserver`) still live in content.ts and are injected via
- * `initWrapperLifecycle` — they become direct imports once observer construction
- * relocates onto PageSession (Tier 3). The discovery walk (`discoverInSubtree`)
- * and `reevaluateAttribute` stay in content.ts for now; they reach into the
- * rules / attention / shadow surfaces and move with the mutation source.
+ * `attentionObserver`) are owned by the `pageSession` singleton (Tier 3 of the
+ * restructure — constructed in `PageSession.start()`), reached by direct
+ * import. The discovery walk (`discoverInSubtree`) and `reevaluateAttribute`
+ * stay in content.ts for now; they reach into the rules / attention / shadow
+ * surfaces and move with the mutation source.
  */
 
 import { ElementWrapper } from '../scan/element-wrapper';
@@ -21,25 +21,7 @@ import { isRecallLoaded, resolvePreferredCodeword } from '../labels/codeword-rec
 import { dropPendingPut, hasSent, queueDelete } from '../labels/label-sync';
 import { tryRebindFromLimbo, tryRebindByStrongKey, isRecentlyOrphaned } from '../observe/limbo';
 import { store } from './store';
-import type { IntersectionTracker } from '../observe/intersection-tracker';
-import type { AttentionObserver } from '../observe/attention-observer';
-
-let tracker!: IntersectionTracker;
-let resizeObserver!: ResizeObserver;
-let attentionObserver!: AttentionObserver;
-
-export interface WrapperLifecycleDeps {
-  tracker: IntersectionTracker;
-  resizeObserver: ResizeObserver;
-  attentionObserver: AttentionObserver;
-}
-
-/** Wire the still-in-content.ts observers. Call once at boot. */
-export function initWrapperLifecycle(deps: WrapperLifecycleDeps): void {
-  tracker = deps.tracker;
-  resizeObserver = deps.resizeObserver;
-  attentionObserver = deps.attentionObserver;
-}
+import { pageSession } from '../lifecycle/page-session';
 
 // Regime B phase 3 (DESIGN_CODEWORD_STABILITY): seed a wrapper's
 // preferredCodeword from the SW-persisted memory so it reclaims the codeword
@@ -79,8 +61,8 @@ export function attachWrapper(wrapper: ElementWrapper): void {
   idRegistry.register(wrapper);
   seedPreferredFromMemory(wrapper);
   store.addWrapper(wrapper);
-  tracker.observe(wrapper.element);
-  resizeObserver.observe(wrapper.element);
+  pageSession.tracker.observe(wrapper.element);
+  pageSession.resizeObserver.observe(wrapper.element);
   // Note: NOT observing via attentionObserver. Wrappers stay attached
   // until DOM disconnect (Rango model); leave-detach is the regression
   // path. The attention observer's only job is bounding pendingVisibility.
@@ -91,9 +73,9 @@ export function attachWrapper(wrapper: ElementWrapper): void {
  * the pool and unobserves both observers.
  */
 export function detachWrapper(element: Element): void {
-  resizeObserver.unobserve(element);
-  tracker.unobserve(element);
-  attentionObserver.unobserve(element);
+  pageSession.resizeObserver.unobserve(element);
+  pageSession.tracker.unobserve(element);
+  pageSession.attentionObserver.unobserve(element);
   const removed = store.removeWrapperByElement(element);
   if (removed) {
     // Delta-sync bookkeeping: if the plugin holds this codeword, queue

@@ -5,8 +5,8 @@
  * scan time, and gates already-hinted badges as page-script visibility flips.
  * Extracted from content.ts module scope (Tier 1 of
  * notes/DESIGN_EXTENSION_RESTRUCTURE.md). It owns the `pendingVisibility` set
- * and the two visibility observers; the attention observer (still in
- * content.ts) feeds candidates in via `trackPendingCandidate` /
+ * and the two visibility observers; the attention observer (owned by the
+ * `pageSession`) feeds candidates in via `trackPendingCandidate` /
  * `untrackPendingCandidate`.
  *
  * Two layers (see notes/completed/DESIGN_VISIBILITY_OBSERVER.md):
@@ -16,10 +16,13 @@
  *      disconnects when the set empties. RAF-debounced to coalesce React's
  *      per-component class churn into one re-check per frame.
  *
- * Transitional seam: `attachWrapper`, `showHints`, and the `pageSession`
- * instance still live in content.ts and are injected via `initVisibilityTracker`
- * (mirroring the PageSession hooks pattern). They become direct imports once the
- * wrapper-lifecycle lift and the store delta cut land.
+ * `attachWrapper` is a direct import from core/wrapper-lifecycle; the
+ * `pageSession` singleton is imported from lifecycle/page-session, and the
+ * remaining content.ts orchestration (`showHints`, the strict-viewport
+ * re-push) arrives through `pageSession.deps`. The two observers here are
+ * constructed by `constructVisibilityObservers()`, called from
+ * `PageSession.start()` — the session owns observer construction (Tier 3 of
+ * notes/DESIGN_EXTENSION_RESTRUCTURE.md).
  */
 
 import { ElementWrapper } from '../scan/element-wrapper';
@@ -27,62 +30,46 @@ import { scanSingle, isVisible } from '../scan/scanner';
 import { cacheVisibility, clearLayoutCache, getCachedRect, isRectOnScreen } from '../layout-cache';
 import { recordCpu } from '../debug/perf-counters';
 import { store } from '../core/store';
-import type { PageSession } from '../lifecycle/page-session';
-
-let pageSession!: PageSession;
-let attachWrapper!: (w: ElementWrapper) => void;
-let showHints!: () => void;
-let onVisibilityChanged: (() => void) | undefined;
-
-export interface VisibilityTrackerDeps {
-  pageSession: PageSession;
-  attachWrapper: (w: ElementWrapper) => void;
-  showHints: () => void;
-  /** Called after `recheckHintedVisibility` flips any badge's shown/hidden
-   * state. Lets content.ts re-push the strict-viewport delta so a target the
-   * recheck just hid (or re-showed) drops from (or rejoins) the voice-matchable
-   * `_strict` collection promptly — without waiting for the next scroll-settle. */
-  onVisibilityChanged?: () => void;
-}
-
-/** Wire the still-in-content.ts dependencies. Call once at boot, before any
- * candidate is observed. */
-export function initVisibilityTracker(deps: VisibilityTrackerDeps): void {
-  pageSession = deps.pageSession;
-  attachWrapper = deps.attachWrapper;
-  showHints = deps.showHints;
-  onVisibilityChanged = deps.onVisibilityChanged;
-}
+import { attachWrapper } from '../core/wrapper-lifecycle';
+import { pageSession } from '../lifecycle/page-session';
 
 const pendingVisibility = new Set<Element>();
 const VISIBILITY_ABANDON_MS = 30_000;
 let visibilityAbandonTimer: ReturnType<typeof setTimeout> | null = null;
 let visibilityRafPending = false;
 
-const visibilityIO = new IntersectionObserver((entries) => {
-  let dirty = false;
-  for (const entry of entries) {
-    if (!entry.isIntersecting) continue;
-    const el = entry.target;
-    visibilityIO.unobserve(el);
-    if (store.findWrapperFor(el)) { pendingVisibility.delete(el); continue; }
-    const scanned = scanSingle(el);
-    // Keep in pendingVisibility — visibility:hidden elements have non-zero
-    // rects so IO fires immediately, but they need the MO layer to promote
-    // them once a class/style change flips visibility.
-    if (!scanned) continue;
-    attachWrapper(new ElementWrapper(el, scanned));
-    pendingVisibility.delete(el);
-    dirty = true;
-  }
-  // attachWrapper above emits a store attach delta → grammar sync (Tier 2).
-  if (dirty && pageSession.hintsVisible) showHints();
-  if (pendingVisibility.size === 0) disconnectVisibilityMO();
-}, { root: null, rootMargin: '200px', threshold: 0 });
+let visibilityIO: IntersectionObserver | undefined;
+let visibilityMO: MutationObserver | undefined;
 
-const visibilityMO = new MutationObserver(() => {
-  scheduleVisibilitySweep();
-});
+/** Construct the two visibility observers. Called once from
+ * `PageSession.start()`. Construction is inert — nothing is observed until a
+ * candidate is tracked. */
+export function constructVisibilityObservers(): void {
+  visibilityIO = new IntersectionObserver((entries) => {
+    let dirty = false;
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const el = entry.target;
+      visibilityIO?.unobserve(el);
+      if (store.findWrapperFor(el)) { pendingVisibility.delete(el); continue; }
+      const scanned = scanSingle(el);
+      // Keep in pendingVisibility — visibility:hidden elements have non-zero
+      // rects so IO fires immediately, but they need the MO layer to promote
+      // them once a class/style change flips visibility.
+      if (!scanned) continue;
+      attachWrapper(new ElementWrapper(el, scanned));
+      pendingVisibility.delete(el);
+      dirty = true;
+    }
+    // attachWrapper above emits a store attach delta → grammar sync (Tier 2).
+    if (dirty && pageSession.hintsVisible) pageSession.deps.showHints();
+    if (pendingVisibility.size === 0) disconnectVisibilityMO();
+  }, { root: null, rootMargin: '200px', threshold: 0 });
+
+  visibilityMO = new MutationObserver(() => {
+    scheduleVisibilitySweep();
+  });
+}
 
 // A "visibility may have changed" signal does two distinct things, on two
 // cadences:
@@ -225,7 +212,7 @@ export function recheckHintedVisibility(): void {
     // A badge flipped shown/hidden → its strict-viewport eligibility may have
     // changed too. Re-push the strict delta now (debounced downstream) so voice
     // converges with the visual without waiting for a scroll-settle.
-    onVisibilityChanged?.();
+    pageSession.deps.onVisibilityChanged();
   }
 }
 
@@ -241,12 +228,12 @@ function anyHintedWrapperVisible(): boolean {
 export function connectVisibilityMO(): void {
   if (visibilityAbandonTimer) clearTimeout(visibilityAbandonTimer);
   visibilityAbandonTimer = setTimeout(() => {
-    for (const el of pendingVisibility) visibilityIO.unobserve(el);
+    for (const el of pendingVisibility) visibilityIO?.unobserve(el);
     pendingVisibility.clear();
     disconnectVisibilityMO();
   }, VISIBILITY_ABANDON_MS);
   if (pageSession.visibilityMOConnected) return;
-  visibilityMO.observe(document.documentElement, {
+  visibilityMO?.observe(document.documentElement, {
     subtree: true,
     attributes: true,
     attributeFilter: ['class', 'style'],
@@ -263,7 +250,7 @@ function disconnectVisibilityMO(): void {
   // throttle, so leaving the MO connected on a hinted page costs at most
   // ~30ms CPU per second of activity.
   if (anyHintedWrapperVisible()) return;
-  visibilityMO.disconnect();
+  visibilityMO?.disconnect();
   pageSession.visibilityMOConnected = false;
   if (visibilityAbandonTimer) {
     clearTimeout(visibilityAbandonTimer);
@@ -286,18 +273,18 @@ function recheckPendingVisibility(): void {
     for (const el of pendingVisibility) {
       if (!el.isConnected) {
         pendingVisibility.delete(el);
-        visibilityIO.unobserve(el);
+        visibilityIO?.unobserve(el);
         continue;
       }
       if (store.findWrapperFor(el)) {
         pendingVisibility.delete(el);
-        visibilityIO.unobserve(el);
+        visibilityIO?.unobserve(el);
         continue;
       }
       const scanned = scanSingle(el);
       if (!scanned) continue;
       pendingVisibility.delete(el);
-      visibilityIO.unobserve(el);
+      visibilityIO?.unobserve(el);
       attachWrapper(new ElementWrapper(el, scanned));
       dirty = true;
     }
@@ -305,7 +292,7 @@ function recheckPendingVisibility(): void {
     clearLayoutCache();
   }
   // attachWrapper above emits a store attach delta → grammar sync (Tier 2).
-  if (dirty && pageSession.hintsVisible) showHints();
+  if (dirty && pageSession.hintsVisible) pageSession.deps.showHints();
   if (pendingVisibility.size === 0) disconnectVisibilityMO();
   recordCpu('recheckPendingVisibility', performance.now() - __cpuStart);
   if (__initialSize > 0) recordCpu(`recheckPendingVisibility:size:${__initialSize > 1000 ? '1000+' : __initialSize > 100 ? '100-1000' : '<100'}`, __initialSize);
@@ -319,7 +306,7 @@ function recheckPendingVisibility(): void {
  */
 export function trackPendingCandidate(el: Element): void {
   pendingVisibility.add(el);
-  visibilityIO.observe(el);
+  visibilityIO?.observe(el);
   connectVisibilityMO();
 }
 
@@ -330,7 +317,7 @@ export function trackPendingCandidate(el: Element): void {
 export function untrackPendingCandidate(el: Element): void {
   if (pendingVisibility.has(el)) {
     pendingVisibility.delete(el);
-    visibilityIO.unobserve(el);
+    visibilityIO?.unobserve(el);
     if (pendingVisibility.size === 0) disconnectVisibilityMO();
   }
 }
@@ -342,8 +329,8 @@ export function untrackPendingCandidate(el: Element): void {
  * teardown only disconnected the observers).
  */
 export function teardownVisibilityTracker(): void {
-  try { visibilityIO.disconnect(); } catch { /* idempotent */ }
-  try { visibilityMO.disconnect(); } catch { /* idempotent */ }
+  try { visibilityIO?.disconnect(); } catch { /* idempotent */ }
+  try { visibilityMO?.disconnect(); } catch { /* idempotent */ }
   if (visibilityAbandonTimer) {
     clearTimeout(visibilityAbandonTimer);
     visibilityAbandonTimer = null;

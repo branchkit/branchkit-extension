@@ -11,10 +11,10 @@
  * Extracted from content.ts module scope (Tier 1 of
  * notes/DESIGN_EXTENSION_RESTRUCTURE.md). The pure rebind decision logic
  * already lives in labels/rebind.ts; this owns the orchestration over the
- * store. `detachWrapper` and the two observers (`tracker`, `resizeObserver`)
- * still live in content.ts and are injected via `initLimbo` — they become
- * direct imports once the wrapper-lifecycle lift and the observer relocation
- * (Tier 3) land.
+ * store. The two observers (`tracker`, `resizeObserver`) are owned by the
+ * `pageSession` singleton (Tier 3 — constructed in `PageSession.start()`);
+ * `detachWrapper` is a direct import from core/wrapper-lifecycle (the import
+ * cycle with it is runtime-only function references, which ES modules allow).
  */
 
 import { ElementWrapper, enterLimbo, isLimboExpired } from '../scan/element-wrapper';
@@ -24,24 +24,8 @@ import { bumpRebindCounter, findLimboMatch, newRebindCounters, REBIND_DISTANCE_T
 import { peekCachedRect } from '../layout-cache';
 import { lifecycleCounters, recordCpu } from '../debug/perf-counters';
 import { store } from '../core/store';
-import type { IntersectionTracker } from './intersection-tracker';
-
-let detachWrapper!: (element: Element) => void;
-let tracker!: IntersectionTracker;
-let resizeObserver!: ResizeObserver;
-
-export interface LimboDeps {
-  detachWrapper: (element: Element) => void;
-  tracker: IntersectionTracker;
-  resizeObserver: ResizeObserver;
-}
-
-/** Wire the still-in-content.ts dependencies. Call once at boot. */
-export function initLimbo(deps: LimboDeps): void {
-  detachWrapper = deps.detachWrapper;
-  tracker = deps.tracker;
-  resizeObserver = deps.resizeObserver;
-}
+import { detachWrapper } from '../core/wrapper-lifecycle';
+import { pageSession } from '../lifecycle/page-session';
 
 // Per-bucket rebind counters fed by `tryRebindFromLimbo` and the finalize
 // sweeper. Read via `window.branchkitRebindStats()` (console) and the debug
@@ -129,10 +113,10 @@ function rebindWrapper(w: ElementWrapper, newEl: Element): void {
     idRegistry.refreshFingerprint(w.scanned.id, newEl);
   }
 
-  tracker.unobserve(oldEl);
-  tracker.observe(newEl);
-  resizeObserver.unobserve(oldEl);
-  resizeObserver.observe(newEl);
+  pageSession.tracker.unobserve(oldEl);
+  pageSession.tracker.observe(newEl);
+  pageSession.resizeObserver.unobserve(oldEl);
+  pageSession.resizeObserver.observe(newEl);
 
   if (w.hint) w.hint.retarget(newEl);
 
@@ -274,8 +258,8 @@ export function finalizeExpiredLimboWrappers(): number {
     if (w.element.isConnected) {
       w.disconnectedAt = null;
       w.lastRect = null;
-      tracker.observe(w.element);
-      resizeObserver.observe(w.element);
+      pageSession.tracker.observe(w.element);
+      pageSession.resizeObserver.observe(w.element);
       continue;
     }
     detachWrapper(w.element);

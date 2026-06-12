@@ -9,9 +9,12 @@
  *
  * The discovery WALK (`discoverInSubtree` / `discoverInSubtreeBatched`) and
  * `reevaluateAttribute` stay in content.ts — they reach the rules / attention /
- * shadow surfaces — and are injected here via `initMutationSource`, alongside the
- * reposition schedulers and the PageSession instance. They become direct
- * imports / store-delta subscriptions in later tiers.
+ * shadow surfaces — and arrive through `pageSession.deps` (set once by
+ * `PageSession.start()`), alongside the reposition schedulers. They become
+ * direct imports / store-delta subscriptions in later tiers. The page
+ * MutationObserver itself is constructed by `constructPageMutationObserver()`,
+ * called from `PageSession.start()` — the session owns observer construction
+ * (Tier 3 of notes/DESIGN_EXTENSION_RESTRUCTURE.md).
  */
 
 import { store } from '../core/store';
@@ -23,33 +26,7 @@ import { getHintVisibility } from '../config';
 import { recordCpu, lifecycleCounters } from '../debug/perf-counters';
 import { firehoseStep } from '../debug/firehose';
 import { Message } from '../types';
-import type { PageSession } from '../lifecycle/page-session';
-
-let pageSession!: PageSession;
-let discoverInSubtree!: (root: Element) => number;
-let discoverInSubtreeBatched!: (root: Element) => Promise<number>;
-let reevaluateAttribute!: (target: Element) => boolean;
-let scheduleReposition!: () => void;
-let scheduleDeferredReposition!: () => void;
-
-export interface MutationSourceDeps {
-  pageSession: PageSession;
-  discoverInSubtree: (root: Element) => number;
-  discoverInSubtreeBatched: (root: Element) => Promise<number>;
-  reevaluateAttribute: (target: Element) => boolean;
-  scheduleReposition: () => void;
-  scheduleDeferredReposition: () => void;
-}
-
-/** Wire the still-in-content.ts collaborators. Call once at boot. */
-export function initMutationSource(deps: MutationSourceDeps): void {
-  pageSession = deps.pageSession;
-  discoverInSubtree = deps.discoverInSubtree;
-  discoverInSubtreeBatched = deps.discoverInSubtreeBatched;
-  reevaluateAttribute = deps.reevaluateAttribute;
-  scheduleReposition = deps.scheduleReposition;
-  scheduleDeferredReposition = deps.scheduleDeferredReposition;
-}
+import { pageSession } from '../lifecycle/page-session';
 
 // Beyond the HUGE_MUTATIONS_COUNT threshold (DarkReader's pattern), we
 // stop processing nodes individually and just queue a coarse refresh.
@@ -113,7 +90,7 @@ function drainReevaluations(): void {
         continue;
       }
       // attach/detach inside reevaluateAttribute emits a store delta → sync.
-      reevaluateAttribute(t);
+      pageSession.deps.reevaluateAttribute(t);
     }
   } finally {
     clearLayoutCache();
@@ -196,7 +173,7 @@ function drainDiscovery(): void {
       continue;
     }
     // Newly-attached wrappers emit store deltas → grammar sync (Tier 2 delta cut).
-    discoverInSubtree(root);
+    pageSession.deps.discoverInSubtree(root);
     // Yield to the event loop once we've exceeded the budget — but
     // always do at least one root so we make forward progress even when
     // a single root is heavy enough to blow the budget by itself.
@@ -274,7 +251,7 @@ export function processMutations(records: MutationRecord[]): void {
   firehoseStep('processMutations:end', records.length);
 }
 
-const observer = new MutationObserver((records) => {
+function handlePageMutations(records: MutationRecord[]): void {
   const __cpuStart = performance.now();
   lifecycleCounters.moCallbackInvocations++;
   firehoseStep('moCallback:start', records.length);
@@ -350,12 +327,12 @@ const observer = new MutationObserver((records) => {
       // over the whole fresh body froze Firefox ~1.1s on YouTube /watch
       // SPA nav (notes/DESIGN_NAV_TIME_RESCAN.md).
       firehoseStep('huge_path:batched_start', foreign.length);
-      void discoverInSubtreeBatched(document.body || document.documentElement)
+      void pageSession.deps.discoverInSubtreeBatched(document.body || document.documentElement)
         .then((added) => {
           firehoseStep('huge_path:batched_end', added);
           // Newly-attached wrappers emit store deltas → grammar sync.
           if (pageSession.hintsVisible) {
-            scheduleReposition();
+            pageSession.deps.scheduleReposition();
           }
         });
     }, HUGE_MUTATION_IDLE_MS);
@@ -372,13 +349,22 @@ const observer = new MutationObserver((records) => {
   // the dominant scroll-time CPU bucket. A mutation batch means "layout
   // may have shifted"; coalescing to one reposition after mutations
   // settle is the same trade already accepted for scroll/resize.
-  if (pageSession.hintsVisible) scheduleDeferredReposition();
+  if (pageSession.hintsVisible) pageSession.deps.scheduleDeferredReposition();
   recordCpu('moCallback', performance.now() - __cpuStart);
   firehoseStep('moCallback:end_normal', foreign.length);
-});
+}
+
+let observer: MutationObserver | undefined;
+
+/** Construct the page MutationObserver. Called once from `PageSession.start()`
+ * — the session owns observer construction (Tier 3). Construction is inert;
+ * nothing is observed until `attachPageMutationObserver()`. */
+export function constructPageMutationObserver(): void {
+  observer = new MutationObserver(handlePageMutations);
+}
 
 export function attachPageMutationObserver(): void {
-  observer.observe(document.body || document.documentElement, {
+  observer?.observe(document.body || document.documentElement, {
     childList: true,
     subtree: true,
     attributes: true,
@@ -399,7 +385,7 @@ export function attachPageMutationObserver(): void {
  * Idempotent; called from teardown. (The discovery rAF + huge-mutation timer
  * live on PageSession and are cancelled by the session teardown.) */
 export function teardownMutationSource(): void {
-  try { observer.disconnect(); } catch { /* may not be initialized yet */ }
+  try { observer?.disconnect(); } catch { /* may not be initialized yet */ }
   if (reevaluationFrame !== null) {
     cancelAnimationFrame(reevaluationFrame);
     reevaluationFrame = null;

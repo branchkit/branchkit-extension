@@ -2,19 +2,34 @@
  * BranchKit Browser — per-frame page lifecycle.
  *
  * One `PageSession` per content-script context. It is the single object that
- * represents "this frame's hinting session": its identity, and its lifecycle
- * transitions (boot, SPA navigation, teardown).
+ * represents "this frame's hinting session": its identity, its lifecycle
+ * transitions (boot, SPA navigation, teardown), and — since the Tier 3
+ * relocation (notes/DESIGN_EXTENSION_RESTRUCTURE.md step 10) — the
+ * construction of the six observers that feed the session. `start()` builds
+ * the IntersectionTracker / ResizeObserver / AttentionObserver here and asks
+ * the visibility-tracker and mutation-source modules to construct theirs, so
+ * the session is the one owner of observer construction; the extracted source
+ * modules import the `pageSession` singleton directly instead of being wired
+ * through per-module init seams.
  *
- * This is the first, transitional cut of the extraction described in
- * notes/DESIGN_EXTENSION_RESTRUCTURE.md §3.3.1. The observer/timer state the
- * session will eventually own still lives in `content.ts` module scope; the
- * session reaches it through injected hooks. Subsequent steps migrate that
- * state into the instance and route SPA-nav/bfcache through `onUrlChange`/
- * `restore`. Keeping the seam injection-based first makes each step
- * behavior-identical and independently revertable, instead of relocating
- * ~2,800 lines of entangled top-level boot in a single diff.
+ * The orchestration the observers still reach back into content.ts for
+ * (codeword-claim sync, the discovery walk, the reposition schedulers, paint)
+ * arrives once through `start(deps)` — the single remaining seam, consumed by
+ * the unified-reconciler work (notes/DESIGN_UNIFIED_RECONCILER.md).
  */
 
+import { store } from '../core/store';
+import { ElementWrapper } from '../scan/element-wrapper';
+import { scanSingle, isHintable } from '../scan/scanner';
+import { IntersectionTracker } from '../observe/intersection-tracker';
+import { AttentionObserver } from '../observe/attention-observer';
+import { attachWrapper, detachWrapper } from '../core/wrapper-lifecycle';
+import {
+  constructVisibilityObservers,
+  trackPendingCandidate,
+  untrackPendingCandidate,
+} from '../observe/visibility-tracker';
+import { constructPageMutationObserver } from '../observe/mutation-source';
 import { getSessionId } from '../labels/label-sync';
 
 /**
@@ -28,7 +43,13 @@ import { getSessionId } from '../labels/label-sync';
  */
 export type TeardownReason = 'orphan' | 'navigate' | 'unload';
 
-export interface PageSessionHooks {
+/**
+ * The content.ts-owned orchestration the session and its observers drive.
+ * Passed once to `start()`. Everything here is a function that reaches the
+ * render/grammar/discovery surfaces still living in content.ts module scope;
+ * pure store mutation lives in the importable modules and needs no seam.
+ */
+export interface PageSessionDeps {
   /**
    * Disconnect every observer/timer and remove badge hosts for this frame.
    * Must be idempotent — the session guards against repeat calls, but the
@@ -50,19 +71,84 @@ export interface PageSessionHooks {
    * wrappers and rescan so the plugin's wiped grammar is rebuilt.
    */
   restore: () => void;
+
+  /**
+   * IntersectionTracker flush changed codewords: drive the delta-sync
+   * Put/Delete bookkeeping, the claim-path counters, and the build-up
+   * reconcile. Stays in content.ts — it is grammar/render orchestration,
+   * not store mutation.
+   */
+  onCodewordsChanged: (claimed: ElementWrapper[], released: string[]) => void;
+
+  // --- visibility-tracker collaborators ---
+
+  /** Paint badges after a visibility promotion attached new wrappers. */
+  showHints: () => void;
+
+  /** A badge flipped shown/hidden — re-push the strict-viewport delta so the
+   * voice-matchable `_strict` collection converges without waiting for the
+   * next scroll-settle. */
+  onVisibilityChanged: () => void;
+
+  // --- mutation-source collaborators ---
+
+  discoverInSubtree: (root: Element) => number;
+  discoverInSubtreeBatched: (root: Element) => Promise<number>;
+  reevaluateAttribute: (target: Element) => boolean;
+  scheduleReposition: () => void;
+  scheduleDeferredReposition: () => void;
 }
 
 export class PageSession {
   private toreDown = false;
 
   /**
+   * Content.ts orchestration, set by `start()`. Public so the source modules
+   * (mutation-source, visibility-tracker) reach it through the singleton; in
+   * tests it is assigned directly with stubs.
+   */
+  deps!: PageSessionDeps;
+
+  /**
+   * The session-owned observers, constructed by `start()`. Public and
+   * assignable: production code reads them; unit tests install fakes without
+   * constructing the real (happy-dom-less) observers.
+   */
+
+  /** Narrow-margin IO driving codeword claim/release. */
+  tracker!: IntersectionTracker;
+
+  /**
+   * Safety net for CSS-driven visibility changes the MutationObserver can't
+   * see. The MO's attribute filter watches `disabled`, `aria-hidden`, `role`,
+   * `contenteditable`, `href` — a `display:none` toggle (via class change or
+   * inline `style`) flies past it. When an element's bounding rect collapses
+   * to zero, RO fires; we re-evaluate hintability and detach if it's no
+   * longer hintable.
+   *
+   * One-directional: detects hintable → non-hintable, but can't catch the
+   * reverse (an element going from `display:none` to visible) since RO
+   * only observes elements we already know about. The forward-direction
+   * case is the one that matters for pool hygiene — keeping codewords
+   * attached to invisible elements would leak the budget.
+   */
+  resizeObserver!: ResizeObserver;
+
+  /**
+   * Viewport-scoped attention. Wide-margin IO (2 viewports above/below)
+   * drives the lifecycle of candidates that aren't yet wrappers. Distinct
+   * from the IntersectionTracker (narrow-margin IO for codeword claim/
+   * release) by design — different concerns, different margins. See
+   * notes/DESIGN_OBSERVER_DRIVEN_LAYOUT.md.
+   */
+  attentionObserver!: AttentionObserver;
+
+  /**
    * Per-frame lifecycle state, migrated out of `content.ts` module scope
    * (DESIGN_EXTENSION_RESTRUCTURE.md §3.3.1 step 2). These are deliberately
    * public during the transition: the boot/teardown/scheduling logic still
    * lives as free functions in `content.ts` and reaches them through the
-   * module-level `pageSession` singleton. Later increments encapsulate them
-   * as the surrounding logic moves onto the instance. The observer singletons
-   * and `hintsVisible` stay in module scope for now (heavier entanglement).
+   * `pageSession` singleton.
    */
 
   /** SW-assigned frame id; null until the liveness Port handshake completes. */
@@ -121,7 +207,70 @@ export class PageSession {
    */
   pendingMutation = false;
 
-  constructor(private readonly hooks: PageSessionHooks) {}
+  /**
+   * Construct the six observers and store the content.ts orchestration deps.
+   * Called once from content.ts boot, before any listener/scan can fire.
+   * Construction is side-effect-free (no element is observed until the
+   * lifecycle paths call `observe`), so relocating it here from module scope
+   * changes no behavior.
+   */
+  start(deps: PageSessionDeps): void {
+    this.deps = deps;
+
+    this.tracker = new IntersectionTracker(store, {
+      onCodewordsChanged: (claimed, released) => this.deps.onCodewordsChanged(claimed, released),
+    });
+
+    this.resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const el = entry.target;
+        const wrapper = store.findWrapperFor(el);
+        if (!wrapper) continue;
+        // Limbo wrappers: hold codeword + badge until finalize/rebind.
+        // Disconnected elements deterministically fail isHintable; we don't
+        // want that path stealing the wrapper out from under the limbo
+        // lifecycle.
+        if (wrapper.disconnectedAt !== null) continue;
+        if (!isHintable(el)) {
+          // detachWrapper emits a store detach delta → grammar sync (Tier 2).
+          detachWrapper(el);
+        }
+      }
+    });
+
+    this.attentionObserver = new AttentionObserver({
+      onEnter: (el) => {
+        if (!el.isConnected) return;
+        if (store.findWrapperFor(el)) return;
+        const scanned = scanSingle(el);
+        if (scanned) {
+          // attachWrapper emits a store attach delta → grammar sync (Tier 2).
+          attachWrapper(new ElementWrapper(el, scanned));
+          return;
+        }
+        // Still not hintable (visibility:hidden, opacity:0, etc.). Bounded
+        // by attention region — only stays in the recheck loop while near
+        // the viewport. visibilityMO watches for class/style flips that
+        // make it hintable.
+        trackPendingCandidate(el);
+      },
+      onLeave: (el) => {
+        // Deliberately NOT detaching wrappers on attention-leave (Rango model).
+        // Wrappers stay alive until their element disconnects from the DOM.
+        // The attention IO's role here is just to manage pendingVisibility
+        // membership — bounding the visibility-recheck set is what fixed the
+        // Firefox unresponsive-script case on YouTube. Detaching wrappers as
+        // well introduced two real regressions (Gmail scroll-back lost hints;
+        // Gmail unresponsiveness when we tried keeping IO subscriptions alive
+        // instead). Better trade-off: wrappers grow with discovered hintables,
+        // but scroll-back works correctly and per-event cost stays bounded.
+        untrackPendingCandidate(el);
+      },
+    });
+
+    constructVisibilityObservers();
+    constructPageMutationObserver();
+  }
 
   /**
    * The label/grammar session id. Owned by the LabelStage (`label-sync.ts`);
@@ -146,16 +295,23 @@ export class PageSession {
   teardown(reason: TeardownReason): void {
     if (this.toreDown) return;
     this.toreDown = true;
-    this.hooks.teardown(reason);
+    this.deps.teardown(reason);
   }
 
-  /** Reconcile after a same-document navigation. See `onUrlChange` hook. */
+  /** Reconcile after a same-document navigation. See `onUrlChange` dep. */
   onUrlChange(fromCache: boolean, reason: string): void {
-    this.hooks.onUrlChange(fromCache, reason);
+    this.deps.onUrlChange(fromCache, reason);
   }
 
-  /** Rebuild grammar after a bfcache restore. See `restore` hook. */
+  /** Rebuild grammar after a bfcache restore. See `restore` dep. */
   restore(): void {
-    this.hooks.restore();
+    this.deps.restore();
   }
 }
+
+/**
+ * The per-frame session singleton. Constructed inert at module load (no
+ * observers, no deps); content.ts boot calls `start()` exactly once. Source
+ * modules import this directly — the per-module init injection seams are gone.
+ */
+export const pageSession = new PageSession();

@@ -17,12 +17,10 @@ import type { CodewordMemoryEntry } from './labels/codeword-memory';
 import { loadRecall, recalledCodewords, rememberLive, resolvePreferredCodeword, isRecallLoaded } from './labels/codeword-recall';
 import { type RebindCounters } from './labels/rebind';
 import { resolveTarget } from './activate/activate-resolution';
-import { IntersectionTracker } from './observe/intersection-tracker';
-import { AttentionObserver } from './observe/attention-observer';
-import { initVisibilityTracker, recheckHintedVisibility, schedulePointerVisibilitySweep, trackPendingCandidate, untrackPendingCandidate, connectVisibilityMO, teardownVisibilityTracker } from './observe/visibility-tracker';
-import { initLimbo, rebindCounters, LIMBO_DEADLINE_MS, collectLimboWrappers, collectStrongKeyIndex, dropDisconnectedWrappers, finalizeExpiredLimboWrappers } from './observe/limbo';
-import { initWrapperLifecycle, attachWrapper, detachWrapper, seedPreferredFromMemory, attachDiscovered } from './core/wrapper-lifecycle';
-import { initMutationSource, attachPageMutationObserver, teardownMutationSource } from './observe/mutation-source';
+import { recheckHintedVisibility, schedulePointerVisibilitySweep, connectVisibilityMO, teardownVisibilityTracker } from './observe/visibility-tracker';
+import { rebindCounters, LIMBO_DEADLINE_MS, collectLimboWrappers, collectStrongKeyIndex, dropDisconnectedWrappers, finalizeExpiredLimboWrappers } from './observe/limbo';
+import { attachWrapper, detachWrapper, seedPreferredFromMemory, attachDiscovered } from './core/wrapper-lifecycle';
+import { attachPageMutationObserver, teardownMutationSource } from './observe/mutation-source';
 import { firehoseStep } from './debug/firehose';
 import { bkLog } from './debug/bk-log';
 import { store } from './core/store';
@@ -97,7 +95,7 @@ import { labelReservoir } from './labels/label-reservoir';
 import { filterNewBatchRefs } from './scan/batch-dedup';
 import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
 import { openLivenessPort } from './plugin/liveness';
-import { PageSession, TeardownReason } from './lifecycle/page-session';
+import { pageSession, TeardownReason } from './lifecycle/page-session';
 import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './debug/message-counters';
 import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, lifecycleCounters, resetLifecycleCounters } from './debug/perf-counters';
 import { loadConfig, getDisplayMode, getHintVisibility, getHintsShown, setHintsShown, getHintHideKey } from './config';
@@ -251,24 +249,27 @@ function rememberClaimedCodewords(claimed: ElementWrapper[]): void {
   }
 }
 
-const tracker = new IntersectionTracker(store, {
-  onCodewordsChanged: (claimed, released) => {
-    claimCounters.trackerPathClaimed += claimed.length;
-    for (const w of claimed) queuePut(w);
-    rememberClaimedCodewords(claimed);
-    for (const cw of released) {
-      // Only enqueue a real Delete if we'd actually told the plugin
-      // about this codeword; if the claim happened and immediately got
-      // released inside one debounce window, the plugin never saw it.
-      if (hasSent(cw)) queueDelete(cw);
-    }
-    schedulePushGrammar();
-    // Build-up reconcile: codewords just landed, so build their badges and
-    // re-sweep for any in-band wrapper still missing a claim (closes the
-    // claim-gap-after-build window). reconcile guards build on hintsVisible.
-    reconcile();
-  },
-});
+// The IntersectionTracker's codeword-claim sync. The tracker itself is owned
+// by `pageSession` (constructed in start(), Tier 3); this callback stays here
+// because it drives the delta-sync Put/Delete bookkeeping, the claim-path
+// counters, and the build-up reconcile — grammar/render orchestration, not
+// store mutation. Passed to `pageSession.start()` below.
+function onTrackerCodewordsChanged(claimed: ElementWrapper[], released: string[]): void {
+  claimCounters.trackerPathClaimed += claimed.length;
+  for (const w of claimed) queuePut(w);
+  rememberClaimedCodewords(claimed);
+  for (const cw of released) {
+    // Only enqueue a real Delete if we'd actually told the plugin
+    // about this codeword; if the claim happened and immediately got
+    // released inside one debounce window, the plugin never saw it.
+    if (hasSent(cw)) queueDelete(cw);
+  }
+  schedulePushGrammar();
+  // Build-up reconcile: codewords just landed, so build their badges and
+  // re-sweep for any in-band wrapper still missing a claim (closes the
+  // claim-gap-after-build window). reconcile guards build on hintsVisible.
+  reconcile();
+}
 
 // (Strict-viewport tracker removed — it was meant to narrow the
 // scheduleReposition set on heavy pages, but on YouTube /watch the
@@ -529,7 +530,7 @@ if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
       reconcile();
       if (pageSession.hintsVisible) {
         // Re-render once the new codewords land.
-        tracker.flushNow().then(() => {
+        pageSession.tracker.flushNow().then(() => {
           if (pageSession.hintsVisible) showHints(activeCategory ?? undefined);
         });
       }
@@ -574,7 +575,7 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
         scheduleDoScan();
         if (shouldAutoShowHints()) {
           whenDOMSettles(() => {
-            tracker.flushNow().then(() => {
+            pageSession.tracker.flushNow().then(() => {
               if (shouldAutoShowHints() && !pageSession.hintsVisible) showHints();
             });
           });
@@ -927,88 +928,25 @@ function poolLabelToAssignment(codeword: string): LabelAssignment {
   return { words, letter, isSingle: words.length === 1 };
 }
 
-/**
- * ResizeObserver acts as a safety net for CSS-driven visibility changes
- * the MutationObserver can't see. The MO's attribute filter watches
- * `disabled`, `aria-hidden`, `role`, `contenteditable`, `href` — a
- * `display:none` toggle (via class change or inline `style`) flies past
- * it. When an element's bounding rect collapses to zero, RO fires; we
- * re-evaluate hintability and detach if it's no longer hintable.
- *
- * One-directional: detects hintable → non-hintable, but can't catch the
- * reverse (an element going from `display:none` to visible) since RO
- * only observes elements we already know about. The forward-direction
- * case is the one that matters for pool hygiene — keeping codewords
- * attached to invisible elements would leak the budget.
- */
-const resizeObserver = new ResizeObserver((entries) => {
-  for (const entry of entries) {
-    const el = entry.target;
-    const wrapper = store.findWrapperFor(el);
-    if (!wrapper) continue;
-    // Limbo wrappers: hold codeword + badge until finalize/rebind.
-    // Disconnected elements deterministically fail isHintable; we don't
-    // want that path stealing the wrapper out from under the limbo
-    // lifecycle.
-    if (wrapper.disconnectedAt !== null) continue;
-    if (!isHintable(el)) {
-      // detachWrapper emits a store detach delta → grammar sync (Tier 2).
-      detachWrapper(el);
-    }
-  }
-});
+// (The ResizeObserver hintability safety net and the viewport-scoped
+// AttentionObserver are owned by `pageSession` — constructed in
+// `PageSession.start()` with the other observers, Tier 3 of
+// notes/DESIGN_EXTENSION_RESTRUCTURE.md.)
 
 function observeInvisibleCandidates(candidates: Element[]): void {
   // Under the viewport-scoped lifecycle, invisible candidates are routed
   // through the attention observer. They only join `pendingVisibility`
-  // when they actually enter the attention region (handled by
-  // attentionObserver.onEnter below). This bounds the recheck set by
+  // when they actually enter the attention region (handled by the
+  // session's attentionObserver.onEnter). This bounds the recheck set by
   // viewport proximity instead of total document candidate count —
   // YouTube comment skeletons that scroll past stay registered with
   // attention IO but are no longer rechecked on every MO fire.
   for (const el of candidates) {
     if (store.findWrapperFor(el) || !el.isConnected) continue;
     if (isExcludedByRule(el, getExcludes())) continue;
-    attentionObserver.observe(el);
+    pageSession.attentionObserver.observe(el);
   }
 }
-
-// Viewport-scoped attention. Wide-margin IO (2 viewports above/below)
-// drives the lifecycle of candidates that aren't yet wrappers, plus
-// leave-detach for wrappers that drift far from the viewport. Distinct
-// from the IntersectionTracker (narrow-margin IO for codeword claim/
-// release) by design — different concerns, different margins. See
-// notes/DESIGN_OBSERVER_DRIVEN_LAYOUT.md.
-
-const attentionObserver = new AttentionObserver({
-  onEnter: (el) => {
-    if (!el.isConnected) return;
-    if (store.findWrapperFor(el)) return;
-    const scanned = scanSingle(el);
-    if (scanned) {
-      // attachWrapper emits a store attach delta → grammar sync (Tier 2).
-      attachWrapper(new ElementWrapper(el, scanned));
-      return;
-    }
-    // Still not hintable (visibility:hidden, opacity:0, etc.). Bounded
-    // by attention region — only stays in the recheck loop while near
-    // the viewport. visibilityMO watches for class/style flips that
-    // make it hintable.
-    trackPendingCandidate(el);
-  },
-  onLeave: (el) => {
-    // Deliberately NOT detaching wrappers on attention-leave (Rango model).
-    // Wrappers stay alive until their element disconnects from the DOM.
-    // The attention IO's role here is just to manage pendingVisibility
-    // membership — bounding the visibility-recheck set is what fixed the
-    // Firefox unresponsive-script case on YouTube. Detaching wrappers as
-    // well introduced two real regressions (Gmail scroll-back lost hints;
-    // Gmail unresponsiveness when we tried keeping IO subscriptions alive
-    // instead). Better trade-off: wrappers grow with discovered hintables,
-    // but scroll-back works correctly and per-event cost stays bounded.
-    untrackPendingCandidate(el);
-  },
-});
 
 /**
  * Full re-discovery of hintable elements in the document. Idempotent:
@@ -1121,7 +1059,7 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
   // but their codewords haven't been claimed yet and badges would
   // render with no labels.
   await new Promise(r => requestAnimationFrame(() => r(null)));
-  await tracker.flushNow();
+  await pageSession.tracker.flushNow();
 
   // Determine which categories to show
   const categories: Category[] | null = filter
@@ -1396,7 +1334,7 @@ function reattachStrippedHosts(): void {
 }
 
 function reconcile(): void {
-  tracker.refreshViewportClaims();
+  pageSession.tracker.refreshViewportClaims();
   if (pageSession.hintsVisible) {
     badgeNewlyCodeworded();
     reattachStrippedHosts();
@@ -1495,7 +1433,7 @@ function reconcileTeardown(): void {
   // …then act.
   for (const w of offBand) {
     w.isInViewport = false;
-    tracker.queueRelease(w);
+    pageSession.tracker.queueRelease(w);
   }
   for (const w of missedEnter) {
     w.isInViewport = true;
@@ -1617,7 +1555,7 @@ function scheduleBandDiscovery(): void {
         // New wrappers landed: claim codewords for the in-band ones and build
         // their badges (reconcile), flush the claims, then paint.
         reconcile();
-        await tracker.flushNow();
+        await pageSession.tracker.flushNow();
         if (pageSession.hintsVisible) await showHints(activeCategory ?? undefined);
       } finally {
         pageSession.discoverySweepPending = false;
@@ -2034,36 +1972,19 @@ function restoreFromBfcache(): void {
 // because it disconnects this file's observers. The frame id itself now lives
 // on `pageSession.myFrameId`.
 
-// This frame's page-session lifecycle object. Owns the teardown transition
-// (and its reason) plus the per-frame lifecycle primitives migrated out of
-// module scope (frame id, discovery scheduling, reposition timers, visibility
-// wiring flag). The observer singletons and boot logic still live in this
-// module and reach the session via the module-level reference. See
-// notes/DESIGN_EXTENSION_RESTRUCTURE.md §3.3.1.
-const pageSession = new PageSession({
+// Boot this frame's page session (the singleton lives in
+// lifecycle/page-session.ts and is imported directly by the source modules).
+// start() constructs the six observers — the session is the one owner of
+// observer construction/teardown (Tier 3 of DESIGN_EXTENSION_RESTRUCTURE.md)
+// — and receives the content.ts orchestration the observers still reach back
+// into, replacing the per-module init injection seams with this single call.
+pageSession.start({
   teardown: (reason) => quiesceOrphan(reason),
   onUrlChange: (fromCache, reason) => rescanForNav(fromCache, reason),
   restore: () => restoreFromBfcache(),
-});
-
-// Wire the visibility-recovery source with the dependencies that still live in
-// content.ts (the wrapper-lifecycle and render orchestration). Transitional
-// injection seam — see notes/DESIGN_EXTENSION_RESTRUCTURE.md (Tier 1).
-initVisibilityTracker({ pageSession, attachWrapper, showHints, onVisibilityChanged: reconcileStrictViewport });
-
-// Wire the wrapper-lifecycle ops with the three observers they drive, which
-// still live in content.ts (become imports when observer construction relocates
-// onto PageSession in Tier 3).
-initWrapperLifecycle({ tracker, resizeObserver, attentionObserver });
-
-// Wire limbo/rebind with detachWrapper + the two observers it re-anchors on,
-// which still live in content.ts (become imports once those lift in Tier 1/3).
-initLimbo({ detachWrapper, tracker, resizeObserver });
-
-// Wire the mutation source with the discovery walk + reevaluation + reposition
-// schedulers it drives, which stay in content.ts (rules/attention/shadow-coupled).
-initMutationSource({
-  pageSession,
+  onCodewordsChanged: onTrackerCodewordsChanged,
+  showHints,
+  onVisibilityChanged: reconcileStrictViewport,
   discoverInSubtree,
   discoverInSubtreeBatched,
   reevaluateAttribute,
@@ -2117,8 +2038,8 @@ function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
   // means the orphan keeps reacting to DOM changes / viewport shifts and
   // surfacing `Extension context invalidated` errors in the page console.
   teardownMutationSource();
-  try { tracker.disconnectAll(); } catch { /* same */ }
-  try { resizeObserver.disconnect(); } catch { /* same */ }
+  try { pageSession.tracker.disconnectAll(); } catch { /* same */ }
+  try { pageSession.resizeObserver.disconnect(); } catch { /* same */ }
   if (pageSession.discoveryFrame !== null) {
     try { cancelAnimationFrame(pageSession.discoveryFrame); } catch { /* same */ }
     pageSession.discoveryFrame = null;
@@ -2237,9 +2158,9 @@ function preNavDetachAll(triggerReason: string, sparePersistent = false): number
 function preNavObserverTeardown(triggerReason: string): number {
   const targets = [...store.all];
   for (const w of targets) {
-    resizeObserver.unobserve(w.element);
-    tracker.unobserve(w.element);
-    attentionObserver.unobserve(w.element);
+    pageSession.resizeObserver.unobserve(w.element);
+    pageSession.tracker.unobserve(w.element);
+    pageSession.attentionObserver.unobserve(w.element);
   }
   chrome.runtime.sendMessage({
     type: 'DEBUG_LOG',
@@ -2365,7 +2286,7 @@ function rescanForNav(fromCache: boolean, reason: string): void {
           // here (codewords not flushed yet); showHints below paints once they
           // land. Cheap no-op for wrappers that already claimed (refocus path).
           reconcile();
-          await tracker.flushNow();
+          await pageSession.tracker.flushNow();
           if (pageSession.hintsVisible) showHints(activeCategory ?? undefined);
           void navStep('deferred_scan:end');
         });

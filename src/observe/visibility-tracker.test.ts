@@ -12,24 +12,23 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { PageSession } from '../lifecycle/page-session';
+import { pageSession } from '../lifecycle/page-session';
 import {
-  initVisibilityTracker,
+  constructVisibilityObservers,
   trackPendingCandidate,
   untrackPendingCandidate,
   teardownVisibilityTracker,
 } from './visibility-tracker';
 
-function makeSession(): PageSession {
-  return new PageSession({ teardown: () => {}, onUrlChange: () => {}, restore: () => {} });
-}
-
-let session: PageSession;
+// The tracker reads the pageSession singleton directly (Tier 3 — the
+// initVisibilityTracker seam is gone); reset the session flags it touches.
+const session = pageSession;
 
 beforeEach(() => {
   vi.useFakeTimers();
-  session = makeSession();
-  initVisibilityTracker({ pageSession: session, attachWrapper: vi.fn(), showHints: vi.fn() });
+  session.visibilityMOConnected = false;
+  session.hintsVisible = false;
+  constructVisibilityObservers();
 });
 
 afterEach(() => {

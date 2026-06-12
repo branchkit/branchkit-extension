@@ -10,14 +10,17 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { PageSession } from '../lifecycle/page-session';
-import { initMutationSource, processMutations, teardownMutationSource } from './mutation-source';
+import { pageSession, type PageSessionDeps } from '../lifecycle/page-session';
+import { processMutations, teardownMutationSource } from './mutation-source';
 
 function childListRecord(added: Node[] = [], removed: Node[] = []): MutationRecord {
   return { type: 'childList', addedNodes: added, removedNodes: removed } as unknown as MutationRecord;
 }
 
-let session: PageSession;
+// The mutation source reads the pageSession singleton directly (Tier 3 — the
+// initMutationSource seam is gone); reset the session state it touches and
+// install stub deps per test.
+const session = pageSession;
 
 beforeEach(() => {
   vi.useFakeTimers(); // neutralize the rAF the discovery scheduler arms
@@ -25,15 +28,18 @@ beforeEach(() => {
   (globalThis as unknown as { chrome: unknown }).chrome = {
     runtime: { sendMessage: vi.fn(() => Promise.resolve()) },
   };
-  session = new PageSession({ teardown: () => {}, onUrlChange: () => {}, restore: () => {} });
-  initMutationSource({
-    pageSession: session,
+  session.pendingDiscoveryRoots.clear();
+  session.discoveryFrame = null;
+  session.hugeMutationTimer = null;
+  session.hintsVisible = false;
+  session.pendingMutation = false;
+  session.deps = {
     discoverInSubtree: vi.fn(() => 0),
     discoverInSubtreeBatched: vi.fn(async () => 0),
     reevaluateAttribute: vi.fn(() => false),
     scheduleReposition: vi.fn(),
     scheduleDeferredReposition: vi.fn(),
-  });
+  } as unknown as PageSessionDeps;
 });
 
 afterEach(() => {
