@@ -1,7 +1,11 @@
 # Grammar epoch handshake — level-triggered grammar convergence
 
 Date: 2026-06-12
-Status: Phases 0-2a IMPLEMENTED 2026-06-12. Phase 0 was already done by
+Status: Phases 0-2b IMPLEMENTED 2026-06-12 (2b landed in the follow-up
+session after the dual-CS race closed — see "Phase 2b LANDED" below).
+Remaining: 2b soak telemetry, then Phase 3 (trigger retirement on
+evidence) and Phase 4 (CONFIRM fold).
+Earlier status trail: Phases 0-2a same day. Phase 0 was already done by
 parallel sessions (calibration refusal handling + evicted-field deletion).
 Phase 1 live (plugin emits epoch, golden vectors pinned both sides, epoch on
 the batch log line). Phase 2a live detect-only with a QUIESCENCE GATE added
@@ -143,6 +147,56 @@ markers carry ownership and quiesceOrphan releases only its own guard.
 Gate result: 30/30 tabs single-boot, zero flushes, zero aborts, across
 25-chunk (~2.5s) and 10-chunk (~1s, load completing exactly at the ping
 ladder's decision point) stream profiles. **2b is UNBLOCKED.**
+
+## Phase 2b LANDED (2026-06-12, same session)
+
+`checkGrammarEpoch`'s mismatch branch now acts: a confirmed quiescent
+mismatch fires `republishAllGrammar('epoch_mismatch')` through a new
+`LabelSyncDeps.republishAll` seam (content.ts wires the same hoisted body
+the enumerated triggers call). The enumerated triggers stay (decision 4).
+
+Loop guards (decision 5, one refinement): 5s cooldown between acts, and the
+"per-page cap" is implemented as a CONSECUTIVE cap — 3 republishes with no
+clean check in between → stop acting, go loud (`BK_GRAMMAR_EPOCH_CAP` +
+`grammar_epoch:cap_exhausted` firehose breadcrumb), keep detect-only
+logging. Any clean check resets the cap (`BK_GRAMMAR_EPOCH_CAP_CLEARED`).
+Rationale for the refinement: a never-resetting per-page counter would
+silently disable healing on long-lived tabs after a handful of legitimate,
+days-apart heals — the cap's purpose is to bound a republish→mismatch
+ping-pong, which is by definition consecutive. `republishes`/`capExhausted`
+ride the perf snapshot via `grammarEpochStats`.
+
+Verification (per the section below):
+- tsc + 768 unit tests (new: act-on-mismatch, cooldown suppression,
+  consecutive cap + loud flag + reset-on-clean under a fake performance
+  clock). Wedge repro green twice. Classify sweep: discoveryGap=0,
+  claimGap≤1 across the sweep. Coverage fixture (now tracked:
+  `scripts/_test-coverage-curve.mjs`): interleaved A/B against the pre-2b
+  build — load t95 within mutual noise (base 628/262ms vs head 404/705ms);
+  earlier 1.8-2.8s outliers were machine load, not the change.
+- LIVE, ORGANIC: during the verification runs browser.log captured real
+  heal cycles — `BK_GRAMMAR_EPOCH_MISMATCH` → `BK_SESSION_ROTATE` →
+  `BK_GRAMMAR_REPUBLISH {reason: epoch_mismatch}` → silence (converged;
+  later quiescent checks pass) on both YouTube and the local fixture. The
+  A/B's base-arm (2a-only) runs logged lone unhealed mismatches in the same
+  window — an accidental detect-only control group.
+- Live repros (`scripts/_test-epoch-live-repros.mjs`, tracked): bfcache
+  back/forward green (badges stable, single boot, zero aborts, no late
+  mismatch). Scripted extension-reload is NOT reachable under Playwright
+  (about:debugging is privileged; the juggler connection hangs/closes) —
+  the script self-reports that phase skipped; reload coverage = the status
+  gate's unit tests + the dual-CS gate + the live soak. SW kill is
+  Chrome-specific and likewise soak-covered.
+
+TRIPWIRE CATCH #4 (found during 2b verification): the coverage fixture's
+content swap (400 links replaced in place) deterministically leaves the
+SHADOW larger than the plugin (e.g. shadow 208-263 vs plugin stuck at 188,
+plugin hash stable across runs) — the inverse of catch #3's response-loss
+ghosts: sentCodewords retains entries for wrappers that died without their
+deletes landing. Parked with catch #3 on the bug list; 2b heals both (the
+observed organic republishes above ARE this specimen healing). Repro:
+`scripts/_test-coverage-curve.mjs`, watch browser.log during the swap
+phase.
 
 ## Tripwire catch #3 (2026-06-12 night): response-loss ghost entries
 
