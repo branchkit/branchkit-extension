@@ -10,7 +10,15 @@ import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from '
 import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters } from './scan/scanner';
 import { ElementWrapper } from './scan/element-wrapper';
 import { wantsHint } from './lifecycle/desired-state';
-import { computeReconcilePlan, geometryInBand, RECONCILE_BAND_MARGIN_PX } from './lifecycle/reconcile';
+import {
+  computeReconcilePlan,
+  computeReconcilePlanLists,
+  computeStrictDeltaPlan,
+  diffShadow,
+  geometryInBand,
+  RECONCILE_BAND_MARGIN_PX,
+  type ShadowDiff,
+} from './lifecycle/reconcile';
 import { gatherSettleReads, SettleGather } from './lifecycle/gather';
 import { stampStrictViewport, collectStrictViewportDelta } from './lifecycle/strict-viewport';
 import * as idRegistry from './scan/registry';
@@ -1384,7 +1392,10 @@ function scheduleReconcile(): void {
 // layout read never interleaves with a write. Wrappers with a codeword but no
 // hint are deliberately NOT swept: a codeword implies the IO delivered an
 // enter, and its exit/release flows through the IO + the hinted sweep.
-function reconcileTeardown(gather?: SettleGather): void {
+// Returns the wrappers it acted on ({released: stale-TRUE releases,
+// repaired: stale-FALSE flag flips}) so the settle pipeline can diff the
+// shadow plan's lists against the live actions (Phase C).
+function reconcileTeardown(gather?: SettleGather): { released: ElementWrapper[]; repaired: ElementWrapper[] } {
   const vw = gather?.vw ?? window.innerWidth;
   const vh = gather?.vh ?? window.innerHeight;
   // Include dormant reused hints (DESIGN_HINT_REUSE.md): they were torn down
@@ -1401,7 +1412,7 @@ function reconcileTeardown(gather?: SettleGather): void {
   const unhinted = store.all.filter(w =>
     !w.hint && w.disconnectedAt === null && !w.isInViewport &&
     w.scanned.codeword.length === 0 && w.element.isConnected);
-  if (hinted.length === 0 && unhinted.length === 0) return;
+  if (hinted.length === 0 && unhinted.length === 0) return { released: [], repaired: [] };
 
   // Read all geometry first… (from the settle gather when present — the
   // once-per-settle batched read; live fallback for wrappers it missed)
@@ -1447,6 +1458,7 @@ function reconcileTeardown(gather?: SettleGather): void {
     firehoseStep('reconcile:stale_false_repair', missedEnter.length, 1);
     reconcile();
   }
+  return { released: offBand, repaired: missedEnter };
 }
 
 // Strict-viewport reconciler: scroll moves wrappers across the strict/band
@@ -1457,12 +1469,15 @@ function reconcileTeardown(gather?: SettleGather): void {
 // the _strict membership to converge. Walks the store, queues any wrapper
 // whose current strict status differs from the last-sent value, and triggers
 // a debounced sync. Codeword set is unchanged; this is a flag refresh.
-function reconcileStrictViewport(gather?: SettleGather): void {
+// Returns the delta it pushed so the settle pipeline can diff the shadow
+// plan's strict list against it (Phase C).
+function reconcileStrictViewport(gather?: SettleGather): ElementWrapper[] {
   const delta = collectStrictViewportDelta(store.all, gather);
-  if (delta.length === 0) return;
+  if (delta.length === 0) return delta;
   firehoseStep('strict-viewport:delta', delta.length, 1);
   for (const w of delta) queuePut(w);
   scheduleSync('strict-viewport-change');
+  return delta;
 }
 
 // Occlusion pass (notes/DESIGN_HINT_OCCLUSION_FILTERING.md). Hit-test each
@@ -2771,6 +2786,44 @@ function reconcileScrollFrame(): void {
 // Steps 1-6 are gated on hintsVisible: the activate command requires the
 // hints tag, so voice can't match while hints are down — stale strict
 // membership doesn't matter, and the next `show` re-scans from scratch.
+// Shadow-diff record (Phase C of notes/DESIGN_UNIFIED_RECONCILER.md): each
+// pipeline run diffs the plan's lists against the live steps' actions. The
+// last diff + cumulative totals are surfaced on the debug snapshot
+// (reconcile_shadow_diff) and the perf snapshot; a non-zero diff also drops a
+// firehose breadcrumb. Steady state is all-zero — any divergence is either a
+// live-step bug or a desired-state nuance the plan hasn't encoded yet, and
+// must be understood before Phase D makes the plan authoritative.
+const shadowDiffTotals = {
+  settles: 0,
+  divergentSettles: 0,
+  /** Cumulative list volumes — proof the zero-diff settles compared real
+   * work, not empty-vs-empty. */
+  planned: 0,
+  acted: 0,
+  release: { planOnly: 0, liveOnly: 0 },
+  repair: { planOnly: 0, liveOnly: 0 },
+  show: { planOnly: 0, liveOnly: 0 },
+  hide: { planOnly: 0, liveOnly: 0 },
+  strict: { planOnly: 0, liveOnly: 0 },
+};
+let lastShadowDiff: ShadowDiff | null = null;
+
+function recordShadowDiff(diff: ShadowDiff): void {
+  lastShadowDiff = diff;
+  shadowDiffTotals.settles++;
+  for (const k of ['release', 'repair', 'show', 'hide', 'strict'] as const) {
+    shadowDiffTotals.planned += diff[k].planned;
+    shadowDiffTotals.acted += diff[k].acted;
+  }
+  if (diff.total === 0) return;
+  shadowDiffTotals.divergentSettles++;
+  for (const k of ['release', 'repair', 'show', 'hide', 'strict'] as const) {
+    shadowDiffTotals[k].planOnly += diff[k].planOnly;
+    shadowDiffTotals[k].liveOnly += diff[k].liveOnly;
+  }
+  firehoseStep('reconcile_shadow:diff', diff.total, 1);
+}
+
 function runSettlePipeline(discovery: 'band' | 'store'): void {
   if (pageSession.hintsVisible) {
     // GATHER (Phase B of notes/DESIGN_UNIFIED_RECONCILER.md): one batched
@@ -2782,14 +2835,29 @@ function runSettlePipeline(discovery: 'band' | 'store'): void {
     // Steps read live wrapper FLAGS as before — only geometry/styles come
     // from the snapshot, with live fallback for wrappers it missed.
     const gather = gatherSettleReads(store.all);
-    reconcileTeardown(gather);
+    // PLAN (shadow): what should each step do, per the desired-state
+    // predicates over the snapshot? Drives nothing yet.
+    const planLists = computeReconcilePlanLists(store, activeCategory, gather);
+    const teardownActions = reconcileTeardown(gather);
     if (discovery === 'band') scheduleBandDiscovery();
     else scheduleReconcile();
     reconcileClipObservation(store.all);
     reconcileOcclusion();
     reconcileScrollAccel();
-    recheckHintedVisibility(gather);
-    reconcileStrictViewport(gather);
+    const recheckActions = recheckHintedVisibility(gather);
+    // The strict half of the plan runs HERE, not at gather time: its two
+    // flag inputs (occluded, cssHidden) are written by the occlusion and
+    // visibility steps above. When the occlusion hit-tests move into the
+    // gather (Phase D), this folds into the single plan call.
+    const strictPlan = computeStrictDeltaPlan(store.all, gather);
+    const strictActions = reconcileStrictViewport(gather);
+    recordShadowDiff(diffShadow(planLists, strictPlan, {
+      released: teardownActions.released,
+      repaired: teardownActions.repaired,
+      shown: recheckActions.shown,
+      hidden: recheckActions.hidden,
+      strictDelta: strictActions,
+    }));
   }
   scheduleReposition();
 }
@@ -3022,6 +3090,7 @@ document.addEventListener('__branchkit__capture_snapshot', () => {
   try {
     const payload = captureDebugSnapshot(store, trimFrameUrl(window.location.href));
     payload.reconcile_shadow = computeReconcilePlan(store, activeCategory);
+    payload.reconcile_shadow_diff = { last: lastShadowDiff, totals: shadowDiffTotals };
     document.documentElement.dataset.branchkitSnapshot = JSON.stringify(payload);
   } catch {
     // Snapshot build failed (detached store, serialization); leave the
@@ -3339,6 +3408,9 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
     // non-zero count flags a {claim, build, release, teardown} the authoritative
     // paths missed. Cheap: O(store), no layout reads.
     reconcileShadow: computeReconcilePlan(store, activeCategory),
+    // Cumulative plan-vs-live divergence totals (Phase C shadow diff). All
+    // zeros in steady state; see recordShadowDiff.
+    reconcileShadowDiff: { ...shadowDiffTotals },
   };
 }
 (window as any).branchkitPerfStats = buildPerfSnapshot;

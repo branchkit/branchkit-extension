@@ -63,17 +63,29 @@ export function gatherSettleReads(wrappers: readonly ElementWrapper[]): SettleGa
   //               (no hint, flag out, no codeword, connected)
   //             ∪ strict's codeworded set
   //   vis set   = recheck's hinted in-viewport set (⊆ hinted)
+  //             ∪ the plan's build candidates (codeworded, badge not
+  //               showing) — the answer to the design note's open question:
+  //               measured live, the plan otherwise pays ~30 unbatched
+  //               cssVisible reads per settle for the claim-gap set
+  //               (reconcilePlan:size:lazyReads tripwire). Dormant badges
+  //               WITHOUT a codeword stay out — style-reading the whole
+  //               scroll-history set every settle is the cost the dormancy
+  //               design avoids; the plan lazy-reads those only in the rare
+  //               stale-FALSE repair case.
   const rectSet: ElementWrapper[] = [];
   const visSet: ElementWrapper[] = [];
   for (const w of wrappers) {
     if (w.disconnectedAt !== null) continue;
     const hinted = w.hint !== null;
+    const codeworded = w.scanned.codeword.length > 0;
     const unhintedCandidate = !hinted && !w.isInViewport &&
-      w.scanned.codeword.length === 0 && w.element.isConnected;
-    if (hinted || unhintedCandidate || w.scanned.codeword.length > 0) {
+      !codeworded && w.element.isConnected;
+    if (hinted || unhintedCandidate || codeworded) {
       rectSet.push(w);
     }
-    if (hinted && w.isInViewport && w.element.isConnected) visSet.push(w);
+    const recheckMember = hinted && w.isInViewport;
+    const buildCandidate = codeworded && !(w.hint?.isVisible ?? false);
+    if ((recheckMember || buildCandidate) && w.element.isConnected) visSet.push(w);
   }
 
   const ancestorChainVisible = isAncestorChainInVisibleViewport(window);

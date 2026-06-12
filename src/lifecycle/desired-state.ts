@@ -42,3 +42,65 @@ export function wantsCodeword(w: ElementWrapper): boolean {
 export function wantsHint(w: ElementWrapper, activeCategory: Category | null): boolean {
   return w.isInViewport && w.scanned.codeword.length > 0 && categoryMatches(w, activeCategory);
 }
+
+/**
+ * Geometry/style inputs for `wantsShown`, resolved by the settle gather (or
+ * its simulation): the predicates stay pure so the plan and any fast-path
+ * consult identical definitions without re-reading layout.
+ */
+export interface ShownInputs {
+  /** The IO band flag as it stands AFTER the teardown step's stale-flag
+   * repairs (the plan simulates those; live code reads the repaired flag). */
+  flagInBand: boolean;
+  /** isVisible() — CSS visibility of the target. */
+  cssVisible: boolean;
+  /** Target rect overlaps the actual visible viewport (isRectOnScreen). */
+  onScreen: boolean;
+}
+
+/**
+ * Should this wrapper's badge be painted right now?
+ *
+ * Encodes the two known traps explicitly (DESIGN_UNIFIED_RECONCILER.md risks):
+ *   - Limbo wrappers hold their badge by design — never "shown" here, and
+ *     never repaired toward shown/hidden.
+ *   - Dormant badge reuse (DESIGN_HINT_REUSE.md): an out-of-band wrapper
+ *     keeps its badge object hidden + label-cleared for scroll-back. That is
+ *     DESIRED state, not drift — shown-ness is only ever true for in-band
+ *     wrappers, so a reconcile pass must not "repair" dormant badges.
+ *
+ * A wrapper with no badge object never wants "shown" — constructing one is
+ * the build action class, not the show class.
+ */
+export function wantsShown(w: ElementWrapper, s: ShownInputs): boolean {
+  if (w.disconnectedAt !== null) return false;
+  if (!w.hint) return false;
+  if (!w.element.isConnected) return false;
+  return s.flagInBand && s.cssVisible && s.onScreen;
+}
+
+/**
+ * Geometry inputs for `wantsStrict`. The occluded/cssHidden cuts are read
+ * off the wrapper flags (written by the occlusion and visibility steps that
+ * run earlier in the settle order) — they are state, not geometry.
+ */
+export interface StrictInputs {
+  /** Every ancestor iframe element is on-screen in its parent (per-frame,
+   * computed once per gather). */
+  ancestorChainVisible: boolean;
+  /** Target rect overlaps the actual visible viewport (no band margin —
+   * the strict notion, not the IO band notion). */
+  onScreen: boolean;
+}
+
+/**
+ * Should this wrapper be in the voice-matchable `_strict` companion
+ * collection right now? Mirrors stampStrictViewport's rule: visible viewport
+ * ∩ visible ancestor frames ∩ not occluded ∩ not CSS-hidden, holding a
+ * codeword. Limbo wrappers hold their state by design.
+ */
+export function wantsStrict(w: ElementWrapper, s: StrictInputs): boolean {
+  if (w.disconnectedAt !== null) return false;
+  if (!w.scanned.codeword) return false;
+  return s.ancestorChainVisible && !w.occluded && !w.cssHidden && s.onScreen;
+}

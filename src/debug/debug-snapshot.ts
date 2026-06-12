@@ -41,7 +41,7 @@ import {
   type ActivatePathEvent,
   type ElementSnap,
 } from '../activate/activate-path-log';
-import type { ReconcilePlan } from '../lifecycle/reconcile';
+import type { ReconcilePlan, ShadowDiff } from '../lifecycle/reconcile';
 
 // --- payload shape ---
 
@@ -183,6 +183,24 @@ export interface DebugSnapshotPayload {
    * Attached by the content-script capture path, which owns activeCategory +
    * the rect store the plan reads. */
   reconcile_shadow?: ReconcilePlan;
+  /** Plan-lists-vs-live-steps divergence (Phase C of
+   * DESIGN_UNIFIED_RECONCILER.md): the last settle's per-class diff plus
+   * cumulative totals since content-script load. Attached by the capture
+   * path; all-zero totals are the acceptance gate for the apply cutover. */
+  reconcile_shadow_diff?: {
+    last: ShadowDiff | null;
+    totals: {
+      settles: number;
+      divergentSettles: number;
+      planned: number;
+      acted: number;
+      release: { planOnly: number; liveOnly: number };
+      repair: { planOnly: number; liveOnly: number };
+      show: { planOnly: number; liveOnly: number };
+      hide: { planOnly: number; liveOnly: number };
+      strict: { planOnly: number; liveOnly: number };
+    };
+  };
 }
 
 // --- id generation ---

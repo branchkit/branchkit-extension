@@ -152,9 +152,14 @@ export function scheduleHintVisibilityRecheck(): void {
 // The settle pipeline passes its gather snapshot (Phase B of
 // notes/DESIGN_UNIFIED_RECONCILER.md) so the style/rect reads come out of the
 // once-per-settle batched pass; the throttled out-of-pipeline callers run the
-// legacy self-read path. Wrapper flags are always read live.
-export function recheckHintedVisibility(gather?: SettleGather): void {
+// legacy self-read path. Wrapper flags are always read live. Returns the
+// badges it actually transitioned so the pipeline can diff the shadow plan's
+// toShow/toHide lists against the live actions (Phase C).
+export function recheckHintedVisibility(
+  gather?: SettleGather,
+): { shown: ElementWrapper[]; hidden: ElementWrapper[] } {
   const __cpuStart = performance.now();
+  const acted: { shown: ElementWrapper[]; hidden: ElementWrapper[] } = { shown: [], hidden: [] };
   // Don't re-show badges the user just hid. Without this guard, hideHints()
   // sets pageSession.hintsVisible=false and clears each badge's visible
   // class — but the next visibilityMO tick (or periodic recheck) walks
@@ -165,7 +170,7 @@ export function recheckHintedVisibility(gather?: SettleGather): void {
   // the user's explicit hide intent.
   if (!pageSession.hintsVisible) {
     recordCpu('recheckHintedVisibility', performance.now() - __cpuStart);
-    return;
+    return acted;
   }
   const wrappers = store.all;
   const hinted: Element[] = [];
@@ -179,7 +184,7 @@ export function recheckHintedVisibility(gather?: SettleGather): void {
   }
   if (hinted.length === 0) {
     recordCpu('recheckHintedVisibility', performance.now() - __cpuStart);
-    return;
+    return acted;
   }
   // Reads come from the settle gather when present (snapshot taken at
   // pipeline start; misses fall back live). Legacy path warms the layout
@@ -207,9 +212,11 @@ export function recheckHintedVisibility(gather?: SettleGather): void {
       if (visible && !showing) {
         w.hint.show(w.grammarReady);
         transitions++;
+        acted.shown.push(w);
       } else if (!visible && showing) {
         w.hint.hide();
         transitions++;
+        acted.hidden.push(w);
       }
     }
   } finally {
@@ -223,6 +230,7 @@ export function recheckHintedVisibility(gather?: SettleGather): void {
     // converges with the visual without waiting for a scroll-settle.
     pageSession.deps.onVisibilityChanged();
   }
+  return acted;
 }
 
 function anyHintedWrapperVisible(): boolean {

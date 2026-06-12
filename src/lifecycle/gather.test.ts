@@ -78,15 +78,19 @@ describe('gatherSettleReads set membership', () => {
     expect(g.rects.has(dead)).toBe(false);
   });
 
-  it('resolves cssVisible only for hinted in-viewport wrappers', () => {
+  it('resolves cssVisible for hinted in-viewport wrappers and build candidates', () => {
     const dormant = make({ hint: true, inViewport: false });
     const active = make({ hint: true, inViewport: true });
-    const codewordedNoHint = make({ codeword: 'ape', inViewport: true });
-    const g = gatherSettleReads([dormant, active, codewordedNoHint]);
+    // Codeworded with no showing badge = the plan's build candidate — its
+    // cssVisible rides the gather batch (the lazyReads finding).
+    const buildCandidate = make({ codeword: 'ape', inViewport: true });
+    const g = gatherSettleReads([dormant, active, buildCandidate]);
     expect(g.cssVisible.has(active)).toBe(true);
     expect(typeof g.cssVisible.get(active)).toBe('boolean');
+    expect(g.cssVisible.has(buildCandidate)).toBe(true);
+    // Dormant codeword-less badge: style-read only in the rare repair case,
+    // never on the steady-state settle path.
     expect(g.cssVisible.has(dormant)).toBe(false);
-    expect(g.cssVisible.has(codewordedNoHint)).toBe(false);
     // …but the dormant hint still gets a rect (teardown's stale-FALSE sweep).
     expect(g.rects.get(dormant)).toBeDefined();
   });

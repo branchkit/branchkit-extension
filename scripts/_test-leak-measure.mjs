@@ -54,9 +54,24 @@ async function measure(page, label) {
       `claim=${String(r.needClaim).padStart(3)}  ` +
       `build=${String(r.needBuild).padStart(3)}  ` +
       `release=${String(r.needRelease).padStart(3)}  ` +
-      `teardown=${String(r.needTeardown).padStart(3)}  ` +
-      `band(known/sT/sF)=${r.band.rectsKnown}/${r.band.staleTrue}/${r.band.staleFalse}`,
+      `teardown=${String(r.needTeardown).padStart(3)}`,
     );
+  }
+  // Plan-lists shadow diff (Phase C of DESIGN_UNIFIED_RECONCILER.md):
+  // cumulative plan-vs-live divergence. Acceptance gate: stays all-zero
+  // across the sweep.
+  const d = snap.reconcile_shadow_diff;
+  if (d?.totals) {
+    const t = d.totals;
+    const cls = (x) => `${x.planOnly}/${x.liveOnly}`;
+    console.log(
+      `  ${' '.padEnd(16)} ~diff  settles=${t.settles} divergent=${t.divergentSettles} planned=${t.planned} acted=${t.acted}  ` +
+      `(plan/live) release=${cls(t.release)} repair=${cls(t.repair)} ` +
+      `show=${cls(t.show)} hide=${cls(t.hide)} strict=${cls(t.strict)}`,
+    );
+    if (t.divergentSettles > 0 && d.last && d.last.total > 0) {
+      console.log(`  ${' '.padEnd(16)} ~diff:last ${JSON.stringify(d.last)}`);
+    }
   }
   return c;
 }

@@ -83,3 +83,231 @@ describe('computeReconcilePlan', () => {
     expect(plan.needClaim).toBe(0);
   });
 });
+
+// --- Plan-as-lists (Phase C of notes/DESIGN_UNIFIED_RECONCILER.md) ---
+//
+// Real connected elements (the candidate/shown predicates read isConnected)
+// + a synthetic gather snapshot so the plan never falls back to live layout
+// reads. Rects are plain DOMRect-shaped objects in a 1000×800 viewport.
+
+import { afterEach } from 'vitest';
+import {
+  computeReconcilePlanLists,
+  computeStrictDeltaPlan,
+  diffShadow,
+  type ReconcilePlanLists,
+} from './reconcile';
+import type { SettleGather } from './gather';
+
+const VW = 1000;
+const VH = 800;
+// RECONCILE_BAND_MARGIN_PX is 1000 — beyond-band needs top > VH + 1000.
+const ON_SCREEN = { top: 100, left: 100, width: 50, height: 20 };
+const IN_BAND_OFF_SCREEN = { top: VH + 500, left: 100, width: 50, height: 20 };
+const OFF_BAND = { top: VH + 3000, left: 100, width: 50, height: 20 };
+const ZERO_BOX = { top: 0, left: 0, width: 0, height: 0 };
+
+function rect(r: { top: number; left: number; width: number; height: number }): DOMRect {
+  return {
+    top: r.top, left: r.left,
+    bottom: r.top + r.height, right: r.left + r.width,
+    width: r.width, height: r.height, x: r.left, y: r.top,
+    toJSON() { return this; },
+  } as DOMRect;
+}
+
+let liveId = 100;
+function liveWrapper(opts: {
+  codeword?: string;
+  hint?: 'visible' | 'dormant' | 'none';
+  inViewport?: boolean;
+  disconnected?: boolean;
+  cssHidden?: boolean;
+  occluded?: boolean;
+  lastSent?: boolean;
+}): ElementWrapper {
+  const el = document.createElement('a');
+  document.body.appendChild(el);
+  const scanned: ScannedElement = {
+    label: 'x', id: ++liveId, category: 'link', type: 'link', adapter: null,
+    codeword: opts.codeword ?? '',
+  };
+  const w = new ElementWrapper(el, scanned);
+  const hint = opts.hint ?? 'none';
+  if (hint !== 'none') w.hint = { isVisible: hint === 'visible' } as HintBadge;
+  w.isInViewport = opts.inViewport ?? false;
+  if (opts.disconnected) w.disconnectedAt = 1;
+  if (opts.cssHidden) w.cssHidden = true;
+  if (opts.occluded) w.occluded = true;
+  w.lastSentStrictViewport = opts.lastSent;
+  return w;
+}
+
+function gatherOf(entries: Array<[ElementWrapper, { top: number; left: number; width: number; height: number }, boolean?]>): SettleGather {
+  const rects = new Map<ElementWrapper, DOMRect>();
+  const cssVisible = new Map<ElementWrapper, boolean>();
+  for (const [w, r, visible] of entries) {
+    rects.set(w, rect(r));
+    if (visible !== undefined) cssVisible.set(w, visible);
+  }
+  return { vw: VW, vh: VH, ancestorChainVisible: true, rects, cssVisible };
+}
+
+afterEach(() => {
+  document.body.replaceChildren();
+});
+
+describe('computeReconcilePlanLists', () => {
+  it('lists a visible hint with off-band geometry for release (stale-TRUE)', () => {
+    const w = liveWrapper({ hint: 'visible', inViewport: true, codeword: 'ape' });
+    const lists = computeReconcilePlanLists(storeOf([w]), null, gatherOf([[w, OFF_BAND, true]]));
+    expect(lists.toRelease).toEqual([w]);
+    expect(lists.toRepair).toEqual([]);
+  });
+
+  it('does NOT release a dormant (hidden) off-band badge — desired state, not drift', () => {
+    const w = liveWrapper({ hint: 'dormant', inViewport: false });
+    const lists = computeReconcilePlanLists(storeOf([w]), null, gatherOf([[w, OFF_BAND]]));
+    expect(lists.toRelease).toEqual([]);
+    expect(lists.toRepair).toEqual([]);
+    expect(lists.toShow).toEqual([]);
+    expect(lists.toHide).toEqual([]);
+  });
+
+  it('lists a flag-out in-band hinted wrapper for repair (stale-FALSE)', () => {
+    const w = liveWrapper({ hint: 'dormant', inViewport: false });
+    const lists = computeReconcilePlanLists(storeOf([w]), null, gatherOf([[w, IN_BAND_OFF_SCREEN, true]]));
+    expect(lists.toRepair).toEqual([w]);
+  });
+
+  it('lists a never-hinted in-band candidate for repair, skipping boxless rects', () => {
+    const candidate = liveWrapper({});
+    const boxless = liveWrapper({});
+    const lists = computeReconcilePlanLists(
+      storeOf([candidate, boxless]), null,
+      gatherOf([[candidate, IN_BAND_OFF_SCREEN], [boxless, ZERO_BOX]]),
+    );
+    expect(lists.toRepair).toEqual([candidate]);
+  });
+
+  it('excludes limbo wrappers from every class', () => {
+    const w = liveWrapper({ hint: 'visible', inViewport: true, codeword: 'ape', disconnected: true });
+    const lists = computeReconcilePlanLists(storeOf([w]), null, gatherOf([[w, OFF_BAND, true]]));
+    for (const k of Object.keys(lists) as Array<keyof ReconcilePlanLists>) {
+      expect(lists[k]).toEqual([]);
+    }
+  });
+
+  it('claims follow the repaired flag: a repaired codeword-less wrapper lands in toClaim', () => {
+    const w = liveWrapper({ hint: 'dormant', inViewport: false });
+    const lists = computeReconcilePlanLists(storeOf([w]), null, gatherOf([[w, IN_BAND_OFF_SCREEN, true]]));
+    expect(lists.toRepair).toEqual([w]);
+    expect(lists.toClaim).toEqual([w]);
+  });
+
+  it('releases drop the flag: a released wrapper does not land in toShow', () => {
+    const w = liveWrapper({ hint: 'visible', inViewport: true, codeword: 'ape' });
+    const lists = computeReconcilePlanLists(storeOf([w]), null, gatherOf([[w, OFF_BAND, true]]));
+    expect(lists.toRelease).toEqual([w]);
+    expect(lists.toShow).toEqual([]);
+    expect(lists.toHide).toEqual([]);
+  });
+
+  it('re-shows a repaired dormant badge that is CSS-visible and on-screen (scroll-back)', () => {
+    const w = liveWrapper({ hint: 'dormant', inViewport: false });
+    const lists = computeReconcilePlanLists(storeOf([w]), null, gatherOf([[w, ON_SCREEN, true]]));
+    expect(lists.toRepair).toEqual([w]);
+    expect(lists.toShow).toEqual([w]);
+  });
+
+  it('hides a showing badge whose target went CSS-invisible', () => {
+    const w = liveWrapper({ hint: 'visible', inViewport: true, codeword: 'ape' });
+    const lists = computeReconcilePlanLists(storeOf([w]), null, gatherOf([[w, ON_SCREEN, false]]));
+    expect(lists.toHide).toEqual([w]);
+    expect(lists.toShow).toEqual([]);
+  });
+
+  it('lists a paintable codeworded badge-less wrapper for build', () => {
+    const w = liveWrapper({ codeword: 'ape', inViewport: true });
+    const lists = computeReconcilePlanLists(storeOf([w]), null, gatherOf([[w, ON_SCREEN, true]]));
+    expect(lists.toBuild).toEqual([w]);
+    // No repair happened → the live build pass would not run this settle, so
+    // the wrapper must not be predicted shown (or transitioned) by recheck.
+    expect(lists.toShow).toEqual([]);
+  });
+
+  it('a build alongside a repair is simulated as already-showing (no toShow double-count)', () => {
+    const repairTrigger = liveWrapper({ hint: 'dormant', inViewport: false });
+    const buildable = liveWrapper({ codeword: 'ape', inViewport: true });
+    const lists = computeReconcilePlanLists(
+      storeOf([repairTrigger, buildable]), null,
+      gatherOf([[repairTrigger, IN_BAND_OFF_SCREEN, true], [buildable, ON_SCREEN, true]]),
+    );
+    expect(lists.toRepair).toEqual([repairTrigger]);
+    expect(lists.toBuild).toEqual([buildable]);
+    expect(lists.toShow).toEqual([]);
+  });
+
+  it('does not build an off-screen or CSS-hidden target', () => {
+    const offScreen = liveWrapper({ codeword: 'ape', inViewport: true });
+    const hidden = liveWrapper({ codeword: 'oak', inViewport: true });
+    const lists = computeReconcilePlanLists(
+      storeOf([offScreen, hidden]), null,
+      gatherOf([[offScreen, IN_BAND_OFF_SCREEN, true], [hidden, ON_SCREEN, false]]),
+    );
+    expect(lists.toBuild).toEqual([]);
+  });
+});
+
+describe('computeStrictDeltaPlan', () => {
+  it('mirrors collectStrictViewportDelta: lastSent-vs-wantsStrict drives the delta', () => {
+    const entering = liveWrapper({ codeword: 'ape', hint: 'visible', inViewport: true, lastSent: false });
+    const leaving = liveWrapper({ codeword: 'oak', hint: 'visible', inViewport: true, lastSent: true });
+    const settled = liveWrapper({ codeword: 'elm', hint: 'visible', inViewport: true, lastSent: true });
+    const delta = computeStrictDeltaPlan(
+      [entering, leaving, settled],
+      gatherOf([[entering, ON_SCREEN], [leaving, IN_BAND_OFF_SCREEN], [settled, ON_SCREEN]]),
+    );
+    expect(delta).toEqual([entering, leaving]);
+  });
+
+  it('reads occluded/cssHidden live (written by earlier settle steps)', () => {
+    const occluded = liveWrapper({ codeword: 'ape', lastSent: true, occluded: true });
+    const cssHidden = liveWrapper({ codeword: 'oak', lastSent: true, cssHidden: true });
+    const delta = computeStrictDeltaPlan(
+      [occluded, cssHidden],
+      gatherOf([[occluded, ON_SCREEN], [cssHidden, ON_SCREEN]]),
+    );
+    expect(delta).toEqual([occluded, cssHidden]);
+  });
+});
+
+describe('diffShadow', () => {
+  it('reports zero for matching lists regardless of order', () => {
+    const a = liveWrapper({ codeword: 'ape' });
+    const b = liveWrapper({ codeword: 'oak' });
+    const lists: ReconcilePlanLists = {
+      toRelease: [a, b], toRepair: [], toClaim: [], toBuild: [], toShow: [], toHide: [],
+    };
+    const diff = diffShadow(lists, [], {
+      released: [b, a], repaired: [], shown: [], hidden: [], strictDelta: [],
+    });
+    expect(diff.total).toBe(0);
+  });
+
+  it('splits divergence into planOnly and liveOnly with samples', () => {
+    const planned = liveWrapper({ codeword: 'ape' });
+    const acted = liveWrapper({ codeword: 'oak' });
+    const lists: ReconcilePlanLists = {
+      toRelease: [], toRepair: [], toClaim: [], toBuild: [], toShow: [planned], toHide: [],
+    };
+    const diff = diffShadow(lists, [], {
+      released: [], repaired: [], shown: [acted], hidden: [], strictDelta: [],
+    });
+    expect(diff.show.planOnly).toBe(1);
+    expect(diff.show.liveOnly).toBe(1);
+    expect(diff.show.planOnlySample).toEqual(['ape']);
+    expect(diff.show.liveOnlySample).toEqual(['oak']);
+    expect(diff.total).toBe(2);
+  });
+});
