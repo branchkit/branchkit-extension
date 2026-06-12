@@ -464,7 +464,15 @@ export function buildSnapshotPayload(inputs: BuildInputs): DebugSnapshotPayload 
  * callers — notably the `window.__branchkitCaptureSnapshot` test hook —
  * can read the structured snapshot synchronously without waiting on the
  * async disk-write/plugin-reachability path. */
-export function captureDebugSnapshot(store: WrapperStore, frameUrl: string): DebugSnapshotPayload {
+export function captureDebugSnapshot(
+  store: WrapperStore,
+  frameUrl: string,
+  /** Caller-owned diagnostic surfaces (reconcile_applied, grammar_epoch) —
+   * merged BEFORE the send so the on-disk snapshot carries them. Attaching
+   * after the call only ever reached the dataset mirror, which is why disk
+   * snapshots silently lacked these fields (found 2026-06-12). */
+  extras?: Partial<DebugSnapshotPayload>,
+): DebugSnapshotPayload {
   const knownIds = new Set<number>();
   for (const w of store.all) knownIds.add(w.scanned.id);
   for (const ev of getActivatePathBuffer()) {
@@ -475,6 +483,7 @@ export function captureDebugSnapshot(store: WrapperStore, frameUrl: string): Deb
     knownRegistryIds: knownIds,
     frameUrl,
   });
+  if (extras) Object.assign(payload, extras);
   try {
     chrome.runtime.sendMessage({ type: 'DEBUG_SNAPSHOT', payload });
   } catch {

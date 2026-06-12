@@ -2730,6 +2730,20 @@ const reconcileApplied = {
   total: { release: 0, repair: 0, claim: 0, build: 0, show: 0, hide: 0, cssHidden: 0, strict: 0 },
 };
 
+/** Diagnostic surfaces owned by this module, merged into every debug
+ * snapshot (both the Ctrl+Alt+A path and the test-capture event) BEFORE the
+ * send — see captureDebugSnapshot's extras param. */
+function snapshotExtras() {
+  return {
+    grammar_epoch: grammarEpochStats(),
+    reconcile_applied: {
+      passes: reconcileApplied.passes,
+      last: { ...reconcileApplied.last },
+      total: { ...reconcileApplied.total },
+    },
+  };
+}
+
 function recordApplied(lists: ReconcilePlanLists): void {
   reconcileApplied.passes++;
   const last = {
@@ -2950,7 +2964,7 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
       data: { url, ts: performance.now() },
       level: 'info',
     });
-    captureDebugSnapshot(store, url);
+    captureDebugSnapshot(store, url, snapshotExtras());
     // Phase 3: same press also toggles the in-page debug overlay so the
     // diagnostic categories (yellow/orange/red/blue) become visible
     // without needing to read JSON. Frozen-frame; re-press flips off.
@@ -3007,13 +3021,7 @@ document.addEventListener('keyup', (e: KeyboardEvent) => {
 // overlay — a test driving captures shouldn't mutate the page's visuals.
 document.addEventListener('__branchkit__capture_snapshot', () => {
   try {
-    const payload = captureDebugSnapshot(store, trimFrameUrl(window.location.href));
-    payload.grammar_epoch = grammarEpochStats();
-    payload.reconcile_applied = {
-      passes: reconcileApplied.passes,
-      last: { ...reconcileApplied.last },
-      total: { ...reconcileApplied.total },
-    };
+    const payload = captureDebugSnapshot(store, trimFrameUrl(window.location.href), snapshotExtras());
     document.documentElement.dataset.branchkitSnapshot = JSON.stringify(payload);
   } catch {
     // Snapshot build failed (detached store, serialization); leave the
