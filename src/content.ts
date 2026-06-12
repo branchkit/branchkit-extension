@@ -17,6 +17,7 @@ import {
   diffShadow,
   geometryInBand,
   RECONCILE_BAND_MARGIN_PX,
+  type ReconcilePlanLists,
   type ShadowDiff,
 } from './lifecycle/reconcile';
 import { gatherSettleReads, SettleGather } from './lifecycle/gather';
@@ -1364,101 +1365,33 @@ function scheduleReconcile(): void {
   }, DEFERRED_REPOSITION_DEBOUNCE_MS);
 }
 
-// Tear-down + missed-enter backstop for the lifecycle reconciler (Phase 4 of
-// notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md). The IO entry/exit
-// branches are the cheap fast-path; this is the authoritative backstop for
-// dropped/reordered IO events that leave `isInViewport` desynced in EITHER
-// direction:
+// Tear-down + missed-enter backstop for the lifecycle reconciler — Phase D
+// cutover (notes/DESIGN_UNIFIED_RECONCILER.md): the plan computes WHICH
+// wrappers are desynced (computeReconcilePlanLists' toRelease/toRepair, from
+// the gather's band geometry — derivation, sets, and the boxless/dormancy
+// nuances live there); this is the thin applier. The IO entry/exit branches
+// remain the cheap fast-path; this corrects dropped/reordered IO events in
+// either direction:
 //
-//   stale-TRUE  (flag=in,  geometry=out) → release codeword + tear down hint
-//   stale-FALSE (flag=out, geometry=in)  → flip flag to true; next reconcile
-//                                          will re-claim a codeword and rebuild
-//                                          the hint
-//
-// The stale-FALSE case shows up on YouTube post-scroll: a video tile wrapper
-// scrolled out (codeword released, hint went dormant via hint reuse), then
-// scrolled back in but the IO never re-fired enter (mutation-storm dropped it,
-// or YouTube reparented the element through a structure the IO didn't follow).
-// Without this correction the wrapper stays stuck — `wantsCodeword` reads the
-// stale flag, `refreshViewportClaims` skips it, and the dormant hint never
-// gets re-shown.
-//
-// Cost discipline (the wedge guard): fresh getBoundingClientRect runs over the
-// hinted set (visible + dormant — both scroll-history-bounded by the
-// IO-exit-marks-dormant path) plus the codeword-less never-hinted wrappers —
-// the only set that can hold the missed-INITIAL-enter desync. The first gBCR
-// pays the (single) forced reflow; every read after it is a cheap
-// clean-layout lookup, and the whole pass is batched read-all-then-act so a
-// layout read never interleaves with a write. Wrappers with a codeword but no
-// hint are deliberately NOT swept: a codeword implies the IO delivered an
-// enter, and its exit/release flows through the IO + the hinted sweep.
-// Returns the wrappers it acted on ({released: stale-TRUE releases,
-// repaired: stale-FALSE flag flips}) so the settle pipeline can diff the
-// shadow plan's lists against the live actions (Phase C).
-function reconcileTeardown(gather?: SettleGather): { released: ElementWrapper[]; repaired: ElementWrapper[] } {
-  const vw = gather?.vw ?? window.innerWidth;
-  const vh = gather?.vh ?? window.innerHeight;
-  // Include dormant reused hints (DESIGN_HINT_REUSE.md): they were torn down
-  // by an IO exit but the badge object survived for scroll-back. If the user
-  // scrolled them back in and the IO missed the enter, the wrapper has
-  // `isInViewport=false` + no codeword + dormant hint — exactly the stale-FALSE
-  // signature. We need them in the set to detect and fix that.
-  const hinted = store.all.filter(w => w.hint && w.disconnectedAt === null);
-  // Never-hinted stale-FALSE candidates: a wrapper that missed its INITIAL IO
-  // enter (mutation-storm drop before any codeword/hint existed) has no hint
-  // for the sweep above to see — `wantsCodeword` reads the stale flag,
-  // `refreshViewportClaims` skips it, and nothing else ever repairs it (the
-  // residual scroll-back-missing-badge mode, 2026-06-11 review bug 4).
-  const unhinted = store.all.filter(w =>
-    !w.hint && w.disconnectedAt === null && !w.isInViewport &&
-    w.scanned.codeword.length === 0 && w.element.isConnected);
-  if (hinted.length === 0 && unhinted.length === 0) return { released: [], repaired: [] };
-
-  // Read all geometry first… (from the settle gather when present — the
-  // once-per-settle batched read; live fallback for wrappers it missed)
-  const offBand: ElementWrapper[] = [];
-  const missedEnter: ElementWrapper[] = [];
-  for (const w of hinted) {
-    const r = gather?.rects.get(w) ?? w.element.getBoundingClientRect();
-    const inBand = geometryInBand(r, vw, vh, RECONCILE_BAND_MARGIN_PX);
-    if (inBand) {
-      // Stale-FALSE candidate: IO flag says out but geometry says in.
-      // Only act when the flag actually disagrees with geometry; in-band
-      // hints with the flag correctly TRUE are the steady state we skip.
-      if (!w.isInViewport) missedEnter.push(w);
-    } else {
-      // Stale-TRUE candidate (visible hints only — dormant hints have already
-      // released their codeword and torn down on the IO exit; releasing again
-      // would be a no-op + an unnecessary scheduleFlush).
-      if (w.hint?.isVisible) offBand.push(w);
-    }
-  }
-  for (const w of unhinted) {
-    const r = gather?.rects.get(w) ?? w.element.getBoundingClientRect();
-    // A boxless element (display:none collapsed menu) reads as the all-zero
-    // rect, which the band test would call "in band" — but the IO never
-    // intersects a boxless element, so flipping the flag here would claim
-    // codewords for invisible targets. Skip; if it regains a box, this pass
-    // (or the IO) catches it then.
-    if (r.width === 0 && r.height === 0 && r.top === 0 && r.left === 0) continue;
-    if (geometryInBand(r, vw, vh, RECONCILE_BAND_MARGIN_PX)) missedEnter.push(w);
-  }
-  // …then act.
-  for (const w of offBand) {
+//   toRelease (stale-TRUE):  flag=in, geometry=out → release codeword; the
+//                            flush tears the hint down to dormant
+//   toRepair  (stale-FALSE): flag=out, geometry=in → flip flag; the
+//                            reconcile below re-claims + rebuilds
+function applyTeardownPlan(lists: ReconcilePlanLists): void {
+  for (const w of lists.toRelease) {
     w.isInViewport = false;
     pageSession.tracker.queueRelease(w);
   }
-  for (const w of missedEnter) {
+  for (const w of lists.toRepair) {
     w.isInViewport = true;
   }
   // If we corrected any stale-FALSE flags, run reconcile so the just-recovered
   // wrappers go through claim + build (refreshViewportClaims gates on the
   // flag, so the fix has to land before reconcile reads it).
-  if (missedEnter.length > 0) {
-    firehoseStep('reconcile:stale_false_repair', missedEnter.length, 1);
+  if (lists.toRepair.length > 0) {
+    firehoseStep('reconcile:stale_false_repair', lists.toRepair.length, 1);
     reconcile();
   }
-  return { released: offBand, repaired: missedEnter };
 }
 
 // Strict-viewport reconciler: scroll moves wrappers across the strict/band
@@ -2835,10 +2768,12 @@ function runSettlePipeline(discovery: 'band' | 'store'): void {
     // Steps read live wrapper FLAGS as before — only geometry/styles come
     // from the snapshot, with live fallback for wrappers it missed.
     const gather = gatherSettleReads(store.all);
-    // PLAN (shadow): what should each step do, per the desired-state
-    // predicates over the snapshot? Drives nothing yet.
+    // PLAN: which wrappers does each step act on, per the desired-state
+    // predicates over the snapshot? Cut-over classes (teardown/repair)
+    // execute the lists directly; the rest still run their own filters with
+    // the shadow diff watching them.
     const planLists = computeReconcilePlanLists(store, activeCategory, gather);
-    const teardownActions = reconcileTeardown(gather);
+    applyTeardownPlan(planLists);
     if (discovery === 'band') scheduleBandDiscovery();
     else scheduleReconcile();
     reconcileClipObservation(store.all);
@@ -2852,8 +2787,11 @@ function runSettlePipeline(discovery: 'band' | 'store'): void {
     const strictPlan = computeStrictDeltaPlan(store.all, gather);
     const strictActions = reconcileStrictViewport(gather);
     recordShadowDiff(diffShadow(planLists, strictPlan, {
-      released: teardownActions.released,
-      repaired: teardownActions.repaired,
+      // release/repair are tautological since the cutover (the step executes
+      // the plan's lists); kept so planned/acted volumes stay comparable.
+      // The whole shadow comparison dies in Phase E.
+      released: planLists.toRelease,
+      repaired: planLists.toRepair,
       shown: recheckActions.shown,
       hidden: recheckActions.hidden,
       strictDelta: strictActions,
