@@ -89,7 +89,8 @@ import {
 } from './rules/domain-rules';
 import { loadDomainRules, onDomainRulesChanged, rulesEqual } from './rules/domain-rules-storage';
 import { loadBadgeSettings, onBadgeSettingsChanged } from './badge-settings-storage';
-import { setBadgeSizingFromSettings, setScrollAccelEnabled, setScrollAccelNestedEnabled, reconcileScrollAccel, reconcileScrollAccelForScroller } from './render/hints';
+import { setBadgeSizingFromSettings } from './render/hints';
+import { setScrollAccelEnabled, setScrollAccelNestedEnabled, reconcileScrollAccel, reconcileScrollAccelForScroller } from './render/scroll-accel-glue';
 import { isScrollTimelineSupported } from './render/scroll-accel';
 import { setNudgesFromSettings } from './placement';
 import { labelReservoir } from './labels/label-reservoir';

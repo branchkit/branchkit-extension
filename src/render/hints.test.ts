@@ -1,11 +1,6 @@
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
-import {
-  findBadgeContainer,
-  findLimitParent,
-  resolveContainer,
-  HintBadge,
-  __refineScheduler,
-} from './hints';
+import { findBadgeContainer, findLimitParent, resolveContainer } from './container-resolution';
+import { HintBadge, __refineScheduler } from './hints';
 import { __testing as containerTracker } from '../observe/container-resize-tracker';
 import { __testing as targetTracker } from '../observe/target-mutation-tracker';
 import { __testing as hostTracker } from '../observe/host-attribute-tracker';

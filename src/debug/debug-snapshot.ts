@@ -33,7 +33,7 @@ import type { RebindCounters } from '../labels/rebind';
 import { persistedCodeword } from '../labels/codeword-recall';
 import { enumerateAlmostHintable, isHintable, isVisible, type AlmostHintable } from '../scan/scanner';
 import { accessibleName } from '../scan/accessible-name';
-import { diagnoseContainerResolution, type ContainerResolutionDiag } from '../render/hints';
+import { diagnoseContainerResolution, type ContainerResolutionDiag } from '../render/container-diagnostics';
 import {
   elementSnap,
   parentChainSig,

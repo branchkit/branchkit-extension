@@ -1,16 +1,17 @@
 /**
- * BranchKit Browser — Shadow DOM hint badges.
+ * BranchKit Browser — the HintBadge: a Shadow DOM badge pinned to its target.
  *
  * Each badge lives in a closed Shadow DOM to prevent page CSS interference.
  * Hosts are body-mounted; the batched JS reconciler (reconcile-positioner.ts)
  * pins each host to its target's live rect every pass. Container resolution
- * (resolveContainer) still runs per badge — its anchorParent drives the
- * container-resize tracker.
+ * (container-resolution.ts) still runs per badge — its anchorParent drives the
+ * container-resize tracker. Accelerator coordination lives in
+ * scroll-accel-glue.ts; container diagnostics in container-diagnostics.ts.
  */
 
 import { Category, BadgeDisplayMode } from '../types';
 import { LabelAssignment, labelToDisplay } from '../labels/words';
-import { getCachedRect, getCachedStyle, getCachedDims, isClipAncestor } from '../layout-cache';
+import { getCachedRect, getCachedStyle } from '../layout-cache';
 import { calculateZIndex } from '../placement/stacking';
 import { computeBadgeColors } from './badge-colors';
 import { type BadgeSettings, DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
@@ -19,6 +20,15 @@ import { trackContainerResize, untrackContainerResize } from '../observe/contain
 import { trackTargetMutations, untrackTargetMutations } from '../observe/target-mutation-tracker';
 import { trackHostAttributes, untrackHostAttributes } from '../observe/host-attribute-tracker';
 import { register as registerReconcile, unregister as unregisterReconcile, type ReconcileWrite } from './reconcile-positioner';
+import { hasViewportPinnedAncestor, resolveContainer } from './container-resolution';
+import {
+  isScrollAccelEnabled,
+  isScrollAccelNestedEnabled,
+  registerScrollAccelBadge,
+  unregisterScrollAccelBadge,
+  sameElements,
+  describeScroller,
+} from './scroll-accel-glue';
 import {
   type ScrollAccel,
   createScrollAccel,
@@ -30,241 +40,6 @@ import {
   findScrollableAncestor,
   findScrollableAncestors,
 } from './scroll-accel';
-
-// Walk ancestors (piercing shadow boundaries) for a position:fixed or sticky
-// element. Such a target holds a constant viewport position as the window
-// scrolls, so its badge host must be viewport-anchored (position:fixed + viewport
-// coords) — a document-anchored host would ride the page scroll away from the
-// pinned target (the YouTube left-rail drift). Uses the warm style cache;
-// evaluated once at construction / retarget.
-function hasViewportPinnedAncestor(target: Element): boolean {
-  let node: Element | null = target;
-  while (node) {
-    if (node instanceof HTMLElement) {
-      const pos = getCachedStyle(node).position;
-      if (pos === 'fixed' || pos === 'sticky') return true;
-    }
-    const parent: Element | null = node.parentElement;
-    if (parent) {
-      node = parent;
-    } else {
-      const r = node.getRootNode();
-      node = r instanceof ShadowRoot ? (r.host as Element) : null;
-    }
-  }
-  return false;
-}
-
-
-export function findBadgeContainer(target: Element): HTMLElement {
-  let current: Node | null = target.parentNode;
-  while (current) {
-    if (current instanceof ShadowRoot) return current.host as HTMLElement;
-    if (!(current instanceof HTMLElement) || current.shadowRoot) {
-      current = current.parentNode;
-      continue;
-    }
-    const s = getCachedStyle(current);
-    if (s.display === 'contents') { current = current.parentElement; continue; }
-    // Mount inside table cells / rows / sections — these participate
-    // in normal flow for inline-block children and are required for
-    // scroll-tracking on apps that scroll the table itself rather than
-    // an outer wrapper (Gmail mail list). Skip only the <table>/<inline-table>
-    // containers themselves; their cell/row/section/group descendants
-    // accept arbitrary inline children fine.
-    if (current.tagName === 'TABLE' || s.display === 'table' || s.display === 'inline-table') {
-      current = current.parentElement;
-      continue;
-    }
-    return current;
-  }
-  return document.body;
-}
-
-function isScrollContainer(el: Element): boolean {
-  const s = getCachedStyle(el);
-  const { clientWidth, scrollWidth, clientHeight, scrollHeight } = getCachedDims(el);
-  return (
-    el === document.documentElement ||
-    (scrollWidth > clientWidth && /scroll|auto/.test(s.overflowX)) ||
-    (scrollHeight > clientHeight && /scroll|auto/.test(s.overflowY))
-  );
-}
-
-const ENOUGH_LEFT = 15;
-const ENOUGH_TOP = 10;
-
-export function findLimitParent(target: Element): HTMLElement {
-  let current: Element | null = target.parentElement;
-  while (current && current !== document.body) {
-    if (current instanceof HTMLElement) {
-      const s = getCachedStyle(current);
-      if (
-        s.position === 'fixed' || s.position === 'sticky' ||
-        (s.transform && s.transform !== 'none') ||
-        s.willChange === 'transform' ||
-        isScrollContainer(current)
-      ) {
-        return current;
-      }
-    }
-    current = current.parentElement;
-  }
-  return document.body;
-}
-
-function getSpaceInAncestor(ancestor: Element, targetRect: DOMRect): { left: number; top: number } {
-  const ancestorRect = getCachedRect(ancestor);
-  return {
-    left: Math.max(0, targetRect.left - ancestorRect.left),
-    top: Math.max(0, targetRect.top - ancestorRect.top),
-  };
-}
-
-export function resolveContainer(target: Element): HTMLElement {
-  const candidate = findBadgeContainer(target);
-  const limitParent = findLimitParent(target);
-  const targetRect = getCachedRect(target);
-
-  // Walk every clipping ancestor between target and limitParent. For
-  // each, measure how much space the badge would have to the left and
-  // above the target. Stop at the first ancestor that has ENOUGH_LEFT
-  // and ENOUGH_TOP — that ancestor's parent is the container. Direct
-  // port of Rango's getContextForHint loop; the multi-level escalation
-  // is what handles deeply-nested sidebars (Gmail's nav rail clips at
-  // ~3 levels and a single-level escalation would still leave the
-  // badge clamped over the menu text).
-  const clipAncestors: HTMLElement[] = [];
-  let current: Element | null = target.parentElement;
-  while (current && current !== document.body) {
-    if (current instanceof HTMLElement && isClipAncestor(current)) {
-      clipAncestors.push(current);
-    }
-    if (current === limitParent) break;
-    current = current.parentElement;
-  }
-
-  let chosen: HTMLElement | null = null;
-  for (let i = 0; i < clipAncestors.length; i++) {
-    const ancestor = clipAncestors[i];
-    // The limitParent represents the scroll/positioning boundary. If
-    // it appears as a clip ancestor itself (overflow:auto scroll
-    // container case), don't escape past it — that would mount the
-    // badge OUTSIDE the scrolling context where it can't follow the
-    // target on internal scroll. Let the fallthrough return the
-    // candidate (findBadgeContainer's result) so the badge stays
-    // inside the scrolling content (Gmail mail-list bug).
-    if (ancestor === limitParent) continue;
-    const space = getSpaceInAncestor(ancestor, targetRect);
-    if (space.left >= ENOUGH_LEFT && space.top >= ENOUGH_TOP) {
-      // This ancestor has enough space for the badge; its parent
-      // container is the right place to anchor.
-      const parent = (i === 0 ? ancestor : clipAncestors[i - 1]).parentElement;
-      if (parent instanceof HTMLElement && limitParent.contains(parent)) {
-        chosen = parent;
-      } else {
-        const escaped = findBadgeContainer(ancestor);
-        // Don't escape outside limitParent. If the escape result isn't
-        // contained, leave chosen null so we fall through to candidate
-        // (which is findBadgeContainer(target) — already inside limitParent
-        // because target is).
-        if (limitParent.contains(escaped)) chosen = escaped;
-      }
-      break;
-    }
-  }
-
-  if (chosen) return chosen;
-
-  // No ancestor had enough room. Escape past the LAST tight clip we
-  // found — escaping past only the first would land us inside the
-  // remaining tight clips, which still clamp the badge over the text.
-  // Confirmed on Gmail's nav: clipAncestors are [span.nU, div.aio.UKr6le],
-  // both with space (0, 1). Anchoring at span.nU.parentElement = div.aio
-  // (the second tight clip) leaves the badge clamped; anchoring at
-  // div.aio.parentElement = div.TN gets us out of both.
-  if (clipAncestors.length > 0) {
-    const lastTight = clipAncestors[clipAncestors.length - 1];
-    const clipParent = lastTight.parentElement;
-    if (clipParent instanceof HTMLElement && limitParent.contains(clipParent)) {
-      return clipParent;
-    }
-    const escaped = findBadgeContainer(lastTight);
-    if (limitParent.contains(escaped)) return escaped;
-  }
-  return candidate;
-}
-
-export interface ContainerResolutionDiag {
-  limitParent: { tag: string; id: string; classes: string; position: string; isScrollContainer: boolean };
-  clipAncestors: Array<{ tag: string; id: string; classes: string; space: { left: number; top: number }; tight: boolean }>;
-  escalated: boolean;
-  escalationBlocked: boolean;
-  finalContainer: { tag: string; id: string; classes: string };
-}
-
-function elSig(el: Element): { tag: string; id: string; classes: string } {
-  return {
-    tag: el.tagName.toLowerCase(),
-    id: el.id || '',
-    classes: (typeof el.className === 'string' ? el.className : '').slice(0, 200),
-  };
-}
-
-export function diagnoseContainerResolution(target: Element): ContainerResolutionDiag {
-  const candidate = findBadgeContainer(target);
-  const limitParent = findLimitParent(target);
-  const targetRect = getCachedRect(target);
-  const lpStyle = getCachedStyle(limitParent);
-
-  const clipAncestors: ContainerResolutionDiag['clipAncestors'] = [];
-  let current: Element | null = target.parentElement;
-  let firstTightClip: HTMLElement | null = null;
-
-  while (current && current !== limitParent && current !== document.body) {
-    if (current instanceof HTMLElement && isClipAncestor(current)) {
-      const space = getSpaceInAncestor(current, targetRect);
-      const tight = space.left < ENOUGH_LEFT || space.top < ENOUGH_TOP;
-      clipAncestors.push({ ...elSig(current), space, tight });
-      if (tight) firstTightClip ??= current;
-    }
-    current = current.parentElement;
-  }
-
-  let escalated = false;
-  let escalationBlocked = false;
-  let finalContainer = candidate;
-
-  if (firstTightClip) {
-    const clipParent = firstTightClip.parentElement;
-    if (clipParent instanceof HTMLElement && limitParent.contains(clipParent)) {
-      finalContainer = clipParent;
-      escalated = true;
-    } else {
-      const escaped = findBadgeContainer(firstTightClip);
-      if (limitParent.contains(escaped)) {
-        finalContainer = escaped;
-        escalated = true;
-      } else {
-        escalationBlocked = true;
-      }
-    }
-  }
-
-  return {
-    limitParent: {
-      ...elSig(limitParent),
-      position: lpStyle.position,
-      isScrollContainer: isScrollContainer(limitParent),
-    },
-    clipAncestors,
-    escalated,
-    escalationBlocked,
-    finalContainer: elSig(finalContainer),
-  };
-}
-
-const BADGE_OFFSET = 24;
 
 // --- Refinement scheduler (phase 3 of the two-pass paint plan) ---
 //
@@ -371,42 +146,6 @@ export function setBadgeSizingFromSettings(s: BadgeSettings): void {
   badgeFontMax = s.fontMax;
 }
 
-// Inner-scroll accelerator gate (notes/DESIGN_INNER_SCROLL_ACCELERATOR.md).
-// Production default is ON, set at content-script init from the `bkScrollAccel`
-// flag (only an explicit `false` disables it). This module ref initializes false
-// as a pre-read safety value — off until that init read confirms — so a badge
-// built before the storage read doesn't arm prematurely; it re-arms on its next
-// show()/updatePosition once the flag resolves. A mutable ref so the flag
-// propagates without re-wiring callers.
-let scrollAccelEnabled = false;
-
-export function setScrollAccelEnabled(enabled: boolean): void {
-  scrollAccelEnabled = enabled;
-}
-
-// Nested-scroller support for the accelerator: ride the WHOLE chain of scroller
-// ancestors (composed additive ScrollTimelines), not just the nearest. Fixes the
-// wiggle when an OUTER overflow ancestor scrolls a target that lives in an inner
-// pane (the QuickBase report-in-#mainBodyDiv case). Default ON, set from the
-// `bkScrollAccelNested` flag in content.ts (only an explicit `false` disables).
-// The multi-scroller path relies on `composite: 'add'`, verified by the nested
-// integration test. This module ref initializes false as a pre-read safety value.
-let scrollAccelNestedEnabled = false;
-
-export function setScrollAccelNestedEnabled(enabled: boolean): void {
-  if (scrollAccelNestedEnabled === enabled) return;
-  scrollAccelNestedEnabled = enabled;
-  // Re-detect every live badge's chain so a flag flip (or a late flag read)
-  // takes effect without waiting for each badge to be re-shown.
-  for (const b of liveReconcileBadges) b.syncScrollAccel();
-}
-
-// Registry of live reconcile badges, so the accelerator can be re-detected
-// level-triggered (a scroller that became scrollable after a badge first armed,
-// a chain that grew/shrank, or a flag flip) instead of only edge-triggered at
-// show time. Added in the constructor, removed in remove().
-const liveReconcileBadges = new Set<HintBadge>();
-
 // Z-index cache, keyed by anchorParent. calculateZIndex walks the target's
 // descendants plus its ancestor chain with live getComputedStyle — too
 // expensive to run per badge per placement pass (the pre-2026-06 model, the
@@ -425,46 +164,6 @@ function zIndexFor(target: Element, host: HTMLElement, anchorParent: HTMLElement
     zIndexByAnchorParent.set(anchorParent, z);
   }
   return z;
-}
-
-/** Re-detect the accelerator chain for every visible live badge. Called from the
- *  settle handlers so arming is level-triggered: a badge whose scroller wasn't
- *  scrollable yet at show time (content still loading) gets accelerated once it
- *  is, and a chain that changed is rebuilt. No-op when the flag is off. */
-export function reconcileScrollAccel(): void {
-  if (!scrollAccelEnabled) return;
-  for (const b of liveReconcileBadges) b.syncScrollAccel();
-}
-
-/** Scoped variant of `reconcileScrollAccel`: re-detect only badges whose target
- *  lives inside `scroller`. Called from the scroll handler at gesture START with
- *  the element that just scrolled. A scroller that only becomes scrollable on
- *  pointer hover (QuickBase classic report grids flip overflow:hidden->auto under
- *  :hover) emits no mutation and — with overlay scrollbars — no reflow, so the
- *  settle-time `reconcileScrollAccel` hasn't armed it when the gesture begins.
- *  Re-detecting the moment that scroller first scrolls rides it from the first
- *  frame instead of after the ~100ms settle, killing the first-gesture chase.
- *  Scoped to the scrolled subtree so the common case (window / already-ridden
- *  page scroller) costs one cheap `contains` check per badge, no layout reads. */
-export function reconcileScrollAccelForScroller(scroller: Element): void {
-  if (!scrollAccelEnabled) return;
-  for (const b of liveReconcileBadges) b.syncScrollAccelInside(scroller);
-}
-
-function sameElements(a: readonly Element[], b: readonly Element[]): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
-  return true;
-}
-
-/** Short `tag#id.class.class` descriptor for a scroller, for the debug snapshot's
- *  per-layer accelerator chain. Diagnostic-only. */
-function describeScroller(el: Element): string {
-  const id = el.id ? `#${el.id}` : '';
-  const cls = typeof el.className === 'string' && el.className
-    ? '.' + el.className.trim().split(/\s+/).slice(0, 2).join('.')
-    : '';
-  return `${el.tagName.toLowerCase()}${id}${cls}`;
 }
 
 // Test affordance: open the badge's shadow root so integration tests (Playwright)
@@ -679,7 +378,7 @@ export class HintBadge {
     this.anchorParent = resolveContainer(target);
     this.setupReconcileHost();
     registerReconcile(this);
-    liveReconcileBadges.add(this);
+    registerScrollAccelBadge(this);
 
     // Defer the heavy half of setup (4 observer registrations + APCA color
     // computation, ~5-10 ms total) onto idle time via the module-level
@@ -806,8 +505,8 @@ export class HintBadge {
   // dropped exclusion only newly covers fixed/sticky panes that DO inner-scroll.
   // Called from `updatePosition` (offset baked) and `show`.
   private armScrollAccel(): void {
-    if (!scrollAccelEnabled || this._scrollAccel) return;
-    this._scrollAccel = createScrollAccel(this.target, this.outer, this.inner, scrollAccelNestedEnabled);
+    if (!isScrollAccelEnabled() || this._scrollAccel) return;
+    this._scrollAccel = createScrollAccel(this.target, this.outer, this.inner, isScrollAccelNestedEnabled());
     // Diagnostic mirror on the light-DOM host: a badge that found an inner
     // scroller and armed carries `data-bk-accel="<layerCount>"`, so the accelerated
     // set is countable from the page console
@@ -835,7 +534,7 @@ export class HintBadge {
   // that grew/shrank, and late flag reads. Repositions after, since this is not
   // called from inside reconcileRead.
   syncScrollAccel(): void {
-    if (!scrollAccelEnabled || !this._visible) return;
+    if (!isScrollAccelEnabled() || !this._visible) return;
     if (this.syncScrollAccelChain() && this._scrollAccel) this.repositionHostNow();
   }
 
@@ -844,7 +543,7 @@ export class HintBadge {
   // cheap: badges outside the scrolled subtree skip the layout-reading chain
   // walk entirely. See `reconcileScrollAccelForScroller`.
   syncScrollAccelInside(scroller: Element): void {
-    if (!scrollAccelEnabled || !this._visible) return;
+    if (!isScrollAccelEnabled() || !this._visible) return;
     if (!scroller.contains(this.target)) return;
     this.syncScrollAccel();
   }
@@ -857,7 +556,7 @@ export class HintBadge {
   // true if the chain changed. Does NOT reposition (callers decide). Fully disarms
   // when nothing is scrollable now (→ chase base, graceful degradation).
   private syncScrollAccelChain(): boolean {
-    const desired = scrollAccelNestedEnabled
+    const desired = isScrollAccelNestedEnabled()
       ? findScrollableAncestors(this.target)
       : ((s) => (s ? [s] : []))(findScrollableAncestor(this.target));
     const current = this._scrollAccel ? this._scrollAccel.layers.map((l) => l.scroller) : [];
@@ -977,7 +676,7 @@ export class HintBadge {
     // the old-target disarm + new-target re-arm flip `outer`'s -scrollTop, so
     // the base must move in lockstep. Accel off: the next reconcile pass moves
     // the host to the new target.
-    if (scrollAccelEnabled) this.repositionHostNow();
+    if (isScrollAccelEnabled()) this.repositionHostNow();
   }
 
   /**
@@ -1015,7 +714,7 @@ export class HintBadge {
     // prior render). Gated on the flag so flag-off `show()` is unchanged — today
     // it does not touch the host transform here.
     this.armScrollAccel();
-    if (scrollAccelEnabled) this.repositionHostNow();
+    if (isScrollAccelEnabled()) this.repositionHostNow();
     if (!grammarReady) {
       this.inner.classList.add('bk-pending');
       this.host.setAttribute('data-bk-pending', 'true');
@@ -1226,7 +925,7 @@ export class HintBadge {
     untrackTargetMutations(this.target);
     untrackHostAttributes(this.host);
     unregisterReconcile(this);
-    liveReconcileBadges.delete(this);
+    unregisterScrollAccelBadge(this);
     this.disarmScrollAccel();
     this.host.remove();
   }
