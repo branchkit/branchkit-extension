@@ -1394,23 +1394,26 @@ function applyTeardownPlan(lists: ReconcilePlanLists): void {
   }
 }
 
-// Strict-viewport reconciler: scroll moves wrappers across the strict/band
-// boundary without changing their codeword. The plugin's `_strict` companion
-// collection (which now drives both voice matching and the Discovery HUD)
-// reflects the last-pushed strict-viewport flag, so a wrapper that scrolled
-// into strict — or out of strict but still in band — needs a re-push for
-// the _strict membership to converge. Walks the store, queues any wrapper
-// whose current strict status differs from the last-sent value, and triggers
-// a debounced sync. Codeword set is unchanged; this is a flag refresh.
-// Returns the delta it pushed so the settle pipeline can diff the shadow
-// plan's strict list against it (Phase C).
-function reconcileStrictViewport(gather?: SettleGather): ElementWrapper[] {
-  const delta = collectStrictViewportDelta(store.all, gather);
-  if (delta.length === 0) return delta;
+// Strict-viewport re-push applier (apply cutover 2/4): scroll moves wrappers
+// across the strict/band boundary without changing their codeword; the
+// plugin's `_strict` companion collection (voice matching + Discovery HUD)
+// reflects the last-pushed flag, so the delta needs a re-push to converge.
+// The plan computes WHICH wrappers (computeStrictDeltaPlan, via wantsStrict
+// over the gather geometry); this queues them. Codeword set unchanged — a
+// flag refresh.
+function applyStrictPlan(delta: ElementWrapper[]): void {
+  if (delta.length === 0) return;
   firehoseStep('strict-viewport:delta', delta.length, 1);
   for (const w of delta) queuePut(w);
   scheduleSync('strict-viewport-change');
-  return delta;
+}
+
+// Out-of-pipeline strict re-push — the visibility recheck's
+// onVisibilityChanged trigger (and any future caller without a settle
+// gather). Computes its own delta with live reads; Phase E demotes this to
+// "schedule the pass sooner".
+function reconcileStrictViewport(): void {
+  applyStrictPlan(collectStrictViewportDelta(store.all));
 }
 
 // Occlusion pass (notes/DESIGN_HINT_OCCLUSION_FILTERING.md). Hit-test each
@@ -2783,18 +2786,18 @@ function runSettlePipeline(discovery: 'band' | 'store'): void {
     // The strict half of the plan runs HERE, not at gather time: its two
     // flag inputs (occluded, cssHidden) are written by the occlusion and
     // visibility steps above. When the occlusion hit-tests move into the
-    // gather (Phase D), this folds into the single plan call.
+    // gather (cutover 4), this folds into the single plan call.
     const strictPlan = computeStrictDeltaPlan(store.all, gather);
-    const strictActions = reconcileStrictViewport(gather);
+    applyStrictPlan(strictPlan);
     recordShadowDiff(diffShadow(planLists, strictPlan, {
-      // release/repair are tautological since the cutover (the step executes
-      // the plan's lists); kept so planned/acted volumes stay comparable.
-      // The whole shadow comparison dies in Phase E.
+      // release/repair/strict are tautological since their cutovers (the
+      // steps execute the plan's lists); kept so planned/acted volumes stay
+      // comparable. The whole shadow comparison dies in Phase E.
       released: planLists.toRelease,
       repaired: planLists.toRepair,
       shown: recheckActions.shown,
       hidden: recheckActions.hidden,
-      strictDelta: strictActions,
+      strictDelta: strictPlan,
     }));
   }
   scheduleReposition();
