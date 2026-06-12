@@ -127,27 +127,40 @@ import {
 //
 // Two paths can land us here:
 //   1. Manifest content_scripts on page load (fresh JS context, flag unset).
-//   2. SW programmatic re-injection via `chrome.scripting.executeScript`
-//      after `chrome.runtime.onInstalled` (extension install/update/reload).
+//   2. SW programmatic injection via `chrome.scripting.executeScript`
+//      (install/update/reload reinject storm, or the lazy ping-fail path).
 //
-// Case 2 hits a frame whose isolated world already holds an orphan content
-// script with the flag set. The SW clears the flag immediately before
-// injecting (see background.ts re-injection handler), so the fresh script
-// runs to completion and binds new listeners. The orphan stays in the
-// world but its `chrome.runtime` is invalidated; its observers/listeners
-// keep firing into dead code until the page navigates or follow-up work
-// (step A in the orphan-CS plan) adds a `port.onDisconnect` teardown.
+// The guard lives on a DOM ATTRIBUTE, not a window expando: the document is
+// the one surface every injection shares. On Firefox, an executeScript file
+// injection runs in its OWN sandbox — a `window.__branchkitContentInjected`
+// expando set by the manifest script was invisible there, so when the SW's
+// queued injection (executeScript defers to document_idle on a still-loading
+// page) landed back-to-back with the manifest script at document_idle, BOTH
+// passed the old guard — two live content scripts per frame, each with its
+// own grammar session, ping-ponging the plugin's per-frame state
+// (deterministic 5/6 repro on a slow page, 2026-06-12; the epoch tripwire's
+// catch #1). Attribute check+set is synchronous, so whoever runs first wins
+// regardless of sandbox or world; a navigation replaces the document and
+// resets it naturally.
 //
-// Manual F5 of the page destroys both scripts and the manifest injection
-// starts clean — guard catches the rare case of two manifest-driven
-// injections (shouldn't happen but is cheap insurance).
-if ((window as unknown as { __branchkitContentInjected?: boolean }).__branchkitContentInjected) {
-  // Already initialized in this isolated world. Throwing aborts the IIFE
-  // without re-binding listeners; the original content script keeps owning
-  // the frame. No-op for the page.
+// The SW's recovery paths clear the attribute (flushOrphanGuard) only after
+// a ping-retry proves the holder is an unreachable orphan.
+const CS_GUARD_ATTR = 'data-branchkit-cs';
+if (document.documentElement.hasAttribute(CS_GUARD_ATTR)) {
+  // A content script already owns this frame. Leave an aborted-marker on the
+  // page-world bridge (diagnostic — lets harnesses count guard trips), then
+  // throw to abort the IIFE without re-binding listeners. No-op for the page.
+  try {
+    const pw = ((window as unknown as { wrappedJSObject?: Window }).wrappedJSObject ?? window) as unknown as {
+      __branchkitDebugJSON?: string;
+    };
+    const arr = JSON.parse(pw.__branchkitDebugJSON ?? '[]');
+    arr.push({ aborted_at: performance.now(), ready: document.readyState });
+    pw.__branchkitDebugJSON = JSON.stringify(arr);
+  } catch { /* diagnostic only */ }
   throw new Error('[BranchKit] content script duplicate injection — bailing');
 }
-(window as unknown as { __branchkitContentInjected: boolean }).__branchkitContentInjected = true;
+document.documentElement.setAttribute(CS_GUARD_ATTR, '1');
 
 // Reference-identity check (safe cross-origin — reads no properties). The perf
 // trail + live dataset + standing watchdog/longtask observers are diagnostic
@@ -2075,12 +2088,12 @@ function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
   } catch { /* document gone */ }
   // Release the idempotency guard so a subsequent injection (e.g. the lazy
   // inject on tab activation after an extension reload) can re-initialize this
-  // isolated world. Without this, the orphan's lingering flag makes every fresh
+  // frame. Without this, the orphan's lingering guard makes every fresh
   // script bail on the "duplicate injection" throw — the tab stays dead until
   // it's closed and reopened. We're tearing down, so we no longer own the frame.
   try {
-    delete (window as unknown as { __branchkitContentInjected?: boolean }).__branchkitContentInjected;
-  } catch { /* window gone */ }
+    document.documentElement.removeAttribute(CS_GUARD_ATTR);
+  } catch { /* document gone */ }
   console.warn(`[BranchKit] content script torn down (reason: ${reason}). Self-quiesced.`);
 }
 

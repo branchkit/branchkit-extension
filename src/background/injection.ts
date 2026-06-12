@@ -31,7 +31,7 @@ export function isInjectableURL(url: string): boolean {
  * a Firefox temporary add-on where `onInstalled` didn't reach this
  * tab.
  *
- * Does NOT clear `__branchkitContentInjected` itself — callers that reach
+ * Does NOT clear the idempotency guard itself — callers that reach
  * a tab on a recovery path (`ensureContentScriptInjected`,
  * `reinjectContentScripts`) flush the orphan guard via `flushOrphanGuard`
  * first. If a healthy script is still loaded, content.ts's top-level guard
@@ -142,7 +142,8 @@ export async function withInjectLock<T>(tabId: number, fn: () => Promise<T>): Pr
 }
 
 /**
- * Best-effort clear of the `__branchkitContentInjected` idempotency guard
+ * Best-effort clear of the content-script idempotency guard (the
+ * `data-branchkit-cs` documentElement attribute)
  * across every frame in `tabId`. An orphaned content script from a previous
  * extension generation leaves this flag set; until it's cleared a freshly
  * injected content.js bails on the top-level "duplicate injection" throw,
@@ -164,6 +165,11 @@ async function flushOrphanGuard(tabId: number): Promise<void> {
     await chrome.scripting.executeScript({
       target: { tabId, allFrames: true },
       func: () => {
+        // The guard is a DOM attribute (shared across sandboxes/worlds —
+        // see content.ts's idempotency guard); the legacy window expando is
+        // cleared too so an old-generation orphan can't strand a tab
+        // across the changeover.
+        document.documentElement.removeAttribute('data-branchkit-cs');
         delete (window as unknown as { __branchkitContentInjected?: boolean }).__branchkitContentInjected;
       },
     });
