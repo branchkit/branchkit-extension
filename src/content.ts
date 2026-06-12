@@ -20,7 +20,7 @@ import {
   type ShadowDiff,
 } from './lifecycle/reconcile';
 import { gatherSettleReads, SettleGather } from './lifecycle/gather';
-import { stampStrictViewport, collectStrictViewportDelta } from './lifecycle/strict-viewport';
+import { stampStrictViewport } from './lifecycle/strict-viewport';
 import * as idRegistry from './scan/registry';
 import type { CodewordMemoryEntry } from './labels/codeword-memory';
 import { loadRecall, recalledCodewords, rememberLive, resolvePreferredCodeword, isRecallLoaded } from './labels/codeword-recall';
@@ -1145,11 +1145,10 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
     }
     firehoseStep('showHints:mount_end', renderable.length, 20);
 
-    // Ensure visibilityMO is running so the throttled recheckHintedVisibility
-    // catches class/style-driven visibility transitions (YouTube controls
-    // fading out, etc.). Idempotent — no-op if already connected, just
-    // refreshes the abandon timer. The recheck itself runs at most every
-    // 100ms; this just keeps the MO active to feed it.
+    // Ensure visibilityMO is running so class/style-driven visibility
+    // transitions (YouTube controls fading out, etc.) request the settle
+    // pass (schedulePassSoon — the demoted backstop). Idempotent — no-op if
+    // already connected, just refreshes the abandon timer.
     if (renderable.length > 0) connectVisibilityMO();
 
     const __pbStart = performance.now();
@@ -1428,12 +1427,22 @@ function applyStrictPlan(delta: ElementWrapper[]): void {
   scheduleSync('strict-viewport-change');
 }
 
-// Out-of-pipeline strict re-push — the visibility recheck's
-// onVisibilityChanged trigger (and any future caller without a settle
-// gather). Computes its own delta with live reads; Phase E demotes this to
-// "schedule the pass sooner".
-function reconcileStrictViewport(): void {
-  applyStrictPlan(collectStrictViewportDelta(store.all));
+// Demoted backstop entry (Phase E): between-settle signals — the visibility
+// MO's class/style ticks, pointer-driven reveals — request the unified pass
+// instead of running their own convergence loops (the old 100ms-throttled
+// recheckHintedVisibility + the strict re-push it triggered). Non-extending
+// single-flight timer, deliberately NOT the scheduleDeferredReposition
+// debounce: a debounce pushes back under sustained churn, and the demotion
+// contract is "must not get slower than the loops it replaced" — this fires
+// within the same 100ms cadence the old throttle guaranteed. The pass is
+// budget-priced for that cadence (gather+plan ≈ 4-6ms, Phase B/D evidence).
+let passSoonTimer: ReturnType<typeof setTimeout> | null = null;
+function schedulePassSoon(): void {
+  if (passSoonTimer !== null) return;
+  passSoonTimer = setTimeout(() => {
+    passSoonTimer = null;
+    runSettlePipeline('store');
+  }, DEFERRED_REPOSITION_DEBOUNCE_MS);
 }
 
 // Occlusion applier (apply cutover 4/4 — notes/DESIGN_HINT_OCCLUSION_FILTERING.md
@@ -1948,7 +1957,7 @@ pageSession.start({
   restore: () => restoreFromBfcache(),
   onCodewordsChanged: onTrackerCodewordsChanged,
   showHints,
-  onVisibilityChanged: reconcileStrictViewport,
+  schedulePassSoon,
   discoverInSubtree,
   discoverInSubtreeBatched,
   reevaluateAttribute,

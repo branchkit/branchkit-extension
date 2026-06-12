@@ -85,10 +85,12 @@ export interface PageSessionDeps {
   /** Paint badges after a visibility promotion attached new wrappers. */
   showHints: () => void;
 
-  /** A badge flipped shown/hidden — re-push the strict-viewport delta so the
-   * voice-matchable `_strict` collection converges without waiting for the
-   * next scroll-settle. */
-  onVisibilityChanged: () => void;
+  /** Demoted backstop entry (Phase E of DESIGN_UNIFIED_RECONCILER.md): a
+   * between-settle signal (class/style mutation, pointer reveal) requests
+   * the unified settle pass instead of running its own loop. Non-extending —
+   * the pass fires within the backstop's old 100ms cadence even under
+   * sustained churn. */
+  schedulePassSoon: () => void;
 
   // --- mutation-source collaborators ---
 

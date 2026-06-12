@@ -2,7 +2,8 @@
  * BranchKit Browser — visibility recovery (source).
  *
  * Promotes elements that matched HINTABLE_SELECTOR but failed isVisible() at
- * scan time, and gates already-hinted badges as page-script visibility flips.
+ * scan time, and turns page-script visibility flips on already-hinted badges
+ * into settle-pass requests (the pass's plan owns the show/hide convergence).
  * Extracted from content.ts module scope (Tier 1 of
  * notes/DESIGN_EXTENSION_RESTRUCTURE.md). It owns the `pendingVisibility` set
  * and the two visibility observers; the attention observer (owned by the
@@ -26,8 +27,8 @@
  */
 
 import { ElementWrapper } from '../scan/element-wrapper';
-import { scanSingle, isVisible } from '../scan/scanner';
-import { cacheVisibility, clearLayoutCache, getCachedRect, isRectOnScreen } from '../layout-cache';
+import { scanSingle } from '../scan/scanner';
+import { cacheVisibility, clearLayoutCache } from '../layout-cache';
 import { recordCpu } from '../debug/perf-counters';
 import { store } from '../core/store';
 import { attachWrapper } from '../core/wrapper-lifecycle';
@@ -75,28 +76,29 @@ export function constructVisibilityObservers(): void {
 // cadences:
 //   1. PROMOTE — re-scan `pendingVisibility` so a candidate that just became
 //      visible turns into a hinted wrapper (rAF-coalesced; `recheckPendingVisibility`).
-//   2. RE-SHOW — re-check already-hinted badges to show/hide them to match
-//      current isVisible (100ms-throttled; `recheckHintedVisibility`).
+//      Candidate lifecycle, not wrapper reconcile — it stays here.
+//   2. RE-SHOW — already-hinted badges converge to current visibility. Phase E
+//      of notes/DESIGN_UNIFIED_RECONCILER.md demoted this half from its own
+//      100ms-throttled loop to a settle-pass request (schedulePassSoon, also
+//      non-extending at the same 100ms cadence): the pass's plan derives
+//      toShow/toHide/cssHidden from the gather, so one convergence engine
+//      serves the settle and between-settle triggers alike.
 // The class/style MutationObserver fires this for mutation-driven reveals.
 // Pointer events fire it too (content.ts) for pure CSS `:hover` reveals, which
 // produce NO mutation — without the PROMOTE half, a freshly-:hover-revealed
 // element that was never scanned-while-visible never becomes a wrapper, so the
-// recheck has nothing to show (the temperamental "hover the report, no hint").
+// pass has nothing to show (the temperamental "hover the report, no hint").
 //
-// The 100ms throttle on the re-show is separate from the rAF promote because on
-// heavy pages (YouTube /watch ad iframes, reflow storms) the MO fires many times
-// per second; coupling the re-show to rAF (16ms) compounded into ~200ms CPU/min
-// and tripped Firefox's slow-extension warning (reverted 2026-06-02). 100ms
-// (Rango's debouncedRefresh interval) keeps it bounded to ~30ms/sec worst case.
-// MutationObserver path: fast rAF promote (keep up with mutation storms) + the
-// shared 100ms-throttled re-show. The pointer path uses the throttled variant
-// below.
+// The promote stays on rAF for the MO path (must keep up with mutation
+// storms; coupling the RE-SHOW to rAF was what compounded into ~200ms
+// CPU/min and tripped Firefox's slow-extension warning, reverted 2026-06-02
+// — the re-show cadence stays 100ms via the pass timer).
 function scheduleVisibilitySweep(): void {
   if (!visibilityRafPending) {
     visibilityRafPending = true;
     requestAnimationFrame(recheckPendingVisibility);
   }
-  scheduleHintVisibilityRecheck();
+  pageSession.deps.schedulePassSoon();
 }
 
 // Pointer-driven sweep variant. Same two halves, but the PROMOTE runs on a 100ms
@@ -120,107 +122,19 @@ function schedulePromoteThrottled(): void {
 
 export function schedulePointerVisibilitySweep(): void {
   schedulePromoteThrottled();
-  scheduleHintVisibilityRecheck();
+  // RE-SHOW half: demoted to the settle pass (Phase E) — the plan's
+  // toShow/toHide/cssHidden derivation converges hinted badges, including
+  // the "user just hid" guard (the pipeline gates on hintsVisible) and the
+  // strict re-push (the plan's strictDelta rides the same pass).
+  pageSession.deps.schedulePassSoon();
 }
 
-// Throttle state for the hint-visibility recheck. Single pending flag; many
-// visibilityMO fires within a 100ms window collapse to one recheck.
-let hintVisibilityRecheckPending = false;
-const HINT_VISIBILITY_RECHECK_THROTTLE_MS = 100;
-
-export function scheduleHintVisibilityRecheck(): void {
-  if (hintVisibilityRecheckPending) return;
-  hintVisibilityRecheckPending = true;
-  setTimeout(() => {
-    hintVisibilityRecheckPending = false;
-    recheckHintedVisibility();
-  }, HINT_VISIBILITY_RECHECK_THROTTLE_MS);
-}
-
-// Iterate hinted wrappers, hide/show their badges based on current
-// isVisible(). Also writes `w.cssHidden` (so do the paint sites — showHints,
-// badgeNewlyCodeworded): a target hidden because it's CSS-invisible
-// (visibility:hidden/opacity:0 — a hover-reveal action bar) is flagged so the
-// strict-viewport pass drops it from the voice-matchable `_strict` collection.
-// We previously kept the codeword live for
-// CSS-hidden targets (Rango's updateShouldBeHinted semantics — voice-activate a
-// hover-revealed control you can't see); the QuickBase WidgetActions ghost-badge
-// report changed that policy to "if the badge is hidden, voice can't match it
-// either." When any badge flips shown/hidden, fire `onVisibilityChanged` so the
-// strict delta re-pushes without waiting for the next scroll-settle.
-// Out-of-pipeline visibility recheck — the 100ms-throttled MO/pointer path
-// only. The settle pipeline no longer calls this (apply cutover 3/4 of
-// notes/DESIGN_UNIFIED_RECONCILER.md): there the plan's toShow/toHide +
-// cssHidden delta are applied directly from the gather snapshot. This
-// self-read loop survives for the between-settle triggers until Phase E
-// demotes them to "schedule the pass sooner".
-export function recheckHintedVisibility(): void {
-  const __cpuStart = performance.now();
-  // Don't re-show badges the user just hid. Without this guard, hideHints()
-  // sets pageSession.hintsVisible=false and clears each badge's visible
-  // class — but the next visibilityMO tick (or periodic recheck) walks
-  // every wrapper, sees its target is CSS-visible, and calls hint.show()
-  // again. The user observes "I said hide and the badges flashed off then
-  // popped back on." This function exists to catch *page-script-driven*
-  // visibility changes (YouTube fade-out, dropdown close), NOT to override
-  // the user's explicit hide intent.
-  if (!pageSession.hintsVisible) {
-    recordCpu('recheckHintedVisibility', performance.now() - __cpuStart);
-    return;
-  }
-  const wrappers = store.all;
-  const hinted: Element[] = [];
-  for (const w of wrappers) {
-    // Only consider wrappers IO says are in-viewport. With hint reuse
-    // (DESIGN_HINT_REUSE.md), `w.hint` persists for out-of-viewport
-    // wrappers in dormant state — including them here would let the
-    // `visible && !showing` branch below re-show a hint for a wrapper
-    // the IO already released, painting badges off-screen.
-    if (w.hint && w.isInViewport && w.element.isConnected) hinted.push(w.element);
-  }
-  if (hinted.length === 0) {
-    recordCpu('recheckHintedVisibility', performance.now() - __cpuStart);
-    return;
-  }
-  cacheVisibility(hinted);
-  // cacheVisibility warms each seed element's rect too, so getCachedRect below
-  // is free. Gate paint on actual viewport geometry, not the tracker's wide-
-  // margin isInViewport flag: an element parked off-screen but within that
-  // margin (YouTube's collapsed nav drawer at x=-228) is isInViewport-true yet
-  // must not paint a badge clamped to the edge. Without this the reposition
-  // pass hides it and this loop re-shows it 100ms later — the flashing column.
-  const vw = window.innerWidth, vh = window.innerHeight;
-  let transitions = 0;
-  try {
-    for (const w of wrappers) {
-      if (!w.hint || !w.isInViewport || !w.element.isConnected) continue;
-      // Split the two reasons a badge hides: CSS-invisible (visibility/opacity —
-      // voice should drop it) vs merely off the real viewport (the band-margin
-      // clamp — geometry already drops it from strict, so don't flag cssHidden).
-      const cssVisible = isVisible(w.element);
-      const visible = cssVisible && isRectOnScreen(getCachedRect(w.element), vw, vh);
-      w.cssHidden = !cssVisible;
-      const showing = w.hint.isVisible;
-      if (visible && !showing) {
-        w.hint.show(w.grammarReady);
-        transitions++;
-      } else if (!visible && showing) {
-        w.hint.hide();
-        transitions++;
-      }
-    }
-  } finally {
-    clearLayoutCache();
-  }
-  recordCpu('recheckHintedVisibility', performance.now() - __cpuStart);
-  if (transitions > 0) {
-    recordCpu(`recheckHintedVisibility:transitions:${transitions > 10 ? '10+' : '<10'}`, transitions);
-    // A badge flipped shown/hidden → its strict-viewport eligibility may have
-    // changed too. Re-push the strict delta now (debounced downstream) so voice
-    // converges with the visual without waiting for a scroll-settle.
-    pageSession.deps.onVisibilityChanged();
-  }
-}
+// (recheckHintedVisibility is gone — Phase E of
+// notes/DESIGN_UNIFIED_RECONCILER.md. Badge show/hide convergence, the
+// cssHidden write-through, and the QuickBase ghost-badge policy ("if the
+// badge is hidden, voice can't match it either") live in the plan's
+// wantsShown/wantsStrict derivation; the between-settle triggers above just
+// request the pass.)
 
 function anyHintedWrapperVisible(): boolean {
   for (const w of store.all) {
@@ -249,12 +163,11 @@ export function connectVisibilityMO(): void {
 
 function disconnectVisibilityMO(): void {
   if (!pageSession.visibilityMOConnected) return;
-  // Stay connected while any wrapper owns a hint — the throttled
-  // recheckHintedVisibility relies on this MO to catch class/style
-  // transitions that hide/show hinted targets (YouTube player controls,
-  // sticky headers, sliding sidebars). Cost is bounded by the 100ms
-  // throttle, so leaving the MO connected on a hinted page costs at most
-  // ~30ms CPU per second of activity.
+  // Stay connected while any wrapper owns a hint — this MO is what turns
+  // class/style transitions that hide/show hinted targets (YouTube player
+  // controls, sticky headers, sliding sidebars) into settle-pass requests.
+  // Cost is bounded by the pass timer's 100ms single-flight, so leaving the
+  // MO connected on a hinted page stays cheap.
   if (anyHintedWrapperVisible()) return;
   visibilityMO?.disconnect();
   pageSession.visibilityMOConnected = false;

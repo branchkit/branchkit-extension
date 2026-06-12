@@ -332,6 +332,43 @@ describe('strictDelta (folded into the plan, cutover 4/4)', () => {
     const lists = computeReconcilePlanLists(storeOf([w]), null, gatherOf([[w, OFF_BAND]]));
     expect(lists.strictDelta).toEqual([w]); // off-strict (cssHidden + off-screen) vs lastSent=true
   });
+
+  // Boundary semantics, ported from the deleted collectStrictViewportDelta
+  // spec: any pixel of the element in the visible viewport counts as
+  // in-strict. Pinned so a refactor can't silently change "barely visible".
+  function strictOf(w: ElementWrapper, r: { top: number; left: number; width: number; height: number }): ElementWrapper[] {
+    return computeReconcilePlanLists(storeOf([w]), null, gatherOf([[w, r, true]])).strictDelta;
+  }
+
+  it('counts an element straddling the top edge as in-strict (partial visibility)', () => {
+    const w = liveWrapper({ codeword: 'ape', hint: 'visible', inViewport: true, lastSent: false });
+    expect(strictOf(w, { top: -10, left: 100, width: 100, height: 20 })).toEqual([w]);
+  });
+
+  it('counts an element straddling the bottom edge as in-strict (partial visibility)', () => {
+    const w = liveWrapper({ codeword: 'ape', hint: 'visible', inViewport: true, lastSent: false });
+    expect(strictOf(w, { top: VH - 10, left: 100, width: 100, height: 20 })).toEqual([w]);
+  });
+
+  it('counts an element fully off-top as out-of-strict', () => {
+    const w = liveWrapper({ codeword: 'ape', hint: 'visible', inViewport: true, lastSent: true });
+    expect(strictOf(w, { top: -50, left: 100, width: 100, height: 20 })).toEqual([w]);
+  });
+
+  it('counts a zero-size element at a visible coordinate as in-strict', () => {
+    const w = liveWrapper({ codeword: 'ape', hint: 'visible', inViewport: true, lastSent: false });
+    expect(strictOf(w, { top: 100, left: 100, width: 0, height: 0 })).toEqual([w]);
+  });
+
+  it('counts an element exactly at top=0 as in-strict', () => {
+    const w = liveWrapper({ codeword: 'ape', hint: 'visible', inViewport: true, lastSent: false });
+    expect(strictOf(w, { top: 0, left: 0, width: 100, height: 100 })).toEqual([w]);
+  });
+
+  it('queues a never-pushed wrapper as a delta (undefined lastSent counts as a change)', () => {
+    const w = liveWrapper({ codeword: 'ape', hint: 'visible', inViewport: true, lastSent: undefined });
+    expect(strictOf(w, IN_BAND_OFF_SCREEN)).toEqual([w]); // off-strict vs undefined
+  });
 });
 
 describe('diffShadow', () => {
