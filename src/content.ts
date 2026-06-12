@@ -13,14 +13,13 @@ import { wantsHint } from './lifecycle/desired-state';
 import {
   computeReconcilePlan,
   computeReconcilePlanLists,
-  computeStrictDeltaPlan,
   diffShadow,
   geometryInBand,
   RECONCILE_BAND_MARGIN_PX,
   type ReconcilePlanLists,
   type ShadowDiff,
 } from './lifecycle/reconcile';
-import { gatherSettleReads } from './lifecycle/gather';
+import { gatherSettleReads, SettleGather } from './lifecycle/gather';
 import { stampStrictViewport, collectStrictViewportDelta } from './lifecycle/strict-viewport';
 import * as idRegistry from './scan/registry';
 import type { CodewordMemoryEntry } from './labels/codeword-memory';
@@ -38,7 +37,7 @@ import { HintBadge } from './render/hints';
 import { reconcilePass, drain as drainReconcilePositioner, reconcileRegistrySize } from './render/reconcile-positioner';
 import { onContainerResize } from './observe/container-resize-tracker';
 import { onTargetMutation } from './observe/target-mutation-tracker';
-import { isOccluded, isOcclusionEnabled, setOcclusionEnabled, applyOcclusion } from './observe/occlusion';
+import { setOcclusionEnabled, applyOcclusion } from './observe/occlusion';
 import { reconcileClipObservation, drainClipObservers, setClipObserverEnabled } from './observe/clip-observer';
 import { cacheLayout, clearLayoutCache, getCachedRect, isRectOnScreen } from './layout-cache';
 import { placeBadges, placeOne, invalidateProbe } from './placement';
@@ -1437,30 +1436,21 @@ function reconcileStrictViewport(): void {
   applyStrictPlan(collectStrictViewportDelta(store.all));
 }
 
-// Occlusion pass (notes/DESIGN_HINT_OCCLUSION_FILTERING.md). Hit-test each
-// visible in-band badge: if its target is covered by another element, hide the
-// badge (visual) and flag the wrapper occluded so the strict-viewport pass that
-// follows drops it from the voice-matchable `_strict` collection (voice). Runs
-// from the same debounced settle handlers as reconcileStrictViewport, BEFORE it,
-// so collectStrictViewportDelta reads a fresh `occluded`. No-op when the
-// bkOcclusion flag is off (isOccluded short-circuits → nothing ever flips).
-//
-// Batched read-then-write: all elementFromPoint reads first (one layout flush),
-// then the setOccluded class writes — so a hide doesn't dirty layout between
-// hit-tests. IO-gated to the visible set (hidden/off-band badges aren't painted,
-// so occlusion is moot) to keep the synchronous reads bounded.
-function reconcileOcclusion(): void {
-  if (!isOcclusionEnabled()) return;
-  // Read pass: hit-test all visible in-band badges, record the overlay signal.
-  const candidates: ElementWrapper[] = [];
-  for (const w of store.all) {
-    if (!w.hint || !w.hint.isVisible || !w.isInViewport || !w.element.isConnected) continue;
-    w.overlayCovered = isOccluded(w.element);
-    candidates.push(w);
-  }
-  // Write pass: fold into the effective state (composes with the clip signal).
+// Occlusion applier (apply cutover 4/4 — notes/DESIGN_HINT_OCCLUSION_FILTERING.md
+// for the detection itself). The elementFromPoint hit-tests live in the
+// gather (read batch 3, over the visible in-band badge set, flag-gated);
+// this writes the overlay signal and folds it into the effective occlusion
+// (composes with the clip signal) — hiding the badge and dropping the target
+// from the voice-matchable `_strict` collection via the plan's strict delta.
+// Empty map (flag off) → no-op. A badge built mid-pipeline by the repair
+// path isn't in the map and gets its first hit-test next settle.
+function applyOcclusionPlan(gather: SettleGather): void {
+  if (gather.overlayCovered.size === 0) return;
   let changed = 0;
-  for (const w of candidates) if (applyOcclusion(w)) changed++;
+  for (const [w, covered] of gather.overlayCovered) {
+    w.overlayCovered = covered;
+    if (applyOcclusion(w)) changed++;
+  }
   if (changed > 0) firehoseStep('occlusion:delta', changed, 1);
 }
 
@@ -2783,43 +2773,41 @@ function recordShadowDiff(diff: ShadowDiff): void {
 
 function runSettlePipeline(discovery: 'band' | 'store'): void {
   if (pageSession.hintsVisible) {
-    // GATHER (Phase B of notes/DESIGN_UNIFIED_RECONCILER.md): one batched
-    // layout read over the steps' bounded sets, shared by teardown (1),
-    // recheck (5), and strict (6) — previously three separate read passes
-    // over heavily-overlapping sets. Taken before any step writes; safe to
-    // share because the steps' writes (badge DOM, flag repairs, queued
-    // releases) never move target elements within this synchronous task.
-    // Steps read live wrapper FLAGS as before — only geometry/styles come
-    // from the snapshot, with live fallback for wrappers it missed.
+    // Clip-membership sync FIRST: its leave-path is the one mid-pipeline
+    // writer of the plan's occlusion inputs (clearing `clipped` for targets
+    // that left observation) — running it before the gather keeps every
+    // plan input stable through the applies. A badge built mid-pipeline by
+    // the repair path joins observation next settle (the clip IO drives
+    // `clipped` between settles anyway).
+    reconcileClipObservation(store.all);
+    // GATHER (notes/DESIGN_UNIFIED_RECONCILER.md): one batched read over
+    // the bounded sets — rects, styles, occlusion hit-tests, the frame
+    // ancestor-chain check. Taken before any write; safe to share because
+    // the appliers' writes (badge DOM, flag repairs, queued releases) never
+    // move target elements within this synchronous task.
     const gather = gatherSettleReads(store.all);
-    // PLAN: which wrappers does each step act on, per the desired-state
-    // predicates over the snapshot? Cut-over classes (teardown/repair)
-    // execute the lists directly; the rest still run their own filters with
-    // the shadow diff watching them.
+    // PLAN: the one desired-state derivation deciding every action class
+    // over the snapshot, simulating the apply order (flag repairs feed
+    // shown-ness; occlusion/cssHidden feed strict).
     const planLists = computeReconcilePlanLists(store, activeCategory, gather);
+    // APPLY: thin appliers in the load-bearing step order — enforced here
+    // by structure, not comment discipline.
     applyTeardownPlan(planLists);
     if (discovery === 'band') scheduleBandDiscovery();
     else scheduleReconcile();
-    reconcileClipObservation(store.all);
-    reconcileOcclusion();
+    applyOcclusionPlan(gather);
     reconcileScrollAccel();
     applyVisibilityPlan(planLists);
-    // The strict half of the plan runs HERE, not at gather time: its
-    // occluded input is written by the occlusion step above (cssHidden now
-    // comes from the plan's own delta, applied just before). When the
-    // occlusion hit-tests move into the gather (cutover 4), this folds into
-    // the single plan call.
-    const strictPlan = computeStrictDeltaPlan(store.all, gather);
-    applyStrictPlan(strictPlan);
-    recordShadowDiff(diffShadow(planLists, strictPlan, {
-      // Every class is tautological since its cutover (the steps execute the
-      // plan's lists); kept so planned/acted volumes stay comparable. The
-      // whole shadow comparison dies in Phase E.
+    applyStrictPlan(planLists.strictDelta);
+    recordShadowDiff(diffShadow(planLists, {
+      // Every class is tautological since its cutover (the appliers execute
+      // the plan's lists); kept so planned/acted volumes stay comparable.
+      // The whole shadow comparison dies in Phase E.
       released: planLists.toRelease,
       repaired: planLists.toRepair,
       shown: planLists.toShow,
       hidden: planLists.toHide,
-      strictDelta: strictPlan,
+      strictDelta: planLists.strictDelta,
     }));
   }
   scheduleReposition();

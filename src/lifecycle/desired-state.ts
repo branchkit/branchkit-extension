@@ -80,9 +80,11 @@ export function wantsShown(w: ElementWrapper, s: ShownInputs): boolean {
 }
 
 /**
- * Geometry inputs for `wantsStrict`. The occluded/cssHidden cuts are read
- * off the wrapper flags (written by the occlusion and visibility steps that
- * run earlier in the settle order) — they are state, not geometry.
+ * Inputs for `wantsStrict`, resolved by the plan over the gather snapshot.
+ * The occluded/cssHidden cuts arrive as inputs (not read off the wrapper)
+ * because the plan derives them as the occlusion and visibility appliers
+ * will leave them — the predicate must not depend on WHEN in the settle
+ * order it is consulted.
  */
 export interface StrictInputs {
   /** Every ancestor iframe element is on-screen in its parent (per-frame,
@@ -91,6 +93,10 @@ export interface StrictInputs {
   /** Target rect overlaps the actual visible viewport (no band margin —
    * the strict notion, not the IO band notion). */
   onScreen: boolean;
+  /** Effective occlusion: overlay hit-test folded with the clip flag. */
+  occluded: boolean;
+  /** CSS-invisible target (visibility:hidden / opacity:0). */
+  cssHidden: boolean;
 }
 
 /**
@@ -102,5 +108,5 @@ export interface StrictInputs {
 export function wantsStrict(w: ElementWrapper, s: StrictInputs): boolean {
   if (w.disconnectedAt !== null) return false;
   if (!w.scanned.codeword) return false;
-  return s.ancestorChainVisible && !w.occluded && !w.cssHidden && s.onScreen;
+  return s.ancestorChainVisible && !s.occluded && !s.cssHidden && s.onScreen;
 }

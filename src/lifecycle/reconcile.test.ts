@@ -93,7 +93,6 @@ describe('computeReconcilePlan', () => {
 import { afterEach } from 'vitest';
 import {
   computeReconcilePlanLists,
-  computeStrictDeltaPlan,
   diffShadow,
   type ReconcilePlanLists,
 } from './reconcile';
@@ -143,14 +142,20 @@ function liveWrapper(opts: {
   return w;
 }
 
-function gatherOf(entries: Array<[ElementWrapper, { top: number; left: number; width: number; height: number }, boolean?]>): SettleGather {
+function gatherOf(
+  entries: Array<[ElementWrapper, { top: number; left: number; width: number; height: number }, boolean?]>,
+  overlay?: Array<[ElementWrapper, boolean]>,
+): SettleGather {
   const rects = new Map<ElementWrapper, DOMRect>();
   const cssVisible = new Map<ElementWrapper, boolean>();
   for (const [w, r, visible] of entries) {
     rects.set(w, rect(r));
     if (visible !== undefined) cssVisible.set(w, visible);
   }
-  return { vw: VW, vh: VH, ancestorChainVisible: true, rects, cssVisible };
+  return {
+    vw: VW, vh: VH, ancestorChainVisible: true, rects, cssVisible,
+    overlayCovered: new Map(overlay ?? []),
+  };
 }
 
 afterEach(() => {
@@ -278,26 +283,54 @@ describe('computeReconcilePlanLists', () => {
   });
 });
 
-describe('computeStrictDeltaPlan', () => {
-  it('mirrors collectStrictViewportDelta: lastSent-vs-wantsStrict drives the delta', () => {
+describe('strictDelta (folded into the plan, cutover 4/4)', () => {
+  it('lastSent-vs-wantsStrict drives the delta', () => {
     const entering = liveWrapper({ codeword: 'ape', hint: 'visible', inViewport: true, lastSent: false });
     const leaving = liveWrapper({ codeword: 'oak', hint: 'visible', inViewport: true, lastSent: true });
     const settled = liveWrapper({ codeword: 'elm', hint: 'visible', inViewport: true, lastSent: true });
-    const delta = computeStrictDeltaPlan(
-      [entering, leaving, settled],
-      gatherOf([[entering, ON_SCREEN], [leaving, IN_BAND_OFF_SCREEN], [settled, ON_SCREEN]]),
+    const lists = computeReconcilePlanLists(
+      storeOf([entering, leaving, settled]), null,
+      gatherOf([[entering, ON_SCREEN, true], [leaving, IN_BAND_OFF_SCREEN, true], [settled, ON_SCREEN, true]]),
     );
-    expect(delta).toEqual([entering, leaving]);
+    expect(lists.strictDelta).toEqual([entering, leaving]);
   });
 
-  it('reads occluded/cssHidden live (written by earlier settle steps)', () => {
-    const occluded = liveWrapper({ codeword: 'ape', lastSent: true, occluded: true });
-    const cssHidden = liveWrapper({ codeword: 'oak', lastSent: true, cssHidden: true });
-    const delta = computeStrictDeltaPlan(
-      [occluded, cssHidden],
-      gatherOf([[occluded, ON_SCREEN], [cssHidden, ON_SCREEN]]),
+  it('folds the gather hit-test into the occlusion input', () => {
+    const w = liveWrapper({ codeword: 'ape', hint: 'visible', inViewport: true, lastSent: true });
+    const lists = computeReconcilePlanLists(
+      storeOf([w]), null,
+      gatherOf([[w, ON_SCREEN, true]], [[w, true]]),
     );
-    expect(delta).toEqual([occluded, cssHidden]);
+    // Covered by an overlay → off-strict; lastSent=true → delta.
+    expect(lists.strictDelta).toEqual([w]);
+  });
+
+  it('folds the clip flag (stable across the pipeline) into the occlusion input', () => {
+    const w = liveWrapper({ codeword: 'ape', hint: 'visible', inViewport: true, lastSent: true });
+    w.clipped = true;
+    const lists = computeReconcilePlanLists(
+      storeOf([w]), null,
+      gatherOf([[w, ON_SCREEN, true]], [[w, false]]),
+    );
+    expect(lists.strictDelta).toEqual([w]);
+  });
+
+  it('uses cssHidden as the visibility apply will leave it, not as it stands', () => {
+    // Target went CSS-invisible this settle: the recheck sim writes
+    // cssHidden=true, so strict must already see it hidden — same settle,
+    // no one-settle lag.
+    const w = liveWrapper({ codeword: 'ape', hint: 'visible', inViewport: true, lastSent: true });
+    const lists = computeReconcilePlanLists(storeOf([w]), null, gatherOf([[w, ON_SCREEN, false]]));
+    expect(lists.toHide).toEqual([w]);
+    expect(lists.strictDelta).toEqual([w]);
+  });
+
+  it('keeps a pre-existing cssHidden for wrappers outside the recheck set', () => {
+    // Dormant codeword-holder out of band: not in the recheck set, so the
+    // current flag stands.
+    const w = liveWrapper({ codeword: 'ape', hint: 'dormant', inViewport: false, lastSent: true, cssHidden: true });
+    const lists = computeReconcilePlanLists(storeOf([w]), null, gatherOf([[w, OFF_BAND]]));
+    expect(lists.strictDelta).toEqual([w]); // off-strict (cssHidden + off-screen) vs lastSent=true
   });
 });
 
@@ -307,9 +340,9 @@ describe('diffShadow', () => {
     const b = liveWrapper({ codeword: 'oak' });
     const lists: ReconcilePlanLists = {
       toRelease: [a, b], toRepair: [], toClaim: [], toBuild: [], toShow: [], toHide: [],
-      cssHiddenDelta: [],
+      cssHiddenDelta: [], strictDelta: [],
     };
-    const diff = diffShadow(lists, [], {
+    const diff = diffShadow(lists, {
       released: [b, a], repaired: [], shown: [], hidden: [], strictDelta: [],
     });
     expect(diff.total).toBe(0);
@@ -320,9 +353,9 @@ describe('diffShadow', () => {
     const acted = liveWrapper({ codeword: 'oak' });
     const lists: ReconcilePlanLists = {
       toRelease: [], toRepair: [], toClaim: [], toBuild: [], toShow: [planned], toHide: [],
-      cssHiddenDelta: [],
+      cssHiddenDelta: [], strictDelta: [],
     };
-    const diff = diffShadow(lists, [], {
+    const diff = diffShadow(lists, {
       released: [], repaired: [], shown: [acted], hidden: [], strictDelta: [],
     });
     expect(diff.show.planOnly).toBe(1);

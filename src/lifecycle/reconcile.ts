@@ -112,17 +112,17 @@ export function computeReconcilePlan(
 //   toBuild    — codeworded, paintable, badge not showing → construct/paint
 //   toShow     — visibility recheck would re-show the badge
 //   toHide     — visibility recheck would hide the badge
-// The strict delta is computed separately (computeStrictDeltaPlan) because
-// its two flag inputs (`occluded`, `cssHidden`) are written by the occlusion
-// and visibility steps that run between the gather and the strict step; when
-// the occlusion hit-tests move into the gather (Phase D territory), it folds
-// into the single plan call.
+//   strictDelta — `_strict` membership re-pushes (folded here in cutover 4/4:
+//                the gather carries the occlusion hit-tests, and the clip
+//                flag is stable because the membership sync runs before the
+//                gather)
 //
 // Ordering is simulated, not assumed: the show/hide derivation runs against
-// the band flags as repaired by the teardown sim, and against badge
-// visibility as it stands after the conditional build pass the live teardown
-// triggers (badgeNewlyCodeworded runs inside teardown's reconcile() only when
-// a stale-FALSE repair happened).
+// the band flags as repaired by the teardown sim, against badge visibility
+// as it stands after the conditional build pass the live teardown triggers
+// (badgeNewlyCodeworded runs inside teardown's reconcile() only when a
+// stale-FALSE repair happened), and the strict derivation against `occluded`
+// / `cssHidden` as the occlusion and visibility appliers will leave them.
 //
 // Cost: O(store) over the gather's already-read geometry. The only layout
 // reads are the bounded lazy fallbacks for wrappers the gather couldn't see
@@ -140,8 +140,11 @@ export interface ReconcilePlanLists {
    * whose `cssHidden` flag must change to match the gathered cssVisible
    * (delta-only — writing an unchanged value is a no-op). The strict
    * predicate reads this flag, so the applier writes it before the strict
-   * delta is computed. */
+   * delta is queued. */
   cssHiddenDelta: Array<[ElementWrapper, boolean]>;
+  /** Wrappers whose `_strict` membership (wantsStrict over simulated
+   * post-apply flags) differs from the last value pushed to the plugin. */
+  strictDelta: ElementWrapper[];
 }
 
 function lazyCssVisible(w: ElementWrapper, counter: { reads: number }): boolean {
@@ -162,7 +165,7 @@ export function computeReconcilePlanLists(
   const lazy = { reads: 0 };
   const lists: ReconcilePlanLists = {
     toRelease: [], toRepair: [], toClaim: [], toBuild: [], toShow: [], toHide: [],
-    cssHiddenDelta: [],
+    cssHiddenDelta: [], strictDelta: [],
   };
 
   // Step-1 sim — mirrors reconcileTeardown over the same gather rects.
@@ -197,80 +200,79 @@ export function computeReconcilePlanLists(
   for (const w of store.all) {
     if (w.disconnectedAt !== null) continue;
     const flag = flagAfterTeardown(w);
+    const codeworded = w.scanned.codeword.length > 0;
 
     // Claim sim — refreshViewportClaims over post-repair flags.
-    if (flag && w.scanned.codeword.length === 0) lists.toClaim.push(w);
+    if (flag && !codeworded) lists.toClaim.push(w);
+
+    // Shared inputs, resolved at most once per wrapper from the gather
+    // (bounded lazy fallback for snapshot misses).
+    let onScreenMemo: boolean | undefined;
+    const onScreen = (): boolean => onScreenMemo ??= ((): boolean => {
+      const r = gather.rects.get(w);
+      return r
+        ? isRectOnScreen(r, gather.vw, gather.vh)
+        : lazyOnScreen(w, gather.vw, gather.vh, lazy);
+    })();
+    let cssVisibleMemo: boolean | undefined;
+    const cssVisible = (): boolean =>
+      cssVisibleMemo ??= (gather.cssVisible.get(w) ?? lazyCssVisible(w, lazy));
+
+    // `cssHidden` as it will stand when the strict re-push runs — after the
+    // build pass's write-through and the visibility apply.
+    let cssHidden5 = w.cssHidden;
 
     // Build sim — badgeNewlyCodeworded's paint set: wants a hint, badge not
     // currently showing, target on-screen and CSS-visible.
-    const wantsHintNow = flag && w.scanned.codeword.length > 0
+    const wantsHintNow = flag && codeworded
       && (!activeCategory || w.category === activeCategory);
     const showingAtPlan = w.hint?.isVisible ?? false;
     let builtAndShown = false;
     if (wantsHintNow && !showingAtPlan) {
-      const r = gather.rects.get(w);
-      const onScreen = r
-        ? isRectOnScreen(r, gather.vw, gather.vh)
-        : lazyOnScreen(w, gather.vw, gather.vh, lazy);
-      const cssVisible = gather.cssVisible.get(w) ?? lazyCssVisible(w, lazy);
-      if (onScreen && cssVisible) {
+      // The live build pass writes cssHidden for its whole set (painted or
+      // not) — mirror that when it will actually run this settle.
+      if (buildPassRuns) cssHidden5 = !cssVisible();
+      if (onScreen() && cssVisible()) {
         lists.toBuild.push(w);
         builtAndShown = buildPassRuns;
       }
     }
 
-    // Step-5 sim — the visibility recheck's show/hide transitions, over the
-    // post-repair flag and post-build badge visibility.
+    // Step-5 sim — the visibility recheck's show/hide transitions + the
+    // cssHidden write-through, over the post-repair flag and post-build
+    // badge visibility.
     const hasBadgeAtRecheck = w.hint !== null || builtAndShown;
-    if (!hasBadgeAtRecheck || !flag || !w.element.isConnected) continue;
-    const showingAtRecheck = showingAtPlan || builtAndShown;
-    const r = gather.rects.get(w);
-    const onScreen = r
-      ? isRectOnScreen(r, gather.vw, gather.vh)
-      : lazyOnScreen(w, gather.vw, gather.vh, lazy);
-    const cssVisible = gather.cssVisible.get(w) ?? lazyCssVisible(w, lazy);
-    // The recheck's write-through: cssHidden tracks !cssVisible for every
-    // member of its set, not just transitioning ones.
-    if (w.cssHidden !== !cssVisible) lists.cssHiddenDelta.push([w, !cssVisible]);
-    const visible = w.hint
-      ? wantsShown(w, { flagInBand: flag, cssVisible, onScreen })
-      : (cssVisible && onScreen); // freshly-constructed badge: shown-ness core
-    if (visible && !showingAtRecheck) lists.toShow.push(w);
-    else if (!visible && showingAtRecheck) lists.toHide.push(w);
+    if (hasBadgeAtRecheck && flag && w.element.isConnected) {
+      const showingAtRecheck = showingAtPlan || builtAndShown;
+      if (w.cssHidden !== !cssVisible()) lists.cssHiddenDelta.push([w, !cssVisible()]);
+      cssHidden5 = !cssVisible();
+      const visible = w.hint
+        ? wantsShown(w, { flagInBand: flag, cssVisible: cssVisible(), onScreen: onScreen() })
+        : (cssVisible() && onScreen()); // freshly-constructed badge: shown-ness core
+      if (visible && !showingAtRecheck) lists.toShow.push(w);
+      else if (!visible && showingAtRecheck) lists.toHide.push(w);
+    }
+
+    // Step-6 sim (the strict fold, cutover 4/4) — wantsStrict over simulated
+    // post-apply flags: effective occlusion folded from the gather's
+    // hit-tests and the clip flag (stable — the membership sync runs before
+    // the gather); cssHidden as the applies will leave it.
+    // lastSentStrictViewport is only written at batch POST, so it is stable
+    // across the pipeline.
+    if (codeworded) {
+      const occluded5 = (gather.overlayCovered.get(w) ?? w.overlayCovered) || w.clipped;
+      const inStrict = wantsStrict(w, {
+        ancestorChainVisible: gather.ancestorChainVisible,
+        onScreen: onScreen(),
+        occluded: occluded5,
+        cssHidden: cssHidden5,
+      });
+      if (inStrict !== w.lastSentStrictViewport) lists.strictDelta.push(w);
+    }
   }
 
   if (lazy.reads > 0) recordCpu('reconcilePlan:size:lazyReads', lazy.reads);
   return lists;
-}
-
-/**
- * The strict-delta half of the plan: wrappers whose `_strict` membership
- * (per `wantsStrict`) differs from the last value pushed to the plugin.
- * Call AFTER the occlusion and visibility steps have written `occluded` /
- * `cssHidden` for this settle — the predicate reads those flags live, the
- * geometry comes from the gather.
- */
-export function computeStrictDeltaPlan(
-  wrappers: Iterable<ElementWrapper>,
-  gather: SettleGather,
-): ElementWrapper[] {
-  const lazy = { reads: 0 };
-  const delta: ElementWrapper[] = [];
-  for (const w of wrappers) {
-    if (w.disconnectedAt !== null) continue;
-    if (!w.scanned.codeword) continue;
-    const r = gather.rects.get(w);
-    const onScreen = r
-      ? (r.bottom > 0 && r.top < gather.vh && r.right > 0 && r.left < gather.vw)
-      : lazyOnScreen(w, gather.vw, gather.vh, lazy);
-    const inStrict = wantsStrict(w, {
-      ancestorChainVisible: gather.ancestorChainVisible,
-      onScreen,
-    });
-    if (inStrict !== w.lastSentStrictViewport) delta.push(w);
-  }
-  if (lazy.reads > 0) recordCpu('reconcilePlan:size:lazyReads', lazy.reads);
-  return delta;
 }
 
 // --- Shadow diff (plan lists vs what the live steps actually did) ---
@@ -326,14 +328,13 @@ export interface LiveSettleActions {
 
 export function diffShadow(
   lists: ReconcilePlanLists,
-  strictPlan: ElementWrapper[],
   live: LiveSettleActions,
 ): ShadowDiff {
   const release = diffClass(lists.toRelease, live.released);
   const repair = diffClass(lists.toRepair, live.repaired);
   const show = diffClass(lists.toShow, live.shown);
   const hide = diffClass(lists.toHide, live.hidden);
-  const strict = diffClass(strictPlan, live.strictDelta);
+  const strict = diffClass(lists.strictDelta, live.strictDelta);
   const total =
     release.planOnly + release.liveOnly +
     repair.planOnly + repair.liveOnly +

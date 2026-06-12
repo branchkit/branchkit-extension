@@ -28,6 +28,7 @@ import { ElementWrapper } from '../scan/element-wrapper';
 import { isVisible } from '../scan/scanner';
 import { cacheVisibility, clearLayoutCache, peekCachedRect } from '../layout-cache';
 import { isAncestorChainInVisibleViewport } from './strict-viewport';
+import { isOccluded, isOcclusionEnabled } from '../observe/occlusion';
 import { recordCpu } from '../debug/perf-counters';
 
 export interface SettleGather {
@@ -44,6 +45,12 @@ export interface SettleGather {
   /** isVisible() per hinted in-viewport wrapper, resolved against the same
    * batched style read. */
   cssVisible: Map<ElementWrapper, boolean>;
+  /** Occlusion hit-test results (apply cutover 4/4) over the visible in-band
+   * badge set — the elementFromPoint reads the occlusion step used to take
+   * itself. Empty when the bkOcclusion flag is off. Limbo wrappers are
+   * excluded (they hold their state by design; the old step could hit-test a
+   * connected limbo survivor — a deliberate micro-divergence). */
+  overlayCovered: Map<ElementWrapper, boolean>;
 }
 
 /**
@@ -74,6 +81,8 @@ export function gatherSettleReads(wrappers: readonly ElementWrapper[]): SettleGa
   //               stale-FALSE repair case.
   const rectSet: ElementWrapper[] = [];
   const visSet: ElementWrapper[] = [];
+  const occlusionSet: ElementWrapper[] = [];
+  const occlusionOn = isOcclusionEnabled();
   for (const w of wrappers) {
     if (w.disconnectedAt !== null) continue;
     const hinted = w.hint !== null;
@@ -86,6 +95,9 @@ export function gatherSettleReads(wrappers: readonly ElementWrapper[]): SettleGa
     const recheckMember = hinted && w.isInViewport;
     const buildCandidate = codeworded && !(w.hint?.isVisible ?? false);
     if ((recheckMember || buildCandidate) && w.element.isConnected) visSet.push(w);
+    if (occlusionOn && w.hint?.isVisible && w.isInViewport && w.element.isConnected) {
+      occlusionSet.push(w);
+    }
   }
 
   const ancestorChainVisible = isAncestorChainInVisibleViewport(window);
@@ -110,13 +122,19 @@ export function gatherSettleReads(wrappers: readonly ElementWrapper[]): SettleGa
   const cssVisible = new Map<ElementWrapper, boolean>();
   for (const w of visSet) cssVisible.set(w, isVisible(w.element));
 
+  // Read batch 3: occlusion hit-tests over the visible badge set. Pure reads
+  // (elementFromPoint + the target rect), still against clean layout.
+  const overlayCovered = new Map<ElementWrapper, boolean>();
+  for (const w of occlusionSet) overlayCovered.set(w, isOccluded(w.element));
+
   clearLayoutCache();
 
   // Count-overloaded buckets (the :size: convention): the budget evidence the
   // design note asks for — live layout reads per settle, post-consolidation.
   recordCpu('settleGather:size:gbcr', rectReads);
   recordCpu('settleGather:size:gcs', counts.styles);
+  if (occlusionSet.length > 0) recordCpu('settleGather:size:hitTests', occlusionSet.length);
   recordCpu('settleGather', performance.now() - __cpuStart);
 
-  return { vw, vh, ancestorChainVisible, rects, cssVisible };
+  return { vw, vh, ancestorChainVisible, rects, cssVisible, overlayCovered };
 }

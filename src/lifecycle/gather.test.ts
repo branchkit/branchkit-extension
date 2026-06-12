@@ -14,6 +14,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { ElementWrapper } from '../scan/element-wrapper';
 import { ScannedElement } from '../types';
 import { HintBadge } from '../render/hints';
+import { setOcclusionEnabled } from '../observe/occlusion';
 import { gatherSettleReads } from './gather';
 
 let nextId = 0;
@@ -100,5 +101,21 @@ describe('gatherSettleReads set membership', () => {
     expect(g.vw).toBe(window.innerWidth);
     expect(g.vh).toBe(window.innerHeight);
     expect(g.ancestorChainVisible).toBe(true);
+  });
+
+  it('hit-tests the visible badge set only when occlusion is enabled', () => {
+    const visibleBadge = make({ hint: true, inViewport: true });
+    (visibleBadge.hint as unknown as { isVisible: boolean }).isVisible = true;
+    const dormantBadge = make({ hint: true, inViewport: true });
+    // Flag off (the default): no hit-tests at all.
+    expect(gatherSettleReads([visibleBadge]).overlayCovered.size).toBe(0);
+    setOcclusionEnabled(true);
+    try {
+      const g = gatherSettleReads([visibleBadge, dormantBadge]);
+      expect(g.overlayCovered.has(visibleBadge)).toBe(true);
+      expect(g.overlayCovered.has(dormantBadge)).toBe(false);
+    } finally {
+      setOcclusionEnabled(false);
+    }
   });
 });

@@ -138,7 +138,7 @@ describe('wantsShown', () => {
   });
 });
 
-const STRICT_OK = { ancestorChainVisible: true, onScreen: true };
+const STRICT_OK = { ancestorChainVisible: true, onScreen: true, occluded: false, cssHidden: false };
 
 describe('wantsStrict', () => {
   it('wants strict for a codeworded on-screen wrapper in visible frames', () => {
@@ -154,8 +154,10 @@ describe('wantsStrict', () => {
   });
 
   it('drops occluded and CSS-hidden targets (badge hidden → voice must not match)', () => {
-    expect(wantsStrict(makeShownWrapper({ occluded: true }), STRICT_OK)).toBe(false);
-    expect(wantsStrict(makeShownWrapper({ cssHidden: true }), STRICT_OK)).toBe(false);
+    // Flags arrive as inputs: the plan derives them as the appliers will
+    // leave them, so the predicate is order-independent.
+    expect(wantsStrict(makeShownWrapper({}), { ...STRICT_OK, occluded: true })).toBe(false);
+    expect(wantsStrict(makeShownWrapper({}), { ...STRICT_OK, cssHidden: true })).toBe(false);
   });
 
   it('drops off-screen targets and invisible ancestor frames', () => {
