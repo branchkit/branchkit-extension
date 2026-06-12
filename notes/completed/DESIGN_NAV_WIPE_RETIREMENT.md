@@ -1,9 +1,12 @@
 # Nav-wipe retirement — a SPA nav is just a large mutation batch
 
 Date: 2026-06-12
-Status: IMPLEMENTED 2026-06-12 (three commits on
-`unified-reconciler-2026-06`: toClaim apply, spa_nav hint, residue
-deletion), all gates green; the change's OWN soak is the outstanding item.
+Status: COMPLETE — soak passed 2026-06-12. Final form after two soak
+corrections (trail below): limbo identity across navs (no hard detach, no
+wipe), the nav doScan tail KEPT (it is the bulk claim+grammar pipeline),
+the runWhenIdle unbound-rIC fix, and the per-pass toClaim apply REVERTED
+(fragmented claim waves + raced the scan's inline claims). Coverage
+fixture: load t95 648ms vs 1664ms pre-arc.
 Found along the way: runWhenIdle invoked requestIdleCallback unbound —
 band discovery had been silently dead after its first invocation in both
 engines (fixed, 7bca447; likely the persistent classify discoveryGap).
