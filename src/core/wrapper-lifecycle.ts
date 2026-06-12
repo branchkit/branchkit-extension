@@ -21,7 +21,6 @@ import { isRecallLoaded, resolvePreferredCodeword } from '../labels/codeword-rec
 import { dropPendingPut, hasSent, queueDelete } from '../labels/label-sync';
 import { tryRebindFromLimbo, tryRebindByStrongKey, isRecentlyOrphaned } from '../observe/limbo';
 import { store } from './store';
-import { targetRectStore } from './singletons';
 import type { IntersectionTracker } from '../observe/intersection-tracker';
 import type { AttentionObserver } from '../observe/attention-observer';
 
@@ -95,7 +94,6 @@ export function detachWrapper(element: Element): void {
   resizeObserver.unobserve(element);
   tracker.unobserve(element);
   attentionObserver.unobserve(element);
-  targetRectStore.evict(element);
   const removed = store.removeWrapperByElement(element);
   if (removed) {
     // Delta-sync bookkeeping: if the plugin holds this codeword, queue

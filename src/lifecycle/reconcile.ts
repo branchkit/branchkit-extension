@@ -13,7 +13,6 @@
  *   scheduleBandDiscovery() — re-walks the document via the wedge-safe sliced
  *                           discovery to close the discovery gap when the
  *                           MutationObserver dropped an insertion record.
- *   reconcilePlacement()  — anchor / nesting placement repair.
  *
  * This module DRIVES NOTHING. `computeReconcilePlan` re-derives the desired
  * state (desired-state.ts) and reports the actual-vs-desired delta as counts
@@ -22,27 +21,21 @@
  * non-zero count is a tripwire for a {claim, build, release, teardown} the
  * authoritative paths missed.
  *
- * It is also the only production reader of TargetRectStore: the band check
- * reads warm rects to flag whether the IO `isInViewport` flag has gone stale
- * relative to geometry. `band.staleFalse` is unreliable off-band (the store
- * doesn't re-warm off-band rects) — trust the warm store only for the
- * in-band / staleTrue direction. Fresh-geometry release lives in
- * `reconcileTeardown`, not here.
- *
- * Cost contract: O(store) with NO forced layout. It reads only cached warm
- * rects from TargetRectStore (never getBoundingClientRect) and the wrappers'
- * already-resolved sub-states, so it is safe to run on the perf cadence and on
- * every snapshot without reintroducing a layout-thrash wedge.
+ * Cost contract: O(store) with NO layout reads — only the wrappers'
+ * already-resolved sub-states — so it is safe to run on the perf cadence and
+ * on every snapshot without reintroducing a layout-thrash wedge. Geometry
+ * divergence (a stale `isInViewport` flag) is reconcileTeardown's job; it
+ * reads fresh gBCR over the bounded hinted set precisely because an IO-fed
+ * cache cannot police dropped IO events.
  */
 
 import { Category } from '../types';
 import { WrapperStore } from '../scan/element-wrapper';
-import { TargetRectStore } from '../observe/target-rect-store';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { wantsCodeword, wantsHint } from './desired-state';
 
 /** Viewport band margin, in px. Derived from the IntersectionObserver
- * rootMargin so the geometry band-check agrees with the flag the IO
+ * rootMargin so geometry band-checks agree with the flag the IO
  * actually sets. (Was a hardcoded 200 that silently drifted when the IO
  * widened to 1000px — the backstops then disagreed with IO ground truth
  * for the 200-1000px ring.) */
@@ -57,13 +50,6 @@ export interface ReconcilePlan {
   needRelease: number;
   /** Wrappers with a hint that desired-state no longer wants — stale teardown. */
   needTeardown: number;
-  /**
-   * Band-divergence: among wrappers whose warm rect is known to the store,
-   * how often the IO `isInViewport` flag disagrees with the geometry band.
-   * staleTrue = flag says in, geometry says out (the stale-isInViewport root);
-   * staleFalse = flag says out, geometry says in (a missed-enter root).
-   */
-  band: { rectsKnown: number; staleTrue: number; staleFalse: number };
 }
 
 export function emptyPlan(): ReconcilePlan {
@@ -72,7 +58,6 @@ export function emptyPlan(): ReconcilePlan {
     needBuild: 0,
     needRelease: 0,
     needTeardown: 0,
-    band: { rectsKnown: 0, staleTrue: 0, staleFalse: 0 },
   };
 }
 
@@ -94,12 +79,8 @@ export function geometryInBand(
 export function computeReconcilePlan(
   store: WrapperStore,
   activeCategory: Category | null,
-  rectStore: TargetRectStore,
-  viewport: { width: number; height: number },
-  marginPx: number,
 ): ReconcilePlan {
   const plan = emptyPlan();
-  const { width: vw, height: vh } = viewport;
 
   for (const w of store.all) {
     // Limbo wrappers hold their state by design — exclude from the plan.
@@ -110,14 +91,6 @@ export function computeReconcilePlan(
     if (!wantsCodeword(w) && hasCodeword) plan.needRelease++;
     if (wantsHint(w, activeCategory) && !w.hint) plan.needBuild++;
     if (w.hint && !wantsHint(w, activeCategory)) plan.needTeardown++;
-
-    const rect = rectStore.read(w.element);
-    if (rect) {
-      plan.band.rectsKnown++;
-      const inBand = geometryInBand(rect, vw, vh, marginPx);
-      if (w.isInViewport && !inBand) plan.band.staleTrue++;
-      else if (!w.isInViewport && inBand) plan.band.staleFalse++;
-    }
   }
 
   return plan;

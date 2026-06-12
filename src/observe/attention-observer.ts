@@ -8,10 +8,6 @@
 // and hold forever" lifecycle that grew pendingVisibility to 8,081
 // elements on YouTube comment pages.
 //
-// Per DESIGN_OBSERVER_DRIVEN_LAYOUT.md: this is the lifecycle axis of
-// the observer-driven model. Positioning axis (TargetRectStore) is a
-// later phase.
-//
 // Distinct from IntersectionTracker (narrow-margin IO for codeword
 // claim/release). Two IOs by deliberate choice — different concerns
 // (you-are-a-candidate vs you-are-interactive), different margins,
@@ -21,11 +17,6 @@
 export interface AttentionEvents {
   onEnter: (element: Element) => void;
   onLeave: (element: Element) => void;
-  // Phase 3 shadow hook. Fired only for intersecting transitions —
-  // the IO entry's boundingClientRect was just computed by the engine,
-  // so passing it on costs nothing. Skipped on leave + far-threshold
-  // paths so non-attended elements never pollute the rect store.
-  onRect?: (element: Element, rect: DOMRectReadOnly) => void;
 }
 
 const ATTENTION_ROOT_MARGIN = '200%';
@@ -70,7 +61,6 @@ export class AttentionObserver {
       const is = entry.isIntersecting;
       if (is && !was) {
         this.intersecting.add(el);
-        if (this.events.onRect) this.events.onRect(el, entry.boundingClientRect);
         this.events.onEnter(el);
       } else if (!is && was) {
         this.intersecting.delete(el);

@@ -47,7 +47,7 @@ import {
   takeSnapshot,
   resolveFromSnapshot,
 } from './activate/snapshot';
-import { dispatcher, registry, keyHandler, targetRectStore } from './core/singletons';
+import { dispatcher, registry, keyHandler } from './core/singletons';
 import { getActiveAdapter, scanWithAdapter } from './adapters';
 import {
   scroll,
@@ -206,8 +206,8 @@ let hintMachineryEnabled = false;
 
 // --- State ---
 //
-// The stable runtime singletons (store, dispatcher, registry, keyHandler,
-// targetRectStore) are constructed in core/ and imported above — see
+// The stable runtime singletons (store, dispatcher, registry, keyHandler)
+// are constructed in core/ and imported above — see
 // notes/DESIGN_EXTENSION_RESTRUCTURE.md (Tier 0).
 
 // Claim-path instrumentation (badge-coverage regression diagnosis).
@@ -954,11 +954,7 @@ const resizeObserver = new ResizeObserver((entries) => {
     if (!isHintable(el)) {
       // detachWrapper emits a store detach delta → grammar sync (Tier 2).
       detachWrapper(el);
-      continue;
     }
-    // Phase 5 (router-via-RO): the engine just resized this element. The
-    // read here follows the layout pass it triggered, so it's warm.
-    targetRectStore.write(el, el.getBoundingClientRect());
   }
 });
 
@@ -1010,11 +1006,7 @@ const attentionObserver = new AttentionObserver({
     // Gmail unresponsiveness when we tried keeping IO subscriptions alive
     // instead). Better trade-off: wrappers grow with discovered hintables,
     // but scroll-back works correctly and per-event cost stays bounded.
-    targetRectStore.evict(el);
     untrackPendingCandidate(el);
-  },
-  onRect: (el, rect) => {
-    targetRectStore.write(el, rect);
   },
 });
 
@@ -1218,11 +1210,6 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
       recordCpu('placeBadges:show', performance.now() - __pbStart);
       firehoseStep('showHints:place_end', renderable.length, 20);
     }
-    // Write-on-paint: seed the store with each painted target's current rect
-    // from the warm cache. The attention IO writes targets at band-entry time
-    // (often a stale position by the time they paint); this corrects it on
-    // paint so the store is warm without the blanket sweep.
-    for (const w of renderable) targetRectStore.write(w.element, getCachedRect(w.element));
   } finally {
     clearLayoutCache();
   }
@@ -1354,7 +1341,6 @@ function badgeNewlyCodeworded(): void {
       }
       w.hint.show(w.grammarReady);
       placeOne(w);
-      targetRectStore.write(w.element, getCachedRect(w.element)); // write-on-paint
     }
   } finally {
     clearLayoutCache();
@@ -2747,18 +2733,12 @@ function scheduleReposition(): void {
     // nav drawer parked at x=-228; the reconciler would otherwise pin them at
     // the live off-screen coords where partial overhang can bleed into the
     // viewport edge. Same predicate every paint path uses (see isRectOnScreen).
-    // On-screen rects also keep TargetRectStore warm (router-via-scroll-rAF),
-    // reusing the rects the pass above already paid for.
+    // Reuses the rects the pass above already paid for.
     const vw = window.innerWidth, vh = window.innerHeight;
     for (const w of store.all) {
       if (!w.hint?.isVisible) continue;
       const r = rects.get(w.hint);
-      if (!r) continue;
-      if (!isRectOnScreen(r, vw, vh)) {
-        w.hint.hide();
-        continue;
-      }
-      targetRectStore.write(w.element, r);
+      if (r && !isRectOnScreen(r, vw, vh)) w.hint.hide();
     }
     recordCpu('reposition:sweep', performance.now() - __start);
     firehoseStep('reposition:end', rects.size, 20);
@@ -3086,13 +3066,7 @@ document.addEventListener('keyup', (e: KeyboardEvent) => {
 document.addEventListener('__branchkit__capture_snapshot', () => {
   try {
     const payload = captureDebugSnapshot(store, trimFrameUrl(window.location.href));
-    payload.reconcile_shadow = computeReconcilePlan(
-      store,
-      activeCategory,
-      targetRectStore,
-      { width: window.innerWidth, height: window.innerHeight },
-      RECONCILE_BAND_MARGIN_PX,
-    );
+    payload.reconcile_shadow = computeReconcilePlan(store, activeCategory);
     document.documentElement.dataset.branchkitSnapshot = JSON.stringify(payload);
   } catch {
     // Snapshot build failed (detached store, serialization); leave the
@@ -3404,23 +3378,12 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
       longtask: longtaskSnapshot(),
       watchdog: watchdogSnapshot(),
     },
-    targetRectStore: {
-      size: targetRectStore.size,
-      subscribers: targetRectStore.subscriberCount,
-      drift: targetRectStore.sampleDrift(10),
-    },
     // Diagnostic shadow of the authoritative reconcile (content.ts:reconcile +
     // reconcileTeardown + scheduleBandDiscovery). Drives nothing; surfaces the
     // actual→desired delta as a tripwire — steady-state counts are all zero, a
     // non-zero count flags a {claim, build, release, teardown} the authoritative
-    // paths missed. Cheap: O(store), reads warm rects only.
-    reconcileShadow: computeReconcilePlan(
-      store,
-      activeCategory,
-      targetRectStore,
-      { width: window.innerWidth, height: window.innerHeight },
-      RECONCILE_BAND_MARGIN_PX,
-    ),
+    // paths missed. Cheap: O(store), no layout reads.
+    reconcileShadow: computeReconcilePlan(store, activeCategory),
   };
 }
 (window as any).branchkitPerfStats = buildPerfSnapshot;

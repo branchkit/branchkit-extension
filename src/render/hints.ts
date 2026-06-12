@@ -429,8 +429,6 @@ export class HintBadge {
    *
    *   - container-resize observer: detects layout shifts not driven by
    *     scroll/resize (animated dropdowns, sibling expansion, :focus-within).
-   *   - scroll-ancestor observer (nesting path only): keeps TargetRectStore
-   *     warm for inner-pane scroll so anchor offsets stay accurate.
    *   - target mutation observer: catches the page mutating the target's
    *     class/style/aria-label so the wrapper's hintability can be re-checked.
    *   - host attribute defender: restores attributes/styles the page tries
