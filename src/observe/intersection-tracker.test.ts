@@ -248,6 +248,55 @@ describe('IntersectionTracker.refreshViewportClaims', () => {
   });
 });
 
+describe('IntersectionTracker.queueClaim (the plan\'s toClaim apply)', () => {
+  it('claims a codeword for a queued wrapper', async () => {
+    const store = new WrapperStore();
+    const events = { onCodewordsChanged: vi.fn() };
+    const tracker = new IntersectionTracker(store, events);
+    const w = new ElementWrapper(fakeElement('a'), fakeScanned());
+    w.isInViewport = true;
+    store.addWrapper(w);
+
+    setupClaimResponse(['arch']);
+    tracker.queueClaim(w);
+    await tracker.flushNow();
+
+    expect(w.scanned.codeword).toBe('arch');
+    expect(events.onCodewordsChanged).toHaveBeenCalled();
+  });
+
+  it('is a no-op for a wrapper that already holds a codeword', async () => {
+    const store = new WrapperStore();
+    const events = { onCodewordsChanged: vi.fn() };
+    const tracker = new IntersectionTracker(store, events);
+    const held = new ElementWrapper(fakeElement('held'), fakeScanned({ codeword: 'rain' }));
+    held.isInViewport = true;
+    store.addWrapper(held);
+
+    tracker.queueClaim(held);
+    await tracker.flushNow();
+
+    expect(held.scanned.codeword).toBe('rain');
+    expect(events.onCodewordsChanged).not.toHaveBeenCalled();
+  });
+
+  it('releases the label straight back when the wrapper left the band before flush', async () => {
+    const store = new WrapperStore();
+    const events = { onCodewordsChanged: vi.fn() };
+    const tracker = new IntersectionTracker(store, events);
+    const w = new ElementWrapper(fakeElement('a'), fakeScanned());
+    w.isInViewport = true;
+    store.addWrapper(w);
+
+    setupClaimResponse(['arch']);
+    tracker.queueClaim(w);
+    w.isInViewport = false; // left between plan and flush
+    await tracker.flushNow();
+
+    expect(w.scanned.codeword).toBe('');
+  });
+});
+
 describe('IntersectionTracker lastRect snapshot', () => {
   // Without this, lastRect would almost always be null at limbo entry —
   // the layout cache is cleared after every reposition and the MO-driven

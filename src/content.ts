@@ -1377,19 +1377,27 @@ function scheduleReconcile(): void {
   }, DEFERRED_REPOSITION_DEBOUNCE_MS);
 }
 
-// Tear-down + missed-enter backstop for the lifecycle reconciler — Phase D
-// cutover (notes/DESIGN_UNIFIED_RECONCILER.md): the plan computes WHICH
-// wrappers are desynced (computeReconcilePlanLists' toRelease/toRepair, from
-// the gather's band geometry — derivation, sets, and the boxless/dormancy
-// nuances live there); this is the thin applier. The IO entry/exit branches
-// remain the cheap fast-path; this corrects dropped/reordered IO events in
-// either direction:
+// Lifecycle applier — the codeword/flag half of the settle pass
+// (notes/DESIGN_UNIFIED_RECONCILER.md + nav-wipe retirement step 1). The
+// plan computes WHICH wrappers are desynced (computeReconcilePlanLists —
+// derivation, sets, and the boxless/dormancy nuances live there); this is
+// the thin applier. The IO entry/exit branches remain the cheap fast-path;
+// this corrects dropped/reordered IO events in either direction and queues
+// the claims the IO missed:
 //
 //   toRelease (stale-TRUE):  flag=in, geometry=out → release codeword; the
 //                            flush tears the hint down to dormant
 //   toRepair  (stale-FALSE): flag=out, geometry=in → flip flag; the
-//                            reconcile below re-claims + rebuilds
-function applyTeardownPlan(lists: ReconcilePlanLists): void {
+//                            reconcile below rebuilds
+//   toClaim:                 in-band (post-repair), codeword-less → queue a
+//                            claim EVERY pass, not just when a repair fired
+//                            refreshViewportClaims. The settle pass is the
+//                            standing claim backstop — this closes the
+//                            scroll-after-nav claim hole (52f30c4's one-shot
+//                            nav-tail backstop, now superseded). Steady
+//                            state has an empty list, so no flush is
+//                            scheduled and the grammar-churn gate holds.
+function applyLifecyclePlan(lists: ReconcilePlanLists): void {
   for (const w of lists.toRelease) {
     w.isInViewport = false;
     pageSession.tracker.queueRelease(w);
@@ -1397,9 +1405,12 @@ function applyTeardownPlan(lists: ReconcilePlanLists): void {
   for (const w of lists.toRepair) {
     w.isInViewport = true;
   }
+  for (const w of lists.toClaim) {
+    pageSession.tracker.queueClaim(w);
+  }
   // If we corrected any stale-FALSE flags, run reconcile so the just-recovered
-  // wrappers go through claim + build (refreshViewportClaims gates on the
-  // flag, so the fix has to land before reconcile reads it).
+  // wrappers also go through build (badgeNewlyCodeworded picks up repaired
+  // dormant badges whose codeword survived).
   if (lists.toRepair.length > 0) {
     firehoseStep('reconcile:stale_false_repair', lists.toRepair.length, 1);
     reconcile();
@@ -2808,7 +2819,7 @@ function runSettlePipeline(discovery: 'band' | 'store'): void {
     const planLists = computeReconcilePlanLists(store, activeCategory, gather);
     // APPLY: thin appliers in the load-bearing step order — enforced here
     // by structure, not comment discipline.
-    applyTeardownPlan(planLists);
+    applyLifecyclePlan(planLists);
     if (discovery === 'band') scheduleBandDiscovery();
     else scheduleReconcile();
     applyOcclusionPlan(gather);
