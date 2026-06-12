@@ -77,6 +77,29 @@ Implications, in priority order:
    still hold — invisible to the epoch (it compares CS↔plugin, not
    plugin↔actuator). Park for the bug list.
 
+## Tripwire catch #3 (2026-06-12 night): response-loss ghost entries
+
+Post-fix residual mismatches show the INVERSE signature — plugin LARGER
+than shadow (417 vs 404, stable hash) on a tab whose batch trail is clean
+(one session, zero deletes, no C7 churn, iframes correctly framed). The
+delta is batches whose REQUEST the plugin applied but whose RESPONSE never
+reached the CS (SW message round-trip lost): postBatch's catch synthesizes
+`failed: sendMessage_failed` for every element, so the CS detaches those
+wrappers (badges gone, shadow never updated) while the plugin keeps their
+session entries and grammar — GHOST entries: voice-matchable codewords
+bound to nothing. Classic apply-then-lose-ack asymmetry; the synthetic-
+failure path treats "response lost" as "request not applied", which is the
+one thing it cannot know.
+
+Disposition: Phase 2b heals this structurally (the next quiescent epoch
+mismatch republishes; rotation wipes the ghosts). A targeted fix (e.g.
+idempotent batch ids so a retried batch can reconcile, or treating
+transport failure as unknown-outcome and re-verifying instead of
+synthesizing failure) is heavier than the value once 2b exists — park
+unless ghost activations get reported. Tally for the day: the tripwire's
+three catches are the dual-CS install race, the tab-switch wipe (fixed,
+b73d9a2), and this.
+
 ## The disease, restated
 
 The content script's delta-sync shadow (`sentCodewords`, label-sync.ts) and
