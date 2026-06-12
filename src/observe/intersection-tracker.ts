@@ -232,20 +232,6 @@ export class IntersectionTracker {
     this.scheduleFlush();
   }
 
-  /**
-   * Queue a codeword claim for a wrapper the settle plan found in-band and
-   * codeword-less (the plan's `toClaim` action class — nav-wipe retirement
-   * step 1). Same queue `refreshViewportClaims` feeds, minus its store walk:
-   * the plan already derived the set. Set-idempotent, and the flush
-   * re-validates `isInViewport`, so a wrapper that leaves the band between
-   * plan and flush returns its label straight to the pool.
-   */
-  queueClaim(wrapper: ElementWrapper): void {
-    if (wrapper.scanned.codeword) return;
-    this.pendingClaim.add(wrapper);
-    this.scheduleFlush();
-  }
-
   private scheduleFlush(): void {
     if (this.flushScheduled) return;
     this.flushScheduled = true;

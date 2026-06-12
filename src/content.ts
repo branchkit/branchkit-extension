@@ -1389,14 +1389,17 @@ function scheduleReconcile(): void {
 //                            flush tears the hint down to dormant
 //   toRepair  (stale-FALSE): flag=out, geometry=in → flip flag; the
 //                            reconcile below rebuilds
-//   toClaim:                 in-band (post-repair), codeword-less → queue a
-//                            claim EVERY pass, not just when a repair fired
-//                            refreshViewportClaims. The settle pass is the
-//                            standing claim backstop — this closes the
-//                            scroll-after-nav claim hole (52f30c4's one-shot
-//                            nav-tail backstop, now superseded). Steady
-//                            state has an empty list, so no flush is
-//                            scheduled and the grammar-churn gate holds.
+//   toClaim:                 emit-only telemetry, NOT applied. The first
+//                            attempt to apply it per pass (7fe37a0, nav-wipe
+//                            step 1) fragmented claim/sync into many small
+//                            waves during page load (QuickBase trickle,
+//                            285 grammar batches / 167 release messages on
+//                            one tab) and produced badge doubling on the
+//                            coverage fixture — it races the scan pipeline's
+//                            inline claims. Reverted 2026-06-12; the
+//                            standing-claim-backstop idea needs its own
+//                            design with that data (see
+//                            DESIGN_NAV_WIPE_RETIREMENT.md status).
 function applyLifecyclePlan(lists: ReconcilePlanLists): void {
   for (const w of lists.toRelease) {
     w.isInViewport = false;
@@ -1404,9 +1407,6 @@ function applyLifecyclePlan(lists: ReconcilePlanLists): void {
   }
   for (const w of lists.toRepair) {
     w.isInViewport = true;
-  }
-  for (const w of lists.toClaim) {
-    pageSession.tracker.queueClaim(w);
   }
   // If we corrected any stale-FALSE flags, run reconcile so the just-recovered
   // wrappers also go through build (badgeNewlyCodeworded picks up repaired

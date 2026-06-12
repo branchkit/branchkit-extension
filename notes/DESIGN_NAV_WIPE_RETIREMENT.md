@@ -15,9 +15,18 @@ grammar pipeline (doScanBatched claims inline per batch). On claim-heavy
 swaps where rebind can't rescue identity (QuickBase report→report, ~230
 fresh claims per nav, swap slower than the rebind window) the IO/settle
 trickle path delivered hints+grammar seconds late. The doScan tail is
-restored for both rescan kinds; the retirement's substance (no hard detach,
-limbo identity, toClaim backstop, no nav-specific wipe) stands. Post-fix
-probe: 150 badged / 169 codeworded post-nav+scroll.
+restored for both rescan kinds. SECOND CORRECTION (same soak): step 1's
+per-pass toClaim apply itself was the deeper cause — it fragments
+claim/sync into many small waves during load (the trickle; 285 grammar
+batches / 167 release messages on one QuickBase tab) and produced badge
+DOUBLING on the coverage fixture (176 hosts for 88 anchors at 7fe37a0) —
+it races the scan pipeline's inline claims. REVERTED to emit-only
+telemetry; the standing-claim-backstop idea needs its own design against
+this data. What stands of the retirement: no hard detach, limbo identity
+across navs, no nav-specific wipe, plus the runWhenIdle fix. Coverage
+fixture (400-link grid): load t95 648ms post-revert vs 1664ms pre-arc vs
+2205ms with toClaim — net faster than where we started, swap converges
+instantly via rebind.
 (Smell recorded 2026-05-31 — "we shouldn't be doing anything specific to
 navigation".)
 
