@@ -2216,29 +2216,27 @@ function rescanForNav(fromCache: boolean, reason: string): void {
       // wait. Plan A3 (notes/PLAN_BROWSER_EXTENSION_PERF_OPTIMIZATION.md).
       const scheduleDeferred = () => {
         void navStep('deferred_scan:start');
-        if (reason === 'spa_nav') {
-          // Nav-wipe retirement, step 2: no full-document doScan and no
-          // one-shot claim backstop. The swap's discovery rides the
-          // MutationObserver huge-path that already fired; the band sweep
-          // is the dropped-records backstop it is everywhere else; and the
-          // settle pass — which applies toClaim every run — converges
-          // claims + badges. A SPA nav is just a large mutation batch with
-          // a scheduling hint attached.
-          scheduleBandDiscovery();
-          schedulePassSoon();
+        // Both rescan kinds run the idempotent doScan. For spa_nav this is
+        // NOT about discovery (the MutationObserver huge-path covers that) —
+        // doScanBatched is the BULK claim + grammar pipeline: it claims
+        // codewords inline per batch and posts grammar in the same sliced
+        // walk. Dropping it (nav-wipe retirement step 2, first cut) left
+        // post-nav claims to trickle through the IO/settle path in flush
+        // waves — on claim-heavy swaps where rebind can't rescue identity
+        // (QuickBase report→report: ~230 fresh claims, swap slower than the
+        // rebind window) hints+grammar arrived seconds late (soak find,
+        // 2026-06-12). doScan skips known elements and consults the limbo
+        // pool, so the retirement's stability win is untouched; the settle
+        // pass (toClaim) remains the standing backstop for what the scan
+        // misses. Routed through doScan() so it can't race a concurrent
+        // storage-onChanged scan with the same session_id (duplicate
+        // codeword assignments — actuator.log 2026-06-05T17:30:11).
+        void doScan().then(async () => {
+          reconcile();
+          await pageSession.tracker.flushNow();
+          if (pageSession.hintsVisible) showHints(activeCategory ?? undefined);
           void navStep('deferred_scan:end');
-        } else {
-          // Refocus: the idempotent full reconciliation we always did.
-          // Route through doScan() so it can't race a concurrent
-          // storage-onChanged scan with the same session_id (duplicate
-          // codeword assignments — actuator.log 2026-06-05T17:30:11).
-          void doScan().then(async () => {
-            reconcile();
-            await pageSession.tracker.flushNow();
-            if (pageSession.hintsVisible) showHints(activeCategory ?? undefined);
-            void navStep('deferred_scan:end');
-          });
-        }
+        });
       };
       if (typeof (window as { requestIdleCallback?: unknown }).requestIdleCallback === 'function') {
         (window as Window & { requestIdleCallback: (cb: () => void, opts?: { timeout: number }) => void })

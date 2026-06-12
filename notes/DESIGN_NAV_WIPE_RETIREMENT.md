@@ -9,6 +9,15 @@ band discovery had been silently dead after its first invocation in both
 engines (fixed, 7bca447; likely the persistent classify discoveryGap).
 Scroll-after-nav acceptance: 48 badged / 60 codeworded post-nav+scroll
 (the 2026-05-31 symptom was 243 wrappers / 14 codewords).
+SOAK CORRECTION (same day): the first cut also dropped the nav-tail doScan,
+misreading it as redundant discovery — it is actually the BULK claim +
+grammar pipeline (doScanBatched claims inline per batch). On claim-heavy
+swaps where rebind can't rescue identity (QuickBase report→report, ~230
+fresh claims per nav, swap slower than the rebind window) the IO/settle
+trickle path delivered hints+grammar seconds late. The doScan tail is
+restored for both rescan kinds; the retirement's substance (no hard detach,
+limbo identity, toClaim backstop, no nav-specific wipe) stands. Post-fix
+probe: 150 badged / 169 codeworded post-nav+scroll.
 (Smell recorded 2026-05-31 — "we shouldn't be doing anything specific to
 navigation".)
 
@@ -71,10 +80,10 @@ shrinks to:
   - `dropDisconnectedWrappers()` instead of `preNavDetachAll` (limbo owns
     the swapped-out content);
   - `syncNow` republish (unchanged);
-  - request band discovery (`scheduleBandDiscovery()`) + `schedulePassSoon()`
-    instead of the full `doScan` + one-shot `reconcile()` tail. Discovery of
-    the new page's content rides the MO huge-path that already fired; the
-    band sweep is the dropped-records backstop it already is everywhere else.
+  - ~~request band discovery + schedulePassSoon instead of the full doScan
+    tail~~ — REVISED by the soak correction above: the doScan tail stays
+    (it is the bulk claim+grammar pipeline, not redundant discovery); what
+    the retirement removes is the hard detach and the wipe, not the scan.
   - `showHints` re-paint stays gated on hintsVisible as today (paint comes
     from claims landing → `badgeNewlyCodeworded`, as on any other page).
 - The refocus (`from_cache`, non-spa_nav) branch is already the generic
