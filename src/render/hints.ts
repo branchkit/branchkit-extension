@@ -182,6 +182,123 @@ const SHADOW_MODE: ShadowRootMode = (() => {
   }
 })();
 
+const BADGE_CSS = `
+  .bk-outer {
+    position: absolute;
+    inset: auto;
+    display: block;
+    contain: layout size style;
+    z-index: 2147483647;
+    pointer-events: none;
+  }
+  .bk-inner {
+    position: absolute;
+    /* Floor the font size so inheritance from the host can't collapse
+     * the badge text. Gmail's email-row checkbox is a div[role=checkbox]
+     * with font-size:0 (to hide its accessible-name text node from layout)
+     * and that value inherits through the shadow boundary. Without this
+     * floor, badges on Gmail rows render at 3x3 px — visible to the
+     * scanner but invisible to the user. Inline style.fontSize set in
+     * the constructor still wins for normal targets; this rule is the
+     * defensive backstop. */
+    font-size: 11px;
+    min-width: 8px;
+    min-height: 12px;
+    font-weight: bold;
+    font-family: system-ui, -apple-system, sans-serif;
+    line-height: 1.2;
+    padding: 0 0.1em;
+    border-radius: 3px;
+    user-select: none;
+    white-space: nowrap;
+    text-align: center;
+    border-width: 1px;
+    border-style: solid;
+    opacity: 0;
+  }
+  .bk-inner.visible {
+    opacity: 1;
+    transition: opacity 0.12s ease-out;
+  }
+  /* Voice-pending: badge is painted but the native plugin hasn't yet
+   * acknowledged its codeword in the grammar. The translucent state
+   * communicates "visible, identifiable, but voice may not match this
+   * yet" — the keyboard layer can still operate on it. Removed when
+   * the grammar push ACK arrives via wrapper.grammarReady → markGrammarReady.
+   */
+  .bk-inner.visible.bk-pending {
+    opacity: 0.55;
+  }
+  .bk-inner.filtered {
+    display: none;
+  }
+  /* Occlusion: the target is covered by another element (hit-test), so the
+   * badge would float on top of whatever hides it. Hidden entirely —
+   * orthogonal to .filtered (text-match) and the .visible opacity gate. */
+  .bk-inner.bk-occluded {
+    display: none;
+  }
+  .bk-inner.text-match {
+    outline: 1px solid currentColor;
+  }
+  .bk-matched {
+    opacity: 0.35;
+  }
+  @keyframes bk-flash {
+    /* No !important here — the CSS spec specifies that !important inside
+     * @keyframes is silently ignored, which drops the entire declaration
+     * and makes the keyframe a no-op. Animation declarations naturally
+     * outrank normal inline styles set by applyColors(), so no override
+     * marker is needed. */
+    0%, 70% { background: #ffeb3b; color: #000; }
+    100% { /* fade back to inherited background/color */ }
+  }
+  .bk-inner.flashing {
+    animation: bk-flash 350ms ease-out;
+  }
+  .bk-leader {
+    position: absolute;
+    height: 1px;
+    transform-origin: 0 0;
+    pointer-events: none;
+  }
+  @media print { .bk-outer { visibility: hidden; } }
+`;
+
+// One shared constructable stylesheet adopted by every badge shadow root,
+// instead of a per-badge <style> clone of the ~80-line block above (N parsed
+// copies retained at hundreds of badges). Lazily built on first use. Both
+// build targets support it (Chrome 73+, and MV3 implies Firefox 109+ where
+// shadow-root adoption landed in 101); the <style> fallback exists because
+// Firefox content scripts run in their own compartment and constructable-
+// sheet adoption across the Xray boundary is the one path we can't verify
+// outside a live browser. `false` = construction/adoption threw once, don't
+// retry per badge.
+let sharedBadgeSheet: CSSStyleSheet | null | false = null;
+
+function adoptBadgeStyles(shadow: ShadowRoot): void {
+  if (sharedBadgeSheet === null) {
+    try {
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync(BADGE_CSS);
+      sharedBadgeSheet = sheet;
+    } catch {
+      sharedBadgeSheet = false;
+    }
+  }
+  if (sharedBadgeSheet) {
+    try {
+      shadow.adoptedStyleSheets = [sharedBadgeSheet];
+      return;
+    } catch {
+      sharedBadgeSheet = false;
+    }
+  }
+  const style = document.createElement('style');
+  style.textContent = BADGE_CSS;
+  shadow.appendChild(style);
+}
+
 function computeBadgeFontSize(target: Element): number {
   // Targets with font-size: 0 (the common a11y-text-hiding trick on
   // role=checkbox / role=button divs) would otherwise yield a 0px or
@@ -280,91 +397,7 @@ export class HintBadge {
     const text = labelToDisplay(label, displayMode);
     this.inner.textContent = text;
 
-    const style = document.createElement('style');
-    style.textContent = `
-      .bk-outer {
-        position: absolute;
-        inset: auto;
-        display: block;
-        contain: layout size style;
-        z-index: 2147483647;
-        pointer-events: none;
-      }
-      .bk-inner {
-        position: absolute;
-        /* Floor the font size so inheritance from the host can't collapse
-         * the badge text. Gmail's email-row checkbox is a div[role=checkbox]
-         * with font-size:0 (to hide its accessible-name text node from layout)
-         * and that value inherits through the shadow boundary. Without this
-         * floor, badges on Gmail rows render at 3x3 px — visible to the
-         * scanner but invisible to the user. Inline style.fontSize set in
-         * the constructor still wins for normal targets; this rule is the
-         * defensive backstop. */
-        font-size: 11px;
-        min-width: 8px;
-        min-height: 12px;
-        font-weight: bold;
-        font-family: system-ui, -apple-system, sans-serif;
-        line-height: 1.2;
-        padding: 0 0.1em;
-        border-radius: 3px;
-        user-select: none;
-        white-space: nowrap;
-        text-align: center;
-        border-width: 1px;
-        border-style: solid;
-        opacity: 0;
-      }
-      .bk-inner.visible {
-        opacity: 1;
-        transition: opacity 0.12s ease-out;
-      }
-      /* Voice-pending: badge is painted but the native plugin hasn't yet
-       * acknowledged its codeword in the grammar. The translucent state
-       * communicates "visible, identifiable, but voice may not match this
-       * yet" — the keyboard layer can still operate on it. Removed when
-       * the grammar push ACK arrives via wrapper.grammarReady → markGrammarReady.
-       */
-      .bk-inner.visible.bk-pending {
-        opacity: 0.55;
-      }
-      .bk-inner.filtered {
-        display: none;
-      }
-      /* Occlusion: the target is covered by another element (hit-test), so the
-       * badge would float on top of whatever hides it. Hidden entirely —
-       * orthogonal to .filtered (text-match) and the .visible opacity gate. */
-      .bk-inner.bk-occluded {
-        display: none;
-      }
-      .bk-inner.text-match {
-        outline: 1px solid currentColor;
-      }
-      .bk-matched {
-        opacity: 0.35;
-      }
-      @keyframes bk-flash {
-        /* No !important here — the CSS spec specifies that !important inside
-         * @keyframes is silently ignored, which drops the entire declaration
-         * and makes the keyframe a no-op. Animation declarations naturally
-         * outrank normal inline styles set by applyColors(), so no override
-         * marker is needed. */
-        0%, 70% { background: #ffeb3b; color: #000; }
-        100% { /* fade back to inherited background/color */ }
-      }
-      .bk-inner.flashing {
-        animation: bk-flash 350ms ease-out;
-      }
-      .bk-leader {
-        position: absolute;
-        height: 1px;
-        transform-origin: 0 0;
-        pointer-events: none;
-      }
-      @media print { .bk-outer { visibility: hidden; } }
-    `;
-
-    this.shadow.appendChild(style);
+    adoptBadgeStyles(this.shadow);
     this.outer.appendChild(this.inner);
     this.shadow.appendChild(this.outer);
 
