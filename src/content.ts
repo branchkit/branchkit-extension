@@ -1492,9 +1492,15 @@ function applyOcclusionPlan(gather: SettleGather): void {
 // requestIdleCallback is unavailable (Firefox content scripts historically).
 // `timeoutMs` caps the idle wait so a pathologically busy page still runs it.
 function runWhenIdle(cb: () => void, timeoutMs: number): void {
-  const ric = (window as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void })
-    .requestIdleCallback;
-  if (typeof ric === 'function') ric(cb, { timeout: timeoutMs });
+  const w = window as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void };
+  // Call ON window — extracting the function and invoking it unbound throws
+  // TypeError in both engines ("Illegal invocation" / "does not implement
+  // interface Window"). The unbound call here meant scheduleBandDiscovery's
+  // first invocation threw AFTER setting its single-flight flag, wedging the
+  // flag true and silently killing every later band sweep (the persistent
+  // discoveryGap in the classify sweeps). Found 2026-06-12 when the nav-hint
+  // path called it synchronously.
+  if (typeof w.requestIdleCallback === 'function') w.requestIdleCallback(cb, { timeout: timeoutMs });
   else setTimeout(cb, 100);
 }
 
