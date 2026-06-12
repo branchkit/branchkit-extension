@@ -445,6 +445,13 @@ before anything is pushed.
     (mutate the store, no reaching into render/grammar). This also retires the
     growing observer-injection surface the Tier 1 lifts accumulated (`limbo` and
     wrapper-lifecycle inject `tracker` / `resizeObserver` / `attentionObserver`).
+    **Landed 2026-06-12** (Phase A of DESIGN_UNIFIED_RECONCILER.md): the
+    `pageSession` singleton lives in lifecycle/page-session.ts; `start(deps)`
+    constructs all six observers (tracker/resize/attention inline; the page MO
+    + two visibility observers via construct functions in their modules) and
+    is the single remaining seam for content.ts orchestration — all four init
+    injection seams (`initWrapperLifecycle`, `initLimbo`, `initMutationSource`,
+    `initVisibilityTracker`) are deleted; modules import the singleton.
 11. `background.ts` extraction (Tier-0-equivalent risk; can run in parallel any
     time — see section 4).
 12. **Delete the residue.** `content.ts` and `background.ts` become construct-and-

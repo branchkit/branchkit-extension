@@ -1,7 +1,12 @@
 # Unified Reconciler — the plan becomes the engine
 
 Date: 2026-06-12
-Status: proposal (structural arc 1 of `REVIEW_ARCHITECTURE_2026-06-11.md`)
+Status: IMPLEMENTED through Phase E (2026-06-12, branch
+`unified-reconciler-2026-06`); Phase F's automated gates are green and the
+ONE end-of-arc real-browser soak is the outstanding item — relocate this
+note to `notes/completed/` once it passes. See "Landed" at the bottom for
+outcomes, deviations, and the churn-probe finding.
+(structural arc 1 of `REVIEW_ARCHITECTURE_2026-06-11.md`)
 Successor to: `notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md` (the
 {claim, build, release, teardown} axis — phases 0-6 landed and verified).
 Base: branch `deletion-sprint-2026-06` (the sprint reshaped several inputs;
@@ -291,10 +296,67 @@ handshake (arc 2, its own note).
   desired-state ambiguity — leaning fold-late (Phase D last), since its reads
   (scroller-chain walks) are the most expensive per wrapper and benefit most
   from the gather's shown-set narrowing.
+  **Outcome: stayed a glue-module step the pass orders; folding remains open.**
 - Should the gather snapshot carry style reads for *non-hinted* in-band
   candidates (so the plan can gate `toBuild` on cssVisible, as
   `badgeNewlyCodeworded` does today), or keep build-time visibility checks in
   the applier? Affects gather size on dense pages.
+  **Outcome: answered with data in Phase C — the plan's build-sim was paying
+  ~30 unbatched cssVisible reads per settle for the codeworded badge-less set
+  (the `reconcilePlan:size:lazyReads` tripwire), so those style reads ride
+  the gather batch (gCS ~627→~792/settle on /watch). Dormant codeword-less
+  badges stay out; the plan lazy-reads those only in the rare repair case.**
 - Budget shape: hard per-settle time cap with carry-over lists, or trust the
   bounded sets and skip budgeting until measurement says otherwise? (The
   prior note's history says: measure first.)
+  **Outcome: no budget — bounded sets trusted; the applied-counts surface
+  (`reconcile_applied`) spiking against a quiet page is the tripwire.**
+
+## Landed (2026-06-12)
+
+Phases A–E on `unified-reconciler-2026-06`, one commit per phase / action
+class, every commit behind tsc + unit suite + wedge repro + (behavior phases)
+the classify sweep. The end state matches the target model: clip-membership
+sync first, then GATHER (rects + styles + occlusion hit-tests + frame
+ancestor chain, batched, never cached across settles) → PLAN
+(`computeReconcilePlanLists`, the one desired-state derivation, simulating
+the apply order) → thin APPLY steps in structurally-enforced order
+(teardown → discovery → occlusion → accel → visibility → strict →
+reposition).
+
+Numbers and findings:
+
+- **Phase B reads**: ~489 → ~220 gBCR per settle on /watch (~55%); styles
+  unchanged in volume but batched. Gather costs ~3–6ms per settle.
+- **Phase C verification**: zero plan-vs-live divergence at real volume
+  (classify sweep 305 planned = 305 acted / 35 settles; /watch with
+  scroll-back + hover 1148 = 1148 / 33 settles). No live divergences
+  surfaced; the ordering subtleties were caught structurally — the
+  conditional build pass had to be simulated (else built badges
+  double-predict as shows) and the strict derivation had to take
+  occluded/cssHidden as derived inputs.
+- **Phase D soundness move**: `reconcileClipObservation`'s leave-path was
+  the one mid-pipeline writer of plan inputs (clearing `clipped`) — it now
+  runs before the gather. Two deliberate micro-divergences, both one-settle
+  lags on the rare in-pipeline build path: a freshly-built badge joins clip
+  observation / gets its first hit-test next settle. Limbo wrappers are no
+  longer hit-tested (they hold state by design).
+- **Phase E cadence**: the demoted backstops drive the full pass at the old
+  100ms recheck cadence via a non-extending single-flight timer
+  (`schedulePassSoon` — deliberately not the settle debounce, which pushes
+  back under sustained churn). Classify sweep: ~132 passes vs ~34
+  pre-demotion, each pass inside the measured budget.
+- **Decision 6 gate (grammar churn)**: `scripts/_test-live-churn.mjs` FAILS —
+  but identically (same counts) at HEAD, at the pre-arc base (c5a5abb), and
+  at the pre-deletion-sprint base (25e807d), with production badges working
+  throughout. The probe has rotted against the current actuator/plugin
+  pipeline (the app repo's record-keyed command pipeline + vocabulary
+  changes landed after its last pass; the SDK harness needed the same
+  revival). Reviving it belongs to the harness-promotion chore from the
+  review's dead-weight list, not this arc. The intent is covered in the
+  meantime by the applied-counts surface (zero-delta passes queue no puts —
+  `grammar_already_owns` absorption unchanged).
+
+Outstanding: the ONE batched real-browser soak (Chrome + Firefox), then
+relocate this note to `notes/completed/`. After that, the unlocked
+dependents: nav-wipe retirement and the grammar epoch handshake (arc 2).
