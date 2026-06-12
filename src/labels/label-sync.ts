@@ -261,7 +261,21 @@ interface EpochStats {
     pluginCount: number; pluginHash: string;
     shadowCount: number; shadowHash: string;
     reason: string;
+    /** Frame attribution — without it, every mismatch investigation needs
+     * hand-correlation across logs (2026-06-12's chases). */
+    url: string;
+    frame: 'top' | 'iframe';
   } | null;
+}
+
+// Origin+path only (no query/fragment noise), capped — breadcrumb-sized.
+function trimUrlForLog(href: string): string {
+  try {
+    const u = new URL(href);
+    return `${u.origin}${u.pathname}`.slice(0, 120);
+  } catch {
+    return href.slice(0, 120);
+  }
 }
 const epochStats: EpochStats = { checks: 0, mismatches: 0, skippedBusy: 0, lastMismatch: null };
 
@@ -301,6 +315,8 @@ function checkGrammarEpoch(resp: GrammarBatchResponse, reason: string): void {
     shadowCount,
     shadowHash: epochHashOf(sentCodewords),
     reason,
+    url: trimUrlForLog(window.location.href),
+    frame: window === window.top ? 'top' : 'iframe',
   };
   bkLog('BK_GRAMMAR_EPOCH_MISMATCH', epochStats.lastMismatch);
 }
