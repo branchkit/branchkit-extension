@@ -406,17 +406,34 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
 // SSR apps hydrate via a burst of mutations after page load; inserting
 // nodes mid-hydration causes error #418. This watches for a quiet
 // period (no mutations for SETTLE_MS) before firing the callback.
+//
+// HARD-CAPPED: a page that never goes mutation-quiet (ad churn, animated
+// thumbnails — YouTube results) must still fire. Uncapped, this was the
+// no-badges-on-refresh boot race (2026-06-12): when the hintsShown config
+// load beat the alphabet load, the boot showHints() early-returned on the
+// missing alphabet WITHOUT setting hintsVisible, and the alphabet-callback
+// recovery sat behind this settle wait forever — codewords claimed, zero
+// badges painted, settle pass never armed. Hydration is comfortably done
+// within the cap; trading a rare React #418 console error on a
+// pathologically slow hydration for guaranteed badges is the right side.
 const SETTLE_MS = 200;
+const SETTLE_MAX_WAIT_MS = 3000;
 
 function whenDOMSettles(callback: () => void): void {
+  let fired = false;
   let timer: ReturnType<typeof setTimeout> | null = setTimeout(fire, SETTLE_MS);
+  const deadline = setTimeout(fire, SETTLE_MAX_WAIT_MS);
   const mo = new MutationObserver(() => {
     if (timer) clearTimeout(timer);
     timer = setTimeout(fire, SETTLE_MS);
   });
   mo.observe(document.documentElement, { childList: true, subtree: true });
   function fire() {
+    if (fired) return;
+    fired = true;
     mo.disconnect();
+    if (timer) clearTimeout(timer);
+    clearTimeout(deadline);
     timer = null;
     callback();
   }
