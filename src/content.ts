@@ -20,14 +20,14 @@ import {
   type ReconcilePlanLists,
   type ShadowDiff,
 } from './lifecycle/reconcile';
-import { gatherSettleReads, SettleGather } from './lifecycle/gather';
+import { gatherSettleReads } from './lifecycle/gather';
 import { stampStrictViewport, collectStrictViewportDelta } from './lifecycle/strict-viewport';
 import * as idRegistry from './scan/registry';
 import type { CodewordMemoryEntry } from './labels/codeword-memory';
 import { loadRecall, recalledCodewords, rememberLive, resolvePreferredCodeword, isRecallLoaded } from './labels/codeword-recall';
 import { type RebindCounters } from './labels/rebind';
 import { resolveTarget } from './activate/activate-resolution';
-import { recheckHintedVisibility, schedulePointerVisibilitySweep, connectVisibilityMO, teardownVisibilityTracker } from './observe/visibility-tracker';
+import { schedulePointerVisibilitySweep, connectVisibilityMO, teardownVisibilityTracker } from './observe/visibility-tracker';
 import { rebindCounters, LIMBO_DEADLINE_MS, collectLimboWrappers, collectStrongKeyIndex, dropDisconnectedWrappers, finalizeExpiredLimboWrappers } from './observe/limbo';
 import { attachWrapper, detachWrapper, seedPreferredFromMemory, attachDiscovered } from './core/wrapper-lifecycle';
 import { attachPageMutationObserver, teardownMutationSource } from './observe/mutation-source';
@@ -1391,6 +1391,27 @@ function applyTeardownPlan(lists: ReconcilePlanLists): void {
   if (lists.toRepair.length > 0) {
     firehoseStep('reconcile:stale_false_repair', lists.toRepair.length, 1);
     reconcile();
+  }
+}
+
+// Visibility applier (apply cutover 3/4): the plan decides which badges flip
+// (toShow/toHide via wantsShown over the gather, with dormancy and the
+// post-repair flag simulated) and which targets' cssHidden changed; this
+// writes them. The visibility guards mirror the live recheck's
+// transition-only branches (show only a hidden badge, hide only a showing
+// one) so the apply stays idempotent against the conditional build pass that
+// ran during teardown. No onVisibilityChanged trigger here: the strict step
+// runs next in the pipeline and reads the just-written cssHidden, so the
+// out-of-band re-push would queue the identical delta. The throttled
+// out-of-pipeline recheck (visibility-tracker) keeps its own loop + trigger
+// until Phase E.
+function applyVisibilityPlan(lists: ReconcilePlanLists): void {
+  for (const [w, hidden] of lists.cssHiddenDelta) w.cssHidden = hidden;
+  for (const w of lists.toShow) {
+    if (w.hint && !w.hint.isVisible) w.hint.show(w.grammarReady);
+  }
+  for (const w of lists.toHide) {
+    if (w.hint?.isVisible) w.hint.hide();
   }
 }
 
@@ -2782,21 +2803,22 @@ function runSettlePipeline(discovery: 'band' | 'store'): void {
     reconcileClipObservation(store.all);
     reconcileOcclusion();
     reconcileScrollAccel();
-    const recheckActions = recheckHintedVisibility(gather);
-    // The strict half of the plan runs HERE, not at gather time: its two
-    // flag inputs (occluded, cssHidden) are written by the occlusion and
-    // visibility steps above. When the occlusion hit-tests move into the
-    // gather (cutover 4), this folds into the single plan call.
+    applyVisibilityPlan(planLists);
+    // The strict half of the plan runs HERE, not at gather time: its
+    // occluded input is written by the occlusion step above (cssHidden now
+    // comes from the plan's own delta, applied just before). When the
+    // occlusion hit-tests move into the gather (cutover 4), this folds into
+    // the single plan call.
     const strictPlan = computeStrictDeltaPlan(store.all, gather);
     applyStrictPlan(strictPlan);
     recordShadowDiff(diffShadow(planLists, strictPlan, {
-      // release/repair/strict are tautological since their cutovers (the
-      // steps execute the plan's lists); kept so planned/acted volumes stay
-      // comparable. The whole shadow comparison dies in Phase E.
+      // Every class is tautological since its cutover (the steps execute the
+      // plan's lists); kept so planned/acted volumes stay comparable. The
+      // whole shadow comparison dies in Phase E.
       released: planLists.toRelease,
       repaired: planLists.toRepair,
-      shown: recheckActions.shown,
-      hidden: recheckActions.hidden,
+      shown: planLists.toShow,
+      hidden: planLists.toHide,
       strictDelta: strictPlan,
     }));
   }

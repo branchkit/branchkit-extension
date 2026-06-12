@@ -32,7 +32,6 @@ import { recordCpu } from '../debug/perf-counters';
 import { store } from '../core/store';
 import { attachWrapper } from '../core/wrapper-lifecycle';
 import { pageSession } from '../lifecycle/page-session';
-import type { SettleGather } from '../lifecycle/gather';
 
 const pendingVisibility = new Set<Element>();
 const VISIBILITY_ABANDON_MS = 30_000;
@@ -149,17 +148,14 @@ export function scheduleHintVisibilityRecheck(): void {
 // report changed that policy to "if the badge is hidden, voice can't match it
 // either." When any badge flips shown/hidden, fire `onVisibilityChanged` so the
 // strict delta re-pushes without waiting for the next scroll-settle.
-// The settle pipeline passes its gather snapshot (Phase B of
-// notes/DESIGN_UNIFIED_RECONCILER.md) so the style/rect reads come out of the
-// once-per-settle batched pass; the throttled out-of-pipeline callers run the
-// legacy self-read path. Wrapper flags are always read live. Returns the
-// badges it actually transitioned so the pipeline can diff the shadow plan's
-// toShow/toHide lists against the live actions (Phase C).
-export function recheckHintedVisibility(
-  gather?: SettleGather,
-): { shown: ElementWrapper[]; hidden: ElementWrapper[] } {
+// Out-of-pipeline visibility recheck — the 100ms-throttled MO/pointer path
+// only. The settle pipeline no longer calls this (apply cutover 3/4 of
+// notes/DESIGN_UNIFIED_RECONCILER.md): there the plan's toShow/toHide +
+// cssHidden delta are applied directly from the gather snapshot. This
+// self-read loop survives for the between-settle triggers until Phase E
+// demotes them to "schedule the pass sooner".
+export function recheckHintedVisibility(): void {
   const __cpuStart = performance.now();
-  const acted: { shown: ElementWrapper[]; hidden: ElementWrapper[] } = { shown: [], hidden: [] };
   // Don't re-show badges the user just hid. Without this guard, hideHints()
   // sets pageSession.hintsVisible=false and clears each badge's visible
   // class — but the next visibilityMO tick (or periodic recheck) walks
@@ -170,7 +166,7 @@ export function recheckHintedVisibility(
   // the user's explicit hide intent.
   if (!pageSession.hintsVisible) {
     recordCpu('recheckHintedVisibility', performance.now() - __cpuStart);
-    return acted;
+    return;
   }
   const wrappers = store.all;
   const hinted: Element[] = [];
@@ -184,19 +180,16 @@ export function recheckHintedVisibility(
   }
   if (hinted.length === 0) {
     recordCpu('recheckHintedVisibility', performance.now() - __cpuStart);
-    return acted;
+    return;
   }
-  // Reads come from the settle gather when present (snapshot taken at
-  // pipeline start; misses fall back live). Legacy path warms the layout
-  // cache itself.
-  if (!gather) cacheVisibility(hinted);
+  cacheVisibility(hinted);
   // cacheVisibility warms each seed element's rect too, so getCachedRect below
   // is free. Gate paint on actual viewport geometry, not the tracker's wide-
   // margin isInViewport flag: an element parked off-screen but within that
   // margin (YouTube's collapsed nav drawer at x=-228) is isInViewport-true yet
   // must not paint a badge clamped to the edge. Without this the reposition
   // pass hides it and this loop re-shows it 100ms later — the flashing column.
-  const vw = gather?.vw ?? window.innerWidth, vh = gather?.vh ?? window.innerHeight;
+  const vw = window.innerWidth, vh = window.innerHeight;
   let transitions = 0;
   try {
     for (const w of wrappers) {
@@ -204,19 +197,16 @@ export function recheckHintedVisibility(
       // Split the two reasons a badge hides: CSS-invisible (visibility/opacity —
       // voice should drop it) vs merely off the real viewport (the band-margin
       // clamp — geometry already drops it from strict, so don't flag cssHidden).
-      const cssVisible = gather?.cssVisible.get(w) ?? isVisible(w.element);
-      const rect = gather?.rects.get(w) ?? getCachedRect(w.element);
-      const visible = cssVisible && isRectOnScreen(rect, vw, vh);
+      const cssVisible = isVisible(w.element);
+      const visible = cssVisible && isRectOnScreen(getCachedRect(w.element), vw, vh);
       w.cssHidden = !cssVisible;
       const showing = w.hint.isVisible;
       if (visible && !showing) {
         w.hint.show(w.grammarReady);
         transitions++;
-        acted.shown.push(w);
       } else if (!visible && showing) {
         w.hint.hide();
         transitions++;
-        acted.hidden.push(w);
       }
     }
   } finally {
@@ -230,7 +220,6 @@ export function recheckHintedVisibility(
     // converges with the visual without waiting for a scroll-settle.
     pageSession.deps.onVisibilityChanged();
   }
-  return acted;
 }
 
 function anyHintedWrapperVisible(): boolean {

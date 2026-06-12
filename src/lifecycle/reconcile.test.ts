@@ -225,6 +225,25 @@ describe('computeReconcilePlanLists', () => {
     const lists = computeReconcilePlanLists(storeOf([w]), null, gatherOf([[w, ON_SCREEN, false]]));
     expect(lists.toHide).toEqual([w]);
     expect(lists.toShow).toEqual([]);
+    // …and the write-through flag flips with it (delta-only).
+    expect(lists.cssHiddenDelta).toEqual([[w, true]]);
+  });
+
+  it('emits no cssHidden delta when the flag already matches', () => {
+    const visible = liveWrapper({ hint: 'visible', inViewport: true, codeword: 'ape' });
+    const hidden = liveWrapper({ hint: 'visible', inViewport: true, codeword: 'oak', cssHidden: true });
+    const lists = computeReconcilePlanLists(
+      storeOf([visible, hidden]), null,
+      gatherOf([[visible, ON_SCREEN, true], [hidden, ON_SCREEN, false]]),
+    );
+    expect(lists.cssHiddenDelta).toEqual([]);
+  });
+
+  it('clears cssHidden for a target that became CSS-visible again', () => {
+    const w = liveWrapper({ hint: 'dormant', inViewport: true, codeword: 'ape', cssHidden: true });
+    const lists = computeReconcilePlanLists(storeOf([w]), null, gatherOf([[w, ON_SCREEN, true]]));
+    expect(lists.cssHiddenDelta).toEqual([[w, false]]);
+    expect(lists.toShow).toEqual([w]);
   });
 
   it('lists a paintable codeworded badge-less wrapper for build', () => {
@@ -288,6 +307,7 @@ describe('diffShadow', () => {
     const b = liveWrapper({ codeword: 'oak' });
     const lists: ReconcilePlanLists = {
       toRelease: [a, b], toRepair: [], toClaim: [], toBuild: [], toShow: [], toHide: [],
+      cssHiddenDelta: [],
     };
     const diff = diffShadow(lists, [], {
       released: [b, a], repaired: [], shown: [], hidden: [], strictDelta: [],
@@ -300,6 +320,7 @@ describe('diffShadow', () => {
     const acted = liveWrapper({ codeword: 'oak' });
     const lists: ReconcilePlanLists = {
       toRelease: [], toRepair: [], toClaim: [], toBuild: [], toShow: [planned], toHide: [],
+      cssHiddenDelta: [],
     };
     const diff = diffShadow(lists, [], {
       released: [], repaired: [], shown: [acted], hidden: [], strictDelta: [],

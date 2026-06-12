@@ -136,6 +136,12 @@ export interface ReconcilePlanLists {
   toBuild: ElementWrapper[];
   toShow: ElementWrapper[];
   toHide: ElementWrapper[];
+  /** The visibility step's write-through side effect: recheck-set wrappers
+   * whose `cssHidden` flag must change to match the gathered cssVisible
+   * (delta-only — writing an unchanged value is a no-op). The strict
+   * predicate reads this flag, so the applier writes it before the strict
+   * delta is computed. */
+  cssHiddenDelta: Array<[ElementWrapper, boolean]>;
 }
 
 function lazyCssVisible(w: ElementWrapper, counter: { reads: number }): boolean {
@@ -156,6 +162,7 @@ export function computeReconcilePlanLists(
   const lazy = { reads: 0 };
   const lists: ReconcilePlanLists = {
     toRelease: [], toRepair: [], toClaim: [], toBuild: [], toShow: [], toHide: [],
+    cssHiddenDelta: [],
   };
 
   // Step-1 sim — mirrors reconcileTeardown over the same gather rects.
@@ -222,6 +229,9 @@ export function computeReconcilePlanLists(
       ? isRectOnScreen(r, gather.vw, gather.vh)
       : lazyOnScreen(w, gather.vw, gather.vh, lazy);
     const cssVisible = gather.cssVisible.get(w) ?? lazyCssVisible(w, lazy);
+    // The recheck's write-through: cssHidden tracks !cssVisible for every
+    // member of its set, not just transitioning ones.
+    if (w.cssHidden !== !cssVisible) lists.cssHiddenDelta.push([w, !cssVisible]);
     const visible = w.hint
       ? wantsShown(w, { flagInBand: flag, cssVisible, onScreen })
       : (cssVisible && onScreen); // freshly-constructed badge: shown-ness core
