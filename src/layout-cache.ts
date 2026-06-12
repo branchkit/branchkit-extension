@@ -36,10 +36,6 @@ export function cacheLayout(elements: Element[]): void {
       current = current.parentElement;
       depth++;
     }
-
-    for (const desc of el.querySelectorAll('*')) {
-      toCache.add(desc);
-    }
   }
 
   for (const el of toCache) {

@@ -1,7 +1,6 @@
 import { ElementWrapper } from '../scan/element-wrapper';
 import { getCachedRect, getCachedStyle } from '../layout-cache';
 import { computePlacement, Nudge } from './compute';
-import { calculateZIndex } from './stacking';
 import { type BadgeSettings, DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
 
 export type TextProbe = { hasText: true; rect: DOMRect } | { hasText: false };
@@ -141,32 +140,26 @@ function getNudge(element: Element, hasText: boolean): Nudge {
 }
 
 export function placeBadges(wrappers: ElementWrapper[]): void {
-  const sorted = [...wrappers].sort((a, b) => {
-    const ra = getCachedRect(a.element);
-    const rb = getCachedRect(b.element);
-    return (ra.top - rb.top) || (ra.left - rb.left);
-  });
-
   // Read pass: probe text positions for all elements before any writes.
   // Cached per-wrapper (see `ElementWrapper.cachedProbe`) so scroll-only
   // repositions don't re-walk text nodes or re-read Range rects.
-  const probes = sorted.map((w) => getOrComputeProbe(w));
+  const probes = wrappers.map((w) => getOrComputeProbe(w));
 
-  // Write pass: position all badges using pre-collected probes.
-  for (let i = 0; i < sorted.length; i++) {
-    const w = sorted[i];
+  // Write pass: position all badges using pre-collected probes. Z-index is
+  // not placement's job — HintBadge.refine() computes it once per badge,
+  // cached per anchorParent.
+  for (let i = 0; i < wrappers.length; i++) {
+    const w = wrappers[i];
     if (!w.hint) continue;
     positionAtTopLeft(w, probes[i]);
     w.hint.hideLeader();
-    w.hint.host.style.zIndex = String(calculateZIndex(w.element, w.hint.host) + i);
   }
 }
 
-export function placeOne(wrapper: ElementWrapper, readingIndex: number): void {
+export function placeOne(wrapper: ElementWrapper): void {
   if (!wrapper.hint) return;
   positionAtTopLeft(wrapper);
   wrapper.hint.hideLeader();
-  wrapper.hint.host.style.zIndex = String(calculateZIndex(wrapper.element, wrapper.hint.host) + readingIndex);
 }
 
 function positionAtTopLeft(w: ElementWrapper, probe?: TextProbe): void {

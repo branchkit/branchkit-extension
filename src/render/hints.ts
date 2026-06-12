@@ -11,6 +11,7 @@
 import { Category, BadgeDisplayMode } from '../types';
 import { LabelAssignment, labelToDisplay } from '../labels/words';
 import { getCachedRect, getCachedStyle, getCachedDims, isClipAncestor } from '../layout-cache';
+import { calculateZIndex } from '../placement/stacking';
 import { computeBadgeColors } from './badge-colors';
 import { type BadgeSettings, DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
 import { leaderLineGeometry } from '../placement/geometry';
@@ -406,6 +407,26 @@ export function setScrollAccelNestedEnabled(enabled: boolean): void {
 // show time. Added in the constructor, removed in remove().
 const liveReconcileBadges = new Set<HintBadge>();
 
+// Z-index cache, keyed by anchorParent. calculateZIndex walks the target's
+// descendants plus its ancestor chain with live getComputedStyle — too
+// expensive to run per badge per placement pass (the pre-2026-06 model, the
+// biggest single read cost on dense pages). Badges sharing an anchorParent sit
+// in the same stacking context, so one walk serves them all; computed once per
+// badge at refine()/retarget() time. WeakMap so detached containers fall out
+// with the page's own GC. Staleness (a container whose stacking context
+// changes after the first badge computed it) is accepted — calculateZIndex's
+// +5 buffer covers minor drift, and a re-shown session rebuilds badges anyway.
+const zIndexByAnchorParent = new WeakMap<HTMLElement, number>();
+
+function zIndexFor(target: Element, host: HTMLElement, anchorParent: HTMLElement): number {
+  let z = zIndexByAnchorParent.get(anchorParent);
+  if (z === undefined) {
+    z = calculateZIndex(target, host);
+    zIndexByAnchorParent.set(anchorParent, z);
+  }
+  return z;
+}
+
 /** Re-detect the accelerator chain for every visible live badge. Called from the
  *  settle handlers so arming is level-triggered: a badge whose scroller wasn't
  *  scrollable yet at show time (content still loading) gets accelerated once it
@@ -692,6 +713,12 @@ export class HintBadge {
     this._refined = true;
     trackContainerResize(this.anchorParent);
     trackTargetMutations(this.target);
+    // Stacking: place the badge in its target's natural stacking context so
+    // modals/dropdowns with a higher-z context still cover it. Deferred here
+    // (not the constructor) because the walk reads live computed styles;
+    // cached per anchorParent. Written before the host-attribute defender
+    // starts so the write isn't observed as page tampering.
+    this.host.style.zIndex = String(zIndexFor(this.target, this.host, this.anchorParent));
     // Start the host-attribute defender AFTER all setup is done — the
     // observer fires on real mutations only, but starting it earlier
     // would treat our own setAttribute/style writes as page tampering.
@@ -928,6 +955,10 @@ export class HintBadge {
 
     trackContainerResize(this.anchorParent);
     trackTargetMutations(this.target);
+    // Recompute stacking for the new target's container (cached per
+    // anchorParent). The host-attribute defender allows style writes that
+    // keep display intact, so this is safe with the tracker live.
+    this.host.style.zIndex = String(zIndexFor(this.target, this.host, this.anchorParent));
     // host-attribute tracker is keyed on the host (unchanged); no swap.
     // Re-detect the accelerator for the new node (no-op when flag off / no
     // inner scroller). Disarm above + this re-arm flip `outer`'s animation, so

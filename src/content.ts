@@ -1315,8 +1315,6 @@ function badgeNewlyCodeworded(): void {
   }
   if (newBadges.length === 0) return;
 
-  const existingCount = store.all.filter(w => w.hint?.isVisible).length;
-
   try {
     cacheLayout(newBadges.map(w => w.element));
     const vw = window.innerWidth, vh = window.innerHeight;
@@ -1354,7 +1352,7 @@ function badgeNewlyCodeworded(): void {
         w.hint = new HintBadge(w.element, label, w.category, getDisplayMode());
       }
       w.hint.show(w.grammarReady);
-      placeOne(w, existingCount + i);
+      placeOne(w);
       targetRectStore.write(w.element, getCachedRect(w.element)); // write-on-paint
     }
   } finally {
