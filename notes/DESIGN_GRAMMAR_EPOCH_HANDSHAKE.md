@@ -367,6 +367,26 @@ and sw_restart_resync probe coverage comes from the real-Firefox soak,
 where both fire organically (browser.log shows organic bfcache_restore
 firings 2026-06-11).
 
+SOAK, FIRST HOURS (2026-06-13, user's real Chrome): three probe firings,
+ALL diverged:false — every enumerated-trigger republish so far re-pushed an
+already-converged grammar (early retirement evidence; small n). One reason
+the enumeration missed arrived for free: `app_refocus` (plugin focus.go
+pushes reactivate on OS refocus — flows through the same handler, probed
+generically). Separately, a QuickBase appoverview session showed a live
+heal-churn window (13 mismatches / 7 epoch_mismatch republishes in ~30s,
+counts 410-460, no cap exhaustion — every cycle healed): plugin>shadow by
+3-6 during discovery (catch-#3 ghost signature) flipping to shadow>plugin
+on an SPA content swap (catch-#4 signature). The parked specimens are ACTIVE
+on QuickBase; 2b is carrying them at the cost of a 400+-element re-Put per
+heal. If soak shows this sustained, unpark the targeted fixes. Same window:
+confirm arbitration fired for real — 43 rejections across 3 events, one
+with dropped=17 (17 live wrappers yielded their codewords, badges removed →
+re-claimed fresh → repainted translucent until ACK). User independently
+reported the visual ("half a hint render, then it fills in") — the 0.55
+bk-pending readiness state plus arbitration re-claims made visible by the
+churn. Working as designed, but perceptual-continuity cost scales with
+mismatch volume — another reason to watch the QuickBase churn rate.
+
 **Phase 3b — retirement (NOT implemented; gated on soak).** Open question
 recorded ahead of the data: retiring triggers leaves IDLE tabs unhealed.
 Epoch checks ride sync traffic, and a static page after an SW restart
