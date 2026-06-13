@@ -407,6 +407,35 @@ initLabelSync({
   republishAll: (reason) => republishAllGrammar(reason),
 });
 
+// Confirm-rejection handler (epoch-handshake Phase 4, review bug #5): the SW
+// pool arbitrated these codewords AWAY from this frame — another frame won
+// the release-vs-confirm race, or the pool no longer knows the string (stale
+// alphabet). The holding wrapper must drop the codeword WITHOUT releaseLabel:
+// a RELEASE_LABELS here would free the WINNER's assignment out from under it.
+// Retract our grammar entry, strip the wrapper back to unhinted, and let the
+// level-triggered reconcile claim it a fresh codeword.
+labelReservoir.onConfirmRejected((codewords) => {
+  let dropped = 0;
+  for (const cw of codewords) {
+    const w = store.byCodeword(cw);
+    if (!w) continue;
+    if (hasSent(cw)) queueDelete(cw);
+    w.scanned.codeword = '';
+    w.label = null;
+    w.grammarReady = false;
+    if (w.hint) {
+      w.hint.remove();
+      w.hint = null;
+    }
+    dropped++;
+  }
+  bkLog('BK_CONFIRM_REJECTED', { codewords: codewords.length, dropped });
+  if (dropped > 0) {
+    reconcile();
+    scheduleSync('confirm_rejected');
+  }
+});
+
 let activeCategory: Category | null = null;
 let lastActivatedElement: Element | null = null;
 const MAX_BADGE_COUNT = 676; // No artificial cap; word pairs for >26

@@ -686,21 +686,30 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
 
   if (message.type === 'CONFIRM_LABELS') {
     // Sent by the content script's reservoir after `claim()` actually hands
-    // codewords to wrappers. Promotes the labels from reserved (pre-allocated
-    // to this frame's reservoir) to assigned (wrapper-confirmed, routable).
-    // Unconfirmed reserved labels are NOT routable — the SW falls back to
-    // broadcasting actions to all frames so iframe reservoirs holding
+    // codewords to wrappers. An arbitrated EXCHANGE (review bug #5): promotes
+    // reserved → assigned, directly acquires from free (the released-then-
+    // locally-reclaimed case the old fire-and-forget silently dropped), and
+    // answers `rejected` for codewords another frame won so the sender drops
+    // them. Unconfirmed reserved labels remain NOT routable — the SW falls
+    // back to broadcasting actions to all frames so iframe reservoirs holding
     // unused codewords don't capture activations meant for a sibling
     // frame's wrapper. See docs/completed/DESIGN_ELEMENT_IDENTITY_REGISTRY.md
     // and the QuickBase `fine jury` failure 2026-06-05T17:18:37.
     const tabId = _sender.tab?.id;
     const frameId = _sender.frameId;
-    if (typeof tabId !== 'number' || typeof frameId !== 'number') return false;
-    if (!Array.isArray(message.labels)) return false;
-    confirmLabels(tabId, frameId, message.labels).catch(err => {
-      console.warn('[BranchKit SW] CONFIRM_LABELS error:', err);
-    });
-    return false;
+    if (typeof tabId !== 'number' || typeof frameId !== 'number' || !Array.isArray(message.labels)) {
+      sendResponse({ rejected: [] });
+      return false;
+    }
+    confirmLabels(tabId, frameId, message.labels)
+      .then(result => sendResponse(result))
+      .catch(err => {
+        console.warn('[BranchKit SW] CONFIRM_LABELS error:', err);
+        // Transient error: don't reject — rejecting nukes wrappers; the
+        // codewords stay locally held and a later confirm re-arbitrates.
+        sendResponse({ rejected: [] });
+      });
+    return true;
   }
 
   if (message.type === 'REMEMBER_CODEWORDS') {

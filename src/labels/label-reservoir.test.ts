@@ -74,6 +74,56 @@ describe('LabelReservoir.claim', () => {
   });
 });
 
+describe('LabelReservoir confirm exchange (Phase 4 / review bug #5)', () => {
+  it('sends CONFIRM_LABELS for granted codewords as an exchange', async () => {
+    labelReservoir._seedForTests(['arch bake', 'cave dove']);
+    labelReservoir.onConfirmRejected(vi.fn());
+    sendMessageMock.mockResolvedValue({ rejected: [] });
+    labelReservoir.claim(2);
+    const confirmCall = sendMessageMock.mock.calls.find(([m]) => m.type === 'CONFIRM_LABELS');
+    expect(confirmCall?.[0].labels).toEqual(['arch bake', 'cave dove']);
+  });
+
+  it('purges rejected codewords and hands them to the rejection handler', async () => {
+    labelReservoir._seedForTests(['arch bake', 'cave dove']);
+    const handler = vi.fn();
+    labelReservoir.onConfirmRejected(handler);
+    sendMessageMock.mockImplementation((m: { type: string }) =>
+      Promise.resolve(m.type === 'CONFIRM_LABELS' ? { rejected: ['arch bake'] } : undefined));
+
+    labelReservoir.claim(2);
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledWith(['arch bake']));
+
+    // Outstanding purged: a later refill re-issuing the rejected codeword is
+    // no longer dedup-blocked (it isn't ours anymore — if the SW grants it
+    // again later, that's a legitimate fresh grant). Without the purge, the
+    // refill-dedup against `outstanding` would drop it and free would stay 0.
+    sendMessageMock.mockImplementation((m: { type: string }) =>
+      Promise.resolve(m.type === 'CLAIM_LABELS' ? { labels: ['arch bake'] } : { rejected: [] }));
+    labelReservoir.claim(1); // empty reservoir → grants nothing, arms a refill
+    await vi.waitFor(() => expect(labelReservoir.stats().free).toBe(1));
+  });
+
+  it('a rejection with no registered handler does not throw', async () => {
+    labelReservoir._seedForTests(['arch bake']);
+    // Simulate no handler (fresh module state would have none).
+    labelReservoir.onConfirmRejected(undefined as unknown as (l: string[]) => void);
+    sendMessageMock.mockResolvedValue({ rejected: ['arch bake'] });
+    labelReservoir.claim(1);
+    await new Promise((r) => setTimeout(r, 0)); // let the .then settle
+  });
+
+  it('a malformed / absent confirm response is ignored', async () => {
+    labelReservoir._seedForTests(['arch bake']);
+    const handler = vi.fn();
+    labelReservoir.onConfirmRejected(handler);
+    sendMessageMock.mockResolvedValue(undefined);
+    labelReservoir.claim(1);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(handler).not.toHaveBeenCalled();
+  });
+});
+
 describe('LabelReservoir.release', () => {
   it('returns labels to the front of the reservoir (sticky semantics)', () => {
     labelReservoir._seedForTests(['c', 'd']);

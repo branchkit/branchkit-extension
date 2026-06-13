@@ -217,35 +217,65 @@ export async function claimLabels(
 }
 
 /**
- * Promote labels from this frame's reservoir-reservation to wrapper-assigned.
- * Called by the extension's reservoir after `claim()` actually hands codewords
- * to wrappers (vs. just refilling the local cache). Only labels whose
- * `stack.reserved[label] === frameId` are promoted; mismatches are silently
- * ignored (the wrapper got the codeword from somewhere else, or the SW already
- * reassigned it via a stale path).
+ * Confirm that wrappers in `frameId` now hold `labels` — an ARBITRATED
+ * exchange (review bug #5 / epoch-handshake Phase 4), not a silent promote.
+ * Called by the extension's reservoir after `claim()` actually hands
+ * codewords to wrappers (vs. just refilling the local cache). Per label:
+ *
+ *   - `reserved[label] === frameId` → promote to assigned (the normal path).
+ *   - `assigned[label] === frameId` → already ours; idempotent no-op.
+ *   - in `free` → ACQUIRE directly (free → assigned[frameId]). This is the
+ *     released-then-locally-reclaimed case: the frame released the codeword
+ *     (RELEASE moved it to free) and then its reservoir re-granted it from
+ *     the local cache. Pre-fix this was a silent no-op, so the pool kept the
+ *     codeword free and could hand it to ANOTHER frame while this frame's
+ *     wrapper still held it — the cross-frame duplicate the pool exists to
+ *     prevent.
+ *   - reserved/assigned to a DIFFERENT frame, or unknown to the pool (stale
+ *     alphabet string) → REJECTED. The other frame won the race; the caller
+ *     must drop the codeword locally and re-claim fresh.
  */
 export async function confirmLabels(
   tabId: number,
   frameId: number,
   labels: string[],
-): Promise<void> {
+): Promise<{ rejected: string[] }> {
   return withTabLock(tabId, async () => {
     const stack = await loadStack(tabId);
-    if (!stack) return;
+    // Pool not ready: nothing to arbitrate — treat as accepted (the frame's
+    // codewords stay locally held; routing falls back to broadcast until a
+    // later confirm lands on a live pool). Rejecting here would nuke every
+    // wrapper on a transient stack miss.
+    if (!stack) return { rejected: [] };
     ensureReservedField(stack);
 
+    const rejected: string[] = [];
     let changed = false;
     for (const label of labels) {
       if (stack.reserved[label] === frameId) {
         delete stack.reserved[label];
         stack.assigned[label] = frameId;
         changed = true;
+      } else if (stack.assigned[label] === frameId) {
+        // already ours — idempotent re-confirm
+      } else if (label in stack.reserved || label in stack.assigned) {
+        rejected.push(label); // another frame owns it
+      } else {
+        const idx = stack.free.indexOf(label);
+        if (idx !== -1) {
+          stack.free.splice(idx, 1);
+          stack.assigned[label] = frameId;
+          changed = true;
+        } else {
+          rejected.push(label); // unknown to the pool (stale alphabet etc.)
+        }
       }
     }
     if (changed) {
       await saveStack(tabId, stack);
       assignedCache.set(tabId, { ...stack.assigned });
     }
+    return { rejected };
   });
 }
 

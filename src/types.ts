@@ -195,6 +195,16 @@ export interface ClaimLabelsResponse {
   labels: string[];
 }
 
+// Response to CONFIRM_LABELS (review bug #5 / epoch-handshake Phase 4).
+// Confirm is an arbitrated exchange, not fire-and-forget: `rejected` lists
+// the codewords this frame may NOT keep — they are reserved/assigned to a
+// different frame (it won the release-vs-confirm race) or unknown to the
+// pool (stale alphabet). The frame drops them locally and re-claims fresh.
+// Empty when every label was promoted or directly acquired.
+export interface ConfirmLabelsResponse {
+  rejected: string[];
+}
+
 // --- Frame label pool ---
 
 /**

@@ -227,26 +227,85 @@ describe('label-pool', () => {
       }
     });
 
-    it('confirmLabels ignores labels reserved to a different frame', async () => {
+    it('confirmLabels rejects labels reserved to a different frame', async () => {
       // Defensive: an out-of-order or stale CONFIRM_LABELS from frame B
-      // for labels that are reserved to frame A must not steal ownership.
+      // for labels that are reserved to frame A must not steal ownership —
+      // and (Phase 4) must REPORT the rejection so frame B drops them.
       const tabId = nextTabId();
       const a = await claimLabels(tabId, 0, 3);
 
       // Frame 1 tries to confirm frame 0's reserved labels.
-      await confirmLabels(tabId, 1, a);
+      const { rejected } = await confirmLabels(tabId, 1, a);
+      expect(rejected).toEqual(a);
 
-      // Still nobody owns them — frame 0 hasn't confirmed, frame 1's
-      // confirm was silently rejected.
+      // Still nobody owns them — frame 0 hasn't confirmed.
       for (const label of a) {
         expect(await getFrameForLabel(tabId, label)).toBeNull();
       }
 
       // Frame 0's own confirm still works.
-      await confirmLabels(tabId, 0, a);
+      const ownConfirm = await confirmLabels(tabId, 0, a);
+      expect(ownConfirm.rejected).toEqual([]);
       for (const label of a) {
         expect(await getFrameForLabel(tabId, label)).toBe(0);
       }
+    });
+  });
+
+  describe('confirm exchange (epoch-handshake Phase 4 / review bug #5)', () => {
+    it('acquires a released-then-reclaimed codeword directly from free', async () => {
+      // The cross-frame duplicate setup: frame 0 releases (codeword → free),
+      // then its reservoir re-grants the codeword locally. Pre-fix the late
+      // confirm was a silent no-op, leaving the codeword in free for another
+      // frame to claim while frame 0's wrapper still held it.
+      const tabId = nextTabId();
+      const [cw] = await claimLabels(tabId, 0, 1);
+      await confirmLabels(tabId, 0, [cw]);
+      await releaseLabels(tabId, [cw]);
+
+      const { rejected } = await confirmLabels(tabId, 0, [cw]);
+      expect(rejected).toEqual([]);
+      expect(await getFrameForLabel(tabId, cw)).toBe(0);
+
+      // The pool can no longer hand it to another frame.
+      const b = await claimLabels(tabId, 1, 5);
+      expect(b).not.toContain(cw);
+    });
+
+    it('rejects a codeword another frame won in the release-vs-confirm window', async () => {
+      const tabId = nextTabId();
+      const [cw] = await claimLabels(tabId, 0, 1);
+      await confirmLabels(tabId, 0, [cw]);
+      await releaseLabels(tabId, [cw]);
+
+      // Frame 1's refill grabs it before frame 0's confirm lands (released
+      // labels unshift to the front, so a 1-slot claim returns the same one).
+      const b = await claimLabels(tabId, 1, 1);
+      expect(b[0]).toBe(cw);
+
+      // Frame 0's late confirm loses the arbitration.
+      const { rejected } = await confirmLabels(tabId, 0, [cw]);
+      expect(rejected).toEqual([cw]);
+
+      // Frame 1 confirms and owns routing — exactly one owner.
+      await confirmLabels(tabId, 1, [cw]);
+      expect(await getFrameForLabel(tabId, cw)).toBe(1);
+    });
+
+    it('rejects codewords unknown to the pool', async () => {
+      const tabId = nextTabId();
+      await claimLabels(tabId, 0, 1); // materialize the stack
+      const { rejected } = await confirmLabels(tabId, 0, ['bogus pair']);
+      expect(rejected).toEqual(['bogus pair']);
+    });
+
+    it('re-confirm of an already-assigned codeword is an accepted no-op', async () => {
+      const tabId = nextTabId();
+      const [cw] = await claimLabels(tabId, 0, 1);
+      await confirmLabels(tabId, 0, [cw]);
+      const { rejected } = await confirmLabels(tabId, 0, [cw]);
+      expect(rejected).toEqual([]);
+      expect(await getFrameForLabel(tabId, cw)).toBe(0);
     });
   });
 

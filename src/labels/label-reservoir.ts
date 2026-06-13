@@ -77,15 +77,15 @@ class LabelReservoir {
   private free: string[] = [];
   /** Codewords currently held by wrappers in this frame (granted out but not
    *  yet released). Refill dedup checks `free ∪ outstanding` so the SW
-   *  re-issuing a codeword we already handed to a wrapper can't slip past:
-   *  the SW's CONFIRM_LABELS handler is no-op when the codeword sits in
-   *  `stack.free` (because RELEASE landed before CONFIRM), so after a
-   *  release-then-local-reclaim cycle the SW thinks the codeword is free
-   *  and a later refill would dup-issue it. Tracking grants locally closes
-   *  that race without a synchronous SW round-trip. QuickBase 2026-06-05 —
-   *  6 wrappers all attached with "cap each" in 260ms, which then evicted
-   *  `each` from `browser_hints_cap_strict` and made the CE hint
-   *  unreachable. */
+   *  re-issuing a codeword we already handed to a wrapper can't slip past.
+   *  Since the Phase 4 confirm exchange, the SW acquires released-then-
+   *  reclaimed codewords straight from `stack.free` at confirm time, so the
+   *  SW-side hole this originally closed (silent no-op confirm leaving the
+   *  codeword free) is gone — but the dedup still covers the IN-FLIGHT
+   *  window: a refill response issued before our confirm landed can carry a
+   *  codeword we just granted locally. QuickBase 2026-06-05 — 6 wrappers all
+   *  attached with "cap each" in 260ms, which then evicted `each` from
+   *  `browser_hints_cap_strict` and made the CE hint unreachable. */
   private outstanding: Set<string> = new Set();
   /** Recalled codewords earmarked for a remembered fingerprint (Regime B,
    *  A3 in DESIGN_REGIME_B_RECALL.md). These sit in `free` but a fresh,
@@ -100,6 +100,35 @@ class LabelReservoir {
   /** Initial-reservation promise so concurrent ensureReady() callers
    *  await the same fetch. */
   private initialReady: Promise<void> | null = null;
+  /** Content-layer hook for confirm rejections: codewords the SW pool
+   *  arbitrated AWAY from this frame (another frame won them, or the pool
+   *  no longer knows them). The handler must make the holding wrappers drop
+   *  the codeword WITHOUT a RELEASE (we don't own it — releasing would free
+   *  the winner's assignment) and re-claim fresh. */
+  private rejectionHandler: ((codewords: string[]) => void) | null = null;
+
+  /** Register the confirm-rejection handler (content.ts, once at boot). */
+  onConfirmRejected(handler: (codewords: string[]) => void): void {
+    this.rejectionHandler = handler;
+  }
+
+  /** Process a CONFIRM_LABELS response: purge rejected codewords from every
+   *  local structure, then hand them to the content layer. */
+  private handleConfirmResponse(resp: { rejected?: unknown } | undefined): void {
+    const rejected = Array.isArray(resp?.rejected)
+      ? (resp.rejected as unknown[]).filter((l): l is string => typeof l === 'string' && l.length > 0)
+      : [];
+    if (rejected.length === 0) return;
+    const rejectedSet = new Set(rejected);
+    for (const l of rejected) {
+      this.outstanding.delete(l);
+      this.reserved.delete(l);
+    }
+    // Defensive — a rejected codeword shouldn't sit in `free` (it was just
+    // granted out), but a racing release could have returned it.
+    this.free = this.free.filter(l => !rejectedSet.has(l));
+    this.rejectionHandler?.(rejected);
+  }
 
   /**
    * Kick off the initial reservation if we don't have one yet. Idempotent;
@@ -202,20 +231,25 @@ class LabelReservoir {
     // reservoir-reserved. The promotion from reserved → assigned makes them
     // routable for voice activations; without it, the SW's getFrameForLabel
     // would return null and actions would fall through to the broadcast
-    // fallback. Fire-and-forget — if the SW is temporarily unreachable
-    // (orphan content script, SW restart mid-session), the next claim
-    // burst's confirm catches up, and the worst-case interim is the
-    // broadcast fallback handles the action anyway.
+    // fallback. The confirm is an ARBITRATED EXCHANGE (review bug #5 /
+    // epoch-handshake Phase 4): the SW also acquires released-then-reclaimed
+    // codewords straight from its free list, and answers `rejected` for any
+    // codeword a different frame won in the release-vs-confirm window — we
+    // must drop those (see handleConfirmResponse). Transport failure stays
+    // best-effort: the next claim burst's confirm re-arbitrates, and the
+    // broadcast fallback handles activations in the interim.
     const claimed = result.filter(l => l !== '');
     if (claimed.length > 0) {
       // Track outstanding grants so refill-dedup can reject SW-side re-issues
-      // of a codeword we already have on a wrapper. See the `outstanding`
-      // field comment for why the SW's CONFIRM is racey.
+      // of a codeword we already have on a wrapper during the in-flight
+      // confirm window. See the `outstanding` field comment.
       for (const l of claimed) this.outstanding.add(l);
       try {
-        chrome.runtime.sendMessage({ type: 'CONFIRM_LABELS', labels: claimed }).catch(() => {
-          // SW asleep / extension reload — best-effort.
-        });
+        chrome.runtime.sendMessage({ type: 'CONFIRM_LABELS', labels: claimed })
+          .then((resp: { rejected?: unknown } | undefined) => this.handleConfirmResponse(resp))
+          .catch(() => {
+            // SW asleep / extension reload — best-effort.
+          });
       } catch {
         // chrome.runtime missing (orphan post-reload) — same fallback.
       }
@@ -313,17 +347,13 @@ class LabelReservoir {
       const resp = await chrome.runtime.sendMessage({ type: 'CLAIM_LABELS', count, preferred });
       if (Array.isArray(resp?.labels)) {
         // Dedup against `free ∪ outstanding`. The SW can re-issue a
-        // codeword we already have outstanding on a wrapper when a
-        // release-then-local-reclaim race nukes the CONFIRM_LABELS
-        // handler's reserved-match: RELEASE moves SW state to free, the
-        // local reservoir hands the codeword to a new wrapper, and the
-        // CONFIRM that follows is a no-op (no reserved entry to promote).
-        // The SW then keeps the codeword in `stack.free` and a later
-        // refill picks it up despite our local wrapper still holding it.
-        // Dedup against `free` alone misses this case because the
-        // codeword isn't in `free` while a wrapper holds it — it's in
-        // `outstanding`. QuickBase 2026-06-05 — 6 wrappers all attached
-        // with "cap each" in 260ms.
+        // codeword we already have outstanding on a wrapper while our
+        // CONFIRM for it is still in flight (the confirm exchange acquires
+        // it from `stack.free` only once it lands — a refill processed in
+        // that window can pick it up). Dedup against `free` alone misses
+        // this case because the codeword isn't in `free` while a wrapper
+        // holds it — it's in `outstanding`. QuickBase 2026-06-05 — 6
+        // wrappers all attached with "cap each" in 260ms.
         const seen = new Set(this.free);
         for (const l of this.outstanding) seen.add(l);
         for (const l of resp.labels) {
