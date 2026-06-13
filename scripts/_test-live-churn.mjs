@@ -1,18 +1,28 @@
-// LIVE grammar-churn + discovery-efficacy probe for Phase 6 of
-// notes/DESIGN_HINT_LIFECYCLE_RECONCILER.md. This is NOT a committed CI
-// guardrail — it talks to the running dev actuator (localhost:21551) and reads
-// its actuator.log, so it only works on a machine with BranchKit running. It
-// briefly clobbers any active browser tab's hint grammar (multi-tab
-// last-pusher-wins). Run it deliberately, not in a suite.
+// LIVE grammar-churn + discovery-efficacy probe (originally Phase 6 of
+// notes/DESIGN_HINT_LIFECYCLE_RECONCILER.md; revived 2026-06-12 against the
+// unified-reconciler pipeline as the grammar-wire churn gate the epoch
+// handshake's verification section asks for). It talks to the running dev
+// actuator (localhost:21551) and reads its actuator.log, so it only works on
+// a machine with BranchKit running. It briefly clobbers any active browser
+// tab's hint grammar (multi-tab last-pusher-wins). Run it deliberately, not
+// in a suite.
 //
 // It answers the two LIVE gates the signed-out CI guardrails can't:
-//   (Phase 5) Does the settle-triggered reconcile spam grammar on every scroll?
-//             -> Phase A scrolls with NO new content; expect ~no grammar batches.
-//   (Phase 3b) Does the band-discovery sweep actually close a discovery gap
-//             through the real grammar path, with BOUNDED (incremental, not
-//             full-rescan) commits? -> Phase B injects gap links into an open
-//             shadow root during scroll; expect them badged via incremental
-//             commits, no `kind=scan` storm.
+//   (churn)    Does the settle-triggered reconcile spam grammar on every
+//              scroll? -> Phase A scrolls with NO new content. The strict-
+//              viewport re-push applier (content.ts applyStrictPlan) makes a
+//              flag-refresh re-Put for each wrapper that crosses the
+//              strict/band boundary — BY DESIGN, O(crossing elements) per
+//              scroll. The gate therefore allows a small bounded commit
+//              count and fails on kind=scan or wrapper-count-proportional
+//              commits (the spam signature).
+//   (efficacy) Does the band-discovery sweep close a discovery gap through
+//              the real grammar path, with BOUNDED (incremental, not
+//              full-rescan) commits? -> Phase B injects gap links into an
+//              open shadow root during scroll; expect them badged (shown
+//              badge-host count delta — the positioning re-arch writes
+//              nothing to the page DOM, so there is no per-link marker) via
+//              incremental commits, no `kind=scan` storm.
 //
 // Isolation: we snapshot the actuator.log byte length before/after and parse
 // ONLY the delta, so the user's concurrent traffic doesn't pollute the count.
@@ -105,8 +115,14 @@ console.log(`    baseline shadow badges = ${baseShadowBadges} (expect 0 — host
 
 // ---- Phase A: steady-state scroll, NO new content ----
 console.log('\n[3] Phase A — steady-state scroll burst (no new hintables)');
+const BOUNCES = 8;
+// The 80px bounce walks static-0 across the strict/band boundary, so each
+// cycle legitimately re-Puts ~1 element (flag refresh, codeword unchanged).
+// Spam would be O(total wrappers) per bounce; 2×bounces is the generous
+// ceiling that still catches it.
+const STRICT_REPUSH_ALLOWANCE = 2 * BOUNCES;
 let off = statSync(ACTUATOR_LOG).size;
-for (let i = 0; i < 8; i++) {
+for (let i = 0; i < BOUNCES; i++) {
   await page.evaluate(() => window.scrollTo(0, 80));
   await sleep(160);
   await page.evaluate(() => window.scrollTo(0, 0));
@@ -118,16 +134,20 @@ const aStats = grammarStats(a.text);
 console.log('    grammar in window:', JSON.stringify(aStats));
 if (aStats.scan > 0) {
   fail(`steady-state scroll triggered ${aStats.scan} full grammar rescans (kind=scan) — settle reconcile is re-posting grammar`);
-} else if (aStats.elemsCommitted > 0) {
-  fail(`steady-state scroll committed ${aStats.elemsCommitted} grammar elements with no new content — unexpected churn`);
+} else if (aStats.elemsCommitted > STRICT_REPUSH_ALLOWANCE) {
+  fail(`steady-state scroll committed ${aStats.elemsCommitted} grammar elements (allowance ${STRICT_REPUSH_ALLOWANCE} for strict-boundary re-pushes) — wrapper-proportional churn`);
 } else {
-  pass(`steady-state scroll caused no grammar element commits (scan=0, elements=0, skipped=${aStats.skipped})`);
+  pass(`steady-state scroll commits bounded by strict re-pushes (scan=0, elements=${aStats.elemsCommitted} ≤ ${STRICT_REPUSH_ALLOWANCE}, skipped=${aStats.skipped})`);
 }
 
 // ---- Phase B: inject discovery-gap links during scroll ----
 console.log('\n[4] Phase B — inject 6 gap links (open shadow root) across a scroll burst');
 off = a.offset;
 const GAPS = 6;
+// Badge hosts are body-mounted with zero page-DOM writes, so gap badging is
+// only observable as a shown-host count delta. Sample at scroll 0 (statics
+// in viewport) on a fixture where the gaps are the ONLY content change.
+const shownBefore = await page.evaluate(() => window.__countShownBadges());
 for (let i = 0; i < GAPS; i++) {
   await page.evaluate((id) => window.__injectGap(id), `gap-${i}`);
   await page.evaluate(() => window.scrollTo(0, 80));
@@ -138,15 +158,20 @@ for (let i = 0; i < GAPS; i++) {
 console.log('    wait 2000ms for settle debounce + idle sweep + reconcile + paint');
 await sleep(2000);
 
-const boundGaps = await page.evaluate(() => window.__countBoundGapLinks());
+const shownAfter = await page.evaluate(() => window.__countShownBadges());
 const totalGaps = await page.evaluate(() => window.__countGapLinks());
+const shadowBadgesAfter = await page.evaluate(() => window.__countShadowBadges());
+const badgedGaps = shownAfter - shownBefore;
 const b = readLogSince(off);
 const bStats = grammarStats(b.text);
-console.log(`    gap links in shadow = ${totalGaps}, badged (anchor-bound) = ${boundGaps}`);
+console.log(`    gap links in shadow = ${totalGaps}, shown hosts ${shownBefore} -> ${shownAfter} (delta ${badgedGaps})`);
 console.log('    grammar in window:', JSON.stringify(bStats));
 
-if (boundGaps < GAPS) {
-  fail(`only ${boundGaps}/${GAPS} injected gap links got badged — band-discovery sweep missed some`);
+if (shadowBadgesAfter !== 0) {
+  fail(`${shadowBadgesAfter} badge hosts inside the shadow root — hosts must be body-mounted`);
+}
+if (badgedGaps < GAPS) {
+  fail(`only ${badgedGaps}/${GAPS} injected gap links got badged — band-discovery sweep missed some`);
 } else {
   pass(`all ${GAPS} injected gap links discovered + badged (efficacy: discoveryGap -> 0)`);
 }

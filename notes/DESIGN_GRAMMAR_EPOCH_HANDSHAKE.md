@@ -435,9 +435,17 @@ fixture (timing gate). End-to-end: the three live desync repros — extension
 reload, SW kill (chrome://serviceworker-internals), bfcache back/forward —
 each must show the mismatch breadcrumb in 2a and self-heal in 2b. The
 grammar-churn discipline check rides the cooldown telemetry (zero
-mismatches in steady state). Optional rider: reviving
-`_test-live-churn.mjs` (rotted against the current plugin pipeline) would
-directly exercise this wire; it is on the harness-promotion chore list.
+mismatches in steady state). `_test-live-churn.mjs` REVIVED 2026-06-12,
+green and deterministic against the live app (A: 8 elements/8 bounces —
+exactly the strict re-pushes; B: 6/6 gaps badged, 18 elements incremental,
+zero scans). The rot was two-count and harness-side, not pipeline-deep:
+Phase A expected ZERO commits but the reconciler's strict-viewport re-push
+applier (applyStrictPlan) legitimately re-Puts boundary-crossing wrappers
+— the gate now allows O(crossings) and still fails on kind=scan or
+wrapper-proportional commits; Phase B detected badging via inline
+anchor-name on the target, which the positioning re-arch removed (badge
+hosts are body-mounted, zero page-DOM writes) — now a shown-host count
+delta on a fixture where the gaps are the only content change.
 
 ## Out of scope
 

@@ -41,16 +41,19 @@
       a.style.cssText = 'display:block;padding:12px 20px;';
       window.__sr.appendChild(a);
     };
+    // Sanity: badge hosts are body-mounted in the top document, never inside
+    // the shadow root — expect 0 always.
     window.__countShadowBadges = () =>
       window.__sr.querySelectorAll('[data-branchkit-hint]').length;
     window.__countGapLinks = () =>
       window.__sr.querySelectorAll('a[id^="gap-"]').length;
-    // How many injected gap links carry an inline anchor-name we assigned
-    // (anchor-path binding) — i.e., got a badge.
-    window.__countBoundGapLinks = () =>
-      Array.from(window.__sr.querySelectorAll('a[id^="gap-"]'))
-        .filter((a) => a.style.getPropertyValue('anchor-name').trim().startsWith('--bk-'))
-        .length;
+    // Visible badge hosts, document-wide. The positioning re-arch removed
+    // every page-DOM write (no anchor-name on the target — there is nothing
+    // on the gap link itself to inspect), so "did the gaps get badged" is a
+    // host-count DELTA across the injection on a fixture that adds nothing
+    // else: shownAfter - shownBefore === gaps injected.
+    window.__countShownBadges = () =>
+      document.querySelectorAll('[data-bk-shown]').length;
   </script>
 
   <div id="spacer"></div>
