@@ -328,6 +328,42 @@ claim+confirm one exchange. Separate wire (reservoir ↔ SW pool, not the
 grammar batch), separate risk profile — its own commits, possibly its own
 note if the reservoir reading surprises.
 
+**Phase 4 LANDED (2026-06-12). The reservoir reading DID surprise — the
+literal fold is a regression.** Assigning at CLAIM_LABELS (refill) time is
+exactly the pre-PR-6 design that the reserved/assigned split replaced:
+iframe reservoirs accumulated phantom ownership of codewords no wrapper
+used and voice routing landed there (the QuickBase `fine jury` failure,
+2026-06-05T17:18:37 — recorded in types.ts's LabelStack doc). And the
+confirm cannot ride the refill exchange either: local grants are
+synchronous and mostly don't coincide with a refill.
+
+What ships instead — **confirm becomes the arbitrated exchange**:
+- SW `confirmLabels` answers `{rejected}` per label: `reserved[frame]` →
+  promote (unchanged); `assigned[frame]` → idempotent no-op; **in `free` →
+  acquire directly** (the released-then-locally-reclaimed case that was a
+  silent no-op — the hole that left the codeword free for another frame
+  while this frame's wrapper held it); reserved/assigned to another frame
+  or unknown string → **rejected**.
+- The reservoir purges rejected codewords (outstanding/reserved/free) and
+  hands them to a content-layer hook; the holding wrapper drops the
+  codeword WITHOUT a RELEASE (releasing would free the winner's
+  assignment), retracts its grammar entry (`queueDelete` +
+  `scheduleSync('confirm_rejected')`, breadcrumb `BK_CONFIRM_REJECTED`),
+  and the level-triggered reconcile claims it a fresh one.
+- Net: the pool converges to exactly one owner per codeword under every
+  interleaving — first-confirmer wins, the loser yields deterministically.
+  The cross-frame duplicate class (review bug #5) is closed at the
+  arbitration point rather than narrowed by dedup sets. The reservoir's
+  `outstanding` dedup stays: it still covers the in-flight-confirm window
+  against a concurrently-processed refill.
+
+Verification: 776 unit tests (new: pool acquire-from-free, cross-frame
+reject + single-owner convergence, unknown-string reject, idempotent
+re-confirm; reservoir confirm-exchange send, rejected purge + handler
+hand-off, outstanding-purge-enables-refill, malformed-response no-op).
+Wedge green. Live bfcache gate green against the new exchange (badges
+painting = confirms succeeding end-to-end).
+
 ## Cross-repo shape
 
 Phases 1+ touch `plugins/browser` (Go, closed) and the extension. Additive
