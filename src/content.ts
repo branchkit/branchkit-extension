@@ -108,6 +108,7 @@ import { loadConfig, getDisplayMode, getHintVisibility, getHintsShown, setHintsS
 import { matchesCombo } from './activate/key-combo';
 import {
   grammarEpochStats,
+  probeGrammarEpoch,
   initLabelSync,
   queuePut,
   dropPendingPut,
@@ -2039,6 +2040,14 @@ window.addEventListener('pageshow', (e) => {
 // session_id so its `ensureFrameSession` clears stale per-prefix entries;
 // then re-queue every live, hintable wrapper for the next sync.
 function republishAllGrammar(reason: string): void {
+  // Phase 3a trigger-redundancy probe (decision 4): read the plugin's
+  // pre-republish epoch so the soak can answer "would the handshake have
+  // caught this firing?" per enumerated trigger. epoch_mismatch IS the
+  // handshake acting — probing it would be circular, so it's excluded.
+  // Fire-and-forget: the heal must not wait a round-trip on telemetry, and
+  // the probe snapshots the shadow synchronously before rotateSession
+  // clears it.
+  if (reason !== 'epoch_mismatch') void probeGrammarEpoch(reason);
   rotateSession();
   let requeued = 0;
   for (const w of store.all) {
@@ -2404,6 +2413,12 @@ function republishForActivation(reason: string): void {
   // re-push, and reconciliation scan entirely so a refocus doesn't wake a
   // full DOM scan in every empty subframe of the page.
   if (!store.all.some(w => w.scanned.codeword)) return;
+  // Phase 3a trigger-redundancy probe — the reactivate push is the third
+  // enumerated trigger (reasons here: sse_connect from the plugin,
+  // tab_activated from the background). After the early-out so empty
+  // subframes don't probe on every refocus; before rotateSession for the
+  // same pre-rotation snapshot reasons as republishAllGrammar.
+  void probeGrammarEpoch(reason);
   // Rotate to a fresh session id so the re-push rebuilds the plugin's per-frame
   // view cleanly. rotateSession also resets the delta-sync mirror, so every
   // live codeword needs re-Putting below.

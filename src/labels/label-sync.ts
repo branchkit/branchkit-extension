@@ -400,6 +400,67 @@ function checkGrammarEpoch(resp: GrammarBatchResponse, reason: string): void {
   deps.republishAll('epoch_mismatch');
 }
 
+// --- Phase 3a: trigger-redundancy probe (DESIGN_GRAMMAR_EPOCH_HANDSHAKE.md
+// decision 4) ---
+//
+// Detect-only telemetry for trigger retirement: at each enumerated
+// full-republish trigger firing, read the plugin's PRE-republish epoch and
+// record whether the handshake alone would have seen this divergence
+// (`diverged`) and whether the 2a quiescence gate would have let a check run
+// at that instant (`busy`). An empty incremental batch is a pure read — the
+// plugin applies nothing and answers with its current epoch (same shape the
+// pure-delete push already posts, minus the deletes).
+//
+// The probe is its own read, NOT a sync participant: it bypasses postBatch
+// (no pendingDeleteCodewords piggyback, no inFlightBatches participation —
+// the regular traffic must not see the probe as "busy"), never feeds
+// checkGrammarEpoch, and never republishes. Callers fire it BEFORE
+// rotateSession, so the shadow snapshot below still describes the
+// pre-republish state; the comparison runs against that snapshot when the
+// response lands (rotation will have cleared the live set by then).
+//
+// `diverged: null` = the epoch was unreadable (transport failure, wholesale
+// refusal, or a pre-handshake plugin build); the firing still gets its line
+// so per-firing counts stay honest.
+export function probeGrammarEpoch(reason: string): Promise<void> {
+  const busy = inFlightBatches > 0 || pendingPuts.size > 0 || pendingDeleteCodewords.length > 0;
+  const shadowCount = sentCodewords.size;
+  const shadowHash = epochHashOf(sentCodewords);
+  const request: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'> = {
+    session_id: sessionId,
+    batch_index: 0,
+    is_final: true,
+    kind: 'incremental',
+    conn_id: '', // stamped by the background SW
+    hint_visibility: getHintVisibility(),
+    app_id: '',
+    table_id: '',
+    elements: [],
+  };
+  return (async () => {
+    let diverged: boolean | null = null;
+    let pluginCount: number | null = null;
+    let result = 'transport_failed';
+    try {
+      const resp: GrammarBatchResponse =
+        await chrome.runtime.sendMessage({ type: 'GRAMMAR_BATCH', request } as Message);
+      result = resp.result;
+      const remote = (resp.result === 'ok' || resp.result === 'stored') ? resp.epoch : undefined;
+      if (remote) {
+        diverged = remote.count !== shadowCount || remote.hash !== shadowHash;
+        pluginCount = remote.count;
+      }
+    } catch {
+      // SW unreachable — diverged stays null.
+    }
+    bkLog('BK_TRIGGER_PROBE', {
+      reason, diverged, busy, pluginCount, shadowCount, result,
+      url: trimUrlForLog(window.location.href),
+      frame: window === window.top ? 'top' : 'iframe',
+    });
+  })();
+}
+
 /**
  * Debounced entry point for every grammar-relevant change (MO mutations,
  * IT codeword claims, finalize-sweep detaches, bfcache restore). Coalesces

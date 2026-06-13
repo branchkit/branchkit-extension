@@ -351,3 +351,106 @@ describe('grammar epoch 2b loop guards (cap + reset)', () => {
     expect(republishAll).toHaveBeenCalledTimes(4);
   });
 });
+
+import { probeGrammarEpoch } from './label-sync';
+
+describe('grammar epoch phase 3a trigger-redundancy probe', () => {
+  // Detect-only read fired at each enumerated trigger BEFORE rotateSession:
+  // one empty batch, a BK_TRIGGER_PROBE breadcrumb, and nothing else — no
+  // delete drain, no epochStats participation, never a republish.
+  let store: WrapperStore;
+  let sendMessage: ReturnType<typeof vi.fn>;
+  let republishAll: ReturnType<typeof vi.fn<(reason: string) => void>>;
+  let nextResp: Resp & { epoch?: { count: number; hash: string } };
+  let rejectBatch: boolean;
+
+  const batchCalls = () =>
+    sendMessage.mock.calls.filter((c) => c[0]?.type === 'GRAMMAR_BATCH');
+  const probeLogs = () =>
+    sendMessage.mock.calls
+      .filter((c) => c[0]?.type === 'PLUGIN_DEBUG_LOG' && c[0]?.tag === 'BK_TRIGGER_PROBE')
+      .map((c) => c[0].data);
+
+  beforeEach(() => {
+    setAlphabet(ALPHABET);
+    store = new WrapperStore();
+    rejectBatch = false;
+    republishAll = vi.fn<(reason: string) => void>();
+    sendMessage = vi.fn((msg: { type: string }) => {
+      if (msg.type !== 'GRAMMAR_BATCH') return Promise.resolve(undefined);
+      if (rejectBatch) return Promise.reject(new Error('sw unreachable'));
+      return Promise.resolve(nextResp);
+    });
+    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+    initLabelSync({
+      store,
+      detachWrapper: vi.fn(),
+      reconcile: vi.fn(),
+      isHintsVisible: () => false,
+      republishAll,
+    });
+    rotateSession();
+    resetGrammarEpochActForTest();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    document.body.innerHTML = '';
+  });
+
+  it('matching plugin epoch logs diverged:false busy:false on an empty batch', async () => {
+    markSent('arch');
+    nextResp = { ...ok([]), epoch: { count: 1, hash: epochHashOf(['arch']) } };
+    await probeGrammarEpoch('sw_restart_resync');
+
+    expect(batchCalls()).toHaveLength(1);
+    const req = batchCalls()[0][0].request;
+    expect(req.elements).toEqual([]);
+    expect(req.delete_codewords).toBeUndefined();
+
+    expect(probeLogs()).toEqual([expect.objectContaining({
+      reason: 'sw_restart_resync', diverged: false, busy: false,
+      pluginCount: 1, shadowCount: 1,
+    })]);
+  });
+
+  it('diverged epoch logs diverged:true, reflects busy, and drains nothing', async () => {
+    markSent('arch');
+    queueDelete('zinc'); // pending delete → the quiescence gate would skip ⇒ busy
+    nextResp = { ...ok([]), epoch: { count: 0, hash: epochHashOf([]) } };
+    const statsBefore = grammarEpochStats();
+    await probeGrammarEpoch('bfcache_restore');
+
+    expect(probeLogs()).toEqual([expect.objectContaining({
+      reason: 'bfcache_restore', diverged: true, busy: true,
+      pluginCount: 0, shadowCount: 1,
+    })]);
+    // Its own read, not a sync: the queued delete must not ride the probe.
+    expect(batchCalls()[0][0].request.delete_codewords).toBeUndefined();
+    expect(hasPendingDeletes()).toBe(true);
+    // Never a mismatch-act path: no stats, no republish.
+    const statsAfter = grammarEpochStats();
+    expect(statsAfter.checks).toBe(statsBefore.checks);
+    expect(statsAfter.mismatches).toBe(statsBefore.mismatches);
+    expect(republishAll).not.toHaveBeenCalled();
+  });
+
+  it('wholesale refusal logs diverged:null with the result attached', async () => {
+    markSent('arch');
+    nextResp = calibrationActive();
+    await probeGrammarEpoch('sse_connect');
+    expect(probeLogs()).toEqual([expect.objectContaining({
+      reason: 'sse_connect', diverged: null, busy: false, pluginCount: null,
+      result: 'calibration_active',
+    })]);
+  });
+
+  it('transport failure still logs the firing, diverged:null', async () => {
+    rejectBatch = true;
+    await probeGrammarEpoch('tab_activated');
+    expect(probeLogs()).toEqual([expect.objectContaining({
+      reason: 'tab_activated', diverged: null, result: 'transport_failed',
+    })]);
+    expect(republishAll).not.toHaveBeenCalled();
+  });
+});
