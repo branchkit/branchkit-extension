@@ -3,8 +3,11 @@
 Date: 2026-06-12
 Status: Phases 0-2b IMPLEMENTED 2026-06-12 (2b landed in the follow-up
 session after the dual-CS race closed — see "Phase 2b LANDED" below).
-Remaining: 2b soak telemetry, then Phase 3 (trigger retirement on
-evidence) and Phase 4 (CONFIRM fold).
+Phase 3a (trigger-redundancy probe, detect-only) IMPLEMENTED 2026-06-12 —
+see "Phase 3a LANDED" below. Phase 4 LANDED 2026-06-12 (confirm became the
+arbitrated exchange). Remaining: 2b/3a soak telemetry, then 3b (trigger
+retirement on evidence — gated on the probe data AND an answer to the
+idle-tab healing question recorded under Phase 3a).
 Earlier status trail: Phases 0-2a same day. Phase 0 was already done by
 parallel sessions (calibration refusal handling + evicted-field deletion).
 Phase 1 live (plugin emits epoch, golden vectors pinned both sides, epoch on
@@ -319,6 +322,59 @@ compare on final-chunk responses; mismatch → breadcrumb
 behind the cooldown/cap. The three enumerated triggers stay.
 
 **Phase 3 — retire redundant triggers.** Evidence-driven per decision 4.
+Split into 3a (measure) and 3b (act):
+
+**Phase 3a LANDED (2026-06-12) — trigger-redundancy probe, detect-only.**
+At each enumerated trigger firing (`republishAllGrammar` reasons
+`sw_restart_resync` / `bfcache_restore`, plus the `reactivate` push handler
+`republishForActivation` — reasons `sse_connect` / `tab_activated`), BEFORE
+the session rotates, the CS probes the plugin's epoch with an empty
+incremental batch (a pure read — same shape as the pure-delete push, minus
+the deletes) and logs `BK_TRIGGER_PROBE {reason, diverged, busy, ...}`:
+- `diverged` — plugin epoch vs the pre-rotation `sentCodewords` shadow
+  (null when the epoch was unreadable: transport failure / refusal);
+- `busy` — the 2a quiescence-gate state at that instant (in-flight batch,
+  pending puts, or pending deletes).
+This answers decision 4's question per firing: a `diverged:true` firing is
+one the handshake would also have caught (eventually — see the latency
+caveat below); `diverged:false` means the trigger republished a grammar
+that was already converged (pure redundancy); `busy` shows whether a
+handshake check could even have run at that moment. The probe is its own
+read: it bypasses postBatch (no delete piggyback, no inFlightBatches
+participation), never feeds `checkGrammarEpoch`, and emits no republishes.
+`republishForActivation`'s no-codewords early-out still applies — empty
+subframes don't probe on every refocus. `epoch_mismatch` republishes are
+excluded (probing the handshake's own act is circular).
+
+Verified: tsc + 780 unit tests (new: empty-batch shape + no delete drain,
+diverged true/false/null, busy reflection, no stats/no republish). Wedge
+green. Live: `scripts/_test-trigger-probe-live.mjs` (tracked) drives the
+tab-switch reactivate and caught the first organic probe line —
+`{reason: tab_activated, diverged: false, busy: false, 50/50}`: that
+firing republished an already-converged grammar (the tab-switch wipe fix
+b73d9a2 de-projects instead of wiping, so switch-back holds no
+divergence) — exactly the per-firing redundancy evidence 3b needs, one
+data point in.
+
+HARNESS CONFOUND, recorded for the verification ledger: Playwright's
+Firefox build DISABLES BFCache outright (playwright.cfg "Disable BFCache
+in parent process… also separately in content via docShell property"), so
+`_test-epoch-live-repros.mjs`'s bfcache leg cold-boots a fresh CS on
+goBack and `bfcache_restore` can never fire there — that leg has always
+been a plain back-nav test (its asserts pass either way; the 2b
+"bfcache back/forward green" should be read accordingly). bfcache_restore
+and sw_restart_resync probe coverage comes from the real-Firefox soak,
+where both fire organically (browser.log shows organic bfcache_restore
+firings 2026-06-11).
+
+**Phase 3b — retirement (NOT implemented; gated on soak).** Open question
+recorded ahead of the data: retiring triggers leaves IDLE tabs unhealed.
+Epoch checks ride sync traffic, and a static page after an SW restart
+generates none — the divergence sits voice-dead until the user scrolls or
+mutates the page. Retirement evidence therefore needs the probe data AND
+an answer for idle-tab latency. Likely shapes: keep the triggers demoted
+to comments, or a low-cadence idle epoch heartbeat (an empty-batch probe
+is exactly that read). Design discussion after soak.
 
 **Phase 4 — fold CONFIRM into the claim exchange (review bug #5).**
 CONFIRM_LABELS is fire-and-forget after CLAIM, so a RELEASE racing ahead
