@@ -425,6 +425,9 @@ before anything is pushed.
    observers, the shadow-discovery paths). Render is *already* decoupled — badges
    paint via the IntersectionTracker + reconcile (viewport-driven), not per-attach
    — so the doc's "badge-manager subscribes to deltas" doesn't fit and was dropped.
+   (The render reaction's actual home — an injectable settle engine over the store
+   read-model that makes the badge lifecycle unit-testable without Playwright — is
+   designed in notes/DESIGN_SETTLE_ENGINE_EXTRACTION.md.)
    What landed: `content.ts` wires `store.subscribe(d => if attached|detached →
    schedulePushGrammar())`, and the ten lifecycle-mutation sync calls were deleted
    across content.ts / mutation-source / limbo / visibility-tracker. The
