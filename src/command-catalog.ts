@@ -126,36 +126,32 @@ export const COMMAND_BY_ID: ReadonlyMap<string, CommandMeta> = new Map(
   COMMAND_CATALOG.map((c) => [c.id, c]),
 );
 
-// The shipping keybinds. This is the source of truth the registry is built
-// from; the editor edits a copy of it. Comments show the keys as a user types
-// them; the tokens are canonical combos (Shift+F → "shift+KeyF", "gg" → two
-// KeyG presses, "/" → "Slash").
+// The shipping keybinds — one binding per command, preferring the form that
+// works in every mode. While hints are visible (always-mode) bare letters are
+// codeword input, so a Shift/modifier chord is the always-mode form and is
+// strictly more robust than the bare key (which only fires with hints hidden);
+// we ship the robust one. The editor groups bindings under each command and
+// auto-tags context, so a user can ADD a bare key (e.g. plain J) as a
+// hidden-only convenience — it's just opt-in rather than a default.
+//
+// A few commands have no always-mode form and stay bare/hidden-only: horizontal
+// scroll (Shift+H/L are tabs), the `cs` sequence, `/` find, and find-next.
+// Comments show the keys as typed; tokens are canonical combos.
 export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   { keys: 'shift+KeyF', command: 'show_hints_newtab' }, // Shift+F (show, new-tab armed)
-  { keys: 'ctrl+KeyS', command: 'toggle_hints' }, // Ctrl+S — show/hide (overrides save-page, leaves Ctrl+F find free)
-  { keys: 'KeyJ', command: 'scroll_down' },
-  { keys: 'KeyK', command: 'scroll_up' },
-  { keys: 'KeyD', command: 'scroll_half_down' },
-  { keys: 'KeyU', command: 'scroll_half_up' },
-  // Shift forms of the scroll commands. While hints are visible (always-mode),
-  // bare letters are eaten by the codeword filter, so Shift is the always-mode
-  // scroll form; these also fire when hints are hidden, so Shift scrolls
-  // regardless of mode. `gg` (two bare g's) can't survive always-mode and has
-  // no Shift sequence (Shift+G alone is bottom), so top gets its own Shift+T.
-  // (Horizontal scroll has no Shift form: Shift+H/L are tabs.)
+  { keys: 'ctrl+KeyS', command: 'toggle_hints' }, // Ctrl+S — show/hide (leaves Ctrl+F find free)
   { keys: 'shift+KeyJ', command: 'scroll_down' },
   { keys: 'shift+KeyK', command: 'scroll_up' },
   { keys: 'shift+KeyD', command: 'scroll_half_down' },
   { keys: 'shift+KeyU', command: 'scroll_half_up' },
-  { keys: 'KeyG KeyG', command: 'scroll_top' }, // gg
-  { keys: 'shift+KeyG', command: 'scroll_bottom' }, // G
-  { keys: 'shift+KeyT', command: 'scroll_top' }, // Shift+T — always-mode top
-  { keys: 'KeyH', command: 'scroll_left' },
-  { keys: 'KeyL', command: 'scroll_right' },
-  { keys: 'KeyC KeyS', command: 'cycle_scroll_target' }, // cs
-  { keys: 'Slash', command: 'find_open' }, // /
-  { keys: 'KeyN', command: 'find_next' },
-  { keys: 'shift+KeyN', command: 'find_previous' }, // N
+  { keys: 'shift+KeyT', command: 'scroll_top' }, // Shift+T (gg has no always-mode form)
+  { keys: 'shift+KeyG', command: 'scroll_bottom' }, // Shift+G
+  { keys: 'KeyH', command: 'scroll_left' }, // hidden-only (Shift+H is previous-tab)
+  { keys: 'KeyL', command: 'scroll_right' }, // hidden-only (Shift+L is next-tab)
+  { keys: 'KeyC KeyS', command: 'cycle_scroll_target' }, // cs — hidden-only
+  { keys: 'Slash', command: 'find_open' }, // / — hidden-only
+  { keys: 'KeyN', command: 'find_next' }, // hidden-only
+  { keys: 'shift+KeyN', command: 'find_previous' }, // Shift+N
   { keys: 'shift+KeyH', command: 'previous_tab' }, // Shift+H
   { keys: 'shift+KeyL', command: 'next_tab' }, // Shift+L
 ];

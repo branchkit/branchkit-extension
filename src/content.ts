@@ -794,15 +794,13 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
 // registry.add calls) is what lets the options-page editor rebuild bindings
 // live via registry.replaceAll — see notes/DESIGN_KEYMAP_CONFIG.md.
 //
-// The default set, for reference: `F` shows hints with new-tab activation
-// armed; j/k/d/u/gg/G/h/l scroll, with Shift+J/K/D/U/T duplicating the
-// vertical scrolls for always-mode (bare letters are codeword input while
-// hints are painted, so Shift is the always-mode scroll form); `cs` cycles the
-// scroll target; `/`/n/N drive find-in-page; Shift+H/L cycle tabs. Shift+letter
-// and modifier chords route to the command path even in always-visible hints
-// mode (a Shift+letter isn't eaten by the codeword filter, see keyboard.ts).
-// Hint visibility still toggles via the configurable Ctrl/Alt/Meta chord in the
-// keydown listener below.
+// The default set, for reference: one binding per command, preferring the
+// always-mode form (Shift/modifier chords route to commands even with hints
+// painted; bare letters are codeword input then, so they'd be eaten). Shift+F
+// shows (new-tab armed); Shift+J/K/D/U/T/G scroll; Shift+H/L cycle tabs; Ctrl+S
+// toggles hints. A few inherently-bare, hidden-only binds remain (h/l
+// horizontal scroll, `cs`, `/`, `n`). Users add extra binds (e.g. plain j) via
+// the options editor.
 function buildRegistryFromKeymap(entries: readonly KeymapEntry[]): void {
   registry.replaceAll(
     entries.map((e) => ({ keys: e.keys, action: e.command, params: e.params })),
