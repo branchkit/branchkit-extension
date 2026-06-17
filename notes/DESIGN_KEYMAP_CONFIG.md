@@ -76,6 +76,7 @@ Touched: `src/dispatcher.ts` (`CommandRegistry.replaceAll`, canonical match), `s
 - **Sequences** (`gg`, future multi-key) generalize `key-combo` from single-combo to combo-sequences — scope carefully; single-combo binds (the common case) first.
 - **Order semantics** — the registry matches first-wins + partial (timeout) for sequences; the editor's row order may matter, or we dedupe by key. Decide in Phase 2.
 - **Param UI breadth** — only 3 mappable param commands today; keep the schema renderer minimal (number + enum) and grow as commands gain params.
+- **`event.code` is physical-position, not character (Phase 2 implication).** Command bindings now match the physical key (`KeyJ` = the QWERTY-J position), so on non-QWERTY layouts (Dvorak/AZERTY) the `hjkl`/`F` command keys follow positions, not printed letters. QWERTY is unaffected; the codeword-typing filter still uses `event.key` (you type what you see). This matches the unified-token design and the hide chord's existing behavior, and the editor's key-capture means a non-QWERTY user can rebind. A per-binding character-vs-physical nuance (VS Code-style) is deliberately out of scope — revisit only if international users report it.
 
 ## Non-goals
 Voice command binding (actuator-side), OS hotkeys (Swift shell), and arbitrary-JS commands (Surfingkeys-style) are out — this is a fixed-vocabulary, GUI-bound keyboard keymap.

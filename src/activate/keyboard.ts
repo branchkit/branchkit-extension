@@ -7,6 +7,7 @@
  */
 
 import { ActionDispatcher, CommandRegistry } from '../dispatcher';
+import { comboFromEvent, serializeCombo } from './key-combo';
 
 export type KeyMode = 'normal' | 'insert' | 'hint';
 
@@ -89,14 +90,24 @@ export class KeyHandler {
   }
 
   handleKeyDown(e: KeyboardEvent): boolean {
-    // Always let modifier combos through (Cmd+C, Ctrl+V, etc.)
-    if (e.metaKey || e.ctrlKey || e.altKey) return false;
-
     // Insert mode: pass through. Only the explicitly-entered `hint` mode (the
     // user pressed `f`) intercepts inside an editable field; passive typing
     // driven by always-visible hints must NOT hijack keystrokes meant for a
-    // search box.
+    // search box. Checked first so it also yields modifier chords to the field
+    // (Ctrl+A select-all, Cmd+C copy, etc.).
     if (this.mode !== 'hint' && isInsertMode()) return false;
+
+    // A real-modifier combo (Ctrl/Alt/Meta) is never codeword / filter / text
+    // input — route it straight to the command registry so user-bound chords
+    // fire, and unbound ones return 'none' → fall through to native shortcuts
+    // and other extensions (Ctrl+T, Cmd+V, Vimium-C's Ctrl+H, …). Shift alone
+    // is NOT a real modifier here: Shift+letter is still a normal binding token
+    // (handled below / by the registry). The configurable hide chord (Ctrl+F)
+    // and the dev-snapshot chord (Ctrl+Alt+A) are intercepted upstream in
+    // content.ts before this runs.
+    if (e.ctrlKey || e.altKey || e.metaKey) {
+      return this.handleNormalKey(e);
+    }
 
     // Hints are typeable in explicit hint mode OR whenever hints are painted
     // (always-mode, no `f` needed). Routing within, in priority order:
@@ -109,11 +120,12 @@ export class KeyHandler {
       // 2. A Shift+letter with NO codeword in progress is a command "outlier":
       //    route it to the command path so uppercase keybinds work in
       //    always-mode — BranchKit's own (F/G/N) match there, and unbound ones
-      //    (e.g. Vimium-C's H/L) fall through to other extensions. (Shift makes
-      //    `e.key` the capital, so the registry distinguishes "H" from "h";
-      //    Ctrl/Alt/Meta can't, which is why they bypass entirely above.) A
-      //    Shift+letter *mid*-codeword is deliberately NOT diverted — it stays
-      //    with the hint filter, reserved for the capital-means-new-tab idea.
+      //    (e.g. Vimium-C's H/L) fall through to other extensions. (The combo
+      //    token carries the `shift+` prefix, so the registry distinguishes
+      //    "shift+KeyH" from "KeyH"; real-modifier chords already routed to the
+      //    registry above.) A Shift+letter *mid*-codeword is deliberately NOT
+      //    diverted — it stays with the hint filter, reserved for the
+      //    capital-means-new-tab idea.
       if (
         this.filterText.length === 0 &&
         e.shiftKey &&
@@ -215,7 +227,9 @@ export class KeyHandler {
 
   private handleNormalKey(e: KeyboardEvent): boolean {
     const key = keyToString(e);
-    this.sequence += key;
+    // Combo tokens are space-joined into a sequence ("KeyG KeyG"), so the
+    // registry can compare on token boundaries.
+    this.sequence = this.sequence ? `${this.sequence} ${key}` : key;
 
     if (this.timeout) {
       clearTimeout(this.timeout);
@@ -247,7 +261,9 @@ export class KeyHandler {
   }
 }
 
+// Canonical combo token for a keypress (layout-independent, via event.code):
+// "KeyJ", "shift+KeyG", "ctrl+KeyF", "Slash". This is the token the registry's
+// bindings are written in, so a key event and a binding compare directly.
 function keyToString(e: KeyboardEvent): string {
-  if (e.key.length === 1) return e.key;
-  return e.key; // "Escape", "Enter", etc.
+  return serializeCombo(comboFromEvent(e));
 }

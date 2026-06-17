@@ -25,7 +25,10 @@ export class ActionDispatcher {
 }
 
 export interface CommandEntry {
-  keys: string;       // e.g. "f", "gg", "F", "Escape"
+  // Canonical combo-token sequence (key-combo.ts serializeCombo), tokens
+  // space-joined for multi-key sequences. E.g. "KeyJ", "shift+KeyG",
+  // "ctrl+KeyF", "Slash", "KeyG KeyG".
+  keys: string;
   action: string;
   params?: Record<string, string>;
 }
@@ -50,17 +53,21 @@ export class CommandRegistry {
   }
 
   /**
-   * Match a key sequence against registered commands.
-   * Returns 'exact' match, 'partial' (prefix of longer sequence), or 'none'.
+   * Match a combo-token sequence against registered commands. Compares on
+   * token boundaries (split on space), so "KeyG" is a prefix of "KeyG KeyG"
+   * but NOT of "shift+KeyG". Returns 'exact', 'partial' (prefix of a longer
+   * binding), or 'none'.
    */
   match(sequence: string): { result: 'exact' | 'partial' | 'none'; entry?: CommandEntry } {
+    const seq = sequence.split(' ');
     let hasPartial = false;
 
     for (const cmd of this.commands) {
-      if (cmd.keys === sequence) {
+      const tokens = cmd.keys.split(' ');
+      if (tokens.length === seq.length && tokens.every((t, i) => t === seq[i])) {
         return { result: 'exact', entry: cmd };
       }
-      if (cmd.keys.startsWith(sequence) && cmd.keys.length > sequence.length) {
+      if (tokens.length > seq.length && seq.every((t, i) => t === tokens[i])) {
         hasPartial = true;
       }
     }

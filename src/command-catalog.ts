@@ -6,11 +6,10 @@
  * validation all read. Adding a command = add a catalog entry; the editor
  * and help surface pick it up automatically.
  *
- * Phasing note: DEFAULT_KEYMAP uses the registry's current `event.key` token
- * format ("F", "gg", "/"). The canonical `event.code` combo tokens
- * (key-combo.ts: "shift+KeyF", "KeyG KeyG") arrive with the GUI editor +
- * keymap storage, where the routing change is testable and gets a manual
- * always-mode pass. See notes/DESIGN_KEYMAP_CONFIG.md.
+ * Key tokens are canonical combo tokens (key-combo.ts `serializeCombo`):
+ * layout-independent `event.code` with modifier prefixes, space-joined for
+ * multi-key sequences — "shift+KeyF", "KeyJ", "KeyG KeyG", "Slash". See
+ * notes/DESIGN_KEYMAP_CONFIG.md.
  */
 
 export type ParamType = 'number' | 'enum' | 'string';
@@ -41,7 +40,7 @@ export interface CommandMeta {
 }
 
 export interface KeymapEntry {
-  /** Key token in the registry's current format (legacy event.key based). */
+  /** Canonical combo-token sequence (key-combo.ts `serializeCombo`). */
   keys: string;
   command: string;
   params?: Record<string, string>;
@@ -127,22 +126,24 @@ export const COMMAND_BY_ID: ReadonlyMap<string, CommandMeta> = new Map(
   COMMAND_CATALOG.map((c) => [c.id, c]),
 );
 
-// The shipping keybinds, extracted verbatim from content.ts. This is the
-// source of truth the registry is built from; the editor edits a copy of it.
+// The shipping keybinds. This is the source of truth the registry is built
+// from; the editor edits a copy of it. Comments show the keys as a user types
+// them; the tokens are canonical combos (Shift+F → "shift+KeyF", "gg" → two
+// KeyG presses, "/" → "Slash").
 export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
-  { keys: 'F', command: 'show_hints_newtab' },
-  { keys: 'j', command: 'scroll_down' },
-  { keys: 'k', command: 'scroll_up' },
-  { keys: 'd', command: 'scroll_half_down' },
-  { keys: 'u', command: 'scroll_half_up' },
-  { keys: 'gg', command: 'scroll_top' },
-  { keys: 'G', command: 'scroll_bottom' },
-  { keys: 'h', command: 'scroll_left' },
-  { keys: 'l', command: 'scroll_right' },
-  { keys: 'cs', command: 'cycle_scroll_target' },
-  { keys: '/', command: 'find_open' },
-  { keys: 'n', command: 'find_next' },
-  { keys: 'N', command: 'find_previous' },
-  { keys: 'H', command: 'previous_tab' },
-  { keys: 'L', command: 'next_tab' },
+  { keys: 'shift+KeyF', command: 'show_hints_newtab' }, // Shift+F (show, new-tab armed)
+  { keys: 'KeyJ', command: 'scroll_down' },
+  { keys: 'KeyK', command: 'scroll_up' },
+  { keys: 'KeyD', command: 'scroll_half_down' },
+  { keys: 'KeyU', command: 'scroll_half_up' },
+  { keys: 'KeyG KeyG', command: 'scroll_top' }, // gg
+  { keys: 'shift+KeyG', command: 'scroll_bottom' }, // G
+  { keys: 'KeyH', command: 'scroll_left' },
+  { keys: 'KeyL', command: 'scroll_right' },
+  { keys: 'KeyC KeyS', command: 'cycle_scroll_target' }, // cs
+  { keys: 'Slash', command: 'find_open' }, // /
+  { keys: 'KeyN', command: 'find_next' },
+  { keys: 'shift+KeyN', command: 'find_previous' }, // N
+  { keys: 'shift+KeyH', command: 'previous_tab' }, // Shift+H
+  { keys: 'shift+KeyL', command: 'next_tab' }, // Shift+L
 ];

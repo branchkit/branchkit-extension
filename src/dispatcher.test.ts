@@ -28,15 +28,26 @@ describe('CommandRegistry.replaceAll', () => {
     const r = new CommandRegistry();
     r.replaceAll(DEFAULT_KEYMAP.map((e) => ({ keys: e.keys, action: e.command, params: e.params })));
 
-    expect(r.match('j')).toEqual({ result: 'exact', entry: { keys: 'j', action: 'scroll_down' } });
-    expect(r.match('H').entry?.action).toBe('previous_tab');
-    expect(r.match('L').entry?.action).toBe('next_tab');
-    // 'gg' is a two-key sequence: 'g' is a partial prefix.
-    expect(r.match('g')).toEqual({ result: 'partial' });
-    expect(r.match('gg').entry?.action).toBe('scroll_top');
+    expect(r.match('KeyJ')).toEqual({ result: 'exact', entry: { keys: 'KeyJ', action: 'scroll_down' } });
+    // Shift+H = previous tab; bare H = scroll-left (distinct tokens).
+    expect(r.match('shift+KeyH').entry?.action).toBe('previous_tab');
+    expect(r.match('KeyH').entry?.action).toBe('scroll_left');
+    expect(r.match('shift+KeyL').entry?.action).toBe('next_tab');
+    // 'gg' is a two-token sequence: one KeyG is a partial prefix.
+    expect(r.match('KeyG')).toEqual({ result: 'partial' });
+    expect(r.match('KeyG KeyG').entry?.action).toBe('scroll_top');
     // 'cs' likewise.
-    expect(r.match('c')).toEqual({ result: 'partial' });
-    expect(r.match('cs').entry?.action).toBe('cycle_scroll_target');
+    expect(r.match('KeyC')).toEqual({ result: 'partial' });
+    expect(r.match('KeyC KeyS').entry?.action).toBe('cycle_scroll_target');
+  });
+
+  it('matches on token boundaries — a combo prefix is not a sequence prefix', () => {
+    const r = new CommandRegistry();
+    r.replaceAll([{ keys: 'KeyG KeyG', action: 'gg' }, { keys: 'shift+KeyG', action: 'sg' }]);
+    // "KeyG" is a partial of "KeyG KeyG" but NOT of "shift+KeyG".
+    expect(r.match('KeyG')).toEqual({ result: 'partial' });
+    // A modifier combo is a single token, never a prefix of a bare-key sequence.
+    expect(r.match('shift+KeyG')).toEqual({ result: 'exact', entry: { keys: 'shift+KeyG', action: 'sg' } });
   });
 });
 

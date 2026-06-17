@@ -2,9 +2,20 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { KeyHandler } from './keyboard';
 import { ActionDispatcher, CommandRegistry } from '../dispatcher';
 
+// Derive a plausible `event.code` from a `key` char, so synthetic events carry
+// the layout-independent code the registry now matches on. Real browsers always
+// set `code`; jsdom KeyboardEvent does not for hand-built keys.
+function codeFor(key: string): string {
+  if (/^[a-zA-Z]$/.test(key)) return `Key${key.toUpperCase()}`;
+  if (/^[0-9]$/.test(key)) return `Digit${key}`;
+  const map: Record<string, string> = { '/': 'Slash', ' ': 'Space', '.': 'Period', ',': 'Comma' };
+  return map[key] ?? key; // Escape / Enter / Backspace are read off e.key anyway
+}
+
 function makeKey(key: string, extra: Partial<KeyboardEvent> = {}): KeyboardEvent {
   return {
     key,
+    code: codeFor(key),
     metaKey: false,
     ctrlKey: false,
     altKey: false,
@@ -234,7 +245,7 @@ describe('passive typing — hints visible without entering hint mode (f)', () =
   });
 
   it('a letter filters instead of firing its nav keybind when hints are visible', () => {
-    registry.add({ keys: 'j', action: 'scroll_down' });
+    registry.add({ keys: 'KeyJ', action: 'scroll_down' });
     const cb = vi.fn();
     handler.setFilterCallback(cb);
     handler.setHintsVisible(() => true);
@@ -253,7 +264,7 @@ describe('passive typing — hints visible without entering hint mode (f)', () =
   });
 
   it('Shift+letter (no codeword started) routes to commands, not the codeword filter', () => {
-    registry.add({ keys: 'G', action: 'scroll_bottom' });
+    registry.add({ keys: 'shift+KeyG', action: 'scroll_bottom' });
     const cb = vi.fn();
     handler.setFilterCallback(cb);
     handler.setHintsVisible(() => true);
@@ -276,7 +287,7 @@ describe('passive typing — hints visible without entering hint mode (f)', () =
   });
 
   it('lowercase letters still type codewords when hints are visible', () => {
-    registry.add({ keys: 'j', action: 'scroll_down' });
+    registry.add({ keys: 'KeyJ', action: 'scroll_down' });
     const cb = vi.fn();
     handler.setFilterCallback(cb);
     handler.setHintsVisible(() => true);
@@ -287,7 +298,7 @@ describe('passive typing — hints visible without entering hint mode (f)', () =
   });
 
   it('a Shift+letter MID-codeword stays with the hint filter (reserved for new-tab casing)', () => {
-    registry.add({ keys: 'A', action: 'some_cmd' });
+    registry.add({ keys: 'shift+KeyA', action: 'some_cmd' });
     const cb = vi.fn();
     handler.setFilterCallback(cb);
     handler.setHintsVisible(() => true);
@@ -300,7 +311,7 @@ describe('passive typing — hints visible without entering hint mode (f)', () =
   });
 
   it('in the text-filter (/) search, Shift+letters are query text, not commands', () => {
-    registry.add({ keys: 'G', action: 'scroll_bottom' });
+    registry.add({ keys: 'shift+KeyG', action: 'scroll_bottom' });
     const cb = vi.fn();
     handler.setFilterCallback(cb);
     handler.enterHintMode();
@@ -345,37 +356,72 @@ describe('passive typing — hints visible without entering hint mode (f)', () =
 
 describe('normal mode — command sequences', () => {
   it('exact match dispatches action', () => {
-    registry.add({ keys: 'f', action: 'show_hints' });
+    registry.add({ keys: 'KeyF', action: 'show_hints' });
     const result = handler.handleKeyDown(makeKey('f'));
     expect(result).toBe(true);
     expect(dispatchSpy).toHaveBeenCalledWith('show_hints', {});
   });
 
   it('partial match waits for more keys', () => {
-    registry.add({ keys: 'gg', action: 'scroll_top' });
+    registry.add({ keys: 'KeyG KeyG', action: 'scroll_top' });
     const result = handler.handleKeyDown(makeKey('g'));
     expect(result).toBe(true);
     expect(dispatchSpy).not.toHaveBeenCalled();
   });
 
   it('multi-key sequence dispatches on completion', () => {
-    registry.add({ keys: 'gg', action: 'scroll_top' });
+    registry.add({ keys: 'KeyG KeyG', action: 'scroll_top' });
     handler.handleKeyDown(makeKey('g'));
     handler.handleKeyDown(makeKey('g'));
     expect(dispatchSpy).toHaveBeenCalledWith('scroll_top', {});
   });
 
   it('no match resets sequence', () => {
-    registry.add({ keys: 'f', action: 'show_hints' });
+    registry.add({ keys: 'KeyF', action: 'show_hints' });
     const result = handler.handleKeyDown(makeKey('x'));
     expect(result).toBe(false);
     expect(dispatchSpy).not.toHaveBeenCalled();
   });
 
-  it('modifier combos pass through', () => {
-    registry.add({ keys: 'c', action: 'some_action' });
+  it('an unbound modifier combo passes through (native shortcut / other extension)', () => {
+    registry.add({ keys: 'KeyC', action: 'some_action' }); // bare c, not Meta+C
     const result = handler.handleKeyDown(makeKey('c', { metaKey: true }));
     expect(result).toBe(false);
     expect(dispatchSpy).not.toHaveBeenCalled();
+  });
+
+  it('Ctrl+T (unbound) falls through even with other binds present', () => {
+    registry.add({ keys: 'KeyJ', action: 'scroll_down' });
+    const result = handler.handleKeyDown(makeKey('t', { ctrlKey: true }));
+    expect(result).toBe(false);
+    expect(dispatchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe('normal mode — modifier-combo commands', () => {
+  it('a bound modifier combo dispatches', () => {
+    registry.add({ keys: 'ctrl+shift+KeyK', action: 'next_tab' });
+    const result = handler.handleKeyDown(makeKey('k', { ctrlKey: true, shiftKey: true }));
+    expect(result).toBe(true);
+    expect(dispatchSpy).toHaveBeenCalledWith('next_tab', {});
+  });
+
+  it('a bound modifier combo fires even while hints are visible', () => {
+    registry.add({ keys: 'ctrl+KeyK', action: 'do_thing' });
+    handler.setHintsVisible(() => true);
+    const result = handler.handleKeyDown(makeKey('k', { ctrlKey: true }));
+    expect(result).toBe(true);
+    expect(dispatchSpy).toHaveBeenCalledWith('do_thing', {});
+  });
+
+  it('a modifier combo yields to an editable field (does not hijack typing)', () => {
+    registry.add({ keys: 'ctrl+KeyK', action: 'do_thing' });
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    input.focus();
+    const result = handler.handleKeyDown(makeKey('k', { ctrlKey: true }));
+    expect(result).toBe(false);
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    input.remove();
   });
 });

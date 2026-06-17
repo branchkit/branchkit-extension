@@ -107,24 +107,24 @@ describe('default keymap', () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it('matches the shipping content.ts bindings', () => {
-    // Locks the extracted defaults against accidental drift from content.ts.
+  it('matches the shipping bindings in canonical combo tokens', () => {
+    // Locks the defaults (and their token format) against accidental drift.
     expect(DEFAULT_KEYMAP).toEqual([
-      { keys: 'F', command: 'show_hints_newtab' },
-      { keys: 'j', command: 'scroll_down' },
-      { keys: 'k', command: 'scroll_up' },
-      { keys: 'd', command: 'scroll_half_down' },
-      { keys: 'u', command: 'scroll_half_up' },
-      { keys: 'gg', command: 'scroll_top' },
-      { keys: 'G', command: 'scroll_bottom' },
-      { keys: 'h', command: 'scroll_left' },
-      { keys: 'l', command: 'scroll_right' },
-      { keys: 'cs', command: 'cycle_scroll_target' },
-      { keys: '/', command: 'find_open' },
-      { keys: 'n', command: 'find_next' },
-      { keys: 'N', command: 'find_previous' },
-      { keys: 'H', command: 'previous_tab' },
-      { keys: 'L', command: 'next_tab' },
+      { keys: 'shift+KeyF', command: 'show_hints_newtab' },
+      { keys: 'KeyJ', command: 'scroll_down' },
+      { keys: 'KeyK', command: 'scroll_up' },
+      { keys: 'KeyD', command: 'scroll_half_down' },
+      { keys: 'KeyU', command: 'scroll_half_up' },
+      { keys: 'KeyG KeyG', command: 'scroll_top' },
+      { keys: 'shift+KeyG', command: 'scroll_bottom' },
+      { keys: 'KeyH', command: 'scroll_left' },
+      { keys: 'KeyL', command: 'scroll_right' },
+      { keys: 'KeyC KeyS', command: 'cycle_scroll_target' },
+      { keys: 'Slash', command: 'find_open' },
+      { keys: 'KeyN', command: 'find_next' },
+      { keys: 'shift+KeyN', command: 'find_previous' },
+      { keys: 'shift+KeyH', command: 'previous_tab' },
+      { keys: 'shift+KeyL', command: 'next_tab' },
     ]);
   });
 });
