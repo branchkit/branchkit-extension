@@ -24,6 +24,10 @@ import {
 } from './keymap-storage';
 import { comboFromEvent, serializeCombo } from './activate/key-combo';
 import { displayKeys, alwaysModeNote, duplicateKeys } from './keymap-edit-helpers';
+import { nativeOverride, detectOS, detectBrowser } from './browser-shortcuts';
+
+const OS = detectOS();
+const BROWSER = detectBrowser();
 
 let keymap: KeymapEntry[] = [];
 let suppressEcho = false;
@@ -98,6 +102,8 @@ function renderRow(entry: KeymapEntry, index: number, dupes: Set<string>): HTMLE
   const messages: string[] = [];
   const amNote = alwaysModeNote(entry.keys);
   if (amNote) messages.push(amNote);
+  const override = nativeOverride(entry.keys, OS, BROWSER);
+  if (override) messages.push(`Overrides the browser's "${override}" shortcut.`);
   if (dupes.has(entry.keys)) messages.push(`"${displayKeys(entry.keys)}" is bound to more than one command.`);
   if (messages.length > 0) {
     note.textContent = '⚠';

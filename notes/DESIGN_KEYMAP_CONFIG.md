@@ -47,6 +47,7 @@ The registry work splits into three steps with distinct risk profiles, done in s
 
 ### 4. Key-capture + validation (reuse + generalize `key-combo.ts`)
 - Capture widget: "Press a key" → `comboFromEvent` → `serializeCombo`; display via `comboDisplay`.
+- **Native-override notes (DONE).** `browser-shortcuts.ts` is a small curated table (no API enumerates the browser's built-in shortcuts) of stable Ctrl/Cmd(+Shift)+letter commands, keyed by **OS** (Cmd on mac vs Ctrl on win/linux — detected at runtime) and **browser** (Chrome/Firefox — for the few that differ). The editor shows "Overrides the browser's *Save page* shortcut" on a row so users bind with eyes open. Honest limit: browser defaults only, not site/extension binds. This is why `Ctrl+S` is the toggle default — free on mac, only save-page on win/linux.
 - Generalize `isComboAllowed` → **bindability for always-mode**: allow modifier combos, **Shift+letter**, non-letter keys, sequences; **warn (don't hard-reject) on a bare lowercase letter** ("types codewords in always-mode — use a modifier or uppercase"); flag conflicts (two commands on one key) and reserved (`Ctrl+Alt+A`).
 
 ### 5. GUI editor (options page) — mirror the domain-rules editor
