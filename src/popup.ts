@@ -26,13 +26,6 @@ import {
   setFeedbackError,
   clearFeedback,
 } from './rules/rule-ui';
-import {
-  DEFAULT_HIDE_KEY,
-  comboDisplay,
-  comboFromEvent,
-  isComboAllowed,
-  serializeCombo,
-} from './activate/key-combo';
 
 // --- State ---
 
@@ -74,55 +67,6 @@ function initSyncedSelect(id: string, storageKey: string): void {
   });
   select.addEventListener('change', () => {
     chrome.storage.sync.set({ [storageKey]: select.value });
-  });
-}
-
-// Key-capture for the show/hide chord. Click the button, press a combo; it's
-// accepted only if it carries a Ctrl/Alt/Meta modifier (the guardrail in
-// key-combo.ts), else an inline hint explains why. Stored as a combo string.
-function initHideKeyCapture(): void {
-  const btn = document.getElementById('hide-key') as HTMLButtonElement;
-  const hint = document.getElementById('hide-key-hint') as HTMLElement;
-  let capturing = false;
-
-  const show = (spec: string) => { btn.textContent = comboDisplay(spec); };
-  chrome.storage.sync.get('hintHideKey', (r) => show(r.hintHideKey || DEFAULT_HIDE_KEY));
-
-  const stopCapture = () => {
-    capturing = false;
-    btn.classList.remove('capturing');
-  };
-
-  btn.addEventListener('click', () => {
-    capturing = true;
-    btn.classList.add('capturing');
-    btn.textContent = 'Press a combo…';
-    hint.hidden = true;
-  });
-
-  btn.addEventListener('keydown', (e) => {
-    if (!capturing) return;
-    e.preventDefault();
-    e.stopPropagation();
-    // Wait for a real key — ignore bare modifier presses.
-    if (['Control', 'Alt', 'Meta', 'Shift'].includes(e.key)) return;
-    const combo = comboFromEvent(e);
-    if (!isComboAllowed(combo)) {
-      hint.textContent = 'Combo must include Ctrl, Alt, or Cmd.';
-      hint.hidden = false;
-      return;
-    }
-    const spec = serializeCombo(combo);
-    chrome.storage.sync.set({ hintHideKey: spec });
-    show(spec);
-    hint.hidden = true;
-    stopCapture();
-  });
-
-  btn.addEventListener('blur', () => {
-    if (!capturing) return;
-    stopCapture();
-    chrome.storage.sync.get('hintHideKey', (r) => show(r.hintHideKey || DEFAULT_HIDE_KEY));
   });
 }
 
@@ -509,7 +453,6 @@ async function init(): Promise<void> {
   checkStatus();
   initSyncedSelect('hint-visibility', 'hintVisibility');
   initSyncedSelect('hint-mode', 'badgeDisplayMode');
-  initHideKeyCapture();
   initSyncedCheckbox('aggressive-hints', 'aggressiveHints');
   initOptionsLink();
 

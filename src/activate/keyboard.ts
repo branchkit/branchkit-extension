@@ -90,24 +90,23 @@ export class KeyHandler {
   }
 
   handleKeyDown(e: KeyboardEvent): boolean {
-    // Insert mode: pass through. Only the explicitly-entered `hint` mode (the
-    // user pressed `f`) intercepts inside an editable field; passive typing
-    // driven by always-visible hints must NOT hijack keystrokes meant for a
-    // search box. Checked first so it also yields modifier chords to the field
-    // (Ctrl+A select-all, Cmd+C copy, etc.).
-    if (this.mode !== 'hint' && isInsertMode()) return false;
-
     // A real-modifier combo (Ctrl/Alt/Meta) is never codeword / filter / text
-    // input — route it straight to the command registry so user-bound chords
-    // fire, and unbound ones return 'none' → fall through to native shortcuts
-    // and other extensions (Ctrl+T, Cmd+V, Vimium-C's Ctrl+H, …). Shift alone
-    // is NOT a real modifier here: Shift+letter is still a normal binding token
-    // (handled below / by the registry). The configurable hide chord (Ctrl+F)
-    // and the dev-snapshot chord (Ctrl+Alt+A) are intercepted upstream in
-    // content.ts before this runs.
+    // input, so route it straight to the command registry — checked BEFORE the
+    // insert-mode yield so a bound chord fires even while typing in a field.
+    // That's required for the hide chord (Ctrl+F): it must toggle hints AND
+    // suppress the browser's native find while focused in a search box. Unbound
+    // chords return 'none' and fall through, so Ctrl+A / Cmd+C stay native even
+    // in fields. Shift alone is NOT a real modifier here — Shift+letter is a
+    // normal binding token (handled below / by the registry). The dev-snapshot
+    // chord (Ctrl+Alt+A) is intercepted upstream in content.ts before this runs.
     if (e.ctrlKey || e.altKey || e.metaKey) {
       return this.handleNormalKey(e);
     }
+
+    // Bare / Shift keys: pass through inside editable fields. Only the
+    // explicitly-entered `hint` mode (the user pressed `f`) intercepts in a
+    // field; passive always-visible typing must NOT hijack a search box.
+    if (this.mode !== 'hint' && isInsertMode()) return false;
 
     // Hints are typeable in explicit hint mode OR whenever hints are painted
     // (always-mode, no `f` needed). Routing within, in priority order:

@@ -12,8 +12,6 @@ export type Category = 'link' | 'button' | 'input' | 'tab' | 'edit' | 'view' | '
 
 export type BadgeDisplayMode = 'word' | 'letter' | 'both' | 'first-word';
 export type HintVisibility = 'always' | 'manual';
-/** A serialized key combo (see activate/key-combo.ts), e.g. "ctrl+KeyF". */
-export type HintHideKey = string;
 
 // --- Scanned Elements ---
 

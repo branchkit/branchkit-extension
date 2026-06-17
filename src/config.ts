@@ -17,16 +17,8 @@
  * carve leaf concerns). See notes/DESIGN_EXTENSION_RESTRUCTURE.md.
  */
 
-import { BadgeDisplayMode, HintHideKey, HintVisibility } from './types';
+import { BadgeDisplayMode, HintVisibility } from './types';
 import { setExtraHintsEnabled } from './scan/scanner';
-import { DEFAULT_HIDE_KEY, isComboAllowed, parseCombo } from './activate/key-combo';
-
-/** Accept a stored combo only if it still passes the guardrail; else default. */
-function sanitizeHideKey(value: unknown): HintHideKey {
-  if (typeof value !== 'string') return DEFAULT_HIDE_KEY;
-  const c = parseCombo(value);
-  return c && isComboAllowed(c) ? value : DEFAULT_HIDE_KEY;
-}
 
 let displayMode: BadgeDisplayMode = 'letter';
 let hintVisibility: HintVisibility = 'always';
@@ -34,11 +26,6 @@ let hintVisibility: HintVisibility = 'always';
 // page does on its own; this is the user's explicit "hints on/off" intent,
 // which overrides always-mode auto-show. Default on.
 let hintsShown = true;
-// User-chosen chord that toggles hints. Captured from a real keypress and
-// stored as a combo string (see activate/key-combo.ts). Must carry a
-// Ctrl/Alt/Meta modifier — bare keys collide with codeword typing in
-// always-visible mode. Default Ctrl+F.
-let hintHideKey: HintHideKey = DEFAULT_HIDE_KEY;
 
 export function getDisplayMode(): BadgeDisplayMode {
   return displayMode;
@@ -46,10 +33,6 @@ export function getDisplayMode(): BadgeDisplayMode {
 
 export function getHintVisibility(): HintVisibility {
   return hintVisibility;
-}
-
-export function getHintHideKey(): HintHideKey {
-  return hintHideKey;
 }
 
 export function getHintsShown(): boolean {
@@ -87,15 +70,12 @@ export interface ConfigHandlers {
 export function loadConfig(handlers: ConfigHandlers): void {
   if (typeof chrome === 'undefined' || !chrome.storage?.sync) return;
 
-  chrome.storage.sync.get(['badgeDisplayMode', 'hintVisibility', 'aggressiveHints', 'hintHideKey'], (result) => {
+  chrome.storage.sync.get(['badgeDisplayMode', 'hintVisibility', 'aggressiveHints'], (result) => {
     if (result.badgeDisplayMode) {
       displayMode = result.badgeDisplayMode;
     }
     if (result.hintVisibility) {
       hintVisibility = result.hintVisibility;
-    }
-    if (result.hintHideKey) {
-      hintHideKey = sanitizeHideKey(result.hintHideKey);
     }
     setExtraHintsEnabled(result.aggressiveHints === true);
   });
@@ -115,10 +95,6 @@ export function loadConfig(handlers: ConfigHandlers): void {
     if (changes.hintVisibility) {
       hintVisibility = changes.hintVisibility.newValue || 'always';
       handlers.onHintVisibilityChange();
-    }
-    if (changes.hintHideKey) {
-      // Read live by the keydown listener — no side effect to apply here.
-      hintHideKey = sanitizeHideKey(changes.hintHideKey.newValue);
     }
     if (changes.hintsShown) {
       // Keep the value current for this frame's next decision (e.g. an SPA

@@ -106,8 +106,7 @@ import { openLivenessPort } from './plugin/liveness';
 import { pageSession, TeardownReason } from './lifecycle/page-session';
 import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './debug/message-counters';
 import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, lifecycleCounters, resetLifecycleCounters } from './debug/perf-counters';
-import { loadConfig, getDisplayMode, getHintVisibility, getHintsShown, setHintsShown, getHintHideKey } from './config';
-import { matchesCombo } from './activate/key-combo';
+import { loadConfig, getDisplayMode, getHintVisibility, getHintsShown, setHintsShown } from './config';
 import {
   grammarEpochStats,
   probeGrammarEpoch,
@@ -3125,17 +3124,6 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
     // The rebind-counters panel rides along — see step 5 of
     // notes/completed/DESIGN_WRAPPER_IDENTITY_STABILITY.md.
     toggleOverlay(store, rebindCounters);
-    return;
-  }
-
-  // User-configured show/hide chord (default Ctrl+F). Plain `f` is a codeword
-  // filter letter once hints are visible, so toggling needs its own chord. The
-  // chord always carries a Ctrl/Alt/Meta modifier (enforced at capture time),
-  // so it never collides with codeword typing. Full toggle, works any time.
-  if (matchesCombo(e, getHintHideKey())) {
-    e.preventDefault();
-    e.stopPropagation();
-    dispatcher.dispatch('toggle_hints');
     return;
   }
 

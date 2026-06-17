@@ -428,12 +428,25 @@ describe('normal mode — modifier-combo commands', () => {
     expect(dispatchSpy).toHaveBeenCalledWith('do_thing', {});
   });
 
-  it('a modifier combo yields to an editable field (does not hijack typing)', () => {
+  it('a bound modifier combo fires even inside an editable field', () => {
+    // Required for the hide chord: Ctrl+F must toggle (and suppress native
+    // find) while focused in a search box. Modifier chords can't be confused
+    // with typing, so bound ones fire regardless of focus.
     registry.add({ keys: 'ctrl+KeyK', action: 'do_thing' });
     const input = document.createElement('input');
     document.body.appendChild(input);
     input.focus();
     const result = handler.handleKeyDown(makeKey('k', { ctrlKey: true }));
+    expect(result).toBe(true);
+    expect(dispatchSpy).toHaveBeenCalledWith('do_thing', {});
+    input.remove();
+  });
+
+  it('an unbound modifier combo in a field falls through (native shortcut)', () => {
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    input.focus();
+    const result = handler.handleKeyDown(makeKey('a', { ctrlKey: true })); // Ctrl+A select-all
     expect(result).toBe(false);
     expect(dispatchSpy).not.toHaveBeenCalled();
     input.remove();
