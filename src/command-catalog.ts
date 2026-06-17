@@ -132,7 +132,7 @@ export const COMMAND_BY_ID: ReadonlyMap<string, CommandMeta> = new Map(
 // KeyG presses, "/" → "Slash").
 export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   { keys: 'shift+KeyF', command: 'show_hints_newtab' }, // Shift+F (show, new-tab armed)
-  { keys: 'ctrl+KeyF', command: 'toggle_hints' }, // Ctrl+F — show/hide (suppresses native find)
+  { keys: 'ctrl+KeyS', command: 'toggle_hints' }, // Ctrl+S — show/hide (overrides save-page, leaves Ctrl+F find free)
   { keys: 'KeyJ', command: 'scroll_down' },
   { keys: 'KeyK', command: 'scroll_up' },
   { keys: 'KeyD', command: 'scroll_half_down' },

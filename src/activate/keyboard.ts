@@ -93,9 +93,9 @@ export class KeyHandler {
     // A real-modifier combo (Ctrl/Alt/Meta) is never codeword / filter / text
     // input, so route it straight to the command registry — checked BEFORE the
     // insert-mode yield so a bound chord fires even while typing in a field.
-    // That's required for the hide chord (Ctrl+F): it must toggle hints AND
-    // suppress the browser's native find while focused in a search box. Unbound
-    // chords return 'none' and fall through, so Ctrl+A / Cmd+C stay native even
+    // That's required for the hide chord (default Ctrl+S): it must toggle hints
+    // AND suppress the browser's native shortcut while focused in a search box.
+    // Unbound chords return 'none' and fall through, so Ctrl+A / Cmd+C stay even
     // in fields. Shift alone is NOT a real modifier here — Shift+letter is a
     // normal binding token (handled below / by the registry). The dev-snapshot
     // chord (Ctrl+Alt+A) is intercepted upstream in content.ts before this runs.

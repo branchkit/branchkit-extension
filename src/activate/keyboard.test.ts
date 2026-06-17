@@ -429,9 +429,9 @@ describe('normal mode — modifier-combo commands', () => {
   });
 
   it('a bound modifier combo fires even inside an editable field', () => {
-    // Required for the hide chord: Ctrl+F must toggle (and suppress native
-    // find) while focused in a search box. Modifier chords can't be confused
-    // with typing, so bound ones fire regardless of focus.
+    // Required for the hide chord (default Ctrl+S): it must toggle (and suppress
+    // the native shortcut) while focused in a search box. Modifier chords can't
+    // be confused with typing, so bound ones fire regardless of focus.
     registry.add({ keys: 'ctrl+KeyK', action: 'do_thing' });
     const input = document.createElement('input');
     document.body.appendChild(input);
