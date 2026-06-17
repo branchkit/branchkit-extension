@@ -43,6 +43,7 @@ import {
   resetBadgeSettings,
   onBadgeSettingsChanged,
 } from './badge-settings-storage';
+import { initKeymapEditor } from './keymap-options';
 
 // --- State ---
 
@@ -670,6 +671,7 @@ async function init(): Promise<void> {
   });
 
   await initBadgeSettings();
+  await initKeymapEditor();
 }
 
 // --- Badge appearance ---

@@ -366,6 +366,47 @@
       .badge-row span input { margin-left: 4px; }
     </style>
 
+    <h1 style="margin-top: 40px">Keyboard shortcuts</h1>
+    <div class="subtitle">
+      Rebind the in-page keyboard commands. While hints are visible, bare
+      letters type hint codewords — so use Shift+letter or a Ctrl/Alt/Cmd chord
+      for shortcuts that should work in that mode (others are marked ⚠ and only
+      fire when hints are hidden). Shortcuts sync across browsers.
+    </div>
+    <div class="toolbar">
+      <button id="km-add" class="primary">+ Add shortcut</button>
+      <button id="km-reset">Reset to defaults</button>
+    </div>
+    <div id="keymap"></div>
+    <style>
+      .km-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
+      .km-command { flex: 1; min-width: 160px; }
+      .km-command-select { width: 100%; font: inherit; padding: 4px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); }
+      .km-keys { flex-shrink: 0; }
+      .km-capture { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace; min-width: 88px; text-align: center; }
+      .km-capture.capturing { border-color: var(--accent); color: var(--accent); }
+      .km-params { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .km-param { font-size: 12px; color: var(--fg-muted); display: inline-flex; align-items: center; gap: 4px; }
+      .km-param input, .km-param select { font: inherit; font-size: 12px; padding: 2px 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); }
+      .km-param input[type=number] { width: 56px; text-align: right; }
+      .km-warn { color: var(--accent); cursor: help; flex-shrink: 0; width: 16px; text-align: center; }
+      .km-warn.conflict { color: var(--danger); }
+      .km-warn:empty { visibility: hidden; }
+      .km-desc { flex-basis: 100%; font-size: 12px; color: var(--fg-muted); }
+      .km-desc:empty { display: none; }
+    </style>
+
+    <template id="keymap-row-template">
+      <div class="km-row">
+        <span class="km-command"><select class="km-command-select"></select></span>
+        <span class="km-keys"><button type="button" class="km-capture"></button></span>
+        <span class="km-params"></span>
+        <span class="km-warn" title=""></span>
+        <button class="km-delete danger">Delete</button>
+        <div class="km-desc"></div>
+      </div>
+    </template>
+
     <template id="rule-template">
       <div class="rule">
         <div class="rule-header">
