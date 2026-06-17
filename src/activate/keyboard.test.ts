@@ -80,6 +80,25 @@ describe('hint mode — codeword filtering', () => {
     expect(handler.getMode()).toBe('normal');
     expect(dispatchSpy).toHaveBeenCalledWith('hide_hints');
   });
+
+  it('escape with a typed prefix cancels just the prefix and stays in hint mode', () => {
+    const cb = vi.fn();
+    handler.setFilterCallback(cb);
+    handler.enterHintMode();
+    handler.handleKeyDown(makeKey('a'));
+    handler.handleKeyDown(makeKey('x'));
+
+    const result = handler.handleKeyDown(makeKey('Escape'));
+    expect(result).toBe(true);
+    expect(cb).toHaveBeenLastCalledWith('', false); // prefix cleared
+    expect(handler.getMode()).toBe('hint'); // did NOT exit
+    expect(dispatchSpy).not.toHaveBeenCalledWith('hide_hints');
+
+    // A second Escape (no prefix in progress) hides + exits.
+    handler.handleKeyDown(makeKey('Escape'));
+    expect(handler.getMode()).toBe('normal');
+    expect(dispatchSpy).toHaveBeenCalledWith('hide_hints');
+  });
 });
 
 describe('hint mode — text filter', () => {
@@ -182,11 +201,28 @@ describe('passive typing — hints visible without entering hint mode (f)', () =
     expect(dispatchSpy).not.toHaveBeenCalledWith('scroll_down', {});
   });
 
-  it('Escape stays native under passive typing (does NOT hide)', () => {
+  it('Escape stays native under passive typing when no prefix is in progress', () => {
     handler.setHintsVisible(() => true);
     const result = handler.handleKeyDown(makeKey('Escape'));
     expect(result).toBe(false);
     expect(dispatchSpy).not.toHaveBeenCalledWith('hide_hints');
+  });
+
+  it('Escape cancels an in-progress typed prefix under passive typing (the user case)', () => {
+    const cb = vi.fn();
+    handler.setFilterCallback(cb);
+    handler.setHintsVisible(() => true);
+    handler.handleKeyDown(makeKey('a')); // first letter of a hint
+    handler.handleKeyDown(makeKey('x')); // wrong key
+
+    const result = handler.handleKeyDown(makeKey('Escape'));
+    expect(result).toBe(true); // consumed, not native
+    expect(cb).toHaveBeenLastCalledWith('', false); // prefix reset
+    expect(dispatchSpy).not.toHaveBeenCalledWith('hide_hints'); // hints stay visible
+
+    // After cancel, a fresh letter starts a new hint cleanly.
+    handler.handleKeyDown(makeKey('b'));
+    expect(cb).toHaveBeenLastCalledWith('b', false);
   });
 
   it('passive typing yields to editable fields (insert mode passes through)', () => {

@@ -97,9 +97,21 @@ export class KeyHandler {
 
   private handleHintKey(e: KeyboardEvent): boolean {
     if (e.key === 'Escape') {
-      // Only the explicitly-entered hint mode treats Escape as "hide hints".
-      // Under passive always-visible typing, Escape stays native (close a
-      // dropdown/dialog, cancel find) — hiding is the configurable chord
+      // Two-stage Escape. If hint letters have been typed, Escape cancels just
+      // the typed prefix — back to no-prefix — so a mistyped hint can be
+      // abandoned and a different one started, without hiding the (always-
+      // visible) hints or exiting hint mode. Keeps the current filter sub-mode
+      // (codeword vs text). This is the first stage, regardless of mode.
+      if (this.filterText.length > 0) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.filterText = '';
+        this.onFilterChange?.('', this.filterByText);
+        return true;
+      }
+      // No typed prefix. Only the explicitly-entered hint mode treats Escape as
+      // "hide hints". Under passive always-visible typing, Escape stays native
+      // (close a dropdown/dialog, cancel find) — hiding is the configurable chord
       // handled in content.ts instead.
       if (this.mode !== 'hint') return false;
       e.preventDefault();
