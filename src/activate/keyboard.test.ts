@@ -275,6 +275,20 @@ describe('passive typing — hints visible without entering hint mode (f)', () =
     expect(cb).not.toHaveBeenCalled(); // did NOT enter the codeword filter
   });
 
+  it('Shift+J scrolls in always-mode (bare j is codeword input here)', () => {
+    // The always-mode scroll form: a Shift duplicate of the bare scroll bind,
+    // since bare j types a codeword while hints are painted.
+    registry.add({ keys: 'shift+KeyJ', action: 'scroll_down' });
+    const cb = vi.fn();
+    handler.setFilterCallback(cb);
+    handler.setHintsVisible(() => true);
+
+    const result = handler.handleKeyDown(makeKey('J', { shiftKey: true }));
+    expect(result).toBe(true);
+    expect(dispatchSpy).toHaveBeenCalledWith('scroll_down', {});
+    expect(cb).not.toHaveBeenCalled(); // did NOT enter the codeword filter
+  });
+
   it('an unbound Shift+letter falls through (passes to other extensions) in always-mode', () => {
     const cb = vi.fn();
     handler.setFilterCallback(cb);
