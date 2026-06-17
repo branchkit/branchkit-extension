@@ -33,6 +33,11 @@ export class KeyHandler {
   private timeout: ReturnType<typeof setTimeout> | null = null;
   private filterText: string = '';
   private filterByText: boolean = false;
+  // Set when a capital letter is typed mid-codeword — the "aA" affordance:
+  // finishing a codeword with a capital opens the pick in a new tab. Read by
+  // the content-side filter callback on the unique match; reset whenever the
+  // codeword / hint mode resets.
+  private newTabArmed: boolean = false;
   private registry: CommandRegistry;
   private dispatcher: ActionDispatcher;
   private onFilterChange: ((prefix: string, byText: boolean) => void) | null = null;
@@ -66,6 +71,7 @@ export class KeyHandler {
     this.mode = 'hint';
     this.filterText = '';
     this.filterByText = false;
+    this.newTabArmed = false;
   }
 
   exitHintMode(): void {
@@ -73,6 +79,13 @@ export class KeyHandler {
     this.filterText = '';
     this.filterByText = false;
     this.sequence = '';
+    this.newTabArmed = false;
+  }
+
+  /** True when a capital was typed mid-codeword — the current pick should open
+   *  in a new tab. Read by the content-side filter callback on a unique match. */
+  isNewTabArmed(): boolean {
+    return this.newTabArmed;
   }
 
   handleKeyDown(e: KeyboardEvent): boolean {
@@ -85,9 +98,31 @@ export class KeyHandler {
     // search box.
     if (this.mode !== 'hint' && isInsertMode()) return false;
 
-    // Hint-typing is active in explicit hint mode OR whenever hints are
-    // painted — so always-visible hints are typeable without pressing `f`.
+    // Hints are typeable in explicit hint mode OR whenever hints are painted
+    // (always-mode, no `f` needed). Routing within, in priority order:
     if (this.mode === 'hint' || this.hintsVisible()) {
+      // 1. Text/search sub-mode (the `/` filter): every printable key —
+      //    capitals included — is query text, never a command or codeword.
+      if (this.filterByText) {
+        return this.handleHintKey(e);
+      }
+      // 2. A Shift+letter with NO codeword in progress is a command "outlier":
+      //    route it to the command path so uppercase keybinds work in
+      //    always-mode — BranchKit's own (F/G/N) match there, and unbound ones
+      //    (e.g. Vimium-C's H/L) fall through to other extensions. (Shift makes
+      //    `e.key` the capital, so the registry distinguishes "H" from "h";
+      //    Ctrl/Alt/Meta can't, which is why they bypass entirely above.) A
+      //    Shift+letter *mid*-codeword is deliberately NOT diverted — it stays
+      //    with the hint filter, reserved for the capital-means-new-tab idea.
+      if (
+        this.filterText.length === 0 &&
+        e.shiftKey &&
+        e.key.length === 1 &&
+        /[a-zA-Z]/.test(e.key)
+      ) {
+        return this.handleNormalKey(e);
+      }
+      // 3. Lowercase / control keys / mid-codeword keys → codeword filter.
       return this.handleHintKey(e);
     }
 
@@ -106,6 +141,7 @@ export class KeyHandler {
         e.preventDefault();
         e.stopPropagation();
         this.filterText = '';
+        this.newTabArmed = false;
         this.onFilterChange?.('', this.filterByText);
         return true;
       }
@@ -126,6 +162,7 @@ export class KeyHandler {
       e.stopPropagation();
       if (this.filterText.length > 0) {
         this.filterText = this.filterText.slice(0, -1);
+        if (this.filterText.length === 0) this.newTabArmed = false;
         this.onFilterChange?.(this.filterText, this.filterByText);
       } else if (this.filterByText) {
         this.filterByText = false;
@@ -160,11 +197,15 @@ export class KeyHandler {
       return true;
     }
 
-    // Codeword mode: single letter characters for filtering
+    // Codeword mode: single letter characters for filtering. A capital here is
+    // necessarily mid-codeword (a capital first keypress is diverted to commands
+    // by handleKeyDown), so it arms "open this pick in a new tab" — the user's
+    // "aA" affordance.
     if (e.key.length === 1 && /[a-zA-Z]/.test(e.key)) {
       e.preventDefault();
       e.stopPropagation();
       this.filterText += e.key.toLowerCase();
+      if (e.shiftKey) this.newTabArmed = true;
       this.onFilterChange?.(this.filterText, false);
       return true;
     }

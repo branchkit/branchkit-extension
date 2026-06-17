@@ -101,6 +101,50 @@ describe('hint mode — codeword filtering', () => {
   });
 });
 
+describe('new-tab casing (capital mid-codeword)', () => {
+  it('arms new-tab when a capital is typed mid-codeword', () => {
+    handler.setHintsVisible(() => true);
+    handler.handleKeyDown(makeKey('a')); // start codeword (lowercase)
+    expect(handler.isNewTabArmed()).toBe(false);
+    handler.handleKeyDown(makeKey('A', { shiftKey: true })); // capital, mid-codeword
+    expect(handler.isNewTabArmed()).toBe(true);
+  });
+
+  it('does not arm for an all-lowercase codeword', () => {
+    handler.setHintsVisible(() => true);
+    handler.handleKeyDown(makeKey('a'));
+    handler.handleKeyDown(makeKey('b'));
+    expect(handler.isNewTabArmed()).toBe(false);
+  });
+
+  it('disarms on exitHintMode (after a pick)', () => {
+    handler.setHintsVisible(() => true);
+    handler.handleKeyDown(makeKey('a'));
+    handler.handleKeyDown(makeKey('A', { shiftKey: true }));
+    expect(handler.isNewTabArmed()).toBe(true);
+    handler.exitHintMode();
+    expect(handler.isNewTabArmed()).toBe(false);
+  });
+
+  it('disarms when the prefix is cleared with Escape', () => {
+    handler.setHintsVisible(() => true);
+    handler.handleKeyDown(makeKey('a'));
+    handler.handleKeyDown(makeKey('A', { shiftKey: true }));
+    expect(handler.isNewTabArmed()).toBe(true);
+    handler.handleKeyDown(makeKey('Escape')); // clears the prefix
+    expect(handler.isNewTabArmed()).toBe(false);
+  });
+
+  it('disarms when backspaced all the way to empty', () => {
+    handler.setHintsVisible(() => true);
+    handler.handleKeyDown(makeKey('a'));
+    handler.handleKeyDown(makeKey('A', { shiftKey: true }));
+    handler.handleKeyDown(makeKey('Backspace'));
+    handler.handleKeyDown(makeKey('Backspace'));
+    expect(handler.isNewTabArmed()).toBe(false);
+  });
+});
+
 describe('hint mode — text filter', () => {
   it('/ in hint mode switches to text filter mode', () => {
     const cb = vi.fn();
@@ -206,6 +250,65 @@ describe('passive typing — hints visible without entering hint mode (f)', () =
     const result = handler.handleKeyDown(makeKey('Escape'));
     expect(result).toBe(false);
     expect(dispatchSpy).not.toHaveBeenCalledWith('hide_hints');
+  });
+
+  it('Shift+letter (no codeword started) routes to commands, not the codeword filter', () => {
+    registry.add({ keys: 'G', action: 'scroll_bottom' });
+    const cb = vi.fn();
+    handler.setFilterCallback(cb);
+    handler.setHintsVisible(() => true);
+
+    const result = handler.handleKeyDown(makeKey('G', { shiftKey: true }));
+    expect(result).toBe(true);
+    expect(dispatchSpy).toHaveBeenCalledWith('scroll_bottom', {});
+    expect(cb).not.toHaveBeenCalled(); // did NOT enter the codeword filter
+  });
+
+  it('an unbound Shift+letter falls through (passes to other extensions) in always-mode', () => {
+    const cb = vi.fn();
+    handler.setFilterCallback(cb);
+    handler.setHintsVisible(() => true);
+
+    // No BranchKit command on 'H' → falls through (reaches Vimium-C etc.).
+    const result = handler.handleKeyDown(makeKey('H', { shiftKey: true }));
+    expect(result).toBe(false);
+    expect(cb).not.toHaveBeenCalled();
+  });
+
+  it('lowercase letters still type codewords when hints are visible', () => {
+    registry.add({ keys: 'j', action: 'scroll_down' });
+    const cb = vi.fn();
+    handler.setFilterCallback(cb);
+    handler.setHintsVisible(() => true);
+
+    handler.handleKeyDown(makeKey('j')); // lowercase
+    expect(cb).toHaveBeenCalledWith('j', false);
+    expect(dispatchSpy).not.toHaveBeenCalledWith('scroll_down', {});
+  });
+
+  it('a Shift+letter MID-codeword stays with the hint filter (reserved for new-tab casing)', () => {
+    registry.add({ keys: 'A', action: 'some_cmd' });
+    const cb = vi.fn();
+    handler.setFilterCallback(cb);
+    handler.setHintsVisible(() => true);
+
+    handler.handleKeyDown(makeKey('a')); // start a codeword → filterText "a"
+    expect(cb).toHaveBeenLastCalledWith('a', false);
+    handler.handleKeyDown(makeKey('A', { shiftKey: true })); // capital mid-codeword
+    expect(cb).toHaveBeenLastCalledWith('aa', false); // stayed in the filter (lowercased)
+    expect(dispatchSpy).not.toHaveBeenCalledWith('some_cmd', {}); // did NOT divert to the command
+  });
+
+  it('in the text-filter (/) search, Shift+letters are query text, not commands', () => {
+    registry.add({ keys: 'G', action: 'scroll_bottom' });
+    const cb = vi.fn();
+    handler.setFilterCallback(cb);
+    handler.enterHintMode();
+    handler.handleKeyDown(makeKey('/')); // enter text-filter search
+    handler.handleKeyDown(makeKey('G', { shiftKey: true }));
+
+    expect(cb).toHaveBeenLastCalledWith('g', true); // query text, not a command
+    expect(dispatchSpy).not.toHaveBeenCalledWith('scroll_bottom', {});
   });
 
   it('Escape cancels an in-progress typed prefix under passive typing (the user case)', () => {

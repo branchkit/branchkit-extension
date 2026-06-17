@@ -13,6 +13,7 @@ import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearStack, cl
 import { rememberCodewords, clearCodewordMemory, recallCodewords } from './labels/codeword-memory';
 import { discoverPlugin, ensureConnected, postToPlugin, getPluginPort, getPluginToken, getActuatorJson } from './plugin/actuator-client';
 import { buildReconcileReport, type ReconcileWrapper, type ReconcileReport, type MatchableView } from './debug/reconcile';
+import { cycleTabIndex } from './background/tab-nav';
 import { ensureContentScriptInjected } from './background/injection';
 import { bgState, connId } from './background/state';
 import { republishActiveTab, broadcastToAllTabs, resolveActiveContentTab, notifyActiveTab, resolveHintFromTab } from './background/frame-router';
@@ -309,6 +310,19 @@ async function handleDebugSnapshot(
   if (captured) body.png_base64 = pngBase64;
   else body.error = captureError || 'unknown';
   await postToPlugin('/debug-snapshot/screenshot', body);
+}
+
+// Adjacent tab cycling (Layer 1 of notes/DESIGN_TAB_NAVIGATION.md). Cycles
+// within the current window and wraps around. Content scripts can't switch
+// tabs, so the keybind handler forwards here. The fuzzy switcher + voice
+// "switch to <tab>" will share the same `chrome.tabs.update({active})` dispatch.
+async function handleSwitchTab(direction: 'next' | 'previous'): Promise<void> {
+  const tabs = await chrome.tabs.query({ currentWindow: true });
+  if (tabs.length < 2) return;
+  const activeIdx = tabs.findIndex((t) => t.active);
+  if (activeIdx < 0) return;
+  const target = tabs[cycleTabIndex(activeIdx, tabs.length, direction)];
+  if (target?.id != null) await chrome.tabs.update(target.id, { active: true });
 }
 
 // Tell the plugin to end a hint session. Two scopes:
@@ -644,6 +658,11 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
 
   if (message.type === 'DEBUG_SNAPSHOT' && message.payload) {
     handleDebugSnapshot(message.payload, _sender);
+    return false;
+  }
+
+  if (message.type === 'SWITCH_TAB' && (message.direction === 'next' || message.direction === 'previous')) {
+    void handleSwitchTab(message.direction);
     return false;
   }
 

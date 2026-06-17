@@ -175,7 +175,12 @@ export type Message =
   // Background → content (specific frame). Resolve the codeword to an
   // element in the local store and synthesize a stable selector. Response
   // shape is ResolveHintResponse.
-  | { type: 'RESOLVE_HINT'; codeword: string };
+  | { type: 'RESOLVE_HINT'; codeword: string }
+  // Content → background. Keyboard tab cycling (Layer 1 of
+  // notes/DESIGN_TAB_NAVIGATION.md). Content scripts can't switch tabs, so the
+  // keybind handler forwards the direction; background cycles within the
+  // current window and activates the neighbor.
+  | { type: 'SWITCH_TAB'; direction: 'next' | 'previous' };
 
 // Response to RESOLVE_HINT / RESOLVE_HINT_FROM_TAB.
 export type ResolveHintResponse =

@@ -815,6 +815,13 @@ registry.add({ keys: '/', action: 'find_open' });
 registry.add({ keys: 'n', action: 'find_next' });
 registry.add({ keys: 'N', action: 'find_previous' });
 
+// Tab cycling — Shift+H = previous, Shift+L = next (Vimium convention: H=left,
+// L=right). These work even in always-visible hints mode: a Shift+letter routes
+// to the command path, not the codeword filter (see keyboard.ts). Defaults;
+// rebindable like any keybind. See notes/DESIGN_TAB_NAVIGATION.md.
+registry.add({ keys: 'H', action: 'previous_tab' });
+registry.add({ keys: 'L', action: 'next_tab' });
+
 // --- Register Action Handlers ---
 
 // The modal `hint` mode (where Escape dismisses all hints) only makes sense
@@ -951,6 +958,14 @@ dispatcher.register('find_previous', () => {
   findPrevious();
 });
 
+// Tab cycling — forward to the background SW (content scripts can't switch tabs).
+dispatcher.register('next_tab', () => {
+  chrome.runtime.sendMessage({ type: 'SWITCH_TAB', direction: 'next' } as Message).catch(() => {});
+});
+dispatcher.register('previous_tab', () => {
+  chrome.runtime.sendMessage({ type: 'SWITCH_TAB', direction: 'previous' } as Message).catch(() => {});
+});
+
 dispatcher.register('find_immediate', (params) => {
   const query = params.query || '';
   if (query) findImmediate(query);
@@ -1040,6 +1055,10 @@ keyHandler.setFilterCallback((prefix: string, byText: boolean) => {
 
     if (matchSet.size === 1) {
       const first = matchSet.values().next().value!;
+      // "aA" affordance: a capital typed mid-codeword opens this pick in a new
+      // tab. `activateWrapper` reads `activateInNewTab` and `clearHintFilter`
+      // resets it, same as the `F` arm.
+      if (keyHandler.isNewTabArmed()) activateInNewTab = true;
       activateWrapper(first);
       hideHints();
       keyHandler.exitHintMode();
