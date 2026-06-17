@@ -385,6 +385,9 @@
       .km-cmd-text { flex: 1; min-width: 0; }
       .km-cmd-label { font-weight: 600; }
       .km-cmd-desc { font-size: 12px; color: var(--fg-muted); margin-top: 2px; }
+      .km-cmd-voice { font-size: 12px; color: var(--accent); margin-top: 2px; }
+      .km-cmd-voice:empty { display: none; }
+      .km-voice-note { font-size: 12px; color: var(--fg-muted); font-style: italic; background: var(--bg); border: 1px dashed var(--border); border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; }
       .km-add-key { flex-shrink: 0; font-size: 12px; padding: 4px 8px; }
       .km-bindings { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
       .km-bindings:empty { display: none; }
@@ -410,6 +413,7 @@
           <div class="km-cmd-text">
             <div class="km-cmd-label"></div>
             <div class="km-cmd-desc"></div>
+            <div class="km-cmd-voice"></div>
           </div>
           <button type="button" class="km-add-key">+ Add key</button>
         </div>

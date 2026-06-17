@@ -26,12 +26,18 @@ import {
 import { comboFromEvent, serializeCombo } from './activate/key-combo';
 import { displayKeys, worksInAlwaysMode, duplicateKeys } from './keymap-edit-helpers';
 import { nativeOverride, detectOS, detectBrowser } from './browser-shortcuts';
+import { loadVoiceCommands, type VoicePhrase } from './voice-commands';
 
 const OS = detectOS();
 const BROWSER = detectBrowser();
 
 let keymap: KeymapEntry[] = [];
 let suppressEcho = false;
+// Voice phrases per command id, loaded live from the platform. `voiceLoaded`
+// gates the not-connected note so we don't flash it before the fetch resolves.
+let voiceByCommand = new Map<string, VoicePhrase[]>();
+let voiceConnected = false;
+let voiceLoaded = false;
 
 let keymapEl: HTMLDivElement;
 let cmdTpl: HTMLTemplateElement;
@@ -47,6 +53,12 @@ function save(): void {
 
 function render(): void {
   keymapEl.replaceChildren();
+  if (voiceLoaded && !voiceConnected) {
+    const note = document.createElement('div');
+    note.className = 'km-voice-note';
+    note.textContent = 'Voice phrases unavailable — BranchKit isn’t running. Start it to see what you can say for each command.';
+    keymapEl.appendChild(note);
+  }
   const dupes = duplicateKeys(keymap);
   for (const group of GROUPS) {
     const head = document.createElement('div');
@@ -63,6 +75,13 @@ function renderCommand(meta: CommandMeta, dupes: Set<string>): HTMLElement {
   const node = cmdTpl.content.firstElementChild!.cloneNode(true) as HTMLElement;
   (node.querySelector('.km-cmd-label') as HTMLElement).textContent = meta.label;
   (node.querySelector('.km-cmd-desc') as HTMLElement).textContent = meta.description;
+
+  // Voice phrases from the platform — "you can also say …".
+  const voice = voiceByCommand.get(meta.id);
+  const voiceEl = node.querySelector('.km-cmd-voice') as HTMLElement;
+  if (voice && voice.length > 0) {
+    voiceEl.textContent = `Voice: ${voice.map((p) => `“${p.phrase}”`).join(', ')}`;
+  }
 
   const addBtn = node.querySelector('.km-add-key') as HTMLButtonElement;
   addBtn.addEventListener('click', () => {
@@ -207,6 +226,15 @@ export async function initKeymapEditor(): Promise<void> {
 
   keymap = await loadKeymap();
   render();
+
+  // Voice phrases load async from the platform; re-render when they land so
+  // the cards gain "Voice: …" lines (or the not-connected note).
+  void loadVoiceCommands().then((r) => {
+    voiceByCommand = r.byCommand;
+    voiceConnected = r.connected;
+    voiceLoaded = true;
+    render();
+  });
 
   const resetBtn = document.getElementById('km-reset') as HTMLButtonElement | null;
   resetBtn?.addEventListener('click', async () => {
