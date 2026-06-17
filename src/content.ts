@@ -53,6 +53,7 @@ import {
 } from './activate/snapshot';
 import { dispatcher, registry, keyHandler } from './core/singletons';
 import { DEFAULT_KEYMAP, type KeymapEntry } from './command-catalog';
+import { loadKeymap, onKeymapChanged } from './keymap-storage';
 import { getActiveAdapter, scanWithAdapter } from './adapters';
 import {
   scroll,
@@ -788,26 +789,33 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
 
 // --- Register Commands (built from the keymap) ---
 //
-// The registry is the matcher; DEFAULT_KEYMAP (command-catalog.ts) is the
-// source of truth for what's bound to what. Building the registry from data
-// (rather than hardcoded registry.add calls) is what lets a future keymap
-// editor rebuild bindings via registry.replaceAll — see
-// notes/DESIGN_KEYMAP_CONFIG.md.
+// The registry is the matcher; the keymap (command-catalog.ts DEFAULT_KEYMAP,
+// overridable per-user via keymap-storage) is the source of truth for what's
+// bound to what. Building the registry from data (rather than hardcoded
+// registry.add calls) is what lets the options-page editor rebuild bindings
+// live via registry.replaceAll — see notes/DESIGN_KEYMAP_CONFIG.md.
 //
 // The default set, for reference: `F` shows hints with new-tab activation
-// armed; j/k/d/u/gg/G/h/l scroll (Vimium-compatible); `cs` cycles the scroll
-// target; `/`/n/N drive find-in-page; Shift+H/L cycle tabs (these route to the
-// command path even in always-visible hints mode — a Shift+letter isn't eaten
-// by the codeword filter, see keyboard.ts; bare letters would be). Hint
-// visibility still toggles via the configurable Ctrl/Alt/Meta chord in the
-// keydown listener below — deliberately a modifier chord, since every bare
-// letter is a codeword filter key while hints are painted.
+// armed; j/k/d/u/gg/G/h/l scroll, with Shift+J/K/D/U/T duplicating the
+// vertical scrolls for always-mode (bare letters are codeword input while
+// hints are painted, so Shift is the always-mode scroll form); `cs` cycles the
+// scroll target; `/`/n/N drive find-in-page; Shift+H/L cycle tabs. Shift+letter
+// and modifier chords route to the command path even in always-visible hints
+// mode (a Shift+letter isn't eaten by the codeword filter, see keyboard.ts).
+// Hint visibility still toggles via the configurable Ctrl/Alt/Meta chord in the
+// keydown listener below.
 function buildRegistryFromKeymap(entries: readonly KeymapEntry[]): void {
   registry.replaceAll(
     entries.map((e) => ({ keys: e.keys, action: e.command, params: e.params })),
   );
 }
+// Defaults synchronously so keybinds work before the async storage read
+// returns; then apply the stored keymap (if any) and rebuild live on edits.
 buildRegistryFromKeymap(DEFAULT_KEYMAP);
+if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
+  void loadKeymap().then(buildRegistryFromKeymap);
+  onKeymapChanged(buildRegistryFromKeymap);
+}
 
 // --- Register Action Handlers ---
 
