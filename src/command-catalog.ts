@@ -138,7 +138,6 @@ export const COMMAND_BY_ID: ReadonlyMap<string, CommandMeta> = new Map(
 // scroll (Shift+H/L are tabs), the `cs` sequence, `/` find, and find-next.
 // Comments show the keys as typed; tokens are canonical combos.
 export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
-  { keys: 'shift+KeyF', command: 'show_hints_newtab' }, // Shift+F (show, new-tab armed)
   { keys: 'ctrl+KeyS', command: 'toggle_hints' }, // Ctrl+S — show/hide (leaves Ctrl+F find free)
   { keys: 'shift+KeyJ', command: 'scroll_down' },
   { keys: 'shift+KeyK', command: 'scroll_up' },

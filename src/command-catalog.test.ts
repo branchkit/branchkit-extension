@@ -110,7 +110,6 @@ describe('default keymap', () => {
   it('matches the shipping bindings in canonical combo tokens', () => {
     // Locks the defaults (and their token format) against accidental drift.
     expect(DEFAULT_KEYMAP).toEqual([
-      { keys: 'shift+KeyF', command: 'show_hints_newtab' },
       { keys: 'ctrl+KeyS', command: 'toggle_hints' },
       { keys: 'shift+KeyJ', command: 'scroll_down' },
       { keys: 'shift+KeyK', command: 'scroll_up' },

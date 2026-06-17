@@ -796,9 +796,10 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
 //
 // The default set, for reference: one binding per command, preferring the
 // always-mode form (Shift/modifier chords route to commands even with hints
-// painted; bare letters are codeword input then, so they'd be eaten). Shift+F
-// shows (new-tab armed); Shift+J/K/D/U/T/G scroll; Shift+H/L cycle tabs; Ctrl+S
-// toggles hints. A few inherently-bare, hidden-only binds remain (h/l
+// painted; bare letters are codeword input then, so they'd be eaten).
+// Shift+J/K/D/U/T/G scroll; Shift+H/L cycle tabs; Ctrl+S toggles hints
+// (show_hints_newtab is still bindable, just not a default — Ctrl+S + the "aA"
+// new-tab affordance cover it). A few inherently-bare, hidden-only binds (h/l
 // horizontal scroll, `cs`, `/`, `n`). Users add extra binds (e.g. plain j) via
 // the options editor.
 function buildRegistryFromKeymap(entries: readonly KeymapEntry[]): void {
