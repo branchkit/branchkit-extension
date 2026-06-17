@@ -33,12 +33,16 @@ Concrete (from the current handlers):
 - `DEFAULT_KEYMAP`: the current hardcoded `registry.add(...)` set (content.ts ~798–816 + Shift+H/L), moved into a constant of `{ keys, command, params? }`.
 - `keymap-storage.ts`: **mirror `badge-settings-storage.ts` / `domain-rules-storage.ts`** — `loadKeymap()`, `saveKeymap()`, `onKeymapChanged()`, `DEFAULT_KEYMAP`, on `chrome.storage.sync`. Store the **full effective map** (defaults + user edits) as a structured array — simplest for the GUI (the editor reads/writes objects, no parsing). Optional JSON export/import for backup/sharing (not the primary path).
 
-### 3. Modifier-aware registry (the central refactor)
-Today `handleKeyDown` early-returns on Ctrl/Alt/Meta (so modifier combos can't be registry commands — that's why the hide chord is special-cased), and the registry matches on `e.key` (so `Ctrl+H` ≡ `h`). To unify:
-- **Canonical key tokens via `event.code`** (layout-independent), reusing `key-combo.ts` (`comboFromEvent`/`serializeCombo` → `"ctrl+KeyF"`, `"shift+KeyH"`, `"KeyG"`); generalize to **sequences** (`"KeyG KeyG"`).
+### 3. Data-driven registry, then modifier-aware routing (split)
+This splits into a low-risk half (landed) and the load-bearing half (deferred to land *with* the editor):
+
+**3a — data-driven registry (DONE, Phase 1).** `CommandRegistry.replaceAll(entries)`; `content.ts` builds the registry from `DEFAULT_KEYMAP` instead of hardcoded `registry.add` calls. **No routing-semantic change** — bindings still match on `e.key` tokens (`"F"`, `"gg"`, `"/"`), so all 34 keyboard tests stay green. This is what lets a future editor rebuild bindings (`onKeymapChanged` → `replaceAll`). The hide chord + `Ctrl+Alt+A` stay special in the keydown listener for now.
+
+**3b — modifier-aware routing (DEFERRED, lands with the editor/storage).** Today `handleKeyDown` early-returns on Ctrl/Alt/Meta and the registry matches on `e.key` (so `Ctrl+H` ≡ `h`); only Shift+letter and bare keys reach the registry. To bind arbitrary modifier combos from the GUI:
+- **Canonical key tokens via `event.code`** (layout-independent), reusing `key-combo.ts` (`comboFromEvent`/`serializeCombo` → `"ctrl+KeyF"`, `"shift+KeyH"`, `"KeyG"`); generalize to **sequences** (`"KeyG KeyG"`). This migrates `DEFAULT_KEYMAP` off the legacy `e.key` tokens.
 - **Routing (one rule):** lowercase letter while hints visible → codeword filter (unchanged); **everything else → the command registry**; matched → run, unmatched → `return false` → falls through to other extensions (preserves Vimium-C pass-through for `Ctrl+H`, `<`, `>`, etc.).
-- `CommandRegistry.replaceAll(entries)` so it rebuilds from the effective keymap; wire `onKeymapChanged` → rebuild. `keyToString` becomes code/combo-canonical.
-- **The hide chord stops being special** — it's a default keymap entry (`ctrl+KeyF` → `toggle_hints`), rebindable. **Only `Ctrl+Alt+A` (dev snapshot) stays hard-coded** ahead of the registry.
+- **The hide chord stops being special** — a default keymap entry (`ctrl+KeyF` → `toggle_hints`), rebindable; the editor/store replaces the standalone `hintHideKey` config + `getHintHideKey()`. **Only `Ctrl+Alt+A` (dev snapshot) stays hard-coded** ahead of the registry.
+- **Why deferred:** this changes live routing (every keyboard test switches from `e.key` to `event.code`) and supersedes the shipping `getHintHideKey()` config, so it must land where it's testable end-to-end with a manual always-mode pass — i.e. alongside the editor + storage, not as a blind refactor.
 
 ### 4. Key-capture + validation (reuse + generalize `key-combo.ts`)
 - Capture widget: "Press a key" → `comboFromEvent` → `serializeCombo`; display via `comboDisplay`.
@@ -59,9 +63,9 @@ Touched: `src/dispatcher.ts` (`CommandRegistry.replaceAll`, canonical match), `s
 
 ## Phased plan
 
-- **Phase 0 — data:** `command-catalog.ts` (metadata + param schemas) and `DEFAULT_KEYMAP` (extract from content.ts). Pure data; unit-test the catalog covers every registered action.
-- **Phase 1 — engine:** modifier-aware canonical tokens + sequences in `key-combo`/`keyToString`; `CommandRegistry.replaceAll`; build registry from `DEFAULT_KEYMAP`; route modifier combos through the registry (drop the early-return for the bound path, keep fall-through); migrate the hide chord into the keymap (delete its content.ts special-case). Unit-test: routing (lowercase→filter, Shift/modifier/non-letter→commands, unbound→fall-through), match, and Vimium-C pass-through preserved. **Ships config-driven keybinds even before any UI.**
-- **Phase 2 — storage + editor:** `keymap-storage.ts`; the options-page section (rows, command dropdown, key-capture, schema-driven param controls, validation + warnings, reset); `onKeymapChanged` → registry rebuild. Real user rebinding.
+- **Phase 0 — data (DONE):** `command-catalog.ts` (metadata + param schemas for all 26 actions) and `DEFAULT_KEYMAP` (extracted from content.ts). Pure data; `command-catalog.test.ts` asserts the catalog covers exactly the registered actions, mappable flags are correct, and the extracted defaults match content.ts.
+- **Phase 1 — data-driven registry (DONE):** `CommandRegistry.replaceAll` + build the registry from `DEFAULT_KEYMAP` in content.ts (replacing the hardcoded `registry.add` block). **No routing change** (still `e.key` tokens; hide chord + Ctrl+Alt+A stay special). `dispatcher.test.ts` covers `replaceAll`; all 819 tests green. Foundation for the editor — but no user-visible change yet.
+- **Phase 2 — modifier-aware routing + storage + editor:** the deferred §3b routing migration (canonical `event.code` tokens + sequences, route modifier combos through the registry, fold the hide chord into the keymap) lands here, **with** `keymap-storage.ts` and the options-page editor (rows, command dropdown, key-capture, schema-driven param controls, validation + always-mode warnings, reset) and `onKeymapChanged` → `replaceAll`. Bundling them means the routing change ships where it's testable end-to-end. **Gate: a manual always-mode keyboard pass before merge** (lowercase→filter, Shift/modifier/non-letter→commands, unbound→Vimium-C fall-through, hide chord still toggles).
 - **Phase 3 — polish:** `?` cheat-sheet overlay; JSON export/import; conflict/shadow badges in the editor; drag-reorder; per-`when` scoping if ever needed.
 
 ## Risks / open questions

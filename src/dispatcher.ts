@@ -37,6 +37,18 @@ export class CommandRegistry {
     this.commands.push(entry);
   }
 
+  /** Replace the entire binding set — the keymap is the source of truth, so
+   *  a config change rebuilds the registry rather than mutating in place.
+   *  Entries (params included) are copied so later edits to the source keymap
+   *  don't leak into the live registry. */
+  replaceAll(entries: readonly CommandEntry[]): void {
+    this.commands = entries.map((e) => ({
+      keys: e.keys,
+      action: e.action,
+      params: e.params ? { ...e.params } : undefined,
+    }));
+  }
+
   /**
    * Match a key sequence against registered commands.
    * Returns 'exact' match, 'partial' (prefix of longer sequence), or 'none'.

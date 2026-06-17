@@ -52,6 +52,7 @@ import {
   resolveFromSnapshot,
 } from './activate/snapshot';
 import { dispatcher, registry, keyHandler } from './core/singletons';
+import { DEFAULT_KEYMAP, type KeymapEntry } from './command-catalog';
 import { getActiveAdapter, scanWithAdapter } from './adapters';
 import {
   scroll,
@@ -785,42 +786,28 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
   });
 }
 
-// --- Register Commands (Slice B) ---
-
-// Hint visibility is toggled by the configurable show/hide chord (default
-// Ctrl+F; handled in the keydown listener) — deliberately NOT a plain letter.
-// In always-visible mode every bare letter is consumed as a codeword filter,
-// so a single-key binding would be eaten and never fire; the toggle has to
-// live in a disjoint keyspace (a modifier chord or a non-letter like Escape).
-// That's why the setting is a curated dropdown, not a free key-capture.
-// `F` (shift-F) shows with the new-tab activation modifier armed. Escape stays
-// native (close modal, blur input, cancel find); voice "hide" also works.
-registry.add({ keys: 'F', action: 'show_hints_newtab' });
-
-// Scroll commands (Vimium-compatible)
-registry.add({ keys: 'j', action: 'scroll_down' });
-registry.add({ keys: 'k', action: 'scroll_up' });
-registry.add({ keys: 'd', action: 'scroll_half_down' });
-registry.add({ keys: 'u', action: 'scroll_half_up' });
-registry.add({ keys: 'gg', action: 'scroll_top' });
-registry.add({ keys: 'G', action: 'scroll_bottom' });
-registry.add({ keys: 'h', action: 'scroll_left' });
-registry.add({ keys: 'l', action: 'scroll_right' });
-
-// Cycle scroll target (Surfingkeys-style)
-registry.add({ keys: 'cs', action: 'cycle_scroll_target' });
-
-// Find-in-page
-registry.add({ keys: '/', action: 'find_open' });
-registry.add({ keys: 'n', action: 'find_next' });
-registry.add({ keys: 'N', action: 'find_previous' });
-
-// Tab cycling — Shift+H = previous, Shift+L = next (Vimium convention: H=left,
-// L=right). These work even in always-visible hints mode: a Shift+letter routes
-// to the command path, not the codeword filter (see keyboard.ts). Defaults;
-// rebindable like any keybind. See notes/DESIGN_TAB_NAVIGATION.md.
-registry.add({ keys: 'H', action: 'previous_tab' });
-registry.add({ keys: 'L', action: 'next_tab' });
+// --- Register Commands (built from the keymap) ---
+//
+// The registry is the matcher; DEFAULT_KEYMAP (command-catalog.ts) is the
+// source of truth for what's bound to what. Building the registry from data
+// (rather than hardcoded registry.add calls) is what lets a future keymap
+// editor rebuild bindings via registry.replaceAll — see
+// notes/DESIGN_KEYMAP_CONFIG.md.
+//
+// The default set, for reference: `F` shows hints with new-tab activation
+// armed; j/k/d/u/gg/G/h/l scroll (Vimium-compatible); `cs` cycles the scroll
+// target; `/`/n/N drive find-in-page; Shift+H/L cycle tabs (these route to the
+// command path even in always-visible hints mode — a Shift+letter isn't eaten
+// by the codeword filter, see keyboard.ts; bare letters would be). Hint
+// visibility still toggles via the configurable Ctrl/Alt/Meta chord in the
+// keydown listener below — deliberately a modifier chord, since every bare
+// letter is a codeword filter key while hints are painted.
+function buildRegistryFromKeymap(entries: readonly KeymapEntry[]): void {
+  registry.replaceAll(
+    entries.map((e) => ({ keys: e.keys, action: e.command, params: e.params })),
+  );
+}
+buildRegistryFromKeymap(DEFAULT_KEYMAP);
 
 // --- Register Action Handlers ---
 
