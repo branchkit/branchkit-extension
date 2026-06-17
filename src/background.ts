@@ -11,7 +11,8 @@
 import { Message, ScannedElement, HintVisibility, DispatchResult, GrammarBatchRequest, GrammarBatchResponse } from './types';
 import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearStack, clearAllStacks, regenerateAllStacks, alphabetsEqual } from './labels/label-pool';
 import { rememberCodewords, clearCodewordMemory, recallCodewords } from './labels/codeword-memory';
-import { discoverPlugin, ensureConnected, postToPlugin, getPluginPort, getPluginToken } from './plugin/actuator-client';
+import { discoverPlugin, ensureConnected, postToPlugin, getPluginPort, getPluginToken, getActuatorJson } from './plugin/actuator-client';
+import { buildReconcileReport, type ReconcileWrapper, type ReconcileReport, type MatchableView } from './debug/reconcile';
 import { ensureContentScriptInjected } from './background/injection';
 import { bgState, connId } from './background/state';
 import { republishActiveTab, broadcastToAllTabs, resolveActiveContentTab, notifyActiveTab, resolveHintFromTab } from './background/frame-router';
@@ -248,6 +249,21 @@ async function handleDebugSnapshot(
   if (!snapshotId) {
     console.warn('[branchkit] debug snapshot: missing snapshot_id');
     return;
+  }
+
+  // Layer-2 painted/matchable reconcile (one-shot, demand-driven). Fetches the
+  // actuator's matchable view and joins it with the painted set already in
+  // `payload`, attaching a classified report so it lands in snapshot.json and
+  // the SW log. Non-fatal: a failed fetch must not block the snapshot. Runs
+  // only here, on the debug-snapshot trigger — zero steady-state cost.
+  try {
+    const matchable = await getActuatorJson('/inspector/matchable');
+    const snap = payload as { wrappers?: ReconcileWrapper[]; reconcile?: ReconcileReport };
+    const report = buildReconcileReport(snap.wrappers ?? [], matchable as MatchableView | null);
+    snap.reconcile = report;
+    console.log('[branchkit] painted/matchable reconcile:', report.verdict.join(' | '), report);
+  } catch (e) {
+    console.warn('[branchkit] reconcile failed (non-fatal):', e);
   }
 
   // Step 1: structured-state POST.

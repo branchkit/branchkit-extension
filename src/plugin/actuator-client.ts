@@ -44,6 +44,21 @@ export async function discoverPlugin(): Promise<boolean> {
   }
 }
 
+/**
+ * GET an open (unauthenticated) actuator endpoint and parse JSON. The
+ * `/inspector/*` endpoints are open-GET. Used by the one-shot debug reconcile
+ * to read `/inspector/matchable`. Returns null on any failure (never throws).
+ */
+export async function getActuatorJson(endpoint: string): Promise<unknown | null> {
+  try {
+    const resp = await fetch(`${ACTUATOR_URL}${endpoint}`);
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
 /** True if connected; discovers on miss. Use before a forward that should
  * lazily reconnect. */
 export async function ensureConnected(): Promise<boolean> {
