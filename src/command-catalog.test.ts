@@ -121,6 +121,7 @@ describe('default keymap', () => {
       { keys: 'shift+KeyU', command: 'scroll_half_up' },
       { keys: 'KeyG KeyG', command: 'scroll_top' },
       { keys: 'shift+KeyG', command: 'scroll_bottom' },
+      { keys: 'shift+KeyT', command: 'scroll_top' },
       { keys: 'KeyH', command: 'scroll_left' },
       { keys: 'KeyL', command: 'scroll_right' },
       { keys: 'KeyC KeyS', command: 'cycle_scroll_target' },

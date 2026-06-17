@@ -136,17 +136,19 @@ export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   { keys: 'KeyK', command: 'scroll_up' },
   { keys: 'KeyD', command: 'scroll_half_down' },
   { keys: 'KeyU', command: 'scroll_half_up' },
-  // Shift duplicates of the vertical scrolls. While hints are visible
-  // (always-mode), bare letters are eaten by the codeword filter, so Shift is
-  // the always-mode scroll form; these also fire when hints are hidden, so
-  // Shift scrolls regardless of mode. (Horizontal scroll / scroll-top have no
-  // Shift form: Shift+H/L are tabs and Shift+G is scroll-bottom.)
+  // Shift forms of the scroll commands. While hints are visible (always-mode),
+  // bare letters are eaten by the codeword filter, so Shift is the always-mode
+  // scroll form; these also fire when hints are hidden, so Shift scrolls
+  // regardless of mode. `gg` (two bare g's) can't survive always-mode and has
+  // no Shift sequence (Shift+G alone is bottom), so top gets its own Shift+T.
+  // (Horizontal scroll has no Shift form: Shift+H/L are tabs.)
   { keys: 'shift+KeyJ', command: 'scroll_down' },
   { keys: 'shift+KeyK', command: 'scroll_up' },
   { keys: 'shift+KeyD', command: 'scroll_half_down' },
   { keys: 'shift+KeyU', command: 'scroll_half_up' },
   { keys: 'KeyG KeyG', command: 'scroll_top' }, // gg
   { keys: 'shift+KeyG', command: 'scroll_bottom' }, // G
+  { keys: 'shift+KeyT', command: 'scroll_top' }, // Shift+T — always-mode top
   { keys: 'KeyH', command: 'scroll_left' },
   { keys: 'KeyL', command: 'scroll_right' },
   { keys: 'KeyC KeyS', command: 'cycle_scroll_target' }, // cs
