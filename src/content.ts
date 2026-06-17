@@ -852,7 +852,13 @@ dispatcher.register('hide_hints', () => {
 // to route through the dedicated handlers above; this is the keyboard
 // affordance for users in manual visibility mode.
 dispatcher.register('toggle_hints', () => {
-  if (pageSession.hintsVisible) {
+  // Branch on what's actually on screen, not just the visibility flag. If the
+  // flag desyncs (badges painted while it reads hidden), keying off it alone
+  // makes the toggle "show" a second set on top instead of hiding — the
+  // double-badge / "Ctrl+S won't hide" report. Treat any actually-visible
+  // badge as "showing" so the toggle always dismisses what the user sees.
+  const showing = pageSession.hintsVisible || store.all.some((w) => w.hint?.isVisible);
+  if (showing) {
     hideHints();
     keyHandler.exitHintMode();
     setHintsShown(false);  // sticky: stay hidden across navigation
@@ -2891,6 +2897,20 @@ function snapshotExtras() {
       passes: reconcileApplied.passes,
       last: { ...reconcileApplied.last },
       total: { ...reconcileApplied.total },
+    },
+    // Visibility state — to diagnose a stuck toggle (badges painted but the
+    // flag says hidden, so Ctrl+S routes to "show" instead of "hide"). If
+    // painted_badges > 0 while hints_visible is false, that's the desync.
+    visibility: {
+      hints_visible: pageSession.hintsVisible,
+      hints_shown: getHintsShown(),
+      hint_visibility: getHintVisibility(),
+      painted_badges: store.all.filter((w) => w.hint !== null).length,
+      claimed_codewords: store.all.filter((w) => w.scanned.codeword.length > 0).length,
+      // Actual badge-host DOM nodes. If this exceeds painted_badges, there are
+      // untracked/stale badge nodes in the DOM — i.e. visually doubled hints
+      // that no wrapper owns (the cleanup-on-hide/scroll gap).
+      dom_badge_hosts: document.querySelectorAll('[data-branchkit-hint]').length,
     },
   };
 }
