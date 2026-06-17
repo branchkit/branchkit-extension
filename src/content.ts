@@ -1012,6 +1012,11 @@ dispatcher.register('show_hints_category', (params) => {
 // immediately, no `f` first.
 keyHandler.setHintsVisible(() => pageSession.hintsVisible);
 
+// Reject a codeword keystroke that no painted badge starts with, so a stray
+// key doesn't filter every hint off the screen. Only consults codeword
+// prefixes (not the `/` text filter, which accepts anything).
+keyHandler.setMatchPredicate((prefix) => store.matchingLetterPrefix(prefix).length > 0);
+
 keyHandler.setFilterCallback((prefix: string, byText: boolean) => {
   if (!pageSession.hintsVisible) return;
 

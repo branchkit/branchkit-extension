@@ -46,6 +46,10 @@ export class KeyHandler {
   // badges even without the explicit `f`-entered hint mode — so always-visible
   // hints are keyboard-reachable without first pressing `f`. Set by content.ts.
   private hintsVisible: () => boolean = () => false;
+  // Whether at least one codeword starts with a given prefix. Used to reject a
+  // codeword keystroke that matches nothing — otherwise the filter hides every
+  // badge until Escape. Set by content.ts; null means accept any char.
+  private matchPredicate: ((prefix: string) => boolean) | null = null;
 
   constructor(registry: CommandRegistry, dispatcher: ActionDispatcher) {
     this.registry = registry;
@@ -58,6 +62,10 @@ export class KeyHandler {
 
   setHintsVisible(fn: () => boolean): void {
     this.hintsVisible = fn;
+  }
+
+  setMatchPredicate(fn: (prefix: string) => boolean): void {
+    this.matchPredicate = fn;
   }
 
   isFilteringByText(): boolean {
@@ -215,7 +223,15 @@ export class KeyHandler {
     if (e.key.length === 1 && /[a-zA-Z]/.test(e.key)) {
       e.preventDefault();
       e.stopPropagation();
-      this.filterText += e.key.toLowerCase();
+      const next = this.filterText + e.key.toLowerCase();
+      // No-op a keystroke that no codeword starts with — otherwise the filter
+      // matches nothing and every hint vanishes until Escape. A stray key while
+      // hints are up should do nothing, not blank the screen. (No predicate set
+      // → accept any char, preserving the old behavior for tests/manual mode.)
+      if (this.matchPredicate && !this.matchPredicate(next)) {
+        return true;
+      }
+      this.filterText = next;
       if (e.shiftKey) this.newTabArmed = true;
       this.onFilterChange?.(this.filterText, false);
       return true;

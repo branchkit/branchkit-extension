@@ -156,6 +156,43 @@ describe('new-tab casing (capital mid-codeword)', () => {
   });
 });
 
+describe('codeword filter — match predicate (no blank-on-nonmatch)', () => {
+  it('no-ops a first letter no codeword starts with (hints stay put)', () => {
+    const cb = vi.fn();
+    handler.setFilterCallback(cb);
+    handler.setHintsVisible(() => true);
+    handler.setMatchPredicate((p) => p.startsWith('a')); // only "a…" codewords exist
+
+    const result = handler.handleKeyDown(makeKey('k')); // no "k…" codeword
+    expect(result).toBe(true); // consumed (doesn't fall through to the page)
+    expect(cb).not.toHaveBeenCalled(); // filter NOT applied → nothing hidden
+  });
+
+  it('accepts a matching first letter and filters', () => {
+    const cb = vi.fn();
+    handler.setFilterCallback(cb);
+    handler.setHintsVisible(() => true);
+    handler.setMatchPredicate((p) => p.startsWith('a'));
+
+    handler.handleKeyDown(makeKey('a'));
+    expect(cb).toHaveBeenCalledWith('a', false);
+  });
+
+  it('does not extend the prefix into a non-matching codeword', () => {
+    const cb = vi.fn();
+    handler.setFilterCallback(cb);
+    handler.setHintsVisible(() => true);
+    handler.setMatchPredicate((p) => p === 'a' || p === 'ai');
+
+    handler.handleKeyDown(makeKey('a'));
+    expect(cb).toHaveBeenLastCalledWith('a', false);
+    handler.handleKeyDown(makeKey('z')); // "az" matches nothing → no-op
+    expect(cb).toHaveBeenLastCalledWith('a', false);
+    handler.handleKeyDown(makeKey('i')); // "ai" matches
+    expect(cb).toHaveBeenLastCalledWith('ai', false);
+  });
+});
+
 describe('hint mode — text filter', () => {
   it('/ in hint mode switches to text filter mode', () => {
     const cb = vi.fn();
