@@ -1,13 +1,17 @@
 /**
  * BranchKit Browser — voice commands from the platform, for the keymap editor.
  *
- * Reads the actuator's open-GET /inspector/matchable and maps the browser
- * plugin's spoken commands to this extension's command ids, so the editor can
- * show "you can also say …" next to each command's keys. The action field
- * ("browser.show_hints") was added to that endpoint precisely for this map.
+ * Maps the browser plugin's spoken commands to this extension's command ids so
+ * the editor can show "you can also say …" next to each command's keys. The
+ * data comes from the browser plugin's authenticated GET /voice-commands
+ * (fetched by the background SW, which holds the plugin port+token) — NOT the
+ * actuator's open /inspector/matchable, which exposed every plugin's command
+ * set to any local process. The plugin enumerates + filters to owner=="browser"
+ * and returns the same {eligible, gated} shape this parser already expects; the
+ * action field ("browser.show_hints") maps each phrase to a command id.
  */
 
-import { getActuatorJson } from './plugin/actuator-client';
+import type { VoiceCommandsMessageResponse } from './types';
 
 export interface VoicePhrase {
   phrase: string;
@@ -56,7 +60,16 @@ export interface VoiceCommandsResult {
 }
 
 export async function loadVoiceCommands(): Promise<VoiceCommandsResult> {
-  const json = await getActuatorJson('/inspector/matchable');
-  if (json === null) return { connected: false, byCommand: new Map() };
-  return { connected: true, byCommand: parseVoiceCommands(json) };
+  // The options page can't reach the plugin directly (no port+token), so it
+  // asks the background SW, which fetches the authenticated /voice-commands.
+  let resp: VoiceCommandsMessageResponse | undefined;
+  try {
+    resp = await chrome.runtime.sendMessage({ type: 'GET_VOICE_COMMANDS' });
+  } catch {
+    resp = undefined;
+  }
+  if (!resp || !resp.connected || resp.data == null) {
+    return { connected: false, byCommand: new Map() };
+  }
+  return { connected: true, byCommand: parseVoiceCommands(resp.data) };
 }

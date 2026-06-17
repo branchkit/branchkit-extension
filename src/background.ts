@@ -11,7 +11,7 @@
 import { Message, ScannedElement, HintVisibility, DispatchResult, GrammarBatchRequest, GrammarBatchResponse } from './types';
 import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearStack, clearAllStacks, regenerateAllStacks, alphabetsEqual } from './labels/label-pool';
 import { rememberCodewords, clearCodewordMemory, recallCodewords } from './labels/codeword-memory';
-import { discoverPlugin, ensureConnected, postToPlugin, getPluginPort, getPluginToken, getActuatorJson } from './plugin/actuator-client';
+import { discoverPlugin, ensureConnected, postToPlugin, getFromPlugin, getPluginPort, getPluginToken, getActuatorJson } from './plugin/actuator-client';
 import { buildReconcileReport, type ReconcileWrapper, type ReconcileReport, type MatchableView } from './debug/reconcile';
 import { cycleTabIndex } from './background/tab-nav';
 import { ensureContentScriptInjected } from './background/injection';
@@ -175,6 +175,19 @@ async function hydrateReferencesFromCollection(): Promise<void> {
   } catch {
     // Plugin may be down or tab URL unavailable
   }
+}
+
+// Fetch this browser plugin's voice commands for the keymap editor. The
+// options page can't hold the plugin port+token, so it asks the background
+// (GET_VOICE_COMMANDS) which calls the plugin's authenticated GET
+// /voice-commands — replacing the editor's old direct read of the actuator's
+// open /inspector/matchable. Discovers on miss; returns connected:false when
+// BranchKit is unreachable so the editor can show its "not running" note.
+async function fetchVoiceCommands(): Promise<{ connected: boolean; data: unknown }> {
+  if (!(await ensureConnected())) return { connected: false, data: null };
+  const data = await getFromPlugin('/voice-commands');
+  if (data === null) return { connected: false, data: null };
+  return { connected: true, data };
 }
 
 // Forward a content-script dispatch outcome to the plugin's POST
@@ -664,6 +677,13 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   if (message.type === 'SWITCH_TAB' && (message.direction === 'next' || message.direction === 'previous')) {
     void handleSwitchTab(message.direction);
     return false;
+  }
+
+  if (message.type === 'GET_VOICE_COMMANDS') {
+    fetchVoiceCommands()
+      .then(sendResponse)
+      .catch(() => sendResponse({ connected: false, data: null }));
+    return true; // async response
   }
 
   if (message.type === 'HEALTH_STATUS') {
