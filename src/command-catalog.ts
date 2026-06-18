@@ -25,6 +25,25 @@ export interface ParamSchema {
   default?: string;
 }
 
+/**
+ * A spoken form of a command, owned by the extension. When BranchKit is present
+ * the extension contributes these up to the browser plugin (the registrar), so
+ * voice phrases live in ONE place with the command's keybind and action — never
+ * read back from the plugin. See notes/DESIGN_COMMAND_CONTRIBUTION.md.
+ */
+export interface VoicePattern {
+  /**
+   * Spoken slot sequence: space-separated literal words plus `{number}` /
+   * `{text}` captures (e.g. "scroll down", "scroll down {number}", "find {text}").
+   */
+  pattern: string;
+  /**
+   * Action params this phrase binds. Values may reference a capture by name
+   * ("{number}" / "{text}"). Omitted = the command's bare action.
+   */
+  params?: Record<string, string>;
+}
+
 export interface CommandMeta {
   id: string;
   label: string;
@@ -37,6 +56,11 @@ export interface CommandMeta {
    */
   mappable: boolean;
   params: ParamSchema[];
+  /**
+   * Optional spoken forms. Contributed to the browser plugin when BranchKit is
+   * connected; also what the voice panel renders. Absent = no voice phrase.
+   */
+  voice?: readonly VoicePattern[];
 }
 
 export interface KeymapEntry {
@@ -96,10 +120,29 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
       { name: 'direction', type: 'enum', options: SCROLL_DIRECTIONS, default: 'down' },
       { name: 'amount', type: 'enum', options: SCROLL_AMOUNTS, default: 'step' },
       { name: 'count', type: 'number', min: 1, default: '1' },
+    ],
+    voice: [
+      { pattern: 'scroll down', params: { direction: 'down', amount: 'step' } },
+      { pattern: 'scroll up', params: { direction: 'up', amount: 'step' } },
+      { pattern: 'scroll down {number}', params: { direction: 'down', amount: 'step', count: '{number}' } },
+      { pattern: 'scroll up {number}', params: { direction: 'up', amount: 'step', count: '{number}' } },
+      { pattern: 'page down', params: { direction: 'down', amount: 'half' } },
+      { pattern: 'page up', params: { direction: 'up', amount: 'half' } },
+      { pattern: 'full page down', params: { direction: 'down', amount: 'full' } },
+      { pattern: 'full page up', params: { direction: 'up', amount: 'full' } },
+      { pattern: 'top', params: { direction: 'up', amount: 'top' } },
+      { pattern: 'bottom', params: { direction: 'down', amount: 'bottom' } },
+      { pattern: 'scroll sidebar', params: { direction: 'down', amount: 'step', region: 'leftSidebar' } },
+      { pattern: 'scroll sidebar down', params: { direction: 'down', amount: 'step', region: 'leftSidebar' } },
+      { pattern: 'scroll sidebar up', params: { direction: 'up', amount: 'step', region: 'leftSidebar' } },
+      { pattern: 'scroll main', params: { direction: 'down', amount: 'step', region: 'main' } },
+      { pattern: 'scroll main down', params: { direction: 'down', amount: 'step', region: 'main' } },
+      { pattern: 'scroll main up', params: { direction: 'up', amount: 'step', region: 'main' } },
     ] },
   { id: 'scroll_to_percent', label: 'Scroll to percent', group: 'Scroll', mappable: true,
     description: 'Scroll to a vertical position given as a percentage of the page.',
-    params: [{ name: 'percent', type: 'number', min: 0, max: 100, default: '50' }] },
+    params: [{ name: 'percent', type: 'number', min: 0, max: 100, default: '50' }],
+    voice: [{ pattern: 'scroll halfway', params: { percent: '50' } }] },
   { id: 'scroll_to_element', label: 'Scroll to element', group: 'Scroll', mappable: false, params: [],
     description: 'Scroll a specific element into view (runtime selector — not bindable).' },
 
@@ -109,11 +152,25 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   { id: 'find_close', label: 'Close find', group: 'Find', mappable: true, params: [],
     description: 'Close the in-page find bar.' },
   { id: 'find_next', label: 'Find next', group: 'Find', mappable: true, params: [],
-    description: 'Jump to the next find match.' },
+    description: 'Jump to the next find match.',
+    voice: [{ pattern: 'next' }] },
   { id: 'find_previous', label: 'Find previous', group: 'Find', mappable: true, params: [],
-    description: 'Jump to the previous find match.' },
+    description: 'Jump to the previous find match.',
+    voice: [{ pattern: 'previous' }] },
   { id: 'find_immediate', label: 'Find immediately', group: 'Find', mappable: false, params: [],
-    description: 'Run a find for a given query (runtime query — not bindable).' },
+    description: 'Run a find for a given query (runtime query — not bindable).',
+    voice: [{ pattern: 'find {text}', params: { query: '{text}' } }] },
+
+  // --- Navigation ---
+  { id: 'history_back', label: 'Go back', group: 'Navigation', mappable: true, params: [],
+    description: 'Step back through page history (full stack, including voice-navigated SPA entries).',
+    voice: [{ pattern: 'go back' }] },
+  { id: 'history_forward', label: 'Go forward', group: 'Navigation', mappable: true, params: [],
+    description: 'Step forward through page history (full stack).',
+    voice: [{ pattern: 'go forward' }] },
+  { id: 'refresh', label: 'Reload page', group: 'Navigation', mappable: true, params: [],
+    description: 'Reload the current page.',
+    voice: [{ pattern: 'refresh' }, { pattern: 'reload' }] },
 
   // --- Tabs ---
   { id: 'next_tab', label: 'Next tab', group: 'Tabs', mappable: true, params: [],

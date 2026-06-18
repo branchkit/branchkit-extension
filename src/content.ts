@@ -939,6 +939,20 @@ dispatcher.register('previous_tab', () => {
   chrome.runtime.sendMessage({ type: 'SWITCH_TAB', direction: 'previous' } as Message).catch(() => {});
 });
 
+// Page navigation — also handled inline in the BRANCHKIT_ACTION listener for the
+// voice path; registering here makes them keyboard-bindable (extension-owned).
+// history.back/forward step the full stack so voice-navigated SPA entries
+// (synthetic clicks, isTrusted=false) aren't skipped like the UI buttons do.
+dispatcher.register('history_back', () => {
+  history.back();
+});
+dispatcher.register('history_forward', () => {
+  history.forward();
+});
+dispatcher.register('refresh', () => {
+  location.reload();
+});
+
 dispatcher.register('find_immediate', (params) => {
   const query = params.query || '';
   if (query) findImmediate(query);

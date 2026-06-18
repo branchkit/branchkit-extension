@@ -16,6 +16,7 @@ const REGISTERED_ACTIONS = [
   'scroll_top', 'scroll_bottom', 'scroll_left', 'scroll_right',
   'cycle_scroll_target', 'scroll', 'scroll_to_percent', 'scroll_to_element',
   'find_open', 'find_close', 'find_next', 'find_previous', 'find_immediate',
+  'history_back', 'history_forward', 'refresh',
   'next_tab', 'previous_tab',
 ] as const;
 
@@ -89,6 +90,37 @@ describe('command catalog — param schemas', () => {
   it('only enum params carry options', () => {
     for (const p of allParams) {
       if (p.options) expect(p.type).toBe('enum');
+    }
+  });
+});
+
+describe('command catalog — voice patterns', () => {
+  const withVoice = COMMAND_CATALOG.filter((c) => c.voice && c.voice.length > 0);
+
+  it('gives every voice pattern a non-empty pattern string', () => {
+    for (const c of withVoice) {
+      for (const v of c.voice!) {
+        expect(v.pattern.trim().length, `${c.id}`).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it('only references captures ({number}/{text}) that appear in the pattern', () => {
+    for (const c of withVoice) {
+      for (const v of c.voice!) {
+        const captures = new Set(v.pattern.match(/\{(\w+)\}/g) ?? []);
+        for (const val of Object.values(v.params ?? {})) {
+          const m = val.match(/^\{(\w+)\}$/);
+          if (m) expect(captures.has(val), `${c.id}: param ${val}`).toBe(true);
+        }
+      }
+    }
+  });
+
+  it('attaches voice only to scroll / find / navigation commands this phase', () => {
+    const allowed = new Set(['Scroll', 'Find', 'Navigation']);
+    for (const c of withVoice) {
+      expect(allowed.has(c.group), `${c.id} in ${c.group}`).toBe(true);
     }
   });
 });
