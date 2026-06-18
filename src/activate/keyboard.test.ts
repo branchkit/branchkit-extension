@@ -51,14 +51,6 @@ describe('hint mode entry/exit', () => {
     handler.exitHintMode();
     expect(handler.getMode()).toBe('normal');
   });
-
-  it('exitHintMode resets filterByText flag', () => {
-    handler.enterHintMode();
-    handler.handleKeyDown(makeKey('/'));
-    expect(handler.isFilteringByText()).toBe(true);
-    handler.exitHintMode();
-    expect(handler.isFilteringByText()).toBe(false);
-  });
 });
 
 describe('hint mode — codeword filtering', () => {
@@ -68,10 +60,10 @@ describe('hint mode — codeword filtering', () => {
     handler.enterHintMode();
 
     handler.handleKeyDown(makeKey('a'));
-    expect(cb).toHaveBeenCalledWith('a', false);
+    expect(cb).toHaveBeenCalledWith('a');
 
     handler.handleKeyDown(makeKey('B'));
-    expect(cb).toHaveBeenCalledWith('ab', false);
+    expect(cb).toHaveBeenCalledWith('ab');
   });
 
   it('backspace in codeword mode removes last char', () => {
@@ -82,7 +74,7 @@ describe('hint mode — codeword filtering', () => {
     handler.handleKeyDown(makeKey('a'));
     handler.handleKeyDown(makeKey('b'));
     handler.handleKeyDown(makeKey('Backspace'));
-    expect(cb).toHaveBeenLastCalledWith('a', false);
+    expect(cb).toHaveBeenLastCalledWith('a');
   });
 
   it('escape exits hint mode', () => {
@@ -101,7 +93,7 @@ describe('hint mode — codeword filtering', () => {
 
     const result = handler.handleKeyDown(makeKey('Escape'));
     expect(result).toBe(true);
-    expect(cb).toHaveBeenLastCalledWith('', false); // prefix cleared
+    expect(cb).toHaveBeenLastCalledWith(''); // prefix cleared
     expect(handler.getMode()).toBe('hint'); // did NOT exit
     expect(dispatchSpy).not.toHaveBeenCalledWith('hide_hints');
 
@@ -175,7 +167,7 @@ describe('codeword filter — match predicate (no blank-on-nonmatch)', () => {
     handler.setMatchPredicate((p) => p.startsWith('a'));
 
     handler.handleKeyDown(makeKey('a'));
-    expect(cb).toHaveBeenCalledWith('a', false);
+    expect(cb).toHaveBeenCalledWith('a');
   });
 
   it('does not extend the prefix into a non-matching codeword', () => {
@@ -185,79 +177,30 @@ describe('codeword filter — match predicate (no blank-on-nonmatch)', () => {
     handler.setMatchPredicate((p) => p === 'a' || p === 'ai');
 
     handler.handleKeyDown(makeKey('a'));
-    expect(cb).toHaveBeenLastCalledWith('a', false);
+    expect(cb).toHaveBeenLastCalledWith('a');
     handler.handleKeyDown(makeKey('z')); // "az" matches nothing → no-op
-    expect(cb).toHaveBeenLastCalledWith('a', false);
+    expect(cb).toHaveBeenLastCalledWith('a');
     handler.handleKeyDown(makeKey('i')); // "ai" matches
-    expect(cb).toHaveBeenLastCalledWith('ai', false);
+    expect(cb).toHaveBeenLastCalledWith('ai');
   });
 });
 
-describe('hint mode — text filter', () => {
-  it('/ in hint mode switches to text filter mode', () => {
+describe('hint mode — / opens find', () => {
+  it('/ dispatches find_open (find-in-page), not a hint filter', () => {
     const cb = vi.fn();
     handler.setFilterCallback(cb);
     handler.enterHintMode();
-
-    handler.handleKeyDown(makeKey('/'));
-    expect(handler.isFilteringByText()).toBe(true);
-    expect(cb).toHaveBeenCalledWith('', true);
+    const result = handler.handleKeyDown(makeKey('/'));
+    expect(result).toBe(true);
+    expect(dispatchSpy).toHaveBeenCalledWith('find_open');
+    expect(cb).not.toHaveBeenCalled();
   });
 
-  it('letters in text filter mode append to filterText with byText=true', () => {
-    const cb = vi.fn();
-    handler.setFilterCallback(cb);
-    handler.enterHintMode();
-    handler.handleKeyDown(makeKey('/'));
-
-    handler.handleKeyDown(makeKey('s'));
-    expect(cb).toHaveBeenCalledWith('s', true);
-
-    handler.handleKeyDown(makeKey('e'));
-    expect(cb).toHaveBeenCalledWith('se', true);
-  });
-
-  it('digits and spaces work in text filter mode', () => {
-    const cb = vi.fn();
-    handler.setFilterCallback(cb);
-    handler.enterHintMode();
-    handler.handleKeyDown(makeKey('/'));
-
-    handler.handleKeyDown(makeKey('1'));
-    expect(cb).toHaveBeenCalledWith('1', true);
-
-    handler.handleKeyDown(makeKey(' '));
-    expect(cb).toHaveBeenCalledWith('1 ', true);
-  });
-
-  it('backspace in text filter mode removes last char', () => {
-    const cb = vi.fn();
-    handler.setFilterCallback(cb);
-    handler.enterHintMode();
-    handler.handleKeyDown(makeKey('/'));
-    handler.handleKeyDown(makeKey('a'));
-    handler.handleKeyDown(makeKey('b'));
-
-    handler.handleKeyDown(makeKey('Backspace'));
-    expect(cb).toHaveBeenLastCalledWith('a', true);
-  });
-
-  it('backspace on empty text filter exits back to codeword mode', () => {
-    const cb = vi.fn();
-    handler.setFilterCallback(cb);
-    handler.enterHintMode();
-    handler.handleKeyDown(makeKey('/'));
-
-    handler.handleKeyDown(makeKey('Backspace'));
-    expect(handler.isFilteringByText()).toBe(false);
-    expect(cb).toHaveBeenLastCalledWith('', false);
-  });
-
-  it('escape exits hint mode from text filter sub-mode', () => {
-    handler.enterHintMode();
-    handler.handleKeyDown(makeKey('/'));
-    handler.handleKeyDown(makeKey('Escape'));
-    expect(handler.getMode()).toBe('normal');
+  it('/ opens find in always-mode too (hints visible, no explicit hint mode)', () => {
+    handler.setHintsVisible(() => true);
+    const result = handler.handleKeyDown(makeKey('/'));
+    expect(result).toBe(true);
+    expect(dispatchSpy).toHaveBeenCalledWith('find_open');
   });
 });
 
@@ -278,7 +221,7 @@ describe('passive typing — hints visible without entering hint mode (f)', () =
     const result = handler.handleKeyDown(makeKey('a'));
     expect(result).toBe(true);
     expect(handler.getMode()).toBe('normal'); // never entered explicit hint mode
-    expect(cb).toHaveBeenCalledWith('a', false);
+    expect(cb).toHaveBeenCalledWith('a');
   });
 
   it('a letter filters instead of firing its nav keybind when hints are visible', () => {
@@ -289,7 +232,7 @@ describe('passive typing — hints visible without entering hint mode (f)', () =
 
     const result = handler.handleKeyDown(makeKey('j'));
     expect(result).toBe(true);
-    expect(cb).toHaveBeenCalledWith('j', false);
+    expect(cb).toHaveBeenCalledWith('j');
     expect(dispatchSpy).not.toHaveBeenCalledWith('scroll_down', {});
   });
 
@@ -356,7 +299,7 @@ describe('passive typing — hints visible without entering hint mode (f)', () =
     handler.setHintsVisible(() => true);
 
     handler.handleKeyDown(makeKey('j')); // lowercase
-    expect(cb).toHaveBeenCalledWith('j', false);
+    expect(cb).toHaveBeenCalledWith('j');
     expect(dispatchSpy).not.toHaveBeenCalledWith('scroll_down', {});
   });
 
@@ -367,22 +310,10 @@ describe('passive typing — hints visible without entering hint mode (f)', () =
     handler.setHintsVisible(() => true);
 
     handler.handleKeyDown(makeKey('a')); // start a codeword → filterText "a"
-    expect(cb).toHaveBeenLastCalledWith('a', false);
+    expect(cb).toHaveBeenLastCalledWith('a');
     handler.handleKeyDown(makeKey('A', { shiftKey: true })); // capital mid-codeword
-    expect(cb).toHaveBeenLastCalledWith('aa', false); // stayed in the filter (lowercased)
+    expect(cb).toHaveBeenLastCalledWith('aa'); // stayed in the filter (lowercased)
     expect(dispatchSpy).not.toHaveBeenCalledWith('some_cmd', {}); // did NOT divert to the command
-  });
-
-  it('in the text-filter (/) search, Shift+letters are query text, not commands', () => {
-    registry.add({ keys: 'shift+KeyG', action: 'scroll_bottom' });
-    const cb = vi.fn();
-    handler.setFilterCallback(cb);
-    handler.enterHintMode();
-    handler.handleKeyDown(makeKey('/')); // enter text-filter search
-    handler.handleKeyDown(makeKey('G', { shiftKey: true }));
-
-    expect(cb).toHaveBeenLastCalledWith('g', true); // query text, not a command
-    expect(dispatchSpy).not.toHaveBeenCalledWith('scroll_bottom', {});
   });
 
   it('Escape cancels an in-progress typed prefix under passive typing (the user case)', () => {
@@ -394,12 +325,12 @@ describe('passive typing — hints visible without entering hint mode (f)', () =
 
     const result = handler.handleKeyDown(makeKey('Escape'));
     expect(result).toBe(true); // consumed, not native
-    expect(cb).toHaveBeenLastCalledWith('', false); // prefix reset
+    expect(cb).toHaveBeenLastCalledWith(''); // prefix reset
     expect(dispatchSpy).not.toHaveBeenCalledWith('hide_hints'); // hints stay visible
 
     // After cancel, a fresh letter starts a new hint cleanly.
     handler.handleKeyDown(makeKey('b'));
-    expect(cb).toHaveBeenLastCalledWith('b', false);
+    expect(cb).toHaveBeenLastCalledWith('b');
   });
 
   it('passive typing yields to editable fields (insert mode passes through)', () => {

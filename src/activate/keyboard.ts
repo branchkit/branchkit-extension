@@ -33,7 +33,6 @@ export class KeyHandler {
   private sequence: string = '';
   private timeout: ReturnType<typeof setTimeout> | null = null;
   private filterText: string = '';
-  private filterByText: boolean = false;
   // Set when a capital letter is typed mid-codeword — the "aA" affordance:
   // finishing a codeword with a capital opens the pick in a new tab. Read by
   // the content-side filter callback on the unique match; reset whenever the
@@ -41,7 +40,7 @@ export class KeyHandler {
   private newTabArmed: boolean = false;
   private registry: CommandRegistry;
   private dispatcher: ActionDispatcher;
-  private onFilterChange: ((prefix: string, byText: boolean) => void) | null = null;
+  private onFilterChange: ((prefix: string) => void) | null = null;
   // Whether hints are currently painted. When true, typed letters filter
   // badges even without the explicit `f`-entered hint mode — so always-visible
   // hints are keyboard-reachable without first pressing `f`. Set by content.ts.
@@ -56,7 +55,7 @@ export class KeyHandler {
     this.dispatcher = dispatcher;
   }
 
-  setFilterCallback(cb: (prefix: string, byText: boolean) => void): void {
+  setFilterCallback(cb: (prefix: string) => void): void {
     this.onFilterChange = cb;
   }
 
@@ -68,10 +67,6 @@ export class KeyHandler {
     this.matchPredicate = fn;
   }
 
-  isFilteringByText(): boolean {
-    return this.filterByText;
-  }
-
   getMode(): KeyMode {
     return this.mode;
   }
@@ -79,14 +74,12 @@ export class KeyHandler {
   enterHintMode(): void {
     this.mode = 'hint';
     this.filterText = '';
-    this.filterByText = false;
     this.newTabArmed = false;
   }
 
   exitHintMode(): void {
     this.mode = 'normal';
     this.filterText = '';
-    this.filterByText = false;
     this.sequence = '';
     this.newTabArmed = false;
   }
@@ -119,12 +112,7 @@ export class KeyHandler {
     // Hints are typeable in explicit hint mode OR whenever hints are painted
     // (always-mode, no `f` needed). Routing within, in priority order:
     if (this.mode === 'hint' || this.hintsVisible()) {
-      // 1. Text/search sub-mode (the `/` filter): every printable key —
-      //    capitals included — is query text, never a command or codeword.
-      if (this.filterByText) {
-        return this.handleHintKey(e);
-      }
-      // 2. A Shift combo with NO codeword in progress is a command "outlier":
+      // 1. A Shift combo with NO codeword in progress is a command "outlier":
       //    route it to the command path so modifier-style keybinds work in
       //    always-mode. Shift+letter (BranchKit's F/G/N) matches there, unbound
       //    ones (e.g. Vimium-C's H/L) fall through to other extensions, and
@@ -140,7 +128,7 @@ export class KeyHandler {
       if (this.filterText.length === 0 && e.shiftKey) {
         return this.handleNormalKey(e);
       }
-      // 3. Lowercase / control keys / mid-codeword keys → codeword filter.
+      // 2. Lowercase / control keys / mid-codeword keys → codeword filter.
       return this.handleHintKey(e);
     }
 
@@ -160,7 +148,7 @@ export class KeyHandler {
         e.stopPropagation();
         this.filterText = '';
         this.newTabArmed = false;
-        this.onFilterChange?.('', this.filterByText);
+        this.onFilterChange?.('');
         return true;
       }
       // No typed prefix. Only the explicitly-entered hint mode treats Escape as
@@ -181,10 +169,7 @@ export class KeyHandler {
       if (this.filterText.length > 0) {
         this.filterText = this.filterText.slice(0, -1);
         if (this.filterText.length === 0) this.newTabArmed = false;
-        this.onFilterChange?.(this.filterText, this.filterByText);
-      } else if (this.filterByText) {
-        this.filterByText = false;
-        this.onFilterChange?.('', false);
+        this.onFilterChange?.(this.filterText);
       }
       return true;
     }
@@ -196,22 +181,14 @@ export class KeyHandler {
       return true;
     }
 
-    // `/` in hint mode switches to text filter
-    if (e.key === '/' && !this.filterByText) {
+    // `/` opens find-in-page (Vimium-style: a visible query bar that highlights
+    // text matches and steps through them with Enter / Shift+Enter — it never
+    // clicks a link). It used to enter a hint-text-filter that auto-activated a
+    // unique match, a footgun with no on-screen affordance.
+    if (e.key === '/') {
       e.preventDefault();
       e.stopPropagation();
-      this.filterByText = true;
-      this.filterText = '';
-      this.onFilterChange?.('', true);
-      return true;
-    }
-
-    // In text filter mode, accept any printable character (including spaces, digits)
-    if (this.filterByText && e.key.length === 1) {
-      e.preventDefault();
-      e.stopPropagation();
-      this.filterText += e.key.toLowerCase();
-      this.onFilterChange?.(this.filterText, true);
+      this.dispatcher.dispatch('find_open');
       return true;
     }
 
@@ -232,7 +209,7 @@ export class KeyHandler {
       }
       this.filterText = next;
       if (e.shiftKey) this.newTabArmed = true;
-      this.onFilterChange?.(this.filterText, false);
+      this.onFilterChange?.(this.filterText);
       return true;
     }
 

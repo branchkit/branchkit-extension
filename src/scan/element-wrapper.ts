@@ -290,23 +290,6 @@ export class WrapperStore {
       return w.label.letter.toLowerCase().startsWith(lower);
     });
   }
-
-  /**
-   * Score all wrappers against a text query using Vimium's scoreLinkHint
-   * algorithm. Returns wrappers with score > 0, sorted descending.
-   */
-  matchingText(query: string): { wrapper: ElementWrapper; score: number }[] {
-    if (!query) return [];
-    const lower = query.toLowerCase();
-    const results: { wrapper: ElementWrapper; score: number }[] = [];
-    for (const w of this.wrappers) {
-      if (!w.label) continue;
-      const score = scoreTextMatch(w.scanned.label, lower);
-      if (score > 0) results.push({ wrapper: w, score });
-    }
-    results.sort((a, b) => b.score - a.score);
-    return results;
-  }
 }
 
 /**

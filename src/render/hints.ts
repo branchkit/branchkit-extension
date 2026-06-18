@@ -234,12 +234,9 @@ const BADGE_CSS = `
   }
   /* Occlusion: the target is covered by another element (hit-test), so the
    * badge would float on top of whatever hides it. Hidden entirely —
-   * orthogonal to .filtered (text-match) and the .visible opacity gate. */
+   * orthogonal to .filtered (codeword filter) and the .visible opacity gate. */
   .bk-inner.bk-occluded {
     display: none;
-  }
-  .bk-inner.text-match {
-    outline: 1px solid currentColor;
   }
   .bk-matched {
     opacity: 0.35;
@@ -819,8 +816,8 @@ export class HintBadge {
   // Visually hide a badge whose target is covered by another element (the
   // occlusion hit-test, notes/DESIGN_HINT_OCCLUSION_FILTERING.md). Distinct from
   // hide()/_visible (the badge stays "shown" in the visibility-tracker's sense,
-  // so it un-hides the instant the cover moves) and from setFiltered (text-match
-  // filtering). Mirrors the occluded state onto the light-DOM host as
+  // so it un-hides the instant the cover moves) and from setFiltered (codeword-
+  // filter dimming). Mirrors the occluded state onto the light-DOM host as
   // data-bk-occluded for diagnostics. Idempotent.
   setOccluded(occluded: boolean): void {
     if (occluded) {
@@ -829,14 +826,6 @@ export class HintBadge {
     } else {
       this.inner.classList.remove('bk-occluded');
       this.host.removeAttribute('data-bk-occluded');
-    }
-  }
-
-  setTextMatch(matched: boolean): void {
-    if (matched) {
-      this.inner.classList.add('text-match');
-    } else {
-      this.inner.classList.remove('text-match');
     }
   }
 

@@ -79,7 +79,6 @@ import {
   findPrevious,
   findImmediate,
   isFindActive,
-  handlePostFindKey,
   setFindCallbacks,
 } from './scan/find';
 import { saveReference, resolveReference, listReferences } from './scan/references';
@@ -1043,55 +1042,35 @@ keyHandler.setHintsVisible(() => pageSession.hintsVisible);
 // prefixes (not the `/` text filter, which accepts anything).
 keyHandler.setMatchPredicate((prefix) => store.matchingLetterPrefix(prefix).length > 0);
 
-keyHandler.setFilterCallback((prefix: string, byText: boolean) => {
+keyHandler.setFilterCallback((prefix: string) => {
   if (!pageSession.hintsVisible) return;
 
   if (prefix === '') {
     for (const w of store.all) {
       w.hint?.setFiltered(false);
-      w.hint?.setTextMatch(false);
       w.hint?.setMatchedChars(0);
     }
     return;
   }
 
-  if (byText) {
-    const textResults = store.matchingText(prefix);
-    const textMatches = new Set(textResults.map(r => r.wrapper));
+  const matchSet = new Set(store.matchingLetterPrefix(prefix));
+  for (const w of store.all) {
+    const isMatch = matchSet.has(w);
+    w.hint?.setFiltered(!isMatch);
+    if (isMatch) {
+      w.hint?.setMatchedChars(prefix.length);
+    }
+  }
 
-    for (const w of store.all) {
-      const isMatch = textMatches.has(w);
-      w.hint?.setFiltered(!isMatch);
-      w.hint?.setTextMatch(isMatch);
-    }
-
-    if (textMatches.size === 1) {
-      const winner = textMatches.values().next().value!;
-      activateWrapper(winner);
-      hideHints();
-      keyHandler.exitHintMode();
-    }
-  } else {
-    const matchSet = new Set(store.matchingLetterPrefix(prefix));
-    for (const w of store.all) {
-      const isMatch = matchSet.has(w);
-      w.hint?.setFiltered(!isMatch);
-      w.hint?.setTextMatch(false);
-      if (isMatch) {
-        w.hint?.setMatchedChars(prefix.length);
-      }
-    }
-
-    if (matchSet.size === 1) {
-      const first = matchSet.values().next().value!;
-      // "aA" affordance: a capital typed mid-codeword opens this pick in a new
-      // tab. `activateWrapper` reads `activateInNewTab` and `clearHintFilter`
-      // resets it, same as the `F` arm.
-      if (keyHandler.isNewTabArmed()) activateInNewTab = true;
-      activateWrapper(first);
-      hideHints();
-      keyHandler.exitHintMode();
-    }
+  if (matchSet.size === 1) {
+    const first = matchSet.values().next().value!;
+    // "aA" affordance: a capital typed mid-codeword opens this pick in a new
+    // tab. `activateWrapper` reads `activateInNewTab` and `clearHintFilter`
+    // resets it, same as the `F` arm.
+    if (keyHandler.isNewTabArmed()) activateInNewTab = true;
+    activateWrapper(first);
+    hideHints();
+    keyHandler.exitHintMode();
   }
 });
 
@@ -1384,7 +1363,6 @@ function clearHintFilter(): void {
   keyHandler.exitHintMode();
   for (const w of store.all) {
     w.hint?.setFiltered(false);
-    w.hint?.setTextMatch(false);
   }
 }
 
@@ -2743,7 +2721,6 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         for (const w of store.all) {
           const isMatch = matchSet.has(w);
           w.hint?.setFiltered(!isMatch);
-          w.hint?.setTextMatch(false);
           if (isMatch) {
             w.hint?.setMatchedChars(1);
           }
@@ -2752,7 +2729,6 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         // No prefix — reset all hints to default (cancel pair state)
         for (const w of store.all) {
           w.hint?.setFiltered(false);
-          w.hint?.setTextMatch(false);
           w.hint?.setMatchedChars(0);
         }
       }
@@ -3152,7 +3128,12 @@ const heldKeys = new Set<string>();
 
 document.addEventListener('keydown', (e: KeyboardEvent) => {
   if (pageSession.isTornDown) return;
-  if (handlePostFindKey(e)) return;
+  // While the find bar is open it owns the keyboard — its focused input handles
+  // typing and its own keydown handles Enter/Escape. Returning here (without
+  // preventDefault) lets the keystroke reach that input and keeps the hint key
+  // handler from treating letters as codeword filtering. Without this, in
+  // always-mode the codeword filter ate every key after the first.
+  if (isFindActive()) return;
 
   // Ctrl+Alt+A — hint-diagnostics snapshot trigger (Phase 2b of
   // docs/completed/DESIGN_HINT_DIAGNOSTICS.md). The design originally
