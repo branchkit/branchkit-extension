@@ -36,10 +36,15 @@ const LETTER_TO_WORD: Record<string, string> = {}; // 'a' -> 'arch'
  *  voice path. Empty until the voice alphabet is loaded. */
 export const WORD_TO_LETTER: Record<string, string> = {};
 
+// Cached load state so isVoiceAlphabetLoaded() is O(1) on the badge-paint hot
+// path (no Object.keys allocation per pending badge). The maps are mutated only
+// by setAlphabet + clearAlphabet, which keep this in sync.
+let voiceAlphabetLoaded = false;
+
 /** True once BranchKit has pushed a valid 26-word alphabet (voice addressing is
  *  available). Hints do NOT depend on this — only the spoken overlay does. */
 export function isVoiceAlphabetLoaded(): boolean {
-  return Object.keys(LETTER_TO_WORD).length === 26;
+  return voiceAlphabetLoaded;
 }
 
 /**
@@ -56,6 +61,7 @@ export function setAlphabet(words: string[]): boolean {
     LETTER_TO_WORD[LETTER_INDEX[i]] = words[i];
     WORD_TO_LETTER[words[i]] = LETTER_INDEX[i];
   }
+  voiceAlphabetLoaded = true;
   return true;
 }
 
@@ -63,6 +69,7 @@ export function setAlphabet(words: string[]): boolean {
 export function clearAlphabet(): void {
   for (const k of Object.keys(LETTER_TO_WORD)) delete LETTER_TO_WORD[k];
   for (const k of Object.keys(WORD_TO_LETTER)) delete WORD_TO_LETTER[k];
+  voiceAlphabetLoaded = false;
 }
 
 /** The spoken word for a letter, or the letter itself when no overlay loaded. */
