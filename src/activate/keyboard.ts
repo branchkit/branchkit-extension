@@ -124,21 +124,20 @@ export class KeyHandler {
       if (this.filterByText) {
         return this.handleHintKey(e);
       }
-      // 2. A Shift+letter with NO codeword in progress is a command "outlier":
-      //    route it to the command path so uppercase keybinds work in
-      //    always-mode — BranchKit's own (F/G/N) match there, and unbound ones
-      //    (e.g. Vimium-C's H/L) fall through to other extensions. (The combo
-      //    token carries the `shift+` prefix, so the registry distinguishes
-      //    "shift+KeyH" from "KeyH"; real-modifier chords already routed to the
-      //    registry above.) A Shift+letter *mid*-codeword is deliberately NOT
-      //    diverted — it stays with the hint filter, reserved for the
-      //    capital-means-new-tab idea.
-      if (
-        this.filterText.length === 0 &&
-        e.shiftKey &&
-        e.key.length === 1 &&
-        /[a-zA-Z]/.test(e.key)
-      ) {
+      // 2. A Shift combo with NO codeword in progress is a command "outlier":
+      //    route it to the command path so modifier-style keybinds work in
+      //    always-mode. Shift+letter (BranchKit's F/G/N) matches there, unbound
+      //    ones (e.g. Vimium-C's H/L) fall through to other extensions, and
+      //    Shift+punctuation likewise — Shift+/ (?) opens the help overlay.
+      //    Punctuation is never a codeword char (codewords are [a-zA-Z]), and a
+      //    first-key capital is a command not a codeword start by design, so
+      //    diverting every empty-prefix Shift combo is safe. (The combo token
+      //    carries the `shift+` prefix, so the registry distinguishes
+      //    "shift+KeyH" from "KeyH"; real-modifier chords already routed above.)
+      //    A Shift+letter *mid*-codeword (filterText > 0) is deliberately NOT
+      //    diverted — it stays with the hint filter for the capital-means-new-tab
+      //    affordance.
+      if (this.filterText.length === 0 && e.shiftKey) {
         return this.handleNormalKey(e);
       }
       // 3. Lowercase / control keys / mid-codeword keys → codeword filter.

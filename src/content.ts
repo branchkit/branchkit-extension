@@ -46,6 +46,7 @@ import {
 } from './activate/activate-path-log';
 import { captureDebugSnapshot } from './debug/debug-snapshot';
 import { toggleOverlay } from './render/debug-overlay';
+import { toggleHelpOverlay } from './render/help-overlay';
 import {
   CodewordSnapshot,
   takeSnapshot,
@@ -788,7 +789,11 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
 // new-tab affordance cover it). A few inherently-bare, hidden-only binds (h/l
 // horizontal scroll, `cs`, `/`, `n`). Users add extra binds (e.g. plain j) via
 // the options editor.
+// The effective keymap, kept in sync with the registry so the help overlay can
+// render the user's actual binds (not just the defaults).
+let currentKeymap: readonly KeymapEntry[] = DEFAULT_KEYMAP;
 function buildRegistryFromKeymap(entries: readonly KeymapEntry[]): void {
+  currentKeymap = entries;
   registry.replaceAll(
     entries.map((e) => ({ keys: e.keys, action: e.command, params: e.params })),
   );
@@ -955,6 +960,12 @@ dispatcher.register('find_next', () => {
 
 dispatcher.register('find_previous', () => {
   findPrevious();
+});
+
+// Keyboard help overlay (default ?). Reads the live keymap so it shows the
+// user's actual binds. Extension-owned — works without BranchKit connected.
+dispatcher.register('toggle_help', () => {
+  toggleHelpOverlay(currentKeymap);
 });
 
 // Tab cycling — forward to the background SW (content scripts can't switch tabs).

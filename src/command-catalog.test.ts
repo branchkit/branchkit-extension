@@ -19,6 +19,7 @@ const REGISTERED_ACTIONS = [
   'find_open', 'find_close', 'find_next', 'find_previous', 'find_immediate',
   'history_back', 'history_forward', 'refresh',
   'next_tab', 'previous_tab',
+  'toggle_help',
 ] as const;
 
 const NOT_MAPPABLE = new Set(['activate_hint', 'find_immediate', 'scroll_to_element', 'scroll']);
@@ -158,6 +159,7 @@ describe('default keymap', () => {
       { keys: 'shift+KeyN', command: 'find_previous' },
       { keys: 'shift+KeyH', command: 'previous_tab' },
       { keys: 'shift+KeyL', command: 'next_tab' },
+      { keys: 'shift+Slash', command: 'toggle_help' },
     ]);
   });
 });

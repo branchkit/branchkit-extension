@@ -7,9 +7,13 @@
  * the shipping DEFAULT_KEYMAP applies. The content script reads this at startup
  * and rebuilds the command registry on storage.onChanged.
  *
- * Trade-off: full-replace storage means a user who saved a keymap won't pick up
- * NEW default binds added in a later version. Acceptable pre-launch; revisit
- * with a defaults+overrides model if it bites.
+ * The stored snapshot is from whatever version the user last saved, so it lacks
+ * binds for commands shipped since. On load we BACKFILL any default whose
+ * command the snapshot doesn't bind at all AND whose default key is free — so a
+ * new command (e.g. the `?` help overlay) works without a manual reset. User
+ * rebinds and removals of still-present commands are untouched; a command the
+ * user fully unbound whose default key is also free is restored (the accepted
+ * edge of snapshot — not diff — storage).
  */
 
 import { DEFAULT_KEYMAP, COMMAND_BY_ID, type KeymapEntry } from './command-catalog';
@@ -41,11 +45,28 @@ export function sanitizeKeymap(entries: readonly KeymapEntry[]): KeymapEntry[] {
   return out;
 }
 
+/**
+ * Backfill default binds the stored snapshot lacks: a default whose command is
+ * unbound there AND whose key combo is free. Surfaces commands shipped after the
+ * user last saved without clobbering rebinds or creating duplicate/conflicting
+ * binds. Pure; tested directly.
+ */
+export function mergeNewDefaults(stored: readonly KeymapEntry[]): KeymapEntry[] {
+  const boundCommands = new Set(stored.map((e) => e.command));
+  const usedKeys = new Set(stored.map((e) => e.keys));
+  const out = stored.map((e) => ({ ...e }));
+  for (const d of DEFAULT_KEYMAP) {
+    if (boundCommands.has(d.command) || usedKeys.has(d.keys)) continue;
+    out.push({ ...d });
+  }
+  return out;
+}
+
 export async function loadKeymap(): Promise<KeymapEntry[]> {
   const result = await chrome.storage.sync.get(STORAGE_KEY);
   const stored = result[STORAGE_KEY] as KeymapEntry[] | undefined;
   if (!Array.isArray(stored)) return defaults();
-  return sanitizeKeymap(stored);
+  return mergeNewDefaults(sanitizeKeymap(stored));
 }
 
 export function saveKeymap(entries: readonly KeymapEntry[]): void {
@@ -65,7 +86,7 @@ export function onKeymapChanged(cb: (entries: KeymapEntry[]) => void): () => voi
   const listener = (changes: Record<string, chrome.storage.StorageChange>): void => {
     if (!changes[STORAGE_KEY]) return;
     const next = changes[STORAGE_KEY].newValue as KeymapEntry[] | undefined;
-    cb(Array.isArray(next) ? sanitizeKeymap(next) : defaults());
+    cb(Array.isArray(next) ? mergeNewDefaults(sanitizeKeymap(next)) : defaults());
   };
   chrome.storage.onChanged.addListener(listener);
   return () => chrome.storage.onChanged.removeListener(listener);

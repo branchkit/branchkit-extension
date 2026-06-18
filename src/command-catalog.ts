@@ -184,6 +184,10 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     description: 'Switch to the next tab in the current window.' },
   { id: 'previous_tab', label: 'Previous tab', group: 'Tabs', mappable: true, params: [],
     description: 'Switch to the previous tab in the current window.' },
+
+  // --- Help ---
+  { id: 'toggle_help', label: 'Keyboard help', group: 'Help', mappable: true, params: [],
+    description: 'Show or hide this keyboard command reference.' },
 ];
 
 export const COMMAND_BY_ID: ReadonlyMap<string, CommandMeta> = new Map(
@@ -242,4 +246,5 @@ export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   { keys: 'shift+KeyN', command: 'find_previous' }, // Shift+N
   { keys: 'shift+KeyH', command: 'previous_tab' }, // Shift+H
   { keys: 'shift+KeyL', command: 'next_tab' }, // Shift+L
+  { keys: 'shift+Slash', command: 'toggle_help' }, // ? — keyboard command reference
 ];

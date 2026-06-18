@@ -326,6 +326,18 @@ describe('passive typing — hints visible without entering hint mode (f)', () =
     expect(cb).not.toHaveBeenCalled(); // did NOT enter the codeword filter
   });
 
+  it('Shift+/ (?) routes to a command in always-mode (punctuation is never a codeword)', () => {
+    registry.add({ keys: 'shift+Slash', action: 'toggle_help' });
+    const cb = vi.fn();
+    handler.setFilterCallback(cb);
+    handler.setHintsVisible(() => true);
+
+    const result = handler.handleKeyDown(makeKey('?', { shiftKey: true, code: 'Slash' } as Partial<KeyboardEvent>));
+    expect(result).toBe(true);
+    expect(dispatchSpy).toHaveBeenCalledWith('toggle_help', {});
+    expect(cb).not.toHaveBeenCalled(); // did NOT enter the codeword filter
+  });
+
   it('an unbound Shift+letter falls through (passes to other extensions) in always-mode', () => {
     const cb = vi.fn();
     handler.setFilterCallback(cb);
