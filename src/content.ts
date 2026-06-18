@@ -670,39 +670,47 @@ if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
 // are standalone now, so they run whether or not BranchKit is present. (Before
 // the inversion, doScanBatched no-opped without an alphabet, so this block was
 // the only thing that kicked the first scan once voice connected.)
+// The one-time initial discovery scan + auto-show. Shared by the eligible-at-
+// load path (the storage callback below) and the visibility-deferred path
+// (deferActivationUntilVisible). Guarded so it runs at most once even if a tab
+// becomes visible before the storage read resolves.
+//
+// Deferred by a macrotask: running doScan synchronously here blocks the main
+// thread before the snapshot publisher's setInterval registers its first tick —
+// on heavy pages (YouTube /watch with shadow DOM and 1000+ candidates) this
+// reads as a freeze and Firefox flags the extension as unresponsive. setTimeout(0)
+// (not requestIdleCallback) because rIC never finds a true idle window on
+// hyperactive pages and its 2s fallback starves the scan-batch loop's own
+// setTimeout(0) yields. One tick is enough to let the page paint + the publisher
+// fire its first sample; from there doScanBatched's chunked walk yields between
+// batches.
+let initialScanKicked = false;
+function kickInitialScan(): void {
+  if (initialScanKicked) return;
+  initialScanKicked = true;
+  setTimeout(() => {
+    // Coalesced — any domain-rules-change or badge-settings-change event that
+    // arrived in the same tick folds into this scan instead of triggering a
+    // second back-to-back doScanBatched.
+    scheduleDoScan();
+    if (shouldAutoShowHints()) {
+      whenDOMSettles(() => {
+        pageSession.tracker.flushNow().then(() => {
+          if (shouldAutoShowHints() && !pageSession.hintsVisible) showHints();
+        });
+      });
+    }
+  }, 0);
+}
+
 if (typeof chrome !== 'undefined' && chrome.storage?.local) {
   chrome.storage.local.get('alphabet', (result) => {
     if (Array.isArray(result.alphabet)) setAlphabet(result.alphabet);
-    // Ineligible frame (tiny/about:blank subframe): no initial scan. If it
-    // later grows past the threshold the wake-on-resize path runs doScan.
+    // No initial scan yet when the machinery is off: either an ineligible frame
+    // (tiny/about:blank subframe — woken via wake-on-resize) or a backgrounded
+    // tab whose activation was deferred (Lever 2 — woken on first show).
     if (!hintMachineryEnabled) return;
-    // Defer the initial scan by one macrotask. Running doScan
-    // synchronously inside the storage callback blocks the main thread
-    // before the snapshot publisher's setInterval has a chance to
-    // register its first tick — on heavy pages (YouTube /watch with
-    // shadow DOM and 1000+ candidates) this looks like a freeze and
-    // Firefox flags the extension as unresponsive.
-    //
-    // setTimeout(0) (rather than requestIdleCallback) because rIC
-    // never finds a true idle window on hyperactive pages, and the 2s
-    // timeout fallback still starves the scan-batch loop's own
-    // setTimeout(0) yields. A single-tick defer is enough to let the
-    // page paint + the publisher fire its first sample; from there
-    // scanInBatches' chunked walk + the per-batch await yield the
-    // event loop between batches.
-    setTimeout(() => {
-      // Coalesced — any domain-rules-change or badge-settings-change
-      // event that arrived in the same tick will fold into this scan
-      // instead of triggering a second back-to-back doScanBatched.
-      scheduleDoScan();
-      if (shouldAutoShowHints()) {
-        whenDOMSettles(() => {
-          pageSession.tracker.flushNow().then(() => {
-            if (shouldAutoShowHints() && !pageSession.hintsVisible) showHints();
-          });
-        });
-      }
-    }, 0);
+    kickInitialScan();
   });
 }
 
@@ -1156,6 +1164,14 @@ function observeInvisibleCandidates(candidates: Element[]): void {
 let scanChain: Promise<void> = Promise.resolve();
 let scanPending = false;
 function doScan(): Promise<void> {
+  // Lever 2 (visibility-defer): hintMachineryEnabled is the single gate for ALL
+  // scan work, not just the boot path. It's false for an ineligible frame
+  // (Lever 1 frame-skip) or a backgrounded tab whose activation is deferred —
+  // neither should run a full-document discovery walk. So a rescan/reactivate/
+  // show_hints message that arrives while deferred no-ops here; the scan runs
+  // from kickInitialScan when the tab is first shown (activateHintMachinery sets
+  // this flag before kickInitialScan, so the normal activation scan still runs).
+  if (!hintMachineryEnabled) return scanChain;
   // If a scan is in flight and another is already pending, fold this
   // trigger into the existing pending re-run.
   if (scanPending) return scanChain;
@@ -3344,8 +3360,34 @@ function activateHintMachinery(trigger: 'load' | 'resize'): void {
   }
 }
 
+// Lever 2 (visibility-defer / lazy discovery): a frame that loads while its tab
+// is in the background gets its page-wide hint machinery — MutationObserver,
+// initial full-document scan, limbo sweeper — deferred until the tab is first
+// shown. Background-tab hints are unusable anyway (voice dispatches only to the
+// focused source, and the plugin projects grammar to the active tab), so running
+// discovery now is pure waste. The payoff is the session-restore / open-many-
+// tabs burst: 20-30 tabs that would each run a full scan on load instead stay
+// inert until focused, one at a time. A subframe in a hidden tab inherits
+// 'hidden' from the top document, so the whole tab defers as a unit.
+function deferActivationUntilVisible(): void {
+  const onVisible = (): void => {
+    if (document.visibilityState !== 'visible') return;
+    document.removeEventListener('visibilitychange', onVisible);
+    activateHintMachinery('load');
+    // 'load' relies on the storage callback to run the first scan, but that
+    // already ran and returned early while we were hidden — kick it here.
+    kickInitialScan();
+  };
+  document.addEventListener('visibilitychange', onVisible);
+}
+
 if (frameMayHoldHints()) {
-  activateHintMachinery('load');
+  // Visible (foreground) tab: activate now. Hidden/prerender: defer to first show.
+  if (document.visibilityState === 'visible') {
+    activateHintMachinery('load');
+  } else {
+    deferActivationUntilVisible();
+  }
 } else {
   // Subframe too small / blank to hold a usable hint. Watch for it growing
   // past the threshold (a collapsed slot expanding, a lazily-sized iframe) and
