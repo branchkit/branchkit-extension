@@ -298,6 +298,10 @@ function frameMayHoldHints(): boolean {
   return window.innerWidth * window.innerHeight >= MIN_FRAME_AREA_PX;
 }
 let hintMachineryEnabled = false;
+// Lever 3 (hidden-tab suspend): true while an enabled frame is backgrounded
+// and its page MutationObserver has been disconnected. Reversible — wrappers/
+// codewords/badges are preserved; resume re-attaches the MO and reconciles.
+let suspended = false;
 
 // --- State ---
 //
@@ -1171,7 +1175,9 @@ function doScan(): Promise<void> {
   // show_hints message that arrives while deferred no-ops here; the scan runs
   // from kickInitialScan when the tab is first shown (activateHintMachinery sets
   // this flag before kickInitialScan, so the normal activation scan still runs).
-  if (!hintMachineryEnabled) return scanChain;
+  // Also no-op while suspended (Lever 3): a rescan/reactivate for a hidden tab
+  // waits; resume() runs the catch-up scan after re-attaching the observer.
+  if (!hintMachineryEnabled || suspended) return scanChain;
   // If a scan is in flight and another is already pending, fold this
   // trigger into the existing pending re-run.
   if (scanPending) return scanChain;
@@ -3360,33 +3366,70 @@ function activateHintMachinery(trigger: 'load' | 'resize'): void {
   }
 }
 
-// Lever 2 (visibility-defer / lazy discovery): a frame that loads while its tab
-// is in the background gets its page-wide hint machinery — MutationObserver,
-// initial full-document scan, limbo sweeper — deferred until the tab is first
-// shown. Background-tab hints are unusable anyway (voice dispatches only to the
-// focused source, and the plugin projects grammar to the active tab), so running
-// discovery now is pure waste. The payoff is the session-restore / open-many-
-// tabs burst: 20-30 tabs that would each run a full scan on load instead stay
-// inert until focused, one at a time. A subframe in a hidden tab inherits
-// 'hidden' from the top document, so the whole tab defers as a unit.
-function deferActivationUntilVisible(): void {
-  const onVisible = (): void => {
-    if (document.visibilityState !== 'visible') return;
-    document.removeEventListener('visibilitychange', onVisible);
-    activateHintMachinery('load');
-    // 'load' relies on the storage callback to run the first scan, but that
-    // already ran and returned early while we were hidden — kick it here.
-    kickInitialScan();
-  };
-  document.addEventListener('visibilitychange', onVisible);
+// Lever 3 (hidden-tab suspend): stop reacting to the page's DOM churn while the
+// tab is backgrounded. Disconnect ONLY the page MutationObserver (the lone
+// continuous cost in a hidden tab — the IO/resize observers are dormant without
+// scroll/relayout) and cancel the discovery rAF. Preserve wrappers, codewords,
+// pool claims, badges, registry: this is reversible, NOT teardown
+// (cf. quiesceOrphan). See notes/DESIGN_HIDDEN_TAB_SUSPEND.md.
+function suspendHintMachinery(): void {
+  if (suspended || !hintMachineryEnabled) return;
+  suspended = true;
+  teardownMutationSource();
+  if (pageSession.discoveryFrame !== null) {
+    cancelAnimationFrame(pageSession.discoveryFrame);
+    pageSession.discoveryFrame = null;
+    pageSession.pendingDiscoveryRoots.clear();
+  }
+  bkLog('BK_SUSPEND', { url: trimFrameUrl(window.location.href), wrappers: store.all.length });
 }
 
+// Re-arm the page MutationObserver and catch up on whatever the page mutated
+// while we were suspended: doScan discovers new content + drops detached
+// wrappers, reconcile refreshes viewport claims. Mirrors the from_cache
+// reactivate path; doScan's scanChain serializes this against the background's
+// reactivate so there's no duplicate-codeword race.
+function resumeHintMachinery(): void {
+  if (!suspended) return;
+  suspended = false;
+  attachPageMutationObserver();
+  void doScan().then(() => {
+    reconcile();
+    void pageSession.tracker.flushNow();
+    if (pageSession.hintsVisible) showHints(activeCategory ?? undefined);
+  });
+  bkLog('BK_RESUME', { url: trimFrameUrl(window.location.href), wrappers: store.all.length });
+}
+
+// One persistent visibilitychange handler driving the deferred/active/suspended
+// state machine for an eligible frame. A subframe inherits the top document's
+// visibility, so the whole tab transitions as a unit.
+//   - Lever 2 (lazy discovery): a tab that loaded hidden activates on first show.
+//   - Lever 3 (suspend): an active tab suspends when hidden, resumes when shown.
+function onVisibilityChange(): void {
+  if (!frameMayHoldHints()) return;
+  if (document.visibilityState === 'visible') {
+    if (!hintMachineryEnabled) {
+      // First show of a tab that loaded hidden. 'load' relies on the storage
+      // callback for the first scan, but that returned early while hidden —
+      // kick it here.
+      activateHintMachinery('load');
+      kickInitialScan();
+    } else if (suspended) {
+      resumeHintMachinery();
+    }
+  } else if (hintMachineryEnabled && !suspended) {
+    suspendHintMachinery();
+  }
+}
+document.addEventListener('visibilitychange', onVisibilityChange);
+
 if (frameMayHoldHints()) {
-  // Visible (foreground) tab: activate now. Hidden/prerender: defer to first show.
+  // Visible (foreground) tab: activate now (the storage callback kicks the
+  // initial scan). Hidden/prerender: stay inert; onVisibilityChange activates
+  // on first show (lazy discovery).
   if (document.visibilityState === 'visible') {
     activateHintMachinery('load');
-  } else {
-    deferActivationUntilVisible();
   }
 } else {
   // Subframe too small / blank to hold a usable hint. Watch for it growing
