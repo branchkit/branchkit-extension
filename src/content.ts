@@ -861,16 +861,18 @@ dispatcher.register('activate_hint', (params) => {
 
 // --- Scroll action handlers ---
 
-dispatcher.register('scroll_down', () => {
+dispatcher.register('scroll_down', (params) => {
+  const count = parseInt(params.count || '1', 10) || 1;
   const ct = getCycleTarget();
-  if (ct) scrollElement(ct, 'down', 'step');
-  else scroll('down', 'step');
+  if (ct) scrollElement(ct, 'down', 'step', count);
+  else scroll('down', 'step', count);
 });
 
-dispatcher.register('scroll_up', () => {
+dispatcher.register('scroll_up', (params) => {
+  const count = parseInt(params.count || '1', 10) || 1;
   const ct = getCycleTarget();
-  if (ct) scrollElement(ct, 'up', 'step');
-  else scroll('up', 'step');
+  if (ct) scrollElement(ct, 'up', 'step', count);
+  else scroll('up', 'step', count);
 });
 
 dispatcher.register('scroll_half_down', () => {
@@ -883,6 +885,18 @@ dispatcher.register('scroll_half_up', () => {
   const ct = getCycleTarget();
   if (ct) scrollElement(ct, 'up', 'half');
   else scroll('up', 'half');
+});
+
+dispatcher.register('scroll_full_down', () => {
+  const ct = getCycleTarget();
+  if (ct) scrollElement(ct, 'down', 'full');
+  else scroll('down', 'full');
+});
+
+dispatcher.register('scroll_full_up', () => {
+  const ct = getCycleTarget();
+  if (ct) scrollElement(ct, 'up', 'full');
+  else scroll('up', 'full');
 });
 
 dispatcher.register('scroll_top', () => {
@@ -2464,6 +2478,7 @@ function republishForActivation(reason: string): void {
 const DISPATCH_PASSTHROUGH_ACTIONS = new Set([
   'scroll', 'scroll_to_element', 'scroll_to_percent',
   'scroll_down', 'scroll_up', 'scroll_half_down', 'scroll_half_up',
+  'scroll_full_down', 'scroll_full_up',
   'scroll_top', 'scroll_bottom', 'scroll_left', 'scroll_right',
   'find_open', 'find_close', 'find_next', 'find_previous', 'find_immediate',
 ]);

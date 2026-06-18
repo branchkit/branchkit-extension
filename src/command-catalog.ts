@@ -97,17 +97,29 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
 
   // --- Scroll ---
   { id: 'scroll_down', label: 'Scroll down', group: 'Scroll', mappable: true, params: [],
-    description: 'Scroll the page (or cycled target) down one step.',
-    voice: [{ pattern: 'scroll down' }] },
+    description: 'Scroll the page (or cycled target) down one step (or N steps).',
+    voice: [
+      { pattern: 'scroll down' },
+      { pattern: 'scroll down {number}', params: { count: '{number}' } },
+    ] },
   { id: 'scroll_up', label: 'Scroll up', group: 'Scroll', mappable: true, params: [],
-    description: 'Scroll the page (or cycled target) up one step.',
-    voice: [{ pattern: 'scroll up' }] },
+    description: 'Scroll the page (or cycled target) up one step (or N steps).',
+    voice: [
+      { pattern: 'scroll up' },
+      { pattern: 'scroll up {number}', params: { count: '{number}' } },
+    ] },
   { id: 'scroll_half_down', label: 'Scroll half-page down', group: 'Scroll', mappable: true, params: [],
     description: 'Scroll down half a viewport.',
     voice: [{ pattern: 'page down' }] },
   { id: 'scroll_half_up', label: 'Scroll half-page up', group: 'Scroll', mappable: true, params: [],
     description: 'Scroll up half a viewport.',
     voice: [{ pattern: 'page up' }] },
+  { id: 'scroll_full_down', label: 'Scroll full-page down', group: 'Scroll', mappable: true, params: [],
+    description: 'Scroll down a full viewport.',
+    voice: [{ pattern: 'full page down' }] },
+  { id: 'scroll_full_up', label: 'Scroll full-page up', group: 'Scroll', mappable: true, params: [],
+    description: 'Scroll up a full viewport.',
+    voice: [{ pattern: 'full page up' }] },
   { id: 'scroll_top', label: 'Scroll to top', group: 'Scroll', mappable: true, params: [],
     description: 'Jump to the top of the page (or cycled target).',
     voice: [{ pattern: 'top' }, { pattern: 'scroll top' }, { pattern: 'scroll to top' }] },
@@ -122,26 +134,17 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     voice: [{ pattern: 'scroll right' }] },
   { id: 'cycle_scroll_target', label: 'Cycle scroll target', group: 'Scroll', mappable: true, params: [],
     description: 'Cycle which scrollable element the scroll commands act on.' },
-  { id: 'scroll', label: 'Scroll (parameterized)', group: 'Scroll', mappable: true,
-    description: 'Scroll in a direction by an amount, optionally repeated.',
+  // The generic parameterized scroll: a runtime action (direction/amount/count/
+  // region), not a sensible single-key bind — hidden from the editor like
+  // scroll_to_element. Its directional/count phrases now live on the discrete
+  // cards above; region (sidebar/main) scrolling is implemented (scrollRegion)
+  // but not currently voiced — re-add a voice entry here to bring it back.
+  { id: 'scroll', label: 'Scroll (parameterized)', group: 'Scroll', mappable: false,
+    description: 'Scroll in a direction by an amount, optionally repeated or region-scoped (runtime — not bindable).',
     params: [
       { name: 'direction', type: 'enum', options: SCROLL_DIRECTIONS, default: 'down' },
       { name: 'amount', type: 'enum', options: SCROLL_AMOUNTS, default: 'step' },
       { name: 'count', type: 'number', min: 1, default: '1' },
-    ],
-    // Only the phrases that genuinely need params live here; the single-step
-    // directional scrolls moved to their own discrete cards (next to the key).
-    voice: [
-      { pattern: 'scroll down {number}', params: { direction: 'down', amount: 'step', count: '{number}' } },
-      { pattern: 'scroll up {number}', params: { direction: 'up', amount: 'step', count: '{number}' } },
-      { pattern: 'full page down', params: { direction: 'down', amount: 'full' } },
-      { pattern: 'full page up', params: { direction: 'up', amount: 'full' } },
-      { pattern: 'scroll sidebar', params: { direction: 'down', amount: 'step', region: 'leftSidebar' } },
-      { pattern: 'scroll sidebar down', params: { direction: 'down', amount: 'step', region: 'leftSidebar' } },
-      { pattern: 'scroll sidebar up', params: { direction: 'up', amount: 'step', region: 'leftSidebar' } },
-      { pattern: 'scroll main', params: { direction: 'down', amount: 'step', region: 'main' } },
-      { pattern: 'scroll main down', params: { direction: 'down', amount: 'step', region: 'main' } },
-      { pattern: 'scroll main up', params: { direction: 'up', amount: 'step', region: 'main' } },
     ] },
   { id: 'scroll_to_percent', label: 'Scroll to percent', group: 'Scroll', mappable: true,
     description: 'Scroll to a vertical position given as a percentage of the page.',

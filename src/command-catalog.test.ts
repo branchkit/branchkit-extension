@@ -13,6 +13,7 @@ const REGISTERED_ACTIONS = [
   'show_hints', 'show_hints_newtab', 'hide_hints', 'toggle_hints',
   'activate_first_visible', 'activate_hint', 'show_hints_category',
   'scroll_down', 'scroll_up', 'scroll_half_down', 'scroll_half_up',
+  'scroll_full_down', 'scroll_full_up',
   'scroll_top', 'scroll_bottom', 'scroll_left', 'scroll_right',
   'cycle_scroll_target', 'scroll', 'scroll_to_percent', 'scroll_to_element',
   'find_open', 'find_close', 'find_next', 'find_previous', 'find_immediate',
@@ -20,7 +21,7 @@ const REGISTERED_ACTIONS = [
   'next_tab', 'previous_tab',
 ] as const;
 
-const NOT_MAPPABLE = new Set(['activate_hint', 'find_immediate', 'scroll_to_element']);
+const NOT_MAPPABLE = new Set(['activate_hint', 'find_immediate', 'scroll_to_element', 'scroll']);
 
 describe('command catalog', () => {
   it('has a unique id per entry', () => {
