@@ -13,7 +13,7 @@ import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearStack, cl
 import { setAlphabet, tokenToSpokenCodeword, spokenCodewordToToken } from './labels/words';
 import { buildCommandContributions } from './command-catalog';
 import { rememberCodewords, clearCodewordMemory, recallCodewords } from './labels/codeword-memory';
-import { discoverPlugin, ensureConnected, postToPlugin, getFromPlugin, getPluginPort, getPluginToken, getActuatorJson } from './plugin/actuator-client';
+import { discoverPlugin, ensureConnected, postToPlugin, getPluginPort, getPluginToken, getActuatorJson } from './plugin/actuator-client';
 import { buildReconcileReport, type ReconcileWrapper, type ReconcileReport, type MatchableView } from './debug/reconcile';
 import { cycleTabIndex } from './background/tab-nav';
 import { ensureContentScriptInjected } from './background/injection';
@@ -173,19 +173,6 @@ async function hydrateReferencesFromCollection(): Promise<void> {
   } catch {
     // Plugin may be down or tab URL unavailable
   }
-}
-
-// Fetch this browser plugin's voice commands for the keymap editor. The
-// options page can't hold the plugin port+token, so it asks the background
-// (GET_VOICE_COMMANDS) which calls the plugin's authenticated GET
-// /voice-commands — replacing the editor's old direct read of the actuator's
-// open /inspector/matchable. Discovers on miss; returns connected:false when
-// BranchKit is unreachable so the editor can show its "not running" note.
-async function fetchVoiceCommands(): Promise<{ connected: boolean; data: unknown }> {
-  if (!(await ensureConnected())) return { connected: false, data: null };
-  const data = await getFromPlugin('/voice-commands');
-  if (data === null) return { connected: false, data: null };
-  return { connected: true, data };
 }
 
 // Forward a content-script dispatch outcome to the plugin's POST
@@ -713,10 +700,12 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     return false;
   }
 
-  if (message.type === 'GET_VOICE_COMMANDS') {
-    fetchVoiceCommands()
-      .then(sendResponse)
-      .catch(() => sendResponse({ connected: false, data: null }));
+  if (message.type === 'GET_VOICE_STATUS') {
+    // The keymap editor sources voice phrases from its own catalog now; it only
+    // needs to know whether BranchKit is connected (for the not-connected note).
+    ensureConnected()
+      .then((connected) => sendResponse({ connected }))
+      .catch(() => sendResponse({ connected: false }));
     return true; // async response
   }
 

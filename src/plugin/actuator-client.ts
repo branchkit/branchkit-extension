@@ -59,26 +59,6 @@ export async function getActuatorJson(endpoint: string): Promise<unknown | null>
   }
 }
 
-/**
- * Authed GET to a plugin endpoint and parse JSON. Returns null if not
- * currently connected, the request threw, or the response wasn't ok. Does NOT
- * discover — callers that want lazy reconnect call `ensureConnected()` first.
- * Token goes on the Authorization header (the plugin's GET endpoints accept
- * header OR ?token=; header keeps it out of any logged URL).
- */
-export async function getFromPlugin(endpoint: string): Promise<unknown | null> {
-  if (!pluginPort || !pluginToken) return null;
-  try {
-    const resp = await fetch(`http://127.0.0.1:${pluginPort}${endpoint}`, {
-      headers: { 'Authorization': `Bearer ${pluginToken}` },
-    });
-    if (!resp.ok) return null;
-    return await resp.json();
-  } catch {
-    return null;
-  }
-}
-
 /** True if connected; discovers on miss. Use before a forward that should
  * lazily reconnect. */
 export async function ensureConnected(): Promise<boolean> {

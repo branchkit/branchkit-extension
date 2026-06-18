@@ -179,20 +179,10 @@ export type Message =
   // keybind handler forwards the direction; background cycles within the
   // current window and activates the neighbor.
   | { type: 'SWITCH_TAB'; direction: 'next' | 'previous' }
-  // Options → background. The keymap editor asks for this browser plugin's
-  // voice commands ("you can also say …"). The options page can't hold the
-  // plugin port+token, so the background fetches them from the plugin's
-  // authenticated GET /voice-commands and returns the result. Response shape
-  // is VoiceCommandsMessageResponse.
-  | { type: 'GET_VOICE_COMMANDS' };
-
-// Response to GET_VOICE_COMMANDS. `connected` is false when the plugin /
-// actuator is unreachable (BranchKit not running); `data` is the plugin's
-// {eligible, gated} payload, fed verbatim to parseVoiceCommands.
-export interface VoiceCommandsMessageResponse {
-  connected: boolean;
-  data: unknown;
-}
+  // Options → background. The keymap editor renders voice phrases from its own
+  // catalog now; it only asks whether BranchKit is connected so it can show the
+  // not-connected note. Response: { connected: boolean }.
+  | { type: 'GET_VOICE_STATUS' };
 
 // Response to RESOLVE_HINT / RESOLVE_HINT_FROM_TAB.
 export type ResolveHintResponse =

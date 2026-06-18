@@ -26,16 +26,15 @@ import {
 import { comboFromEvent, serializeCombo } from './activate/key-combo';
 import { displayKeys, worksInAlwaysMode, duplicateKeys } from './keymap-edit-helpers';
 import { nativeOverride, detectOS, detectBrowser } from './browser-shortcuts';
-import { loadVoiceCommands, type VoicePhrase } from './voice-commands';
 
 const OS = detectOS();
 const BROWSER = detectBrowser();
 
 let keymap: KeymapEntry[] = [];
 let suppressEcho = false;
-// Voice phrases per command id, loaded live from the platform. `voiceLoaded`
-// gates the not-connected note so we don't flash it before the fetch resolves.
-let voiceByCommand = new Map<string, VoicePhrase[]>();
+// Voice phrases come from the command catalog (the extension owns them). The
+// only runtime signal is whether BranchKit is connected, which gates the
+// not-connected note; `voiceLoaded` avoids flashing it before the probe lands.
 let voiceConnected = false;
 let voiceLoaded = false;
 
@@ -76,11 +75,10 @@ function renderCommand(meta: CommandMeta, dupes: Set<string>): HTMLElement {
   (node.querySelector('.km-cmd-label') as HTMLElement).textContent = meta.label;
   (node.querySelector('.km-cmd-desc') as HTMLElement).textContent = meta.description;
 
-  // Voice phrases from the platform — "you can also say …".
-  const voice = voiceByCommand.get(meta.id);
+  // Voice phrases from the extension's own catalog — "you can also say …".
   const voiceEl = node.querySelector('.km-cmd-voice') as HTMLElement;
-  if (voice && voice.length > 0) {
-    voiceEl.textContent = `Voice: ${voice.map((p) => `“${p.phrase}”`).join(', ')}`;
+  if (meta.voice && meta.voice.length > 0) {
+    voiceEl.textContent = `Voice: ${meta.voice.map((v) => `“${v.pattern}”`).join(', ')}`;
   }
 
   const addBtn = node.querySelector('.km-add-key') as HTMLButtonElement;
@@ -227,14 +225,18 @@ export async function initKeymapEditor(): Promise<void> {
   keymap = await loadKeymap();
   render();
 
-  // Voice phrases load async from the platform; re-render when they land so
-  // the cards gain "Voice: …" lines (or the not-connected note).
-  void loadVoiceCommands().then((r) => {
-    voiceByCommand = r.byCommand;
-    voiceConnected = r.connected;
-    voiceLoaded = true;
-    render();
-  });
+  // Voice phrases render synchronously from the catalog; only probe BranchKit's
+  // connection state so the not-connected note appears when voice is inactive.
+  void chrome.runtime.sendMessage({ type: 'GET_VOICE_STATUS' })
+    .then((r: { connected?: boolean } | undefined) => {
+      voiceConnected = r?.connected ?? false;
+      voiceLoaded = true;
+      render();
+    })
+    .catch(() => {
+      voiceLoaded = true;
+      render();
+    });
 
   const resetBtn = document.getElementById('km-reset') as HTMLButtonElement | null;
   resetBtn?.addEventListener('click', async () => {
