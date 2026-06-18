@@ -9,6 +9,7 @@
  */
 
 import { LabelStack } from '../types';
+import { LETTERS_26 } from './words';
 
 // Pool composition: 26×26 pairs = 676 codewords.
 //
@@ -110,10 +111,13 @@ async function saveStack(tabId: number, stack: LabelStack): Promise<void> {
   });
 }
 
+// The pool builds its tokens from the fixed, extension-owned 26-letter
+// alphabet — not BranchKit's codeword alphabet. Letters are the cross-frame
+// identity, available with BranchKit absent, and stable across alphabet
+// changes (so connecting voice never churns hint identities). Async to keep
+// the call sites unchanged.
 async function getAlphabet(): Promise<string[] | null> {
-  const result = await chrome.storage.local.get('alphabet');
-  const a = result.alphabet;
-  return Array.isArray(a) && a.length === 26 ? a : null;
+  return LETTERS_26;
 }
 
 /**
@@ -405,12 +409,9 @@ export async function clearAllStacks(): Promise<void> {
 
 /**
  * Strict order-preserving equality on two alphabet arrays. Used by
- * `storeAlphabet` to short-circuit redundant pool churn — voice
- * re-pushes the alphabet on a hot path, and a `regenerateAllStacks` call
- * for a no-op change creates a race window between the pool wipe and
- * the `chrome.storage.onChanged` listener (which Chrome suppresses when
- * the stored value didn't actually change), letting new wrappers claim
- * codewords that existing wrappers still hold locally.
+ * `storeAlphabet` to short-circuit a redundant alphabet write: voice re-pushes
+ * the alphabet on a hot path (almost all identical), and each distinct write
+ * wakes every content script into a needless grammar re-push + re-render.
  */
 export function alphabetsEqual(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false;
@@ -418,38 +419,4 @@ export function alphabetsEqual(a: readonly string[], b: readonly string[]): bool
     if (a[i] !== b[i]) return false;
   }
   return true;
-}
-
-/**
- * Regenerate every active stack with a new alphabet. Called when the voice
- * plugin pushes an updated alphabet — old codewords are invalid. All
- * frames will re-claim labels on their next scan.
- *
- * Each tab's reset goes through its own withTabLock so an in-flight
- * claim or release can't race the regeneration and overwrite the new
- * pool with stale state. Tabs regenerate in parallel, but each tab's
- * regenerate-then-anyone-else order is preserved.
- */
-export async function regenerateAllStacks(): Promise<void> {
-  const alphabet = await getAlphabet();
-  if (!alphabet) return;
-  const newPool = buildPool(alphabet);
-  if (!newPool) return;
-
-  const all = await chrome.storage.session.get();
-  const tabIds = Object.keys(all)
-    .filter(k => k.startsWith('labelStack:'))
-    .map(k => Number.parseInt(k.slice('labelStack:'.length), 10))
-    .filter(n => Number.isFinite(n));
-
-  await Promise.all(tabIds.map(tabId =>
-    withTabLock(tabId, async () => {
-      assignedCache.set(tabId, {});
-      const fresh: LabelStack = { free: [...newPool], reserved: {}, assigned: {} };
-      stackCache.set(tabId, fresh);
-      await chrome.storage.session.set({
-        [storageKey(tabId)]: fresh,
-      });
-    })
-  ));
 }

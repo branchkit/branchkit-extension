@@ -16,20 +16,19 @@ import {
   releaseLabels,
   releaseFrame,
   getFrameForLabel,
-  regenerateAllStacks,
   alphabetsEqual,
 } from './label-pool';
+import { LETTERS_26 } from './words';
+
+// The pool builds from the fixed extension-owned letter alphabet, so claim/
+// release tokens are letter pairs. Derive the expected square-fill order from
+// buildPool so these tests don't hard-code the letter ordering.
+const LP = buildPool(LETTERS_26)!;
 
 const ALPHABET = [
   'arch', 'bake', 'check', 'deck', 'egg', 'food', 'glad', 'half', 'iron', 'jake',
   'kind', 'land', 'make', 'none', 'own', 'plan', 'quick', 'rain', 'song', 'take',
   'under', 'voice', 'work', 'xray', 'yoga', 'zoo',
-];
-
-const ALT_ALPHABET = [
-  'apple', 'berry', 'cherry', 'date', 'elder', 'fig', 'grape', 'honey', 'item', 'jelly',
-  'kiwi', 'lemon', 'mango', 'nectar', 'olive', 'pear', 'quince', 'rose', 'sage', 'thyme',
-  'umber', 'vine', 'wheat', 'xenon', 'yarrow', 'zest',
 ];
 
 // Minimal chrome.storage mock — in-memory backing for session and local
@@ -116,24 +115,24 @@ describe('label-pool', () => {
     it('returns the same labels on re-claim of the same count', async () => {
       const tabId = nextTabId();
       const first = await claimLabels(tabId, 0, 4);
-      expect(first).toEqual(['arch arch', 'arch bake', 'bake bake', 'bake arch']);
+      expect(first).toEqual(LP.slice(0, 4));
 
       await releaseLabels(tabId, first);
 
       const second = await claimLabels(tabId, 0, 4);
-      expect(second).toEqual(['arch arch', 'arch bake', 'bake bake', 'bake arch']);
+      expect(second).toEqual(LP.slice(0, 4));
     });
 
     it('release of partial set preserves order for unreleased labels', async () => {
       const tabId = nextTabId();
       const first = await claimLabels(tabId, 0, 5);
-      expect(first).toEqual(['arch arch', 'arch bake', 'bake bake', 'bake arch', 'arch check']);
+      expect(first).toEqual(LP.slice(0, 5));
 
       // Release only the middle three; first and last stay claimed.
-      await releaseLabels(tabId, ['arch bake', 'bake bake', 'bake arch']);
+      await releaseLabels(tabId, [LP[1], LP[2], LP[3]]);
 
       const next = await claimLabels(tabId, 0, 3);
-      expect(next).toEqual(['arch bake', 'bake bake', 'bake arch']);
+      expect(next).toEqual([LP[1], LP[2], LP[3]]);
     });
   });
 
@@ -141,17 +140,17 @@ describe('label-pool', () => {
     it('re-grants a preferred codeword that is still free', async () => {
       const tabId = nextTabId();
       const first = await claimLabels(tabId, 0, 3);
-      expect(first).toEqual(['arch arch', 'arch bake', 'bake bake']);
+      expect(first).toEqual(LP.slice(0, 3));
 
-      // Element holding 'bake bake' scrolls out, releasing it.
-      await releaseLabels(tabId, ['bake bake']);
+      // Element holding LP[2] scrolls out, releasing it.
+      await releaseLabels(tabId, [LP[2]]);
 
-      // Two slots re-claim: one prefers the freed 'bake bake', one is new.
-      const next = await claimLabels(tabId, 0, 2, ['bake bake', '']);
+      // Two slots re-claim: one prefers the freed LP[2], one is new.
+      const next = await claimLabels(tabId, 0, 2, [LP[2], '']);
       // Slot 0 gets its preferred back regardless of pool order; slot 1 gets
-      // the next fresh front-of-pool codeword (not 'bake bake').
-      expect(next[0]).toBe('bake bake');
-      expect(next[1]).not.toBe('bake bake');
+      // the next fresh front-of-pool token (not LP[2]).
+      expect(next[0]).toBe(LP[2]);
+      expect(next[1]).not.toBe(LP[2]);
       expect(next[1].length).toBeGreaterThan(0);
     });
 
@@ -169,10 +168,10 @@ describe('label-pool', () => {
       const first = await claimLabels(tabId, 0, 4);
       await releaseLabels(tabId, first); // all four back, front-of-pool
 
-      // Slot 1 prefers a specific freed codeword; the rest are fresh and must
+      // Slot 1 prefers a specific freed token; the rest are fresh and must
       // fill the OTHER slots without clobbering slot 1's grant.
-      const next = await claimLabels(tabId, 0, 4, ['', 'bake arch', '', '']);
-      expect(next[1]).toBe('bake arch');
+      const next = await claimLabels(tabId, 0, 4, ['', LP[3], '', '']);
+      expect(next[1]).toBe(LP[3]);
       expect(new Set(next).size).toBe(4); // all distinct, none empty
       expect(next.every(l => l.length > 0)).toBe(true);
     });
@@ -194,11 +193,7 @@ describe('label-pool', () => {
       // The first 10 pairs are split between the two frames. Square-fill
       // ordering fills expanding shells: the 2×2 and 3×3 grids, then the
       // first cell of the 4×4 shell.
-      const expected = new Set([
-        'arch arch', 'arch bake', 'bake bake', 'bake arch', 'arch check',
-        'bake check', 'check check', 'check bake', 'check arch', 'arch deck',
-      ]);
-      expect(combined).toEqual(expected);
+      expect(combined).toEqual(new Set(LP.slice(0, 10)));
     });
 
     it('routing map reflects which frame owns each codeword (after confirm)', async () => {
@@ -366,39 +361,13 @@ describe('label-pool', () => {
       expect(claimed.slice(676).every(l => l === '')).toBe(true);
     });
 
-    it('returns empty when alphabet is missing', async () => {
-      installMockChrome(null); // no alphabet
+    it('builds from the fixed letter alphabet even with no stored alphabet', async () => {
+      // The pool is extension-owned now — it does NOT depend on BranchKit
+      // having pushed an alphabet. Claims succeed with nothing in storage.
+      installMockChrome(null);
       const tabId = nextTabId();
       const claimed = await claimLabels(tabId, 0, 5);
-      expect(claimed).toEqual([]);
-    });
-  });
-
-  describe('regenerateAllStacks', () => {
-    it('clears assigned across all tabs and seeds the new alphabet', async () => {
-      const tabA = nextTabId();
-      const tabB = nextTabId();
-      const aClaim = await claimLabels(tabA, 0, 5);
-      const bClaim = await claimLabels(tabB, 0, 3);
-      expect(aClaim.length).toBe(5);
-      expect(bClaim.length).toBe(3);
-
-      // Swap the alphabet and regenerate.
-      await (globalThis as unknown as { chrome: { storage: { local: { set(o: object): Promise<void> } } } })
-        .chrome.storage.local.set({ alphabet: ALT_ALPHABET });
-      await regenerateAllStacks();
-
-      // Old codewords should no longer resolve to any frame.
-      for (const label of aClaim) {
-        expect(await getFrameForLabel(tabA, label)).toBeNull();
-      }
-      for (const label of bClaim) {
-        expect(await getFrameForLabel(tabB, label)).toBeNull();
-      }
-
-      // New claims pull from the alt alphabet (pairs now).
-      const fresh = await claimLabels(tabA, 0, 3);
-      expect(fresh).toEqual(['apple apple', 'apple berry', 'berry berry']);
+      expect(claimed).toEqual(LP.slice(0, 5));
     });
   });
 

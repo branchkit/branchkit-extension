@@ -9,7 +9,8 @@
  */
 
 import { Message, ScannedElement, HintVisibility, DispatchResult, GrammarBatchRequest, GrammarBatchResponse } from './types';
-import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearStack, clearAllStacks, regenerateAllStacks, alphabetsEqual } from './labels/label-pool';
+import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearStack, clearAllStacks, alphabetsEqual } from './labels/label-pool';
+import { setAlphabet, tokenToSpokenCodeword, spokenCodewordToToken } from './labels/words';
 import { rememberCodewords, clearCodewordMemory, recallCodewords } from './labels/codeword-memory';
 import { discoverPlugin, ensureConnected, postToPlugin, getFromPlugin, getPluginPort, getPluginToken, getActuatorJson } from './plugin/actuator-client';
 import { buildReconcileReport, type ReconcileWrapper, type ReconcileReport, type MatchableView } from './debug/reconcile';
@@ -80,34 +81,30 @@ const hasOffscreenAPI = typeof chrome !== 'undefined' && !!chrome.offscreen;
 // the same codewords voice will recognize. content.ts reads this on load
 // and subscribes to chrome.storage.onChanged for live updates.
 //
-// Short-circuits when the incoming alphabet matches the one already in
-// storage. Voice re-pushes the alphabet on a hot path (688 pushes in a
-// single observed session, almost all identical content); running the
-// full chain on each one wipes the per-tab label pools and creates a
-// race window where existing wrappers retain codewords locally that
-// the pool now considers free, producing duplicate badge assignments.
-// `chrome.storage.local.set` of an unchanged value suppresses the
-// `chrome.storage.onChanged` event, so content scripts never get the
-// signal to clear their wrappers — but `regenerateAllStacks` runs
-// anyway. Detecting the no-op here is the load-bearing check.
+// Short-circuits the storage write when the incoming alphabet matches the one
+// already stored. Voice re-pushes the alphabet on a hot path (688 pushes in a
+// single observed session, almost all identical); each distinct push wakes
+// every content script (storage.onChanged) into a grammar re-push + re-render,
+// so the dedup avoids that churn. The overlay itself is updated every call
+// (idempotent) so the SW translation layer is always current.
 async function storeAlphabet(words: string[]): Promise<void> {
   if (!Array.isArray(words) || words.length !== 26) return;
   if (words.some(w => typeof w !== 'string' || w.length === 0)) return;
 
+  // Install the SW-realm voice overlay so postGrammarBatch / frame-router can
+  // translate letter tokens <-> spoken codewords at the plugin boundary. The
+  // pool itself builds from fixed letters and is NOT touched by an alphabet
+  // change — hint identities stay stable when voice connects/disconnects.
+  setAlphabet(words);
+
   try {
     const current = await chrome.storage.local.get('alphabet');
-    // LOAD-BEARING: drop the no-op alphabet push before it touches the pool.
-    // Relies on a Chrome behavior: `chrome.storage.local.set` of an unchanged
-    // value suppresses `storage.onChanged`. If a future Chrome ever fires
-    // onChanged for equal-value sets, this dedup becomes a slight optimization
-    // rather than a correctness gate — but the pool-wipe race it prevents is
-    // still real. Do NOT remove this dedup without also fixing the pool to
-    // tolerate wipes-with-surviving-wrappers.
+    // Skip a no-op push: an unchanged alphabet would still wake every content
+    // script (storage.onChanged) into a needless grammar re-push + re-render.
     if (Array.isArray(current.alphabet) && alphabetsEqual(current.alphabet, words)) {
       return;
     }
     await chrome.storage.local.set({ alphabet: words });
-    await regenerateAllStacks();
   } catch (err) {
     console.error('[BranchKit BG] alphabet store error:', err);
   }
@@ -393,12 +390,24 @@ async function postGrammarBatch(
     connectSSE();
   }
 
+  // Voice overlay translation (outbound): the content script speaks in letter
+  // tokens ("c g"); the plugin's grammar speaks in codewords ("cape glad").
+  // Translate every element + queued delete here so the plugin is unchanged.
+  // With no overlay loaded this is identity (letters pass through).
+  const translatedElements = request.elements.map(e => ({
+    ...e,
+    codeword: tokenToSpokenCodeword(e.codeword),
+  }));
+  const translatedDeletes = request.delete_codewords?.map(tokenToSpokenCodeword);
+
   // Stamp the connection nonce here, not in the content script. The plugin's
   // cross-browser focus gate keys off the connId↔bundle binding (established
   // by the focus handshake) to accept grammar only from the OS-focused
   // browser. tab_id/frame_id come from the message sender.
   const fullRequest: GrammarBatchRequest = {
     ...request,
+    elements: translatedElements,
+    ...(translatedDeletes ? { delete_codewords: translatedDeletes } : {}),
     tab_id: tabId,
     frame_id: frameId,
     conn_id: connId,
@@ -406,7 +415,14 @@ async function postGrammarBatch(
   const r = await postToPlugin('/grammar/batch', fullRequest);
   if (!r || !r.ok) return transportFailure(request);
   try {
-    return await r.json() as GrammarBatchResponse;
+    const resp = await r.json() as GrammarBatchResponse;
+    // Translate the response's codewords back to letter tokens so the content
+    // script — which only knows letters — matches them against its wrappers.
+    return {
+      ...resp,
+      succeeded: (resp.succeeded ?? []).map(spokenCodewordToToken),
+      failed: (resp.failed ?? []).map(f => ({ ...f, codeword: spokenCodewordToToken(f.codeword) })),
+    };
   } catch {
     return transportFailure(request);
   }

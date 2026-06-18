@@ -11,8 +11,30 @@
 
 import { Message, ResolveHintResponse } from '../types';
 import { getFrameForLabel } from '../labels/label-pool';
+import { spokenCodewordToToken, spokenWordToLetter } from '../labels/words';
 import { bgState } from './state';
 import { isInjectableURL, withInjectLock, injectContentScriptFiles } from './injection';
+
+/**
+ * Voice overlay translation (inbound): the plugin addresses hints by spoken
+ * codeword ("cape glad" / prefix word "cape"); the label pool and content
+ * script are keyed on letter tokens ("c g" / letter "c"). Rewrite a voice
+ * action's params to letters before routing + forwarding, so both the SW pool
+ * lookup and the frame resolve against the same letter identity. Identity when
+ * no overlay is loaded (letters pass through), and a no-op for actions without
+ * voice params.
+ */
+function translateInboundAction(message: Message): Message {
+  if (message.type !== 'BRANCHKIT_ACTION') return message;
+  const params = message.payload.params;
+  if (!params) return message;
+  const next: Record<string, string> = { ...params };
+  if (typeof params.codeword === 'string') next.codeword = spokenCodewordToToken(params.codeword);
+  if (typeof params.prefix === 'string') next.prefix = spokenWordToLetter(params.prefix);
+  if (typeof params.word === 'string') next.word = spokenWordToLetter(params.word);
+  if (typeof params.word2 === 'string') next.word2 = spokenWordToLetter(params.word2);
+  return { ...message, payload: { ...message.payload, params: next } };
+}
 
 // Tell the newly-active tab to republish its grammar. Because the relay drops
 // grammar batches from non-active tabs, a tab that was backgrounded while
@@ -85,12 +107,15 @@ export async function notifyActiveTab(message: Message): Promise<void> {
       return;
     }
 
-    const frameId = await routeFrameForAction(tabId, message);
+    // Translate spoken voice params to letter tokens once: routing (the SW
+    // label pool) and the frame both key on letters.
+    const translated = translateInboundAction(message);
+    const frameId = await routeFrameForAction(tabId, translated);
     const tid = tabId;
     const trySend = (): Promise<unknown> =>
       frameId !== null
-        ? chrome.tabs.sendMessage(tid, message, { frameId })
-        : chrome.tabs.sendMessage(tid, message);
+        ? chrome.tabs.sendMessage(tid, translated, { frameId })
+        : chrome.tabs.sendMessage(tid, translated);
 
     trySend().catch(async (e: Error) => {
       // "Receiving end does not exist" means the tab has no content
@@ -130,10 +155,10 @@ export async function notifyActiveTab(message: Message): Promise<void> {
  * "all frames"). Frames with nothing to do early-out cheaply on their side
  * (e.g. republishForActivation skips frames with no claimed codewords).
  *
- * The voice plugin sends `params.codeword` directly (the full string, e.g.
- * "arch" or "zone arch") per the Sprint A.5 protocol. Older keyboard-derived
- * actions used `params.word` + optional `params.word2`; we still honor that
- * shape for backwards compatibility within the extension's own dispatcher.
+ * By the time this runs, `translateInboundAction` has already rewritten the
+ * spoken codeword to its letter token (e.g. "c g"), which is what the label
+ * pool is keyed on. `params.codeword` is the full token; older keyboard-derived
+ * actions used `params.word` + optional `params.word2` (also letters now).
  */
 async function routeFrameForAction(tabId: number, message: Message): Promise<number | null> {
   if (message.type !== 'BRANCHKIT_ACTION') return null;

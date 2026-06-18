@@ -37,7 +37,7 @@ import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
 import { stampStrictViewport } from '../lifecycle/strict-viewport';
 import { epochHashOf } from './grammar-epoch';
 import { GrammarBatchRequest, GrammarBatchResponse, Message } from '../types';
-import { isAlphabetLoaded } from './words';
+import { isVoiceAlphabetLoaded, tokenToSpokenCodeword } from './words';
 import { DEFAULT_SCAN_BATCH_SIZE } from '../scan/scanner';
 import { sweepDisconnectedAfterBatch } from '../scan/batch-sweep';
 import { getHintVisibility } from '../config';
@@ -181,6 +181,15 @@ function drainPendingDeletes(): string[] {
 export async function postBatch(
   request: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'>,
 ): Promise<GrammarBatchResponse> {
+  // Standalone (BranchKit absent): there is no plugin to receive the grammar.
+  // Acknowledge every element locally so the scan path attaches all candidate
+  // wrappers — the badge-implies-functional contract degenerates to "pickable
+  // by typing", which holds without any voice round-trip. Drain and discard
+  // any queued deletes so they can't accumulate while disconnected.
+  if (!isVoiceAlphabetLoaded()) {
+    drainPendingDeletes();
+    return { result: 'ok', succeeded: request.elements.map(e => e.codeword), failed: [] };
+  }
   // Piggyback any queued deletes from the prior batch's isConnected
   // sweep. Drain unconditionally — even an empty batch should carry
   // pending deletes through so disconnected elements don't leak past
@@ -357,9 +366,14 @@ function checkGrammarEpoch(resp: GrammarBatchResponse, reason: string): void {
   }
   epochStats.checks++;
   const shadowCount = sentCodewords.size;
+  // The plugin's epoch is computed over the SPOKEN codewords it stored, so the
+  // shadow must hash the spoken translation of our letter tokens — not the
+  // letters themselves — to stay byte-identical (the overlay is loaded whenever
+  // a real epoch response arrives, since voice is connected).
+  const shadowHash = epochHashOf([...sentCodewords].map(tokenToSpokenCodeword));
   // Count comparison is free; hash only when counts agree (and at mismatch
   // time for the breadcrumb).
-  if (remote.count === shadowCount && epochHashOf(sentCodewords) === remote.hash) {
+  if (remote.count === shadowCount && shadowHash === remote.hash) {
     // Clean check: the grammar converged, so any republish run is over.
     if (epochStats.capExhausted) {
       bkLog('BK_GRAMMAR_EPOCH_CAP_CLEARED', { afterRepublishes: consecutiveEpochRepublishes });
@@ -373,7 +387,7 @@ function checkGrammarEpoch(resp: GrammarBatchResponse, reason: string): void {
     pluginCount: remote.count,
     pluginHash: remote.hash,
     shadowCount,
-    shadowHash: epochHashOf(sentCodewords),
+    shadowHash,
     reason,
     url: trimUrlForLog(window.location.href),
     frame: window === window.top ? 'top' : 'iframe',
@@ -425,7 +439,9 @@ function checkGrammarEpoch(resp: GrammarBatchResponse, reason: string): void {
 export function probeGrammarEpoch(reason: string): Promise<void> {
   const busy = inFlightBatches > 0 || pendingPuts.size > 0 || pendingDeleteCodewords.length > 0;
   const shadowCount = sentCodewords.size;
-  const shadowHash = epochHashOf(sentCodewords);
+  // Hash the spoken translation of our letter tokens to match the plugin's
+  // epoch (computed over the codewords it stored). See checkGrammarEpoch.
+  const shadowHash = epochHashOf([...sentCodewords].map(tokenToSpokenCodeword));
   const request: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'> = {
     session_id: sessionId,
     batch_index: 0,
@@ -488,7 +504,10 @@ export function scheduleSync(reason: string): void {
  * Awaitable so the refocus-from-cache path can sync inline.
  */
 export async function syncNow(reason: string): Promise<void> {
-  if (!isAlphabetLoaded()) return;
+  // Grammar is pushed to the plugin only when BranchKit is connected (voice
+  // overlay loaded). Standalone there is no plugin to receive it; hints still
+  // render and are typeable without this push.
+  if (!isVoiceAlphabetLoaded()) return;
 
   // Drain pendingPuts. Snapshot + clear before any await so codewords
   // claimed during the post round-trip re-queue for the next push.

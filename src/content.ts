@@ -6,7 +6,7 @@
  */
 
 import { Category, HintVisibility, ScannedElement, Message, DispatchResult } from './types';
-import { LabelAssignment, WORD_TO_LETTER, isAlphabetLoaded, setAlphabet } from './labels/words';
+import { LabelAssignment, isVoiceAlphabetLoaded, setAlphabet } from './labels/words';
 import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters } from './scan/scanner';
 import { ElementWrapper } from './scan/element-wrapper';
 import { wantsHint } from './lifecycle/desired-state';
@@ -635,100 +635,74 @@ if (typeof chrome !== 'undefined' && chrome.runtime && frameMayHoldHints()) {
 }
 
 // Alphabet adoption (not a user setting; stays here, coupled to delta-sync
-// session state). BranchKit pushed a new alphabet — adopt it. The pool was
-// wiped server-side by regenerateAllStacks; our wrappers' codewords are
-// stale strings that no longer route. Drop them locally and let the tracker
-// reclaim for every viewport-visible wrapper. (IO won't re-fire on
-// already-intersecting elements, so we have to walk the store ourselves.)
+// session state). BranchKit pushed (or changed) its voice alphabet. Under the
+// inverted model the pool builds from fixed letters, so hint IDENTITIES are
+// unchanged — only the spoken overlay moved. We therefore do NOT wipe codewords
+// or re-claim: we just re-render (so word/both-mode badges show the new spoken
+// words) and re-push every wrapper's grammar to the plugin with the new
+// translation. rotateSession makes the plugin drop any stale per-prefix entries
+// from a prior alphabet. This also covers the first BranchKit connect: wrappers
+// that attached standalone (never pushed) now get pushed so voice goes live.
 if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
   chrome.storage.onChanged.addListener((changes) => {
     if (changes.alphabet?.newValue) {
       setAlphabet(changes.alphabet.newValue);
-      // Reservoir codewords were built from the old alphabet; SW already
-      // wiped the central pool, so even sending the old strings back as
-      // RELEASE_LABELS would be a no-op. Clear locally and re-fetch.
-      labelReservoir.clear();
-      void labelReservoir.ensureReady();
-      // Problem 3 (notes/DESIGN_OPTION_B_REATTEMPT.md): the previous
-      // alphabet's codewords are now invalid, and the plugin still
-      // holds them in `browser_hints_<old-prefix>` for this frame.
-      // Rotate the session_id so the plugin's ensureFrameSession sees
-      // a session change → cleanupFrameSessionLocked clears stale
-      // per-prefix entries. This is the ONE place in a content
-      // script's lifetime where we want plugin-side cleanup.
-      // Plugin clears its per-frame session on session_id change, so the
-      // delta-sync mirror state on this side is now stale; rotateSession
-      // rotates the id and resets it. The subsequent reconcile() will
-      // re-claim codewords for in-viewport wrappers and onCodewordsChanged
-      // will re-queue them as pending Puts.
       rotateSession();
       for (const w of store.all) {
-        w.scanned.codeword = '';
-        w.label = null;
-        // Every wrapper's codeword is invalidated — voice layer goes back
-        // to pending until each wrapper's fresh codeword gets a grammar
-        // ACK from the plugin.
+        if (!w.scanned.codeword) continue;
+        // Voice goes pending until the re-push ACKs the (re)translated codeword.
         w.grammarReady = false;
-        if (w.hint) {
-          w.hint.remove();
-          w.hint = null;
-        }
+        w.label = poolLabelToAssignment(w.scanned.codeword);
+        w.hint?.updateLabel(w.label, getDisplayMode());
+        queuePut(w);
       }
-      reconcile();
-      if (pageSession.hintsVisible) {
-        // Re-render once the new codewords land.
-        pageSession.tracker.flushNow().then(() => {
-          if (pageSession.hintsVisible) showHints(activeCategory ?? undefined);
-        });
-      }
+      void syncNow('alphabet_change');
     }
   });
 }
 
-// Adopt the BranchKit alphabet from chrome.storage.local on script load.
-// Local (not sync) because the alphabet is per-machine: it tracks whatever
-// voice plugin happens to be running locally, not user preferences.
+// Adopt the BranchKit voice alphabet (overlay) from chrome.storage.local on
+// script load, if BranchKit was already connected. Local (not sync) because the
+// alphabet is per-machine: it tracks whatever voice plugin happens to be running
+// locally, not user preferences.
 //
-// Re-triggers doScan after setAlphabet because under Option B's batched
-// path (doScanBatched) the initial doScan at module load no-ops if the
-// alphabet isn't loaded yet — without this re-trigger the store stays
-// empty and badges never paint. Old path's IntersectionTracker async-
-// claim hid the race; the batched path's inline claim doesn't.
+// The initial scan + auto-show below is NO LONGER gated on the alphabet — hints
+// are standalone now, so they run whether or not BranchKit is present. (Before
+// the inversion, doScanBatched no-opped without an alphabet, so this block was
+// the only thing that kicked the first scan once voice connected.)
 if (typeof chrome !== 'undefined' && chrome.storage?.local) {
   chrome.storage.local.get('alphabet', (result) => {
-    if (Array.isArray(result.alphabet)) {
-      setAlphabet(result.alphabet);
-      // Ineligible frame (tiny/about:blank subframe): no initial scan. If it
-      // later grows past the threshold the wake-on-resize path runs doScan.
-      if (!hintMachineryEnabled) return;
-      // Defer the initial scan by one macrotask. Running doScan
-      // synchronously inside the storage callback blocks the main thread
-      // before the snapshot publisher's setInterval has a chance to
-      // register its first tick — on heavy pages (YouTube /watch with
-      // shadow DOM and 1000+ candidates) this looks like a freeze and
-      // Firefox flags the extension as unresponsive.
-      //
-      // setTimeout(0) (rather than requestIdleCallback) because rIC
-      // never finds a true idle window on hyperactive pages, and the 2s
-      // timeout fallback still starves the scan-batch loop's own
-      // setTimeout(0) yields. A single-tick defer is enough to let the
-      // page paint + the publisher fire its first sample; from there
-      // scanInBatches' chunked walk + the per-batch await yield the
-      // event loop between batches.
-      setTimeout(() => {
-        // Coalesced — any domain-rules-change or badge-settings-change
-        // event that arrived in the same tick will fold into this scan
-        // instead of triggering a second back-to-back doScanBatched.
-        scheduleDoScan();
-        if (shouldAutoShowHints()) {
-          whenDOMSettles(() => {
-            pageSession.tracker.flushNow().then(() => {
-              if (shouldAutoShowHints() && !pageSession.hintsVisible) showHints();
-            });
+    if (Array.isArray(result.alphabet)) setAlphabet(result.alphabet);
+    // Ineligible frame (tiny/about:blank subframe): no initial scan. If it
+    // later grows past the threshold the wake-on-resize path runs doScan.
+    if (!hintMachineryEnabled) return;
+    // Defer the initial scan by one macrotask. Running doScan
+    // synchronously inside the storage callback blocks the main thread
+    // before the snapshot publisher's setInterval has a chance to
+    // register its first tick — on heavy pages (YouTube /watch with
+    // shadow DOM and 1000+ candidates) this looks like a freeze and
+    // Firefox flags the extension as unresponsive.
+    //
+    // setTimeout(0) (rather than requestIdleCallback) because rIC
+    // never finds a true idle window on hyperactive pages, and the 2s
+    // timeout fallback still starves the scan-batch loop's own
+    // setTimeout(0) yields. A single-tick defer is enough to let the
+    // page paint + the publisher fire its first sample; from there
+    // scanInBatches' chunked walk + the per-batch await yield the
+    // event loop between batches.
+    setTimeout(() => {
+      // Coalesced — any domain-rules-change or badge-settings-change
+      // event that arrived in the same tick will fold into this scan
+      // instead of triggering a second back-to-back doScanBatched.
+      scheduleDoScan();
+      if (shouldAutoShowHints()) {
+        whenDOMSettles(() => {
+          pageSession.tracker.flushNow().then(() => {
+            if (shouldAutoShowHints() && !pageSession.hintsVisible) showHints();
           });
-        }
-      }, 0);
-    }
+        });
+      }
+    }, 0);
   });
 }
 
@@ -1086,15 +1060,23 @@ function viewportSort(wrappers: ElementWrapper[]): ElementWrapper[] {
 }
 
 /**
- * Convert a pool codeword string ("arch" or "rain bake") to the
- * LabelAssignment shape the HintBadge renderer expects. Letter mapping
- * comes from the words.ts WORD_TO_LETTER table populated when the
- * alphabet was set; "?" only appears if the alphabet is mismatched.
+ * Convert a pool token ("a" or "a s") to the LabelAssignment shape the
+ * HintBadge renderer expects. The token IS the letter form (extension-owned,
+ * BranchKit-independent), so the letter is the tokens joined.
  */
-function poolLabelToAssignment(codeword: string): LabelAssignment {
-  const words = codeword.split(/\s+/).filter(w => w.length > 0);
-  const letter = words.map(w => WORD_TO_LETTER[w] ?? '?').join('');
-  return { words, letter, isSingle: words.length === 1 };
+function poolLabelToAssignment(token: string): LabelAssignment {
+  const words = token.split(/\s+/).filter(w => w.length > 0);
+  return { words, letter: words.join(''), isSingle: words.length === 1 };
+}
+
+/**
+ * A hint is paint-ready (full opacity) once its voice command is live OR when
+ * voice isn't in play at all. The `grammarReady` flag tracks the plugin's
+ * grammar ACK, which only arrives when BranchKit is connected; standalone a
+ * badge is functional (type / click) the moment it paints, so don't gate it.
+ */
+function isPaintReady(w: ElementWrapper): boolean {
+  return w.grammarReady || !isVoiceAlphabetLoaded();
 }
 
 // (The ResizeObserver hintability safety net and the viewport-scoped
@@ -1216,11 +1198,6 @@ function applyUserRuleToScan(
 }
 
 async function showHints(filter?: Category | Category[]): Promise<void> {
-  if (!isAlphabetLoaded()) {
-    console.warn('[BranchKit Browser] Hints unavailable: alphabet not loaded. Is BranchKit running?');
-    return;
-  }
-
   // Wait one frame so any pending IntersectionObserver entries (queued
   // synchronously by observe(), delivered async) have a chance to fire,
   // then drain pending claims/releases. Without this, a `f` keypress
@@ -1300,7 +1277,7 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
       // warm from cacheLayout above, so isVisible is cheap here.
       const cssVisible = isVisible(wrapper.element);
       wrapper.cssHidden = !cssVisible;
-      if (cssVisible) wrapper.hint.show(wrapper.grammarReady);
+      if (cssVisible) wrapper.hint.show(isPaintReady(wrapper));
       else wrapper.hint.hide();
     }
     firehoseStep('showHints:mount_end', renderable.length, 20);
@@ -1445,7 +1422,7 @@ function badgeNewlyCodeworded(): void {
       if (!w.hint) {
         w.hint = new HintBadge(w.element, label, w.category, getDisplayMode());
       }
-      w.hint.show(w.grammarReady);
+      w.hint.show(isPaintReady(w));
       placeOne(w);
     }
   } finally {
@@ -1577,7 +1554,7 @@ function applyLifecyclePlan(lists: ReconcilePlanLists): void {
 function applyVisibilityPlan(lists: ReconcilePlanLists): void {
   for (const [w, hidden] of lists.cssHiddenDelta) w.cssHidden = hidden;
   for (const w of lists.toShow) {
-    if (w.hint && !w.hint.isVisible) w.hint.show(w.grammarReady);
+    if (w.hint && !w.hint.isVisible) w.hint.show(isPaintReady(w));
   }
   for (const w of lists.toHide) {
     if (w.hint?.isVisible) w.hint.hide();
@@ -1780,9 +1757,6 @@ function activateWrapper(wrapper: ElementWrapper): void {
  * paints badges whose voice command is live.
  */
 async function doScanBatched(): Promise<void> {
-  if (!isAlphabetLoaded()) {
-    return;
-  }
   const __cpuStart = performance.now();
 
   // Uses the LabelStage session id — see Problem 1 in the design doc.
@@ -2689,19 +2663,18 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         });
       }
     } else if (action === 'noop') {
-      const prefix = params?.prefix;
-      if (prefix) {
-        const letter = WORD_TO_LETTER[prefix];
-        if (letter) {
-          if (!pageSession.hintsVisible) showHints();
-          const matchSet = new Set(store.matchingLetterPrefix(letter));
-          for (const w of store.all) {
-            const isMatch = matchSet.has(w);
-            w.hint?.setFiltered(!isMatch);
-            w.hint?.setTextMatch(false);
-            if (isMatch) {
-              w.hint?.setMatchedChars(1);
-            }
+      // The SW translates the inbound spoken prefix word to its letter before
+      // forwarding (see frame-router), so `prefix` is already a letter here.
+      const letter = params?.prefix;
+      if (letter) {
+        if (!pageSession.hintsVisible) showHints();
+        const matchSet = new Set(store.matchingLetterPrefix(letter));
+        for (const w of store.all) {
+          const isMatch = matchSet.has(w);
+          w.hint?.setFiltered(!isMatch);
+          w.hint?.setTextMatch(false);
+          if (isMatch) {
+            w.hint?.setMatchedChars(1);
           }
         }
       } else {
