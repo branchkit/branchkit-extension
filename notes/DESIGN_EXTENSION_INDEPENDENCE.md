@@ -75,12 +75,29 @@ today. The platform never originates the extension's commands or labels.
 - **Keyboard binds to extension-owned commands, not platform command ids.**
   Binding to `commands.enumerate` ids would couple the keyboard to BranchKit and
   break standalone — rejected.
-- **Context routing is a consumer concern.** The "browser scroll when in-browser,
-  OS-level scroll everywhere else" idea: the *browser* scroll is extension-owned
-  and works alone. The OS-level fallback and the by-context routing (the
-  platform's command `variants`, gated on the browser-active tag) live
-  **platform-side and apply only when BranchKit is present** — layered onto the
-  extension's command, not defining it.
+- **Two distinct scroll commands, not one with variants.** Scrolling resolves to
+  *three inputs across two behaviors*:
+  1. **Keyboard, extension** — key → the extension's smart (container-aware)
+     scroll. Works with BranchKit off (no SSE, no voice).
+  2. **Browser-context voice** — the extension *contributes* a "scroll up" phrase
+     to the platform; it's eligible only when the browser is the focused source
+     and routes to the extension's smart scroll. Inputs (1) and (2) are two
+     inputs to the **same** extension command — one catalog entry carries both
+     the keybind and the phrase.
+  3. **Generic voice** — a separate, platform-owned "scroll up" (OS-level /
+     simulated wheel) for non-browser apps; the extension knows nothing about it.
+
+  So when BranchKit is on, the platform holds **two** "scroll up" voice commands
+  — the extension-contributed browser one and its own generic one —
+  disambiguated by focused-source projection + tag priority (browser focused →
+  the browser one wins). Keeping them *distinct* is what lets the editor show
+  key + browser-voice on one card while the generic command stays platform-only.
+
+  This **supersedes the earlier "one command with `variants`" framing.** Distinct
+  commands keep ownership clean (extension owns its command + phrase; platform
+  owns its generic one) and avoid stuffing two actions into one definition — and
+  because the extension declares both the key and the phrase on one entry, there
+  is no params-mapping or reverse-inference to line voice up with keys.
 
 ## Rejected approaches (and why)
 
