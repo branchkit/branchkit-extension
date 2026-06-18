@@ -183,6 +183,31 @@ export const COMMAND_BY_ID: ReadonlyMap<string, CommandMeta> = new Map(
   COMMAND_CATALOG.map((c) => [c.id, c]),
 );
 
+/**
+ * One spoken form contributed to the browser plugin: a bare action id (the
+ * plugin prefixes it with its own id), the spoken pattern, the bound params,
+ * and the catalog group as a display category. The plugin owns the context gate
+ * (RequiresTags) — the extension never names a platform tag.
+ */
+export interface CommandContribution {
+  action: string;
+  pattern: string;
+  params?: Record<string, string>;
+  category: string;
+}
+
+/** Flatten the catalog's voice patterns into the plugin contribution payload. */
+export function buildCommandContributions(): CommandContribution[] {
+  const out: CommandContribution[] = [];
+  for (const c of COMMAND_CATALOG) {
+    if (!c.voice) continue;
+    for (const v of c.voice) {
+      out.push({ action: c.id, pattern: v.pattern, params: v.params, category: c.group });
+    }
+  }
+  return out;
+}
+
 // The shipping keybinds — one binding per command, preferring the form that
 // works in every mode. While hints are visible (always-mode) bare letters are
 // codeword input, so a Shift/modifier chord is the always-mode form and is

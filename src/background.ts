@@ -11,6 +11,7 @@
 import { Message, ScannedElement, HintVisibility, DispatchResult, GrammarBatchRequest, GrammarBatchResponse } from './types';
 import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearStack, clearAllStacks, alphabetsEqual } from './labels/label-pool';
 import { setAlphabet, tokenToSpokenCodeword, spokenCodewordToToken } from './labels/words';
+import { buildCommandContributions } from './command-catalog';
 import { rememberCodewords, clearCodewordMemory, recallCodewords } from './labels/codeword-memory';
 import { discoverPlugin, ensureConnected, postToPlugin, getFromPlugin, getPluginPort, getPluginToken, getActuatorJson } from './plugin/actuator-client';
 import { buildReconcileReport, type ReconcileWrapper, type ReconcileReport, type MatchableView } from './debug/reconcile';
@@ -477,10 +478,27 @@ async function assertFocusIfFocused(): Promise<void> {
 // --- SSE Connection (browser-adaptive) ---
 
 /** Connect to the plugin's SSE stream using the best available method. */
+// Contribute the extension's static command vocabulary (scroll/find/nav voice
+// phrases from command-catalog.ts) to the browser plugin, which registers them
+// as a thin registrar. Fired on every (re)connect — the plugin REPLACE-stores
+// the set and re-runs its command push, so a re-POST is idempotent. Best-effort:
+// a failure self-heals on the next connect. See notes/DESIGN_COMMAND_CONTRIBUTION.md.
+async function contributeCommands(): Promise<void> {
+  try {
+    await postToPlugin('/commands/contribute', { commands: buildCommandContributions() });
+  } catch {
+    // Plugin unreachable — retried on the next connect.
+  }
+}
+
 function connectSSE(): void {
   const port = getPluginPort();
   const token = getPluginToken();
   if (!port || !token) return;
+
+  // The plugin's HTTP server is up once we have a port+token; contribute the
+  // command vocabulary now so voice scroll/find/nav are live for this session.
+  void contributeCommands();
 
   if (hasOffscreenAPI) {
     // Chrome: delegate to offscreen document
