@@ -129,14 +129,15 @@ and needs sign-off before starting.
   a stale overlay can't leave new badges stuck pending; deferred to avoid a
   transient-disconnect footgun.
 
-- **Phase 2 — extension owns its command vocabulary (cross-repo, NEEDS CONFIRM).**
-  Move static phrases into the extension's `command-catalog` (optional voice
-  phrase per entry); plugin becomes a thin registrar; two distinct scroll
-  commands (extension browser-voice + platform generic).
-
-- **Phase 3 — voice panel sources from the catalog (cross-repo, NEEDS CONFIRM).**
-  Stop reading `commands.enumerate`; "voice enabled" becomes a runtime state.
-  Keymap editor grows the voice-phrase column.
+- **Phase 2 — extension owns its command vocabulary. IMPLEMENTED 2026-06-18,
+  pending soak.** Static scroll/find/nav phrases moved into the
+  `command-catalog` (`voice` per entry); the plugin became a thin registrar over
+  `POST /commands/contribute` (its hardcoded phrase builders deleted); the voice
+  panel + the `/voice-commands` endpoint were retired so the editor sources
+  phrases from the catalog. Full design + decisions + commit list in
+  `DESIGN_COMMAND_CONTRIBUTION.md`. Scope A: activate-by-codeword + references
+  stay plugin-side (grammar-coupled). The platform-generic OS scroll (the third
+  scroll input) is out of scope — a later platform item.
 
 ## Constraints carried in
 

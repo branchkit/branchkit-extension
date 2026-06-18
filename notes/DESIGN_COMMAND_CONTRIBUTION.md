@@ -1,10 +1,12 @@
 # Design sketch: extension-owned command vocabulary + plugin-as-registrar
 
-**Status:** Sketch, 2026-06-18. Phase 2 of extension independence
-(`PLAN_EXTENSION_INDEPENDENCE.md`). Cross-repo — **needs sign-off before
-implementing.** Phase 1 (letter inversion) is committed; this is the next gap:
-the extension should OWN its static voice phrases and contribute them up, with
-the browser plugin reduced to a registrar.
+**Status:** IMPLEMENTED 2026-06-18, pending real-Chrome + voice soak. Phase 2 of
+extension independence (`PLAN_EXTENSION_INDEPENDENCE.md`). Decisions: **Q1 = A**
+(dedicated `POST /commands/contribute`), **Q3 = A** (static scroll/find/nav only;
+activate-by-codeword + references stay plugin-side), **Q2 = plugin owns the gate
++ category**, **Q4 = keys stay in DEFAULT_KEYMAP, joined by id**. Committed:
+extension `c93976d` (catalog) / `11570f1` (contribute) / `c6065f8` (voice panel);
+plugin `b56572b` (registrar) / `6c1edad` (drop /voice-commands).
 
 ## Current state (verified against the code)
 
