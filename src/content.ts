@@ -2457,6 +2457,17 @@ function republishForActivation(reason: string): void {
 
 // --- Message Listener (from background / voice) ---
 
+// Voice actions that route straight to the local dispatcher (the same handlers
+// the keyboard uses). The discrete scroll/find actions are here so a contributed
+// voice phrase (e.g. "scroll down" → scroll_down) runs the identical command as
+// its keybind. Parameterized scroll + find_immediate carry params through.
+const DISPATCH_PASSTHROUGH_ACTIONS = new Set([
+  'scroll', 'scroll_to_element', 'scroll_to_percent',
+  'scroll_down', 'scroll_up', 'scroll_half_down', 'scroll_half_up',
+  'scroll_top', 'scroll_bottom', 'scroll_left', 'scroll_right',
+  'find_open', 'find_close', 'find_next', 'find_previous', 'find_immediate',
+]);
+
 chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {
   if (message.type === 'GET_FOCUS_STATUS') {
     sendResponse({ focused: windowHasFocus });
@@ -2482,7 +2493,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       republishForActivation(params?.reason ?? 'tab_activated');
     } else if (action === 'set_badge_mode' && params?.mode) {
       chrome.storage.sync.set({ badgeDisplayMode: params.mode });
-    } else if (action === 'scroll' || action === 'scroll_to_element' || action === 'scroll_to_percent') {
+    } else if (DISPATCH_PASSTHROUGH_ACTIONS.has(action)) {
       dispatcher.dispatch(action, params);
     } else if (action === 'history_back') {
       // history.back() steps through the full history stack regardless of
@@ -2498,8 +2509,6 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       history.forward();
     } else if (action === 'refresh') {
       location.reload();
-    } else if (action === 'find_open' || action === 'find_close' || action === 'find_next' || action === 'find_previous' || action === 'find_immediate') {
-      dispatcher.dispatch(action, params);
     } else if (action === 'activate') {
       // Three-tier resolution (see docs/completed/DESIGN_ELEMENT_IDENTITY_REGISTRY.md §6).
       // Algorithm lives in activate-resolution.ts so it's unit-testable.
