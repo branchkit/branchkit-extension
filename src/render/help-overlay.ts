@@ -21,8 +21,9 @@ import { letterToSpokenWord, isVoiceAlphabetLoaded } from '../labels/words';
 export interface HelpRow {
   /** Display strings for every binding of this command (e.g. ["Shift+J"]). */
   keys: string[];
+  /** Spoken phrases for this command (e.g. ["scroll down", "scroll down {number}"]). */
+  voice: string[];
   label: string;
-  description: string;
 }
 export interface HelpGroup {
   group: string;
@@ -36,9 +37,9 @@ function formatKeysToken(token: string): string {
 }
 
 /**
- * Build the grouped help model: every catalog command that has at least one
- * binding in `keymap`, grouped by catalog group, preserving catalog order.
- * Pure — unit-tested directly.
+ * Build the grouped help model: every catalog command that has a key binding OR
+ * a spoken phrase, grouped by catalog group, preserving catalog order. Each row
+ * carries its keys and voice phrases (either may be empty). Pure — unit-tested.
  */
 export function buildHelpModel(
   catalog: readonly CommandMeta[],
@@ -53,15 +54,16 @@ export function buildHelpModel(
   const groups: HelpGroup[] = [];
   const indexByGroup = new Map<string, number>();
   for (const c of catalog) {
-    const keys = keysByCommand.get(c.id);
-    if (!keys || keys.length === 0) continue; // keyboard help: only bound commands
+    const keys = keysByCommand.get(c.id) ?? [];
+    const voice = (c.voice ?? []).map((v) => v.pattern);
+    if (keys.length === 0 && voice.length === 0) continue; // not reachable → skip
     let gi = indexByGroup.get(c.group);
     if (gi === undefined) {
       gi = groups.length;
       groups.push({ group: c.group, rows: [] });
       indexByGroup.set(c.group, gi);
     }
-    groups[gi].rows.push({ keys, label: c.label, description: c.description });
+    groups[gi].rows.push({ keys, voice, label: c.label });
   }
   return groups;
 }
@@ -116,20 +118,21 @@ const STYLE = `
   color: #e6edf3; width: 1.1em; flex: 0 0 auto; }
 .alpha .w { color: #c9d1d9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .alpha-empty { font-size: 12px; color: #8b949e; margin-bottom: 12px; }
-/* Commands — one line each, multi-column. */
-.cmds { columns: 3; column-gap: 22px; }
-@media (max-width: 640px) { .cmds { columns: 2; } }
+/* Commands — one line each (key + label + spoken phrase), multi-column. */
+.cmds { columns: 2; column-gap: 22px; }
+@media (max-width: 560px) { .cmds { columns: 1; } }
 .group { break-inside: avoid; margin-bottom: 9px; }
 .group-name { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
   color: #8b949e; margin-bottom: 3px; }
-.row { display: flex; gap: 6px; align-items: baseline; margin-bottom: 3px; font-size: 12px; }
+.row { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; margin-bottom: 3px; font-size: 12px; }
 .keys { flex: 0 0 auto; display: flex; gap: 3px; flex-wrap: wrap; }
 kbd {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px;
   background: #21262d; color: #e6edf3; border: 1px solid #30363d;
   border-bottom-width: 2px; border-radius: 3px; padding: 0 4px; white-space: nowrap;
 }
-.label { color: #e6edf3; min-width: 0; }
+.label { color: #e6edf3; }
+.say { color: #8b949e; font-style: italic; }
 .usage { margin-top: 10px; font-size: 11px; color: #8b949e; line-height: 1.45; }
 .usage b { color: #c9d1d9; font-weight: 600; }
 `;
@@ -191,10 +194,15 @@ function buildHelpOverlay(
     groupEl.appendChild(el('div', 'group-name', g.group));
     for (const r of g.rows) {
       const row = el('div', 'row');
-      const keys = el('div', 'keys');
-      for (const k of r.keys) keys.appendChild(el('kbd', undefined, k));
-      row.appendChild(keys);
+      if (r.keys.length) {
+        const keys = el('div', 'keys');
+        for (const k of r.keys) keys.appendChild(el('kbd', undefined, k));
+        row.appendChild(keys);
+      }
       row.appendChild(el('span', 'label', r.label));
+      if (r.voice.length) {
+        row.appendChild(el('span', 'say', r.voice.map((v) => `“${v}”`).join(' / ')));
+      }
       groupEl.appendChild(row);
     }
     cmds.appendChild(groupEl);

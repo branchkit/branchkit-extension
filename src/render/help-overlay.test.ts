@@ -3,8 +3,11 @@ import { buildHelpModel, buildAlphabetModel } from './help-overlay';
 import type { CommandMeta, KeymapEntry } from '../command-catalog';
 import { setAlphabet, clearAlphabet } from '../labels/words';
 
-function cmd(id: string, group: string, label = id, description = 'd'): CommandMeta {
-  return { id, label, group, description, mappable: true, params: [] };
+function cmd(id: string, group: string, voice?: string[]): CommandMeta {
+  return {
+    id, label: id, group, description: 'd', mappable: true, params: [],
+    ...(voice ? { voice: voice.map((pattern) => ({ pattern })) } : {}),
+  };
 }
 
 describe('buildHelpModel', () => {
@@ -20,12 +23,27 @@ describe('buildHelpModel', () => {
     expect(model[0].rows.map((r) => r.label)).toEqual(['a', 'c']);
   });
 
-  it('omits commands with no binding', () => {
+  it('omits commands with neither a binding nor a voice phrase', () => {
     const catalog = [cmd('a', 'Scroll'), cmd('runtime', 'Hints')];
     const model = buildHelpModel(catalog, [{ keys: 'shift+KeyJ', command: 'a' }]);
     expect(model).toHaveLength(1);
     expect(model[0].rows).toHaveLength(1);
     expect(model[0].rows[0].label).toBe('a');
+  });
+
+  it('includes a voice-only command (no keybind) with its phrases', () => {
+    const catalog = [cmd('say_it', 'Find', ['find {text}', 'search {text}'])];
+    const model = buildHelpModel(catalog, []); // no keymap bindings
+    expect(model).toHaveLength(1);
+    expect(model[0].rows[0].keys).toEqual([]);
+    expect(model[0].rows[0].voice).toEqual(['find {text}', 'search {text}']);
+  });
+
+  it('carries both keys and voice when a command has both', () => {
+    const catalog = [cmd('scroll_down', 'Scroll', ['scroll down'])];
+    const model = buildHelpModel(catalog, [{ keys: 'shift+KeyJ', command: 'scroll_down' }]);
+    expect(model[0].rows[0].keys).toEqual(['Shift+J']);
+    expect(model[0].rows[0].voice).toEqual(['scroll down']);
   });
 
   it('shows every binding of a command, formatted for display', () => {
