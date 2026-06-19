@@ -78,7 +78,8 @@ import {
   findNext,
   findPrevious,
   findImmediate,
-  isFindActive,
+  isFindBarOpen,
+  handleFindNavKey,
   setFindCallbacks,
 } from './scan/find';
 import { saveReference, resolveReference, listReferences } from './scan/references';
@@ -3131,9 +3132,12 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
   // While the find bar is open it owns the keyboard — its focused input handles
   // typing and its own keydown handles Enter/Escape. Returning here (without
   // preventDefault) lets the keystroke reach that input and keeps the hint key
-  // handler from treating letters as codeword filtering. Without this, in
-  // always-mode the codeword filter ate every key after the first.
-  if (isFindActive()) return;
+  // handler from treating letters as codeword filtering.
+  if (isFindBarOpen()) return;
+  // After Enter commits the search the bar closes but highlights persist; n /
+  // Shift+n cycle matches and Escape clears. This runs before the hint key
+  // handler so bare n isn't swallowed as codeword input in always-mode.
+  if (handleFindNavKey(e)) return;
 
   // Ctrl+Alt+A — hint-diagnostics snapshot trigger (Phase 2b of
   // docs/completed/DESIGN_HINT_DIAGNOSTICS.md). The design originally

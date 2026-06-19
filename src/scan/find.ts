@@ -45,6 +45,13 @@ export function isFindActive(): boolean {
   return state.active;
 }
 
+/** True while the find bar input is open and capturing keystrokes. After Enter
+ * commits the search the bar closes but find stays active (highlights persist,
+ * n / Shift+n navigate) — see handleFindNavKey. */
+export function isFindBarOpen(): boolean {
+  return barElement !== null;
+}
+
 // --- CSS Custom Highlight API access (guarded; newish API) ---
 
 interface HighlightLike { priority: number }
@@ -213,6 +220,23 @@ function scrollToCurrent(): void {
 
 // --- Find logic ---
 
+// Match the browser's own find-in-page notion of "visible text": skip matches in
+// display:none / visibility:hidden / content-visibility / opacity:0 subtrees, so
+// our count agrees with Ctrl+F and we never "navigate" to an invisible match.
+// Prefer Element.checkVisibility() (Chrome 105+/FF); fall back to a layout-box +
+// computed-style check on older engines.
+function isMatchVisible(range: Range): boolean {
+  const el = range.startContainer.parentElement;
+  if (!el) return false;
+  const check = (el as Element & { checkVisibility?: (o?: object) => boolean }).checkVisibility;
+  if (typeof check === 'function') {
+    return check.call(el, { checkOpacity: true, checkVisibilityCSS: true });
+  }
+  if (range.getClientRects().length === 0) return false;
+  const style = getComputedStyle(el);
+  return style.visibility !== 'hidden' && style.visibility !== 'collapse' && style.opacity !== '0';
+}
+
 function performFind(query: string): void {
   state.query = query;
   clearHighlights();
@@ -223,7 +247,7 @@ function performFind(query: string): void {
     return;
   }
   matchRanges = findMatchRanges(query, document.body || document.documentElement)
-    .filter((r) => r.getClientRects().length > 0); // drop hidden/collapsed matches
+    .filter(isMatchVisible);
   state.matchCount = matchRanges.length;
   if (matchRanges.length === 0) {
     currentIndex = -1;
@@ -257,8 +281,17 @@ function handleFindBarKey(e: KeyboardEvent): void {
   } else if (e.key === 'Enter') {
     e.preventDefault();
     e.stopPropagation();
-    move(e.shiftKey ? -1 : 1);
+    commitFind();
   }
+}
+
+/** Commit the search (Vimium-style): close the input bar but keep the highlights
+ * and the current match. The page regains the keyboard; n / Shift+n then cycle
+ * matches via handleFindNavKey. */
+function commitFind(): void {
+  if (!state.active || !barElement) return;
+  removeFindBar();
+  scrollToCurrent();
 }
 
 // --- Public API ---
@@ -291,6 +324,31 @@ export function findNext(): void {
 
 export function findPrevious(): void {
   if (matchRanges.length) move(-1);
+}
+
+/**
+ * Post-commit navigation: while find is active but the bar is closed, `n` cycles
+ * to the next match, `Shift+n` to the previous, and Escape clears + exits.
+ * Returns true if it consumed the key. Other keys pass through (highlights stay
+ * until Escape), so it must run before the hint key handler — where bare `n`
+ * would otherwise be codeword input in always-mode.
+ */
+export function handleFindNavKey(e: KeyboardEvent): boolean {
+  if (!state.active || barElement) return false; // only when committed (bar closed)
+  if (e.ctrlKey || e.altKey || e.metaKey) return false;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    closeFindMode();
+    return true;
+  }
+  if (e.key === 'n' || e.key === 'N') {
+    e.preventDefault();
+    e.stopPropagation();
+    move(e.shiftKey ? -1 : 1);
+    return true;
+  }
+  return false;
 }
 
 /** Voice-activated find: skip the bar, run the query directly (highlights paint). */
