@@ -82,6 +82,7 @@ import {
   handleFindNavKey,
   setFindCallbacks,
 } from './scan/find';
+import { focusFirstInput, handleFocusInputKey } from './activate/focus-input';
 import { saveReference, resolveReference, listReferences } from './scan/references';
 import {
   matchRules,
@@ -985,6 +986,9 @@ dispatcher.register('history_back', () => {
 });
 dispatcher.register('history_forward', () => {
   history.forward();
+});
+dispatcher.register('focus_input', () => {
+  focusFirstInput();
 });
 dispatcher.register('refresh', () => {
   location.reload();
@@ -2493,6 +2497,7 @@ const DISPATCH_PASSTHROUGH_ACTIONS = new Set([
   'scroll_full_down', 'scroll_full_up',
   'scroll_top', 'scroll_bottom', 'scroll_left', 'scroll_right',
   'find_open', 'find_close', 'find_next', 'find_previous', 'find_immediate',
+  'focus_input',
 ]);
 
 chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {
@@ -3138,6 +3143,10 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
   // Shift+n cycle matches and Escape clears. This runs before the hint key
   // handler so bare n isn't swallowed as codeword input in always-mode.
   if (handleFindNavKey(e)) return;
+  // Focus-input mode (Vimium gi): Tab/Shift+Tab cycle text fields. Runs before
+  // the hint handler so Tab cycling isn't pre-empted, and in capture phase so it
+  // beats the focused input's native Tab.
+  if (handleFocusInputKey(e)) return;
 
   // Ctrl+Alt+A — hint-diagnostics snapshot trigger (Phase 2b of
   // docs/completed/DESIGN_HINT_DIAGNOSTICS.md). The design originally

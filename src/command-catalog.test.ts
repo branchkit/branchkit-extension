@@ -17,7 +17,7 @@ const REGISTERED_ACTIONS = [
   'scroll_top', 'scroll_bottom', 'scroll_left', 'scroll_right',
   'cycle_scroll_target', 'scroll', 'scroll_to_percent', 'scroll_to_element',
   'find_open', 'find_close', 'find_next', 'find_previous', 'find_immediate',
-  'history_back', 'history_forward', 'refresh',
+  'history_back', 'history_forward', 'refresh', 'focus_input',
   'next_tab', 'previous_tab',
   'toggle_help',
 ] as const;
@@ -160,6 +160,7 @@ describe('default keymap', () => {
       { keys: 'shift+KeyH', command: 'previous_tab' },
       { keys: 'shift+KeyL', command: 'next_tab' },
       { keys: 'shift+Slash', command: 'toggle_help' },
+      { keys: 'shift+KeyI', command: 'focus_input' },
     ]);
   });
 });

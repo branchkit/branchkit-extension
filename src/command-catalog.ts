@@ -178,6 +178,9 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   { id: 'refresh', label: 'Reload page', group: 'Navigation', mappable: true, params: [],
     description: 'Reload the current page.',
     voice: [{ pattern: 'refresh' }, { pattern: 'reload' }] },
+  { id: 'focus_input', label: 'Focus first input', group: 'Navigation', mappable: true, params: [],
+    description: 'Focus the first text field on the page; Tab / Shift+Tab then cycle between fields.',
+    voice: [{ pattern: 'focus input' }, { pattern: 'focus first input' }] },
 
   // --- Tabs ---
   { id: 'next_tab', label: 'Next tab', group: 'Tabs', mappable: true, params: [],
@@ -247,4 +250,5 @@ export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   { keys: 'shift+KeyH', command: 'previous_tab' }, // Shift+H
   { keys: 'shift+KeyL', command: 'next_tab' }, // Shift+L
   { keys: 'shift+Slash', command: 'toggle_help' }, // ? — keyboard command reference
+  { keys: 'shift+KeyI', command: 'focus_input' }, // Shift+I — focus first input (works in always-mode)
 ];
