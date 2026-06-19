@@ -122,10 +122,14 @@ function createFindBar(): void {
 
   barElement = document.createElement('div');
   barElement.setAttribute('data-branchkit-find', '');
+  // Compact floating pill in the bottom-right corner (Vimium-C style) rather
+  // than a full-width bar, so it overlaps almost no page content.
   barElement.style.cssText = `
-    position: fixed; bottom: 0; left: 0; right: 0; height: 36px;
-    background: #1e1e1e; border-top: 1px solid rgba(255,255,255,0.15);
-    display: flex; align-items: center; padding: 0 12px; gap: 8px;
+    position: fixed; bottom: 12px; right: 12px;
+    width: 360px; max-width: calc(100vw - 24px); height: 34px; box-sizing: border-box;
+    background: #1e1e1e; border: 1px solid rgba(255,255,255,0.18); border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    display: flex; align-items: center; padding: 0 10px; gap: 8px;
     z-index: 2147483647; font-family: -apple-system, BlinkMacSystemFont, sans-serif;
     font-size: 13px; color: #fff;
   `;
@@ -209,11 +213,14 @@ function pickInitialIndex(): number {
   return 0;
 }
 
+// Reserve the floating pill's footprint at the bottom so the current match is
+// never scrolled to behind it (pill height + bottom margin, with slack).
+const FIND_BAR_RESERVE_PX = 60;
 function scrollToCurrent(): void {
   const r = matchRanges[currentIndex];
   if (!r) return;
   const rect = r.getBoundingClientRect();
-  if (rect.top < 0 || rect.bottom > window.innerHeight) {
+  if (rect.top < 0 || rect.bottom > window.innerHeight - FIND_BAR_RESERVE_PX) {
     r.startContainer.parentElement?.scrollIntoView({ block: 'center', inline: 'nearest' });
   }
 }
