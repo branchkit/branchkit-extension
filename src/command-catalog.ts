@@ -208,6 +208,10 @@ export interface CommandContribution {
   pattern: string;
   params?: Record<string, string>;
   category: string;
+  /** The command's "what it does" text — already authored per command in the
+   * catalog; forwarded so the platform can show it (HUD subtitle, command
+   * editor, calibration detail). */
+  description: string;
 }
 
 /** Flatten the catalog's voice patterns into the plugin contribution payload. */
@@ -216,7 +220,7 @@ export function buildCommandContributions(): CommandContribution[] {
   for (const c of COMMAND_CATALOG) {
     if (!c.voice) continue;
     for (const v of c.voice) {
-      out.push({ action: c.id, pattern: v.pattern, params: v.params, category: c.group });
+      out.push({ action: c.id, pattern: v.pattern, params: v.params, category: c.group, description: c.description });
     }
   }
   return out;
