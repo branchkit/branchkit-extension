@@ -42,10 +42,10 @@ function translateInboundAction(message: Message): Message {
 // must re-push from scratch so the active tab is the sole, complete contributor
 // to the global vocabulary. The content script's `reactivate` handler flips its
 // local active flag back on and re-queues its whole wrapper store.
-export function republishActiveTab(tabId: number): void {
+export function republishActiveTab(tabId: number, reason = 'tab_activated'): void {
   chrome.tabs.sendMessage(tabId, {
     type: 'BRANCHKIT_ACTION',
-    payload: { action: 'reactivate', params: { reason: 'tab_activated' } },
+    payload: { action: 'reactivate', params: { reason } },
   } as Message).catch(() => {});
 }
 

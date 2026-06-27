@@ -721,6 +721,19 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
       void assertFocusIfFocused();
       hydrateReferencesFromCollection().then(() => pushReferenceNames());
       rescanActiveTab();
+      // Host (BranchKit app) restart healer. A host restart drops the SSE but
+      // does NOT kill the extension service worker, so the per-frame liveness
+      // Ports never drop and their onResync (the SW-restart healer) never fires.
+      // The restarted plugin lost every frame's grammar, and rescanActiveTab
+      // only re-scans the DOM — it does not re-emit codewords. Reactivate the
+      // active tab so its grammar is rebuilt into the fresh plugin (rotate
+      // session + re-Put). Other tabs heal on next focus via tab_activated.
+      // Without this, badges paint but aren't matchable after an app restart —
+      // which production hits on every update/crash.
+      // See notes/DESIGN_HOST_RESTART_RESYNC.md.
+      if (bgState.cachedActiveTabId != null) {
+        republishActiveTab(bgState.cachedActiveTabId, 'sse_reconnect');
+      }
     }
 
     // SSE dropped — retry with exponential backoff until plugin is back
