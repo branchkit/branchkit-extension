@@ -2063,7 +2063,7 @@ window.addEventListener('blur', (e) => {
 // the plugin re-registers commands for this page's elements. Fresh page
 // loads also fire pageshow but with persisted=false — those are handled by
 // the normal init flow; we skip them here to avoid double-scanning.
-window.addEventListener('pageshow', (e) => {
+pageSession.resources.listen(window, 'pageshow', (e) => {
   if (!e.persisted) return;
   pageSession.restore();
 });
@@ -3473,7 +3473,7 @@ function onVisibilityChange(): void {
     suspendHintMachinery();
   }
 }
-document.addEventListener('visibilitychange', onVisibilityChange);
+pageSession.resources.listen(document, 'visibilitychange', onVisibilityChange);
 
 if (frameMayHoldHints()) {
   // Visible (foreground) tab: activate now (the storage callback kicks the
@@ -3524,7 +3524,7 @@ if (frameMayHoldHints()) {
 // constant can't be shared via import.
 const SHADOW_EVENT = '__branchkit__shadow_attached';
 
-document.addEventListener(SHADOW_EVENT, (event) => {
+pageSession.resources.listen(document, SHADOW_EVENT, (event) => {
   const host = event.target;
   if (!(host instanceof Element)) return;
   // The bootstrap fires the event *before* the native attach — the

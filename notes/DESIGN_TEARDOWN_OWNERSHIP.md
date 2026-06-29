@@ -337,9 +337,37 @@ strictly more complete. The throw stays throughout. Soak at sensible batches.
   safe-by-emptiness (the reconcile registry is drained, so they no-op). A registry
   `clearTimeout`/named-slot API (Lift 3b) is the proper home for the clear-reset
   timers.
-- **Lift 4 — the ~15 `addEventListener`s.** Window/document listeners through
-  `resources.listen` so teardown removes them (retiring the per-handler
-  `isTornDown` guards added in Phase 1 once the listener is gone entirely).
+- **Lift 4 — DOM `addEventListener`s. 4a DONE.** Research-scoped (see the
+  cross-browser findings below): only `window`/`document` DOM listeners migrate to
+  `resources.listen`; the `chrome.*` listeners (`onMessage`, `storage.onChanged`)
+  stay — they auto-clean on context invalidation, and `onMessage` keeps its Phase
+  1 guard for the superseded-but-live-elder case. `resources.listen` was
+  overloaded like `addEventListener` to preserve per-event typing (`pageshow` ->
+  `PageTransitionEvent`, etc.).
+  - **4a (done):** the resurrection-driver + grammar-republish listeners —
+    `SHADOW_EVENT`, `visibilitychange`, `pageshow`. `scripts/_soak-orphan.mjs`
+    confirms the `SHADOW_EVENT` residual dropped 50 -> 0 (handlers no longer fire
+    after teardown).
+  - **4b (next):** the reposition / pointer / focus / `keydown` / `keyup`
+    listeners — bulk-mechanical, lower-risk (already safe-by-emptiness or guarded).
+  - **Guards stay as defense-in-depth.** The Phase 1 guards sit on work functions
+    (`activateHintMachinery` / `resumeHintMachinery` / `discoverInSubtree`) reached
+    by multiple callers, so they can't be retired 1:1 with a listener. Keep them
+    as backstop (same philosophy as keeping the throw); retire only once every
+    caller is owned (post-Lift-5).
+
+### Cross-browser teardown findings (research, 2026-06-29)
+
+- `chrome.*` listeners (`onMessage`, `storage.onChanged`) are auto-removed when
+  the context is invalidated — so the *context-dead* orphan stops them for free.
+  Only the *superseded-but-live-elder* (chrome.runtime still valid) needs the
+  guard, which is exactly what Phase 1's `onMessage` guard covers. So: keep that
+  guard; do not route `chrome.*` listeners through the DOM-listener registry.
+- DOM listeners are NOT auto-removed; `AbortController(signal)` is the canonical
+  bulk-cleanup pattern and our explicit-removal registry is equivalent.
+- Most extensions don't fully tear down DOM listeners (they let the orphan die on
+  navigation — the "close the tab" pain); BranchKit doing complete teardown is
+  more thorough than typical, so there's no off-the-shelf recipe.
 - **Lift 5 — rAFs, then fold the big observers** (mutation-source, tracker,
   visibility) so `quiesceOrphan`'s body collapses into `teardownAll()`.
 

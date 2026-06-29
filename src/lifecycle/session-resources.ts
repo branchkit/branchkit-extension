@@ -37,12 +37,24 @@ export class SessionResources {
   /**
    * `addEventListener` that teardown removes. Pass the same handler reference
    * you would hand `removeEventListener` — an inline arrow is fine, since the
-   * reference is captured here for the matching removal.
+   * reference is captured here for the matching removal. Overloaded like
+   * `addEventListener` so per-event typing is preserved (e.g. `pageshow` ->
+   * `PageTransitionEvent`, `keydown` -> `KeyboardEvent`).
    */
+  listen<K extends keyof WindowEventMap>(
+    target: Window, type: K, handler: (ev: WindowEventMap[K]) => void, options?: boolean | AddEventListenerOptions,
+  ): void;
+  listen<K extends keyof DocumentEventMap>(
+    target: Document, type: K, handler: (ev: DocumentEventMap[K]) => void, options?: boolean | AddEventListenerOptions,
+  ): void;
+  listen(
+    target: EventTarget, type: string, handler: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions,
+  ): void;
   listen(
     target: EventTarget,
     type: string,
-    handler: EventListenerOrEventListenerObject,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    handler: any,
     options?: boolean | AddEventListenerOptions,
   ): void {
     target.addEventListener(type, handler, options);
