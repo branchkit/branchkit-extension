@@ -2501,6 +2501,10 @@ const DISPATCH_PASSTHROUGH_ACTIONS = new Set([
 ]);
 
 chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {
+  // A torn-down orphan (a superseded elder whose chrome.runtime is still live)
+  // must not act on broadcasts — it would fire navigations/clicks/grammar into
+  // a dead session alongside the successor. See notes/DESIGN_TEARDOWN_OWNERSHIP.md.
+  if (pageSession.isTornDown) return false;
   if (message.type === 'GET_FOCUS_STATUS') {
     sendResponse({ focused: windowHasFocus });
     return false;
@@ -3249,6 +3253,10 @@ function schedulePushGrammar(): void {
 
 /** Walk an added subtree and create wrappers for any hintable descendants. */
 function discoverInSubtree(root: Element): number {
+  // Resurrection guard: a torn-down orphan must not re-discover into a dead
+  // session. Reached via SHADOW_EVENT, this rebuilds observers/wrappers that
+  // quiesceOrphan removed. See notes/DESIGN_TEARDOWN_OWNERSHIP.md.
+  if (pageSession.isTornDown) return 0;
   const __cpuStart = performance.now();
   const result = scanElements(root, (el) => store.findWrapperFor(el) !== undefined);
   applyUserRuleToScan(result, root);
@@ -3355,6 +3363,10 @@ function reevaluateAttribute(target: Element): boolean {
 // previously-ineligible frame grew, so it also kicks an initial scan (the
 // module-load alphabet callback already scans eligible-at-load frames).
 function activateHintMachinery(trigger: 'load' | 'resize'): void {
+  // Resurrection guard: a torn-down orphan (e.g. a visibilitychange after
+  // supersede) must not re-arm the MutationObserver + scan loop that teardown
+  // stopped. See notes/DESIGN_TEARDOWN_OWNERSHIP.md.
+  if (pageSession.isTornDown) return;
   if (hintMachineryEnabled) return;
   hintMachineryEnabled = true;
   attachPageMutationObserver();
@@ -3395,6 +3407,9 @@ function suspendHintMachinery(): void {
 // reactivate path; doScan's scanChain serializes this against the background's
 // reactivate so there's no duplicate-codeword race.
 function resumeHintMachinery(): void {
+  // Resurrection guard (see activateHintMachinery): a torn-down orphan that
+  // goes visible must not resume the MutationObserver + scan loop.
+  if (pageSession.isTornDown) return;
   if (!suspended) return;
   suspended = false;
   attachPageMutationObserver();
