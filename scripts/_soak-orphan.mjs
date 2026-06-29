@@ -85,12 +85,16 @@ await sleep(600);
 
 const hits = await readHits();
 console.log(`\norphanHits after ${BURST}-event burst: ${hits}`);
-console.log(
-  hits > 0
-    ? `RESIDUAL: handlers STILL FIRED ${hits}x after teardown (expected pre-Lift-4; Lift 4 should drive this to ~0).`
-    : `CLEAN: no surviving handler hits — teardown removed these listeners.`,
-);
 
 await ctx.close();
 server.close();
-process.exit(0);
+
+// Post-Lift-4 the residual must be 0; a non-zero count means a listener was not
+// removed on teardown (a regression). Exit code gates CI / `npm run soak:orphan`.
+const pass = hits === 0;
+console.log(
+  pass
+    ? `PASS: 0 surviving handler hits — teardown removed these listeners.`
+    : `FAIL: handlers still fired ${hits}x after teardown — a listener was not removed (teardown regression).`,
+);
+process.exit(pass ? 0 : 1);

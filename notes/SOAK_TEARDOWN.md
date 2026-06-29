@@ -86,8 +86,9 @@ The gauge gives a clean before/after as the migration proceeds:
 
 ## The automated harness vs. the real soak
 
-`scripts/_soak-orphan.mjs` (`npm run build:chrome && node scripts/_soak-orphan.mjs`)
-is the deterministic half. It loads the extension headful, forces the teardown
+`scripts/_soak-orphan.mjs` (`npm run soak:orphan`) is the deterministic half. It
+exits non-zero if any handler still fired after teardown (CI-gateable). It loads
+the extension headful, forces the teardown
 path (dispatches `__branchkit__force_teardown`), fires the resurrection-driving
 events (attachShadow → `SHADOW_EVENT`, visibilitychange, scroll), and reads
 `branchkitOrphanHits`. It objectively answers "do these listeners still fire
