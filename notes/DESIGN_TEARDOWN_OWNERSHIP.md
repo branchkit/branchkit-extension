@@ -1,8 +1,10 @@
 # Content-script teardown — the model, the structural cause, and the path
 
 Date: 2026-06-29
-Status: proposal (in-progress). Phase 1 is a small, shippable change; Phase 2 is
-the structural endgame and is soak-gated.
+Status: Phase 1 + Phase 2a Lifts 1-4 implemented (8 commits, unpushed, pending
+the manual soak). The correctness goal is met; the remaining lifts are
+consolidation-only and were deliberately deferred. See "Status — where this
+landed" below.
 
 Companion to `DESIGN_ORPHAN_CS_TEARDOWN_RETROSPECTIVE.md` (the 2026-06-02 failed
 fix) and `REVIEW_EXTENSION_FOOTGUNS_2026-06-29.md` (the finding that surfaced
@@ -16,6 +18,54 @@ The trigger was small: the `chrome.runtime.onMessage` handler
 fire navigations and clicks. Investigating "should we just add the guard?" kept
 moving the recommendation, which is itself the tell that the problem is
 structural, not a single missing line.
+
+---
+
+## Status — where this landed (2026-06-29)
+
+**Shipped (8 commits, unpushed, not yet soaked):** Phase 1 + Phase 2a Lifts 1-4.
+The correctness goal is met — every resource that could fire into a dead session
+is now registry-owned and stopped on teardown:
+
+- **Phase 1** (`78f3ef7`) — `isTornDown` guards on `onMessage` + the three
+  resurrection work functions (`activateHintMachinery`, `resumeHintMachinery`,
+  `discoverInSubtree`). Retained as defense-in-depth.
+- **Lift 1** (`bab6ba7`) — the `SessionResources` registry
+  (`lifecycle/session-resources.ts`) + `teardownAll()` wired into `quiesceOrphan`.
+- **Lift 2** (`54c984e`) — every `setInterval` except `guardKeeper` (self-clears;
+  it is the orphan *detector*).
+- **Lift 3** (`6eeb225`) — the fire-once / single-flight `setTimeout`s.
+- **Lift 4a/4b** (`ebb7ccf`, `a0e6296`) — every `window`/`document` listener
+  except the `__branchkit__force_teardown` test trigger (`{ once: true }`).
+- **Soak tooling** (`6b3dea4`, `5a8290c`) — the `branchkitOrphanHits` gauge,
+  `notes/SOAK_TEARDOWN.md`, and `scripts/_soak-orphan.mjs`.
+
+**Validated:** `scripts/_soak-orphan.mjs` shows the `SHADOW_EVENT` post-teardown
+residual dropping **50 -> 0** once Lift 4a removed that listener — objective proof
+the teardown now holds for the migrated surface.
+
+**Stopped before Lift 5 (fold observers) and Lift 3b (debounce-timer slot), by
+design.** These are consolidation, not correctness:
+
+- The big observers (mutation-source, tracker, visibility, resize) are *already*
+  torn down by `quiesceOrphan` via their own teardown calls. Folding them into
+  the registry only collapses `quiesceOrphan`'s body into `teardownAll()` — an
+  aesthetic win, no behavior change — and it is the multi-module, more-invasive
+  change, so it should not ride into an unsoaked batch in this high-blast-radius
+  area.
+- The clear-reset debounce timers (scroll/deferred reposition, `whenDOMSettles`)
+  are already neutralized by safe-by-emptiness; 3b would route them only for
+  tidiness.
+- The `chrome.*` listeners (`onMessage`, `storage.onChanged`) intentionally stay
+  guard-only — they auto-clean on context invalidation; only the
+  superseded-but-live-elder needs the `onMessage` guard.
+
+**The remaining gate is the manual soak,** which the harness cannot replace (it
+covers teardown-completeness, not the emergent SW-saturation steady-state). Run
+`notes/SOAK_TEARDOWN.md` on the eight commits; if clean, push the extension, then
+bump the app submodule pointer (last at `78f3ef7`). Resume points if anyone picks
+up the consolidation later: tasks Lift 5 / Lift 3b, and the lift sequence in
+section 6.
 
 ---
 
