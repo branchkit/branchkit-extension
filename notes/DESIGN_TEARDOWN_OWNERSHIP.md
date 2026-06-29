@@ -348,8 +348,10 @@ strictly more complete. The throw stays throughout. Soak at sensible batches.
     `SHADOW_EVENT`, `visibilitychange`, `pageshow`. `scripts/_soak-orphan.mjs`
     confirms the `SHADOW_EVENT` residual dropped 50 -> 0 (handlers no longer fire
     after teardown).
-  - **4b (next):** the reposition / pointer / focus / `keydown` / `keyup`
-    listeners — bulk-mechanical, lower-risk (already safe-by-emptiness or guarded).
+  - **4b (done):** the reposition / scroll / pointer / focus-blur / focusin-out /
+    transition-animation-end / `keydown` / `keyup` / `capture_snapshot` listeners.
+    Every `window`/`document` listener is now registry-owned except the
+    `__branchkit__force_teardown` test trigger (`{ once: true }`, self-removing).
   - **Guards stay as defense-in-depth.** The Phase 1 guards sit on work functions
     (`activateHintMachinery` / `resumeHintMachinery` / `discoverInSubtree`) reached
     by multiple callers, so they can't be retired 1:1 with a listener. Keep them

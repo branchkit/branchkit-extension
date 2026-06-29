@@ -2041,10 +2041,10 @@ async function processScanBatch(
 
 let windowHasFocus = document.hasFocus();
 
-window.addEventListener('focus', (e) => {
+pageSession.resources.listen(window, 'focus', (e) => {
   if (e.target === window) windowHasFocus = true;
 }, true);
-window.addEventListener('blur', (e) => {
+pageSession.resources.listen(window, 'blur', (e) => {
   if (e.target === window) windowHasFocus = false;
 }, true);
 
@@ -2850,7 +2850,7 @@ function scheduleReposition(): void {
     firehoseStep('reposition:end', rects.size, 20);
   });
 }
-window.addEventListener('resize', () => scheduleReposition(), { passive: true });
+pageSession.resources.listen(window, 'resize', () => scheduleReposition(), { passive: true });
 
 // Scroll tracking. A viewport-pinned badge host (position:fixed) does not ride
 // the compositor, and an inner-pane scroll moves flow targets without moving
@@ -3048,7 +3048,7 @@ function scheduleScrollReposition(e?: Event): void {
     runSettlePipeline('band');
   }, DEFERRED_REPOSITION_DEBOUNCE_MS);
 }
-window.addEventListener('scroll', scheduleScrollReposition, { passive: true });
+pageSession.resources.listen(window, 'scroll', scheduleScrollReposition, { passive: true });
 // Capture-phase document listener catches scroll events on nested overflow
 // containers (QuickBase's mainBodyDiv table scroll, Gmail's pane scrolls,
 // any modern web-app sidebar / data-grid pattern). Scroll events don't
@@ -3061,7 +3061,7 @@ window.addEventListener('scroll', scheduleScrollReposition, { passive: true });
 // because scroll never reached scheduleScrollReposition. The handler is the same
 // debounced scheduleScrollReposition the window listener uses, so the
 // 100 ms coalescing keeps cost bounded even on multi-pane scroll bursts.
-document.addEventListener('scroll', scheduleScrollReposition, { passive: true, capture: true });
+pageSession.resources.listen(document, 'scroll', scheduleScrollReposition, { passive: true, capture: true });
 
 // Per-container resize: each HintBadge registers its anchor with the
 // shared tracker. Catches CSS-only and container-scoped layout shifts
@@ -3102,10 +3102,10 @@ function scheduleDeferredReposition(): void {
     runSettlePipeline('store');
   }, DEFERRED_REPOSITION_DEBOUNCE_MS);
 }
-document.addEventListener('focusin', scheduleDeferredReposition, { passive: true });
-document.addEventListener('focusout', scheduleDeferredReposition, { passive: true });
-document.addEventListener('transitionend', scheduleDeferredReposition, { passive: true });
-document.addEventListener('animationend', scheduleDeferredReposition, { passive: true });
+pageSession.resources.listen(document, 'focusin', scheduleDeferredReposition, { passive: true });
+pageSession.resources.listen(document, 'focusout', scheduleDeferredReposition, { passive: true });
+pageSession.resources.listen(document, 'transitionend', scheduleDeferredReposition, { passive: true });
+pageSession.resources.listen(document, 'animationend', scheduleDeferredReposition, { passive: true });
 // Pointer-driven visibility sweep. A CSS `:hover` reveal (QuickBase widget
 // action bars, dropdown menus) flips targets from visibility:hidden to visible
 // with NO DOM mutation and often no transition — so neither the class/style
@@ -3117,7 +3117,7 @@ document.addEventListener('animationend', scheduleDeferredReposition, { passive:
 // entering any element (not per-pixel like mousemove), and the pointer variant
 // throttles BOTH halves to 100ms (the promote doesn't need rAF cadence here), so
 // movement-driven cost stays bounded.
-document.addEventListener('pointerover', schedulePointerVisibilitySweep, { passive: true, capture: true });
+pageSession.resources.listen(document, 'pointerover', schedulePointerVisibilitySweep, { passive: true, capture: true });
 // Pointer left the window entirely: the `:hover` reveal collapses back to
 // visibility:hidden, but no further `pointerover` fires to catch it, so the badge
 // would linger until the next settle. `pointerout` with a null `relatedTarget`
@@ -3126,14 +3126,14 @@ document.addEventListener('pointerover', schedulePointerVisibilitySweep, { passi
 // un-hover case needs no handler: moving onto any other element fires another
 // `pointerover`. Gated on the null check so ordinary in-page pointerouts (every
 // element boundary crossing) don't double the sweep rate.
-document.addEventListener('pointerout', (e: PointerEvent) => {
+pageSession.resources.listen(document, 'pointerout', (e: PointerEvent) => {
   if (e.relatedTarget === null) schedulePointerVisibilitySweep();
 }, { passive: true, capture: true });
 // Window resize covers genuine viewport changes (drag corner, device
 // rotation, DevTools open/close) AND browser zoom (Cmd+= reflows the
 // layout and changes innerWidth/innerHeight in CSS pixels). Route through
 // the deferred path so the strict-viewport reconciler runs.
-window.addEventListener('resize', scheduleDeferredReposition, { passive: true });
+pageSession.resources.listen(window, 'resize', scheduleDeferredReposition, { passive: true });
 
 // Per-target mutation: each HintBadge registers its target with the
 // shared tracker. Catches class/style/subtree changes that move a
@@ -3157,7 +3157,7 @@ onTargetMutation((target) => {
 const scrollKeys = new Set(['j', 'k', 'd', 'u', 'h', 'l']);
 const heldKeys = new Set<string>();
 
-document.addEventListener('keydown', (e: KeyboardEvent) => {
+pageSession.resources.listen(document, 'keydown', (e: KeyboardEvent) => {
   if (pageSession.isTornDown) return;
   // While the find bar is open it owns the keyboard — its focused input handles
   // typing and its own keydown handles Enter/Escape. Returning here (without
@@ -3221,7 +3221,7 @@ document.addEventListener('keydown', (e: KeyboardEvent) => {
   keyHandler.handleKeyDown(e);
 }, true);
 
-document.addEventListener('keyup', (e: KeyboardEvent) => {
+pageSession.resources.listen(document, 'keyup', (e: KeyboardEvent) => {
   if (pageSession.isTornDown) return;
   if (heldKeys.has(e.key)) {
     heldKeys.delete(e.key);
@@ -3248,7 +3248,7 @@ document.addEventListener('keyup', (e: KeyboardEvent) => {
 //   });
 // Unlike the Ctrl+Alt+A path this deliberately does NOT toggle the debug
 // overlay — a test driving captures shouldn't mutate the page's visuals.
-document.addEventListener('__branchkit__capture_snapshot', () => {
+pageSession.resources.listen(document, '__branchkit__capture_snapshot', () => {
   try {
     const payload = captureDebugSnapshot(store, trimFrameUrl(window.location.href), snapshotExtras());
     document.documentElement.dataset.branchkitSnapshot = JSON.stringify(payload);
