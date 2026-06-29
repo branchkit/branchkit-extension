@@ -222,20 +222,115 @@ successor handoff or steady-state. It ADDS brakes; it does not touch the throw
 or add AbortController — the opposite direction from what broke. Still soak it
 (constraint 7).
 
-### Phase 2 — ownership-derived teardown (later, soak-gated)
+### Phase 2 — ownership-derived teardown (in progress)
 
 The structural fix, consistent with the convergence-over-enumeration direction
-the rest of the codebase is taking:
+the rest of the codebase is taking. It splits into two halves with very
+different risk; keeping them separate is the single most important discipline,
+because the 2026-06-02 failure came from doing them together.
 
-- A session-scoped resource registry: every `addEventListener`, `setInterval`,
-  `setTimeout`, observer, and rAF is created through a `pageSession`-owned helper
-  that records it, so `teardown()` stops the entire set with no hand-maintained
-  list. The restructure already made `pageSession` the owner of construction
-  (`PageSession.start()`), so the owner exists — this extends it to own
-  destruction too.
-- Make backpressure explicit: a named guard at the `sendMessage` boundary rather
-  than reliance on the emergent throw. The throw can only retire once the
-  registry guarantees nothing is left running to need braking — never before.
+Before — teardown is a hand-maintained list:
+
+```
+  module scope (~3700 lines): resources created ad hoc, no owner
+  ┌──────────────────────────────────────────────────────────┐
+  │ addEventListener ×~15   setInterval ×3   setTimeout ×~20   │
+  │ MutationObserver   IntersectionObserver   ResizeObserver  │
+  │ requestAnimationFrame ×N                                  │
+  └───────────────┬──────────────────────────────────────────┘
+                  │ created here...
+                  ▼
+        ┌─────────────────────┐     TWO artifacts kept in sync
+        │ quiesceOrphan()     │ ◀── BY HAND — drift is silent
+        │ hand-written list   │     (onMessage, the intervals,
+        │ of things to stop   │     resurrection paths forgotten)
+        └─────────┬───────────┘
+                  │ stops SOME
+                  ▼
+        ┌──────────────────────────────────────────────┐
+        │ everything it forgot keeps firing ──▶ caught   │
+        │ ONLY by the implicit sendMessage THROW         │
+        └──────────────────────────────────────────────┘
+        + resurrection handlers can RE-CREATE stopped observers
+```
+
+After — teardown derives from ownership:
+
+```
+  every resource created through ONE owner that records it
+  ┌──────────────────────────────────────────────────────────┐
+  │ pageSession.resources.{ listen | interval | timeout |      │
+  │                         raf | track }                      │
+  │   → does the real call AND registers the handle            │
+  └───────────────────────────┬──────────────────────────────┘
+                              │ registered AT creation
+                              ▼
+                   ┌──────────────────────────┐
+                   │  SessionResources set    │  the ONLY list
+                   └───────────┬──────────────┘
+                              │ teardownAll() → stops ALL
+                              ▼
+                   ┌──────────────────────────┐
+                   │  nothing left running    │  creation ⇄ teardown
+                   │  no hand-written list    │  CANNOT drift
+                   └──────────────────────────┘
+        throw stays as defense-in-depth — NOT the sole brake
+```
+
+**Phase 2a — the registry, keeping the throw.** The architectural win, and
+*lower* risk than the 2026-06-02 attempt precisely because the throw stays as a
+backstop the whole time — a missed resource during migration is still caught by
+the throw, same safety net as today, over a steadily-shrinking unowned set.
+`pageSession` already owns observer construction post-restructure, so it is the
+natural owner; this extends it to own destruction. `pageSession` is a singleton
+constructed at its own module load (`page-session.ts`), imported before
+`content.ts`'s module body runs, so referencing `pageSession.resources` from the
+top-level listeners is TDZ-safe (the footgun that crashed the 2026-06-02 attempt
+does not recur here).
+
+**Phase 2b — remove the throw / make backpressure explicit.** The dangerous
+half, and *optional*. The throw is cheap and works; there is no current reason
+to remove it. Honest assessment: 2b probably never needs to happen. It stays
+roped off — the throw can only retire once the registry provably owns
+everything, and even then only if there's a concrete reason.
+
+Risks (even for 2a):
+
+1. Large mechanical surface (~15 listeners, 3 intervals, ~20 timeouts, observers
+   + rAFs) — high churn, easy to wire one wrong or miss one. The throw backstops
+   misses, but it's still error-prone.
+2. Construction ordering / TDZ — mitigated here because the owner is the
+   already-constructed `pageSession` singleton; still grep for early refs.
+3. Tests can't catch the regression — steady-state, multi-generation,
+   hours-later. Soak each meaningful batch.
+4. The "feel safe → remove the throw too early" trap — a registry makes teardown
+   *look* complete and tempts dropping the throw before it provably is. This is
+   why 2b stays separate.
+5. Partial-migration ambiguity — mid-refactor, teardown is "more complete but
+   still not complete." The throw covers the remainder.
+6. No big-bang — one revertable, behavior-equivalent lift per commit.
+7. Does NOT fix the two-generation shared-substrate problem (DOM interleaving,
+   routing to stale frames). That needs generation-stamping, a separate effort.
+
+### Phase 2a lift sequence
+
+Each lift is behavior-equivalent while the session is alive; only teardown gets
+strictly more complete. The throw stays throughout. Soak at sensible batches.
+
+- **Lift 1 — registry infra + wiring.** `SessionResources`
+  (`lifecycle/session-resources.ts`: `listen`/`interval`/`timeout`/`raf`/
+  `track`/`teardownAll`), added as `pageSession.resources`, `teardownAll()`
+  called from `quiesceOrphan`. Additive, unit-tested. **DONE.**
+- **Lift 2 — intervals.** Migrate `finalizeExpiredLimboWrappers` (done), then
+  the dev perf intervals (`publishPerfSnapshot`, `shipPerfReport`). `guardKeeper`
+  stays as-is — it self-clears and is the orphan *detector*, not a leak.
+- **Lift 3 — the ~20 ad-hoc `setTimeout`s.** The settle/coalesce/retry debounces
+  the retrospective called out as untracked.
+- **Lift 4 — the ~15 `addEventListener`s.** Window/document listeners through
+  `resources.listen` so teardown removes them (retiring the per-handler
+  `isTornDown` guards added in Phase 1 once the listener is gone entirely).
+- **Lift 5 — rAFs, then fold the big observers** (mutation-source, tracker,
+  visibility) so `quiesceOrphan`'s body collapses into `teardownAll()`.
 
 ## 7. Constraints (carried from the retrospective, still binding)
 

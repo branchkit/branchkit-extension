@@ -31,6 +31,7 @@ import {
 } from '../observe/visibility-tracker';
 import { constructPageMutationObserver } from '../observe/mutation-source';
 import { getSessionId } from '../labels/label-sync';
+import { SessionResources } from './session-resources';
 
 /**
  * Why a session is tearing down. Carried so the teardown body (and its log
@@ -113,6 +114,15 @@ export class PageSession {
    * tests it is assigned directly with stubs.
    */
   deps!: PageSessionDeps;
+
+  /**
+   * Owned listeners/intervals/timeouts/rAFs/observers (Phase 2a of
+   * notes/DESIGN_TEARDOWN_OWNERSHIP.md). Resources created through these
+   * helpers are torn down as a set by `quiesceOrphan` via `teardownAll()`,
+   * so creation and teardown can't drift. Migration is incremental; the
+   * sendMessage throw still backstops anything not yet routed through here.
+   */
+  readonly resources = new SessionResources();
 
   /**
    * The session-owned observers, constructed by `start()`. Public and

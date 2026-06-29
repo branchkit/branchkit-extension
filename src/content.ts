@@ -2237,6 +2237,10 @@ function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
     drainReconcilePositioner();
     drainClipObservers();
   } catch { /* same */ }
+  // Stop every session-owned resource (Phase 2a, DESIGN_TEARDOWN_OWNERSHIP.md).
+  // No-op for resources not yet migrated to the registry — those still rely on
+  // the sendMessage throw as backpressure until they move here.
+  try { pageSession.resources.teardownAll(); } catch { /* same */ }
   // Remove badge hosts so the new content script's initial DOM-clear sweep
   // (content.ts ~line 2230) doesn't have to fight visible artifacts.
   try {
@@ -3370,7 +3374,9 @@ function activateHintMachinery(trigger: 'load' | 'resize'): void {
   if (hintMachineryEnabled) return;
   hintMachineryEnabled = true;
   attachPageMutationObserver();
-  setInterval(finalizeExpiredLimboWrappers, LIMBO_DEADLINE_MS);
+  // Registry-owned (Phase 2a): teardown clears it instead of leaving an orphan
+  // limbo sweeper running. Behavior-identical while the session is alive.
+  pageSession.resources.interval(finalizeExpiredLimboWrappers, LIMBO_DEADLINE_MS);
   if (trigger === 'resize') {
     // Subframe that just grew past the eligibility threshold. The module-
     // load reservoir warm-up was skipped (frame was too small / blank),
