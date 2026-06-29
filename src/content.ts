@@ -2192,6 +2192,23 @@ openLivenessPort({
   onResync: () => republishAllGrammar('sw_restart_resync'),
 });
 
+// --- Orphan-activity gauge (soak instrumentation) ---
+//
+// Counts how many times a torn-down content script's guard still fired — i.e. a
+// surviving listener/event reached a handler after teardown — and mirrors the
+// running total to the page as `data-branchkit-orphan-hits`. The soak reads that
+// number instead of eyeballing the console: a complete teardown leaves it stable
+// after teardown; a climbing value means residual orphan activity. The mirror is
+// a plain dataset write (no chrome.*, no throw), so it is safe from a dead
+// context. See notes/SOAK_TEARDOWN.md.
+let orphanHits = 0;
+function recordOrphanHit(): void {
+  orphanHits++;
+  try {
+    document.documentElement.dataset.branchkitOrphanHits = String(orphanHits);
+  } catch { /* document gone */ }
+}
+
 // --- Orphan self-quiesce ---
 //
 // When the extension is reloaded at chrome://extensions/, this content
@@ -2508,7 +2525,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
   // A torn-down orphan (a superseded elder whose chrome.runtime is still live)
   // must not act on broadcasts — it would fire navigations/clicks/grammar into
   // a dead session alongside the successor. See notes/DESIGN_TEARDOWN_OWNERSHIP.md.
-  if (pageSession.isTornDown) return false;
+  if (pageSession.isTornDown) { recordOrphanHit(); return false; }
   if (message.type === 'GET_FOCUS_STATUS') {
     sendResponse({ focused: windowHasFocus });
     return false;
@@ -3260,7 +3277,7 @@ function discoverInSubtree(root: Element): number {
   // Resurrection guard: a torn-down orphan must not re-discover into a dead
   // session. Reached via SHADOW_EVENT, this rebuilds observers/wrappers that
   // quiesceOrphan removed. See notes/DESIGN_TEARDOWN_OWNERSHIP.md.
-  if (pageSession.isTornDown) return 0;
+  if (pageSession.isTornDown) { recordOrphanHit(); return 0; }
   const __cpuStart = performance.now();
   const result = scanElements(root, (el) => store.findWrapperFor(el) !== undefined);
   applyUserRuleToScan(result, root);
@@ -3370,7 +3387,7 @@ function activateHintMachinery(trigger: 'load' | 'resize'): void {
   // Resurrection guard: a torn-down orphan (e.g. a visibilitychange after
   // supersede) must not re-arm the MutationObserver + scan loop that teardown
   // stopped. See notes/DESIGN_TEARDOWN_OWNERSHIP.md.
-  if (pageSession.isTornDown) return;
+  if (pageSession.isTornDown) { recordOrphanHit(); return; }
   if (hintMachineryEnabled) return;
   hintMachineryEnabled = true;
   attachPageMutationObserver();
@@ -3415,7 +3432,7 @@ function suspendHintMachinery(): void {
 function resumeHintMachinery(): void {
   // Resurrection guard (see activateHintMachinery): a torn-down orphan that
   // goes visible must not resume the MutationObserver + scan loop.
-  if (pageSession.isTornDown) return;
+  if (pageSession.isTornDown) { recordOrphanHit(); return; }
   if (!suspended) return;
   suspended = false;
   attachPageMutationObserver();
