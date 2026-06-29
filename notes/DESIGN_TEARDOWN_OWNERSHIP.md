@@ -321,9 +321,10 @@ strictly more complete. The throw stays throughout. Soak at sensible batches.
   (`lifecycle/session-resources.ts`: `listen`/`interval`/`timeout`/`raf`/
   `track`/`teardownAll`), added as `pageSession.resources`, `teardownAll()`
   called from `quiesceOrphan`. Additive, unit-tested. **DONE.**
-- **Lift 2 — intervals.** Migrate `finalizeExpiredLimboWrappers` (done), then
-  the dev perf intervals (`publishPerfSnapshot`, `shipPerfReport`). `guardKeeper`
-  stays as-is — it self-clears and is the orphan *detector*, not a leak.
+- **Lift 2 — intervals. DONE.** `finalizeExpiredLimboWrappers` and the dev perf
+  intervals (`publishPerfSnapshot`, `shipPerfReport`) now flow through the
+  registry. `guardKeeper` intentionally stays as a bare `setInterval` — it
+  self-clears on `isTornDown` and is the orphan *detector*, not a leak.
 - **Lift 3 — the ~20 ad-hoc `setTimeout`s.** The settle/coalesce/retry debounces
   the retrospective called out as untracked.
 - **Lift 4 — the ~15 `addEventListener`s.** Window/document listeners through

@@ -3659,7 +3659,7 @@ function publishPerfSnapshot(): void {
 // which reads the top document's element. A subframe publishing to its own
 // (unread) documentElement is pure 4Hz waste across the ad-frame swarm.
 if (isTopFrame) {
-  setInterval(publishPerfSnapshot, 250);
+  pageSession.resources.interval(publishPerfSnapshot, 250);
   publishPerfSnapshot();
 }
 
@@ -3690,7 +3690,7 @@ const PERF_REPORT_INTERVAL_MS = 5000;
 // The top-frame snapshot carries `frames` (subframe count) so the trail still
 // surfaces swarm size without 700 separate sendMessage round-trips.
 if (isTopFrame) {
-  setInterval(shipPerfReport, PERF_REPORT_INTERVAL_MS);
+  pageSession.resources.interval(shipPerfReport, PERF_REPORT_INTERVAL_MS);
   // Reset trigger from main world — set the dataset to "1" and we reset.
   new MutationObserver(() => {
     if (document.documentElement.dataset.branchkitResetPerf === '1') {
