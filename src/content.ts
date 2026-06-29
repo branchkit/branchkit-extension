@@ -3258,6 +3258,14 @@ document.addEventListener('__branchkit__capture_snapshot', () => {
   }
 }, true);
 
+// Soak hook: a page-world dispatch of this event forces the orphan teardown
+// path, so the harness (notes/SOAK_TEARDOWN.md) can induce the torn-down state
+// deterministically without a real extension reload, then fire events and read
+// the branchkitOrphanHits gauge. `once` so it self-removes after firing.
+document.addEventListener('__branchkit__force_teardown', () => {
+  pageSession.teardown('orphan');
+}, { once: true });
+
 // --- MutationObserver (discovery-only) ---
 //
 // The observer surgically reflects DOM changes into the wrapper store:

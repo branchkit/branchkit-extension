@@ -84,10 +84,23 @@ The gauge gives a clean before/after as the migration proceeds:
   to ~0; only `onMessage` (kept by design) can still register a hit, and only in
   the superseded-but-live-elder case.
 
-## Playwright is NOT the soak
+## The automated harness vs. the real soak
 
-A Playwright harness can automate steps 2-5 and read `branchkitOrphanHits` to
-produce a repeatable number — useful as a fast pre-filter. But per
-`[[playwright-not-authoritative]]` it forces user-activation, runs synthetic
-scroll, and can't hold a real steady-state, so a green Playwright run is a smoke
-check, not the gate. The real-Chrome / real-Firefox idle soak above is the gate.
+`scripts/_soak-orphan.mjs` (`npm run build:chrome && node scripts/_soak-orphan.mjs`)
+is the deterministic half. It loads the extension headful, forces the teardown
+path (dispatches `__branchkit__force_teardown`), fires the resurrection-driving
+events (attachShadow → `SHADOW_EVENT`, visibilitychange, scroll), and reads
+`branchkitOrphanHits`. It objectively answers "do these listeners still fire
+after teardown?" — the teardown-COMPLETENESS question and the before/after signal
+for Lift 4. Pre-Lift-4 it reports a residual (one hit per shadow attach, e.g.
+`50` for a 50-event burst); Lift 4 should drive it to ~0.
+
+What it does NOT cover: the emergent SW-saturation failure (orphan loops pumping
+the shared SW over minutes until tabs hang). Per `[[playwright-not-authoritative]]`
+the harness forces activation and can't hold a real steady-state, so it's a fast
+pre-filter, not the gate. The real-Chrome / real-Firefox idle soak above remains
+the push gate.
+
+(The `__branchkit__force_teardown` listener is a pre-launch test affordance —
+gate or remove it before shipping, since it lets any page tear down the content
+script on itself.)
