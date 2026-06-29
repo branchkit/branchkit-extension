@@ -325,8 +325,18 @@ strictly more complete. The throw stays throughout. Soak at sensible batches.
   intervals (`publishPerfSnapshot`, `shipPerfReport`) now flow through the
   registry. `guardKeeper` intentionally stays as a bare `setInterval` — it
   self-clears on `isTornDown` and is the orphan *detector*, not a leak.
-- **Lift 3 — the ~20 ad-hoc `setTimeout`s.** The settle/coalesce/retry debounces
-  the retrospective called out as untracked.
+- **Lift 3 — ad-hoc `setTimeout`s. DONE (partial by design).** Migrated the 11
+  fire-once / single-flight deferrals (doScan / rescan / reconcile / passSoon /
+  doScan-coalesce / band-retry / hint-refresh / deferred-rescan) to
+  `resources.timeout`, so teardown stops them. Deliberately skipped, with reasons:
+  the two Promise-resolver `await` yields (async control-flow, not leaks — the
+  awaiting functions self-guard), the boot deferral (one-shot before any teardown
+  is possible), and the clear-reset debounces (`whenDOMSettles` internals, the
+  scroll/deferred reposition timers) — naive `timeout()` would leak a dead id into
+  the registry set on every reset, and these are already neutralized by
+  safe-by-emptiness (the reconcile registry is drained, so they no-op). A registry
+  `clearTimeout`/named-slot API (Lift 3b) is the proper home for the clear-reset
+  timers.
 - **Lift 4 — the ~15 `addEventListener`s.** Window/document listeners through
   `resources.listen` so teardown removes them (retiring the per-handler
   `isTornDown` guards added in Phase 1 once the listener is gone entirely).

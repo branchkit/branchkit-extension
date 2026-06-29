@@ -1211,7 +1211,7 @@ let doScanCoalesceTimer: ReturnType<typeof setTimeout> | null = null;
 const DO_SCAN_COALESCE_MS = 50;
 function scheduleDoScan(): void {
   if (doScanCoalesceTimer) return;
-  doScanCoalesceTimer = setTimeout(() => {
+  doScanCoalesceTimer = pageSession.resources.timeout(() => {
     doScanCoalesceTimer = null;
     doScan();
   }, DO_SCAN_COALESCE_MS);
@@ -1383,7 +1383,7 @@ function hideHints(): void {
   // Catch up on DOM changes that occurred while hints were visible
   if (pageSession.pendingMutation) {
     pageSession.pendingMutation = false;
-    setTimeout(() => doScan(), 100);
+    pageSession.resources.timeout(() => doScan(), 100);
   }
 }
 
@@ -1404,7 +1404,7 @@ const HINT_REFRESH_DELAY_MS = 450;
 function scheduleHintRefresh(): void {
   if (hintRefreshScheduled) return;
   hintRefreshScheduled = true;
-  setTimeout(() => {
+  pageSession.resources.timeout(() => {
     hintRefreshScheduled = false;
     if (!shouldAutoShowHints()) return;
     doScan();
@@ -1538,7 +1538,7 @@ function reconcile(): void {
 // alphabet) call reconcile() directly instead.
 function scheduleReconcile(): void {
   if (pageSession.reconcileTimer) return;
-  pageSession.reconcileTimer = setTimeout(() => {
+  pageSession.reconcileTimer = pageSession.resources.timeout(() => {
     pageSession.reconcileTimer = null;
     reconcile();
   }, DEFERRED_REPOSITION_DEBOUNCE_MS);
@@ -1631,7 +1631,7 @@ function applyStrictPlan(delta: ElementWrapper[]): void {
 let passSoonTimer: ReturnType<typeof setTimeout> | null = null;
 function schedulePassSoon(): void {
   if (passSoonTimer !== null) return;
-  passSoonTimer = setTimeout(() => {
+  passSoonTimer = pageSession.resources.timeout(() => {
     passSoonTimer = null;
     runSettlePipeline('store');
   }, DEFERRED_REPOSITION_DEBOUNCE_MS);
@@ -1668,7 +1668,7 @@ function runWhenIdle(cb: () => void, timeoutMs: number): void {
   // discoveryGap in the classify sweeps). Found 2026-06-12 when the nav-hint
   // path called it synchronously.
   if (typeof w.requestIdleCallback === 'function') w.requestIdleCallback(cb, { timeout: timeoutMs });
-  else setTimeout(cb, 100);
+  else pageSession.resources.timeout(cb, 100);
 }
 
 const DISCOVERY_SWEEP_IDLE_TIMEOUT_MS = 500;
@@ -1744,7 +1744,7 @@ function scheduleBandDiscovery(): void {
         if (shouldRetry) {
           pageSession.discoveryRetryDepth++;
           firehoseStep('band_discovery:retry', pageSession.discoveryRetryDepth);
-          setTimeout(() => scheduleBandDiscovery(), DISCOVERY_RETRY_COOLDOWN_MS);
+          pageSession.resources.timeout(() => scheduleBandDiscovery(), DISCOVERY_RETRY_COOLDOWN_MS);
         } else {
           pageSession.discoveryRetryDepth = 0;
         }
@@ -2422,7 +2422,7 @@ function rescanForNav(fromCache: boolean, reason: string): void {
         (window as Window & { requestIdleCallback: (cb: () => void, opts?: { timeout: number }) => void })
           .requestIdleCallback(scheduleDeferred, { timeout: 300 });
       } else {
-        setTimeout(scheduleDeferred, 100);
+        pageSession.resources.timeout(scheduleDeferred, 100);
       }
     };
 
@@ -2430,7 +2430,7 @@ function rescanForNav(fromCache: boolean, reason: string): void {
       (window as Window & { requestIdleCallback: (cb: () => void, opts?: { timeout: number }) => void })
         .requestIdleCallback(() => { void runRescan(); }, { timeout: 2000 });
     } else {
-      setTimeout(() => { void runRescan(); }, 100);
+      pageSession.resources.timeout(() => { void runRescan(); }, 100);
     }
   } else {
     doScan();
@@ -2484,7 +2484,7 @@ function republishForActivation(reason: string): void {
       lastActivationScanAt = now;
       // Route through doScan() so this reconciliation walk serializes
       // with any other in-flight scan (storage-onChanged, MO settle).
-      setTimeout(() => { void doScan(); }, 300);
+      pageSession.resources.timeout(() => { void doScan(); }, 300);
     }
   })();
 }
@@ -3385,7 +3385,7 @@ function activateHintMachinery(trigger: 'load' | 'resize'): void {
     if (typeof chrome !== 'undefined' && chrome.runtime) {
       void labelReservoir.ensureReady();
     }
-    setTimeout(() => doScan(), 0);
+    pageSession.resources.timeout(() => doScan(), 0);
   }
 }
 
