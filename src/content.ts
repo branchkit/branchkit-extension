@@ -547,7 +547,7 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
 // within the cap; trading a rare React #418 console error on a
 // pathologically slow hydration for guaranteed badges is the right side.
 const SETTLE_MS = 200;
-const SETTLE_MAX_WAIT_MS = 3000;
+const SETTLE_MAX_WAIT_MS = 1000;
 
 function whenDOMSettles(callback: () => void): void {
   let fired = false;

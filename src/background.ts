@@ -1192,7 +1192,10 @@ async function reinjectContentScripts(): Promise<void> {
   // from tabs.onUpdated during the reload. See notes/DESIGN_EXTENSION_RELOAD_SURVIVAL.md.
   await Promise.all(targets.map(async (tab) => {
     void forwardDebugLog('pipeline.bg_reinject_tab', { tab_id: tab.id });
-    await ensureContentScriptInjected(tab.id);
+    // fromReload: skip the dual-CS-race retry — a reload doesn't re-fire the
+    // manifest CS, so an already-open tab here holds a dead orphan, not a
+    // booting CS (notes/DESIGN_HINT_SHOW_LATENCY.md).
+    await ensureContentScriptInjected(tab.id, { fromReload: true });
   }));
 }
 

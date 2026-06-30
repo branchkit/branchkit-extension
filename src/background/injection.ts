@@ -226,10 +226,22 @@ async function flushOrphanGuard(tabId: number): Promise<void> {
  */
 const PING_RETRY_DELAY_MS = 500;
 
-export async function ensureContentScriptInjected(tabId: number): Promise<void> {
+export async function ensureContentScriptInjected(
+  tabId: number,
+  opts: { fromReload?: boolean } = {},
+): Promise<void> {
   if (await pingContentScript(tabId)) return;
-  await new Promise<void>((resolve) => setTimeout(resolve, PING_RETRY_DELAY_MS));
-  if (await pingContentScript(tabId)) return;
+  // The 500ms retry waits out a freshly-loading manifest CS so we don't inject
+  // on top of it (the dual-CS install race). On the extension-RELOAD path that
+  // race can't happen: MV3 does not re-fire content_scripts into already-open
+  // tabs, so an unanswered ping there is a dead orphan, not a booting CS — the
+  // wait is pure latency (notes/DESIGN_HINT_SHOW_LATENCY.md). Skip it; the
+  // `status:'loading'` guard inside the lock still defers any tab mid-navigation
+  // during the reload, the one case where a fresh CS IS still coming.
+  if (!opts.fromReload) {
+    await new Promise<void>((resolve) => setTimeout(resolve, PING_RETRY_DELAY_MS));
+    if (await pingContentScript(tabId)) return;
+  }
   await withInjectLock(tabId, async () => {
     // Re-check inside the lock: the holder of the lock might have just
     // injected, so the CS is healthy by the time we get in here.
