@@ -296,8 +296,24 @@ export function isVisible(el: Element): boolean {
   }
 
   if (style.visibility === 'hidden' || rect.width < 5 || rect.height < 5 || style.opacity === '0') {
+    // Custom-styled checkbox/radio: the native input hides (size/opacity)
+    // behind a styled proxy; the parent's visibility answers for it.
     if (el instanceof HTMLInputElement &&
         (el.type === 'checkbox' || el.type === 'radio') &&
+        el.parentElement && isVisible(el.parentElement)) {
+      return true;
+    }
+    // Autosized text-entry controls (react-select and kin): the visible
+    // "box" is a styled wrapper div and the real <input> collapses to ~2px
+    // while empty (QuickBase grid column filters measure w=2, 2026-07-01
+    // snapshot). SIZE-ONLY failures defer to the parent's visibility;
+    // explicit visibility:hidden / opacity:0 / display:none still reject —
+    // unlike checkbox/radio, an invisible text control usually really is
+    // hidden, and focusing a display:none input is a no-op anyway.
+    if (style.visibility !== 'hidden' && style.opacity !== '0' &&
+        style.display !== 'none' &&
+        (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ||
+         el instanceof HTMLSelectElement) &&
         el.parentElement && isVisible(el.parentElement)) {
       return true;
     }

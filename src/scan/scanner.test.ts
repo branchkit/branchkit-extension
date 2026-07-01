@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   scanElements, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, subtreeMaybeHintable,
-  deepQuerySelectorAll, getPerfCounters, resetPerfCounters,
+  deepQuerySelectorAll, getPerfCounters, resetPerfCounters, isVisible,
 } from './scanner';
 
 function html(markup: string): void {
@@ -231,5 +231,52 @@ describe('scanInBatches', () => {
     expect(batches).toHaveLength(1);
     expect(batches[0].isLast).toBe(true);
     expect(batches[0].elements).toEqual([]);
+  });
+});
+
+describe('isVisible — autosized text-entry carve-out (QuickBase 2px filter inputs)', () => {
+  // The shared beforeEach patches every rect to 100x20; narrow it here so
+  // [data-tiny] elements measure 2x19 (the react-select empty-input shape).
+  beforeEach(() => {
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      const tiny = this.hasAttribute?.('data-tiny');
+      return {
+        x: 0, y: 0, top: 0, left: 0,
+        right: tiny ? 2 : 100, bottom: tiny ? 19 : 20,
+        width: tiny ? 2 : 100, height: tiny ? 19 : 20,
+        toJSON: () => ({}),
+      } as DOMRect;
+    };
+  });
+
+  it('a 2px-wide empty text input inside a visible wrapper is visible', () => {
+    html('<div id="wrap"><input id="f" type="text" data-tiny></div>');
+    expect(isVisible(document.getElementById('f')!)).toBe(true);
+  });
+
+  it('textarea and select get the same parent fallback', () => {
+    html('<div><textarea id="t" data-tiny></textarea><select id="s" data-tiny></select></div>');
+    expect(isVisible(document.getElementById('t')!)).toBe(true);
+    expect(isVisible(document.getElementById('s')!)).toBe(true);
+  });
+
+  it('size-only fallback does NOT rescue an explicitly hidden input', () => {
+    html('<div><input id="f" type="text" data-tiny style="visibility:hidden"></div>');
+    expect(isVisible(document.getElementById('f')!)).toBe(false);
+  });
+
+  it('does NOT rescue an opacity:0 text input (unlike checkbox/radio)', () => {
+    html('<div><input id="f" type="text" data-tiny style="opacity:0"></div>');
+    expect(isVisible(document.getElementById('f')!)).toBe(false);
+  });
+
+  it('does NOT rescue a tiny input whose parent is itself invisible', () => {
+    html('<div style="opacity:0"><input id="f" type="text" data-tiny></div>');
+    expect(isVisible(document.getElementById('f')!)).toBe(false);
+  });
+
+  it('a tiny non-form element stays invisible (gate unchanged)', () => {
+    html('<div><a href="#" id="a" data-tiny>x</a></div>');
+    expect(isVisible(document.getElementById('a')!)).toBe(false);
   });
 });
