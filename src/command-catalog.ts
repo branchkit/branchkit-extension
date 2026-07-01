@@ -166,8 +166,10 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     description: 'Jump to the previous find match.',
     voice: [{ pattern: 'previous' }] },
   { id: 'find_immediate', label: 'Find immediately', group: 'Find', mappable: false, params: [],
-    description: 'Run a find for a given query (runtime query — not bindable).',
-    voice: [{ pattern: 'find {text}', params: { query: '{text}' } }] },
+    // No voice pattern: the closed command engine can only hear words already
+    // in its union, so "find {text}" never did real find-in-page. A future
+    // page-word index ("find <word:page_words>") would re-target this action.
+    description: 'Run a find for a given query (runtime query — not bindable).' },
 
   // --- Navigation ---
   { id: 'history_back', label: 'Go back', group: 'Navigation', mappable: true, params: [],
