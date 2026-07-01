@@ -372,11 +372,14 @@ export function attachPageMutationObserver(): void {
     // fingerprint. Without aria-label/title/type in the filter, a button
     // renamed from "Save" to "Save changes" would still register against
     // its stale fingerprint and the WeakRef-dead-fingerprint-fallback
-    // path could never recover it.
+    // path could never recover it. tabindex/inert are hintability gates
+    // too ([tabindex]:not([tabindex="-1"]) in HINTABLE, [inert] in
+    // EXCLUDE) — without them, an element JS-enhanced with tabindex="0"
+    // or un-inerted never reevaluates until a full walk happens by.
     attributeFilter: [
       'disabled', 'aria-hidden', 'role', 'contenteditable', 'href',
       'aria-label', 'aria-labelledby', 'aria-describedby', 'aria-roledescription',
-      'title', 'type',
+      'title', 'type', 'tabindex', 'inert',
     ],
   });
 }
