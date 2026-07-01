@@ -284,13 +284,24 @@ export async function confirmLabels(
 }
 
 /**
- * Release labels back to the pool. Labels not in `assigned` are silently
- * ignored — release is idempotent. Returned labels are unshifted en bloc
- * (preserving their original order) so an immediate re-claim of the same
- * count yields the same labels — important for hint stability across
- * rescans.
+ * Release labels back to the pool — frame-scoped. Only labels the calling
+ * frame actually owns (assigned or reserved to `frameId`) are freed; the
+ * rest are silently ignored, so release stays idempotent for the owner.
+ *
+ * The owner check is load-bearing (review 2026-06-29, owner-blind release):
+ * a frame can hold a STALE local copy of a codeword another frame won in
+ * confirm arbitration — its wrapper released in the release-vs-confirm
+ * window, or its reservoir kept the string after a rejection. An unscoped
+ * release from that frame would free the winner's live assignment: the
+ * winner's badge keeps painting but stops routing, and the pool can re-issue
+ * the codeword to a third frame — the cross-frame duplicate the pool exists
+ * to prevent. Same arbitration rule `confirmLabels` applies to `reserved`.
+ *
+ * Returned labels are unshifted en bloc (preserving their original order)
+ * so an immediate re-claim of the same count yields the same labels —
+ * important for hint stability across rescans.
  */
-export async function releaseLabels(tabId: number, labels: string[]): Promise<void> {
+export async function releaseLabels(tabId: number, frameId: number, labels: string[]): Promise<void> {
   return withTabLock(tabId, async () => {
     const stack = await loadStack(tabId);
     if (!stack) return;
@@ -298,20 +309,18 @@ export async function releaseLabels(tabId: number, labels: string[]): Promise<vo
 
     const toReturn: string[] = [];
     for (const label of labels) {
-      // Assigned takes precedence; a label can be in exactly one of
-      // assigned / reserved / free at a time, but release is idempotent
-      // so we check both maps and free in whatever state the label is.
-      if (label in stack.assigned) {
+      // A label is in exactly one of assigned / reserved / free at a time;
+      // check both owned states so release works pre- and post-confirm.
+      if (stack.assigned[label] === frameId) {
         delete stack.assigned[label];
         toReturn.push(label);
-      } else if (label in stack.reserved) {
+      } else if (stack.reserved[label] === frameId) {
         delete stack.reserved[label];
         toReturn.push(label);
       }
     }
-    if (toReturn.length > 0) {
-      stack.free.unshift(...toReturn);
-    }
+    if (toReturn.length === 0) return;
+    stack.free.unshift(...toReturn);
     await saveStack(tabId, stack);
     assignedCache.set(tabId, { ...stack.assigned });
   });

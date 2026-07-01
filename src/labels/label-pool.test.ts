@@ -117,7 +117,7 @@ describe('label-pool', () => {
       const first = await claimLabels(tabId, 0, 4);
       expect(first).toEqual(LP.slice(0, 4));
 
-      await releaseLabels(tabId, first);
+      await releaseLabels(tabId, 0, first);
 
       const second = await claimLabels(tabId, 0, 4);
       expect(second).toEqual(LP.slice(0, 4));
@@ -129,7 +129,7 @@ describe('label-pool', () => {
       expect(first).toEqual(LP.slice(0, 5));
 
       // Release only the middle three; first and last stay claimed.
-      await releaseLabels(tabId, [LP[1], LP[2], LP[3]]);
+      await releaseLabels(tabId, 0, [LP[1], LP[2], LP[3]]);
 
       const next = await claimLabels(tabId, 0, 3);
       expect(next).toEqual([LP[1], LP[2], LP[3]]);
@@ -143,7 +143,7 @@ describe('label-pool', () => {
       expect(first).toEqual(LP.slice(0, 3));
 
       // Element holding LP[2] scrolls out, releasing it.
-      await releaseLabels(tabId, [LP[2]]);
+      await releaseLabels(tabId, 0, [LP[2]]);
 
       // Two slots re-claim: one prefers the freed LP[2], one is new.
       const next = await claimLabels(tabId, 0, 2, [LP[2], '']);
@@ -166,7 +166,7 @@ describe('label-pool', () => {
     it('index-aligns grants when a preferred slot precedes fresh ones', async () => {
       const tabId = nextTabId();
       const first = await claimLabels(tabId, 0, 4);
-      await releaseLabels(tabId, first); // all four back, front-of-pool
+      await releaseLabels(tabId, 0, first); // all four back, front-of-pool
 
       // Slot 1 prefers a specific freed token; the rest are fresh and must
       // fill the OTHER slots without clobbering slot 1's grant.
@@ -256,7 +256,7 @@ describe('label-pool', () => {
       const tabId = nextTabId();
       const [cw] = await claimLabels(tabId, 0, 1);
       await confirmLabels(tabId, 0, [cw]);
-      await releaseLabels(tabId, [cw]);
+      await releaseLabels(tabId, 0, [cw]);
 
       const { rejected } = await confirmLabels(tabId, 0, [cw]);
       expect(rejected).toEqual([]);
@@ -271,7 +271,7 @@ describe('label-pool', () => {
       const tabId = nextTabId();
       const [cw] = await claimLabels(tabId, 0, 1);
       await confirmLabels(tabId, 0, [cw]);
-      await releaseLabels(tabId, [cw]);
+      await releaseLabels(tabId, 0, [cw]);
 
       // Frame 1's refill grabs it before frame 0's confirm lands (released
       // labels unshift to the front, so a 1-slot claim returns the same one).
@@ -301,6 +301,53 @@ describe('label-pool', () => {
       const { rejected } = await confirmLabels(tabId, 0, [cw]);
       expect(rejected).toEqual([]);
       expect(await getFrameForLabel(tabId, cw)).toBe(0);
+    });
+  });
+
+  describe('frame-scoped release (owner-blind release fix)', () => {
+    it('ignores a release from a frame that does not own the assigned label', async () => {
+      // The stale-local-copy scenario: frame 0 released a codeword, frame 1
+      // claimed + confirmed it, and frame 0's reservoir (still holding the
+      // string locally) releases it AGAIN. That second release must not free
+      // frame 1's live assignment.
+      const tabId = nextTabId();
+      const [cw] = await claimLabels(tabId, 0, 1);
+      await releaseLabels(tabId, 0, [cw]);          // owner release — freed
+
+      const b = await claimLabels(tabId, 1, 1);     // frame 1 wins it
+      expect(b[0]).toBe(cw);
+      await confirmLabels(tabId, 1, [cw]);
+
+      await releaseLabels(tabId, 0, [cw]);          // stale re-release — ignored
+
+      // Frame 1 still owns routing, and the pool can't re-issue the
+      // codeword to a third frame.
+      expect(await getFrameForLabel(tabId, cw)).toBe(1);
+      const c = await claimLabels(tabId, 2, 5);
+      expect(c).not.toContain(cw);
+    });
+
+    it('ignores a non-owner release of a reserved (unconfirmed) label', async () => {
+      const tabId = nextTabId();
+      const [cw] = await claimLabels(tabId, 0, 1);  // reserved to frame 0
+
+      await releaseLabels(tabId, 1, [cw]);          // frame 1 never owned it
+
+      // Frame 0's confirm still promotes its reservation.
+      const { rejected } = await confirmLabels(tabId, 0, [cw]);
+      expect(rejected).toEqual([]);
+      expect(await getFrameForLabel(tabId, cw)).toBe(0);
+    });
+
+    it('releases a reserved label when its owning frame releases it', async () => {
+      // Pre-confirm owner release (wrapper left viewport before the confirm
+      // round-trip): the reservation must come back to the pool.
+      const tabId = nextTabId();
+      const [cw] = await claimLabels(tabId, 0, 1);  // reserved to frame 0
+      await releaseLabels(tabId, 0, [cw]);
+
+      const b = await claimLabels(tabId, 1, 1);     // front-of-pool again
+      expect(b[0]).toBe(cw);
     });
   });
 

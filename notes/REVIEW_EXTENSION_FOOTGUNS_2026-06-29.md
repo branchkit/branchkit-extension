@@ -149,7 +149,11 @@ Severity is high/med/low. "Verified" means checked against source in this pass.
 
 ### Labels / codewords / grammar-epoch
 
-- **HIGH — `RELEASE_LABELS` is owner-blind across frames.** Verified.
+- **HIGH — `RELEASE_LABELS` is owner-blind across frames.** FIXED 2026-07-01:
+  `releaseLabels` now takes the sender's `frameId` (authoritative from
+  `_sender`, not payload) and only frees labels assigned/reserved to that
+  frame, mirroring `confirmLabels`. Regression tests in `label-pool.test.ts`
+  ("frame-scoped release"). Original finding:
   `label-pool.ts:293-318` releases any matching codeword regardless of owning
   frame, and the SW handler drops `frameId` (`background.ts:769-776`). Frame A
   releasing a stale local copy of `"a s"` can free frame B's live, painted
@@ -157,8 +161,12 @@ Severity is high/med/low. "Verified" means checked against source in this pass.
   allowing the pool to re-issue `"a s"` to a third frame (the cross-frame
   duplicate the pool exists to prevent). Fix: scope release to
   `assigned[cw] === frameId`, as `confirmLabels` already does.
-- **HIGH — confirm-rejection can leave an opaque-but-wrong badge.** Verified
-  ordering gap. A frame can win the grammar batch (badge goes opaque,
+- **HIGH — confirm-rejection can leave an opaque-but-wrong badge.** RETRACTED
+  2026-07-01: this was already handled when the review was written — the
+  review missed the `labelReservoir.onConfirmRejected` wiring in
+  `content.ts` (epoch-handshake Phase 4, commit 0d2fa9d), which does exactly
+  the suggested fix: `queueDelete` + wrapper strip + reconcile. Original
+  finding: A frame can win the grammar batch (badge goes opaque,
   `sentCodewords` records it — `label-sync.ts:608-619`) but lose the codeword in
   the later `confirmLabels` arbitration (`label-reservoir.ts:241-256`). The
   rejection purges reservoir state but never rolls back `sentCodewords` or

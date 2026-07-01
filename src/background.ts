@@ -767,9 +767,14 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   }
 
   if (message.type === 'RELEASE_LABELS') {
+    // Frame-scoped: only the owning frame's release frees a codeword. The
+    // sender's frameId is authoritative (not message payload) — a frame with
+    // a stale local copy of a codeword another frame won must not free the
+    // winner's assignment. See releaseLabels.
     const tabId = _sender.tab?.id;
-    if (typeof tabId !== 'number') return false;
-    releaseLabels(tabId, message.labels).catch(err => {
+    const frameId = _sender.frameId;
+    if (typeof tabId !== 'number' || typeof frameId !== 'number') return false;
+    releaseLabels(tabId, frameId, message.labels).catch(err => {
       console.warn('[BranchKit SW] RELEASE_LABELS error:', err);
     });
     return false;
