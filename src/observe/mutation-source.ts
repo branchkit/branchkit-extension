@@ -21,6 +21,7 @@ import { store } from '../core/store';
 import { detachWrapper } from '../core/wrapper-lifecycle';
 import { dropDisconnectedWrappers } from './limbo';
 import { subtreeMaybeHintable } from '../scan/scanner';
+import { consumePendingShadowHostsIn } from '../scan/pending-shadow-hosts';
 import { cacheVisibility, clearLayoutCache } from '../layout-cache';
 import { getHintVisibility } from '../config';
 import { recordCpu, lifecycleCounters } from '../debug/perf-counters';
@@ -167,8 +168,11 @@ function drainDiscovery(): void {
     // that can't yield a hint. The deep walk (shadow pierce + limbo
     // rebind + custom-element watch) is the expensive part, and on
     // YouTube /watch almost no mutation root contains a hintable.
-    // Shadow-hosted hintables arrive via the SHADOW_EVENT path.
-    if (!subtreeMaybeHintable(root)) {
+    // Shadow-hosted hintables arrive via the SHADOW_EVENT path — except
+    // hosts whose attachShadow ran while disconnected; those are parked
+    // in the pending-shadow-hosts set, and a root carrying one must be
+    // walked even when its light DOM looks hintless.
+    if (!consumePendingShadowHostsIn(root) && !subtreeMaybeHintable(root)) {
       lifecycleCounters.discoveryRootsSkipped++;
       continue;
     }

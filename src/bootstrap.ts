@@ -38,7 +38,19 @@ const SHADOW_EVENT = '__branchkit__shadow_attached';
 
   function wrappedAttachShadow(this: Element, options: ShadowRootInit): ShadowRoot {
     try {
-      this.dispatchEvent(new CustomEvent(SHADOW_EVENT, { bubbles: true, composed: true }));
+      if (this.isConnected) {
+        this.dispatchEvent(new CustomEvent(SHADOW_EVENT, { bubbles: true, composed: true }));
+      } else {
+        // Disconnected host — the standard web-component pattern
+        // (createElement → attachShadow in the constructor → populate →
+        // append). An event dispatched on a disconnected element never
+        // propagates past its detached tree, so the document listener
+        // misses it entirely; dispatch on document instead, carrying the
+        // host in detail. DOM nodes in detail cross the MAIN/ISOLATED
+        // boundary; an engine that blocks it leaves detail.host
+        // undefined and the listener degrades to the old behavior.
+        document.dispatchEvent(new CustomEvent(SHADOW_EVENT, { detail: { host: this } }));
+      }
     } catch {
       // Some pages override Event/CustomEvent; swallow to keep the page working.
     }
