@@ -122,22 +122,28 @@ export function resetPerfCounters(): void {
   }
 }
 
-// Standard HTML elements that don't host shadow DOM in practice. Used as a
-// pre-filter for shadow-host detection: only `<div>` and custom elements
-// (which have hyphens in their tag names) commonly attach shadow roots, so
-// skip the `.shadowRoot` lookup for everything else. Pattern from Rango.
+// Standard HTML elements that CANNOT host shadow DOM (attachShadow throws).
+// Used as a pre-filter for shadow-host detection: skip the `.shadowRoot`
+// lookup only for these. The spec-permitted built-in hosts (div, span, p,
+// h1-h6, section, article, aside, header, footer, main, nav, blockquote,
+// body) and hyphenated custom elements are all checked — declarative shadow
+// DOM lands on plain sectioning tags in the wild, and a host skipped here is
+// a subtree the hint walk can never see. The check replaced is a plain
+// property read (no layout), so the strictly spec-shaped list costs
+// microseconds per walk. (Was Rango's wider "doesn't host in practice" list,
+// which silently skipped span/section/etc hosts.)
 const COMMON_LEAF_TAGS = new Set([
-  'a', 'abbr', 'address', 'area', 'article', 'aside', 'audio', 'b', 'base',
-  'bdi', 'bdo', 'blockquote', 'body', 'br', 'button', 'canvas', 'caption',
+  'a', 'abbr', 'address', 'area', 'audio', 'b', 'base',
+  'bdi', 'bdo', 'br', 'button', 'canvas', 'caption',
   'cite', 'code', 'col', 'colgroup', 'data', 'datalist', 'dd', 'del',
   'details', 'dfn', 'dialog', 'dl', 'dt', 'em', 'embed', 'fieldset',
-  'figcaption', 'figure', 'footer', 'form', 'h1', 'h2', 'h3', 'h4', 'h5',
-  'h6', 'head', 'header', 'hgroup', 'hr', 'html', 'i', 'iframe', 'img',
-  'input', 'ins', 'kbd', 'label', 'legend', 'li', 'link', 'main', 'map',
-  'mark', 'menu', 'meta', 'meter', 'nav', 'noscript', 'object', 'ol',
-  'optgroup', 'option', 'output', 'p', 'picture', 'pre', 'progress', 'q',
-  'rp', 'rt', 'ruby', 's', 'samp', 'script', 'section', 'select', 'slot',
-  'small', 'source', 'span', 'strong', 'style', 'sub', 'summary', 'sup',
+  'figcaption', 'figure', 'form',
+  'head', 'hgroup', 'hr', 'html', 'i', 'iframe', 'img',
+  'input', 'ins', 'kbd', 'label', 'legend', 'li', 'link', 'map',
+  'mark', 'menu', 'meta', 'meter', 'noscript', 'object', 'ol',
+  'optgroup', 'option', 'output', 'picture', 'pre', 'progress', 'q',
+  'rp', 'rt', 'ruby', 's', 'samp', 'script', 'select', 'slot',
+  'small', 'source', 'strong', 'style', 'sub', 'summary', 'sup',
   'svg', 'table', 'tbody', 'td', 'template', 'textarea', 'tfoot', 'th',
   'thead', 'time', 'title', 'tr', 'track', 'u', 'ul', 'var', 'video', 'wbr',
 ]);

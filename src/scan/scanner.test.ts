@@ -87,6 +87,19 @@ describe('deepQuerySelectorAll — opaque-subtree pruning (A2)', () => {
     expect(found.some(el => el.id === 'sb')).toBe(true);
   });
 
+  it('pierces shadow hosts on spec-permitted non-div tags (span/section/etc)', () => {
+    // These sat in the old "doesn't host shadow DOM in practice" leaf list,
+    // so declarative-shadow / uncommon hosts on them were never pierced.
+    html('<span id="s"></span><section id="sec"></section>');
+    document.getElementById('s')!
+      .attachShadow({ mode: 'open' }).innerHTML = '<button id="in-span">x</button>';
+    document.getElementById('sec')!
+      .attachShadow({ mode: 'open' }).innerHTML = '<button id="in-section">x</button>';
+    const found = deepQuerySelectorAll(document, 'button');
+    expect(found.some(el => el.id === 'in-span')).toBe(true);
+    expect(found.some(el => el.id === 'in-section')).toBe(true);
+  });
+
   it('skips the shadow-host walk inside an opaque <svg> subtree', () => {
     // A custom-element host nested inside an <svg> would normally be pierced;
     // the opaque-subtree prune means we never descend into the <svg> to find
