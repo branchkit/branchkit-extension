@@ -464,6 +464,14 @@ labelReservoir.installLeakSweep(
   },
 );
 
+// A claim that ran while the reservoir was dry left its wrappers unhinted
+// ('' slots); the reconciler re-queues them, but its triggers are all
+// user-activity-driven (scroll settle, mutation, focus) — on a static, dense
+// first paint the overflow wrappers would stay bare indefinitely. When a
+// refill actually lands codewords, run the coalesced reconcile directly so
+// the starved wrappers claim + paint without waiting for the user to move.
+labelReservoir.onRefillLanded(() => scheduleReconcile());
+
 let activeCategory: Category | null = null;
 let lastActivatedElement: Element | null = null;
 const MAX_BADGE_COUNT = 676; // No artificial cap; word pairs for >26

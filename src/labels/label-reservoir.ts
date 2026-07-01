@@ -125,9 +125,22 @@ class LabelReservoir {
    *  codewords the grammar may still hold. */
   private sweepHandler: ((codewords: string[]) => void) | null = null;
 
+  /** Refill-landed hook: a claim that ran while the reservoir was dry
+   *  returns '' and the wrapper stays unhinted — the reconciler re-queues
+   *  it, but only when something (scroll, mutation, focus) next triggers a
+   *  pass. On a static page that could be never. This hook fires when a
+   *  refill actually adds codewords so content.ts can request the pass
+   *  directly instead of waiting for user activity. */
+  private refillLandedHandler: (() => void) | null = null;
+
   /** Register the confirm-rejection handler (content.ts, once at boot). */
   onConfirmRejected(handler: (codewords: string[]) => void): void {
     this.rejectionHandler = handler;
+  }
+
+  /** Register the refill-landed handler (content.ts, once at boot). */
+  onRefillLanded(handler: () => void): void {
+    this.refillLandedHandler = handler;
   }
 
   /** Install the leak sweep (content.ts, once at boot): `isHeld` answers
@@ -444,12 +457,15 @@ class LabelReservoir {
         // wrappers all attached with "cap each" in 260ms.
         const seen = new Set(this.free);
         for (const l of this.outstanding.keys()) seen.add(l);
+        let added = 0;
         for (const l of resp.labels) {
           if (typeof l === 'string' && l.length > 0 && !seen.has(l)) {
             this.free.push(l);
             seen.add(l);
+            added++;
           }
         }
+        if (added > 0) this.refillLandedHandler?.();
       }
     } catch {
       // SW unavailable. The reservoir stays at its current depth; the
