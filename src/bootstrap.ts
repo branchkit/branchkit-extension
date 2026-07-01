@@ -45,11 +45,14 @@ const SHADOW_EVENT = '__branchkit__shadow_attached';
         // (createElement → attachShadow in the constructor → populate →
         // append). An event dispatched on a disconnected element never
         // propagates past its detached tree, so the document listener
-        // misses it entirely; dispatch on document instead, carrying the
-        // host in detail. DOM nodes in detail cross the MAIN/ISOLATED
-        // boundary; an engine that blocks it leaves detail.host
-        // undefined and the listener degrades to the old behavior.
-        document.dispatchEvent(new CustomEvent(SHADOW_EVENT, { detail: { host: this } }));
+        // misses it entirely. Dispatch a bare signal on document instead —
+        // deliberately NO detail: cross-world object access is blocked in
+        // Chrome (a MAIN-world detail reads as null in the ISOLATED
+        // listener, verified 2026-07-01), and DOM nodes can't cross via
+        // postMessage either. The listener can't learn WHICH host, only
+        // that one exists; the discovery drain compensates by deep-checking
+        // skipped roots while such a signal is live (shadow-attach-signal).
+        document.dispatchEvent(new CustomEvent(SHADOW_EVENT));
       }
     } catch {
       // Some pages override Event/CustomEvent; swallow to keep the page working.

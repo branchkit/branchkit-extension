@@ -21,7 +21,7 @@ import { store } from '../core/store';
 import { detachWrapper } from '../core/wrapper-lifecycle';
 import { dropDisconnectedWrappers } from './limbo';
 import { subtreeMaybeHintable } from '../scan/scanner';
-import { consumePendingShadowHostsIn } from '../scan/pending-shadow-hosts';
+import { consumeShadowAttachSignal } from '../scan/shadow-attach-signal';
 import { cacheVisibility, clearLayoutCache } from '../layout-cache';
 import { getHintVisibility } from '../config';
 import { recordCpu, lifecycleCounters } from '../debug/perf-counters';
@@ -169,10 +169,12 @@ function drainDiscovery(): void {
     // rebind + custom-element watch) is the expensive part, and on
     // YouTube /watch almost no mutation root contains a hintable.
     // Shadow-hosted hintables arrive via the SHADOW_EVENT path — except
-    // hosts whose attachShadow ran while disconnected; those are parked
-    // in the pending-shadow-hosts set, and a root carrying one must be
-    // walked even when its light DOM looks hintless.
-    if (!consumePendingShadowHostsIn(root) && !subtreeMaybeHintable(root)) {
+    // hosts whose attachShadow ran while disconnected (the event can't
+    // reach the document listener, and no host reference crosses the
+    // world boundary). While such a signal is live, a root the light
+    // pre-filter would skip gets the deep shadow-piercing check instead;
+    // no live signal → pre-filter cost is unchanged.
+    if (!subtreeMaybeHintable(root) && !consumeShadowAttachSignal(root)) {
       lifecycleCounters.discoveryRootsSkipped++;
       continue;
     }

@@ -233,6 +233,17 @@ export function subtreeMaybeHintable(root: Element): boolean {
 }
 
 /**
+ * Deep (open-shadow-piercing) variant of `subtreeMaybeHintable`, for callers
+ * that already know the light DOM has no match. Full shadow-host walk — too
+ * expensive for the always-on childList pre-filter; used only while a
+ * disconnected-shadow-attach signal is live (see scan/shadow-attach-signal).
+ */
+export function deepSubtreeMaybeHintable(root: Element): boolean {
+  const sel = extraHintsEnabled ? EXTRA_SELECTOR : HINTABLE_SELECTOR;
+  return deepQuerySelectorAll(root, sel).length > 0;
+}
+
+/**
  * Classify an element into a voice category.
  */
 export function classifyCategory(el: Element): Category {

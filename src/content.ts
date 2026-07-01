@@ -8,7 +8,7 @@
 import { Category, HintVisibility, ScannedElement, Message, DispatchResult } from './types';
 import { LabelAssignment, isVoiceAlphabetLoaded, setAlphabet } from './labels/words';
 import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters } from './scan/scanner';
-import { addPendingShadowHost } from './scan/pending-shadow-hosts';
+import { noteDisconnectedShadowAttach } from './scan/shadow-attach-signal';
 import { ElementWrapper } from './scan/element-wrapper';
 import { wantsHint } from './lifecycle/desired-state';
 import {
@@ -3563,24 +3563,17 @@ if (frameMayHoldHints()) {
 const SHADOW_EVENT = '__branchkit__shadow_attached';
 
 pageSession.resources.listen(document, SHADOW_EVENT, (event) => {
-  // Disconnected-attach form: the bootstrap dispatches on document with the
-  // host in detail — an event dispatched on a disconnected element can't
-  // propagate to this listener. Park the host so drainDiscovery force-walks
-  // its subtree when it gets inserted (the light-DOM pre-filter would
-  // otherwise skip a host whose hintables live entirely in shadow).
-  const detailHost = (event as CustomEvent<{ host?: unknown }>).detail?.host;
-  if (detailHost instanceof Element) {
-    queueMicrotask(() => {
-      if (!detailHost.isConnected) {
-        addPendingShadowHost(detailHost);
-      } else if (detailHost.shadowRoot) {
-        // Connected between attach and this microtask — walk it directly.
-        discoverInSubtree(detailHost);
-      }
-    });
+  const host = event.target;
+  // Disconnected-attach signal: the bootstrap dispatches a bare event on
+  // document (an event on a disconnected element can't propagate here, and
+  // no host reference crosses the MAIN→ISOLATED boundary — detail objects
+  // read as null). Record that one happened; while the signal is live,
+  // drainDiscovery deep-checks roots its light-DOM pre-filter would skip,
+  // so the host's subtree is walked when it gets inserted.
+  if (host === document) {
+    noteDisconnectedShadowAttach();
     return;
   }
-  const host = event.target;
   if (!(host instanceof Element)) return;
   // The bootstrap fires the event *before* the native attach — the
   // shadow root isn't there yet. Defer one microtask so .shadowRoot
