@@ -69,14 +69,15 @@ const ctx = await chromium.launchPersistentContext(PROFILE, {
   args: ['--disable-extensions-except=' + EXT, '--load-extension=' + EXT],
 });
 
-// Seed an alphabet so codewords get claimed without the app (same as
-// _test-codeword-key-ownership.mjs). always-mode so links claim on scan.
-const ALPHABET = 'arch bat cat dog echo fox golf hotel india jam kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu'.split(' ');
+// Standalone (no BranchKit, no seeded alphabet): pool claims/confirms are
+// letter-based and voice-independent. Deliberately NOT seeding an alphabet —
+// with voice "loaded" but no host, every grammar batch transport-fails and
+// content's unwind RELEASES the codewords, emptying `assigned` (this harness
+// originally seeded one and silently depended on the real app being up).
 const sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent('serviceworker');
-await sw.evaluate(async (a) => {
+await sw.evaluate(async () => {
   await chrome.storage.sync.set({ aggressiveHints: true, hintVisibility: 'always' });
-  await chrome.storage.local.set({ alphabet: a });
-}, ALPHABET);
+});
 
 const page = await ctx.newPage();
 console.log('[2] load fixture (top + iframe), settle 6s for scan + claim + confirm');
