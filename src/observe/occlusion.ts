@@ -51,6 +51,24 @@ export function isOcclusionEnabled(): boolean {
 }
 
 /**
+ * Shadow-including (composed-tree) containment. `Node.contains` stops at
+ * shadow boundaries, so for a target inside a shadow root a document-level
+ * `elementFromPoint` hit — which returns the shadow HOST, not the shadow
+ * content — would read as "unrelated element on top" and every shadow-hosted
+ * target would be judged occluded. Climb from `node` through its shadow
+ * hosts and ask `contains` at each light-tree level.
+ */
+function composedContains(ancestor: Element, node: Element): boolean {
+  let cur: Node | null = node;
+  while (cur) {
+    if (ancestor.contains(cur)) return true;
+    const root = cur.getRootNode();
+    cur = root instanceof ShadowRoot ? root.host : null;
+  }
+  return false;
+}
+
+/**
  * Pure decision: given a target and whatever `elementFromPoint` returned at the
  * target's center, is the target occluded by something else?
  *
@@ -58,14 +76,18 @@ export function isOcclusionEnabled(): boolean {
  *   occluded) rather than hide a badge we can't reason about.
  * - hit IS the target, or the target's own descendant (its visible text/icon),
  *   or an ancestor that wraps the target (e.g. the target is a `<span>` inside
- *   the `<a>` we hit) → same visible element, NOT occluded.
+ *   the `<a>` we hit) → same visible element, NOT occluded. Containment is
+ *   composed-tree in both directions: a hit on the target's shadow host (the
+ *   only thing document-level elementFromPoint can return for shadow content)
+ *   is the target's own ancestor, and a hit inside the target's shadow tree is
+ *   its own content.
  * - anything else painted on top → occluded.
  */
 export function isHitOccluding(target: Element, hit: Element | null): boolean {
   if (!hit) return false;
   if (hit === target) return false;
-  if (target.contains(hit)) return false;
-  if (hit.contains(target)) return false;
+  if (composedContains(target, hit)) return false;
+  if (composedContains(hit, target)) return false;
   return true;
 }
 
