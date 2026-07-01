@@ -34,9 +34,17 @@ import { store } from '../core/store';
 import { attachWrapper } from '../core/wrapper-lifecycle';
 import { pageSession } from '../lifecycle/page-session';
 
+// Candidates are held until they promote, disconnect, or leave the attention
+// region (untrackPendingCandidate via the attention IO's onLeave — which also
+// fires for DOM removal). No time-based abandonment: the original 30s
+// abandon timer predated the attention-region scoping (it was the cost bound
+// for a document-wide candidate set) and permanently stranded pre-mounted,
+// CSS-revealed UI opened >30s after discovery — the attention IO never
+// refires onEnter for an element it already considers intersecting, so an
+// abandoned candidate could never re-track without a scroll across the
+// region boundary. The set is now bounded by attention-region membership;
+// the recheckPendingVisibility:size perf bucket is the growth tripwire.
 const pendingVisibility = new Set<Element>();
-const VISIBILITY_ABANDON_MS = 30_000;
-let visibilityAbandonTimer: ReturnType<typeof setTimeout> | null = null;
 let visibilityRafPending = false;
 
 let visibilityIO: IntersectionObserver | undefined;
@@ -146,12 +154,6 @@ function anyHintedWrapperVisible(): boolean {
 }
 
 export function connectVisibilityMO(): void {
-  if (visibilityAbandonTimer) clearTimeout(visibilityAbandonTimer);
-  visibilityAbandonTimer = setTimeout(() => {
-    for (const el of pendingVisibility) visibilityIO?.unobserve(el);
-    pendingVisibility.clear();
-    disconnectVisibilityMO();
-  }, VISIBILITY_ABANDON_MS);
   if (pageSession.visibilityMOConnected) return;
   visibilityMO?.observe(document.documentElement, {
     subtree: true,
@@ -171,10 +173,6 @@ function disconnectVisibilityMO(): void {
   if (anyHintedWrapperVisible()) return;
   visibilityMO?.disconnect();
   pageSession.visibilityMOConnected = false;
-  if (visibilityAbandonTimer) {
-    clearTimeout(visibilityAbandonTimer);
-    visibilityAbandonTimer = null;
-  }
 }
 
 function recheckPendingVisibility(): void {
@@ -243,16 +241,11 @@ export function untrackPendingCandidate(el: Element): void {
 
 /**
  * Disconnect both visibility observers and drop all tracked state. Idempotent;
- * called from teardown. Also clears the pending set and the abandon timer so no
- * stray 30s callback fires into a torn-down context (the original inline
+ * called from teardown. Also clears the pending set (the original inline
  * teardown only disconnected the observers).
  */
 export function teardownVisibilityTracker(): void {
   try { visibilityIO?.disconnect(); } catch { /* idempotent */ }
   try { visibilityMO?.disconnect(); } catch { /* idempotent */ }
-  if (visibilityAbandonTimer) {
-    clearTimeout(visibilityAbandonTimer);
-    visibilityAbandonTimer = null;
-  }
   pendingVisibility.clear();
 }

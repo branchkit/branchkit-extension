@@ -66,6 +66,18 @@ describe('visibility MO lifecycle', () => {
     expect(session.visibilityMOConnected).toBe(false);
   });
 
+  it('holds candidates indefinitely — no time-based abandonment', () => {
+    // The old 30s abandon timer wholesale-cleared the pending set; because
+    // the attention IO never refires onEnter for a still-intersecting
+    // element, abandoned candidates could never re-track and a CSS-revealed
+    // control opened >30s after discovery stayed permanently hintless.
+    trackPendingCandidate(document.createElement('div'));
+    expect(session.visibilityMOConnected).toBe(true);
+
+    vi.advanceTimersByTime(120_000);
+    expect(session.visibilityMOConnected).toBe(true);
+  });
+
   it('untracking an element that was never tracked is a no-op', () => {
     const tracked = document.createElement('div');
     const stranger = document.createElement('div');
