@@ -120,26 +120,38 @@ Severity is high/med/low. "Verified" means checked against source in this pass.
   (`:2536-2543`). This is a repeat of the known orphan-CS failure class. Fix:
   first line of the handler, `if (pageSession.isTornDown) return false;`. Lowest
   effort, highest value.
-- **HIGH — SSE backoff resets on every connect edge.** Verified.
+- **HIGH — SSE backoff resets on every connect edge.** FIXED 2026-07-01
+  (notes/DESIGN_SSE_RESILIENCE.md): reset now requires a 30s-stable
+  connection (`sse-backoff.ts`). Original finding:
   `background.ts:40-64` early-returns if a retry timer exists, but
   `cancelSSERetry` (`:721`) resets `sseRetryDelay` to 1s on every successful
   HEALTH_STATUS reconnect. A host that crash-loops re-runs `discoverPlugin`
   (a real fetch) every ~1s forever with no escalation. Fix: only reset backoff
   after the connection has been stable for N seconds.
-- **HIGH — stale plugin creds wedge all POSTs silently.** Verified.
+- **HIGH — stale plugin creds wedge all POSTs silently.** FIXED 2026-07-01
+  (notes/DESIGN_SSE_RESILIENCE.md): postToPlugin clears creds on 401/403 or
+  thrown fetch; ensureConnected is single-flight + negative-cached.
+  Original finding:
   `plugin/actuator-client.ts:33-88`: after a host restart with a new token,
   `ensureConnected()` returns true on the cached port/token, POSTs 401, and the
   error is swallowed as best-effort; nothing forces re-discovery while
   `pluginPort` is truthy. Fix: clear `pluginPort`/`pluginToken` on a
   401/network error so the next `ensureConnected` rediscovers.
-- **MED — Firefox `connectDirectSSE` can thrash/duplicate.** Verified.
+- **MED — Firefox `connectDirectSSE` can thrash/duplicate.** MITIGATED
+  2026-07-01: postGrammarBatch's discover now goes through single-flight
+  ensureConnected, so port-missing bursts share one discovery; an
+  already-connecting guard for the redundant connectSSE calls that remain is
+  still open. Original finding:
   `background.ts:532-580` closes the prior source at entry, so serial re-entry
   is fine, but `postGrammarBatch` (`:378`) calls `connectSSE()` un-awaited on
   every port-missing batch; a burst before the first `connected` event each
   closes and reopens the EventSource. Guard with an already-connecting flag for
   the Firefox path.
 - **MED — Chrome offscreen SSE has no self-recovery if the SW is idle-killed.**
-  Verified. Recovery is entirely SW-driven via the `branchkitConnected` flag,
+  FIXED 2026-07-01 (notes/DESIGN_SSE_RESILIENCE.md): the 30s alarm now probes
+  the offscreen stream's actual readyState (SSE_STATUS) instead of trusting
+  the flag; also fixed a zombie-EventSource factory in offscreen's onerror
+  (closed the wrong instance under racing CONNECT_SSE). Original finding: Recovery is entirely SW-driven via the `branchkitConnected` flag,
   which only flips on a HEALTH_STATUS message a dead SW never receives
   (`offscreen.ts:48-57`, `background.ts:1200`). Have the alarm actively ping
   offscreen for liveness, or let offscreen self-reconnect and report.

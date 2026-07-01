@@ -19,6 +19,7 @@ import { cycleTabIndex } from './background/tab-nav';
 import { ensureContentScriptInjected } from './background/injection';
 import { bgState, connId } from './background/state';
 import { republishActiveTab, broadcastToAllTabs, resolveActiveContentTab, notifyActiveTab, resolveHintFromTab } from './background/frame-router';
+import { SSEBackoff } from './background/sse-backoff';
 
 // --- State ---
 //
@@ -32,35 +33,71 @@ let hintVisibility: HintVisibility = 'always';
 let directSSE: EventSource | null = null;
 
 // SSE reconnect backoff state. Shared by Chrome (offscreen→HEALTH_STATUS)
-// and Firefox (direct EventSource) paths.
+// and Firefox (direct EventSource) paths. Policy (ladder + stable-connection
+// reset) lives in SSEBackoff; only the timer lives here.
 let sseRetryTimer: ReturnType<typeof setTimeout> | null = null;
-let sseRetryDelay = 1000;
-const SSE_RETRY_CAP_MS = 30_000;
+const sseBackoff = new SSEBackoff();
 
-function cancelSSERetry(): void {
+function clearSSERetryTimer(): void {
   if (sseRetryTimer) {
     clearTimeout(sseRetryTimer);
     sseRetryTimer = null;
   }
-  sseRetryDelay = 1000;
 }
 
 function scheduleSSERetry(): void {
   if (sseRetryTimer) return;
-  const delay = sseRetryDelay;
-  sseRetryDelay = Math.min(sseRetryDelay * 2, SSE_RETRY_CAP_MS);
   sseRetryTimer = setTimeout(async () => {
     sseRetryTimer = null;
     const found = await discoverPlugin();
     if (found) {
-      bgState.branchkitConnected = true;
-      cancelSSERetry();
+      // Discovery success is NOT connection success — the flag flips (and
+      // the connect-edge work runs) only on the stream's real `connected`
+      // signal via onSSEConnected. If the SSE never comes up, a
+      // HEALTH_STATUS(false) / onerror / alarm probe re-arms the retry.
       connectSSE();
-      rescanActiveTab();
     } else {
       scheduleSSERetry();
     }
-  }, delay);
+  }, sseBackoff.nextDelayMs(Date.now()));
+}
+
+// The one honest connect signal: the SSE stream's `connected` event, via
+// Chrome's offscreen HEALTH_STATUS(true) or Firefox's direct EventSource.
+// Runs on EVERY connected event, not just flag edges — a `connected` means a
+// NEW stream was established, so the host/plugin may have restarted and the
+// grammar heal is warranted. Edge-gating on branchkitConnected is what masked
+// the b7399f5 healer: reconnect paths used to set the flag optimistically
+// before the stream was up, so the "edge" never fired. Reactivate is
+// idempotent (same rotate+re-Put as every tab focus) and connects are rare.
+// See notes/DESIGN_SSE_RESILIENCE.md (1).
+function onSSEConnected(): void {
+  bgState.branchkitConnected = true;
+  sseBackoff.onConnected(Date.now());
+  clearSSERetryTimer();
+  // Cold-start focus handshake: this browser may already be frontmost when
+  // its extension connects, so no onFocusChanged fires to claim focus.
+  void assertFocusIfFocused();
+  hydrateReferencesFromCollection().then(() => pushReferenceNames());
+  rescanActiveTab();
+  // Host (BranchKit app) restart healer. A host restart drops the SSE but
+  // does NOT kill the extension service worker, so the per-frame liveness
+  // Ports never drop and their onResync (the SW-restart healer) never fires.
+  // The restarted plugin lost every frame's grammar, and rescanActiveTab
+  // only re-scans the DOM — it does not re-emit codewords. Reactivate the
+  // active tab so its grammar is rebuilt into the fresh plugin (rotate
+  // session + re-Put). Other tabs heal on next focus via tab_activated.
+  // Without this, badges paint but aren't matchable after an app restart —
+  // which production hits on every update/crash.
+  // See notes/DESIGN_HOST_RESTART_RESYNC.md.
+  if (bgState.cachedActiveTabId != null) {
+    republishActiveTab(bgState.cachedActiveTabId, 'sse_reconnect');
+  }
+}
+
+function onSSEDisconnected(): void {
+  bgState.branchkitConnected = false;
+  scheduleSSERetry();
 }
 
 function rescanActiveTab(): void {
@@ -372,9 +409,14 @@ async function postGrammarBatch(
   request: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'>,
 ): Promise<GrammarBatchResponse> {
   if (!getPluginPort() || !getPluginToken()) {
-    const found = await discoverPlugin();
+    // ensureConnected (not raw discoverPlugin): single-flight + negative
+    // cache, so a burst of batches against a down host can't each fire a
+    // discovery fetch + connectSSE cycle.
+    const found = await ensureConnected();
     if (!found) return transportFailure(request);
-    bgState.branchkitConnected = true;
+    // Fresh creds (cold start, or a cred-clear after the old host died) —
+    // bring the SSE up too. The connected flag flips on the stream's real
+    // signal, not here.
     connectSSE();
   }
 
@@ -543,9 +585,11 @@ function connectDirectSSE(port: number, token: string): void {
 
   directSSE.addEventListener('connected', () => {
     console.log('[BranchKit BG] SSE connected (direct)');
-    bgState.branchkitConnected = true;
-    void assertFocusIfFocused();
-    hydrateReferencesFromCollection().then(() => pushReferenceNames());
+    // Same connect-edge work as Chrome's HEALTH_STATUS(true). Firefox
+    // previously did a partial inline version (focus + hydrate only), which
+    // meant no rescan, no host-restart grammar heal, and no backoff
+    // bookkeeping on this engine.
+    onSSEConnected();
   });
 
   directSSE.addEventListener('action', (e: MessageEvent) => {
@@ -574,8 +618,7 @@ function connectDirectSSE(port: number, token: string): void {
       directSSE.close();
       directSSE = null;
     }
-    bgState.branchkitConnected = false;
-    scheduleSSERetry();
+    onSSEDisconnected();
   };
 }
 
@@ -710,36 +753,14 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   }
 
   if (message.type === 'HEALTH_STATUS') {
-    const wasConnected = bgState.branchkitConnected;
-    bgState.branchkitConnected = message.branchkit ?? false;
-
-    // New connection — cancel any pending retry, hydrate, rescan, and claim
-    // focus if this browser is currently frontmost (cold-start handshake; the
-    // offscreen doc holds the EventSource so onFocusChanged may never fire).
-    if (!wasConnected && bgState.branchkitConnected) {
-      cancelSSERetry();
-      void assertFocusIfFocused();
-      hydrateReferencesFromCollection().then(() => pushReferenceNames());
-      rescanActiveTab();
-      // Host (BranchKit app) restart healer. A host restart drops the SSE but
-      // does NOT kill the extension service worker, so the per-frame liveness
-      // Ports never drop and their onResync (the SW-restart healer) never fires.
-      // The restarted plugin lost every frame's grammar, and rescanActiveTab
-      // only re-scans the DOM — it does not re-emit codewords. Reactivate the
-      // active tab so its grammar is rebuilt into the fresh plugin (rotate
-      // session + re-Put). Other tabs heal on next focus via tab_activated.
-      // Without this, badges paint but aren't matchable after an app restart —
-      // which production hits on every update/crash.
-      // See notes/DESIGN_HOST_RESTART_RESYNC.md.
-      if (bgState.cachedActiveTabId != null) {
-        republishActiveTab(bgState.cachedActiveTabId, 'sse_reconnect');
-      }
-    }
-
-    // SSE dropped — retry with exponential backoff until plugin is back
-    if (wasConnected && !bgState.branchkitConnected) {
-      scheduleSSERetry();
-    }
+    // The full connect/disconnect work runs on every report, not on flag
+    // edges — edge-gating masked the reconnect healer (the reconnect paths
+    // used to set the flag optimistically before the stream was up), and a
+    // down report while already-marked-down still needs a retry armed
+    // ("discovery succeeded but the SSE never came up"). scheduleSSERetry is
+    // idempotent while a timer is pending. notes/DESIGN_SSE_RESILIENCE.md.
+    if (message.branchkit) onSSEConnected();
+    else onSSEDisconnected();
     return false;
   }
 
@@ -1113,14 +1134,21 @@ async function init(): Promise<void> {
   await resolveActiveContentTab();
 
   const found = await discoverPlugin();
-  bgState.branchkitConnected = found;
 
   if (hasOffscreenAPI) {
     await ensureOffscreen();
   }
 
   if (found) {
+    // branchkitConnected stays false until the stream's real `connected`
+    // signal (onSSEConnected) — discovery success is not connection success.
     connectSSE();
+  } else {
+    // Host down at boot: arm the retry ladder now instead of waiting up to
+    // 30s for the connection-check alarm. With no host at all (standalone
+    // keyboard/hints use) this settles at one discovery fetch per 30s — the
+    // same steady-state the alarm already produced.
+    scheduleSSERetry();
   }
 }
 
@@ -1204,12 +1232,26 @@ async function reinjectContentScripts(): Promise<void> {
   }));
 }
 
-// Safety net: check connection every 30s
+// Safety net: check connection every 30s. Probes the actual stream state
+// rather than trusting branchkitConnected — the offscreen document (or its
+// EventSource) can die without a HEALTH_STATUS(false) ever reaching the SW,
+// and a stale `true` used to disable this net entirely. That silent-drop
+// window is what let stale creds wedge every POST (review 2026-06-29).
+// Worst-case detection latency for a silent drop is one alarm period.
+// notes/DESIGN_SSE_RESILIENCE.md (4).
 chrome.alarms.create('connection-check', { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'connection-check') {
     if (hasOffscreenAPI) {
       await ensureOffscreen();
+      if (bgState.branchkitConnected && !(await probeOffscreenSSE())) {
+        onSSEDisconnected();
+      }
+    } else if (
+      bgState.branchkitConnected &&
+      (!directSSE || directSSE.readyState !== EventSource.OPEN)
+    ) {
+      onSSEDisconnected();
     }
 
     // Kick off retry loop if not connected and no retry is pending
@@ -1218,6 +1260,19 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     }
   }
 });
+
+// Ask the offscreen document whether its EventSource is actually OPEN.
+// No response (offscreen gone, message dropped) counts as dead. A probe can
+// catch a mid-reconnect stream in CONNECTING and trigger one redundant
+// retry cycle; that self-corrects and connects are rare.
+async function probeOffscreenSSE(): Promise<boolean> {
+  try {
+    const resp = await chrome.runtime.sendMessage({ type: 'SSE_STATUS' });
+    return resp?.connected === true;
+  } catch {
+    return false;
+  }
+}
 
 // Init immediately (service worker may be waking from alarm)
 init();

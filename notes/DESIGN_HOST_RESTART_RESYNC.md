@@ -1,6 +1,13 @@
 # Host-restart resync — heal hints after the BranchKit app restarts
 
 Date: 2026-06-27. Status: fix landed (extension half); verify on clean baseline.
+Update 2026-07-01: the healer as landed never actually fired — it keyed on a
+`false→true` edge of `branchkitConnected`, but every reconnect path set that
+flag optimistically before the stream was up (and Firefox never ran the
+HEALTH_STATUS handler at all), so the edge was always masked. Unmasked by the
+real-connect-edge refactor in notes/DESIGN_SSE_RESILIENCE.md (1) and verified
+end-to-end by `scripts/_test-sse-resilience.mjs` scenario B (grammar re-emitted
+~1s after a host restart with a rotated token).
 
 ## The gap
 

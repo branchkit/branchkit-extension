@@ -59,11 +59,29 @@ export async function getActuatorJson(endpoint: string): Promise<unknown | null>
   }
 }
 
-/** True if connected; discovers on miss. Use before a forward that should
- * lazily reconnect. */
+// Discover-on-miss throttling. ensureConnected is called per-POST by ~12
+// forwarders; with the host down (or creds just cleared) every one of those
+// would fire its own discovery fetch. Single-flight collapses concurrent
+// callers onto one fetch, and a failed discovery is cached briefly so a
+// burst of forwards can't turn into a discovery hammer. The SSE retry
+// ladder calls discoverPlugin directly and is NOT throttled — reconnect
+// pacing is its job (background.ts scheduleSSERetry).
+const DISCOVERY_NEGATIVE_TTL_MS = 5_000;
+let discoveryInFlight: Promise<boolean> | null = null;
+let lastFailedDiscoveryAt = 0;
+
+/** True if connected; discovers on miss (single-flight, negative-cached).
+ * Use before a forward that should lazily reconnect. */
 export async function ensureConnected(): Promise<boolean> {
   if (pluginPort && pluginToken) return true;
-  return discoverPlugin();
+  if (discoveryInFlight) return discoveryInFlight;
+  if (Date.now() - lastFailedDiscoveryAt < DISCOVERY_NEGATIVE_TTL_MS) return false;
+  discoveryInFlight = discoverPlugin().then((found) => {
+    if (!found) lastFailedDiscoveryAt = Date.now();
+    discoveryInFlight = null;
+    return found;
+  });
+  return discoveryInFlight;
 }
 
 /**
@@ -74,7 +92,7 @@ export async function ensureConnected(): Promise<boolean> {
 export async function postToPlugin(endpoint: string, body: unknown): Promise<Response | null> {
   if (!pluginPort || !pluginToken) return null;
   try {
-    return await fetch(`http://127.0.0.1:${pluginPort}${endpoint}`, {
+    const resp = await fetch(`http://127.0.0.1:${pluginPort}${endpoint}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -82,7 +100,21 @@ export async function postToPlugin(endpoint: string, body: unknown): Promise<Res
       },
       body: JSON.stringify(body),
     });
+    if (resp.status === 401 || resp.status === 403) {
+      // The host restarted with a fresh token while the SSE drop went
+      // unnoticed: these creds are dead, and holding them wedges every POST
+      // (ensureConnected keeps vouching for them). Clear so the next
+      // ensureConnected/discover-on-miss rediscovers. App-level errors
+      // (400s from validation etc.) keep the creds.
+      pluginPort = null;
+      pluginToken = null;
+    }
+    return resp;
   } catch {
+    // Connection refused/reset — whatever owned this port is gone. Same
+    // self-heal: drop the creds, rediscover on the next call.
+    pluginPort = null;
+    pluginToken = null;
     return null;
   }
 }
