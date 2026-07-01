@@ -254,6 +254,20 @@ describe('isVisible — autosized text-entry carve-out (QuickBase 2px filter inp
     expect(isVisible(document.getElementById('f')!)).toBe(true);
   });
 
+  it('climbs past an equally-tiny autosize sizer to the real box (react-select nesting)', () => {
+    // QuickBase gridColumnFilter: input sits in an inline-grid measuring
+    // container that is as tiny as the input; the visible box is 2 levels up.
+    html('<div id="box"><div id="sizer" data-tiny><input id="f" type="text" data-tiny></div></div>');
+    expect(isVisible(document.getElementById('f')!)).toBe(true);
+  });
+
+  it('gives up when no real box exists within the climb bound', () => {
+    let markup = '<input id="f" type="text" data-tiny>';
+    for (let i = 0; i < 6; i++) markup = `<div data-tiny>${markup}</div>`;
+    html(markup);
+    expect(isVisible(document.getElementById('f')!)).toBe(false);
+  });
+
   it('textarea and select get the same parent fallback', () => {
     html('<div><textarea id="t" data-tiny></textarea><select id="s" data-tiny></select></div>');
     expect(isVisible(document.getElementById('t')!)).toBe(true);

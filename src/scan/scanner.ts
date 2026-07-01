@@ -306,16 +306,29 @@ export function isVisible(el: Element): boolean {
     // Autosized text-entry controls (react-select and kin): the visible
     // "box" is a styled wrapper div and the real <input> collapses to ~2px
     // while empty (QuickBase grid column filters measure w=2, 2026-07-01
-    // snapshot). SIZE-ONLY failures defer to the parent's visibility;
+    // snapshot). SIZE-ONLY failures defer to an ancestor's visibility;
     // explicit visibility:hidden / opacity:0 / display:none still reject —
     // unlike checkbox/radio, an invisible text control usually really is
     // hidden, and focusing a display:none input is a no-op anyway.
+    //
+    // The climb is bounded, not just parentElement: react-select nests the
+    // input inside an equally-autosized measuring container (the inline-grid
+    // sizer that tracks input width), so the immediate parent is as tiny as
+    // the input. Skip past tiny ancestors to the first one with a real box
+    // and let ITS visibility answer (QuickBase needed two levels).
     if (style.visibility !== 'hidden' && style.opacity !== '0' &&
         style.display !== 'none' &&
         (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ||
-         el instanceof HTMLSelectElement) &&
-        el.parentElement && isVisible(el.parentElement)) {
-      return true;
+         el instanceof HTMLSelectElement)) {
+      let anc = el.parentElement;
+      for (let depth = 0; anc && depth < 5; depth++, anc = anc.parentElement) {
+        let ancRect = peekCachedRect(anc);
+        if (ancRect === null) {
+          ancRect = anc.getBoundingClientRect();
+          perfCounters.boundingRectCalls++;
+        }
+        if (ancRect.width >= 5 && ancRect.height >= 5) return isVisible(anc);
+      }
     }
     return false;
   }
