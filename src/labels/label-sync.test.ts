@@ -350,6 +350,43 @@ describe('grammar epoch 2b loop guards (cap + reset)', () => {
     await syncRound('gulf', MISMATCH);
     expect(republishAll).toHaveBeenCalledTimes(4);
   });
+
+  it('capped state retries at the 5-minute trickle instead of wedging forever', async () => {
+    // Exhaust the cap: 3 fast republishes, then the 4th mismatch trips it.
+    await syncRound('arch', MISMATCH);
+    await vi.advanceTimersByTimeAsync(6000);
+    await syncRound('bake', MISMATCH);
+    await vi.advanceTimersByTimeAsync(6000);
+    await syncRound('cave', MISMATCH);
+    await vi.advanceTimersByTimeAsync(6000);
+    await syncRound('dove', MISMATCH);
+    expect(republishAll).toHaveBeenCalledTimes(3);
+    expect(grammarEpochStats().capExhausted).toBe(true);
+
+    // Shortly after the cap: still detect-only (no storm).
+    await vi.advanceTimersByTimeAsync(30_000);
+    await syncRound('echo', MISMATCH);
+    expect(republishAll).toHaveBeenCalledTimes(3);
+
+    // Past the 5-minute trickle window: ONE more recovery attempt fires.
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    await syncRound('fern', MISMATCH);
+    expect(republishAll).toHaveBeenCalledTimes(4);
+    expect(grammarEpochStats().capExhausted).toBe(true); // still capped, not a reset
+
+    // Immediately after the trickle attempt: detect-only again.
+    await vi.advanceTimersByTimeAsync(6000);
+    await syncRound('gulf', MISMATCH);
+    expect(republishAll).toHaveBeenCalledTimes(4);
+
+    // The trickle-driven republish converging still clears everything.
+    await vi.advanceTimersByTimeAsync(6000);
+    await syncRound('hail', cleanEpoch);
+    expect(grammarEpochStats().capExhausted).toBe(false);
+    await vi.advanceTimersByTimeAsync(6000);
+    await syncRound('iris', MISMATCH);
+    expect(republishAll).toHaveBeenCalledTimes(5); // fast ladder re-armed
+  });
 });
 
 import { probeGrammarEpoch } from './label-sync';

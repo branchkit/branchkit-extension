@@ -185,18 +185,44 @@ Severity is high/med/low. "Verified" means checked against source in this pass.
   re-Deletes the grammar entry, so the losing frame shows a "ready" badge whose
   codeword routes elsewhere. Fix: feed confirm-rejections back into label-sync
   to `queueDelete` + `sentCodewords.delete`.
-- **MED — epoch republish cap-exhaust has no recovery.** Verified.
+- **MED — epoch republish cap-exhaust has no recovery.** FIXED 2026-07-01
+  (severity was understated: a terminal no-self-heal wedge on any tab that
+  keeps focus). The suggested fix (rotateSession+republishAll) is what the
+  capped attempts already did — republishAllGrammar rotates; instead the
+  capped state now retries ONE republish per 5 minutes (trickle), bounding
+  staleness without a storm. Also fixed the likely dominant CAUSE of
+  persistent mismatches: detachWrapper read the codeword after
+  removeWrapperByElement→releaseLabel had blanked it, so the plugin-side
+  Delete never queued — every detach leaked a stale grammar entry the
+  handshake then kept repairing. Original finding:
   `label-sync.ts:397-415`: after 3 republishes with no clean check it goes loud
   and stops acting. The loud log is dev-only; production users get a silently
   diverged grammar with no self-heal until an unrelated session rotation. Fix:
   on cap-exhaust, fall back to one full `rotateSession` + `republishAll`.
-- **MED — SW startup clears the pool but not codeword memory.** Verified.
+- **MED — SW startup clears the pool but not codeword memory.** REASSESSED
+  2026-07-01: the suggested memory-clear is rejected — recall only runs on a
+  full document reload, where a fresh pool has every remembered codeword
+  free (recall works BETTER post-restart), and clearing memory at SW init
+  would gut Regime B (the SW restarts constantly). The real post-restart
+  hole was pool OWNERSHIP: live frames still hold codewords while
+  clearAllStacks wiped `assigned`, and nothing re-confirmed until the next
+  claim burst — a window for cross-frame duplicates and broadcast-fallback
+  routing (liveness.ts's "claims survive in storage.session" premise was
+  stale). Fixed: onResync now labelReservoir.reconfirm()s every held
+  codeword before rebuilding grammar. Original finding:
   `background.ts:1096` calls `clearAllStacks()` on init; `codewordMemory:*`
   survives, so post-restart recall points at codewords the freshly-cleared pool
   will also hand front-of-pool to different fresh elements. Recall-vs-fresh
   collisions spike after every SW restart. Fix: clear memory alongside stacks,
   or validate recall against live pool state.
-- **MED — `outstanding` reservoir set is never swept.** Verified no cap.
+- **MED — `outstanding` reservoir set is never swept.** FIXED 2026-07-01: an
+  audit found no live release-skipping path (tracker exit, detach, store
+  clear, and confirm-rejection all release or purge), so this was invariant
+  fragility rather than an active leak — but the sweep now exists as
+  self-heal: `outstanding` is age-stamped, and at each refill check any
+  entry past a 30s grace that no live wrapper holds is released back to the
+  pool, with plugin-side deletes queued via the content hook. Original
+  finding:
   `label-reservoir.ts:89,246`: a teardown path that doesn't call
   `reservoir.release()` leaks the codeword in `outstanding` permanently,
   slowly starving refill over a long SPA session. Fix: reconcile `outstanding`

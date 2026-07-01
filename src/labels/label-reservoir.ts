@@ -71,22 +71,33 @@ const REFILL_AMOUNT = 60;
 // requesting an unbounded first fill; comfortably above MEMORY_CAP_PER_FRAME
 // (200), so the full remembered set fits.
 const MAX_INITIAL_RESERVATION = 300;
+// Leak-sweep grace: an outstanding grant younger than this is never swept —
+// covers the scan path's claim→POST→attach round-trip, during which wrappers
+// hold codewords but aren't in the store yet.
+const OUTSTANDING_SWEEP_GRACE_MS = 30_000;
 
 class LabelReservoir {
   /** Available codewords for synchronous claim, front-of-array first. */
   private free: string[] = [];
   /** Codewords currently held by wrappers in this frame (granted out but not
-   *  yet released). Refill dedup checks `free ∪ outstanding` so the SW
-   *  re-issuing a codeword we already handed to a wrapper can't slip past.
-   *  Since the Phase 4 confirm exchange, the SW acquires released-then-
-   *  reclaimed codewords straight from `stack.free` at confirm time, so the
-   *  SW-side hole this originally closed (silent no-op confirm leaving the
-   *  codeword free) is gone — but the dedup still covers the IN-FLIGHT
-   *  window: a refill response issued before our confirm landed can carry a
-   *  codeword we just granted locally. QuickBase 2026-06-05 — 6 wrappers all
-   *  attached with "cap each" in 260ms, which then evicted `each` from
-   *  `browser_hints_cap_strict` and made the CE hint unreachable. */
-  private outstanding: Set<string> = new Set();
+   *  yet released), each mapped to its grant time. Refill dedup checks
+   *  `free ∪ outstanding` so the SW re-issuing a codeword we already handed
+   *  to a wrapper can't slip past. Since the Phase 4 confirm exchange, the
+   *  SW acquires released-then-reclaimed codewords straight from
+   *  `stack.free` at confirm time, so the SW-side hole this originally
+   *  closed (silent no-op confirm leaving the codeword free) is gone — but
+   *  the dedup still covers the IN-FLIGHT window: a refill response issued
+   *  before our confirm landed can carry a codeword we just granted locally.
+   *  QuickBase 2026-06-05 — 6 wrappers all attached with "cap each" in
+   *  260ms, which then evicted `each` from `browser_hints_cap_strict` and
+   *  made the CE hint unreachable.
+   *
+   *  The grant timestamp powers the leak sweep (see sweepOutstanding): any
+   *  teardown path that strips a wrapper's codeword without
+   *  `reservoir.release()` would otherwise leak the entry here permanently,
+   *  and refill dedup would slowly starve the reservoir over a long SPA
+   *  session (2026-06-29 review). */
+  private outstanding: Map<string, number> = new Map();
   /** Recalled codewords earmarked for a remembered fingerprint (Regime B,
    *  A3 in DESIGN_REGIME_B_RECALL.md). These sit in `free` but a fresh,
    *  no-memory claim must NOT consume them — only their owner (via `preferred`)
@@ -107,9 +118,48 @@ class LabelReservoir {
    *  the winner's assignment) and re-claim fresh. */
   private rejectionHandler: ((codewords: string[]) => void) | null = null;
 
+  /** True if a live wrapper currently holds the codeword (content.ts wires
+   *  this to `store.byCodeword`). Null until installed — sweep disabled. */
+  private isHeld: ((codeword: string) => boolean) | null = null;
+  /** Post-sweep hook: content.ts queues plugin-side deletes for leaked
+   *  codewords the grammar may still hold. */
+  private sweepHandler: ((codewords: string[]) => void) | null = null;
+
   /** Register the confirm-rejection handler (content.ts, once at boot). */
   onConfirmRejected(handler: (codewords: string[]) => void): void {
     this.rejectionHandler = handler;
+  }
+
+  /** Install the leak sweep (content.ts, once at boot): `isHeld` answers
+   *  whether a live wrapper holds the codeword; `onSwept` runs after leaked
+   *  codewords are released back to the pool. */
+  installLeakSweep(
+    isHeld: (codeword: string) => boolean,
+    onSwept?: (codewords: string[]) => void,
+  ): void {
+    this.isHeld = isHeld;
+    this.sweepHandler = onSwept ?? null;
+  }
+
+  /** Self-heal the `free ∪ outstanding` invariant: an outstanding codeword
+   *  that no live wrapper holds — past a grace window covering the
+   *  claim→attach round-trip (scan candidates hold codewords before they
+   *  enter the store) — was leaked by a release-skipping teardown path.
+   *  Route it through release() (outstanding cleared, back to local free,
+   *  SW notified) so the pool and refill dedup converge instead of starving.
+   *  Runs at the refill chokepoint (maybeRefill), so it fires exactly when
+   *  reservoir depth matters. */
+  private sweepOutstanding(): void {
+    if (!this.isHeld) return;
+    const now = performance.now();
+    const leaked: string[] = [];
+    for (const [cw, grantedAt] of this.outstanding) {
+      if (now - grantedAt < OUTSTANDING_SWEEP_GRACE_MS) continue;
+      if (!this.isHeld(cw)) leaked.push(cw);
+    }
+    if (leaked.length === 0) return;
+    this.release(leaked);
+    this.sweepHandler?.(leaked);
   }
 
   /** Process a CONFIRM_LABELS response: purge rejected codewords from every
@@ -243,7 +293,8 @@ class LabelReservoir {
       // Track outstanding grants so refill-dedup can reject SW-side re-issues
       // of a codeword we already have on a wrapper during the in-flight
       // confirm window. See the `outstanding` field comment.
-      for (const l of claimed) this.outstanding.add(l);
+      const grantedAt = performance.now();
+      for (const l of claimed) this.outstanding.set(l, grantedAt);
       try {
         chrome.runtime.sendMessage({ type: 'CONFIRM_LABELS', labels: claimed })
           .then((resp: { rejected?: unknown } | undefined) => this.handleConfirmResponse(resp))
@@ -257,6 +308,34 @@ class LabelReservoir {
 
     this.maybeRefill();
     return result;
+  }
+
+  /**
+   * Re-assert pool ownership of codewords this frame's wrappers ALREADY
+   * hold. Used on the liveness resync after a transient SW restart: the SW's
+   * init runs clearAllStacks(), so the fresh pool no longer knows these
+   * codewords are ours — until a confirm lands, voice routing falls back to
+   * broadcast and a reloading sibling frame could be granted a codeword
+   * that is still painted here. The Phase 4 confirm exchange re-acquires
+   * them straight from the fresh pool's free list; a codeword genuinely
+   * lost to another frame comes back through the rejection handler
+   * (wrapper strips + re-claims fresh). Single-sender invariant: this is
+   * reservoir-owned, like every CONFIRM_LABELS.
+   */
+  reconfirm(codewords: string[]): void {
+    const valid = codewords.filter(l => l && l.length > 0);
+    if (valid.length === 0) return;
+    const now = performance.now();
+    for (const l of valid) this.outstanding.set(l, now);
+    try {
+      chrome.runtime.sendMessage({ type: 'CONFIRM_LABELS', labels: valid })
+        .then((resp: { rejected?: unknown } | undefined) => this.handleConfirmResponse(resp))
+        .catch(() => {
+          // SW asleep — the next claim burst's confirm re-arbitrates.
+        });
+    } catch {
+      // chrome.runtime missing (orphan post-reload) — same fallback.
+    }
   }
 
   /**
@@ -315,8 +394,12 @@ class LabelReservoir {
   }
 
   /** Diagnostic: current reservoir depth + refill state for snapshots. */
-  stats(): { free: number; refillInFlight: boolean } {
-    return { free: this.free.length, refillInFlight: this.refillInFlight !== null };
+  stats(): { free: number; refillInFlight: boolean; outstanding: number } {
+    return {
+      free: this.free.length,
+      refillInFlight: this.refillInFlight !== null,
+      outstanding: this.outstanding.size,
+    };
   }
 
   /** Test-only: seed the reservoir with a specific set of labels and
@@ -332,9 +415,14 @@ class LabelReservoir {
     this.reserved = new Set(reserved);
     this.refillInFlight = null;
     this.initialReady = labels.length > 0 ? Promise.resolve() : null;
+    this.isHeld = null;
+    this.sweepHandler = null;
   }
 
   private maybeRefill(): void {
+    // Sweep leaks first — released leaks land back in `free` and may make
+    // the refill unnecessary.
+    this.sweepOutstanding();
     if (this.refillInFlight) return;
     if (this.free.length >= REFILL_THRESHOLD) return;
     this.refillInFlight = this.refill(REFILL_AMOUNT).finally(() => {
@@ -355,7 +443,7 @@ class LabelReservoir {
         // holds it — it's in `outstanding`. QuickBase 2026-06-05 — 6
         // wrappers all attached with "cap each" in 260ms.
         const seen = new Set(this.free);
-        for (const l of this.outstanding) seen.add(l);
+        for (const l of this.outstanding.keys()) seen.add(l);
         for (const l of resp.labels) {
           if (typeof l === 'string' && l.length > 0 && !seen.has(l)) {
             this.free.push(l);

@@ -10,8 +10,11 @@
  *
  * The content-side onDisconnect handler below fires only when the SW
  * restarts (idle-terminated), not when this frame dies. On SW restart we
- * reopen a Port so the background can re-track us; we don't re-claim
- * labels because our existing claims survive in chrome.storage.session.
+ * reopen a Port so the background can re-track us. Label claims do NOT
+ * survive the restart (the SW's init runs clearAllStacks()), so the resync
+ * must also re-assert pool ownership of held codewords — content.ts's
+ * onResync does this via labelReservoir.reconfirm() before rebuilding the
+ * grammar.
  *
  * The grammar, however, does NOT survive: our port closing made the SW's
  * onDisconnect fire `frame_liveness_disconnect` → /hints/session_end, which

@@ -76,6 +76,13 @@ export function detachWrapper(element: Element): void {
   pageSession.resizeObserver.unobserve(element);
   pageSession.tracker.unobserve(element);
   pageSession.attentionObserver.unobserve(element);
+  // Capture the codeword BEFORE removal: removeWrapperByElement calls
+  // releaseLabel(), which blanks scanned.codeword. The pre-2026-07 code read
+  // it after, always saw '', and never queued the plugin-side Delete — every
+  // detach leaked a stale grammar entry (a painted-but-gone codeword the
+  // plugin kept matching), which the epoch handshake then kept detecting
+  // and repairing with full rotate+republish cycles.
+  const cw = store.findWrapperFor(element)?.scanned.codeword ?? '';
   const removed = store.removeWrapperByElement(element);
   if (removed) {
     // Delta-sync bookkeeping: if the plugin holds this codeword, queue
@@ -83,7 +90,6 @@ export function detachWrapper(element: Element): void {
     // yet, drop the Put. Either way we don't want stale state on the
     // plugin side post-detach.
     dropPendingPut(removed);
-    const cw = removed.scanned.codeword;
     if (cw && hasSent(cw)) queueDelete(cw);
     if (removed.scanned.id > 0) {
       idRegistry.unregister(removed.scanned.id);

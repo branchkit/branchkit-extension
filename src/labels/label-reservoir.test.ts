@@ -11,7 +11,7 @@
  * rejection as "SW unreachable, stay at current depth."
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { labelReservoir } from './label-reservoir';
 
 let sendMessageMock: ReturnType<typeof vi.fn>;
@@ -391,5 +391,93 @@ describe('LabelReservoir.claim — recalled reservation (A3)', () => {
   it('falls back to a reserved codeword when generic is exhausted (no starvation)', () => {
     labelReservoir._seedForTests(['res1', 'res2'], ['res1', 'res2']);
     expect(labelReservoir.claim(1)).toEqual(['res1']); // only reserved left → take one
+  });
+});
+
+describe('LabelReservoir leak sweep (2026-06-29 review: outstanding never swept)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['performance'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('releases an aged outstanding codeword that no live wrapper holds', () => {
+    labelReservoir._seedForTests(['a', 'b', 'c']);
+    const held = new Set<string>();
+    const swept: string[] = [];
+    labelReservoir.installLeakSweep((cw) => held.has(cw), (cws) => swept.push(...cws));
+
+    const [leak] = labelReservoir.claim(1);
+    expect(leak).toBe('a');
+    // A release-skipping teardown strips the wrapper: 'a' never enters
+    // `held`, and reservoir.release() is never called.
+
+    vi.advanceTimersByTime(31_000);
+    held.add('b');
+    labelReservoir.claim(1); // grants 'b'; its maybeRefill runs the sweep
+
+    expect(swept).toEqual(['a']);
+    // Healed end-to-end: back in local free (re-claimable) + SW notified.
+    expect(labelReservoir.claim(1)[0]).toBe('a');
+    expect(sendMessageMock).toHaveBeenCalledWith({ type: 'RELEASE_LABELS', labels: ['a'] });
+  });
+
+  it('never sweeps a codeword a live wrapper still holds', () => {
+    labelReservoir._seedForTests(['a', 'b']);
+    const held = new Set<string>(['a']);
+    const swept: string[] = [];
+    labelReservoir.installLeakSweep((cw) => held.has(cw), (cws) => swept.push(...cws));
+
+    labelReservoir.claim(1); // 'a', held by a wrapper (e.g. dormant/limbo)
+    vi.advanceTimersByTime(120_000);
+    labelReservoir.claim(1);
+    expect(swept).toEqual([]);
+  });
+
+  it('never sweeps inside the claim→attach grace window', () => {
+    labelReservoir._seedForTests(['a', 'b']);
+    const swept: string[] = [];
+    labelReservoir.installLeakSweep(() => false, (cws) => swept.push(...cws));
+
+    labelReservoir.claim(1); // 'a' granted, wrapper not in store yet
+    vi.advanceTimersByTime(5_000); // < 30s grace
+    labelReservoir.claim(1);
+    expect(swept).toEqual([]);
+  });
+});
+
+describe('LabelReservoir.reconfirm (SW-restart pool re-assertion)', () => {
+  it('sends CONFIRM_LABELS for held codewords and registers them outstanding', async () => {
+    labelReservoir._seedForTests(['x']);
+    sendMessageMock.mockResolvedValue({ rejected: [] });
+
+    labelReservoir.reconfirm(['arch bake', 'cave dove']);
+    expect(sendMessageMock).toHaveBeenCalledWith({
+      type: 'CONFIRM_LABELS',
+      labels: ['arch bake', 'cave dove'],
+    });
+    expect(labelReservoir.stats().outstanding).toBe(2);
+  });
+
+  it('routes rejections through the rejection handler (another frame won)', async () => {
+    labelReservoir._seedForTests(['x']);
+    const rejected: string[] = [];
+    labelReservoir.onConfirmRejected((cws) => rejected.push(...cws));
+    sendMessageMock.mockResolvedValue({ rejected: ['cave dove'] });
+
+    labelReservoir.reconfirm(['arch bake', 'cave dove']);
+    await Promise.resolve(); await Promise.resolve(); // confirm .then chain
+
+    expect(rejected).toEqual(['cave dove']);
+    expect(labelReservoir.stats().outstanding).toBe(1); // loser purged
+  });
+
+  it('empty / blank input is a no-op', () => {
+    labelReservoir._seedForTests(['x']);
+    labelReservoir.reconfirm(['', '']);
+    expect(sendMessageMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'CONFIRM_LABELS' }),
+    );
   });
 });

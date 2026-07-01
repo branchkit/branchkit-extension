@@ -167,3 +167,23 @@ describe('attachDiscovered — key-ownership transfer on a same-document re-moun
     expect(added).toBe(1); // genuine duplicate — claims fresh, keeps the others distinct
   });
 });
+
+import { markSent, hasPendingDeletes } from '../labels/label-sync';
+
+describe('detachWrapper delta-sync ordering', () => {
+  it('queues the plugin-side Delete for a sent codeword (regression: release blanks it first)', () => {
+    // removeWrapperByElement calls releaseLabel(), which blanks
+    // scanned.codeword — reading the codeword after removal always saw ''
+    // and never queued the Delete, leaking a stale grammar entry per detach.
+    const node = el('detach-delete');
+    const s = scanned('detach-delete');
+    s.codeword = 'arch bake';
+    const w = new ElementWrapper(node, s);
+    attachWrapper(w);
+    markSent('arch bake');
+
+    expect(hasPendingDeletes()).toBe(false);
+    detachWrapper(node);
+    expect(hasPendingDeletes()).toBe(true);
+  });
+});

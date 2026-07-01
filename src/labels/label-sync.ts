@@ -317,13 +317,21 @@ const epochStats: EpochStats = {
 // republish forever:
 //   - cooldown: at most one epoch_mismatch republish per 5s;
 //   - consecutive cap: after 3 republishes with no clean check in between,
-//     stop acting and go LOUD (BK_GRAMMAR_EPOCH_CAP + firehose breadcrumb).
-//     A mismatch that survives a full republish is a real bug we want
-//     visible, not a silent republish storm. Any clean check resets the cap,
-//     so a long-lived page whose occasional desyncs DO heal never exhausts
-//     it; detect-only logging continues even when capped.
+//     stop the fast ladder and go LOUD (BK_GRAMMAR_EPOCH_CAP + firehose
+//     breadcrumb). A mismatch that survives a full republish is a real bug we
+//     want visible, not a silent republish storm. Any clean check resets the
+//     cap, so a long-lived page whose occasional desyncs DO heal never
+//     exhausts it; detect-only logging continues even when capped.
+//   - post-cap trickle: while capped, retry ONE republish per
+//     EPOCH_CAP_RETRY_MS instead of never. The loud log is dev-only, so a
+//     hard stop left production users with a silently diverged grammar
+//     (painted-but-unmatchable badges) until an unrelated rotation — a
+//     terminal wedge on a tab that never changes focus (2026-06-29 review).
+//     One rotate+republish per 5 minutes bounds staleness for transient
+//     causes while staying far from storm territory.
 const EPOCH_REPUBLISH_COOLDOWN_MS = 5000;
 const EPOCH_REPUBLISH_MAX_CONSECUTIVE = 3;
+const EPOCH_CAP_RETRY_MS = 5 * 60_000;
 let lastEpochRepublishAt = -Infinity;
 let consecutiveEpochRepublishes = 0;
 
@@ -394,7 +402,8 @@ function checkGrammarEpoch(resp: GrammarBatchResponse, reason: string): void {
   };
   bkLog('BK_GRAMMAR_EPOCH_MISMATCH', epochStats.lastMismatch);
 
-  // Phase 2b: act on the mismatch (cooldown + consecutive cap, above).
+  // Phase 2b: act on the mismatch (cooldown + consecutive cap + post-cap
+  // trickle, above).
   if (consecutiveEpochRepublishes >= EPOCH_REPUBLISH_MAX_CONSECUTIVE) {
     if (!epochStats.capExhausted) {
       epochStats.capExhausted = true;
@@ -403,6 +412,13 @@ function checkGrammarEpoch(resp: GrammarBatchResponse, reason: string): void {
       });
       firehoseStep('grammar_epoch:cap_exhausted', consecutiveEpochRepublishes);
     }
+    const nowCapped = performance.now();
+    if (nowCapped - lastEpochRepublishAt < EPOCH_CAP_RETRY_MS) return;
+    lastEpochRepublishAt = nowCapped;
+    epochStats.republishes++;
+    bkLog('BK_GRAMMAR_EPOCH_CAP_RETRY', epochStats.lastMismatch);
+    firehoseStep('grammar_epoch:cap_retry', epochStats.republishes);
+    deps.republishAll('epoch_mismatch');
     return;
   }
   const now = performance.now();

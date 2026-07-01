@@ -444,6 +444,25 @@ labelReservoir.onConfirmRejected((codewords) => {
   }
 });
 
+// Reservoir leak sweep (2026-06-29 review): an outstanding codeword no live
+// wrapper holds (past the claim→attach grace) was leaked by a
+// release-skipping teardown path; the reservoir releases it back to the
+// pool, and we clear the plugin-side grammar entry it may still occupy.
+labelReservoir.installLeakSweep(
+  (cw) => store.byCodeword(cw) !== undefined,
+  (leaked) => {
+    let deletesQueued = 0;
+    for (const cw of leaked) {
+      if (hasSent(cw)) {
+        queueDelete(cw);
+        deletesQueued++;
+      }
+    }
+    bkLog('BK_RESERVOIR_SWEEP', { leaked: leaked.length, deletesQueued });
+    if (deletesQueued > 0) scheduleSync('reservoir_sweep');
+  },
+);
+
 let activeCategory: Category | null = null;
 let lastActivatedElement: Element | null = null;
 const MAX_BADGE_COUNT = 676; // No artificial cap; word pairs for >26
@@ -2189,7 +2208,17 @@ openLivenessPort({
   // liveness Port dropped (frame_liveness_disconnect → session_end), but our
   // delta-sync shadow still thinks the codewords are live. Same recovery as
   // the bfcache path — see republishAllGrammar.
-  onResync: () => republishAllGrammar('sw_restart_resync'),
+  onResync: () => {
+    // Re-assert pool ownership FIRST: the SW's init ran clearAllStacks(),
+    // so the fresh pool has no idea this frame's wrappers hold codewords —
+    // until these confirms land, voice routing is broadcast-fallback and a
+    // reloading sibling frame could be granted a codeword still painted
+    // here (a cross-frame duplicate). The confirm exchange re-acquires
+    // them from the fresh pool's free list.
+    const held = store.all.map((w) => w.scanned.codeword).filter((cw) => cw !== '');
+    if (held.length > 0) labelReservoir.reconfirm(held);
+    republishAllGrammar('sw_restart_resync');
+  },
 });
 
 // --- Orphan-activity gauge (soak instrumentation) ---
