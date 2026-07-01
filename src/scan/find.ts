@@ -8,6 +8,13 @@
  * walking the page's text nodes; navigation (n / Enter) scrolls the current
  * Range into view. Highlights persist until find closes.
  *
+ * Two UI states share the bottom-right corner: the INPUT BAR (typing, captures
+ * keys) and the read-only COMMITTED PILL (query + "3 of 17" + dismiss hint).
+ * Enter swaps bar → pill; voice find (findImmediate) lands on the pill
+ * directly — it's the only affordance a voice user ever sees, and without it
+ * the persistent highlights read as undismissable ghosts (2026-06-29 review).
+ * The pill stays until Escape / find_close / a new `/`.
+ *
  * Where the API is unavailable (older engines), matching + scroll-to still work;
  * only the visual highlight is absent.
  */
@@ -166,6 +173,58 @@ function removeFindBar(): void {
   inputElement = null;
 }
 
+// --- Committed pill (post-Enter / voice find) ---
+
+let pillElement: HTMLElement | null = null;
+
+function showCommittedPill(): void {
+  removeCommittedPill();
+  ensureHighlightStyle();
+
+  pillElement = document.createElement('div');
+  // data-branchkit-find also excludes the pill's own text (it contains the
+  // query) from findMatchRanges' walker.
+  pillElement.setAttribute('data-branchkit-find', '');
+  pillElement.style.cssText = `
+    position: fixed; bottom: 12px; right: 12px;
+    max-width: 360px; height: 34px; box-sizing: border-box;
+    background: #1e1e1e; border: 1px solid rgba(255,255,255,0.18); border-radius: 8px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+    display: flex; align-items: center; padding: 0 10px; gap: 8px;
+    z-index: 2147483647; font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    font-size: 13px; color: #fff;
+  `;
+
+  const label = document.createElement('span');
+  label.textContent = '/';
+  label.style.cssText = 'color: #007AFF; font-weight: 600; font-size: 14px;';
+  pillElement.appendChild(label);
+
+  const query = document.createElement('span');
+  query.textContent = state.query;
+  query.style.cssText =
+    'overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px;';
+  pillElement.appendChild(query);
+
+  const countSpan = document.createElement('span');
+  countSpan.id = 'branchkit-find-count';
+  countSpan.style.cssText = 'color: rgba(255,255,255,0.5); font-size: 11px;';
+  pillElement.appendChild(countSpan);
+
+  const hint = document.createElement('span');
+  hint.textContent = 'n/N · esc';
+  hint.style.cssText = 'color: rgba(255,255,255,0.35); font-size: 11px; white-space: nowrap;';
+  pillElement.appendChild(hint);
+
+  document.body.appendChild(pillElement);
+  updateCountDisplay();
+}
+
+function removeCommittedPill(): void {
+  pillElement?.remove();
+  pillElement = null;
+}
+
 function updateCountDisplay(): void {
   const countEl = document.getElementById('branchkit-find-count');
   if (!countEl) return;
@@ -294,10 +353,17 @@ function handleFindBarKey(e: KeyboardEvent): void {
 
 /** Commit the search (Vimium-style): close the input bar but keep the highlights
  * and the current match. The page regains the keyboard; n / Shift+n then cycle
- * matches via handleFindNavKey. */
+ * matches via handleFindNavKey. The committed pill stays as the visible
+ * affordance (query, live count, dismiss hint). Enter on an empty query just
+ * closes find, like Vimium. */
 function commitFind(): void {
   if (!state.active || !barElement) return;
   removeFindBar();
+  if (state.query === '') {
+    closeFindMode();
+    return;
+  }
+  showCommittedPill();
   scrollToCurrent();
 }
 
@@ -305,8 +371,19 @@ function commitFind(): void {
 
 export function openFindMode(): void {
   if (state.active) {
-    inputElement?.focus();
-    inputElement?.select();
+    if (barElement) {
+      inputElement?.focus();
+      inputElement?.select();
+      return;
+    }
+    // Committed state — `/` reopens the bar seeded with the current query so
+    // it can be refined (Vimium behavior). Previously this was a dead key.
+    removeCommittedPill();
+    createFindBar();
+    if (inputElement && state.query) {
+      inputElement.value = state.query;
+      inputElement.select();
+    }
     return;
   }
   state.active = true;
@@ -322,6 +399,7 @@ export function closeFindMode(): void {
   state.active = false;
   clearHighlights();
   removeFindBar();
+  removeCommittedPill();
   onDeactivate?.();
 }
 
@@ -358,10 +436,14 @@ export function handleFindNavKey(e: KeyboardEvent): boolean {
   return false;
 }
 
-/** Voice-activated find: skip the bar, run the query directly (highlights paint). */
+/** Voice-activated find: skip the input bar, run the query directly, and show
+ * the committed pill — highlights persist, n / Shift+n (or voice "next" /
+ * "previous") navigate, Escape or voice "close find" dismisses. */
 export function findImmediate(query: string): void {
+  removeFindBar(); // a voice find while the bar is open supersedes it
   state.active = true;
   ensureHighlightStyle();
   onActivate?.();
   performFind(query);
+  showCommittedPill();
 }

@@ -204,7 +204,11 @@ Severity is high/med/low. "Verified" means checked against source in this pass.
 
 ### Scan / activate / dispatch
 
-- **HIGH — voice "find" leaves undismissable, count-less highlights.** Verified.
+- **HIGH — voice "find" leaves undismissable, count-less highlights.** FIXED
+  2026-07-01: a committed pill (query + live "3 of 17" + n/N·esc hint) now
+  shows for voice find AND for keyboard find after Enter, persisting until
+  Escape / "close find" (new voice phrase) / `/`-refine. Highlights stay per
+  the Vimium-C model. Original finding:
   `scan/find.ts:362-367`: `findImmediate` sets `state.active` and paints
   persistent highlights but never creates the bar or count pill, so there's no
   visible affordance and no obvious dismiss. Fix: have `findImmediate` create

@@ -40,3 +40,98 @@ describe('findMatchRanges', () => {
     expect(ranges[0].startContainer.parentElement?.tagName).toBe('P');
   });
 });
+
+// --- Committed pill (the voice-find affordance, 2026-06-29 review) ---
+//
+// happy-dom note: match VISIBILITY (isMatchVisible) is engine-dependent here,
+// so these assert pill lifecycle + state, not match counts.
+
+import { afterEach } from 'vitest';
+import {
+  findImmediate,
+  closeFindMode,
+  openFindMode,
+  isFindActive,
+  isFindBarOpen,
+  getFindState,
+} from './find';
+
+const pill = () =>
+  [...document.querySelectorAll('[data-branchkit-find]')].find(
+    (el) => !el.querySelector('input'),
+  ) ?? null;
+const bar = () =>
+  [...document.querySelectorAll('[data-branchkit-find]')].find(
+    (el) => el.querySelector('input'),
+  ) ?? null;
+
+describe('committed find pill', () => {
+  afterEach(() => {
+    closeFindMode();
+    document.body.innerHTML = '';
+  });
+
+  it('findImmediate shows a persistent pill with the query and a count element', () => {
+    dom('<p>needle in a needle stack</p>');
+    findImmediate('needle');
+    expect(isFindActive()).toBe(true);
+    expect(isFindBarOpen()).toBe(false); // read-only pill, not the input bar
+    const p = pill();
+    expect(p).not.toBeNull();
+    expect(p!.textContent).toContain('needle');
+    expect(p!.querySelector('#branchkit-find-count')).not.toBeNull();
+    expect(getFindState().query).toBe('needle');
+  });
+
+  it('closeFindMode removes the pill and deactivates find', () => {
+    dom('<p>needle</p>');
+    findImmediate('needle');
+    closeFindMode();
+    expect(pill()).toBeNull();
+    expect(isFindActive()).toBe(false);
+  });
+
+  it('a second findImmediate replaces the pill (single instance, new query)', () => {
+    dom('<p>alpha beta</p>');
+    findImmediate('alpha');
+    findImmediate('beta');
+    const pills = [...document.querySelectorAll('[data-branchkit-find]')]
+      .filter((el) => !el.querySelector('input'));
+    expect(pills).toHaveLength(1);
+    expect(pills[0].textContent).toContain('beta');
+    expect(getFindState().query).toBe('beta');
+  });
+
+  it('Enter in the bar commits: bar swaps to pill, find stays active', () => {
+    dom('<p>target text</p>');
+    openFindMode();
+    const input = bar()!.querySelector('input')!;
+    input.value = 'target';
+    input.dispatchEvent(new Event('input'));
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(isFindBarOpen()).toBe(false);
+    expect(isFindActive()).toBe(true);
+    expect(pill()).not.toBeNull();
+    expect(pill()!.textContent).toContain('target');
+  });
+
+  it('Enter on an empty query closes find entirely (Vimium behavior)', () => {
+    dom('<p>whatever</p>');
+    openFindMode();
+    const input = bar()!.querySelector('input')!;
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(isFindActive()).toBe(false);
+    expect(pill()).toBeNull();
+    expect(bar()).toBeNull();
+  });
+
+  it('openFindMode from the committed state reopens the bar seeded with the query', () => {
+    dom('<p>refine me</p>');
+    findImmediate('refine');
+    openFindMode();
+    expect(pill()).toBeNull();
+    const input = bar()?.querySelector('input');
+    expect(input).not.toBeNull();
+    expect(input!.value).toBe('refine');
+  });
+});
