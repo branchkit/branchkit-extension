@@ -16,7 +16,17 @@ const NAME_FROM_CONTENT_TAGS = new Set([
 const trim = (s: string | null | undefined) =>
   (s ?? '').replace(/\s+/g, ' ').trim();
 
+// One cap at the public boundary, not per-step: the aria-labelledby,
+// name-from-content, and describedby paths return raw innerText, and a
+// button wrapping a large text blob otherwise yields a multi-KB name that
+// flows into fingerprints and grammar labels (2026-06-29 review).
+const NAME_CAP = 256;
+
 export function accessibleName(el: Element, visited = new Set<Element>()): string {
+  return computeAccessibleName(el, visited).slice(0, NAME_CAP);
+}
+
+function computeAccessibleName(el: Element, visited: Set<Element>): string {
   if (visited.has(el)) return '';
   visited.add(el);
 
@@ -27,7 +37,7 @@ export function accessibleName(el: Element, visited = new Set<Element>()): strin
     const out = lb.split(/\s+/)
       .map(id => doc.getElementById(id))
       .filter((n): n is HTMLElement => !!n)
-      .map(n => trim(accessibleName(n, visited) || n.innerText))
+      .map(n => trim(computeAccessibleName(n, visited) || n.innerText))
       .join(' ');
     const result = trim(out);
     if (result) return result;
@@ -88,6 +98,6 @@ export function accessibleName(el: Element, visited = new Set<Element>()): strin
     if (node) return trim(node.innerText);
   }
 
-  // 8. Plain textContent, capped
-  return trim((el as HTMLElement).innerText)?.slice(0, 256) ?? '';
+  // 8. Plain textContent
+  return trim((el as HTMLElement).innerText) ?? '';
 }

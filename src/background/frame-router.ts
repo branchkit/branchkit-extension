@@ -53,7 +53,11 @@ export async function broadcastToAllTabs(message: Message): Promise<void> {
   try {
     const tabs = await chrome.tabs.query({});
     for (const tab of tabs) {
-      if (tab.id && tab.url && !tab.url.startsWith('chrome://') && !tab.url.startsWith('moz-extension://')) {
+      // isInjectableURL is the one URL filter — this loop used to maintain
+      // its own narrower prefix list (missed about:, view-source:, …).
+      // Sends to CS-less tabs are swallowed either way; this just keeps the
+      // two filters from drifting.
+      if (tab.id && tab.url && isInjectableURL(tab.url)) {
         chrome.tabs.sendMessage(tab.id, message).catch(() => {});
       }
     }

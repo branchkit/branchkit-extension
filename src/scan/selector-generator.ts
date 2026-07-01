@@ -1,7 +1,10 @@
 export const BLACKLIST = [
   /data-hint/,
   /data-branchkit/,
-  /href/,
+  // Whole token only: bare /href/ rejected any class/id merely CONTAINING
+  // the substring (e.g. an id like "xhrefresh"), starving those elements of
+  // otherwise-stable selector anchors.
+  /\bhref\b/,
   /^#.*[0-9]/,
   /^.*-[0-9a-f]{6,}$/,
   /^[a-z]+-[a-z0-9]{5,}-[a-z0-9]{5,}$/i,

@@ -83,12 +83,18 @@ export async function resolveReference(name: string): Promise<Element | null> {
     }
   }
 
-  // 1b. Exact selector match (flat DOM)
-  const direct = document.querySelector(ref.selector);
-  if (direct) {
-    ref.lastUsedAt = Date.now();
-    await saveStore(store);
-    return direct;
+  // 1b. Exact selector match — flat-DOM references only. When selectorPath
+  // exists, `selector` is the path's LAST segment, unique only inside its
+  // shadow root; resolving it against `document` can match an unrelated
+  // light-DOM element (e.g. a bare `button:nth-of-type(2)`). Shadow
+  // references that fail 1a heal through the deep text match below.
+  if (!ref.selectorPath) {
+    const direct = document.querySelector(ref.selector);
+    if (direct) {
+      ref.lastUsedAt = Date.now();
+      await saveStore(store);
+      return direct;
+    }
   }
 
   // 2. Tag + visible-text match (pierces shadow DOM)

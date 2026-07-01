@@ -3,6 +3,7 @@ import {
   comboFromEvent,
   serializeCombo,
   parseCombo,
+  canonicalizeKeys,
   comboDisplay,
 } from './key-combo';
 
@@ -42,5 +43,22 @@ describe('comboDisplay', () => {
   });
   it('renders the legacy single-letter spec', () => {
     expect(comboDisplay('ctrl+f')).toBe('Ctrl+F');
+  });
+});
+
+describe('canonicalizeKeys', () => {
+  it('normalizes cmd to meta and modifier order', () => {
+    expect(canonicalizeKeys('cmd+KeyX')).toBe('meta+KeyX');
+    expect(canonicalizeKeys('shift+ctrl+KeyA')).toBe('ctrl+shift+KeyA');
+  });
+
+  it('canonicalizes each combo of a chord sequence independently', () => {
+    expect(canonicalizeKeys('KeyC KeyS')).toBe('KeyC KeyS');
+    expect(canonicalizeKeys('cmd+KeyK  cmd+KeyS')).toBe('meta+KeyK meta+KeyS');
+  });
+
+  it('is idempotent and passes canonical specs through unchanged', () => {
+    expect(canonicalizeKeys('ctrl+KeyF')).toBe('ctrl+KeyF');
+    expect(canonicalizeKeys(canonicalizeKeys('cmd+KeyX'))).toBe('meta+KeyX');
   });
 });

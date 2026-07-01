@@ -47,6 +47,26 @@ export function parseCombo(spec: string): KeyCombo | null {
   };
 }
 
+/**
+ * Canonicalize a stored key spec: each space-separated combo in a chord
+ * sequence is parse→serialize round-tripped, collapsing aliases and modifier
+ * order to one form ("cmd+KeyX" → "meta+KeyX", "shift+ctrl+KeyA" →
+ * "ctrl+shift+KeyA"). parseCombo accepts `cmd` but serializeCombo emits
+ * `meta`; without this a mixed-form stored keymap defeats keymapsEqual's
+ * self-echo skip and forces needless registry rebuilds. Unparseable tokens
+ * pass through unchanged.
+ */
+export function canonicalizeKeys(spec: string): string {
+  return spec
+    .split(/\s+/)
+    .filter((s) => s.length > 0)
+    .map((combo) => {
+      const parsed = parseCombo(combo);
+      return parsed ? serializeCombo(parsed) : combo;
+    })
+    .join(' ');
+}
+
 function keyLabel(code: string): string {
   if (code.startsWith('Key')) return code.slice(3);
   if (code.startsWith('Digit')) return code.slice(5);

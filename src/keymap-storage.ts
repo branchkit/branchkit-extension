@@ -17,6 +17,7 @@
  */
 
 import { DEFAULT_KEYMAP, COMMAND_BY_ID, type KeymapEntry } from './command-catalog';
+import { canonicalizeKeys } from './activate/key-combo';
 
 const STORAGE_KEY = 'keymap';
 
@@ -37,7 +38,9 @@ export function sanitizeKeymap(entries: readonly KeymapEntry[]): KeymapEntry[] {
     if (!meta || !meta.mappable) continue;
     const hasParams = e.params && Object.keys(e.params).length > 0;
     out.push({
-      keys: e.keys,
+      // Canonical form (cmd→meta, modifier order) so string comparisons —
+      // keymapsEqual's echo skip, mergeNewDefaults' usedKeys — see one shape.
+      keys: canonicalizeKeys(e.keys),
       command: e.command,
       ...(hasParams ? { params: { ...e.params } } : {}),
     });

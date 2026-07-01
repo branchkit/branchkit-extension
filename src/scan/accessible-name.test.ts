@@ -205,3 +205,24 @@ describe('accessibleName', () => {
     expect(accessibleName(el)).toBe('');
   });
 });
+
+describe('accessibleName length cap', () => {
+  it('caps names from every path, not just plain textContent', () => {
+    const blob = 'x'.repeat(2000);
+    // Name-from-content (a <button> wrapping a text blob) — previously uncapped.
+    const btn = document.createElement('button');
+    btn.textContent = blob;
+    document.body.appendChild(btn);
+    expect(accessibleName(btn).length).toBeLessThanOrEqual(256);
+
+    // aria-labelledby pointing at a blob — previously uncapped.
+    const src = document.createElement('div');
+    src.id = 'blob-src';
+    src.textContent = blob;
+    const target = document.createElement('input');
+    target.setAttribute('aria-labelledby', 'blob-src');
+    document.body.appendChild(src);
+    document.body.appendChild(target);
+    expect(accessibleName(target).length).toBeLessThanOrEqual(256);
+  });
+});

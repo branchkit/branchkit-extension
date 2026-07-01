@@ -157,7 +157,8 @@ Severity is high/med/low. "Verified" means checked against source in this pass.
   offscreen for liveness, or let offscreen self-reconnect and report.
 - **LOW — `broadcastToAllTabs` URL filter is narrower than `isInjectableURL`**
   (`frame-router.ts:56`): misses `about:` / `view-source:`. Harmless (sends are
-  swallowed) but inconsistent.
+  swallowed) but inconsistent. FIXED 2026-07-01: broadcast now uses
+  `isInjectableURL` — one filter, no drift.
 
 ### Labels / codewords / grammar-epoch
 
@@ -239,13 +240,18 @@ Severity is high/med/low. "Verified" means checked against source in this pass.
   persistent highlights but never creates the bar or count pill, so there's no
   visible affordance and no obvious dismiss. Fix: have `findImmediate` create
   the bar (or at least a count pill).
-- **MED — accessible-name is uncapped on most paths.** Verified.
+- **MED — accessible-name is uncapped on most paths.** FIXED 2026-07-01: one
+  256-char cap at the public accessibleName boundary (all paths). Original
+  finding:
   `scan/accessible-name.ts:30,92`: the 256-char cap is applied only in step 8;
   the `aria-labelledby`, name-from-content, and `describedby` paths return
   uncapped `innerText`, so a button wrapping a big text blob yields a multi-KB
   codeword label. Fix: apply the cap uniformly at the return points.
 - **MED — anchor activation may double-navigate or no-op on plain links.**
-  Speculation, needs runtime check. `activate/event-sequence.ts:58-76` synthes-
+  CLOSED 2026-07-01, runtime-checked (real extension, real activate dispatch):
+  a plain `<a href>` navigates exactly once via the untrusted click, and a
+  site handler's preventDefault suppresses it. `lastClicked` staying a module
+  global is inherent (one content script per frame). Original finding: `activate/event-sequence.ts:58-76` synthes-
   izes an untrusted `click`, which won't trigger default navigation on a plain
   `<a href>`; confirm plain links navigate via this path and aren't either
   dropped or double-fired alongside a site handler. `lastClicked` (`:51`) is a
@@ -254,11 +260,15 @@ Severity is high/med/low. "Verified" means checked against source in this pass.
   containing the substring (`scan/selector-generator.ts:4`); and
   `resolveSelectorPath` re-queries the first segment from `document`, so a
   selector unique inside a shadow root can resolve wrong in the light DOM
-  (`:157`).
+  (`:157`). FIXED 2026-07-01: `/\bhref\b/`, and references' flat-selector
+  fallback (the actual wrong-resolve site) now runs only for flat-DOM
+  references — shadow refs heal through the deep text match.
 - **LOW — keymap round-trip asymmetry** (`activate/key-combo.ts:25-48`):
   `parseCombo` accepts `cmd` but `serializeCombo` emits `meta`; a mixed-form
   storage path defeats the self-echo skip and forces a needless registry
-  rebuild. Normalize `cmd` to `meta` at parse time.
+  rebuild. Normalize `cmd` to `meta` at parse time. FIXED 2026-07-01:
+  `canonicalizeKeys` (parse→serialize per chord combo) applied in
+  `sanitizeKeymap`, the load+save chokepoint.
 
 No XSS surface was found in codeword/label rendering — badges use `textContent`
 and the find bar is built via DOM APIs, not `innerHTML`; `CSS.escape` is used
