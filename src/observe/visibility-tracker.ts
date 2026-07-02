@@ -158,7 +158,13 @@ export function connectVisibilityMO(): void {
   visibilityMO?.observe(document.documentElement, {
     subtree: true,
     attributes: true,
-    attributeFilter: ['class', 'style'],
+    // open/hidden: <details> toggling and hidden-attr reveals mutate
+    // NEITHER class nor style, and (for details) not geometry either —
+    // Chrome keeps closed-details content laid out under
+    // content-visibility, so the attention IO never fires on open. The
+    // open-attr mutation is the only reveal signal for candidates parked
+    // by the checkVisibility gate.
+    attributeFilter: ['class', 'style', 'open', 'hidden'],
   });
   pageSession.visibilityMOConnected = true;
 }

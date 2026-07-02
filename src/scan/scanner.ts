@@ -324,6 +324,17 @@ export function isVisible(el: Element): boolean {
     return false;
   }
 
+  // Skipped-subtree gate: Chrome hides closed-<details> content (and other
+  // c-v subtrees) with content-visibility, NOT display:none — the boxes
+  // keep real size and position, so the rect/style gates above pass and
+  // the content would get a ghost badge. checkVisibility() with no options
+  // checks exactly the display:none chain + content-visibility skipped
+  // state (opacity/visibility are handled above, where their carve-outs
+  // apply), so it can sit after the carve-out block without disturbing
+  // custom-checkbox/autosize handling.
+  const cv = (el as Element & { checkVisibility?: () => boolean }).checkVisibility;
+  if (typeof cv === 'function' && !cv.call(el)) return false;
+
   // Walk ancestors checking for opacity:0. Hit the cache first — the
   // first descendant of an ancestor chain pays the full walk, every
   // subsequent descendant within the same scan short-circuits the
