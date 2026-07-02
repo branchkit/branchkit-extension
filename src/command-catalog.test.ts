@@ -129,8 +129,8 @@ describe('command catalog — voice patterns', () => {
     }
   });
 
-  it('attaches voice only to scroll / find / navigation / tab commands this phase', () => {
-    const allowed = new Set(['Scroll', 'Find', 'Navigation', 'Tabs']);
+  it('attaches voice only to hint / scroll / find / navigation / tab commands this phase', () => {
+    const allowed = new Set(['Hints', 'Scroll', 'Find', 'Navigation', 'Tabs']);
     for (const c of withVoice) {
       expect(allowed.has(c.group), `${c.id} in ${c.group}`).toBe(true);
     }

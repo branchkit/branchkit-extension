@@ -212,7 +212,8 @@ function buildHelpOverlay(
   const usage = el('div', 'usage');
   usage.innerHTML =
     'With hints showing, <b>type a badge’s letters</b> to activate it. ' +
-    'A <b>capital</b> opens it in a new tab. <b>/</b> opens find-in-page; <b>Esc</b> clears.';
+    'A <b>capital</b> opens it in a new tab. <b>Enter</b> activates the first visible hint. ' +
+    '<b>/</b> opens find-in-page; <b>Esc</b> clears.';
   panel.appendChild(usage);
 
   backdrop.appendChild(panel);

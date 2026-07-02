@@ -80,11 +80,13 @@ const HINT_CATEGORIES = ['link', 'button', 'input', 'tab', 'edit', 'view', 'tabl
 export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // --- Hints ---
   { id: 'show_hints', label: 'Show hints', group: 'Hints', mappable: true, params: [],
-    description: 'Scan the page and paint hint badges.' },
+    description: 'Scan the page and paint hint badges.',
+    voice: [{ pattern: 'show' }] },
   { id: 'show_hints_newtab', label: 'Show hints (new tab)', group: 'Hints', mappable: true, params: [],
     description: 'Show hints with the next activation armed to open in a new tab.' },
   { id: 'hide_hints', label: 'Hide hints', group: 'Hints', mappable: true, params: [],
-    description: 'Remove all hint badges.' },
+    description: 'Remove all hint badges.',
+    voice: [{ pattern: 'hide' }] },
   { id: 'toggle_hints', label: 'Toggle hints', group: 'Hints', mappable: true, params: [],
     description: 'Show hints when hidden, hide them when shown (sticky across navigation).' },
   { id: 'activate_first_visible', label: 'Activate first hint', group: 'Hints', mappable: true, params: [],
