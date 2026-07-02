@@ -64,6 +64,25 @@ function scheduleSSERetry(): void {
   }, sseBackoff.nextDelayMs(Date.now()));
 }
 
+// Ambient connection state on the toolbar icon (piece A1 of
+// notes/DESIGN_EXTENSION_CONNECTION_HEALTH.md). State, not error: connected
+// shows a quiet dot; standalone shows NO badge at all — running without
+// BranchKit is a first-class mode, and the extension can't distinguish
+// "standalone by choice" from "host vanished" (the side that can — the
+// plugin — owns that nudge). Driven from the same transitions that flip
+// branchkitConnected, so there's no new state to maintain; the calls are
+// idempotent and the badge itself persists across SW idle-restarts.
+function updateConnectionBadge(connected: boolean): void {
+  try {
+    void chrome.action.setBadgeText({ text: connected ? '•' : '' });
+    if (connected) {
+      void chrome.action.setBadgeBackgroundColor({ color: '#2e7d32' });
+    }
+  } catch {
+    // chrome.action unavailable (shouldn't happen in MV3) — badge is cosmetic.
+  }
+}
+
 // The one honest connect signal: the SSE stream's `connected` event, via
 // Chrome's offscreen HEALTH_STATUS(true) or Firefox's direct EventSource.
 // Runs on EVERY connected event, not just flag edges — a `connected` means a
@@ -75,6 +94,7 @@ function scheduleSSERetry(): void {
 // See notes/DESIGN_SSE_RESILIENCE.md (1).
 function onSSEConnected(): void {
   bgState.branchkitConnected = true;
+  updateConnectionBadge(true);
   sseBackoff.onConnected(Date.now());
   clearSSERetryTimer();
   // Cold-start focus handshake: this browser may already be frontmost when
@@ -105,6 +125,7 @@ function onSSEConnected(): void {
 
 function onSSEDisconnected(): void {
   bgState.branchkitConnected = false;
+  updateConnectionBadge(false);
   scheduleSSERetry();
 }
 

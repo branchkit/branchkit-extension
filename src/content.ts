@@ -2329,7 +2329,11 @@ function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
       document.documentElement.removeAttribute(CS_GUARD_ATTR);
     }
   } catch { /* document gone */ }
-  console.warn(`[BranchKit] content script torn down (reason: ${reason}). Self-quiesced.`);
+  // console.log, not warn: chrome://extensions' error collector records warns
+  // from unpacked extensions, and one farewell per frame per reload buries
+  // genuine exceptions under breadcrumbs (2026-07-02 incident triage). The
+  // orphan-hits gauge carries the soak signal; this line is human context only.
+  console.log(`[BranchKit] content script torn down (reason: ${reason}). Self-quiesced.`);
 }
 
 // --- BK_ACTIVATE_PATH diagnostic ---
