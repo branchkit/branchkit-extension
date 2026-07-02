@@ -58,11 +58,13 @@ Enforcement lives in the scripts, not in convention:
 
 Non-goal: plugin-side rejection of `com.google.chrome.for.testing` by bundle id. A denylist of browser identities in the plugin is the wrong layer (forks are legitimate; the identity-hardening work deliberately trusts OS-asserted bundles) and would break the opted-in gate tests.
 
-## Addendum: the wedge (diagnosis pending)
+## Addendum: the wedge (evidence collected 2026-07-02, same session)
 
-Hypothesis for the 2026-07-02 outage: MV3 service workers idle-terminate and re-read their JS from disk on respawn. `npm run build` swapped `dist/chrome/*` under the loaded extension; the SW respawned into a mixed generation (new `background.js` against the old loaded manifest, or a mid-write file) and errored terminally — a state the retry ladder can't see because there is no running SW to retry from.
+Hypothesis: MV3 service workers idle-terminate and re-read their JS from disk on respawn. `npm run build` swapped `dist/chrome/*` under the loaded extension; the SW respawned into a mixed generation (new `background.js` against the old loaded manifest, or a mid-write file) and errored terminally — a state the retry ladder can't see because there is no running SW to retry from.
 
-Evidence needed before designing: the chrome://extensions error banner (or absence of one) from the actual incident, and whether `chrome://serviceworker-internals` showed start failures. If confirmed, candidate fixes, smallest first:
+**What the incident actually showed:** the SW sat in a not-starting state for ~45 minutes. The chrome://extensions error collector held only (a) the old generation's quiesce breadcrumbs (`console.warn` farewells — the collector records warns, so the teardown's own breadcrumb spams it; downgrade that farewell to `console.log`) and (b) `Uncaught (in promise) Could not establish connection. Receiving end does not exist.` from LIVE manifest-injected content scripts on fresh navigations (Gmail) messaging the absent SW — the clearest live signature of this state. No boot exception was ever recorded. Clicking the card's **"service worker" link forced a start and fully recovered** (identity assert + reinjection sweep + SSE within 1s), confirming "Chrome stopped attempting SW starts" rather than "the bundle can't boot" — the same dist had booted fine in a Playwright profile an hour earlier. Diagnostic recipe, in order: plugin log `is_browser=false` on the browser's focus events → error collector shows receiving-end errors from live CSs → click the service-worker link.
+
+Candidate fixes, smallest first (now justified — the mid-write/mixed-generation window is the only plausible trigger on this timeline):
 
 1. **Atomic dist swap** — `scripts/build.mjs` writes to `dist/.chrome.tmp` and renames into place, closing the mid-write window.
 2. **Build↔reload coupling** — bare `npm run build` pings the dev-reload websocket (port 35729) when a watcher is listening, so "files changed" and "extension reloaded" can't be separate events. (The version-skew window — SW respawn between an out-of-band build and any reload — only closes this way; atomicity alone doesn't.)
