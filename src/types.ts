@@ -120,6 +120,17 @@ export interface GrammarBatchResponse {
 
 // --- Messages ---
 
+/**
+ * The tab verbs handleTabAction (background.ts) implements. One vocabulary for
+ * both entry points: keyboard (content dispatcher → TAB_ACTION message) and
+ * voice (SSE action intercept in the background). See
+ * notes/DESIGN_TAB_NAVIGATION.md, "Tab verbs".
+ */
+export type TabAction =
+  | 'next' | 'previous' | 'first' | 'last' | 'goto' | 'last_active'
+  | 'new' | 'close' | 'restore' | 'duplicate'
+  | 'pin' | 'mute' | 'move_left' | 'move_right';
+
 export type Message =
   | { type: 'SCAN_RESULT'; elements: ScannedElement[]; adapter: string | null }
   | {
@@ -174,11 +185,12 @@ export type Message =
   // element in the local store and synthesize a stable selector. Response
   // shape is ResolveHintResponse.
   | { type: 'RESOLVE_HINT'; codeword: string }
-  // Content → background. Keyboard tab cycling (Layer 1 of
-  // notes/DESIGN_TAB_NAVIGATION.md). Content scripts can't switch tabs, so the
-  // keybind handler forwards the direction; background cycles within the
-  // current window and activates the neighbor.
-  | { type: 'SWITCH_TAB'; direction: 'next' | 'previous' }
+  // Content → background. Keyboard tab verbs (notes/DESIGN_TAB_NAVIGATION.md,
+  // "Tab verbs"). Content scripts can't touch chrome.tabs, so the keybind
+  // handlers forward the verb to handleTabAction in the background. The voice
+  // path never sends this — it's intercepted in the background's SSE handler
+  // before content forwarding. `index` is goto's 1-based tab position.
+  | { type: 'TAB_ACTION'; action: TabAction; index?: number }
   // Options → background. The keymap editor renders voice phrases from its own
   // catalog now; it only asks whether BranchKit is connected so it can show the
   // not-connected note. Response: { connected: boolean }.

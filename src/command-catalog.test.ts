@@ -18,7 +18,9 @@ const REGISTERED_ACTIONS = [
   'cycle_scroll_target', 'scroll', 'scroll_to_percent', 'scroll_to_element',
   'find_open', 'find_close', 'find_next', 'find_previous', 'find_immediate',
   'history_back', 'history_forward', 'refresh', 'focus_input',
-  'next_tab', 'previous_tab',
+  'next_tab', 'previous_tab', 'first_tab', 'last_tab', 'goto_tab', 'last_active_tab',
+  'new_tab', 'close_tab', 'restore_tab', 'duplicate_tab', 'pin_tab', 'mute_tab',
+  'move_tab_left', 'move_tab_right',
   'toggle_help',
 ] as const;
 
@@ -119,8 +121,8 @@ describe('command catalog — voice patterns', () => {
     }
   });
 
-  it('attaches voice only to scroll / find / navigation commands this phase', () => {
-    const allowed = new Set(['Scroll', 'Find', 'Navigation']);
+  it('attaches voice only to scroll / find / navigation / tab commands this phase', () => {
+    const allowed = new Set(['Scroll', 'Find', 'Navigation', 'Tabs']);
     for (const c of withVoice) {
       expect(allowed.has(c.group), `${c.id} in ${c.group}`).toBe(true);
     }
@@ -161,6 +163,17 @@ describe('default keymap', () => {
       { keys: 'shift+KeyL', command: 'next_tab' },
       { keys: 'shift+Slash', command: 'toggle_help' },
       { keys: 'shift+KeyI', command: 'focus_input' },
+      { keys: 'shift+KeyO', command: 'new_tab' },
+      { keys: 'shift+KeyX', command: 'close_tab' },
+      { keys: 'shift+KeyZ', command: 'restore_tab' },
+      { keys: 'shift+KeyY', command: 'duplicate_tab' },
+      { keys: 'shift+KeyP', command: 'pin_tab' },
+      { keys: 'shift+KeyM', command: 'mute_tab' },
+      { keys: 'shift+Digit1', command: 'first_tab' },
+      { keys: 'shift+Digit9', command: 'last_tab' },
+      { keys: 'shift+Digit6', command: 'last_active_tab' },
+      { keys: 'shift+Comma', command: 'move_tab_left' },
+      { keys: 'shift+Period', command: 'move_tab_right' },
     ]);
   });
 });

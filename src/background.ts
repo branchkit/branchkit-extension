@@ -8,7 +8,7 @@
  * - Manage offscreen document lifecycle (Chrome only)
  */
 
-import { Message, ScannedElement, HintVisibility, DispatchResult, GrammarBatchRequest, GrammarBatchResponse } from './types';
+import { Message, ScannedElement, HintVisibility, DispatchResult, GrammarBatchRequest, GrammarBatchResponse, TabAction } from './types';
 import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearStack, clearAllStacks, alphabetsEqual } from './labels/label-pool';
 import { setAlphabet, tokenToSpokenCodeword, spokenCodewordToToken } from './labels/words';
 import { buildCommandContributions } from './command-catalog';
@@ -16,6 +16,7 @@ import { rememberCodewords, clearCodewordMemory, recallCodewords } from './label
 import { discoverPlugin, ensureConnected, postToPlugin, getPluginPort, getPluginToken, getActuatorJson } from './plugin/actuator-client';
 import { buildReconcileReport, type ReconcileWrapper, type ReconcileReport, type MatchableView } from './debug/reconcile';
 import { cycleTabIndex } from './background/tab-nav';
+import { loadMru, previousCandidates, recordTabActivated } from './background/tab-mru';
 import { ensureContentScriptInjected } from './background/injection';
 import { bgState, connId } from './background/state';
 import { republishActiveTab, broadcastToAllTabs, resolveActiveContentTab, notifyActiveTab, resolveHintFromTab } from './background/frame-router';
@@ -347,18 +348,87 @@ async function handleDebugSnapshot(
   await postToPlugin('/debug-snapshot/screenshot', body);
 }
 
-// Adjacent tab cycling (Layer 1 of notes/DESIGN_TAB_NAVIGATION.md). Cycles
-// within the current window and wraps around. Content scripts can't switch
-// tabs, so the keybind handler forwards here. The fuzzy switcher + voice
-// "switch to <tab>" will share the same `chrome.tabs.update({active})` dispatch.
-async function handleSwitchTab(direction: 'next' | 'previous'): Promise<void> {
+// Tab verbs (notes/DESIGN_TAB_NAVIGATION.md, "Tab verbs"). One handler for
+// both entry points: the content dispatcher's TAB_ACTION message (keyboard)
+// and the SSE action intercept (voice — handled here rather than in content
+// so the verbs work even when the active page has no content script, e.g. a
+// chrome:// page). `index` is goto's 1-based tab position.
+async function handleTabAction(action: TabAction, index?: number): Promise<void> {
+  if (action === 'new') {
+    await chrome.tabs.create({});
+    return;
+  }
+  if (action === 'restore') {
+    // Most recently closed tab or window (browser Cmd/Ctrl+Shift+T).
+    // Needs the `sessions` permission.
+    try { await chrome.sessions.restore(); } catch { /* nothing to restore */ }
+    return;
+  }
+  if (action === 'last_active') {
+    // Walk the MRU stack for the newest still-existing tab that isn't the
+    // current one; closed tabs stay in the stack, so skip the dead ids.
+    for (const id of previousCandidates(await loadMru(), bgState.cachedActiveTabId)) {
+      try {
+        const t = await chrome.tabs.get(id);
+        await chrome.windows.update(t.windowId, { focused: true });
+        await chrome.tabs.update(id, { active: true });
+        return;
+      } catch { /* tab gone — try the next candidate */ }
+    }
+    return;
+  }
+
   const tabs = await chrome.tabs.query({ currentWindow: true });
-  if (tabs.length < 2) return;
   const activeIdx = tabs.findIndex((t) => t.active);
-  if (activeIdx < 0) return;
-  const target = tabs[cycleTabIndex(activeIdx, tabs.length, direction)];
-  if (target?.id != null) await chrome.tabs.update(target.id, { active: true });
+  const active = tabs[activeIdx];
+  if (activeIdx < 0 || active?.id == null) return;
+
+  switch (action) {
+    case 'next':
+    case 'previous': {
+      if (tabs.length < 2) return;
+      const target = tabs[cycleTabIndex(activeIdx, tabs.length, action)];
+      if (target?.id != null) await chrome.tabs.update(target.id, { active: true });
+      return;
+    }
+    case 'close':
+      await chrome.tabs.remove(active.id);
+      return;
+    case 'duplicate':
+      await chrome.tabs.duplicate(active.id);
+      return;
+    case 'pin':
+      await chrome.tabs.update(active.id, { pinned: !active.pinned });
+      return;
+    case 'mute':
+      await chrome.tabs.update(active.id, { muted: !active.mutedInfo?.muted });
+      return;
+    case 'first':
+    case 'last':
+    case 'goto': {
+      const pos = action === 'first' ? 1 : action === 'last' ? tabs.length : index ?? 1;
+      const target = tabs[Math.min(Math.max(pos, 1), tabs.length) - 1];
+      if (target?.id != null && !target.active) await chrome.tabs.update(target.id, { active: true });
+      return;
+    }
+    case 'move_left':
+    case 'move_right': {
+      const to = Math.min(Math.max(activeIdx + (action === 'move_right' ? 1 : -1), 0), tabs.length - 1);
+      if (to !== activeIdx) await chrome.tabs.move(active.id, { index: to });
+      return;
+    }
+  }
 }
+
+// Voice → tab verb intercept: catalog command id → TabAction. The ids are the
+// same ones the content dispatcher registers for the keyboard path; this map
+// is what lets the background claim them off the SSE stream first.
+const TAB_ACTION_BY_ID: Readonly<Record<string, TabAction>> = {
+  next_tab: 'next', previous_tab: 'previous', new_tab: 'new', close_tab: 'close',
+  restore_tab: 'restore', duplicate_tab: 'duplicate', pin_tab: 'pin', mute_tab: 'mute',
+  first_tab: 'first', last_tab: 'last', goto_tab: 'goto',
+  move_tab_left: 'move_left', move_tab_right: 'move_right', last_active_tab: 'last_active',
+};
 
 // Tell the plugin to end a hint session. Two scopes:
 //   - tab-wide: omit `frameId`. Plugin Deletes every frame's tracked
@@ -625,6 +695,16 @@ function connectDirectSSE(port: number, token: string): void {
 // --- SSE Event Handling (shared by both paths) ---
 
 function handleSSEEvent(data: any): void {
+  // Tab verbs are handled here, not forwarded to content: they act on
+  // chrome.tabs regardless of what page is focused (content scripts can't
+  // reach the API, and the active page may not even have one).
+  const tabAction = TAB_ACTION_BY_ID[data.action];
+  if (tabAction) {
+    const n = parseInt(data.params?.index ?? '', 10);
+    void handleTabAction(tabAction, Number.isFinite(n) ? n : undefined);
+    return;
+  }
+
   // Active-tab-only routing for events that carry params.target === 'active'.
   // The plugin uses this for focus-driven rescans where only the active
   // tab's state matters — broadcasting to every tab would multiply the
@@ -738,8 +818,8 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     return false;
   }
 
-  if (message.type === 'SWITCH_TAB' && (message.direction === 'next' || message.direction === 'previous')) {
-    void handleSwitchTab(message.direction);
+  if (message.type === 'TAB_ACTION' && typeof message.action === 'string') {
+    void handleTabAction(message.action, typeof message.index === 'number' ? message.index : undefined);
     return false;
   }
 
@@ -955,6 +1035,9 @@ async function logTabSwitch(reason: string, oldTabId: number | null, newTabId: n
 chrome.tabs.onActivated.addListener((activeInfo) => {
   const oldTabId = bgState.cachedActiveTabId;
   bgState.cachedActiveTabId = activeInfo.tabId;
+  // Recency stack for the `last_active` tab verb (and the future fuzzy
+  // switcher's MRU ranking).
+  void recordTabActivated(activeInfo.tabId);
   if (oldTabId !== activeInfo.tabId) {
     logTabSwitch('tab_activated', oldTabId, activeInfo.tabId);
     // Report the new active tab to the plugin (accepted only if this is the

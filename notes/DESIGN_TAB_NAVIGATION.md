@@ -1,6 +1,6 @@
 # Design: Tab Navigation + Tab Switcher
 
-**Status:** Proposal, 2026-06-17. Layer 1 (keyboard cycle) in progress.
+**Status:** Layer 1 shipped; tab verbs (Vimium parity, below) shipped 2026-07-01. Layers 2–3 (fuzzy switcher, voice "switch to \<tab>") remain proposals.
 **Goal:** Move between tabs (adjacent cycling) and jump to a specific tab (fuzzy search), via keyboard now and voice later — without building a keyboard-only thing that can't be reused for voice.
 
 ## Prior art (what we're borrowing)
@@ -41,3 +41,43 @@ This is the main open design decision: which non-letter trigger (if any) opens t
 **Ranking:** start MRU (recency stack). Add title+domain relevance on typed query. Frequency is v2. Don't reinvent — port Vimium's `wordRelevancy` + `recencyScore` shape if it helps.
 
 **Phasing rule:** never build a keyboard overlay that can't be reused for voice. Layer 0's collection + recency is the shared core; everything else consumes it.
+
+## Tab verbs (Vimium parity) — shipped 2026-07-01
+
+The mechanical verbs that need no switcher UI. Every verb has both a keyboard
+bind and a voice phrase. One background handler (`handleTabAction`,
+background.ts) serves both entry points:
+
+- **Keyboard:** content dispatcher registration → `TAB_ACTION` message
+  (replaced the old `SWITCH_TAB`) → background.
+- **Voice:** intercepted in the background's `handleSSEEvent`
+  (`TAB_ACTION_BY_ID`) *before* content forwarding, so tab verbs work even
+  when the active page has no content script (chrome:// pages, PDFs).
+
+Per the always-mode keyboard constraint above, every default bind is a
+Shift-chord (bare letters are hint-filter input while badges are painted).
+
+| Command | Keys | Voice | Notes |
+|---|---|---|---|
+| `next_tab` / `previous_tab` | Shift+L / Shift+H | "next tab" / "previous tab" | Layer 1, now voiced |
+| `new_tab` | Shift+O | "new tab" | |
+| `close_tab` | Shift+X | "close tab" | |
+| `restore_tab` | Shift+Z | "reopen tab", "restore tab" | `chrome.sessions.restore()`; added the `sessions` permission (no new install warning — `tabs` already carries the history warning) |
+| `duplicate_tab` | Shift+Y | "duplicate tab" | |
+| `pin_tab` / `mute_tab` | Shift+P / Shift+M | "pin/unpin tab", "mute/unmute tab" | Toggles |
+| `first_tab` / `last_tab` | Shift+1 / Shift+9 | "first tab" / "last tab" | Position (Cmd/Ctrl+9 convention). "last tab" means *rightmost*, not recency — recency is `last_active_tab` |
+| `goto_tab` | unbound (mappable, `index` param) | "tab {number}" | 1-based, clamped |
+| `move_tab_left` / `move_tab_right` | Shift+, / Shift+. | "move tab left/right" | Vimium `<<` / `>>`, clamped (no wrap) |
+| `last_active_tab` | Shift+6 (`^`) | "swap tab" | Layer 0's recency stack, now real: `background/tab-mru.ts`, MRU in `chrome.storage.session`, pushed on `tabs.onActivated`. Cross-window (focuses the tab's window) |
+
+## Follow-ups beyond tabs (not this note's scope, recorded while fresh)
+
+- **Bookmarks:** voice-native shape is a published collection of bookmark
+  titles ("bookmark \<name>"), same machinery as Layer 3's tab collection —
+  needs the `bookmarks` permission and a design pass on corpus size/churn.
+  Keyboard shape falls out of the Layer 2 overlay generalized to multiple
+  sources (Vimium's `b`).
+- **History search** (Vimium `o`): corpus is too large/churny to feed a
+  recognition grammar; keyboard-overlay-only if we build it at all.
+- **Window verbs** (move tab to new window, close others/left/right): more
+  Vimium-C parity, same `handleTabAction` shape if wanted.

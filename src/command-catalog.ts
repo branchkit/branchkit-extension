@@ -186,10 +186,52 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     voice: [{ pattern: 'focus input' }, { pattern: 'focus first input' }] },
 
   // --- Tabs ---
+  // All tab verbs share one background handler (handleTabAction): keyboard
+  // dispatches TAB_ACTION from content, voice is intercepted in the background
+  // SSE path so the verbs work even on pages with no content script.
   { id: 'next_tab', label: 'Next tab', group: 'Tabs', mappable: true, params: [],
-    description: 'Switch to the next tab in the current window.' },
+    description: 'Switch to the next tab in the current window.',
+    voice: [{ pattern: 'next tab' }] },
   { id: 'previous_tab', label: 'Previous tab', group: 'Tabs', mappable: true, params: [],
-    description: 'Switch to the previous tab in the current window.' },
+    description: 'Switch to the previous tab in the current window.',
+    voice: [{ pattern: 'previous tab' }] },
+  { id: 'new_tab', label: 'New tab', group: 'Tabs', mappable: true, params: [],
+    description: 'Open a new tab.',
+    voice: [{ pattern: 'new tab' }] },
+  { id: 'close_tab', label: 'Close tab', group: 'Tabs', mappable: true, params: [],
+    description: 'Close the current tab.',
+    voice: [{ pattern: 'close tab' }] },
+  { id: 'restore_tab', label: 'Reopen closed tab', group: 'Tabs', mappable: true, params: [],
+    description: 'Reopen the most recently closed tab or window.',
+    voice: [{ pattern: 'reopen tab' }, { pattern: 'restore tab' }] },
+  { id: 'duplicate_tab', label: 'Duplicate tab', group: 'Tabs', mappable: true, params: [],
+    description: 'Duplicate the current tab.',
+    voice: [{ pattern: 'duplicate tab' }] },
+  { id: 'pin_tab', label: 'Pin/unpin tab', group: 'Tabs', mappable: true, params: [],
+    description: 'Toggle whether the current tab is pinned.',
+    voice: [{ pattern: 'pin tab' }, { pattern: 'unpin tab' }] },
+  { id: 'mute_tab', label: 'Mute/unmute tab', group: 'Tabs', mappable: true, params: [],
+    description: 'Toggle whether the current tab is muted.',
+    voice: [{ pattern: 'mute tab' }, { pattern: 'unmute tab' }] },
+  { id: 'first_tab', label: 'First tab', group: 'Tabs', mappable: true, params: [],
+    description: 'Switch to the leftmost tab in the current window.',
+    voice: [{ pattern: 'first tab' }] },
+  { id: 'last_tab', label: 'Last tab', group: 'Tabs', mappable: true, params: [],
+    description: 'Switch to the rightmost tab in the current window.',
+    voice: [{ pattern: 'last tab' }] },
+  { id: 'goto_tab', label: 'Go to tab N', group: 'Tabs', mappable: true,
+    description: 'Switch to the Nth tab in the current window (1-based, clamped).',
+    params: [{ name: 'index', type: 'number', min: 1, default: '1' }],
+    voice: [{ pattern: 'tab {number}', params: { index: '{number}' } }] },
+  { id: 'move_tab_left', label: 'Move tab left', group: 'Tabs', mappable: true, params: [],
+    description: 'Move the current tab one position to the left.',
+    voice: [{ pattern: 'move tab left' }] },
+  { id: 'move_tab_right', label: 'Move tab right', group: 'Tabs', mappable: true, params: [],
+    description: 'Move the current tab one position to the right.',
+    voice: [{ pattern: 'move tab right' }] },
+  { id: 'last_active_tab', label: 'Previously active tab', group: 'Tabs', mappable: true, params: [],
+    description: 'Toggle back to the tab you were on before this one (any window).',
+    voice: [{ pattern: 'swap tab' }] },
 
   // --- Help ---
   { id: 'toggle_help', label: 'Keyboard help', group: 'Help', mappable: true, params: [],
@@ -258,4 +300,15 @@ export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   { keys: 'shift+KeyL', command: 'next_tab' }, // Shift+L
   { keys: 'shift+Slash', command: 'toggle_help' }, // ? — keyboard command reference
   { keys: 'shift+KeyI', command: 'focus_input' }, // Shift+I — focus first input (works in always-mode)
+  { keys: 'shift+KeyO', command: 'new_tab' }, // Shift+O — open a new tab
+  { keys: 'shift+KeyX', command: 'close_tab' }, // Shift+X (Vimium x)
+  { keys: 'shift+KeyZ', command: 'restore_tab' }, // Shift+Z — undo the close
+  { keys: 'shift+KeyY', command: 'duplicate_tab' }, // Shift+Y (Vimium yt)
+  { keys: 'shift+KeyP', command: 'pin_tab' }, // Shift+P
+  { keys: 'shift+KeyM', command: 'mute_tab' }, // Shift+M
+  { keys: 'shift+Digit1', command: 'first_tab' }, // Shift+1
+  { keys: 'shift+Digit9', command: 'last_tab' }, // Shift+9 (browser Cmd/Ctrl+9 convention)
+  { keys: 'shift+Digit6', command: 'last_active_tab' }, // Shift+6 = ^ (Vimium ^)
+  { keys: 'shift+Comma', command: 'move_tab_left' }, // Shift+, = < (Vimium <<)
+  { keys: 'shift+Period', command: 'move_tab_right' }, // Shift+. = > (Vimium >>)
 ];
