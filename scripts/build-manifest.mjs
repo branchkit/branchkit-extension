@@ -2,7 +2,8 @@
 /**
  * Build a target-specific `dist/manifest.json` from the base `manifest.json`.
  *
- * Usage: node scripts/build-manifest.mjs <chrome|firefox>
+ * Usage: node scripts/build-manifest.mjs <chrome|firefox> [outDir]
+ * (outDir defaults to dist/<target>; build.mjs passes its staging dir)
  *
  * The base manifest is structured to be Firefox-compatible by default
  * (it omits Chrome-only permissions). Chrome builds layer those back in.
@@ -66,6 +67,6 @@ if (target === 'chrome') {
   };
 }
 
-const outPath = resolve(root, 'dist', target, 'manifest.json');
-writeFileSync(outPath, JSON.stringify(base, null, 2) + '\n');
-console.log(`wrote dist/${target}/manifest.json`);
+const outDir = process.argv[3] ?? resolve(root, 'dist', target);
+writeFileSync(resolve(outDir, 'manifest.json'), JSON.stringify(base, null, 2) + '\n');
+console.log(`wrote ${target} manifest.json`);

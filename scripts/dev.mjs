@@ -38,6 +38,13 @@ const clients = new Set();
 
 wss.on('connection', (ws) => {
   clients.add(ws);
+  // Out-of-band build notification: a bare `npm run build` (build.mjs)
+  // connects, sends this, and disconnects — we broadcast the reload so no
+  // loaded extension keeps running a prior generation against the freshly
+  // swapped dist/. Extensions themselves never send messages.
+  ws.on('message', (m) => {
+    if (m.toString() === 'external-build') notifyReload();
+  });
   ws.on('close', () => clients.delete(ws));
 });
 
