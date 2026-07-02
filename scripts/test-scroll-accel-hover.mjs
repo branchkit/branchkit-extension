@@ -16,15 +16,9 @@
 //
 // Run: npm run test:scroll-accel-hover  (or node scripts/test-scroll-accel-hover.mjs after build)
 
-import { chromium } from 'playwright';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { existsSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { launchExtension } from './lib/launch.mjs';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const root = resolve(__dirname, '..');
-const EXT = resolve(root, 'dist/chrome');
 const PROFILE = '/tmp/branchkit-hover-scroller-profile';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -69,12 +63,7 @@ await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const FIXTURE = `http://127.0.0.1:${server.address().port}/`;
 console.log('fixture:', FIXTURE);
 
-if (existsSync(PROFILE)) rmSync(PROFILE, { recursive: true });
-const ctx = await chromium.launchPersistentContext(PROFILE, {
-  headless: false,
-  args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`],
-});
-const sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent('serviceworker');
+const { ctx, sw } = await launchExtension({ profile: PROFILE });
 const ALPHABET = 'arch bat cat dog echo fox golf hotel india jam kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu'.split(' ');
 await sw.evaluate(async (a) => {
   await chrome.storage.sync.set({ aggressiveHints: true, hintVisibility: 'always' });

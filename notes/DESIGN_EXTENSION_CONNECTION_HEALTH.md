@@ -49,12 +49,13 @@ Together A1+A2 cover both directions: host dies → extension badge drops to sta
 
 **Rule (already in force, recorded in session memory): never run the Playwright harness against a running BranchKit mid-session.** This section makes the rule structural instead of behavioral.
 
-Mechanism: a `branchkit_discovery_disabled` flag in `chrome.storage.local`, checked at the single choke point `discoverPlugin()` (all connection paths — `ensureConnected`, the SSE retry ladder, `init` — funnel through it). Flag set → `discoverPlugin` returns false immediately; the extension is deterministically standalone. A storage flag beats a build define because the harness loads the same `dist/` artifact the user does — no second build flavor to drift.
+Mechanism **(revised at implementation, 2026-07-02)**: a `harness.json` **marker file** the launch helper drops into a staged copy of `dist/`, checked as a packaged-resource fetch at the single choke point `discoverPlugin()` (all connection paths — `ensureConnected`, the SSE retry ladder, `init` — funnel through it). Marker present → `discoverPlugin` returns false; the extension is deterministically standalone. The originally-sketched `chrome.storage` flag was dropped: it can only be seeded via `sw.evaluate` *after* launch, which **races the SW's boot-time discovery** — the pollution window is exactly the first seconds the flag was meant to close. A packaged marker is readable before the first discovery, race-free. The staged copy (`cpSync` + one extra file, per-profile) keeps tests on byte-identical code — still no second build flavor.
 
-Enforcement lives in the scripts, not in convention:
+Enforcement lives in the scripts and a ratchet, not in convention:
 
-- A shared launch helper for the `scripts/_test-*.mjs` family (they already seed `alphabet` / `hintVisibility` via `sw.evaluate` — same hook) that sets the flag **by default** before any navigation. Individual scripts opting into live-plugin behavior (e.g. `_test-active-tab-gate.mjs`) pass `{allowDiscovery: true}` explicitly.
+- `scripts/lib/launch.mjs` (`launchExtension`) stages the marked copy **by default** and returns `{ctx, sw}`. Live-plugin tests pass `{allowDiscovery: true}`, which loads the raw dist instead.
 - Pre-flight tripwire in the helper: if discovery is allowed AND `http://127.0.0.1:21551` answers, refuse to run unless `BRANCHKIT_ALLOW_LIVE=1` is set, printing why. An opted-in test hitting a *live user session* is exactly the incident; make it a conscious act.
+- `src/harness-isolation.test.ts` is the ratchet: any script calling `launchPersistentContext` without the helper fails, except a frozen, underscore-only, shrink-enforced GRANDFATHERED list of pre-helper one-off diagnostics (entries must be removed as they're migrated or deleted; the maintained npm entrypoints are all migrated). Residual known gap: running a grandfathered one-off against a live host still pollutes — the list is the worklist for closing that.
 
 Non-goal: plugin-side rejection of `com.google.chrome.for.testing` by bundle id. A denylist of browser identities in the plugin is the wrong layer (forks are legitimate; the identity-hardening work deliberately trusts OS-asserted bundles) and would break the opted-in gate tests.
 

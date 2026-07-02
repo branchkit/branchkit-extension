@@ -23,22 +23,16 @@
  * reuses the cached browser.
  */
 
-import { chromium } from 'playwright';
 import { readdirSync, mkdirSync, rmSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { launchExtension } from './lib/launch.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
-const EXT = resolve(root, 'dist/chrome');
 const FIXTURE_DIR = resolve(root, 'test-fixtures');
 const OUT_DIR = resolve(FIXTURE_DIR, 'output');
 const PROFILE = '/tmp/branchkit-place-test-profile';
-
-if (!existsSync(resolve(EXT, 'manifest.json'))) {
-  console.error(`No manifest at ${EXT}/manifest.json — run \`npm run build:chrome\` first.`);
-  process.exit(1);
-}
 
 if (existsSync(OUT_DIR)) rmSync(OUT_DIR, { recursive: true });
 mkdirSync(OUT_DIR, { recursive: true });
@@ -49,11 +43,8 @@ if (fixtures.length === 0) {
   process.exit(1);
 }
 
-console.log(`Launching Chromium with extension at ${EXT}`);
-const ctx = await chromium.launchPersistentContext(PROFILE, {
-  headless: false,
-  args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`],
-});
+console.log('Launching Chromium with the staged (standalone) extension');
+const { ctx } = await launchExtension({ profile: PROFILE, freshProfile: false });
 
 let failures = 0;
 

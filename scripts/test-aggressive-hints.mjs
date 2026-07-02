@@ -5,25 +5,20 @@
  * widens the selector set without breaking the default scan.
  */
 
-import { chromium } from 'playwright';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
+import { launchExtension } from './lib/launch.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
-const EXT = resolve(root, 'dist/chrome');
 const FIXTURE = resolve(root, 'test-fixtures/aggressive-hints.html');
 const OUT = resolve(root, 'test-fixtures/output');
 const PROFILE = '/tmp/branchkit-aggressive-test-profile';
 
-if (existsSync(PROFILE)) rmSync(PROFILE, { recursive: true });
 if (!existsSync(OUT)) mkdirSync(OUT, { recursive: true });
 
-const ctx = await chromium.launchPersistentContext(PROFILE, {
-  headless: false,
-  args: [`--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`],
-});
+const { ctx } = await launchExtension({ profile: PROFILE });
 
 async function runWith(modeOn) {
   // Set the toggle BEFORE navigating so content script sees the right value.

@@ -18,6 +18,30 @@ const ACTUATOR_URL = 'http://127.0.0.1:21551';
 let pluginPort: number | null = null;
 let pluginToken: string | null = null;
 
+// Harness isolation (notes/DESIGN_EXTENSION_CONNECTION_HEALTH.md, piece B).
+// Test harnesses copy dist/ and drop a `harness.json` marker into the copy;
+// its presence makes this extension deterministically standalone — no
+// discovery, no SSE, no live-session pollution. A packaged-resource fetch
+// (not a storage flag) because it's readable BEFORE the boot-time discovery
+// runs — a storage flag seeded via sw.evaluate loses that race. Memoized:
+// the answer can't change within a SW lifetime. In production the marker
+// doesn't exist and the single failed fetch at first discovery is free.
+let discoveryDisabled: Promise<boolean> | null = null;
+
+function isDiscoveryDisabled(): Promise<boolean> {
+  if (!discoveryDisabled) {
+    try {
+      discoveryDisabled = fetch(chrome.runtime.getURL('harness.json'))
+        .then((r) => r.ok)
+        .catch(() => false);
+    } catch {
+      // No chrome.runtime (unit tests) or invalidated context — not a harness.
+      discoveryDisabled = Promise.resolve(false);
+    }
+  }
+  return discoveryDisabled;
+}
+
 export function getPluginPort(): number | null {
   return pluginPort;
 }
@@ -31,6 +55,7 @@ export function getPluginToken(): string | null {
  * endpoint. Caches the connection and returns true on success.
  */
 export async function discoverPlugin(): Promise<boolean> {
+  if (await isDiscoveryDisabled()) return false;
   try {
     const resp = await fetch(`${ACTUATOR_URL}/v1/plugins/browser/status`);
     if (!resp.ok) return false;

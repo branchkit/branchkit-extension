@@ -27,10 +27,10 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, rmSync } from 'node:fs';
 import { parseArgs } from 'node:util';
+import { launchExtension } from './lib/launch.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
-const BRANCHKIT_EXT = resolve(root, 'dist/chrome');
 const FIXTURE = resolve(root, 'test-fixtures/perf-stress.html');
 
 const { values: argv } = parseArgs({
@@ -64,13 +64,22 @@ SAMPLE_TIMES_MS.sort((a, b) => a - b);
 
 async function launchContext(engine) {
   const profile = `/tmp/branchkit-perf-${engine}-profile`;
-  if (existsSync(profile)) rmSync(profile, { recursive: true });
 
-  const args = ['--enable-precise-memory-info']; // un-buckets performance.memory
+  // BranchKit loads through the shared helper so the harness copy carries the
+  // standalone marker — a perf run against a live host would both pollute the
+  // user's session AND corrupt the measurement (SSE + grammar traffic).
   if (engine === 'branchkit') {
-    args.push(`--disable-extensions-except=${BRANCHKIT_EXT}`);
-    args.push(`--load-extension=${BRANCHKIT_EXT}`);
-  } else if (engine === 'rango') {
+    const { ctx } = await launchExtension({
+      profile,
+      headless: argv.headless,
+      extraArgs: ['--enable-precise-memory-info'], // un-buckets performance.memory
+    });
+    return ctx;
+  }
+
+  if (existsSync(profile)) rmSync(profile, { recursive: true });
+  const args = ['--enable-precise-memory-info'];
+  if (engine === 'rango') {
     if (!existsSync(argv['rango-path'])) {
       throw new Error(
         `Rango build not found at ${argv['rango-path']}. ` +

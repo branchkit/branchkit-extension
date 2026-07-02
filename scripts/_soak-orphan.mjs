@@ -13,15 +13,9 @@
 //
 // Usage: npm run build:chrome && node scripts/_soak-orphan.mjs
 
-import { chromium } from 'playwright';
-import { resolve, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:http';
-import { existsSync, rmSync } from 'node:fs';
+import { launchExtension } from './lib/launch.mjs';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const root = resolve(__dirname, '..');
-const EXT = resolve(root, 'dist/chrome');
 const PROFILE = '/tmp/branchkit-soak-orphan-profile';
 const BURST = Number(process.env.BURST ?? '50');
 
@@ -39,14 +33,10 @@ const server = createServer((_req, res) => {
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const URL = `http://127.0.0.1:${server.address().port}/`;
 
-if (existsSync(PROFILE)) rmSync(PROFILE, { recursive: true });
-const ctx = await chromium.launchPersistentContext(PROFILE, {
-  headless: false,
-  args: ['--disable-extensions-except=' + EXT, '--load-extension=' + EXT],
-});
+const { ctx, sw: initialSw } = await launchExtension({ profile: PROFILE });
 
 const ALPHABET = 'arch bat cat dog echo fox golf hotel india jam kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu'.split(' ');
-let sw = ctx.serviceWorkers()[0] || (await ctx.waitForEvent('serviceworker', { timeout: 10000 }));
+let sw = initialSw;
 await sw.evaluate(async (a) => {
   await chrome.storage.sync.set({ aggressiveHints: true, hintVisibility: 'always' });
   await chrome.storage.local.set({ alphabet: a });
