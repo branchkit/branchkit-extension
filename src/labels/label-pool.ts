@@ -16,7 +16,7 @@ import { LETTERS_26 } from './words';
 // All hints are uniform two-word pairs — no singles. This eliminates
 // prefix ambiguity by construction: every first word is always a prefix,
 // every hint always requires a second word. Same approach as Rango.
-// Continuous Vosk recognition makes pairs flow as one utterance (~200ms),
+// Continuous recognition makes pairs flow as one utterance (~200ms),
 // so the one-word advantage of singles is negligible.
 //
 // Ordering is BALANCED (square-fill): pairs are enumerated by expanding

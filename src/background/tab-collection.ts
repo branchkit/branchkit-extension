@@ -14,7 +14,7 @@
  *  - Title churn: SPA pages retitle constantly (notification counts,
  *    now-playing). Publishes are debounced AND skipped when the computed
  *    entry set is unchanged — the same guard class that fixed the
- *    mid-utterance Vosk rebuild bug (see project_command_twice_fresh_page).
+ *    mid-utterance recognizer rebuild bug (see project_command_twice_fresh_page).
  *  - Disambiguation: a word claimed by several tabs resolves to the most
  *    recently used claimant (MRU tiebreak); tabs prefer title words unique to
  *    them and fall back to domain words. Tabs that win no word are reachable
