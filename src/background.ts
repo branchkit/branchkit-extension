@@ -17,6 +17,7 @@ import { discoverPlugin, ensureConnected, postToPlugin, getPluginPort, getPlugin
 import { buildReconcileReport, type ReconcileWrapper, type ReconcileReport, type MatchableView } from './debug/reconcile';
 import { cycleTabIndex } from './background/tab-nav';
 import { loadMru, previousCandidates, recordTabActivated } from './background/tab-mru';
+import { scheduleTabPublish, resetTabPublishCache } from './background/tab-collection';
 import { ensureContentScriptInjected } from './background/injection';
 import { bgState, connId } from './background/state';
 import { republishActiveTab, broadcastToAllTabs, resolveActiveContentTab, notifyActiveTab, resolveHintFromTab } from './background/frame-router';
@@ -94,6 +95,12 @@ function onSSEConnected(): void {
   if (bgState.cachedActiveTabId != null) {
     republishActiveTab(bgState.cachedActiveTabId, 'sse_reconnect');
   }
+  // Seed the open-tab voice collection ("switch to <tab>"). The publish cache
+  // is cleared first: a reconnected plugin may have restarted and lost its
+  // per-connection tab entries, so the unchanged-set guard must not suppress
+  // this re-seed.
+  resetTabPublishCache();
+  scheduleTabPublish();
 }
 
 function onSSEDisconnected(): void {
@@ -420,6 +427,21 @@ async function handleTabAction(action: TabAction, index?: number): Promise<void>
   }
 }
 
+// Voice "switch to <tab>": the matched collection entry's tab_id arrives as an
+// action param (the browser_tabs collection's value_field). Same focus-window-
+// then-activate dispatch as handleTabAction's last_active branch — cross-window
+// by design. A stale id (tab closed since the last publish) just refreshes the
+// collection so the dead entry drops.
+async function switchToTabById(tabId: number): Promise<void> {
+  try {
+    const t = await chrome.tabs.get(tabId);
+    await chrome.windows.update(t.windowId, { focused: true });
+    await chrome.tabs.update(tabId, { active: true });
+  } catch {
+    scheduleTabPublish();
+  }
+}
+
 // Voice → tab verb intercept: catalog command id → TabAction. The ids are the
 // same ones the content dispatcher registers for the keyboard path; this map
 // is what lets the background claim them off the SSE stream first.
@@ -702,6 +724,14 @@ function handleSSEEvent(data: any): void {
   if (tabAction) {
     const n = parseInt(data.params?.index ?? '', 10);
     void handleTabAction(tabAction, Number.isFinite(n) ? n : undefined);
+    return;
+  }
+
+  // "switch to <tab>" — like the tab verbs, handled here so it works
+  // regardless of the active page's content-script state.
+  if (data.action === 'switch_to_tab') {
+    const id = parseInt(data.params?.tab_id ?? '', 10);
+    if (Number.isFinite(id)) void switchToTabById(id);
     return;
   }
 
@@ -1038,6 +1068,11 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
   // Recency stack for the `last_active` tab verb (and the future fuzzy
   // switcher's MRU ranking).
   void recordTabActivated(activeInfo.tabId);
+  // MRU order is the tiebreak for shared tab-collection words, so an
+  // activation can reassign an ambiguous word to this tab. The word SET is
+  // unchanged (payload-only diff plugin-side), so this never rebuilds the
+  // engine grammar.
+  scheduleTabPublish();
   if (oldTabId !== activeInfo.tabId) {
     logTabSwitch('tab_activated', oldTabId, activeInfo.tabId);
     // Report the new active tab to the plugin (accepted only if this is the
@@ -1075,6 +1110,20 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === 'complete') {
     void ensureContentScriptInjected(tabId);
   }
+  // Tab-collection churn signal: only title/URL changes can alter the
+  // published word set. SPA retitle bursts (notification counters,
+  // now-playing) coalesce in the publish debounce and no-op through the
+  // unchanged-set guard when the words don't change.
+  if (changeInfo.title !== undefined || changeInfo.url !== undefined) {
+    scheduleTabPublish();
+  }
+});
+
+// New tabs join the voice collection once they have a title/URL; the
+// onUpdated hook above covers the loading transitions, but a restored or
+// pre-rendered tab can arrive fully formed.
+chrome.tabs.onCreated.addListener(() => {
+  scheduleTabPublish();
 });
 
 // SPA navigation (History API pushState/replaceState, or in-page hash
@@ -1190,6 +1239,8 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     spaRescanTimers.delete(tabId);
   }
   purgeTab(tabId);
+  // Drop the closed tab's words from the voice collection.
+  scheduleTabPublish();
 });
 
 // --- Startup ---

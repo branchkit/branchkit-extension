@@ -24,7 +24,15 @@ const REGISTERED_ACTIONS = [
   'toggle_help',
 ] as const;
 
-const NOT_MAPPABLE = new Set(['activate_hint', 'find_immediate', 'scroll_to_element', 'scroll']);
+// Voice-only commands dispatched entirely in the background (SSE intercept),
+// with no content-dispatcher registration: no keyboard form exists because
+// the value is a runtime spoken word.
+const VOICE_ONLY_BACKGROUND = ['switch_to_tab'] as const;
+
+const NOT_MAPPABLE = new Set([
+  'activate_hint', 'find_immediate', 'scroll_to_element', 'scroll',
+  ...VOICE_ONLY_BACKGROUND,
+]);
 
 describe('command catalog', () => {
   it('has a unique id per entry', () => {
@@ -32,9 +40,9 @@ describe('command catalog', () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it('covers exactly the actions registered in content.ts', () => {
+  it('covers exactly the registered actions plus voice-only background commands', () => {
     const ids = new Set(COMMAND_CATALOG.map((c) => c.id));
-    expect(ids).toEqual(new Set(REGISTERED_ACTIONS));
+    expect(ids).toEqual(new Set([...REGISTERED_ACTIONS, ...VOICE_ONLY_BACKGROUND]));
   });
 
   it('marks runtime-value actions as not mappable, everything else mappable', () => {
