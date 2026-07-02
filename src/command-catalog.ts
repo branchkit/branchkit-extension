@@ -35,6 +35,9 @@ export interface VoicePattern {
   /**
    * Spoken slot sequence: space-separated literal words plus `{number}` /
    * `{text}` captures (e.g. "scroll down", "scroll down {number}", "find {text}").
+   * `{hint}` is the compound hint codeword (prefix + suffix words); the browser
+   * plugin expands it into its dependent-capture pair and attaches the hint
+   * context gating, so the extension never names collections or platform tags.
    */
   pattern: string;
   /**
@@ -61,6 +64,13 @@ export interface CommandMeta {
    * connected; also what the voice panel renders. Absent = no voice phrase.
    */
   voice?: readonly VoicePattern[];
+  /**
+   * For `{hint}` commands only: the command leaves hints painted and live for
+   * the next utterance (e.g. stash opens a background tab — focus never moves,
+   * the gather continues). The plugin maps this to hint-tag lifecycle: absent
+   * means the command ends the hint interaction the way plain activation does.
+   */
+  retainsHints?: boolean;
 }
 
 export interface KeymapEntry {
@@ -96,6 +106,17 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     params: [{ name: 'category', type: 'enum', options: HINT_CATEGORIES, default: 'link' }] },
   { id: 'activate_hint', label: 'Activate hint by codeword', group: 'Hints', mappable: false, params: [],
     description: 'Activate the hint matching a spoken/typed codeword (runtime value — not bindable).' },
+  // blank / stash — the voice twins of the typed-capital new-tab affordance,
+  // which spoken codewords can't express (no capitals in speech). Verbs match
+  // the Rango convention; choice rationale in
+  // notes/DESIGN_MULTI_TARGET_COMMANDS.md (phase 1).
+  { id: 'activate_hint_newtab', label: 'Open hint in new tab', group: 'Hints', mappable: false, params: [],
+    description: 'Open the hinted link in a new focused tab.',
+    voice: [{ pattern: 'blank {hint}' }] },
+  { id: 'activate_hint_background', label: 'Open hint in background tab', group: 'Hints', mappable: false, params: [],
+    description: 'Open the hinted link in a new background tab; hints stay up for the next command.',
+    voice: [{ pattern: 'stash {hint}' }],
+    retainsHints: true },
 
   // --- Scroll ---
   { id: 'scroll_down', label: 'Scroll down', group: 'Scroll', mappable: true, params: [],
@@ -267,6 +288,8 @@ export interface CommandContribution {
    * catalog; forwarded so the platform can show it (HUD subtitle, command
    * editor, calibration detail). */
   description: string;
+  /** CommandMeta.retainsHints, forwarded for `{hint}` patterns. */
+  retains_hints?: boolean;
 }
 
 /** Flatten the catalog's voice patterns into the plugin contribution payload. */
@@ -275,7 +298,10 @@ export function buildCommandContributions(): CommandContribution[] {
   for (const c of COMMAND_CATALOG) {
     if (!c.voice) continue;
     for (const v of c.voice) {
-      out.push({ action: c.id, pattern: v.pattern, params: v.params, category: c.group, description: c.description });
+      out.push({
+        action: c.id, pattern: v.pattern, params: v.params, category: c.group,
+        description: c.description, retains_hints: c.retainsHints,
+      });
     }
   }
   return out;

@@ -816,6 +816,22 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     return false;
   }
 
+  if (message.type === 'OPEN_TAB_BACKGROUND') {
+    // "stash" hint verb: open the resolved href without moving focus.
+    // openerTabId groups the new tab with the page it came from (inserted
+    // next to the opener, like a ctrl-click). Content validated the scheme,
+    // but re-check here — any frame can send runtime messages.
+    if (typeof message.url === 'string' && /^https?:\/\//i.test(message.url)) {
+      const openerTabId = _sender.tab?.id;
+      chrome.tabs.create({
+        url: message.url,
+        active: false,
+        ...(openerTabId !== undefined ? { openerTabId } : {}),
+      }).catch((e) => console.warn('[BranchKit BG] stash tab create failed:', e));
+    }
+    return false;
+  }
+
   if (message.type === 'ALPHABET' && Array.isArray(message.words)) {
     // Offscreen doc forwarded an alphabet event (Chrome path)
     storeAlphabet(message.words);

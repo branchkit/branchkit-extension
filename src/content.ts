@@ -39,7 +39,7 @@ import { setOcclusionEnabled, applyOcclusion } from './observe/occlusion';
 import { reconcileClipObservation, drainClipObservers, setClipObserverEnabled } from './observe/clip-observer';
 import { cacheLayout, clearLayoutCache, getCachedRect, isRectOnScreen } from './layout-cache';
 import { placeBadges, placeOne, invalidateProbe } from './placement';
-import { activateElement, dispatchHover, type ActivationResult } from './activate/event-sequence';
+import { activateElement, dispatchHover, resolveNavTarget, type ActivationResult } from './activate/event-sequence';
 import {
   emitActivatePath,
   elementSnap,
@@ -2622,7 +2622,16 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       history.forward();
     } else if (action === 'refresh') {
       location.reload();
-    } else if (action === 'activate') {
+    } else if (action === 'activate' || action === 'activate_hint_newtab' || action === 'activate_hint_background') {
+      // Tab-targeted variants ("blank <hint>" / "stash <hint>", see
+      // notes/DESIGN_MULTI_TARGET_COMMANDS.md phase 1): same resolution as
+      // plain activate, different landing. 'new' opens the href in a focused
+      // tab (voice twin of the typed capital); 'background' opens it without
+      // moving focus so hints stay painted for the next command. Non-anchor
+      // targets fall back to plain activation for both.
+      const tabTarget =
+        action === 'activate_hint_newtab' ? 'new' :
+        action === 'activate_hint_background' ? 'background' : 'none';
       // Three-tier resolution (see docs/completed/DESIGN_ELEMENT_IDENTITY_REGISTRY.md §6).
       // Algorithm lives in activate-resolution.ts so it's unit-testable.
       const codeword = params?.codeword ?? '';
@@ -2662,7 +2671,14 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         //    autocomplete dropdown) get reflected in the next badge set.
         //  - Manual-mode: full hide. Activate is the "I'm done" gesture;
         //    user re-summons via "show" or the f keybind.
-        if (shouldAutoShowHints()) {
+        //  - Background ("stash"): NOT an "I'm done" gesture — focus stays
+        //    here and the plugin keeps the hints tag set, so badges must stay
+        //    painted in both modes for the gather to continue. Just clear the
+        //    prefix narrowing/keyboard state.
+        if (tabTarget === 'background') {
+          clearHintFilter();
+          if (shouldAutoShowHints()) scheduleHintRefresh();
+        } else if (shouldAutoShowHints()) {
           clearHintFilter();
           scheduleHintRefresh();
         } else {
@@ -2693,11 +2709,36 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
           // through the generic limbo/rebind/recall path (same as a mouse nav).
           // Cost on a non-nav click: tearing down ~100 wrappers takes ~2ms and
           // the post-click `scheduleHintRefresh` (always-mode) rebuilds them.
-          preNavObserverTeardown('activate_click');
-          const result = activateElement(target);
-          clickedEl = result.target;
-          delegation = result.delegation;
-          taken = 'click';
+          //
+          // Tab-targeted variants with a real http(s) href never click into
+          // this page (the tab opens elsewhere; this DOM is untouched), so
+          // they skip the teardown — a stash-gather shouldn't churn observers
+          // once per breath. Anything else — plain activate, or a tab verb on
+          // a non-anchor / non-http target — takes the normal click path.
+          const nav = tabTarget !== 'none' ? resolveNavTarget(target) : null;
+          const tabHref =
+            nav && (nav.protocol === 'http:' || nav.protocol === 'https:') && nav.href
+              ? nav.href : null;
+          if (tabTarget === 'background' && nav && tabHref) {
+            // Content scripts can't reach chrome.tabs — the SW opens it.
+            void chrome.runtime.sendMessage({ type: 'OPEN_TAB_BACKGROUND', url: tabHref });
+            clickedEl = nav;
+            delegation = nav !== target ? 'anchor' : 'none';
+            taken = 'click';
+          } else if (tabTarget === 'new' && tabHref) {
+            // activateElement's newTab branch is guaranteed here (href
+            // present): window.open, no in-page click.
+            const result = activateElement(target, { newTab: true });
+            clickedEl = result.target;
+            delegation = result.delegation;
+            taken = 'click';
+          } else {
+            preNavObserverTeardown('activate_click');
+            const result = activateElement(target);
+            clickedEl = result.target;
+            delegation = result.delegation;
+            taken = 'click';
+          }
         }
         emitActivatePath({
           ts: performance.now(),

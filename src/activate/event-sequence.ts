@@ -140,6 +140,19 @@ function isIndependentlyInteractive(el: Element): boolean {
 }
 
 /**
+ * The anchor a click on `el` would navigate, or null when the element is not
+ * anchor-driven. Delegates to a wrapping anchor only when `el` is a
+ * non-interactive descendant of it: `anchor === el` (el is itself the anchor)
+ * keeps its own navigation; an interactive control nested in an anchor is the
+ * click target, not the anchor. Exported so tab-targeted activation (blank /
+ * stash) can decide whether an href exists before choosing a strategy.
+ */
+export function resolveNavTarget(el: HTMLElement): HTMLAnchorElement | null {
+  const anchor = el.closest('a') as HTMLAnchorElement | null;
+  return anchor && (anchor === el || !isIndependentlyInteractive(el)) ? anchor : null;
+}
+
+/**
  * Click an element using the appropriate strategy:
  * - New-tab anchors: window.open() for explicit tab control
  * - Anchors wrapping a non-interactive child: delegate to the anchor
@@ -165,13 +178,7 @@ export function activateElement(
     return { target: el, delegation: 'file-picker' };
   }
 
-  const anchor = el.closest('a') as HTMLAnchorElement | null;
-  // Delegate to a wrapping anchor only when `el` is a non-interactive
-  // descendant of it. `anchor === el` (el is itself the anchor) keeps
-  // its own navigation; an interactive control nested in an anchor is
-  // clicked directly.
-  const navTarget =
-    anchor && (anchor === el || !isIndependentlyInteractive(el)) ? anchor : null;
+  const navTarget = resolveNavTarget(el);
 
   if (opts.newTab && navTarget?.href) {
     window.open(navTarget.href, '_blank');

@@ -141,6 +141,9 @@ export type Message =
   | { type: 'SHOW_HINTS'; category?: Category }
   | { type: 'HIDE_HINTS' }
   | { type: 'BRANCHKIT_ACTION'; payload: { action: string; params: Record<string, string>; correlation_id?: string } }
+  // Content → background: open an http(s) href in a new background tab (the
+  // "stash" hint verb). Content scripts can't reach chrome.tabs.
+  | { type: 'OPEN_TAB_BACKGROUND'; url: string }
   | { type: 'SSE_EVENT'; data: unknown }
   // Diagnostic breadcrumbs — content/background → background, forwarded to the
   // plugin's debug-log endpoints (see background.ts forwardDebugLog /

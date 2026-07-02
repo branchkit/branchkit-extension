@@ -29,9 +29,15 @@ const REGISTERED_ACTIONS = [
 // the value is a runtime spoken word.
 const VOICE_ONLY_BACKGROUND = ['switch_to_tab'] as const;
 
+// Voice-only commands handled inline in content's BRANCHKIT_ACTION listener
+// (the activate family shares plain activate's resolution path there), with
+// no content-dispatcher registration: the target is a runtime spoken codeword.
+const VOICE_ONLY_CONTENT = ['activate_hint_newtab', 'activate_hint_background'] as const;
+
 const NOT_MAPPABLE = new Set([
   'activate_hint', 'find_immediate', 'scroll_to_element', 'scroll',
   ...VOICE_ONLY_BACKGROUND,
+  ...VOICE_ONLY_CONTENT,
 ]);
 
 describe('command catalog', () => {
@@ -42,7 +48,7 @@ describe('command catalog', () => {
 
   it('covers exactly the registered actions plus voice-only background commands', () => {
     const ids = new Set(COMMAND_CATALOG.map((c) => c.id));
-    expect(ids).toEqual(new Set([...REGISTERED_ACTIONS, ...VOICE_ONLY_BACKGROUND]));
+    expect(ids).toEqual(new Set([...REGISTERED_ACTIONS, ...VOICE_ONLY_BACKGROUND, ...VOICE_ONLY_CONTENT]));
   });
 
   it('marks runtime-value actions as not mappable, everything else mappable', () => {
