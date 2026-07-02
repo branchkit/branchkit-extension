@@ -110,6 +110,33 @@ describe('isHitOccluding', () => {
     shadow.append(a, b);
     expect(isHitOccluding(a, b)).toBe(true);
   });
+
+  // Transparent overlays: hit-testable but invisible — the stretched
+  // opacity:0 file input over a styled dropzone button. An invisible cover
+  // isn't a visual cover.
+  it('opacity:0 hit (stretched file input) — not occluded', () => {
+    const root = mount(
+      '<button id="t">Choose file</button><input id="overlay" type="file" style="opacity:0">');
+    const t = root.querySelector('#t')!;
+    const overlay = root.querySelector('#overlay')!;
+    expect(isHitOccluding(t, overlay)).toBe(false);
+  });
+
+  it('hit inside an opacity:0 ancestor — not occluded (subtree is invisible)', () => {
+    const root = mount(
+      '<button id="t">x</button><div style="opacity:0"><div id="inner">cover</div></div>');
+    const t = root.querySelector('#t')!;
+    const inner = root.querySelector('#inner')!;
+    expect(isHitOccluding(t, inner)).toBe(false);
+  });
+
+  it('transparent-BACKGROUND hit stays an occluder (only opacity exempts)', () => {
+    const root = mount(
+      '<button id="t">x</button><div id="scrim" style="background:transparent">text</div>');
+    const t = root.querySelector('#t')!;
+    const scrim = root.querySelector('#scrim')!;
+    expect(isHitOccluding(t, scrim)).toBe(true);
+  });
 });
 
 describe('isOccluded — flag gate', () => {

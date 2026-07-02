@@ -71,6 +71,35 @@ function composedContains(ancestor: Element, node: Element): boolean {
 }
 
 /**
+ * A fully transparent element is HIT-TESTABLE without being VISIBLE — the
+ * stretched opacity:0 file input over a styled dropzone button is the
+ * canonical case (also drag-target overlays and custom-upload patterns).
+ * Occlusion is a visual judgment — voice activation dispatches synthetic
+ * events directly on the target, so click-interception by an invisible
+ * layer doesn't make the target unusable — and an invisible cover isn't a
+ * cover. Own opacity plus a bounded ancestor climb (an opacity:0 ancestor
+ * makes the whole subtree invisible while still hit-testable);
+ * visibility:hidden hits never reach here (elementFromPoint skips them).
+ *
+ * Deliberately NOT extended to transparent BACKGROUNDS (e.g. Bootstrap's
+ * stretched-link ::after): the hit element may paint text or children
+ * elsewhere in its box, and per-point paint transparency isn't knowable
+ * from computed style — those stay occluders.
+ */
+const TRANSPARENT_CLIMB_BOUND = 5;
+function isEffectivelyTransparent(el: Element): boolean {
+  let cur: Element | null = el;
+  for (let depth = 0; cur && depth < TRANSPARENT_CLIMB_BOUND; depth++, cur = cur.parentElement) {
+    try {
+      if (getComputedStyle(cur).opacity === '0') return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/**
  * Pure decision: given a target and whatever `elementFromPoint` returned at the
  * target's center, is the target occluded by something else?
  *
@@ -83,6 +112,8 @@ function composedContains(ancestor: Element, node: Element): boolean {
  *   only thing document-level elementFromPoint can return for shadow content)
  *   is the target's own ancestor, and a hit inside the target's shadow tree is
  *   its own content.
+ * - a fully transparent hit (opacity:0, own or inherited) → invisible, can't
+ *   visually cover anything → NOT occluded.
  * - anything else painted on top → occluded.
  */
 export function isHitOccluding(target: Element, hit: Element | null): boolean {
@@ -90,6 +121,7 @@ export function isHitOccluding(target: Element, hit: Element | null): boolean {
   if (hit === target) return false;
   if (composedContains(target, hit)) return false;
   if (composedContains(hit, target)) return false;
+  if (isEffectivelyTransparent(hit)) return false;
   return true;
 }
 
