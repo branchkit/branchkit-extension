@@ -17,12 +17,14 @@
  * sidebar case) is caught by the corner samples. `opacity:0` ancestors still
  * receive hit-tests, so a hover-revealed control (always-mode) stays NOT occluded.
  *
- * Flag-gated (`bkOcclusion`, default off) and consumed by two layers: the visual
- * pass hides occluded badges, and the strict-viewport computation drops them so
- * voice can't match a hidden target.
+ * Flag-gated (`bkOcclusion`, default ON — content.ts reads storage, only an
+ * explicit false disables) and consumed by two layers: the visual pass hides
+ * occluded badges, and the strict-viewport computation drops them so voice
+ * can't match a hidden target.
  */
 
 import type { ElementWrapper } from '../scan/element-wrapper';
+import { effectiveVisualBox } from '../scan/scanner';
 
 let occlusionEnabled = false;
 
@@ -114,6 +116,13 @@ const OCCLUDED_MAJORITY = 3; // of SAMPLE_FRACTIONS.length (5)
  */
 export function isOccluded(el: Element): boolean {
   if (!occlusionEnabled) return false;
+  // Judge the control's visual box, not the raw element: an autosized
+  // combobox <input> is ~2px wide and sits UNDER its own placeholder/value
+  // chips — siblings, so the ancestor/descendant exemption can't clear them
+  // and the widget would occlude itself. Sampling the box makes the
+  // widget's own content exempt (descendants) while a real overlay covering
+  // the box still occludes. Same surface isVisible's size carve-out uses.
+  el = effectiveVisualBox(el);
   let r: DOMRect;
   try {
     r = el.getBoundingClientRect();

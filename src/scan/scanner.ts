@@ -317,18 +317,9 @@ export function isVisible(el: Element): boolean {
     // the input. Skip past tiny ancestors to the first one with a real box
     // and let ITS visibility answer (QuickBase needed two levels).
     if (style.visibility !== 'hidden' && style.opacity !== '0' &&
-        style.display !== 'none' &&
-        (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ||
-         el instanceof HTMLSelectElement)) {
-      let anc = el.parentElement;
-      for (let depth = 0; anc && depth < 5; depth++, anc = anc.parentElement) {
-        let ancRect = peekCachedRect(anc);
-        if (ancRect === null) {
-          ancRect = anc.getBoundingClientRect();
-          perfCounters.boundingRectCalls++;
-        }
-        if (ancRect.width >= 5 && ancRect.height >= 5) return isVisible(anc);
-      }
+        style.display !== 'none') {
+      const box = effectiveVisualBox(el);
+      if (box !== el) return isVisible(box);
     }
     return false;
   }
@@ -356,6 +347,43 @@ export function isVisible(el: Element): boolean {
   }
 
   return true;
+}
+
+/**
+ * The element that visually REPRESENTS a control. For sub-5px text-entry
+ * controls (react-select-style autosized inputs — the visible "box" is a
+ * wrapper div and the real <input> collapses to ~2px while empty), climb
+ * past equally-tiny ancestors (bounded) to the first one with a real box.
+ * Everything else answers for itself.
+ *
+ * Shared judgment surface: `isVisible`'s size-only carve-out defers to this
+ * box, and the occlusion hit-test samples it instead of the 2px control —
+ * otherwise the widget's own placeholder/value chips (SIBLINGS painted over
+ * the input's column, so the ancestor/descendant exemption can't clear
+ * them) read as occluders and the badge self-hides (QuickBase grid column
+ * filters, 2026-07-01).
+ */
+export function effectiveVisualBox(el: Element): Element {
+  if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement ||
+        el instanceof HTMLSelectElement)) {
+    return el;
+  }
+  let rect = peekCachedRect(el);
+  if (rect === null) {
+    rect = el.getBoundingClientRect();
+    perfCounters.boundingRectCalls++;
+  }
+  if (rect.width >= 5 && rect.height >= 5) return el;
+  let anc = el.parentElement;
+  for (let depth = 0; anc && depth < 5; depth++, anc = anc.parentElement) {
+    let ancRect = peekCachedRect(anc);
+    if (ancRect === null) {
+      ancRect = anc.getBoundingClientRect();
+      perfCounters.boundingRectCalls++;
+    }
+    if (ancRect.width >= 5 && ancRect.height >= 5) return anc;
+  }
+  return el;
 }
 
 function isRedundant(el: Element): boolean {

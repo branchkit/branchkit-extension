@@ -14,6 +14,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   scanElements, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, subtreeMaybeHintable,
   deepQuerySelectorAll, getPerfCounters, resetPerfCounters, isVisible,
+  effectiveVisualBox,
 } from './scanner';
 
 function html(markup: string): void {
@@ -292,5 +293,45 @@ describe('isVisible — autosized text-entry carve-out (QuickBase 2px filter inp
   it('a tiny non-form element stays invisible (gate unchanged)', () => {
     html('<div><a href="#" id="a" data-tiny>x</a></div>');
     expect(isVisible(document.getElementById('a')!)).toBe(false);
+  });
+});
+
+describe('effectiveVisualBox', () => {
+  beforeEach(() => {
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      const tiny = this.hasAttribute?.('data-tiny');
+      return {
+        x: 0, y: 0, top: 0, left: 0,
+        right: tiny ? 2 : 100, bottom: tiny ? 19 : 20,
+        width: tiny ? 2 : 100, height: tiny ? 19 : 20,
+        toJSON: () => ({}),
+      } as DOMRect;
+    };
+  });
+
+  it('a normal-size input answers for itself', () => {
+    html('<div><input id="f" type="text"></div>');
+    const f = document.getElementById('f')!;
+    expect(effectiveVisualBox(f)).toBe(f);
+  });
+
+  it('a tiny input climbs past tiny sizers to the first real box', () => {
+    html('<div id="box"><div id="sizer" data-tiny><input id="f" type="text" data-tiny></div></div>');
+    expect(effectiveVisualBox(document.getElementById('f')!))
+      .toBe(document.getElementById('box')!);
+  });
+
+  it('a tiny NON-form element answers for itself (no climb)', () => {
+    html('<div id="box"><a href="#" id="a" data-tiny>x</a></div>');
+    const a = document.getElementById('a')!;
+    expect(effectiveVisualBox(a)).toBe(a);
+  });
+
+  it('returns the element itself when no real box exists within the bound', () => {
+    let markup = '<input id="f" type="text" data-tiny>';
+    for (let i = 0; i < 6; i++) markup = `<div data-tiny>${markup}</div>`;
+    html(markup);
+    const f = document.getElementById('f')!;
+    expect(effectiveVisualBox(f)).toBe(f);
   });
 });

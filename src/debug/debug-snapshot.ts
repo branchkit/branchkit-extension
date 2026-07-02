@@ -103,6 +103,10 @@ interface WrapperRecord {
     scrollAccelRearms: number;
     scrollAccelAnimBuilds: number;
     occluded: boolean;
+    /** The two inputs behind `occluded` (effective = overlayCovered ||
+     * clipped), so a snapshot pins WHICH signal hid the badge without a
+     * flag-bisection round-trip (QuickBase combobox triage, 2026-07-01). */
+    occludedBy: { overlayCovered: boolean; clipped: boolean };
   } | null;
   containerResolution: ContainerResolutionDiag | null;
   isInViewport: boolean;
@@ -266,6 +270,7 @@ function captureWrapper(w: ElementWrapper): WrapperRecord {
       scrollAccelRearms: diag.scrollAccelRearms,
       scrollAccelAnimBuilds: diag.scrollAccelAnimBuilds,
       occluded: diag.occluded,
+      occludedBy: { overlayCovered: w.overlayCovered, clipped: w.clipped },
     };
   }
 
