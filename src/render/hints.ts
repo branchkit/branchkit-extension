@@ -11,7 +11,7 @@
 
 import { Category, BadgeDisplayMode } from '../types';
 import { LabelAssignment, labelToDisplay } from '../labels/words';
-import { getCachedRect, getCachedStyle } from '../layout-cache';
+import { getCachedRect, getCachedStyle, isRectOnScreen } from '../layout-cache';
 import { calculateZIndex } from '../placement/stacking';
 import { computeBadgeColors } from './badge-colors';
 import { type BadgeSettings, DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
@@ -296,6 +296,35 @@ function adoptBadgeStyles(shadow: ShadowRoot): void {
   shadow.appendChild(style);
 }
 
+/**
+ * Clamp a badge's viewport-relative box to its target's side of the viewport
+ * edge (notes/DESIGN_PAINT_THE_BAND.md seam 3). Only meaningful when the
+ * target rect is FULLY off-screen (the caller checks): a target parked
+ * off-screen (YouTube's collapsed nav drawer at x=-228) keeps its badge
+ * painted under the band-scoped shown predicate, but the badge box — which
+ * placement hangs up-and-left of the target — must not overhang into the
+ * visible viewport. Per-axis: only the axis on which the target is fully
+ * off-screen is clamped, so a below-fold target riding in (off-screen with
+ * its badge) is untouched.
+ *
+ * Pure geometry, no DOM. The caller applies the result per pass at WRITE
+ * time — never baked into the reconcile offset (a bake-time clamp was the
+ * d35201a stranding bug).
+ */
+export function clampOffscreenBadgeBox(
+  badge: { x: number; y: number; w: number; h: number },
+  target: { left: number; top: number; right: number; bottom: number },
+  vw: number,
+  vh: number,
+): { x: number; y: number } {
+  let { x, y } = badge;
+  if (target.right <= 0) x = Math.min(x, target.right - badge.w);
+  else if (target.left >= vw) x = Math.max(x, target.left);
+  if (target.bottom <= 0) y = Math.min(y, target.bottom - badge.h);
+  else if (target.top >= vh) y = Math.max(y, target.top);
+  return { x, y };
+}
+
 function computeBadgeFontSize(target: Element): number {
   // Targets with font-size: 0 (the common a11y-text-hiding trick on
   // role=checkbox / role=button divs) would otherwise yield a 0px or
@@ -487,6 +516,7 @@ export class HintBadge {
     // are scroll-invariant for their target, so no per-frame chase / no wiggle.
     const sx = this._viewportFixed ? 0 : window.scrollX;
     const sy = this._viewportFixed ? 0 : window.scrollY;
+    let x = r.left + sx + this._reconcileOffset.x;
     let y = r.top + sy + this._reconcileOffset.y;
     // Inner-scroll accelerator, evaluated every pass (level-triggered).
     if (this._scrollAccel) {
@@ -513,9 +543,24 @@ export class HintBadge {
         y += scrollAccelScrollOffset(this._scrollAccel);
       }
     }
+    // Write-time clamp for FULLY off-screen targets (paint-the-band seam 3,
+    // replacing the old settle-time off-screen hide sweep): a parked target
+    // keeps its badge painted under the band-scoped predicate, but the badge
+    // box must not overhang into the viewport edge. Applied to the VIEWPORT-
+    // relative box (accel and anchoring cancel out of it), per pass, never
+    // into the baked offset. Same predicate every paint path uses.
+    const vw = window.innerWidth, vh = window.innerHeight;
+    if (!isRectOnScreen(r, vw, vh)) {
+      const size = this._size ?? this.estimateSize();
+      const bx = r.left + this._reconcileOffset.x;
+      const by = r.top + this._reconcileOffset.y;
+      const clamped = clampOffscreenBadgeBox({ x: bx, y: by, w: size.w, h: size.h }, r, vw, vh);
+      x += clamped.x - bx;
+      y += clamped.y - by;
+    }
     return {
       host: this.host,
-      x: Math.round(r.left + sx + this._reconcileOffset.x),
+      x: Math.round(x),
       y: Math.round(y),
       targetRect: r,
     };
@@ -772,12 +817,21 @@ export class HintBadge {
       this._size = { w: Math.ceil(rect.width), h: Math.ceil(rect.height) };
       return this._size;
     }
+    this._size = this.estimateSize();
+    return this._size;
+  }
+
+  // Font-metric estimate of the badge box, no layout read. Shared by the
+  // badgeSize fallback (zero-rect inner) and the reconcile clamp path — the
+  // latter runs inside the batched read pass, must not force a reflow, and
+  // uses it directly (uncached) so a later badgeSize still gets the real rect.
+  private estimateSize(): { w: number; h: number } {
     const text = this.inner.textContent || '';
     const charWidth = this.fontSize * 0.6;
-    const w = Math.ceil(text.length * charWidth) + 4;
-    const h = Math.ceil(this.fontSize * 1.2) + 2;
-    this._size = { w, h };
-    return this._size;
+    return {
+      w: Math.ceil(text.length * charWidth) + 4,
+      h: Math.ceil(this.fontSize * 1.2) + 2,
+    };
   }
 
   /** APCA-accurate page-aware colors. Walks the target's ancestors to

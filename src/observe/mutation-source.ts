@@ -49,6 +49,14 @@ const HUGE_MUTATIONS_COUNT = 1000;
 // start-without-end wedge signature the soak checklist greps for.
 const FIREHOSE_MIN = 100;
 const HUGE_MUTATION_IDLE_MS = 50;
+// Max-wait deadline for the huge-mutation debounce — the same
+// debounce+deadline shape as content.ts whenDOMSettles
+// (notes/DESIGN_PAINT_THE_BAND.md seam 4). The trailing 50ms timer alone is
+// storm-extendable: QuickBase's virtualized grids CREATE rows during scroll
+// in ≥1000-record batches, each batch resetting the timer, so fresh rows
+// weren't discovered until the scroll paused. The deadline guarantees one
+// coarse refresh per storm window regardless of how long it rages.
+const HUGE_MUTATION_MAX_WAIT_MS = 250;
 
 function isOwnMutation(n: Node): boolean {
   return n instanceof HTMLElement && n.hasAttribute('data-branchkit-hint');
@@ -272,6 +280,42 @@ export function processMutations(records: MutationRecord[]): void {
   firehoseStep('processMutations:end', records.length, FIREHOSE_MIN);
 }
 
+// Foreign-record count of the latest huge batch, for the fire-time
+// breadcrumbs (the fire body is shared by the trailing timer and the
+// deadline, so it can't close over one batch's count).
+let hugeMutationLastCount = 0;
+
+// Shared fire body for the huge-mutation trailing timer AND its max-wait
+// deadline: whichever fires first clears both, so a storm window produces
+// exactly one coarse refresh per firing.
+function fireHugeMutationRefresh(): void {
+  if (pageSession.hugeMutationTimer) {
+    clearTimeout(pageSession.hugeMutationTimer);
+    pageSession.hugeMutationTimer = null;
+  }
+  if (pageSession.hugeMutationDeadline) {
+    clearTimeout(pageSession.hugeMutationDeadline);
+    pageSession.hugeMutationDeadline = null;
+  }
+  firehoseStep('huge_path:timer_fired', hugeMutationLastCount);
+  // Limbo entry doesn't change grammar (codewords are still claimed);
+  // the finalize sweeper schedules push on actual detach. We only
+  // need to push if discovery added new wrappers.
+  dropDisconnectedWrappers();
+  // Full-page rediscovery is sliced — a synchronous discoverInSubtree
+  // over the whole fresh body froze Firefox ~1.1s on YouTube /watch
+  // SPA nav (notes/DESIGN_NAV_TIME_RESCAN.md).
+  firehoseStep('huge_path:batched_start', hugeMutationLastCount);
+  void pageSession.deps.discoverInSubtreeBatched(document.body || document.documentElement)
+    .then((added) => {
+      firehoseStep('huge_path:batched_end', added);
+      // Newly-attached wrappers emit store deltas → grammar sync.
+      if (pageSession.hintsVisible) {
+        pageSession.deps.scheduleReposition();
+      }
+    });
+}
+
 function handlePageMutations(records: MutationRecord[]): void {
   const __cpuStart = performance.now();
   lifecycleCounters.moCallbackInvocations++;
@@ -309,27 +353,15 @@ function handlePageMutations(records: MutationRecord[]): void {
 
   if (foreign.length >= HUGE_MUTATIONS_COUNT) {
     lifecycleCounters.moHugePathFired++;
+    hugeMutationLastCount = foreign.length;
     if (pageSession.hugeMutationTimer) clearTimeout(pageSession.hugeMutationTimer);
-    pageSession.hugeMutationTimer = setTimeout(() => {
-      pageSession.hugeMutationTimer = null;
-      firehoseStep('huge_path:timer_fired', foreign.length);
-      // Limbo entry doesn't change grammar (codewords are still claimed);
-      // the finalize sweeper schedules push on actual detach. We only
-      // need to push if discovery added new wrappers.
-      dropDisconnectedWrappers();
-      // Full-page rediscovery is sliced — a synchronous discoverInSubtree
-      // over the whole fresh body froze Firefox ~1.1s on YouTube /watch
-      // SPA nav (notes/DESIGN_NAV_TIME_RESCAN.md).
-      firehoseStep('huge_path:batched_start', foreign.length);
-      void pageSession.deps.discoverInSubtreeBatched(document.body || document.documentElement)
-        .then((added) => {
-          firehoseStep('huge_path:batched_end', added);
-          // Newly-attached wrappers emit store deltas → grammar sync.
-          if (pageSession.hintsVisible) {
-            pageSession.deps.scheduleReposition();
-          }
-        });
-    }, HUGE_MUTATION_IDLE_MS);
+    pageSession.hugeMutationTimer = setTimeout(fireHugeMutationRefresh, HUGE_MUTATION_IDLE_MS);
+    // Non-extending deadline: armed by the first batch of a storm, NOT reset
+    // by later batches (the whenDOMSettles shape), so a sustained storm can't
+    // defer the refresh indefinitely. fireHugeMutationRefresh clears both.
+    if (pageSession.hugeMutationDeadline === null) {
+      pageSession.hugeMutationDeadline = setTimeout(fireHugeMutationRefresh, HUGE_MUTATION_MAX_WAIT_MS);
+    }
     recordCpu('moCallback', performance.now() - __cpuStart);
     firehoseStep('moCallback:end_huge_scheduled', records.length, FIREHOSE_MIN);
     return;

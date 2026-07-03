@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { findBadgeContainer, findLimitParent, resolveContainer } from './container-resolution';
-import { HintBadge, __refineScheduler } from './hints';
+import { HintBadge, __refineScheduler, clampOffscreenBadgeBox } from './hints';
 import { __testing as containerTracker } from '../observe/container-resize-tracker';
 import { __testing as targetTracker } from '../observe/target-mutation-tracker';
 import { __testing as hostTracker } from '../observe/host-attribute-tracker';
@@ -464,5 +464,57 @@ describe('HintBadge bk-pending opacity indicator (voice-not-ready state)', () =>
     expect(() => badge.markGrammarReady()).not.toThrow();
     expect((badge as unknown as { inner: HTMLDivElement }).inner.classList.contains('bk-pending')).toBe(false);
     badge.remove();
+  });
+});
+
+describe('clampOffscreenBadgeBox (paint-the-band write-time clamp)', () => {
+  const VW = 1000;
+  const VH = 800;
+
+  it('pushes a left-parked target\'s overhanging badge back to the target\'s side (the drawer artifact)', () => {
+    // Narrow target fully off the left edge; the badge box (wider than the
+    // target's remaining offset) would bleed into the viewport.
+    const target = { left: -30, right: -2, top: 100, bottom: 130 };
+    const clamped = clampOffscreenBadgeBox({ x: -30, y: 95, w: 40, h: 15 }, target, VW, VH);
+    // badgeX + badgeW ≤ target.right — fully on the target's side of the edge.
+    expect(clamped.x + 40).toBeLessThanOrEqual(target.right);
+    expect(clamped.y).toBe(95); // vertically on-screen: y-axis untouched
+  });
+
+  it('leaves a badge alone when it already sits on the target\'s side', () => {
+    const target = { left: -228, right: -28, top: 100, bottom: 130 };
+    const clamped = clampOffscreenBadgeBox({ x: -240, y: 95, w: 40, h: 15 }, target, VW, VH);
+    expect(clamped).toEqual({ x: -240, y: 95 });
+  });
+
+  it('clamps a right-parked target\'s badge to at or beyond the target\'s left edge', () => {
+    const target = { left: 1005, right: 1200, top: 100, bottom: 130 };
+    const clamped = clampOffscreenBadgeBox({ x: 990, y: 95, w: 40, h: 15 }, target, VW, VH);
+    expect(clamped.x).toBeGreaterThanOrEqual(target.left);
+    expect(clamped.y).toBe(95);
+  });
+
+  it('clamps an above-viewport target\'s badge fully above with it', () => {
+    const target = { left: 100, right: 200, top: -50, bottom: -5 };
+    const clamped = clampOffscreenBadgeBox({ x: 95, y: -12, w: 40, h: 15 }, target, VW, VH);
+    // badgeY + badgeH ≤ target.bottom.
+    expect(clamped.y + 15).toBeLessThanOrEqual(target.bottom);
+    expect(clamped.x).toBe(95);
+  });
+
+  it('clamps a below-fold target\'s badge overhang down to the target\'s top edge', () => {
+    // Target 5px below the fold; placement hangs the badge up-and-left, so
+    // the badge box would poke ~10px into the viewport bottom.
+    const target = { left: 100, right: 200, top: VH + 5, bottom: VH + 35 };
+    const clamped = clampOffscreenBadgeBox({ x: 95, y: VH - 10, w: 40, h: 15 }, target, VW, VH);
+    expect(clamped.y).toBeGreaterThanOrEqual(target.top);
+    expect(clamped.x).toBe(95);
+  });
+
+  it('clamps only the off-screen axis for a diagonally-parked target', () => {
+    const target = { left: -30, right: -2, top: -50, bottom: -5 };
+    const clamped = clampOffscreenBadgeBox({ x: -20, y: -10, w: 40, h: 15 }, target, VW, VH);
+    expect(clamped.x + 40).toBeLessThanOrEqual(target.right);
+    expect(clamped.y + 15).toBeLessThanOrEqual(target.bottom);
   });
 });

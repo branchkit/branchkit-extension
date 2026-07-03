@@ -54,12 +54,16 @@ export interface ShownInputs {
   flagInBand: boolean;
   /** isVisible() — CSS visibility of the target. */
   cssVisible: boolean;
-  /** Target rect overlaps the actual visible viewport (isRectOnScreen). */
-  onScreen: boolean;
 }
 
 /**
  * Should this wrapper's badge be painted right now?
+ *
+ * Shown-ness is IO-BAND scoped, not strict-viewport scoped
+ * (notes/DESIGN_PAINT_THE_BAND.md): a badge paints as soon as its wrapper is
+ * in-band and rides the page's scroll into view already painted, Rango-style.
+ * The strict-viewport notion survives only in `wantsStrict` (voice) and the
+ * occlusion pass — do not reintroduce it here.
  *
  * Encodes the two known traps explicitly (DESIGN_UNIFIED_RECONCILER.md risks):
  *   - Limbo wrappers hold their badge by design — never "shown" here, and
@@ -76,7 +80,7 @@ export function wantsShown(w: ElementWrapper, s: ShownInputs): boolean {
   if (w.disconnectedAt !== null) return false;
   if (!w.hint) return false;
   if (!w.element.isConnected) return false;
-  return s.flagInBand && s.cssVisible && s.onScreen;
+  return s.flagInBand && s.cssVisible;
 }
 
 /**

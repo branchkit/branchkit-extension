@@ -170,7 +170,9 @@ export function computeReconcilePlanLists(
     let cssHidden5 = w.cssHidden;
 
     // Build sim — badgeNewlyCodeworded's paint set: wants a hint, badge not
-    // currently showing, target on-screen and CSS-visible.
+    // currently showing, target CSS-visible. Band-scoped, NOT strict-viewport
+    // (notes/DESIGN_PAINT_THE_BAND.md): off-viewport band wrappers build and
+    // paint too, riding the scroll into view already painted.
     const wantsHintNow = flag && codeworded
       && (!activeCategory || w.category === activeCategory);
     const showingAtPlan = w.hint?.isVisible ?? false;
@@ -179,7 +181,7 @@ export function computeReconcilePlanLists(
       // The live build pass writes cssHidden for its whole set (painted or
       // not) — mirror that when it will actually run this settle.
       if (buildPassRuns) cssHidden5 = !cssVisible();
-      if (onScreen() && cssVisible()) {
+      if (cssVisible()) {
         lists.toBuild.push(w);
         builtAndShown = buildPassRuns;
       }
@@ -194,8 +196,8 @@ export function computeReconcilePlanLists(
       if (w.cssHidden !== !cssVisible()) lists.cssHiddenDelta.push([w, !cssVisible()]);
       cssHidden5 = !cssVisible();
       const visible = w.hint
-        ? wantsShown(w, { flagInBand: flag, cssVisible: cssVisible(), onScreen: onScreen() })
-        : (cssVisible() && onScreen()); // freshly-constructed badge: shown-ness core
+        ? wantsShown(w, { flagInBand: flag, cssVisible: cssVisible() })
+        : cssVisible(); // freshly-constructed badge: shown-ness core
       if (visible && !showingAtRecheck) lists.toShow.push(w);
       else if (!visible && showingAtRecheck) lists.toHide.push(w);
     }

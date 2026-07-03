@@ -51,15 +51,15 @@ export function getCachedRect(el: Element): DOMRect {
 }
 
 /**
- * True when a rect overlaps the actual visible viewport. This is the badge
- * *paint* gate, and is deliberately distinct from the IntersectionTracker's
- * `isInViewport` flag, which is set by a wide-rootMargin IO (VIEWPORT_MARGIN_PX) for codeword
- * pre-claim / lazy badge construction. An element parked off-screen but within
- * that margin (e.g. YouTube's collapsed left nav drawer at x=-228) is
- * `isInViewport`-true yet must NOT paint a badge — placement would clamp it to
- * the viewport edge, producing a flashing edge column. Every paint path
- * (showHints/viewportSort, badgeNewlyCodeworded, recheckHintedVisibility,
- * scheduleReposition) routes through this one predicate so they agree.
+ * True when a rect overlaps the actual visible viewport — the STRICT notion,
+ * deliberately distinct from the IntersectionTracker's `isInViewport` flag,
+ * which is set by a wide-rootMargin IO (VIEWPORT_MARGIN_PX). Badge shown-ness
+ * is band-scoped (notes/DESIGN_PAINT_THE_BAND.md), so this is no longer a
+ * paint gate; the strict-viewport consumers that remain are the voice
+ * `_strict` set, occlusion, the build queue's on-screen-first prioritization
+ * (showHints/viewportSort, badgeNewlyCodeworded's sync-vs-budgeted split),
+ * and reconcileRead's fully-off-screen write-time clamp. All route through
+ * this one predicate so they agree.
  */
 export function isRectOnScreen(
   r: DOMRect,

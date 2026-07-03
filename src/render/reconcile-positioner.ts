@@ -29,9 +29,8 @@ export interface ReconcileWrite {
   x: number;
   y: number;
   /** The live target rect read for this badge, in viewport coords. Returned
-   *  to the caller of reconcilePass so settle-time consumers (the off-screen-
-   *  hide sweep) reuse the rects this pass already paid for instead of
-   *  re-reading layout. */
+   *  to the caller of reconcilePass so any settle-time consumer can reuse the
+   *  rects this pass already paid for instead of re-reading layout. */
   targetRect: DOMRect;
 }
 
@@ -75,8 +74,8 @@ export function drain(): void {
  * hidden/off-screen badges (`reconcileRead` short-circuits before gBCR).
  *
  * Returns the live target rect read for each placed badge, keyed by badge, so
- * callers can reuse the rects this pass already paid for (the settle-time
- * off-screen-hide sweep) instead of re-reading layout.
+ * callers can reuse the rects this pass already paid for instead of
+ * re-reading layout.
  */
 export function reconcilePass(): Map<ReconcileBadge, DOMRect> {
   const rects = new Map<ReconcileBadge, DOMRect>();

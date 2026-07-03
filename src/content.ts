@@ -11,6 +11,7 @@ import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, 
 import { noteDisconnectedShadowAttach } from './scan/shadow-attach-signal';
 import { ElementWrapper } from './scan/element-wrapper';
 import { wantsHint } from './lifecycle/desired-state';
+import { runBuildPass, createSingleFlight } from './lifecycle/build-queue';
 import {
   computeReconcilePlanLists,
   geometryInBand,
@@ -1464,9 +1465,34 @@ function scheduleHintRefresh(): void {
   }, HINT_REFRESH_DELAY_MS);
 }
 
-// The build step of the reconciler. Called only by reconcile() — no longer an
-// independent edge-triggered backstop. Builds badges for every wrapper that
-// wants a hint (in-band, codeworded, category-matched) but lacks one.
+// Per-pass CPU budget for OFF-VIEWPORT first-time badge construction
+// (notes/DESIGN_PAINT_THE_BAND.md seam 2). On-screen wrappers construct
+// synchronously and unbudgeted; off-viewport band wrappers construct under
+// this budget and the remainder re-derives on the idle continuation — the
+// ordering/exemption contract lives in runBuildPass (lifecycle/build-queue.ts).
+// Value matches REFINE_BUDGET_MS (the refine scheduler this mirrors); measure
+// on QuickBase/YouTube before tuning.
+const BAND_BUILD_BUDGET_MS = 4;
+const BAND_BUILD_IDLE_TIMEOUT_MS = 200;
+
+// Single-flight idle continuation for band construction the budget deferred.
+// Re-enters the BUILD step ONLY (badgeNewlyCodeworded, never reconcile() —
+// so never claims): claims are byte-for-byte unchanged by band painting,
+// which is what keeps the 73cf6e7 → b813e29 codeword-churn loop from
+// re-arming (notes/DESIGN_PAINT_THE_BAND.md risk 2).
+const scheduleBandBuildContinuation = createSingleFlight(
+  (cb) => runWhenIdle(cb, BAND_BUILD_IDLE_TIMEOUT_MS),
+  () => {
+    if (pageSession.hintsVisible) badgeNewlyCodeworded();
+  },
+);
+
+// The build step of the reconciler. Called only by reconcile() and the idle
+// continuation above — no longer an independent edge-triggered backstop.
+// Builds badges for every wrapper that wants a hint (in-band, codeworded,
+// category-matched) but lacks one. Shown-ness is IO-band scoped
+// (notes/DESIGN_PAINT_THE_BAND.md): off-viewport band wrappers paint too and
+// ride the scroll into view already painted, Rango-style.
 function badgeNewlyCodeworded(): void {
   const newBadges: ElementWrapper[] = [];
   for (const w of store.all) {
@@ -1485,45 +1511,53 @@ function badgeNewlyCodeworded(): void {
   try {
     cacheLayout(newBadges.map(w => w.element));
     const vw = window.innerWidth, vh = window.innerHeight;
-    for (let i = 0; i < newBadges.length; i++) {
-      const w = newBadges[i];
-      const label = poolLabelToAssignment(w.scanned.codeword);
-      w.label = label;
-      const onScreen = isRectOnScreen(getCachedRect(w.element), vw, vh);
-      // A CSS-invisible target (visibility:hidden / opacity:0 hover-reveal) must
-      // not paint — same reason as showHints: no visibility transition fires for
-      // a never-revealed target, so the recheck never cleans it up. `cssHidden`
-      // keeps the voice (strict-viewport) gate in lockstep.
-      const cssVisible = isVisible(w.element);
-      w.cssHidden = !cssVisible;
-      // Restore the label on an existing dormant (scroll-back) hint even when
-      // the element is off the actual viewport. A dormant hint was clearLabel()d
-      // on viewport exit; if its codeword is re-granted while it sits in the
-      // IO band but below/above the viewport, skipping the label here (the
-      // 116b321 regression) leaves it null — and recheckHintedVisibility shows it
-      // as an empty box when it later scrolls in. The label is just data on a
-      // hidden badge; only show()/placement waits for the actual viewport.
-      if (w.hint) {
-        w.hint.setLabel(label);
-      }
-      // Don't construct/paint a badge for an element that's in the IO band
-      // but off the actual viewport (e.g. YouTube's collapsed nav drawer at
-      // x=-228); placement would clamp it to the edge. It keeps its codeword +
-      // (restored) label and paints when it scrolls on-screen. Same skip for a
-      // CSS-hidden target.
-      if (!onScreen || !cssVisible) continue;
-      // Slow path (first-time): construct the badge. The reuse fast path above
-      // skips shadow DOM creation, observer wire-up, anchorParent walk, z-index
-      // walk, and APCA color recomputation — ~5-10ms per badge on scroll-back.
-      if (!w.hint) {
-        w.hint = new HintBadge(w.element, label, w.category, getDisplayMode());
-      }
-      w.hint.show(isPaintReady(w));
-      placeOne(w);
+    const deferred = runBuildPass(newBadges, {
+      isOnScreen: (w) => isRectOnScreen(getCachedRect(w.element), vw, vh),
+      // First-time construction (shadow DOM, anchorParent walk, APCA colors,
+      // ~5-10ms) is the budgeted class; the dormant-reuse fast path
+      // (setLabel + show) is cheap and exempt.
+      isFirstTime: (w) => !w.hint,
+      build: buildBadge,
+      budgetMs: BAND_BUILD_BUDGET_MS,
+    });
+    if (deferred > 0) {
+      firehoseStep('band_build:deferred', deferred, 1);
+      scheduleBandBuildContinuation();
     }
   } finally {
     clearLayoutCache();
   }
+}
+
+// Build/paint one wrapper from the pass's delta set: label restore, the CSS-
+// visibility gate, first-time construction or dormant reuse, show + place.
+// Requires a warm layout cache (badgeNewlyCodeworded's cacheLayout).
+function buildBadge(w: ElementWrapper): void {
+  const label = poolLabelToAssignment(w.scanned.codeword);
+  w.label = label;
+  // A CSS-invisible target (visibility:hidden / opacity:0 hover-reveal) must
+  // not paint — same reason as showHints: no visibility transition fires for
+  // a never-revealed target, so the recheck never cleans it up. `cssHidden`
+  // keeps the voice (strict-viewport) gate in lockstep.
+  const cssVisible = isVisible(w.element);
+  w.cssHidden = !cssVisible;
+  // Restore the label on an existing dormant (scroll-back) hint even when the
+  // target is CSS-hidden. A dormant hint was clearLabel()d on band exit;
+  // skipping the label here (the 116b321 regression) leaves it null — and
+  // recheckHintedVisibility shows it as an empty box when the target is later
+  // revealed. The label is just data on a hidden badge.
+  if (w.hint) {
+    w.hint.setLabel(label);
+  }
+  if (!cssVisible) return;
+  // Slow path (first-time): construct the badge. The reuse fast path above
+  // skips shadow DOM creation, observer wire-up, anchorParent walk, z-index
+  // walk, and APCA color recomputation — ~5-10ms per badge on scroll-back.
+  if (!w.hint) {
+    w.hint = new HintBadge(w.element, label, w.category, getDisplayMode());
+  }
+  w.hint.show(isPaintReady(w));
+  placeOne(w);
 }
 
 // Build-up half of the level-triggered lifecycle reconciler (Phases 3+5 of
@@ -2926,8 +2960,14 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
 // every registered badge's live target rect and writes composited transforms.
 // scheduleReposition drives that pass on a rAF single-flight so the settle
 // handlers' shared 100ms debounce funnels into one coalescing policy —
-// wedge-safe by construction. The pass's rects also feed the off-screen-hide
-// sweep, so no extra layout reads happen here.
+// wedge-safe by construction.
+//
+// There is deliberately NO off-screen hide sweep here (retired by
+// notes/DESIGN_PAINT_THE_BAND.md seam 3): shown-ness is band-scoped, so a
+// sweep would fight the plan's applyVisibilityPlan re-show every settle — a
+// flap. The one artifact the sweep existed for (a parked target's badge box
+// overhanging the viewport edge) is solved geometrically by the write-time
+// clamp inside reconcileRead (hints.ts).
 let repositionRafPending = false;
 function scheduleReposition(): void {
   if (!pageSession.hintsVisible) return;
@@ -2939,25 +2979,12 @@ function scheduleReposition(): void {
     // `reposition:end` pins this as the wedge body. Threshold-gated so
     // steady-state scroll doesn't add 60 sendMessages/sec just for telemetry.
     firehoseStep('reposition:start', reconcileRegistrySize(), 20);
-    const __start = performance.now();
-    // One batched pass: reads all target rects, writes all transforms, and
-    // returns the rects it read. reconcileRead() short-circuits hidden badges
-    // and disconnected targets before any gBCR (limbo wrappers — badge held
-    // for the ~250ms rebind window — never reach placement; see
+    // One batched pass: reads all target rects, writes all transforms.
+    // reconcileRead() short-circuits hidden badges and disconnected targets
+    // before any gBCR (limbo wrappers — badge held for the ~250ms rebind
+    // window — never reach placement; see
     // notes/INVESTIGATION_LIMBO_BADGE_FLASH.md).
     const rects = reconcilePass();
-    // Hide badges whose element is fully off-screen — e.g. YouTube's collapsed
-    // nav drawer parked at x=-228; the reconciler would otherwise pin them at
-    // the live off-screen coords where partial overhang can bleed into the
-    // viewport edge. Same predicate every paint path uses (see isRectOnScreen).
-    // Reuses the rects the pass above already paid for.
-    const vw = window.innerWidth, vh = window.innerHeight;
-    for (const w of store.all) {
-      if (!w.hint?.isVisible) continue;
-      const r = rects.get(w.hint);
-      if (r && !isRectOnScreen(r, vw, vh)) w.hint.hide();
-    }
-    recordCpu('reposition:sweep', performance.now() - __start);
     firehoseStep('reposition:end', rects.size, 20);
   });
 }
@@ -3025,8 +3052,8 @@ function reconcileScrollFrame(): void {
 //   6. reconcileStrictViewport — re-push wrappers whose strict-viewport flag
 //      changed so the plugin's `_strict` companion collection (voice matching
 //      + Discovery HUD) converges to post-settle viewport reality.
-//   7. scheduleReposition — drive the batched positioner pass + the
-//      off-screen-hide sweep over the rects that pass read.
+//   7. scheduleReposition — drive the batched positioner pass (which also
+//      applies the off-screen write-time clamp inside reconcileRead).
 //
 // The `discovery` parameter is the single difference between the two settle
 // kinds:

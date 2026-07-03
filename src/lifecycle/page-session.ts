@@ -179,6 +179,10 @@ export class PageSession {
   scrollRepositionTimer: ReturnType<typeof setTimeout> | null = null;
   deferredRepositionTimer: ReturnType<typeof setTimeout> | null = null;
   hugeMutationTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Max-wait companion to hugeMutationTimer (debounce+deadline shape): armed
+   * by the first huge batch of a mutation storm, non-extending, so a
+   * sustained storm can't defer the coarse refresh indefinitely. */
+  hugeMutationDeadline: ReturnType<typeof setTimeout> | null = null;
 
   /** Debounce handle coalescing the level-triggered reconcile (claim + build). */
   reconcileTimer: ReturnType<typeof setTimeout> | null = null;

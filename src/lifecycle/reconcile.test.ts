@@ -153,6 +153,15 @@ describe('computeReconcilePlanLists', () => {
     expect(lists.toShow).toEqual([w]);
   });
 
+  it('re-shows a repaired dormant badge that is in-band but OFF-screen (paint the band)', () => {
+    // Shown-ness is band-scoped (notes/DESIGN_PAINT_THE_BAND.md): the badge
+    // paints below the fold and rides into view already painted.
+    const w = liveWrapper({ hint: 'dormant', inViewport: false });
+    const lists = computeReconcilePlanLists(storeOf([w]), null, gatherOf([[w, IN_BAND_OFF_SCREEN, true]]));
+    expect(lists.toRepair).toEqual([w]);
+    expect(lists.toShow).toEqual([w]);
+  });
+
   it('hides a showing badge whose target went CSS-invisible', () => {
     const w = liveWrapper({ hint: 'visible', inViewport: true, codeword: 'ape' });
     const lists = computeReconcilePlanLists(storeOf([w]), null, gatherOf([[w, ON_SCREEN, false]]));
@@ -197,17 +206,20 @@ describe('computeReconcilePlanLists', () => {
     );
     expect(lists.toRepair).toEqual([repairTrigger]);
     expect(lists.toBuild).toEqual([buildable]);
-    expect(lists.toShow).toEqual([]);
+    // The built wrapper is simulated as already showing, so it must not be
+    // double-counted in toShow. (repairTrigger DOES land there: band-scoped
+    // shown-ness re-shows the repaired dormant badge off-screen too.)
+    expect(lists.toShow).toEqual([repairTrigger]);
   });
 
-  it('does not build an off-screen or CSS-hidden target', () => {
+  it('builds an off-screen in-band target (paint the band) but never a CSS-hidden one', () => {
     const offScreen = liveWrapper({ codeword: 'ape', inViewport: true });
     const hidden = liveWrapper({ codeword: 'oak', inViewport: true });
     const lists = computeReconcilePlanLists(
       storeOf([offScreen, hidden]), null,
       gatherOf([[offScreen, IN_BAND_OFF_SCREEN, true], [hidden, ON_SCREEN, false]]),
     );
-    expect(lists.toBuild).toEqual([]);
+    expect(lists.toBuild).toEqual([offScreen]);
   });
 });
 
