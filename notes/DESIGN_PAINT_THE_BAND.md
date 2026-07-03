@@ -120,6 +120,29 @@ swapped) instead of teardown+rebuild — i.e. soften release on recycle,
 or rebind wrappers across the swap. Distinct from the (deprioritized)
 Rango-parity rebind: this is about not EMPTYING, not filling faster.
 
+Round 10 / sequencing verdict (2026-07-03, shown_minus_ack + tBuildGated
+stamps on production): BOTH remaining theories died. gated_to_shown n=0 —
+no badge is ever built-but-gated on an invisible skeleton; rows are
+visible when built. shown_minus_ack is +2..+9ms for ALL 508 wrappers —
+the grammar ACK is effectively INSTANT at claim time (sticky reclaim:
+churned codewords are re-grants already present in the plugin grammar,
+ACKed synchronously in the claim-processing task) and the show follows
+milliseconds later in the same task. So there is NO sequencing inversion
+and no voice slowness: the translucent bk-pending phase is structurally
+near-zero on a churning grid because voice is ready before paint, not
+after. bk-pending only shows for genuinely-new codewords.
+
+What remains is exactly two things: (a) stacked stage coalescing — end-to
+-end dom_seen→shown p50 328-565ms across runs is the SUM of defensible
+per-stage debounces (discovery ~90-250ms, claim flush 50ms+, build
+trigger rounds ~100ms cadence), each individually fine, jointly above the
+~150-200ms "fused with content" perceptual threshold; and (b) the churn
+dip (round 9). The open design question for a fresh pass: collapse the
+per-stage coalescing into one fling-wave window (row batch → badges in
+<200ms, one paint wave), and/or hold badges through in-place row
+recycling. All instrumentation to judge any attempt is in place
+(paint_latency stages + paint_stability eye-level ring, debug snapshot).
+
 Why Rango still reads faster — the full causal decomposition (2026-07-03,
 post-round-4, source-verified). Fresh-row-to-visible-badge, stage by stage:
 Rango = MO-synchronous wrapper creation → IO → local label pop → one
