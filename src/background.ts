@@ -756,6 +756,34 @@ function handleSSEEvent(data: any): void {
     return;
   }
 
+  // Multi-target hint verbs ("stash huge gap arch same"): the plugin delivers
+  // the matched targets as a JSON-encoded ordered list under params.targets
+  // (SSE params are string-keyed). Fan out to one per-target action, awaited
+  // in spoken order, so per-codeword frame routing and the content script's
+  // single-target handling work unchanged.
+  if (typeof data.params?.targets === 'string') {
+    let targets: unknown;
+    try {
+      targets = JSON.parse(data.params.targets);
+    } catch {
+      console.warn('[BranchKit BG] multi-target action with unparseable targets:', data.action);
+      return;
+    }
+    if (!Array.isArray(targets)) return;
+    void (async () => {
+      for (const t of targets) {
+        if (t === null || typeof t !== 'object') continue;
+        const params: Record<string, string> = {};
+        for (const [k, v] of Object.entries(t)) params[k] = String(v);
+        await notifyActiveTab({
+          type: 'BRANCHKIT_ACTION',
+          payload: { action: data.action, params, correlation_id: data.correlation_id },
+        });
+      }
+    })();
+    return;
+  }
+
   // Active-tab-only routing for events that carry params.target === 'active'.
   // The plugin uses this for focus-driven rescans where only the active
   // tab's state matters — broadcasting to every tab would multiply the

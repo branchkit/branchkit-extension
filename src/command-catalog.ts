@@ -35,9 +35,10 @@ export interface VoicePattern {
   /**
    * Spoken slot sequence: space-separated literal words plus `{number}` /
    * `{text}` captures (e.g. "scroll down", "scroll down {number}", "find {text}").
-   * `{hint}` is the compound hint codeword (prefix + suffix words); the browser
-   * plugin expands it into its dependent-capture pair and attaches the hint
-   * context gating, so the extension never names collections or platform tags.
+   * `{hint}` is the compound hint codeword (prefix + suffix words); `{hint+}`
+   * is one-or-more of them, delivered as an ordered target list. The browser
+   * plugin expands both into its capture shapes and attaches the hint context
+   * gating, so the extension never names collections or platform tags.
    */
   pattern: string;
   /**
@@ -113,9 +114,12 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   { id: 'activate_hint_newtab', label: 'Open hint in new tab', group: 'Hints', mappable: false, params: [],
     description: 'Open the hinted link in a new focused tab.',
     voice: [{ pattern: 'blank {hint}' }] },
-  { id: 'activate_hint_background', label: 'Open hint in background tab', group: 'Hints', mappable: false, params: [],
-    description: 'Open the hinted link in a new background tab; hints stay up for the next command.',
-    voice: [{ pattern: 'stash {hint}' }],
+  // {hint+} = one or more hint codewords in a single breath ("stash huge gap
+  // arch same" opens both) — the plugin expands it to its repeated capture
+  // macro and delivers the ordered target list; the SW fans it out per target.
+  { id: 'activate_hint_background', label: 'Open hints in background tabs', group: 'Hints', mappable: false, params: [],
+    description: 'Open one or more hinted links in background tabs; hints stay up for the next command.',
+    voice: [{ pattern: 'stash {hint+}' }],
     retainsHints: true },
 
   // --- Scroll ---
