@@ -103,8 +103,8 @@ Everything else survives teardown and keeps firing into a dead session:
 | `focus`/`blur` (`:2044`/`:2047`) | set a `windowHasFocus` bool | harmless |
 | reposition schedulers (`:2828`,`:3026`,`:3039`,`:3080-3111`) | no-op — reconcile registry is drained | safe-by-emptiness |
 | `finalizeExpiredLimboWrappers` (interval, `:3361`) | limbo finalize | survives |
-| `publishPerfSnapshot` (interval 250ms, `:3641`, dev) | writes snapshot mirror | survives |
-| `shipPerfReport` (interval, `:3672`, dev) | `sendMessage` to SW | survives |
+| `publishPerfSnapshot` (interval 250ms, `:3641`, diagnostic but NOT dev-gated) | writes snapshot mirror | survives |
+| `shipPerfReport` (interval, `:3672`, diagnostic but NOT dev-gated) | `sendMessage` to SW | survives |
 
 The only brake on the surviving set today is an **emergent** one: raw
 `chrome.runtime.sendMessage` throws synchronously ("Extension context
@@ -159,8 +159,8 @@ Teardown — what stops vs. what keeps running:
   │  SHADOW_EVENT .......... re-discovery + grammar         │  │
   │  storage.onChanged ..... alphabet re-push               │  │
   │  pageshow / snapshot ... grammar re-push / mirror       │  │
-  │  shipPerfReport (intvl)  sendMessage every N ms (dev)   │  │
-  │  publishPerfSnapshot ... every 250ms (dev)              │  │
+  │  shipPerfReport (intvl)  sendMessage every N ms         │  │
+  │  publishPerfSnapshot ... every 250ms                    │  │
   │  finalizeLimbo (intvl) . every deadline                 │  │
   │                                                         │  │
   │  the ONLY brake on all of these today =                 │  │
@@ -371,10 +371,20 @@ strictly more complete. The throw stays throughout. Soak at sensible batches.
   (`lifecycle/session-resources.ts`: `listen`/`interval`/`timeout`/`raf`/
   `track`/`teardownAll`), added as `pageSession.resources`, `teardownAll()`
   called from `quiesceOrphan`. Additive, unit-tested. **DONE.**
-- **Lift 2 — intervals. DONE.** `finalizeExpiredLimboWrappers` and the dev perf
+- **Lift 2 — intervals. DONE.** `finalizeExpiredLimboWrappers` and the perf
   intervals (`publishPerfSnapshot`, `shipPerfReport`) now flow through the
   registry. `guardKeeper` intentionally stays as a bare `setInterval` — it
   self-clears on `isTornDown` and is the orphan *detector*, not a leak.
+
+  *Addendum 2026-07-03:* this doc's "(dev)" label on the perf intervals was a
+  mislabel — they ran ungated in production. The long-session perf audit
+  (`notes/INVESTIGATION_LONG_SESSION_PERF.md`) found them a top contributor to
+  Firefox multi-day slowdown (hidden-tab timer throttling is only ~1s there);
+  both now early-return unless the tab is visible. Same audit also found the
+  watchdog's self-rescheduling `setTimeout` chain in `debug/perf-counters.ts`
+  was never in the registry (it survived `teardownAll()`); `quiesceOrphan` now
+  calls the new `stopPerfObservers()` to end it and disconnect the longtask
+  PerformanceObserver.
 - **Lift 3 — ad-hoc `setTimeout`s. DONE (partial by design).** Migrated the 11
   fire-once / single-flight deferrals (doScan / rescan / reconcile / passSoon /
   doScan-coalesce / band-retry / hint-refresh / deferred-rescan) to

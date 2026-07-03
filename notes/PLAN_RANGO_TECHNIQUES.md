@@ -7,7 +7,7 @@ Reference clone at `/tmp/rango` (david-tejada/rango).
 | # | Technique | Effort | Status |
 |---|-----------|--------|--------|
 | 1 | Layout caching | Medium | Done (`src/layout-cache.ts`) |
-| 2 | Stacking context + z-index | Medium | **Not built** (verified 2026-05-30 — z-index is still reading-order based, `BASE_Z + i`; no `createsStackingContext`/`calculateZIndex` in `src/`) |
+| 2 | Stacking context + z-index | Medium | Done (`src/placement/stacking.ts`, landed 2026-06-02 — `createsStackingContext` + `calculateZIndex` ported from Rango; the 2026-05-30 "Not built" verification predated it) |
 | 3 | Sticky header detection | Medium | Done (`src/activate/scroller.ts`) |
 | 4 | Focus-driven visibility | Low | **Not built** (verified 2026-05-30 — no focus-hide-badge listeners; the focusin/focusout handlers in `content.ts` are reposition triggers, not the badge-hide behavior this item describes) |
 | 5 | Event dispatch order | High | Done (`src/activate/event-sequence.ts`) |
