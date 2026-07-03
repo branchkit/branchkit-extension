@@ -1,7 +1,10 @@
 # Paint the band — badges ride into view already painted
 
 Date: 2026-07-03
-Status: implemented 2026-07-03, live verify pending. All four seams landed:
+Status: implemented + 9 tuning rounds 2026-07-03, live-verified on
+production QuickBase (user: perceptibly faster; end-to-end p50 ~330ms
+from ~2.5s). Remaining perceptible artifact: the churn dip (round 9
+below). Original ship record follows. All four seams landed:
 predicate band-scoped (desired-state + plan + badgeNewlyCodeworded), budgeted
 build queue extracted to `src/lifecycle/build-queue.ts` (runBuildPass +
 createSingleFlight, unit-tested), write-time clamp in reconcileRead
@@ -103,6 +106,19 @@ the Rango burst model with a backstop: BAND_BUILD_BUDGET_MS 12 → 48
 claimed→shown tail also legitimately contains page-driven waits
 (skeleton rows CSS-invisible at build time paint only after QuickBase
 fills them — not ours to fix). Production re-verify pending.
+
+Round 9 / eye-level verdict (2026-07-03, paint_stability sampler on
+production; user reports perceptibly faster): the pipeline now FILLS fast
+(dom_seen_to_shown p50 ~330-375ms; discovery 87ms after scheduler.yield),
+and the sampler shows the remaining perceptible artifact is the CHURN
+DIP: each fling tears down 60-110 of ~380 visible badges (shown sagged
+383→275 in one burst) which then rebuild over ~1-1.4s. Perception tracks
+that dip-and-recover cycle — invisible to the stage stamps, which credit
+first paint. Next lever, if pursued: keep badges visible through
+QuickBase's in-place row recycling (constant ~300-row window, contents
+swapped) instead of teardown+rebuild — i.e. soften release on recycle,
+or rebind wrappers across the swap. Distinct from the (deprioritized)
+Rango-parity rebind: this is about not EMPTYING, not filling faster.
 
 Why Rango still reads faster — the full causal decomposition (2026-07-03,
 post-round-4, source-verified). Fresh-row-to-visible-badge, stage by stage:
