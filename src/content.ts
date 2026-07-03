@@ -108,7 +108,7 @@ import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
 import { openLivenessPort } from './plugin/liveness';
 import { pageSession, TeardownReason } from './lifecycle/page-session';
 import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './debug/message-counters';
-import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, lifecycleCounters, resetLifecycleCounters } from './debug/perf-counters';
+import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, stopPerfObservers, lifecycleCounters, resetLifecycleCounters } from './debug/perf-counters';
 import { loadConfig, getDisplayMode, getHintVisibility, getHintsShown, setHintsShown } from './config';
 import {
   grammarEpochStats,
@@ -2301,6 +2301,10 @@ function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
     pageSession.pendingDiscoveryRoots.clear();
   }
   teardownVisibilityTracker();
+  // Stop the watchdog setTimeout chain + longtask observer — raw timers in
+  // perf-counters, not SessionResources-owned, so teardownAll() below never
+  // reaches them and an orphan would keep a 4Hz diagnostic timer forever.
+  try { stopPerfObservers(); } catch { /* same */ }
   // Stop the reconcile scroll loop and drop every reconcile-mode badge from the
   // positioner registry. The host-removal sweep below removes hosts via raw DOM
   // (bypassing HintBadge.remove(), the only per-badge unregister site), so
@@ -3790,8 +3794,13 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
 // Cross-world bridge: content script globals live in the isolated world,
 // so Playwright's page.evaluate (main world) can't call them directly.
 // Mirror the snapshot to a documentElement dataset attribute every 250ms
-// so any world can read it. Cheap; the JSON is small (<500B).
+// so any world can read it. Hidden tabs skip the work (the dataset goes
+// stale, not empty): the snapshot walks the whole wrapper store and the
+// JSON grows with CPU-bucket count, and Firefox only throttles hidden-tab
+// timers to ~1s (vs Chrome's ~1/min), so ungated this was a store-walk +
+// stringify per second per hidden tab, times days of accumulated tabs.
 function publishPerfSnapshot(): void {
+  if (document.visibilityState !== 'visible') return;
   try {
     document.documentElement.dataset.branchkitPerf =
       JSON.stringify(buildPerfSnapshot());
@@ -3811,7 +3820,13 @@ if (isTopFrame) {
 // publish above is for live in-page inspection; this is the durable
 // record. Every 5s is the sample interval — slow enough to be cheap,
 // fast enough to bracket a Firefox unresponsive-script event.
+// Visible tabs only: a hidden tab has nothing new to report, and every
+// ship is a sendMessage that resets the background's idle timer — with N
+// accumulated tabs that's N/5 wakeups/sec keeping the Firefox event page
+// (and the plugin's /perf-report handler) permanently hot. The trail
+// keeps full coverage of the tab the user is actually looking at.
 function shipPerfReport(): void {
+  if (document.visibilityState !== 'visible') return;
   try {
     const snapshot = buildPerfSnapshot(true);
     const ua = navigator.userAgent;

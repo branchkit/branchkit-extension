@@ -169,11 +169,12 @@ let longtaskCount = 0;
 let longtaskTotalMs = 0;
 let longtaskMaxMs = 0;
 const longtaskTop: Array<{ ts: number; ms: number }> = [];
+let longtaskObserver: PerformanceObserver | null = null;
 function startLongtaskObserver(): void {
   try {
     const supported = (PerformanceObserver as unknown as { supportedEntryTypes?: string[] }).supportedEntryTypes;
     if (supported?.includes('longtask')) {
-      new PerformanceObserver((list) => {
+      longtaskObserver = new PerformanceObserver((list) => {
         for (const e of list.getEntries()) {
           longtaskCount++;
           longtaskTotalMs += e.duration;
@@ -184,7 +185,8 @@ function startLongtaskObserver(): void {
             if (longtaskTop.length > CPU_TOP_N) longtaskTop.length = CPU_TOP_N;
           }
         }
-      }).observe({ type: 'longtask', buffered: true });
+      });
+      longtaskObserver.observe({ type: 'longtask', buffered: true });
     }
   } catch { /* PerformanceObserver missing or longtask unsupported */ }
 }
@@ -258,6 +260,7 @@ function attributeStall(windowStart: number, windowEnd: number): { trackedMs: nu
 }
 
 function watchdogTick(): void {
+  if (perfObserversStopped) return; // teardown: let the chain die here
   const now = performance.now();
   const visible = document.visibilityState === 'visible';
   // Only attribute delay when the tab was visible during BOTH the prior
@@ -303,6 +306,7 @@ function watchdogTick(): void {
 // caller gates this to the top frame; inline recordCpu marks stay everywhere
 // (cheap) so a frame promoted to top-of-its-process still has fresh attribution.
 let perfObserversStarted = false;
+let perfObserversStopped = false;
 export function startPerfObservers(): void {
   if (perfObserversStarted) return;
   perfObserversStarted = true;
@@ -310,6 +314,20 @@ export function startPerfObservers(): void {
   watchdogVisibleOnLastFire = document.visibilityState === 'visible';
   setTimeout(watchdogTick, WATCHDOG_INTERVAL_MS);
   startLongtaskObserver();
+}
+
+/**
+ * Stop the watchdog timeout chain and the longtask PerformanceObserver. The
+ * watchdog is a raw self-rescheduling setTimeout — not SessionResources-owned,
+ * so `teardownAll()` never reaches it and an orphaned content script would
+ * keep a 4Hz timer alive for the life of the tab. Called from quiesceOrphan.
+ * One-way: a torn-down context never restarts its session (the successor CS
+ * is a fresh JS context), so there is no resume path.
+ */
+export function stopPerfObservers(): void {
+  perfObserversStopped = true;
+  longtaskObserver?.disconnect();
+  longtaskObserver = null;
 }
 
 export function resetWatchdog(): void {
