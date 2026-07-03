@@ -3153,6 +3153,63 @@ const reconcileApplied = {
   total: { release: 0, repair: 0, claim: 0, build: 0, show: 0, hide: 0, cssHidden: 0, strict: 0 },
 };
 
+// --- Paint-stability sampler: the eye-level truth ---
+// A 10Hz change-log of visible-state counts, armed by scroll activity and
+// self-terminating 5s after the last scroll event (wedge discipline: a
+// bounded timer chain, not a rAF). Dumped raw into the debug snapshot
+// (paint_stability) alongside the per-wrapper stage stamps.
+//
+// Exists because the stage stamps CANNOT see what the user sees: tFirstShown
+// credits a badge's first paint, but QuickBase's row churn re-hides and
+// re-shows badges (repair waves of 80-105 mid-fling), so a badge the stamps
+// score at 50ms may visibly stabilize seconds later. This ring records the
+// actual on-screen badge count over time — plateau time and flicker dips
+// included — which is the number that corresponds to perceived paint speed
+// (the stage-percentiles-improve-but-it-feels-the-same disconnect,
+// 2026-07-03). Cost per tick: O(store) property reads + one live
+// HTMLCollection length; nothing runs while the page is scroll-idle.
+const PAINT_SAMPLE_INTERVAL_MS = 100;
+const PAINT_SAMPLE_TRAIL_MS = 5000;
+const PAINT_SAMPLE_RING_MAX = 900;
+const paintSamples: Array<[number, number, number, number, number]> = [];
+let paintSamplerRunning = false;
+let paintSamplerLastScroll = 0;
+let paintSamplerLastKey = '';
+
+function notePaintSamplerScroll(): void {
+  paintSamplerLastScroll = performance.now();
+  if (paintSamplerRunning) return;
+  paintSamplerRunning = true;
+  paintSamplerTick();
+}
+
+function paintSamplerTick(): void {
+  const now = performance.now();
+  if (pageSession.isTornDown || now - paintSamplerLastScroll > PAINT_SAMPLE_TRAIL_MS) {
+    paintSamplerRunning = false;
+    return;
+  }
+  let painted = 0, shown = 0;
+  for (const w of store.all) {
+    if (w.hint) {
+      painted++;
+      if (w.hint.isVisible) shown++;
+    }
+  }
+  // 'tr' count as the content-arrival proxy (live collection; .length is
+  // cheap). Page-shape-specific but harmless where rows aren't tables.
+  const rows = document.getElementsByTagName('tr').length;
+  const key = `${rows}|${store.all.length}|${painted}|${shown}`;
+  if (key !== paintSamplerLastKey) {
+    paintSamplerLastKey = key;
+    paintSamples.push([Math.round(now), rows, store.all.length, painted, shown]);
+    if (paintSamples.length > PAINT_SAMPLE_RING_MAX) {
+      paintSamples.splice(0, paintSamples.length - PAINT_SAMPLE_RING_MAX);
+    }
+  }
+  pageSession.resources.timeout(paintSamplerTick, PAINT_SAMPLE_INTERVAL_MS);
+}
+
 // Paint-latency decomposition for the debug snapshot: stage-delta
 // percentiles over wrappers first shown in the trailing window. Answers
 // "where does the time go between a row appearing and its badge painting"
@@ -3205,6 +3262,9 @@ function paintLatencyStats() {
 function snapshotExtras() {
   return {
     paint_latency: paintLatencyStats(),
+    // Raw eye-level ring: [t_ms, tr_rows, wrappers, painted, shown] change
+    // entries from the scroll-armed sampler above.
+    paint_stability: { interval_ms: PAINT_SAMPLE_INTERVAL_MS, samples: [...paintSamples] },
     grammar_epoch: grammarEpochStats(),
     reconcile_applied: {
       passes: reconcileApplied.passes,
@@ -3284,6 +3344,8 @@ function scheduleScrollReposition(e?: Event): void {
   // don't ride the compositor); this fires on every scroll event, before the
   // trailing-edge settle below. No-op when the flag is off (empty registry).
   noteReconcileScroll();
+  // Arm the eye-level paint-stability sampler (self-terminating; see above).
+  notePaintSamplerScroll();
   // Gesture-start accelerator re-detection (timer null = first event of this
   // scroll burst). A scroller that only became scrollable on hover (QuickBase
   // classic report grids flip overflow:hidden->auto under :hover) emits no
