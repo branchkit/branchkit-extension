@@ -25,6 +25,7 @@
 import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
 import { wantsCodeword } from '../lifecycle/desired-state';
 import { labelReservoir } from '../labels/label-reservoir';
+import { geometryInBand } from '../layout-cache';
 
 // Wide rootMargin to match Rango's lazy-construction model: catch elements
 // while they're still ~5 viewport-line-rows away, so the per-badge work
@@ -136,6 +137,42 @@ export class IntersectionTracker {
       }
     }
     if (this.pendingClaim.size > 0) this.scheduleFlush();
+  }
+
+  /**
+   * Mid-scroll band-entry flag sweep — the settle plan's stale-FALSE repair
+   * (toRepair), run one-directionally while the user is actively scrolling
+   * (notes/DESIGN_FLING_WAVE.md Part 1c). On a virtualized grid most rows
+   * are inserted OUTSIDE the band and cross its edge mid-fling; the IO's
+   * delivery of that crossing starves on saturated frames (attached_to_band
+   * p90 581ms, drill round 1), so this reads the geometry directly. One
+   * gBCR per out-of-band live wrapper, no interleaved writes — a single
+   * reflow per sweep; the caller throttles (10Hz) and runs reconcile() when
+   * anything was repaired (claims + build flow through the normal
+   * convergence entry — no new claim path). Exits deliberately NOT handled
+   * here: teardown stays settle-scoped, which also removes any flap risk
+   * with late IO entries.
+   */
+  sweepBandEntries(vw: number, vh: number): number {
+    const __t0 = performance.now();
+    let repaired = 0;
+    for (const w of this.store.all) {
+      if (w.isInViewport) continue;
+      if (w.disconnectedAt !== null) continue;
+      if (!w.element.isConnected) continue;
+      const r = w.element.getBoundingClientRect();
+      // Boxless skip (the reconcile plan's zero-rect guard): display:none
+      // elements report all-zeros, which would false-positive at the origin.
+      if (r.width === 0 && r.height === 0 && r.top === 0 && r.left === 0) continue;
+      if (!geometryInBand(r, vw, vh, VIEWPORT_MARGIN_PX)) continue;
+      w.lastRect = r; // free fresh rect — keeps the limbo tiebreaker current
+      w.isInViewport = true;
+      w.tInBand ??= performance.now();
+      repaired++;
+    }
+    const rec = (globalThis as { __branchkitRecordCpu?: (label: string, ms: number) => void }).__branchkitRecordCpu;
+    if (rec) rec('intersection:sweepBandEntries', performance.now() - __t0);
+    return repaired;
   }
 
   /**

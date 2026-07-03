@@ -14,7 +14,6 @@ import { wantsHint } from './lifecycle/desired-state';
 import { runBuildPass, createSingleFlight, WAVE_SLICE_BUDGET_MS } from './lifecycle/build-queue';
 import {
   computeReconcilePlanLists,
-  geometryInBand,
   RECONCILE_BAND_MARGIN_PX,
   type ReconcilePlanLists,
 } from './lifecycle/reconcile';
@@ -38,7 +37,7 @@ import { onContainerResize } from './observe/container-resize-tracker';
 import { onTargetMutation } from './observe/target-mutation-tracker';
 import { setOcclusionEnabled, applyOcclusion } from './observe/occlusion';
 import { reconcileClipObservation, drainClipObservers, setClipObserverEnabled } from './observe/clip-observer';
-import { cacheLayout, cacheConstruction, clearLayoutCache, getCachedRect, isRectOnScreen } from './layout-cache';
+import { cacheLayout, cacheConstruction, clearLayoutCache, geometryInBand, getCachedRect, isRectOnScreen } from './layout-cache';
 import { placeBadges, invalidateProbe } from './placement';
 import { activateElement, dispatchHover, resolveNavTarget, type ActivationResult } from './activate/event-sequence';
 import {
@@ -3327,6 +3326,31 @@ function runSettlePipeline(discovery: 'band' | 'store'): void {
   scheduleReposition();
 }
 
+// Mid-fling band-entry sweep throttle (notes/DESIGN_FLING_WAVE.md Part 1c).
+// 10Hz while scroll events arrive; a timestamp, not a timer — nothing to
+// tear down, nothing free-running (wedge discipline). Gated on hintsVisible:
+// with hints down the IO's own cadence is fine (nothing user-facing waits),
+// and the next show re-converges from scratch.
+const MID_SCROLL_BAND_SWEEP_MS = 100;
+let bandSweepLastAt = 0;
+function noteBandEntrySweep(): void {
+  if (!pageSession.hintsVisible) return;
+  const now = performance.now();
+  if (now - bandSweepLastAt < MID_SCROLL_BAND_SWEEP_MS) return;
+  bandSweepLastAt = now;
+  const repaired = pageSession.tracker.sweepBandEntries(window.innerWidth, window.innerHeight);
+  if (repaired > 0) {
+    lifecycleCounters.bandSweepRepairs += repaired;
+    firehoseStep('band_sweep:repaired', repaired, 20);
+    // The designed convergence entry: refreshViewportClaims picks up the
+    // just-flipped flags (claim), badgeNewlyCodeworded builds. The claim
+    // flush lands in this task's microtask tail, so the leading edge of a
+    // fling paints within the sweep's own 100ms cadence instead of waiting
+    // out the IO.
+    reconcile();
+  }
+}
+
 function scheduleScrollReposition(e?: Event): void {
   // Reconcile badges need per-frame re-pinning during the scroll itself (they
   // don't ride the compositor); this fires on every scroll event, before the
@@ -3334,6 +3358,9 @@ function scheduleScrollReposition(e?: Event): void {
   noteReconcileScroll();
   // Arm the eye-level paint-stability sampler (self-terminating; see above).
   notePaintSamplerScroll();
+  // Mid-fling band-entry repair (throttled) — badges for rows crossing the
+  // band edge paint DURING the fling, not after the IO catches up.
+  noteBandEntrySweep();
   // Gesture-start accelerator re-detection (timer null = first event of this
   // scroll burst). A scroller that only became scrollable on hover (QuickBase
   // classic report grids flip overflow:hidden->auto under :hover) emits no

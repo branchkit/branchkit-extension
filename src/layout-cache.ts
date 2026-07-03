@@ -70,6 +70,28 @@ export function isRectOnScreen(
 }
 
 /**
+ * True if a viewport-relative rect falls within the viewport ± margin band —
+ * the IO-band notion (the tracker's VIEWPORT_MARGIN_PX), deliberately
+ * distinct from `isRectOnScreen`'s strict notion. Lives here (leaf module)
+ * rather than in lifecycle/reconcile.ts so observe/ modules can consume it:
+ * reconcile.ts reads the tracker's VIEWPORT_MARGIN_PX at module-eval time,
+ * so a tracker → reconcile import would be a TDZ cycle.
+ */
+export function geometryInBand(
+  r: DOMRectReadOnly,
+  vw: number,
+  vh: number,
+  marginPx: number,
+): boolean {
+  return (
+    r.bottom > -marginPx &&
+    r.top < vh + marginPx &&
+    r.right > -marginPx &&
+    r.left < vw + marginPx
+  );
+}
+
+/**
  * Cache-only peek — returns null if no entry was populated. Distinct from
  * `getCachedRect`, which falls back to a live `getBoundingClientRect()`.
  * The live fallback returns `{0,0,0,0}` for disconnected elements; for

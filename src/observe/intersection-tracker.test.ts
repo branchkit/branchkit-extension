@@ -36,6 +36,7 @@ function fakeElement(
   return {
     tagName: 'BUTTON',
     __debug: label,
+    isConnected: true,
     getBoundingClientRect: () => fullRect,
   } as unknown as Element;
 }
@@ -427,6 +428,73 @@ describe('IntersectionTracker.primeClaims', () => {
 
     expect(w.scanned.codeword).toBe('arch');
     expect(events.onCodewordsChanged).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('IntersectionTracker.sweepBandEntries', () => {
+  // Mid-scroll band-entry flag sweep (DESIGN_FLING_WAVE Part 1c): rows that
+  // cross the band edge mid-fling get their flag repaired by geometry
+  // instead of waiting out starved IO delivery. vw=800 vh=600 with the
+  // 1000px margin puts the band at y ∈ (-1000, 1600).
+
+  it('repairs the flag for out-of-band wrappers whose geometry is in-band', () => {
+    const store = new WrapperStore();
+    const tracker = new IntersectionTracker(store, { onCodewordsChanged: vi.fn() });
+
+    // Both marked out-of-band by a prior IO delivery (isInViewport defaults
+    // to true on fresh wrappers; the sweep's cohort is IO-confirmed
+    // out-of-band wrappers that have since crossed the edge).
+    const entering = new ElementWrapper(
+      fakeElement('entering', { left: 0, top: 1200, width: 10, height: 10 }),
+      fakeScanned(),
+    );
+    entering.isInViewport = false;
+    const farBelow = new ElementWrapper(
+      fakeElement('farBelow', { left: 0, top: 5000, width: 10, height: 10 }),
+      fakeScanned(),
+    );
+    farBelow.isInViewport = false;
+    store.addWrapper(entering);
+    store.addWrapper(farBelow);
+
+    const repaired = tracker.sweepBandEntries(800, 600);
+
+    expect(repaired).toBe(1);
+    expect(entering.isInViewport).toBe(true);
+    expect(entering.tInBand).not.toBeNull();
+    expect(entering.lastRect).not.toBeNull(); // fresh rect kept for limbo
+    expect(farBelow.isInViewport).toBe(false);
+  });
+
+  it('skips already-in-band, limbo, disconnected, and boxless wrappers', () => {
+    const store = new WrapperStore();
+    const tracker = new IntersectionTracker(store, { onCodewordsChanged: vi.fn() });
+
+    const alreadyIn = new ElementWrapper(fakeElement('in'), fakeScanned());
+    alreadyIn.isInViewport = true;
+
+    const limbo = new ElementWrapper(fakeElement('limbo'), fakeScanned());
+    limbo.isInViewport = false;
+    limbo.disconnectedAt = 1_000;
+
+    const gone = new ElementWrapper(fakeElement('gone'), fakeScanned());
+    gone.isInViewport = false;
+    (gone.element as unknown as { isConnected: boolean }).isConnected = false;
+
+    const boxless = new ElementWrapper(
+      fakeElement('boxless', { left: 0, top: 0, width: 0, height: 0 }),
+      fakeScanned(),
+    );
+    boxless.isInViewport = false;
+
+    for (const w of [alreadyIn, limbo, gone, boxless]) store.addWrapper(w);
+
+    const repaired = tracker.sweepBandEntries(800, 600);
+
+    expect(repaired).toBe(0);
+    expect(limbo.isInViewport).toBe(false);
+    expect(gone.isInViewport).toBe(false);
+    expect(boxless.isInViewport).toBe(false);
   });
 });
 

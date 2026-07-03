@@ -21,7 +21,7 @@ import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { wantsShown, wantsStrict } from './desired-state';
 import { isVisible } from '../scan/scanner';
-import { isRectOnScreen } from '../layout-cache';
+import { geometryInBand, isRectOnScreen } from '../layout-cache';
 import { recordCpu } from '../debug/perf-counters';
 import type { SettleGather } from './gather';
 
@@ -29,23 +29,9 @@ import type { SettleGather } from './gather';
  * rootMargin so geometry band-checks agree with the flag the IO
  * actually sets. (Was a hardcoded 200 that silently drifted when the IO
  * widened to 1000px — the backstops then disagreed with IO ground truth
- * for the 200-1000px ring.) */
+ * for the 200-1000px ring.) The band predicate itself (`geometryInBand`)
+ * lives in layout-cache.ts — leaf module, importable from observe/. */
 export const RECONCILE_BAND_MARGIN_PX = VIEWPORT_MARGIN_PX;
-
-/** True if a viewport-relative rect falls within the viewport ± margin band. */
-export function geometryInBand(
-  r: DOMRectReadOnly,
-  vw: number,
-  vh: number,
-  marginPx: number,
-): boolean {
-  return (
-    r.bottom > -marginPx &&
-    r.top < vh + marginPx &&
-    r.right > -marginPx &&
-    r.left < vw + marginPx
-  );
-}
 
 // --- Plan-as-lists (Phase C of notes/DESIGN_UNIFIED_RECONCILER.md) ---
 //
