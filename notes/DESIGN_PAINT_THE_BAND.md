@@ -91,6 +91,19 @@ chain the next slice via a session-owned 0-timeout instead of the next
 rAF (yields the loop, resumes ~1-4ms — discoverInSubtreeBatched's shape),
 so slices run near-back-to-back. Production re-verify pending.
 
+Tuning round 6 (2026-07-03, post-discovery-chaining profile): discovery
+attach latency dropped 3x (dom_seen_to_attached p50 632→224ms) but the
+end-to-end tail did NOT move (dom_seen_to_shown p90 1634ms) — the queue
+migrated downstream (claimed→shown p90 839ms). Conclusion: the tail is
+THROUGHPUT-bound, not stage-latency-bound — a fling is ~500 badges ≈
+~600ms of raw construction, and 12ms slices with trigger-cadence gaps
+stretch it to ~1.5s regardless of which upstream stage improves. Adopted
+the Rango burst model with a backstop: BAND_BUILD_BUDGET_MS 12 → 48
+(idle cap to match) — an 80-badge wave completes in ~2 passes. Note the
+claimed→shown tail also legitimately contains page-driven waits
+(skeleton rows CSS-invisible at build time paint only after QuickBase
+fills them — not ours to fix). Production re-verify pending.
+
 Why Rango still reads faster — the full causal decomposition (2026-07-03,
 post-round-4, source-verified). Fresh-row-to-visible-badge, stage by stage:
 Rango = MO-synchronous wrapper creation → IO → local label pop → one

@@ -1480,20 +1480,22 @@ function scheduleHintRefresh(): void {
 // the idle continuation — the ordering/exemption contract lives in
 // runBuildPass (lifecycle/build-queue.ts).
 //
-// Sized for ~a frame, not a fraction of one (tuning round 4): the original
-// 4ms spread a QuickBase churn wave's ~120ms of construction across 2.5s of
-// tiny slices, while Rango — which does the identical walks synchronously,
-// unbudgeted — populated the same production grid near-instantly (A/B,
-// 2026-07-03). A fling's frames are already dropping from the page's own
-// row rendering; users read "badges are there" long before they notice
-// frame pacing. The budget survives only as a guardrail against
-// pathological waves, not as a smoothness tax.
-const BAND_BUILD_BUDGET_MS = 12;
+// Sized for a BURST, not a smooth frame (tuning rounds 4+6): the original
+// 4ms — and even 12ms — spread a fling's ~600ms of total construction
+// across 1.5-2.5s of small slices with trigger-cadence gaps between them,
+// while Rango — identical walks, synchronous 100-200ms single tasks —
+// populated the same production grid near-instantly (A/B 2026-07-03; the
+// round-6 profile showed the tail was throughput-bound: fixing discovery
+// just moved the queue into claimed→shown, p90 839ms). A fling's frames
+// are already dropping from the page's own row rendering; users read
+// "badges are there" long before they notice frame pacing. 48ms ≈ an
+// 80-badge wave in ~2 passes (~100-150ms wall). The budget survives only
+// as a guardrail against pathological waves, not as a smoothness tax.
+const BAND_BUILD_BUDGET_MS = 48;
 const BAND_BUILD_IDLE_TIMEOUT_MS = 100;
 // Ceiling on how much of an idle window one continuation pass consumes.
-// rIC deadlines run up to 50ms; capping keeps a single re-entry from
-// monopolizing a whole idle frame on low-end machines.
-const BAND_BUILD_IDLE_BUDGET_CAP_MS = 32;
+// Matches the sync budget — the burst model applies in both contexts.
+const BAND_BUILD_IDLE_BUDGET_CAP_MS = 48;
 
 // Single-flight idle continuation for band construction the budget deferred.
 // Re-enters the BUILD step ONLY (badgeNewlyCodeworded, never reconcile() —
