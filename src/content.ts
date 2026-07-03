@@ -38,7 +38,7 @@ import { onContainerResize } from './observe/container-resize-tracker';
 import { onTargetMutation } from './observe/target-mutation-tracker';
 import { setOcclusionEnabled, applyOcclusion } from './observe/occlusion';
 import { reconcileClipObservation, drainClipObservers, setClipObserverEnabled } from './observe/clip-observer';
-import { cacheLayout, cacheVisibility, clearLayoutCache, getCachedRect, isRectOnScreen } from './layout-cache';
+import { cacheLayout, cacheConstruction, clearLayoutCache, getCachedRect, isRectOnScreen } from './layout-cache';
 import { placeBadges, invalidateProbe } from './placement';
 import { activateElement, dispatchHover, resolveNavTarget, type ActivationResult } from './activate/event-sequence';
 import {
@@ -1348,10 +1348,10 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
   // on heavy SPA targets (YouTube /@channel/videos with 80+ badges).
   firehoseStep('showHints:start', renderable.length, 20);
   cacheLayout(renderable.map(w => w.element));
-  // Ancestor-style warm for the same three construction walks the build
-  // pass warms for (see badgeNewlyCodeworded) — showHints constructs the
-  // strict-viewport slice and pays them per badge otherwise.
-  cacheVisibility(renderable.map(w => w.element), 40);
+  // Ancestor warm (rect + style + dims) for the same construction walks the
+  // build pass warms for (see badgeNewlyCodeworded) — showHints constructs
+  // the strict-viewport slice and pays them per badge otherwise.
+  cacheConstruction(renderable.map(w => w.element));
   firehoseStep('showHints:cache_end', renderable.length, 20);
   try {
     for (const wrapper of renderable) {
@@ -1544,14 +1544,15 @@ function badgeNewlyCodeworded(budgetMs: number = BAND_BUILD_BUDGET_MS): void {
   try {
     const elements = newBadges.map(w => w.element);
     cacheLayout(elements);
-    // Warm the ancestor STYLE chain too (deduped across wrappers): first-time
-    // construction runs three ancestor walks per badge (container resolution,
-    // viewport-pinned check, APCA background resolution), and sibling rows
-    // share almost their whole chain. Cold, those walks were ~1.3ms/badge of
-    // live getComputedStyle on deep production DOM — the build-queue
-    // saturation in the 2026-07-03 QuickBase fling profile. Depth 40 (not
-    // the default 15) because the pinned check climbs to the root.
-    cacheVisibility(elements, 40);
+    // Warm the full ancestor chain too — rect + style + dims, deduped across
+    // wrappers: first-time construction walks ancestors for container
+    // resolution (rects + dims), the viewport-pinned check, and APCA
+    // background resolution (styles), and sibling rows share almost their
+    // whole chain. Cold, those walks cost ~1.3-1.5ms/badge on deep
+    // production DOM (each badge's host append dirties layout, so the next
+    // badge's first cold read forces a reflow) — the build-queue saturation
+    // in the 2026-07-03 QuickBase fling profiles.
+    cacheConstruction(elements);
     const vw = window.innerWidth, vh = window.innerHeight;
     const built: ElementWrapper[] = [];
     const deferred = runBuildPass(newBadges, {

@@ -95,18 +95,16 @@ export function peekCachedStyle(el: Element): CSSStyleDeclaration | null {
 
 /**
  * Lighter alternative to `cacheLayout` for visibility/hintability checks:
- * caches the element itself plus its ancestor chain (up to `maxDepth`
- * levels, default 15) and no descendants. isHintable's hot path reads
- * `el.getBoundingClientRect` + `getComputedStyle(el)` once and then walks
- * the parent chain probing opacity; neither phase touches descendants, so
- * the full cacheLayout's descendant walk would be pure overhead. Called
- * from the rAF-coalesced reevaluateAttribute drain so many same-tree
- * attribute mutations share one ancestor pre-read, and from the badge
- * build passes (content.ts), whose construction walks (viewport-pinned
- * check, APCA background) can climb to the root — those pass a deeper
- * `maxDepth` so the shared top of a deep production chain is warmed too.
+ * caches the element itself plus its ancestor chain (up to 15 levels) and
+ * no descendants. isHintable's hot path reads `el.getBoundingClientRect`
+ * + `getComputedStyle(el)` once and then walks the parent chain probing
+ * opacity; neither phase touches descendants, so the full cacheLayout's
+ * descendant walk would be pure overhead. Called from the rAF-coalesced
+ * reevaluateAttribute drain so many same-tree attribute mutations share
+ * one ancestor pre-read. (Badge construction uses the heavier
+ * `cacheConstruction` below — it needs ancestor rects + dims too.)
  */
-export function cacheVisibility(elements: Iterable<Element>, maxDepth = 15): { rects: number; styles: number } {
+export function cacheVisibility(elements: Iterable<Element>): { rects: number; styles: number } {
   // isVisible reads the *element's* rect once, then walks ancestors probing
   // only `opacity` (a style read). It never reads an ancestor's rect. So we
   // cache rect for the seed elements only, and style for seed + ancestor
@@ -119,7 +117,7 @@ export function cacheVisibility(elements: Iterable<Element>, maxDepth = 15): { r
     if (!boundingRects.has(el)) { boundingRects.set(el, el.getBoundingClientRect()); rects++; }
     let current: Element | null = el;
     let depth = 0;
-    while (current && depth < maxDepth) {
+    while (current && depth < 15) {
       if (toCacheStyle.has(current)) break;
       toCacheStyle.add(current);
       current = current.parentElement;
@@ -134,6 +132,39 @@ export function cacheVisibility(elements: Iterable<Element>, maxDepth = 15): { r
     if (!computedStyles.has(el)) { computedStyles.set(el, getComputedStyle(el)); styles++; }
   }
   return { rects, styles };
+}
+
+/**
+ * Heavy warm pass for badge CONSTRUCTION (paint-the-band tuning round 3):
+ * seeds + their ancestor chains get rect + style + dims, deduped across
+ * seeds. Construction's container walks read all three off ANCESTORS
+ * (getSpaceInAncestor rects, isScrollContainer/isClipAncestor dims), and
+ * each constructed badge appends its host — a layout write — so any cold
+ * ancestor read on the NEXT badge forces a reflow. Batching every read
+ * here, before the first append, caps the whole build pass at ~one reflow.
+ * cacheVisibility stays styles-only for its own caller (reevaluations),
+ * where ancestor rects are pure waste.
+ */
+export function cacheConstruction(elements: Iterable<Element>, maxDepth = 40): void {
+  const chain = new Set<Element>();
+  for (const el of elements) {
+    let current: Element | null = el;
+    let depth = 0;
+    while (current && depth < maxDepth) {
+      if (chain.has(current)) break;
+      chain.add(current);
+      current = current.parentElement;
+      depth++;
+    }
+  }
+  for (const el of chain) {
+    if (!boundingRects.has(el)) boundingRects.set(el, el.getBoundingClientRect());
+    if (!computedStyles.has(el)) computedStyles.set(el, getComputedStyle(el));
+    if (!clientDims.has(el)) {
+      const { clientWidth, scrollWidth, clientHeight, scrollHeight } = el;
+      clientDims.set(el, { clientWidth, scrollWidth, clientHeight, scrollHeight });
+    }
+  }
 }
 
 function overflowClips(v: string): boolean {

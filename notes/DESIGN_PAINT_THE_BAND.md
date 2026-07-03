@@ -45,6 +45,20 @@ table pending (user gesture + log re-read; the builder-realm harness lost
 its extension to a chrome.runtime.reload() footgun — a --load-extension
 extension cannot be re-enabled after runtime.reload(); relaunch instead).
 
+Tuning round 3 (2026-07-03, second production fling profile): round 2's
+style warm halved the wall-rate (~26 → ~14 ms/badge) but passes still built
+only ~2-3 badges per 4ms budget. Residual cause: the container walks ALSO
+read ancestor RECTS (getSpaceInAncestor) and DIMS (isScrollContainer /
+isClipAncestor) — cold, and each construction appends its host (a layout
+write), so the next badge's first cold layout read forced a reflow per
+badge. Fix: `cacheConstruction(elements)` in layout-cache — rect + style +
+dims for seeds + deduped ancestor chains (depth 40), batched before the
+first append, capping the whole pass at ~one reflow. Both build paths use
+it (cacheVisibility reverted to styles-only/depth-15 for its own caller).
+Expected: per-badge cost drops toward pure construction (~0.3ms), a 4ms
+pass builds ~12, a 70-badge churn wave drains in ~200ms. Production
+re-verify pending.
+
 QuickBase-shaped residual, measured but NOT yet addressed: the grid
 virtualizes rows, so wrappers churn hard mid-scroll (stale-flag repairs of
 20-35 per settle, hosts oscillating ±40) — every recycled row is a fresh
