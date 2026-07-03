@@ -26,13 +26,30 @@ let pluginToken: string | null = null;
 // runs — a storage flag seeded via sw.evaluate loses that race. Memoized:
 // the answer can't change within a SW lifetime. In production the marker
 // doesn't exist and the single failed fetch at first discovery is free.
+//
+// The check requires the marker's CONTENT, not just a non-error response:
+// Firefox answers a fetch of a MISSING packaged resource with a 200 (Chrome
+// rejects it), so an `r.ok` check read as "harness present" in every real
+// Firefox install and deterministically disabled discovery — the extension
+// looked healthy (hints paint standalone) but could never connect
+// (2026-07-03 incident, one day after this gate landed).
 let discoveryDisabled: Promise<boolean> | null = null;
 
 function isDiscoveryDisabled(): Promise<boolean> {
   if (!discoveryDisabled) {
     try {
       discoveryDisabled = fetch(chrome.runtime.getURL('harness.json'))
-        .then((r) => r.ok)
+        .then(async (r) => {
+          if (!r.ok) return false;
+          try {
+            // Only the real marker counts: the JSON launch.mjs writes,
+            // carrying discovery:"disabled".
+            const marker = await r.json();
+            return marker?.discovery === 'disabled';
+          } catch {
+            return false;
+          }
+        })
         .catch(() => false);
     } catch {
       // No chrome.runtime (unit tests) or invalidated context — not a harness.
