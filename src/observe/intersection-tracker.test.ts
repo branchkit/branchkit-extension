@@ -363,6 +363,73 @@ describe('IntersectionTracker limbo gating', () => {
   });
 });
 
+describe('IntersectionTracker.primeClaims', () => {
+  // Prime-at-attach (DESIGN_FLING_WAVE Part 1): the caller proves band
+  // membership by geometry and writes isInViewport before priming, so a
+  // fresh in-band wrapper claims in the same task instead of waiting for
+  // the IO to deliver its band-entry callback.
+
+  it('claims for primed wrappers without waiting for an IO entry', async () => {
+    const store = new WrapperStore();
+    const events = { onCodewordsChanged: vi.fn() };
+    const tracker = new IntersectionTracker(store, events);
+
+    const w = new ElementWrapper(fakeElement('primed'), fakeScanned());
+    w.isInViewport = true; // caller contract: geometry proved, flag written
+    store.addWrapper(w);
+    tracker.observe(w.element);
+
+    setupClaimResponse(['arch']);
+    tracker.primeClaims([w]);
+    await tracker.flushNow();
+
+    expect(w.scanned.codeword).toBe('arch');
+    expect(events.onCodewordsChanged).toHaveBeenCalledWith([w], []);
+  });
+
+  it('skips wrappers that already hold a codeword and stays quiet when all skip', async () => {
+    const store = new WrapperStore();
+    const events = { onCodewordsChanged: vi.fn() };
+    const tracker = new IntersectionTracker(store, events);
+
+    const held = new ElementWrapper(fakeElement('held'), fakeScanned({ codeword: 'rain' }));
+    held.isInViewport = true;
+    store.addWrapper(held);
+
+    setupClaimResponse(['arch']);
+    tracker.primeClaims([held]);
+    await tracker.flushNow();
+
+    expect(held.scanned.codeword).toBe('rain');
+    expect(events.onCodewordsChanged).not.toHaveBeenCalled();
+  });
+
+  it('is idempotent with a subsequent IO entry for the same wrapper', async () => {
+    const store = new WrapperStore();
+    const events = { onCodewordsChanged: vi.fn() };
+    const tracker = new IntersectionTracker(store, events);
+    const io = FakeIntersectionObserver.lastInstance!;
+
+    const w = new ElementWrapper(fakeElement('w'), fakeScanned());
+    w.isInViewport = true;
+    store.addWrapper(w);
+    tracker.observe(w.element);
+
+    setupClaimResponse(['arch', 'bake']);
+    tracker.primeClaims([w]);
+    await tracker.flushNow();
+    expect(w.scanned.codeword).toBe('arch');
+
+    // The IO's initial callback arrives after the primed claim: its claim
+    // branch must no-op (codeword present), not double-claim.
+    io.fire(w.element, true);
+    await tracker.flushNow();
+
+    expect(w.scanned.codeword).toBe('arch');
+    expect(events.onCodewordsChanged).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('IntersectionTracker.unobserve', () => {
   it('removes the wrapper from pendingClaim so a detached wrapper does not leak a codeword', async () => {
     const store = new WrapperStore();

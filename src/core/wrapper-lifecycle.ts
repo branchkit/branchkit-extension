@@ -21,6 +21,10 @@ import * as idRegistry from '../scan/registry';
 import { isRecallLoaded, resolvePreferredCodeword } from '../labels/codeword-recall';
 import { dropPendingPut, hasSent, queueDelete } from '../labels/label-sync';
 import { tryRebindFromLimbo, tryRebindByStrongKey, isRecentlyOrphaned } from '../observe/limbo';
+import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
+import { geometryInBand } from '../lifecycle/reconcile';
+import { getCachedRect } from '../layout-cache';
+import { lifecycleCounters } from '../debug/perf-counters';
 import { store } from './store';
 import { pageSession } from '../lifecycle/page-session';
 
@@ -113,6 +117,7 @@ export function attachDiscovered(
   keyIndex: Map<string, ElementWrapper | null>,
 ): number {
   let added = 0;
+  const attached: ElementWrapper[] = [];
   for (let i = 0; i < refs.length; i++) {
     const ref = refs[i];
     // Skip a node we just transferred a wrapper *off* of (key-ownership rebind).
@@ -131,8 +136,47 @@ export function attachDiscovered(
     // (the YouTube-comment-skeleton case), not for wrapper lifecycle.
     // Trades unbounded wrapper growth on infinite-scroll pages for
     // correct scroll-back behavior (badges reappear on scroll up).
-    attachWrapper(new ElementWrapper(ref, elements[i]));
+    const wrapper = new ElementWrapper(ref, elements[i]);
+    attachWrapper(wrapper);
+    attached.push(wrapper);
     added++;
   }
+  primeInBandClaims(attached);
   return added;
+}
+
+// Prime-at-attach (notes/DESIGN_FLING_WAVE.md Part 1): a wrapper that is
+// in-band by geometry right now claims in the flush microtask at the end of
+// THIS task — which also builds and places its badge via the synchronous
+// onCodewordsChanged → reconcile chain — instead of waiting ~305ms p50 for
+// the IO to deliver the band-entry callback on saturated mid-fling frames.
+// The IO demotes to steady-state maintainer for these wrappers: its initial
+// callback finds the codeword present (claim branch no-ops) and keeps
+// owning exits, later entries, and flag corrections.
+//
+// Edge-triggered once per wrapper at creation, inside the path that created
+// it — NOT a level-triggered re-derivation. That distinction is what keeps
+// this from re-arming the reverted settle-pass toClaim fragmentation
+// (7fe37a0; see the design note). Scan-path wrappers never reach this:
+// processScanBatch claims inline pre-POST and attaches via attachWrapper
+// directly.
+function primeInBandClaims(attached: ElementWrapper[]): void {
+  if (attached.length === 0) return;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const primed: ElementWrapper[] = [];
+  for (const w of attached) {
+    if (w.scanned.codeword) continue;
+    const r = getCachedRect(w.element);
+    // Boxless skip (mirrors computeReconcilePlanLists' zero-rect guard):
+    // display:none / not-yet-laid-out elements report an all-zeros rect that
+    // would false-positive the band test at the viewport origin. Let the IO
+    // decide those when they gain a box.
+    if (r.width === 0 && r.height === 0 && r.top === 0 && r.left === 0) continue;
+    if (!geometryInBand(r, vw, vh, VIEWPORT_MARGIN_PX)) continue;
+    w.isInViewport = true;
+    w.tInBand ??= performance.now();
+    lifecycleCounters.primedClaims++;
+    primed.push(w);
+  }
+  if (primed.length > 0) pageSession.tracker.primeClaims(primed);
 }

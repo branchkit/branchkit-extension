@@ -139,6 +139,28 @@ export class IntersectionTracker {
   }
 
   /**
+   * Queue codeword claims for wrappers a caller just proved in-band by
+   * geometry, without waiting for the IO to deliver its band-entry callback
+   * (mid-fling that delivery ran ~305ms p50 — the dominant paint-latency
+   * stage; notes/DESIGN_FLING_WAVE.md Part 1). The caller owns the band
+   * check and the optimistic `isInViewport` write — the tracker only ever
+   * learns band state from IO entries or callers that just read geometry.
+   * Idempotent with the IO path: its claim branch skips wrappers that
+   * already hold a codeword, and a wrong optimistic flag is corrected by
+   * the IO's initial callback (a genuine out-of-band wrapper gets the
+   * normal release, sticky reclaim keeps the letter).
+   */
+  primeClaims(wrappers: ElementWrapper[]): void {
+    let queued = false;
+    for (const w of wrappers) {
+      if (w.scanned.codeword) continue;
+      this.pendingClaim.add(w);
+      queued = true;
+    }
+    if (queued) this.scheduleFlush();
+  }
+
+  /**
    * Force pending work to flush. Awaitable. Drains until both queues are
    * stable — a doFlush awaiting CLAIM_LABELS may have IO fire more
    * entries (or refreshViewportClaims push more wrappers) by the time

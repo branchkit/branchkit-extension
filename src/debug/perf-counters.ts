@@ -372,6 +372,10 @@ export interface LifecycleCounters {
   // nothing hintable (cheap pre-filter bail).
   discoveryRootsDeduped: number;
   discoveryRootsSkipped: number;
+  // Wrappers claim-primed at attach time (in-band by geometry, so the claim
+  // didn't wait for IO delivery — notes/DESIGN_FLING_WAVE.md Part 1). Sizes
+  // the fresh-row cohort whose attached_to_band stage collapsed to ~0.
+  primedClaims: number;
 }
 
 export const lifecycleCounters: LifecycleCounters = {
@@ -386,6 +390,7 @@ export const lifecycleCounters: LifecycleCounters = {
   processMutationsCalls: 0,
   discoveryRootsDeduped: 0,
   discoveryRootsSkipped: 0,
+  primedClaims: 0,
 };
 
 export function resetLifecycleCounters(): void {
