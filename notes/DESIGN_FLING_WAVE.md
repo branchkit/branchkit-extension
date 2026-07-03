@@ -192,6 +192,52 @@ fill slope rather than above it, and the dip shrinks by however much of
 it was fill-side. Whatever dip remains after that is teardown-side —
 step 4's territory.
 
+## Drill round 2 (2026-07-03, snapshot 23-44, sweep live) — the sweep must
+## be symmetric
+
+Fill improved again and perception still didn't move — dom_seen_to_shown
+p50 565 → 311 → **123ms** across rounds, yet the dip is byte-identical
+(shown 484 → 383, the same ~100-badge sag) and the user reports no
+difference. Round 9's verdict is now confirmed twice over: perception
+tracks the dip.
+
+The new tell: **band_to_claimed p90 jumped 13 → 377ms.** The one-
+directional sweep made band ENTRIES fast while EXITS still wait for
+starved IO delivery or the settle — so mid-fling the local reservoir
+drains (claims fast, releases slow), `claim()` hands out `''`, and the
+leading edge paints only after settle-time releases refill the pool.
+Worse, the claim-starved cohort is exactly the recycled rows'
+replacements — which is why the dip didn't close even at 123ms fill:
+the handoff badges were the ones left letterless.
+
+Fix: the sweep runs BOTH directions of the settle plan's lifecycle
+repair — stale-FALSE (entries, as shipped) and stale-TRUE (flag in,
+geometry out → flip flag + `queueRelease`). `labelReservoir.release` is
+local-synchronous (freed letters land at the front of the local free
+queue), so an exit in sweep N funds a claim in the same sweep's
+reconcile. Released wrappers are ≥1000px off-screen — hiding their
+badges is imperceptible, and sticky reclaim keeps their letters for the
+scroll-back.
+
+Why this does NOT re-arm the retired off-screen hide sweep's flap
+(seam 3 of paint-the-band): that sweep hid badges while LEAVING them
+band-flagged, so `wantsShown` stayed true and the settle plan re-showed
+them — hide/show forever. This one flips the band flag first; the plan
+agrees with the resulting state. It is the IO exit path, driven by
+geometry, at 10Hz — not a second visibility policy.
+
+Also added: the debug snapshot now carries a `wave` section
+(primed_claims, band_sweep_repairs/releases, reservoir stats) — the
+drill previously couldn't see the sweep counters at all (they lived
+only in the perf snapshot), which made this round's diagnosis
+inferential when it should have been direct.
+
+Prediction for drill round 3: band_to_claimed p90 back to ~sub-50ms,
+reservoir free-count healthy mid-fling, and the dip finally shrinks —
+recycle replacements claim instantly and paint inside the 250-500ms
+limbo hold. If the dip persists even then, it is teardown-side with no
+remaining fill-side excuse: proceed to step 4 (slot rebind).
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is

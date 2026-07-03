@@ -431,18 +431,20 @@ describe('IntersectionTracker.primeClaims', () => {
   });
 });
 
-describe('IntersectionTracker.sweepBandEntries', () => {
-  // Mid-scroll band-entry flag sweep (DESIGN_FLING_WAVE Part 1c): rows that
-  // cross the band edge mid-fling get their flag repaired by geometry
-  // instead of waiting out starved IO delivery. vw=800 vh=600 with the
-  // 1000px margin puts the band at y ∈ (-1000, 1600).
+describe('IntersectionTracker.sweepBand', () => {
+  // Mid-scroll band flag sweep (DESIGN_FLING_WAVE Part 1c + round 2): rows
+  // crossing the band edge mid-fling get their flag repaired by geometry
+  // in BOTH directions instead of waiting out starved IO delivery — the
+  // release direction funds the entry direction's claims via the local
+  // reservoir. vw=800 vh=600 with the 1000px margin puts the band at
+  // y ∈ (-1000, 1600).
 
   it('repairs the flag for out-of-band wrappers whose geometry is in-band', () => {
     const store = new WrapperStore();
     const tracker = new IntersectionTracker(store, { onCodewordsChanged: vi.fn() });
 
     // Both marked out-of-band by a prior IO delivery (isInViewport defaults
-    // to true on fresh wrappers; the sweep's cohort is IO-confirmed
+    // to true on fresh wrappers; the entry cohort is IO-confirmed
     // out-of-band wrappers that have since crossed the edge).
     const entering = new ElementWrapper(
       fakeElement('entering', { left: 0, top: 1200, width: 10, height: 10 }),
@@ -457,21 +459,51 @@ describe('IntersectionTracker.sweepBandEntries', () => {
     store.addWrapper(entering);
     store.addWrapper(farBelow);
 
-    const repaired = tracker.sweepBandEntries(800, 600);
+    const { repaired, released } = tracker.sweepBand(800, 600);
 
     expect(repaired).toBe(1);
+    expect(released).toBe(0);
     expect(entering.isInViewport).toBe(true);
     expect(entering.tInBand).not.toBeNull();
     expect(entering.lastRect).not.toBeNull(); // fresh rect kept for limbo
     expect(farBelow.isInViewport).toBe(false);
   });
 
-  it('skips already-in-band, limbo, disconnected, and boxless wrappers', () => {
+  it('releases in-band-flagged wrappers whose geometry left the band', async () => {
     const store = new WrapperStore();
     const tracker = new IntersectionTracker(store, { onCodewordsChanged: vi.fn() });
 
-    const alreadyIn = new ElementWrapper(fakeElement('in'), fakeScanned());
-    alreadyIn.isInViewport = true;
+    // Flag says in-band (stale-TRUE — the IO exit never delivered), geometry
+    // is 5000px down. The sweep must flip the flag and route through
+    // queueRelease: codeword cleared, stashed for sticky reclaim.
+    const exiting = new ElementWrapper(
+      fakeElement('exiting', { left: 0, top: 5000, width: 10, height: 10 }),
+      fakeScanned({ codeword: 'arch bake' }),
+    );
+    exiting.isInViewport = true;
+    store.addWrapper(exiting);
+
+    setupClaimResponse([]);
+    const { repaired, released } = tracker.sweepBand(800, 600);
+    await tracker.flushNow();
+
+    expect(repaired).toBe(0);
+    expect(released).toBe(1);
+    expect(exiting.isInViewport).toBe(false);
+    expect(exiting.scanned.codeword).toBe('');
+    expect(exiting.preferredCodeword).toBe('arch bake');
+    // The freed letter is back in the local reservoir — the round-2 pool
+    // starvation fix. A fresh claim must be funded by it.
+    expect(labelReservoir.claim(1)).toEqual(['arch bake']);
+  });
+
+  it('skips settled, limbo, disconnected, and boxless wrappers', () => {
+    const store = new WrapperStore();
+    const tracker = new IntersectionTracker(store, { onCodewordsChanged: vi.fn() });
+
+    // Flag and geometry agree (in-band flag, on-screen rect) — untouched.
+    const settled = new ElementWrapper(fakeElement('in'), fakeScanned());
+    settled.isInViewport = true;
 
     const limbo = new ElementWrapper(fakeElement('limbo'), fakeScanned());
     limbo.isInViewport = false;
@@ -487,11 +519,13 @@ describe('IntersectionTracker.sweepBandEntries', () => {
     );
     boxless.isInViewport = false;
 
-    for (const w of [alreadyIn, limbo, gone, boxless]) store.addWrapper(w);
+    for (const w of [settled, limbo, gone, boxless]) store.addWrapper(w);
 
-    const repaired = tracker.sweepBandEntries(800, 600);
+    const { repaired, released } = tracker.sweepBand(800, 600);
 
     expect(repaired).toBe(0);
+    expect(released).toBe(0);
+    expect(settled.isInViewport).toBe(true);
     expect(limbo.isInViewport).toBe(false);
     expect(gone.isInViewport).toBe(false);
     expect(boxless.isInViewport).toBe(false);

@@ -3248,6 +3248,16 @@ function paintLatencyStats() {
  * send — see captureDebugSnapshot's extras param. */
 function snapshotExtras() {
   return {
+    // Fling-wave pipeline health (notes/DESIGN_FLING_WAVE.md): cohort sizes
+    // for the two geometry fast paths and the reservoir state they depend
+    // on. reservoir.free pinned at ~0 during a fling = claims starving
+    // (the round-2 signature); band_sweep_releases should fund it.
+    wave: {
+      primed_claims: lifecycleCounters.primedClaims,
+      band_sweep_repairs: lifecycleCounters.bandSweepRepairs,
+      band_sweep_releases: lifecycleCounters.bandSweepReleases,
+      reservoir: labelReservoir.stats(),
+    },
     paint_latency: paintLatencyStats(),
     // Raw eye-level ring: [t_ms, tr_rows, wrappers, painted, shown] change
     // entries from the scroll-armed sampler above.
@@ -3326,27 +3336,28 @@ function runSettlePipeline(discovery: 'band' | 'store'): void {
   scheduleReposition();
 }
 
-// Mid-fling band-entry sweep throttle (notes/DESIGN_FLING_WAVE.md Part 1c).
-// 10Hz while scroll events arrive; a timestamp, not a timer — nothing to
-// tear down, nothing free-running (wedge discipline). Gated on hintsVisible:
-// with hints down the IO's own cadence is fine (nothing user-facing waits),
-// and the next show re-converges from scratch.
+// Mid-fling band sweep throttle (notes/DESIGN_FLING_WAVE.md Part 1c +
+// drill round 2). 10Hz while scroll events arrive; a timestamp, not a
+// timer — nothing to tear down, nothing free-running (wedge discipline).
+// Gated on hintsVisible: with hints down the IO's own cadence is fine
+// (nothing user-facing waits), and the next show re-converges from scratch.
 const MID_SCROLL_BAND_SWEEP_MS = 100;
 let bandSweepLastAt = 0;
-function noteBandEntrySweep(): void {
+function noteBandSweep(): void {
   if (!pageSession.hintsVisible) return;
   const now = performance.now();
   if (now - bandSweepLastAt < MID_SCROLL_BAND_SWEEP_MS) return;
   bandSweepLastAt = now;
-  const repaired = pageSession.tracker.sweepBandEntries(window.innerWidth, window.innerHeight);
-  if (repaired > 0) {
+  const { repaired, released } = pageSession.tracker.sweepBand(window.innerWidth, window.innerHeight);
+  if (repaired > 0 || released > 0) {
     lifecycleCounters.bandSweepRepairs += repaired;
-    firehoseStep('band_sweep:repaired', repaired, 20);
+    lifecycleCounters.bandSweepReleases += released;
+    firehoseStep('band_sweep:changed', repaired + released, 20);
     // The designed convergence entry: refreshViewportClaims picks up the
-    // just-flipped flags (claim), badgeNewlyCodeworded builds. The claim
-    // flush lands in this task's microtask tail, so the leading edge of a
-    // fling paints within the sweep's own 100ms cadence instead of waiting
-    // out the IO.
+    // just-flipped flags (claim), badgeNewlyCodeworded builds. Releases
+    // matter here too — the freed letters land at the front of the local
+    // reservoir synchronously, so a claim that would have returned '' a
+    // sweep ago is funded NOW, in this task's microtask tail.
     reconcile();
   }
 }
@@ -3358,9 +3369,10 @@ function scheduleScrollReposition(e?: Event): void {
   noteReconcileScroll();
   // Arm the eye-level paint-stability sampler (self-terminating; see above).
   notePaintSamplerScroll();
-  // Mid-fling band-entry repair (throttled) — badges for rows crossing the
-  // band edge paint DURING the fling, not after the IO catches up.
-  noteBandEntrySweep();
+  // Mid-fling band repair (throttled, both directions) — badges for rows
+  // crossing the band edge paint DURING the fling, funded by same-sweep
+  // releases, instead of waiting for the IO to catch up.
+  noteBandSweep();
   // Gesture-start accelerator re-detection (timer null = first event of this
   // scroll burst). A scroller that only became scrollable on hover (QuickBase
   // classic report grids flip overflow:hidden->auto under :hover) emits no

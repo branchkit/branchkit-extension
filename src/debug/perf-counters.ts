@@ -376,10 +376,13 @@ export interface LifecycleCounters {
   // didn't wait for IO delivery — notes/DESIGN_FLING_WAVE.md Part 1). Sizes
   // the fresh-row cohort whose attached_to_band stage collapsed to ~0.
   primedClaims: number;
-  // Band flags repaired by the mid-scroll sweep (rows that crossed the band
-  // edge mid-fling, caught by geometry ahead of the starved IO —
-  // notes/DESIGN_FLING_WAVE.md Part 1c). Sizes the edge-crossing cohort.
+  // Band flags repaired/released by the mid-scroll sweep (rows crossing the
+  // band edge mid-fling, caught by geometry ahead of the starved IO —
+  // notes/DESIGN_FLING_WAVE.md Part 1c + round 2). Repairs size the
+  // entering cohort; releases size the exits that fund the entries' claims
+  // (local reservoir round-trip within one sweep).
   bandSweepRepairs: number;
+  bandSweepReleases: number;
 }
 
 export const lifecycleCounters: LifecycleCounters = {
@@ -396,6 +399,7 @@ export const lifecycleCounters: LifecycleCounters = {
   discoveryRootsSkipped: 0,
   primedClaims: 0,
   bandSweepRepairs: 0,
+  bandSweepReleases: 0,
 };
 
 export function resetLifecycleCounters(): void {

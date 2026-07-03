@@ -140,39 +140,58 @@ export class IntersectionTracker {
   }
 
   /**
-   * Mid-scroll band-entry flag sweep — the settle plan's stale-FALSE repair
-   * (toRepair), run one-directionally while the user is actively scrolling
-   * (notes/DESIGN_FLING_WAVE.md Part 1c). On a virtualized grid most rows
-   * are inserted OUTSIDE the band and cross its edge mid-fling; the IO's
-   * delivery of that crossing starves on saturated frames (attached_to_band
-   * p90 581ms, drill round 1), so this reads the geometry directly. One
-   * gBCR per out-of-band live wrapper, no interleaved writes — a single
+   * Mid-scroll band flag sweep — BOTH directions of the settle plan's
+   * lifecycle repair, run by geometry while the user is actively scrolling
+   * (notes/DESIGN_FLING_WAVE.md Part 1c + drill round 2). On a virtualized
+   * grid most rows are inserted OUTSIDE the band and cross its edge
+   * mid-fling; the IO's delivery of those crossings starves on saturated
+   * frames (attached_to_band p90 581ms, round 1), so this reads geometry
+   * directly. One gBCR per live wrapper, no interleaved writes — a single
    * reflow per sweep; the caller throttles (10Hz) and runs reconcile() when
-   * anything was repaired (claims + build flow through the normal
-   * convergence entry — no new claim path). Exits deliberately NOT handled
-   * here: teardown stays settle-scoped, which also removes any flap risk
-   * with late IO entries.
+   * anything changed (claims + build flow through the normal convergence
+   * entry — no new claim path).
+   *
+   * The release direction is load-bearing for the POOL, not just flag
+   * hygiene: entries-only drained the local reservoir mid-fling (claims
+   * fast, releases waiting on starved IO/settle — band_to_claimed p90
+   * 13 → 377ms, round 2) and left the leading edge letterless until
+   * settle. `labelReservoir.release` is local-synchronous, so an exit in
+   * this sweep funds a claim in the same sweep's reconcile. This is NOT
+   * the retired off-screen hide sweep (paint-the-band seam 3): that one
+   * hid badges while LEAVING them band-flagged, so the plan re-showed
+   * them — a flap. This flips the flag first; plan and IO agree with the
+   * result.
    */
-  sweepBandEntries(vw: number, vh: number): number {
+  sweepBand(vw: number, vh: number): { repaired: number; released: number } {
     const __t0 = performance.now();
     let repaired = 0;
+    let released = 0;
     for (const w of this.store.all) {
-      if (w.isInViewport) continue;
       if (w.disconnectedAt !== null) continue;
       if (!w.element.isConnected) continue;
       const r = w.element.getBoundingClientRect();
       // Boxless skip (the reconcile plan's zero-rect guard): display:none
       // elements report all-zeros, which would false-positive at the origin.
       if (r.width === 0 && r.height === 0 && r.top === 0 && r.left === 0) continue;
-      if (!geometryInBand(r, vw, vh, VIEWPORT_MARGIN_PX)) continue;
-      w.lastRect = r; // free fresh rect — keeps the limbo tiebreaker current
-      w.isInViewport = true;
-      w.tInBand ??= performance.now();
-      repaired++;
+      const inBand = geometryInBand(r, vw, vh, VIEWPORT_MARGIN_PX);
+      if (inBand && !w.isInViewport) {
+        w.lastRect = r; // free fresh rect — keeps the limbo tiebreaker current
+        w.isInViewport = true;
+        w.tInBand ??= performance.now();
+        repaired++;
+      } else if (!inBand && w.isInViewport) {
+        w.lastRect = r;
+        w.isInViewport = false;
+        // Same path as the IO exit branch: cancels any pending claim,
+        // stashes preferredCodeword for sticky reclaim, drops the badge to
+        // dormant. ≥1000px off-screen, so the hide is imperceptible.
+        this.queueRelease(w);
+        released++;
+      }
     }
     const rec = (globalThis as { __branchkitRecordCpu?: (label: string, ms: number) => void }).__branchkitRecordCpu;
-    if (rec) rec('intersection:sweepBandEntries', performance.now() - __t0);
-    return repaired;
+    if (rec) rec('intersection:sweepBand', performance.now() - __t0);
+    return { repaired, released };
   }
 
   /**
