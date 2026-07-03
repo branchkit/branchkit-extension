@@ -26,13 +26,21 @@ import { cacheVisibility, clearLayoutCache } from '../layout-cache';
 import { getHintVisibility } from '../config';
 import { recordCpu, lifecycleCounters } from '../debug/perf-counters';
 import { firehoseStep } from '../debug/firehose';
-import { Message } from '../types';
 import { pageSession } from '../lifecycle/page-session';
 
 // Beyond the HUGE_MUTATIONS_COUNT threshold (DarkReader's pattern), we
 // stop processing nodes individually and just queue a coarse refresh.
 // Slack and Linear regularly trip 1000+ mutations per scroll event.
 const HUGE_MUTATIONS_COUNT = 1000;
+
+// Minimum batch size before a MO-path firehose breadcrumb ships. The MO
+// callback fires ~80×/sec on churny pages (YouTube /watch scroll bursts), and
+// every breadcrumb is a sendMessage + SW wakeup + localhost HTTP POST — ungated
+// (threshold 1, left over from the nav-wedge diagnostic pass) that was up to 6
+// messages per mutation batch, hundreds/sec, on every mutation-active page.
+// 100 restores the gating INVESTIGATION_YOUTUBE_WATCH_PERF.md records: only
+// bursts big enough to plausibly wedge are worth a breadcrumb.
+const FIREHOSE_MIN = 100;
 const HUGE_MUTATION_IDLE_MS = 50;
 
 function isOwnMutation(n: Node): boolean {
@@ -139,7 +147,7 @@ function drainDiscovery(): void {
   const roots = [...pageSession.pendingDiscoveryRoots];
   pageSession.pendingDiscoveryRoots.clear();
   const __rootCount = roots.length;
-  firehoseStep('drainDiscovery:start', __rootCount);
+  firehoseStep('drainDiscovery:start', __rootCount, FIREHOSE_MIN);
 
   // Ancestor-dedup: if a queued root is contained by another queued
   // root, the ancestor's discoverInSubtree already deep-walks it. Drop
@@ -201,7 +209,7 @@ function drainDiscovery(): void {
       __rootCount,
     );
   }
-  firehoseStep('drainDiscovery:end', __rootCount);
+  firehoseStep('drainDiscovery:end', __rootCount, FIREHOSE_MIN);
 }
 
 // True if any light-DOM ancestor of `el` is also a member of `set`.
@@ -218,7 +226,7 @@ function hasQueuedAncestor(el: Element, set: Set<Element>): boolean {
 export function processMutations(records: MutationRecord[]): void {
   const __cpuStart = performance.now();
   lifecycleCounters.processMutationsCalls++;
-  firehoseStep('processMutations:start', records.length);
+  firehoseStep('processMutations:start', records.length, FIREHOSE_MIN);
   let sawRemoval = false;
 
   for (const m of records) {
@@ -254,40 +262,13 @@ export function processMutations(records: MutationRecord[]): void {
   // Grammar push for added subtrees now happens inside drainDiscovery
   // (deferred). Removals still push via dropDisconnectedWrappers above.
   recordCpu('processMutations', performance.now() - __cpuStart);
-  firehoseStep('processMutations:end', records.length);
+  firehoseStep('processMutations:end', records.length, FIREHOSE_MIN);
 }
 
 function handlePageMutations(records: MutationRecord[]): void {
   const __cpuStart = performance.now();
   lifecycleCounters.moCallbackInvocations++;
-  firehoseStep('moCallback:start', records.length);
-  // Diagnostic: sample the first record's type and target to find the source
-  // of the high-rate end_all_own loop on YouTube /featured. The 28-records-
-  // every-2ms pattern means something is mutating 28 of our badges in a tight
-  // microtask loop — discriminating childList vs attributes vs the attribute
-  // name pins which of our DOM operations is the trigger.
-  if (records.length > 0 && Math.random() < 0.05) {
-    const r0 = records[0];
-    const target0 = r0.target instanceof Element ? r0.target : null;
-    const tag = target0?.tagName?.toLowerCase() ?? '?';
-    const attrName = r0.type === 'attributes' ? r0.attributeName : null;
-    const added = r0.type === 'childList' ? r0.addedNodes.length : 0;
-    const removed = r0.type === 'childList' ? r0.removedNodes.length : 0;
-    chrome.runtime.sendMessage({
-      type: 'DEBUG_LOG',
-      tag: 'pipeline.cs_firehose_step',
-      data: {
-        step: 'moCallback:sample',
-        size: records.length,
-        rec_type: r0.type,
-        tag,
-        attr: attrName,
-        added,
-        removed,
-        has_own_attr: target0?.hasAttribute('data-branchkit-hint') ?? false,
-      },
-    } as Message).catch(() => {});
-  }
+  firehoseStep('moCallback:start', records.length, FIREHOSE_MIN);
   // Hints are visible — behavior depends on visibility mode.
   // In "manual" mode, defer mutations so codewords don't shuffle while
   // the user is reading badges. hideHints() flushes via doScan().
@@ -296,13 +277,13 @@ function handlePageMutations(records: MutationRecord[]): void {
   if (pageSession.hintsVisible && getHintVisibility() === 'manual') {
     pageSession.pendingMutation = true;
     recordCpu('moCallback', performance.now() - __cpuStart);
-    firehoseStep('moCallback:end_manual_deferred', records.length);
+    firehoseStep('moCallback:end_manual_deferred', records.length, FIREHOSE_MIN);
     return;
   }
 
   // Filter our own mutations early so the threshold isn't tripped by
   // badge mount/unmount churn.
-  firehoseStep('moCallback:filter_start', records.length);
+  firehoseStep('moCallback:filter_start', records.length, FIREHOSE_MIN);
   const foreign = records.filter(m => {
     if (m.type === 'childList') {
       const allOwnAdded = Array.from(m.addedNodes).every(isOwnMutation);
@@ -311,11 +292,11 @@ function handlePageMutations(records: MutationRecord[]): void {
     }
     return !isOwnMutation(m.target);
   });
-  firehoseStep('moCallback:filter_end', foreign.length);
+  firehoseStep('moCallback:filter_end', foreign.length, FIREHOSE_MIN);
   lifecycleCounters.moForeignRecords += foreign.length;
   if (foreign.length === 0) {
     recordCpu('moCallback', performance.now() - __cpuStart);
-    firehoseStep('moCallback:end_all_own', records.length);
+    firehoseStep('moCallback:end_all_own', records.length, FIREHOSE_MIN);
     return;
   }
 
@@ -343,7 +324,7 @@ function handlePageMutations(records: MutationRecord[]): void {
         });
     }, HUGE_MUTATION_IDLE_MS);
     recordCpu('moCallback', performance.now() - __cpuStart);
-    firehoseStep('moCallback:end_huge_scheduled', foreign.length);
+    firehoseStep('moCallback:end_huge_scheduled', foreign.length, FIREHOSE_MIN);
     return;
   }
 
@@ -357,7 +338,7 @@ function handlePageMutations(records: MutationRecord[]): void {
   // settle is the same trade already accepted for scroll/resize.
   if (pageSession.hintsVisible) pageSession.deps.scheduleDeferredReposition();
   recordCpu('moCallback', performance.now() - __cpuStart);
-  firehoseStep('moCallback:end_normal', foreign.length);
+  firehoseStep('moCallback:end_normal', foreign.length, FIREHOSE_MIN);
 }
 
 let observer: MutationObserver | undefined;
