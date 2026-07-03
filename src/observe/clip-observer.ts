@@ -17,8 +17,13 @@
  * arbitrary overlays (that stays the elementFromPoint job); the two signals
  * compose via `applyOcclusion` (effective = overlayCovered || clipped).
  *
- * Flag-gated (`bkClipObserver`, default off). One shared observer per scroll
- * container root (like Rango's `scrollIntersectionObservers`).
+ * Flag-gated (`bkClipObserver`, default ON). One shared observer per scroll
+ * container root (like Rango's `scrollIntersectionObservers`), released when
+ * its last target is dropped: `observersByRoot` holds a strong ref to the root
+ * Element, so an entry that outlives its targets pins the root — and, for a
+ * detached SPA route's main scroller, the route's entire subtree — for the
+ * life of the tab. Hundreds of SPA navs/day made this the extension's largest
+ * long-session memory leak (notes/INVESTIGATION_LONG_SESSION_PERF.md, finding 1).
  */
 
 import type { ElementWrapper } from '../scan/element-wrapper';
@@ -37,6 +42,7 @@ export function isClipObserverEnabled(): boolean {
 }
 
 const observersByRoot = new Map<Element, IntersectionObserver>();
+const targetsByRoot = new Map<Element, Set<Element>>();
 const rootByTarget = new Map<Element, Element>();
 const wrapperByTarget = new Map<Element, ElementWrapper>();
 
@@ -64,7 +70,20 @@ function onClipIntersection(entries: IntersectionObserverEntry[]): void {
 
 function unobserveTarget(el: Element): void {
   const root = rootByTarget.get(el);
-  if (root) observersByRoot.get(root)?.unobserve(el);
+  if (root) {
+    const io = observersByRoot.get(root);
+    io?.unobserve(el);
+    const targets = targetsByRoot.get(root);
+    targets?.delete(el);
+    // Last target gone → release the root's observer. Without this the Map
+    // entry (strong ref to the root) survives the root's own disconnection,
+    // pinning detached SPA subtrees until teardown.
+    if (targets && targets.size === 0) {
+      io?.disconnect();
+      observersByRoot.delete(root);
+      targetsByRoot.delete(root);
+    }
+  }
   rootByTarget.delete(el);
   const w = wrapperByTarget.get(el);
   wrapperByTarget.delete(el);
@@ -102,6 +121,9 @@ export function reconcileClipObservation(wrappers: Iterable<ElementWrapper>): vo
     rootByTarget.set(w.element, root);
     wrapperByTarget.set(w.element, w);
     getObserver(root).observe(w.element);
+    let targets = targetsByRoot.get(root);
+    if (!targets) targetsByRoot.set(root, targets = new Set());
+    targets.add(w.element);
   }
   for (const el of [...rootByTarget.keys()]) {
     if (!wanted.has(el)) unobserveTarget(el);
@@ -116,6 +138,7 @@ export function reconcileClipObservation(wrappers: Iterable<ElementWrapper>): vo
 export function drainClipObservers(): void {
   for (const io of observersByRoot.values()) io.disconnect();
   observersByRoot.clear();
+  targetsByRoot.clear();
   for (const w of wrapperByTarget.values()) {
     if (w.clipped) {
       w.clipped = false;

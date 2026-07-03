@@ -93,6 +93,24 @@ describe('reconcileClipObservation', () => {
     expect(clipObserverDebug().targets).toBe(0);
   });
 
+  it('releases the root observer when its last target is dropped', () => {
+    // The root Map entry strongly references the scroll container; an entry
+    // that outlives its targets pins a detached SPA route's subtree for the
+    // life of the tab (the long-session leak — INVESTIGATION_LONG_SESSION_PERF).
+    setClipObserverEnabled(true);
+    const scroller = makeScroller();
+    const a = document.createElement('button');
+    const b = document.createElement('button');
+    scroller.appendChild(a);
+    scroller.appendChild(b);
+    reconcileClipObservation([wrapperFor(a), wrapperFor(b)]);
+    expect(clipObserverDebug()).toEqual({ roots: 1, targets: 2 });
+    reconcileClipObservation([wrapperFor(a)]); // b dropped; root still has a
+    expect(clipObserverDebug()).toEqual({ roots: 1, targets: 1 });
+    reconcileClipObservation([]); // last target gone → root observer released
+    expect(clipObserverDebug()).toEqual({ roots: 0, targets: 0 });
+  });
+
   it('drainClipObservers clears everything', () => {
     setClipObserverEnabled(true);
     const scroller = makeScroller();
