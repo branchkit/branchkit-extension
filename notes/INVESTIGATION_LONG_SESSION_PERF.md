@@ -4,7 +4,10 @@
 (firehose re-gate, perf-publisher visibility gate + watchdog stop, ScrollTimeline
 gate on scroll-accel, clip-observer root release — four commits on main, unpushed;
 tests + tsc green). Medium/strategic items (5–11) and live Firefox re-verification
-still open.
+still open. Same-day review (8-angle) confirmed and fixed three regressions in
+those commits (38837ba: firehose start/end pairing, cpu.share baseline re-arm,
+one-shot dataset publishes); surviving review findings + host-side factors are in
+the two sections at the end of this note.
 
 Trigger: user-observed Firefox slowdown after days of uptime (possibly machine-wide), fixed by
 restarting Firefox. Question: is the extension responsible, and where do our steady-state and
@@ -154,6 +157,100 @@ Strategic:
   `src/placement/stacking.ts` landed 2026-06-02.
 - DESIGN_TEARDOWN_OWNERSHIP.md labels publishPerfSnapshot/shipPerfReport "(dev)" — they are not
   dev-gated in code.
+
+## Review backlog (2026-07-03, 8-angle review of the four fixes; verified findings not yet fixed)
+
+Correctness / behavior:
+- **Clip-observer stale root binding (CONFIRMED, pre-existing, interacts with the leak fix).**
+  `reconcileClipObservation`'s `if (rootByTarget.has(w.element)) continue` never rechecks the
+  root. A reparent-while-connected (same-task remove+insert — never enters limbo, wrapper
+  survives) leaves a continuously-hinted target bound to its OLD scroller: (a) a detached old
+  scroller stays pinned in observersByRoot despite the release fix (release only fires via
+  unobserveTarget); (b) per IO spec, a target outside its root's containing-block chain reports
+  isIntersecting:false → clipped=true → visible badge wrongly hidden, non-self-healing. Related
+  PLAUSIBLE race: wrapperByTarget can hold a dead wrapper if detach→reattach→claim completes
+  between reconciles (clip signal lands on the dead wrapper; ghost badge). Shared fix shape:
+  cheap recheck when `!root.isConnected || wrapperByTarget.get(el) !== w`, re-observe on
+  mismatch (avoid unconditional findClippingScroller — that trades away bounded-to-churn cost).
+- **Firefox retarget repaint gap (PLAUSIBLE, low).** hints.ts `retarget()` ends with
+  `if (isScrollAccelEnabled()) repositionHostNow()` — Firefox previously took this branch
+  (flag true, accel null); with the gate it doesn't, so a limbo rebind leaves the badge at the
+  old position until the settle/reposition catches up (~100ms; usually imperceptible since
+  rebinds are same-fingerprint slots). Fix shape: retarget always repositions (one badge, cheap).
+- **Clip-observer add-path ordering (PLAUSIBLE, near-nil trigger, free hardening).** In the
+  reconcile add path, `rootByTarget.set` and `observe()` precede the targetsByRoot bookkeeping;
+  a throwing observe() would strand a root with no targets Set (release can never fire) and a
+  believed-observed target. Move bookkeeping first; nothing observes the order (initial IO
+  callback is async).
+
+Structural (verified premises):
+- **Heavy pages still ship ~4-6 breadcrumbs per MO callback** when batches clear 100 records
+  (Slack/Linear: 1000+/scroll → ~320-480 msg/s during bursts). FIREHOSE_MIN gates size, not
+  rate, and firehoseStep's default threshold is still 1 (policy lives in a comment). Fix shape:
+  move burst policy into the firehose module (rate limiter or required threshold param), or a
+  storage-flag master gate like bkClipObserver.
+- **Per-callback visibility gates don't generalize** — the limbo sweeper (250ms
+  finalizeExpiredLimboWrappers, whole-store copy) still runs hidden, in the same registry as
+  the two gated intervals. Right altitude: SessionResources pause/resume wired to the existing
+  onVisibilityChange, replacing per-callback checks (also kills the residual ~1 wakeup/s/tab).
+- **Watchdog belongs in SessionResources.** resources.timeout self-removes on fire (a chain
+  re-registered per tick is cleanly covered by teardownAll) and track() takes the longtask
+  observer. Pass pageSession.resources into startPerfObservers (do NOT import pageSession from
+  perf-counters — cycle via mutation-source). Deletes stopPerfObservers + the flag + the
+  hand-added quiesceOrphan call.
+- **targetsByRoot → refcount.** container-resize-tracker.ts already uses Map<Element, number>
+  release-at-zero; the Set's contents are never read. One number, one fewer sync surface.
+  (Fix the resize tracker's own underflow bug — audit finding 8 — while converging.)
+- **Scroll-accel gate at setter altitude.** Only one caller today (verified: no
+  storage.onChanged handles bkScrollAccel), but folding `&& isScrollTimelineSupported()` into
+  the glue setters makes future bypass impossible; deeper still: short-circuit
+  syncScrollAccelChain when the ctor is absent.
+
+Refuted (for the record): drainDiscovery FIREHOSE_MIN miscalibration (root counts routinely
+clear 100 on the pages that matter — the code's own size buckets and the ~200 roots/pass
+measurement; ≥100-records/roots is the investigation's original documented calibration);
+quiesceOrphan shared-try risk (drainReconcilePositioner is just registry.clear(), can't throw);
+clip release/recreate churn (findClippingScroller re-runs were pre-existing; new cost is one IO
+disconnect+construct per zero-crossing — rounding error).
+
+## Host-side factors (same-day audit of non-extension contributors to machine-wide slowdown)
+
+Separate repos (actuator / plugins/browser / shell-macos) — not fixed in this pass. Ranked:
+1. **Show-all archive roll is O(rolls²) inline gzip** (HIGH, CONFIRMED) —
+   `actuator/src/observability/sinks/sink_io.rs:97-129` decompresses the ENTIRE day archive
+   (~44MB gz ≈ 400-500MB raw) into memory, appends the 50MB hot file, re-gzips — synchronously
+   on the event-EMITTING thread (bus sinks are synchronous). ~6-10 rolls/day, each bigger:
+   0.5-1GB alloc spikes + multi-second stalls of e.g. an RPC handler mid-grammar-batch, daily,
+   forever. Matches "machine feels slow sometimes." Fix: per-roll segments
+   (`<date>.<n>.jsonl.gz`) or day-boundary gzip on a background thread. Also: the 30-day
+   retention sweep only runs inside the size-roll branch — an idle machine never sweeps.
+2. **Event-volume baseline** (HIGH, CONFIRMED) — hint churn writes ~0.5-1GB/day of JSONL/text:
+   77k state.write_succeeded in 5h; unbuffered writeln! per line per sink (actuator.log +
+   show-all), paid inline by the emitter; this volume is what feeds #1. Fix: severity-gate or
+   sample state.write_succeeded in the sinks (visible counts, not silent drops) + BufWriter.
+3. **grammar_hwm/vocabulary_hwm grow monotonically** (MOD-HIGH) — never pruned
+   (state/mod.rs:347, locked by test); browser_tabs page-title words + user references are
+   unbounded cardinality; every vocabulary commit (per scroll-quiet + 300ms backstop)
+   serializes + hashes the whole union — commits get slower for the life of the app session
+   (consistent with "restarting BranchKit helps"). Fix: prune HWM on periodic rebuild, or
+   memoize compiled DAG/hash on unchanged union.
+4. **`/debug-log` amplification chain un-rate-limited** (HIGH historically, MOD now) — each
+   extension debug POST → plugin stderr → actuator stderr reader (NO rate limit, unlike plugin
+   emits capped 100/window) → Info-level → 2 disk sinks + roll pressure. This is what the old
+   firehose flood turned into host-side for weeks. Fix: rate-limit the stderr reader or
+   classify relayed lines at Debug.
+5. **`lsof -iTCP` fork per SSE connect** (MODERATE) — plugins/browser sse.go:161 →
+   os/macos/system.rs:777 spawns lsof per accept; walks EVERY process's file tables; clusters
+   during reconnect storms. Fix: TTL-cache port→bundle + rate-limit per conn_id.
+6. **/tmp/branchkit.log never rotates; open/seek/write/close per line; 10s audio heartbeat
+   forever** (LOW-MED) — ActuatorConnection.swift:88; 147k lines today. Fix: persistent
+   O_APPEND handle + size rotation + debug-gate heartbeat.
+7. **Browser plugin FrameSessions never deleted** (LOW, SUSPECTED) — batch.go sweep only marks
+   SweptStale, never deletes; orphaned CS tabs stop sending session_end (known reload bug);
+   dead Codewords maps accumulate; every sweep/reproject iterates the whole map. Fix: delete
+   after SweptStale + grace.
+Clean (traced): live-SSE registry, replay rings, Chrome offscreen path, Swift shell timers,
+audit log, extension-perf.jsonl rotation (bounded at 2×64MiB).
 
 ## Live confirmation on the user's running Firefox (before any fix)
 - `document.documentElement.getAttribute('data-bk-scroll-accel')` → expect `unsupported`.
