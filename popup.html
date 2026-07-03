@@ -301,6 +301,19 @@
       width: 100%;
     }
     .options-link:hover { text-decoration: underline; }
+    .grant-access {
+      font: inherit;
+      font-size: 12px;
+      display: block;
+      width: 100%;
+      margin: 2px 0 8px;
+      padding: 5px 10px;
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: white;
+      border-radius: 4px;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
@@ -309,6 +322,10 @@
     <span class="dot" id="dot"></span>
     <span id="status-text">Checking...</span>
   </div>
+  <button id="grant-access" class="grant-access" hidden
+          title="Firefox requires granting host access before the extension can reach BranchKit on this machine">
+    Grant local access
+  </button>
   <div class="setting">
     <label for="hint-visibility">Hints</label>
     <select id="hint-visibility">

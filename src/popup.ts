@@ -41,23 +41,67 @@ let draftRuleId: string | null = null;
 
 // --- Global settings (existing) ---
 
+// The origin the background needs for discovery + SSE to the BranchKit host.
+// Firefox MV3 treats manifest host permissions as opt-in: on a fresh install
+// this origin is NOT granted, every discovery fetch dies silently on CORS,
+// and the extension impersonates a healthy standalone setup (hints paint,
+// voice never connects). The about:addons Permissions tab doesn't reliably
+// show for temporary add-ons, so this popup is the one guaranteed surface
+// that can name the problem and fix it (permissions.request needs a user
+// gesture — the button click qualifies). Chrome grants host permissions at
+// install, so the blocked state never shows there.
+const HOST_ORIGIN = 'http://127.0.0.1/*';
+
 async function checkStatus(): Promise<void> {
   const dot = document.getElementById('dot')!;
   const text = document.getElementById('status-text')!;
+  const grantBtn = document.getElementById('grant-access') as HTMLButtonElement | null;
+  if (grantBtn) grantBtn.hidden = true;
 
   try {
     const resp = await chrome.runtime.sendMessage({ type: 'GET_HEALTH' });
     if (resp?.branchkit) {
       dot.className = 'dot connected';
       text.textContent = 'Connected to BranchKit';
+      return;
+    }
+    dot.className = 'dot disconnected';
+    let hasHostAccess = true;
+    try {
+      hasHostAccess = await chrome.permissions.contains({ origins: [HOST_ORIGIN] });
+    } catch { /* permissions API unavailable — report the generic state */ }
+    if (!hasHostAccess && grantBtn) {
+      text.textContent = 'Browser is blocking local access';
+      grantBtn.hidden = false;
     } else {
-      dot.className = 'dot disconnected';
       text.textContent = 'BranchKit not detected';
     }
   } catch {
     dot.className = 'dot disconnected';
     text.textContent = 'Extension error';
   }
+}
+
+function initGrantButton(): void {
+  const btn = document.getElementById('grant-access') as HTMLButtonElement | null;
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    const text = document.getElementById('status-text')!;
+    let granted = false;
+    try {
+      // Must be called directly from the click handler (user gesture).
+      granted = await chrome.permissions.request({ origins: [HOST_ORIGIN] });
+    } catch {
+      granted = false;
+    }
+    if (!granted) return; // user dismissed the browser dialog — leave the button up
+    btn.hidden = true;
+    text.textContent = 'Connecting…';
+    // The background's permissions.onAdded listener connects immediately;
+    // poll a couple of times so the dot flips while the popup is still open.
+    setTimeout(checkStatus, 1_000);
+    setTimeout(checkStatus, 3_000);
+  });
 }
 
 function initSyncedSelect(id: string, storageKey: string): void {
@@ -451,6 +495,7 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
 
 async function init(): Promise<void> {
   checkStatus();
+  initGrantButton();
   initSyncedSelect('hint-visibility', 'hintVisibility');
   initSyncedSelect('hint-mode', 'badgeDisplayMode');
   initSyncedCheckbox('aggressive-hints', 'aggressiveHints');

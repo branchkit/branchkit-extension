@@ -1439,6 +1439,22 @@ async function reinjectContentScripts(): Promise<void> {
 // Worst-case detection latency for a silent drop is one alarm period.
 // notes/DESIGN_SSE_RESILIENCE.md (4).
 chrome.alarms.create('connection-check', { periodInMinutes: 0.5 });
+
+// Firefox MV3 treats host permissions as opt-in, so a fresh install can sit
+// permission-blocked: every discovery fetch to 127.0.0.1 dies on CORS inside
+// discoverPlugin's catch and the extension silently settles into standalone
+// mode (hints paint, voice never connects — 2026-07-03 incident). When the
+// user grants host access (the popup's "Grant local access" button, or
+// about:addons), connect NOW rather than through scheduleSSERetry — after
+// minutes of blocked attempts the backoff ladder sits at its 30s cap, and a
+// just-granted permission should feel instant. Chrome grants host
+// permissions at install, so this listener never fires there in practice.
+chrome.permissions?.onAdded?.addListener(async (added) => {
+  if (bgState.branchkitConnected) return;
+  if (!added.origins?.length) return;
+  const found = await discoverPlugin();
+  if (found) connectSSE();
+});
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'connection-check') {
     if (hasOffscreenAPI) {
