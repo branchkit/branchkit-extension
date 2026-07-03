@@ -150,4 +150,19 @@ describe('createSingleFlight', () => {
     scheduled[0]();
     expect(scheduled.length).toBe(2);
   });
+
+  it('forwards the scheduler callback arguments to run (the rIC deadline path)', () => {
+    // The band-build continuation drains under the IdleDeadline runWhenIdle
+    // hands it; the wrapper must pass it through, not swallow it.
+    const scheduled: Array<(arg: { timeRemaining(): number }) => void> = [];
+    const seen: Array<{ timeRemaining(): number } | undefined> = [];
+    const trigger = createSingleFlight<[{ timeRemaining(): number }]>(
+      (cb) => scheduled.push(cb),
+      (deadline) => seen.push(deadline),
+    );
+    trigger();
+    const fakeDeadline = { timeRemaining: () => 42 };
+    scheduled[0](fakeDeadline);
+    expect(seen).toEqual([fakeDeadline]);
+  });
 });

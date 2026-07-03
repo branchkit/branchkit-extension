@@ -14,6 +14,21 @@ dual-CS race, orphan soak. Telemetry tells verified present:
 (QuickBase ride-in, YouTube /watch CPU vs 22% baseline, collapsed-drawer edge
 bleed, occlusion flicker) pending.
 
+Tuning round 1 (2026-07-03, after live check showed badges still slow): the
+first cut's drain rate was the bottleneck, three compounding causes —
+(1) the build loop placed per badge (append host → probe Range gBCR →
+append …), a forced reflow PER badge that inflated per-badge cost well past
+the 5-10ms estimate; (2) at that cost the 4ms budget built ~1 badge per sync
+pass, deferring nearly everything; (3) the idle continuation re-entered with
+the same 4ms (ignoring its rIC deadline) and, when rIC starved during
+scroll, fired on the 200ms timeout with timeRemaining()=0 — one badge per
+200ms, the visible one-by-one trickle. Fixes: build phase is now two-phase
+like showHints (construct/show all, then ONE batched placeBadges), and the
+continuation drains under its rIC deadline (capped 32ms, sync-budget
+fallback on didTimeout). The 4ms sync budget stays as the mid-scroll frame
+guard. Per-pass cost lands in the `bandBuild:pass` perf-counter bucket —
+check it in the perf snapshot if paint still lags before touching budgets.
+
 Companions: `notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md` (the
 desired-state predicates this changes), `DESIGN_HINT_REUSE.md` (dormant badge
 lifecycle, unchanged), `notes/completed/DESIGN_HINT_POSITIONING_REARCH.md`

@@ -39,7 +39,7 @@ import { onTargetMutation } from './observe/target-mutation-tracker';
 import { setOcclusionEnabled, applyOcclusion } from './observe/occlusion';
 import { reconcileClipObservation, drainClipObservers, setClipObserverEnabled } from './observe/clip-observer';
 import { cacheLayout, clearLayoutCache, getCachedRect, isRectOnScreen } from './layout-cache';
-import { placeBadges, placeOne, invalidateProbe } from './placement';
+import { placeBadges, invalidateProbe } from './placement';
 import { activateElement, dispatchHover, resolveNavTarget, type ActivationResult } from './activate/event-sequence';
 import {
   emitActivatePath,
@@ -1465,25 +1465,41 @@ function scheduleHintRefresh(): void {
   }, HINT_REFRESH_DELAY_MS);
 }
 
-// Per-pass CPU budget for OFF-VIEWPORT first-time badge construction
-// (notes/DESIGN_PAINT_THE_BAND.md seam 2). On-screen wrappers construct
-// synchronously and unbudgeted; off-viewport band wrappers construct under
-// this budget and the remainder re-derives on the idle continuation — the
-// ordering/exemption contract lives in runBuildPass (lifecycle/build-queue.ts).
-// Value matches REFINE_BUDGET_MS (the refine scheduler this mirrors); measure
-// on QuickBase/YouTube before tuning.
+// Per-pass CPU budget for OFF-VIEWPORT first-time badge construction on the
+// SYNC (reconcile-path) passes (notes/DESIGN_PAINT_THE_BAND.md seam 2).
+// On-screen wrappers construct synchronously and unbudgeted; off-viewport
+// band wrappers construct under this budget and the remainder re-derives on
+// the idle continuation — the ordering/exemption contract lives in
+// runBuildPass (lifecycle/build-queue.ts). The tight value protects the
+// frame mid-scroll (sync passes ride the claim-flush cadence); the idle
+// continuation drains under its rIC deadline instead.
 const BAND_BUILD_BUDGET_MS = 4;
 const BAND_BUILD_IDLE_TIMEOUT_MS = 200;
+// Ceiling on how much of an idle window one continuation pass consumes.
+// rIC deadlines run up to 50ms; capping keeps a single re-entry from
+// monopolizing a whole idle frame on low-end machines.
+const BAND_BUILD_IDLE_BUDGET_CAP_MS = 32;
 
 // Single-flight idle continuation for band construction the budget deferred.
 // Re-enters the BUILD step ONLY (badgeNewlyCodeworded, never reconcile() —
 // so never claims): claims are byte-for-byte unchanged by band painting,
 // which is what keeps the 73cf6e7 → b813e29 codeword-churn loop from
 // re-arming (notes/DESIGN_PAINT_THE_BAND.md risk 2).
+//
+// Budget: idle time is otherwise wasted, so drain up to the rIC deadline
+// (capped) rather than the sync pass's 4ms — the first cut re-entered with
+// 4ms and drained ~1 badge per idle round, a visible one-by-one trickle. A
+// timeout-fired callback (didTimeout — rIC starved by a busy page) reports
+// timeRemaining()=0; fall back to the sync budget there so a storm still
+// makes bounded forward progress instead of one badge per 200ms.
 const scheduleBandBuildContinuation = createSingleFlight(
   (cb) => runWhenIdle(cb, BAND_BUILD_IDLE_TIMEOUT_MS),
-  () => {
-    if (pageSession.hintsVisible) badgeNewlyCodeworded();
+  (deadline?: IdleDeadline) => {
+    if (!pageSession.hintsVisible) return;
+    const idleRemaining = deadline && !deadline.didTimeout ? deadline.timeRemaining() : 0;
+    badgeNewlyCodeworded(
+      Math.max(BAND_BUILD_BUDGET_MS, Math.min(idleRemaining, BAND_BUILD_IDLE_BUDGET_CAP_MS)),
+    );
   },
 );
 
@@ -1493,7 +1509,19 @@ const scheduleBandBuildContinuation = createSingleFlight(
 // category-matched) but lacks one. Shown-ness is IO-band scoped
 // (notes/DESIGN_PAINT_THE_BAND.md): off-viewport band wrappers paint too and
 // ride the scroll into view already painted, Rango-style.
-function badgeNewlyCodeworded(): void {
+//
+// Two-phase like showHints: construct/show everything first (DOM writes),
+// THEN one batched placeBadges (probe reads before transform writes). The
+// first cut placed per badge inside the build loop (append host → Range
+// gBCR → append host …), forcing a reflow PER BADGE — which inflated
+// per-badge cost far past the note's 5-10ms estimate and made the 4ms
+// budget defer nearly everything (the "badges trickle in one at a time"
+// symptom). Batched, the whole pass pays ~one reflow.
+//
+// `budgetMs` is the off-viewport construction budget for THIS pass: the
+// reconcile-path callers use the tight sync default (mid-scroll frame
+// safety); the idle continuation passes its rIC deadline instead.
+function badgeNewlyCodeworded(budgetMs: number = BAND_BUILD_BUDGET_MS): void {
   const newBadges: ElementWrapper[] = [];
   for (const w of store.all) {
     // Delta against desired state: wants a hint but isn't currently
@@ -1508,31 +1536,40 @@ function badgeNewlyCodeworded(): void {
   }
   if (newBadges.length === 0) return;
 
+  const __start = performance.now();
   try {
     cacheLayout(newBadges.map(w => w.element));
     const vw = window.innerWidth, vh = window.innerHeight;
+    const built: ElementWrapper[] = [];
     const deferred = runBuildPass(newBadges, {
       isOnScreen: (w) => isRectOnScreen(getCachedRect(w.element), vw, vh),
-      // First-time construction (shadow DOM, anchorParent walk, APCA colors,
-      // ~5-10ms) is the budgeted class; the dormant-reuse fast path
+      // First-time construction (shadow DOM, anchorParent walk, APCA
+      // colors) is the budgeted class; the dormant-reuse fast path
       // (setLabel + show) is cheap and exempt.
       isFirstTime: (w) => !w.hint,
-      build: buildBadge,
-      budgetMs: BAND_BUILD_BUDGET_MS,
+      build: (w) => {
+        if (prepareBadge(w)) built.push(w);
+      },
+      budgetMs,
     });
+    // Batched placement for everything this pass constructed/re-showed:
+    // one read phase (text probes) over all badges, then the writes.
+    if (built.length > 0) placeBadges(built);
     if (deferred > 0) {
       firehoseStep('band_build:deferred', deferred, 1);
       scheduleBandBuildContinuation();
     }
   } finally {
     clearLayoutCache();
+    recordCpu('bandBuild:pass', performance.now() - __start);
   }
 }
 
-// Build/paint one wrapper from the pass's delta set: label restore, the CSS-
-// visibility gate, first-time construction or dormant reuse, show + place.
-// Requires a warm layout cache (badgeNewlyCodeworded's cacheLayout).
-function buildBadge(w: ElementWrapper): void {
+// Construct/show one wrapper from the pass's delta set: label restore, the
+// CSS-visibility gate, first-time construction or dormant reuse, show.
+// Placement is NOT done here — the caller batch-places the returned set
+// (true = needs placement). Requires a warm layout cache.
+function prepareBadge(w: ElementWrapper): boolean {
   const label = poolLabelToAssignment(w.scanned.codeword);
   w.label = label;
   // A CSS-invisible target (visibility:hidden / opacity:0 hover-reveal) must
@@ -1549,15 +1586,15 @@ function buildBadge(w: ElementWrapper): void {
   if (w.hint) {
     w.hint.setLabel(label);
   }
-  if (!cssVisible) return;
+  if (!cssVisible) return false;
   // Slow path (first-time): construct the badge. The reuse fast path above
   // skips shadow DOM creation, observer wire-up, anchorParent walk, z-index
-  // walk, and APCA color recomputation — ~5-10ms per badge on scroll-back.
+  // walk, and APCA color recomputation.
   if (!w.hint) {
     w.hint = new HintBadge(w.element, label, w.category, getDisplayMode());
   }
   w.hint.show(isPaintReady(w));
-  placeOne(w);
+  return true;
 }
 
 // Build-up half of the level-triggered lifecycle reconciler (Phases 3+5 of
@@ -1744,8 +1781,11 @@ function applyOcclusionPlan(gather: SettleGather): void {
 // Run `cb` on the next idle frame, falling back to a short timeout where
 // requestIdleCallback is unavailable (Firefox content scripts historically).
 // `timeoutMs` caps the idle wait so a pathologically busy page still runs it.
-function runWhenIdle(cb: () => void, timeoutMs: number): void {
-  const w = window as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void };
+// The rIC path forwards the IdleDeadline so budget-aware callers (the band-
+// build continuation) can drain up to the real idle window instead of a
+// fixed slice; the fallback path passes none.
+function runWhenIdle(cb: (deadline?: IdleDeadline) => void, timeoutMs: number): void {
+  const w = window as { requestIdleCallback?: (cb: (d: IdleDeadline) => void, opts?: { timeout: number }) => void };
   // Call ON window — extracting the function and invoking it unbound throws
   // TypeError in both engines ("Illegal invocation" / "does not implement
   // interface Window"). The unbound call here meant scheduleBandDiscovery's

@@ -58,19 +58,20 @@ export function runBuildPass<T>(
  * Single-flight wrapper: collapse any number of trigger calls into one
  * scheduled `run`, re-armable after it fires. The band-build continuation
  * uses this over `runWhenIdle` so a burst of build passes schedules exactly
- * one idle re-entry.
+ * one idle re-entry. Whatever the scheduler passes its callback (e.g. the
+ * rIC IdleDeadline) is forwarded to `run`.
  */
-export function createSingleFlight(
-  schedule: (cb: () => void) => void,
-  run: () => void,
+export function createSingleFlight<Args extends unknown[]>(
+  schedule: (cb: (...args: Args) => void) => void,
+  run: (...args: Args) => void,
 ): () => void {
   let scheduled = false;
   return () => {
     if (scheduled) return;
     scheduled = true;
-    schedule(() => {
+    schedule((...args: Args) => {
       scheduled = false;
-      run();
+      run(...args);
     });
   };
 }
