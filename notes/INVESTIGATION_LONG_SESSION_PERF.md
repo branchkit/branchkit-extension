@@ -161,7 +161,10 @@ Strategic:
 ## Review backlog (2026-07-03, 8-angle review of the four fixes; verified findings not yet fixed)
 
 Correctness / behavior:
-- **Clip-observer stale root binding (CONFIRMED, pre-existing, interacts with the leak fix).**
+- **[FIXED 2026-07-03, ext 2c2f15d] Clip-observer stale root binding (CONFIRMED).**
+  Fix: cheap per-bound-target recheck (`root.isConnected` + wrapper identity) in the reconcile
+  loop, rebind on mismatch; `boundClipRoot()` diagnostic accessor; regression tests. Residual
+  known gap (connected→connected reparent) documented in-code. Original finding:
   `reconcileClipObservation`'s `if (rootByTarget.has(w.element)) continue` never rechecks the
   root. A reparent-while-connected (same-task remove+insert — never enters limbo, wrapper
   survives) leaves a continuously-hinted target bound to its OLD scroller: (a) a detached old
@@ -233,17 +236,23 @@ Separate repos (actuator / plugins/browser / shell-macos). Ranked:
    77k state.write_succeeded in 5h; unbuffered writeln! per line per sink (actuator.log +
    show-all), paid inline by the emitter; this volume is what feeds #1. Fix: severity-gate or
    sample state.write_succeeded in the sinks (visible counts, not silent drops) + BufWriter.
-3. **grammar_hwm/vocabulary_hwm grow monotonically** (MOD-HIGH) — never pruned
-   (state/mod.rs:347, locked by test); browser_tabs page-title words + user references are
-   unbounded cardinality; every vocabulary commit (per scroll-quiet + 300ms backstop)
-   serializes + hashes the whole union — commits get slower for the life of the app session
-   (consistent with "restarting BranchKit helps"). Fix: prune HWM on periodic rebuild, or
-   memoize compiled DAG/hash on unchanged union.
-4. **`/debug-log` amplification chain un-rate-limited** (HIGH historically, MOD now) — each
-   extension debug POST → plugin stderr → actuator stderr reader (NO rate limit, unlike plugin
-   emits capped 100/window) → Info-level → 2 disk sinks + roll pressure. This is what the old
-   firehose flood turned into host-side for weeks. Fix: rate-limit the stderr reader or
-   classify relayed lines at Debug.
+3. **[DOWNGRADED to LOW 2026-07-03] grammar_hwm/vocabulary_hwm grow monotonically** — the
+   growth is real (never pruned, browser_tabs page-title words are unbounded cardinality) and
+   each commit recomputes union + weights + DAG JSON + hash even when unchanged. BUT: (a) an
+   unchanged-hash broadcast skip already exists (`last_vocab_broadcast_hash`), so the per-commit
+   cost is only the hash computation; (b) measured live union = 344 words (~2h uptime with
+   browsing) → sub-ms per commit; even weeks of growth ≈ a few ms per scroll-quiet commit;
+   (c) the recompute-over-proxy shape is a DELIBERATE design decision
+   (`desired_vocabulary_hash` doc comment + DESIGN_GRAMMAR_STRUCTURE_HWM.md — a proxy is what
+   let structure-only changes fail to propagate). Memoizing by generation counter would
+   reintroduce the rejected proxy pattern. Do nothing unless /inspector/vocabulary shows unions
+   in the tens of thousands; then revisit as a design conversation, not a patch.
+4. **[FIXED 2026-07-03, app fef01f5] `/debug-log` amplification chain un-rate-limited** —
+   fix: the actuator's plugin-stderr forward loop now caps at RATE_LIMIT_PER_SEC (100/s, 1s
+   fixed window, mirroring the plugin-emit path) with a visible one-line drop summary per
+   window (no silent filtering). Original finding: each extension debug POST → plugin stderr →
+   actuator stderr reader → Info-level → 2 disk sinks + roll pressure; this is what the old
+   firehose flood turned into host-side for weeks.
 5. **`lsof -iTCP` fork per SSE connect** (MODERATE) — plugins/browser sse.go:161 →
    os/macos/system.rs:777 spawns lsof per accept; walks EVERY process's file tables; clusters
    during reconnect storms. Fix: TTL-cache port→bundle + rate-limit per conn_id.
