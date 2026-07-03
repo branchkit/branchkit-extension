@@ -78,6 +78,25 @@ identity. If the drain is still slow after the walk fix, the next levers
 are (a) budget scaling when the backlog is large, (b) wrapper rebind for
 recycled rows (fingerprint / limbo-style), (c) accepting the churn.
 
+Why Rango still reads faster — the full causal decomposition (2026-07-03,
+post-round-4, source-verified). Fresh-row-to-visible-badge, stage by stage:
+Rango = MO-synchronous wrapper creation → IO → local label pop → one
+trailing-100ms-debounced UNBUDGETED batch paint (whole wave, full opacity,
+fade-in). Us = MO → rAF-budgeted discovery drain (8ms/frame) → IO → claim
+queue → 50ms flush debounce → serialized async flush → build passes sliced
+at 12ms across claim-flush/idle rounds → paint at 0.55 opacity
+(bk-pending) → full opacity only on grammar push ACK (~0.4-1s later).
+Three real causes, ranked by likely perceptual weight: (1) the bk-pending
+TRANSLUCENT phase — Rango's badges are born solid, ours read "not there
+yet" for up to a second after they paint; (2) burst vs slices — one
+unbudgeted batch vs a 150-500ms spread; (3) two extra pre-paint stages
+(discovery drain + claim debounce/flush), ~50-150ms of stacked coalescing
+Rango doesn't have. NOT causes (verified): construction cost (same walks,
+ours ported from theirs), DOM pooling (neither pools), virtualization
+handling (both rebuild recycled rows), z-index (ours is cheaper).
+Causes 1 and 3 are voice-architecture costs; cause 2 is a tunable
+scheduling choice. Nothing unexplained remains.
+
 Rango source read (2026-07-03, /tmp clone after the A/B; full report in
 session log): corrects two assumptions above. (1) Rango does NOT pool or
 rebind hint DOM — labels are pooled, but a removed element's Hint is
