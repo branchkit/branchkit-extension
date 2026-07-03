@@ -16,6 +16,7 @@
 
 import { ElementWrapper } from '../scan/element-wrapper';
 import { ScannedElement } from '../types';
+import { domSeenAt } from '../observe/dom-seen';
 import * as idRegistry from '../scan/registry';
 import { isRecallLoaded, resolvePreferredCodeword } from '../labels/codeword-recall';
 import { dropPendingPut, hasSent, queueDelete } from '../labels/label-sync';
@@ -52,6 +53,9 @@ export function seedPreferredFromMemory(wrapper: ElementWrapper): void {
  * tolerant of duplicate observe calls.
  */
 export function attachWrapper(wrapper: ElementWrapper): void {
+  // Paint-latency stage stamp: when did the MO first sight this element's
+  // subtree? tAttached - tDomSeen is the discovery layer's contribution.
+  wrapper.tDomSeen = domSeenAt(wrapper.element);
   // Mint the registry id first. A rejected registration (id=0) means the
   // fingerprint validator couldn't disambiguate this element from another
   // already in the registry — voice can't safely address it, so don't add

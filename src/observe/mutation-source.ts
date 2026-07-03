@@ -19,6 +19,7 @@
 
 import { store } from '../core/store';
 import { detachWrapper } from '../core/wrapper-lifecycle';
+import { markDomSeen } from './dom-seen';
 import { dropDisconnectedWrappers } from './limbo';
 import { subtreeMaybeHintable } from '../scan/scanner';
 import { consumeShadowAttachSignal } from '../scan/shadow-attach-signal';
@@ -249,6 +250,7 @@ export function processMutations(records: MutationRecord[]): void {
       for (const node of m.addedNodes) {
         if (isOwnMutation(node)) continue;
         if (node instanceof Element) {
+          markDomSeen(node);
           scheduleDiscovery(node);
         }
       }
@@ -354,6 +356,15 @@ function handlePageMutations(records: MutationRecord[]): void {
   if (foreign.length >= HUGE_MUTATIONS_COUNT) {
     lifecycleCounters.moHugePathFired++;
     hugeMutationLastCount = foreign.length;
+    // Stamp added elements for the paint-latency decomposition even on the
+    // coarse path — the deferred full-body rediscovery is a prime suspect
+    // for pre-attach latency, so its inputs must carry sighting times too.
+    for (const m of foreign) {
+      if (m.type !== 'childList') continue;
+      for (const node of m.addedNodes) {
+        if (node instanceof Element && !isOwnMutation(node)) markDomSeen(node);
+      }
+    }
     if (pageSession.hugeMutationTimer) clearTimeout(pageSession.hugeMutationTimer);
     pageSession.hugeMutationTimer = setTimeout(fireHugeMutationRefresh, HUGE_MUTATION_IDLE_MS);
     // Non-extending deadline: armed by the first batch of a storm, NOT reset

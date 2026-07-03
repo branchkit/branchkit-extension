@@ -121,6 +121,11 @@ export class ElementWrapper {
   tInBand: number | null = null;
   tClaimed: number | null = null;
   tFirstShown: number | null = null;
+  // When the MutationObserver first saw this wrapper's element (or its
+  // added-subtree root) enter the DOM — resolved by attachWrapper from the
+  // dom-seen stamps. Null for pre-existing DOM (boot scan). Closes the
+  // pre-attach blind spot: tAttached - tDomSeen is the discovery layer.
+  tDomSeen: number | null = null;
 
   constructor(element: Element, scanned: ScannedElement) {
     this.element = element;

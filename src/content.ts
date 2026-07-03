@@ -3162,12 +3162,17 @@ const PAINT_LATENCY_WINDOW_MS = 90_000;
 function paintLatencyStats() {
   const now = performance.now();
   const deltas: Record<string, number[]> = {
-    attached_to_band: [], band_to_claimed: [], claimed_to_shown: [], attached_to_shown: [],
+    dom_seen_to_attached: [], attached_to_band: [], band_to_claimed: [],
+    claimed_to_shown: [], attached_to_shown: [], dom_seen_to_shown: [],
   };
   let count = 0;
   for (const w of store.all) {
     if (w.tFirstShown === null || now - w.tFirstShown > PAINT_LATENCY_WINDOW_MS) continue;
     count++;
+    if (w.tDomSeen !== null) {
+      deltas.dom_seen_to_attached.push(w.tAttached - w.tDomSeen);
+      deltas.dom_seen_to_shown.push(w.tFirstShown - w.tDomSeen);
+    }
     if (w.tInBand !== null) deltas.attached_to_band.push(w.tInBand - w.tAttached);
     if (w.tInBand !== null && w.tClaimed !== null) deltas.band_to_claimed.push(w.tClaimed - w.tInBand);
     if (w.tClaimed !== null) deltas.claimed_to_shown.push(w.tFirstShown - w.tClaimed);
@@ -3183,10 +3188,12 @@ function paintLatencyStats() {
   return {
     window_ms: PAINT_LATENCY_WINDOW_MS,
     shown_in_window: count,
+    dom_seen_to_attached: summarize(deltas.dom_seen_to_attached),
     attached_to_band: summarize(deltas.attached_to_band),
     band_to_claimed: summarize(deltas.band_to_claimed),
     claimed_to_shown: summarize(deltas.claimed_to_shown),
     attached_to_shown: summarize(deltas.attached_to_shown),
+    dom_seen_to_shown: summarize(deltas.dom_seen_to_shown),
   };
 }
 
