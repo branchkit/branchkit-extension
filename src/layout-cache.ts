@@ -95,15 +95,18 @@ export function peekCachedStyle(el: Element): CSSStyleDeclaration | null {
 
 /**
  * Lighter alternative to `cacheLayout` for visibility/hintability checks:
- * caches the element itself plus its ancestor chain (up to 15 levels) and
- * no descendants. isHintable's hot path reads `el.getBoundingClientRect`
- * + `getComputedStyle(el)` once and then walks the parent chain probing
- * opacity; neither phase touches descendants, so the full cacheLayout's
- * descendant walk would be pure overhead. Called from the rAF-coalesced
- * reevaluateAttribute drain so many same-tree attribute mutations share
- * one ancestor pre-read.
+ * caches the element itself plus its ancestor chain (up to `maxDepth`
+ * levels, default 15) and no descendants. isHintable's hot path reads
+ * `el.getBoundingClientRect` + `getComputedStyle(el)` once and then walks
+ * the parent chain probing opacity; neither phase touches descendants, so
+ * the full cacheLayout's descendant walk would be pure overhead. Called
+ * from the rAF-coalesced reevaluateAttribute drain so many same-tree
+ * attribute mutations share one ancestor pre-read, and from the badge
+ * build passes (content.ts), whose construction walks (viewport-pinned
+ * check, APCA background) can climb to the root — those pass a deeper
+ * `maxDepth` so the shared top of a deep production chain is warmed too.
  */
-export function cacheVisibility(elements: Iterable<Element>): { rects: number; styles: number } {
+export function cacheVisibility(elements: Iterable<Element>, maxDepth = 15): { rects: number; styles: number } {
   // isVisible reads the *element's* rect once, then walks ancestors probing
   // only `opacity` (a style read). It never reads an ancestor's rect. So we
   // cache rect for the seed elements only, and style for seed + ancestor
@@ -116,7 +119,7 @@ export function cacheVisibility(elements: Iterable<Element>): { rects: number; s
     if (!boundingRects.has(el)) { boundingRects.set(el, el.getBoundingClientRect()); rects++; }
     let current: Element | null = el;
     let depth = 0;
-    while (current && depth < 15) {
+    while (current && depth < maxDepth) {
       if (toCacheStyle.has(current)) break;
       toCacheStyle.add(current);
       current = current.parentElement;

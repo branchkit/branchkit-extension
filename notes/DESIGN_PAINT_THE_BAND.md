@@ -29,6 +29,30 @@ fallback on didTimeout). The 4ms sync budget stays as the mid-scroll frame
 guard. Per-pass cost lands in the `bandBuild:pass` perf-counter bucket —
 check it in the perf snapshot if paint still lags before touching budgets.
 
+Tuning round 2 (2026-07-03, from a real production-QuickBase fling profile
+read out of actuator.log breadcrumbs): discovery was NOT the bottleneck
+(`band_discovery:added` = 0 — the MO path kept up); the build queue was
+saturated for ~2.5s (`band_build:deferred` × 17, backlog peaking at 36,
+~3 badges built per ~25ms pass ⇒ ~1.3ms per badge). The cost was three
+COLD ancestor walks per badge construction — container resolution,
+viewport-pinned check, APCA background resolution — live getComputedStyle
+up a deep production chain that sibling rows almost entirely share. Fixes:
+resolveBackgroundColor/resolveForegroundColor now read getCachedStyle, and
+both build paths (badgeNewlyCodeworded, showHints) pre-warm the deduped
+ancestor style chain via cacheVisibility(elements, 40) — depth 40 because
+the pinned walk climbs to the root. Verification on the live production
+table pending (user gesture + log re-read; the builder-realm harness lost
+its extension to a chrome.runtime.reload() footgun — a --load-extension
+extension cannot be re-enabled after runtime.reload(); relaunch instead).
+
+QuickBase-shaped residual, measured but NOT yet addressed: the grid
+virtualizes rows, so wrappers churn hard mid-scroll (stale-flag repairs of
+20-35 per settle, hosts oscillating ±40) — every recycled row is a fresh
+wrapper paying full construction. Hint reuse can't help across element
+identity. If the drain is still slow after the walk fix, the next levers
+are (a) budget scaling when the backlog is large, (b) wrapper rebind for
+recycled rows (fingerprint / limbo-style), (c) accepting the churn.
+
 Companions: `notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md` (the
 desired-state predicates this changes), `DESIGN_HINT_REUSE.md` (dormant badge
 lifecycle, unchanged), `notes/completed/DESIGN_HINT_POSITIONING_REARCH.md`

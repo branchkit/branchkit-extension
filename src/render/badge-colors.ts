@@ -14,6 +14,7 @@
  */
 
 import { APCAcontrast, sRGBtoY } from 'apca-w3';
+import { getCachedStyle } from '../layout-cache';
 
 // --- RGB type and parsing ---
 
@@ -71,7 +72,14 @@ export function resolveBackgroundColor(el: Element): RGB {
   let current: Element | null = el;
 
   while (current) {
-    const style = getComputedStyle(current);
+    // Cache-aware: this walk runs once per badge CONSTRUCTION and climbs
+    // until it finds an opaque background — many transparent levels on
+    // table-shaped DOM (tr → tbody → table → pane wrappers). The build pass
+    // pre-warms the shared ancestor chain (content.ts cacheVisibility), so
+    // sibling rows' badges reuse one read instead of N live walks — the
+    // dominant per-badge construction cost on deep production DOM
+    // (QuickBase fling profile, 2026-07-03).
+    const style = getCachedStyle(current);
     let parsed = parseColor(style.backgroundColor);
 
     if (!parsed && style.backgroundImage?.includes('gradient(')) {
@@ -248,7 +256,7 @@ function getElementForegroundColor(target: Element): RGB {
       if (parsed) return parsed;
     }
   }
-  const style = getComputedStyle(target);
+  const style = getCachedStyle(target);
   return parseColor(style.color) || BLACK;
 }
 
