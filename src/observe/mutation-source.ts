@@ -209,14 +209,24 @@ function drainDiscovery(): void {
     // a single root is heavy enough to blow the budget by itself.
     if (performance.now() - __cpuStart >= DRAIN_DISCOVERY_BUDGET_MS) break;
   }
-  // Re-queue anything we didn't process this pass; the rAF below picks
-  // it up on the next frame. Re-adding to a Set is idempotent so any
-  // new arrivals between drain start and now coalesce naturally.
+  // Re-queue anything we didn't process this pass. Re-adding to a Set is
+  // idempotent so any new arrivals between drain start and now coalesce
+  // naturally.
   for (let i = processed; i < workRoots.length; i++) {
     pageSession.pendingDiscoveryRoots.add(workRoots[i]);
   }
   if (pageSession.pendingDiscoveryRoots.size > 0 && pageSession.discoveryFrame === null) {
-    pageSession.discoveryFrame = requestAnimationFrame(drainDiscovery);
+    // Chain the next slice via a 0-timeout, NOT the next rAF. Under a fling
+    // the frames run 30-60ms, so one budget-slice per frame drained far
+    // slower than roots arrived — discovery owned ~75% of end-to-end badge
+    // latency (dom_seen_to_attached p50 632ms / max 2.1s, production
+    // QuickBase profile 2026-07-03, notes/DESIGN_PAINT_THE_BAND.md). A
+    // 0-timeout yields the event loop (input/paint stay responsive — same
+    // shape as discoverInSubtreeBatched's between-batch yields) but resumes
+    // in ~1-4ms, so slices chain near-back-to-back until the queue empties.
+    // Session-owned timer: teardownAll cancels it, so orphan discipline is
+    // unchanged; the rAF path remains the entry for fresh MO batches.
+    pageSession.resources.timeout(drainDiscovery, 0);
   }
   recordCpu('drainDiscovery', performance.now() - __cpuStart);
   if (__rootCount > 0) {

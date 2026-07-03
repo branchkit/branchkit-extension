@@ -78,6 +78,19 @@ identity. If the drain is still slow after the walk fix, the next levers
 are (a) budget scaling when the backlog is large, (b) wrapper rebind for
 recycled rows (fingerprint / limbo-style), (c) accepting the churn.
 
+Tuning round 5 (2026-07-03, paint_latency + dom-seen instrumentation on
+production): the post-attach pipeline is exonerated — attached→shown p50
+41-48ms, claims effectively instant (band→claimed p50 negative). The lag
+is the DISCOVERY layer: dom_seen_to_attached p50 632ms / p90 743ms / max
+2.1s, i.e. ~75% of the true end-to-end (dom_seen_to_shown p50 844ms, p90
+1.6s — matching perception). The huge path never fires on this page
+(0 huge_path breadcrumbs, threshold 1); the culprit is drainDiscovery's
+one-8ms-slice-per-rAF shape — mid-fling frames run 30-60ms, so the queue
+drains at ~15-25% duty while rows pour in. Fix: when backlog remains,
+chain the next slice via a session-owned 0-timeout instead of the next
+rAF (yields the loop, resumes ~1-4ms — discoverInSubtreeBatched's shape),
+so slices run near-back-to-back. Production re-verify pending.
+
 Why Rango still reads faster — the full causal decomposition (2026-07-03,
 post-round-4, source-verified). Fresh-row-to-visible-badge, stage by stage:
 Rango = MO-synchronous wrapper creation → IO → local label pop → one
