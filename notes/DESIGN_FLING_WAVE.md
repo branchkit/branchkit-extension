@@ -137,6 +137,61 @@ Part 1 lands.
 - paint_stability fill slope steepens; the ring is the acceptance test, per
   the drill (reload, close+reopen tab, fling, Ctrl+Alt+A).
 
+## Drill round 1 (2026-07-03, snapshot 23-30, steps 1+2 live) — Part 1c
+
+Steps 1+2 did what they claimed and it was not enough. The numbers
+(vs the 22-54 baseline): attached_to_band p50 305 → **3ms** (prime works),
+dom_seen_to_shown p50 565 → 311 / p90 992 → 558, claimed_to_shown p90
+401 → 231. User verdict: still lags. Two facts explain the gap:
+
+1. **attached_to_band p90 is still 581ms.** QuickBase's ~300-row window
+   spans MANY viewports (~30-40px rows ≈ 9-12k px), so most rows are
+   inserted OUTSIDE the 1000px band and cross the band edge mid-fling.
+   Prime-at-attach can't see them — they were legitimately out-of-band at
+   attach — and the crossing is still detected by the starved IO. The
+   badges the user watches pop in late are exactly this cohort: the
+   leading edge of the fling. The p50/p90 split is the two cohorts
+   (in-band inserts primed instantly; edge-crossers still IO-bound).
+2. **The dip is intact** (stability ring: shown 480 → 383 in one burst —
+   same ~100-badge sag). Expected: replacement paint p50 311ms still
+   straddles the 250-500ms limbo hold.
+
+Fix (Part 1c): **mid-scroll band-entry flag sweep** — the settle plan's
+stale-FALSE repair (`toRepair`), run one-directionally while scroll events
+are arriving, throttled to 10Hz. This is the piece of Rango's model we had
+not ported: it rect-polls every observed target on a 50ms-throttled scroll
+listener (its stale-IO defense); ours is cheaper (out-of-band wrappers
+only, entries only).
+
+- `tracker.sweepBandEntries(vw, vh)`: walk the store's out-of-band, live,
+  connected wrappers; one gBCR each (no writes interleave — a single
+  reflow per sweep); boxless rects skip; `geometryInBand` hit → flip
+  `isInViewport`, stamp `tInBand`, refresh `lastRect` (free, helps the
+  limbo tiebreaker). Returns the repair count.
+- content.ts: 100ms-throttled call from `scheduleScrollReposition` (both
+  window and inner-pane capture listeners already funnel there), gated on
+  `hintsVisible`; repairs > 0 → `reconcile()` — the designed convergence
+  entry does claims (refreshViewportClaims picks up the flipped flags) and
+  build. No new claim path, no new build path.
+- Exits stay settle-scoped (teardown at `runSettlePipeline`) — hiding
+  badges mid-fling is wasted work and the one-directional shape removes
+  any flap risk with the IO.
+- Wedge discipline: synchronous, bounded, inside an existing scroll
+  handler at ≤10Hz, no timers, no rAF. Cost ≈ one batched-read reflow per
+  100ms while scrolling — the same class reconcileTeardown pays once per
+  settle, and far below the per-rAF settle pipeline the 100ms debounce
+  exists to prevent.
+- `geometryInBand` moves to layout-cache.ts (leaf, next to
+  `isRectOnScreen`) — the tracker can't import it from reconcile.ts, which
+  imports the tracker's `VIEWPORT_MARGIN_PX` at module-eval time (TDZ
+  cycle).
+
+Prediction to check at the next drill: attached_to_band p90 collapses to
+~100ms (throttle ceiling), dom_seen_to_shown p50 lands near the ring's
+fill slope rather than above it, and the dip shrinks by however much of
+it was fill-side. Whatever dip remains after that is teardown-side —
+step 4's territory.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is

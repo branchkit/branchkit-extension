@@ -90,6 +90,29 @@ green (mandatory — this step touches scheduling).
 
 Revert: constants + scheduler swap, one commit.
 
+## Step 2b — mid-scroll band-entry sweep (added after drill round 1)
+
+Drill round 1 (snapshot 23-30): steps 1+2 landed their numbers
+(attached_to_band p50 305→3ms, dom_seen_to_shown p50 565→311) but the user
+still perceives lag — the ~300-row window spans many viewports, so most rows
+attach OUT of band and cross the edge mid-fling, still IO-delivery-bound
+(attached_to_band p90 581ms). Fix per the design note's "Drill round 1 /
+Part 1c" section: `tracker.sweepBandEntries(vw, vh)` (one-directional
+stale-FALSE repair by geometry over out-of-band live wrappers, one gBCR
+each), 100ms-throttled from `scheduleScrollReposition`, repairs > 0 →
+`reconcile()`. `geometryInBand` re-homed to layout-cache.ts (leaf; the
+tracker can't import reconcile.ts — TDZ cycle on VIEWPORT_MARGIN_PX).
+Counter `bandSweepRepairs`; firehose `band_sweep:repaired` (threshold 20).
+
+Verify (drill): attached_to_band p90 ≲ ~150ms (sweep cadence + flush);
+leading-edge badges paint during the fling; `bandSweepRepairs` sizes the
+cohort; watch `intersection:sweepBandEntries` CPU bucket and YouTube /watch
+scroll CPU vs the 22% baseline (the sweep must stay well under the per-rAF
+settle cost the debounce exists to prevent).
+
+Revert: delete noteBandEntrySweep + the tracker method (the geometryInBand
+re-home stays — it's a neutral cleanup).
+
 ## Step 3 — production re-measure (user drill; decides step 4's framing)
 
 Reload extension, close+reopen tab, fling, Ctrl+Alt+A. Read:
