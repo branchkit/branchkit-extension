@@ -755,9 +755,10 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
 // — run `chrome.storage.local.remove([...keys])` to reset to a clean baseline.
 //
 // bkScrollAccel / bkScrollAccelNested - default ON, GRADUATED (real-Chrome
-//   confirmed). The off-path (JS chase) is also the Firefox fallback, gated
-//   independently by isScrollTimelineSupported(). EXIT: delete these flags after
-//   a clean soak (~2026-06-17), keeping the feature-detect.
+//   confirmed). Both flags are ANDed with isScrollTimelineSupported() at apply
+//   time, so Firefox stable (no ScrollTimeline) runs the JS-chase fallback with
+//   the accel glue fully off — not just null accelerators. EXIT: delete these
+//   flags after a clean soak (~2026-06-17), keeping the feature-detect.
 // bkOcclusion - default ON, validated helpful but still watching for FALSE
 //   POSITIVES (a real badge wrongly hidden = voice silently can't match it).
 //   EXIT: keep on if the soak stays clean, else investigate; reconfirm at launch.
@@ -789,8 +790,17 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
   chrome.storage.local.get(['bkScrollAccel', 'bkScrollAccelNested'], (result) => {
     const enabled = result.bkScrollAccel !== false;
     const nested = result.bkScrollAccelNested !== false;
-    setScrollAccelEnabled(enabled);
-    setScrollAccelNestedEnabled(nested);
+    // Gate the glue on the feature detect, not just the flag. createScrollAccel
+    // already returns null without ScrollTimeline (Firefox stable), but with the
+    // glue enabled that null meant the reconcile never converged: every settle
+    // re-ran syncScrollAccelChain on every badge in an inner scroller — an
+    // ancestor walk of scrollHeight/getComputedStyle reads right after the
+    // pipeline's writes — then bumped the re-arm attribute and tried again,
+    // forever (data-bk-accel-rearms in the thousands on a day-old Gmail tab).
+    // With the glue off, badges ride the shared scroll-active rAF chase instead.
+    const supported = isScrollTimelineSupported();
+    setScrollAccelEnabled(enabled && supported);
+    setScrollAccelNestedEnabled(nested && supported);
     // Page-visible diagnostic markers on <html>: 'on' = flag set + ScrollTimeline
     // supported; 'unsupported' = no ScrollTimeline (Firefox stable); 'off' = not
     // set. Pair with `document.querySelectorAll('[data-bk-accel]').length`.
