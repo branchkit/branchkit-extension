@@ -215,8 +215,13 @@ disconnect+construct per zero-crossing — rounding error).
 
 ## Host-side factors (same-day audit of non-extension contributors to machine-wide slowdown)
 
-Separate repos (actuator / plugins/browser / shell-macos) — not fixed in this pass. Ranked:
-1. **Show-all archive roll is O(rolls²) inline gzip** (HIGH, CONFIRMED) —
+Separate repos (actuator / plugins/browser / shell-macos). Ranked:
+1. **[FIXED 2026-07-03, app b108da2] Show-all archive roll is O(rolls²) inline gzip** (HIGH,
+   CONFIRMED) — fix: segment-per-roll (`<date>.jsonl.gz` then `<date>T<HHMMSS>.jsonl.gz`,
+   streaming gzip of the hot file only, archives never rewritten) in the shared
+   `roll_hot_to_archive`, covering all four sinks; boot-time retention sweep added to all four
+   constructors (closes the idle-machine-never-sweeps caveat). Needs `just build --full` to
+   take effect. Original finding: —
    `actuator/src/observability/sinks/sink_io.rs:97-129` decompresses the ENTIRE day archive
    (~44MB gz ≈ 400-500MB raw) into memory, appends the 50MB hot file, re-gzips — synchronously
    on the event-EMITTING thread (bus sinks are synchronous). ~6-10 rolls/day, each bigger:
