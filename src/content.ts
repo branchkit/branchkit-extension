@@ -1613,7 +1613,10 @@ function prepareBadge(w: ElementWrapper): boolean {
   if (w.hint) {
     w.hint.setLabel(label);
   }
-  if (!cssVisible) return false;
+  if (!cssVisible) {
+    w.tBuildGated ??= performance.now();
+    return false;
+  }
   // Slow path (first-time): construct the badge. The reuse fast path above
   // skips shadow DOM creation, observer wire-up, anchorParent walk, z-index
   // walk, and APCA color recomputation.
@@ -3223,6 +3226,7 @@ function paintLatencyStats() {
   const deltas: Record<string, number[]> = {
     dom_seen_to_attached: [], attached_to_band: [], band_to_claimed: [],
     claimed_to_shown: [], attached_to_shown: [], dom_seen_to_shown: [],
+    shown_minus_ack: [], gated_to_shown: [],
   };
   let count = 0;
   for (const w of store.all) {
@@ -3232,6 +3236,12 @@ function paintLatencyStats() {
       deltas.dom_seen_to_attached.push(w.tAttached - w.tDomSeen);
       deltas.dom_seen_to_shown.push(w.tFirstShown - w.tDomSeen);
     }
+    // Sequencing: negative = shown before voice ACK (designed order,
+    // visible translucent window); positive = show lagged the voice
+    // round-trip (zero translucency — the inversion).
+    if (w.tGrammarReady !== null) deltas.shown_minus_ack.push(w.tFirstShown - w.tGrammarReady);
+    // Built-but-gated on an invisible target: how long the reveal path took.
+    if (w.tBuildGated !== null) deltas.gated_to_shown.push(w.tFirstShown - w.tBuildGated);
     if (w.tInBand !== null) deltas.attached_to_band.push(w.tInBand - w.tAttached);
     if (w.tInBand !== null && w.tClaimed !== null) deltas.band_to_claimed.push(w.tClaimed - w.tInBand);
     if (w.tClaimed !== null) deltas.claimed_to_shown.push(w.tFirstShown - w.tClaimed);
@@ -3253,6 +3263,8 @@ function paintLatencyStats() {
     claimed_to_shown: summarize(deltas.claimed_to_shown),
     attached_to_shown: summarize(deltas.attached_to_shown),
     dom_seen_to_shown: summarize(deltas.dom_seen_to_shown),
+    shown_minus_ack: summarize(deltas.shown_minus_ack),
+    gated_to_shown: summarize(deltas.gated_to_shown),
   };
 }
 
