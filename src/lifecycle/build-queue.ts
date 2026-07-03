@@ -19,6 +19,22 @@
  *     delta, so a deferred item that left the band in the interim simply
  *     drops out.
  */
+/**
+ * The wave-slice CPU budget shared by the discovery drain's walk and the
+ * build pass (notes/DESIGN_FLING_WAVE.md Part 1). One constant, two
+ * consumers: `drainDiscovery` yields between roots past it, and
+ * `badgeNewlyCodeworded` defers off-viewport first-time construction past
+ * it. Because the claim flush (and therefore the build) runs in the
+ * microtask tail of the drain's own task, a composed slice worst-cases at
+ * ~2× this value — sized for a BURST, not a smooth frame (paint-the-band
+ * rounds 4+6): mid-fling the page is already dropping frames from its own
+ * row rendering, and users read "badges are there" long before they notice
+ * frame pacing. The budget survives as a guardrail against pathological
+ * waves, not as a smoothness tax. Tune from the `bandBuild:pass` /
+ * `drainDiscovery` CPU buckets, not by feel.
+ */
+export const WAVE_SLICE_BUDGET_MS = 32;
+
 export function runBuildPass<T>(
   items: T[],
   opts: {

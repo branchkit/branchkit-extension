@@ -27,7 +27,8 @@ import { cacheVisibility, clearLayoutCache } from '../layout-cache';
 import { getHintVisibility } from '../config';
 import { recordCpu, lifecycleCounters } from '../debug/perf-counters';
 import { firehoseStep } from '../debug/firehose';
-import { pageSession } from '../lifecycle/page-session';
+import { pageSession, scheduleYieldTask } from '../lifecycle/page-session';
+import { WAVE_SLICE_BUDGET_MS } from '../lifecycle/build-queue';
 
 // Beyond the HUGE_MUTATIONS_COUNT threshold (DarkReader's pattern), we
 // stop processing nodes individually and just queue a coarse refresh.
@@ -145,16 +146,16 @@ function scheduleDiscovery(root: Element): void {
   }
 }
 
-// Time-slice budget for a single drain pass. With many queued roots (or
-// one heavy root like a freshly-mounted <ytd-app> on YouTube /watch),
-// running every discoverInSubtree synchronously in one rAF can blow
-// past 16ms and trip Firefox's unresponsive-script warning. Cap the
-// per-drain wall time at half a frame; any remaining roots are deferred
-// to the next rAF via the same scheduling path. We always do at least
-// one root per pass so a single very-expensive root can't permanently
-// starve the queue — we'd rather take one expensive frame than freeze
-// indefinitely.
-const DRAIN_DISCOVERY_BUDGET_MS = 8;
+// Per-drain walk budget: WAVE_SLICE_BUDGET_MS (lifecycle/build-queue.ts) —
+// the shared wave-slice constant. With many queued roots (or one heavy root
+// like a freshly-mounted <ytd-app> on YouTube /watch), running every
+// discoverInSubtree synchronously in one pass can trip Firefox's
+// unresponsive-script warning; remaining roots defer to the yield-chained
+// continuation below. We always do at least one root per pass so a single
+// very-expensive root can't permanently starve the queue. Note the claim
+// flush (and build) for wrappers this drain prime-claimed runs in THIS
+// task's microtask tail, so a composed slice worst-cases at ~2× the budget
+// — the burst-model trade the constant's comment records.
 
 function drainDiscovery(): void {
   const __cpuStart = performance.now();
@@ -211,7 +212,7 @@ function drainDiscovery(): void {
     // Yield to the event loop once we've exceeded the budget — but
     // always do at least one root so we make forward progress even when
     // a single root is heavy enough to blow the budget by itself.
-    if (performance.now() - __cpuStart >= DRAIN_DISCOVERY_BUDGET_MS) break;
+    if (performance.now() - __cpuStart >= WAVE_SLICE_BUDGET_MS) break;
   }
   // Re-queue anything we didn't process this pass. Re-adding to a Set is
   // idempotent so any new arrivals between drain start and now coalesce
@@ -225,22 +226,11 @@ function drainDiscovery(): void {
     // slower than roots arrived — discovery owned ~75% of end-to-end badge
     // latency (dom_seen_to_attached p50 632ms / max 2.1s, production
     // QuickBase profile 2026-07-03, notes/DESIGN_PAINT_THE_BAND.md).
-    //
-    // Prefer scheduler.yield() (Chromium): its continuation lands at the
-    // FRONT of the task queue, so the chain resumes before the page's own
-    // queued work while still yielding for input/paint — a setTimeout(0)
-    // continuation queues BEHIND the page's pending tasks, which mid-fling
-    // on QuickBase left ~50-200ms gaps between slices (round-7 residual).
-    // Fallback: session-owned 0-timeout (Firefox; torn down by
-    // teardownAll — the yield path is covered by the isTornDown guard at
-    // the top of drainDiscovery). The rAF stays the entry for fresh MO
+    // scheduleYieldTask prefers scheduler.yield (front-of-queue resume);
+    // the isTornDown guard at the top of drainDiscovery covers the
+    // uncancellable yield path. The rAF stays the entry for fresh MO
     // batches; this chain self-terminates when the queue empties.
-    const sched = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
-    if (typeof sched?.yield === 'function') {
-      void sched.yield().then(drainDiscovery);
-    } else {
-      pageSession.resources.timeout(drainDiscovery, 0);
-    }
+    scheduleYieldTask(drainDiscovery);
   }
   recordCpu('drainDiscovery', performance.now() - __cpuStart);
   if (__rootCount > 0) {

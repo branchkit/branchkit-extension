@@ -334,3 +334,27 @@ export class PageSession {
  * modules import this directly — the per-module init injection seams are gone.
  */
 export const pageSession = new PageSession();
+
+/**
+ * Chain a continuation task so a backlog drains near-back-to-back while
+ * still yielding for input/paint. Prefer `scheduler.yield()` (Chromium): its
+ * continuation lands at the FRONT of the task queue, resuming ~1-4ms later —
+ * a setTimeout(0) continuation queues BEHIND the page's pending tasks, which
+ * mid-fling on QuickBase left ~50-200ms gaps between slices (paint-the-band
+ * round-7 residual). Fallback: session-owned 0-timeout (Firefox), torn down
+ * with the session.
+ *
+ * The yield path is NOT cancellable — every callback chained through here
+ * must re-check `pageSession.isTornDown` (and any of its own gates) at the
+ * top, exactly as `drainDiscovery` does. Shared by the discovery drain and
+ * the band-build continuation so the two chains cannot drift
+ * (notes/DESIGN_FLING_WAVE.md step 2).
+ */
+export function scheduleYieldTask(cb: () => void): void {
+  const sched = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
+  if (typeof sched?.yield === 'function') {
+    void sched.yield().then(cb);
+  } else {
+    pageSession.resources.timeout(cb, 0);
+  }
+}

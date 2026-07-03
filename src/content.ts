@@ -11,7 +11,7 @@ import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, 
 import { noteDisconnectedShadowAttach } from './scan/shadow-attach-signal';
 import { ElementWrapper } from './scan/element-wrapper';
 import { wantsHint } from './lifecycle/desired-state';
-import { runBuildPass, createSingleFlight } from './lifecycle/build-queue';
+import { runBuildPass, createSingleFlight, WAVE_SLICE_BUDGET_MS } from './lifecycle/build-queue';
 import {
   computeReconcilePlanLists,
   geometryInBand,
@@ -107,7 +107,7 @@ import { labelReservoir } from './labels/label-reservoir';
 import { filterNewBatchRefs } from './scan/batch-dedup';
 import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
 import { openLivenessPort } from './plugin/liveness';
-import { pageSession, TeardownReason } from './lifecycle/page-session';
+import { pageSession, scheduleYieldTask, TeardownReason } from './lifecycle/page-session';
 import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './debug/message-counters';
 import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, rearmCpuShareBaseline, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, stopPerfObservers, lifecycleCounters, resetLifecycleCounters } from './debug/perf-counters';
 import { loadConfig, getDisplayMode, getHintVisibility, getHintsShown, setHintsShown } from './config';
@@ -1473,50 +1473,26 @@ function scheduleHintRefresh(): void {
   }, HINT_REFRESH_DELAY_MS);
 }
 
-// Per-pass CPU budget for OFF-VIEWPORT first-time badge construction on the
-// SYNC (reconcile-path) passes (notes/DESIGN_PAINT_THE_BAND.md seam 2).
-// On-screen wrappers construct synchronously and unbudgeted; off-viewport
-// band wrappers construct under this budget and the remainder re-derives on
-// the idle continuation — the ordering/exemption contract lives in
-// runBuildPass (lifecycle/build-queue.ts).
+// Single-flight yield-chained continuation for band construction the budget
+// deferred. Re-enters the BUILD step ONLY (badgeNewlyCodeworded, never
+// reconcile() — so never claims): claims are byte-for-byte unchanged by band
+// painting, which is what keeps the 73cf6e7 → b813e29 codeword-churn loop
+// from re-arming (notes/DESIGN_PAINT_THE_BAND.md risk 2).
 //
-// Sized for a BURST, not a smooth frame (tuning rounds 4+6): the original
-// 4ms — and even 12ms — spread a fling's ~600ms of total construction
-// across 1.5-2.5s of small slices with trigger-cadence gaps between them,
-// while Rango — identical walks, synchronous 100-200ms single tasks —
-// populated the same production grid near-instantly (A/B 2026-07-03; the
-// round-6 profile showed the tail was throughput-bound: fixing discovery
-// just moved the queue into claimed→shown, p90 839ms). A fling's frames
-// are already dropping from the page's own row rendering; users read
-// "badges are there" long before they notice frame pacing. 48ms ≈ an
-// 80-badge wave in ~2 passes (~100-150ms wall). The budget survives only
-// as a guardrail against pathological waves, not as a smoothness tax.
-const BAND_BUILD_BUDGET_MS = 48;
-const BAND_BUILD_IDLE_TIMEOUT_MS = 100;
-// Ceiling on how much of an idle window one continuation pass consumes.
-// Matches the sync budget — the burst model applies in both contexts.
-const BAND_BUILD_IDLE_BUDGET_CAP_MS = 48;
-
-// Single-flight idle continuation for band construction the budget deferred.
-// Re-enters the BUILD step ONLY (badgeNewlyCodeworded, never reconcile() —
-// so never claims): claims are byte-for-byte unchanged by band painting,
-// which is what keeps the 73cf6e7 → b813e29 codeword-churn loop from
-// re-arming (notes/DESIGN_PAINT_THE_BAND.md risk 2).
-//
-// Budget: idle time is otherwise wasted, so drain up to the rIC deadline
-// (capped) rather than the sync pass's 4ms — the first cut re-entered with
-// 4ms and drained ~1 badge per idle round, a visible one-by-one trickle. A
-// timeout-fired callback (didTimeout — rIC starved by a busy page) reports
-// timeRemaining()=0; fall back to the sync budget there so a storm still
-// makes bounded forward progress instead of one badge per 200ms.
+// Scheduling: the rIC(100ms-timeout) shape this replaces starved mid-fling —
+// rIC never fired during a fling, so the backlog drained one
+// timeout-clamped pass per 100ms round (the claimed→shown p90 401ms tail,
+// notes/DESIGN_FLING_WAVE.md). scheduleYieldTask resumes ~1-4ms after the
+// prior slice, same shape as drainDiscovery's chain. Termination: re-armed
+// only when a pass reports deferred > 0, and every pass builds at least one
+// first-time item (budget checked before each, elapsed starts at 0), so the
+// backlog strictly shrinks — self-terminating, wedge-safe. The isTornDown
+// guard is load-bearing: the yield path is not cancellable by teardown.
 const scheduleBandBuildContinuation = createSingleFlight(
-  (cb) => runWhenIdle(cb, BAND_BUILD_IDLE_TIMEOUT_MS),
-  (deadline?: IdleDeadline) => {
-    if (!pageSession.hintsVisible) return;
-    const idleRemaining = deadline && !deadline.didTimeout ? deadline.timeRemaining() : 0;
-    badgeNewlyCodeworded(
-      Math.max(BAND_BUILD_BUDGET_MS, Math.min(idleRemaining, BAND_BUILD_IDLE_BUDGET_CAP_MS)),
-    );
+  scheduleYieldTask,
+  () => {
+    if (pageSession.isTornDown || !pageSession.hintsVisible) return;
+    badgeNewlyCodeworded();
   },
 );
 
@@ -1535,10 +1511,10 @@ const scheduleBandBuildContinuation = createSingleFlight(
 // budget defer nearly everything (the "badges trickle in one at a time"
 // symptom). Batched, the whole pass pays ~one reflow.
 //
-// `budgetMs` is the off-viewport construction budget for THIS pass: the
-// reconcile-path callers use the tight sync default (mid-scroll frame
-// safety); the idle continuation passes its rIC deadline instead.
-function badgeNewlyCodeworded(budgetMs: number = BAND_BUILD_BUDGET_MS): void {
+// `budgetMs` is the off-viewport construction budget for THIS pass — the
+// shared wave-slice constant (lifecycle/build-queue.ts) for every caller,
+// reconcile-path and continuation alike.
+function badgeNewlyCodeworded(budgetMs: number = WAVE_SLICE_BUDGET_MS): void {
   const newBadges: ElementWrapper[] = [];
   for (const w of store.all) {
     // Delta against desired state: wants a hint but isn't currently
