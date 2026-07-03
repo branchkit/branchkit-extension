@@ -78,6 +78,24 @@ identity. If the drain is still slow after the walk fix, the next levers
 are (a) budget scaling when the backlog is large, (b) wrapper rebind for
 recycled rows (fingerprint / limbo-style), (c) accepting the churn.
 
+Rango source read (2026-07-03, /tmp clone after the A/B; full report in
+session log): corrects two assumptions above. (1) Rango does NOT pool or
+rebind hint DOM — labels are pooled, but a removed element's Hint is
+GC'd and a recycled row gets a fresh Hint built from scratch, same as us.
+The rebind lever is NOT how Rango wins; deprioritize it. (2) Rango's
+paint is not synchronous-in-IO either — it's a lodash.debounce(100ms)
+queue that paints the ENTIRE accumulated wave in one unbudgeted batched
+pass (cacheLayout over targets + descendants + 10 ancestors + text-node
+Range rects, read/write phased, rAF fade-in). So its model is "one burst
+per 100ms window", vs our "12ms slices per wave" — that unbudgeted batch
+is the remaining structural difference if any tail persists. Where we're
+already ahead: Rango's calculateZIndex runs querySelectorAll("*") +
+UNCACHED getComputedStyle per hint at first position; ours is refine()-
+deferred and cached per anchorParent. Rango also rect-polls every
+observed target on a 50ms-throttled scroll listener (its stale-IO
+defense; our reconcileTeardown equivalent) and switches to lazy wrapper
+creation above 25k elements.
+
 Companions: `notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md` (the
 desired-state predicates this changes), `DESIGN_HINT_REUSE.md` (dormant badge
 lifecycle, unchanged), `notes/completed/DESIGN_HINT_POSITIONING_REARCH.md`
