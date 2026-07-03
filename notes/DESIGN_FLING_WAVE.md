@@ -167,15 +167,22 @@ stable shells: the `td.column-<reportid>-<fieldid>[role=gridcell]` cells (and
 Add a third tier to `attachDiscovered`, after strong-key and fingerprint:
 
 - **Record the slot at attach.** `slotAncestors`: WeakRefs to the wrapper's
-  first ~3 parent elements. Three pointer reads, no layout, recorded once.
-  (Post-hoc recovery is impossible — a removed subtree loses its parent
-  chain at the detach point, so the slot must be remembered while attached.)
+  first ~6 parent elements (or until the first `tr`/`role=row`, whichever is
+  shallower). Pointer reads, no layout, recorded once. Depth 6, not 3: in
+  the 2026-07-03T22-54 snapshot, 60 of 305 grid-adjacent wrappers have
+  their `td` at depth 5 (buttons nested under extra cell layers) — depth 3
+  would exclude a fifth of the grid from the tier. (Post-hoc recovery is
+  impossible — a removed subtree loses its parent chain at the detach
+  point, so the slot must be remembered while attached.)
 - **Match on discovery.** For a new element neither tier claimed: a limbo
   wrapper slot-matches iff one of its recorded slot ancestors is still
   connected AND `contains()` the new element, AND tag+role match, AND the
   match is unique both ways within this drain pass (exactly one limbo
   candidate for that slot, exactly one new element claiming it — a per-pass
-  map enforces it). Ambiguity → refuse, fall through to fresh attach.
+  map enforces it). When several recorded ancestors survive, match against
+  the DEEPEST one — a `td` disambiguates (typically one hintable per kind),
+  a `tr` contains many and would refuse on uniqueness. Ambiguity → refuse,
+  fall through to fresh attach.
 - **On match:** existing `rebindWrapper` (retargets the badge, swaps
   observers, store/registry rebind, clears `disconnectedAt`), plus
   `refreshFingerprint`, plus a `scanSingle` metadata refresh (the accessible
@@ -298,9 +305,18 @@ both builds, wedge, dual-CS race, orphan soak) run per step.
 
 1. `WAVE_SLICE_BUDGET_MS` value — start 32ms, measure `bandBuild:pass` +
    `drainDiscovery` CPU buckets on the fling profile before tuning.
-2. slotAncestors depth — 3 covers link→div→td on this grid; is there a
-   grid that needs the `tr`? (Depth 4 is one more pointer; decide from the
-   builder-realm harness, not speculation.)
+2. ~~slotAncestors depth~~ ANSWERED from the existing snapshot (2026-07-03):
+   grid hintables put the `td` at depth 1 (160), 2 (84), and **5** (60 —
+   buttons under extra cell layers), so record to depth 6 / first row
+   ancestor and match the deepest survivor. Folded into the mechanism above.
+   The REMAINING unknown for this tier: does the cell shell actually survive
+   the swap (in-place content replacement), or does QuickBase replace whole
+   rows? A point-in-time snapshot can't say. Cheap to answer with a one-fling
+   console probe on the builder realm (MO on a `td`: childList replacements
+   vs `tr` removals) — but it doesn't gate anything: Part 1 lands first
+   regardless, and the tier fails safe to today's behavior if shells die.
+   Run the probe as the step-4 pre-check (or during any drill, if curious
+   early).
 3. Should the scan path (`processScanBatch`) also prime-build in-slice on
    initial load? It already claims inline; first-show latency is a different
    problem (showHints owns it). Initially: no.
