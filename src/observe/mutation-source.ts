@@ -159,6 +159,10 @@ const DRAIN_DISCOVERY_BUDGET_MS = 8;
 function drainDiscovery(): void {
   const __cpuStart = performance.now();
   pageSession.discoveryFrame = null;
+  // A scheduler.yield() continuation (below) is not cancellable by the
+  // session teardown, so guard explicitly — quiesceOrphan only clears the
+  // pending set on the rAF branch.
+  if (pageSession.isTornDown) return;
   if (pageSession.pendingDiscoveryRoots.size === 0) return;
   const roots = [...pageSession.pendingDiscoveryRoots];
   pageSession.pendingDiscoveryRoots.clear();
@@ -216,17 +220,27 @@ function drainDiscovery(): void {
     pageSession.pendingDiscoveryRoots.add(workRoots[i]);
   }
   if (pageSession.pendingDiscoveryRoots.size > 0 && pageSession.discoveryFrame === null) {
-    // Chain the next slice via a 0-timeout, NOT the next rAF. Under a fling
+    // Chain the next slice immediately, NOT on the next rAF. Under a fling
     // the frames run 30-60ms, so one budget-slice per frame drained far
     // slower than roots arrived — discovery owned ~75% of end-to-end badge
     // latency (dom_seen_to_attached p50 632ms / max 2.1s, production
-    // QuickBase profile 2026-07-03, notes/DESIGN_PAINT_THE_BAND.md). A
-    // 0-timeout yields the event loop (input/paint stay responsive — same
-    // shape as discoverInSubtreeBatched's between-batch yields) but resumes
-    // in ~1-4ms, so slices chain near-back-to-back until the queue empties.
-    // Session-owned timer: teardownAll cancels it, so orphan discipline is
-    // unchanged; the rAF path remains the entry for fresh MO batches.
-    pageSession.resources.timeout(drainDiscovery, 0);
+    // QuickBase profile 2026-07-03, notes/DESIGN_PAINT_THE_BAND.md).
+    //
+    // Prefer scheduler.yield() (Chromium): its continuation lands at the
+    // FRONT of the task queue, so the chain resumes before the page's own
+    // queued work while still yielding for input/paint — a setTimeout(0)
+    // continuation queues BEHIND the page's pending tasks, which mid-fling
+    // on QuickBase left ~50-200ms gaps between slices (round-7 residual).
+    // Fallback: session-owned 0-timeout (Firefox; torn down by
+    // teardownAll — the yield path is covered by the isTornDown guard at
+    // the top of drainDiscovery). The rAF stays the entry for fresh MO
+    // batches; this chain self-terminates when the queue empties.
+    const sched = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
+    if (typeof sched?.yield === 'function') {
+      void sched.yield().then(drainDiscovery);
+    } else {
+      pageSession.resources.timeout(drainDiscovery, 0);
+    }
   }
   recordCpu('drainDiscovery', performance.now() - __cpuStart);
   if (__rootCount > 0) {
