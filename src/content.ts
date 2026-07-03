@@ -108,7 +108,7 @@ import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
 import { openLivenessPort } from './plugin/liveness';
 import { pageSession, TeardownReason } from './lifecycle/page-session';
 import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './debug/message-counters';
-import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, stopPerfObservers, lifecycleCounters, resetLifecycleCounters } from './debug/perf-counters';
+import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, rearmCpuShareBaseline, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, stopPerfObservers, lifecycleCounters, resetLifecycleCounters } from './debug/perf-counters';
 import { loadConfig, getDisplayMode, getHintVisibility, getHintsShown, setHintsShown } from './config';
 import {
   grammarEpochStats,
@@ -3736,6 +3736,10 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
   }
   return {
     ...getPerfCounters(),
+    // Publish timestamp. The dataset mirror freezes while the tab is hidden
+    // (visibility gate below), so consumers need this to tell a fresh snapshot
+    // from one stranded at the moment the tab was backgrounded.
+    ts: Date.now(),
     // Subframe count of this (top) frame — preserves the ad-frame-swarm signal
     // now that subframes no longer ship their own trail entries.
     frames: window.length,
@@ -3799,8 +3803,15 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
 // JSON grows with CPU-bucket count, and Firefox only throttles hidden-tab
 // timers to ~1s (vs Chrome's ~1/min), so ungated this was a store-walk +
 // stringify per second per hidden tab, times days of accumulated tabs.
-function publishPerfSnapshot(): void {
-  if (document.visibilityState !== 'visible') return;
+// `force` bypasses the visibility gate for one-shot publishes (boot marker,
+// reset-handshake confirmation) — the gate exists to kill the 4Hz interval's
+// hidden-tab cost, not to strand harness handshakes. A tab loaded hidden must
+// still publish once so dataset presence works as a liveness probe
+// (scripts/_test-extension-reload-firefox.mjs), and a reset delivered to a
+// hidden tab must confirm with zeroed counters or drivers diff against
+// pre-reset history (scripts/test-perf.mjs).
+function publishPerfSnapshot(force = false): void {
+  if (!force && document.visibilityState !== 'visible') return;
   try {
     document.documentElement.dataset.branchkitPerf =
       JSON.stringify(buildPerfSnapshot());
@@ -3811,7 +3822,7 @@ function publishPerfSnapshot(): void {
 // (unread) documentElement is pure 4Hz waste across the ad-frame swarm.
 if (isTopFrame) {
   pageSession.resources.interval(publishPerfSnapshot, 250);
-  publishPerfSnapshot();
+  publishPerfSnapshot(true);
 }
 
 // Periodic ship to the browser plugin's /perf-report endpoint so we have
@@ -3848,6 +3859,15 @@ const PERF_REPORT_INTERVAL_MS = 5000;
 // surfaces swarm size without 700 separate sendMessage round-trips.
 if (isTopFrame) {
   pageSession.resources.interval(shipPerfReport, PERF_REPORT_INTERVAL_MS);
+  // The visibility gate stops ships while hidden, which also stops the only
+  // cpu.share baseline advance — without a re-arm, the first ship after
+  // refocus would compute its share window over the entire hidden span
+  // (hours), diluting pct toward 0 and lumping all hidden-period bucket
+  // deltas into one bogus trail sample. Re-arm (without shipping) on the
+  // visible transition so the first sample covers a normal window.
+  pageSession.resources.listen(document, 'visibilitychange', () => {
+    if (document.visibilityState === 'visible') rearmCpuShareBaseline();
+  });
   // Reset trigger from main world — set the dataset to "1" and we reset.
   new MutationObserver(() => {
     if (document.documentElement.dataset.branchkitResetPerf === '1') {
@@ -3857,7 +3877,7 @@ if (isTopFrame) {
       resetCpuCounters();
       resetLongtask();
       delete document.documentElement.dataset.branchkitResetPerf;
-      publishPerfSnapshot();
+      publishPerfSnapshot(true);
     }
   }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-branchkit-reset-perf'] });
 }

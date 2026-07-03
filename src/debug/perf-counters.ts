@@ -140,6 +140,16 @@ export function computeCpuShare(advanceShareBaseline: boolean): {
   };
 }
 
+/**
+ * Advance the cpu-share baseline without producing a sample. Used on the
+ * hidden→visible transition: ships are visibility-gated, so the baseline
+ * freezes while hidden — without this, the first post-refocus ship would
+ * integrate its share window over the whole hidden span.
+ */
+export function rearmCpuShareBaseline(): void {
+  computeCpuShare(true);
+}
+
 /** Per-bucket cumulative totals for the snapshot's `cpu.buckets`. */
 export function cpuBucketsSnapshot(): Record<string, { count: number; totalMs: number; maxMs: number; top: Array<{ ts: number; ms: number }> }> {
   return Object.fromEntries(

@@ -40,6 +40,13 @@ const HUGE_MUTATIONS_COUNT = 1000;
 // messages per mutation batch, hundreds/sec, on every mutation-active page.
 // 100 restores the gating INVESTIGATION_YOUTUBE_WATCH_PERF.md records: only
 // bursts big enough to plausibly wedge are worth a breadcrumb.
+//
+// Pairing invariant: every step within one handlePageMutations invocation
+// gates on the SAME size (records.length), including the end-family steps
+// that conceptually describe the post-filter set. Gating :start on
+// records.length but :end on foreign.length would suppress the end for any
+// mixed batch (records >= 100, foreign < 100) and fabricate the
+// start-without-end wedge signature the soak checklist greps for.
 const FIREHOSE_MIN = 100;
 const HUGE_MUTATION_IDLE_MS = 50;
 
@@ -292,7 +299,7 @@ function handlePageMutations(records: MutationRecord[]): void {
     }
     return !isOwnMutation(m.target);
   });
-  firehoseStep('moCallback:filter_end', foreign.length, FIREHOSE_MIN);
+  firehoseStep('moCallback:filter_end', records.length, FIREHOSE_MIN);
   lifecycleCounters.moForeignRecords += foreign.length;
   if (foreign.length === 0) {
     recordCpu('moCallback', performance.now() - __cpuStart);
@@ -324,7 +331,7 @@ function handlePageMutations(records: MutationRecord[]): void {
         });
     }, HUGE_MUTATION_IDLE_MS);
     recordCpu('moCallback', performance.now() - __cpuStart);
-    firehoseStep('moCallback:end_huge_scheduled', foreign.length, FIREHOSE_MIN);
+    firehoseStep('moCallback:end_huge_scheduled', records.length, FIREHOSE_MIN);
     return;
   }
 
@@ -338,7 +345,7 @@ function handlePageMutations(records: MutationRecord[]): void {
   // settle is the same trade already accepted for scroll/resize.
   if (pageSession.hintsVisible) pageSession.deps.scheduleDeferredReposition();
   recordCpu('moCallback', performance.now() - __cpuStart);
-  firehoseStep('moCallback:end_normal', foreign.length, FIREHOSE_MIN);
+  firehoseStep('moCallback:end_normal', records.length, FIREHOSE_MIN);
 }
 
 let observer: MutationObserver | undefined;
