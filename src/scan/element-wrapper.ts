@@ -110,6 +110,18 @@ export class ElementWrapper {
   // Distinct from `occluded` (a visible target covered by something on top).
   cssHidden: boolean = false;
 
+  // Stage timestamps (performance.now ms) for the paint-latency
+  // decomposition (notes/DESIGN_PAINT_THE_BAND.md): where does the time go
+  // between a row appearing in the DOM and its badge painting? Stamped once
+  // each, first pass through the stage; the debug snapshot reports
+  // stage-delta percentiles over recently-shown wrappers (paint_latency in
+  // snapshotExtras), so one Ctrl+Alt+A after a fling attributes the lag to
+  // discovery→band, band→claim, or claim→paint.
+  tAttached: number = performance.now();
+  tInBand: number | null = null;
+  tClaimed: number | null = null;
+  tFirstShown: number | null = null;
+
   constructor(element: Element, scanned: ScannedElement) {
     this.element = element;
     this.scanned = scanned;

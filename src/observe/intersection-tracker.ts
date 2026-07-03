@@ -180,6 +180,8 @@ export class IntersectionTracker {
       wrapper.isInViewport = entry.isIntersecting;
 
       if (entry.isIntersecting) {
+        // Paint-latency stage stamp (first band entry only).
+        wrapper.tInBand ??= performance.now();
         // Want a codeword if we don't already have one.
         if (!wrapper.scanned.codeword) {
           this.pendingClaim.add(wrapper);
@@ -320,6 +322,7 @@ export class IntersectionTracker {
 
         if (label) {
           wrapper.scanned.codeword = label;
+          wrapper.tClaimed ??= performance.now();
           newlyClaimed.push(wrapper);
           dirty = true;
         }

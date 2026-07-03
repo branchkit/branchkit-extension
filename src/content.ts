@@ -1379,8 +1379,12 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
       // warm from cacheLayout above, so isVisible is cheap here.
       const cssVisible = isVisible(wrapper.element);
       wrapper.cssHidden = !cssVisible;
-      if (cssVisible) wrapper.hint.show(isPaintReady(wrapper));
-      else wrapper.hint.hide();
+      if (cssVisible) {
+        wrapper.hint.show(isPaintReady(wrapper));
+        wrapper.tFirstShown ??= performance.now();
+      } else {
+        wrapper.hint.hide();
+      }
     }
     firehoseStep('showHints:mount_end', renderable.length, 20);
 
@@ -1615,6 +1619,7 @@ function prepareBadge(w: ElementWrapper): boolean {
     w.hint = new HintBadge(w.element, label, w.category, getDisplayMode());
   }
   w.hint.show(isPaintReady(w));
+  w.tFirstShown ??= performance.now();
   return true;
 }
 
@@ -1718,6 +1723,7 @@ function applyLifecyclePlan(lists: ReconcilePlanLists): void {
   }
   for (const w of lists.toRepair) {
     w.isInViewport = true;
+    w.tInBand ??= performance.now();
   }
   // If we corrected any stale-FALSE flags, run reconcile so the just-recovered
   // wrappers also go through build (badgeNewlyCodeworded picks up repaired
@@ -2090,7 +2096,9 @@ async function processScanBatch(
     if (!label) continue;  // pool exhausted; element stays unaddressable
     newElements[i].codeword = label;
     claimCounters.scanPathClaimed++;
-    candidates.push(new ElementWrapper(newRefs[i], newElements[i]));
+    const cw = new ElementWrapper(newRefs[i], newElements[i]);
+    cw.tClaimed = performance.now(); // scan-path claim: born codeworded
+    candidates.push(cw);
   }
 
   // Even an empty batch sends an is_final marker so the plugin
@@ -3143,11 +3151,51 @@ const reconcileApplied = {
   total: { release: 0, repair: 0, claim: 0, build: 0, show: 0, hide: 0, cssHidden: 0, strict: 0 },
 };
 
+// Paint-latency decomposition for the debug snapshot: stage-delta
+// percentiles over wrappers first shown in the trailing window. Answers
+// "where does the time go between a row appearing and its badge painting"
+// (notes/DESIGN_PAINT_THE_BAND.md) — attached→band is discovery+IO,
+// band→claimed is the claim debounce/flush, claimed→shown is the build
+// queue. Pure reads over already-stamped fields; no layout.
+const PAINT_LATENCY_WINDOW_MS = 90_000;
+
+function paintLatencyStats() {
+  const now = performance.now();
+  const deltas: Record<string, number[]> = {
+    attached_to_band: [], band_to_claimed: [], claimed_to_shown: [], attached_to_shown: [],
+  };
+  let count = 0;
+  for (const w of store.all) {
+    if (w.tFirstShown === null || now - w.tFirstShown > PAINT_LATENCY_WINDOW_MS) continue;
+    count++;
+    if (w.tInBand !== null) deltas.attached_to_band.push(w.tInBand - w.tAttached);
+    if (w.tInBand !== null && w.tClaimed !== null) deltas.band_to_claimed.push(w.tClaimed - w.tInBand);
+    if (w.tClaimed !== null) deltas.claimed_to_shown.push(w.tFirstShown - w.tClaimed);
+    deltas.attached_to_shown.push(w.tFirstShown - w.tAttached);
+  }
+  const pct = (arr: number[], p: number) => {
+    if (arr.length === 0) return null;
+    const s = [...arr].sort((a, b) => a - b);
+    return Math.round(s[Math.min(s.length - 1, Math.floor((p / 100) * s.length))]);
+  };
+  const summarize = (arr: number[]) =>
+    ({ n: arr.length, p50: pct(arr, 50), p90: pct(arr, 90), max: pct(arr, 100) });
+  return {
+    window_ms: PAINT_LATENCY_WINDOW_MS,
+    shown_in_window: count,
+    attached_to_band: summarize(deltas.attached_to_band),
+    band_to_claimed: summarize(deltas.band_to_claimed),
+    claimed_to_shown: summarize(deltas.claimed_to_shown),
+    attached_to_shown: summarize(deltas.attached_to_shown),
+  };
+}
+
 /** Diagnostic surfaces owned by this module, merged into every debug
  * snapshot (both the Ctrl+Alt+A path and the test-capture event) BEFORE the
  * send — see captureDebugSnapshot's extras param. */
 function snapshotExtras() {
   return {
+    paint_latency: paintLatencyStats(),
     grammar_epoch: grammarEpochStats(),
     reconcile_applied: {
       passes: reconcileApplied.passes,
