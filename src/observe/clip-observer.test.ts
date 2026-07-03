@@ -5,6 +5,7 @@ import {
   drainClipObservers,
   setClipObserverEnabled,
   clipObserverDebug,
+  boundClipRoot,
 } from './clip-observer';
 
 const mounted: Element[] = [];
@@ -91,6 +92,46 @@ describe('reconcileClipObservation', () => {
     expect(clipObserverDebug().targets).toBe(1);
     reconcileClipObservation([]); // btn no longer present
     expect(clipObserverDebug().targets).toBe(0);
+  });
+
+  it('rebinds a target whose bound root detached (same-task reparent)', () => {
+    // A same-task remove+insert keeps the element connected at every
+    // disconnect check, so no limbo/unobserve reset fires — the recheck in
+    // the reconcile loop is the only thing that catches the stale binding.
+    setClipObserverEnabled(true);
+    const scrollerA = makeScroller();
+    const scrollerB = makeScroller();
+    const btn = document.createElement('button');
+    scrollerA.appendChild(btn);
+    const w = wrapperFor(btn);
+    reconcileClipObservation([w]);
+    expect(boundClipRoot(btn)).toBe(scrollerA);
+
+    scrollerB.appendChild(btn); // reparent: btn never disconnects observably
+    scrollerA.remove(); // old route's scroller detaches
+    reconcileClipObservation([w]);
+    expect(boundClipRoot(btn)).toBe(scrollerB);
+    expect(clipObserverDebug()).toEqual({ roots: 1, targets: 1 });
+
+    reconcileClipObservation([]);
+    expect(clipObserverDebug()).toEqual({ roots: 0, targets: 0 });
+  });
+
+  it('rebinds when the wrapper was recreated for a still-bound element', () => {
+    setClipObserverEnabled(true);
+    const scroller = makeScroller();
+    const btn = document.createElement('button');
+    scroller.appendChild(btn);
+    reconcileClipObservation([wrapperFor(btn)]);
+    expect(clipObserverDebug()).toEqual({ roots: 1, targets: 1 });
+
+    // Fresh wrapper object for the same element (attribute-flap
+    // detach→reattach). Clip signals must land on the live wrapper.
+    reconcileClipObservation([wrapperFor(btn)]);
+    expect(clipObserverDebug()).toEqual({ roots: 1, targets: 1 });
+
+    reconcileClipObservation([]);
+    expect(clipObserverDebug()).toEqual({ roots: 0, targets: 0 });
   });
 
   it('releases the root observer when its last target is dropped', () => {

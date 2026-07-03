@@ -111,7 +111,23 @@ export function reconcileClipObservation(wrappers: Iterable<ElementWrapper>): vo
   for (const w of wrappers) {
     if (!w.hint || !w.element.isConnected) continue;
     wanted.add(w.element);
-    if (rootByTarget.has(w.element)) continue;
+    const boundRoot = rootByTarget.get(w.element);
+    if (boundRoot) {
+      // Staleness recheck (cheap: two Map/flag reads, no layout). A
+      // same-task reparent never disconnects the element, so it skips every
+      // limbo/unobserve reset path — without this, a target whose old
+      // scroller detached stays bound to it forever: the detached subtree
+      // stays pinned (defeating the last-target release) and the IO reports
+      // a permanent non-intersection → visible badge wrongly hidden. Same
+      // reset applies when the wrapper was recreated for the element
+      // (attribute flap detach→reattach between settles) so clip signals
+      // land on the live wrapper, not the dead one. Residual known gap: a
+      // reparent between two still-connected scrollers keeps the stale
+      // binding (recomputing findClippingScroller per target per settle
+      // would trade away the bounded-to-churn cost this loop guarantees).
+      if (boundRoot.isConnected && wrapperByTarget.get(w.element) === w) continue;
+      unobserveTarget(w.element);
+    }
     // The scroll container that actually CLIPS this target. Returns null for a
     // position:fixed target (or one nested under a fixed popup) — ancestor
     // overflow doesn't clip it, so rooting an IO at an ancestor scroller would
@@ -151,4 +167,9 @@ export function drainClipObservers(): void {
 
 export function clipObserverDebug(): { roots: number; targets: number } {
   return { roots: observersByRoot.size, targets: rootByTarget.size };
+}
+
+/** Diagnostic/test accessor: the scroll-container root `el` is bound to. */
+export function boundClipRoot(el: Element): Element | null {
+  return rootByTarget.get(el) ?? null;
 }
