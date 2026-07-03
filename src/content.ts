@@ -1474,11 +1474,18 @@ function scheduleHintRefresh(): void {
 // On-screen wrappers construct synchronously and unbudgeted; off-viewport
 // band wrappers construct under this budget and the remainder re-derives on
 // the idle continuation — the ordering/exemption contract lives in
-// runBuildPass (lifecycle/build-queue.ts). The tight value protects the
-// frame mid-scroll (sync passes ride the claim-flush cadence); the idle
-// continuation drains under its rIC deadline instead.
-const BAND_BUILD_BUDGET_MS = 4;
-const BAND_BUILD_IDLE_TIMEOUT_MS = 200;
+// runBuildPass (lifecycle/build-queue.ts).
+//
+// Sized for ~a frame, not a fraction of one (tuning round 4): the original
+// 4ms spread a QuickBase churn wave's ~120ms of construction across 2.5s of
+// tiny slices, while Rango — which does the identical walks synchronously,
+// unbudgeted — populated the same production grid near-instantly (A/B,
+// 2026-07-03). A fling's frames are already dropping from the page's own
+// row rendering; users read "badges are there" long before they notice
+// frame pacing. The budget survives only as a guardrail against
+// pathological waves, not as a smoothness tax.
+const BAND_BUILD_BUDGET_MS = 12;
+const BAND_BUILD_IDLE_TIMEOUT_MS = 100;
 // Ceiling on how much of an idle window one continuation pass consumes.
 // rIC deadlines run up to 50ms; capping keeps a single re-entry from
 // monopolizing a whole idle frame on low-end machines.

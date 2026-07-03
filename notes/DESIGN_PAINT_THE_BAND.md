@@ -59,6 +59,17 @@ Expected: per-badge cost drops toward pure construction (~0.3ms), a 4ms
 pass builds ~12, a 70-badge churn wave drains in ~200ms. Production
 re-verify pending.
 
+Tuning round 4 (2026-07-03, after a Rango A/B on the same production
+grid): Rango — identical container/placement walks, synchronous and
+unbudgeted — populated near-instantly where we took ~2.5s. The arithmetic:
+an 80-badge churn wave is only ~120ms of construction; the 4ms budget was
+spreading it across seconds of 2-3-badge slices. The page tolerates burst
+construction during a fling (its own row rendering is already dropping
+frames), so the budget is a guardrail, not a smoothness tax:
+BAND_BUILD_BUDGET_MS 4 → 12 (also the continuation's starved-rIC floor),
+BAND_BUILD_IDLE_TIMEOUT_MS 200 → 100. Expected wall for an 80-wave:
+~150-400ms. Production re-verify pending.
+
 QuickBase-shaped residual, measured but NOT yet addressed: the grid
 virtualizes rows, so wrappers churn hard mid-scroll (stale-flag repairs of
 20-35 per settle, hosts oscillating ±40) — every recycled row is a fresh
