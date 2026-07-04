@@ -1091,6 +1091,37 @@ writes/sec bursts for a few seconds — wasteful, imperceptible);
 disagreement, dies at quiet); (c) the 55 no-MO-stamp buttons/inputs
 question is moot at current sweep speed.
 
+## Round 20 — the last politeness tax: reveal sweeps walk in one slab
+## (2026-07-04)
+
+Drill on build 04:09 (round 19 live). User: "slower than Rango for
+sure, but consistent." The consistency is round 19 (oscillator dead);
+the slower-than-Rango is now measured exactly: the fling reveal's
+fast-armed sweep took `fast_arm @ 3131 → added 52 @ 5251` — **2.1s**
+— while the identical walk runs 158ms at boot. Batch-60 (18c) helped
+less than predicted because the assumption was wrong: mid-storm an
+inter-batch yield hop costs ~150ms (the page's own swap tasks run
+between our slices), not ~30ms. Twelve hops ≈ 1.8s. The hop COUNT is
+the wall-clock; shrinking per-hop work can't fix paying the storm per
+hop.
+
+Rango's number comes from paying the storm ZERO times: one
+synchronous unbudgeted walk, one reflow. Round-13's lesson
+("politeness multiplies wall-clock 3-5x under contention"), applied
+to the one path that never got it: a REVEAL-armed sweep now walks
+batches back-to-back in one task until REVEAL_SWEEP_SLAB_BUDGET_MS
+(250ms), yielding only past the budget — circuit breaker, not pacing.
+Idle-armed sweeps and the huge-mutation path keep per-batch yields
+(background politeness is still right when nobody is watching).
+Plumbing: discoverInSubtreeBatched(root, source, slabBudgetMs = 0);
+fast_rerun re-arms pass the budget too.
+
+Expected: reveal → settle (~100ms) → fast_arm → one ~150-250ms slab →
+added → prime+build (round-13 fast) → paint ≈ **0.4-0.6s post-reveal
+for the hidden cohort** — Rango's shape with our machinery. Cost
+accepted with eyes open, same as round 13: one ~250ms task at swap
+time, during frames the page is already dropping.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is

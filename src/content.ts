@@ -1886,12 +1886,18 @@ function scheduleBandDiscovery(settleKind: 'band' | 'store', revealRepairs = 0):
   // coalesced request of the other kind folds in — labels are diagnostic):
   // scroll settles → band_sweep, non-scroll (store) settles → settle_sweep.
   const source: DiscoverySource = settleKind === 'band' ? 'band_sweep' : 'settle_sweep';
+  const fastReveal = revealRepairs >= REVEAL_REPAIR_FAST_ARM;
   const sweepBody = () => {
     void (async () => {
       let added = 0;
       try {
         if (pageSession.isTornDown || !document.body) return;
-        added = await discoverInSubtreeBatched(document.body, source);
+        // Reveal-armed sweeps walk in one ~250ms slab (round 20) — the
+        // user is watching for exactly this result; idle sweeps keep
+        // per-batch yields.
+        added = await discoverInSubtreeBatched(
+          document.body, source, fastReveal ? REVEAL_SWEEP_SLAB_BUDGET_MS : 0,
+        );
         // Diagnostic: the sweep's added count INCLUDING zero, to correlate a
         // miss against whether the walk actually attached anything.
         firehoseStep('band_discovery:added', added, 0);
@@ -1941,10 +1947,10 @@ function scheduleBandDiscovery(settleKind: 'band' | 'store', revealRepairs = 0):
       }
     })();
   };
-  if (revealRepairs >= REVEAL_REPAIR_FAST_ARM) {
+  if (fastReveal) {
     // The settle plan just proved a mass reveal — content gained geometry
     // en masse. Waiting for idle here IS the residual late wave; the walk
-    // itself is yield-chained (round 17) so front-of-queue entry is safe.
+    // runs in one slab (round 20) so front-of-queue entry is safe.
     // Retries (armed above) deliberately keep the idle path — they are
     // race backstops, not reveal-urgent.
     firehoseStep('band_discovery:fast_arm', revealRepairs);
@@ -3868,7 +3874,19 @@ function discoverInSubtree(root: Element, source: DiscoverySource): number {
 // well under the wedge threshold) while cutting the reflow count ~4x.
 const SWEEP_WALK_BATCH_SIZE = 60;
 
-async function discoverInSubtreeBatched(root: Element, source: DiscoverySource): Promise<number> {
+// One-slab budget for a REVEAL-armed sweep (round 20): mid-storm every
+// inter-batch yield hop costs ~150ms (the page's own swap tasks run between
+// our slices), so even 12 hops ≈ 1.8s — while the identical walk runs 111ms
+// at boot and Rango's synchronous unbudgeted walk pays the storm ZERO times.
+// Round-13 posture applied to the sweep: run batches back-to-back inside one
+// task until this budget, yield only past it (circuit breaker, not pacing).
+// Idle-armed sweeps pass no budget and keep per-batch yields — background
+// politeness is still right when nobody is watching for the result.
+const REVEAL_SWEEP_SLAB_BUDGET_MS = 250;
+
+async function discoverInSubtreeBatched(
+  root: Element, source: DiscoverySource, slabBudgetMs = 0,
+): Promise<number> {
   const __cpuStart = performance.now();
   let added = 0;
   // Feed the limbo pool before collecting it (fling-wave round 8; see
@@ -3896,6 +3914,7 @@ async function discoverInSubtreeBatched(root: Element, source: DiscoverySource):
   }
 
   let invisibleCandidates: Element[] = [];
+  let lastYieldAt = performance.now();
   for (const batch of scanInBatches(root, SWEEP_WALK_BATCH_SIZE, initialSeen, isKnown)) {
     if (cr?.excludes.length) applyExclusions(batch.refs, batch.elements, cr.excludes);
     added += attachDiscovered(batch.refs, batch.elements, limboPool, keyIndex, source);
@@ -3906,7 +3925,15 @@ async function discoverInSubtreeBatched(root: Element, source: DiscoverySource):
     // page's pending tasks at 50-150ms, and ~45 hops on a 300-row grid WAS
     // the 3-4s "late wave" (DESIGN_FLING_WAVE round 17). Batching itself —
     // the actual freeze protection — is unchanged.
+    //
+    // A reveal-armed sweep (slabBudgetMs > 0) skips the yield while inside
+    // its slab budget: mid-storm EVERY hop pays ~150ms of the page's own
+    // swap tasks, so the hop count IS the wall-clock — the same walk is
+    // 111ms at boot and was still ~2.1s mid-storm at 12 hops (round 20).
+    // The budget is the round-13 circuit breaker, not pacing.
+    if (slabBudgetMs > 0 && performance.now() - lastYieldAt < slabBudgetMs) continue;
     await yieldTask();
+    lastYieldAt = performance.now();
     // The yield continuation is not cancellable; bail if the session died
     // mid-walk (same contract as drainDiscovery's chain).
     if (pageSession.isTornDown) return added;

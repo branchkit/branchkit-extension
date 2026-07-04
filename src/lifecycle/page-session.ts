@@ -99,7 +99,9 @@ export interface PageSessionDeps {
   // --- mutation-source collaborators ---
 
   discoverInSubtree: (root: Element, source: DiscoverySource) => number;
-  discoverInSubtreeBatched: (root: Element, source: DiscoverySource) => Promise<number>;
+  /** Third param: one-slab wall budget for reveal-armed sweeps (round 20);
+   * omitted/0 = yield every batch (huge path, idle sweeps). */
+  discoverInSubtreeBatched: (root: Element, source: DiscoverySource, slabBudgetMs?: number) => Promise<number>;
   reevaluateAttribute: (target: Element) => boolean;
   scheduleReposition: () => void;
   scheduleDeferredReposition: () => void;
