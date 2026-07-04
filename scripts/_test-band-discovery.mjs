@@ -30,6 +30,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, rmSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { captureSnapshot } from './_snapshot.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
@@ -148,15 +149,22 @@ if (after.totalHosts <= base.totalHosts) {
 } else {
   pass(`a new badge appeared after the sweep (hosts ${base.totalHosts} -> ${after.totalHosts})`);
 }
-// Stronger attribution: the badge must be tied to the injected element, either
-// via an inline anchor-name (anchor path) or a host inside the shadow root
-// (nesting path). Either proves the discover step found THIS element.
-if (after.injectedAnchorName && after.injectedAnchorName.startsWith('--bk-')) {
-  pass(`injected element bound on anchor path (anchor-name=${after.injectedAnchorName})`);
-} else if (after.shadowHosts > gapped.shadowHosts) {
-  pass(`injected element bound on nesting path (shadow host mounted)`);
+// Stronger attribution: the injected element must own a wrapper with a
+// claimed codeword. (The old checks — inline anchor-name, or a host nested
+// inside the shadow root — probed the anchor/nesting positioning
+// generations deleted in the reconcile-only re-arch 630f35c..83a2439;
+// under JS reconcile positioning every host mounts in the light DOM with a
+// transform, so both branches were unreachable and the fixture failed on a
+// working backstop.)
+const snap = await captureSnapshot(page);
+const gapWrapper = (snap?.wrappers ?? []).find(
+  (w) => /Gap link/.test(w.element?.accessibleName ?? ''),
+);
+if (gapWrapper && gapWrapper.scanned?.codeword) {
+  pass(`injected element owns a wrapper with codeword "${gapWrapper.scanned.codeword}"`
+    + (gapWrapper.discovery ? ` (source=${gapWrapper.discovery.source})` : ''));
 } else {
-  fail('a badge appeared but is not attributable to the injected element');
+  fail('a badge appeared but the injected element has no codeworded wrapper');
 }
 
 console.log('\n=== VERDICT ===');
