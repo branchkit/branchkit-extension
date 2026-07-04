@@ -673,6 +673,40 @@ warning or input-latency complaints appear on other sites, the
 guardrails are the tuning point (lower them), and `git revert` of this
 commit restores the polite pipeline wholesale.
 
+## Drill round 14 — the cut landed; the residual is a discovery
+## straggler cohort
+
+The Rango-parity cut worked where it aimed: claimed_to_shown p50
+652 → **32ms** (p90 132), dom_seen_to_shown p50 **229ms** (the target
+range), rebind_key 217, and the paint_stability ring shows NO dip for
+the first time in the arc (shown holds 366-396 through the whole
+trail). The user still reads it as slower than Rango — because
+dom_seen_to_attached has a monster tail: p50 70ms but p90 2535 / max
+6064. The median badge is Rango-fast; a ~10-15% cohort waits SECONDS
+for a wrapper, and the eye keys on screen-completion, not the median.
+
+The cohort's signature: one band_discovery:added size=49 at the next
+scroll settle — 49 elements the MO path missed entirely, rescued only
+by the scroll-settle sweep. Consistent mechanism: QuickBase renders
+the incoming window hidden and flips it visible via a class change,
+which is invisible to our MO (class is deliberately not in the
+attributeFilter) and produces no settle signal of its own.
+
+Fix: **every settle kind arms the band discovery sweep** (the
+'band'-vs-'store' discovery split assumed non-scroll settles only
+reveal existing wrappers — false on double-buffered grids). The
+mutation burst around the flip lands a 'store' settle within ~100ms,
+so the straggler window collapses from seconds to ≤~600ms. Sweep is
+single-flight + idle + isKnown-skipping; steady-state cost ~nil.
+
+Prediction for drill round 15: dom_seen_to_attached p90 falls from
+2535 to ≲700ms, dom_seen_to_shown p90 follows (was 2556), and
+screen-completion stops trailing the median. If the eye still reads
+slower-than-Rango at THAT point, the residual is the ≤600ms straggler
+window itself — the next lever would be class/style-aware reveal
+detection (a debounced coarse signal, carefully rate-limited), which
+should be designed, not rushed.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is

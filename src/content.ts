@@ -3401,8 +3401,19 @@ function runSettlePipeline(discovery: 'band' | 'store'): void {
     // APPLY: thin appliers in the load-bearing step order — enforced here
     // by structure, not comment discipline.
     applyLifecyclePlan(planLists);
-    if (discovery === 'band') scheduleBandDiscovery();
-    else scheduleReconcile();
+    // Every settle kind arms the band discovery sweep (round 14). The old
+    // 'band'-only rule assumed non-scroll settles reveal new hintables only
+    // among EXISTING wrappers — false on double-buffered grids: QuickBase
+    // renders the incoming window hidden and flips it visible via a class
+    // change our attributeFilter deliberately ignores, so ~50 elements per
+    // swap (the dom_seen_to_attached p90 2.5-6s straggler cohort, round-14
+    // drill) were discovered only by the NEXT scroll's settle. The mutation
+    // burst around the flip lands a 'store' settle within ~100ms; arming the
+    // sweep here closes the straggler window to ≤~600ms. The sweep is
+    // single-flight, idle-scheduled, and isKnown-skipping — cheap when
+    // nothing new exists.
+    scheduleBandDiscovery();
+    if (discovery === 'store') scheduleReconcile();
     applyOcclusionPlan(gather);
     reconcileScrollAccel();
     applyVisibilityPlan(planLists);
