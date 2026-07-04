@@ -2301,6 +2301,26 @@ takeover counters keep their names; a new `retarget_deferred` bucket
   (structure is freshest then); consume resolves per-wrapper WeakRefs
   independently, so partial rows degrade gracefully.
 
+IMPLEMENTED (a652176; net-NEGATIVE diff, 149+/160− — the deferral
+deleted the round-25 grace/hold machinery it obsoletes). Fixture
+verdict on the same swap/gesture/eye:
+- The 95 ↔ 11 oscillation is GONE. Solid holds 87-95 through the
+  entire double-generation window; the progressive removal reads as a
+  gentle 95 → 76 slope (Rango's identical window: 95 → 70) with two
+  single-sample transients; back to 95 at rest — full coverage, which
+  Rango ends 26% below (no checkboxes).
+- retarget_deferred 615 consumed transfers; letters preserved
+  throughout.
+- Bonus: takeover_fp_position 150 (was ~1) — with doomed wrappers
+  keeping honest geometry until death, the ambiguous tier's tight
+  position gate finally has real co-location to work with.
+- Gates green (1031 tests; the takeover/coattail tests rewritten to
+  pin reserve-then-consume; _test-qb-fling-rango.mjs allowlisted in
+  the harness ratchet with rationale — Rango-only launch).
+
+The real-Chrome drill is the arbiter, as always: this is the first
+build whose fixture line matches Rango's slope.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
