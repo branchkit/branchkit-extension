@@ -23,13 +23,13 @@ function childListRecord(added: Node[] = [], removed: Node[] = []): MutationReco
 const session = pageSession;
 
 beforeEach(() => {
-  vi.useFakeTimers(); // neutralize the rAF the discovery scheduler arms
+  vi.useFakeTimers(); // neutralize the yield-fallback timeout the discovery scheduler arms
   // firehoseStep posts a breadcrumb via chrome.runtime.sendMessage; stub it.
   (globalThis as unknown as { chrome: unknown }).chrome = {
     runtime: { sendMessage: vi.fn(() => Promise.resolve()) },
   };
   session.pendingDiscoveryRoots.clear();
-  session.discoveryFrame = null;
+  session.discoveryScheduled = false;
   session.hugeMutationTimer = null;
   session.hintsVisible = false;
   session.pendingMutation = false;

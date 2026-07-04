@@ -11,7 +11,7 @@ import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, 
 import { noteDisconnectedShadowAttach } from './scan/shadow-attach-signal';
 import { ElementWrapper } from './scan/element-wrapper';
 import { wantsHint } from './lifecycle/desired-state';
-import { runBuildPass, createSingleFlight, WAVE_SLICE_BUDGET_MS } from './lifecycle/build-queue';
+import { runBuildPass, createSingleFlight, WAVE_BUILD_BUDGET_MS } from './lifecycle/build-queue';
 import {
   computeReconcilePlanLists,
   RECONCILE_BAND_MARGIN_PX,
@@ -1511,9 +1511,10 @@ const scheduleBandBuildContinuation = createSingleFlight(
 // symptom). Batched, the whole pass pays ~one reflow.
 //
 // `budgetMs` is the off-viewport construction budget for THIS pass — the
-// shared wave-slice constant (lifecycle/build-queue.ts) for every caller,
-// reconcile-path and continuation alike.
-function badgeNewlyCodeworded(budgetMs: number = WAVE_SLICE_BUDGET_MS): void {
+// burst-scale build constant (lifecycle/build-queue.ts) for every caller,
+// reconcile-path and continuation alike: a realistic wave completes in one
+// pass, paying the ancestor warm and the placement reflow once.
+function badgeNewlyCodeworded(budgetMs: number = WAVE_BUILD_BUDGET_MS): void {
   const newBadges: ElementWrapper[] = [];
   for (const w of store.all) {
     // Delta against desired state: wants a hint but isn't currently
@@ -2378,11 +2379,11 @@ function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
   teardownMutationSource();
   try { pageSession.tracker.disconnectAll(); } catch { /* same */ }
   try { pageSession.resizeObserver.disconnect(); } catch { /* same */ }
-  if (pageSession.discoveryFrame !== null) {
-    try { cancelAnimationFrame(pageSession.discoveryFrame); } catch { /* same */ }
-    pageSession.discoveryFrame = null;
-    pageSession.pendingDiscoveryRoots.clear();
-  }
+  // The discovery drain is a yield task now (not cancellable) — clear the
+  // queue and reset the flag; drainDiscovery's isTornDown guard makes the
+  // already-scheduled continuation inert.
+  pageSession.discoveryScheduled = false;
+  pageSession.pendingDiscoveryRoots.clear();
   teardownVisibilityTracker();
   // Stop the watchdog setTimeout chain + longtask observer — raw timers in
   // perf-counters, not SessionResources-owned, so teardownAll() below never
@@ -3769,11 +3770,11 @@ function suspendHintMachinery(): void {
   if (suspended || !hintMachineryEnabled) return;
   suspended = true;
   teardownMutationSource();
-  if (pageSession.discoveryFrame !== null) {
-    cancelAnimationFrame(pageSession.discoveryFrame);
-    pageSession.discoveryFrame = null;
-    pageSession.pendingDiscoveryRoots.clear();
-  }
+  // The discovery drain is a yield task (not cancellable): clearing the
+  // queue makes an already-scheduled continuation a no-op (empty-set
+  // return), and the reset flag lets resume re-schedule cleanly.
+  pageSession.discoveryScheduled = false;
+  pageSession.pendingDiscoveryRoots.clear();
   bkLog('BK_SUSPEND', { url: trimFrameUrl(window.location.href), wrappers: store.all.length });
 }
 

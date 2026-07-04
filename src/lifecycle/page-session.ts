@@ -169,8 +169,11 @@ export class PageSession {
   /** SW-assigned frame id; null until the liveness Port handshake completes. */
   myFrameId: number | null = null;
 
-  /** In-flight discovery rAF handle, or null when no drain is scheduled. */
-  discoveryFrame: number | null = null;
+  /** Single-flight flag for the yield-scheduled discovery drain (entry and
+   * chain share it). The yield task itself is not cancellable — teardown
+   * relies on drainDiscovery's isTornDown guard; this flag just prevents
+   * double-scheduling. */
+  discoveryScheduled = false;
 
   /** Roots queued for the next discovery drain. */
   readonly pendingDiscoveryRoots: Set<Element> = new Set();

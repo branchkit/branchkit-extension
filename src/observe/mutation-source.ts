@@ -28,7 +28,7 @@ import { getHintVisibility } from '../config';
 import { recordCpu, lifecycleCounters } from '../debug/perf-counters';
 import { firehoseStep } from '../debug/firehose';
 import { pageSession, scheduleYieldTask } from '../lifecycle/page-session';
-import { WAVE_SLICE_BUDGET_MS } from '../lifecycle/build-queue';
+import { WAVE_WALK_BUDGET_MS } from '../lifecycle/build-queue';
 
 // Beyond the HUGE_MUTATIONS_COUNT threshold (DarkReader's pattern), we
 // stop processing nodes individually and just queue a coarse refresh.
@@ -131,38 +131,43 @@ function drainReevaluations(): void {
 // subtree roots per batch) consuming 84ms of CPU in that window. Rather
 // than running each scan synchronously inside the MO callback — which
 // is what trips Firefox's unresponsive-script warning — accumulate
-// added subtree roots in a Set and drain them via rAF, mirroring the
-// existing `scheduleReevaluation` pattern for attribute changes.
+// added subtree roots in a Set and drain them as a yield-scheduled task.
 //
-// Net effect: 80 sync scans/sec → ≤60 batched drains/sec, with the same
-// total discovery work amortized across frames so no single task exceeds
-// the unresponsive threshold. Side effect: badges for newly-mounted
-// elements appear up to one frame (~16ms) later than they used to,
-// which is imperceptible in `always` mode (the user's typical setup).
+// The entry is scheduleYieldTask, NOT requestAnimationFrame (fling-wave
+// round 3): the drain itself is cheap (224 roots in 10ms — the
+// subtreeMaybeHintable pre-filter eats almost everything), but a
+// mid-fling saturated main thread delivers the next animation frame
+// 100-300ms late, and that entry wait WAS the discovery tail
+// (dom_seen_to_attached p90 302ms). A yield task runs front-of-queue
+// after the current task — no rendering opportunity required. Trades a
+// little batching (a fresh MO batch can land its own small drain instead
+// of joining the frame's); the pre-filter keeps those ~2-10ms. All
+// scheduleDiscovery calls within one MO callback still coalesce into one
+// drain via the single-flight `discoveryScheduled` flag.
 function scheduleDiscovery(root: Element): void {
   pageSession.pendingDiscoveryRoots.add(root);
-  if (pageSession.discoveryFrame === null) {
-    pageSession.discoveryFrame = requestAnimationFrame(drainDiscovery);
+  if (!pageSession.discoveryScheduled) {
+    pageSession.discoveryScheduled = true;
+    scheduleYieldTask(drainDiscovery);
   }
 }
 
-// Per-drain walk budget: WAVE_SLICE_BUDGET_MS (lifecycle/build-queue.ts) —
-// the shared wave-slice constant. With many queued roots (or one heavy root
-// like a freshly-mounted <ytd-app> on YouTube /watch), running every
-// discoverInSubtree synchronously in one pass can trip Firefox's
-// unresponsive-script warning; remaining roots defer to the yield-chained
-// continuation below. We always do at least one root per pass so a single
-// very-expensive root can't permanently starve the queue. Note the claim
-// flush (and build) for wrappers this drain prime-claimed runs in THIS
-// task's microtask tail, so a composed slice worst-cases at ~2× the budget
-// — the burst-model trade the constant's comment records.
+// Per-drain walk budget: WAVE_WALK_BUDGET_MS (lifecycle/build-queue.ts).
+// With many queued roots (or one heavy root like a freshly-mounted
+// <ytd-app> on YouTube /watch), running every discoverInSubtree
+// synchronously in one pass can trip Firefox's unresponsive-script
+// warning; remaining roots defer to the yield-chained continuation below.
+// We always do at least one root per pass so a single very-expensive root
+// can't permanently starve the queue. Note the claim flush (and build) for
+// wrappers this drain prime-claimed runs in THIS task's microtask tail, so
+// a composed slice is walk-budget + build-budget in the worst case — the
+// burst-model trade the constants' comment records.
 
 function drainDiscovery(): void {
   const __cpuStart = performance.now();
-  pageSession.discoveryFrame = null;
-  // A scheduler.yield() continuation (below) is not cancellable by the
-  // session teardown, so guard explicitly — quiesceOrphan only clears the
-  // pending set on the rAF branch.
+  pageSession.discoveryScheduled = false;
+  // A scheduleYieldTask continuation is not cancellable by the session
+  // teardown, so guard explicitly.
   if (pageSession.isTornDown) return;
   if (pageSession.pendingDiscoveryRoots.size === 0) return;
   const roots = [...pageSession.pendingDiscoveryRoots];
@@ -212,7 +217,7 @@ function drainDiscovery(): void {
     // Yield to the event loop once we've exceeded the budget — but
     // always do at least one root so we make forward progress even when
     // a single root is heavy enough to blow the budget by itself.
-    if (performance.now() - __cpuStart >= WAVE_SLICE_BUDGET_MS) break;
+    if (performance.now() - __cpuStart >= WAVE_WALK_BUDGET_MS) break;
   }
   // Re-queue anything we didn't process this pass. Re-adding to a Set is
   // idempotent so any new arrivals between drain start and now coalesce
@@ -220,16 +225,16 @@ function drainDiscovery(): void {
   for (let i = processed; i < workRoots.length; i++) {
     pageSession.pendingDiscoveryRoots.add(workRoots[i]);
   }
-  if (pageSession.pendingDiscoveryRoots.size > 0 && pageSession.discoveryFrame === null) {
-    // Chain the next slice immediately, NOT on the next rAF. Under a fling
-    // the frames run 30-60ms, so one budget-slice per frame drained far
-    // slower than roots arrived — discovery owned ~75% of end-to-end badge
-    // latency (dom_seen_to_attached p50 632ms / max 2.1s, production
-    // QuickBase profile 2026-07-03, notes/DESIGN_PAINT_THE_BAND.md).
+  if (pageSession.pendingDiscoveryRoots.size > 0 && !pageSession.discoveryScheduled) {
+    // Chain the next slice immediately. Under a fling the frames run
+    // 30-60ms, so any frame-gated cadence drains far slower than roots
+    // arrive — discovery owned ~75% of end-to-end badge latency before the
+    // chain (dom_seen_to_attached p50 632ms, notes/DESIGN_PAINT_THE_BAND.md).
     // scheduleYieldTask prefers scheduler.yield (front-of-queue resume);
-    // the isTornDown guard at the top of drainDiscovery covers the
-    // uncancellable yield path. The rAF stays the entry for fresh MO
-    // batches; this chain self-terminates when the queue empties.
+    // the isTornDown guard at the top covers the uncancellable yield path.
+    // The flag keeps entry and chain single-flight together; the chain
+    // self-terminates when the queue empties.
+    pageSession.discoveryScheduled = true;
     scheduleYieldTask(drainDiscovery);
   }
   recordCpu('drainDiscovery', performance.now() - __cpuStart);

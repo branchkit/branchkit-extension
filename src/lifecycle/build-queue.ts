@@ -20,20 +20,27 @@
  *     drops out.
  */
 /**
- * The wave-slice CPU budget shared by the discovery drain's walk and the
- * build pass (notes/DESIGN_FLING_WAVE.md Part 1). One constant, two
- * consumers: `drainDiscovery` yields between roots past it, and
- * `badgeNewlyCodeworded` defers off-viewport first-time construction past
- * it. Because the claim flush (and therefore the build) runs in the
- * microtask tail of the drain's own task, a composed slice worst-cases at
- * ~2× this value — sized for a BURST, not a smooth frame (paint-the-band
- * rounds 4+6): mid-fling the page is already dropping frames from its own
- * row rendering, and users read "badges are there" long before they notice
- * frame pacing. The budget survives as a guardrail against pathological
- * waves, not as a smoothness tax. Tune from the `bandBuild:pass` /
- * `drainDiscovery` CPU buckets, not by feel.
+ * Wave budgets (notes/DESIGN_FLING_WAVE.md Part 1 + round-3 verdict).
+ * Deliberately TWO constants — round 3 showed the two stages need
+ * different scales:
+ *
+ * WALK: `drainDiscovery` yields between roots past this. The walk is cheap
+ * as measured (224 roots in 10ms — subtreeMaybeHintable eats almost
+ * everything), so a mid-frame-friendly slice is fine.
+ *
+ * BUILD: `badgeNewlyCodeworded` defers off-viewport first-time
+ * construction past this. Burst-sized so a realistic fling wave
+ * (~80-120 badges at ~0.3ms warmed) completes in ONE pass — every extra
+ * pass re-pays the cacheConstruction ancestor warm and the placeBadges
+ * reflow that clearLayoutCache wiped (round 3 measured passes 40-110ms
+ * apart re-slicing one wave into five). The budget survives only as the
+ * pathological-wave guardrail (paint-the-band rounds 4+6 posture):
+ * mid-fling the page is dropping frames from its own row rendering, and
+ * users read "badges are there" long before they notice frame pacing.
+ * Tune from the `bandBuild:pass` CPU bucket, not by feel.
  */
-export const WAVE_SLICE_BUDGET_MS = 32;
+export const WAVE_WALK_BUDGET_MS = 32;
+export const WAVE_BUILD_BUDGET_MS = 120;
 
 export function runBuildPass<T>(
   items: T[],

@@ -238,6 +238,63 @@ recycle replacements claim instantly and paint inside the 250-500ms
 limbo hold. If the dip persists even then, it is teardown-side with no
 remaining fill-side excuse: proceed to step 4 (slot rebind).
 
+## Drill round 3 (2026-07-03, snapshot 23-51 + actuator.log breadcrumbs)
+## — stop re-slicing the wave
+
+Pool fixed (wave.reservoir.free 125 mid-window, band_to_claimed p90
+377 → 130), user reports incremental painting but the same overall lag,
+and the end-to-end tail barely moved (dom_seen_to_shown p90 566). Two
+side notes first: round 2's p50 123ms was partly an ARTIFACT — fresh
+out-of-band wrappers carry isInViewport=true by default, so before the
+symmetric sweep they pre-claimed and pre-built; the sweep now honestly
+flips them false and p50 "regressed" to 365 (real band timing). And
+band_sweep_repairs=1 with primed_claims=480: on this grid the
+destination rows mount in-band at deceleration and get primed — the
+sweep's entry direction is a backstop here, its release direction (the
+pool fix) is what earns its keep.
+
+The actuator.log firehose finally shows where the wall-clock goes — the
+wave is being RE-SLICED, twice:
+
+1. **Build passes are 40-110ms apart with the backlog growing
+   mid-chain** (band_build:deferred 31 → 58 → 39 → 18 → 14 → 7 over
+   ~700ms). Each pass pays cacheConstruction ancestor-warm + build +
+   placeBadges reflow (~50-80ms wall) and then clearLayoutCache wipes
+   the warm — the next pass RE-WARMS the same shared row ancestor
+   chains. Five passes ≈ five times Rango's one-burst overhead. (Step
+   2's budget unification also quietly LOWERED the build budget 48 → 32
+   — the wrong direction; the ten-round arc keeps concluding burst.)
+2. **drainDiscovery itself is fast (224 roots in 10ms — the pre-filter
+   eats almost everything); the discovery tail is the rAF ENTRY.**
+   Mid-fling a saturated main thread delivers the next animation frame
+   100-300ms late; that is dom_seen_to_attached p90 302 / max 2575.
+
+Fix (Part 1d):
+- **Burst build budget.** Split the unified constant back into
+  WAVE_WALK_BUDGET_MS = 32 (drainDiscovery slices — fine as measured)
+  and WAVE_BUILD_BUDGET_MS = 120 (badgeNewlyCodeworded) — an 80-badge
+  wave (~0.3ms/badge warmed, plus warm + place) completes in ONE pass,
+  paying the warm and the placement reflow once. The budget survives
+  only as the pathological-wave guardrail, exactly the round-4/6
+  posture. Mid-fling the page is dropping frames anyway; a ~150ms task
+  at swap time is Rango's shape, which the A/B said reads as instant.
+- **Yield-task discovery entry.** scheduleDiscovery enters via
+  scheduleYieldTask instead of requestAnimationFrame, with a
+  single-flight `discoveryScheduled` flag replacing the rAF id (the
+  isTornDown guard already covers the uncancellable yield path — same
+  contract as the chain). Trades a little batching (a fresh MO batch
+  can land its own small drain instead of joining the frame's) for
+  entry latency that no longer waits on a rendering opportunity; the
+  subtreeMaybeHintable pre-filter keeps small drains ~2-10ms.
+
+Prediction for drill round 4: dom_seen_to_attached p90 well under
+100ms, claimed_to_shown p90 under ~100ms (one build pass per wave), a
+fling paints as 1-2 visible waves instead of a trickle, and
+screen-completion (the p90, which is what the eye keys on for a full
+viewport) lands near ~200ms. If perception STILL doesn't move, the
+remaining lag is not in this pipeline — it is content-vs-badge timing
+on QuickBase's own swap plus the teardown dip: go to step 4.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
