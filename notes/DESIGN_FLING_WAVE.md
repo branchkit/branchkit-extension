@@ -1477,6 +1477,70 @@ Our post-fix response to an eligibility flip is already in that range;
 if the probe shows no long-ineligible in-viewport cohort, the correct
 verdict is parity-declared, arc closed.
 
+## Round 21g — drill verdict: text-fill reveal on lookup columns;
+## layer-3 parked ResizeObserver lands (2026-07-04, drill on build 05:41)
+
+The 21e drill (snapshot 05-46, round-21 instrumentation live) answered
+without needing the console probe — the two new discriminators plus the
+firehose pinned the mechanism:
+
+- **Boot classifier works**: the 155 unstamped settle_sweep wrappers
+  attached at t≈1.0-1.9s against `observer_attached_at` 986 — provably
+  boot, never again confusable with a fling cohort.
+- **The residual is real, small, and column-shaped**: 68 band_sweep
+  wrappers, ALL MO-stamped (insertions observed at t_dom_seen
+  6394/7527), all attached in ONE sweep at t=10007, gaps 2.5-3.6s.
+  20 in-viewport at attach. Every one is an ANCHOR, and they sit in
+  exactly four columns × ~17 rows: the related-record lookups
+  (full-name link, email, two relation counts). The same rows' other
+  234 elements — including 121 anchors in non-lookup columns, and all
+  the pencil/eye/checkbox controls — attached via the MO path at
+  p50 254ms from the same insertion bursts.
+- **The gate story**: the anchors carry href from birth (zero
+  attr-source attaches — no attribute hydration) but render EMPTY →
+  0×0 → size-gate reject → parked. QuickBase's related-table data
+  lands ~2.5-3.5s after the row insert; React fills the text via
+  nodeValue updates — characterData mutations, invisible to every
+  childList/attributes observer config including Rango's. The box gain
+  is the only reveal signal. Layer 1 (visibilityIO) already spent its
+  one delivery; layer 2 (class/style MO) sees nothing.
+- **The response tail was ours**: firehose shows fast_arm 97 @ 8530 →
+  sweep added=0 @ 8725 (still empty then); settles coalescing at
+  9300/9603/9897 behind the idle gate; sweep added=68 @ 10012, shown
+  +57ms. So ~0.6-1.3s of sweep-queue latency stacked on top of
+  QuickBase's own data latency.
+
+Fix landed (the 21f-recommended shape, scoped exactly as designed):
+**layer 3 of the visibility tracker** — one shared ResizeObserver over
+the parked candidate set. Observe at park (`trackPendingCandidate`),
+unobserve at every unpark site (promote, wrapper-exists, disconnect,
+untrack, teardown). Zero-box deliveries are dropped — they can't flip
+the size gate, and the drop absorbs the RO initial-fire storm from a
+park burst; a NONZERO initial fire is kept deliberately (the element
+gained its box between the walk's rejection and RO delivery — the race
+the sensor closes). Signals feed the EXISTING rAF-coalesced promote
+(`scheduleVisibilitySweep`) — no new promote path, no gate changes.
+Counter `visibilityRoSignals` + snapshot `wave.visibility_ro_signals`;
+read against `attached_by_source.visibility` (signals climbing while
+visibility attaches stay flat = the recheck rejecting what the sensor
+reports). Unit tests pin the classifier semantics and the
+park→text-fill→promote path.
+
+Expected at the next drill: the lookup-column anchors attach via the
+'visibility' source within ~1-2 frames of their text landing (vs
++0.6-1.3s sweep-queue), visibility_ro_signals ≈ the lookup cohort
+size, and the band_sweep straggler cluster collapses toward zero. What
+remains after that is QuickBase's own related-data latency (~2.5-3.5s
+post-insert), which no extension can beat — Rango's RO fires on the
+same box gain at the same moment.
+
+Cost: one RO subscription per parked candidate (bounded by the
+attention region; typically tens-to-hundreds), callbacks only on
+actual layout changes of parked elements, promote bounded by the
+existing once-per-rAF single-flight. Revert lever: remove the
+`visibilityRO` observe/unobserve calls — layers 1+2 restore the prior
+behavior exactly.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is

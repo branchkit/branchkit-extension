@@ -395,6 +395,13 @@ export interface LifecycleCounters {
   // the missed content at all; large means the walk classified it hidden
   // and the promotion path is what's slow. Round-15 discriminator.
   invisibleCandidatesObserved: number;
+  // Nonzero-box ResizeObserver deliveries on PARKED candidates (the reveal
+  // sensor, notes/DESIGN_FLING_WAVE.md round 21): a parked element gained a
+  // box with no mutation our filtered page MO could see (text fill via
+  // characterData, CSSOM sizing). Read with attachedBySource.visibility —
+  // signals climbing while visibility attaches stay flat means the promote
+  // recheck is rejecting what the sensor reports.
+  visibilityRoSignals: number;
   // Cumulative wrapper attaches by discovery source (attachWrapper stamps
   // the same value on the wrapper — see DiscoverySource in element-wrapper).
   // Window-scoped per-source latency lives in the debug snapshot's
@@ -419,6 +426,7 @@ export const lifecycleCounters: LifecycleCounters = {
   bandSweepRepairs: 0,
   bandSweepReleases: 0,
   invisibleCandidatesObserved: 0,
+  visibilityRoSignals: 0,
   attachedBySource: {},
 };
 

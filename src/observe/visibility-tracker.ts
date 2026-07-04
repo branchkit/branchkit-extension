@@ -10,12 +10,24 @@
  * `pageSession`) feeds candidates in via `trackPendingCandidate` /
  * `untrackPendingCandidate`.
  *
- * Two layers (see notes/completed/DESIGN_VISIBILITY_OBSERVER.md):
- *   1. IntersectionObserver catches display:none -> block (geometry change).
+ * Three layers (see notes/completed/DESIGN_VISIBILITY_OBSERVER.md +
+ * notes/DESIGN_FLING_WAVE.md round 21):
+ *   1. IntersectionObserver catches display:none -> block (geometry change) —
+ *      one delivery per candidate, then it defers to the other layers.
  *   2. Scoped MutationObserver on class/style catches visibility:hidden ->
  *      visible (no geometry change). Connected only while candidates exist;
  *      disconnects when the set empties. RAF-debounced to coalesce React's
  *      per-component class churn into one re-check per frame.
+ *   3. Per-candidate ResizeObserver catches MUTATION-FREE box gains — the
+ *      reveals neither MO can see: React text fills (characterData-only,
+ *      outside every childList/attributes config — QuickBase lookup-column
+ *      anchors render empty with href and fill ~2.5-3.5s later when the
+ *      related-table data lands), and CSSOM/stylesheet-driven sizing
+ *      (Emotion insertRule). Observed at park, unobserved at
+ *      promote/untrack; zero-box deliveries are dropped (they can't flip
+ *      the size gate, and they absorb the RO's initial-fire storm). This
+ *      is Rango's sleeper sensor (their ElementWrapper ResizeObserver on
+ *      every hintable) scoped to our bounded parked set.
  *
  * `attachWrapper` is a direct import from core/wrapper-lifecycle; the
  * `pageSession` singleton is imported from lifecycle/page-session, and the
@@ -29,7 +41,7 @@
 import { ElementWrapper } from '../scan/element-wrapper';
 import { scanSingle } from '../scan/scanner';
 import { cacheVisibility, clearLayoutCache } from '../layout-cache';
-import { recordCpu } from '../debug/perf-counters';
+import { lifecycleCounters, recordCpu } from '../debug/perf-counters';
 import { store } from '../core/store';
 import { attachWrapper } from '../core/wrapper-lifecycle';
 import { pageSession } from '../lifecycle/page-session';
@@ -49,6 +61,38 @@ let visibilityRafPending = false;
 
 let visibilityIO: IntersectionObserver | undefined;
 let visibilityMO: MutationObserver | undefined;
+let visibilityRO: ResizeObserver | undefined;
+
+// Layer-3 signal classifier, split from the RO callback for unit tests
+// (happy-dom constructs ResizeObserver but never delivers). A parked
+// candidate reporting a real box is the mutation-free reveal; count it and
+// let the shared rAF promote apply the actual gates. Zero-box deliveries
+// (the initial fire at observe time for a still-collapsed element, or a
+// shrink) can't flip the size gate — dropping them also drops the
+// initial-fire storm a park burst would otherwise cause. A nonzero initial
+// fire is kept deliberately: it means the element gained its box between
+// the walk's rejection and the RO's first delivery, which is exactly the
+// race the sensor exists to close.
+function parkedResizeSignal(target: Element, hasBox: boolean): boolean {
+  if (!hasBox || !pendingVisibility.has(target)) return false;
+  lifecycleCounters.visibilityRoSignals++;
+  return true;
+}
+
+function handleParkedResizeEntries(entries: ResizeObserverEntry[]): void {
+  let dirty = false;
+  for (const entry of entries) {
+    const box = entry.borderBoxSize?.[0];
+    const hasBox = box
+      ? box.inlineSize >= 1 && box.blockSize >= 1
+      : entry.contentRect.width >= 1 && entry.contentRect.height >= 1;
+    if (parkedResizeSignal(entry.target, hasBox)) dirty = true;
+  }
+  // Same two-cadence signal as the class/style MO: rAF promote + settle-pass
+  // request (the pass converges already-hinted badges; the promote turns the
+  // revealed candidate into a wrapper).
+  if (dirty) scheduleVisibilitySweep();
+}
 
 /** Construct the two visibility observers. Called once from
  * `PageSession.start()`. Construction is inert — nothing is observed until a
@@ -60,14 +104,20 @@ export function constructVisibilityObservers(): void {
       if (!entry.isIntersecting) continue;
       const el = entry.target;
       visibilityIO?.unobserve(el);
-      if (store.findWrapperFor(el)) { pendingVisibility.delete(el); continue; }
+      if (store.findWrapperFor(el)) {
+        pendingVisibility.delete(el);
+        visibilityRO?.unobserve(el);
+        continue;
+      }
       const scanned = scanSingle(el);
       // Keep in pendingVisibility — visibility:hidden elements have non-zero
       // rects so IO fires immediately, but they need the MO layer to promote
-      // them once a class/style change flips visibility.
+      // them once a class/style change flips visibility (and the RO layer to
+      // promote a mutation-free box gain).
       if (!scanned) continue;
       attachWrapper(new ElementWrapper(el, scanned), 'visibility');
       pendingVisibility.delete(el);
+      visibilityRO?.unobserve(el);
       dirty = true;
     }
     // attachWrapper above emits a store attach delta → grammar sync (Tier 2).
@@ -78,6 +128,13 @@ export function constructVisibilityObservers(): void {
   visibilityMO = new MutationObserver(() => {
     scheduleVisibilitySweep();
   });
+
+  // Layer 3 (round 21). Constructed inert like the others; candidates are
+  // observed as they park. Guarded: happy-dom/older engines without RO just
+  // lose the sensor, not the tracker.
+  visibilityRO = typeof ResizeObserver !== 'undefined'
+    ? new ResizeObserver(handleParkedResizeEntries)
+    : undefined;
 }
 
 // A "visibility may have changed" signal does two distinct things, on two
@@ -197,17 +254,20 @@ function recheckPendingVisibility(): void {
       if (!el.isConnected) {
         pendingVisibility.delete(el);
         visibilityIO?.unobserve(el);
+        visibilityRO?.unobserve(el);
         continue;
       }
       if (store.findWrapperFor(el)) {
         pendingVisibility.delete(el);
         visibilityIO?.unobserve(el);
+        visibilityRO?.unobserve(el);
         continue;
       }
       const scanned = scanSingle(el);
       if (!scanned) continue;
       pendingVisibility.delete(el);
       visibilityIO?.unobserve(el);
+      visibilityRO?.unobserve(el);
       attachWrapper(new ElementWrapper(el, scanned), 'visibility');
       dirty = true;
     }
@@ -230,6 +290,7 @@ function recheckPendingVisibility(): void {
 export function trackPendingCandidate(el: Element): void {
   pendingVisibility.add(el);
   visibilityIO?.observe(el);
+  visibilityRO?.observe(el);
   connectVisibilityMO();
 }
 
@@ -241,6 +302,7 @@ export function untrackPendingCandidate(el: Element): void {
   if (pendingVisibility.has(el)) {
     pendingVisibility.delete(el);
     visibilityIO?.unobserve(el);
+    visibilityRO?.unobserve(el);
     if (pendingVisibility.size === 0) disconnectVisibilityMO();
   }
 }
@@ -253,5 +315,14 @@ export function untrackPendingCandidate(el: Element): void {
 export function teardownVisibilityTracker(): void {
   try { visibilityIO?.disconnect(); } catch { /* idempotent */ }
   try { visibilityMO?.disconnect(); } catch { /* idempotent */ }
+  try { visibilityRO?.disconnect(); } catch { /* idempotent */ }
   pendingVisibility.clear();
 }
+
+// Test seams: happy-dom constructs the observers but never delivers entries,
+// so the layer-3 classifier and the promote pass are driven directly.
+export const __testing = {
+  parkedResizeSignal,
+  recheckNow: recheckPendingVisibility,
+  isPending: (el: Element): boolean => pendingVisibility.has(el),
+};

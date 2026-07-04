@@ -13,11 +13,16 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { pageSession } from '../lifecycle/page-session';
+import { store } from '../core/store';
+import * as idRegistry from '../scan/registry';
+import { lifecycleCounters } from '../debug/perf-counters';
+import type { IntersectionTracker } from '../observe/intersection-tracker';
 import {
   constructVisibilityObservers,
   trackPendingCandidate,
   untrackPendingCandidate,
   teardownVisibilityTracker,
+  __testing,
 } from './visibility-tracker';
 
 // The tracker reads the pageSession singleton directly (Tier 3 — the
@@ -99,5 +104,56 @@ describe('teardownVisibilityTracker', () => {
       teardownVisibilityTracker();
       teardownVisibilityTracker();
     }).not.toThrow();
+  });
+});
+
+describe('layer-3 parked ResizeObserver signal (round 21)', () => {
+  it('counts a nonzero-box delivery for a parked candidate; drops zero-box and unparked', () => {
+    const parked = document.createElement('a');
+    trackPendingCandidate(parked);
+    const stranger = document.createElement('a');
+    const before = lifecycleCounters.visibilityRoSignals;
+
+    // Zero-box (the RO initial fire on a still-collapsed element) — dropped.
+    expect(__testing.parkedResizeSignal(parked, false)).toBe(false);
+    // Nonzero box on an element nobody parked — dropped.
+    expect(__testing.parkedResizeSignal(stranger, true)).toBe(false);
+    expect(lifecycleCounters.visibilityRoSignals).toBe(before);
+
+    // The reveal: a parked candidate gained a real box.
+    expect(__testing.parkedResizeSignal(parked, true)).toBe(true);
+    expect(lifecycleCounters.visibilityRoSignals).toBe(before + 1);
+  });
+
+  it('promotes a parked candidate to a wrapper once the box gain makes it hintable', () => {
+    // The QuickBase lookup-column shape: an anchor with href parked while
+    // 0×0 (empty text), later sized by a characterData fill neither page-MO
+    // config can see. The RO signal schedules the promote; the recheck
+    // applies the real gates and attaches.
+    store.clear();
+    idRegistry.clear();
+    pageSession.tracker = { observe: vi.fn(), unobserve: vi.fn() } as unknown as IntersectionTracker;
+    pageSession.resizeObserver = { observe: vi.fn(), unobserve: vi.fn(), disconnect: vi.fn() } as unknown as ResizeObserver;
+
+    const anchor = document.createElement('a');
+    anchor.setAttribute('href', '/db/rec?rid=23');
+    anchor.setAttribute('aria-label', 'Doe, Jane');
+    document.body.appendChild(anchor);
+    // Parked while collapsed: happy-dom rects are 0×0, so the size gate
+    // rejects and the candidate stays pending.
+    trackPendingCandidate(anchor);
+    __testing.recheckNow();
+    expect(store.findWrapperFor(anchor)).toBeUndefined();
+    expect(__testing.isPending(anchor)).toBe(true);
+
+    // The text fill lands: the anchor now reports a real box.
+    anchor.getBoundingClientRect = () =>
+      ({ top: 100, left: 40, bottom: 120, right: 200, width: 160, height: 20, x: 40, y: 100, toJSON: () => ({}) }) as DOMRect;
+    expect(__testing.parkedResizeSignal(anchor, true)).toBe(true);
+    __testing.recheckNow();
+
+    expect(store.findWrapperFor(anchor)?.discoverySource).toBe('visibility');
+    expect(__testing.isPending(anchor)).toBe(false);
+    anchor.remove();
   });
 });

@@ -3464,6 +3464,10 @@ function snapshotExtras() {
       // while sweeps attach hundreds → the walk never saw the missed
       // content; large → promotion-path latency is the thing to chase.
       invisible_candidates_observed: lifecycleCounters.invisibleCandidatesObserved,
+      // Layer-3 reveal sensor (round 21): nonzero-box RO deliveries on parked
+      // candidates. Climbing while attached_by_source.visibility stays flat =
+      // the promote recheck rejects what the sensor reports.
+      visibility_ro_signals: lifecycleCounters.visibilityRoSignals,
     },
     paint_latency: paintLatencyStats(),
     // Raw eye-level ring: [t_ms, tr_rows, wrappers, painted, shown] change
