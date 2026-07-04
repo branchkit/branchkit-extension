@@ -110,6 +110,19 @@ interface WrapperRecord {
   } | null;
   containerResolution: ContainerResolutionDiag | null;
   isInViewport: boolean;
+  /** Which discovery path created this wrapper + the paint-latency stamps
+   * (performance.now ms, rounded), so a snapshot can slice the late cohort
+   * by element kind — "the sweeps found mostly grid pencil buttons" —
+   * instead of only reading the wave section's aggregates. `dom_seen_by_mo`
+   * false means t_dom_seen is the attach-time fallback, not an MO sighting
+   * (notes/DESIGN_FLING_WAVE.md round 16). */
+  discovery: {
+    source: string;
+    dom_seen_by_mo: boolean;
+    t_dom_seen: number | null;
+    t_attached: number;
+    t_first_shown: number | null;
+  };
   /** Plugin ACK'd the codeword (it reached the recognizer grammar). A
    * strictly-painted badge with grammar_ready=false is painted but the
    * extension->plugin sync hasn't confirmed it — a drift signal the Layer-2
@@ -300,6 +313,13 @@ function captureWrapper(w: ElementWrapper): WrapperRecord {
     hint,
     containerResolution,
     isInViewport: w.isInViewport,
+    discovery: {
+      source: w.discoverySource,
+      dom_seen_by_mo: w.domSeenByMo,
+      t_dom_seen: w.tDomSeen === null ? null : Math.round(w.tDomSeen),
+      t_attached: Math.round(w.tAttached),
+      t_first_shown: w.tFirstShown === null ? null : Math.round(w.tFirstShown),
+    },
     grammar_ready: w.grammarReady,
     // What was last pushed to the plugin for this wrapper. A divergence
     // between `scanned.in_strict_viewport` (current) and `lastSentStrictViewport`
