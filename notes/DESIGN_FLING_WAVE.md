@@ -2980,3 +2980,37 @@ VERIFY (user, client): reload extension, close+reopen tab, fling — the
 flash-off/repaint cycle on link badges should be gone (badges ride the
 re-render, letters stable); checkbox/pencil/eye badges may still blink
 once per swap (no href — fingerprint/slot tiers, the round-12 residual).
+
+## Round 34b/34c — "we paint translucent badges slower than Rango" —
+## user right again; three paint-latency levers landed
+
+User rejected the settle-is-the-ACK framing: the TRANSLUCENT first paint
+itself lags Rango. Histogram from the 23-05 drill confirmed: 348 badges
+<200ms, **193 at 200-500ms** (settle-hop scheduling), **77 at 0.5-3s**
+(empty-born lookup cells caught at sweep cadence). Rango's synchronous
+pass lands everything ~100-200ms — the trickle is the perceived gap.
+
+Fixes:
+1. **34b (62aa90f)** — mass-claim fast sync: ≥25 pendingPuts at schedule
+   time fires syncNow next macrotask instead of the 80/400ms debounce.
+   (Solidify sooner; not the user's main complaint but real.)
+2. **34c (8048876a)** — reveal RO rides along at PARKING
+   (observeRevealCandidate in observeInvisibleCandidates): the 21g sensor
+   was wired behind the attention IO, which 0×0 candidates never trip —
+   that's why ro_signals sat at 8 vs 10,244 parked. A box-gain on an
+   attention-lot candidate now PROMOTES it into pendingVisibility
+   (parkedResizeSignal). Rango-precedented cost model.
+3. **34c** — drainDiscovery reports ≥25-add bursts via new
+   deps.onMassDiscovery → scheduleMassRevealPaint: fresh swap cohorts
+   claim-flush + paint on the yield chain, no settle hop.
+
+Fixture: recovery 743→**148ms**, post-reveal floor never below baseline
+(95/95), ro_signals 330 → visibility attaches 330 (sensor ALIVE, first
+time ever). All gates green (1022 tests, wedge, dual-CS, orphan).
+
+Still open: row-coattail on strong-key pins for the non-href per-swap
+blink (user sign-off pending — reverses part of the round-29 deletion).
+
+VERIFY (user): reload ext, close+reopen tab, fling. Expect: translucent
+badges land with/immediately after rows across the whole population,
+including the lookup columns as their text arrives; solid ~0.5s later.
