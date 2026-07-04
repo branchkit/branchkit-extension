@@ -522,6 +522,16 @@ export function probeGrammarEpoch(reason: string): Promise<void> {
   })();
 }
 
+// Mass-claim fast path (round 34b): a swap repaint claims ~100+ letters in
+// one burst, and every one of those badges renders bk-pending translucent
+// until the plugin ACK — the "settled" moment the eye actually waits for.
+// The 80ms debounce + 400ms deadline were tuned for cosmetic-mutation
+// coalescing; on a mass claim they just delay solidification. When the
+// pending-Put backlog crosses this threshold, fire on the next macrotask
+// (still coalescing the synchronous burst that's mid-flight) instead of
+// waiting out the debounce. Same threshold class as REVEAL_REPAIR_FAST_ARM.
+const MASS_CLAIM_FAST_SYNC = 25;
+
 /**
  * Debounced entry point for every grammar-relevant change (MO mutations,
  * IT codeword claims, finalize-sweep detaches, bfcache restore). Coalesces
@@ -529,6 +539,12 @@ export function probeGrammarEpoch(reason: string): Promise<void> {
  */
 export function scheduleSync(reason: string): void {
   if (batchedSyncTimer) clearTimeout(batchedSyncTimer);
+  if (pendingPuts.size >= MASS_CLAIM_FAST_SYNC) {
+    // setTimeout(0), not the debounce: the current task's claim loop
+    // finishes queueing first, then one flush ships the whole burst.
+    batchedSyncTimer = setTimeout(() => fireBatchedSync(`${reason}:mass_claim`), 0);
+    return;
+  }
   batchedSyncTimer = setTimeout(() => fireBatchedSync(reason), BATCHED_SYNC_DEBOUNCE_MS);
   if (batchedSyncDeadline === null) {
     batchedSyncDeadline = setTimeout(() => fireBatchedSync(`${reason}:deadline`), BATCHED_SYNC_MAX_WAIT_MS);
