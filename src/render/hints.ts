@@ -1008,6 +1008,32 @@ export class HintBadge {
     return this._visible;
   }
 
+  /**
+   * Photon-level state (round 34d): what this badge ACTUALLY renders as
+   * right now, by computed style + geometry — NOT the `_visible` flag.
+   * The flag records intent; a badge can be flag-visible while its box is
+   * 0×0, transitioned to opacity 0, or positioned off-viewport. The
+   * eye-level drill sampler reads this so user drills carry the same
+   * ground truth as the Playwright harness's shadow-piercing eye.
+   * Null = not rendering (no box or fully transparent). Forces layout —
+   * callers batch reads at a bounded cadence.
+   */
+  eyeState(): { solid: boolean; inViewport: boolean } | null {
+    const r = this.inner.getBoundingClientRect();
+    if (r.width === 0 || r.height === 0) return null;
+    const is = getComputedStyle(this.inner);
+    const os = getComputedStyle(this.outer);
+    if (is.visibility === 'hidden' || os.visibility === 'hidden' ||
+        is.display === 'none' || os.display === 'none') return null;
+    const op = Math.min(parseFloat(is.opacity), parseFloat(os.opacity));
+    if (!(op >= 0.05)) return null;
+    return {
+      solid: op >= 0.85,
+      inViewport: r.bottom > 0 && r.top < window.innerHeight &&
+        r.right > 0 && r.left < window.innerWidth,
+    };
+  }
+
   get diagnostics(): {
     innerRect: { x: number; y: number; w: number; h: number };
     outerRect: { x: number; y: number; w: number; h: number };

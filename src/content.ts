@@ -3339,7 +3339,17 @@ const reconcileApplied = {
 const PAINT_SAMPLE_INTERVAL_MS = 100;
 const PAINT_SAMPLE_TRAIL_MS = 5000;
 const PAINT_SAMPLE_RING_MAX = 900;
-const paintSamples: Array<[number, number, number, number, number, number, number]> = [];
+// Tuple layout (round 34d appended the four photon columns):
+// [t, rows, wrappers, painted, shown, shownStrict, poolFree,
+//  eyeVpSolid, eyeVpTransl, eyeSolid, eyeTransl]
+// The first seven read wrapper FLAGS (intent); the eye columns read each
+// badge's computed style + geometry (HintBadge.eyeState) — what the user's
+// retina gets. Flag/eye divergence in one sample IS the historically
+// recurring "logs say fast, eye says slow" gap, now measured per drill.
+const paintSamples: Array<[
+  number, number, number, number, number, number, number,
+  number, number, number, number,
+]> = [];
 let paintSamplerRunning = false;
 let paintSamplerLastScroll = 0;
 let paintSamplerLastKey = '';
@@ -3358,6 +3368,12 @@ function paintSamplerTick(): void {
     return;
   }
   let painted = 0, shown = 0, shownStrict = 0;
+  // Photon columns (round 34d): computed-style + geometry truth per badge.
+  // All reads, batched in one pass — at most one forced layout per tick,
+  // bounded to the scroll-armed sampling window. The flag columns above
+  // record intent; these record what renders. Their divergence is the
+  // recurring "logs say fast, eye says slow" gap, now a number per drill.
+  let eyeVpSolid = 0, eyeVpTransl = 0, eyeSolid = 0, eyeTransl = 0;
   for (const w of store.all) {
     if (w.hint) {
       painted++;
@@ -3368,6 +3384,11 @@ function paintSamplerTick(): void {
         // no layout — the strict machinery maintains it.
         if (w.scanned.in_strict_viewport) shownStrict++;
       }
+      const eye = w.hint.eyeState();
+      if (eye) {
+        if (eye.solid) { eyeSolid++; if (eye.inViewport) eyeVpSolid++; }
+        else { eyeTransl++; if (eye.inViewport) eyeVpTransl++; }
+      }
     }
   }
   // 'tr' count as the content-arrival proxy (live collection; .length is
@@ -3377,10 +3398,13 @@ function paintSamplerTick(): void {
   // repop-delay suspect (doomed-but-connected wrappers hold letters while
   // the replacement window claims); the at-rest snapshot can't see it.
   const poolFree = labelReservoir.stats().free;
-  const key = `${rows}|${store.all.length}|${painted}|${shown}|${shownStrict}|${poolFree}`;
+  const key = `${rows}|${store.all.length}|${painted}|${shown}|${shownStrict}|${poolFree}|${eyeVpSolid}|${eyeVpTransl}|${eyeSolid}|${eyeTransl}`;
   if (key !== paintSamplerLastKey) {
     paintSamplerLastKey = key;
-    paintSamples.push([Math.round(now), rows, store.all.length, painted, shown, shownStrict, poolFree]);
+    paintSamples.push([
+      Math.round(now), rows, store.all.length, painted, shown, shownStrict, poolFree,
+      eyeVpSolid, eyeVpTransl, eyeSolid, eyeTransl,
+    ]);
     if (paintSamples.length > PAINT_SAMPLE_RING_MAX) {
       paintSamples.splice(0, paintSamples.length - PAINT_SAMPLE_RING_MAX);
     }
@@ -3542,7 +3566,12 @@ function snapshotExtras() {
     // viewport-sliced count (round 22 — a viewport wipe barely dents the
     // band-scoped `shown`); pool_free is the label reservoir depth per
     // sample (mid-storm exhaustion suspect).
-    paint_stability: { interval_ms: PAINT_SAMPLE_INTERVAL_MS, samples: [...paintSamples] },
+    paint_stability: {
+      interval_ms: PAINT_SAMPLE_INTERVAL_MS,
+      columns: ['t', 'rows', 'wrappers', 'painted', 'shown', 'shown_strict', 'pool_free',
+        'eye_vp_solid', 'eye_vp_transl', 'eye_solid', 'eye_transl'],
+      samples: [...paintSamples],
+    },
     // Round 22: history of shown-then-detached wrappers (the churn the
     // percentiles can't see — dead wrappers leave store.all). A fling with
     // a healthy pipeline shows recent[] ≈ empty; a pop→wipe→rebuild cycle
