@@ -167,6 +167,7 @@ describe('bumpRebindCounter', () => {
       refuse_distance: 1,
       refuse_no_match: 0,
       rebind_key: 0,
+      rebind_slot: 0,
     });
   });
 
@@ -182,21 +183,24 @@ describe('bumpRebindCounter', () => {
       refuse_distance: 0,
       refuse_no_match: 0,
       rebind_key: 0,
+      rebind_slot: 0,
     });
   });
 
   it('counter keys cover the matcher buckets plus the externally-bumped ones', () => {
     // Locks the relationship: every counter except the externally-bumped
-    // refuse_no_match (finalize sweeper) and rebind_key (key-ownership path)
-    // must correspond to a kind the matcher can return. If a new matcher
-    // outcome kind is added without a counter, this test guards the gap.
+    // refuse_no_match (finalize sweeper), rebind_key (key-ownership path),
+    // and rebind_slot (slot tier — DESIGN_FLING_WAVE Part 2) must correspond
+    // to a kind the matcher can return. If a new matcher outcome kind is
+    // added without a counter, this test guards the gap.
     const c = newRebindCounters();
     const matcherBuckets = ['rebind_clean', 'rebind_position', 'refuse_distance'] as const;
     for (const k of matcherBuckets) expect(c).toHaveProperty(k);
     expect(c).toHaveProperty('refuse_no_match');
     expect(c).toHaveProperty('rebind_key');
+    expect(c).toHaveProperty('rebind_slot');
     expect(Object.keys(c).sort()).toEqual([
-      'rebind_clean', 'rebind_position', 'refuse_distance', 'refuse_no_match', 'rebind_key',
+      'rebind_clean', 'rebind_position', 'refuse_distance', 'refuse_no_match', 'rebind_key', 'rebind_slot',
     ].sort());
   });
 });

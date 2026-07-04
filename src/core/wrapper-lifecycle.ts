@@ -19,8 +19,8 @@ import { ScannedElement } from '../types';
 import { domSeenAt } from '../observe/dom-seen';
 import * as idRegistry from '../scan/registry';
 import { isRecallLoaded, resolvePreferredCodeword } from '../labels/codeword-recall';
-import { dropPendingPut, hasSent, queueDelete } from '../labels/label-sync';
-import { tryRebindFromLimbo, tryRebindByStrongKey, isRecentlyOrphaned } from '../observe/limbo';
+import { dropPendingPut, hasSent, queueDelete, queuePut, scheduleSync } from '../labels/label-sync';
+import { tryRebindFromLimbo, tryRebindByStrongKey, tryRebindBySlot, recordSlotAncestors, isRecentlyOrphaned } from '../observe/limbo';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { geometryInBand, getCachedRect } from '../layout-cache';
 import { lifecycleCounters } from '../debug/perf-counters';
@@ -67,6 +67,9 @@ export function attachWrapper(wrapper: ElementWrapper): void {
   // distinguisher.
   idRegistry.register(wrapper);
   seedPreferredFromMemory(wrapper);
+  // Slot identity for the recycle-rebind tier (DESIGN_FLING_WAVE Part 2) —
+  // must be captured while attached; a removed subtree loses its chain.
+  recordSlotAncestors(wrapper);
   store.addWrapper(wrapper);
   pageSession.tracker.observe(wrapper.element);
   pageSession.resizeObserver.observe(wrapper.element);
@@ -129,6 +132,21 @@ export function attachDiscovered(
     // pool-availability race that churns the QuickBase sidebar.
     if (tryRebindByStrongKey(ref, keyIndex, limboPool)) continue;
     if (limboPool.length > 0 && tryRebindFromLimbo(ref, limboPool)) continue;
+    // Slot tier (DESIGN_FLING_WAVE Part 2): a recycled cell's new content —
+    // different fingerprint, different key, same surviving slot ancestor.
+    // The wrapper (badge, letter, grammar entry, grammarReady) survives the
+    // swap; adopt the fresh scan's metadata (the record changed) while
+    // keeping identity, and re-Put so the plugin's entity name converges.
+    const slotRebound = tryRebindBySlot(ref, limboPool);
+    if (slotRebound) {
+      const fresh = elements[i];
+      fresh.codeword = slotRebound.scanned.codeword;
+      fresh.id = slotRebound.scanned.id;
+      slotRebound.scanned = fresh;
+      queuePut(slotRebound);
+      scheduleSync('slot_rebind');
+      continue;
+    }
     // Eager attach (Rango/Vimium model). Wrappers stay alive while their
     // element is in the DOM — scroll-out doesn't release them. The
     // attention IO is reserved for bounding `pendingVisibility` membership

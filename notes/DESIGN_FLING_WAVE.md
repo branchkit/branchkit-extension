@@ -400,6 +400,45 @@ phase; the ring's fill slope becomes near-vertical steps. If the eye
 STILL reads it as slower than Rango after that, measure the pop
 timestamps against Rango's on video before touching anything else.
 
+## Drill round 6 (2026-07-04, firehose) — the pop works; the blink is
+## the teardown; Part 2 promoted to NOW
+
+User: saw a pop, then it DISAPPEARED — jarring; overall feel similar.
+Firehose: wave:reveal fires with big atomic sizes (212/240/220/116 —
+the reveal works), but each reveal is followed within ~200-500ms by a
+churn cycle — band_sweep:changed ~117 → reconcile:stale_false_repair
+~106 → a second reveal. The atomic reveal made BOTH edges crisp: POP in
+(the wave), BLINK out (recycled rows' limbo badges mass-destroyed by
+the finalize sweeper + band flags flapping out/in), POP again (the
+rebuild). Every diagnostic now converges on the teardown side, so Part
+2 (slot rebind) is promoted from "queued pending probe" to the fix —
+its rebind_slot counter IS the probe (fails safe to today's behavior if
+the shells die with the rows).
+
+Landed alongside it, from the same firehose signature:
+- **Two-strike sweep release** (temporal hysteresis): a virtualizer can
+  transiently park a recycling shell at odd coordinates, and a single
+  out-of-band gBCR then releases + hides a badge that is back in-band
+  by the next sweep — the release/repair oscillation above. The sweep's
+  destructive direction now requires out-of-band on two consecutive
+  sweeps (~100ms apart); entries still repair immediately. WeakSet
+  ledger, cleared by any in-band sighting.
+- **Slot-anchor stop-list** (caught by a unit test): recording must
+  never anchor on body/html/table/tbody/thead/main or role
+  grid/treegrid/rowgroup — those span many slots and survive every
+  swap, so a unique element removed in one place could steal onto a
+  unique same-kind element added anywhere under the shared container.
+  The two ambiguity gates can't see that case (both sides look unique
+  locally); the stop-list makes it structurally unreachable. Recording
+  is depth ≤6, nearest-first, through at most the first tr/role=row.
+
+Prediction for drill round 7: rebind_slot climbs and refuse_no_match
+collapses on the grid (the probe answers itself); recycled cells keep
+their badge and letter through the swap — no blink-out, no second pop;
+the ring's shown floor rises (dip ≤ ~10-20). If rebind_slot stays ~0,
+the shells die with the rows and the blink needs the deferred
+ghost-handoff idea instead — measure before building it.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is

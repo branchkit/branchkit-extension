@@ -111,6 +111,11 @@ export interface RebindCounters {
    *  fingerprint/position path. Tracked separately so soak data can tell the
    *  two rebind routes apart. */
   rebind_key: number;
+  /** Slot rebinds (DESIGN_FLING_WAVE.md Part 2): a recycled cell's new
+   *  content inherited the limbo predecessor's wrapper via a surviving slot
+   *  ancestor — different fingerprint, different key, same slot. Also the
+   *  live probe for whether the grid's shells survive its swaps. */
+  rebind_slot: number;
 }
 
 export function newRebindCounters(): RebindCounters {
@@ -120,6 +125,7 @@ export function newRebindCounters(): RebindCounters {
     refuse_distance: 0,
     refuse_no_match: 0,
     rebind_key: 0,
+    rebind_slot: 0,
   };
 }
 

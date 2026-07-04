@@ -67,6 +67,15 @@ export class ElementWrapper {
   // never cleared (a new release just overwrites it).
   preferredCodeword: string = '';
 
+  // Slot identity for the recycle-rebind tier (notes/DESIGN_FLING_WAVE.md
+  // Part 2): WeakRefs to the element's first few parents, recorded at attach
+  // (and re-recorded on rebind). A virtualized grid swaps a cell's CONTENT
+  // while the cell shell survives; a removed subtree loses its parent chain
+  // at the detach point, so the slot must be remembered while attached.
+  // Nearest ancestor first — the first still-connected entry that contains a
+  // replacement candidate is the deepest surviving slot anchor.
+  slotAncestors: WeakRef<Element>[] = [];
+
   // True when this wrapper's codeword has been acknowledged by the native
   // plugin's grammar (i.e., voice will actually match it). Decouples the
   // visual layer (badge paints immediately on claim) from the voice layer

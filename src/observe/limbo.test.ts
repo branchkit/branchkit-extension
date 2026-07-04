@@ -20,6 +20,8 @@ import {
   collectLimboWrappers,
   collectStrongKeyIndex,
   tryRebindByStrongKey,
+  tryRebindBySlot,
+  recordSlotAncestors,
   isRecentlyOrphaned,
   dropDisconnectedWrappers,
   finalizeExpiredLimboWrappers,
@@ -78,6 +80,7 @@ beforeEach(() => {
   pageSession.resizeObserver = { observe: resizeObserve, unobserve: vi.fn(), disconnect: vi.fn() } as unknown as ResizeObserver;
   rebindCounters.refuse_no_match = 0;
   rebindCounters.rebind_key = 0;
+  rebindCounters.rebind_slot = 0;
 });
 
 afterEach(() => {
@@ -231,5 +234,122 @@ describe('tryRebindByStrongKey', () => {
     const ok = tryRebindByStrongKey(freeAnchor('/users'), collectStrongKeyIndex(), pool);
     expect(ok).toBe(true);
     expect(pool).toEqual([]); // consumed, so the fingerprint path can't double-bind it
+  });
+});
+
+describe('tryRebindBySlot (DESIGN_FLING_WAVE Part 2)', () => {
+  // A virtualized grid swaps a cell's content: new fingerprint, new href,
+  // same surviving cell shell. The slot tier re-anchors the limbo wrapper
+  // onto the replacement so badge/letter/grammar survive the swap.
+
+  /** td cell holding one link; returns [cell, link, limbo wrapper]. */
+  function cellWithLimboLink(id: number, text = 'old'): [HTMLElement, ElementWrapper] {
+    const cell = document.createElement('td');
+    document.body.appendChild(cell);
+    const link = document.createElement('a');
+    link.textContent = text;
+    cell.appendChild(link);
+    const w = new ElementWrapper(link, scanned(id));
+    w.scanned.codeword = 'arch bake';
+    store.addWrapper(w);
+    recordSlotAncestors(w); // normally attachWrapper's job (mocked here)
+    link.remove();
+    enterLimbo(w, Date.now());
+    return [cell, w];
+  }
+
+  function newLinkIn(cell: HTMLElement, text = 'new'): HTMLAnchorElement {
+    const el = document.createElement('a');
+    el.textContent = text;
+    cell.appendChild(el);
+    return el;
+  }
+
+  it('re-anchors a limbo wrapper onto same-slot replacement content', () => {
+    const [cell, w] = cellWithLimboLink(1);
+    const replacement = newLinkIn(cell);
+
+    const pool = [w];
+    const rebound = tryRebindBySlot(replacement, pool);
+
+    expect(rebound).toBe(w);
+    expect(w.element).toBe(replacement);
+    expect(w.disconnectedAt).toBeNull();
+    expect(w.scanned.codeword).toBe('arch bake'); // identity survives
+    expect(pool).toEqual([]); // consumed
+    expect(rebindCounters.rebind_slot).toBe(1);
+    // Slot re-recorded from the NEW element for the next recycle.
+    expect(w.slotAncestors.some(r => r.deref() === cell)).toBe(true);
+  });
+
+  it('refuses on tag mismatch (not a slot swap)', () => {
+    const [cell, w] = cellWithLimboLink(1);
+    const button = document.createElement('button');
+    cell.appendChild(button);
+
+    expect(tryRebindBySlot(button, [w])).toBeNull();
+    expect(rebindCounters.rebind_slot).toBe(0);
+  });
+
+  it('refuses when two limbo wrappers claim the same new element', () => {
+    const cell = document.createElement('td');
+    document.body.appendChild(cell);
+    const mk = (id: number) => {
+      const link = document.createElement('a');
+      cell.appendChild(link);
+      const w = new ElementWrapper(link, scanned(id));
+      store.addWrapper(w);
+      recordSlotAncestors(w);
+      link.remove();
+      enterLimbo(w, Date.now());
+      return w;
+    };
+    const w1 = mk(1);
+    const w2 = mk(2);
+    const replacement = newLinkIn(cell);
+
+    expect(tryRebindBySlot(replacement, [w1, w2])).toBeNull();
+    expect(rebindCounters.rebind_slot).toBe(0);
+  });
+
+  it('refuses when the surviving anchor holds two same-kind candidates', () => {
+    const [cell, w] = cellWithLimboLink(1);
+    newLinkIn(cell, 'first');
+    const second = newLinkIn(cell, 'second');
+
+    expect(tryRebindBySlot(second, [w])).toBeNull();
+    expect(rebindCounters.rebind_slot).toBe(0);
+  });
+
+  it('falls through when no recorded ancestor survives (whole-row replacement)', () => {
+    const [cell, w] = cellWithLimboLink(1);
+    cell.remove(); // the shell died with the row
+    const otherCell = document.createElement('td');
+    document.body.appendChild(otherCell);
+    const replacement = newLinkIn(otherCell);
+
+    expect(tryRebindBySlot(replacement, [w])).toBeNull();
+    expect(rebindCounters.rebind_slot).toBe(0);
+  });
+
+  it('matches via a deeper recorded ancestor when the immediate parent died', () => {
+    // link inside div inside td; the div is removed with the link, the new
+    // link mounts directly in the td — the depth-2 record still matches.
+    const cell = document.createElement('td');
+    document.body.appendChild(cell);
+    const inner = document.createElement('div');
+    cell.appendChild(inner);
+    const link = document.createElement('a');
+    inner.appendChild(link);
+    const w = new ElementWrapper(link, scanned(1));
+    store.addWrapper(w);
+    recordSlotAncestors(w);
+    inner.remove();
+    enterLimbo(w, Date.now());
+
+    const replacement = newLinkIn(cell);
+    expect(tryRebindBySlot(replacement, [w])).toBe(w);
+    expect(w.element).toBe(replacement);
+    expect(rebindCounters.rebind_slot).toBe(1);
   });
 });
