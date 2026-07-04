@@ -21,6 +21,7 @@ import {
   hasSent,
   hasPendingDeletes,
   rotateSession,
+  scheduleSync,
   syncNow,
 } from './label-sync';
 
@@ -489,5 +490,67 @@ describe('grammar epoch phase 3a trigger-redundancy probe', () => {
       reason: 'tab_activated', diverged: null, result: 'transport_failed',
     })]);
     expect(republishAll).not.toHaveBeenCalled();
+  });
+});
+
+describe('scheduleSync debounce + max-wait deadline (round 22c)', () => {
+  // A pure trailing debounce starves under sustained churn: during a fling,
+  // claims and strict deltas reset the 80ms timer continuously and the sync
+  // never fired for the whole scroll+swap window (sync_trace: a 5.5s hole,
+  // then a 355-delete monster delta, session rotation, full republish —
+  // badges translucent 13s+). The deadline caps the stall at 400ms.
+  let store: WrapperStore;
+  let sendMessage: ReturnType<typeof vi.fn>;
+
+  const batchCalls = () =>
+    sendMessage.mock.calls.filter((c) => c[0]?.type === 'GRAMMAR_BATCH');
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    setAlphabet(ALPHABET);
+    store = new WrapperStore();
+    sendMessage = vi.fn((msg: { type: string }) => {
+      if (msg.type !== 'GRAMMAR_BATCH') return Promise.resolve(undefined);
+      return Promise.resolve(ok(['arch']));
+    });
+    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+    initLabelSync({
+      store,
+      detachWrapper: vi.fn(),
+      reconcile: vi.fn(),
+      isHintsVisible: () => false,
+      republishAll: vi.fn(),
+    });
+    rotateSession();
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = '';
+  });
+
+  it('a quiet burst fires once at the trailing debounce, and the deadline does not double-fire', async () => {
+    const w = makeWrapper('arch', store);
+    queuePut(w);
+    scheduleSync('quiet');
+    await vi.advanceTimersByTimeAsync(100); // trailing 80ms fires
+    expect(batchCalls()).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1000); // past the deadline — cleared by the fire
+    expect(batchCalls()).toHaveLength(1);
+  });
+
+  it('sustained sub-debounce churn ships via the deadline instead of starving', async () => {
+    const w = makeWrapper('arch', store);
+    queuePut(w);
+    // Storm: a scheduleSync every 50ms for 2s — the trailing 80ms debounce
+    // alone would never fire.
+    for (let i = 0; i < 8; i++) {
+      scheduleSync('storm');
+      await vi.advanceTimersByTimeAsync(50);
+    }
+    // 400ms in: the non-extending deadline must have shipped the delta.
+    expect(batchCalls().length).toBeGreaterThanOrEqual(1);
   });
 });

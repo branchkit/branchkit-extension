@@ -235,7 +235,19 @@ export async function postBatch(
 // --- Catchup orchestration ---
 
 let batchedSyncTimer: ReturnType<typeof setTimeout> | null = null;
+let batchedSyncDeadline: ReturnType<typeof setTimeout> | null = null;
 const BATCHED_SYNC_DEBOUNCE_MS = 80;
+// Max-wait deadline for the sync debounce (round 22b/22c): a pure trailing
+// debounce starves under sustained churn — during a fling, claims and strict
+// deltas reset the 80ms timer continuously and the sync NEVER fired for the
+// whole scroll+swap window (sync_trace: a 5.5s hole, then one monster delta
+// with 355 deletes at settle, then epoch divergence → session rotation → a
+// full ~25-batch republish; badges translucent 13s+). Same debounce+deadline
+// shape as the huge-mutation refresh (mutation-source.ts) and whenDOMSettles:
+// the deadline is armed by the FIRST schedule of a burst, NOT reset by later
+// ones, and whichever timer fires first clears both — so a sustained storm
+// ships coalesced deltas at least every BATCHED_SYNC_MAX_WAIT_MS.
+const BATCHED_SYNC_MAX_WAIT_MS = 400;
 
 // Retry pacing for a wholesale plugin refusal (`calibration_active`): the
 // plugin received the batch but applied nothing, so the delta must be re-sent
@@ -517,10 +529,25 @@ export function probeGrammarEpoch(reason: string): Promise<void> {
  */
 export function scheduleSync(reason: string): void {
   if (batchedSyncTimer) clearTimeout(batchedSyncTimer);
-  batchedSyncTimer = setTimeout(() => {
+  batchedSyncTimer = setTimeout(() => fireBatchedSync(reason), BATCHED_SYNC_DEBOUNCE_MS);
+  if (batchedSyncDeadline === null) {
+    batchedSyncDeadline = setTimeout(() => fireBatchedSync(`${reason}:deadline`), BATCHED_SYNC_MAX_WAIT_MS);
+  }
+}
+
+// Shared fire body for the trailing timer AND the max-wait deadline:
+// whichever fires first clears both, so one burst produces exactly one
+// syncNow per firing (the fireHugeMutationRefresh shape).
+function fireBatchedSync(reason: string): void {
+  if (batchedSyncTimer) {
+    clearTimeout(batchedSyncTimer);
     batchedSyncTimer = null;
-    void syncNow(reason);
-  }, BATCHED_SYNC_DEBOUNCE_MS);
+  }
+  if (batchedSyncDeadline) {
+    clearTimeout(batchedSyncDeadline);
+    batchedSyncDeadline = null;
+  }
+  void syncNow(reason);
 }
 
 /**
