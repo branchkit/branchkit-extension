@@ -2027,6 +2027,68 @@ Gates green (1028 tests — the two tests pinning the old gate semantics
 updated to pin the new; builds; wedge; dual-cs; soak:orphan). The
 real-Chrome verify drill is the arbiter, as always.
 
+## Round 25 — takeover grace: the ride's transient position is not an
+## exit (2026-07-04, ce212a1; fixture-driven, real-drill signature)
+
+The user's first real-Chrome drill on round 24 reported: "a flash like
+it almost painted on everything quickly, but then it hit itself and
+then it painted itself on one by one in the normal timing." The
+production snapshot confirmed the flash (takeover_fp 326 — the rides
+fire at scale live) and the fixture reproduced the full signature:
+solid badges 95 → 14 at phase-2, then a ragged one-by-one recovery
+tracking the old generation's progressive removal.
+
+Mechanism: a ride lands on an element parked ~3,300px below the band
+during the insert-before-remove overlap. The IO's initial delivery,
+the sweep, and the plan's toRelease all read that transient position
+as a REAL band exit — release the letter, hide the badge. The
+takeover un-did its own win.
+
+Fix (three pieces, each fixture-verified):
+1. **Grace on exits**: rebindWrapper stamps `takenOverAt` when the
+   ridden element is out-of-band at ride time; the IO exit branch,
+   sweepBand's two-strike, and the plan's toRelease skip graced
+   wrappers (TAKEOVER_GRACE_MS=2000, self-expiring — a ride the user
+   scrolls away from degrades to one late release).
+2. **Position hold**: `HintBadge.holdUntil` gates reconcileRead (and
+   through it repositionHostNow) — the badge keeps its last on-screen
+   spot while the identical-content replacement slides into place
+   beneath it. Grace clears at band entry (exits legit again); the
+   position hold releases only when the element is actually ON-SCREEN
+   — band entry can still be 1000px below the viewport, and gliding
+   the badge there reads as vanishing.
+3. **Accel-pair consistency**: retarget skips the accelerator
+   disarm/re-arm while holding — re-arming outer's -scrollTop
+   animation against a deliberately-unpainted host base teleported
+   held badges by the pane's whole scrollTop (fixture: the mid-swap
+   trough). clearPositionHold rebinds the accel for the new target
+   and repaints base+animation in lockstep.
+
+Fixture verdict: badges hold solid through the ENTIRE
+double-generation overlap (95 solid from reveal through phase-2
+insert, previously 95 → 11-14); letters and grammar never churn on
+ridden swaps; rest state healthy.
+
+OPEN, precisely characterized: during the progressive old-row removal
+(~+1.6 to +3.6s in the fixture), solid badges oscillate 95 ↔ ~15-55.
+That flicker is the clip/occlusion machinery HONESTLY hiding badges
+whose ridden elements are still below the pane's visible box — the
+hold freezes position, not visibility. The candidate next iteration
+(design before code, high-blast-radius subsystems): suppress
+clip/occlusion/visibility-driven HIDE for position-held badges — the
+doomed twin the badge visually sits on is still on screen showing
+identical content, so keeping the badge painted is visually truthful,
+and activation on the ridden element is semantically equivalent.
+Decide after the next real-Chrome drill: production's removal may be
+fast enough that the residual flicker is minor.
+
+Fixture fidelity gained this round (each was masquerading as an
+extension bug until fixed): constant scroll-height spacers through
+the swap (height bounce clamped scrollTop and shifted content under
+held badges), a latest-wins queue for settles landing mid-swap (the
+drop left the pane on empty spacer — 'stuck hidden at rest' was this),
+overflow-anchor:none, progressive-removal knob (remove_step_ms).
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
