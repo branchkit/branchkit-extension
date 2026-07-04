@@ -104,7 +104,26 @@ export function computeFingerprint(el: Element): Fingerprint {
 export function computeStrongKey(el: Element): string | null {
   if (el.tagName.toLowerCase() === 'a') {
     const href = (el as HTMLAnchorElement).getAttribute('href');
-    if (href) return 'h:' + href;
+    if (!href) return null;
+    // Cell-context disambiguator (notes/DESIGN_FLING_WAVE.md round 9): data
+    // grids link the same record from several columns, so raw-href keys
+    // collide row-wide, collectStrongKeyIndex nulls every copy as ambiguous,
+    // and the takeover tier — the one rebind path that works when a grid
+    // replaces whole row subtrees insert-before-remove — goes dark for
+    // exactly the wrappers that churn hardest. The nearest cell's class is
+    // stable per column (both the index side and the match side read their
+    // own CONNECTED element's cell, so the enrichment is symmetric); same
+    // href in different columns → distinct unique keys → the tier fires.
+    // Anchors outside any cell keep the raw-href key: duplicate nav/content
+    // links stay ambiguous-null, exactly today's safe behavior.
+    let p: Element | null = el.parentElement;
+    for (let d = 0; p && d < 6; d++, p = p.parentElement) {
+      if (p.tagName === 'TD' || p.getAttribute('role') === 'gridcell') {
+        return 'h:' + href + '|c:' + p.className;
+      }
+      if (p.tagName === 'TR') break;
+    }
+    return 'h:' + href;
   }
   return null;
 }

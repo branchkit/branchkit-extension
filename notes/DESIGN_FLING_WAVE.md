@@ -480,6 +480,42 @@ genuinely changed (window edges) still rebuild — correct behavior; if
 their pop still reads slow, that residual is the true fill cost and it
 is already burst-shaped.
 
+## Drill round 9 — insert-before-remove, and the nulled strong keys
+
+The pool-feed did nothing: pool_empty unchanged at 365, eye-latency
+still ~1.3s. That falsifies "removed but unprocessed": at discovery
+time the old rows are STILL CONNECTED — QuickBase inserts the new
+window before removing the old (double-buffered swap). No limbo-timing
+fix can help; the pool is genuinely empty when replacements appear.
+
+The tier built for exactly this is the strong-key TAKEOVER
+(tryRebindByStrongKey handles connected predecessors — ping-pong guard
+and all), and the snapshot shows why it never fires on the grid:
+record anchors carry stable hrefs (`?a=dr&rid=23`) but each row links
+the same record from SEVERAL COLUMNS, so raw-href keys collide
+row-wide and collectStrongKeyIndex nulls every copy as ambiguous.
+rebind_key frozen at 44 (sidebar) across nine rounds was this exact
+signature, visible since round 1 and only now legible.
+
+Fix: **cell-context strong keys.** computeStrongKey appends the
+nearest td / role=gridcell class to the href key (bounded 6-hop walk,
+stops at the row). Same href in different columns → distinct unique
+keys → the takeover tier fires for the whole grid: on discovery of a
+replacement anchor, the still-connected predecessor's wrapper —
+badge, letter, grammar entry, grammarReady — re-anchors onto it, and
+the old element dies unobserved when QuickBase removes it. Symmetric
+by construction (index side and match side each read their own
+connected element's cell). Anchors outside any cell keep the raw-href
+key: duplicate nav/content links stay ambiguous-null, today's safe
+behavior. Buttons/labels/inputs in recycled rows (~⅓ of grid wrappers)
+have no strong key and still rebuild — smaller residual, measure
+before chasing it.
+
+Prediction for drill round 10: rebind_key jumps from 44 to hundreds
+per fling; refuse_no_match collapses; the eye-honest dom_seen_to_shown
+falls hard for the anchor cohort (never torn down at all); visually,
+record-link badges hold position and letter through window swaps.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is

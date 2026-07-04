@@ -292,4 +292,50 @@ describe('registry.computeStrongKey', () => {
     btn.id = 'save';
     expect(registry.computeStrongKey(btn)).toBeNull();
   });
+
+  // Cell-context disambiguator (DESIGN_FLING_WAVE round 9): grids link the
+  // same record from several columns; the cell class splits those collisions
+  // so the strong-key takeover tier stays live on recycled rows.
+  it('appends the nearest cell class for an anchor inside a td', () => {
+    const td = document.createElement('td');
+    td.className = 'column-report-129-0';
+    const wrap = document.createElement('div');
+    const a = document.createElement('a');
+    a.setAttribute('href', '?a=dr&rid=23');
+    wrap.appendChild(a);
+    td.appendChild(wrap);
+    expect(registry.computeStrongKey(a)).toBe('h:?a=dr&rid=23|c:column-report-129-0');
+  });
+
+  it('same href in different columns yields distinct keys', () => {
+    const mk = (cls: string) => {
+      const td = document.createElement('td');
+      td.className = cls;
+      const a = document.createElement('a');
+      a.setAttribute('href', '?a=dr&rid=23');
+      td.appendChild(a);
+      return registry.computeStrongKey(a);
+    };
+    const k1 = mk('column-a');
+    const k2 = mk('column-b');
+    expect(k1).not.toBe(k2);
+  });
+
+  it('respects role=gridcell and stops at the row boundary', () => {
+    const cell = document.createElement('div');
+    cell.setAttribute('role', 'gridcell');
+    cell.className = 'cell-x';
+    const a = document.createElement('a');
+    a.setAttribute('href', '/r/1');
+    cell.appendChild(a);
+    expect(registry.computeStrongKey(a)).toBe('h:/r/1|c:cell-x');
+
+    // An anchor whose nearest structural ancestor is the tr itself (no cell
+    // between) keeps the raw-href key — the walk stops at the row.
+    const tr = document.createElement('tr');
+    const bare = document.createElement('a');
+    bare.setAttribute('href', '/r/2');
+    tr.appendChild(bare);
+    expect(registry.computeStrongKey(bare)).toBe('h:/r/2');
+  });
 });
