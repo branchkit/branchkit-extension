@@ -2385,6 +2385,24 @@ the map for anyone who attempts identity transfer again (the missing
 primitive is a reliable doomed-twin lifecycle signal, which QuickBase
 does not provide).
 
+### Round 29b — the reshuffle volume exposed syncNow's inter-chunk hop
+### (7fed551)
+
+First simple-model drill: "particularly slow" — and the snapshot
+agreed: shown_minus_ack p50 **−3,529ms**. Badges painted at content
+speed but sat translucent 3.5s: with letters reshuffling per swap, a
+fling's grammar delta is ~40 chunks of 15, and syncNow's inter-chunk
+`setTimeout(0)` queues behind the storm at 50-150ms per hop — the
+same starvation class round 17 fixed in the discovery walk and 22c in
+the scheduling path, never applied here because ride-era deltas were
+tiny. Now `yieldTask()` (scheduler.yield, ~1-4ms). Expected: ACK
+window back to ~0.5s; the translucent phase reads as the designed
+brief shimmer, not as "still loading."
+
+Secondary, tracked: settle_sweep stragglers at gap p50 2.4s this
+drill — the cold-data/lookup class (round 21g territory), to re-read
+on the next snapshot now that the acute regression is fixed.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
