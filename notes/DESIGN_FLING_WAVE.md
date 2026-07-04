@@ -1953,6 +1953,19 @@ way since round 9.
 3. Interaction with the slot tier: it currently never fires on this
    grid (shells die with rows) and stays as-is, after this tier.
 
+IMPLEMENTED as designed (06f6fc0, user-approved; gates green, 1028
+tests — 7 new pinning unique-steal ride, far-refusal, position
+resolve, margin refusal, consume, no-lastRect skip, limbo exclusion).
+One deviation from the sketch: the fingerprint is computed once per
+new element in `attachDiscovered` AFTER the strong-key check and
+shared with the limbo tier (which gained an optional precomputed-fp
+param) — a key hit never pays the innerText read. Drill reads: the
+churn ring and the viewport-strict dip are the verdict;
+takeover_fp/takeover_fp_position volume should approximate the former
+wipe volume, refuse_fp_ambiguous sizes what the margin gate leaves on
+the table (candidate for threshold tuning, not loosening past the
+neighbor-row spacing).
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
