@@ -2565,11 +2565,38 @@ function preNavObserverTeardown(triggerReason: string): number {
   return targets.length;
 }
 
+// Mid-scroll spa_nav deferral (notes/DESIGN_FLING_WAVE.md round 10):
+// QuickBase writes a pagination offset (?skip=N) into the grid URL during
+// scrolling; webNavigation reports every tick as a history-state update, and
+// the drill firehose showed FIVE overlapping full rescans (document-wide
+// doScan + syncNow + wholesale showHints) landing mid-swap-storm — pure
+// self-inflicted load at the worst moment. A user cannot click-navigate
+// mid-fling: a URL change while scroll events are arriving is in-page
+// state, so the rescan defers to scroll settle and coalesces (latest args
+// win — the rescan body reads live DOM/URL anyway). Real navigations are
+// never mid-scroll and keep today's immediate path; YouTube's query-only
+// watch→watch navs (the case the heavy rescan exists for) are unaffected.
+let navRescanDeferred: { fromCache: boolean; reason: string } | null = null;
+
+/** Fire a scroll-deferred spa_nav rescan, if one was parked. Called by the
+ * scroll-settle timeout right after runSettlePipeline. */
+function flushDeferredNavRescan(): void {
+  if (!navRescanDeferred) return;
+  const d = navRescanDeferred;
+  navRescanDeferred = null;
+  rescanForNav(d.fromCache, d.reason);
+}
+
 // The same-document-nav rescan body, owned by `PageSession.onUrlChange`. The
 // background `webNavigation` SPA-nav signal arrives as the `rescan` action and
 // is dispatched here; this is the content-side handler, not the detector.
 function rescanForNav(fromCache: boolean, reason: string): void {
   const t0 = performance.now();
+  if (reason === 'spa_nav' && pageSession.scrollRepositionTimer !== null) {
+    navRescanDeferred = { fromCache, reason };
+    chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_nav_step', data: { step: 'deferred_mid_scroll', reason, at_ms: 0 } } as Message).catch(() => {});
+    return;
+  }
   chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_rescan_received', data: { url: window.location.href, from_cache: fromCache, reason } } as Message).catch(() => {});
 
   // A same-document nav is a new page: in manual mode (or always-mode with an
@@ -3473,6 +3500,9 @@ function scheduleScrollReposition(e?: Event): void {
     // Scroll-settle is the canonical viewport-exit moment (stale-TRUE release)
     // AND where infinite-scroll content lands (band discovery).
     runSettlePipeline('band');
+    // A spa_nav that arrived mid-scroll (scroll-driven URL tick, e.g. a
+    // pagination offset) was parked; run it now that the storm is over.
+    flushDeferredNavRescan();
   }, DEFERRED_REPOSITION_DEBOUNCE_MS);
 }
 pageSession.resources.listen(window, 'scroll', scheduleScrollReposition, { passive: true });

@@ -516,6 +516,45 @@ per fling; refuse_no_match collapses; the eye-honest dom_seen_to_shown
 falls hard for the anchor cohort (never torn down at all); visually,
 record-link badges hold position and letter through window swaps.
 
+## Drill round 10 — the elephant: our own nav rescans, five per fling
+
+rebind_key moved 44 → 87 (the takeover fires; partial overlap between
+windows caps it — a fling's destination records are mostly new, and
+THOSE genuinely need fresh badges). Eye numbers flat. Then the
+firehose, read with wall-clock timestamps, surfaced two things the
+page-relative breadcrumbs had been hiding:
+
+1. **Multiple frames interleave in the log** (pendo widget,
+   about:blank children) — earlier timeline reads averaged two
+   pipelines.
+2. **QuickBase writes a pagination offset into the URL as you scroll**
+   (`…/action/td?skip=0`). webNavigation reports every tick as a
+   history-state update, the background dispatches spa_nav, and
+   rescanForNav ran its FULL body — drop_disconnected + syncNow +
+   document-wide doScan + wholesale showHints — FIVE TIMES IN FIVE
+   SECONDS, overlapping, in the middle of the swap storm. The
+   spa_nav machinery exists for real route changes (YouTube
+   watch→watch); for a scroll-driven query tick it is pure
+   self-inflicted load at the worst possible moment, and it has been
+   running during every drill of this arc.
+
+Fix: **defer mid-scroll spa_navs to scroll settle.** The naive
+discriminator (query-only URL change = cosmetic) is WRONG — YouTube's
+watch→watch navs are query-only and need the heavy path. The correct
+one: a user cannot click-navigate mid-fling, so a spa_nav arriving
+while scroll events are streaming (scrollRepositionTimer armed) is
+in-page state. It parks (latest args win) and fires once right after
+runSettlePipeline at settle. Real navigations are never mid-scroll and
+keep today's immediate path — the wedge fixture (YouTube spa_nav, no
+scrolling) exercises exactly that unchanged branch.
+
+Prediction for drill round 11: at most ONE rescan per fling, after
+settle; the mid-fling wholesale re-show cycles disappear from the
+firehose; the ring's mass sag (shown 670→225 with painted flat —
+badges HIDDEN en masse, not destroyed) shrinks to the swap-diff
+cohort. Whatever eye-latency remains after this is the true refill
+cost of genuinely-new windows.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
