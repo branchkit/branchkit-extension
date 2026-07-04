@@ -2131,6 +2131,47 @@ pacing makes that flicker visible is exactly what the next real-Chrome
 drill answers; if it does, the next iteration is the
 visibility-suppression-during-hold pass round 25 characterized.
 
+## Round 26 VERIFY — the closing drill (2026-07-04, snapshot 18-57,
+## build 18:25): everything ours is at content speed; the residual is
+## the page
+
+Production verdict, every layer:
+- **takeover_row 998 + takeover_fp 93** — the whole population rides
+  both render generations on the real grid.
+- **The only in-viewport deaths are correct ones**: 65 anchors + 12
+  labels, all at swap start, each shown ~4.4s — the OUTGOING window's
+  badges dying as the user flings away (in_viewport=true via their
+  final pre-void lastRect). Zero buttons, zero checkboxes: the
+  ambiguous cohort survives.
+- **The dip decoded, finally**: the strict floor is EXACTLY 121 in
+  every drill regardless of gesture — that is the constant NON-GRID
+  chrome (sidebar/nav). The dip is simply "the grid region has no
+  badges while QuickBase blanks and re-renders it." Its duration is
+  the page's void + progressive render, not our pipeline.
+- **Badges land 52ms behind their row's DOM** (mo dom_seen→shown p50
+  52 / p90 70) and solidify in ~0.5s (shown_minus_ack p50 −519; was
+  −1671 at round 22b). Zero sync transport errors; no session
+  rotation; RO sensor quiet.
+
+The arc's honest close: the perceived fling-to-badges timing is
+dominated by QuickBase's own cycle — white void (~1-2s), progressive
+row render, related-data fetch (~2.5-3.5s cold) — which no extension
+changes; Rango's measured 0.46-0.73s was clocked from rows-repaint on
+the same floor, and we now paint 52ms after each row exists. What the
+26 rounds actually bought does not show on a stopwatch but is real:
+letters no longer reshuffle across swaps (voice targets stay stable
+through a fling), badges solidify in half a second instead of 10-25s,
+the rotation/republish storms are gone, discovery is content-speed on
+every reveal class including mutation-free ones, and the QuickBase
+fixture + DOM-level eye regression-gate all of it programmatically.
+
+Parked with tripwires, deliberately not chased: the fixture's
+removal-window clip/occlusion flicker (did not manifest in the
+production data); the strict-flag lag inside the page's own render
+window (voice matchability trails paint by ~1-2s during the swap —
+bounded by the same floor); batch-boundary row splits in the coattail;
+the boot-cohort's settle_sweep classification.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
