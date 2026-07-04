@@ -2172,6 +2172,61 @@ window (voice matchability trails paint by ~1-2s during the swap —
 bounded by the same floor); batch-boundary row splits in the coattail;
 the boot-cohort's settle_sweep classification.
 
+## Round 27 — THE RANGO A/B ON ONE CLOCK: the gap is not speed, it is
+## swap-window STABILITY (2026-07-04; scripts/_test-qb-fling-rango.mjs)
+
+The user's standing objection, correctly held against every "it's the
+page" conclusion: Rango is perceived MUCH faster on the same page, so
+something BranchKit-specific must exist. Answered by running Rango
+itself (built from /tmp/rango-source, hint shadow patched open)
+through the SAME fixture, gesture, and 100ms DOM-level eye:
+
+**Paint speed is EQUAL — we are marginally faster.**
+- Rango: reveal → 95 hints at +475ms translucent (their fade-in) →
+  95 solid at +617ms; 85%-recovery 499ms.
+- BranchKit: 95 solid at ~+400ms; 85%-recovery 400ms (same fixture,
+  same gesture, prior run).
+
+**The entire difference is DURING the swap.** Through the identical
+phase-2 + progressive-removal window:
+- Rango: 95 → 95 → 95 → 90 → 90 → 80 → 70 — a smooth monotone slope,
+  ZERO dips, zero flicker. (It ends at 70: fewer hintables — no
+  checkboxes.)
+- BranchKit: 95 → 11 → 43 → 55 → 95 → 23 → 94 → 55 → 95 — hard
+  oscillation for ~2s.
+
+The eye reads flicker as slower-than-slow; that IS the perceived gap.
+
+**Why Rango is steady there — by doing nothing:** Rango does not ride
+identity. Hints live and die with their elements (deleteWrapper on
+removal; new elements wrapped + painted synchronously at insertion).
+Under insert-before-remove that is INHERENTLY stable: the old row's
+hint stays exactly as long as the old row is on screen; the new row's
+hint exists wherever the new row is; in-pane count ≈ constant by
+construction. The price they pay is the one thing they don't need and
+we do: their labels RESHUFFLE on every swap — a memorized label is
+invalid after a fling. Keyboard users point at what they see; voice
+users speak what they memorized. We ride identity because voice
+requires it.
+
+**Why we flicker there:** riding moves the badge's TARGET to the
+replacement element the moment the takeover fires — while the doomed
+twin is still visibly on screen. The round-25 position hold pins the
+badge's coordinates, but the visibility subsystems (clip/occlusion/
+strict, evaluated against the RIDDEN target's transient off-pane
+state) hide it anyway. The user watches visible rows lose their
+badges early and regain them as each replacement lands: the
+oscillation.
+
+**The closing fix, now precisely justified:** suppress
+visibility-driven hides for position-held wrappers (bounded: graced
+rides only, ≤2s, self-expiring). Visually truthful — the doomed twin
+under the held badge shows identical content — and semantically fine
+(activation targets the replacement, an equivalent action). With it,
+our fixture line should read like Rango's flat slope PLUS letter
+continuity they can't offer. This is the round-25 "characterized +
+open" item, promoted to next with A/B receipts.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
