@@ -1861,7 +1861,13 @@ const DISCOVERY_SWEEP_IDLE_TIMEOUT_MS = 500;
 // records it DIDN'T.
 const DISCOVERY_RETRY_COOLDOWN_MS = 300;
 const DISCOVERY_MAX_RETRY_DEPTH = 2;
-function scheduleBandDiscovery(settleKind: 'band' | 'store'): void {
+// Mass-reveal fast-arm threshold (DESIGN_FLING_WAVE round 18): a settle whose
+// plan repaired this many stale-FALSE band flags IS the double-buffered
+// reveal (QuickBase measures 106-166 at the flip; incidental repairs run
+// 1-17). Such a sweep skips the idle gate — mid-storm rIC never fires, so
+// the gate is a flat +500ms on exactly the wave the user is watching for.
+const REVEAL_REPAIR_FAST_ARM = 25;
+function scheduleBandDiscovery(settleKind: 'band' | 'store', revealRepairs = 0): void {
   if (pageSession.discoverySweepPending) {
     pageSession.discoverySweepRerun = true;
     firehoseStep('band_discovery:coalesced', 1);
@@ -1873,7 +1879,7 @@ function scheduleBandDiscovery(settleKind: 'band' | 'store'): void {
   // coalesced request of the other kind folds in — labels are diagnostic):
   // scroll settles → band_sweep, non-scroll (store) settles → settle_sweep.
   const source: DiscoverySource = settleKind === 'band' ? 'band_sweep' : 'settle_sweep';
-  runWhenIdle(() => {
+  const sweepBody = () => {
     void (async () => {
       let added = 0;
       try {
@@ -1910,7 +1916,18 @@ function scheduleBandDiscovery(settleKind: 'band' | 'store'): void {
         }
       }
     })();
-  }, DISCOVERY_SWEEP_IDLE_TIMEOUT_MS);
+  };
+  if (revealRepairs >= REVEAL_REPAIR_FAST_ARM) {
+    // The settle plan just proved a mass reveal — content gained geometry
+    // en masse. Waiting for idle here IS the residual late wave; the walk
+    // itself is yield-chained (round 17) so front-of-queue entry is safe.
+    // Retries (armed above) deliberately keep the idle path — they are
+    // race backstops, not reveal-urgent.
+    firehoseStep('band_discovery:fast_arm', revealRepairs);
+    scheduleYieldTask(sweepBody);
+  } else {
+    runWhenIdle(sweepBody, DISCOVERY_SWEEP_IDLE_TIMEOUT_MS);
+  }
 }
 
 function updateBadgeLabels(): void {
@@ -3479,8 +3496,10 @@ function runSettlePipeline(discovery: 'band' | 'store'): void {
     // burst around the flip lands a 'store' settle within ~100ms; arming the
     // sweep here closes the straggler window to ≤~600ms. The sweep is
     // single-flight, idle-scheduled, and isKnown-skipping — cheap when
-    // nothing new exists.
-    scheduleBandDiscovery(discovery);
+    // nothing new exists. The repair count is the mass-reveal tell: a
+    // double-buffered flip repairs ~100+ stale band flags in one plan,
+    // and that sweep skips the idle gate (round 18 fast-arm).
+    scheduleBandDiscovery(discovery, planLists.toRepair.length);
     if (discovery === 'store') scheduleReconcile();
     applyOcclusionPlan(gather);
     reconcileScrollAccel();

@@ -904,6 +904,52 @@ via moves that only record the moved intermediate). The per-wrapper
 discovery blocks in the next snapshot can chase this; it matters
 only if the fixed sweep still reads slow for that cohort.
 
+## Round 18 — round-17 verified; the last deliberate lever: fast-arm the
+## mass-reveal sweep (2026-07-04)
+
+Drill on build 03:08 (round 17 live). User: still sees the flash, the
+landing "maybe a little quicker but hard to tell" — matching
+prediction. The data confirms round 17 did what it claimed:
+
+- No multi-second sweep anywhere in the trail (was one 4s in-flight
+  window). Storm-window sweeps complete in ~100-400ms; steady-state
+  ~350-400ms wall.
+- The late-cohort signature collapsed: settle_sweep MO-stamped
+  stragglers 78 → **2** (dom_seen_to_attached n=2 at ~6s, residue).
+  settle_sweep attached_to_shown p50 34ms.
+- Knock-on: mo-source dom_seen_to_attached p90 549 → **40ms** — the
+  sweep no longer monopolizes the queue, so the MO drain path itself
+  runs at full duty.
+- Ring in the captured trail: shown 393-411, no deep dip.
+
+What remains between QuickBase's reveal and the final population,
+measured: 100ms settle debounce (load-bearing coalescing, stays) +
+**up to 500ms idle gate** before the sweep body runs (mid-storm rIC
+never fires, so it is a flat +500ms) + ~100-400ms walk + ~35ms
+attach→shown. Total ~0.7-1.0s — consistent with the user's read.
+
+The lever: the idle gate is scar tissue from when sweeps were
+expensive walks; with the walk yield-chained it protects nothing on
+exactly the sweep the user is watching for. And the settle pass
+already KNOWS when a mass reveal happened — its own plan just
+repaired ~100+ stale-FALSE band flags (measured 106/119/166 at the
+flip; incidental repairs run 1-17). So: `runSettlePipeline` passes
+`toRepair.length` to `scheduleBandDiscovery`; ≥25 repairs
+(`REVEAL_REPAIR_FAST_ARM`) schedules the sweep body on the yield
+chain instead of `runWhenIdle`. Breadcrumb
+`band_discovery:fast_arm` carries the count. Retries keep the idle
+path (race backstops, not reveal-urgent). Coalesce/single-flight
+semantics unchanged.
+
+Expected: late wave lands ~0.3-0.5s after the reveal — Rango's own
+video-A/B number. Past this, the floor is QuickBase's white void and
+two-phase render, which every extension pays; declare the arc done on
+perception parity and chase the 55 no-MO-stamp buttons/inputs only if
+a drill still reads slow.
+
+Revert lever: delete the fast-arm branch (one `if` in
+`scheduleBandDiscovery`) — restores idle-gated sweeps exactly.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
