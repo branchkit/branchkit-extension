@@ -2764,3 +2764,70 @@ Aligned on fling_end (gesture + momentum tail over):
   messier motion — flicker reads as "slower" to the eye.
 - Caveat: standalone run (local-ack) — translucent→solid ACK beat not
   exercised; that half still only measurable in the user's paired Chrome.
+
+## Round 33 — user's videos vindicated on the client realm: REVEAL BLINDNESS,
+## sensor dead (2026-07-04, rango2.mov/branchkit2.mov + 21-21-10 snapshot +
+## actuator.log wall-clock)
+
+Second same-day A/B pair, user's own gesture, on their REAL workload
+(client-realm client realm, Purchase Orders, 10,201 records, new-style
+grid). Frame reads:
+
+- **Rango**: void → rows ~2.1s → hints at ~2.5s (**+0.4s**, solid).
+- **BranchKit**: void → rows ~3.3s → badges at ~6.4s (**+3.1s**,
+  translucent, top-down over ~1.5s).
+
+The user's "Rango is much faster" is CONFIRMED on this page — while the
+round-32 builder-realm A/B (same day, same builds) shows BranchKit at
+parity-or-better. Both are true: the beats differ per grid.
+
+### Why the counters lied (deception #7, round-16 class)
+
+Per-wrapper slicing of the same drill's snapshot says only 2 wrappers were
+shown >1s after dom_seen. But t_dom_seen falls back to t_attached for
+non-MO discoveries — a cohort the observer misses is DEFINITIONALLY
+invisible to every percentile. The eye had to come from actuator.log
+wall-clock.
+
+### The mechanism, from the log (session ts ≈ wall − 21:20:57.17)
+
+- ts 2071: moCallback 188 records → drainDiscovery 185 elements in 11ms —
+  the extension processed the row content the moment QuickBase inserted
+  it (HIDDEN, in the buffer).
+- ts 2100–4300: sweeps run every ~250–500ms, `added 0` every time. A
+  fast_arm 25 at 3322 also walks and finds nothing. The rows are VISIBLE
+  to the user through most of this window.
+- ts 4353/4676: `added 1`, then `added 52` → showHints 166/184 — the
+  badges the video shows at +3.1s.
+
+Snapshot counters for the session: **invisible_candidates_observed 10,268
+vs visibility_ro_signals 8.** The layer-3 ResizeObserver (21g — THE reveal
+sensor for parked-hidden content) is attached and silent. attention
+attaches 114 all session. So: content discovered at insert while hidden →
+parked → reveal (class-flip/CSSOM/reparent, invisible to the MO filter)
+never fires the RO → nothing re-evaluates until much-later sweeps.
+
+Suspects for RO silence (probe next, don't guess): (a) QuickBase REPLACES
+buffer nodes at reveal rather than revealing them — parked elements die
+unrevealed and their replacements arrive in an MO batch misclassified
+`end_all_own` (142-record all-own batch at ts 2616 sits exactly in the
+window); (b) parked candidates unobserved at some unpark site before
+reveal; (c) reveal grants boxes only to ancestors, parked descendants stay
+0×0 until later layout.
+
+### Why round 32 missed it
+
+The builder-realm grid (sparse synthetic data) reveals rows ~immediately
+after insert — the blindness window rounds to zero. The client grid's heavier
+render keeps content in the hidden buffer for seconds. The fixture has the
+same gap RECORDED (round 28b): its phase-2 rows arrive VISIBLE.
+
+### Next steps
+
+1. Fixture: veil-flip phase-2 rows (hidden buffer → class-flip reveal
+   AFTER a configurable delay) — reproduce the 3s gap programmatically.
+2. Classify the RO-silence suspect with the fixture (or the round-21
+   console probe scripts/_probe-fling-cohort.console.js on the client page —
+   classifies each late element's last-failing gate + whether a
+   mutation/resize landed within 250ms of its flip).
+3. Fix per classification; re-verify with fixture + user drill on client.
