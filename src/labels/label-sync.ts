@@ -664,7 +664,15 @@ export async function syncNow(reason: string): Promise<void> {
     if (resp.failed.length > 0) {
       const failedSet = new Set(resp.failed.map(f => f.codeword));
       for (const w of chunk) {
-        if (failedSet.has(w.scanned.codeword)) deps.detachWrapper(w.element);
+        // Guard the empty string (round 30): a wrapper released while its
+        // chunk was in flight has codeword '' — an ''-keyed failure would
+        // match EVERY such wrapper and mass-detach freshly painted badges
+        // (the production flash-then-gone: 605 plugin drops, all
+        // reason=empty_codeword, each one detaching a whole chunk's
+        // released wrappers).
+        if (w.scanned.codeword && failedSet.has(w.scanned.codeword)) {
+          deps.detachWrapper(w.element);
+        }
       }
     }
     const succeededSet = new Set(resp.succeeded);
@@ -690,8 +698,19 @@ export async function syncNow(reason: string): Promise<void> {
   };
 
   const postChunk = async (index: number, isLast: boolean): Promise<void> => {
-    const chunk = chunks[index];
+    // Re-validate at POST time (round 30): the drain filter ran when the
+    // sync was SCHEDULED, but a wrapper can be released (codeword blanked)
+    // or detached while earlier chunks round-trip — the wider the 29c
+    // parallel window, the more often. Posting them as codeword:"" made
+    // the plugin fail them (605 × reason=empty_codeword in one session)
+    // and the failure path detached innocent wrappers. A released
+    // wrapper's Delete is already queued by its release path; just don't
+    // Put it.
+    const chunk = chunks[index].filter(
+      (w) => w.scanned.codeword && deps.store.findWrapperFor(w.element) === w,
+    );
     const deletesRiding = index === 0 ? pendingDeleteCodewords.slice() : [];
+    if (chunk.length === 0 && deletesRiding.length === 0 && !isLast) return;
     stampStrictViewport(chunk);
     const resp = await postBatch({
       session_id: sessionId,
