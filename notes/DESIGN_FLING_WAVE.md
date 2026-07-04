@@ -2349,6 +2349,42 @@ broke in production. A future fixture iteration should reveal phase-2
 rows via the veil class flip like the main swap. The production drill
 verifies fix 1.
 
+## Round 29 — the experiment closes: badges live and die with their
+## elements (2026-07-04, 7bc90dc — 9+/684− lines)
+
+The second production drill of the deferred model repeated the
+stranding in a new form: 1,111 reservations, 16 consumed, 72 expired —
+the rest cycled in a RE-RESERVATION LOOP (isReservedForRetarget's
+TTL-expiry-delete let the next sweep's tier re-reserve the same pair
+with a fresh timestamp, forever), and the expiry backstop mostly lost
+that race; hints loaded ~7s late. Root truth, twice demonstrated:
+**QuickBase's doomed twins do not disconnect on our schedule**, so any
+cross-element transfer keyed to their lifecycle — early OR deferred —
+loses in production.
+
+Decision, per the user's explicit priority ("it might be better to see
+the badge quicker than have the badge remain consistent"): the
+identity-preservation experiment ends. Deleted wholesale (net −675
+lines): the fingerprint takeover tier, the row coattail, the
+reservation system, the ambiguous deferral, the fpIndex plumbing, and
+their counters. `attachDiscovered` returns to
+strong-key → limbo → slot → fresh — the pre-round-23 shape, running on
+top of everything the arc fixed for good (content-speed discovery, the
+sync deadline, the RO reveal sensor, the sweep-fresh lastRect).
+
+Fixture verdict for the simple model: recovery 636ms (Rango: 499ms on
+the identical run), transient single-sample dips self-healing in
+200-400ms, stable at rest. Letters reshuffle per swap — exactly
+Rango's trade, which its voice-first users also live with. No timing
+bets remain for production to falsify.
+
+What survives of rounds 23-28: the diagnosis method (fixture +
+DOM-level eye + Rango A/B harness), the round-27 finding that paint
+speed was never the gap, and this documented dead end — the note is
+the map for anyone who attempts identity transfer again (the missing
+primitive is a reliable doomed-twin lifecycle signal, which QuickBase
+does not provide).
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
