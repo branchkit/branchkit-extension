@@ -19,7 +19,7 @@
 
 import { ElementWrapper, enterLimbo, isLimboExpired } from '../scan/element-wrapper';
 import * as idRegistry from '../scan/registry';
-import { computeFingerprint, fingerprintsEqual, computeStrongKey } from '../scan/registry';
+import { computeFingerprint, fingerprintsEqual, fingerprintToString, computeStrongKey, type Fingerprint } from '../scan/registry';
 import { bumpRebindCounter, findLimboMatch, newRebindCounters, REBIND_DISTANCE_THRESHOLD_PX, type RebindCounters } from '../labels/rebind';
 import { peekCachedRect } from '../layout-cache';
 import { lifecycleCounters, recordCpu } from '../debug/perf-counters';
@@ -186,8 +186,8 @@ export function collectLimboWrappers(): ElementWrapper[] {
  * true iff the new element was rebound; false means the caller should
  * create a fresh wrapper.
  */
-export function tryRebindFromLimbo(newEl: Element, pool: ElementWrapper[]): boolean {
-  const newFp = computeFingerprint(newEl);
+export function tryRebindFromLimbo(newEl: Element, pool: ElementWrapper[], precomputedFp?: Fingerprint): boolean {
+  const newFp = precomputedFp ?? computeFingerprint(newEl);
   const matches: ElementWrapper[] = [];
   for (const w of pool) {
     const entry = idRegistry.get(w.scanned.id);
@@ -317,6 +317,128 @@ export function tryRebindByStrongKey(
   if (w.element.isConnected) orphanedByKeyRebind.set(w.element, Date.now());
   rebindCounters.rebind_key++;
   rebindWrapper(w, newEl);
+  return true;
+}
+
+// --- Connected-predecessor takeover by fingerprint + position (round 23,
+// DESIGN_FLING_WAVE.md) ---
+//
+// The fingerprint/position tier above only consults the limbo pool —
+// disconnected wrappers. QuickBase inserts the replacement window BEFORE
+// removing the old one (slot_probe.pool_empty 591/1104 on production), so at
+// discovery time the doomed predecessor is still connected and the pool is
+// empty: identical-content remounts churned fresh wrappers, letters, grammar
+// entries, and badges on every fling — the viewport-strict dip the user
+// watches (174→121, ~2.7s). This tier is the strong-key takeover's pattern
+// applied to everything without an href: badge + letter + grammar RIDE the
+// swap, producing zero sync traffic (same fingerprint = same content, no
+// re-Put).
+
+// Unique-fingerprint steals: the fingerprint appears on exactly one connected
+// wrapper, so replacement semantics are near-certain (names on data grids
+// carry record ids); the generous gate only blocks cross-page steals.
+const TAKEOVER_UNIQUE_MAX_PX = 300;
+// Ambiguous fingerprints (identical per-row controls — checkboxes,
+// pencil/eye): the new element must sit ON one predecessor (co-location of
+// identical controls is not a legitimate steady state) AND be uniquely
+// nearest — grid rows sit ~35-45px apart, so a same-column neighbor-row twin
+// fails the margin.
+const TAKEOVER_TIGHT_PX = 40;
+const TAKEOVER_MARGIN_PX = 40;
+
+/**
+ * Index: fingerprint string → CONNECTED, non-limbo wrappers holding it.
+ * Built once per discovery pass alongside `collectStrongKeyIndex`.
+ * Fingerprints come from the registry (computed at register time), so this
+ * is O(store) pointer reads — no DOM access, no layout.
+ */
+export function collectFingerprintIndex(): Map<string, ElementWrapper[]> {
+  const index = new Map<string, ElementWrapper[]>();
+  for (const w of store.all) {
+    if (w.scanned.id <= 0) continue;
+    if (w.disconnectedAt !== null || !w.element.isConnected) continue;
+    const entry = idRegistry.get(w.scanned.id);
+    if (!entry) continue;
+    const key = fingerprintToString(entry.fingerprint);
+    const list = index.get(key);
+    if (list) list.push(w);
+    else index.set(key, [w]);
+  }
+  return index;
+}
+
+const centerDist = (r: DOMRect, rect: DOMRect): number => {
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  return Math.max(
+    Math.abs(r.left + r.width / 2 - cx),
+    Math.abs(r.top + r.height / 2 - cy),
+  );
+};
+
+/**
+ * Transfer a still-connected doomed predecessor's wrapper onto a
+ * freshly-discovered lookalike. Returns true iff taken over; false falls
+ * through to the slot tier / fresh attach (today's behavior — fail-safe).
+ *
+ * Wrong steals self-heal: the robbed element loses its wrapper, the next
+ * sweep/MO pass rediscovers it, and it attaches fresh — one letter swap on
+ * one control, paid only on a bad bet instead of on every swap. The
+ * consumed-from-index rule stops a second new element from stealing the
+ * same predecessor; `orphanedByKeyRebind` (the existing ping-pong guard)
+ * stops the robbed element from grabbing the wrapper back via
+ * `attachDiscovered`'s isRecentlyOrphaned skip.
+ */
+export function tryTakeoverByFingerprint(
+  newEl: Element,
+  newFp: Fingerprint,
+  fpIndex: Map<string, ElementWrapper[]>,
+): boolean {
+  const list = fpIndex.get(fingerprintToString(newFp));
+  if (!list || list.length === 0) return false;
+  // Re-validate at match time — the index snapshot can go stale within a
+  // pass (elements disconnect mid-drain; lastRect-less wrappers can't be
+  // position-verified so they never qualify).
+  const candidates = list.filter(
+    (w) => w.element !== newEl && w.element.isConnected && w.lastRect !== null,
+  );
+  if (candidates.length === 0) return false;
+
+  const newRect = peekCachedRect(newEl) ?? newEl.getBoundingClientRect();
+
+  let winner: ElementWrapper | null = null;
+  if (candidates.length === 1) {
+    const d = centerDist(newRect, candidates[0].lastRect!);
+    if (d <= TAKEOVER_UNIQUE_MAX_PX) winner = candidates[0];
+  } else {
+    let best: { w: ElementWrapper; d: number } | null = null;
+    let second = Infinity;
+    for (const w of candidates) {
+      const d = centerDist(newRect, w.lastRect!);
+      if (!best || d < best.d) {
+        second = best?.d ?? Infinity;
+        best = { w, d };
+      } else if (d < second) {
+        second = d;
+      }
+    }
+    if (best && best.d <= TAKEOVER_TIGHT_PX && second - best.d >= TAKEOVER_MARGIN_PX) {
+      winner = best.w;
+    } else {
+      rebindCounters.refuse_fp_ambiguous++;
+      return false;
+    }
+  }
+  if (!winner) return false;
+
+  const idx = list.indexOf(winner);
+  if (idx >= 0) list.splice(idx, 1);
+  orphanedByKeyRebind.set(winner.element, Date.now());
+  if (candidates.length === 1) rebindCounters.takeover_fp++;
+  else rebindCounters.takeover_fp_position++;
+  // Deliberately NOT adopting the fresh scan metadata (unlike the slot
+  // tier): same fingerprint = same content — no re-Put, no grammar delta.
+  rebindWrapper(winner, newEl);
   return true;
 }
 

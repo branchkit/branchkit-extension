@@ -353,3 +353,114 @@ describe('tryRebindBySlot (DESIGN_FLING_WAVE Part 2)', () => {
     expect(rebindCounters.rebind_slot).toBe(1);
   });
 });
+
+// --- Round 23: connected-predecessor takeover by fingerprint + position ---
+
+import * as idRegistry from '../scan/registry';
+import { computeFingerprint } from '../scan/registry';
+import { collectFingerprintIndex, tryTakeoverByFingerprint } from './limbo';
+
+describe('tryTakeoverByFingerprint (round 23)', () => {
+  const domRect = (x: number, y: number, w = 40, h = 20): DOMRect =>
+    ({ left: x, top: y, width: w, height: h, right: x + w, bottom: y + h, x, y, toJSON: () => ({}) }) as DOMRect;
+
+  /** Connected wrapper, registered (the index reads registry fingerprints),
+   * with a lever-2-fresh lastRect. */
+  function makePredecessor(label: string, x: number, y: number, tag = 'button'): ElementWrapper {
+    const el = document.createElement(tag);
+    if (label) el.setAttribute('aria-label', label);
+    if (tag === 'input') el.setAttribute('type', 'checkbox');
+    document.body.appendChild(el);
+    const w = new ElementWrapper(el, scanned(0));
+    idRegistry.register(w);
+    store.addWrapper(w);
+    w.lastRect = domRect(x, y);
+    return w;
+  }
+
+  /** A freshly-discovered lookalike with a real box (attachDiscovered refs
+   * passed isVisible, so they always have geometry). */
+  function makeReplacement(label: string, x: number, y: number, tag = 'button'): Element {
+    const el = document.createElement(tag);
+    if (label) el.setAttribute('aria-label', label);
+    if (tag === 'input') el.setAttribute('type', 'checkbox');
+    el.getBoundingClientRect = () => domRect(x, y);
+    document.body.appendChild(el);
+    return el;
+  }
+
+  const takeover = (el: Element, index = collectFingerprintIndex()) =>
+    tryTakeoverByFingerprint(el, computeFingerprint(el), index);
+
+  beforeEach(() => {
+    idRegistry.clear();
+    rebindCounters.takeover_fp = 0;
+    rebindCounters.takeover_fp_position = 0;
+    rebindCounters.refuse_fp_ambiguous = 0;
+  });
+
+  it('unique fingerprint: the wrapper (codeword + id) rides onto the co-located lookalike', () => {
+    const w = makePredecessor('Edit purchase order 10897', 100, 100);
+    w.scanned.codeword = 'harp bat';
+    w.grammarReady = true;
+    const oldEl = w.element;
+    const newEl = makeReplacement('Edit purchase order 10897', 104, 102);
+
+    expect(takeover(newEl)).toBe(true);
+    expect(w.element).toBe(newEl);
+    expect(w.scanned.codeword).toBe('harp bat');
+    expect(w.grammarReady).toBe(true);
+    expect(store.findWrapperFor(newEl)).toBe(w);
+    expect(store.findWrapperFor(oldEl)).toBeUndefined();
+    expect(rebindCounters.takeover_fp).toBe(1);
+    expect(isRecentlyOrphaned(oldEl)).toBe(true); // ping-pong guard armed
+  });
+
+  it('unique fingerprint but far away (cross-page shape) is refused', () => {
+    makePredecessor('Edit purchase order 10897', 100, 100);
+    const newEl = makeReplacement('Edit purchase order 10897', 100, 900);
+    expect(takeover(newEl)).toBe(false);
+    expect(rebindCounters.takeover_fp).toBe(0);
+  });
+
+  it('ambiguous fingerprints (identical checkboxes) resolve by tight+margin position', () => {
+    const near = makePredecessor('', 50, 100, 'input');
+    makePredecessor('', 50, 300, 'input');
+    const newEl = makeReplacement('', 50, 102, 'input');
+
+    expect(takeover(newEl)).toBe(true);
+    expect(near.element).toBe(newEl);
+    expect(rebindCounters.takeover_fp_position).toBe(1);
+  });
+
+  it('ambiguous without a uniquely-nearest candidate refuses (adjacent-row twins)', () => {
+    // 30px apart — inside the tight gate but the margin over second-best
+    // fails, exactly the same-column neighbor-row hazard.
+    makePredecessor('', 50, 100, 'input');
+    makePredecessor('', 50, 130, 'input');
+    const newEl = makeReplacement('', 50, 115, 'input');
+
+    expect(takeover(newEl)).toBe(false);
+    expect(rebindCounters.refuse_fp_ambiguous).toBe(1);
+  });
+
+  it('consumes the winner: a second lookalike cannot steal the same predecessor', () => {
+    makePredecessor('Edit purchase order 10897', 100, 100);
+    const index = collectFingerprintIndex();
+    expect(takeover(makeReplacement('Edit purchase order 10897', 100, 104), index)).toBe(true);
+    expect(takeover(makeReplacement('Edit purchase order 10897', 100, 108), index)).toBe(false);
+  });
+
+  it('candidates without a lastRect are skipped (cannot position-verify)', () => {
+    const w = makePredecessor('Edit purchase order 10897', 0, 0);
+    w.lastRect = null;
+    expect(takeover(makeReplacement('Edit purchase order 10897', 4, 2))).toBe(false);
+  });
+
+  it('limbo wrappers stay out of the index — the disconnected path owns them', () => {
+    const w = makePredecessor('Edit purchase order 10897', 100, 100);
+    w.element.remove();
+    enterLimbo(w, performance.now());
+    expect(collectFingerprintIndex().size).toBe(0);
+  });
+});

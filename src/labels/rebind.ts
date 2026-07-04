@@ -116,6 +116,16 @@ export interface RebindCounters {
    *  ancestor — different fingerprint, different key, same slot. Also the
    *  live probe for whether the grid's shells survive its swaps. */
   rebind_slot: number;
+  /** Connected-predecessor takeovers by UNIQUE fingerprint (round 23,
+   *  DESIGN_FLING_WAVE.md): the doomed predecessor was still in the DOM
+   *  (insert-before-remove swap) so the limbo tiers couldn't see it. */
+  takeover_fp: number;
+  /** Same tier, ambiguous fingerprints resolved by the tight+margin
+   *  position gate (identical per-row controls — checkboxes, pencils). */
+  takeover_fp_position: number;
+  /** Same tier, refused: multiple connected candidates and no candidate
+   *  was uniquely co-located. Fresh attach (today's churn) follows. */
+  refuse_fp_ambiguous: number;
 }
 
 export function newRebindCounters(): RebindCounters {
@@ -126,6 +136,9 @@ export function newRebindCounters(): RebindCounters {
     refuse_no_match: 0,
     rebind_key: 0,
     rebind_slot: 0,
+    takeover_fp: 0,
+    takeover_fp_position: 0,
+    refuse_fp_ambiguous: 0,
   };
 }
 

@@ -20,7 +20,8 @@ import { domSeenAt } from '../observe/dom-seen';
 import * as idRegistry from '../scan/registry';
 import { isRecallLoaded, resolvePreferredCodeword } from '../labels/codeword-recall';
 import { dropPendingPut, hasSent, queueDelete, queuePut, scheduleSync } from '../labels/label-sync';
-import { tryRebindFromLimbo, tryRebindByStrongKey, tryRebindBySlot, recordSlotAncestors, isRecentlyOrphaned } from '../observe/limbo';
+import { tryRebindFromLimbo, tryRebindByStrongKey, tryRebindBySlot, tryTakeoverByFingerprint, recordSlotAncestors, isRecentlyOrphaned } from '../observe/limbo';
+import { computeFingerprint } from '../scan/registry';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { geometryInBand, getCachedRect, isRectOnScreen } from '../layout-cache';
 import { lifecycleCounters } from '../debug/perf-counters';
@@ -147,6 +148,7 @@ export function detachWrapper(element: Element): void {
 export function attachDiscovered(
   refs: Element[], elements: ScannedElement[], limboPool: ElementWrapper[],
   keyIndex: Map<string, ElementWrapper | null>, source: DiscoverySource,
+  fpIndex?: Map<string, ElementWrapper[]>,
 ): number {
   let added = 0;
   const attached: ElementWrapper[] = [];
@@ -161,7 +163,17 @@ export function attachDiscovered(
     // strong key (href), ahead of the fingerprint/position path. Sidesteps the
     // pool-availability race that churns the QuickBase sidebar.
     if (tryRebindByStrongKey(ref, keyIndex, limboPool)) continue;
-    if (limboPool.length > 0 && tryRebindFromLimbo(ref, limboPool)) continue;
+    // Fingerprint computed once, shared by the limbo tier and the
+    // connected-takeover tier (round 23) — after the strong-key check so a
+    // key hit never pays the innerText read.
+    const newFp = computeFingerprint(ref);
+    if (limboPool.length > 0 && tryRebindFromLimbo(ref, limboPool, newFp)) continue;
+    // Connected-predecessor takeover (round 23, DESIGN_FLING_WAVE.md): the
+    // doomed predecessor of an insert-before-remove swap is still in the
+    // DOM, so the limbo tiers above can't see it. Badge + letter + grammar
+    // ride the swap; zero sync traffic (no metadata adoption needed — same
+    // fingerprint, same content).
+    if (fpIndex && tryTakeoverByFingerprint(ref, newFp, fpIndex)) continue;
     // Slot tier (DESIGN_FLING_WAVE Part 2): a recycled cell's new content —
     // different fingerprint, different key, same surviving slot ancestor.
     // The wrapper (badge, letter, grammar entry, grammarReady) survives the
