@@ -2720,3 +2720,47 @@ real-Chrome drill, and the gesture matters: **reload the QuickBase report
 page** (or navigate to it fresh) and watch the grid rows — translucent
 badges should appear with the rows, solidifying ~1s later. The fling drill
 exercises the OTHER (already-fixed) path.
+
+## Round 32 — REAL-page A/B harness (builder realm, one gesture, one eye)
+## (2026-07-04, scripts/_test-qb-real-ab.mjs)
+
+User provided builder-realm credentials (~/.branchkit-builder-creds.json,
+never in chat/git). New harness runs load + fling against the REAL
+BK_PERF_TEST grid, one extension per pass (--ext=branchkit|rango|none),
+100ms in-page eye, results to /tmp/qb-real-ab-<ext>.json.
+
+### Harness lessons (each burned a run)
+
+- QuickBase logins are session-cookie-scoped: every fresh launch must run
+  the sign-in flow (input[name=loginid] + password + submit works).
+- The REAL scroll container is `tbody.tableBody` (scrollHeight ~35k). The
+  classless-tbody rows carrying BK_PERF text that ancestry probes find are
+  the HIDDEN BUFFER — aim wheel/gesture at the scroller's own visible box;
+  points derived from "first row/table" rects land on sticky header or
+  buffer and scroll NOTHING.
+- Gesture fidelity (user's observation, correct): 12×900px wheel teleports
+  drive the page differently than a trackpad. CDP
+  Input.synthesizeScrollGesture (yDistance −10800, speed 6000) is the
+  faithful synthetic fling; hand-rolled 8ms micro-deltas moved nothing.
+  Harness verifies scrollTop moved and falls back to coarse wheel loudly.
+
+### The numbers (same gesture, same page, same clock)
+
+Aligned on fling_end (gesture + momentum tail over):
+
+| | rest vp badges | mid-scroll floor | recovery after gesture end |
+|---|---|---|---|
+| BranchKit | 90 | 51 (oscillating 51-100) | **+77ms** |
+| Rango | 71 | 41 (clean two-state) | +429ms |
+
+- Load phase: both populate ≈100-300ms after rows (BK 80-206ms, Rango
+  292-307ms). Paint parity CONFIRMED on the real page.
+- Page-floor control: rows>10 at ~1.8-1.9s with no extension AND with
+  BranchKit (BK does not slow QuickBase's own render); Rango runs showed
+  rows at 2.5-3.2s (possibly network variance — not pursued).
+- The REMAINING visible difference is the round-27 finding on real data:
+  BranchKit's badge count OSCILLATES through the swap (paint/die/repaint
+  churn) while Rango drops once and returns once. Equal-or-better totals,
+  messier motion — flicker reads as "slower" to the eye.
+- Caveat: standalone run (local-ack) — translucent→solid ACK beat not
+  exercised; that half still only measurable in the user's paired Chrome.
