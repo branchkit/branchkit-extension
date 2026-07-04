@@ -59,6 +59,12 @@
   /* The hidden double-buffer: in-document (MO sees insertions) but
      unrendered — the walk parks its content as invisible candidates. */
   #buffer { display: none; }
+  /* buffer_layout=1: the buffer keeps LAYOUT (sized boxes, offscreen)
+     instead of display:none. Children pass visibility checks at insert →
+     the walk ATTACHES them (not parks) while they sit in the buffer; the
+     reveal is then a reparent of ALREADY-KNOWN wrappers, which every
+     subsequent body sweep skips (added=0 → early-out, no repaint). */
+  body.bufferLayout #buffer { display: block; position: absolute; top: 0; left: -99999px; width: 1200px; }
   /* The white void: rows removed, pane shows blank. */
   #voidCover { position: absolute; inset: 0; background: #fff; display: none; }
   .veil { visibility: hidden; }
@@ -84,6 +90,7 @@
 <script>
 (() => {
   const P = new URLSearchParams(location.search);
+  if (P.has('buffer_layout')) document.body.classList.add('bufferLayout');
   const VOID_MS = P.has('novoid') ? 0 : +(P.get('void_ms') || 800);
   const PHASE2_MS = P.has('norebuild') ? -1 : +(P.get('phase2_ms') || 700);
   const LOOKUP_MS = P.has('nolookupdelay') ? 0 : +(P.get('lookup_ms') || 2500);
