@@ -1236,6 +1236,247 @@ The tuning arc ends here. Every pipeline stage is instrumented,
 drill-verified, and at parity on content the MO can see; the residual
 is a discovery-VISIBILITY question, not a scheduling one.
 
+## Round 21 — the 20d verdict corrected: the "no-trace" cohort was BOOT
+## content; the real stragglers ARE MO-stamped; Rango's edge is sensor
+## class, not criteria (2026-07-04, snapshot re-slicing + Rango source +
+## video re-measure; no code)
+
+Three independent investigations — re-slicing the 20d drill's own
+snapshot per-wrapper, a full Rango source read, and a frame-level
+re-measure of the round-15 A/B videos — converge on a different story
+than 20d recorded. No pipeline change is implied until the one open
+question below is answered by a drill probe.
+
+### 21a. The 20d cohort attached at t≈1.0s — page BOOT, not the fling
+
+Round 20d read the 90s-window per-source aggregates
+(`wave.discovery_sources`) and concluded ~200 elements materialized
+mid-fling with no observable mutation. The same snapshot's PER-WRAPPER
+stamps (2026-07-04T04-53-04, build 04:44 — the 20d drill) say
+otherwise:
+
+- The 217 settle_sweep wrappers (106 button / 93 a / 12 input /
+  3 textarea / 3 div — exactly the note's "late cohort") ALL carry
+  `t_attached` 998-1006: one sweep walk, **~1.0s after page load**.
+  The user's drill is close+reopen-then-fling; t=1.0s is the initial
+  render, 1.3s BEFORE the first fling mutation.
+- The fling itself (t≈2322-6898) was discovered by the MO path: 418
+  mo-source wrappers, dom_seen_to_attached p50 66 / p90 219, all
+  stamped. The fling had NO unstamped sweep cohort in this drill —
+  only the 2 genuine stragglers 20d already noted.
+- Why the boot cohort has no stamps: `markDomSeen` only sees records
+  after `attachPageMutationObserver()` runs
+  (mutation-source.ts:441-459, called from `activateHintMachinery` on
+  alphabet arrival). Content rendered before observer attach — or
+  inserted-hidden before it and class-revealed after — can never be
+  stamped. `domSeenAt`'s 40-hop walk (dom-seen.ts:24-34) then finds
+  nothing on the chain, `tDomSeen` falls back to `tAttached`, and the
+  wrapper reads as "no MO trace." The round-16 instrumentation cannot
+  distinguish "materialized invisibly" from "predates the observer";
+  round 16's own diagnosis table flagged this (`scan` dominating
+  no-stamp) but the sweep tag hid it — the boot stragglers here were
+  caught by the first settle sweep, not the boot scan, so they wore
+  the settle_sweep tag that round 17 had taught us to read as
+  "mid-fling rescue."
+- The boot cohort is also FAST: attached_to_shown p50 47ms, dom_seen
+  (=attach) to shown p50 48ms. Nothing about it is a user-visible
+  problem; it is the ordinary "QuickBase renders progressively at
+  boot, the 200ms-later sweep catches what the boot scan's visibility
+  gates rejected" shape.
+
+So the sentence "~200 interactive elements per fling MATERIALIZE
+~1.5s after the reveal without producing observable mutations" is
+withdrawn. There was no such cohort in the 20d drill.
+
+### 21b. The real mid-fling stragglers are MO-STAMPED — the insertion
+### was always observed; the REVEAL is what we can't see
+
+The 20c drill's snapshot (04-41, build 04:36) still shows true
+mid-fling stragglers, and their fingerprint inverts 20d's premise: 78
+settle_sweep wrappers with REAL MO stamps — `t_dom_seen` 7836/8930
+(two insertion bursts, both observed by the MO), `t_attached`
+10752/11350/12830 (three later sweeps). The document MO saw their
+subtrees enter the DOM; the walk ran and did not attach them
+(rejected by gates — the hidden double-buffer, round 17's 11,505
+parked candidates); they became attachable 2.4-3.9s after insertion
+and the next ≤400ms sweep took them. Round 17 measured the same split
+live (115 anchors 78-stamped). The 55-buttons-zero-stamps residue of
+round 17, like 20d's 217, is explained by the boot window, not by an
+invisible insertion path.
+
+The observation-topology audit backs this: for light-DOM insertions
+under `body` while the observer is attached, records are unavoidable —
+the only structural holes are open-shadow-root insertions (subtree
+observation doesn't pierce; our sweep's `deepQuerySelectorAll` does,
+which would produce exactly a "sweep finds it, MO never saw it"
+signature — not implicated here since the stragglers ARE stamped),
+body replacement (we observe `document.body || documentElement` once;
+Rango observes `document` for this exact reason), and pre-observer
+content (21a). The huge path stamps too (mutation-source.ts:400-405).
+
+What we genuinely cannot see is the REVEAL of already-inserted hidden
+content, when QuickBase implements it as:
+- class/style flips — deliberately outside the page MO's
+  attributeFilter (mutation-source.ts:454-458); the visibilityMO
+  (visibility-tracker.ts:156-170) watches class/style/open/hidden
+  document-wide, but only promotes elements already parked in
+  `pendingVisibility`;
+- CSSOM writes — Emotion `insertRule` (QuickBase's `css-*` classes are
+  Emotion) and `adoptedStyleSheets` changes produce NO mutation records
+  of any kind, on any filter, for any observer;
+- geometry-only reveals (0-width cells sized late by stylesheet): the
+  one-shot visibilityIO fires once on first intersection and defers to
+  the class/style MO afterwards (visibility-tracker.ts:57-76), so a
+  later mutation-free size gain has no sensor.
+
+And the park→promote chain that should catch reveals is fragile by
+construction: walk rejects → attention IO observe
+(content.ts:1176-1190) → IO delivery (starved mid-storm) → onEnter →
+`trackPendingCandidate` → visibilityIO first-delivery + class/style-MO
+promote. Each link is edge-triggered; an element inserted hidden but
+already intersecting fires its one attention entry while still
+invisible and then has no further intersection transitions to offer.
+Round 17's 11,505-parked/0-promoted is this chain failing end-to-end
+under storm, exactly as designed-in.
+
+### 21c. Rango comparison (source at /tmp/rango-source, de798d0):
+### same selector idea, same visibility gates — different SENSORS
+
+Full observer/trigger topology read; the load-bearing differences:
+
+1. **Registration is selector-only, at insertion, visibility-blind.**
+   `isHintable` (src/content/dom/isHintable.ts:90-119) has NO
+   visibility term; wrappers are created synchronously in the mutation
+   callback (ElementWrapper.ts:237). A hidden buffered row is wrapped
+   the moment it enters the DOM.
+2. **Every hintable gets a per-element ResizeObserver, visible or
+   not** (ElementWrapper.ts:284-295, attached at ts:350-353): "The
+   change in `shouldBeHinted` state is mostly due to the element going
+   from or to `display: none`" — their comment. Box appearance is a
+   LAYOUT event: it fires with zero mutations, catches CSSOM-driven
+   reveals, needs no walk at reveal time. This is the sensor class we
+   don't have, and it is almost certainly what beats a
+   MO+attributeFilter+sweep design on a hidden-buffer reveal.
+3. **No attributeFilter anywhere** (observe.ts:16,63-64 — `{attributes:
+   true, childList: true, subtree: true}` on `document`): any
+   class/style flip anywhere funnels into a lodash
+   `debounce(refresh, 100)` (refresh.ts:97) that re-runs
+   `shouldBeHinted` over ALL wrappers — a full-population visibility
+   resweep per attribute-churn wave, unbudgeted (and with no maxWait,
+   starvable by a sustained storm). Our attributeFilter exclusion of
+   class/style is load-bearing scar tissue (class-churn reevaluation
+   was a top CPU bucket); Rango simply pays this cost.
+4. Shadow roots observed individually (ElementWrapper.ts:57-75, +1s
+   retry for late attachShadow); 50ms-throttled scroll rect-polling of
+   observed targets (BoundedIntersectionObserver.ts:60-96); hint paint
+   behind `debounce(processHintQueue, 100)` (Hint.ts:50). No
+   setInterval/rAF/idle polling loops anywhere — the round-15 memory
+   summary ("one unbudgeted batch per 100ms-debounced wave") is
+   verified for visibility/paint, with the correction that wrapper
+   CREATION is synchronous in the MO callback, not debounced.
+
+Their visibility criteria are NOT looser than ours — no
+`checkVisibility()`, opacity-ancestor walk capped at 4 hops
+(isVisible.ts:3-43) vs our unbounded walk + checkVisibility
+(scanner.ts:282-361). Nothing in their gates accepts an earlier
+element state than ours; the difference is purely WHEN the gates are
+re-run: we re-run on sweep cadence, they re-run on per-element RO/IO
+events plus a 100ms global resweep on any attribute churn.
+
+### 21d. Video re-measure: the A/B beat, cohort-specific
+
+Fresh frame extraction from /tmp/badge-ab (the round-15 recordings —
+which predate the round 16-20b fixes; BranchKit-side numbers are of
+historical interest only):
+
+- Shared zero: rows repaint out of the white void (Rango video
+  t≈8.87, BK video t≈4.95).
+- The pencil/eye icons are EYE-VISIBLE at reveal+0.06s in both videos.
+  The content is NOT late. "QuickBase genuinely builds these controls
+  that late" is dead as stated — at most, ELIGIBILITY-relevant state
+  (not paint) could lag, which is what the 21e probe checks.
+- Rango: header hints <+0.46s; pencil/eye and anchor hints land
+  staggered +0.46 → +0.73s (rows 2-4 before row 1). So "full solid
+  population in 0.4-0.5s, one wave" was slightly generous — it is
+  0.46-0.73s in visible stages.
+- **Rango never hints the row checkboxes at all** (checked through
+  reveal+1.1s and later frames). Our late cohort includes them (12-15
+  inputs). We paint measurably more of the grid than the competition
+  we're benchmarking against.
+- BK (video-era build): row-control badges at reveal+1.6-1.9s,
+  translucent-then-solid — the since-fixed sweep starvation
+  (rounds 17-20b) plus the since-deleted reveal artifacts.
+
+Post-fix reference points: clean-shot sweep chains now land at
++31/+151ms (20c), and the 20d fling was MO-discovered at content
+speed. Our settle(100ms)+fast_arm+one-slab chain responds to an
+ELIGIBILITY flip in ~0.25-0.6s — the same order as Rango's
+RO→IO→100ms-debounce chain. The remaining doubt is only whether
+in-viewport controls still sit INELIGIBLE for seconds post-reveal
+(the 20c fling chains at +1503/+1893ms), or whether those chains were
+scroll-ahead content correctly waiting to become visible — the
+per-wrapper data cannot discriminate retroactively.
+
+### 21e. The open question and its probe
+
+scripts/_probe-fling-cohort.console.js — a read-only console
+instrument for the next drill (paste in the grid tab's top-frame
+DevTools, fling, `copy(__bkProbe.report())`). Per candidate element it
+records insertion time from a NO-FILTER document MO, every record
+touching it or an ancestor, ResizeObserver box-gain events, and
+100ms-polled gate verdicts (our exact gate order: selector → EXCLUDE →
+size → visibility → opacity → checkVisibility → ancestor-opacity)
+until first pass. The report classifies every in-viewport element that
+took >500ms from insertion to eligibility by (a) which gate flipped
+last and (b) whether any mutation or resize event landed within 250ms
+of the flip.
+
+Readings:
+- `late_in_viewport ≈ 0` → no residual exists post-fix; declare parity
+  (Rango's own beat is 0.46-0.73s and it skips checkboxes); close the
+  arc for real.
+- last_fail=size/display, `mut=false`, `resize=true` → CSSOM-driven
+  reveal confirmed → the sensor-gap fix below is justified.
+- last_fail flips with a class/style record (`mut=true`) → the
+  park→promote chain is broken somewhere concrete — fix THAT, don't
+  add sensors.
+
+### 21f. Recommendation (for discussion before any code)
+
+1. **Correct the record now** (this round does it): 20d's terminal
+   claim is withdrawn; the instrumentation gap (pre-observer content
+   is indistinguishable from "materialized without trace") should be
+   closed cheaply — stamp observer-attach time once and let the
+   snapshot classify unstamped wrappers whose attach predates
+   attach+ε as `boot`, so no future round re-chases this ghost.
+2. **If (and only if) the probe confirms a mutation-free reveal
+   residual:** adopt Rango's sleeper sensor at our bounded scope — a
+   single shared ResizeObserver over the PARKED candidate set
+   (`pendingVisibility` + attention-parked), observed at park time,
+   unobserved at promote/leave/finalize. It fires on exactly the
+   reveals no MutationObserver can see (CSSOM/stylesheet sizing,
+   display flips), costs one RO subscription per parked candidate
+   (bounded by the attention region, typically tens-to-hundreds), and
+   its callback can feed the EXISTING rAF-coalesced
+   `recheckPendingVisibility` — no new promote path. This is
+   Rango-parity on sensor class without their costs (they observe
+   EVERY hintable; we'd observe only currently-parked rejects).
+   Also close the visibilityIO one-shot gap the same way (its
+   unobserve-after-first-delivery is what orphans geometry reveals).
+3. **Do NOT drop the attributeFilter** (Rango's shape): class-churn
+   reevaluation as a top CPU bucket is why the filter exists; the
+   parked-RO covers the same reveals event-driven at a fraction of the
+   cost.
+4. If the probe instead shows the reveal carries class/style records,
+   fix the park→promote chain against the specific broken link the
+   probe names; the sensor addition would be redundant.
+
+Either way, the perception target should be restated honestly: Rango's
+measured beat on this grid is 0.46-0.73s staggered, minus checkboxes.
+Our post-fix response to an eligibility flip is already in that range;
+if the probe shows no long-ineligible in-viewport cohort, the correct
+verdict is parity-declared, arc closed.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
