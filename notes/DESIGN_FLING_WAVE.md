@@ -1188,6 +1188,54 @@ sweep_start→added dominates WITHOUT slab_yield → it's the build
 burst, and the sweep is exonerated entirely (round-13 territory,
 different lever).
 
+## Round 20d — THE ATTRIBUTION VERDICT: all three suspects acquitted;
+## the content itself is late, and its arrival leaves no MO trace
+## (2026-07-04, drill on build 04:44)
+
+The stamps answered with a fourth option none of the tree predicted:
+
+- Entry delay: fast_arm 130 → sweep_start **+207ms**. Fine.
+- Walk: **zero slab_yield events all drill** — no walk ever exceeded
+  700ms; sweeps complete in one slab.
+- Build burst: sweep_start → added ~10-30ms on every observed sweep.
+- The kicker: after the reveal repair, sweeps ran every ~400ms
+  **finding nothing** (added=0 train), until one finally found the
+  cohort. The pipeline was never slow this round — THERE WAS NOTHING
+  TO FIND until ~1.5s after the reveal.
+
+And the cohort's fingerprint deepens the round-17 no-stamp mystery
+into the main event: of 214 sweep-attached wrappers (106 button, 93
+a, 12 input, 3 textarea, 3 div), only **2** carry an MO stamp. If
+these elements had been sitting in the DOM failing our
+visibility/hintability gates, their subtree insertions would have
+stamped them (like the 2 genuine stragglers: gaps 2209/4273ms) and
+the walks/parks would show it. Instead: no insertion record our
+document-level MO can see, not attr-path attaches (attr count 0 —
+so not hydration via filtered attributes), not text-only records
+(n=9), huge path never fires. As far as our instrumentation can
+tell, ~200 interactive elements per fling MATERIALIZE ~1.5s after
+the reveal without producing observable mutations, and only a
+document walk finds them.
+
+Candidate mechanisms for the next investigator, none verified:
+stamps failing to resolve across >40-hop chains; insertion into
+subtrees whose added root's WeakMap entry misses the walk (move
+semantics?); elements matching HINTABLE only after unfiltered
+attribute/class hydration in a way that skips every path we
+instrument; or QuickBase genuinely building these controls that late
+(in which case Rango cannot paint them earlier either, and the A/B
+video's beat needs re-measuring). Discriminating these needs either
+a targeted console probe on the real DOM (MO with NO filters on one
+grid cell across a fling, logging every record touching a
+late-cohort element) or a read of QuickBase's renderer behavior —
+plus the Rango-source comparison: whatever the mechanism, either
+Rango's criteria catch these elements in an earlier state, or its
+apparent speed on this cohort is a measurement artifact.
+
+The tuning arc ends here. Every pipeline stage is instrumented,
+drill-verified, and at parity on content the MO can see; the residual
+is a discovery-VISIBILITY question, not a scheduling one.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
