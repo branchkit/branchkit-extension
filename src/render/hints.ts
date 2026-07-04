@@ -376,6 +376,23 @@ export class HintBadge {
   // from the live target rect + page scroll + this baked offset (candidate
   // minus target top-left).
   private _reconcileOffset: { x: number; y: number } | null = null;
+
+  // Takeover position hold deadline (round 25) — while set and in the
+  // future, reconcileRead skips this badge so it keeps its last position
+  // through the swap overlap. Written by the rebind path; cleared early via
+  // clearPositionHold when the ridden element lands in-band.
+  holdUntil: number | null = null;
+
+  clearPositionHold(): void {
+    if (this.holdUntil === null) return;
+    this.holdUntil = null;
+    // The hold kept the OLD target's accel chain + base pair alive through
+    // the swap (see retarget) — rebind for the (already-swapped) target and
+    // repaint base + animation in lockstep now that the read is live again.
+    this.disarmScrollAccel();
+    this.armScrollAccel();
+    if (isScrollAccelEnabled()) this.repositionHostNow();
+  }
   // True when the target is viewport-pinned (fixed/sticky ancestor): the host is
   // position:fixed + viewport coords instead of position:absolute + doc coords.
   private _viewportFixed = false;
@@ -509,6 +526,17 @@ export class HintBadge {
   // badge shouldn't be placed this pass (hidden / disconnected / not yet baked).
   reconcileRead(): ReconcileWrite | null {
     if (!this._reconcileOffset || !this._visible || !this.target.isConnected) return null;
+    // Takeover position hold (round 25): the wrapper just rode onto an
+    // element parked at the insert-before-remove overlap's transient
+    // stacked position. Returning null skips the write, so the badge keeps
+    // its last on-screen spot while the identical-content replacement row
+    // slides into place beneath it — the swap reads as anchored instead of
+    // "flash, hit itself, repaint". Self-expiring; cleared early when the
+    // element lands in-band (clearPositionHold).
+    if (this.holdUntil !== null) {
+      if (performance.now() < this.holdUntil) return null;
+      this.holdUntil = null;
+    }
     const r = this.target.getBoundingClientRect();
     // Coords match the host's anchoring (see setupReconcileHost): document coords
     // (rect + page scroll) for a flow target so it rides window scroll; viewport
@@ -705,11 +733,19 @@ export class HintBadge {
    * routinely mis-paint.
    */
   retarget(newEl: Element): void {
+    // Takeover position hold (round 25): while holding, the badge stays at
+    // its OLD position — so the OLD accel chain + host base pair stays
+    // consistent and must NOT be flipped to the new target's chain (the
+    // re-arm rewrites outer's -scrollTop animation against a base we are
+    // deliberately not repainting; the pair breaks and the badge teleports
+    // by the pane's whole scrollTop). clearPositionHold rebinds the accel
+    // when the hold ends.
+    const holding = this.holdUntil !== null && performance.now() < this.holdUntil;
     untrackContainerResize(this.anchorParent);
     untrackTargetMutations(this.target);
     // The accelerator is bound to the OLD target's scroller; drop it before the
-    // swap and re-detect for the new node below.
-    this.disarmScrollAccel();
+    // swap and re-detect for the new node below (unless holding).
+    if (!holding) this.disarmScrollAccel();
 
     // No page-DOM binding to move (no anchor-name); just swap the tracked
     // target. The baked offset is target-relative, so it stays valid for a
@@ -734,8 +770,9 @@ export class HintBadge {
     // host-attribute tracker is keyed on the host (unchanged); no swap.
     // Re-detect the accelerator for the new node (no-op when flag off / no
     // inner scroller). Disarm above + this re-arm flip `outer`'s animation, so
-    // the host base must be repainted in lockstep (below).
-    this.armScrollAccel();
+    // the host base must be repainted in lockstep (below). Skipped while
+    // holding — clearPositionHold rebinds for the new target.
+    if (!holding) this.armScrollAccel();
 
     // retarget wires observers up itself, so the deferred refine() pass is
     // no longer needed. Mark refined and pull off the pending queue.
@@ -748,8 +785,9 @@ export class HintBadge {
     // the base consistent with the (re-armed or cleared) accelerator animation —
     // the old-target disarm + new-target re-arm flip `outer`'s -scrollTop, so
     // the base must move in lockstep. Accel off: the next reconcile pass moves
-    // the host to the new target.
-    if (isScrollAccelEnabled()) this.repositionHostNow();
+    // the host to the new target. (While holding, nothing accel-side changed
+    // and the hold gates the reposition anyway.)
+    if (!holding && isScrollAccelEnabled()) this.repositionHostNow();
   }
 
   /**

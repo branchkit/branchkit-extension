@@ -44,7 +44,10 @@
     display: flex; align-items: center; gap: 12px; padding: 0 12px; }
   #global-nav-bar button { background: #3d566e; color: #fff; border: 0;
     padding: 6px 10px; border-radius: 4px; }
-  #gridPane { height: 760px; overflow-y: auto; position: relative; }
+  /* overflow-anchor off: real virtualizers manage scrollTop themselves;
+     Chrome's scroll anchoring otherwise walks scrollTop during the
+     append-below/remove-above swap and strands the window off-screen. */
+  #gridPane { height: 760px; overflow-y: auto; position: relative; overflow-anchor: none; }
   table.grid { border-collapse: collapse; width: 100%; table-layout: fixed; }
   tr.gridRow { height: 40px; }
   tr.gridRow td { border-bottom: 1px solid #e3e3e3; padding: 2px 8px;
@@ -206,12 +209,22 @@
   let currentStart = 0;
   let settleTimer = null;
   let swapping = false;
+  let pendingShift = null; // latest-wins queue for settles landing mid-swap
 
   // The full QuickBase settle sequence: void → hidden-buffer build →
   // reparent + class-flip reveal → (phase 2) full identical rebuild →
   // late lookup fills → ?skip tick.
+  function swapDone() {
+    swapping = false;
+    if (pendingShift !== null) {
+      const s = pendingShift;
+      pendingShift = null;
+      if (Math.abs(s - currentStart) >= 10) windowShift(s);
+    }
+  }
+
   function windowShift(newStart) {
-    if (swapping) return;
+    if (swapping) { pendingShift = newStart; return; }
     swapping = true;
     window.__fixture.lastSwap = { t0: performance.now(), newStart };
 
@@ -248,21 +261,43 @@
             const doomed = [...tbody.children];
             buildWindow(buffer, newStart, 2, () => {
               tbody.append(...buffer.children); // new rows in; old still connected
+              // Keep TOTAL scroll height constant through the overlap (real
+              // virtualizers manage spacers; height bounce would clamp
+              // scrollTop and shift content under the viewport):
+              // appending 80 rows borrows from the bottom spacer …
+              const tbl = tbody.parentElement;
+              const mb = () => parseFloat(tbl.style.marginBottom) || 0;
+              tbl.style.marginBottom = `${Math.max(0, mb() - WINDOW_ROWS * ROW_H)}px`;
               window.__fixture.phase2At = performance.now();
-              setTimeout(() => {
-                for (const tr of doomed) tr.remove();
-                flushLookupFills();
-              }, 150);
+              // PROGRESSIVE removal of the old generation (the production
+              // shape: rows finalize one-by-one over ~1-1.5s — the user's
+              // "painted itself on one by one"). remove_ms=0 for atomic.
+              const REMOVE_STEP_MS = +(P.get('remove_step_ms') || 120);
+              const REMOVE_CHUNK = 8;
+              let r = 0;
+              const removeStep = () => {
+                let removed = 0;
+                for (let k = 0; k < REMOVE_CHUNK && r < doomed.length; k++, r++, removed++) doomed[r].remove();
+                // … and each removed chunk returns its height to the spacer.
+                tbl.style.marginBottom = `${mb() + removed * ROW_H}px`;
+                if (r < doomed.length) setTimeout(removeStep, REMOVE_STEP_MS);
+                else {
+                  window.__fixture.oldGoneAt = performance.now();
+                  flushLookupFills();
+                  swapDone();
+                }
+              };
+              setTimeout(removeStep, 150);
             });
           }, PHASE2_MS);
         } else {
           flushLookupFills();
+          swapDone();
         }
 
         // 5. The grid's own settle writes ?skip=N (round 10/11).
         history.replaceState(null, '', `?skip=${newStart}`);
         currentStart = newStart;
-        swapping = false;
       });
     };
     if (VOID_MS > 0) setTimeout(afterVoid, VOID_MS);

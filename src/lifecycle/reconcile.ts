@@ -17,7 +17,7 @@
  */
 
 import { Category } from '../types';
-import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
+import { ElementWrapper, WrapperStore, inTakeoverGrace } from '../scan/element-wrapper';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { wantsShown, wantsStrict } from './desired-state';
 import { isVisible } from '../scan/scanner';
@@ -102,6 +102,7 @@ export function computeReconcilePlanLists(
   };
 
   // Step-1 sim — mirrors reconcileTeardown over the same gather rects.
+  const planNow = performance.now();
   for (const w of store.all) {
     if (w.disconnectedAt !== null) continue;
     if (w.hint) {
@@ -110,6 +111,10 @@ export function computeReconcilePlanLists(
       if (geometryInBand(r, gather.vw, gather.vh, RECONCILE_BAND_MARGIN_PX)) {
         if (!w.isInViewport) lists.toRepair.push(w);
       } else if (w.hint.isVisible) {
+        // Takeover grace (round 25): a wrapper that just rode onto the
+        // insert-before-remove overlap's stacked replacement is out-of-band
+        // transiently — not a real exit; don't release its letter.
+        if (inTakeoverGrace(w, planNow)) continue;
         lists.toRelease.push(w);
       }
     } else if (!w.isInViewport && w.scanned.codeword.length === 0 && w.element.isConnected) {

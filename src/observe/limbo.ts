@@ -17,7 +17,9 @@
  * cycle with it is runtime-only function references, which ES modules allow).
  */
 
-import { ElementWrapper, enterLimbo, isLimboExpired } from '../scan/element-wrapper';
+import { ElementWrapper, enterLimbo, isLimboExpired, TAKEOVER_GRACE_MS } from '../scan/element-wrapper';
+import { geometryInBand } from '../layout-cache';
+import { VIEWPORT_MARGIN_PX } from './intersection-tracker';
 import * as idRegistry from '../scan/registry';
 import { computeFingerprint, fingerprintsEqual, fingerprintToString, computeStrongKey, type Fingerprint } from '../scan/registry';
 import { bumpRebindCounter, findLimboMatch, newRebindCounters, REBIND_DISTANCE_THRESHOLD_PX, type RebindCounters } from '../labels/rebind';
@@ -247,6 +249,24 @@ function rebindWrapper(w: ElementWrapper, newEl: Element): void {
   pageSession.tracker.observe(newEl);
   pageSession.resizeObserver.unobserve(oldEl);
   pageSession.resizeObserver.observe(newEl);
+
+  // Takeover grace (round 25): a ride onto an element that is OUT-OF-BAND
+  // right now is the insert-before-remove overlap parking the replacement
+  // below the doomed rows. Without the grace, the IO/sweep/plan read the
+  // transient position as a real exit — release the letter, hide the badge
+  // — and the takeover un-does its own win (fixture: solid 95 → 14 at
+  // phase 2; the user's "flash, then it hit itself"). The grace suppresses
+  // exit reactions and freezes the badge at its last position until the
+  // element lands in-band or the window expires. MUST be set BEFORE
+  // retarget(): its accel re-arm ends in repositionHostNow, which the hold
+  // gates via reconcileRead.
+  const r = newEl.getBoundingClientRect();
+  if (!geometryInBand(r, window.innerWidth, window.innerHeight, VIEWPORT_MARGIN_PX)) {
+    w.takenOverAt = performance.now();
+    if (w.hint) w.hint.holdUntil = w.takenOverAt + TAKEOVER_GRACE_MS;
+  } else {
+    w.takenOverAt = null;
+  }
 
   if (w.hint) w.hint.retarget(newEl);
 

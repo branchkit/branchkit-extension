@@ -22,10 +22,10 @@
  * O(N).
  */
 
-import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
+import { ElementWrapper, WrapperStore, inTakeoverGrace } from '../scan/element-wrapper';
 import { wantsCodeword } from '../lifecycle/desired-state';
 import { labelReservoir } from '../labels/label-reservoir';
-import { geometryInBand } from '../layout-cache';
+import { geometryInBand, isRectOnScreen } from '../layout-cache';
 
 // Wide rootMargin to match Rango's lazy-construction model: catch elements
 // while they're still ~5 viewport-line-rows away, so the per-badge work
@@ -188,12 +188,23 @@ export class IntersectionTracker {
       const inBand = geometryInBand(r, vw, vh, VIEWPORT_MARGIN_PX);
       if (inBand) {
         this.pendingExit.delete(w);
+        // The ridden element landed in-band — exits are legit again (round
+        // 25). The POSITION hold releases only once the element is actually
+        // on-screen: band entry can still be ~1000px below the viewport,
+        // and gliding the badge there reads as the badge vanishing.
+        if (w.takenOverAt !== null) {
+          w.takenOverAt = null;
+        }
+        if (isRectOnScreen(r, vw, vh)) w.hint?.clearPositionHold();
         if (!w.isInViewport) {
           w.isInViewport = true;
           w.tInBand ??= performance.now();
           repaired++;
         }
       } else if (w.isInViewport) {
+        // Takeover grace (round 25): the transient stacked position of an
+        // insert-before-remove ride is not a real exit.
+        if (inTakeoverGrace(w, performance.now())) continue;
         // Two-strike release (temporal hysteresis — drill round 6): a
         // virtualizer can transiently park a recycling shell at odd
         // coordinates, and a single out-of-band read then releases + hides a
@@ -283,16 +294,31 @@ export class IntersectionTracker {
       // would observe an empty cache). entry.boundingClientRect IS a
       // DOMRectReadOnly at runtime; cast is safe.
       wrapper.lastRect = entry.boundingClientRect as DOMRect;
-      wrapper.isInViewport = entry.isIntersecting;
 
       if (entry.isIntersecting) {
+        wrapper.isInViewport = true;
+        // The ridden element landed in-band — exits are legit again (round
+        // 25); the position hold releases only once actually on-screen.
+        if (wrapper.takenOverAt !== null) {
+          wrapper.takenOverAt = null;
+        }
+        if (isRectOnScreen(entry.boundingClientRect as DOMRect)) {
+          wrapper.hint?.clearPositionHold();
+        }
         // Paint-latency stage stamp (first band entry only).
         wrapper.tInBand ??= performance.now();
         // Want a codeword if we don't already have one.
         if (!wrapper.scanned.codeword) {
           this.pendingClaim.add(wrapper);
         }
+      } else if (inTakeoverGrace(wrapper, performance.now())) {
+        // Takeover grace (round 25): the initial IO delivery for a wrapper
+        // that just rode onto the insert-before-remove overlap's stacked
+        // replacement reports out-of-band — that is the swap's transient,
+        // not a real exit. Keep the flag and the letter; the in-band
+        // delivery (old rows gone, element slid up) resumes normal flow.
       } else {
+        wrapper.isInViewport = false;
         this.queueRelease(wrapper);
       }
     }
