@@ -20,7 +20,7 @@ import { domSeenAt } from '../observe/dom-seen';
 import * as idRegistry from '../scan/registry';
 import { isRecallLoaded, resolvePreferredCodeword } from '../labels/codeword-recall';
 import { dropPendingPut, hasSent, queueDelete, queuePut, scheduleSync } from '../labels/label-sync';
-import { tryRebindFromLimbo, tryRebindByStrongKey, tryRebindBySlot, tryTakeoverByFingerprint, recordSlotAncestors, isRecentlyOrphaned, rebindCounters } from '../observe/limbo';
+import { tryRebindFromLimbo, tryRebindByStrongKey, tryRebindBySlot, tryTakeoverByFingerprint, recordSlotAncestors, isRecentlyOrphaned, isReservedForRetarget, rebindCounters } from '../observe/limbo';
 import { computeFingerprint } from '../scan/registry';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { geometryInBand, getCachedRect, isRectOnScreen } from '../layout-cache';
@@ -165,6 +165,11 @@ export function attachDiscovered(
     // Re-grabbing it would bounce the wrapper back; the page removes it shortly
     // and the guard window covers the gap. See DESIGN_CODEWORD_KEY_OWNERSHIP.md.
     if (isRecentlyOrphaned(ref)) continue;
+    // Deferred retarget (round 28): a reserved replacement is spoken for —
+    // its doomed twin's wrapper transfers here at the twin's disconnect.
+    // Fresh-attaching it now would strand that transfer. TTL-bounded: an
+    // unconsumed reservation expires and the next sweep attaches fresh.
+    if (isReservedForRetarget(ref)) continue;
     if (store.findWrapperFor(ref)) continue;
     // Key-ownership: a re-mounted node inherits its predecessor's codeword by
     // strong key (href), ahead of the fingerprint/position path. Sidesteps the
@@ -207,7 +212,8 @@ export function attachDiscovered(
   // (today's behavior), counted as the refusal it is.
   for (const i of deferred) {
     const ref = refs[i];
-    if (store.findWrapperFor(ref)) continue; // coattail carried it
+    if (store.findWrapperFor(ref)) continue;
+    if (isReservedForRetarget(ref)) continue; // a coattail reserved it
     if (isRecentlyOrphaned(ref)) continue;
     rebindCounters.refuse_fp_ambiguous++;
     added += eagerAttach(ref, elements[i], source, attached);

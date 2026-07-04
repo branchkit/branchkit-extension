@@ -170,16 +170,14 @@ export class ElementWrapper {
   // residual worth chasing); FALSE means scroll-ahead content that attached
   // the moment scrolling made it eligible (correct behavior, not latency).
   inViewportAtAttach: boolean = false;
-  // Takeover grace (round 25, DESIGN_FLING_WAVE.md): set when a rebind
-  // re-anchored this wrapper onto an element that was OUT-OF-BAND at ride
-  // time — the insert-before-remove overlap parks replacements below the
-  // doomed rows, so the ride's transient position must not be treated as a
-  // real band exit (it released the letter and hid the badge: the user's
-  // "flash, then it hit itself"). While in grace: exit paths (IO, sweep,
-  // plan toRelease) skip this wrapper; the badge holds its last position
-  // (HintBadge.holdUntil). Cleared the moment the element lands in-band,
-  // or expires by timestamp.
-  takenOverAt: number | null = null;
+  // Deferred retarget (round 28, DESIGN_FLING_WAVE.md): the takeover match
+  // reserved this wrapper's REPLACEMENT element, but the transfer happens
+  // only when this wrapper's own element DISCONNECTS — the badge stays on
+  // the visible doomed twin (perceptual continuity: same letter, same
+  // place; the element swaps underneath at the moment the eye loses the
+  // old pixels anyway). WeakRef: a replacement that dies first just fails
+  // the deref and the wrapper takes the normal limbo path.
+  pendingRetarget: WeakRef<Element> | null = null;
   // Which discovery path created this wrapper — see DiscoverySource above.
   discoverySource: DiscoverySource = 'unknown';
   // First grammar ACK. tFirstShown - tGrammarReady is the show-vs-voice
@@ -391,18 +389,6 @@ export class WrapperStore {
  * Idempotent: subsequent disconnects on the same wrapper don't reset
  * the timer.
  */
-// Takeover grace length (round 25): must outlast the insert-before-remove
-// overlap (production removals run progressively over ~1-2s). Exits resume
-// normally past it, so a ride onto content the user then scrolls away from
-// degrades to one late release, not a stuck badge.
-export const TAKEOVER_GRACE_MS = 2000;
-
-/** In the post-ride grace window: the wrapper's transient out-of-band
- * position is the swap's artifact, not a real exit. */
-export function inTakeoverGrace(w: ElementWrapper, now: number): boolean {
-  return w.takenOverAt !== null && now - w.takenOverAt < TAKEOVER_GRACE_MS;
-}
-
 export function enterLimbo(w: ElementWrapper, now: number): void {
   if (w.disconnectedAt !== null) return;
   w.disconnectedAt = now;

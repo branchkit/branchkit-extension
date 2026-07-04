@@ -24,6 +24,11 @@ import { fileURLToPath } from 'node:url';
 const SCRIPTS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '../scripts');
 
 const GRANDFATHERED = new Set([
+  // Loads ONLY Rango (built from /tmp/rango-source) for the round-27/28
+  // fixture A/B — no BranchKit dist in the browser, so the isolation
+  // concern (a raw-dist harness joining the user's live session) cannot
+  // apply. Deliberate exemption, not migration debt.
+  '_test-qb-fling-rango.mjs',
   '_drive-firefox-control.mjs',
   '_drive-firefox-inner-scroll.mjs',
   '_drive-firefox-nav-ab.mjs',

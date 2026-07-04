@@ -17,9 +17,7 @@
  * cycle with it is runtime-only function references, which ES modules allow).
  */
 
-import { ElementWrapper, enterLimbo, isLimboExpired, TAKEOVER_GRACE_MS } from '../scan/element-wrapper';
-import { geometryInBand } from '../layout-cache';
-import { VIEWPORT_MARGIN_PX } from './intersection-tracker';
+import { ElementWrapper, enterLimbo, isLimboExpired } from '../scan/element-wrapper';
 import * as idRegistry from '../scan/registry';
 import { computeFingerprint, fingerprintsEqual, fingerprintToString, computeStrongKey, type Fingerprint } from '../scan/registry';
 import { bumpRebindCounter, findLimboMatch, newRebindCounters, REBIND_DISTANCE_THRESHOLD_PX, type RebindCounters } from '../labels/rebind';
@@ -250,24 +248,6 @@ function rebindWrapper(w: ElementWrapper, newEl: Element): void {
   pageSession.resizeObserver.unobserve(oldEl);
   pageSession.resizeObserver.observe(newEl);
 
-  // Takeover grace (round 25): a ride onto an element that is OUT-OF-BAND
-  // right now is the insert-before-remove overlap parking the replacement
-  // below the doomed rows. Without the grace, the IO/sweep/plan read the
-  // transient position as a real exit — release the letter, hide the badge
-  // — and the takeover un-does its own win (fixture: solid 95 → 14 at
-  // phase 2; the user's "flash, then it hit itself"). The grace suppresses
-  // exit reactions and freezes the badge at its last position until the
-  // element lands in-band or the window expires. MUST be set BEFORE
-  // retarget(): its accel re-arm ends in repositionHostNow, which the hold
-  // gates via reconcileRead.
-  const r = newEl.getBoundingClientRect();
-  if (!geometryInBand(r, window.innerWidth, window.innerHeight, VIEWPORT_MARGIN_PX)) {
-    w.takenOverAt = performance.now();
-    if (w.hint) w.hint.holdUntil = w.takenOverAt + TAKEOVER_GRACE_MS;
-  } else {
-    w.takenOverAt = null;
-  }
-
   if (w.hint) w.hint.retarget(newEl);
 
   w.element = newEl;
@@ -464,17 +444,71 @@ export function tryTakeoverByFingerprint(
   const idx = list.indexOf(winner);
   if (idx >= 0) list.splice(idx, 1);
   const doomedEl = winner.element;
-  orphanedByKeyRebind.set(doomedEl, Date.now());
   const unique = candidates.length === 1;
   if (unique) rebindCounters.takeover_fp++;
   else rebindCounters.takeover_fp_position++;
-  // Deliberately NOT adopting the fresh scan metadata (unlike the slot
-  // tier): same fingerprint = same content — no re-Put, no grammar delta.
-  rebindWrapper(winner, newEl);
-  // Row coattail (round 26): a UNIQUE ride pins doomed-row ↔ replacement-row
-  // correspondence — carry the row's content-ambiguous wrappers with it.
+  // Deferred retarget (round 28): RESERVE the pairing; the transfer happens
+  // when the doomed element disconnects (consumePendingRetarget) — the
+  // badge stays on the visible twin until the eye loses those pixels, so
+  // there is no transient position to babysit (the round-25 grace/hold
+  // machinery retired with this).
+  reserveRetarget(winner, newEl);
+  // Row coattail (round 26): a UNIQUE match pins doomed-row ↔
+  // replacement-row correspondence — reserve the row's content-ambiguous
+  // wrappers with it.
   if (unique) coattailRowTakeover(doomedEl, newEl);
   return 'rode';
+}
+
+// --- Deferred retarget (round 28, DESIGN_FLING_WAVE.md) ---
+//
+// Riding at DISCOVERY moved the badge's target to a replacement parked
+// below the band while its doomed twin was still on screen — every
+// visibility subsystem then honestly hid the badge, producing the
+// swap-window flicker that was the ENTIRE perceived gap vs Rango (round-27
+// A/B: paint speed equal; Rango's slope flat because its hints live and
+// die with elements). Riding at DEATH keeps that invariant AND the letter:
+// the badge stays with the visible old element; at its disconnect the
+// wrapper transfers to the reserved replacement, which has just slid into
+// the old one's place. Same letter, same spot, element swapped underneath.
+
+// A reserved replacement must not be fresh-attached by discovery while the
+// reservation lives. TTL: an unconsumed reservation (wrong bet — the old
+// element never left) expires, and the next sweep attaches the element
+// fresh; degradation is exactly today's behavior.
+const RESERVE_TTL_MS = 2000;
+const reservedForRetarget = new WeakMap<Element, number>();
+
+export function isReservedForRetarget(el: Element): boolean {
+  const t = reservedForRetarget.get(el);
+  if (t === undefined) return false;
+  if (Date.now() - t >= RESERVE_TTL_MS) {
+    reservedForRetarget.delete(el);
+    return false;
+  }
+  return true;
+}
+
+function reserveRetarget(w: ElementWrapper, replacement: Element): void {
+  w.pendingRetarget = new WeakRef(replacement);
+  reservedForRetarget.set(replacement, Date.now());
+}
+
+/** Consume a wrapper's reservation at its element's disconnect. Returns
+ * true iff the wrapper transferred (caller skips limbo entry). */
+function consumePendingRetarget(w: ElementWrapper): boolean {
+  const ref = w.pendingRetarget;
+  if (!ref) return false;
+  w.pendingRetarget = null;
+  const target = ref.deref();
+  if (!target || !target.isConnected) return false;
+  if (store.findWrapperFor(target)) return false; // fresh-attached post-TTL
+  reservedForRetarget.delete(target);
+  rebindCounters.retarget_deferred++;
+  // Same-fingerprint content: no metadata adoption, no re-Put, no grammar
+  // delta — letter and badge carry over unchanged.
+  rebindWrapper(w, target);
+  return true;
 }
 
 // --- Row-coattail takeover (round 26, DESIGN_FLING_WAVE.md) ---
@@ -534,10 +568,9 @@ function coattailRowTakeover(doomedEl: Element, newEl: Element): void {
     if (counterpart.tagName !== el.tagName) continue;
     if (counterpart === el) continue;
     if (store.findWrapperFor(counterpart)) continue;
-    if (isRecentlyOrphaned(counterpart)) continue;
-    orphanedByKeyRebind.set(el, Date.now());
+    if (isReservedForRetarget(counterpart)) continue;
     rebindCounters.takeover_row++;
-    rebindWrapper(w, counterpart);
+    reserveRetarget(w, counterpart);
   }
 }
 
@@ -563,6 +596,11 @@ export function dropDisconnectedWrappers(): number {
   for (const w of store.all) {
     if (w.disconnectedAt !== null) continue;
     if (!w.element.isConnected) {
+      // Deferred retarget (round 28): the moment the doomed element leaves
+      // is the transfer moment — the reserved replacement has just slid
+      // into its place. Consumed wrappers skip limbo entirely: same
+      // letter, same spot, element swapped underneath.
+      if (consumePendingRetarget(w)) continue;
       // lastRect is normally already populated by the IntersectionTracker
       // from a recent IO entry. Only fall back to the layout cache for
       // wrappers that disconnected before IO had a chance to fire (race

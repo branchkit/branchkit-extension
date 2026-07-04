@@ -126,12 +126,17 @@ export interface RebindCounters {
   /** Same tier, refused: multiple connected candidates and no candidate
    *  was uniquely co-located. Fresh attach (today's churn) follows. */
   refuse_fp_ambiguous: number;
-  /** Row-coattail rides (round 26): a unique-fingerprint takeover
+  /** Row-coattail reservations (round 26): a unique-fingerprint takeover
    *  established doomed-row ↔ replacement-row correspondence, and the
    *  row's OTHER wrappers (checkboxes, repeating lookup links — the
    *  content-ambiguous cohort no fingerprint or position gate can match)
-   *  rode to their structural counterparts in the replacement row. */
+   *  were paired with their structural counterparts in the replacement row. */
   takeover_row: number;
+  /** Deferred retargets CONSUMED (round 28): a reserved pairing completed
+   *  at the doomed element's disconnect — badge + letter transferred to
+   *  the replacement that slid into its place. takeover_* count
+   *  reservations MADE; this counts the ones that actually rode. */
+  retarget_deferred: number;
 }
 
 export function newRebindCounters(): RebindCounters {
@@ -146,6 +151,7 @@ export function newRebindCounters(): RebindCounters {
     takeover_fp_position: 0,
     refuse_fp_ambiguous: 0,
     takeover_row: 0,
+    retarget_deferred: 0,
   };
 }
 
