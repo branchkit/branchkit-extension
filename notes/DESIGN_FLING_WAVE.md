@@ -589,6 +589,40 @@ reads laggy at that point, the remaining fight is per-badge
 construction cost vs Rango's (they pay no claim/voice/strict layers),
 and it should be fought with a CPU profile, not more scheduling.
 
+## Drill round 12 — light path live; the residual is the non-keyed
+## cohort's double-render blip
+
+The audit path works: the grid frame took deferred_scan:light, the
+multi-second post-fling walks are gone, rebind_key doubled again
+(87 → 187 — record-link badges genuinely ride through swaps), and the
+eye-honest dom_seen_to_shown HALVED (p50 1342 → 920; refuse_no_match
+202 → 162; dip floor 225 → 277). User perception matches: the
+wholesale lag has collapsed into "a little blip — painted,
+disappeared, painted again."
+
+The blip's mechanism: the cohort with no strong key — checkboxes,
+buttons, labels, ~⅓ of grid wrappers — cannot take over across
+QuickBase's two-phase render. Their badges paint on the interim DOM,
+the final render replaces those elements, limbo freezes the badge
+250-500ms, finalize destroys it (the disappear), the replacement
+paints (the second paint). Same-fingerprint position rebind should
+catch these (identical content, ~same spot) but scores 0 — lastRect
+is stale mid-storm, past the 50px tiebreak threshold.
+
+Candidate fixes, deliberately NOT implemented pending review — the
+arc has 17 unpushed commits and the remaining artifact is cosmetic,
+not lag:
+1. **Row-scoped takeover keys for non-anchors** — needs a stable row
+   identity (does tr.gridRow carry a record-id attribute?). Verify on
+   the real DOM before designing; if rows have no identity, this is a
+   dead end like slot rebind was.
+2. **Refresh lastRect at limbo entry from the live sweep** — the
+   two-strike sweep already reads geometry at 10Hz; feeding fresher
+   rects into limbo would revive the EXISTING position tiebreak for
+   the identical-content remounts. Small, uses live machinery, no new
+   identity scheme. Likely first choice.
+3. **Accept**: the blip is one cycle per swap on a minority cohort.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
