@@ -2403,6 +2403,26 @@ Secondary, tracked: settle_sweep stragglers at gap p50 2.4s this
 drill — the cold-data/lookup class (round 21g territory), to re-read
 on the next snapshot now that the acute regression is fixed.
 
+### Round 29c — the hop was noise; the round-trip SUM was the lag
+### (c70ae96)
+
+The 29b drill barely moved the number (−3,529 → −2,865), and the
+sync_trace named why: per-POST round-trips run p50 429 / p90 1,064ms
+mid-storm, and ~40 chunks awaited SEQUENTIALLY. Answering the user's
+direct question along the way: bk-pending is opacity 0.55 by design
+(half-translucent, as they remembered); nothing crashed — the whole
+population just sat in that washed-out state ~3s, which reads as
+absent.
+
+Fix: pipeline the chunks. The plugin has exactly two ordering
+constraints (batch.go admitGrammarBatch: deletes ride batch 0 and
+must precede a reused letter's Put; is_final drives epoch
+finalization) — so batch 0 posts alone and awaited, the middles post
+fully in parallel, the final posts after all middles settle.
+Refusals stop dispatch and re-queue per chunk. Total ACK ≈ max
+round-trip instead of the sum: expect shown_minus_ack ≈ −(500-1000)ms
+and the pending shimmer to read as designed.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
