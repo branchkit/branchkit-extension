@@ -1966,6 +1966,67 @@ wipe volume, refuse_fp_ambiguous sizes what the margin gate leaves on
 the table (candidate for threshold tuning, not loosening past the
 neighbor-row spacing).
 
+## Round 24 — the QuickBase-grid fixture: the drill goes programmatic,
+## and finds round 23's flaw in three runs (2026-07-04, 701b6cb)
+
+User's call, and the arc's best process decision: stop asking the eye
+to arbitrate counter disputes — build a fixture that reproduces the
+documented QuickBase mechanics and measure the badges' VISUAL state
+directly.
+
+**test-fixtures/quickbase-grid.html** replicates, with knobs: 4,000
+virtual records, ~80-row rendered window; white void on scroll settle;
+incoming window built inside a hidden IN-DOCUMENT buffer in
+sub-100-node chunks (MO sees it; huge path doesn't fire); reparent +
+class-flip reveal; TWO-PHASE rebuild with INSERT-BEFORE-REMOVE (both
+generations connected ~150ms — rounds 8-9); lookup columns born with
+href + empty text, filled ~2.5s later via nodeValue (characterData);
+?skip=N history tick. **scripts/_test-qb-fling.mjs** (harness,
+launch.mjs, no voice alphabet) drives a wheel fling and samples a
+DOM-level EYE at 100ms: badge .bk-inner rects + computed opacity
+through the opened shadow (bkOpenShadow), classified
+solid/translucent/absent within the pane. Verdicts print against the
+same-run snapshot counters on one clock. Caveat honored: fixture
+verdicts guide diagnosis and gate regressions; production truth stays
+with the user's real-Chrome drill.
+
+Fidelity checks that make it trustworthy: it reproduces production's
+exact counter signature (limbo tiers 0 — insert-before-remove defeats
+them; rebind_key riding anchors; takeover_fp 0 pre-fix;
+refuse_fp_ambiguous in the hundreds) AND the eye-instrument confusions
+we hit live (the sampler was blind twice — host rects are 0×0, badges
+live in closed shadow roots — both already-documented harness
+confounds).
+
+**The finding (three runs in):** round 23's unique-match position gate
+is structurally wrong for insert-before-remove. During the overlap the
+replacement rows are APPENDED BELOW the doomed rows (~3,300px away in
+the fixture) — the new element's real position doesn't exist until the
+old generation leaves, so the 300px gate refused every unique
+takeover: takeover_fp pinned at 0, and the unique-branch refusal had
+no counter, so four production drills couldn't see why. Fix: the
+unique branch takes NO position gate — uniqueness is the identity
+argument (exactly one connected element looks like this; a new
+lookalike is its replacement wherever either sits). Ambiguous groups
+keep the tight+margin gates (they need co-location by definition); a
+mixed group with an unrankable member now counts refuse_fp_ambiguous
+instead of silently skipping. Cross-page risk unchanged in kind:
+wrong steals remain self-healing, and a unique lookalike appearing
+anywhere IS the same logical control re-rendered.
+
+**Fixture verdict, same clock:** takeover_fp 0 → 263; visual
+reveal→85%-badge-recovery 639ms → **144ms**; wiped_within_2s 348 →
+144; the phase-2 blink ~500ms → ~300ms and letters/grammar no longer
+churn through it (the badge follows its element to the transiently
+stacked position and snaps back when the old rows leave). Remaining:
+the ambiguous cohort (checkboxes + repeating lookup values, 206
+refusals) — next lever is order-pairing within equal-size fingerprint
+groups, only if the real drill still reads slow.
+
+Gates green (1028 tests — the two tests pinning the old gate semantics
+updated to pin the new; builds; wedge; dual-cs; soak:orphan). The
+real-Chrome verify drill is the arbiter, as always.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
