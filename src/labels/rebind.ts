@@ -116,32 +116,6 @@ export interface RebindCounters {
    *  ancestor — different fingerprint, different key, same slot. Also the
    *  live probe for whether the grid's shells survive its swaps. */
   rebind_slot: number;
-  /** Connected-predecessor takeovers by UNIQUE fingerprint (round 23,
-   *  DESIGN_FLING_WAVE.md): the doomed predecessor was still in the DOM
-   *  (insert-before-remove swap) so the limbo tiers couldn't see it. */
-  takeover_fp: number;
-  /** Same tier, ambiguous fingerprints resolved by the tight+margin
-   *  position gate (identical per-row controls — checkboxes, pencils). */
-  takeover_fp_position: number;
-  /** Same tier, refused: multiple connected candidates and no candidate
-   *  was uniquely co-located. Fresh attach (today's churn) follows. */
-  refuse_fp_ambiguous: number;
-  /** Row-coattail reservations (round 26): a unique-fingerprint takeover
-   *  established doomed-row ↔ replacement-row correspondence, and the
-   *  row's OTHER wrappers (checkboxes, repeating lookup links — the
-   *  content-ambiguous cohort no fingerprint or position gate can match)
-   *  were paired with their structural counterparts in the replacement row. */
-  takeover_row: number;
-  /** Deferred retargets CONSUMED (round 28): a reserved pairing completed
-   *  at the doomed element's disconnect — badge + letter transferred to
-   *  the replacement that slid into its place. takeover_* count
-   *  reservations MADE; this counts the ones that actually rode. */
-  retarget_deferred: number;
-  /** Reservations EXPIRED unconsumed (round 28b): the doomed twin never
-   *  left within the TTL — the replacement was actively re-discovered.
-   *  High values against low retarget_deferred = the pairing bet is wrong
-   *  for this page's swap dynamics. */
-  retarget_expired: number;
 }
 
 export function newRebindCounters(): RebindCounters {
@@ -152,12 +126,6 @@ export function newRebindCounters(): RebindCounters {
     refuse_no_match: 0,
     rebind_key: 0,
     rebind_slot: 0,
-    takeover_fp: 0,
-    takeover_fp_position: 0,
-    refuse_fp_ambiguous: 0,
-    takeover_row: 0,
-    retarget_deferred: 0,
-    retarget_expired: 0,
   };
 }
 

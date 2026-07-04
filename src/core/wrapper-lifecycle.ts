@@ -20,8 +20,7 @@ import { domSeenAt } from '../observe/dom-seen';
 import * as idRegistry from '../scan/registry';
 import { isRecallLoaded, resolvePreferredCodeword } from '../labels/codeword-recall';
 import { dropPendingPut, hasSent, queueDelete, queuePut, scheduleSync } from '../labels/label-sync';
-import { tryRebindFromLimbo, tryRebindByStrongKey, tryRebindBySlot, tryTakeoverByFingerprint, recordSlotAncestors, isRecentlyOrphaned, isReservedForRetarget, rebindCounters } from '../observe/limbo';
-import { computeFingerprint } from '../scan/registry';
+import { tryRebindFromLimbo, tryRebindByStrongKey, tryRebindBySlot, recordSlotAncestors, isRecentlyOrphaned } from '../observe/limbo';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { geometryInBand, getCachedRect, isRectOnScreen } from '../layout-cache';
 import { lifecycleCounters } from '../debug/perf-counters';
@@ -148,48 +147,21 @@ export function detachWrapper(element: Element): void {
 export function attachDiscovered(
   refs: Element[], elements: ScannedElement[], limboPool: ElementWrapper[],
   keyIndex: Map<string, ElementWrapper | null>, source: DiscoverySource,
-  fpIndex?: Map<string, ElementWrapper[]>,
 ): number {
   let added = 0;
   const attached: ElementWrapper[] = [];
-  // Content-ambiguous takeover candidates, deferred past the unique rides
-  // (round 26): document order puts a row's checkbox BEFORE its unique
-  // pencil, so refusing inline fresh-attached the checkbox an instant
-  // before the pencil's row-coattail would have carried it — and the old
-  // wrapper died anyway. Pass 2 below re-checks them; most now hold a
-  // ridden wrapper and are skipped.
-  const deferred: number[] = [];
   for (let i = 0; i < refs.length; i++) {
     const ref = refs[i];
     // Skip a node we just transferred a wrapper *off* of (key-ownership rebind).
     // Re-grabbing it would bounce the wrapper back; the page removes it shortly
     // and the guard window covers the gap. See DESIGN_CODEWORD_KEY_OWNERSHIP.md.
     if (isRecentlyOrphaned(ref)) continue;
-    // Deferred retarget (round 28): a reserved replacement is spoken for —
-    // its doomed twin's wrapper transfers here at the twin's disconnect.
-    // Fresh-attaching it now would strand that transfer. TTL-bounded: an
-    // unconsumed reservation expires and the next sweep attaches fresh.
-    if (isReservedForRetarget(ref)) continue;
     if (store.findWrapperFor(ref)) continue;
     // Key-ownership: a re-mounted node inherits its predecessor's codeword by
     // strong key (href), ahead of the fingerprint/position path. Sidesteps the
     // pool-availability race that churns the QuickBase sidebar.
     if (tryRebindByStrongKey(ref, keyIndex, limboPool)) continue;
-    // Fingerprint computed once, shared by the limbo tier and the
-    // connected-takeover tier (round 23) — after the strong-key check so a
-    // key hit never pays the innerText read.
-    const newFp = computeFingerprint(ref);
-    if (limboPool.length > 0 && tryRebindFromLimbo(ref, limboPool, newFp)) continue;
-    // Connected-predecessor takeover (round 23, DESIGN_FLING_WAVE.md): the
-    // doomed predecessor of an insert-before-remove swap is still in the
-    // DOM, so the limbo tiers above can't see it. Badge + letter + grammar
-    // ride the swap; zero sync traffic (no metadata adoption needed — same
-    // fingerprint, same content).
-    if (fpIndex) {
-      const outcome = tryTakeoverByFingerprint(ref, newFp, fpIndex);
-      if (outcome === 'rode') continue;
-      if (outcome === 'ambiguous') { deferred.push(i); continue; }
-    }
+    if (limboPool.length > 0 && tryRebindFromLimbo(ref, limboPool)) continue;
     // Slot tier (DESIGN_FLING_WAVE Part 2): a recycled cell's new content —
     // different fingerprint, different key, same surviving slot ancestor.
     // The wrapper (badge, letter, grammar entry, grammarReady) survives the
@@ -206,17 +178,6 @@ export function attachDiscovered(
       continue;
     }
     added += eagerAttach(refs[i], elements[i], source, attached);
-  }
-  // Pass 2: the deferred ambiguous cohort. A row-coattail usually rode them
-  // during pass 1; whatever remains is a genuine refusal → fresh attach
-  // (today's behavior), counted as the refusal it is.
-  for (const i of deferred) {
-    const ref = refs[i];
-    if (store.findWrapperFor(ref)) continue;
-    if (isReservedForRetarget(ref)) continue; // a coattail reserved it
-    if (isRecentlyOrphaned(ref)) continue;
-    rebindCounters.refuse_fp_ambiguous++;
-    added += eagerAttach(ref, elements[i], source, attached);
   }
   primeInBandClaims(attached);
   return added;

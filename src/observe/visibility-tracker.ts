@@ -45,7 +45,6 @@ import { lifecycleCounters, recordCpu } from '../debug/perf-counters';
 import { store } from '../core/store';
 import { attachWrapper } from '../core/wrapper-lifecycle';
 import { pageSession } from '../lifecycle/page-session';
-import { isReservedForRetarget } from './limbo';
 
 // Candidates are held until they promote, disconnect, or leave the attention
 // region (untrackPendingCandidate via the attention IO's onLeave — which also
@@ -106,17 +105,6 @@ export function constructVisibilityObservers(): void {
       const el = entry.target;
       visibilityIO?.unobserve(el);
       if (store.findWrapperFor(el)) {
-        pendingVisibility.delete(el);
-        visibilityRO?.unobserve(el);
-        continue;
-      }
-      // Deferred retarget (round 28b): a RESERVED element is spoken for —
-      // its doomed twin's wrapper transfers here at the twin's disconnect.
-      // Promoting it to a fresh wrapper is what stranded 714/730
-      // reservations on the first production drill (the buffer-hidden
-      // replacements reveal through THIS path, not attachDiscovered).
-      // Un-park it; the consume (or the expiry backstop) owns it now.
-      if (isReservedForRetarget(el)) {
         pendingVisibility.delete(el);
         visibilityRO?.unobserve(el);
         continue;
@@ -270,14 +258,6 @@ function recheckPendingVisibility(): void {
         continue;
       }
       if (store.findWrapperFor(el)) {
-        pendingVisibility.delete(el);
-        visibilityIO?.unobserve(el);
-        visibilityRO?.unobserve(el);
-        continue;
-      }
-      // Round 28b: reserved elements wait for their transfer (see the IO
-      // callback above).
-      if (isReservedForRetarget(el)) {
         pendingVisibility.delete(el);
         visibilityIO?.unobserve(el);
         visibilityRO?.unobserve(el);

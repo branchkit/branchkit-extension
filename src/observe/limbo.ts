@@ -19,7 +19,7 @@
 
 import { ElementWrapper, enterLimbo, isLimboExpired } from '../scan/element-wrapper';
 import * as idRegistry from '../scan/registry';
-import { computeFingerprint, fingerprintsEqual, fingerprintToString, computeStrongKey, type Fingerprint } from '../scan/registry';
+import { computeFingerprint, fingerprintsEqual, computeStrongKey } from '../scan/registry';
 import { bumpRebindCounter, findLimboMatch, newRebindCounters, REBIND_DISTANCE_THRESHOLD_PX, type RebindCounters } from '../labels/rebind';
 import { peekCachedRect } from '../layout-cache';
 import { lifecycleCounters, recordCpu } from '../debug/perf-counters';
@@ -186,8 +186,8 @@ export function collectLimboWrappers(): ElementWrapper[] {
  * true iff the new element was rebound; false means the caller should
  * create a fresh wrapper.
  */
-export function tryRebindFromLimbo(newEl: Element, pool: ElementWrapper[], precomputedFp?: Fingerprint): boolean {
-  const newFp = precomputedFp ?? computeFingerprint(newEl);
+export function tryRebindFromLimbo(newEl: Element, pool: ElementWrapper[]): boolean {
+  const newFp = computeFingerprint(newEl);
   const matches: ElementWrapper[] = [];
   for (const w of pool) {
     const entry = idRegistry.get(w.scanned.id);
@@ -320,301 +320,6 @@ export function tryRebindByStrongKey(
   return true;
 }
 
-// --- Connected-predecessor takeover by fingerprint + position (round 23,
-// DESIGN_FLING_WAVE.md) ---
-//
-// The fingerprint/position tier above only consults the limbo pool —
-// disconnected wrappers. QuickBase inserts the replacement window BEFORE
-// removing the old one (slot_probe.pool_empty 591/1104 on production), so at
-// discovery time the doomed predecessor is still connected and the pool is
-// empty: identical-content remounts churned fresh wrappers, letters, grammar
-// entries, and badges on every fling — the viewport-strict dip the user
-// watches (174→121, ~2.7s). This tier is the strong-key takeover's pattern
-// applied to everything without an href: badge + letter + grammar RIDE the
-// swap, producing zero sync traffic (same fingerprint = same content, no
-// re-Put).
-
-// Unique-fingerprint steals take NO position gate (round 24, fixture-found):
-// during an insert-before-remove overlap the replacement rows are appended
-// BELOW the doomed rows — the new element's real position doesn't exist
-// until the old generation leaves, so any position gate structurally
-// refuses (the original 300px gate made takeover_fp read 0 forever, with
-// no counter to show the refusals). Uniqueness is the identity argument:
-// there is exactly one connected element that looks like this, so a new
-// lookalike is its replacement wherever either of them currently sits.
-// Ambiguous fingerprints (identical per-row controls — checkboxes,
-// pencil/eye): the new element must sit ON one predecessor (co-location of
-// identical controls is not a legitimate steady state) AND be uniquely
-// nearest — grid rows sit ~35-45px apart, so a same-column neighbor-row twin
-// fails the margin.
-const TAKEOVER_TIGHT_PX = 40;
-const TAKEOVER_MARGIN_PX = 40;
-
-/**
- * Index: fingerprint string → CONNECTED, non-limbo wrappers holding it.
- * Built once per discovery pass alongside `collectStrongKeyIndex`.
- * Fingerprints come from the registry (computed at register time), so this
- * is O(store) pointer reads — no DOM access, no layout.
- */
-export function collectFingerprintIndex(): Map<string, ElementWrapper[]> {
-  const index = new Map<string, ElementWrapper[]>();
-  for (const w of store.all) {
-    if (w.scanned.id <= 0) continue;
-    if (w.disconnectedAt !== null || !w.element.isConnected) continue;
-    const entry = idRegistry.get(w.scanned.id);
-    if (!entry) continue;
-    const key = fingerprintToString(entry.fingerprint);
-    const list = index.get(key);
-    if (list) list.push(w);
-    else index.set(key, [w]);
-  }
-  return index;
-}
-
-const centerDist = (r: DOMRect, rect: DOMRect): number => {
-  const cx = rect.left + rect.width / 2;
-  const cy = rect.top + rect.height / 2;
-  return Math.max(
-    Math.abs(r.left + r.width / 2 - cx),
-    Math.abs(r.top + r.height / 2 - cy),
-  );
-};
-
-/**
- * Transfer a still-connected doomed predecessor's wrapper onto a
- * freshly-discovered lookalike. Returns true iff taken over; false falls
- * through to the slot tier / fresh attach (today's behavior — fail-safe).
- *
- * Wrong steals self-heal: the robbed element loses its wrapper, the next
- * sweep/MO pass rediscovers it, and it attaches fresh — one letter swap on
- * one control, paid only on a bad bet instead of on every swap. The
- * consumed-from-index rule stops a second new element from stealing the
- * same predecessor; `orphanedByKeyRebind` (the existing ping-pong guard)
- * stops the robbed element from grabbing the wrapper back via
- * `attachDiscovered`'s isRecentlyOrphaned skip.
- */
-export type TakeoverOutcome = 'rode' | 'ambiguous' | 'none';
-
-export function tryTakeoverByFingerprint(
-  newEl: Element,
-  newFp: Fingerprint,
-  fpIndex: Map<string, ElementWrapper[]>,
-): TakeoverOutcome {
-  const list = fpIndex.get(fingerprintToString(newFp));
-  if (!list || list.length === 0) return 'none';
-  // Re-validate at match time — the index snapshot can go stale within a
-  // pass (elements disconnect mid-drain). The ambiguous branch additionally
-  // needs lastRect to position-verify; the unique branch does not.
-  const candidates = list.filter(
-    (w) => w.element !== newEl && w.element.isConnected,
-  );
-  if (candidates.length === 0) return 'none';
-
-  let winner: ElementWrapper | null = null;
-  if (candidates.length === 1) {
-    winner = candidates[0];
-  } else if (candidates.some((w) => w.lastRect === null)) {
-    // Can't fairly position-rank a mixed group. 'ambiguous' — the caller
-    // defers these past the unique rides so a row-coattail can carry them
-    // (round 26: document order puts a row's checkbox BEFORE its unique
-    // pencil; refusing inline fresh-attached the checkbox an instant
-    // before its coattail arrived, and the old wrapper died anyway).
-    return 'ambiguous';
-  } else {
-    const newRect = peekCachedRect(newEl) ?? newEl.getBoundingClientRect();
-    let best: { w: ElementWrapper; d: number } | null = null;
-    let second = Infinity;
-    for (const w of candidates) {
-      const d = centerDist(newRect, w.lastRect!);
-      if (!best || d < best.d) {
-        second = best?.d ?? Infinity;
-        best = { w, d };
-      } else if (d < second) {
-        second = d;
-      }
-    }
-    if (best && best.d <= TAKEOVER_TIGHT_PX && second - best.d >= TAKEOVER_MARGIN_PX) {
-      winner = best.w;
-    } else {
-      return 'ambiguous';
-    }
-  }
-  if (!winner) return 'none';
-
-  const idx = list.indexOf(winner);
-  if (idx >= 0) list.splice(idx, 1);
-  const doomedEl = winner.element;
-  const unique = candidates.length === 1;
-  if (unique) rebindCounters.takeover_fp++;
-  else rebindCounters.takeover_fp_position++;
-  // Deferred retarget (round 28): RESERVE the pairing; the transfer happens
-  // when the doomed element disconnects (consumePendingRetarget) — the
-  // badge stays on the visible twin until the eye loses those pixels, so
-  // there is no transient position to babysit (the round-25 grace/hold
-  // machinery retired with this).
-  reserveRetarget(winner, newEl);
-  // Row coattail (round 26): a UNIQUE match pins doomed-row ↔
-  // replacement-row correspondence — reserve the row's content-ambiguous
-  // wrappers with it.
-  if (unique) coattailRowTakeover(doomedEl, newEl);
-  return 'rode';
-}
-
-// --- Deferred retarget (round 28, DESIGN_FLING_WAVE.md) ---
-//
-// Riding at DISCOVERY moved the badge's target to a replacement parked
-// below the band while its doomed twin was still on screen — every
-// visibility subsystem then honestly hid the badge, producing the
-// swap-window flicker that was the ENTIRE perceived gap vs Rango (round-27
-// A/B: paint speed equal; Rango's slope flat because its hints live and
-// die with elements). Riding at DEATH keeps that invariant AND the letter:
-// the badge stays with the visible old element; at its disconnect the
-// wrapper transfers to the reserved replacement, which has just slid into
-// the old one's place. Same letter, same spot, element swapped underneath.
-
-// A reserved replacement must not be fresh-attached by discovery while the
-// reservation lives. TTL: an unconsumed reservation (wrong bet — the old
-// element never left) expires, and the next sweep attaches the element
-// fresh; degradation is exactly today's behavior.
-const RESERVE_TTL_MS = 2000;
-const reservedForRetarget = new WeakMap<Element, number>();
-// Live reservations, for the ACTIVE expiry sweep (round 28b): production's
-// first drill stranded 714 of 730 reservations — the replacement elements
-// sat badge-less for 17-23s because nothing re-discovers a quietly-expired
-// reservation until an incidental settle sweep. The finalize interval
-// (250ms) sweeps this set: an expired reservation clears its bookkeeping
-// and immediately re-discovers the reserved element.
-const liveReservations = new Set<ElementWrapper>();
-
-export function isReservedForRetarget(el: Element): boolean {
-  const t = reservedForRetarget.get(el);
-  if (t === undefined) return false;
-  if (Date.now() - t >= RESERVE_TTL_MS) {
-    reservedForRetarget.delete(el);
-    return false;
-  }
-  return true;
-}
-
-function reserveRetarget(w: ElementWrapper, replacement: Element): void {
-  w.pendingRetarget = new WeakRef(replacement);
-  reservedForRetarget.set(replacement, Date.now());
-  liveReservations.add(w);
-}
-
-/** Active reservation expiry (round 28b): called from the finalize
- * interval. An expired, unconsumed reservation must not strand its
- * replacement — clear the bookkeeping and push the element back through
- * discovery immediately. */
-export function expireStaleReservations(now = Date.now()): number {
-  let expired = 0;
-  for (const w of liveReservations) {
-    const ref = w.pendingRetarget;
-    if (!ref) { liveReservations.delete(w); continue; }
-    const target = ref.deref();
-    if (!target) {
-      w.pendingRetarget = null;
-      liveReservations.delete(w);
-      continue;
-    }
-    const t = reservedForRetarget.get(target);
-    if (t !== undefined && now - t < RESERVE_TTL_MS) continue;
-    // Expired: the doomed twin never left (wrong bet, or a swap slower
-    // than the TTL). Degrade to fresh discovery for the replacement.
-    w.pendingRetarget = null;
-    liveReservations.delete(w);
-    reservedForRetarget.delete(target);
-    rebindCounters.retarget_expired++;
-    expired++;
-    if (target.isConnected && !store.findWrapperFor(target)) {
-      try {
-        pageSession.deps.discoverInSubtree(target, 'rescan');
-      } catch { /* deps unset in unit tests */ }
-    }
-  }
-  return expired;
-}
-
-/** Consume a wrapper's reservation at its element's disconnect. Returns
- * true iff the wrapper transferred (caller skips limbo entry). */
-function consumePendingRetarget(w: ElementWrapper): boolean {
-  const ref = w.pendingRetarget;
-  if (!ref) return false;
-  w.pendingRetarget = null;
-  liveReservations.delete(w);
-  const target = ref.deref();
-  if (!target || !target.isConnected) return false;
-  if (store.findWrapperFor(target)) return false; // fresh-attached post-TTL
-  reservedForRetarget.delete(target);
-  rebindCounters.retarget_deferred++;
-  // Same-fingerprint content: no metadata adoption, no re-Put, no grammar
-  // delta — letter and badge carry over unchanged.
-  rebindWrapper(w, target);
-  return true;
-}
-
-// --- Row-coattail takeover (round 26, DESIGN_FLING_WAVE.md) ---
-//
-// The content-ambiguous cohort (checkboxes — every one looks alike;
-// repeating lookup links — "Doe, Jane" ×17 rows) can never be matched
-// by fingerprint, and the insert-before-remove overlap defeats position
-// gates (rounds 24-25). But every grid row CONTAINS a unique-fingerprint
-// control (the edit/view buttons carry record ids in their names), and a
-// unique ride establishes the row pair for free. Row-mates then ride by
-// STRUCTURAL PATH — the child-index path from the row to the element,
-// exact on an identical rebuild, and fail-safe on anything else (a path
-// miss or tag mismatch just skips that member; fresh attach follows, which
-// is today's behavior).
-
-const ROW_SELECTOR = 'tr, [role="row"]';
-
-/** Child-index path from `row` down to `el`, or null when el isn't under
- * row (or is the row). Pointer walks only. */
-function pathWithinRow(row: Element, el: Element): number[] | null {
-  const path: number[] = [];
-  let cur: Element = el;
-  while (cur !== row) {
-    const parent: Element | null = cur.parentElement;
-    if (!parent) return null;
-    path.push(Array.prototype.indexOf.call(parent.children, cur));
-    cur = parent;
-  }
-  return path.reverse();
-}
-
-function resolvePath(row: Element, path: number[]): Element | null {
-  let cur: Element = row;
-  for (const i of path) {
-    const next = cur.children[i];
-    if (!next) return null;
-    cur = next;
-  }
-  return cur;
-}
-
-function coattailRowTakeover(doomedEl: Element, newEl: Element): void {
-  const doomedRow = doomedEl.closest(ROW_SELECTOR);
-  const newRow = newEl.closest(ROW_SELECTOR);
-  if (!doomedRow || !newRow || doomedRow === newRow) return;
-
-  for (const w of store.all) {
-    const el = w.element;
-    if (el === newEl || !el.isConnected) continue;
-    if (!doomedRow.contains(el)) continue;
-    const path = pathWithinRow(doomedRow, el);
-    if (!path) continue;
-    const counterpart = resolvePath(newRow, path);
-    if (!counterpart) continue;
-    // Structural sanity: an identical rebuild puts the same kind of element
-    // in the same slot. Anything else → skip, fresh attach handles it.
-    if (counterpart.tagName !== el.tagName) continue;
-    if (counterpart === el) continue;
-    if (store.findWrapperFor(counterpart)) continue;
-    if (isReservedForRetarget(counterpart)) continue;
-    rebindCounters.takeover_row++;
-    reserveRetarget(w, counterpart);
-  }
-}
 
 /**
  * Move disconnected wrappers into limbo. Per
@@ -638,11 +343,6 @@ export function dropDisconnectedWrappers(): number {
   for (const w of store.all) {
     if (w.disconnectedAt !== null) continue;
     if (!w.element.isConnected) {
-      // Deferred retarget (round 28): the moment the doomed element leaves
-      // is the transfer moment — the reserved replacement has just slid
-      // into its place. Consumed wrappers skip limbo entirely: same
-      // letter, same spot, element swapped underneath.
-      if (consumePendingRetarget(w)) continue;
       // lastRect is normally already populated by the IntersectionTracker
       // from a recent IO entry. Only fall back to the layout cache for
       // wrappers that disconnected before IO had a chance to fire (race
@@ -688,9 +388,6 @@ export function dropDisconnectedWrappers(): number {
  */
 export function finalizeExpiredLimboWrappers(): number {
   const now = Date.now();
-  // Round 28b: expired reservations re-discover their replacements NOW —
-  // a quiet page has no settle to sweep them up otherwise.
-  expireStaleReservations(now);
   // Iterate a copy so we can mutate `store` mid-loop.
   let finalized = 0;
   for (const w of [...store.all]) {

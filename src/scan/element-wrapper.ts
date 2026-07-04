@@ -170,14 +170,6 @@ export class ElementWrapper {
   // residual worth chasing); FALSE means scroll-ahead content that attached
   // the moment scrolling made it eligible (correct behavior, not latency).
   inViewportAtAttach: boolean = false;
-  // Deferred retarget (round 28, DESIGN_FLING_WAVE.md): the takeover match
-  // reserved this wrapper's REPLACEMENT element, but the transfer happens
-  // only when this wrapper's own element DISCONNECTS — the badge stays on
-  // the visible doomed twin (perceptual continuity: same letter, same
-  // place; the element swaps underneath at the moment the eye loses the
-  // old pixels anyway). WeakRef: a replacement that dies first just fails
-  // the deref and the wrapper takes the normal limbo path.
-  pendingRetarget: WeakRef<Element> | null = null;
   // Which discovery path created this wrapper — see DiscoverySource above.
   discoverySource: DiscoverySource = 'unknown';
   // First grammar ACK. tFirstShown - tGrammarReady is the show-vs-voice

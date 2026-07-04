@@ -25,7 +25,7 @@ import { loadRecall, recalledCodewords, rememberLive, resolvePreferredCodeword, 
 import { type RebindCounters } from './labels/rebind';
 import { resolveTarget } from './activate/activate-resolution';
 import { schedulePointerVisibilitySweep, connectVisibilityMO, teardownVisibilityTracker } from './observe/visibility-tracker';
-import { rebindCounters, LIMBO_DEADLINE_MS, collectLimboWrappers, collectStrongKeyIndex, collectFingerprintIndex, dropDisconnectedWrappers, finalizeExpiredLimboWrappers, slotProbe, limboSlotLiveness } from './observe/limbo';
+import { rebindCounters, LIMBO_DEADLINE_MS, collectLimboWrappers, collectStrongKeyIndex, dropDisconnectedWrappers, finalizeExpiredLimboWrappers, slotProbe, limboSlotLiveness } from './observe/limbo';
 import { attachWrapper, detachWrapper, seedPreferredFromMemory, attachDiscovered } from './core/wrapper-lifecycle';
 import { attachPageMutationObserver, getObserverFirstAttachedAt, teardownMutationSource } from './observe/mutation-source';
 import { firehoseStep } from './debug/firehose';
@@ -3890,7 +3890,7 @@ function discoverInSubtree(root: Element, source: DiscoverySource): number {
   const __cpuStart = performance.now();
   const result = scanElements(root, (el) => store.findWrapperFor(el) !== undefined);
   applyUserRuleToScan(result, root);
-  const added = attachDiscovered(result.refs, result.elements, collectLimboWrappers(), collectStrongKeyIndex(), source, collectFingerprintIndex());
+  const added = attachDiscovered(result.refs, result.elements, collectLimboWrappers(), collectStrongKeyIndex(), source);
   observeInvisibleCandidates(result.invisibleCandidates);
   watchUndefinedCustomElements(root);
   recordCpu('discoverInSubtree', performance.now() - __cpuStart);
@@ -3955,9 +3955,6 @@ async function discoverInSubtreeBatched(
   // Built once for the whole sliced walk (mirrors limboPool); consumed as
   // strong-key rebinds fire across batches. See DESIGN_CODEWORD_KEY_OWNERSHIP.md.
   const keyIndex = collectStrongKeyIndex();
-  // Round 23: connected-predecessor takeover index, same lifecycle as
-  // keyIndex (built once, consumed across batches as steals fire).
-  const fpIndex = collectFingerprintIndex();
   const cr = compiledRule;
   const isKnown = (el: Element) => store.findWrapperFor(el) !== undefined;
 
@@ -3971,7 +3968,7 @@ async function discoverInSubtreeBatched(
       for (const w of store.all) seen.add(w.element);
     }
     const inc = collectInclusions(seen, cr.includeSelector, root);
-    added += attachDiscovered(inc.refs, inc.elements, limboPool, keyIndex, source, fpIndex);
+    added += attachDiscovered(inc.refs, inc.elements, limboPool, keyIndex, source);
     initialSeen = new Set(inc.refs);
   }
 
@@ -3979,7 +3976,7 @@ async function discoverInSubtreeBatched(
   let lastYieldAt = performance.now();
   for (const batch of scanInBatches(root, SWEEP_WALK_BATCH_SIZE, initialSeen, isKnown)) {
     if (cr?.excludes.length) applyExclusions(batch.refs, batch.elements, cr.excludes);
-    added += attachDiscovered(batch.refs, batch.elements, limboPool, keyIndex, source, fpIndex);
+    added += attachDiscovered(batch.refs, batch.elements, limboPool, keyIndex, source);
     if (batch.isLast) invisibleCandidates = batch.invisibleCandidates;
     // Yield so the main thread frees between batches — this is the whole
     // point of the sliced path. Front-of-queue resume (scheduler.yield),
