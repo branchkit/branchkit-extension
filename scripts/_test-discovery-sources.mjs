@@ -8,22 +8,21 @@
 //   - the boot doScan attaches the static links -> source 'scan'
 //   - a post-load light-DOM insertion -> MO record -> 'mo'
 //   - an open-shadow-root insertion the doc MO cannot see -> found only by
-//     the scroll-settle sweep -> 'band_sweep', domSeenByMo=false
+//     a settle-armed discovery sweep -> sweep source, domSeenByMo=false
 //
 // Asserts: no 'unknown' sources, tDomSeen non-null on every wrapper (the
 // survivorship fix), the shadow-injected element attributed to a sweep, the
 // light-DOM injected element attributed to 'mo' with a real MO stamp.
 
-import { chromium } from 'playwright';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { existsSync, rmSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { captureSnapshot } from './_snapshot.mjs';
+import { launchExtension } from './lib/launch.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
-const EXT = resolve(root, 'dist/chrome');
 const PROFILE = '/tmp/branchkit-discovery-sources-profile';
 
 const fixtureHtml = readFileSync(resolve(root, 'test-fixtures/band-discovery.html'), 'utf8');
@@ -34,25 +33,22 @@ const server = createServer((_req, res) => {
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const FIXTURE = `http://127.0.0.1:${server.address().port}/`;
 
-if (existsSync(PROFILE)) rmSync(PROFILE, { recursive: true });
-
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let failed = false;
 const fail = (msg) => { failed = true; console.log('  FAIL —', msg); };
 const pass = (msg) => console.log('  ok  —', msg);
 
-console.log('[1] launch Chromium with extension');
-const ctx = await chromium.launchPersistentContext(PROFILE, {
-  headless: false,
-  args: ['--disable-extensions-except=' + EXT, '--load-extension=' + EXT],
-});
+console.log('[1] launch isolated Chromium with extension (standalone marker)');
+const { ctx, sw } = await launchExtension({ profile: PROFILE });
 
-const ALPHABET = 'arch bat cat dog echo fox golf hotel india jam kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu'.split(' ');
-const sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent('serviceworker');
-await sw.evaluate(async (a) => {
+// Deliberately NO voice alphabet: standalone postBatch only local-acks when
+// isVoiceAlphabetLoaded() is false. Seeding an alphabet without a live
+// BranchKit puts the sync in a state real usage never has — every grammar
+// batch fails against the absent host and the failed-sync path detaches
+// each wrapper right after its sweep attaches it (33 attaches, 0 alive).
+await sw.evaluate(async () => {
   await chrome.storage.sync.set({ aggressiveHints: true, hintVisibility: 'always' });
-  await chrome.storage.local.set({ alphabet: a });
-}, ALPHABET);
+});
 
 const page = await ctx.newPage();
 console.log('[2] load fixture, settle 6s for scan + paint');

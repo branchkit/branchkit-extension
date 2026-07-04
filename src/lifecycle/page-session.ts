@@ -361,3 +361,21 @@ export function scheduleYieldTask(cb: () => void): void {
     pageSession.resources.timeout(cb, 0);
   }
 }
+
+/**
+ * Awaitable sibling of `scheduleYieldTask` for async walks that yield
+ * between batches. Same preference order and the same caveats: the
+ * scheduler.yield continuation is NOT cancellable, so the awaiting loop
+ * must re-check `pageSession.isTornDown` after each hop.
+ *
+ * Exists because the discovery sweep's inter-batch `setTimeout(0)` hops
+ * queue BEHIND the page's pending tasks — mid-storm on QuickBase that was
+ * 50-150ms per hop × ~45 batches ≈ the entire 3-4s "late wave"
+ * (notes/DESIGN_FLING_WAVE.md round 17), the same starvation class the
+ * round-3 rAF-entry fix addressed for drainDiscovery.
+ */
+export function yieldTask(): Promise<void> {
+  const sched = (globalThis as { scheduler?: { yield?: () => Promise<void> } }).scheduler;
+  if (typeof sched?.yield === 'function') return sched.yield();
+  return new Promise((r) => pageSession.resources.timeout(r, 0));
+}

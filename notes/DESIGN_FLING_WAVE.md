@@ -826,6 +826,84 @@ root that yielded 0 hintables despite ≥N selector matches gets a
 scoped attributes-MO for a bounded window, reveal → rediscover that
 root only. Decide on data, not vibes.
 
+## Round 17 — the drill's verdict: the miss is real but the LAG is the
+## sweep's own yield starvation (2026-07-04)
+
+Drill on build 02:49 (round-16 instrumentation live). User report:
+badges flash on ~1.5s after the fling, disappear suddenly, repaint
+2-3s later. The new data explains all three beats:
+
+- `wave.discovery_sources`: settle_sweep cohort n=173,
+  dom_seen_to_attached p50 **3078ms** (the late wave, measured
+  directly). Split by tag: 115 anchors (78 MO-stamped — MO saw their
+  subtrees ~3s before anything attached them) + 55 buttons/inputs
+  (the pencil/eye/checkbox wave, **zero** MO stamps).
+- `invisible_candidates_observed` **11,505** against **zero**
+  attention/visibility attaches: the walk reaches the hidden incoming
+  window at insert, classifies it invisible, parks it — and the
+  IO-gated promotion path never wins a single race. Discrimination
+  table row 1.
+- `mo_text_only_add_records` = 9 — suspect (c) is dead.
+- `mo_huge` never fired: QuickBase's swap arrives in sub-100-record
+  batches (the firehose ≥100 gate shows only our own badge churn
+  during the storm — the page's own mutations are all below it).
+- paint_stability ring: shown 560 → 373 → 396 while painted barely
+  moves. The BLINK is a mass hide, not teardown — QuickBase's white
+  void makes targets CSS-invisible and the visibility plan correctly
+  hides their badges. Not a bug; its perceived cost shrinks when the
+  late wave lands sooner.
+
+The wall-clock tell (actuator.log, fling 2): reveal at page-ts 16561
+(`reconcile:stale_false_repair size=106` — the settle pass flipping
+band flags the moment content gains geometry; that repair IS the
+first pop). Then SEVEN `band_discovery:coalesced` while one sweep
+stays in flight from ~16561 to **20528**, finally landing
+`band_discovery:added size=76` — the second paint. Even the
+steady-state added=0 sweeps take ~450-600ms wall each.
+
+Root cause of the 3-4s: `discoverInSubtreeBatched` yields between
+batches with `await setTimeout(0)` — ~45 batches on this grid
+(680 elements / batch 15), and mid-storm each setTimeout(0) hop
+queues BEHIND the page's pending work, costing 50-150ms. 45 × ~90ms
+≈ the whole late wave. This is byte-for-byte the round-3 discovery
+starvation (rAF entry → yield task); the sweep just never got the
+same fix.
+
+Fix (this round): the sweep's inter-batch yield becomes
+`scheduler.yield()` (front-of-queue resume, ~1-4ms) with the
+session-owned setTimeout(0) fallback — an awaitable sibling of
+`scheduleYieldTask`, same isTornDown discipline. Batching (the actual
+freeze protection) is untouched; the huge path shares the speedup,
+which is the round-13 posture (one fast wave, guardrails not pacing).
+Expected: sweep wall ~4s → ~300-600ms mid-storm (idle-gate ≤500ms +
+walk), late wave lands ≤~1.2s after reveal; steady-state sweeps drop
+to ~50-100ms.
+
+NOT changed, deliberately:
+- The retry-on-coalesce logic (retry only when added=0): a reveal
+  landing mid-sweep whose walk already passed that region still waits
+  for the next settle — with fast sweeps that window is now ~sweep
+  length, and post-reveal paints generate store settles anyway.
+  Loosening it re-arms the 73cf6e7 churn loop; leave the scar tissue.
+- The attention/visibility promotion path: still zero-yield on this
+  grid (starved IO mid-storm + interim nodes dying in the two-phase
+  render). With the sweep fast, promotion becomes redundant here
+  rather than broken. Revisit only if a page shows reveals with NO
+  accompanying settle signal.
+- attributeFilter: untouched. The reveal detection question is moot —
+  the reveal already produces a settle (the mutation burst around the
+  flip), which already arms the sweep. The signal was never missing;
+  the response was slow.
+
+Open after this round: the 55 no-MO-stamp buttons/inputs. Their
+ancestors produced no usable MO record within 40 hops — not
+text-only records (n=9), not the huge path (never fired). Candidate
+explanations: stamps living on roots >40 hops up, or insertion
+records for subtrees whose added root is long-lived (content built
+via moves that only record the moved intermediate). The per-wrapper
+discovery blocks in the next snapshot can chase this; it matters
+only if the fixed sweep still reads slow for that cohort.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is

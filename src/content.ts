@@ -106,7 +106,7 @@ import { labelReservoir } from './labels/label-reservoir';
 import { filterNewBatchRefs } from './scan/batch-dedup';
 import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
 import { openLivenessPort } from './plugin/liveness';
-import { pageSession, scheduleYieldTask, TeardownReason } from './lifecycle/page-session';
+import { pageSession, scheduleYieldTask, yieldTask, TeardownReason } from './lifecycle/page-session';
 import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './debug/message-counters';
 import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, rearmCpuShareBaseline, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, stopPerfObservers, lifecycleCounters, resetLifecycleCounters } from './debug/perf-counters';
 import { loadConfig, getDisplayMode, getHintVisibility, getHintsShown, setHintsShown } from './config';
@@ -3847,8 +3847,15 @@ async function discoverInSubtreeBatched(root: Element, source: DiscoverySource):
     added += attachDiscovered(batch.refs, batch.elements, limboPool, keyIndex, source);
     if (batch.isLast) invisibleCandidates = batch.invisibleCandidates;
     // Yield so the main thread frees between batches — this is the whole
-    // point of the sliced path.
-    await new Promise(r => setTimeout(r, 0));
+    // point of the sliced path. Front-of-queue resume (scheduler.yield),
+    // NOT setTimeout(0): mid-storm each timeout hop queued behind the
+    // page's pending tasks at 50-150ms, and ~45 hops on a 300-row grid WAS
+    // the 3-4s "late wave" (DESIGN_FLING_WAVE round 17). Batching itself —
+    // the actual freeze protection — is unchanged.
+    await yieldTask();
+    // The yield continuation is not cancellable; bail if the session died
+    // mid-walk (same contract as drainDiscovery's chain).
+    if (pageSession.isTornDown) return added;
   }
   observeInvisibleCandidates(invisibleCandidates);
   watchUndefinedCustomElements(root);
