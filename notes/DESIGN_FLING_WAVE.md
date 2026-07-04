@@ -1737,6 +1737,54 @@ post-swap — voice can't match painted badges during it; round-19
 residue class, likely clip re-root latency at the buffer→pane
 reparent).
 
+## Round 22c — sync_trace names the stall: DEBOUNCE STARVATION; the
+## max-wait deadline lands (2026-07-04, drill on build 16:07)
+
+The sync_trace drill (snapshot 16-14) reproduced the symptom (290
+grammar_ready=false) and named the mechanism in one shot:
+
+- **Zero transport errors across 127 posts.** sendMessage is
+  innocent; the SW never failed.
+- **A 5.5-second hole with ZERO postBatch calls** — last pre-fling
+  post at t=5413 (is_final), next post at t=10884. Not slow, not
+  failing: never invoked. `scheduleSync` is a pure 80ms trailing
+  debounce; the fling's claims and strict deltas reset it continuously
+  and it starved for the whole scroll+swap window — the exact trap the
+  schedulePassSoon comment documents ("a debounce pushes back under
+  sustained churn").
+- The consequences chain directly: the t=10884 post carries **355
+  accumulated deletes**; the epoch handshake sees the divergence the
+  starvation created; **session rotates at t=12586** (a629dd35 →
+  580c28da) and a full ~25-batch republish runs to ~15s. The
+  translucent-forever beat, end to end, self-inflicted by the
+  starved debounce.
+- Bonus finding from the boot window: several chunks answered
+  failed=15 (result ok, every codeword refused) — each detaches the
+  whole chunk (label-sync.ts failure path) and feeds churn. Cause not
+  yet chased (plugin-side per-codeword refusal reasons aren't in the
+  trace); visible now, tracked for a later round.
+- Also: pool_free DID hit 0 at the swap this drill (t=7860) —
+  letter exhaustion is drill-variant, secondary, and mostly a symptom
+  of the same churn volume.
+
+Fix landed: **BATCHED_SYNC_MAX_WAIT_MS = 400** — a non-extending
+deadline armed by the first schedule of a burst, cleared by whichever
+timer fires first (the fireHugeMutationRefresh / whenDOMSettles shape,
+third use in this codebase). A sustained storm now ships coalesced
+15-element deltas at least every 400ms: ACKs land while the fling
+runs, badges solidify at ~claim+0.5s instead of settle+10s, no
+monster delta accumulates, and the epoch handshake has no divergence
+to punish with a rotate+republish. Unit tests pin both directions
+(quiet burst fires once at the trailing edge; sub-debounce churn ships
+via the deadline).
+
+Expected at the next drill: sync_trace shows 15-element posts every
+~400ms THROUGH the fling; shown_minus_ack p50 collapses from −1671 to
+≈ −(400..600)ms; grammar_ready=false ≈ 0 within ~1s of settle; no
+session rotation after the swap. The perceptual translucent phase
+compresses to ~half a second — which is the two-phase shape the user
+already approved in round 13, now honest.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
