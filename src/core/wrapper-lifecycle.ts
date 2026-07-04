@@ -15,6 +15,7 @@
  */
 
 import { DiscoverySource, ElementWrapper } from '../scan/element-wrapper';
+import { scanSingle } from '../scan/scanner';
 import { ScannedElement } from '../types';
 import { domSeenAt } from '../observe/dom-seen';
 import * as idRegistry from '../scan/registry';
@@ -160,7 +161,21 @@ export function attachDiscovered(
     // Key-ownership: a re-mounted node inherits its predecessor's codeword by
     // strong key (href), ahead of the fingerprint/position path. Sidesteps the
     // pool-availability race that churns the QuickBase sidebar.
-    if (tryRebindByStrongKey(ref, keyIndex, limboPool)) continue;
+    const rode = tryRebindByStrongKey(ref, keyIndex, limboPool);
+    if (rode) {
+      // Round 34e: the steal orphaned a still-CONNECTED predecessor (no
+      // dead holder was available). Re-attach it fresh RIGHT NOW — the
+      // orphan guard blocks it from rebind tiers (ping-pong), and waiting
+      // for guard expiry + a later sweep left visible links bare (and the
+      // eventual re-discovery stole from the next duplicate). scanSingle
+      // returns null for hidden elements, so doomed buffer copies don't
+      // re-attach — only genuinely visible orphans get a fresh letter.
+      if (rode.orphaned) {
+        const sc = scanSingle(rode.orphaned);
+        if (sc) added += eagerAttach(rode.orphaned, sc, source, attached);
+      }
+      continue;
+    }
     if (limboPool.length > 0 && tryRebindFromLimbo(ref, limboPool)) continue;
     // Slot tier (DESIGN_FLING_WAVE Part 2): a recycled cell's new content —
     // different fingerprint, different key, same surviving slot ancestor.

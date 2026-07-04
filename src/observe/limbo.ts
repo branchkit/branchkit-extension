@@ -319,24 +319,34 @@ export function tryRebindByStrongKey(
   newEl: Element,
   keyIndex: Map<string, ElementWrapper[]>,
   limboPool: ElementWrapper[],
-): boolean {
+): { orphaned: Element | null } | null {
   const key = computeStrongKey(newEl);
-  if (!key) return false;
+  if (!key) return null;
   const queue = keyIndex.get(key);
-  if (!queue || queue.length === 0) return false;
-  // The new node may itself be indexed (already-attached element passing
-  // back through discovery) — never steal from yourself; and if the head
-  // IS the new element's own wrapper, there's nothing to transfer.
-  const idx = queue.findIndex((cand) => cand.element !== newEl);
-  if (idx === -1) return false;
+  if (!queue || queue.length === 0) return null;
+  // Round 34e: pop DISCONNECTED predecessors first — they're free wins
+  // (dead element, live badge). A connected predecessor is only stolen
+  // when no dead one holds the key, and the steal is reported back so the
+  // caller re-attaches the orphaned element FRESH in the same pass. The
+  // 34-era queue popped healthy visible rows and left them bare: the
+  // orphan guard assumed "the page removes the predecessor shortly"
+  // (true for re-mount casualties, false for healthy duplicates), and
+  // after the guard expired the bare link's re-discovery STOLE FROM THE
+  // NEXT visible duplicate — musical chairs with a rotating badge-less
+  // link (16 visible bare links on the client drill, all repeated-value).
+  // Never steal from the new node itself.
+  let idx = queue.findIndex((cand) => cand.element !== newEl && !cand.element.isConnected);
+  if (idx === -1) idx = queue.findIndex((cand) => cand.element !== newEl);
+  if (idx === -1) return null;
   const w = queue[idx];
   queue.splice(idx, 1);
   if (queue.length === 0) keyIndex.delete(key);
   consume(limboPool, w);
-  if (w.element.isConnected) orphanedByKeyRebind.set(w.element, Date.now());
+  const orphaned = w.element.isConnected ? w.element : null;
+  if (orphaned) orphanedByKeyRebind.set(orphaned, Date.now());
   rebindCounters.rebind_key++;
   rebindWrapper(w, newEl);
-  return true;
+  return { orphaned };
 }
 
 

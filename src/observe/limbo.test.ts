@@ -196,7 +196,7 @@ describe('tryRebindByStrongKey', () => {
 
     const ok = tryRebindByStrongKey(newEl, index, []);
 
-    expect(ok).toBe(true);
+    expect(ok).toBeTruthy();
     expect(w.element).toBe(newEl);                  // re-anchored to the new node
     expect(w.scanned.codeword).toBe('harp bat');    // codeword preserved
     expect(w.scanned.id).toBe(7);                   // identity preserved
@@ -212,12 +212,12 @@ describe('tryRebindByStrongKey', () => {
     const index = collectStrongKeyIndex();
     const n1 = freeAnchor('/home');
     const n2 = freeAnchor('/home');
-    expect(tryRebindByStrongKey(n1, index, [])).toBe(true);
+    expect(tryRebindByStrongKey(n1, index, [])).toBeTruthy();
     expect(w1.element).toBe(n1); // document-order pairing: first predecessor first
-    expect(tryRebindByStrongKey(n2, index, [])).toBe(true);
+    expect(tryRebindByStrongKey(n2, index, [])).toBeTruthy();
     expect(w2.element).toBe(n2);
     // Queue exhausted — a third same-key node claims fresh.
-    expect(tryRebindByStrongKey(freeAnchor('/home'), index, [])).toBe(false);
+    expect(tryRebindByStrongKey(freeAnchor('/home'), index, [])).toBeNull();
   });
 
   it('refuses an element with no strong key', () => {
@@ -225,21 +225,42 @@ describe('tryRebindByStrongKey', () => {
     const index = collectStrongKeyIndex();
     const div = document.createElement('div');
     document.body.appendChild(div);
-    expect(tryRebindByStrongKey(div, index, [])).toBe(false);
+    expect(tryRebindByStrongKey(div, index, [])).toBeNull();
   });
 
   it('consumes the entry so a second same-key node falls through to fresh', () => {
     makeAnchor('/users', 1);
     const index = collectStrongKeyIndex();
-    expect(tryRebindByStrongKey(freeAnchor('/users'), index, [])).toBe(true);
-    expect(tryRebindByStrongKey(freeAnchor('/users'), index, [])).toBe(false);
+    expect(tryRebindByStrongKey(freeAnchor('/users'), index, [])).toBeTruthy();
+    expect(tryRebindByStrongKey(freeAnchor('/users'), index, [])).toBeNull();
+  });
+
+  it('pops a DISCONNECTED holder before a connected one (round 34e: never steal from a healthy row when a dead holder exists)', () => {
+    const alive = makeAnchor('/home', 1);
+    const dead = makeAnchor('/home', 2);
+    dead.element.remove();
+    const index = collectStrongKeyIndex();
+    const n = freeAnchor('/home');
+    const res = tryRebindByStrongKey(n, index, []);
+    expect(res).toBeTruthy();
+    expect(dead.element).toBe(n);          // the dead holder rode
+    expect(res!.orphaned).toBeNull();      // nothing connected was orphaned
+    expect(alive.element).not.toBe(n);     // the healthy row kept its wrapper
+  });
+
+  it('reports a connected steal via `orphaned` so the caller can re-attach it fresh (round 34e)', () => {
+    const alive = makeAnchor('/home', 1);
+    const oldEl = alive.element;
+    const res = tryRebindByStrongKey(freeAnchor('/home'), collectStrongKeyIndex(), []);
+    expect(res).toBeTruthy();
+    expect(res!.orphaned).toBe(oldEl);
   });
 
   it('also removes the rebound wrapper from the limbo pool', () => {
     const w = makeAnchor('/users', 1);
     const pool = [w];
     const ok = tryRebindByStrongKey(freeAnchor('/users'), collectStrongKeyIndex(), pool);
-    expect(ok).toBe(true);
+    expect(ok).toBeTruthy();
     expect(pool).toEqual([]); // consumed, so the fingerprint path can't double-bind it
   });
 });
