@@ -66,6 +66,9 @@ export class IntersectionTracker {
   // Codewords waiting to release. Strings, not wrappers — the wrapper may
   // already have been GC'd by the time we flush.
   private pendingRelease: string[] = [];
+  // Wrappers seen out-of-band by exactly one sweep so far (the two-strike
+  // release ledger — see sweepBand). WeakSet: entries GC with their wrapper.
+  private pendingExit: WeakSet<ElementWrapper> = new WeakSet();
   private flushScheduled = false;
   // Promise chain that serializes every doFlush. Without this, a flush
   // started by scheduleFlush's timer can be in mid-await on
@@ -174,12 +177,28 @@ export class IntersectionTracker {
       // elements report all-zeros, which would false-positive at the origin.
       if (r.width === 0 && r.height === 0 && r.top === 0 && r.left === 0) continue;
       const inBand = geometryInBand(r, vw, vh, VIEWPORT_MARGIN_PX);
-      if (inBand && !w.isInViewport) {
-        w.lastRect = r; // free fresh rect — keeps the limbo tiebreaker current
-        w.isInViewport = true;
-        w.tInBand ??= performance.now();
-        repaired++;
-      } else if (!inBand && w.isInViewport) {
+      if (inBand) {
+        this.pendingExit.delete(w);
+        if (!w.isInViewport) {
+          w.lastRect = r; // free fresh rect — keeps the limbo tiebreaker current
+          w.isInViewport = true;
+          w.tInBand ??= performance.now();
+          repaired++;
+        }
+      } else if (w.isInViewport) {
+        // Two-strike release (temporal hysteresis — drill round 6): a
+        // virtualizer can transiently park a recycling shell at odd
+        // coordinates, and a single out-of-band read then releases + hides a
+        // badge that is back in-band by the next sweep — the release/repair
+        // oscillation the firehose showed (sweep ~117 → stale_false_repair
+        // ~106 → re-reveal). Require out-of-band on TWO consecutive sweeps
+        // (~100ms apart) before the destructive direction fires; entries are
+        // still repaired immediately.
+        if (!this.pendingExit.has(w)) {
+          this.pendingExit.add(w);
+          continue;
+        }
+        this.pendingExit.delete(w);
         w.lastRect = r;
         w.isInViewport = false;
         // Same path as the IO exit branch: cancels any pending claim,
@@ -187,6 +206,8 @@ export class IntersectionTracker {
         // dormant. ≥1000px off-screen, so the hide is imperceptible.
         this.queueRelease(w);
         released++;
+      } else {
+        this.pendingExit.delete(w);
       }
     }
     const rec = (globalThis as { __branchkitRecordCpu?: (label: string, ms: number) => void }).__branchkitRecordCpu;

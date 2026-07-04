@@ -469,12 +469,14 @@ describe('IntersectionTracker.sweepBand', () => {
     expect(farBelow.isInViewport).toBe(false);
   });
 
-  it('releases in-band-flagged wrappers whose geometry left the band', async () => {
+  it('releases in-band-flagged wrappers only after two consecutive out-of-band sweeps', async () => {
     const store = new WrapperStore();
     const tracker = new IntersectionTracker(store, { onCodewordsChanged: vi.fn() });
 
     // Flag says in-band (stale-TRUE — the IO exit never delivered), geometry
-    // is 5000px down. The sweep must flip the flag and route through
+    // is 5000px down. First sweep only arms the two-strike ledger (a
+    // virtualizer can transiently park a shell at odd coordinates); the
+    // second consecutive out-of-band sweep flips the flag and routes through
     // queueRelease: codeword cleared, stashed for sticky reclaim.
     const exiting = new ElementWrapper(
       fakeElement('exiting', { left: 0, top: 5000, width: 10, height: 10 }),
@@ -484,17 +486,44 @@ describe('IntersectionTracker.sweepBand', () => {
     store.addWrapper(exiting);
 
     setupClaimResponse([]);
-    const { repaired, released } = tracker.sweepBand(800, 600);
+    const first = tracker.sweepBand(800, 600);
+    expect(first.released).toBe(0); // strike one — no destructive action
+    expect(exiting.isInViewport).toBe(true);
+    expect(exiting.scanned.codeword).toBe('arch bake');
+
+    const second = tracker.sweepBand(800, 600);
     await tracker.flushNow();
 
-    expect(repaired).toBe(0);
-    expect(released).toBe(1);
+    expect(second.repaired).toBe(0);
+    expect(second.released).toBe(1);
     expect(exiting.isInViewport).toBe(false);
     expect(exiting.scanned.codeword).toBe('');
     expect(exiting.preferredCodeword).toBe('arch bake');
     // The freed letter is back in the local reservoir — the round-2 pool
     // starvation fix. A fresh claim must be funded by it.
     expect(labelReservoir.claim(1)).toEqual(['arch bake']);
+  });
+
+  it('a bounce back in-band between sweeps clears the exit strike', () => {
+    const store = new WrapperStore();
+    const tracker = new IntersectionTracker(store, { onCodewordsChanged: vi.fn() });
+
+    // Mutable rect so the same element can move between sweeps.
+    let top = 5000;
+    const el = {
+      tagName: 'BUTTON', isConnected: true,
+      getBoundingClientRect: () => ({ left: 0, top, width: 10, height: 10, right: 10, bottom: top + 10, x: 0, y: top, toJSON: () => ({}) }),
+    } as unknown as Element;
+    const w = new ElementWrapper(el, fakeScanned({ codeword: 'arch' }));
+    w.isInViewport = true;
+    store.addWrapper(w);
+
+    expect(tracker.sweepBand(800, 600).released).toBe(0); // strike one
+    top = 100; // transient park over — back in band
+    tracker.sweepBand(800, 600); // clears the strike
+    top = 5000;
+    expect(tracker.sweepBand(800, 600).released).toBe(0); // strike one again
+    expect(w.scanned.codeword).toBe('arch'); // never released
   });
 
   it('skips settled, limbo, disconnected, and boxless wrappers', () => {
