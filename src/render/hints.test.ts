@@ -467,6 +467,72 @@ describe('HintBadge bk-pending opacity indicator (voice-not-ready state)', () =>
   });
 });
 
+describe('HintBadge wave-atomic reveal (bk-staged hold)', () => {
+  // DESIGN_FLING_WAVE Part 1f: a staged show paints and places everything
+  // but holds opacity at 0 until the wave manager reveals the accumulated
+  // wave in one batch — one visual pop instead of a per-burst trickle.
+
+  const label = { letter: 'a', words: ['arch'], isSingle: true };
+
+  afterEach(() => {
+    containerTracker.reset();
+    targetTracker.reset();
+    hostTracker.reset();
+  });
+
+  function inner(badge: HintBadge): HTMLDivElement {
+    return (badge as unknown as { inner: HTMLDivElement }).inner;
+  }
+
+  it('staged show holds bk-staged (logically visible, eye-invisible); reveal drops it', async () => {
+    const root = mount('<div id="c"><button id="btn">click</button></div>');
+    const badge = new HintBadge(root.querySelector('#btn')!, label, 'button', 'word');
+    badge.show(true, /* staged */ true);
+    await new Promise(r => requestAnimationFrame(() => r(undefined)));
+    expect(badge.isVisible).toBe(true);
+    expect(badge.isStaged).toBe(true);
+    expect(inner(badge).classList.contains('visible')).toBe(true);
+
+    badge.reveal();
+    expect(badge.isStaged).toBe(false);
+    expect(inner(badge).classList.contains('visible')).toBe(true);
+    badge.remove();
+  });
+
+  it('hide() clears the staged hold so a later direct show cannot strand invisible', async () => {
+    const root = mount('<div id="c"><button id="btn">click</button></div>');
+    const badge = new HintBadge(root.querySelector('#btn')!, label, 'button', 'word');
+    badge.show(true, true);
+    badge.hide();
+    expect(badge.isStaged).toBe(false);
+
+    badge.show(true); // direct (unstaged) re-show
+    await new Promise(r => requestAnimationFrame(() => r(undefined)));
+    expect(badge.isStaged).toBe(false);
+    expect(inner(badge).classList.contains('visible')).toBe(true);
+    badge.remove();
+  });
+
+  it('a direct show clears a stale staged class', () => {
+    const root = mount('<div id="c"><button id="btn">click</button></div>');
+    const badge = new HintBadge(root.querySelector('#btn')!, label, 'button', 'word');
+    // Force the stale state directly (staged class present while hidden).
+    inner(badge).classList.add('bk-staged');
+    badge.show(true);
+    expect(badge.isStaged).toBe(false);
+    badge.remove();
+  });
+
+  it('reveal is idempotent and safe on a never-staged badge', () => {
+    const root = mount('<div id="c"><button id="btn">click</button></div>');
+    const badge = new HintBadge(root.querySelector('#btn')!, label, 'button', 'word');
+    badge.show(true);
+    expect(() => { badge.reveal(); badge.reveal(); }).not.toThrow();
+    expect(badge.isStaged).toBe(false);
+    badge.remove();
+  });
+});
+
 describe('clampOffscreenBadgeBox (paint-the-band write-time clamp)', () => {
   const VW = 1000;
   const VH = 800;

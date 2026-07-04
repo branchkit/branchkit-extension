@@ -345,6 +345,61 @@ shallow. That is the whole Part-1 story with no stage left to blame;
 perception unchanged after THAT means QuickBase's own swap timing —
 measure content-paint-to-badge directly before touching anything else.
 
+## Drill round 5 + Rango A/B (2026-07-04) — the wave must reveal as one
+
+Round 5 numbers: pipeline converged. dom_seen_to_attached p50 26 / p90
+32, dom_seen_to_shown p50 139 / p90 328 — 4x the baseline, all stages
+individually healthy. User perception across all five rounds: flat.
+Then the decisive re-run of the Rango A/B on the same grid: Rango is
+near-instantaneous to the eye; BranchKit is visibly INCREMENTAL — the
+user watches badges load in stages, including a second visual phase
+where translucent (bk-pending) badges solidify.
+
+The A/B kills the QuickBase-content-timing hypothesis (Rango sees the
+same DOM at the same moments) and isolates the remaining gap as
+REVEAL SHAPE, not latency: our wave lands as 4-6 micro-pops (per-burst
+paints spread across p50 139 → p90 328, then ACK-driven opacity
+flips), Rango's lands as ONE unbudgeted batch behind a 100ms trailing
+debounce, born fully opaque. The eye reads one pop as instant and
+staged arrival as loading, at similar total latency. This is the
+wave-hold reveal the original note deferred with "revisit only if the
+eye still reads ripple" — the eye reads ripple.
+
+Part 1f — wave-atomic reveal:
+- `HintBadge.show(grammarReady, staged)`: staged paint does everything
+  today's show does (colors, placement, accel, the rAF `.visible`
+  flip) plus a `bk-staged` class that holds opacity at 0. CSS rule
+  ordered after `.visible` and `.bk-pending` so it wins both;
+  `reveal()` removes it and the existing 0.12s opacity transition
+  produces the Rango-style fade-in pop. `hide()` and unstaged `show()`
+  clear the class (a released-then-reshown badge must not strand
+  invisible).
+- Only `prepareBadge` (the churn build path) stages. First paint
+  (showHints), settle re-shows, and pointer/visibility rechecks keep
+  the direct show — they are batch-shaped or single-badge already.
+- Wave manager in content.ts: staged wrappers accumulate;
+  trailing-quiesce timer (WAVE_REVEAL_QUIESCE_MS = 80, reset per build
+  pass) + non-extending deadline (WAVE_REVEAL_MAX_WAIT_MS = 250, armed
+  at first stage) — the whenDOMSettles debounce+deadline shape, both
+  session-owned timeouts. Reveal = one loop of class removals (style
+  writes only, one recalc). A lone badge on a quiet page pays ≤80ms —
+  imperceptible.
+- bk-pending absorption for free: the grammar-ACK sync debounce
+  (~80ms) mostly lands inside the hold, so `markGrammarReady` strips
+  bk-pending BEFORE reveal — badges are born solid like Rango's, and
+  the two-phase translucent→opaque artifact the user called out mostly
+  disappears.
+- Honest metrics: `tFirstShown` stamps at REVEAL for staged badges
+  (not at show), and the paint_stability sampler counts a staged badge
+  as not-yet-shown (`isStaged` getter) — the ring keeps measuring what
+  the eye sees, which is the entire lesson of this arc.
+
+Prediction for drill round 6: a fling paints as 1-2 solid pops
+~150-250ms after each swap wave, no visible trickle, no translucent
+phase; the ring's fill slope becomes near-vertical steps. If the eye
+STILL reads it as slower than Rango after that, measure the pop
+timestamps against Rango's on video before touching anything else.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is

@@ -1602,9 +1602,59 @@ function prepareBadge(w: ElementWrapper): boolean {
   if (!w.hint) {
     w.hint = new HintBadge(w.element, label, w.category, getDisplayMode());
   }
-  w.hint.show(isPaintReady(w));
-  w.tFirstShown ??= performance.now();
+  // Staged show (wave-atomic reveal, notes/DESIGN_FLING_WAVE.md Part 1f):
+  // fully painted and placed, held at opacity 0 until the wave manager
+  // reveals the accumulated wave in one pop. tFirstShown stamps at REVEAL —
+  // the ring and the stage stamps must keep measuring what the eye sees.
+  w.hint.show(isPaintReady(w), /* staged */ true);
+  stageForWaveReveal(w);
   return true;
+}
+
+// --- Wave-atomic reveal (notes/DESIGN_FLING_WAVE.md Part 1f) ---
+//
+// The churn build path paints in bursts as claims land, which the eye reads
+// as incremental loading; Rango paints each accumulated wave in one batch
+// behind a trailing 100ms debounce and reads as instant at similar total
+// latency. Staged badges accumulate here and reveal together: trailing
+// quiesce debounce (reset per build pass) + non-extending deadline (armed at
+// first stage) — the whenDOMSettles debounce+deadline shape, session-owned
+// timeouts, wedge-safe. Reveal is one loop of class removals (style writes
+// only); the .visible opacity transition supplies the fade-in pop. The
+// grammar-ACK sync debounce (~80ms) mostly lands inside the hold, so badges
+// reveal already-solid instead of doing the translucent→opaque two-step.
+const WAVE_REVEAL_QUIESCE_MS = 80;
+const WAVE_REVEAL_MAX_WAIT_MS = 250;
+const stagedWave = new Set<ElementWrapper>();
+let waveQuiesceTimer: ReturnType<typeof setTimeout> | null = null;
+let waveDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
+
+function stageForWaveReveal(w: ElementWrapper): void {
+  stagedWave.add(w);
+  if (waveQuiesceTimer) clearTimeout(waveQuiesceTimer);
+  waveQuiesceTimer = pageSession.resources.timeout(revealWave, WAVE_REVEAL_QUIESCE_MS);
+  if (waveDeadlineTimer === null) {
+    waveDeadlineTimer = pageSession.resources.timeout(revealWave, WAVE_REVEAL_MAX_WAIT_MS);
+  }
+}
+
+function revealWave(): void {
+  if (waveQuiesceTimer) { clearTimeout(waveQuiesceTimer); waveQuiesceTimer = null; }
+  if (waveDeadlineTimer) { clearTimeout(waveDeadlineTimer); waveDeadlineTimer = null; }
+  if (stagedWave.size === 0) return;
+  const now = performance.now();
+  let revealed = 0;
+  for (const w of stagedWave) {
+    // A badge hidden (band exit) or destroyed since staging just drops out;
+    // hide() already cleared its staged class.
+    if (w.hint?.isVisible && w.hint.isStaged) {
+      w.hint.reveal();
+      w.tFirstShown ??= now;
+      revealed++;
+    }
+  }
+  stagedWave.clear();
+  if (revealed > 0) firehoseStep('wave:reveal', revealed, 20);
 }
 
 // Build-up half of the level-triggered lifecycle reconciler (Phases 3+5 of
@@ -3197,7 +3247,9 @@ function paintSamplerTick(): void {
   for (const w of store.all) {
     if (w.hint) {
       painted++;
-      if (w.hint.isVisible) shown++;
+      // Staged badges (wave-atomic reveal hold) are opacity-0 — not shown to
+      // the eye, so not shown to the ring. The whole lesson of this arc.
+      if (w.hint.isVisible && !w.hint.isStaged) shown++;
     }
   }
   // 'tr' count as the content-arrival proxy (live collection; .length is
