@@ -117,6 +117,29 @@ describe('reconcileClipObservation', () => {
     expect(clipObserverDebug()).toEqual({ roots: 0, targets: 0 });
   });
 
+  it('rebinds a target reparented between two still-connected scrollers', () => {
+    // QuickBase's double-buffered swap: rows render inside a hidden buffer
+    // container, then move into the live pane — BOTH containers stay
+    // connected. The old isConnected-only staleness check kept the buffer
+    // binding, whose IO reported permanent non-intersection → clipped=true
+    // on ~186 visible targets, dropping them from the voice-matchable
+    // _strict set and sustaining the round-19 settle/strict-push loop. The
+    // containment check must re-root the binding.
+    setClipObserverEnabled(true);
+    const buffer = makeScroller();
+    const livePane = makeScroller();
+    const btn = document.createElement('button');
+    buffer.appendChild(btn);
+    const w = wrapperFor(btn);
+    reconcileClipObservation([w]);
+    expect(boundClipRoot(btn)).toBe(buffer);
+
+    livePane.appendChild(btn); // reparent; buffer STAYS connected
+    reconcileClipObservation([w]);
+    expect(boundClipRoot(btn)).toBe(livePane);
+    expect(clipObserverDebug()).toEqual({ roots: 1, targets: 1 });
+  });
+
   it('rebinds when the wrapper was recreated for a still-bound element', () => {
     setClipObserverEnabled(true);
     const scroller = makeScroller();

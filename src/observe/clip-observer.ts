@@ -113,19 +113,30 @@ export function reconcileClipObservation(wrappers: Iterable<ElementWrapper>): vo
     wanted.add(w.element);
     const boundRoot = rootByTarget.get(w.element);
     if (boundRoot) {
-      // Staleness recheck (cheap: two Map/flag reads, no layout). A
-      // same-task reparent never disconnects the element, so it skips every
-      // limbo/unobserve reset path — without this, a target whose old
-      // scroller detached stays bound to it forever: the detached subtree
-      // stays pinned (defeating the last-target release) and the IO reports
-      // a permanent non-intersection → visible badge wrongly hidden. Same
-      // reset applies when the wrapper was recreated for the element
+      // Staleness recheck (cheap: Map/flag reads + one containment walk, no
+      // layout). A same-task reparent never disconnects the element, so it
+      // skips every limbo/unobserve reset path — without this, a target
+      // whose old scroller detached stays bound to it forever: the detached
+      // subtree stays pinned (defeating the last-target release) and the IO
+      // reports a permanent non-intersection → visible badge wrongly hidden.
+      // Same reset applies when the wrapper was recreated for the element
       // (attribute flap detach→reattach between settles) so clip signals
-      // land on the live wrapper, not the dead one. Residual known gap: a
-      // reparent between two still-connected scrollers keeps the stale
-      // binding (recomputing findClippingScroller per target per settle
-      // would trade away the bounded-to-churn cost this loop guarantees).
-      if (boundRoot.isConnected && wrapperByTarget.get(w.element) === w) continue;
+      // land on the live wrapper, not the dead one.
+      //
+      // The containment check closes what used to be a documented residual
+      // gap: a reparent between two still-connected scrollers kept the stale
+      // binding. QuickBase's double-buffered swap does that reparent at
+      // SCALE — rows render in a hidden buffer container, then move into the
+      // live pane — leaving ~186 visible targets bound to the buffer, whose
+      // IO reports permanent non-intersection → clipped=true on shown
+      // badges → they drop out of the voice-matchable _strict set AND the
+      // hide→unobserve-clears-clipped→re-push→re-observe oscillator sustains
+      // a ~620ms settle loop (169-entry strict re-push per cycle, 1.4k
+      // plugin writes/sec — DESIGN_FLING_WAVE round 19). contains() is a
+      // pointer walk on already-touched nodes; the bounded-to-churn cost
+      // this loop guarantees is unchanged.
+      if (boundRoot.isConnected && boundRoot.contains(w.element)
+        && wrapperByTarget.get(w.element) === w) continue;
       unobserveTarget(w.element);
     }
     // The scroll container that actually CLIPS this target. Returns null for a

@@ -1024,6 +1024,56 @@ wrappers locate the revealed region, so the sweep could walk their
 container subtrees instead of the whole document. Not attempted —
 measure 18c first.
 
+## Round 19 — the 30-60s drill: not discovery at all; the clip
+## observer's reparent gap + the settle/strict-push oscillator
+## (2026-07-04)
+
+Drill on build 03:40 (18c live). User: the fling took 30-60s — "much
+longer than normal". Supported, and it is NOT the discovery pipeline
+(per-source stats were healthy: sweep cohort attached_to_shown p90
+52ms). It was a self-sustaining loop, ~620ms period, running 80+
+seconds:
+
+- settle pass → `stale_false_repair size=9` (the same 9 flags every
+  cycle) → `strict-viewport:delta 169` (the same re-push every cycle)
+  → reposition 586 → repeat. Actuator side: **1383 plugin state
+  writes in one second** at peak, 5.5k+ writes over the window.
+- Snapshot mid-loop: **186 badges shown on-screen with clipped=true**
+  (occludedBy split: 180 clipped-only + 6 both). The clip observer is
+  misreporting at scale.
+
+Root cause — the clip observer's DOCUMENTED residual gap
+(clip-observer.ts staleness recheck): a reparent between two
+still-connected scrollers kept the stale binding, because the check
+was `boundRoot.isConnected` only. QuickBase's double-buffered swap
+does that reparent at scale: rows render inside a hidden buffer
+container, then MOVE into the live pane; both containers stay
+connected. The IO stays rooted at the buffer → permanent
+non-intersection → clipped=true on visible targets. Downstream:
+(a) those ~180 targets drop out of the voice-matchable `_strict`
+collection — painted badges voice cannot activate (a standing
+correctness bug this likely explains beyond this grid); (b) the
+oscillator: occluded → hide → membership churn → unobserve clears
+clipped → strict flips → re-push → re-observe against the stale root
+→ clipped=true again. Round 18's faster settle cadence made the loop
+tighter and more visible; the seam predates the arc.
+
+Fix: containment joins the staleness check —
+`boundRoot.isConnected && boundRoot.contains(w.element)` — so a
+reparented target re-roots to its real clipping scroller and the
+fresh root's initial IO delivery corrects `clipped`. contains() is a
+pointer walk, no layout; the bounded-to-churn per-settle cost is
+unchanged. Unit test pins the two-connected-scrollers reparent.
+
+Verify at next drill: the settle loop should die within a cycle or
+two of the swap (no sustained `strict-viewport:delta ~169` trains in
+the firehose), shown-but-clipped ≈ 0 in the snapshot, and — the
+correctness half — previously unmatchable painted badges on this grid
+become voice-activatable. If a loop persists, the remaining suspects
+are the 9-flag geometry-vs-IO disagreement (clip-blind geometryInBand
+vs the band IO) and the sync-success reconcile at label-sync:641 as
+the loop motor; both are documented here for the next round.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
