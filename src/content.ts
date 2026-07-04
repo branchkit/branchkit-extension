@@ -3590,6 +3590,24 @@ function recordApplied(lists: ReconcilePlanLists): void {
   }
 }
 
+// Single-flight for the mass-reveal direct paint. Multiple settles in one
+// reveal burst coalesce into one claim-flush + paint on the yield chain.
+let massRevealPaintQueued = false;
+function scheduleMassRevealPaint(repairs: number): void {
+  if (massRevealPaintQueued) return;
+  massRevealPaintQueued = true;
+  scheduleYieldTask(() => {
+    massRevealPaintQueued = false;
+    if (pageSession.isTornDown) return;
+    void (async () => {
+      firehoseStep('mass_reveal:direct_paint', repairs, 0);
+      reconcile();
+      await pageSession.tracker.flushNow();
+      if (pageSession.hintsVisible) await showHints(activeCategory ?? undefined);
+    })();
+  });
+}
+
 function runSettlePipeline(discovery: 'band' | 'store'): void {
   if (pageSession.hintsVisible) {
     // Clip-membership sync FIRST: its leave-path is the one mid-pipeline
@@ -3626,6 +3644,18 @@ function runSettlePipeline(discovery: 'band' | 'store'): void {
     // double-buffered flip repairs ~100+ stale band flags in one plan,
     // and that sweep skips the idle gate (round 18 fast-arm).
     scheduleBandDiscovery(discovery, planLists.toRepair.length);
+    // Mass-reveal DIRECT paint (round 33d): a ≥fast-arm repair batch is a
+    // double-buffered flip revealing already-attached wrappers. The sweep's
+    // follow-through (round 33c) covers them, but its entry queues behind
+    // the single-flight walk — ~0.7s mid-storm on the client grid, the
+    // residual half of the rows→badges gap after 33c (video: +3.1s → +1.5s
+    // vs Rango's +0.4s). The repaired cohort needs NO walk — only claim
+    // flush + paint — so run that follow-through directly on the yield
+    // chain. Idempotent with the sweep's own pass; bounded to mass
+    // reveals.
+    if (planLists.toRepair.length >= REVEAL_REPAIR_FAST_ARM) {
+      scheduleMassRevealPaint(planLists.toRepair.length);
+    }
     if (discovery === 'store') scheduleReconcile();
     applyOcclusionPlan(gather);
     reconcileScrollAccel();
