@@ -44,7 +44,6 @@ import { getHintVisibility } from '../config';
 import { labelReservoir } from './label-reservoir';
 import { bkLog } from '../debug/bk-log';
 import { firehoseStep } from '../debug/firehose';
-import { yieldTask } from '../lifecycle/page-session';
 import { recordSyncPost } from '../debug/sync-trace';
 
 /**
@@ -628,34 +627,36 @@ export async function syncNow(reason: string): Promise<void> {
     return;
   }
 
-  // One delta-push chunked at DEFAULT_SCAN_BATCH_SIZE so each round-trip
-  // stays small. Deletes ride on the first batch's drainPendingDeletes.
+  // One delta-push chunked at DEFAULT_SCAN_BATCH_SIZE so each POST stays
+  // small. PIPELINED (round 29c): mid-storm a single round-trip runs
+  // ~430ms p50 (SW contention + the response continuation queueing behind
+  // the page's storm tasks), and with letters reshuffling per swap a fling
+  // delta is ~40 chunks — sequential awaits summed to the 3-3.5s
+  // translucent window the user read as "not loaded". The plugin imposes
+  // exactly two ordering constraints (batch.go admitGrammarBatch):
+  // delete_codewords ride batch 0 and must apply before any Put that
+  // reuses a freed letter, and is_final drives epoch finalization. So:
+  // batch 0 posts FIRST and is awaited; the middle chunks post fully in
+  // parallel (independent Puts of distinct codewords — arrival order
+  // irrelevant, total = max round-trip instead of the sum); the final
+  // chunk posts after every middle response settles.
+  const chunks: ElementWrapper[][] = [];
   for (let start = 0; start < puts.length; start += DEFAULT_SCAN_BATCH_SIZE) {
-    const end = Math.min(start + DEFAULT_SCAN_BATCH_SIZE, puts.length);
-    const chunk = puts.slice(start, end);
-    const isLast = end === puts.length;
-    // Capture which deletes ride this batch — postBatch's drain
-    // empties pendingDeleteCodewords for us. We track the snapshot so
-    // sentCodewords can be updated on a successful response.
-    const deletesRidingHere = start === 0 ? pendingDeleteCodewords.slice() : [];
-    stampStrictViewport(chunk);
-    const resp = await postBatch({
-      session_id: sessionId,
-      batch_index: Math.floor(start / DEFAULT_SCAN_BATCH_SIZE),
-      is_final: isLast,
-      kind: 'incremental',
-      ...sessionMeta,
-      elements: chunk.map(w => w.scanned),
-    });
+    chunks.push(puts.slice(start, Math.min(start + DEFAULT_SCAN_BATCH_SIZE, puts.length)));
+  }
+  let refused = false;
+
+  const handleResponse = (chunk: ElementWrapper[], resp: GrammarBatchResponse, deletesRiding: string[], isLast: boolean): void => {
     if (isWholesaleRefusal(resp)) {
-      // Nothing in this chunk (or any later one) was applied. Re-queue every
-      // remaining put — the drain-time validity filter handles wrappers that
-      // detach in the meantime — restore the deletes that rode this batch,
-      // and retry once calibration has had a chance to finish.
-      for (const w of puts.slice(start)) pendingPuts.add(w);
-      pendingDeleteCodewords.push(...deletesRidingHere);
+      // Applied nothing (calibration). Re-queue this chunk's puts, restore
+      // the deletes that rode it, stop dispatching further chunks, and
+      // retry once calibration releases. Already-in-flight siblings settle
+      // through this same handler and re-queue themselves too.
+      refused = true;
+      for (const w of chunk) pendingPuts.add(w);
+      pendingDeleteCodewords.push(...deletesRiding);
       bkLog('BK_SYNC_REFUSED', {
-        result: resp.result, requeued: puts.length - start, deletes: deletesRidingHere.length,
+        result: resp.result, requeued: chunk.length, deletes: deletesRiding.length,
       });
       scheduleRefusalRetry();
       return;
@@ -669,7 +670,7 @@ export async function syncNow(reason: string): Promise<void> {
     const succeededSet = new Set(resp.succeeded);
     for (const cw of succeededSet) sentCodewords.add(cw);
     if (resp.result === 'ok' || resp.result === 'stored') {
-      for (const cw of deletesRidingHere) sentCodewords.delete(cw);
+      for (const cw of deletesRiding) sentCodewords.delete(cw);
     }
     // Voice-layer ACK: codewords the plugin just confirmed are live in the
     // grammar. ElementWrapper.markGrammarReady flips the flag and, if the
@@ -686,15 +687,36 @@ export async function syncNow(reason: string): Promise<void> {
     if (deps.isHintsVisible() && resp.succeeded.length > 0) {
       deps.reconcile();
     }
-    // Front-of-queue resume between chunks (round 29b): with letters
-    // reshuffling per swap (the round-29 trade), a fling's delta is ~40
-    // chunks — and a setTimeout(0) hop queues BEHIND the page's storm tasks
-    // at 50-150ms each, which put the median badge's grammar ACK 3.5s
-    // behind its paint (shown_minus_ack p50 −3,529 on the first simple-model
-    // drill). Same starvation class, same fix as the discovery walk
-    // (round 17): scheduler.yield resumes in ~1-4ms.
-    await yieldTask();
+  };
+
+  const postChunk = async (index: number, isLast: boolean): Promise<void> => {
+    const chunk = chunks[index];
+    const deletesRiding = index === 0 ? pendingDeleteCodewords.slice() : [];
+    stampStrictViewport(chunk);
+    const resp = await postBatch({
+      session_id: sessionId,
+      batch_index: index,
+      is_final: isLast,
+      kind: 'incremental',
+      ...sessionMeta,
+      elements: chunk.map(w => w.scanned),
+    });
+    handleResponse(chunk, resp, deletesRiding, isLast);
+  };
+
+  // Batch 0 (carries the deletes) alone and awaited — a freed letter
+  // reused by a later chunk's Put must see its Delete applied first.
+  await postChunk(0, chunks.length === 1);
+  if (refused || chunks.length === 1) { void reason; return; }
+
+  // Middle chunks in parallel; the final chunk waits for all of them so
+  // is_final genuinely arrives last (epoch finalization).
+  if (chunks.length > 2) {
+    await Promise.all(
+      chunks.slice(1, -1).map((_, i) => refused ? Promise.resolve() : postChunk(i + 1, false)),
+    );
   }
+  if (!refused) await postChunk(chunks.length - 1, true);
 
   void reason;
 }
