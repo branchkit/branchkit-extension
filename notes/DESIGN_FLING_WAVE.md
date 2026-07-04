@@ -1678,6 +1678,65 @@ Next drill reads (same gesture as the round-22 video):
   question (repop waiting on letters held by doomed-but-connected
   wrappers) before designing anything.
 
+## Round 22b — drill on the new instruments: the wipe is measured, the
+## pool is acquitted, and the REAL tail is the grammar sync stalling
+## for ~25s after the swap (2026-07-04, snapshot 15-55 + actuator.log)
+
+User: "still same speed." The new instruments explain why, and they
+point somewhere new.
+
+What the drill measured (snapshot 15-55, build 06:23):
+- **The churn is real and now visible**: 593 shown-then-detached
+  wrappers lifetime, 300 in the ring, clustered at the swap (t≈9.2s:
+  75 wipes; t≈9.7s: 193). Lever 1 (sweep-fresh lastRect) fired for
+  the first time in the arc — rebind_position 0 → 45, rebind_key 113
+  — but refuse_no_match 280 still dominates: most replacements
+  rebuild.
+- **Viewport dip, measured without video**: shown_strict_viewport
+  174 → 121 at the swap, flat ~2.3s, recovered 121→145→166→173 by
+  +3.1s — while band-scoped `shown` sat at ~405 the whole time
+  (masking confirmed a second time).
+- **Pool ACQUITTED**: pool_free 99→129→211 across the window — never
+  exhausted. The lever-3 letter-starvation hypothesis is dead.
+- **The kicker — shown_minus_ack p50 −1671ms, and 289 wrappers
+  grammar_ready=false at snapshot time, ~17s after the swap.** The
+  repop painted fast (attached→shown p50 67ms) but sat TRANSLUCENT.
+  actuator.log: the post-swap incremental syncNow (15:55:00.6, ran
+  1.6s) produced ZERO plugin-side grammar-batch receipts; nothing
+  shipped until a full session-rotation republish at 15:55:23-27
+  (27 batches, epoch 15→403) — **~25s after the swap** — interleaved
+  with stale-session batches failing (failed=15/failed=5; the
+  transport-failure path detaches those wrappers → more churn).
+  Epoch stats: mismatches 1, republishes 1, skippedBusy 9.
+
+So the current perceived beat decomposes as: badges appear ~1.0-1.4s
+post-reveal (better than the video era), then sit translucent for up
+to tens of seconds until the epoch handshake's rotate+republish
+converges. The user reads translucent as not-arrived (established in
+round 15); "same speed" is generous.
+
+OPEN (the next diagnosis, before any fix): why did the post-swap
+incremental sync ship nothing? The 55:00.6 syncNow ran 1.6s with no
+receipts — candidates: sendMessage/SW failures swallowed silently
+(postBatch's synthetic-error path populates `failed` and the caller
+DETACHES the chunk — label-sync.ts:618-622 — a churn amplifier if
+transport blips mid-storm), a wholesale refusal + starved retry, or a
+session rotation racing the sync (the failed=15/failed=5 batches were
+old-session Puts landing after rotation). The instrumentation gap:
+postBatch outcomes are invisible unless they refuse wholesale —
+BK_SYNC_REFUSED logs, but per-chunk transport failures and their
+detach cascades do not. Next lever: log every postBatch outcome
+(result, chunk size, session, elapsed) into a ring surfaced in the
+snapshot (sync_trace), so the next drill names the stall's mechanism
+the way churn/pool got named this drill. Fix design follows THAT
+data, not before.
+
+Also confirmed this drill, parked for later: the strict-flag
+depression (badges shown but in_strict_viewport=false for ~2.3s
+post-swap — voice can't match painted badges during it; round-19
+residue class, likely clip re-root latency at the buffer→pane
+reparent).
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
