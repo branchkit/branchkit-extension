@@ -3014,3 +3014,32 @@ blink (user sign-off pending — reverses part of the round-29 deletion).
 VERIFY (user): reload ext, close+reopen tab, fling. Expect: translucent
 badges land with/immediately after rows across the whole population,
 including the lookup columns as their text arrives; solid ~0.5s later.
+
+## Round 34d — the eye ships INTO the extension (846c320)
+
+Answering the user's meta-question ("why do my eyes diverge from the
+logs?"): three systematic biases, every arc divergence an instance —
+(1) metrics clock from code milestones, the eye clocks from photons
+(rounds 21/33); (2) metrics credit FIRST paint, the eye scores the final
+stable result (the flash, rounds 30/34); (3) percentiles average, the
+eye takes the viewport's worst case (the trickle, round 34b/c). Every
+resolution came from an instrument that watches what the user watches.
+
+That instrument now lives in production: HintBadge.eyeState() reads the
+badge's COMPUTED render state (inner rect, computed opacity/visibility
+on inner+outer, viewport membership) — possible without shadow-piercing
+because the badge object holds its own element refs. The scroll-armed
+10Hz paint-stability sampler appends four photon columns
+[eye_vp_solid, eye_vp_transl, eye_solid, eye_transl] (snapshot now
+carries a `columns` legend). Cost: one batched read pass per 100ms tick,
+only during scroll windows (≤1 forced layout/tick).
+
+First fixture sample proved the point instantly: flags said shown=223,
+photons said 99 rendering (69 in-viewport). Every future user drill
+carries this series — "my eyes say X" is now adjudicable on one clock
+against the flag columns and the per-wrapper stamps.
+
+Note: fixture recovery variance across runs is wide (148-784ms across
+the 34c/34d runs, same build class) — treat single-run fixture recovery
+as ±300ms noise; trends need 2-3 runs. The eye columns don't fix that;
+they make the real drills the authoritative series instead.
