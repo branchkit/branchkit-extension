@@ -1074,6 +1074,23 @@ are the 9-flag geometry-vs-IO disagreement (clip-blind geometryInBand
 vs the band IO) and the sync-success reconcile at label-sync:641 as
 the loop motor; both are documented here for the next round.
 
+VERIFIED (drill on build 04:09, snapshot 04-14): oscillator dead —
+strict re-push trains 169/cycle → 5-9; write storms only at the
+legit fling moments; clipping honest (201 shown-but-clipped, but
+only 5 inside the viewport — the rest are scroll-ahead badges
+genuinely outside the pane box; was 186 stale-clipped IN view);
+the residual 9-repair/5-strict tick dies completely at quiet (zero
+repairs after the drill). User: rows "painted one by one, but much
+quicker." The one-by-one IS QuickBase's own progressive row render —
+mo-source dom_seen_to_shown p50 129 / p90 303ms means each badge
+lands ~130-300ms behind its row's DOM, i.e. content-speed. Remaining
+non-blocking cleanups, recorded not scheduled: (a) the fling pushes
+the whole population's strict flags ~3× (327 entries each, ~1k
+writes/sec bursts for a few seconds — wasteful, imperceptible);
+(b) the 9-flag repair flap while scrolling (geometry-vs-IO
+disagreement, dies at quiet); (c) the 55 no-MO-stamp buttons/inputs
+question is moot at current sweep speed.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
