@@ -2911,3 +2911,36 @@ backlog.
 VERIFY: user reloads the extension (close+reopen QuickBase tabs — F5
 breaks content scripts), flings the client grid: badges should now arrive
 with the repair pass (~100-400ms after rows), translucent then solid.
+
+### Round 33d — video on the 33c build: +3.1s → +1.5s; residual = sweep
+### entry; fix = direct paint from the settle pipeline (98661ac)
+
+branchkit3.mov (user gesture, client grid, 33c build): void ~2.25s → rows
+~2.6s → first row badges ~4.15s → full ~4.5s, translucent top-down. The
+33c fix halved the gap (+3.1s → +1.5s); Rango's reference beat is +0.4s.
+
+The 33c-build log shows the remaining ~1s: stale_false_repair 227 lands
+~200ms after rows, but the paint follow-through rode the discovery sweep,
+whose ENTRY queues behind the single-flight walk (repair 40.586 →
+showHints 41.307 = +0.72s). The repaired cohort needs no walk at all.
+
+FIX: runSettlePipeline now fires a single-flight direct follow-through
+(reconcile → tracker.flushNow → showHints) on the yield chain whenever a
+plan repairs ≥REVEAL_REPAIR_FAST_ARM flags. The sweep keeps its 33c
+follow-through for walks that add new elements; double-running is
+idempotent and bounded to mass reveals.
+
+Fixture (veil_ms=2500 cssom_reveal): first paint +443-517ms → +204ms
+TRANSLUCENT / +483ms solid — the bk-pending phase now visibly leads. All
+gates green. One "recovery: NEVER" fixture flake observed (baseline
+variance across boot); rerun clean.
+
+Remaining known tail (NOT this fix's target): 78 lookup-column anchors at
+~2.6s = QuickBase's own related-data fetch latency (attach→shown p50 47ms
+once text lands — the page floor, shared by Rango). Optional polish: wire
+the layer-3 RO directly to 0×0-parked candidates (attention gate can't
+pass zero-area elements; ro_signals 8 vs 10,244 parked) to shave the
+~300-400ms sweep-cadence catch after text-fill.
+
+VERIFY: reload extension, close+reopen the QuickBase tab, fling. Expect
+first row badges within ~300-500ms of rows (translucent), solid ~1s later.
