@@ -2944,3 +2944,39 @@ pass zero-area elements; ro_signals 8 vs 10,244 parked) to shave the
 
 VERIFY: reload extension, close+reopen the QuickBase tab, fling. Expect
 first row badges within ~300-500ms of rows (translucent), solid ~1s later.
+
+## Round 34 — the speedups unmasked the double-render flash; strong keys
+## widened to cover it (73e8b09)
+
+User on the 33d build: "hints flash on, flash off, then repaint" — real
+client only. Mechanism: QuickBase re-renders every window with identical
+fresh DOM (insert-before-remove, documented since round 8); 33c/33d now
+paint generation 1 fast enough to badge it BEFORE generation 2 replaces
+it. The badges die with gen-1 elements and repaint on gen-2 — a churn
+cycle that slowness used to hide. Churn ring receipt (snapshot 22-51):
+43 in-viewport badges (36 a + 7 label) shown ~500-700ms then destroyed
+in one burst; refuse_no_match 223.
+
+The tier that should carry a badge across an IDENTICAL re-render is
+strong-key rebind. Two collision classes kept it dark on this grid:
+1. **Classless cells** — the round-9 cell-class suffix is '' for every
+   column of QuickBase's new-style grid, so same-record links in
+   different columns still collided. Column index (TD cellIndex /
+   gridcell aria-colindex) joins the key: positional, always present,
+   symmetric.
+2. **Repeated-value columns** — ten rows linking the same buyer share
+   href AND column; the ambiguous-null killed every one of those badges
+   per re-render. collectStrongKeyIndex now keeps a QUEUE per key
+   (attach order ≈ document order) and tryRebindByStrongKey pops in
+   order — identical re-renders pair each badge with its own successor.
+   A mispaired pop is action-equivalent (same href — the original safety
+   argument for href keys) and self-heals via rediscovery.
+
+Fixture: rebind_key 109→398 (queues firing), recovery 510ms, key-
+ownership harness PASS, all gates green (tsc, 1022 tests, both builds,
+wedge, dual-CS, orphan soak).
+
+VERIFY (user, client): reload extension, close+reopen tab, fling — the
+flash-off/repaint cycle on link badges should be gone (badges ride the
+re-render, letters stable); checkbox/pencil/eye badges may still blink
+once per swap (no href — fingerprint/slot tiers, the round-12 residual).
