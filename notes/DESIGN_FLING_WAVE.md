@@ -1818,6 +1818,141 @@ Still open, in priority order:
    solidify-in-hundreds-of-ms; whether the eye agrees is the only
    verdict that counts in this arc.
 
+## Round 23 — DESIGN: connected-predecessor takeover by
+## fingerprint + position (the lever that moves the eye)
+
+Status: design for review — no code. Successor to the round-22
+decomposition: every fling kills ~50 viewport badges (~350 band-wide)
+because QuickBase replaces row DOM, and takeover coverage is partial —
+rebind_key ~113 (href anchors) + rebind_position ~45 (limbo-timing
+lucky) out of ~350 deaths. Rounds 22-22c fixed everything DOWNSTREAM
+of the deaths (sync, rotation, churn cascade); the eye-metric
+(shown_strict_viewport dip: 174 → 121, ~2.7s recovery) is unchanged
+because nothing yet stops the deaths. This tier does.
+
+### The gap, precisely
+
+The fingerprint/position rebind tier (`tryRebindFromLimbo`,
+limbo.ts:189) only consults the LIMBO POOL — disconnected wrappers.
+QuickBase inserts the replacement window BEFORE removing the old one
+(established rounds 8-9: slot_probe.pool_empty 591/1104 on the current
+build), so at discovery time the doomed predecessor is still connected
+and the pool is empty. The one tier that handles connected
+predecessors is the strong-key takeover (`tryRebindByStrongKey`,
+limbo.ts:305) — but its keys are hrefs, so buttons/inputs/labels
+(~2/3 of grid wrappers) have none. Result: identical-content remounts
+churn fresh wrappers, letters, grammar entries, and badges.
+
+### Mechanism
+
+A fourth tier in `attachDiscovered` (wrapper-lifecycle.ts:150), after
+strong-key and limbo, before slot:
+
+1. **Index** (built once per discovery pass, alongside
+   `collectStrongKeyIndex`): fingerprint-string →
+   list of CONNECTED, in-store wrappers holding it. Fingerprints come
+   from `idRegistry` — already computed at register time, so the index
+   is O(store) pointer reads, no DOM access. Skip id<=0 and
+   `isRecentlyOrphaned` holders.
+2. **Match**, for each new element E (fingerprint computed once and
+   shared with the limbo tier — today each tier recomputes):
+   - `candidates = index[fp(E)]`, connected, minus already-consumed.
+   - **Exactly one candidate** → takeover, gated by a GENEROUS
+     position check (candidate.lastRect center within
+     TAKEOVER_UNIQUE_MAX_PX ≈ 300 of E's rect center). A unique
+     fingerprint ("Edit purchase order 10897" — names carry record
+     ids on this grid) is near-certain replacement semantics; the
+     generous gate only blocks cross-page steals. E's rect is warm
+     (the scan walk just read it); candidate.lastRect is ≤100ms fresh
+     (lever 2, the sweep refresh).
+   - **Multiple candidates** (identical controls — checkboxes,
+     pencil/eye per row) → position decides: nearest candidate by
+     center distance, requiring d < TAKEOVER_TIGHT_PX ≈ 40 (sub-row
+     scale) AND (d2 − d) > TAKEOVER_MARGIN_PX ≈ 40 (uniquely nearest
+     — adjacent rows sit ~35-45px apart, so a same-column
+     neighbor-row candidate fails the margin). Anything else →
+     refuse, fresh attach (today's behavior).
+3. **Consume + guard**: remove the winner from the index list (a
+   second new element can't also steal it); mark the orphaned
+   predecessor in `orphanedByKeyRebind` — the EXISTING ping-pong
+   guard; `attachDiscovered`'s `isRecentlyOrphaned` skip already
+   prevents re-grabbing the robbed element.
+4. **Transfer**: `rebindWrapper` (existing, unchanged) — badge,
+   letter, grammar entry, grammarReady, registry id re-anchor onto E.
+   Deliberately NOT adopting the fresh scan metadata (unlike the slot
+   tier): same fingerprint = same content, so no re-Put, no grammar
+   delta, ZERO sync traffic for a ridden swap. The old element dies
+   unobserved later; nothing fires.
+
+### Why this is safe (the cross-steal analysis)
+
+- The dangerous case is stealing from a live element that was NOT
+  being replaced. For ambiguous fingerprints, the tight+margin
+  position gate means the new element sits ON the predecessor
+  (co-location of identical controls is not a legitimate steady
+  state). For unique fingerprints, uniqueness itself is the argument
+  (there is no other element that looks like this), with the generous
+  gate as backstop.
+- Wrong steals self-heal: the robbed element loses its wrapper, the
+  next sweep/MO pass rediscovers it, and it attaches fresh with a new
+  letter — one letter swap on one control, the same cost as today's
+  churn, paid only on a bad bet instead of on every swap.
+- The 7fe37a0/73cf6e7 class doesn't apply: edge-triggered, once per
+  newly-discovered element, inside the discovery path; no
+  level-triggered rederivation, no retry loop.
+- Slot-anchor's cross-page-steal lesson (round 6 stop-list) is
+  covered by the position gates — the slot tier's failure mode was
+  matching by structure alone with no spatial term.
+
+### What the eye should see
+
+A same-record window swap (the common fling case: destination rows
+overlap or re-render the visible region): badge and letter RIDE the
+swap — no teardown, no bare window, no translucent phase (grammar
+entry never left). The dip in shown_strict_viewport should shrink
+from ~53 to roughly the count of genuinely-new records in view, and
+recovery from ~2.7s to the reposition cadence (~0.3s). Genuinely new
+records (fling to unvisited rows) still build fresh badges — correct,
+and now fast at every stage.
+
+One honesty note: if the replacement element is inserted hidden
+(buffer) at discovery time, the ridden badge may hide until the
+reveal (wantsShown follows target visibility) — a possible brief
+blink, but letter + grammar + solidity survive, and the reveal
+re-show is settle-driven (~100ms). Strong-key rides have worked this
+way since round 9.
+
+### Instrumentation & acceptance
+
+- New counters in `rebindCounters`: `takeover_fp` (unique),
+  `takeover_fp_position` (ambiguous, position-resolved),
+  `refuse_fp_ambiguous`. The churn ring + viewport-strict dip are the
+  acceptance metric — per the round-22 lesson, NOT the stage stamps:
+  * wiped_within_2s per fling: 176 → target ≤ ~30
+  * shown_strict_viewport dip: 174→121/2.7s → target ≥150 floor,
+    ≤0.7s recovery
+  * takeover_fp* volume ≈ the former wipe volume
+- Cost: one O(store) index per discovery pass (same class as the
+  strong-key index built in the same loop — can share the iteration);
+  one fingerprint compute per new element (innerText read, ~40 chars
+  — today paid only when limbo is non-empty; now always; bounded by
+  new-element count, ~40-350/fling).
+- Revert lever: remove the tier call in `attachDiscovered`; the index
+  build goes with it.
+
+### Open questions for review
+
+1. TAKEOVER_UNIQUE_MAX_PX = 300: generous enough for scrolled
+   remounts (same record re-rendered a viewport away during a fling)?
+   A scrolled remount FAILING the gate just builds fresh — safe but
+   uncovered. Could key the gate off scroll delta instead; start
+   simple.
+2. Should the unique-match path skip the position gate entirely when
+   the fingerprint's accessible name is "strong" (contains digits /
+   ≥N chars)? Deferred — measure the simple version first.
+3. Interaction with the slot tier: it currently never fires on this
+   grid (shells die with rows) and stays as-is, after this tier.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
