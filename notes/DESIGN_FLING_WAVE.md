@@ -2831,3 +2831,43 @@ same gap RECORDED (round 28b): its phase-2 rows arrive VISIBLE.
    classifies each late element's last-failing gate + whether a
    mutation/resize landed within 250ms of its flip).
 3. Fix per classification; re-verify with fixture + user drill on client.
+
+### Round 33b — reproduction campaign: five variants, no repro; hypothesis
+### space narrowed to what only the live page can answer
+
+Fixture gained veil knobs (47f509e): `veil_ms` (rows sit veiled N ms
+post-reparent), `cssom_reveal` (reveal by CSSOM rule delete — ZERO
+mutation records anywhere), `veil_display` (display:none veil — no boxes),
+`buffer_layout` (buffer keeps layout offscreen — children ATTACH at insert
+instead of parking; reveal reparents already-known wrappers). Harness
+passes key=value params through now, and prints the reveal-sensor counters
+(ro_signals / parked / attached_by_source) from the same run.
+
+Results — every variant self-heals fast:
+- class-flip veil 3s: recovery +443ms (visibilityMO sees class → recheck).
+- CSSOM veil 3s: +517ms (ro_signals 297 — box-gain at reparent + sweeps).
+- display:none veil 3s: +279ms (attention IO path).
+- laid-out buffer + veil 2.5s: +235ms (mo attaches at insert; reparent is
+  childList → drain rebinds).
+- REAL builder grid under cpu×6 + slow-4G (rows took 54s to render):
+  badges 50% at +0ms, 95% at +436ms after rows. No window opens.
+
+Sharpened read of the client log with sweep-code facts (sweeps walk
+document.body with a known-wrapper skip; added===0 early-outs before
+reconcile/flushNow/showHints):
+- The 185 row elements ATTACHED at drain (ts 2086, 11ms post-insert).
+- reconcile ran mid-window (stale_false_repair 119 at ts 3008) and did NOT
+  paint them — wantsShown false by some input.
+- added=1 at ts 4353 → showHints mounted 166 — one new element unlocked a
+  ~165-wrapper eligible-unpainted backlog. THE BACKLOG IS THE SIGNATURE.
+- So the question is precisely: which wantsShown input (clipped? strict?
+  band flag? occlusion? veiled-by-QB?) held ~165 attached wrappers unshown
+  from ts 2086→4371, and what flipped at 4371. Clip staleness
+  (round 19 class) repairs at settles and settles ran; RO not involved
+  (signals 8). Cannot be discriminated from logs/fixtures — needs
+  per-element gate observation ON the client page at reveal time.
+
+NEXT: user runs scripts/_probe-fling-cohort.console.js in their Chrome on
+the client grid (read-only; paste → fling → copy(__bkProbe.report())). Its
+last-failing-gate + mutation-at-flip classification lands exactly on the
+remaining branch point. Then fix per classification.
