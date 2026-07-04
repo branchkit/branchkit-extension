@@ -1870,11 +1870,18 @@ const REVEAL_REPAIR_FAST_ARM = 25;
 function scheduleBandDiscovery(settleKind: 'band' | 'store', revealRepairs = 0): void {
   if (pageSession.discoverySweepPending) {
     pageSession.discoverySweepRerun = true;
+    // A mass reveal landing mid-sweep must not be demoted to the noise-retry
+    // path — record the urgency; the in-flight sweep's finally re-arms
+    // immediately regardless of its added count (round 18b).
+    if (revealRepairs >= REVEAL_REPAIR_FAST_ARM) {
+      pageSession.discoverySweepFastRerun = true;
+    }
     firehoseStep('band_discovery:coalesced', 1);
     return;
   }
   pageSession.discoverySweepPending = true;
   pageSession.discoverySweepRerun = false;
+  pageSession.discoverySweepFastRerun = false;
   // Discovery-source tag by the settle kind that STARTED this sweep (a
   // coalesced request of the other kind folds in — labels are diagnostic):
   // scroll settles → band_sweep, non-scroll (store) settles → settle_sweep.
@@ -1896,23 +1903,40 @@ function scheduleBandDiscovery(settleKind: 'band' | 'store', revealRepairs = 0):
         if (pageSession.hintsVisible) await showHints(activeCategory ?? undefined);
       } finally {
         pageSession.discoverySweepPending = false;
-        // Conditional re-arm: retry only when (a) a coalesce happened during this
-        // sweep — without it there's no evidence a race occurred — AND (b) this
-        // sweep added zero new wrappers, which means the work we did do is NOT
-        // the source of any churn the retry might amplify. Retries when added>0
-        // chained the codeword-churn loop in 73cf6e7 → b813e29. Cap depth + add
-        // cooldown so even a pathological scroll settle pattern terminates.
-        const shouldRetry =
-          pageSession.discoverySweepRerun &&
-          added === 0 &&
-          !pageSession.isTornDown &&
-          pageSession.discoveryRetryDepth < DISCOVERY_MAX_RETRY_DEPTH;
-        if (shouldRetry) {
-          pageSession.discoveryRetryDepth++;
-          firehoseStep('band_discovery:retry', pageSession.discoveryRetryDepth);
-          pageSession.resources.timeout(() => scheduleBandDiscovery(settleKind), DISCOVERY_RETRY_COOLDOWN_MS);
-        } else {
+        // Mass-reveal rerun (round 18b): a >=25-repair settle landed while
+        // this sweep was in flight, and its fast-arm was swallowed by the
+        // single-flight coalesce. Re-arm immediately on the fast path —
+        // added>0 here is EXPECTED (this walk caught part of the wave), so
+        // the added===0 gate below deliberately does not apply. This is not
+        // the 73cf6e7 churn loop: that retried on a raceless heuristic per
+        // scroll settle; this consumes an explicit reveal signal, and it
+        // only recurs if ANOTHER mass reveal lands during the next
+        // (isKnown-skipping, ~100-400ms) walk — sustained real content.
+        const fastRerun = pageSession.discoverySweepFastRerun;
+        pageSession.discoverySweepFastRerun = false;
+        if (fastRerun && !pageSession.isTornDown) {
           pageSession.discoveryRetryDepth = 0;
+          firehoseStep('band_discovery:fast_rerun', added);
+          scheduleBandDiscovery(settleKind, REVEAL_REPAIR_FAST_ARM);
+        } else {
+          // Conditional re-arm: retry only when (a) a coalesce happened during this
+          // sweep — without it there's no evidence a race occurred — AND (b) this
+          // sweep added zero new wrappers, which means the work we did do is NOT
+          // the source of any churn the retry might amplify. Retries when added>0
+          // chained the codeword-churn loop in 73cf6e7 → b813e29. Cap depth + add
+          // cooldown so even a pathological scroll settle pattern terminates.
+          const shouldRetry =
+            pageSession.discoverySweepRerun &&
+            added === 0 &&
+            !pageSession.isTornDown &&
+            pageSession.discoveryRetryDepth < DISCOVERY_MAX_RETRY_DEPTH;
+          if (shouldRetry) {
+            pageSession.discoveryRetryDepth++;
+            firehoseStep('band_discovery:retry', pageSession.discoveryRetryDepth);
+            pageSession.resources.timeout(() => scheduleBandDiscovery(settleKind), DISCOVERY_RETRY_COOLDOWN_MS);
+          } else {
+            pageSession.discoveryRetryDepth = 0;
+          }
         }
       }
     })();

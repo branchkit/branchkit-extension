@@ -950,6 +950,37 @@ a drill still reads slow.
 Revert lever: delete the fast-arm branch (one `if` in
 `scheduleBandDiscovery`) — restores idle-gated sweeps exactly.
 
+## Round 18b — the swallowed fast-arm: mass-reveal reruns bypass the
+## added===0 gate (2026-07-04)
+
+Drill on build 03:17 (round 18 live). The fast-arm works when it
+fires: boot reveal `repair 69 → fast_arm 69 → added 114` in **126ms**.
+But the fling's big reveal (`repair 87` at ts 7338) produced NO
+fast_arm — a sweep was already in flight, the single-flight coalesce
+swallowed the urgency, that sweep landed `added 27`, and added>0
+means no retry: the remaining 73 elements waited for the NEXT settle
+and landed at ts 9455 — **2.1s post-reveal**. The round-17 note
+called this window "~sweep length" and accepted it; the drill shows
+it is the COMMON case here — QuickBase's reveal waves arrive ~600ms
+apart, so a sweep is nearly always pending when the big repair lands.
+
+Fix: `discoverySweepFastRerun` on the session. A coalescing request
+carrying >= REVEAL_REPAIR_FAST_ARM repairs sets it; the in-flight
+sweep's finally consumes it and re-arms immediately on the fast path,
+REGARDLESS of added count. Explicitly not the 73cf6e7 churn loop:
+that retried on a raceless heuristic per scroll settle; this consumes
+an explicit mass-reveal signal, one-shot per set, and recurs only if
+another >=25-repair settle lands during the next (isKnown-skipping,
+~100-400ms) walk — which is sustained real content by definition.
+Breadcrumb `band_discovery:fast_rerun` carries the prior sweep's
+added count.
+
+Expected at next drill: reveal → (in-flight sweep completes,
+~≤400ms) → fast_rerun → walk → paint ≈ **0.5-1.0s post-reveal** even
+when the reveal lands mid-sweep; fast_arm handles the clean case at
+~0.15-0.5s. Remaining after that is QuickBase's own progressive
+render (reveals themselves arrive in waves ~2s apart end to end).
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is

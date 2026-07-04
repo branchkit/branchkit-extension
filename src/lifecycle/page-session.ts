@@ -208,6 +208,18 @@ export class PageSession {
   discoverySweepRerun = false;
 
   /**
+   * Set true when a MASS-REVEAL request (settle plan repaired
+   * >= REVEAL_REPAIR_FAST_ARM stale band flags) coalesces into an in-flight
+   * sweep — the fast-arm the single-flight bail would otherwise swallow.
+   * The finally block consumes it to re-arm immediately, bypassing the
+   * added===0 retry gate: this is an explicit fresh reveal signal, not the
+   * race heuristic (DESIGN_FLING_WAVE round 18b — on QuickBase the reveal
+   * waves arrive ~600ms apart, so a sweep is nearly always in flight when
+   * the big repair lands, and the swallowed fast-arm cost ~2s).
+   */
+  discoverySweepFastRerun = false;
+
+  /**
    * Retry depth for the bounded band-discovery re-arm chain. Incremented when
    * the finally block schedules a retry, capped at MAX_RETRY_DEPTH to prevent
    * indefinite chaining under sustained scroll/mutation. Reset to 0 on any
