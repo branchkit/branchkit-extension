@@ -707,6 +707,60 @@ window itself — the next lever would be class/style-aware reveal
 detection (a debounced coarse signal, carefully rate-limited), which
 should be designed, not rushed.
 
+## Round 15 + THE FRAME-LEVEL VIDEO A/B (2026-07-04) — the arc's ground
+## truth; read this section before anything else in this note
+
+Round-15 snapshot: every stamped stage converged (dom_seen_to_shown
+p50 116 / p90 225, attached_to_shown p90 178 over ALL 549 shown,
+no ring dip). User still felt no difference. The user then recorded
+both extensions at 60fps on the production grid
+(~/Documents/Screen Shots/branchkit_scroll.mov + rango_scroll.mov;
+working copies were at /tmp/badge-ab — re-copy if gone; Terminal
+lacks TCC permission on Documents, cp with sandbox disabled worked).
+Frame-by-frame analysis is the arc's final authority:
+
+- QuickBase blanks the grid to a WHITE VOID mid-fling; rows repaint
+  all at once. That repaint is the shared zero for both extensions.
+- **Rango: rows → full SOLID hint population in ~0.4-0.5s. One wave.**
+- **BranchKit: rows → ~4 translucent link badges instantly (the
+  takeover survivors — that path works) → NOTHING for 2-3.5s → the
+  entire main population (checkboxes, pencil/eye buttons) plus
+  solidification in one late wave.**
+
+The FIFTH and decisive instrumentation deception: dom_seen is stamped
+ONLY on the MutationObserver path. 225 of 549 shown wrappers (41%) —
+exactly the late cohort, discovered by fallback sweeps — carry no
+stamp and silently drop out of every dom_seen percentile. The good
+numbers were a survivorship-biased sample of the fast path.
+attached_to_shown p90 178 across all 549 proves everything DOWNSTREAM
+of discovery is genuinely Rango-fast now. The one remaining problem,
+stated precisely: **MutationObserver-driven discovery misses ~40% of
+freshly inserted row content, which is then found only by settle
+sweeps seconds later.**
+
+Next steps (the handoff):
+1. **Kill the metrics bias first**: tag every wrapper with its
+   discovery source (mo | band_sweep | settle_sweep | scan | rescan |
+   attr), stamp a dom_seen-equivalent on every path, and surface
+   per-source counts + latency in the debug snapshot. Every
+   subsequent drill becomes trustworthy.
+2. **Diagnose the 40% miss with that data.** Leading suspects: (a)
+   the elements are not hintable at insertion (hintability hydrated
+   later via class/style-driven changes the MO attributeFilter
+   deliberately ignores — pencil/eye are hover-action-bar-shaped);
+   (b) subtreeMaybeHintable pre-filter drops their subtrees at drain
+   time; (c) they are inserted as text/fragment mutations the
+   `node instanceof Element` gate skips.
+3. Procedural: confirm the extension was RELOADED after build
+   f64a5fd before trusting any new video (the A/B clips may predate
+   round 15's settle-sweep fix — the 2-3.5s could already be
+   partially addressed).
+
+Everything else in this arc landed and holds: prime-at-attach,
+symmetric two-strike sweep, cell-context takeover keys, spa_nav
+storm deferral + swap-audit light path, the Rango-parity unbudgeted
+hot path, no dip. Post-discovery latency is not the problem anymore.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
