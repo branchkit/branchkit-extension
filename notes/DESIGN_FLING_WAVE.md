@@ -3043,3 +3043,36 @@ Note: fixture recovery variance across runs is wide (148-784ms across
 the 34c/34d runs, same build class) — treat single-run fixture recovery
 as ±300ms noise; trends need 2-3 runs. The eye columns don't fix that;
 they make the real drills the authoritative series instead.
+
+## Round 34e — REGRESSION caught by the user: bare links from the key
+## queue; fixed with dead-first pop + immediate orphan re-attach (ad90d60)
+
+User: "some links are not being scanned properly and have no badges at
+all." dom_survey confirmed: 16 fully visible hintable anchors with no
+wrapper coverage — ALL repeated-value ("Doe, Jane" ×8, its email
+×8), i.e. the exact cohort round 34's queue targets. Mechanism:
+1. The queue popped a wrapper off a HEALTHY visible row (any new
+   same-key element steals the head — the old exactly-one rule made
+   connected steals rare; the queue made every duplicate set vulnerable).
+2. The orphan ping-pong guard was designed for re-mount casualties
+   ("the page removes the predecessor shortly") — false for healthy
+   duplicates — so the bare link sat guard-blocked for 2s.
+3. On guard expiry, its re-discovery went through the SAME key tier and
+   stole from the next visible duplicate: musical chairs, one bare link
+   rotating through the set forever.
+
+FIX (two rules restoring the tier's safety invariant):
+- Pop DISCONNECTED holders first — dead element, free win; a connected
+  predecessor is only stolen when no dead holder exists.
+- A connected steal returns the orphaned element; attachDiscovered
+  re-attaches it FRESH in the same pass (new letter, no bareness).
+  scanSingle-gated so hidden buffer copies don't re-attach.
+
+Unit tests pin both rules (1024 tests green); all gates pass. LESSON for
+the queue design: "action-equivalent transfer is harmless" holds for the
+ACTIVATION semantics but not for the VISUAL invariant (every visible
+hintable stays badged) — the invariant needs its own enforcement, which
+the immediate re-attach now provides.
+
+VERIFY (user): reload + close/reopen + fling; the Doe/email columns
+should be fully badged at rest, no bare links.
