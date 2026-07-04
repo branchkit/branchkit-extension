@@ -2668,6 +2668,31 @@ function rescanForNav(fromCache: boolean, reason: string): void {
       // browser holds off until actually idle. The 300ms `timeout` caps the
       // wait. Plan A3 (notes/PLAN_BROWSER_EXTENSION_PERF_OPTIMIZATION.md).
       const scheduleDeferred = () => {
+        // Wholesale-swap audit (notes/DESIGN_FLING_WAVE.md round 11): the
+        // deferred tail below exists to reestablish a page whose DOM swapped
+        // out from under the incremental machinery. Whether that happened is
+        // directly measurable at this moment — the disconnected fraction of
+        // the store. A real route change (YouTube watch→watch) arrives here
+        // with the old wrappers massively disconnected → heavy path,
+        // unchanged. A scroll-driven URL tick (QuickBase ?skip=N fires at
+        // ITS settle, after our incremental path already rebuilt the store)
+        // arrives ~fully connected → the document walk would discover
+        // nothing and the wholesale showHints would re-churn a converged
+        // badge population, seconds after every fling (round-11 firehose:
+        // 913ms-3.2s deferred scans chasing each drill). Light path: one
+        // reconcile + a settle pass. O(store) pointer reads to decide.
+        let disconnected = 0;
+        for (const w of store.all) {
+          if (!w.element.isConnected) disconnected++;
+        }
+        const total = store.all.length;
+        const wholesale = total === 0 || disconnected / total > 0.25;
+        if (!wholesale) {
+          void navStep('deferred_scan:light');
+          reconcile();
+          schedulePassSoon();
+          return;
+        }
         void navStep('deferred_scan:start');
         // Both rescan kinds run the idempotent doScan. For spa_nav this is
         // NOT about discovery (the MutationObserver huge-path covers that) —
@@ -2678,12 +2703,14 @@ function rescanForNav(fromCache: boolean, reason: string): void {
         // waves — on claim-heavy swaps where rebind can't rescue identity
         // (QuickBase report→report: ~230 fresh claims, swap slower than the
         // rebind window) hints+grammar arrived seconds late (soak find,
-        // 2026-06-12). doScan skips known elements and consults the limbo
-        // pool, so the retirement's stability win is untouched; the settle
-        // pass (toClaim) remains the standing backstop for what the scan
-        // misses. Routed through doScan() so it can't race a concurrent
-        // storage-onChanged scan with the same session_id (duplicate
-        // codeword assignments — actuator.log 2026-06-05T17:30:11).
+        // 2026-06-12; prime-at-attach has since moved bulk claims inline at
+        // attach, which is what makes the light path above safe). doScan
+        // skips known elements and consults the limbo pool, so the
+        // retirement's stability win is untouched; the settle pass (toClaim)
+        // remains the standing backstop for what the scan misses. Routed
+        // through doScan() so it can't race a concurrent storage-onChanged
+        // scan with the same session_id (duplicate codeword assignments —
+        // actuator.log 2026-06-05T17:30:11).
         void doScan().then(async () => {
           reconcile();
           await pageSession.tracker.flushNow();

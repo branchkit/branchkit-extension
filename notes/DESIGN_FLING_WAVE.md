@@ -555,6 +555,40 @@ badges HIDDEN en masse, not destroyed) shrinks to the swap-diff
 cohort. Whatever eye-latency remains after this is the true refill
 cost of genuinely-new windows.
 
+## Drill round 11 — the tick arrives at THEIR settle; audit the swap
+## instead of the clock
+
+The mid-scroll deferral never fired: QuickBase updates ?skip=N at ITS
+OWN scroll settle, so the spa_nav lands after our scroll timer has
+cleared and the full rescan still chased every fling (913ms-3.2s
+deferred document scans in the round-11 firehose), re-churning a badge
+population the incremental path had just converged. Eye numbers flat
+(p50 1342, dip 291).
+
+Replacement discriminator — measure the thing the rescan exists to
+fix, not the clock: at deferred-tail time, the STORE'S DISCONNECTED
+FRACTION says whether the DOM wholesale-swapped out from under the
+incremental machinery. A real route change (YouTube watch→watch)
+arrives with old wrappers massively disconnected → heavy path
+unchanged. A pagination tick arrives after the incremental rebuild →
+~fully connected → light path: reconcile() + schedulePassSoon(), no
+document walk, no wholesale showHints. Threshold 25% disconnected;
+O(store) pointer reads; breadcrumb deferred_scan:light vs :start
+audits every decision. The 2026-06-12 "claims trickled without doScan"
+soak-fear is superseded by prime-at-attach (bulk claims now land
+inline at attach) — recorded in the code comment at the decision
+point. The mid-scroll deferral stays (it is correct for grids that
+tick the URL DURING scroll; it just is not this grid).
+
+Prediction for drill round 12: firehose shows deferred_scan:light on
+every post-fling tick (no 913ms-3.2s walks, no wholesale re-show);
+what remains of the eye latency is the genuine refill of new-record
+windows — claimed_to_shown ≈ build throughput of a ~400-badge wave
+under page contention, currently ~630ms p50. If perception still
+reads laggy at that point, the remaining fight is per-badge
+construction cost vs Rango's (they pay no claim/voice/strict layers),
+and it should be fought with a CPU profile, not more scheduling.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
