@@ -1122,6 +1122,41 @@ for the hidden cohort** — Rango's shape with our machinery. Cost
 accepted with eyes open, same as round 13: one ~250ms task at swap
 time, during frames the page is already dropping.
 
+## Round 20b — the drill's two-scroll verdict: budget-edge failure +
+## idle sweeps block the fast lane (2026-07-04)
+
+Drill on build 04:24 (round 20 live), two scrolls. The slab works
+where it completes: boot landed **251 adds in 112ms**, second page
+load **185 adds in 21ms** — one reflow, warm reads, the round-16
+population that once took 3-4s. But:
+
+1. **Budget-edge failure (scroll 1).** The fling's fast sweep still
+   took 2.2s (`fast_arm 119 @ 3199 → added 52 @ 5410`). Mid-storm the
+   first geometry read pays a ~150ms forced reflow; the 250ms budget
+   then expires a few batches in and the TAIL yield-hops through the
+   storm at ~150ms/hop anyway — pays the slab's cost, forfeits the
+   slab's win. Real one-slab cost mid-storm ≈ 300-500ms.
+2. **Idle sweeps hold the lock (scroll 2).** The second reveal
+   (`repair 110 @ 15118`) coalesced behind an in-flight per-batch-
+   yielding IDLE sweep (the steady added=0 train, seconds long mid-
+   storm) and was only served by fast_rerun at +1.45s. Background
+   politeness on the idle path blocks exactly the sweep the user is
+   watching for — single-flight makes idle-sweep duration everyone's
+   queueing delay.
+
+Fix (one change answers both): every band-discovery sweep — idle and
+fast-armed alike — walks in one slab; SWEEP_SLAB_BUDGET_MS = 700 as a
+true circuit breaker above the real cost, replacing the 250 edge
+value. Entry scheduling still differs (fast_arm = yield task, idle =
+runWhenIdle); only the walk shape is unified. The huge-mutation path
+keeps per-batch yields (the actual Firefox-freeze scar). Worst-case
+main-thread slab ≤~500ms during frames the page already drops;
+steady-state quiet sweeps are one ~50-100ms slab.
+
+Expected: both scrolls' hidden cohorts land ≤~0.7s post-reveal
+(settle 100ms + ≤slab-length queueing + one 150-500ms slab), and the
+firehose shows no added>0 event more than ~1s after its repair spike.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is

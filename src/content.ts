@@ -1892,11 +1892,11 @@ function scheduleBandDiscovery(settleKind: 'band' | 'store', revealRepairs = 0):
       let added = 0;
       try {
         if (pageSession.isTornDown || !document.body) return;
-        // Reveal-armed sweeps walk in one ~250ms slab (round 20) — the
-        // user is watching for exactly this result; idle sweeps keep
-        // per-batch yields.
+        // Every sweep walks in one slab (round 20b) — a per-batch-yielding
+        // sweep holds the single-flight lock for seconds mid-storm and the
+        // reveal's fast request queues behind it.
         added = await discoverInSubtreeBatched(
-          document.body, source, fastReveal ? REVEAL_SWEEP_SLAB_BUDGET_MS : 0,
+          document.body, source, SWEEP_SLAB_BUDGET_MS,
         );
         // Diagnostic: the sweep's added count INCLUDING zero, to correlate a
         // miss against whether the walk actually attached anything.
@@ -3874,15 +3874,26 @@ function discoverInSubtree(root: Element, source: DiscoverySource): number {
 // well under the wedge threshold) while cutting the reflow count ~4x.
 const SWEEP_WALK_BATCH_SIZE = 60;
 
-// One-slab budget for a REVEAL-armed sweep (round 20): mid-storm every
-// inter-batch yield hop costs ~150ms (the page's own swap tasks run between
-// our slices), so even 12 hops ≈ 1.8s — while the identical walk runs 111ms
-// at boot and Rango's synchronous unbudgeted walk pays the storm ZERO times.
-// Round-13 posture applied to the sweep: run batches back-to-back inside one
-// task until this budget, yield only past it (circuit breaker, not pacing).
-// Idle-armed sweeps pass no budget and keep per-batch yields — background
-// politeness is still right when nobody is watching for the result.
-const REVEAL_SWEEP_SLAB_BUDGET_MS = 250;
+// One-slab budget for EVERY band-discovery sweep (rounds 20/20b): mid-storm
+// every inter-batch yield hop costs ~150ms (the page's own swap tasks run
+// between our slices), so even 12 hops ≈ 1.8s — while the identical walk
+// runs 21-112ms as one slab (one forced reflow, then warm reads; page
+// mutations can't interleave inside a task). Rango's synchronous unbudgeted
+// walk pays the storm ZERO times; this is the round-13 posture applied to
+// the sweep: batches run back-to-back inside one task until this budget,
+// yield only past it (circuit breaker, not pacing).
+//
+// 700, not 250 (the 20 value): the real mid-storm one-slab cost is
+// ~300-500ms (reflow + ~1400 warm reads on a double-buffered grid), and a
+// budget at the edge is the worst of both — it pays the slab, expires a few
+// batches short, and the TAIL yield-hops through the storm anyway (drill:
+// fast sweep still 2.2s). And it applies to IDLE sweeps too, not just
+// reveal-armed ones: a per-batch-yielding idle sweep holds the single-flight
+// lock for seconds mid-storm, so the reveal's fast request queues behind it
+// (drill: +1.45s). A ≤~500ms task during frames the page is already
+// dropping is the accepted round-13 trade; the huge-mutation path keeps
+// per-batch yields (the actual freeze scar).
+const SWEEP_SLAB_BUDGET_MS = 700;
 
 async function discoverInSubtreeBatched(
   root: Element, source: DiscoverySource, slabBudgetMs = 0,
