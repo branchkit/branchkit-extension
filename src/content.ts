@@ -1908,9 +1908,18 @@ function scheduleBandDiscovery(settleKind: 'band' | 'store', revealRepairs = 0):
         // Diagnostic: the sweep's added count INCLUDING zero, to correlate a
         // miss against whether the walk actually attached anything.
         firehoseStep('band_discovery:added', added, 0);
-        if (added === 0) return;
-        // New wrappers landed: claim codewords for the in-band ones and build
-        // their badges (reconcile), flush the claims, then paint.
+        // A reveal-armed sweep must follow through even with ZERO adds
+        // (round 33c, client probe + log): on QuickBase's new-style grid the
+        // reveal cohort is ALREADY-ATTACHED wrappers whose stale-false band
+        // flags a reconcile pass just repaired — the walk skips them all
+        // (known-wrapper skip), added===0, and the early return here
+        // stranded their claim flush + paint for seconds until some sweep
+        // attached a genuinely new element (log tell: added=1 followed by
+        // showHints 166 — one element unlocking a ~165-badge backlog).
+        if (added === 0 && !fastReveal) return;
+        // New wrappers landed (or a mass reveal armed this sweep): claim
+        // codewords for the in-band ones and build their badges
+        // (reconcile), flush the claims, then paint.
         reconcile();
         await pageSession.tracker.flushNow();
         if (pageSession.hintsVisible) await showHints(activeCategory ?? undefined);
