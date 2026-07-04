@@ -175,7 +175,7 @@ describe('attachDiscovered', () => {
     const a = el('a');
     const b = el('b');
 
-    const added = attachDiscovered([a, b], [scanned('a'), scanned('b')], [], new Map<string, ElementWrapper | null>(), 'mo');
+    const added = attachDiscovered([a, b], [scanned('a'), scanned('b')], [], new Map<string, ElementWrapper[]>(), 'mo');
 
     expect(added).toBe(2);
     expect(store.findWrapperFor(a)).toBeDefined();
@@ -187,7 +187,7 @@ describe('attachDiscovered', () => {
     store.addWrapper(new ElementWrapper(known, scanned('known')));
     const fresh = el('fresh');
 
-    const added = attachDiscovered([known, fresh], [scanned('known'), scanned('fresh')], [], new Map<string, ElementWrapper | null>(), 'mo');
+    const added = attachDiscovered([known, fresh], [scanned('known'), scanned('fresh')], [], new Map<string, ElementWrapper[]>(), 'mo');
 
     expect(added).toBe(1); // only `fresh` is new
     expect(store.findWrapperFor(fresh)).toBeDefined();
@@ -229,8 +229,13 @@ describe('attachDiscovered — key-ownership transfer on a same-document re-moun
     expect(added).toBe(1);
   });
 
-  it('does not transfer when two live wrappers share the href (ambiguous → fresh)', () => {
-    attachWrapper(new ElementWrapper(anchorEl('/home'), scanned('home-a')), 'scan');
+  it('transfers from a multi-holder key queue in order (round 34)', () => {
+    // Repeated-value column: two live wrappers share the href. The old
+    // ambiguous-null forced the replacement to attach fresh (badge flash +
+    // letter reshuffle); the queue pops the first predecessor — an
+    // action-equivalent transfer (same href, same activation result).
+    const wa = new ElementWrapper(anchorEl('/home'), scanned('home-a'));
+    attachWrapper(wa, 'scan');
     attachWrapper(new ElementWrapper(anchorEl('/home'), scanned('home-b')), 'scan');
     const newNode = anchorEl('/home');
 
@@ -238,7 +243,8 @@ describe('attachDiscovered — key-ownership transfer on a same-document re-moun
       [newNode], [scanned('home-c')], collectLimboWrappers(), collectStrongKeyIndex(), 'mo',
     );
 
-    expect(added).toBe(1); // genuine duplicate — claims fresh, keeps the others distinct
+    expect(added).toBe(0); // rode the key queue, no fresh attach
+    expect(wa.element).toBe(newNode);
   });
 });
 

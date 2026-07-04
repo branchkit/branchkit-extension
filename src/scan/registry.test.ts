@@ -304,7 +304,28 @@ describe('registry.computeStrongKey', () => {
     a.setAttribute('href', '?a=dr&rid=23');
     wrap.appendChild(a);
     td.appendChild(wrap);
-    expect(registry.computeStrongKey(a)).toBe('h:?a=dr&rid=23|c:column-report-129-0');
+    expect(registry.computeStrongKey(a)).toBe('h:?a=dr&rid=23|c:column-report-129-0|i:-1');
+  });
+
+  it('same href in different CLASSLESS columns yields distinct keys (round 34: cellIndex)', () => {
+    // QuickBase's new-style grid has classless TDs — the class suffix is
+    // empty for every column, so the column INDEX carries the distinction.
+    const tr = document.createElement('tr');
+    const mkTd = () => {
+      const td = document.createElement('td');
+      const a = document.createElement('a');
+      a.setAttribute('href', '?a=dr&rid=23');
+      td.appendChild(a);
+      tr.appendChild(td);
+      return a;
+    };
+    const a1 = mkTd();
+    const a2 = mkTd();
+    const k1 = registry.computeStrongKey(a1);
+    const k2 = registry.computeStrongKey(a2);
+    expect(k1).not.toBe(k2);
+    expect(k1).toBe('h:?a=dr&rid=23|c:|i:0');
+    expect(k2).toBe('h:?a=dr&rid=23|c:|i:1');
   });
 
   it('same href in different columns yields distinct keys', () => {
@@ -328,7 +349,7 @@ describe('registry.computeStrongKey', () => {
     const a = document.createElement('a');
     a.setAttribute('href', '/r/1');
     cell.appendChild(a);
-    expect(registry.computeStrongKey(a)).toBe('h:/r/1|c:cell-x');
+    expect(registry.computeStrongKey(a)).toBe('h:/r/1|c:cell-x|i:');
 
     // An anchor whose nearest structural ancestor is the tr itself (no cell
     // between) keeps the raw-href key — the walk stops at the row.

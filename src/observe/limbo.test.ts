@@ -170,13 +170,13 @@ describe('finalizeExpiredLimboWrappers', () => {
 describe('collectStrongKeyIndex', () => {
   it('maps a single-holder key to its wrapper', () => {
     const w = makeAnchor('/users', 1);
-    expect(collectStrongKeyIndex().get('h:/users')).toBe(w);
+    expect(collectStrongKeyIndex().get('h:/users')).toEqual([w]);
   });
 
-  it('marks a key held by 2+ wrappers as ambiguous (null)', () => {
-    makeAnchor('/home', 1);
-    makeAnchor('/home', 2);
-    expect(collectStrongKeyIndex().get('h:/home')).toBeNull();
+  it('queues 2+ same-key wrappers in attach order (round 34)', () => {
+    const w1 = makeAnchor('/home', 1);
+    const w2 = makeAnchor('/home', 2);
+    expect(collectStrongKeyIndex().get('h:/home')).toEqual([w1, w2]);
   });
 
   it('omits wrappers with no strong key or no registry id', () => {
@@ -206,10 +206,17 @@ describe('tryRebindByStrongKey', () => {
     expect(isRecentlyOrphaned(oldEl)).toBe(true);   // ping-pong guard armed
   });
 
-  it('refuses when the key is ambiguous (2+ holders)', () => {
-    makeAnchor('/home', 1);
-    makeAnchor('/home', 2);
+  it('pops multi-holder keys in attach order (round 34: repeated-value columns)', () => {
+    const w1 = makeAnchor('/home', 1);
+    const w2 = makeAnchor('/home', 2);
     const index = collectStrongKeyIndex();
+    const n1 = freeAnchor('/home');
+    const n2 = freeAnchor('/home');
+    expect(tryRebindByStrongKey(n1, index, [])).toBe(true);
+    expect(w1.element).toBe(n1); // document-order pairing: first predecessor first
+    expect(tryRebindByStrongKey(n2, index, [])).toBe(true);
+    expect(w2.element).toBe(n2);
+    // Queue exhausted — a third same-key node claims fresh.
     expect(tryRebindByStrongKey(freeAnchor('/home'), index, [])).toBe(false);
   });
 

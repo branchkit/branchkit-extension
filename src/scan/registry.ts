@@ -105,21 +105,24 @@ export function computeStrongKey(el: Element): string | null {
   if (el.tagName.toLowerCase() === 'a') {
     const href = (el as HTMLAnchorElement).getAttribute('href');
     if (!href) return null;
-    // Cell-context disambiguator (notes/DESIGN_FLING_WAVE.md round 9): data
-    // grids link the same record from several columns, so raw-href keys
-    // collide row-wide, collectStrongKeyIndex nulls every copy as ambiguous,
-    // and the takeover tier — the one rebind path that works when a grid
-    // replaces whole row subtrees insert-before-remove — goes dark for
-    // exactly the wrappers that churn hardest. The nearest cell's class is
-    // stable per column (both the index side and the match side read their
-    // own CONNECTED element's cell, so the enrichment is symmetric); same
-    // href in different columns → distinct unique keys → the tier fires.
-    // Anchors outside any cell keep the raw-href key: duplicate nav/content
-    // links stay ambiguous-null, exactly today's safe behavior.
+    // Cell-context disambiguator (notes/DESIGN_FLING_WAVE.md round 9,
+    // round 34): data grids link the same record from several columns, so
+    // raw-href keys collide row-wide and the takeover tier — the one
+    // rebind path that works when a grid replaces whole row subtrees
+    // insert-before-remove — goes dark for exactly the wrappers that
+    // churn hardest. Cell class is stable per column but EMPTY on
+    // QuickBase's new-style grid (classless TDs — round 34's flash), so
+    // the COLUMN INDEX joins the key: positional, always present, and
+    // symmetric (both the index side and the match side read their own
+    // CONNECTED element's cell). Anchors outside any cell keep the
+    // raw-href key.
     let p: Element | null = el.parentElement;
     for (let d = 0; p && d < 6; d++, p = p.parentElement) {
       if (p.tagName === 'TD' || p.getAttribute('role') === 'gridcell') {
-        return 'h:' + href + '|c:' + p.className;
+        const col = p.tagName === 'TD'
+          ? String((p as HTMLTableCellElement).cellIndex)
+          : (p.getAttribute('aria-colindex') ?? '');
+        return 'h:' + href + '|c:' + p.className + '|i:' + col;
       }
       if (p.tagName === 'TR') break;
     }

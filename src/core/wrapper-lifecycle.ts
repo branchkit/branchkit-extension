@@ -146,7 +146,7 @@ export function detachWrapper(element: Element): void {
 // number of wrappers newly attached (rebinds don't count as added).
 export function attachDiscovered(
   refs: Element[], elements: ScannedElement[], limboPool: ElementWrapper[],
-  keyIndex: Map<string, ElementWrapper | null>, source: DiscoverySource,
+  keyIndex: Map<string, ElementWrapper[]>, source: DiscoverySource,
 ): number {
   let added = 0;
   const attached: ElementWrapper[] = [];

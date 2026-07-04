@@ -274,18 +274,31 @@ export function isRecentlyOrphaned(el: Element): boolean {
 }
 
 /**
- * Index: strong key → the single wrapper that holds it, or `null` when 2+
- * wrappers share the key (a genuine duplicate, not a re-mount). Built once per
- * discovery pass from the live store; only single-holder keys are rebind-
- * eligible. Cheap — `computeStrongKey` reads an attribute, no accessible-name.
+ * Index: strong key → the wrappers that hold it, in attach order (≈ document
+ * order for a batch-discovered generation). Built once per discovery pass
+ * from the live store. Cheap — `computeStrongKey` reads an attribute, no
+ * accessible-name.
+ *
+ * Round 34: a QUEUE per key, not the old ambiguous-null. Repeated-value grid
+ * columns (ten rows all linking the same buyer — identical href AND column)
+ * produce N same-key wrappers; on QuickBase's identical insert-before-remove
+ * re-render their N replacements arrive in the same order, so popping in
+ * order pairs each badge with its own successor. The ambiguous-null instead
+ * killed every one of those badges and re-attached fresh — the visible
+ * flash-off/flash-on cycle. A mispaired pop is action-equivalent by
+ * construction (same href, same activation result — the original safety
+ * argument for href keys) and self-heals via rediscovery like any wrong
+ * steal.
  */
-export function collectStrongKeyIndex(): Map<string, ElementWrapper | null> {
-  const index = new Map<string, ElementWrapper | null>();
+export function collectStrongKeyIndex(): Map<string, ElementWrapper[]> {
+  const index = new Map<string, ElementWrapper[]>();
   for (const w of store.all) {
     if (w.scanned.id <= 0) continue;
     const key = computeStrongKey(w.element);
     if (!key) continue;
-    index.set(key, index.has(key) ? null : w);
+    const queue = index.get(key);
+    if (queue) queue.push(w);
+    else index.set(key, [w]);
   }
   return index;
 }
@@ -297,22 +310,28 @@ export function collectStrongKeyIndex(): Map<string, ElementWrapper | null> {
  * reclaim it) by re-anchoring the live wrapper instead. Returns true iff rebound;
  * false means fall through to the fingerprint-limbo path / fresh attach.
  *
- * Fires only when exactly one wrapper holds the key (index stored a wrapper, not
- * `null`) and it's a different node. Consumes the entry from both the index and
- * the limbo pool so a second same-key node and the fingerprint path can't also
- * grab it. Marks the orphaned predecessor for the ping-pong guard.
+ * Pops the key's queue head (skipping the new node itself if present).
+ * Consumes the entry from both the index and the limbo pool so a second
+ * same-key node and the fingerprint path can't also grab it. Marks the
+ * orphaned predecessor for the ping-pong guard.
  */
 export function tryRebindByStrongKey(
   newEl: Element,
-  keyIndex: Map<string, ElementWrapper | null>,
+  keyIndex: Map<string, ElementWrapper[]>,
   limboPool: ElementWrapper[],
 ): boolean {
   const key = computeStrongKey(newEl);
   if (!key) return false;
-  const w = keyIndex.get(key);
-  if (!w) return false;              // undefined (no holder) or null (ambiguous)
-  if (w.element === newEl) return false;
-  keyIndex.delete(key);
+  const queue = keyIndex.get(key);
+  if (!queue || queue.length === 0) return false;
+  // The new node may itself be indexed (already-attached element passing
+  // back through discovery) — never steal from yourself; and if the head
+  // IS the new element's own wrapper, there's nothing to transfer.
+  const idx = queue.findIndex((cand) => cand.element !== newEl);
+  if (idx === -1) return false;
+  const w = queue[idx];
+  queue.splice(idx, 1);
+  if (queue.length === 0) keyIndex.delete(key);
   consume(limboPool, w);
   if (w.element.isConnected) orphanedByKeyRebind.set(w.element, Date.now());
   rebindCounters.rebind_key++;
