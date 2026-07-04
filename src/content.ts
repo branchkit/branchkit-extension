@@ -3857,6 +3857,17 @@ function discoverInSubtree(root: Element, source: DiscoverySource): number {
 // (a per-batch query would be N querySelectorAll), exclusions apply per
 // batch, limbo-rebind is shared via attachDiscovered. See
 // notes/DESIGN_NAV_TIME_RESCAN.md.
+// Walk batch size for the sliced rediscovery. Distinct from
+// DEFAULT_SCAN_BATCH_SIZE (15 — sized for the scan path's per-batch grammar
+// POSTs, which this path doesn't do): mid-storm the page mutates during
+// every inter-batch yield, so each batch's first geometry read forces a
+// full style+layout pass — the batch count IS the reflow count. At 15, a
+// 680-candidate grid pays ~45 forced reflows ≈ 1.5-3.4s mid-fling, vs the
+// identical walk in 111ms at boot when layout stays warm (round 18c).
+// 60 keeps the per-batch sync slab bounded (~60 warm reads + one reflow,
+// well under the wedge threshold) while cutting the reflow count ~4x.
+const SWEEP_WALK_BATCH_SIZE = 60;
+
 async function discoverInSubtreeBatched(root: Element, source: DiscoverySource): Promise<number> {
   const __cpuStart = performance.now();
   let added = 0;
@@ -3885,7 +3896,7 @@ async function discoverInSubtreeBatched(root: Element, source: DiscoverySource):
   }
 
   let invisibleCandidates: Element[] = [];
-  for (const batch of scanInBatches(root, DEFAULT_SCAN_BATCH_SIZE, initialSeen, isKnown)) {
+  for (const batch of scanInBatches(root, SWEEP_WALK_BATCH_SIZE, initialSeen, isKnown)) {
     if (cr?.excludes.length) applyExclusions(batch.refs, batch.elements, cr.excludes);
     added += attachDiscovered(batch.refs, batch.elements, limboPool, keyIndex, source);
     if (batch.isLast) invisibleCandidates = batch.invisibleCandidates;

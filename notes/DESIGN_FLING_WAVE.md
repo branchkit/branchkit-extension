@@ -981,6 +981,49 @@ when the reveal lands mid-sweep; fast_arm handles the clean case at
 ~0.15-0.5s. Remaining after that is QuickBase's own progressive
 render (reveals themselves arrive in waves ~2s apart end to end).
 
+## Round 18c — the walk's own reflow-per-batch; and clearing the
+## hint-memory suspect (2026-07-04)
+
+Drill on build 03:28 (18b live). Both urgency paths fire correctly
+(fast_arm at every big repair; fast_rerun consuming the mid-sweep
+case), MO-stamped stragglers 78 → 15, ring flat. Remaining number:
+the sweep WALK takes 1.5-3.4s mid-storm (fast_arm ts 3536 →
+added 41 @ 5059). The control that isolates it: the IDENTICAL
+full-document walk at boot completes in **111ms** (repair 54 →
+added 200 @ +111ms). Same code, 13-30x slower under the storm.
+
+Mechanism: scanInBatches reads geometry per candidate; between
+batches the sweep yields; mid-storm the page mutates during every
+yield, invalidating layout, so each batch's first read forces a full
+style+layout pass (~30ms on this grid). At batch size 15, ~680
+candidates = ~45 batches = ~45 forced reflows ≈ the whole 1.5s+. At
+boot nothing mutates between yields and the same 45 batches cost
+~2ms each. **The batch count is the reflow count.**
+
+User asked whether the hint-memory feature (limbo/fingerprint/
+strong-key rebind, codeword recall) is the slowdown. Cleared with
+data: its per-sweep cost is two O(store) index builds (pointer reads
++ bounded DOM walks, no layout) plus per-tier checks on genuinely NEW
+elements only (~40-200/fling, not the 680 walked); the 111ms boot
+walk INCLUDES attaching 200 wrappers through the full
+rebind/registry/recall pipeline — sub-ms per element. It is also
+net-negative cost: rebind_key take overs (~200-300/fling) are what
+save teardown + re-claim + grammar churn through the swap.
+
+Fix: `SWEEP_WALK_BATCH_SIZE = 60` for discoverInSubtreeBatched
+(DEFAULT_SCAN_BATCH_SIZE stays 15 — it sizes the scan path's
+per-batch grammar POSTs, which the sweep doesn't do). ~45 reflows →
+~12; per-batch sync slab stays bounded (~60 warm reads + one reflow,
+well under the wedge threshold). Expected mid-storm sweep ~400-600ms;
+with fast_arm/fast_rerun that puts reveal→paint ≈ 0.5-0.8s worst
+case, ~0.2-0.5s clean case.
+
+If a future drill still reads slow, the next (design-worthy, not
+quick) lever is reveal-SCOPED walking: the settle plan's toRepair
+wrappers locate the revealed region, so the sweep could walk their
+container subtrees instead of the whole document. Not attempted —
+measure 18c first.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
