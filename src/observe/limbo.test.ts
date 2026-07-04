@@ -406,7 +406,7 @@ describe('tryTakeoverByFingerprint (round 23)', () => {
     const oldEl = w.element;
     const newEl = makeReplacement('Edit purchase order 10897', 104, 102);
 
-    expect(takeover(newEl)).toBe(true);
+    expect(takeover(newEl)).toBe('rode');
     expect(w.element).toBe(newEl);
     expect(w.scanned.codeword).toBe('harp bat');
     expect(w.grammarReady).toBe(true);
@@ -419,7 +419,7 @@ describe('tryTakeoverByFingerprint (round 23)', () => {
   it('unique fingerprint takes over regardless of position (round 24: during an insert-before-remove overlap the replacement is appended far from the doomed row)', () => {
     const w = makePredecessor('Edit purchase order 10897', 100, 100);
     const newEl = makeReplacement('Edit purchase order 10897', 100, 3400);
-    expect(takeover(newEl)).toBe(true);
+    expect(takeover(newEl)).toBe('rode');
     expect(w.element).toBe(newEl);
     expect(rebindCounters.takeover_fp).toBe(1);
   });
@@ -429,7 +429,7 @@ describe('tryTakeoverByFingerprint (round 23)', () => {
     makePredecessor('', 50, 300, 'input');
     const newEl = makeReplacement('', 50, 102, 'input');
 
-    expect(takeover(newEl)).toBe(true);
+    expect(takeover(newEl)).toBe('rode');
     expect(near.element).toBe(newEl);
     expect(rebindCounters.takeover_fp_position).toBe(1);
   });
@@ -441,29 +441,27 @@ describe('tryTakeoverByFingerprint (round 23)', () => {
     makePredecessor('', 50, 130, 'input');
     const newEl = makeReplacement('', 50, 115, 'input');
 
-    expect(takeover(newEl)).toBe(false);
-    expect(rebindCounters.refuse_fp_ambiguous).toBe(1);
+    expect(takeover(newEl)).toBe('ambiguous'); // counted by attachDiscovered pass 2
   });
 
   it('consumes the winner: a second lookalike cannot steal the same predecessor', () => {
     makePredecessor('Edit purchase order 10897', 100, 100);
     const index = collectFingerprintIndex();
-    expect(takeover(makeReplacement('Edit purchase order 10897', 100, 104), index)).toBe(true);
-    expect(takeover(makeReplacement('Edit purchase order 10897', 100, 108), index)).toBe(false);
+    expect(takeover(makeReplacement('Edit purchase order 10897', 100, 104), index)).toBe('rode');
+    expect(takeover(makeReplacement('Edit purchase order 10897', 100, 108), index)).toBe('none');
   });
 
   it('a unique candidate without a lastRect still takes over (no position term); an ambiguous group with one refuses', () => {
     const w = makePredecessor('Edit purchase order 10897', 0, 0);
     w.lastRect = null;
-    expect(takeover(makeReplacement('Edit purchase order 10897', 4, 2))).toBe(true);
+    expect(takeover(makeReplacement('Edit purchase order 10897', 4, 2))).toBe('rode');
     expect(w.element instanceof HTMLElement).toBe(true);
 
     // Ambiguous group where one member can't be position-ranked → refuse.
     const a = makePredecessor('', 50, 100, 'input');
     makePredecessor('', 50, 300, 'input');
     a.lastRect = null;
-    expect(takeover(makeReplacement('', 50, 102, 'input'))).toBe(false);
-    expect(rebindCounters.refuse_fp_ambiguous).toBe(1);
+    expect(takeover(makeReplacement('', 50, 102, 'input'))).toBe('ambiguous');
   });
 
   it('limbo wrappers stay out of the index — the disconnected path owns them', () => {
@@ -471,5 +469,108 @@ describe('tryTakeoverByFingerprint (round 23)', () => {
     w.element.remove();
     enterLimbo(w, performance.now());
     expect(collectFingerprintIndex().size).toBe(0);
+  });
+});
+
+describe('row-coattail takeover (round 26)', () => {
+  /** A grid row: unique pencil + content-ambiguous checkbox + repeated link. */
+  function makeRow(po: number, buyer: string): { row: HTMLElement; pencil: HTMLElement; cb: HTMLElement; link: HTMLElement } {
+    const row = document.createElement('tr');
+    const td1 = document.createElement('td');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    const pencil = document.createElement('button');
+    pencil.setAttribute('aria-label', `Edit purchase order ${po}`);
+    td1.append(cb, pencil);
+    const td2 = document.createElement('td');
+    const link = document.createElement('a');
+    link.href = '/db/rec?a=dr&rid=9001';
+    link.setAttribute('aria-label', buyer);
+    td2.append(link);
+    row.append(td1, td2);
+    document.body.appendChild(row);
+    return { row, pencil, cb, link };
+  }
+
+  function wrap(el: Element, codeword: string): ElementWrapper {
+    const w = new ElementWrapper(el, scanned(0));
+    w.scanned.codeword = codeword;
+    idRegistry.register(w);
+    store.addWrapper(w);
+    w.lastRect = { left: 0, top: 0, width: 20, height: 20, right: 20, bottom: 20, x: 0, y: 0, toJSON: () => ({}) } as DOMRect;
+    return w;
+  }
+
+  beforeEach(() => {
+    idRegistry.clear();
+    rebindCounters.takeover_fp = 0;
+    rebindCounters.takeover_row = 0;
+  });
+
+  it('a unique ride carries its row-mates by structural path (letters preserved)', () => {
+    const a = makeRow(10897, 'Doe, Jane');
+    const wPencil = wrap(a.pencil, 'arch');
+    const wCb = wrap(a.cb, 'bake');
+    const wLink = wrap(a.link, 'cave');
+    // Another row with the SAME buyer link — content-ambiguity is real.
+    const other = makeRow(10896, 'Doe, Jane');
+    wrap(other.cb, 'dove');
+
+    // The replacement row: identical structure, different DOM.
+    const b = makeRow(10897, 'Doe, Jane');
+    // b's own wrappers don't exist yet (it was just discovered).
+    b.row.dataset.gen = '2';
+
+    const index = collectFingerprintIndex();
+    const newPencil = b.pencil;
+    expect(tryTakeoverByFingerprint(newPencil, computeFingerprint(newPencil), index)).toBe('rode');
+
+    // The unique ride took the pencil…
+    expect(wPencil.element).toBe(b.pencil);
+    expect(wPencil.scanned.codeword).toBe('arch');
+    // …and the coattail took the row-mates, letters intact.
+    expect(wCb.element).toBe(b.cb);
+    expect(wCb.scanned.codeword).toBe('bake');
+    expect(wLink.element).toBe(b.link);
+    expect(wLink.scanned.codeword).toBe('cave');
+    expect(rebindCounters.takeover_row).toBe(2);
+    // Ping-pong guard armed on the doomed twins.
+    expect(isRecentlyOrphaned(a.cb)).toBe(true);
+    // The other row's checkbox was untouched.
+    expect(store.findWrapperFor(other.cb)?.scanned.codeword).toBe('dove');
+  });
+
+  it('a structural mismatch skips that member (fail-safe to fresh attach)', () => {
+    const a = makeRow(10897, 'Doe, Jane');
+    wrap(a.pencil, 'arch');
+    const wCb = wrap(a.cb, 'bake');
+
+    const b = makeRow(10897, 'Doe, Jane');
+    b.cb.remove(); // replacement row lost its checkbox slot
+
+    const index = collectFingerprintIndex();
+    expect(tryTakeoverByFingerprint(b.pencil, computeFingerprint(b.pencil), index)).toBe('rode');
+    // Pencil path shifted (children reindexed) — tag check may still pass for
+    // the pencil itself (it rode via fingerprint, not path); the checkbox's
+    // path resolves to the pencil's slot or nothing → tag/eligibility skips.
+    expect(wCb.element).toBe(a.cb); // unmoved
+    expect(rebindCounters.takeover_row).toBe(0);
+  });
+
+  it('does not steal a counterpart that already has a wrapper', () => {
+    const a = makeRow(10897, 'Doe, Jane');
+    wrap(a.pencil, 'arch');
+    const wCb = wrap(a.cb, 'bake');
+
+    const b = makeRow(10897, 'Doe, Jane');
+    const wFresh = wrap(b.cb, 'echo'); // b's checkbox got a fresh wrapper already
+
+    const index = collectFingerprintIndex();
+    // NOTE: b.cb's wrapper makes the checkbox fingerprint group larger, but
+    // the pencil is still unique.
+    expect(tryTakeoverByFingerprint(b.pencil, computeFingerprint(b.pencil), index)).toBe('rode');
+    expect(wCb.element).toBe(a.cb);        // no steal
+    expect(wFresh.element).toBe(b.cb);     // fresh wrapper untouched
+    expect(rebindCounters.takeover_row).toBe(0);
   });
 });

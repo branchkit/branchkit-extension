@@ -126,6 +126,12 @@ export interface RebindCounters {
   /** Same tier, refused: multiple connected candidates and no candidate
    *  was uniquely co-located. Fresh attach (today's churn) follows. */
   refuse_fp_ambiguous: number;
+  /** Row-coattail rides (round 26): a unique-fingerprint takeover
+   *  established doomed-row ↔ replacement-row correspondence, and the
+   *  row's OTHER wrappers (checkboxes, repeating lookup links — the
+   *  content-ambiguous cohort no fingerprint or position gate can match)
+   *  rode to their structural counterparts in the replacement row. */
+  takeover_row: number;
 }
 
 export function newRebindCounters(): RebindCounters {
@@ -139,6 +145,7 @@ export function newRebindCounters(): RebindCounters {
     takeover_fp: 0,
     takeover_fp_position: 0,
     refuse_fp_ambiguous: 0,
+    takeover_row: 0,
   };
 }
 

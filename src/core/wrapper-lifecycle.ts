@@ -20,7 +20,7 @@ import { domSeenAt } from '../observe/dom-seen';
 import * as idRegistry from '../scan/registry';
 import { isRecallLoaded, resolvePreferredCodeword } from '../labels/codeword-recall';
 import { dropPendingPut, hasSent, queueDelete, queuePut, scheduleSync } from '../labels/label-sync';
-import { tryRebindFromLimbo, tryRebindByStrongKey, tryRebindBySlot, tryTakeoverByFingerprint, recordSlotAncestors, isRecentlyOrphaned } from '../observe/limbo';
+import { tryRebindFromLimbo, tryRebindByStrongKey, tryRebindBySlot, tryTakeoverByFingerprint, recordSlotAncestors, isRecentlyOrphaned, rebindCounters } from '../observe/limbo';
 import { computeFingerprint } from '../scan/registry';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { geometryInBand, getCachedRect, isRectOnScreen } from '../layout-cache';
@@ -152,6 +152,13 @@ export function attachDiscovered(
 ): number {
   let added = 0;
   const attached: ElementWrapper[] = [];
+  // Content-ambiguous takeover candidates, deferred past the unique rides
+  // (round 26): document order puts a row's checkbox BEFORE its unique
+  // pencil, so refusing inline fresh-attached the checkbox an instant
+  // before the pencil's row-coattail would have carried it — and the old
+  // wrapper died anyway. Pass 2 below re-checks them; most now hold a
+  // ridden wrapper and are skipped.
+  const deferred: number[] = [];
   for (let i = 0; i < refs.length; i++) {
     const ref = refs[i];
     // Skip a node we just transferred a wrapper *off* of (key-ownership rebind).
@@ -173,7 +180,11 @@ export function attachDiscovered(
     // DOM, so the limbo tiers above can't see it. Badge + letter + grammar
     // ride the swap; zero sync traffic (no metadata adoption needed — same
     // fingerprint, same content).
-    if (fpIndex && tryTakeoverByFingerprint(ref, newFp, fpIndex)) continue;
+    if (fpIndex) {
+      const outcome = tryTakeoverByFingerprint(ref, newFp, fpIndex);
+      if (outcome === 'rode') continue;
+      if (outcome === 'ambiguous') { deferred.push(i); continue; }
+    }
     // Slot tier (DESIGN_FLING_WAVE Part 2): a recycled cell's new content —
     // different fingerprint, different key, same surviving slot ancestor.
     // The wrapper (badge, letter, grammar entry, grammarReady) survives the
@@ -189,19 +200,36 @@ export function attachDiscovered(
       scheduleSync('slot_rebind');
       continue;
     }
-    // Eager attach (Rango/Vimium model). Wrappers stay alive while their
-    // element is in the DOM — scroll-out doesn't release them. The
-    // attention IO is reserved for bounding `pendingVisibility` membership
-    // (the YouTube-comment-skeleton case), not for wrapper lifecycle.
-    // Trades unbounded wrapper growth on infinite-scroll pages for
-    // correct scroll-back behavior (badges reappear on scroll up).
-    const wrapper = new ElementWrapper(ref, elements[i]);
-    attachWrapper(wrapper, source);
-    attached.push(wrapper);
-    added++;
+    added += eagerAttach(refs[i], elements[i], source, attached);
+  }
+  // Pass 2: the deferred ambiguous cohort. A row-coattail usually rode them
+  // during pass 1; whatever remains is a genuine refusal → fresh attach
+  // (today's behavior), counted as the refusal it is.
+  for (const i of deferred) {
+    const ref = refs[i];
+    if (store.findWrapperFor(ref)) continue; // coattail carried it
+    if (isRecentlyOrphaned(ref)) continue;
+    rebindCounters.refuse_fp_ambiguous++;
+    added += eagerAttach(ref, elements[i], source, attached);
   }
   primeInBandClaims(attached);
   return added;
+}
+
+// Eager attach (Rango/Vimium model). Wrappers stay alive while their
+// element is in the DOM — scroll-out doesn't release them. The attention
+// IO is reserved for bounding `pendingVisibility` membership (the
+// YouTube-comment-skeleton case), not for wrapper lifecycle. Trades
+// unbounded wrapper growth on infinite-scroll pages for correct
+// scroll-back behavior (badges reappear on scroll up).
+function eagerAttach(
+  ref: Element, scanned: ScannedElement, source: DiscoverySource,
+  attached: ElementWrapper[],
+): number {
+  const wrapper = new ElementWrapper(ref, scanned);
+  attachWrapper(wrapper, source);
+  attached.push(wrapper);
+  return 1;
 }
 
 // Prime-at-attach (notes/DESIGN_FLING_WAVE.md Part 1): a wrapper that is

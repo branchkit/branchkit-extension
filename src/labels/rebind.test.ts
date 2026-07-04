@@ -171,6 +171,7 @@ describe('bumpRebindCounter', () => {
       takeover_fp: 0,
       takeover_fp_position: 0,
       refuse_fp_ambiguous: 0,
+      takeover_row: 0,
     });
   });
 
@@ -190,6 +191,7 @@ describe('bumpRebindCounter', () => {
       takeover_fp: 0,
       takeover_fp_position: 0,
       refuse_fp_ambiguous: 0,
+      takeover_row: 0,
     });
   });
 
@@ -209,7 +211,7 @@ describe('bumpRebindCounter', () => {
     // tryTakeoverByFingerprint, not the matcher).
     expect(Object.keys(c).sort()).toEqual([
       'rebind_clean', 'rebind_position', 'refuse_distance', 'refuse_no_match', 'rebind_key', 'rebind_slot',
-      'takeover_fp', 'takeover_fp_position', 'refuse_fp_ambiguous',
+      'takeover_fp', 'takeover_fp_position', 'refuse_fp_ambiguous', 'takeover_row',
     ].sort());
   });
 });

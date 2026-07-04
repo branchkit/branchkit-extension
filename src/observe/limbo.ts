@@ -413,28 +413,33 @@ const centerDist = (r: DOMRect, rect: DOMRect): number => {
  * stops the robbed element from grabbing the wrapper back via
  * `attachDiscovered`'s isRecentlyOrphaned skip.
  */
+export type TakeoverOutcome = 'rode' | 'ambiguous' | 'none';
+
 export function tryTakeoverByFingerprint(
   newEl: Element,
   newFp: Fingerprint,
   fpIndex: Map<string, ElementWrapper[]>,
-): boolean {
+): TakeoverOutcome {
   const list = fpIndex.get(fingerprintToString(newFp));
-  if (!list || list.length === 0) return false;
+  if (!list || list.length === 0) return 'none';
   // Re-validate at match time — the index snapshot can go stale within a
   // pass (elements disconnect mid-drain). The ambiguous branch additionally
   // needs lastRect to position-verify; the unique branch does not.
   const candidates = list.filter(
     (w) => w.element !== newEl && w.element.isConnected,
   );
-  if (candidates.length === 0) return false;
+  if (candidates.length === 0) return 'none';
 
   let winner: ElementWrapper | null = null;
   if (candidates.length === 1) {
     winner = candidates[0];
   } else if (candidates.some((w) => w.lastRect === null)) {
-    // Can't fairly position-rank a mixed group; refuse to fresh attach.
-    rebindCounters.refuse_fp_ambiguous++;
-    return false;
+    // Can't fairly position-rank a mixed group. 'ambiguous' — the caller
+    // defers these past the unique rides so a row-coattail can carry them
+    // (round 26: document order puts a row's checkbox BEFORE its unique
+    // pencil; refusing inline fresh-attached the checkbox an instant
+    // before its coattail arrived, and the old wrapper died anyway).
+    return 'ambiguous';
   } else {
     const newRect = peekCachedRect(newEl) ?? newEl.getBoundingClientRect();
     let best: { w: ElementWrapper; d: number } | null = null;
@@ -451,21 +456,89 @@ export function tryTakeoverByFingerprint(
     if (best && best.d <= TAKEOVER_TIGHT_PX && second - best.d >= TAKEOVER_MARGIN_PX) {
       winner = best.w;
     } else {
-      rebindCounters.refuse_fp_ambiguous++;
-      return false;
+      return 'ambiguous';
     }
   }
-  if (!winner) return false;
+  if (!winner) return 'none';
 
   const idx = list.indexOf(winner);
   if (idx >= 0) list.splice(idx, 1);
-  orphanedByKeyRebind.set(winner.element, Date.now());
-  if (candidates.length === 1) rebindCounters.takeover_fp++;
+  const doomedEl = winner.element;
+  orphanedByKeyRebind.set(doomedEl, Date.now());
+  const unique = candidates.length === 1;
+  if (unique) rebindCounters.takeover_fp++;
   else rebindCounters.takeover_fp_position++;
   // Deliberately NOT adopting the fresh scan metadata (unlike the slot
   // tier): same fingerprint = same content — no re-Put, no grammar delta.
   rebindWrapper(winner, newEl);
-  return true;
+  // Row coattail (round 26): a UNIQUE ride pins doomed-row ↔ replacement-row
+  // correspondence — carry the row's content-ambiguous wrappers with it.
+  if (unique) coattailRowTakeover(doomedEl, newEl);
+  return 'rode';
+}
+
+// --- Row-coattail takeover (round 26, DESIGN_FLING_WAVE.md) ---
+//
+// The content-ambiguous cohort (checkboxes — every one looks alike;
+// repeating lookup links — "Doe, Jane" ×17 rows) can never be matched
+// by fingerprint, and the insert-before-remove overlap defeats position
+// gates (rounds 24-25). But every grid row CONTAINS a unique-fingerprint
+// control (the edit/view buttons carry record ids in their names), and a
+// unique ride establishes the row pair for free. Row-mates then ride by
+// STRUCTURAL PATH — the child-index path from the row to the element,
+// exact on an identical rebuild, and fail-safe on anything else (a path
+// miss or tag mismatch just skips that member; fresh attach follows, which
+// is today's behavior).
+
+const ROW_SELECTOR = 'tr, [role="row"]';
+
+/** Child-index path from `row` down to `el`, or null when el isn't under
+ * row (or is the row). Pointer walks only. */
+function pathWithinRow(row: Element, el: Element): number[] | null {
+  const path: number[] = [];
+  let cur: Element = el;
+  while (cur !== row) {
+    const parent: Element | null = cur.parentElement;
+    if (!parent) return null;
+    path.push(Array.prototype.indexOf.call(parent.children, cur));
+    cur = parent;
+  }
+  return path.reverse();
+}
+
+function resolvePath(row: Element, path: number[]): Element | null {
+  let cur: Element = row;
+  for (const i of path) {
+    const next = cur.children[i];
+    if (!next) return null;
+    cur = next;
+  }
+  return cur;
+}
+
+function coattailRowTakeover(doomedEl: Element, newEl: Element): void {
+  const doomedRow = doomedEl.closest(ROW_SELECTOR);
+  const newRow = newEl.closest(ROW_SELECTOR);
+  if (!doomedRow || !newRow || doomedRow === newRow) return;
+
+  for (const w of store.all) {
+    const el = w.element;
+    if (el === newEl || !el.isConnected) continue;
+    if (!doomedRow.contains(el)) continue;
+    const path = pathWithinRow(doomedRow, el);
+    if (!path) continue;
+    const counterpart = resolvePath(newRow, path);
+    if (!counterpart) continue;
+    // Structural sanity: an identical rebuild puts the same kind of element
+    // in the same slot. Anything else → skip, fresh attach handles it.
+    if (counterpart.tagName !== el.tagName) continue;
+    if (counterpart === el) continue;
+    if (store.findWrapperFor(counterpart)) continue;
+    if (isRecentlyOrphaned(counterpart)) continue;
+    orphanedByKeyRebind.set(el, Date.now());
+    rebindCounters.takeover_row++;
+    rebindWrapper(w, counterpart);
+  }
 }
 
 /**
