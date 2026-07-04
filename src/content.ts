@@ -369,10 +369,13 @@ function onTrackerCodewordsChanged(claimed: ElementWrapper[], released: string[]
     if (hasSent(cw)) queueDelete(cw);
   }
   schedulePushGrammar();
-  // Build-up reconcile: codewords just landed, so build their badges and
-  // re-sweep for any in-band wrapper still missing a claim (closes the
-  // claim-gap-after-build window). reconcile guards build on hintsVisible.
-  reconcile();
+  // Build-up reconcile, storm-shaped: codewords just landed, so schedule
+  // their build burst and re-sweep for any in-band wrapper still missing a
+  // claim (closes the claim-gap-after-build window). This callback fires
+  // from the claim flush — mid-fling that is every discovery drain slice's
+  // microtask tail, which is exactly where an inline build must NOT run
+  // (drill round 4: it starved discovery).
+  reconcileStorm();
 }
 
 // (Strict-viewport tracker removed — it was meant to narrow the
@@ -1658,6 +1661,28 @@ function reconcile(): void {
     badgeNewlyCodeworded();
     reattachStrippedHosts();
   }
+}
+
+// Storm-shaped reconcile (notes/DESIGN_FLING_WAVE.md round 4): the claim
+// step stays synchronous (cheap O(store) flag checks; the flush grants from
+// the local reservoir in ~1ms so tClaimed stays instant), but the BUILD
+// routes through the single-flight yield-task continuation instead of
+// running inline. Mid-fling the claim flush fires in every discovery drain
+// slice's microtask tail — an inline burst-budget build there turned each
+// 32ms walk slice into a ~180ms composed task and starved discovery
+// (dom_seen_to_attached p90 2826ms, drill round 4). With the continuation,
+// at most ONE build task exists at a time, FIFO-interleaved with walk
+// slices, draining every claim accumulated since the last burst — on-screen
+// unbudgeted first (runBuildPass ordering). On-screen badges pay one yield
+// hop (~1-5ms) over the inline path.
+//
+// One-shot converge points (scan path, nav/alphabet, settle repair,
+// label-sync catchup, confirm-rejected) keep the synchronous reconcile()
+// above: they are not per-slice storms, and some (showHints) depend on
+// build-before-paint ordering.
+function reconcileStorm(): void {
+  pageSession.tracker.refreshViewportClaims();
+  if (pageSession.hintsVisible) scheduleBandBuildContinuation();
 }
 
 // Coalesced entry for high-frequency edge signals (focus/transition/resize
@@ -3354,12 +3379,12 @@ function noteBandSweep(): void {
     lifecycleCounters.bandSweepRepairs += repaired;
     lifecycleCounters.bandSweepReleases += released;
     firehoseStep('band_sweep:changed', repaired + released, 20);
-    // The designed convergence entry: refreshViewportClaims picks up the
-    // just-flipped flags (claim), badgeNewlyCodeworded builds. Releases
-    // matter here too — the freed letters land at the front of the local
-    // reservoir synchronously, so a claim that would have returned '' a
-    // sweep ago is funded NOW, in this task's microtask tail.
-    reconcile();
+    // Storm-shaped convergence: refreshViewportClaims picks up the
+    // just-flipped flags (claim, microtask flush), the build burst runs in
+    // its own single-flight task. Releases matter here too — the freed
+    // letters land at the front of the local reservoir synchronously, so a
+    // claim that would have returned '' a sweep ago is funded NOW.
+    reconcileStorm();
   }
 }
 

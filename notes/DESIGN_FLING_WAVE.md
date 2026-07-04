@@ -295,6 +295,56 @@ viewport) lands near ~200ms. If perception STILL doesn't move, the
 remaining lag is not in this pipeline — it is content-vs-badge timing
 on QuickBase's own swap plus the teardown dip: go to step 4.
 
+## Drill round 4 (2026-07-04, snapshot 00-10) — the burst starved
+## discovery; separate the priorities
+
+Half the prediction landed hard: claimed_to_shown p90 205 → **54**,
+attached_to_shown p90 **128**, band_to_claimed p90 16, and the
+stability ring shows painted == wrappers throughout with shown
+oscillating ±15 — the build backlog and (on this evidence) most of the
+CHURN DIP are gone. The other half inverted: dom_seen_to_attached p50
+45 → 267, p90 302 → **2826**. Discovery starved.
+
+Cause — self-inflicted: the prime path's claim flush runs in each
+drain slice's MICROTASK TAIL, and that flush builds synchronously
+(onCodewordsChanged → reconcile → badgeNewlyCodeworded). At the new
+120ms burst budget, every 32ms walk slice became a ~180ms composed
+task; discovery throughput collapsed and the root backlog sat for
+seconds. (Round 3 had the identical structure with a 32ms tail — which
+is why it was survivable then and why this only surfaced now.)
+
+Fix (Part 1e) — priority separation, not budget re-tuning. The
+priority order that matters perceptually is: discovery (enables
+everything, and is cheap) > on-screen build > off-screen band
+pre-build (invisible prefetch). So:
+
+- **Drain slices go walk-only again.** The prime still queues claims
+  and the microtask flush still grants them (local reservoir, ~1ms —
+  tClaimed stays instant); what leaves the tail is the BUILD.
+- **Storm-path build triggers route through the single-flight
+  continuation** instead of calling reconcile()'s synchronous build:
+  `onTrackerCodewordsChanged` and the band sweep call a storm variant
+  (refreshViewportClaims + scheduleBandBuildContinuation). At most ONE
+  120ms build task exists at a time, FIFO-interleaved with walk
+  slices; it drains every claim accumulated across the slices since
+  the last burst, on-screen unbudgeted first (runBuildPass ordering,
+  unchanged). Non-storm callers (scan path, nav/alphabet, settle
+  repair, label-sync catchup, confirm-rejected) keep the synchronous
+  reconcile() — they are one-shot converge points, not per-slice
+  storms, and some (showHints) depend on build-before-paint ordering.
+
+Cost of the separation: on-screen badges wait one yield hop (~1-5ms)
+for the continuation task instead of building in the flush microtask.
+Nothing else moves.
+
+Prediction for drill round 5: dom_seen_to_attached returns to round-3
+shape or better (p50 ≤ 50, p90 ≤ 150 — walk slices at full duty),
+claimed_to_shown holds near round 4 (one burst per accumulation), so
+dom_seen_to_shown p90 finally lands ~200-300ms with the dip staying
+shallow. That is the whole Part-1 story with no stage left to blame;
+perception unchanged after THAT means QuickBase's own swap timing —
+measure content-paint-to-badge directly before touching anything else.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
