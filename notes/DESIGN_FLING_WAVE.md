@@ -2871,3 +2871,43 @@ NEXT: user runs scripts/_probe-fling-cohort.console.js in their Chrome on
 the client grid (read-only; paste → fling → copy(__bkProbe.report())). Its
 last-failing-gate + mutation-at-flip classification lands exactly on the
 remaining branch point. Then fix per classification.
+
+### Round 33c — probe verdict: the page is innocent; fix = reveal-armed
+### follow-through (c86d8dc)
+
+User ran the round-21 console probe on the live client grid through one fling
+(/tmp/probe-report.json): 1,559 elements tracked, **late_in_viewport = 0**
+— every user-visible element passed ALL gates ≤500ms after insertion. The
+still-ineligible tail at report time (261 size=0×0, 29 opacity:0, 9
+disconnected) is QuickBase's never-revealed buffer copies, not the visible
+rows. (Probe report() also hardened: event-detail truncation, 4000-element
+tracking cap, ranked 300-row cap, stringify fallback — the first run
+overflowed JSON.stringify on production mutation traffic.)
+
+So the 3s is OURS, and with the log it assembles completely:
+1. Row wrappers attach 11ms after insert; their band flags go stale-false
+   through the swap.
+2. reconcile repairs the flags (stale_false_repair 119) — but repaired
+   wrappers still need their claim flush before paint.
+3. The repair fast-arms a sweep; the sweep walks document.body, skips
+   every already-attached wrapper, added===0 → early return — SKIPPING
+   reconcile()+flushNow()+showHints(), the exact follow-through the
+   repaired cohort needed.
+4. Badges stall until any later sweep attaches one new element (added=1 →
+   showHints 166 — the backlog signature).
+
+FIX: `if (added === 0 && !fastReveal) return;` — a reveal-armed sweep
+always follows through. Cost bounded to mass-reveal fast-arms (≥25
+repairs). Gates green (tsc, 1021 tests, both builds, wedge, dual-CS,
+orphan soak, fixture recovery 443ms — fixture can't exercise this path;
+its reveals produce adds).
+
+WHY NO FIXTURE VARIANT REPRODUCED (33b mystery resolved): every variant's
+reveal created NEW/reparented discoveries (added>0) so the sweep followed
+through. The client grid's reveal changes no DOM the walk hasn't seen —
+purely flag-state — the one shape where added===0 coincides with a paint
+backlog.
+
+VERIFY: user reloads the extension (close+reopen QuickBase tabs — F5
+breaks content scripts), flings the client grid: badges should now arrive
+with the repair pass (~100-400ms after rows), translucent then solid.
