@@ -2647,3 +2647,76 @@ both builds, wedge, dual-CS race, orphan soak) run per step.
    points at the old record's fingerprint. Refresh via `rememberLive` at
    rebind, or accept decay (memory is a reload nicety, not correctness)?
    Lean: refresh, it's one call.
+
+## Round 31 — same-day A/B closes the mystery: the REPORT-LOAD gap, not
+## the fling (2026-07-04, /tmp/badge-ab)
+
+Fresh same-day recordings (`branchkit.mov`, `rango.mov`), both capturing the
+same gesture — a report LOAD (spinner → header → rows), not a mid-grid
+fling. Frame-level read on the proven left-action-column crop:
+
+- **Rango**: rows repaint at ~3.77s; hints FULLY populated (pencil/eye
+  pairs, headers, filter row) at **rows+0.43s**. Solid.
+- **BranchKit**: rows repaint at ~4.67s; sidebar + header badge quickly,
+  but the grid rows sit **completely bare until ~rows+2.6s**, first badges
+  ~rows+2.6–3.3s.
+
+Every drill of rounds 21–30 measured the fling/swap path — which is now
+genuinely healthy (zero drops, ack ~1s, dip = single sample). The gesture
+the user's eye judges by is the LOAD, and loads run a different path:
+`doScanBatched`.
+
+### The mechanism — paint gated behind sequential grammar round-trips
+
+`processScanBatch` (old shape) held `attachWrapper` until AFTER its
+`postBatch` succeeded ("badge-implies-functional"), and `doScanBatched`
+awaited each batch's POST before walking the next, with a `setTimeout(0)`
+hop between batches (storm-hop class, instance #5). Net: on a report load,
+paint serialized behind ~25 sequential SW→plugin round-trips at ~100–430ms
+each — the observed seconds of bare rows. Rango pays zero round-trips and
+paints during its walk: +0.43s.
+
+This one mechanism also retro-explains two standing puzzles:
+1. **"Your fixture badges were instant but the real page isn't"** — the
+   harness never pairs, so postBatch local-acks and the round-trip cost
+   vanishes. The fixture structurally CANNOT reproduce this bug class
+   (recorded harness gap, round 26).
+2. **"I never see the half-transparent badges"** — scan-path badges only
+   painted post-ACK, already solid. bk-pending never rendered on loads.
+
+### The fix (this round, same two levers as 29b/29c applied to the scan path)
+
+1. **Paint first, solidify on ACK.** `processScanBatch` now attaches +
+   paints candidates BEFORE the POST — badges appear at walk speed in
+   bk-pending translucent, exactly the tracker/IO path's contract; the ACK
+   flips them solid (`markSent` + `markGrammarReady`). Rollback on the
+   response: failed/unacked + still-owned → `detachWrapper` (label
+   released, no Delete since never sent); succeeded-but-disconnected →
+   `markSent` then `detachWrapper` so the normal delta-sync plumbing queues
+   the Delete; succeeded-but-already-detached → manual `queueDelete`,
+   guarded against label reuse (skip if any live wrapper holds the
+   codeword). Per-wrapper store-ownership revalidation throughout (round
+   30's lesson).
+2. **Pipeline the batch POSTs.** `doScanBatched` no longer awaits middle
+   batches — each batch's sync work (claim, attach, paint) runs in call
+   order on the main thread, POSTs fly concurrently, and the terminal
+   `is_final` batch is held until all middles settle (same ordering
+   discipline as syncNow's 29c pipeline: is_final drives plugin-side epoch
+   finalization). `setTimeout(0)` → `yieldTask()`.
+
+Expected beat after the fix: rows badge (translucent) at walk speed —
+Rango-parity paint — then solidify within ~1 ack round-trip.
+
+### Gates
+
+tsc clean, 1021/1021 tests, both builds, wedge PASS, dual-CS race PASS
+(clean=6 dual=0), orphan soak PASS (0 hits), QB fixture: boot 252 badges,
+recovery 630ms (unchanged).
+
+### Verify
+
+The fixture cannot see this fix (local-ack). Verification is the user's
+real-Chrome drill, and the gesture matters: **reload the QuickBase report
+page** (or navigate to it fresh) and watch the grid rows — translucent
+badges should appear with the rows, solidifying ~1s later. The fling drill
+exercises the OTHER (already-fixed) path.

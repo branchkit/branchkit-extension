@@ -2047,29 +2047,59 @@ async function doScanBatched(source: DiscoverySource): Promise<void> {
 
   let batchIndex = 0;
 
+  // Round 31: batches PIPELINE. Each processScanBatch attaches + paints
+  // synchronously before its POST, so the walk (and therefore paint)
+  // proceeds at content speed while the grammar round-trips fly
+  // concurrently — the old shape awaited each batch's POST before
+  // walking the next, which on a report load serialized paint behind
+  // ~25 sequential plugin round-trips (the Rango gap, DESIGN_FLING_WAVE
+  // round 31). Claims stay ordered: everything up to each batch's POST
+  // runs in call order on the main thread. Rejections are swallowed at
+  // push time (parity with doScan's catch) so an unhandled rejection
+  // can't fire while the collection awaits later batches.
+  const inFlight: Promise<void>[] = [];
+
   // Synthetic first "batch" for inclusion-rule elements, if any. Goes
   // through the same processing path so its codewords get Put and the
   // succeeded ones paint. is_final stays false because the scanner
   // walk will follow with at least its own terminal batch.
   if (inclusionRefs.length > 0) {
-    await processScanBatch(
+    inFlight.push(processScanBatch(
       { refs: inclusionRefs, elements: inclusionElements, isLast: false, invisibleCandidates: [] },
       getSessionId(), batchIndex, sessionMeta, adapter, source,
-    );
+    ).catch(() => {}));
     batchIndex++;
   }
 
   for (const batch of scanInBatches(
     adapter ? document : document, DEFAULT_SCAN_BATCH_SIZE, initialSeen,
   )) {
-    await processScanBatch(batch, getSessionId(), batchIndex, sessionMeta, adapter, source);
+    if (batch.isLast) {
+      // The terminal batch carries is_final, which closes the plugin's
+      // scan window — it must be ADMITTED after every middle batch, so
+      // hold its POST until the in-flight ones settle (same ordering
+      // discipline as syncNow's pipelined chunks, round 29c).
+      await Promise.allSettled(inFlight);
+      await processScanBatch(batch, getSessionId(), batchIndex, sessionMeta, adapter, source);
+    } else {
+      inFlight.push(
+        processScanBatch(batch, getSessionId(), batchIndex, sessionMeta, adapter, source)
+          .catch(() => {}),
+      );
+    }
     batchIndex++;
     // Yield to the event loop between batches so MutationObserver
     // can fire and any DOM removal mid-scan flags the wrapper's
     // element as disconnected before the next batch (item 5
     // mitigation; the sweep itself runs in processScanBatch).
-    await new Promise(r => setTimeout(r, 0));
+    // scheduler.yield, not setTimeout(0) — the timer hop costs
+    // 50-150ms per batch under load (storm-hop class, instance #5).
+    await yieldTask();
   }
+  // Belt-and-braces: if the generator yielded no isLast batch (empty
+  // document), middle POSTs may still be in flight — settle them before
+  // the deletes flush below reads hasPendingDeletes.
+  await Promise.allSettled(inFlight);
 
   // If the terminal batch's sweep queued deletes, flush them now via
   // an empty deletes-only batch — otherwise they'd strand until the
@@ -2143,15 +2173,16 @@ async function processScanBatch(
     : [];
   const labels = await claimLabels(newRefs.length, scanPreferred);
 
-  // Build candidate wrappers with codewords assigned but DO NOT
-  // attach to the store yet. Wrappers in the store with codewords
-  // would be visible to showHints() and badgeNewlyCodeworded(),
-  // causing badges to paint before the plugin acknowledges the
-  // grammar push. The design's badge-implies-functional contract
-  // (every painted badge must be voice-activatable) requires that
-  // we hold off attachWrapper until AFTER POST succeeds AND the
-  // element is still in the DOM. Any wrapper that fails either
-  // check gets its label released without ever entering the store.
+  // Build candidate wrappers with codewords assigned. These attach and
+  // paint BEFORE the grammar POST (round 31): the badge appears at walk
+  // speed in the translucent bk-pending state and the ACK solidifies it —
+  // exactly the tracker/IO path's contract. The old shape held
+  // attachWrapper until after the POST "so no badge paints before the
+  // plugin acknowledges", but with sequential per-batch round-trips that
+  // serialized ALL paint behind ~25 plugin POSTs on a report load:
+  // seconds of bare grid rows while Rango painted during its walk. The
+  // badge-implies-functional contract is carried by bk-pending, not by
+  // withholding paint.
   const candidates: ElementWrapper[] = [];
   for (let i = 0; i < newRefs.length; i++) {
     const label = i < labels.length ? labels[i] : '';
@@ -2172,7 +2203,36 @@ async function processScanBatch(
   const adapterName = adapter?.name ?? '';
   void adapterName; // reserved for plugin-side adapter-aware routing
 
+  // Sync slab 2: attach loop + paint, now PRE-POST. Everything here is
+  // synchronous; if any of it takes >50ms it's a real main-thread block.
+  const __syncBStart = performance.now();
+
   stampStrictViewport(candidates);
+  for (const w of candidates) {
+    attachWrapper(w, source);
+  }
+
+  // Record the scan-path claims in the codeword memory (SW + live index). The
+  // tracker path does this via its onCodewordsChanged callback; the scan path
+  // claims labels upfront (claimLabels), so without this its codewords would
+  // never seed a future reclaim — the SPA-rebuild churn the QuickBase sidebar
+  // hit. See rememberClaimedCodewords / codeword-recall.
+  if (candidates.length > 0) rememberClaimedCodewords(candidates);
+
+  // Paint immediately, translucent (grammarReady is still false, so the
+  // badge carries bk-pending). Gated by pageSession.hintsVisible so
+  // manual-mode batches don't paint until "show".
+  if (pageSession.hintsVisible && candidates.length > 0) {
+    reconcile();
+  }
+
+  // Surface terminal-batch invisibleCandidates to the
+  // ResizeObserver path (same as the old doScan's end-of-pass).
+  if (batch.isLast && batch.invisibleCandidates.length > 0) {
+    observeInvisibleCandidates(batch.invisibleCandidates);
+  }
+  recordCpu('processScanBatch:syncB', performance.now() - __syncBStart);
+
   const resp = await postBatch({
     session_id: sessionId,
     batch_index: batchIndex,
@@ -2185,68 +2245,47 @@ async function processScanBatch(
     elements: candidates.map(w => w.scanned),
   });
 
-  // Sync slab 2: response partitioning, attach loop, paint, observer
-  // surfacing. Everything after the POST-await is synchronous; if any
-  // of it takes >50ms it's a real main-thread block.
-  const __syncBStart = performance.now();
-
-  // Partition: succeeded + still-connected → attach to store (paint
-  // follows). Succeeded + disconnected (item 5 RED) → queue the
-  // codeword for delete on the next batch and release the label.
-  // Failed or unknown → release the label without ever attaching.
+  // Response partitioning — solidify or roll back. The wrapper may have
+  // been detached (MO removal, dedup by a later scan) or its element
+  // disconnected during the round-trip, so revalidate store ownership
+  // per wrapper (round 30's lesson) before acting on the ACK.
   const succeededSet = new Set(resp.succeeded);
-  const attached: ElementWrapper[] = [];
   for (const w of candidates) {
-    if (!succeededSet.has(w.scanned.codeword)) {
-      // Either explicitly failed or the response didn't acknowledge
-      // it. Either way: never entered the store, just release.
-      w.releaseLabel();
-      continue;
+    const cw = w.scanned.codeword;
+    const stillMine = cw !== '' && store.findWrapperFor(w.element) === w;
+    if (cw !== '' && succeededSet.has(cw)) {
+      if (stillMine && w.element.isConnected) {
+        // Delta-sync: the plugin acknowledged this codeword, so it's live
+        // on the plugin side. Mark it so future detaches know to send a
+        // Delete and future syncs skip re-Putting it — THEN flip the badge
+        // solid. markGrammarReady clears bk-pending on the visible badge
+        // in one shot, mirroring the IO/syncNow ACK site.
+        markSent(cw);
+        w.markGrammarReady();
+      } else if (stillMine) {
+        // Element disconnected during the round-trip. Plugin holds the
+        // codeword; markSent first so detachWrapper's delta-sync queues
+        // the Delete through the normal plumbing.
+        markSent(cw);
+        detachWrapper(w.element);
+      } else {
+        // Already detached mid-flight (before markSent, so no Delete was
+        // queued then). The plugin holds the codeword — queue the Delete
+        // manually, UNLESS the released label was already reclaimed by a
+        // live wrapper, in which case the plugin entry now (or soon)
+        // belongs to that wrapper and deleting it would orphan a painted
+        // badge.
+        if (!store.all.some((lw) => lw.scanned.codeword === cw)) {
+          queueDelete(cw);
+        }
+      }
+    } else if (stillMine) {
+      // Failed or unacknowledged: never live on the plugin side, and
+      // never marked sent, so detachWrapper unpaints and releases the
+      // label without queueing a Delete.
+      detachWrapper(w.element);
     }
-    if (!w.element.isConnected) {
-      // Element disconnected during the POST round-trip. Plugin
-      // already holds the codeword in its entity_cache — queue the
-      // delete on the next batch to clear it.
-      queueDelete(w.scanned.codeword);
-      w.releaseLabel();
-      continue;
-    }
-    attachWrapper(w, source);
-    // Delta-sync: the plugin acknowledged this codeword inside the
-    // scan-path POST above, so it's now live on the plugin side. Mark
-    // it so future detaches know to send a Delete and future syncs
-    // skip re-Putting it.
-    markSent(w.scanned.codeword);
-    // Voice layer: same ACK as above means this wrapper's codeword is
-    // already live in the grammar by the time badgeNewlyCodeworded runs
-    // below. ElementWrapper.markGrammarReady sets the flag and clears the
-    // bk-pending class on the visible badge in one shot — mirrors the
-    // IO/syncNow path so the two ACK sites can't drift.
-    w.markGrammarReady();
-    attached.push(w);
   }
-
-  // Record the scan-path claims in the codeword memory (SW + live index). The
-  // tracker path does this via its onCodewordsChanged callback; the scan path
-  // claims labels upfront (claimLabels), so without this its codewords would
-  // never seed a future reclaim — the SPA-rebuild churn the QuickBase sidebar
-  // hit. See rememberClaimedCodewords / codeword-recall.
-  if (attached.length > 0) rememberClaimedCodewords(attached);
-
-  // Paint the just-attached badges. Each one is now backed by a
-  // successful plugin acknowledgement AND a still-connected element,
-  // so the badge-implies-functional contract holds. Gated by
-  // pageSession.hintsVisible so manual-mode batches don't paint until "show".
-  if (pageSession.hintsVisible && attached.length > 0) {
-    reconcile();
-  }
-
-  // Surface terminal-batch invisibleCandidates to the
-  // ResizeObserver path (same as the old doScan's end-of-pass).
-  if (batch.isLast && batch.invisibleCandidates.length > 0) {
-    observeInvisibleCandidates(batch.invisibleCandidates);
-  }
-  recordCpu('processScanBatch:syncB', performance.now() - __syncBStart);
 }
 
 // --- Active-frame tracking ---
