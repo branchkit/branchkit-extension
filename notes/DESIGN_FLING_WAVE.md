@@ -1785,6 +1785,39 @@ session rotation after the swap. The perceptual translucent phase
 compresses to ~half a second — which is the two-phase shape the user
 already approved in round 13, now honest.
 
+VERIFY DRILL (snapshot 16-26, build 16:19) — the deadline works, with
+one framing CORRECTION to 22b:
+- **Correction first**: the "289 stuck translucent" reading was wrong.
+  In BOTH the 22b and this drill, every grammar_ready=false wrapper is
+  codeword-LESS — out-of-band wrappers at their resting state, zero
+  translucent badges at rest either time. The real symptom was always
+  the translucent WINDOW (shown→ACK), which the sync hole stretched;
+  grammar_ready counts alone cannot measure it. (Fourth entry in this
+  arc's catalogue of aggregate-counter misreads.)
+- The 5.5s hole is gone: a 2.1s gap with nothing queued (the scroll's
+  pre-swap phase — no claims, no deletes yet; the first post-swap
+  delta shipped 226 deletes within ~0.5s of finalize, deadline-fired),
+  then continuous 15-element trains every ≤400ms through the entire
+  swap window (t=7309→9998, 60+ posts, zero transport errors).
+- **No session rotation** — one session across the whole drill; the
+  epoch divergence → rotate → 25-batch republish cascade is gone.
+- shown_minus_ack p50 −1671 → −1276 over the 90s window (boot's long
+  put-queue dominates the median; mid-fling ACK windows are within a
+  few hundred ms of the deadline cadence).
+- Churn shrank: shown-then-detached 593 → 351, sub-2s wipes 300+ →
+  176 (lever 1's rebind revival + no more refusal/rotation cascade).
+
+Still open, in priority order:
+1. The failed-chunk refusals (result=ok, failed=13/15/12/6 on several
+   mid-storm chunks — each detaches the whole chunk and feeds churn).
+   Plugin-side per-codeword refusal reasons aren't surfaced in the
+   trace; that's the next diagnostic seam if churn still reads high.
+2. The strict-flag depression (voice matchability lag post-swap,
+   round-19 residue class) — parked, unchanged.
+3. Perception check: the machine numbers now say appear-fast +
+   solidify-in-hundreds-of-ms; whether the eye agrees is the only
+   verdict that counts in this arc.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
