@@ -132,6 +132,30 @@ describe('attachWrapper', () => {
 });
 
 describe('detachWrapper', () => {
+  it('records shown wrappers in the churn log; never-shown detaches stay out (round 22)', async () => {
+    const { churnStats, resetChurnLog } = await import('../debug/churn-log');
+    resetChurnLog();
+
+    const shownNode = el('churn-shown');
+    const shown = new ElementWrapper(shownNode, scanned('churn-shown'));
+    attachWrapper(shown, 'mo');
+    shown.tFirstShown = performance.now() - 700; // painted 0.7s ago — a wipe
+    shown.scanned.codeword = 'arch';
+    detachWrapper(shownNode);
+
+    const neverNode = el('churn-never');
+    const never = new ElementWrapper(neverNode, scanned('churn-never'));
+    attachWrapper(never, 'mo');
+    detachWrapper(neverNode); // tFirstShown null — not perceptual churn
+
+    const s = churnStats(60_000);
+    expect(s.detached_shown_total).toBe(1);
+    expect(s.wiped_within_2s_total).toBe(1);
+    expect(s.recent[0].tag).toBe('button');
+    expect(s.recent[0].had_codeword).toBe(true);
+    expect(s.recent[0].shown_for_ms).toBeGreaterThanOrEqual(700);
+  });
+
   it('removes the wrapper from the store and unobserves all three observers', () => {
     const node = el('two');
     attachWrapper(new ElementWrapper(node, scanned('two')), 'scan');

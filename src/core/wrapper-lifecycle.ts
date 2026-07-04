@@ -24,6 +24,7 @@ import { tryRebindFromLimbo, tryRebindByStrongKey, tryRebindBySlot, recordSlotAn
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { geometryInBand, getCachedRect, isRectOnScreen } from '../layout-cache';
 import { lifecycleCounters } from '../debug/perf-counters';
+import { recordShownDetach } from '../debug/churn-log';
 import { store } from './store';
 import { pageSession } from '../lifecycle/page-session';
 
@@ -100,13 +101,28 @@ export function detachWrapper(element: Element): void {
   pageSession.resizeObserver.unobserve(element);
   pageSession.tracker.unobserve(element);
   pageSession.attentionObserver.unobserve(element);
+  // Churn log (round 22): preserve a shown wrapper's history before the
+  // store forgets it — destroyed wrappers vanish from every percentile, so
+  // a pop→wipe→rebuild cycle is otherwise invisible to the snapshot.
+  const dying = store.findWrapperFor(element);
+  if (dying && dying.tFirstShown !== null) {
+    const now = performance.now();
+    recordShownDetach({
+      tDetached: now,
+      shownForMs: now - dying.tFirstShown,
+      tag: element.tagName.toLowerCase(),
+      source: dying.discoverySource,
+      inViewport: dying.lastRect !== null && isRectOnScreen(dying.lastRect),
+      hadCodeword: dying.scanned.codeword !== '',
+    });
+  }
   // Capture the codeword BEFORE removal: removeWrapperByElement calls
   // releaseLabel(), which blanks scanned.codeword. The pre-2026-07 code read
   // it after, always saw '', and never queued the plugin-side Delete — every
   // detach leaked a stale grammar entry (a painted-but-gone codeword the
   // plugin kept matching), which the epoch handshake then kept detecting
   // and repairing with full rotate+republish cycles.
-  const cw = store.findWrapperFor(element)?.scanned.codeword ?? '';
+  const cw = dying?.scanned.codeword ?? '';
   const removed = store.removeWrapperByElement(element);
   if (removed) {
     // Delta-sync bookkeeping: if the plugin holds this codeword, queue

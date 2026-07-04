@@ -469,6 +469,32 @@ describe('IntersectionTracker.sweepBand', () => {
     expect(farBelow.isInViewport).toBe(false);
   });
 
+  it('refreshes lastRect on every sweep read, transitions or not (round 22)', () => {
+    // The fingerprint tier's position tiebreak reads lastRect at limbo
+    // entry; mid-storm the IO's last delivery is seconds stale, so
+    // identical-content remounts scored past the 50px threshold and refused
+    // (rebind_position frozen at 0 through the whole arc). The sweep pays
+    // for the rect anyway — a steady in-band wrapper must get it too.
+    const store = new WrapperStore();
+    const tracker = new IntersectionTracker(store, { onCodewordsChanged: vi.fn() });
+
+    let top = 100;
+    const el = {
+      tagName: 'BUTTON', isConnected: true,
+      getBoundingClientRect: () => ({ left: 0, top, width: 10, height: 10, right: 10, bottom: top + 10, x: 0, y: top, toJSON: () => ({}) }),
+    } as unknown as Element;
+    const w = new ElementWrapper(el, fakeScanned());
+    w.isInViewport = true; // already in-band: no transition will fire
+    store.addWrapper(w);
+
+    tracker.sweepBand(800, 600);
+    expect(w.lastRect?.top).toBe(100);
+
+    top = 180; // the row moved (scroll); still in-band, still no transition
+    tracker.sweepBand(800, 600);
+    expect(w.lastRect?.top).toBe(180);
+  });
+
   it('releases in-band-flagged wrappers only after two consecutive out-of-band sweeps', async () => {
     const store = new WrapperStore();
     const tracker = new IntersectionTracker(store, { onCodewordsChanged: vi.fn() });

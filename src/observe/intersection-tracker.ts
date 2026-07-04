@@ -176,11 +176,19 @@ export class IntersectionTracker {
       // Boxless skip (the reconcile plan's zero-rect guard): display:none
       // elements report all-zeros, which would false-positive at the origin.
       if (r.width === 0 && r.height === 0 && r.top === 0 && r.left === 0) continue;
+      // Refresh lastRect on EVERY sweep read, not just band transitions
+      // (round 22, reviving round 12's first-choice lever): the fingerprint
+      // rebind tier's position tiebreak reads lastRect, and mid-storm the
+      // IO's last delivery can be seconds stale — identical-content remounts
+      // then score past the 50px threshold and refuse (rebind_position
+      // frozen at 0 through the whole arc). The sweep already paid for this
+      // rect; writing it keeps every live wrapper's tiebreaker ≤1 sweep
+      // (~100ms while scrolling) fresh at disconnect time.
+      w.lastRect = r;
       const inBand = geometryInBand(r, vw, vh, VIEWPORT_MARGIN_PX);
       if (inBand) {
         this.pendingExit.delete(w);
         if (!w.isInViewport) {
-          w.lastRect = r; // free fresh rect — keeps the limbo tiebreaker current
           w.isInViewport = true;
           w.tInBand ??= performance.now();
           repaired++;
@@ -199,7 +207,6 @@ export class IntersectionTracker {
           continue;
         }
         this.pendingExit.delete(w);
-        w.lastRect = r;
         w.isInViewport = false;
         // Same path as the IO exit branch: cancels any pending claim,
         // stashes preferredCodeword for sticky reclaim, drops the badge to

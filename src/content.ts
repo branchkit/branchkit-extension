@@ -109,6 +109,7 @@ import { openLivenessPort } from './plugin/liveness';
 import { pageSession, scheduleYieldTask, yieldTask, TeardownReason } from './lifecycle/page-session';
 import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './debug/message-counters';
 import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, rearmCpuShareBaseline, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, stopPerfObservers, lifecycleCounters, resetLifecycleCounters } from './debug/perf-counters';
+import { churnStats } from './debug/churn-log';
 import { loadConfig, getDisplayMode, getHintVisibility, getHintsShown, setHintsShown } from './config';
 import {
   grammarEpochStats,
@@ -3283,7 +3284,7 @@ const reconcileApplied = {
 const PAINT_SAMPLE_INTERVAL_MS = 100;
 const PAINT_SAMPLE_TRAIL_MS = 5000;
 const PAINT_SAMPLE_RING_MAX = 900;
-const paintSamples: Array<[number, number, number, number, number]> = [];
+const paintSamples: Array<[number, number, number, number, number, number, number]> = [];
 let paintSamplerRunning = false;
 let paintSamplerLastScroll = 0;
 let paintSamplerLastKey = '';
@@ -3301,20 +3302,30 @@ function paintSamplerTick(): void {
     paintSamplerRunning = false;
     return;
   }
-  let painted = 0, shown = 0;
+  let painted = 0, shown = 0, shownStrict = 0;
   for (const w of store.all) {
     if (w.hint) {
       painted++;
-      if (w.hint.isVisible) shown++;
+      if (w.hint.isVisible) {
+        shown++;
+        // Viewport slice (round 22): the band-scoped `shown` hid a
+        // viewport-only wipe (~40 of ~400 badges) entirely. Flag read,
+        // no layout — the strict machinery maintains it.
+        if (w.scanned.in_strict_viewport) shownStrict++;
+      }
     }
   }
   // 'tr' count as the content-arrival proxy (live collection; .length is
   // cheap). Page-shape-specific but harmless where rows aren't tables.
   const rows = document.getElementsByTagName('tr').length;
-  const key = `${rows}|${store.all.length}|${painted}|${shown}`;
+  // Pool depth per sample (round 22): mid-storm reservoir exhaustion is a
+  // repop-delay suspect (doomed-but-connected wrappers hold letters while
+  // the replacement window claims); the at-rest snapshot can't see it.
+  const poolFree = labelReservoir.stats().free;
+  const key = `${rows}|${store.all.length}|${painted}|${shown}|${shownStrict}|${poolFree}`;
   if (key !== paintSamplerLastKey) {
     paintSamplerLastKey = key;
-    paintSamples.push([Math.round(now), rows, store.all.length, painted, shown]);
+    paintSamples.push([Math.round(now), rows, store.all.length, painted, shown, shownStrict, poolFree]);
     if (paintSamples.length > PAINT_SAMPLE_RING_MAX) {
       paintSamples.splice(0, paintSamples.length - PAINT_SAMPLE_RING_MAX);
     }
@@ -3470,9 +3481,19 @@ function snapshotExtras() {
       visibility_ro_signals: lifecycleCounters.visibilityRoSignals,
     },
     paint_latency: paintLatencyStats(),
-    // Raw eye-level ring: [t_ms, tr_rows, wrappers, painted, shown] change
-    // entries from the scroll-armed sampler above.
+    // Raw eye-level ring: [t_ms, tr_rows, wrappers, painted, shown,
+    // shown_strict_viewport, pool_free] change entries from the
+    // scroll-armed sampler above. shown_strict_viewport is the
+    // viewport-sliced count (round 22 — a viewport wipe barely dents the
+    // band-scoped `shown`); pool_free is the label reservoir depth per
+    // sample (mid-storm exhaustion suspect).
     paint_stability: { interval_ms: PAINT_SAMPLE_INTERVAL_MS, samples: [...paintSamples] },
+    // Round 22: history of shown-then-detached wrappers (the churn the
+    // percentiles can't see — dead wrappers leave store.all). A fling with
+    // a healthy pipeline shows recent[] ≈ empty; a pop→wipe→rebuild cycle
+    // shows a burst of short shown_for_ms, in_viewport, had_codeword
+    // records at the swap.
+    churn: churnStats(PAINT_LATENCY_WINDOW_MS),
     grammar_epoch: grammarEpochStats(),
     reconcile_applied: {
       passes: reconcileApplied.passes,
