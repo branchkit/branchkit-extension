@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<!--
+  QuickBase-grid mechanics fixture (DESIGN_FLING_WAVE.md round 24).
+
+  A synthetic virtualized data grid reproducing every rendering mechanism
+  the fling-wave arc documented on the real QuickBase table report, so the
+  fling drill can run programmatically (scripts/_test-qb-fling.mjs) with a
+  DOM-level "eye" instead of the user's manual drill + video:
+
+  - Virtualized window over 4,000 records: ~80 rows rendered (several
+    viewports at 40px/row), repositioned via spacer padding. Rows are
+    REPLACED wholesale on window shift — no DOM recycling in place
+    (limbo_slot_liveness alive 0 / dead 500 on production).
+  - WHITE VOID on scroll settle: the pane blanks (~800ms "fetch"), then
+    rows repaint. The shared t=0 of every video A/B.
+  - DOUBLE-BUFFERED swap, insert-before-remove: the incoming window is
+    built inside a HIDDEN buffer container that is IN the document (the
+    MO sees the insertions — round 21b: stragglers are MO-stamped), in
+    sub-100-node chunks (below the huge-mutation threshold — round 17:
+    mo_huge never fires), then the buffer rows are REPARENTED into the
+    live tbody (both containers connected — the round-19 clip-observer
+    reparent) and revealed by a CLASS FLIP (no filtered-attribute
+    mutation — the layer-2-invisible reveal).
+  - TWO-PHASE render: ~700ms after the reveal, every row subtree is
+    replaced with identical-content fresh DOM (the round-12 "double-render
+    blip" — what kills badges).
+  - LATE LOOKUP FILLS: the two lookup columns (buyer name, buyer email —
+    values REPEAT across rows, round 23's ambiguous-fingerprint finding)
+    render their anchors with href but EMPTY text; the text lands ~2.5s
+    later via nodeValue writes (characterData — invisible to every
+    childList/attributes observer config; round 21g).
+  - ?skip=N history tick at the grid's own settle (round 10/11 spa_nav).
+
+  Knobs (URL params): void_ms=800  phase2_ms=700  lookup_ms=2500
+  chunk=90  rows=80  norebuild=1 (skip phase 2)  novoid=1  nolookupdelay=1
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<title>QuickBase grid fixture</title>
+<style>
+  body { margin: 0; font: 13px -apple-system, sans-serif; }
+  #global-nav-bar { height: 52px; background: #2a3f54; color: #fff;
+    display: flex; align-items: center; gap: 12px; padding: 0 12px; }
+  #global-nav-bar button { background: #3d566e; color: #fff; border: 0;
+    padding: 6px 10px; border-radius: 4px; }
+  #gridPane { height: 760px; overflow-y: auto; position: relative; }
+  table.grid { border-collapse: collapse; width: 100%; table-layout: fixed; }
+  tr.gridRow { height: 40px; }
+  tr.gridRow td { border-bottom: 1px solid #e3e3e3; padding: 2px 8px;
+    overflow: hidden; white-space: nowrap; }
+  td.col-actions { width: 130px; }
+  td.col-actions button { background: none; border: 0; cursor: pointer;
+    color: #666; font-size: 14px; }
+  a { color: #1a66c0; text-decoration: none; }
+  /* The hidden double-buffer: in-document (MO sees insertions) but
+     unrendered — the walk parks its content as invisible candidates. */
+  #buffer { display: none; }
+  /* The white void: rows removed, pane shows blank. */
+  #voidCover { position: absolute; inset: 0; background: #fff; display: none; }
+  .veil { visibility: hidden; }
+</style>
+</head>
+<body>
+<div id="global-nav-bar" role="banner">
+  <button aria-label="Navigate to a different feature or app" data-testid="left-section-waffle-menu-button">⠿</button>
+  <span>Purchase Orders Fixture</span>
+  <button aria-label="Search records">Search</button>
+</div>
+<div id="gridPane">
+  <div id="voidCover"></div>
+  <table class="grid" role="grid">
+    <tbody class="tableBody" id="tbody"></tbody>
+  </table>
+</div>
+<div id="buffer"></div>
+
+<script>
+(() => {
+  const P = new URLSearchParams(location.search);
+  const VOID_MS = P.has('novoid') ? 0 : +(P.get('void_ms') || 800);
+  const PHASE2_MS = P.has('norebuild') ? -1 : +(P.get('phase2_ms') || 700);
+  const LOOKUP_MS = P.has('nolookupdelay') ? 0 : +(P.get('lookup_ms') || 2500);
+  const CHUNK = +(P.get('chunk') || 90);       // nodes per mutation batch (< huge threshold)
+  const WINDOW_ROWS = +(P.get('rows') || 80);  // rendered window (several viewports)
+  const ROW_H = 41;                            // incl. border
+  const TOTAL = 4000;
+
+  // Deterministic synthetic records. Buyers repeat across rows — the
+  // round-23 ambiguous-fingerprint property of the real lookup columns.
+  const BUYERS = [
+    ['Doe, Jane', 'jane.doe@example.com'],
+    ['Roe, Alex', 'alex.roe@example.com'],
+    ['Kim, Dana', 'Dana.Kim@example.com'],
+    ['Ruiz, Marta', 'Marta.Ruiz@example.com'],
+  ];
+  const rec = (i) => ({
+    po: 10935 - i,
+    rid: 24000 - i,
+    date: `07-0${1 + (i % 3)}-2026 0${1 + (i % 9)}:${String(10 + (i % 50)).padStart(2, '0')} PM`,
+    buyer: BUYERS[i % BUYERS.length],
+    remark: `Created from Import record ${14436 - i}`,
+  });
+
+  const tbody = document.getElementById('tbody');
+  const pane = document.getElementById('gridPane');
+  const buffer = document.getElementById('buffer');
+  const voidCover = document.getElementById('voidCover');
+  const pendingLookupFills = [];
+
+  function buildRow(i, phase) {
+    const r = rec(i);
+    const tr = document.createElement('tr');
+    tr.className = 'gridRow';
+    tr.dataset.phase = String(phase); // diagnostic only; not an identity QB provides
+
+    const actions = document.createElement('td');
+    actions.className = 'col-actions column-fixture-0';
+    actions.setAttribute('role', 'gridcell');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    const edit = document.createElement('button');
+    edit.setAttribute('aria-label', `Edit purchase order ${r.po}`);
+    edit.textContent = '✎';
+    const view = document.createElement('button');
+    view.setAttribute('aria-label', `View purchase order ${r.po}`);
+    view.textContent = '👁';
+    actions.append(cb, edit, view);
+
+    const date = document.createElement('td');
+    date.className = 'column-fixture-date';
+    date.setAttribute('role', 'gridcell');
+    date.textContent = r.date;
+
+    const po = document.createElement('td');
+    po.className = 'column-fixture-po';
+    po.setAttribute('role', 'gridcell');
+    const poLink = document.createElement('a');
+    poLink.href = `/db/rec?a=dr&rid=${r.rid}`;
+    poLink.textContent = String(r.po);
+    po.appendChild(poLink);
+
+    // Lookup columns: anchors born with href but EMPTY text; the related-
+    // table data "lands" later via nodeValue (characterData) — round 21g.
+    const mkLookup = (cls, href, text) => {
+      const td = document.createElement('td');
+      td.className = cls;
+      td.setAttribute('role', 'gridcell');
+      const a = document.createElement('a');
+      a.href = href;
+      const textNode = document.createTextNode('');
+      a.appendChild(textNode);
+      td.appendChild(a);
+      if (LOOKUP_MS > 0) pendingLookupFills.push([textNode, text]);
+      else textNode.nodeValue = text;
+      return td;
+    };
+    const buyerTd = mkLookup('column-fixture-71', `/db/rec?a=dr&rid=${9000 + (r.po % BUYERS.length)}`, r.buyer[0]);
+    const emailTd = mkLookup('column-fixture-195', `mailto:${r.buyer[1]}`, r.buyer[1]);
+
+    const remarks = document.createElement('td');
+    remarks.className = 'column-fixture-remarks';
+    remarks.setAttribute('role', 'gridcell');
+    const rl = document.createElement('a');
+    rl.href = `/db/rec?a=dr&rid=${r.rid}&view=doc`;
+    rl.textContent = r.remark;
+    remarks.appendChild(rl);
+
+    tr.append(actions, date, po, buyerTd, emailTd, remarks);
+    return tr;
+  }
+
+  function flushLookupFills() {
+    if (LOOKUP_MS <= 0) return;
+    const fills = pendingLookupFills.splice(0);
+    setTimeout(() => {
+      // nodeValue writes on EXISTING text nodes: characterData mutations
+      // only — no childList, no attributes, on any observer config.
+      for (const [node, text] of fills) node.nodeValue = text;
+      window.__fixture.lookupFilledAt = performance.now();
+    }, LOOKUP_MS);
+  }
+
+  // Build rows into a container in sub-huge chunks (QB's sub-100-record
+  // mutation batches), then call done.
+  function buildWindow(container, startIdx, phase, done) {
+    let i = 0;
+    const step = () => {
+      const frag = [];
+      for (; i < WINDOW_ROWS && frag.length * 6 < CHUNK; i++) {
+        frag.push(buildRow(startIdx + i, phase));
+      }
+      container.append(...frag);
+      if (i < WINDOW_ROWS) setTimeout(step, 8);
+      else done();
+    };
+    step();
+  }
+
+  function setSpacers(startIdx) {
+    tbody.style.setProperty('--pad', '');
+    tbody.parentElement.style.marginTop = `${startIdx * ROW_H}px`;
+    tbody.parentElement.style.marginBottom = `${(TOTAL - startIdx - WINDOW_ROWS) * ROW_H}px`;
+  }
+
+  let currentStart = 0;
+  let settleTimer = null;
+  let swapping = false;
+
+  // The full QuickBase settle sequence: void → hidden-buffer build →
+  // reparent + class-flip reveal → (phase 2) full identical rebuild →
+  // late lookup fills → ?skip tick.
+  function windowShift(newStart) {
+    if (swapping) return;
+    swapping = true;
+    window.__fixture.lastSwap = { t0: performance.now(), newStart };
+
+    // 1. WHITE VOID: rows leave the DOM; blank pane.
+    if (VOID_MS > 0) {
+      voidCover.style.display = 'block';
+      tbody.replaceChildren();
+    }
+
+    const afterVoid = () => {
+      // 2. Build the incoming window inside the HIDDEN buffer (in-document:
+      //    the MO sees every insertion; the walk parks it all as invisible).
+      buildWindow(buffer, newStart, 1, () => {
+        // 3. REPARENT buffer rows into the live tbody (both containers
+        //    connected throughout — the round-19 reparent), then reveal by
+        //    CLASS FLIP only.
+        tbody.classList.add('veil');
+        tbody.replaceChildren(...buffer.children); // moves, not clones
+        voidCover.style.display = 'none';
+        setSpacers(newStart);
+        // Class-only reveal: no childList, no filtered attributes.
+        requestAnimationFrame(() => {
+          tbody.classList.remove('veil');
+          window.__fixture.revealAt = performance.now();
+        });
+
+        // 4. PHASE 2: replace every row subtree with identical-content
+        //    fresh DOM — INSERT-BEFORE-REMOVE (rounds 8-9: the doomed
+        //    predecessors stay CONNECTED while their replacements are
+        //    discovered; slot_probe.pool_empty 591/1104 on production).
+        //    The old rows leave ~150ms later.
+        if (PHASE2_MS >= 0) {
+          setTimeout(() => {
+            const doomed = [...tbody.children];
+            buildWindow(buffer, newStart, 2, () => {
+              tbody.append(...buffer.children); // new rows in; old still connected
+              window.__fixture.phase2At = performance.now();
+              setTimeout(() => {
+                for (const tr of doomed) tr.remove();
+                flushLookupFills();
+              }, 150);
+            });
+          }, PHASE2_MS);
+        } else {
+          flushLookupFills();
+        }
+
+        // 5. The grid's own settle writes ?skip=N (round 10/11).
+        history.replaceState(null, '', `?skip=${newStart}`);
+        currentStart = newStart;
+        swapping = false;
+      });
+    };
+    if (VOID_MS > 0) setTimeout(afterVoid, VOID_MS);
+    else afterVoid();
+  }
+
+  pane.addEventListener('scroll', () => {
+    if (settleTimer) clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => {
+      const topRow = Math.max(0, Math.floor(pane.scrollTop / ROW_H) - 20);
+      if (Math.abs(topRow - currentStart) >= 10) windowShift(topRow);
+    }, 200);
+  });
+
+  // Diagnostics surface for the driver script.
+  window.__fixture = { revealAt: null, phase2At: null, lookupFilledAt: null, lastSwap: null };
+
+  // Initial render: straight into the tbody (page load isn't the void path).
+  buildWindow(tbody, 0, 0, () => {
+    setSpacers(0);
+    flushLookupFills();
+    window.__fixture.bootAt = performance.now();
+  });
+})();
+</script>
+</body>
+</html>

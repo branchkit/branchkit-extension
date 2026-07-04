@@ -416,11 +416,12 @@ describe('tryTakeoverByFingerprint (round 23)', () => {
     expect(isRecentlyOrphaned(oldEl)).toBe(true); // ping-pong guard armed
   });
 
-  it('unique fingerprint but far away (cross-page shape) is refused', () => {
-    makePredecessor('Edit purchase order 10897', 100, 100);
-    const newEl = makeReplacement('Edit purchase order 10897', 100, 900);
-    expect(takeover(newEl)).toBe(false);
-    expect(rebindCounters.takeover_fp).toBe(0);
+  it('unique fingerprint takes over regardless of position (round 24: during an insert-before-remove overlap the replacement is appended far from the doomed row)', () => {
+    const w = makePredecessor('Edit purchase order 10897', 100, 100);
+    const newEl = makeReplacement('Edit purchase order 10897', 100, 3400);
+    expect(takeover(newEl)).toBe(true);
+    expect(w.element).toBe(newEl);
+    expect(rebindCounters.takeover_fp).toBe(1);
   });
 
   it('ambiguous fingerprints (identical checkboxes) resolve by tight+margin position', () => {
@@ -451,10 +452,18 @@ describe('tryTakeoverByFingerprint (round 23)', () => {
     expect(takeover(makeReplacement('Edit purchase order 10897', 100, 108), index)).toBe(false);
   });
 
-  it('candidates without a lastRect are skipped (cannot position-verify)', () => {
+  it('a unique candidate without a lastRect still takes over (no position term); an ambiguous group with one refuses', () => {
     const w = makePredecessor('Edit purchase order 10897', 0, 0);
     w.lastRect = null;
-    expect(takeover(makeReplacement('Edit purchase order 10897', 4, 2))).toBe(false);
+    expect(takeover(makeReplacement('Edit purchase order 10897', 4, 2))).toBe(true);
+    expect(w.element instanceof HTMLElement).toBe(true);
+
+    // Ambiguous group where one member can't be position-ranked → refuse.
+    const a = makePredecessor('', 50, 100, 'input');
+    makePredecessor('', 50, 300, 'input');
+    a.lastRect = null;
+    expect(takeover(makeReplacement('', 50, 102, 'input'))).toBe(false);
+    expect(rebindCounters.refuse_fp_ambiguous).toBe(1);
   });
 
   it('limbo wrappers stay out of the index — the disconnected path owns them', () => {

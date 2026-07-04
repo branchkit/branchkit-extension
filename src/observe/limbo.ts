@@ -334,10 +334,14 @@ export function tryRebindByStrongKey(
 // swap, producing zero sync traffic (same fingerprint = same content, no
 // re-Put).
 
-// Unique-fingerprint steals: the fingerprint appears on exactly one connected
-// wrapper, so replacement semantics are near-certain (names on data grids
-// carry record ids); the generous gate only blocks cross-page steals.
-const TAKEOVER_UNIQUE_MAX_PX = 300;
+// Unique-fingerprint steals take NO position gate (round 24, fixture-found):
+// during an insert-before-remove overlap the replacement rows are appended
+// BELOW the doomed rows — the new element's real position doesn't exist
+// until the old generation leaves, so any position gate structurally
+// refuses (the original 300px gate made takeover_fp read 0 forever, with
+// no counter to show the refusals). Uniqueness is the identity argument:
+// there is exactly one connected element that looks like this, so a new
+// lookalike is its replacement wherever either of them currently sits.
 // Ambiguous fingerprints (identical per-row controls — checkboxes,
 // pencil/eye): the new element must sit ON one predecessor (co-location of
 // identical controls is not a legitimate steady state) AND be uniquely
@@ -397,20 +401,22 @@ export function tryTakeoverByFingerprint(
   const list = fpIndex.get(fingerprintToString(newFp));
   if (!list || list.length === 0) return false;
   // Re-validate at match time — the index snapshot can go stale within a
-  // pass (elements disconnect mid-drain; lastRect-less wrappers can't be
-  // position-verified so they never qualify).
+  // pass (elements disconnect mid-drain). The ambiguous branch additionally
+  // needs lastRect to position-verify; the unique branch does not.
   const candidates = list.filter(
-    (w) => w.element !== newEl && w.element.isConnected && w.lastRect !== null,
+    (w) => w.element !== newEl && w.element.isConnected,
   );
   if (candidates.length === 0) return false;
 
-  const newRect = peekCachedRect(newEl) ?? newEl.getBoundingClientRect();
-
   let winner: ElementWrapper | null = null;
   if (candidates.length === 1) {
-    const d = centerDist(newRect, candidates[0].lastRect!);
-    if (d <= TAKEOVER_UNIQUE_MAX_PX) winner = candidates[0];
+    winner = candidates[0];
+  } else if (candidates.some((w) => w.lastRect === null)) {
+    // Can't fairly position-rank a mixed group; refuse to fresh attach.
+    rebindCounters.refuse_fp_ambiguous++;
+    return false;
   } else {
+    const newRect = peekCachedRect(newEl) ?? newEl.getBoundingClientRect();
     let best: { w: ElementWrapper; d: number } | null = null;
     let second = Infinity;
     for (const w of candidates) {
