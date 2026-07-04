@@ -358,7 +358,7 @@ describe('tryRebindBySlot (DESIGN_FLING_WAVE Part 2)', () => {
 
 import * as idRegistry from '../scan/registry';
 import { computeFingerprint } from '../scan/registry';
-import { collectFingerprintIndex, tryTakeoverByFingerprint, isReservedForRetarget } from './limbo';
+import { collectFingerprintIndex, tryTakeoverByFingerprint, isReservedForRetarget, expireStaleReservations } from './limbo';
 
 describe('tryTakeoverByFingerprint (round 23)', () => {
   const domRect = (x: number, y: number, w = 40, h = 20): DOMRect =>
@@ -423,6 +423,26 @@ describe('tryTakeoverByFingerprint (round 23)', () => {
     expect(w.grammarReady).toBe(true);
     expect(store.findWrapperFor(newEl)).toBe(w);
     expect(rebindCounters.retarget_deferred).toBe(1);
+  });
+
+  it('an expired reservation is actively released — the replacement is re-discoverable, not stranded (round 28b)', () => {
+    const w = makePredecessor('Edit purchase order 10897', 100, 100);
+    const newEl = makeReplacement('Edit purchase order 10897', 104, 102);
+    expect(takeover(newEl)).toBe('rode');
+    expect(isReservedForRetarget(newEl)).toBe(true);
+
+    // The doomed twin never leaves (wrong bet / slow swap): TTL passes.
+    const expired = expireStaleReservations(Date.now() + 3000);
+    expect(expired).toBe(1);
+    expect(w.pendingRetarget).toBeNull();
+    expect(isReservedForRetarget(newEl)).toBe(false); // discovery may attach it now
+    expect(rebindCounters.retarget_expired).toBe(1);
+
+    // A late disconnect of the twin no longer transfers (reservation gone).
+    w.element.remove();
+    dropDisconnectedWrappers();
+    expect(w.element).not.toBe(newEl);
+    expect(rebindCounters.retarget_deferred).toBe(0);
   });
 
   it('unique fingerprint reserves regardless of position (round 24: during an insert-before-remove overlap the replacement is appended far from the doomed row)', () => {

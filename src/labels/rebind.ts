@@ -137,6 +137,11 @@ export interface RebindCounters {
    *  the replacement that slid into its place. takeover_* count
    *  reservations MADE; this counts the ones that actually rode. */
   retarget_deferred: number;
+  /** Reservations EXPIRED unconsumed (round 28b): the doomed twin never
+   *  left within the TTL — the replacement was actively re-discovered.
+   *  High values against low retarget_deferred = the pairing bet is wrong
+   *  for this page's swap dynamics. */
+  retarget_expired: number;
 }
 
 export function newRebindCounters(): RebindCounters {
@@ -152,6 +157,7 @@ export function newRebindCounters(): RebindCounters {
     refuse_fp_ambiguous: 0,
     takeover_row: 0,
     retarget_deferred: 0,
+    retarget_expired: 0,
   };
 }
 

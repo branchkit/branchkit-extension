@@ -478,6 +478,13 @@ export function tryTakeoverByFingerprint(
 // fresh; degradation is exactly today's behavior.
 const RESERVE_TTL_MS = 2000;
 const reservedForRetarget = new WeakMap<Element, number>();
+// Live reservations, for the ACTIVE expiry sweep (round 28b): production's
+// first drill stranded 714 of 730 reservations — the replacement elements
+// sat badge-less for 17-23s because nothing re-discovers a quietly-expired
+// reservation until an incidental settle sweep. The finalize interval
+// (250ms) sweeps this set: an expired reservation clears its bookkeeping
+// and immediately re-discovers the reserved element.
+const liveReservations = new Set<ElementWrapper>();
 
 export function isReservedForRetarget(el: Element): boolean {
   const t = reservedForRetarget.get(el);
@@ -492,6 +499,40 @@ export function isReservedForRetarget(el: Element): boolean {
 function reserveRetarget(w: ElementWrapper, replacement: Element): void {
   w.pendingRetarget = new WeakRef(replacement);
   reservedForRetarget.set(replacement, Date.now());
+  liveReservations.add(w);
+}
+
+/** Active reservation expiry (round 28b): called from the finalize
+ * interval. An expired, unconsumed reservation must not strand its
+ * replacement — clear the bookkeeping and push the element back through
+ * discovery immediately. */
+export function expireStaleReservations(now = Date.now()): number {
+  let expired = 0;
+  for (const w of liveReservations) {
+    const ref = w.pendingRetarget;
+    if (!ref) { liveReservations.delete(w); continue; }
+    const target = ref.deref();
+    if (!target) {
+      w.pendingRetarget = null;
+      liveReservations.delete(w);
+      continue;
+    }
+    const t = reservedForRetarget.get(target);
+    if (t !== undefined && now - t < RESERVE_TTL_MS) continue;
+    // Expired: the doomed twin never left (wrong bet, or a swap slower
+    // than the TTL). Degrade to fresh discovery for the replacement.
+    w.pendingRetarget = null;
+    liveReservations.delete(w);
+    reservedForRetarget.delete(target);
+    rebindCounters.retarget_expired++;
+    expired++;
+    if (target.isConnected && !store.findWrapperFor(target)) {
+      try {
+        pageSession.deps.discoverInSubtree(target, 'rescan');
+      } catch { /* deps unset in unit tests */ }
+    }
+  }
+  return expired;
 }
 
 /** Consume a wrapper's reservation at its element's disconnect. Returns
@@ -500,6 +541,7 @@ function consumePendingRetarget(w: ElementWrapper): boolean {
   const ref = w.pendingRetarget;
   if (!ref) return false;
   w.pendingRetarget = null;
+  liveReservations.delete(w);
   const target = ref.deref();
   if (!target || !target.isConnected) return false;
   if (store.findWrapperFor(target)) return false; // fresh-attached post-TTL
@@ -646,6 +688,9 @@ export function dropDisconnectedWrappers(): number {
  */
 export function finalizeExpiredLimboWrappers(): number {
   const now = Date.now();
+  // Round 28b: expired reservations re-discover their replacements NOW —
+  // a quiet page has no settle to sweep them up otherwise.
+  expireStaleReservations(now);
   // Iterate a copy so we can mutate `store` mid-loop.
   let finalized = 0;
   for (const w of [...store.all]) {
