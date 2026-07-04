@@ -2403,6 +2403,43 @@ Secondary, tracked: settle_sweep stragglers at gap p50 2.4s this
 drill — the cold-data/lookup class (round 21g territory), to re-read
 on the next snapshot now that the acute regression is fixed.
 
+### Round 30 — the flash-then-gone named: empty-codeword Puts
+### mass-detached painted badges (ca72623)
+
+User: "I don't see the half-transparent badges at all. I do see a
+flash… then they disappear." And after watching the attempted live
+fixture run: "badges were instant in your test environment, but that's
+not the case in the real QuickBase page — we're missing something."
+Both observations correct; the plugin's drop log held the answer: 605
+STATE_WRITE_DROPPED since the restart, EVERY ONE reason=empty_codeword,
+across 52 failed batches.
+
+The cascade: (1) with letters reshuffling per swap, wrappers are
+RELEASED while their chunk is in flight — band exits blank
+scanned.codeword between the sync's drain-time filter and the
+POST-time serialization (the 29c parallel window widened the race; it
+always existed); (2) the chunk posts codeword:"" and
+validateBatchElement fails it; (3) the multiplier: the failure handler
+matched failedSet.has(w.scanned.codeword) — an ''-keyed failure
+matches EVERY released wrapper in the chunk, mass-detaching freshly
+painted translucent badges. Flash → gone → rediscover → new letter →
+repeat.
+
+Why every fixture run showed "instant" badges: the harness browser's
+SW never PAIRS with the actuator, so GRAMMAR_BATCH gets local-acked —
+no plugin round-trip, no failures, no cascade. The --live mode
+(launchExtension allowDiscovery) hit the same wall (sync_trace: 310
+posts all 'ok'; plugin log: zero batches). Recorded as the fixture's
+standing gap: REAL grammar-path dynamics (failures, ack latency,
+session semantics) are not reproducible in the harness until pairing
+is scriptable; the plugin drop log + the user's drills are the
+authoritative surfaces for this class.
+
+Fixes: postChunk re-validates at POST time (released/detached wrappers
+are skipped — their Delete is already queued by the release path; an
+empty chunk with no deletes and not final skips the round-trip
+entirely), and the failure-detach guards the empty string.
+
 ### Round 29c — the hop was noise; the round-trip SUM was the lag
 ### (c70ae96)
 
