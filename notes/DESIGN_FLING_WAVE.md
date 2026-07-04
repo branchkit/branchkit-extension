@@ -1541,6 +1541,35 @@ existing once-per-rAF single-flight. Revert lever: remove the
 `visibilityRO` observe/unobserve calls — layers 1+2 restore the prior
 behavior exactly.
 
+VERIFY DRILL (snapshot 06-00, build 05:57) — the arc's closing
+numbers, with one caveat:
+- **No held-ineligible cohort exists.** The worst in-viewport
+  MO-stamped dom_seen→attached gap in the entire drill: **44ms**.
+  mo-source overall: 417 attaches, gap p50 40 / max 61ms,
+  attached→shown p50 84ms. The band_sweep straggler cluster is gone
+  (only the boot cohort — 200 unstamped at t≈0-1s vs
+  observer_attached_at 765, correctly classified — plus 2 scattered
+  residue wrappers).
+- **Sensor live and free**: visibility_ro_signals 8 against 10,449
+  parked candidates — the zero-box drop absorbed the initial-fire
+  storm entirely; no visibility-attach churn, no cost signature.
+- **Caveat**: the lookup columns attached via mo at gap p50 45ms this
+  drill — the related-table data was warm (rows revisited), so the
+  text arrived WITH the rows and layer 3's promote path was not
+  exercised under the 21g failure condition live. The unit test
+  covers the path; the permanent tripwire is in the snapshot — the
+  next cold-data fling that reproduces the 21g pattern should show
+  the cohort under `attached_by_source.visibility` with ~frame-level
+  latency instead of a band_sweep cluster with multi-second gaps. If
+  it shows a band_sweep cluster instead, layer 3 missed and this
+  section is the first place to look.
+
+The arc closes here at measured parity: Rango's beat on this grid is
+0.46-0.73s staggered (and it skips checkboxes); our drill shows
+content-speed discovery on everything the page reveals, a sensor for
+the one reveal class no MutationObserver can see, and QuickBase's own
+~2.5-3.5s related-data latency as the shared, unbeatable floor.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
