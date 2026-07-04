@@ -1892,6 +1892,11 @@ function scheduleBandDiscovery(settleKind: 'band' | 'store', revealRepairs = 0):
       let added = 0;
       try {
         if (pageSession.isTornDown || !document.body) return;
+        // Attribution stamp (round 20c): fast_arm→sweep_start is the entry
+        // delay (scheduler/idle queueing); sweep_start→added is walk + the
+        // claim-flush builds in this task's microtask tail. Splits the
+        // repair→added lump the 20b drill couldn't attribute.
+        firehoseStep('band_discovery:sweep_start', 0, 0);
         // Every sweep walks in one slab (round 20b) — a per-batch-yielding
         // sweep holds the single-flight lock for seconds mid-storm and the
         // reveal's fast request queues behind it.
@@ -3943,6 +3948,13 @@ async function discoverInSubtreeBatched(
     // 111ms at boot and was still ~2.1s mid-storm at 12 hops (round 20).
     // The budget is the round-13 circuit breaker, not pacing.
     if (slabBudgetMs > 0 && performance.now() - lastYieldAt < slabBudgetMs) continue;
+    // Attribution stamp (round 20c): fires ONLY when a slab blows its
+    // budget — size carries elapsed ms, so the next drill says whether the
+    // mid-storm walk genuinely exceeds SWEEP_SLAB_BUDGET_MS (dirty-layout
+    // reflow on the double-buffered DOM) or never yields at all.
+    if (slabBudgetMs > 0) {
+      firehoseStep('band_discovery:slab_yield', Math.round(performance.now() - __cpuStart), 0);
+    }
     await yieldTask();
     lastYieldAt = performance.now();
     // The yield continuation is not cancellable; bail if the session died

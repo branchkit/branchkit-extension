@@ -1157,6 +1157,37 @@ Expected: both scrolls' hidden cohorts land ≤~0.7s post-reveal
 (settle 100ms + ≤slab-length queueing + one 150-500ms slab), and the
 firehose shows no added>0 event more than ~1s after its repair spike.
 
+## Round 20c — prediction FAILED at 1.5-1.9s; stop turning the knob,
+## attribute the lump (2026-07-04)
+
+Drill on build 04:36 (20b live). Clean-shot chains at full parity
+(boot repair 164 → added 270 @ +151ms; second load repair 69 →
+added 114 @ +31ms). But the fling chains missed the ≤0.7s
+prediction: repair 121 → added 52 @ **+1503ms** (was 2211), scroll 2
+repair 81 → fast_arm @ +221 → added 44 @ **+1893ms**. Trajectory
+improving, target not met, and the repair→added lump is no longer
+attributable from existing breadcrumbs — it is some mix of (a) entry
+delay before sweepBody runs (scheduler/idle queueing behind storm
+tasks), (b) the walk genuinely exceeding the slab budget mid-storm
+(dirty-layout reflow over a double-buffered ~2x DOM), and (c) the
+claim-flush build burst riding the same task's microtask tail.
+Different causes, different fixes; guessing burns drills.
+
+This round adds ONLY attribution (no behavior change):
+- `band_discovery:sweep_start` — fast_arm→sweep_start = entry delay;
+  sweep_start→added = walk + builds.
+- `band_discovery:slab_yield` (size = elapsed ms) — fires only when a
+  slab blows SWEEP_SLAB_BUDGET_MS, so the drill says whether the
+  mid-storm walk really exceeds 700ms or never yields at all.
+
+Decision tree for the next drill's numbers: entry delay dominates →
+the queueing/scheduling story (look at what task the yield waits on);
+walk dominates with slab_yield firing → the dirty-layout reflow is
+the cost, consider walking BEFORE the settle debounce or accepting;
+sweep_start→added dominates WITHOUT slab_yield → it's the build
+burst, and the sweep is exonerated entirely (round-13 territory,
+different lever).
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
