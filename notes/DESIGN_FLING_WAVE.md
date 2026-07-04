@@ -623,6 +623,56 @@ not lag:
    identity scheme. Likely first choice.
 3. **Accept**: the blip is one cycle per swap on a minority cohort.
 
+## Round 13 — the Rango-parity cut: stop being polite
+
+User-approved strategy change after round 12's numbers finally matched
+the eye (~920ms p50 vs Rango's ~150-250 feel). Twelve rounds of
+raising budgets (4 → 12 → 48 → 120ms) won every time without taking
+the last step; the remaining structural difference was named in this
+note's first causal decomposition and never acted on: Rango does ONE
+synchronous unbudgeted blast per mutation wave; we split the same work
+across walk slices, yield hops, build bursts, and a reveal hold — and
+every yield donates the thread to 30-100ms of the page's own swap
+rendering. Politeness multiplies wall-clock 3-5x under contention.
+
+Why we were polite: scar tissue. The budgets cured real disasters —
+Firefox froze 1.1s on a synchronous full-body walk (YouTube SPA nav),
+22% sustained CPU tripped the slow-extension warning, the nav-time
+wedge. Those cures were right for pathological DISCOVERY walks and
+wrong as a general pacing philosophy for build/paint.
+
+The cut (one commit, one revert):
+- WAVE_WALK_BUDGET_MS 32 → 200, WAVE_BUILD_BUDGET_MS 120 → 500 —
+  circuit breakers, not pacing. A realistic wave (even a ~400-badge
+  full-window swap, 150-400ms) completes in ONE task.
+- reconcileStorm deleted; onCodewordsChanged and the band sweep call
+  reconcile() synchronously. Safe against the round-4 discovery
+  starvation because the walk completes ALL pending roots before the
+  build runs in the same task's tail — the round-4 failure was inline
+  build per SLICE, not inline build per completed wave.
+- The wave-atomic reveal hold deleted (stage/reveal/bk-staged, the
+  80/250ms timers, the sampler exclusion): once each wave builds in
+  one task, the task IS the pop and the hold was pure latency. Badges
+  paint instantly TRANSLUCENT (bk-pending) and solidify on the grammar
+  ACK ~80ms later — the user explicitly wants this Rango-like shape
+  ("badges just appear with each element"). tFirstShown stamps at the
+  (now immediately visible) show — still eye-honest.
+
+Kept, untouched: the huge-mutation path (the actual YouTube freeze
+protection), prime-at-attach, the symmetric two-strike sweep,
+cell-context takeover keys, the rescan swap-audit, slot machinery +
+probes, wedge discipline (the deferred-remainder chain still exists
+behind the guardrails).
+
+Prediction for drill round 14: content-to-badge in the 150-300ms range
+on the grid; the painting no longer reads as a process. Cost accepted
+with eyes open: a ~400-badge swap is one 200-400ms main-thread task
+during frames the page is already dropping — exactly Rango's trade,
+which the A/B showed the page tolerates. If Firefox's slow-extension
+warning or input-latency complaints appear on other sites, the
+guardrails are the tuning point (lower them), and `git revert` of this
+commit restores the polite pipeline wholesale.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is

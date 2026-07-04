@@ -369,13 +369,12 @@ function onTrackerCodewordsChanged(claimed: ElementWrapper[], released: string[]
     if (hasSent(cw)) queueDelete(cw);
   }
   schedulePushGrammar();
-  // Build-up reconcile, storm-shaped: codewords just landed, so schedule
-  // their build burst and re-sweep for any in-band wrapper still missing a
-  // claim (closes the claim-gap-after-build window). This callback fires
-  // from the claim flush — mid-fling that is every discovery drain slice's
-  // microtask tail, which is exactly where an inline build must NOT run
-  // (drill round 4: it starved discovery).
-  reconcileStorm();
+  // Build-up reconcile: codewords just landed — build and paint their
+  // badges NOW, synchronously, in this task (the claim flush fires in the
+  // drain task's microtask tail, so element-appears → badge-painted is one
+  // task, Rango's shape). Safe against the round-4 discovery starvation
+  // because the walk completes all pending roots before this tail runs.
+  reconcile();
 }
 
 // (Strict-viewport tracker removed — it was meant to narrow the
@@ -1602,59 +1601,16 @@ function prepareBadge(w: ElementWrapper): boolean {
   if (!w.hint) {
     w.hint = new HintBadge(w.element, label, w.category, getDisplayMode());
   }
-  // Staged show (wave-atomic reveal, notes/DESIGN_FLING_WAVE.md Part 1f):
-  // fully painted and placed, held at opacity 0 until the wave manager
-  // reveals the accumulated wave in one pop. tFirstShown stamps at REVEAL —
-  // the ring and the stage stamps must keep measuring what the eye sees.
-  w.hint.show(isPaintReady(w), /* staged */ true);
-  stageForWaveReveal(w);
+  // Direct paint (round 13 — the Rango-parity cut): the badge appears the
+  // moment it is built, translucent (bk-pending) until the grammar ACK
+  // solidifies it ~80ms later. The wave-atomic reveal hold this replaces
+  // (stage at opacity 0, flip together at quiesce/deadline) was solving a
+  // trickle that stops existing once each wave builds in one task — the
+  // task IS the pop, and the hold was pure added latency. tFirstShown
+  // stamps here and is eye-honest: the paint is immediately visible.
+  w.hint.show(isPaintReady(w));
+  w.tFirstShown ??= performance.now();
   return true;
-}
-
-// --- Wave-atomic reveal (notes/DESIGN_FLING_WAVE.md Part 1f) ---
-//
-// The churn build path paints in bursts as claims land, which the eye reads
-// as incremental loading; Rango paints each accumulated wave in one batch
-// behind a trailing 100ms debounce and reads as instant at similar total
-// latency. Staged badges accumulate here and reveal together: trailing
-// quiesce debounce (reset per build pass) + non-extending deadline (armed at
-// first stage) — the whenDOMSettles debounce+deadline shape, session-owned
-// timeouts, wedge-safe. Reveal is one loop of class removals (style writes
-// only); the .visible opacity transition supplies the fade-in pop. The
-// grammar-ACK sync debounce (~80ms) mostly lands inside the hold, so badges
-// reveal already-solid instead of doing the translucent→opaque two-step.
-const WAVE_REVEAL_QUIESCE_MS = 80;
-const WAVE_REVEAL_MAX_WAIT_MS = 250;
-const stagedWave = new Set<ElementWrapper>();
-let waveQuiesceTimer: ReturnType<typeof setTimeout> | null = null;
-let waveDeadlineTimer: ReturnType<typeof setTimeout> | null = null;
-
-function stageForWaveReveal(w: ElementWrapper): void {
-  stagedWave.add(w);
-  if (waveQuiesceTimer) clearTimeout(waveQuiesceTimer);
-  waveQuiesceTimer = pageSession.resources.timeout(revealWave, WAVE_REVEAL_QUIESCE_MS);
-  if (waveDeadlineTimer === null) {
-    waveDeadlineTimer = pageSession.resources.timeout(revealWave, WAVE_REVEAL_MAX_WAIT_MS);
-  }
-}
-
-function revealWave(): void {
-  if (waveQuiesceTimer) { clearTimeout(waveQuiesceTimer); waveQuiesceTimer = null; }
-  if (waveDeadlineTimer) { clearTimeout(waveDeadlineTimer); waveDeadlineTimer = null; }
-  if (stagedWave.size === 0) return;
-  const now = performance.now();
-  let revealed = 0;
-  for (const w of stagedWave) {
-    // A badge hidden (band exit) or destroyed since staging just drops out;
-    // hide() already cleared its staged class.
-    if (w.hint?.isVisible && w.hint.isStaged) {
-      w.hint.reveal();
-      w.tFirstShown ??= now;
-      revealed++;
-    }
-  }
-  stagedWave.clear();
-  if (revealed > 0) firehoseStep('wave:reveal', revealed, 20);
 }
 
 // Build-up half of the level-triggered lifecycle reconciler (Phases 3+5 of
@@ -1713,27 +1669,13 @@ function reconcile(): void {
   }
 }
 
-// Storm-shaped reconcile (notes/DESIGN_FLING_WAVE.md round 4): the claim
-// step stays synchronous (cheap O(store) flag checks; the flush grants from
-// the local reservoir in ~1ms so tClaimed stays instant), but the BUILD
-// routes through the single-flight yield-task continuation instead of
-// running inline. Mid-fling the claim flush fires in every discovery drain
-// slice's microtask tail — an inline burst-budget build there turned each
-// 32ms walk slice into a ~180ms composed task and starved discovery
-// (dom_seen_to_attached p90 2826ms, drill round 4). With the continuation,
-// at most ONE build task exists at a time, FIFO-interleaved with walk
-// slices, draining every claim accumulated since the last burst — on-screen
-// unbudgeted first (runBuildPass ordering). On-screen badges pay one yield
-// hop (~1-5ms) over the inline path.
-//
-// One-shot converge points (scan path, nav/alphabet, settle repair,
-// label-sync catchup, confirm-rejected) keep the synchronous reconcile()
-// above: they are not per-slice storms, and some (showHints) depend on
-// build-before-paint ordering.
-function reconcileStorm(): void {
-  pageSession.tracker.refreshViewportClaims();
-  if (pageSession.hintsVisible) scheduleBandBuildContinuation();
-}
+// (reconcileStorm — the round-4 yield-hop variant — is gone, round 13. It
+// existed because inline build per WALK SLICE starved discovery when the
+// walk was budget-sliced at 32ms; with the walk completing all pending
+// roots per pass, the inline build in reconcile() runs once per completed
+// wave and starves nothing. The claim flush lands in the drain task's
+// microtask tail, reconcile() builds and paints synchronously — one task
+// per wave, the Rango shape the twelve-round arc kept converging toward.)
 
 // Coalesced entry for high-frequency edge signals (focus/transition/resize
 // settle): a 100ms debounce collapses a churny burst into one reconcile so we
@@ -3301,9 +3243,7 @@ function paintSamplerTick(): void {
   for (const w of store.all) {
     if (w.hint) {
       painted++;
-      // Staged badges (wave-atomic reveal hold) are opacity-0 — not shown to
-      // the eye, so not shown to the ring. The whole lesson of this arc.
-      if (w.hint.isVisible && !w.hint.isStaged) shown++;
+      if (w.hint.isVisible) shown++;
     }
   }
   // 'tr' count as the content-arrival proxy (live collection; .length is
@@ -3489,12 +3429,13 @@ function noteBandSweep(): void {
     lifecycleCounters.bandSweepRepairs += repaired;
     lifecycleCounters.bandSweepReleases += released;
     firehoseStep('band_sweep:changed', repaired + released, 20);
-    // Storm-shaped convergence: refreshViewportClaims picks up the
-    // just-flipped flags (claim, microtask flush), the build burst runs in
-    // its own single-flight task. Releases matter here too — the freed
-    // letters land at the front of the local reservoir synchronously, so a
-    // claim that would have returned '' a sweep ago is funded NOW.
-    reconcileStorm();
+    // Synchronous convergence (round 13): refreshViewportClaims picks up
+    // the just-flipped flags, the build+paint runs inline — edge-crossing
+    // badges appear within the sweep's own 100ms cadence, Rango's
+    // scroll-poll shape. Releases matter here too — the freed letters land
+    // at the front of the local reservoir synchronously, so a claim that
+    // would have returned '' a sweep ago is funded NOW.
+    reconcile();
   }
 }
 

@@ -20,27 +20,29 @@
  *     drops out.
  */
 /**
- * Wave budgets (notes/DESIGN_FLING_WAVE.md Part 1 + round-3 verdict).
- * Deliberately TWO constants — round 3 showed the two stages need
- * different scales:
+ * Wave guardrails (notes/DESIGN_FLING_WAVE.md round 13 — the Rango-parity
+ * cut). These are CIRCUIT BREAKERS, not pacing: twelve rounds of
+ * production drills showed that budget-slicing the hot path multiplies
+ * wall-clock 3-5x under contention (every yield donates the thread to
+ * 30-100ms of the page's own swap rendering), while Rango's one
+ * synchronous unbudgeted blast per mutation wave reads as instant on the
+ * same grid. A realistic wave must complete in ONE task; only a
+ * pathological one (a full-page swap sneaking past the huge-mutation
+ * path) trips these and defers the remainder to the yield chain.
  *
- * WALK: `drainDiscovery` yields between roots past this. The walk is cheap
- * as measured (224 roots in 10ms — subtreeMaybeHintable eats almost
- * everything), so a mid-frame-friendly slice is fine.
+ * WALK: `drainDiscovery` processes ALL pending roots per pass in practice
+ * (224 roots ≈ 10ms — subtreeMaybeHintable eats almost everything); the
+ * breaker only fires on walks the ≥1000-record huge path should have
+ * caught. Completing the walk before the build is also the round-4
+ * lesson: inline build per SLICE starved discovery; inline build per
+ * completed WAVE starves nothing.
  *
- * BUILD: `badgeNewlyCodeworded` defers off-viewport first-time
- * construction past this. Burst-sized so a realistic fling wave
- * (~80-120 badges at ~0.3ms warmed) completes in ONE pass — every extra
- * pass re-pays the cacheConstruction ancestor warm and the placeBadges
- * reflow that clearLayoutCache wiped (round 3 measured passes 40-110ms
- * apart re-slicing one wave into five). The budget survives only as the
- * pathological-wave guardrail (paint-the-band rounds 4+6 posture):
- * mid-fling the page is dropping frames from its own row rendering, and
- * users read "badges are there" long before they notice frame pacing.
- * Tune from the `bandBuild:pass` CPU bucket, not by feel.
+ * BUILD: `badgeNewlyCodeworded` constructs the whole delta in one pass
+ * (~0.3-1.3ms per badge warmed) — ~400-badge full-window swaps land in
+ * 150-400ms, paid once, during frames the page is already dropping.
  */
-export const WAVE_WALK_BUDGET_MS = 32;
-export const WAVE_BUILD_BUDGET_MS = 120;
+export const WAVE_WALK_BUDGET_MS = 200;
+export const WAVE_BUILD_BUDGET_MS = 500;
 
 export function runBuildPass<T>(
   items: T[],

@@ -229,15 +229,6 @@ const BADGE_CSS = `
   .bk-inner.visible.bk-pending {
     opacity: 0.55;
   }
-  /* Wave-atomic reveal (notes/DESIGN_FLING_WAVE.md Part 1f): a staged badge
-   * is fully painted and placed but held at opacity 0 until the wave
-   * manager reveals the whole accumulated wave in one batch — the eye reads
-   * one pop (Rango's shape), not a per-burst trickle. Ordered after
-   * .visible AND .bk-pending so it wins both while staged; reveal() removes
-   * the class and the .visible transition supplies the fade-in. */
-  .bk-inner.visible.bk-staged {
-    opacity: 0;
-  }
   .bk-inner.filtered {
     display: none;
   }
@@ -773,15 +764,7 @@ export class HintBadge {
    *   to full opacity. If true (rare race where ACK landed before the
    *   first show — or alphabet-stable post-rotate path), paint opaque.
    */
-  /**
-   * @param staged Wave-atomic reveal (notes/DESIGN_FLING_WAVE.md Part 1f):
-   *   paint and place everything now but hold opacity at 0 (`bk-staged`)
-   *   until the wave manager calls `reveal()` — so a churn wave lands as
-   *   one visual pop instead of a per-burst trickle. Only the churn build
-   *   path (prepareBadge) stages; every other show is direct and clears
-   *   any stale staged class.
-   */
-  show(grammarReady = false, staged = false): void {
+  show(grammarReady = false): void {
     if (this._visible) return;
     // Dormant guard: a null label means clearLabel() ran (band-exit reuse, a
     // mid-flight codeword reclaim, or session/alphabet rotation) and the inner
@@ -792,13 +775,6 @@ export class HintBadge {
     // dormant invariant documented on `label` and mirrors setMatchedChars's guard.
     if (this.label === null) return;
     this._visible = true;
-    if (staged) {
-      this.inner.classList.add('bk-staged');
-    } else {
-      // A direct show must never inherit a stale hold (badge staged, then
-      // released and re-shown by a settle path before the wave revealed).
-      this.inner.classList.remove('bk-staged');
-    }
     this.inner.classList.remove('filtered');
     this.applyColors();
     this._size = null;
@@ -832,21 +808,6 @@ export class HintBadge {
   markGrammarReady(): void {
     this.inner.classList.remove('bk-pending');
     this.host.removeAttribute('data-bk-pending');
-  }
-
-  /** Release a staged show (drop `bk-staged`) — the wave manager calls this
-   *  for the whole accumulated wave in one batch; the `.visible` opacity
-   *  transition supplies the fade-in pop. Idempotent; a no-op on badges that
-   *  were hidden or never staged. */
-  reveal(): void {
-    this.inner.classList.remove('bk-staged');
-  }
-
-  /** True while a staged show is holding the badge at opacity 0 awaiting the
-   *  wave reveal. The paint-stability sampler excludes staged badges from
-   *  `shown` — the ring measures what the eye sees. */
-  get isStaged(): boolean {
-    return this.inner.classList.contains('bk-staged');
   }
 
   get badgeSize(): { w: number; h: number } {
@@ -887,9 +848,6 @@ export class HintBadge {
   }
 
   hide(): void {
-    // Clear any staged hold so a later show() can't strand the badge
-    // invisible (staged → band-exit hide → dormant re-show).
-    this.inner.classList.remove('bk-staged');
     this._visible = false;
     this.inner.classList.remove('visible');
     this.inner.classList.remove('bk-pending');
