@@ -111,6 +111,24 @@ describe('attachWrapper', () => {
     expect(w.tDomSeen).not.toBeNull();
     expect(w.tDomSeen!).toBeLessThanOrEqual(w.tAttached);
   });
+
+  it('stamps in_viewport_at_attach from the strict-viewport rect (round 21)', () => {
+    // jsdom rects are 0×0 at the origin — off-screen by the strict predicate
+    // (bottom > 0 fails). An element reporting a real in-viewport rect
+    // stamps true; the default stamps false. Discriminates held-ineligible-
+    // in-view stragglers from scroll-ahead attaches in the snapshot.
+    const offscreen = el('vp-off');
+    const wOff = new ElementWrapper(offscreen, scanned('vp-off'));
+    attachWrapper(wOff, 'settle_sweep');
+    expect(wOff.inViewportAtAttach).toBe(false);
+
+    const onscreen = el('vp-on');
+    onscreen.getBoundingClientRect = () =>
+      ({ top: 10, left: 10, bottom: 30, right: 50, width: 40, height: 20, x: 10, y: 10, toJSON: () => ({}) }) as DOMRect;
+    const wOn = new ElementWrapper(onscreen, scanned('vp-on'));
+    attachWrapper(wOn, 'settle_sweep');
+    expect(wOn.inViewportAtAttach).toBe(true);
+  });
 });
 
 describe('detachWrapper', () => {

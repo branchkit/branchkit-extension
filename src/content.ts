@@ -27,7 +27,7 @@ import { resolveTarget } from './activate/activate-resolution';
 import { schedulePointerVisibilitySweep, connectVisibilityMO, teardownVisibilityTracker } from './observe/visibility-tracker';
 import { rebindCounters, LIMBO_DEADLINE_MS, collectLimboWrappers, collectStrongKeyIndex, dropDisconnectedWrappers, finalizeExpiredLimboWrappers, slotProbe, limboSlotLiveness } from './observe/limbo';
 import { attachWrapper, detachWrapper, seedPreferredFromMemory, attachDiscovered } from './core/wrapper-lifecycle';
-import { attachPageMutationObserver, teardownMutationSource } from './observe/mutation-source';
+import { attachPageMutationObserver, getObserverFirstAttachedAt, teardownMutationSource } from './observe/mutation-source';
 import { firehoseStep } from './debug/firehose';
 import { bkLog } from './debug/bk-log';
 import { store } from './core/store';
@@ -3352,17 +3352,18 @@ const latencySummary = (arr: number[]) =>
 function discoverySourceStats() {
   const now = performance.now();
   type SourceAcc = {
-    attached: number; shown: number; moStamped: number;
+    attached: number; shown: number; moStamped: number; inViewportAtAttach: number;
     seenToAttached: number[]; seenToShown: number[]; attachedToShown: number[];
   };
   const bySource: Record<string, SourceAcc> = {};
   for (const w of store.all) {
     if (now - w.tAttached > PAINT_LATENCY_WINDOW_MS) continue;
     const s = (bySource[w.discoverySource] ??= {
-      attached: 0, shown: 0, moStamped: 0,
+      attached: 0, shown: 0, moStamped: 0, inViewportAtAttach: 0,
       seenToAttached: [], seenToShown: [], attachedToShown: [],
     });
     s.attached++;
+    if (w.inViewportAtAttach) s.inViewportAtAttach++;
     if (w.domSeenByMo && w.tDomSeen !== null) {
       s.moStamped++;
       s.seenToAttached.push(w.tAttached - w.tDomSeen);
@@ -3377,6 +3378,9 @@ function discoverySourceStats() {
     attached_in_window: s.attached,
     shown_in_window: s.shown,
     mo_stamped: s.moStamped,
+    // Round 21: sweep cohort with this HIGH + big dom_seen→attached = held
+    // ineligible in view (chase it); LOW = scroll-ahead accounting (benign).
+    in_viewport_at_attach: s.inViewportAtAttach,
     dom_seen_to_attached: latencySummary(s.seenToAttached),
     dom_seen_to_shown: latencySummary(s.seenToShown),
     attached_to_shown: latencySummary(s.attachedToShown),
@@ -3445,6 +3449,13 @@ function snapshotExtras() {
       // paint-latency window. The MO should own steady-state discovery; a
       // large sweep/scan share on a churny page is the miss being measured.
       discovery_sources: discoverySourceStats(),
+      // Round 21 boot classifier: dom-seen stamps only exist for insertions
+      // after this moment. Unstamped wrappers attached near it are
+      // pre-observer boot content, NOT a mid-fling no-trace cohort.
+      observer_attached_at: (() => {
+        const t = getObserverFirstAttachedAt();
+        return t === null ? null : Math.round(t);
+      })(),
       // Lifetime attach counts per source (not window-scoped) + the
       // suspect-(c) tripwire: add records the Element gate skipped wholesale.
       attached_by_source: { ...lifecycleCounters.attachedBySource },

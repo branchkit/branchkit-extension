@@ -431,6 +431,18 @@ function handlePageMutations(records: MutationRecord[]): void {
 
 let observer: MutationObserver | undefined;
 
+// When the page MO FIRST attached (performance.now ms). dom-seen stamps only
+// exist for insertions after this moment, so an unstamped wrapper attached
+// near it is pre-observer BOOT content — not a "materialized with no MO
+// trace" cohort (the round-20d misread, notes/DESIGN_FLING_WAVE.md round 21).
+// First attach only: the suspend/resume path re-calls
+// attachPageMutationObserver and must not move the boot boundary.
+let observerFirstAttachedAt: number | null = null;
+
+export function getObserverFirstAttachedAt(): number | null {
+  return observerFirstAttachedAt;
+}
+
 /** Construct the page MutationObserver. Called once from `PageSession.start()`
  * — the session owns observer construction (Tier 3). Construction is inert;
  * nothing is observed until `attachPageMutationObserver()`. */
@@ -439,6 +451,7 @@ export function constructPageMutationObserver(): void {
 }
 
 export function attachPageMutationObserver(): void {
+  if (observerFirstAttachedAt === null) observerFirstAttachedAt = performance.now();
   observer?.observe(document.body || document.documentElement, {
     childList: true,
     subtree: true,

@@ -163,6 +163,13 @@ export class ElementWrapper {
   // tAttached - tDomSeen is the MO-path miss window itself.
   tDomSeen: number | null = null;
   domSeenByMo: boolean = false;
+  // Was the element inside the STRICT viewport when attachWrapper stamped it
+  // (notes/DESIGN_FLING_WAVE.md round 21)? Discriminates the two readings of
+  // a big dom_seen→attached gap that per-source aggregates conflate: TRUE
+  // means the element sat in view while ineligible (a held-back reveal — the
+  // residual worth chasing); FALSE means scroll-ahead content that attached
+  // the moment scrolling made it eligible (correct behavior, not latency).
+  inViewportAtAttach: boolean = false;
   // Which discovery path created this wrapper — see DiscoverySource above.
   discoverySource: DiscoverySource = 'unknown';
   // First grammar ACK. tFirstShown - tGrammarReady is the show-vs-voice

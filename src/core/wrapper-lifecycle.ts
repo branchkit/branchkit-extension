@@ -22,7 +22,7 @@ import { isRecallLoaded, resolvePreferredCodeword } from '../labels/codeword-rec
 import { dropPendingPut, hasSent, queueDelete, queuePut, scheduleSync } from '../labels/label-sync';
 import { tryRebindFromLimbo, tryRebindByStrongKey, tryRebindBySlot, recordSlotAncestors, isRecentlyOrphaned } from '../observe/limbo';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
-import { geometryInBand, getCachedRect } from '../layout-cache';
+import { geometryInBand, getCachedRect, isRectOnScreen } from '../layout-cache';
 import { lifecycleCounters } from '../debug/perf-counters';
 import { store } from './store';
 import { pageSession } from '../lifecycle/page-session';
@@ -67,6 +67,10 @@ export function attachWrapper(wrapper: ElementWrapper, source: DiscoverySource):
   const moSeen = domSeenAt(wrapper.element);
   wrapper.tDomSeen = moSeen ?? wrapper.tAttached;
   wrapper.domSeenByMo = moSeen !== null;
+  // Strict-viewport position at attach (round 21): the rect is warm — the
+  // scan walk's visibility check just read it — so this is a cache hit in
+  // the common case, one gBCR otherwise.
+  wrapper.inViewportAtAttach = isRectOnScreen(getCachedRect(wrapper.element));
   lifecycleCounters.attachedBySource[source] =
     (lifecycleCounters.attachedBySource[source] ?? 0) + 1;
   // Mint the registry id first. A rejected registration (id=0) means the
