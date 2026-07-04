@@ -2089,6 +2089,48 @@ held badges), a latest-wins queue for settles landing mid-swap (the
 drop left the pane on empty spacer — 'stuck hidden at rest' was this),
 overflow-anchor:none, progressive-removal knob (remove_step_ms).
 
+## Round 26 — row-coattail takeover: the row is the identity carrier
+## (2026-07-04, 1ad1dc4; fixture-verified)
+
+The 25-verify drill: rides fire at production scale (takeover_fp 326)
+but ~87 in-viewport badges still die per swap — the content-ambiguous
+cohort (checkboxes; repeating lookup links, refuse_fp_ambiguous 211),
+unmatched by content by definition and unmatchable by position during
+the stacked overlap. Roughly half of each visible row rode; the eye
+reads the rebuilding half.
+
+The lever: every grid row CONTAINS a unique-fingerprint control (the
+edit/view buttons carry record ids in their accessible names), so a
+unique ride pins doomed-row ↔ replacement-row correspondence for free.
+`coattailRowTakeover` then rides the row's other wrappers by
+STRUCTURAL PATH — the child-index path from the row to the element,
+exact on an identical rebuild, fail-safe on anything else (path miss /
+tag mismatch / counterpart already wrapped / recently orphaned → skip;
+fresh attach follows, today's behavior). Counter: takeover_row.
+
+Plus an ordering fix the fixture caught on the first run: document
+order puts a row's checkbox BEFORE its unique pencil, so the inline
+ambiguous refusal fresh-attached the checkbox an instant before its
+coattail arrived — and the old wrapper died anyway (the counters said
+so: refuse_fp_ambiguous 318 alongside takeover_row 416).
+tryTakeoverByFingerprint now returns 'rode' | 'ambiguous' | 'none';
+attachDiscovered DEFERS the ambiguous cohort to a second pass within
+the batch — by then the coattails have carried most of them, and true
+refusals count + fresh-attach as before. (Batch-boundary row splits
+remain a minor residual: a row split across two 60-element walk
+batches can still fresh-attach its early members.)
+
+Fixture verdict: takeover_row 730 + takeover_fp 368 per swap — the
+ENTIRE population's letters and grammar ride; rebind_key dropped to 0
+(the coattail carries anchors before the strong-key tier sees them —
+fine, same transfer mechanics). The remaining visual flicker in the
+removal window (~95 ↔ 40-55 solid) is the round-25 OPEN item —
+clip/occlusion honestly hiding held badges whose ridden elements are
+still below the pane — NOT letter churn. Whether production's removal
+pacing makes that flicker visible is exactly what the next real-Chrome
+drill answers; if it does, the next iteration is the
+visibility-suppression-during-hold pass round 25 characterized.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
