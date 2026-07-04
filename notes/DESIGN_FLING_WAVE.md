@@ -1570,6 +1570,89 @@ content-speed discovery on everything the page reveals, a sensor for
 the one reveal class no MutationObserver can see, and QuickBase's own
 ~2.5-3.5s related-data latency as the shared, unbeatable floor.
 
+## Round 22 — the user's eye vs the closing numbers: the perceived
+## beat is the DOUBLE-RENDER CHURN, not discovery; Part 2 promoted
+## again (2026-07-04, fresh 60fps video + actuator.log correlation;
+## diagnosis only, no code)
+
+The user, correctly, did not feel round 21g: "I thought it took
+around the same amount of time for the badges to appear." A fresh
+60fps recording on the current build (branchkit_scroll2.mov,
+02:06 EDT — working copy /tmp/badge-ab) frame-decomposes the beat
+the eye actually sees, and the actuator.log window (page-ts anchored
+at the reveal ≈ 9.8k) explains every phase:
+
+- **reveal +0.25s: a partial POP** — badges land on the first rows
+  (fresh translucent claims). Discovery is genuinely fast now; the
+  rounds-16..21 work shows up here.
+- **reveal +0.65s: the WIPE** — every grid-row badge disappears.
+  QuickBase's double-buffered SECOND render replaces the whole first-
+  render window (`band_sweep:changed 101` @ ts 10580 is the second
+  cohort's flags flipping; the `?skip=0` spa_nav's deferred tail took
+  the HEAVY path — `deferred_scan:start`, >25% of the store
+  disconnected — which is the swap measured directly). The first-pop
+  wrappers die with their elements: limbo holds ~250-500ms, finalize
+  tears down, letters release.
+- **reveal +1.4-2.4s: the REPOP** — `showHints size=183` @ ts 11234
+  (the heavy tail's wholesale re-show) paints the replacement
+  population, with NEW letters (the video shows hb/sb → dy/sp on the
+  same rows — teardown+reclaim, not hide/show). Solidify follows on
+  the grammar ACK.
+
+So the perceived badge latency on a fling is not discovery at all —
+it is pop → wipe → rebuild, and the wipe-to-rebuild gap (~1-1.8s) is
+the beat. This is the round-12 "double-render blip" (no-strong-key
+cohort can't take over across the swap) at full-fling scale, plus the
+first-pop-then-die cost of badging the interim render at all. Round
+12 accepted it as "a little blip — one cycle on a minority cohort";
+this video shows that on a real fling it is the WHOLE population and
+the dominant perceptual cost.
+
+Two NEW instrumentation deceptions explain why the 21g closing
+numbers looked like parity while the eye said otherwise (the round-7
+survivorship family, third appearance):
+1. **Dead wrappers leave the percentiles.** discoverySourceStats and
+   paint_latency iterate `store.all` — the first-pop wrappers were
+   DESTROYED, so their pop-wipe cycle vanishes from every stat; only
+   the final (fast, healthy-looking) population is measured.
+2. **The paint_stability ring is band-scoped, not viewport-scoped.**
+   shown held ~380-436 through the whole wipe because the ~40 wiped
+   viewport badges are a small slice of the ~400-badge band. The
+   "eye-level" instrument does not see what the eye sees.
+
+What this round does NOT conclude: whether Rango avoids this cost.
+Structurally it cannot fully avoid it (their hints also die with
+replaced elements — mutation callback deleteWrapper — and replacements
+get fresh labels), but their rebuild path is one synchronous wrap +
+100ms debounce, so their pop-wipe-repop window should compress to
+~100-200ms vs our ~1-1.8s. The round-15 video cannot answer (different
+session, possibly different render phasing); a fresh SAME-GESTURE
+Rango recording on this grid is the missing comparison.
+
+Candidate levers for the fix round (design before code; all Part-2
+territory):
+1. **Revive position rebind for the no-key cohort** — round 12's
+   "likely first choice": refresh `lastRect` at limbo entry from the
+   live two-strike sweep so the fingerprint tier's 50px position
+   tiebreak works on identical-content remounts (currently scores 0 on
+   stale mid-storm rects). Badge + letter ride the swap; the wipe
+   never happens for same-content rows.
+2. **Row-identity takeover keys** — if tr.gridRow carries a stable
+   record id (attribute probe needed), non-anchor cell controls get
+   strong keys scoped to row identity; the round-9 cell-context trick
+   extended to buttons. Dead end if rows are anonymous (like slot
+   rebind was).
+3. **Rebuild latency, not survival**: if takeover can't cover, cut
+   the wipe-to-repop gap — the repop waited for the heavy nav tail's
+   wholesale showHints; the incremental path should have painted the
+   second-render cohort at claim time (~ts 10.6-11.0k). Why it didn't
+   is itself a diagnosable gap.
+4. **Kill the instrumentation blind spots first** (cheap, this
+   round's lesson): a `wiped_within_2s` counter (wrappers destroyed
+   <2s after first shown, with their dom_seen→shown history) and a
+   viewport-sliced companion to the stability ring, so churn cycles
+   are measurable without frame-by-frame video.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
