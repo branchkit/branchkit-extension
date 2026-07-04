@@ -108,7 +108,7 @@ describe('teardownVisibilityTracker', () => {
 });
 
 describe('layer-3 parked ResizeObserver signal (round 21)', () => {
-  it('counts a nonzero-box delivery for a parked candidate; drops zero-box and unparked', () => {
+  it('counts a nonzero-box delivery for a parked candidate; drops zero-box; promotes an attention-lot box gain (round 34c)', () => {
     const parked = document.createElement('a');
     trackPendingCandidate(parked);
     const stranger = document.createElement('a');
@@ -116,13 +116,17 @@ describe('layer-3 parked ResizeObserver signal (round 21)', () => {
 
     // Zero-box (the RO initial fire on a still-collapsed element) — dropped.
     expect(__testing.parkedResizeSignal(parked, false)).toBe(false);
-    // Nonzero box on an element nobody parked — dropped.
-    expect(__testing.parkedResizeSignal(stranger, true)).toBe(false);
-    expect(lifecycleCounters.visibilityRoSignals).toBe(before);
+    // Round 34c: a nonzero box on an attention-lot candidate (RO-observed
+    // via observeRevealCandidate but never admitted to pendingVisibility —
+    // 0×0 elements can't trip the attention IO) PROMOTES it into the
+    // recheck set and counts a signal. This was the client lookup-column gap:
+    // ro_signals 8 vs 10,244 parked.
+    expect(__testing.parkedResizeSignal(stranger, true)).toBe(true);
+    expect(lifecycleCounters.visibilityRoSignals).toBe(before + 1);
 
     // The reveal: a parked candidate gained a real box.
     expect(__testing.parkedResizeSignal(parked, true)).toBe(true);
-    expect(lifecycleCounters.visibilityRoSignals).toBe(before + 1);
+    expect(lifecycleCounters.visibilityRoSignals).toBe(before + 2);
   });
 
   it('promotes a parked candidate to a wrapper once the box gain makes it hintable', () => {

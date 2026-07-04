@@ -74,7 +74,21 @@ let visibilityRO: ResizeObserver | undefined;
 // the walk's rejection and the RO's first delivery, which is exactly the
 // race the sensor exists to close.
 function parkedResizeSignal(target: Element, hasBox: boolean): boolean {
-  if (!hasBox || !pendingVisibility.has(target)) return false;
+  if (!hasBox) return false;
+  // Round 34c: a box-gain on an ATTENTION-LOT candidate (observed via
+  // observeRevealCandidate, not yet in pendingVisibility) PROMOTES it into
+  // the recheck set. This is the wiring the 21g sensor was missing: 0×0
+  // candidates (grid cells born empty, filled by late data) can never
+  // trip the attention IntersectionObserver, so they never reached
+  // pendingVisibility and the RO watched nothing — ro_signals 8 vs 10,244
+  // parked on the client drill, with those badges landing at settle-sweep
+  // cadence (0.5-3s) instead of frame speed.
+  if (!pendingVisibility.has(target)) {
+    if (store.findWrapperFor(target)) return false; // already attached
+    pendingVisibility.add(target);
+    visibilityIO?.observe(target);
+    connectVisibilityMO();
+  }
   lifecycleCounters.visibilityRoSignals++;
   return true;
 }
@@ -279,6 +293,20 @@ function recheckPendingVisibility(): void {
   if (pendingVisibility.size === 0) disconnectVisibilityMO();
   recordCpu('recheckPendingVisibility', performance.now() - __cpuStart);
   if (__initialSize > 0) recordCpu(`recheckPendingVisibility:size:${__initialSize > 1000 ? '1000+' : __initialSize > 100 ? '100-1000' : '<100'}`, __initialSize);
+}
+
+/**
+ * Round 34c: put the reveal RO on an attention-lot candidate WITHOUT
+ * admitting it to pendingVisibility. Zero-box candidates can't trip the
+ * attention IO, so this is their only reveal sensor; the RO's box-gain
+ * delivery promotes them into the recheck set (parkedResizeSignal).
+ * Rango-precedented cost model: a per-element RO on every hintable is
+ * their whole sensor layer; observing parked candidates is strictly
+ * cheaper (deliveries only on box change; zero-box initial fires are
+ * dropped in the handler).
+ */
+export function observeRevealCandidate(el: Element): void {
+  visibilityRO?.observe(el);
 }
 
 /**

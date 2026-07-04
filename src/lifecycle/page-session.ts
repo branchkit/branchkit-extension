@@ -99,6 +99,10 @@ export interface PageSessionDeps {
   // --- mutation-source collaborators ---
 
   discoverInSubtree: (root: Element, source: DiscoverySource) => number;
+  /** Round 34c: a drain pass attached a mass-discovery burst (>=25 fresh
+   * wrappers — a swap repaint, not trickle). Fires the direct claim-flush
+   * + paint follow-through so first paint doesn't wait a settle hop. */
+  onMassDiscovery: (added: number) => void;
   /** Third param: one-slab wall budget for reveal-armed sweeps (round 20);
    * omitted/0 = yield every batch (huge path, idle sweeps). */
   discoverInSubtreeBatched: (root: Element, source: DiscoverySource, slabBudgetMs?: number) => Promise<number>;

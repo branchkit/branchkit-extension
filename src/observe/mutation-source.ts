@@ -202,6 +202,7 @@ function drainDiscovery(): void {
   }
 
   let processed = 0;
+  let addedTotal = 0;
   for (const root of workRoots) {
     processed++;
     // Skip if the subtree got removed between enqueue and drain. The
@@ -223,7 +224,7 @@ function drainDiscovery(): void {
       continue;
     }
     // Newly-attached wrappers emit store deltas → grammar sync (Tier 2 delta cut).
-    pageSession.deps.discoverInSubtree(root, 'mo');
+    addedTotal += pageSession.deps.discoverInSubtree(root, 'mo');
     // Yield to the event loop once we've exceeded the budget — but
     // always do at least one root so we make forward progress even when
     // a single root is heavy enough to blow the budget by itself.
@@ -247,6 +248,12 @@ function drainDiscovery(): void {
     pageSession.discoveryScheduled = true;
     scheduleYieldTask(drainDiscovery);
   }
+  // Round 34c: a mass-discovery burst is a swap repaint (fresh rows after
+  // QuickBase's teardown+rebuild). Their badges otherwise wait for the next
+  // settle pass / sweep to paint (~200-500ms of pure scheduling — the
+  // "translucent badges paint slower than Rango" cohort). Same threshold
+  // class as REVEAL_REPAIR_FAST_ARM in content.ts.
+  if (addedTotal >= 25) pageSession.deps.onMassDiscovery(addedTotal);
   recordCpu('drainDiscovery', performance.now() - __cpuStart);
   if (__rootCount > 0) {
     recordCpu(

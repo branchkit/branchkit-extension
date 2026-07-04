@@ -24,7 +24,7 @@ import type { CodewordMemoryEntry } from './labels/codeword-memory';
 import { loadRecall, recalledCodewords, rememberLive, resolvePreferredCodeword, isRecallLoaded } from './labels/codeword-recall';
 import { type RebindCounters } from './labels/rebind';
 import { resolveTarget } from './activate/activate-resolution';
-import { schedulePointerVisibilitySweep, connectVisibilityMO, teardownVisibilityTracker } from './observe/visibility-tracker';
+import { schedulePointerVisibilitySweep, connectVisibilityMO, teardownVisibilityTracker, observeRevealCandidate } from './observe/visibility-tracker';
 import { rebindCounters, LIMBO_DEADLINE_MS, collectLimboWrappers, collectStrongKeyIndex, dropDisconnectedWrappers, finalizeExpiredLimboWrappers, slotProbe, limboSlotLiveness } from './observe/limbo';
 import { attachWrapper, detachWrapper, seedPreferredFromMemory, attachDiscovered } from './core/wrapper-lifecycle';
 import { attachPageMutationObserver, getObserverFirstAttachedAt, teardownMutationSource } from './observe/mutation-source';
@@ -1188,6 +1188,11 @@ function observeInvisibleCandidates(candidates: Element[]): void {
     if (isExcludedByRule(el, getExcludes())) continue;
     lifecycleCounters.invisibleCandidatesObserved++;
     pageSession.attentionObserver.observe(el);
+    // Round 34c: the reveal RO rides along from the moment of parking.
+    // The attention IO can't see 0×0 candidates (grid cells born empty,
+    // filled by late data), so without this their reveal is only caught
+    // at settle-sweep cadence — the 0.5-3s badge trickle on data grids.
+    observeRevealCandidate(el);
   }
 }
 
@@ -2427,6 +2432,7 @@ pageSession.start({
   showHints,
   schedulePassSoon,
   discoverInSubtree,
+  onMassDiscovery: (added) => scheduleMassRevealPaint(added),
   discoverInSubtreeBatched,
   reevaluateAttribute,
   scheduleReposition,
