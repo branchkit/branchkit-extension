@@ -3740,6 +3740,9 @@ function discoverInSubtree(root: Element): number {
 async function discoverInSubtreeBatched(root: Element): Promise<number> {
   const __cpuStart = performance.now();
   let added = 0;
+  // Feed the limbo pool before collecting it (fling-wave round 8; see
+  // drainDiscovery) — dead-but-unprocessed content must be rebindable.
+  dropDisconnectedWrappers();
   const limboPool = collectLimboWrappers();
   // Built once for the whole sliced walk (mirrors limboPool); consumed as
   // strong-key rebinds fire across batches. See DESIGN_CODEWORD_KEY_OWNERSHIP.md.

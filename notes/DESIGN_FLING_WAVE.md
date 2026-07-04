@@ -439,6 +439,47 @@ the ring's shown floor rises (dip ≤ ~10-20). If rebind_slot stays ~0,
 the shells die with the rows and the blink needs the deferred
 ghost-handoff idea instead — measure before building it.
 
+## Drill rounds 7-8 — honest stamps, dead shells, and the starved pool
+
+Round 7: rebind_slot stayed 0, and the reveal-time stamps finally
+agree with the eye — dom_seen_to_shown p50 **1327ms**. The 139ms of
+round 5 was stamping hidden paints that churned away before ever being
+visible. The true disease, stated plainly at last: a badge on this
+grid cycles build → teardown → rebuild 2-4 times over ~1.3s before one
+sticks. Landed the slot_probe refusal classifier + limbo slot-liveness
+counters rather than guess again.
+
+Round 8, the probe's verdict:
+- **limbo_slot_liveness: alive 0 / dead 441.** QuickBase replaces
+  whole row subtrees; no recorded ancestor ever survives. Slot rebind
+  is structurally impossible HERE (the tier stays — fails safe, and
+  other grids do swap in place).
+- **slot_probe.pool_empty: 365 of 837 attempts.** The deeper unlock:
+  when replacements are discovered, the dead content often isn't in
+  limbo yet — the discovery drain runs on a fast yield task that beats
+  the removal records' processing, so EVERY rebind tier sees an empty
+  pool. And the tier that should win on this grid is the existing
+  FINGERPRINT tier: a window shift re-renders the currently-visible
+  rows with identical content (same records, fresh DOM) — matching
+  fingerprints by construction. refuse_no_match 202 / rebind_clean 0
+  is that tier starving, not failing.
+
+Fix (round 8): **feed the limbo pool before walking** —
+dropDisconnectedWrappers() at the top of drainDiscovery and
+discoverInSubtreeBatched. isConnected is DOM ground truth regardless
+of MO delivery order; the call is idempotent with the removal path and
+O(store) pointer checks. With the pool fed, same-content remounts
+fingerprint-rebind: badge, letter, and grammar ride through the window
+shift, and the blink dies exactly where the user is looking.
+
+Prediction for drill round 9: rebind_clean/rebind_position climb,
+refuse_no_match and slot_probe.pool_empty collapse, claimed_to_shown
+(now eye-honest) drops from 648/1327 toward the reveal cadence, and
+the ring's shown floor rises. Remaining after that: rows whose records
+genuinely changed (window edges) still rebuild — correct behavior; if
+their pop still reads slow, that residual is the true fill cost and it
+is already burst-shaped.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is

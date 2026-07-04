@@ -170,6 +170,16 @@ function drainDiscovery(): void {
   // teardown, so guard explicitly.
   if (pageSession.isTornDown) return;
   if (pageSession.pendingDiscoveryRoots.size === 0) return;
+  // Feed the limbo pool BEFORE walking (fling-wave round 8): a virtualized
+  // grid replaces whole row subtrees, and this drain now runs on a fast
+  // yield task that beats the removal records' processing — at discovery
+  // time the dead content wasn't marked limbo yet, so every rebind tier saw
+  // an empty pool (slot_probe.pool_empty 365/837 on production) and the
+  // visible region's identical-content remounts churned fresh wrappers
+  // instead of fingerprint-rebinding. isConnected is DOM ground truth
+  // regardless of MO delivery order; this is idempotent with the
+  // processMutations removal path and O(store) pointer checks.
+  dropDisconnectedWrappers();
   const roots = [...pageSession.pendingDiscoveryRoots];
   pageSession.pendingDiscoveryRoots.clear();
   const __rootCount = roots.length;
