@@ -2321,6 +2321,34 @@ verdict on the same swap/gesture/eye:
 The real-Chrome drill is the arbiter, as always: this is the first
 build whose fixture line matches Rango's slope.
 
+### Round 28b — the first production drill stranded reservations;
+### two fixes (20139ac)
+
+Drill on the 28 build: "hints took a very long time to load."
+Snapshot: 730 reservations made, **16 consumed**; settle_sweep
+attached 562 wrappers at dom_seen→attached **p50 17.2s / max 22.9s** —
+reserved elements sat badge-less until the TTL lapsed AND an
+incidental settle swept them.
+
+1. **The consume-blocker**: production replacements arrive in the
+   HIDDEN buffer and reveal through the visibility tracker's direct
+   attachWrapper path — which bypassed the reservation check (the
+   bypass gotcha documented at round 26). The promoted fresh wrapper
+   then blocked every consume. Both promote sites now skip reserved
+   elements.
+2. **The stranding**: an expired reservation had no wake-up on a quiet
+   page. expireStaleReservations (on the 250ms finalize interval)
+   clears the bookkeeping and immediately re-discovers the
+   replacement. Counter: retarget_expired — read against
+   retarget_deferred; expired dominating means the pairing bet is
+   wrong for the page's swap dynamics.
+
+Fixture limitation, recorded: its replacements arrive VISIBLE (the
+walk path), so it cannot exercise the buffer-reveal promote path that
+broke in production. A future fixture iteration should reveal phase-2
+rows via the veil class flip like the main swap. The production drill
+verifies fix 1.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
