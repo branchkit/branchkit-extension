@@ -110,6 +110,7 @@ import { pageSession, scheduleYieldTask, yieldTask, TeardownReason } from './lif
 import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './debug/message-counters';
 import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, rearmCpuShareBaseline, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, stopPerfObservers, lifecycleCounters, resetLifecycleCounters } from './debug/perf-counters';
 import { churnStats } from './debug/churn-log';
+import { syncTraceStats } from './debug/sync-trace';
 import { loadConfig, getDisplayMode, getHintVisibility, getHintsShown, setHintsShown } from './config';
 import {
   grammarEpochStats,
@@ -3494,6 +3495,12 @@ function snapshotExtras() {
     // shows a burst of short shown_for_ms, in_viewport, had_codeword
     // records at the swap.
     churn: churnStats(PAINT_LATENCY_WINDOW_MS),
+    // Round 22b: every grammar postBatch outcome (result, size, session,
+    // elapsed) — a stalled post-swap sync (289 badges translucent ~25s,
+    // snapshot 15-55) names its mechanism here: transport errors, slow
+    // round-trips, wholesale refusals, or session-rotation races
+    // (old-session batches failing after a rotate).
+    sync_trace: syncTraceStats(PAINT_LATENCY_WINDOW_MS),
     grammar_epoch: grammarEpochStats(),
     reconcile_applied: {
       passes: reconcileApplied.passes,

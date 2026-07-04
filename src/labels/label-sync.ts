@@ -44,6 +44,7 @@ import { getHintVisibility } from '../config';
 import { labelReservoir } from './label-reservoir';
 import { bkLog } from '../debug/bk-log';
 import { firehoseStep } from '../debug/firehose';
+import { recordSyncPost } from '../debug/sync-trace';
 
 /**
  * Content.ts-owned collaborators the catchup sync needs. Injected once at
@@ -198,13 +199,29 @@ export async function postBatch(
   const fullRequest: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'> =
     drainedDeletes.length > 0 ? { ...request, delete_codewords: drainedDeletes } : request;
   inFlightBatches++;
+  // Transport trace (round 22b): every outcome — including silently-caught
+  // sendMessage failures and slow round-trips — lands in the snapshot's
+  // sync_trace ring so a stalled post-swap sync names its mechanism.
+  const __t0 = performance.now();
+  const trace = (result: string, failedN: number): void => {
+    recordSyncPost({
+      t: __t0, elapsedMs: performance.now() - __t0, result,
+      elements: request.elements.length, deletes: drainedDeletes.length,
+      failedN, session: request.session_id.slice(0, 8),
+      kind: request.kind, batchIndex: request.batch_index, isFinal: request.is_final,
+    });
+  };
   try {
-    return await chrome.runtime.sendMessage({ type: 'GRAMMAR_BATCH', request: fullRequest } as Message);
+    const resp: GrammarBatchResponse =
+      await chrome.runtime.sendMessage({ type: 'GRAMMAR_BATCH', request: fullRequest } as Message);
+    trace(resp.result, resp.failed.length);
+    return resp;
   } catch {
     // Restore drained deletes on transport failure so they're carried
     // on the next attempt — otherwise an SW restart mid-scan would
     // strand the deletes silently.
     pendingDeleteCodewords.push(...drainedDeletes);
+    trace('error', request.elements.length);
     return {
       result: 'error',
       succeeded: [],
