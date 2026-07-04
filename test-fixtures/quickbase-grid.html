@@ -62,6 +62,9 @@
   /* The white void: rows removed, pane shows blank. */
   #voidCover { position: absolute; inset: 0; background: #fff; display: none; }
   .veil { visibility: hidden; }
+  /* veil_display=1 swaps the veil to display:none — children have NO
+     boxes while veiled (IO/attention blind to them too); the reveal
+     grants boxes, so a box sensor CAN catch this variant. */
 </style>
 </head>
 <body>
@@ -241,15 +244,55 @@
         // 3. REPARENT buffer rows into the live tbody (both containers
         //    connected throughout — the round-19 reparent), then reveal by
         //    CLASS FLIP only.
+        // Re-arm the veil rule if a prior CSSOM reveal deleted it, so
+        // every swap veils again (repeatable flings in one session).
+        const veilCss = P.has('veil_display')
+          ? '.veil { display: none; }' : '.veil { visibility: hidden; }';
+        if (![...document.styleSheets].some((sh) => [...sh.cssRules].some((r) => r.selectorText === '.veil'))) {
+          document.styleSheets[0].insertRule(veilCss);
+        } else if (P.has('veil_display')) {
+          for (const sh of document.styleSheets) {
+            for (const r of sh.cssRules) {
+              if (r.selectorText === '.veil') r.style.cssText = 'display: none;';
+            }
+          }
+        }
         tbody.classList.add('veil');
         tbody.replaceChildren(...buffer.children); // moves, not clones
         voidCover.style.display = 'none';
         setSpacers(newStart);
         // Class-only reveal: no childList, no filtered attributes.
-        requestAnimationFrame(() => {
-          tbody.classList.remove('veil');
+        //
+        // veil_ms (round 33): how long the reparented rows sit VEILED
+        // before the class flip. Default = 1 frame (the pre-round-33
+        // shape, where reveal races the reparent so closely that reveal
+        // blindness can't show). The client production grid holds content
+        // veiled for SECONDS — and because .veil is visibility:hidden
+        // (layout boxes EXIST while veiled), the eventual reveal changes
+        // no element's box: a ResizeObserver-based reveal sensor is
+        // structurally deaf to it.
+        // cssom_reveal: reveal by DELETING the .veil rule from the
+        // stylesheet via CSSOM (Emotion-style). Produces ZERO mutation
+        // records anywhere — no childList, no attribute, nothing. This is
+        // the client-realm reveal class: the class-flip variant is visible
+        // to the extension's visibilityMO (attributeFilter includes
+        // class), the CSSOM variant is invisible to every observer.
+        const CSSOM_REVEAL = P.has('cssom_reveal');
+        const unveil = () => {
+          if (CSSOM_REVEAL) {
+            for (const sheet of document.styleSheets) {
+              for (let i = sheet.cssRules.length - 1; i >= 0; i--) {
+                if (sheet.cssRules[i].selectorText === '.veil') sheet.deleteRule(i);
+              }
+            }
+          } else {
+            tbody.classList.remove('veil');
+          }
           window.__fixture.revealAt = performance.now();
-        });
+        };
+        const VEIL_MS = +(P.get('veil_ms') || 0);
+        if (VEIL_MS > 0) setTimeout(unveil, VEIL_MS);
+        else requestAnimationFrame(unveil);
 
         // 4. PHASE 2: replace every row subtree with identical-content
         //    fresh DOM — INSERT-BEFORE-REMOVE (rounds 8-9: the doomed
