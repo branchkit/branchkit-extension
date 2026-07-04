@@ -95,38 +95,75 @@ export function recordSlotAncestors(w: ElementWrapper): void {
  * metadata — the record content changed) or null for fresh-attach.
  */
 export function tryRebindBySlot(newEl: Element, pool: ElementWrapper[]): ElementWrapper | null {
-  if (pool.length === 0) return null;
+  slotProbe.attempts++;
+  if (pool.length === 0) {
+    // Nothing to rebind against — if this dominates during grid churn, the
+    // old content hasn't entered limbo by the time the replacement is
+    // discovered (a discovery-vs-removal ordering problem), which is a very
+    // different disease than "the shells die with the rows".
+    slotProbe.pool_empty++;
+    return null;
+  }
   const newTag = newEl.tagName;
   const newRole = newEl.getAttribute('role');
+  let sawKind = false;
   let match: ElementWrapper | null = null;
   let matchAnchor: Element | null = null;
   for (const w of pool) {
     if (w.element.tagName !== newTag) continue;
     if (w.element.getAttribute('role') !== newRole) continue;
+    sawKind = true;
     // Nearest-first recorded chain: the first still-connected ancestor that
     // contains the new element is the deepest surviving slot anchor.
     for (const ref of w.slotAncestors) {
       const anc = ref.deref();
       if (!anc || !anc.isConnected || !anc.contains(newEl)) continue;
-      if (match !== null) return null; // two limbo wrappers claim this slot
+      if (match !== null) { slotProbe.multi_wrapper++; return null; }
       match = w;
       matchAnchor = anc;
       break;
     }
   }
-  if (!match || !matchAnchor) return null;
+  if (!match || !matchAnchor) {
+    if (sawKind) slotProbe.no_survivor++;
+    else slotProbe.kind_mismatch++;
+    return null;
+  }
   // Reverse-direction ambiguity: the surviving anchor holds 2+ same-tag/role
   // candidates (a cell with two links) — no safe pick.
   let sameKind = 0;
   for (const el of matchAnchor.querySelectorAll(newTag)) {
     if (el.getAttribute('role') === newRole) sameKind++;
-    if (sameKind > 1) return null;
+    if (sameKind > 1) { slotProbe.multi_candidate++; return null; }
   }
   rebindCounters.rebind_slot++;
+  slotProbe.rebound++;
   rebindWrapper(match, newEl);
   consume(pool, match);
   return match;
 }
+
+/** Why slot rebinds do or don't fire (surfaced on the debug snapshot's
+ * `wave` section). `pool_empty` dominating during grid churn = the old
+ * content isn't in limbo yet when the replacement is discovered (ordering);
+ * `no_survivor` dominating = the shells genuinely die with the rows;
+ * ambiguity counters dominating = the gates are too strict for this DOM. */
+export const slotProbe = {
+  attempts: 0,
+  pool_empty: 0,
+  kind_mismatch: 0,
+  no_survivor: 0,
+  multi_wrapper: 0,
+  multi_candidate: 0,
+  rebound: 0,
+};
+
+/** Slot-ancestor liveness at limbo entry (the other half of the probe): of
+ * wrappers entering limbo, how many still have a connected recorded slot
+ * ancestor RIGHT NOW? alive≈0 = shells die in the same mutation as their
+ * content (slot rebind can never fire); alive high + pool_empty high =
+ * ordering, not structure. */
+export const limboSlotLiveness = { alive: 0, dead: 0, unrecorded: 0 };
 
 export function collectLimboWrappers(): ElementWrapper[] {
   const out: ElementWrapper[] = [];
@@ -313,6 +350,15 @@ export function dropDisconnectedWrappers(): number {
       if (!w.lastRect) w.lastRect = peekCachedRect(w.element);
       enterLimbo(w, now);
       entered++;
+      // Slot-liveness probe (DESIGN_FLING_WAVE round 7): does any recorded
+      // slot ancestor survive at the moment the content dies? Pointer reads.
+      if (w.slotAncestors.length === 0) {
+        limboSlotLiveness.unrecorded++;
+      } else if (w.slotAncestors.some(r => r.deref()?.isConnected)) {
+        limboSlotLiveness.alive++;
+      } else {
+        limboSlotLiveness.dead++;
+      }
     }
   }
   lifecycleCounters.dropDisconnectedCalls++;

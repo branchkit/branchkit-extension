@@ -25,7 +25,7 @@ import { loadRecall, recalledCodewords, rememberLive, resolvePreferredCodeword, 
 import { type RebindCounters } from './labels/rebind';
 import { resolveTarget } from './activate/activate-resolution';
 import { schedulePointerVisibilitySweep, connectVisibilityMO, teardownVisibilityTracker } from './observe/visibility-tracker';
-import { rebindCounters, LIMBO_DEADLINE_MS, collectLimboWrappers, collectStrongKeyIndex, dropDisconnectedWrappers, finalizeExpiredLimboWrappers } from './observe/limbo';
+import { rebindCounters, LIMBO_DEADLINE_MS, collectLimboWrappers, collectStrongKeyIndex, dropDisconnectedWrappers, finalizeExpiredLimboWrappers, slotProbe, limboSlotLiveness } from './observe/limbo';
 import { attachWrapper, detachWrapper, seedPreferredFromMemory, attachDiscovered } from './core/wrapper-lifecycle';
 import { attachPageMutationObserver, teardownMutationSource } from './observe/mutation-source';
 import { firehoseStep } from './debug/firehose';
@@ -3335,6 +3335,10 @@ function snapshotExtras() {
       band_sweep_repairs: lifecycleCounters.bandSweepRepairs,
       band_sweep_releases: lifecycleCounters.bandSweepReleases,
       reservoir: labelReservoir.stats(),
+      // Why slot rebinds do/don't fire + whether slot ancestors survive at
+      // limbo entry (DESIGN_FLING_WAVE round 7 probe).
+      slot_probe: { ...slotProbe },
+      limbo_slot_liveness: { ...limboSlotLiveness },
     },
     paint_latency: paintLatencyStats(),
     // Raw eye-level ring: [t_ms, tr_rows, wrappers, painted, shown] change
