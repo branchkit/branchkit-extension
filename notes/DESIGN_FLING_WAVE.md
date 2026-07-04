@@ -1653,6 +1653,31 @@ territory):
    viewport-sliced companion to the stability ring, so churn cycles
    are measurable without frame-by-frame video.
 
+LEVERS 4+1 LANDED (d158b39, user-approved ordering; gates green):
+- `wave.churn` — detachWrapper records every shown-then-detached
+  wrapper (shown_for_ms, tag, source, in_viewport at last sighting,
+  had_codeword) into a 300-entry ring; totals + window slice in the
+  snapshot. The wipe is now a number.
+- paint_stability samples gain `shown_strict_viewport` (the
+  viewport-sliced count the band-scoped `shown` hid) and `pool_free`
+  (per-sample reservoir depth — the mid-storm exhaustion suspect for
+  the repop delay; at-rest reads can't see it).
+- Lever 1 (position rebind revival): sweepBand refreshes lastRect on
+  EVERY read, not just band transitions — the rect was already paid
+  for. At disconnect the fingerprint tier's 50px tiebreak now sees a
+  ≤100ms-fresh rect instead of a seconds-stale IO delivery.
+
+Next drill reads (same gesture as the round-22 video):
+- `wave.churn.recent`: the wipe's size and shape, directly — expect a
+  burst of short-shown_for_ms, in_viewport, had_codeword records at
+  the swap. If rebind_position/rebind_clean climb (frozen at 0 all
+  arc) and the burst shrinks, lever 1 is riding badges through the
+  swap.
+- ring `shown_strict_viewport`: the perceptual dip's true depth and
+  duration; `pool_free` at the same samples answers the lever-3
+  question (repop waiting on letters held by doomed-but-connected
+  wrappers) before designing anything.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
