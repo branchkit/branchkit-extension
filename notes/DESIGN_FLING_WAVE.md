@@ -2227,6 +2227,80 @@ our fixture line should read like Rango's flat slope PLUS letter
 continuity they can't offer. This is the round-25 "characterized +
 open" item, promoted to next with A/B receipts.
 
+## Round 28 — DESIGN: deferred retarget — ride at DEATH, not at
+## discovery (2026-07-04; design only, supersedes the round-27
+## hide-suppression proposal)
+
+User reframing that settles the architecture: the point of identity
+preservation was never codeword memorization — it is PERCEPTUAL
+CONTINUITY: the badge keeps its previous place and letter through a
+change so the eye doesn't re-read. Given the round-27 A/B (paint speed
+equal; the whole gap is our swap-window flicker), three options:
+
+A. **Remove riding** (Rango's model): hints live/die with elements.
+   Stable by construction, but letters change at the badge's position
+   every swap — the eye must re-read, which is exactly the experience
+   the preservation exists to prevent. Rejected.
+B. **Suppress visibility hides during the hold** (round 27's
+   proposal): keeps continuity but fights clip/occlusion/strict with
+   exemptions — lying to high-blast-radius subsystems about a badge
+   whose target is genuinely elsewhere. Workable but adversarial.
+C. **Defer the transfer to disconnect time.** At discovery, only
+   RESERVE the pairing; transfer when the doomed element actually
+   leaves. Chosen.
+
+### Mechanism (C)
+
+1. At takeover-match time (all of rounds 23-26's matching machinery
+   unchanged: unique fingerprint, position-ambiguous, row coattail,
+   pass-2 deferral), do NOT rebind. Instead:
+   - `wrapper.pendingRetarget = WeakRef(newEl)` (+ a timestamp);
+   - RESERVE newEl (WeakMap, like orphanedByKeyRebind) so discovery
+     skips fresh-attaching it while the reservation lives (TTL ~2s —
+     an unconsumed reservation expires and the next sweep attaches the
+     element fresh; the wrong-steal bet degrades to today's behavior).
+2. The badge stays fully attached to the VISIBLE doomed element. No
+   grace, no position hold, no accel juggling, no visibility
+   exemptions — every subsystem evaluates honest state. (The round-25
+   machinery retires with this; keep the code until C lands, then
+   delete in the same commit.)
+3. On the doomed element's DISCONNECT (dropDisconnectedWrappers /
+   limbo entry — the moment the eye loses the old pixel anyway): if
+   `pendingRetarget` derefs to a CONNECTED element with no wrapper →
+   `rebindWrapper` to it INSTEAD of entering limbo. By insert-before-
+   remove geometry the replacement has just slid into (or near) the
+   old element's place, so the reposition is a nudge: same letter,
+   same spot, element swapped underneath. Else → normal limbo path.
+4. Claims/letters/grammar: nothing moves until the transfer, and the
+   transfer preserves them — zero sync traffic, as with rounds 23-26.
+
+### Why this reads like Rango's flat slope
+
+The old badge lives exactly as long as the old content is visible
+(Rango's invariant), and at the removal instant the badge re-anchors
+to the content that replaces it (our addition — Rango would tear down
+and mint a new label there). In-pane badge count is constant by
+construction; letters and positions are continuous.
+
+### Expected in the fixture
+
+The oscillation window (95 ↔ 11-55 for ~2s) flattens to ~95
+throughout, matching Rango's slope, with letters stable — verify by
+extending the eye to also fingerprint a few labels across the swap.
+takeover counters keep their names; a new `retarget_deferred` bucket
+(reservations consumed) replaces most direct rides on this grid.
+
+### Risks / open
+
+- Reservation TTL races: replacement dies before the old one
+  (three-generation renders) → deref fails → normal limbo; reserved
+  element orphaned until TTL → sweeps re-attach after expiry.
+- The disconnect hook runs inside dropDisconnectedWrappers (hot);
+  work is O(pending pairs), pointer reads.
+- Coattail pairing at reserve time vs at consume time: reserve-time
+  (structure is freshest then); consume resolves per-wrapper WeakRefs
+  independently, so partial rows degrade gracefully.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is
