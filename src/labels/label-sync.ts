@@ -44,6 +44,7 @@ import { getHintVisibility } from '../config';
 import { labelReservoir } from './label-reservoir';
 import { bkLog } from '../debug/bk-log';
 import { firehoseStep } from '../debug/firehose';
+import { yieldTask } from '../lifecycle/page-session';
 import { recordSyncPost } from '../debug/sync-trace';
 
 /**
@@ -685,7 +686,14 @@ export async function syncNow(reason: string): Promise<void> {
     if (deps.isHintsVisible() && resp.succeeded.length > 0) {
       deps.reconcile();
     }
-    await new Promise(r => setTimeout(r, 0));
+    // Front-of-queue resume between chunks (round 29b): with letters
+    // reshuffling per swap (the round-29 trade), a fling's delta is ~40
+    // chunks — and a setTimeout(0) hop queues BEHIND the page's storm tasks
+    // at 50-150ms each, which put the median badge's grammar ACK 3.5s
+    // behind its paint (shown_minus_ack p50 −3,529 on the first simple-model
+    // drill). Same starvation class, same fix as the discovery walk
+    // (round 17): scheduler.yield resumes in ~1-4ms.
+    await yieldTask();
   }
 
   void reason;
