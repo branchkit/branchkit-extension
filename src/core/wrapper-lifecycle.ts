@@ -14,7 +14,7 @@
  * surfaces and move with the mutation source.
  */
 
-import { ElementWrapper } from '../scan/element-wrapper';
+import { DiscoverySource, ElementWrapper } from '../scan/element-wrapper';
 import { ScannedElement } from '../types';
 import { domSeenAt } from '../observe/dom-seen';
 import * as idRegistry from '../scan/registry';
@@ -55,10 +55,20 @@ export function seedPreferredFromMemory(wrapper: ElementWrapper): void {
  * element already exists; IntersectionObserver.observe is similarly
  * tolerant of duplicate observe calls.
  */
-export function attachWrapper(wrapper: ElementWrapper): void {
-  // Paint-latency stage stamp: when did the MO first sight this element's
-  // subtree? tAttached - tDomSeen is the discovery layer's contribution.
-  wrapper.tDomSeen = domSeenAt(wrapper.element);
+export function attachWrapper(wrapper: ElementWrapper, source: DiscoverySource): void {
+  // Paint-latency stage stamps (notes/DESIGN_FLING_WAVE.md round 15): which
+  // path discovered this wrapper, and when was the element first sighted.
+  // The MO stamp is authoritative when one resolves — for a wrapper a sweep
+  // or scan attached, tAttached - tDomSeen is then the MO path's miss
+  // window. No stamp on the chain → fall back to tAttached so EVERY wrapper
+  // enters the percentiles (the round-15 survivorship fix); domSeenByMo
+  // keeps the two cases separable in the per-source snapshot section.
+  wrapper.discoverySource = source;
+  const moSeen = domSeenAt(wrapper.element);
+  wrapper.tDomSeen = moSeen ?? wrapper.tAttached;
+  wrapper.domSeenByMo = moSeen !== null;
+  lifecycleCounters.attachedBySource[source] =
+    (lifecycleCounters.attachedBySource[source] ?? 0) + 1;
   // Mint the registry id first. A rejected registration (id=0) means the
   // fingerprint validator couldn't disambiguate this element from another
   // already in the registry — voice can't safely address it, so don't add
@@ -116,7 +126,7 @@ export function detachWrapper(element: Element): void {
 // number of wrappers newly attached (rebinds don't count as added).
 export function attachDiscovered(
   refs: Element[], elements: ScannedElement[], limboPool: ElementWrapper[],
-  keyIndex: Map<string, ElementWrapper | null>,
+  keyIndex: Map<string, ElementWrapper | null>, source: DiscoverySource,
 ): number {
   let added = 0;
   const attached: ElementWrapper[] = [];
@@ -154,7 +164,7 @@ export function attachDiscovered(
     // Trades unbounded wrapper growth on infinite-scroll pages for
     // correct scroll-back behavior (badges reappear on scroll up).
     const wrapper = new ElementWrapper(ref, elements[i]);
-    attachWrapper(wrapper);
+    attachWrapper(wrapper, source);
     attached.push(wrapper);
     added++;
   }

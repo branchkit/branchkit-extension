@@ -19,7 +19,7 @@
  */
 
 import { store } from '../core/store';
-import { ElementWrapper } from '../scan/element-wrapper';
+import { DiscoverySource, ElementWrapper } from '../scan/element-wrapper';
 import { scanSingle, isHintable } from '../scan/scanner';
 import { IntersectionTracker } from '../observe/intersection-tracker';
 import { AttentionObserver } from '../observe/attention-observer';
@@ -98,8 +98,8 @@ export interface PageSessionDeps {
 
   // --- mutation-source collaborators ---
 
-  discoverInSubtree: (root: Element) => number;
-  discoverInSubtreeBatched: (root: Element) => Promise<number>;
+  discoverInSubtree: (root: Element, source: DiscoverySource) => number;
+  discoverInSubtreeBatched: (root: Element, source: DiscoverySource) => Promise<number>;
   reevaluateAttribute: (target: Element) => boolean;
   scheduleReposition: () => void;
   scheduleDeferredReposition: () => void;
@@ -267,7 +267,7 @@ export class PageSession {
         const scanned = scanSingle(el);
         if (scanned) {
           // attachWrapper emits a store attach delta → grammar sync (Tier 2).
-          attachWrapper(new ElementWrapper(el, scanned));
+          attachWrapper(new ElementWrapper(el, scanned), 'attention');
           return;
         }
         // Still not hintable (visibility:hidden, opacity:0, etc.). Bounded

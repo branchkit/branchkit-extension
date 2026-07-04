@@ -73,18 +73,50 @@ describe('attachWrapper', () => {
     const node = el('one');
     const w = new ElementWrapper(node, scanned('one'));
 
-    attachWrapper(w);
+    attachWrapper(w, 'scan');
 
     expect(store.findWrapperFor(node)).toBe(w);
     expect(trackerObserve).toHaveBeenCalledWith(node);
     expect(resizeObserve).toHaveBeenCalledWith(node);
+  });
+
+  it('tags the discovery source and falls back tDomSeen to tAttached without an MO stamp', () => {
+    // No markDomSeen ran for this element (jsdom, no MO) — every wrapper
+    // must still enter the latency percentiles (round-15 survivorship fix).
+    const node = el('stamped');
+    const w = new ElementWrapper(node, scanned('stamped'));
+
+    attachWrapper(w, 'band_sweep');
+
+    expect(w.discoverySource).toBe('band_sweep');
+    expect(w.domSeenByMo).toBe(false);
+    expect(w.tDomSeen).toBe(w.tAttached);
+  });
+
+  it('keeps the MO stamp authoritative when one resolves on the ancestor chain', async () => {
+    const { markDomSeen } = await import('../observe/dom-seen');
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    markDomSeen(parent); // the added-subtree root the MO reported
+    const node = document.createElement('button');
+    node.setAttribute('aria-label', 'mo-stamped');
+    parent.appendChild(node);
+    const w = new ElementWrapper(node, scanned('mo-stamped'));
+
+    attachWrapper(w, 'settle_sweep');
+
+    // A sweep found it, but the MO had sighted its root — tDomSeen keeps the
+    // earlier stamp so tAttached - tDomSeen measures the MO path's miss window.
+    expect(w.domSeenByMo).toBe(true);
+    expect(w.tDomSeen).not.toBeNull();
+    expect(w.tDomSeen!).toBeLessThanOrEqual(w.tAttached);
   });
 });
 
 describe('detachWrapper', () => {
   it('removes the wrapper from the store and unobserves all three observers', () => {
     const node = el('two');
-    attachWrapper(new ElementWrapper(node, scanned('two')));
+    attachWrapper(new ElementWrapper(node, scanned('two')), 'scan');
     expect(store.findWrapperFor(node)).toBeDefined();
 
     detachWrapper(node);
@@ -101,7 +133,7 @@ describe('attachDiscovered', () => {
     const a = el('a');
     const b = el('b');
 
-    const added = attachDiscovered([a, b], [scanned('a'), scanned('b')], [], new Map<string, ElementWrapper | null>());
+    const added = attachDiscovered([a, b], [scanned('a'), scanned('b')], [], new Map<string, ElementWrapper | null>(), 'mo');
 
     expect(added).toBe(2);
     expect(store.findWrapperFor(a)).toBeDefined();
@@ -113,7 +145,7 @@ describe('attachDiscovered', () => {
     store.addWrapper(new ElementWrapper(known, scanned('known')));
     const fresh = el('fresh');
 
-    const added = attachDiscovered([known, fresh], [scanned('known'), scanned('fresh')], [], new Map<string, ElementWrapper | null>());
+    const added = attachDiscovered([known, fresh], [scanned('known'), scanned('fresh')], [], new Map<string, ElementWrapper | null>(), 'mo');
 
     expect(added).toBe(1); // only `fresh` is new
     expect(store.findWrapperFor(fresh)).toBeDefined();
@@ -124,7 +156,7 @@ describe('attachDiscovered — key-ownership transfer on a same-document re-moun
   it('a re-mounted same-href node inherits the predecessor wrapper (id + codeword)', () => {
     // Predecessor: a link with a codeword + registry id, the steady state.
     const oldNode = anchorEl('/users');
-    attachWrapper(new ElementWrapper(oldNode, scanned('users')));
+    attachWrapper(new ElementWrapper(oldNode, scanned('users')), 'scan');
     const w = store.findWrapperFor(oldNode)!;
     w.scanned.codeword = 'harp bat';
     const id = w.scanned.id;
@@ -137,7 +169,7 @@ describe('attachDiscovered — key-ownership transfer on a same-document re-moun
     const newNode = anchorEl('/users');
 
     const added = attachDiscovered(
-      [newNode], [scanned('users')], collectLimboWrappers(), collectStrongKeyIndex(),
+      [newNode], [scanned('users')], collectLimboWrappers(), collectStrongKeyIndex(), 'mo',
     );
 
     expect(added).toBe(0);                          // transferred, not freshly attached
@@ -150,18 +182,18 @@ describe('attachDiscovered — key-ownership transfer on a same-document re-moun
   it('a genuinely new link (no predecessor) attaches fresh', () => {
     const node = anchorEl('/brand-new');
     const added = attachDiscovered(
-      [node], [scanned('new')], collectLimboWrappers(), collectStrongKeyIndex(),
+      [node], [scanned('new')], collectLimboWrappers(), collectStrongKeyIndex(), 'mo',
     );
     expect(added).toBe(1);
   });
 
   it('does not transfer when two live wrappers share the href (ambiguous → fresh)', () => {
-    attachWrapper(new ElementWrapper(anchorEl('/home'), scanned('home-a')));
-    attachWrapper(new ElementWrapper(anchorEl('/home'), scanned('home-b')));
+    attachWrapper(new ElementWrapper(anchorEl('/home'), scanned('home-a')), 'scan');
+    attachWrapper(new ElementWrapper(anchorEl('/home'), scanned('home-b')), 'scan');
     const newNode = anchorEl('/home');
 
     const added = attachDiscovered(
-      [newNode], [scanned('home-c')], collectLimboWrappers(), collectStrongKeyIndex(),
+      [newNode], [scanned('home-c')], collectLimboWrappers(), collectStrongKeyIndex(), 'mo',
     );
 
     expect(added).toBe(1); // genuine duplicate — claims fresh, keeps the others distinct
@@ -179,7 +211,7 @@ describe('detachWrapper delta-sync ordering', () => {
     const s = scanned('detach-delete');
     s.codeword = 'arch bake';
     const w = new ElementWrapper(node, s);
-    attachWrapper(w);
+    attachWrapper(w, 'scan');
     markSent('arch bake');
 
     expect(hasPendingDeletes()).toBe(false);

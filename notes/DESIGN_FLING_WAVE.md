@@ -761,6 +761,71 @@ symmetric two-strike sweep, cell-context takeover keys, spa_nav
 storm deferral + swap-audit light path, the Rango-parity unbudgeted
 hot path, no dip. Post-discovery latency is not the problem anymore.
 
+## Round 16 — kill the survivorship bias: discovery-source tags +
+## universal dom_seen (2026-07-03, landed; drill pending)
+
+Handoff step 1, landed:
+
+- **Every wrapper is tagged with its discovery source**
+  (`ElementWrapper.discoverySource`, stamped by `attachWrapper`): `mo`
+  (drainDiscovery walk), `mo_huge` (huge-mutation coarse full-body
+  refresh — QuickBase's ≥1000-record bursts land here, so it gets its
+  own bucket), `band_sweep` / `settle_sweep` (the discovery sweep, by
+  which settle kind armed it), `scan` / `rescan` (doScan: boot &
+  storage/activation vs the nav tail), `attr` (attributeFilter
+  reevaluation), `shadow`, `attention`, `visibility`
+  (pending-visibility promotion). Rebinds keep the original tag —
+  identity survival is not a discovery.
+- **dom_seen is universal.** `attachWrapper` resolves the MO stamp as
+  before; when none resolves it falls back to `tAttached`, and
+  `domSeenByMo` records which case. No wrapper drops out of a
+  percentile again. For a NON-MO-source wrapper WITH a real MO stamp,
+  `tAttached - tDomSeen` is the MO path's miss window itself.
+- **Snapshot surface** (`wave.discovery_sources`, 90s window): per
+  source — attached/shown counts, `mo_stamped`, and
+  dom_seen_to_attached / dom_seen_to_shown / attached_to_shown
+  percentiles. Plus `wave.attached_by_source` (lifetime counts),
+  `wave.mo_text_only_add_records` (childList add records whose
+  addedNodes held only non-Element nodes — the `instanceof Element`
+  gate skips these wholesale; suspect (c) tripwire), and
+  `wave.invisible_candidates_observed` (walk-reached-but-invisible
+  handoffs to the attention observer).
+
+How the next drill's snapshot discriminates the suspects — the late
+cohort's source tag + mo_stamped split is the whole diagnosis:
+
+| signature | meaning | fix territory |
+|---|---|---|
+| sweeps/`mo_huge` with mo_stamped ≈ cohort, `invisible_candidates_observed` large | MO saw the subtree; walk classified content invisible at insert (hidden buffer) and the attention/visibility promotion lost the race to the sweep | promotion path latency (attention IO starvation mid-fling), NOT the attributeFilter |
+| sweeps with mo_stamped ≈ cohort, `invisible_candidates_observed` ≈ 0 | MO saw the subtree; walk never yielded the elements (selector non-match at insert — hintability attrs arrive later) | check `attr` counts; if attr also ≈0 the hydration uses non-filtered attrs/classes → reveal-detection design |
+| `attention`/`visibility` dominate the late cohort | promotion machinery works and IS the slow path | same as row 1: starved IO delivery, promote cadence |
+| sweeps with mo_stamped ≈ 0 | MO never got a usable record for any ancestor | `mo_text_only_add_records` high → suspect (c); else observer-level gap (shadow, frame) |
+| `scan` dominates no-stamp | round-15's 41% partly boot-scan wrappers, not the late cohort — the old no-stamp≡sweep-found inference was itself biased | re-read the video timing against per-source numbers |
+
+Static facts pinned while wiring this (they narrow the suspects
+before any drill): `subtreeMaybeHintable` is a pure selector match —
+no visibility read — so a hidden row full of buttons/links PASSES the
+pre-filter; suspect (b) as originally stated can only bite via
+selector non-match, not hiddenness. HINTABLE has no class terms, so a
+class flip can never change matching, only visibility — which routes
+to invisibleCandidates → attention → promotion, all of which existed
+before this round but was invisible to the metrics. EXCLUDE
+(`aria-hidden/disabled/inert`) matches the element only, not
+ancestors — a hidden-buffer CONTAINER doesn't exclude its descendants
+from the walk.
+
+If the data lands on class/style-driven reveal as the mechanism, the
+fix must be designed here first (the attributeFilter exclusion exists
+because class-churn reevaluation was a top CPU bucket): the shape to
+evaluate is NOT adding class to the page-MO attributeFilter but either
+(a) making the already-class-watching visibilityMO's promote path
+cover the miss (it watches document-wide class/style at rAF promote —
+why doesn't it fire? that's what invisible_candidates_observed
+answers), or (b) a bounded per-root "dud subtree" watch: a drained
+root that yielded 0 hintables despite ≥N selector matches gets a
+scoped attributes-MO for a bounded window, reveal → rediscover that
+root only. Decide on data, not vibes.
+
 ## Part 2 — hold badges through in-place row recycling
 
 ### What the dip actually is

@@ -40,6 +40,29 @@ export type TextProbeOffset =
   | { hasText: false }
   | { hasText: true; offsetX: number; offsetY: number; width: number; height: number };
 
+/**
+ * Which discovery path created a wrapper (notes/DESIGN_FLING_WAVE.md round
+ * 15+). The MO path is supposed to own steady-state discovery; every other
+ * source finding fresh content is a miss the per-source snapshot section
+ * exists to quantify. Stamped once by `attachWrapper`; rebinds keep the
+ * original (a rebind is identity survival, not a fresh discovery).
+ *
+ *   mo           MO childList record → drainDiscovery walk
+ *   mo_huge      huge-mutation short-circuit → coarse full-body refresh
+ *   band_sweep   discovery sweep armed by a scroll ('band') settle
+ *   settle_sweep discovery sweep armed by a non-scroll ('store') settle
+ *   scan         full doScan (boot, storage change, activation reconcile)
+ *   rescan       nav rescan's doScan (spa_nav / non-cache navigation)
+ *   attr         attribute reevaluation flipped an element hintable
+ *   shadow       shadow-attach signal / custom-element upgrade rediscovery
+ *   attention    attention-observer enter on an unwrapped element
+ *   visibility   pending-visibility promotion (CSS reveal)
+ *   unknown      threading gap — should never appear; a tripwire, not a bucket
+ */
+export type DiscoverySource =
+  | 'mo' | 'mo_huge' | 'band_sweep' | 'settle_sweep' | 'scan' | 'rescan'
+  | 'attr' | 'shadow' | 'attention' | 'visibility' | 'unknown';
+
 export class ElementWrapper {
   element: Element;
   scanned: ScannedElement;
@@ -130,11 +153,18 @@ export class ElementWrapper {
   tInBand: number | null = null;
   tClaimed: number | null = null;
   tFirstShown: number | null = null;
-  // When the MutationObserver first saw this wrapper's element (or its
-  // added-subtree root) enter the DOM — resolved by attachWrapper from the
-  // dom-seen stamps. Null for pre-existing DOM (boot scan). Closes the
-  // pre-attach blind spot: tAttached - tDomSeen is the discovery layer.
+  // When this wrapper's element was first SIGHTED: the MutationObserver's
+  // dom-seen stamp when one resolves (the element or an added-subtree
+  // ancestor was MO-reported), else tAttached — set by attachWrapper on
+  // EVERY path, so no wrapper is invisible to the latency percentiles
+  // (round 15's survivorship bias: 41% of shown wrappers carried no stamp
+  // and silently dropped out of every dom_seen percentile). `domSeenByMo`
+  // says which case this is; for a non-MO-source wrapper WITH a real stamp,
+  // tAttached - tDomSeen is the MO-path miss window itself.
   tDomSeen: number | null = null;
+  domSeenByMo: boolean = false;
+  // Which discovery path created this wrapper — see DiscoverySource above.
+  discoverySource: DiscoverySource = 'unknown';
   // First grammar ACK. tFirstShown - tGrammarReady is the show-vs-voice
   // sequencing: NEGATIVE means the badge painted before voice was ready
   // (the designed order — visible translucent window); POSITIVE means the

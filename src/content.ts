@@ -9,7 +9,7 @@ import { Category, HintVisibility, ScannedElement, Message, DispatchResult, TabA
 import { LabelAssignment, isVoiceAlphabetLoaded, setAlphabet } from './labels/words';
 import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters } from './scan/scanner';
 import { noteDisconnectedShadowAttach } from './scan/shadow-attach-signal';
-import { ElementWrapper } from './scan/element-wrapper';
+import { DiscoverySource, ElementWrapper } from './scan/element-wrapper';
 import { wantsHint } from './lifecycle/desired-state';
 import { runBuildPass, createSingleFlight, WAVE_BUILD_BUDGET_MS } from './lifecycle/build-queue';
 import {
@@ -1184,6 +1184,7 @@ function observeInvisibleCandidates(candidates: Element[]): void {
   for (const el of candidates) {
     if (store.findWrapperFor(el) || !el.isConnected) continue;
     if (isExcludedByRule(el, getExcludes())) continue;
+    lifecycleCounters.invisibleCandidatesObserved++;
     pageSession.attentionObserver.observe(el);
   }
 }
@@ -1216,7 +1217,11 @@ function observeInvisibleCandidates(candidates: Element[]): void {
 // pending slot.
 let scanChain: Promise<void> = Promise.resolve();
 let scanPending = false;
-function doScan(): Promise<void> {
+// `source` labels wrappers this scan attaches (wave.discovery_sources):
+// 'scan' for the boot/storage/activation walks, 'rescan' when the nav-rescan
+// tail drives it. A trigger folded into an already-pending run keeps the
+// pending run's label — diagnostic, not load-bearing.
+function doScan(source: DiscoverySource = 'scan'): Promise<void> {
   // Lever 2 (visibility-defer): hintMachineryEnabled is the single gate for ALL
   // scan work, not just the boot path. It's false for an ineligible frame
   // (Lever 1 frame-skip) or a backgrounded tab whose activation is deferred —
@@ -1238,7 +1243,7 @@ function doScan(): Promise<void> {
     // role from here forward is "is the NEXT slot taken."
     scanPending = false;
     try {
-      await doScanBatched();
+      await doScanBatched(source);
     } catch {
       // Swallow so a failed scan doesn't break the chain. The next
       // trigger still gets a fresh attempt.
@@ -1856,7 +1861,7 @@ const DISCOVERY_SWEEP_IDLE_TIMEOUT_MS = 500;
 // records it DIDN'T.
 const DISCOVERY_RETRY_COOLDOWN_MS = 300;
 const DISCOVERY_MAX_RETRY_DEPTH = 2;
-function scheduleBandDiscovery(): void {
+function scheduleBandDiscovery(settleKind: 'band' | 'store'): void {
   if (pageSession.discoverySweepPending) {
     pageSession.discoverySweepRerun = true;
     firehoseStep('band_discovery:coalesced', 1);
@@ -1864,12 +1869,16 @@ function scheduleBandDiscovery(): void {
   }
   pageSession.discoverySweepPending = true;
   pageSession.discoverySweepRerun = false;
+  // Discovery-source tag by the settle kind that STARTED this sweep (a
+  // coalesced request of the other kind folds in — labels are diagnostic):
+  // scroll settles → band_sweep, non-scroll (store) settles → settle_sweep.
+  const source: DiscoverySource = settleKind === 'band' ? 'band_sweep' : 'settle_sweep';
   runWhenIdle(() => {
     void (async () => {
       let added = 0;
       try {
         if (pageSession.isTornDown || !document.body) return;
-        added = await discoverInSubtreeBatched(document.body);
+        added = await discoverInSubtreeBatched(document.body, source);
         // Diagnostic: the sweep's added count INCLUDING zero, to correlate a
         // miss against whether the walk actually attached anything.
         firehoseStep('band_discovery:added', added, 0);
@@ -1895,7 +1904,7 @@ function scheduleBandDiscovery(): void {
         if (shouldRetry) {
           pageSession.discoveryRetryDepth++;
           firehoseStep('band_discovery:retry', pageSession.discoveryRetryDepth);
-          pageSession.resources.timeout(() => scheduleBandDiscovery(), DISCOVERY_RETRY_COOLDOWN_MS);
+          pageSession.resources.timeout(() => scheduleBandDiscovery(settleKind), DISCOVERY_RETRY_COOLDOWN_MS);
         } else {
           pageSession.discoveryRetryDepth = 0;
         }
@@ -1951,7 +1960,7 @@ function activateWrapper(wrapper: ElementWrapper): void {
  * the matcher can't activate, and `badgeNewlyCodeworded` only
  * paints badges whose voice command is live.
  */
-async function doScanBatched(): Promise<void> {
+async function doScanBatched(source: DiscoverySource): Promise<void> {
   const __cpuStart = performance.now();
 
   // Uses the LabelStage session id — see Problem 1 in the design doc.
@@ -1991,7 +2000,7 @@ async function doScanBatched(): Promise<void> {
   if (inclusionRefs.length > 0) {
     await processScanBatch(
       { refs: inclusionRefs, elements: inclusionElements, isLast: false, invisibleCandidates: [] },
-      getSessionId(), batchIndex, sessionMeta, adapter,
+      getSessionId(), batchIndex, sessionMeta, adapter, source,
     );
     batchIndex++;
   }
@@ -1999,7 +2008,7 @@ async function doScanBatched(): Promise<void> {
   for (const batch of scanInBatches(
     adapter ? document : document, DEFAULT_SCAN_BATCH_SIZE, initialSeen,
   )) {
-    await processScanBatch(batch, getSessionId(), batchIndex, sessionMeta, adapter);
+    await processScanBatch(batch, getSessionId(), batchIndex, sessionMeta, adapter, source);
     batchIndex++;
     // Yield to the event loop between batches so MutationObserver
     // can fire and any DOM removal mid-scan flags the wrapper's
@@ -2033,6 +2042,7 @@ async function processScanBatch(
   sessionId: string, batchIndex: number,
   sessionMeta: { conn_id: string; hint_visibility: HintVisibility; app_id: string; table_id: string },
   adapter: ReturnType<typeof getActiveAdapter>,
+  source: DiscoverySource,
 ): Promise<void> {
   // Sync slab 1: exclusions + dedup + candidate construction. Measured
   // separately from the surrounding awaits so the recorded ms reflects
@@ -2147,7 +2157,7 @@ async function processScanBatch(
       w.releaseLabel();
       continue;
     }
-    attachWrapper(w);
+    attachWrapper(w, source);
     // Delta-sync: the plugin acknowledged this codeword inside the
     // scan-path POST above, so it's now live on the plugin side. Mark
     // it so future detaches know to send a Delete and future syncs
@@ -2653,7 +2663,7 @@ function rescanForNav(fromCache: boolean, reason: string): void {
         // through doScan() so it can't race a concurrent storage-onChanged
         // scan with the same session_id (duplicate codeword assignments —
         // actuator.log 2026-06-05T17:30:11).
-        void doScan().then(async () => {
+        void doScan('rescan').then(async () => {
           reconcile();
           await pageSession.tracker.flushNow();
           if (pageSession.hintsVisible) showHints(activeCategory ?? undefined);
@@ -2675,7 +2685,7 @@ function rescanForNav(fromCache: boolean, reason: string): void {
       pageSession.resources.timeout(() => { void runRescan(); }, 100);
     }
   } else {
-    doScan();
+    doScan('rescan');
     const t1 = performance.now();
     chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_scan_completed', data: { elements: store.all.length, duration_ms: Math.round(t1 - t0) } } as Message).catch(() => {});
   }
@@ -3268,6 +3278,59 @@ function paintSamplerTick(): void {
 // queue. Pure reads over already-stamped fields; no layout.
 const PAINT_LATENCY_WINDOW_MS = 90_000;
 
+// Percentile helpers shared by paintLatencyStats and discoverySourceStats.
+const latencyPct = (arr: number[], p: number) => {
+  if (arr.length === 0) return null;
+  const s = [...arr].sort((a, b) => a - b);
+  return Math.round(s[Math.min(s.length - 1, Math.floor((p / 100) * s.length))]);
+};
+const latencySummary = (arr: number[]) =>
+  ({ n: arr.length, p50: latencyPct(arr, 50), p90: latencyPct(arr, 90), max: latencyPct(arr, 100) });
+
+// Per-discovery-source decomposition (DESIGN_FLING_WAVE round 15): kills the
+// survivorship bias where only MO-path wrappers carried dom_seen stamps and
+// the sweep-found 41% dropped out of every percentile. Per source over the
+// trailing window: how many wrappers attached/shown, how many carried a REAL
+// MO stamp (mo_stamped), and the stage latencies. Reading it for the miss
+// diagnosis: a big band/settle_sweep cohort with mo_stamped high means the MO
+// saw those subtrees but the walk didn't yield the elements (hydrated-later /
+// pre-filter suspects); mo_stamped low means the MO never got a usable record
+// for any ancestor (text-only records, observer-level gap). For non-MO
+// sources dom_seen_to_attached (MO-stamped wrappers only) IS the miss window.
+function discoverySourceStats() {
+  const now = performance.now();
+  type SourceAcc = {
+    attached: number; shown: number; moStamped: number;
+    seenToAttached: number[]; seenToShown: number[]; attachedToShown: number[];
+  };
+  const bySource: Record<string, SourceAcc> = {};
+  for (const w of store.all) {
+    if (now - w.tAttached > PAINT_LATENCY_WINDOW_MS) continue;
+    const s = (bySource[w.discoverySource] ??= {
+      attached: 0, shown: 0, moStamped: 0,
+      seenToAttached: [], seenToShown: [], attachedToShown: [],
+    });
+    s.attached++;
+    if (w.domSeenByMo && w.tDomSeen !== null) {
+      s.moStamped++;
+      s.seenToAttached.push(w.tAttached - w.tDomSeen);
+    }
+    if (w.tFirstShown !== null) {
+      s.shown++;
+      if (w.tDomSeen !== null) s.seenToShown.push(w.tFirstShown - w.tDomSeen);
+      s.attachedToShown.push(w.tFirstShown - w.tAttached);
+    }
+  }
+  return Object.fromEntries(Object.entries(bySource).map(([source, s]) => [source, {
+    attached_in_window: s.attached,
+    shown_in_window: s.shown,
+    mo_stamped: s.moStamped,
+    dom_seen_to_attached: latencySummary(s.seenToAttached),
+    dom_seen_to_shown: latencySummary(s.seenToShown),
+    attached_to_shown: latencySummary(s.attachedToShown),
+  }]));
+}
+
 function paintLatencyStats() {
   const now = performance.now();
   const deltas: Record<string, number[]> = {
@@ -3294,24 +3357,17 @@ function paintLatencyStats() {
     if (w.tClaimed !== null) deltas.claimed_to_shown.push(w.tFirstShown - w.tClaimed);
     deltas.attached_to_shown.push(w.tFirstShown - w.tAttached);
   }
-  const pct = (arr: number[], p: number) => {
-    if (arr.length === 0) return null;
-    const s = [...arr].sort((a, b) => a - b);
-    return Math.round(s[Math.min(s.length - 1, Math.floor((p / 100) * s.length))]);
-  };
-  const summarize = (arr: number[]) =>
-    ({ n: arr.length, p50: pct(arr, 50), p90: pct(arr, 90), max: pct(arr, 100) });
   return {
     window_ms: PAINT_LATENCY_WINDOW_MS,
     shown_in_window: count,
-    dom_seen_to_attached: summarize(deltas.dom_seen_to_attached),
-    attached_to_band: summarize(deltas.attached_to_band),
-    band_to_claimed: summarize(deltas.band_to_claimed),
-    claimed_to_shown: summarize(deltas.claimed_to_shown),
-    attached_to_shown: summarize(deltas.attached_to_shown),
-    dom_seen_to_shown: summarize(deltas.dom_seen_to_shown),
-    shown_minus_ack: summarize(deltas.shown_minus_ack),
-    gated_to_shown: summarize(deltas.gated_to_shown),
+    dom_seen_to_attached: latencySummary(deltas.dom_seen_to_attached),
+    attached_to_band: latencySummary(deltas.attached_to_band),
+    band_to_claimed: latencySummary(deltas.band_to_claimed),
+    claimed_to_shown: latencySummary(deltas.claimed_to_shown),
+    attached_to_shown: latencySummary(deltas.attached_to_shown),
+    dom_seen_to_shown: latencySummary(deltas.dom_seen_to_shown),
+    shown_minus_ack: latencySummary(deltas.shown_minus_ack),
+    gated_to_shown: latencySummary(deltas.gated_to_shown),
   };
 }
 
@@ -3333,6 +3389,18 @@ function snapshotExtras() {
       // limbo entry (DESIGN_FLING_WAVE round 7 probe).
       slot_probe: { ...slotProbe },
       limbo_slot_liveness: { ...limboSlotLiveness },
+      // Round 15+: who discovers wrappers, with per-source latency, over the
+      // paint-latency window. The MO should own steady-state discovery; a
+      // large sweep/scan share on a churny page is the miss being measured.
+      discovery_sources: discoverySourceStats(),
+      // Lifetime attach counts per source (not window-scoped) + the
+      // suspect-(c) tripwire: add records the Element gate skipped wholesale.
+      attached_by_source: { ...lifecycleCounters.attachedBySource },
+      mo_text_only_add_records: lifecycleCounters.moTextOnlyAddRecords,
+      // Walk-reached-but-invisible registrations (attention handoff). ≈0
+      // while sweeps attach hundreds → the walk never saw the missed
+      // content; large → promotion-path latency is the thing to chase.
+      invisible_candidates_observed: lifecycleCounters.invisibleCandidatesObserved,
     },
     paint_latency: paintLatencyStats(),
     // Raw eye-level ring: [t_ms, tr_rows, wrappers, painted, shown] change
@@ -3412,7 +3480,7 @@ function runSettlePipeline(discovery: 'band' | 'store'): void {
     // sweep here closes the straggler window to ≤~600ms. The sweep is
     // single-flight, idle-scheduled, and isKnown-skipping — cheap when
     // nothing new exists.
-    scheduleBandDiscovery();
+    scheduleBandDiscovery(discovery);
     if (discovery === 'store') scheduleReconcile();
     applyOcclusionPlan(gather);
     reconcileScrollAccel();
@@ -3717,7 +3785,7 @@ function schedulePushGrammar(): void {
 }
 
 /** Walk an added subtree and create wrappers for any hintable descendants. */
-function discoverInSubtree(root: Element): number {
+function discoverInSubtree(root: Element, source: DiscoverySource): number {
   // Resurrection guard: a torn-down orphan must not re-discover into a dead
   // session. Reached via SHADOW_EVENT, this rebuilds observers/wrappers that
   // quiesceOrphan removed. See notes/DESIGN_TEARDOWN_OWNERSHIP.md.
@@ -3725,7 +3793,7 @@ function discoverInSubtree(root: Element): number {
   const __cpuStart = performance.now();
   const result = scanElements(root, (el) => store.findWrapperFor(el) !== undefined);
   applyUserRuleToScan(result, root);
-  const added = attachDiscovered(result.refs, result.elements, collectLimboWrappers(), collectStrongKeyIndex());
+  const added = attachDiscovered(result.refs, result.elements, collectLimboWrappers(), collectStrongKeyIndex(), source);
   observeInvisibleCandidates(result.invisibleCandidates);
   watchUndefinedCustomElements(root);
   recordCpu('discoverInSubtree', performance.now() - __cpuStart);
@@ -3746,7 +3814,7 @@ function discoverInSubtree(root: Element): number {
 // (a per-batch query would be N querySelectorAll), exclusions apply per
 // batch, limbo-rebind is shared via attachDiscovered. See
 // notes/DESIGN_NAV_TIME_RESCAN.md.
-async function discoverInSubtreeBatched(root: Element): Promise<number> {
+async function discoverInSubtreeBatched(root: Element, source: DiscoverySource): Promise<number> {
   const __cpuStart = performance.now();
   let added = 0;
   // Feed the limbo pool before collecting it (fling-wave round 8; see
@@ -3769,14 +3837,14 @@ async function discoverInSubtreeBatched(root: Element): Promise<number> {
       for (const w of store.all) seen.add(w.element);
     }
     const inc = collectInclusions(seen, cr.includeSelector, root);
-    added += attachDiscovered(inc.refs, inc.elements, limboPool, keyIndex);
+    added += attachDiscovered(inc.refs, inc.elements, limboPool, keyIndex, source);
     initialSeen = new Set(inc.refs);
   }
 
   let invisibleCandidates: Element[] = [];
   for (const batch of scanInBatches(root, DEFAULT_SCAN_BATCH_SIZE, initialSeen, isKnown)) {
     if (cr?.excludes.length) applyExclusions(batch.refs, batch.elements, cr.excludes);
-    added += attachDiscovered(batch.refs, batch.elements, limboPool, keyIndex);
+    added += attachDiscovered(batch.refs, batch.elements, limboPool, keyIndex, source);
     if (batch.isLast) invisibleCandidates = batch.invisibleCandidates;
     // Yield so the main thread frees between batches — this is the whole
     // point of the sliced path.
@@ -3805,7 +3873,7 @@ function reevaluateAttribute(target: Element): boolean {
   if (!existing && hintable) {
     const scanned = scanSingle(target);
     if (!scanned) return false;
-    attachWrapper(new ElementWrapper(target, scanned));
+    attachWrapper(new ElementWrapper(target, scanned), 'attr');
     return true;
   }
   if (existing && hintable) {
@@ -3982,7 +4050,7 @@ pageSession.resources.listen(document, SHADOW_EVENT, (event) => {
   queueMicrotask(() => {
     if (host.shadowRoot) {
       // Newly-attached wrappers emit store deltas → grammar sync (Tier 2).
-      discoverInSubtree(host);
+      discoverInSubtree(host, 'shadow');
     }
   });
 }, true);
@@ -4007,7 +4075,7 @@ function watchUndefinedCustomElements(root: Element | Document): void {
     customElements.whenDefined(tag).then(() => {
       // Newly-attached wrappers emit store deltas → grammar sync (Tier 2).
       for (const instance of document.querySelectorAll(tag)) {
-        discoverInSubtree(instance);
+        discoverInSubtree(instance, 'shadow');
       }
     }).catch(() => {/* whenDefined rejects on invalid tag names */});
   }

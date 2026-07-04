@@ -223,7 +223,7 @@ function drainDiscovery(): void {
       continue;
     }
     // Newly-attached wrappers emit store deltas → grammar sync (Tier 2 delta cut).
-    pageSession.deps.discoverInSubtree(root);
+    pageSession.deps.discoverInSubtree(root, 'mo');
     // Yield to the event loop once we've exceeded the budget — but
     // always do at least one root so we make forward progress even when
     // a single root is heavy enough to blow the budget by itself.
@@ -276,12 +276,21 @@ export function processMutations(records: MutationRecord[]): void {
 
   for (const m of records) {
     if (m.type === 'childList') {
+      let foreignAdds = 0, addedElements = 0;
       for (const node of m.addedNodes) {
         if (isOwnMutation(node)) continue;
+        foreignAdds++;
         if (node instanceof Element) {
+          addedElements++;
           markDomSeen(node);
           scheduleDiscovery(node);
         }
+      }
+      // Suspect-(c) tripwire (DESIGN_FLING_WAVE round 15): an add record the
+      // Element gate skipped wholesale. A text insertion can flip its parent
+      // hintable without any record the walk would see.
+      if (foreignAdds > 0 && addedElements === 0) {
+        lifecycleCounters.moTextOnlyAddRecords++;
       }
       for (const node of m.removedNodes) {
         if (isOwnMutation(node)) continue;
@@ -337,7 +346,7 @@ function fireHugeMutationRefresh(): void {
   // over the whole fresh body froze Firefox ~1.1s on YouTube /watch
   // SPA nav (notes/DESIGN_NAV_TIME_RESCAN.md).
   firehoseStep('huge_path:batched_start', hugeMutationLastCount);
-  void pageSession.deps.discoverInSubtreeBatched(document.body || document.documentElement)
+  void pageSession.deps.discoverInSubtreeBatched(document.body || document.documentElement, 'mo_huge')
     .then((added) => {
       firehoseStep('huge_path:batched_end', added);
       // Newly-attached wrappers emit store deltas → grammar sync.

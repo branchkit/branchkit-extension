@@ -66,7 +66,7 @@ export function constructVisibilityObservers(): void {
       // rects so IO fires immediately, but they need the MO layer to promote
       // them once a class/style change flips visibility.
       if (!scanned) continue;
-      attachWrapper(new ElementWrapper(el, scanned));
+      attachWrapper(new ElementWrapper(el, scanned), 'visibility');
       pendingVisibility.delete(el);
       dirty = true;
     }
@@ -208,7 +208,7 @@ function recheckPendingVisibility(): void {
       if (!scanned) continue;
       pendingVisibility.delete(el);
       visibilityIO?.unobserve(el);
-      attachWrapper(new ElementWrapper(el, scanned));
+      attachWrapper(new ElementWrapper(el, scanned), 'visibility');
       dirty = true;
     }
   } finally {

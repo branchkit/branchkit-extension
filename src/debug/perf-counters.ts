@@ -367,6 +367,12 @@ export interface LifecycleCounters {
   moRemoveRecordsSeen: number;
   moHugePathFired: number;
   processMutationsCalls: number;
+  // childList records whose addedNodes held ONLY non-Element nodes (text /
+  // CDATA). The `node instanceof Element` gate skips these entirely — no
+  // dom-seen stamp, no discovery walk — yet a text insertion can flip its
+  // PARENT hintable (an empty <a> gaining its label). Suspect (c) of the
+  // round-15 40%-miss diagnosis; this counts how often the shape occurs.
+  moTextOnlyAddRecords: number;
   // Discovery-drain reductions. `Deduped` = roots dropped because a queued
   // ancestor already covers them; `Skipped` = roots whose light DOM held
   // nothing hintable (cheap pre-filter bail).
@@ -383,6 +389,17 @@ export interface LifecycleCounters {
   // (local reservoir round-trip within one sweep).
   bandSweepRepairs: number;
   bandSweepReleases: number;
+  // Elements a discovery walk DID reach but rejected as invisible and
+  // handed to the attention observer (observeInvisibleCandidates). During a
+  // fling, this ≈0 while sweeps attach hundreds means the walk never saw
+  // the missed content at all; large means the walk classified it hidden
+  // and the promotion path is what's slow. Round-15 discriminator.
+  invisibleCandidatesObserved: number;
+  // Cumulative wrapper attaches by discovery source (attachWrapper stamps
+  // the same value on the wrapper — see DiscoverySource in element-wrapper).
+  // Window-scoped per-source latency lives in the debug snapshot's
+  // wave.discovery_sources; this is the lifetime count per path.
+  attachedBySource: Record<string, number>;
 }
 
 export const lifecycleCounters: LifecycleCounters = {
@@ -395,15 +412,20 @@ export const lifecycleCounters: LifecycleCounters = {
   moRemoveRecordsSeen: 0,
   moHugePathFired: 0,
   processMutationsCalls: 0,
+  moTextOnlyAddRecords: 0,
   discoveryRootsDeduped: 0,
   discoveryRootsSkipped: 0,
   primedClaims: 0,
   bandSweepRepairs: 0,
   bandSweepReleases: 0,
+  invisibleCandidatesObserved: 0,
+  attachedBySource: {},
 };
 
 export function resetLifecycleCounters(): void {
   for (const k of Object.keys(lifecycleCounters) as (keyof LifecycleCounters)[]) {
-    lifecycleCounters[k] = 0;
+    if (k === 'attachedBySource') continue;
+    (lifecycleCounters as unknown as Record<string, number>)[k] = 0;
   }
+  lifecycleCounters.attachedBySource = {};
 }
