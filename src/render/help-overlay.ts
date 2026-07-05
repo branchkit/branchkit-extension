@@ -110,10 +110,12 @@ const STYLE = `
 .hint { font-size: 11px; color: #8b949e; }
 .sec { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
   color: #58a6ff; margin: 0 0 6px; }
-/* Spoken alphabet — compact grid, no scroll needed. */
-.alpha { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
-  gap: 2px 12px; margin-bottom: 12px; }
-.alpha .a { display: flex; gap: 6px; align-items: baseline; font-size: 12px; min-width: 0; }
+/* Spoken alphabet — read DOWN each column in a–z order (column-major). Far
+   faster to eye-scan than row-major: a letter's rough column is predictable,
+   then you scan down. ~6 columns → clean 4–5 letter blocks (a–e, f–j, …). */
+.alpha { column-count: 6; column-gap: 24px; margin-bottom: 12px; }
+.alpha .a { display: flex; gap: 6px; align-items: baseline; font-size: 12px;
+  min-width: 0; break-inside: avoid; margin-bottom: 3px; }
 .alpha .l { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700;
   color: #e6edf3; width: 1.1em; flex: 0 0 auto; }
 .alpha .w { color: #c9d1d9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
