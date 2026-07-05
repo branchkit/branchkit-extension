@@ -2,10 +2,9 @@
  * BranchKit Browser — storage-backed user settings.
  *
  * Owns the two persisted display preferences read throughout content.ts —
- * badge display mode and hint visibility — plus the aggressive-hints
- * scanner toggle. State lives here (private); content.ts reads it through
- * getDisplayMode / getHintVisibility and applies side effects via the
- * handlers passed to loadConfig.
+ * badge display mode and hint visibility. State lives here (private);
+ * content.ts reads it through getDisplayMode / getHintVisibility and
+ * applies side effects via the handlers passed to loadConfig.
  *
  * Deliberately NOT here: the per-machine `alphabet` adoption (storage.local
  * + its onChanged branch). That's vocab adoption coupled to the delta-sync
@@ -18,7 +17,6 @@
  */
 
 import { BadgeDisplayMode, HintVisibility } from './types';
-import { setExtraHintsEnabled } from './scan/scanner';
 
 let displayMode: BadgeDisplayMode = 'letter';
 let hintVisibility: HintVisibility = 'always';
@@ -56,28 +54,24 @@ export interface ConfigHandlers {
   onHintVisibilityChange: () => void;
   /** hintsShown loaded from storage — reconcile this page's initial visibility. */
   onHintsShownLoaded: () => void;
-  /** aggressiveHints toggled — re-scan so the wider/narrower selector applies. */
-  onAggressiveHintsChange: () => void;
 }
 
 /**
  * Read the persisted settings from chrome.storage.sync and register an
- * onChanged listener that keeps them live. Side effects (re-label, show/hide,
- * re-scan) are delegated to the caller via `handlers` because they touch
- * content.ts-owned state. The aggressiveHints scanner flag is applied here
- * directly since it's a scanner setting, then the rescan is delegated.
+ * onChanged listener that keeps them live. Side effects (re-label, show/hide)
+ * are delegated to the caller via `handlers` because they touch
+ * content.ts-owned state.
  */
 export function loadConfig(handlers: ConfigHandlers): void {
   if (typeof chrome === 'undefined' || !chrome.storage?.sync) return;
 
-  chrome.storage.sync.get(['badgeDisplayMode', 'hintVisibility', 'aggressiveHints'], (result) => {
+  chrome.storage.sync.get(['badgeDisplayMode', 'hintVisibility'], (result) => {
     if (result.badgeDisplayMode) {
       displayMode = result.badgeDisplayMode;
     }
     if (result.hintVisibility) {
       hintVisibility = result.hintVisibility;
     }
-    setExtraHintsEnabled(result.aggressiveHints === true);
   });
 
   if (chrome.storage?.local) {
@@ -103,13 +97,6 @@ export function loadConfig(handlers: ConfigHandlers): void {
       // re-show. The F handler applies show/hide locally; new page loads
       // read this value via onHintsShownLoaded.
       hintsShown = changes.hintsShown.newValue !== false;  // absent/removed → on
-    }
-    if (changes.aggressiveHints) {
-      // Toggle changed → re-scan so the wider/narrower selector takes
-      // effect immediately. Caller clears the store first so already-hinted
-      // elements that no longer qualify get torn down.
-      setExtraHintsEnabled(changes.aggressiveHints.newValue === true);
-      handlers.onAggressiveHintsChange();
     }
   });
 }

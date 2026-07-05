@@ -27,50 +27,6 @@ const EXCLUDE = [
 const HINTABLE_SELECTOR = HINTABLE.join(', ');
 const EXCLUDE_SELECTOR = EXCLUDE.join(', ');
 
-// Aggressive-hints opt-in: extra container tags (divs, spans, list items,
-// table cells, headings) that aren't natively interactive but commonly
-// host click handlers in SPAs. Direct port of Rango's `extraSelector` —
-// they only become hintable if they ALSO look interactive (see
-// `isHintableExtra` below). Gmail's email-row click area, Slack message
-// hover actions, GitHub's role-less buttons, etc. fall in this set.
-const EXTRA_TAGS = 'div, span, i, li, td, p, h1, h2, h3, h4, h5, h6';
-const EXTRA_SELECTOR = `${HINTABLE_SELECTOR}, ${EXTRA_TAGS}`;
-
-// Heuristic match for "this container is probably clickable" — matches
-// Rango's isHintableExtra. Selector match for common JS framework class
-// patterns + `[jsaction]` (Google's everything-uses-this attribute).
-const EXTRA_CLICKABLE_SELECTOR =
-  '[class*="button" i], [class*="btn" i], [class*="select" i], [class*="control" i], [jsaction]';
-
-let extraHintsEnabled = false;
-
-/**
- * Toggle the "extra hints" mode on/off. Persisted by the caller; this
- * just controls scan-time selector behavior. Calling this does NOT
- * re-scan — the caller (content.ts) should trigger a rescan.
- */
-export function setExtraHintsEnabled(on: boolean): void {
-  extraHintsEnabled = on;
-}
-
-export function getExtraHintsEnabled(): boolean {
-  return extraHintsEnabled;
-}
-
-function isHintableExtra(el: Element): boolean {
-  if (!el.matches(EXTRA_SELECTOR)) return false;
-  // Cheap match-based check first — avoids the getComputedStyle round
-  // trip for the common case.
-  if (el.matches(EXTRA_CLICKABLE_SELECTOR)) return true;
-  let style = peekCachedStyle(el);
-  if (style === null) {
-    style = getComputedStyle(el);
-    perfCounters.computedStyleCalls++;
-  }
-  const cursor = style.cursor;
-  return cursor === 'pointer' || cursor === 'text';
-}
-
 // --- Perf instrumentation ---
 // Counters incremented during scan + hintability checks. Exposed via
 // `window.branchkitPerfStats()` so a soak on a real page can answer
@@ -86,10 +42,8 @@ export interface PerfCounters {
   scanRejectedExclude: number;
   scanRejectedInvisible: number;
   scanRejectedRedundant: number;
-  scanRejectedExtraNotClickable: number;
   scanSkippedKnown: number;          // already-tracked, skipped before any layout read
   scanSingleCalls: number;           // scanSingle (per-element re-check via MO)
-  isHintableExtraCalls: number;
   computedStyleCalls: number;        // total getComputedStyle calls (all sites)
   boundingRectCalls: number;         // total getBoundingClientRect (forces layout)
   shadowHostPrunedSubtrees: number;  // opaque subtrees (svg/canvas/…) skipped in shadow-host walk
@@ -103,10 +57,8 @@ const perfCounters: PerfCounters = {
   scanRejectedExclude: 0,
   scanRejectedInvisible: 0,
   scanRejectedRedundant: 0,
-  scanRejectedExtraNotClickable: 0,
   scanSkippedKnown: 0,
   scanSingleCalls: 0,
-  isHintableExtraCalls: 0,
   computedStyleCalls: 0,
   boundingRectCalls: 0,
   shadowHostPrunedSubtrees: 0,
@@ -228,8 +180,7 @@ export function deepQuerySelectorAll(root: ParentNode, selector: string): Elemen
  * mutation root yields a hintable.
  */
 export function subtreeMaybeHintable(root: Element): boolean {
-  const sel = extraHintsEnabled ? EXTRA_SELECTOR : HINTABLE_SELECTOR;
-  return root.matches(sel) || root.querySelector(sel) !== null;
+  return root.matches(HINTABLE_SELECTOR) || root.querySelector(HINTABLE_SELECTOR) !== null;
 }
 
 /**
@@ -239,8 +190,7 @@ export function subtreeMaybeHintable(root: Element): boolean {
  * disconnected-shadow-attach signal is live (see scan/shadow-attach-signal).
  */
 export function deepSubtreeMaybeHintable(root: Element): boolean {
-  const sel = extraHintsEnabled ? EXTRA_SELECTOR : HINTABLE_SELECTOR;
-  return deepQuerySelectorAll(root, sel).length > 0;
+  return deepQuerySelectorAll(root, HINTABLE_SELECTOR).length > 0;
 }
 
 /**
@@ -411,28 +361,6 @@ function isRedundant(el: Element): boolean {
     return true;
   }
 
-  // In aggressive mode the wider selector catches nested div/span
-  // wrappers whose parent is ALSO an extra hintable (e.g. Gmail's
-  // "Select" button → inner decorative span both match). When the
-  // inner has no siblings, it's a pure wrapper and the outer is the
-  // real target — suppress the inner. When the inner HAS siblings
-  // (e.g. a checkbox alongside a star alongside subject text inside
-  // a clickable row), the inner IS a distinct target — keep it.
-  if (extraHintsEnabled
-      && !el.matches(HINTABLE_SELECTOR)
-      && isExtraHintableAncestor(parent)
-      && !hasSignificantSiblings(el)) {
-    return true;
-  }
-
-  return false;
-}
-
-function isExtraHintableAncestor(el: Element): boolean {
-  // Cheap matches first; only fall to getComputedStyle if needed and
-  // only for the immediate parent (no walking — keeps O(1) per call).
-  if (el.matches(HINTABLE_SELECTOR)) return true;
-  if (el.matches(EXTRA_SELECTOR) && isHintableExtra(el)) return true;
   return false;
 }
 
@@ -456,8 +384,7 @@ function hasSignificantSiblings(el: Node): boolean {
 export function isHintable(el: Element): boolean {
   if (el.matches(EXCLUDE_SELECTOR)) return false;
   if (el.closest('[data-branchkit-hint]')) return false;
-  const matchesCore = el.matches(HINTABLE_SELECTOR);
-  if (!matchesCore && !(extraHintsEnabled && isHintableExtra(el))) return false;
+  if (!el.matches(HINTABLE_SELECTOR)) return false;
   if (!isVisible(el)) return false;
   if (isRedundant(el)) return false;
   return true;
@@ -561,7 +488,6 @@ function collectHintables(
   const scanStart = performance.now();
   perfCounters.scanCalls++;
   visibilityCache = new WeakSet<Element>();
-  const scanSelector = extraHintsEnabled ? EXTRA_SELECTOR : HINTABLE_SELECTOR;
 
   // Pass 1: cheap, layout-free filters only. Collect survivors so we can
   // batch-warm the layout cache before any getComputedStyle /
@@ -570,7 +496,7 @@ function collectHintables(
   // visibility/hintability flips are the ResizeObserver/attribute path's
   // job). EXCLUDE and hint-host checks are pure selector matches — no reflow.
   const survivors: Element[] = [];
-  for (const el of deepQuerySelectorAll(root, scanSelector)) {
+  for (const el of deepQuerySelectorAll(root, HINTABLE_SELECTOR)) {
     perfCounters.scanCandidatesSeen++;
     if (seen.has(el)) continue;
     if (isKnown && isKnown(el)) { perfCounters.scanSkippedKnown++; continue; }
@@ -592,16 +518,6 @@ function collectHintables(
 
   // Pass 2: layout-dependent filters, now hitting the warm cache.
   for (const el of survivors) {
-    // In extra-hints mode, the wider selector matches plenty of
-    // non-interactive elements. Keep them only if they look clickable.
-    if (extraHintsEnabled && !el.matches(HINTABLE_SELECTOR)) {
-      perfCounters.isHintableExtraCalls++;
-      if (!isHintableExtra(el)) {
-        perfCounters.scanRejectedExtraNotClickable++;
-        continue;
-      }
-    }
-
     if (!isVisible(el)) {
       invisibleCandidates.push(el);
       perfCounters.scanRejectedInvisible++;
@@ -680,7 +596,7 @@ export function* scanInBatches(
 ): Generator<ScanBatch, void, void> {
   // INCREMENTAL walk + filter. The previous implementation called
   // `collectHintables` upfront, walking the entire document and running
-  // isVisible/isHintableExtra on every candidate before yielding the
+  // isVisible on every candidate before yielding the
   // first batch. On a freshly-loaded YouTube /watch page (~1000+ hintable
   // candidates × ~0.5ms isVisible per call), that single synchronous
   // task ran 500ms+, blocking the main thread before the snapshot
@@ -697,8 +613,7 @@ export function* scanInBatches(
   visibilityCache = new WeakSet<Element>();
   const scanStart = performance.now();
   perfCounters.scanCalls++;
-  const scanSelector = extraHintsEnabled ? EXTRA_SELECTOR : HINTABLE_SELECTOR;
-  const allCandidates = deepQuerySelectorAll(root, scanSelector);
+  const allCandidates = deepQuerySelectorAll(root, HINTABLE_SELECTOR);
 
   const invisibleCandidates: Element[] = [];
   let bufferedElements: ScannedElement[] = [];
@@ -710,14 +625,6 @@ export function* scanInBatches(
     if (isKnown && isKnown(el)) { perfCounters.scanSkippedKnown++; continue; }
     if (el.matches(EXCLUDE_SELECTOR)) { perfCounters.scanRejectedExclude++; continue; }
     if (el.closest('[data-branchkit-hint]')) continue;
-
-    if (extraHintsEnabled && !el.matches(HINTABLE_SELECTOR)) {
-      perfCounters.isHintableExtraCalls++;
-      if (!isHintableExtra(el)) {
-        perfCounters.scanRejectedExtraNotClickable++;
-        continue;
-      }
-    }
 
     if (!isVisible(el)) {
       invisibleCandidates.push(el);

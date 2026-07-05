@@ -59,8 +59,8 @@ body { margin: 0; font-family: system-ui; }
 </div>
 <script>
 // Generate N rows. Each row has: row container, checkbox, star, sender,
-// subject — all "clickable" divs with jsaction attribute. Matches the
-// pattern aggressive mode is designed to catch.
+// subject — a heavy DOM with many native + jsaction targets to stress
+// the scan/hint pipeline.
 const ROWS = 200;
 const senders = ['Alice', 'Bob', 'Carol', 'Dan', 'Eve', 'Frank', 'Grace', 'Henry'];
 const subjects = [

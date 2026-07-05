@@ -650,12 +650,6 @@ loadConfig({
     }
   },
   onHintsShownLoaded: () => applyHintsShownState(),
-  onAggressiveHintsChange: () => {
-    // Clear the store so already-hinted elements that no longer qualify
-    // get torn down, then re-scan with the new selector breadth.
-    store.clear();
-    scheduleDoScan();
-  },
 });
 
 // Tab markers (notes/DESIGN_TAB_MARKERS.md): the top frame bootstraps its

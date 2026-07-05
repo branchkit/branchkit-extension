@@ -499,7 +499,6 @@ async function init(): Promise<void> {
   initGrantButton();
   initSyncedSelect('hint-visibility', 'hintVisibility');
   initSyncedSelect('hint-mode', 'badgeDisplayMode');
-  initSyncedCheckbox('aggressive-hints', 'aggressiveHints');
   initSyncedCheckbox('tab-markers', 'tabMarkersEnabled', true);
   initOptionsLink();
 
