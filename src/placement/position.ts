@@ -128,13 +128,15 @@ function getNudge(element: Element, hasText: boolean): Nudge {
     if (rect.width > 30 && rect.height > 30) {
       return { x: 1, y: 1 };
     }
-    // SMALL icon-only targets (round 36): no left overhang. The ratio
-    // overhang exists to keep the badge off a text target's glyphs — an
-    // icon has none, and in dense action clusters (QuickBase's
+    // SMALL icon-only targets (round 36, y tuned 36c): no left overhang —
+    // the ratio overhang exists to keep the badge off a text target's
+    // glyphs; an icon has none, and in dense action clusters (QuickBase's
     // pencil/eye: 18px icons, 4px apart) a badge hanging 70% past the
-    // left edge lands ON the neighboring control. Fully above, left
-    // edges aligned: zero horizontal bleed, icon stays uncovered.
-    return { x: 1, y: 0 };
+    // left edge lands ON the neighboring control. Left edges aligned,
+    // with ~40% of the badge overlapping the icon's top (user direction,
+    // 2026-07-05): the slight overlap reads as ATTACHED to the icon,
+    // where fully-above read as floating between rows.
+    return { x: 1, y: 0.6 };
   }
 
   // Everything else — Rango-style ratio nudge per font-size bucket.
@@ -197,7 +199,7 @@ function positionAtTopLeft(w: ElementWrapper, probe?: TextProbe): void {
   // offset and strand the badge when the row scrolls away from the edge
   // (the d35201a scroll-back class). Re-derived every placement pass, so
   // the badge flips back above once the row has headroom.
-  if (!probe.hasText && nudge.y === 0) {
+  if (!probe.hasText && nudge.y < 1) {
     const clipRoot = clipRootOf(w.element);
     if (clipRoot && result.y < getCachedRect(clipRoot).top) {
       y = getCachedRect(w.element).bottom;
