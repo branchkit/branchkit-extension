@@ -2893,6 +2893,7 @@ const DISPATCH_PASSTHROUGH_ACTIONS = new Set([
   'scroll_top', 'scroll_bottom', 'scroll_left', 'scroll_right',
   'find_open', 'find_close', 'find_next', 'find_previous', 'find_immediate',
   'focus_input',
+  'toggle_palette', // voice "palette" — same handler as the Ctrl+K bind
 ]);
 
 chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {

@@ -1,6 +1,6 @@
 # Design: Tab Navigation + Command Palette
 
-**Status:** Layer 0 (MRU stack) + Layer 1 (cycling) + tab verbs (Vimium parity, below) shipped 2026-07-01. Layer 3 (voice "switch to \<tab>") shipped 2026-07-02. Layer 2 (the palette) keyboard MVP shipped 2026-07-05 — Ctrl+K, extension-served iframe, tabs (MRU-first) + commands sources; see "Layer 2 shipped" below for what's in vs. still open (codeword badges / voice symmetry, frecency, bookmarks).
+**Status:** Layer 0 (MRU stack) + Layer 1 (cycling) + tab verbs (Vimium parity, below) shipped 2026-07-01. Layer 3 (voice "switch to \<tab>") shipped 2026-07-02. Layer 2 (the palette) shipped 2026-07-05 in two same-day halves: keyboard MVP (Ctrl+K, extension-served iframe, tabs MRU-first + commands sources), then the voice half (codeword badges under an exclusive palette mode — see "Layer 2 voice half" below). Live verify pending. Still open: frecency, bookmarks source.
 **Goal:** Move between tabs and jump to specific ones via keyboard and voice — without building a keyboard-only thing that can't be reused for voice — and grow the overlay into the modern successor of Vimium's Vomnibar rather than a one-source switcher.
 
 ## Prior art (what we're borrowing)
@@ -87,13 +87,76 @@ What landed:
   dispatcher (`PALETTE_COMMAND`) — exact keybind semantics, tab verbs bounce
   back as `TAB_ACTION`.
 
-Still open (the voice-symmetry half + v2 items):
-- **Codeword badges per row** — publish visible rows as a collection so
-  speaking a codeword selects it (the palette as a synthetic page of hints).
-  The stable row ids and reserved row-badge space are the hooks.
+Still open (v2 items):
 - **Frecency** ranking; **bookmarks** as source #3 (batch the `bookmarks`
   permission with a store update); palette pre-warm if open latency ever
   bothers (today the iframe is created fresh per open).
+
+### Layer 2 voice half — codeword badges (landed 2026-07-05, live verify pending)
+
+Every palette row carries a spoken-alphabet badge; speaking the codeword
+selects the row. Architecture decided after reading the platform's two-layer
+model against the plugin code:
+
+**The palette is an EXCLUSIVE mode, not a pool client.** The obvious approach
+— claim palette codewords from the per-tab label pool so they can't collide
+with painted page hints — was rejected. On a link-heavy always-mode page the
+pool is near-exhausted and the palette would open badge-less. Instead the
+plugin holds a `plugin.browser.palette` tag (preset tag, `exclusive: true`,
+`as_gates` — the `plugin.windows.snap_mode` pattern) while palette rows are
+published. Exclusivity does two things:
+
+1. **Layer 2:** while the palette is open, every command not gated on the
+   palette tag is suppressed — including the page-hint captures underneath.
+   Palette codewords can therefore reuse the same alphabet words as painted
+   hints with zero ambiguity: "the same word means different things by
+   context" is the eligibility filter's whole job. No pool claim, no
+   exhaustion, deterministic assignment (row N gets alphabet word N, pairs
+   after 26).
+2. **Layer 1, free:** an exclusive gate drives `compute_narrow_to`, so the
+   engine narrows to the palette's word set at the next utterance boundary —
+   off-mode acoustic neighbors become unproducible at the source. The palette
+   is exactly the "focused, stable mode" the narrow was built for: content
+   is frozen while open (publish once at open, never on refilter).
+
+**Data path** (mirrors `browser_tabs`, one level simpler — palettes don't
+exist in background browsers, so it's single-conn, not per-conn):
+- Extension: palette page assigns codewords from the alphabet
+  (chrome.storage.local `alphabet`) in empty-state row order, renders badges,
+  sends the (codeword → row id) list + a (row id → dispatch) map to the
+  background. Background keeps the dispatch map and POSTs
+  `{conn_id, entries: [{spoken, row_id}]}` to the plugin's `POST /palette`.
+- Plugin: entries land in the `browser_palette` collection
+  (`as_named_entities`, key `spoken`, value `row_id`; multi-word keys are
+  proven — app aliases like "activity monitor" ride the same matcher path).
+  Non-empty entries Put the palette tag; empty entries Delete it.
+- Match: contributed command `{browser_palette}` (bare capture, the
+  switch_to_tab shape) with `context: "palette"` — a new contribution field;
+  the registrar gates palette-context commands on the palette tag instead of
+  app-active, and adds `ClearsTags(palette)` so the mode ends at match time,
+  not after the round trip. `palette_select` rides `handleOnAction` → SSE
+  like every browser action; the extension background resolves row_id through
+  its dispatch map and reuses the keyboard path's close-then-execute.
+- Voice close: contributed "hide" with `context: "palette"` →
+  `palette_dismiss` (same word as hint-hide, disambiguated by context —
+  while the palette is open the hint "hide" is suppressed by exclusivity,
+  and vice versa when closed). Voice open: "palette" on `toggle_palette`.
+
+**Stuck-tag safety** (an orphaned exclusive tag would suppress everything):
+- Palette page closes itself on window blur (OS focus leaves the browser),
+  which drains entries and clears the tag through the normal path.
+- Plugin drains palette entries + tag whenever the focused source changes or
+  browser focus is lost (`recomputeFocusedSourceLocked`), and on the
+  publisher's SSE disconnect.
+- Extension background clears on tab close (`tabs.onRemoved`) as backstop.
+
+**Publish-once discipline:** codewords are assigned to ALL rows at open and
+never reassigned on refilter — one collection replace at open, one drain at
+close, nothing mid-utterance. Filtering only changes what's rendered; a
+row's badge (and grammar entry) is stable for the palette's lifetime. All
+entry words are alphabet words already in the engine union (grammar seed
+`browser_palette: alphabet` declares it), so opening the palette costs no
+HLG recompile — only the exclusive narrow does, at a boundary.
 
 ## Tab verbs (Vimium parity) — shipped 2026-07-01
 

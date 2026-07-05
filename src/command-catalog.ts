@@ -72,6 +72,14 @@ export interface CommandMeta {
    * means the command ends the hint interaction the way plain activation does.
    */
   retainsHints?: boolean;
+  /**
+   * Voice-context gate for the command's spoken forms. 'palette' = only
+   * matchable while the command palette is open (the plugin gates on its
+   * exclusive palette tag and clears it at match time). Absent = the plugin's
+   * default app-active gate. A semantic, not a tag name — tags stay
+   * plugin-owned, same contract as retainsHints.
+   */
+  voiceContext?: 'palette';
 }
 
 export interface KeymapEntry {
@@ -276,7 +284,25 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // A real-modifier chord by design — it must open in every mode, mid-hint
   // and inside text fields (the Ctrl+S precedent).
   { id: 'toggle_palette', label: 'Command palette', group: 'Help', mappable: true, params: [],
-    description: 'Search open tabs and every command in one overlay.' },
+    description: 'Search open tabs and every command in one overlay.',
+    voice: [{ pattern: 'palette' }] },
+  // Palette voice selection (voice half of Layer 2): every palette row shows
+  // an alphabet codeword badge; the spoken codeword resolves to the row_id
+  // through the browser_palette collection (as_named_entities, value=row_id),
+  // and the background maps row_id back to the row's dispatch. Gated on the
+  // plugin's exclusive palette tag via voiceContext — while the palette is
+  // open, page-hint captures are suppressed, so these badges can reuse the
+  // hint alphabet without ambiguity.
+  { id: 'palette_select', label: 'Select palette row', group: 'Help', mappable: false, params: [],
+    description: 'Activate a palette row by speaking its codeword badge.',
+    voice: [{ pattern: '{browser_palette}', params: { row_id: '{browser_palette}' } }],
+    voiceContext: 'palette' },
+  // Same word as hint-hide, disambiguated by context: palette open = only
+  // this one is eligible (exclusive tag); palette closed = only the hint one.
+  { id: 'palette_dismiss', label: 'Dismiss palette', group: 'Help', mappable: false, params: [],
+    description: 'Close the command palette without selecting.',
+    voice: [{ pattern: 'hide' }],
+    voiceContext: 'palette' },
 ];
 
 export const COMMAND_BY_ID: ReadonlyMap<string, CommandMeta> = new Map(
@@ -300,6 +326,9 @@ export interface CommandContribution {
   description: string;
   /** CommandMeta.retainsHints, forwarded for `{hint}` patterns. */
   retains_hints?: boolean;
+  /** CommandMeta.voiceContext — the registrar swaps the app-active gate for
+   * the named context's tag (and clears it at match time). */
+  context?: string;
 }
 
 /** Flatten the catalog's voice patterns into the plugin contribution payload. */
@@ -311,6 +340,7 @@ export function buildCommandContributions(): CommandContribution[] {
       out.push({
         action: c.id, pattern: v.pattern, params: v.params, category: c.group,
         description: c.description, retains_hints: c.retainsHints,
+        context: c.voiceContext,
       });
     }
   }

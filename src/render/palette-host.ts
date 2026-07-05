@@ -50,6 +50,10 @@ export function closePalette(): void {
   if (!frame) return;
   frame.remove();
   frame = null;
+  // Every close path funnels here, so this is THE teardown signal for the
+  // palette's voice session: background drains the plugin's palette entries,
+  // which clears the exclusive tag. Idempotent on the background side.
+  chrome.runtime.sendMessage({ type: 'PALETTE_CLOSED' }).catch(() => {});
   // Give focus back to wherever the user was typing/reading. A dispatch that
   // moves focus itself (focus_input, tab switch) runs after this and wins.
   if (prevFocus?.isConnected) {

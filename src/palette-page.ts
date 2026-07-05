@@ -22,7 +22,8 @@ import {
   buildTabItems, buildCommandItems, filterPalette,
   type PaletteItem, type PaletteSection, type PaletteTab,
 } from './palette/model';
-import type { Message } from './types';
+import { assignCodewords } from './palette/codewords';
+import type { Message, PaletteVoiceEntry, PaletteVoiceRow } from './types';
 
 const queryInput = document.getElementById('query') as HTMLInputElement;
 const listEl = document.getElementById('list') as HTMLDivElement;
@@ -33,6 +34,10 @@ let commandItems: PaletteItem[] = [];
 /** Flat render order of the current sections — the selection index space. */
 let flat: PaletteItem[] = [];
 let selected = 0;
+/** Spoken badge per row id, assigned ONCE at open (publish-once discipline —
+ *  refiltering never reassigns, so a row's badge is stable for the palette's
+ *  lifetime). Empty when the voice alphabet isn't loaded. */
+let codewords: Map<string, string> = new Map();
 
 function send(action: Extract<Message, { type: 'PALETTE_ACTION' }>['action']): void {
   chrome.runtime.sendMessage({ type: 'PALETTE_ACTION', action } as Message).catch(() => {});
@@ -83,6 +88,8 @@ function render(sections: PaletteSection[]): void {
     for (const item of s.items) {
       const i = idx++;
       const row = el('div', i === selected ? 'row sel' : 'row');
+      const cw = codewords.get(item.id);
+      if (cw) row.appendChild(el('span', 'cw', cw));
       row.appendChild(el('span', 'title', item.title));
       if (item.subtitle && item.subtitle !== item.title) {
         row.appendChild(el('span', 'sub', item.subtitle));
@@ -138,19 +145,50 @@ backdrop.addEventListener('click', (e) => {
   if (e.target === backdrop) close();
 });
 
+// OS focus leaving the browser closes the palette. Load-bearing beyond UX:
+// the plugin holds an EXCLUSIVE palette tag while our rows are published, and
+// an exclusive tag left active while another app is frontmost would suppress
+// every other command system-wide. Closing drains the entries → clears the
+// tag through the normal path (the plugin's focus-loss drain is the backstop).
+window.addEventListener('blur', () => close());
+
+/**
+ * Voice session: badge every row (empty-state order = assignment order) and
+ * hand the background the spoken entries plus the row → dispatch map. Skipped
+ * entirely when the alphabet isn't loaded — a keyboard-only palette must not
+ * set the exclusive tag.
+ */
+function publishVoiceRows(alphabet: string[]): void {
+  const all = [...tabItems, ...commandItems];
+  codewords = assignCodewords(all.map((r) => r.id), alphabet);
+  if (codewords.size === 0) return;
+  const entries: PaletteVoiceEntry[] = [];
+  const rows: PaletteVoiceRow[] = [];
+  for (const item of all) {
+    const spoken = codewords.get(item.id);
+    if (!spoken) continue;
+    entries.push({ spoken, row_id: item.id });
+    rows.push({ row_id: item.id, dispatch: item.dispatch });
+  }
+  chrome.runtime.sendMessage({ type: 'PALETTE_PUBLISH', entries, rows } as Message).catch(() => {});
+}
+
 async function init(): Promise<void> {
   queryInput.focus();
-  const [tabs, mru, keymap, activeId] = await Promise.all([
+  const [tabs, mru, keymap, activeId, stored] = await Promise.all([
     chrome.tabs.query({}).catch(() => [] as chrome.tabs.Tab[]),
     loadMru().catch(() => [] as number[]),
     loadKeymap().catch(() => []),
     currentTabId(),
+    chrome.storage.local.get('alphabet').catch(() => ({} as Record<string, unknown>)),
   ]);
   const open: PaletteTab[] = tabs
     .filter((t): t is chrome.tabs.Tab & { id: number } => typeof t.id === 'number')
     .map((t) => ({ tabId: t.id, title: t.title ?? '', url: t.url ?? '' }));
   tabItems = buildTabItems(open, mru, activeId);
   commandItems = buildCommandItems(COMMAND_CATALOG, keymap);
+  const alphabet = Array.isArray(stored.alphabet) ? (stored.alphabet as string[]) : [];
+  publishVoiceRows(alphabet);
   refilter();
 }
 

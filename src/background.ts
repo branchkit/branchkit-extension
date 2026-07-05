@@ -8,7 +8,8 @@
  * - Manage offscreen document lifecycle (Chrome only)
  */
 
-import { Message, ScannedElement, HintVisibility, DispatchResult, GrammarBatchRequest, GrammarBatchResponse, TabAction } from './types';
+import { Message, ScannedElement, HintVisibility, DispatchResult, GrammarBatchRequest, GrammarBatchResponse, TabAction, PaletteVoiceEntry, PaletteVoiceRow } from './types';
+import type { PaletteDispatch } from './palette/model';
 import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearStack, clearAllStacks, sweepDeadStacks, alphabetsEqual } from './labels/label-pool';
 import { setAlphabet, tokenToSpokenCodeword, spokenCodewordToToken } from './labels/words';
 import { buildCommandContributions } from './command-catalog';
@@ -452,15 +453,56 @@ async function handleTabAction(action: TabAction, index?: number): Promise<void>
   }
 }
 
+// --- Palette voice session (voice half of Layer 2) ---
+//
+// While the palette is open with badges, the plugin holds its EXCLUSIVE
+// palette tag and the `browser_palette` collection maps spoken codewords to
+// row ids. The row_id → dispatch map never leaves the extension — the plugin
+// round-trips only the opaque row id, and this background resolves it back
+// to the same close-then-execute path the keyboard uses.
+//
+// One session max: a palette only ever opens in the focused window's active
+// tab, and the plugin's projection is single-conn to match.
+interface PaletteVoiceSession {
+  tabId: number;
+  rows: Map<string, PaletteDispatch>;
+}
+let paletteVoice: PaletteVoiceSession | null = null;
+
+async function publishPaletteVoice(
+  tabId: number,
+  entries: PaletteVoiceEntry[],
+  rows: PaletteVoiceRow[],
+): Promise<void> {
+  paletteVoice = { tabId, rows: new Map(rows.map((r) => [r.row_id, r.dispatch])) };
+  if (!(await ensureConnected())) return;
+  await postToPlugin('/palette', { conn_id: connId, entries });
+}
+
+// Idempotent teardown — called from every close path (PALETTE_CLOSED from
+// content, dispatch, tab close). The empty POST drains the plugin's entries,
+// which Deletes the exclusive tag; a stuck tag would suppress every other
+// command system-wide, so this errs on firing redundantly.
+async function clearPaletteVoice(reason: string): Promise<void> {
+  if (!paletteVoice) return;
+  paletteVoice = null;
+  console.log(`[BranchKit BG] palette voice cleared (${reason})`);
+  await postToPlugin('/palette', { conn_id: connId, entries: [] });
+}
+
 // Command palette selection (notes/DESIGN_TAB_NAVIGATION.md, Layer 2). Always
 // close the overlay in the origin tab FIRST — a tab switch moves focus away
 // and must not leave a dead palette behind, and a command dispatch (e.g.
 // focus_input) needs page focus restored before it runs. The close message
 // round-trips (content sendResponse) so ordering is real, not racy.
 async function handlePaletteAction(
-  action: { kind: 'switch_tab'; tabId: number } | { kind: 'command'; command: string; params?: Record<string, string> } | { kind: 'close' },
+  action: PaletteDispatch | { kind: 'close' },
   originTabId: number | undefined,
 ): Promise<void> {
+  // Direct teardown besides the content-side PALETTE_CLOSED signal: if the
+  // content script is gone (catch below), the signal never fires, and the
+  // exclusive tag must not outlive the palette.
+  void clearPaletteVoice('palette_action');
   if (typeof originTabId === 'number') {
     try {
       await chrome.tabs.sendMessage(originTabId, { type: 'PALETTE_CLOSE' }, { frameId: 0 });
@@ -810,6 +852,25 @@ function handleSSEEvent(data: any): void {
     return;
   }
 
+  // Palette voice selection: the matched codeword's row_id comes back from
+  // the browser_palette collection; resolve it through the session's dispatch
+  // map and reuse the keyboard path (close overlay, then execute). An unknown
+  // row id (stale utterance racing a re-open) just closes the palette. The
+  // matcher already cleared the exclusive tag (ClearsTags at match time);
+  // handlePaletteAction's clearPaletteVoice drains the entries to match.
+  if (data.action === 'palette_select') {
+    const pv = paletteVoice;
+    if (pv) {
+      const dispatch = pv.rows.get(data.params?.row_id ?? '');
+      void handlePaletteAction(dispatch ?? { kind: 'close' }, pv.tabId);
+    }
+    return;
+  }
+  if (data.action === 'palette_dismiss') {
+    if (paletteVoice) void handlePaletteAction({ kind: 'close' }, paletteVoice.tabId);
+    return;
+  }
+
   // Multi-target hint verbs ("stash huge gap arch same"): the plugin delivers
   // the matched targets as a JSON-encoded ordered list under params.targets
   // (SSE params are string-keyed). Fan out to one per-target action, awaited
@@ -987,6 +1048,22 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     // From the palette iframe (extension origin, embedded in a tab — so
     // _sender.tab is set). Close-then-execute; see handlePaletteAction.
     void handlePaletteAction(message.action, _sender.tab?.id);
+    return false;
+  }
+
+  if (message.type === 'PALETTE_PUBLISH' && Array.isArray(message.entries)) {
+    // Palette iframe badged its rows: start the voice session. Sender is the
+    // iframe embedded in the host tab, so sender.tab names the origin tab.
+    const tabId = _sender.tab?.id;
+    if (typeof tabId === 'number') {
+      void publishPaletteVoice(tabId, message.entries, message.rows ?? []);
+    }
+    return false;
+  }
+
+  if (message.type === 'PALETTE_CLOSED') {
+    // Content removed the overlay (any path) — end the voice session.
+    void clearPaletteVoice('overlay_closed');
     return false;
   }
 
@@ -1380,6 +1457,8 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   purgeTab(tabId);
   // Drop the closed tab's words from the voice collection.
   scheduleTabPublish();
+  // Backstop: a palette whose host tab died can't send PALETTE_CLOSED.
+  if (paletteVoice?.tabId === tabId) void clearPaletteVoice('tab_removed');
 });
 
 // Dead-tab label-stack sweep (long-session audit finding 6). tabs.onRemoved

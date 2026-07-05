@@ -26,8 +26,9 @@ const REGISTERED_ACTIONS = [
 
 // Voice-only commands dispatched entirely in the background (SSE intercept),
 // with no content-dispatcher registration: no keyboard form exists because
-// the value is a runtime spoken word.
-const VOICE_ONLY_BACKGROUND = ['switch_to_tab'] as const;
+// the value is a runtime spoken word (or, for the palette pair, the overlay
+// itself is the keyboard form).
+const VOICE_ONLY_BACKGROUND = ['switch_to_tab', 'palette_select', 'palette_dismiss'] as const;
 
 // Voice-only commands handled inline in content's BRANCHKIT_ACTION listener
 // (the activate family shares plain activate's resolution path there), with
@@ -135,8 +136,10 @@ describe('command catalog — voice patterns', () => {
     }
   });
 
-  it('attaches voice only to hint / scroll / find / navigation / tab commands this phase', () => {
-    const allowed = new Set(['Hints', 'Scroll', 'Find', 'Navigation', 'Tabs']);
+  it('attaches voice only to hint / scroll / find / navigation / tab / palette commands this phase', () => {
+    // Help entered via the palette voice loop: "palette" opens it,
+    // {browser_palette} selects a row, "hide" dismisses.
+    const allowed = new Set(['Hints', 'Scroll', 'Find', 'Navigation', 'Tabs', 'Help']);
     for (const c of withVoice) {
       expect(allowed.has(c.group), `${c.id} in ${c.group}`).toBe(true);
     }

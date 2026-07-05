@@ -214,7 +214,30 @@ export type Message =
   // Background → content (top frame). Run a catalog command through the
   // content dispatcher — the palette's command rows use the exact semantics
   // of pressing the command's keybind.
-  | { type: 'PALETTE_COMMAND'; action: string; params?: Record<string, string> };
+  | { type: 'PALETTE_COMMAND'; action: string; params?: Record<string, string> }
+  // Palette page → background. The palette's voice session: codeword badges
+  // assigned to every row at open. Background keeps the row_id → dispatch
+  // map and POSTs the (spoken, row_id) entries to the plugin's /palette,
+  // which Puts the exclusive palette tag. Sent only when the voice alphabet
+  // is loaded — keyboard-only palettes have no voice session at all.
+  | { type: 'PALETTE_PUBLISH'; entries: PaletteVoiceEntry[]; rows: PaletteVoiceRow[] }
+  // Content → background. The palette overlay was removed (any close path:
+  // background-driven PALETTE_CLOSE, local Ctrl+K toggle, blur). Background
+  // drains the plugin's palette entries — which clears the exclusive tag —
+  // and drops the dispatch map. Idempotent.
+  | { type: 'PALETTE_CLOSED' };
+
+/** One spoken palette codeword → row binding, published to the plugin. */
+export interface PaletteVoiceEntry {
+  spoken: string;
+  row_id: string;
+}
+
+/** Background-side row dispatch record — never leaves the extension. */
+export interface PaletteVoiceRow {
+  row_id: string;
+  dispatch: PaletteDispatch;
+}
 
 // Response to RESOLVE_HINT / RESOLVE_HINT_FROM_TAB.
 export type ResolveHintResponse =
