@@ -55,7 +55,12 @@ if (existsSync(outDir)) rmSync(outDir, { recursive: true });
 mkdirSync(outDir, { recursive: true });
 
 const entries = [
-  { in: 'src/content.ts',    out: 'content.js',    format: 'iife' },
+  // `swallowGuardBail`: content.ts's duplicate-injection guard deliberately
+  // throws to abort its IIFE when a script is injected into a frame that
+  // already has one. That throw is correct, but it surfaces as an "Uncaught
+  // Error" in the page console / dev error list. Wrap the IIFE so ONLY that
+  // intentional bail is caught (any real error re-throws, still uncaught).
+  { in: 'src/content.ts',    out: 'content.js',    format: 'iife', swallowGuardBail: true },
   { in: 'src/bootstrap.ts',  out: 'bootstrap.js',  format: 'iife' },
   { in: 'src/background.ts', out: 'background.js', format: 'esm'  },
   { in: 'src/offscreen.ts',  out: 'offscreen.js',  format: 'iife' },
@@ -75,6 +80,10 @@ await Promise.all(entries.map((e) =>
       __BUILD_ID__: JSON.stringify(buildId),
       __HARNESS_HOOKS__: release ? 'false' : 'true',
     },
+    ...(e.swallowGuardBail ? {
+      banner: { js: 'try {' },
+      footer: { js: '} catch (e) { if (String((e && e.message) || e).indexOf("duplicate injection") === -1) throw e; }' },
+    } : {}),
   })
 ));
 
