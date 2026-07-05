@@ -133,10 +133,10 @@ function getNudge(element: Element, hasText: boolean): Nudge {
     // glyphs; an icon has none, and in dense action clusters (QuickBase's
     // pencil/eye: 18px icons, 4px apart) a badge hanging 70% past the
     // left edge lands ON the neighboring control. Left edges aligned,
-    // with ~40% of the badge overlapping the icon's top (user direction,
+    // with ~20% of the badge overlapping the icon's top (user-tuned,
     // 2026-07-05): the slight overlap reads as ATTACHED to the icon,
     // where fully-above read as floating between rows.
-    return { x: 1, y: 0.6 };
+    return { x: 1, y: 0.2 };
   }
 
   // Everything else — Rango-style ratio nudge per font-size bucket.

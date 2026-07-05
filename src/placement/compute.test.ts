@@ -20,10 +20,10 @@ describe('computePlacement', () => {
     expect(r).toEqual({ x: 165, y: 88 });
   });
 
-  it('nudge=(1,0.6) — small icon-only targets — left edges aligned, ~40% of the badge overlapping the icon top (rounds 36/36c: no neighbor bleed, reads as attached)', () => {
-    const r = computePlacement(base({ nudge: { x: 1, y: 0.6 }, badgeSize: { w: 22, h: 15 }, targetRect: { left: 363, top: 327 } }));
+  it('nudge=(1,0.2) — small icon-only targets — left edges aligned, ~20% of the badge overlapping the icon top (rounds 36/36c: no neighbor bleed, reads as attached)', () => {
+    const r = computePlacement(base({ nudge: { x: 1, y: 0.2 }, badgeSize: { w: 22, h: 15 }, targetRect: { left: 363, top: 327 } }));
     expect(r.x).toBe(363);        // left edges aligned — zero horizontal overhang
-    expect(r.y).toBe(327 - 6);    // 60% above, 40% on the icon's top
+    expect(r.y).toBe(327 - 12);   // 80% above, 20% on the icon's top
   });
 
   it('nudge=(1,1) puts the badge inside the target at its top-left corner', () => {
