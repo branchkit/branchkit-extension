@@ -122,6 +122,7 @@ import {
   markSent,
   hasSent,
   hasPendingDeletes,
+  drainPendingDeletes,
   getSessionId,
   rotateSession,
   claimLabels,
@@ -2115,10 +2116,13 @@ async function doScanBatched(source: DiscoverySource): Promise<void> {
   // the deletes flush below reads hasPendingDeletes.
   await Promise.allSettled(inFlight);
 
-  // If the terminal batch's sweep queued deletes, flush them now via
-  // an empty deletes-only batch — otherwise they'd strand until the
-  // next user-driven scan. Reuses the same session_id so plugin-side
-  // session tracking stays consistent.
+  // If the batch sweeps queued deletes, flush them now via an empty
+  // deletes-only batch — otherwise they'd strand until the next
+  // user-driven scan. Deletes no longer hitchhike on the pipelined
+  // middle batches (postBatch takes them explicitly and settles the
+  // sentCodewords shadow itself), so this ordered flush is the scan
+  // path's one delete carrier. Reuses the same session_id so
+  // plugin-side session tracking stays consistent.
   if (hasPendingDeletes()) {
     await postBatch({
       session_id: getSessionId(),
@@ -2130,7 +2134,7 @@ async function doScanBatched(source: DiscoverySource): Promise<void> {
       app_id: sessionMeta.app_id,
       table_id: sessionMeta.table_id,
       elements: [],
-    });
+    }, drainPendingDeletes());
   }
   recordCpu('doScanBatched', performance.now() - __cpuStart);
 }

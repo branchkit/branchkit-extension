@@ -169,6 +169,99 @@ describe('syncNow wholesale refusal (calibration_active)', () => {
   });
 });
 
+describe('pipelined delete accounting (audit 2026-07-04)', () => {
+  // Deletes queued while a pipeline's chunks round-trip used to be drained
+  // ambiently by whichever POST fired next — a parallel middle chunk with no
+  // accounting. Applied deletes then stayed in sentCodewords (epoch mismatch
+  // → spurious full republish); refused ones vanished with both sides
+  // agreeing on the wrong state. Now deletes ride only the ordered posts
+  // (chunk 0 / final chunk) and postBatch settles them uniformly.
+  let store: WrapperStore;
+  let sendMessage: ReturnType<typeof vi.fn>;
+  let onBatch: ((req: { batch_index: number }) => void) | null;
+
+  const batchCalls = () =>
+    sendMessage.mock.calls.filter((c) => c[0]?.type === 'GRAMMAR_BATCH');
+
+  beforeEach(() => {
+    setAlphabet(ALPHABET);
+    store = new WrapperStore();
+    onBatch = null;
+    sendMessage = vi.fn((msg: { type: string; request?: { batch_index: number; elements: ScannedElement[] } }) => {
+      if (msg.type !== 'GRAMMAR_BATCH') return Promise.resolve(undefined);
+      onBatch?.(msg.request!);
+      return Promise.resolve(ok(msg.request!.elements.map((e) => e.codeword)));
+    });
+    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+    initLabelSync({
+      store,
+      detachWrapper: vi.fn(),
+      reconcile: vi.fn(),
+      isHintsVisible: () => false,
+      republishAll: vi.fn(),
+    });
+    rotateSession();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    document.body.innerHTML = '';
+  });
+
+  it('a delete queued mid-pipeline rides the FINAL chunk and settles the shadow', async () => {
+    // 16 puts → two chunks (batch size 15): chunk 0 awaited, then the final.
+    markSent('zinc');
+    for (let i = 0; i < 16; i++) queuePut(makeWrapper(ALPHABET[i], store));
+    onBatch = (req) => {
+      // Fires at chunk 0's POST — the delete lands while it round-trips,
+      // after postChunk(0) already drained the (empty) queue.
+      if (req.batch_index === 0) queueDelete('zinc');
+    };
+
+    await syncNow('test');
+
+    const calls = batchCalls();
+    expect(calls).toHaveLength(2);
+    expect(calls[0][0].request.delete_codewords).toBeUndefined();
+    expect(calls[1][0].request.is_final).toBe(true);
+    expect(calls[1][0].request.delete_codewords).toEqual(['zinc']);
+    expect(hasSent('zinc')).toBe(false); // settled, not stranded in the shadow
+    expect(hasPendingDeletes()).toBe(false);
+  });
+
+  it('concurrent syncNow coalesces into the running flight plus one re-run', async () => {
+    // Overlapping pipelines raced pipeline B's chunk-0 deletes against
+    // pipeline A's in-flight Puts through independent fetches. Single-flight:
+    // the second call returns the same promise and its delta ships in one
+    // trailing re-run after the first pipeline fully settles.
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((r) => { releaseFirst = r; });
+    let firstCall = true;
+    sendMessage.mockImplementation(async (msg: { type: string; request?: { elements: ScannedElement[] } }) => {
+      if (msg.type !== 'GRAMMAR_BATCH') return undefined;
+      if (firstCall) { firstCall = false; await gate; }
+      return ok(msg.request!.elements.map((e) => e.codeword));
+    });
+
+    queuePut(makeWrapper('arch', store));
+    const p1 = syncNow('first');
+    queuePut(makeWrapper('bake', store));
+    const p2 = syncNow('second');
+    expect(p2).toBe(p1); // coalesced, not a parallel pipeline
+    expect(batchCalls()).toHaveLength(1); // second flight NOT dispatched yet
+
+    releaseFirst();
+    await p1;
+
+    const calls = batchCalls();
+    expect(calls).toHaveLength(2);
+    expect(calls[0][0].request.elements.map((e: ScannedElement) => e.codeword)).toEqual(['arch']);
+    expect(calls[1][0].request.elements.map((e: ScannedElement) => e.codeword)).toEqual(['bake']);
+    expect(hasSent('arch')).toBe(true);
+    expect(hasSent('bake')).toBe(true);
+  });
+});
+
 // --- Grammar epoch handshake (Phases 2a+2b of DESIGN_GRAMMAR_EPOCH_HANDSHAKE.md) ---
 
 import { grammarEpochStats, resetGrammarEpochActForTest } from './label-sync';

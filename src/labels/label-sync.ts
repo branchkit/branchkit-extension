@@ -172,7 +172,10 @@ export async function claimLabels(count: number, preferred: string[] = []): Prom
   return labelReservoir.claim(count, preferred);
 }
 
-function drainPendingDeletes(): string[] {
+/** Drain the queued deletes for an outbound batch. Callers pass the drained
+ * list to postBatch, which owns settling it (see below). Exported for the
+ * scan path's terminal deletes-only flush (content.ts doScanBatched). */
+export function drainPendingDeletes(): string[] {
   if (pendingDeleteCodewords.length === 0) return [];
   const drained = pendingDeleteCodewords.slice();
   pendingDeleteCodewords.length = 0;
@@ -181,23 +184,32 @@ function drainPendingDeletes(): string[] {
 
 export async function postBatch(
   request: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'>,
+  deletes: string[] = [],
 ): Promise<GrammarBatchResponse> {
   // Standalone (BranchKit absent): there is no plugin to receive the grammar.
   // Acknowledge every element locally so the scan path attaches all candidate
   // wrappers — the badge-implies-functional contract degenerates to "pickable
-  // by typing", which holds without any voice round-trip. Drain and discard
-  // any queued deletes so they can't accumulate while disconnected.
+  // by typing", which holds without any voice round-trip. Discard the caller's
+  // drained deletes AND anything still queued so they can't accumulate while
+  // disconnected — no plugin holds these codewords.
   if (!isVoiceAlphabetLoaded()) {
     drainPendingDeletes();
     return { result: 'ok', succeeded: request.elements.map(e => e.codeword), failed: [] };
   }
-  // Piggyback any queued deletes from the prior batch's isConnected
-  // sweep. Drain unconditionally — even an empty batch should carry
-  // pending deletes through so disconnected elements don't leak past
-  // a scan boundary.
-  const drainedDeletes = drainPendingDeletes();
+  // Deletes ride explicitly — postBatch no longer drains the ambient queue.
+  // The ambient drain let deletes queued mid-pipeline hitchhike on whichever
+  // POST happened next (a parallel middle chunk, a scan batch) with no
+  // accounting: applied deletes stayed in sentCodewords (epoch mismatch →
+  // spurious full republish) and refused ones vanished from the queue with
+  // both sides agreeing on the wrong state — a permanently matchable
+  // painted-but-gone codeword the epoch tripwire can't see. Deletes are
+  // drained only at ordered points (syncNow chunk 0 / final chunk, the
+  // pure-delete push, the scan path's terminal flush) and settled HERE,
+  // uniformly: applied (ok/stored — batch.go admits delete_codewords on any
+  // batch) drops them from the shadow; anything else restores them for the
+  // next attempt.
   const fullRequest: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'> =
-    drainedDeletes.length > 0 ? { ...request, delete_codewords: drainedDeletes } : request;
+    deletes.length > 0 ? { ...request, delete_codewords: deletes } : request;
   inFlightBatches++;
   // Transport trace (round 22b): every outcome — including silently-caught
   // sendMessage failures and slow round-trips — lands in the snapshot's
@@ -206,7 +218,7 @@ export async function postBatch(
   const trace = (result: string, failedN: number): void => {
     recordSyncPost({
       t: __t0, elapsedMs: performance.now() - __t0, result,
-      elements: request.elements.length, deletes: drainedDeletes.length,
+      elements: request.elements.length, deletes: deletes.length,
       failedN, session: request.session_id.slice(0, 8),
       kind: request.kind, batchIndex: request.batch_index, isFinal: request.is_final,
     });
@@ -214,13 +226,19 @@ export async function postBatch(
   try {
     const resp: GrammarBatchResponse =
       await chrome.runtime.sendMessage({ type: 'GRAMMAR_BATCH', request: fullRequest } as Message);
+    if (resp.result === 'ok' || resp.result === 'stored') {
+      for (const cw of deletes) sentCodewords.delete(cw);
+    } else if (deletes.length > 0) {
+      // Refusal (calibration_active) or plugin-side error: nothing applied.
+      pendingDeleteCodewords.push(...deletes);
+    }
     trace(resp.result, resp.failed.length);
     return resp;
   } catch {
     // Restore drained deletes on transport failure so they're carried
     // on the next attempt — otherwise an SW restart mid-scan would
     // strand the deletes silently.
-    pendingDeleteCodewords.push(...drainedDeletes);
+    pendingDeleteCodewords.push(...deletes);
     trace('error', request.elements.length);
     return {
       result: 'error',
@@ -578,8 +596,40 @@ function fireBatchedSync(reason: string): void {
  * changed) not O(rows total). Empty deltas skip the round-trip entirely.
  *
  * Awaitable so the refocus-from-cache path can sync inline.
+ *
+ * SINGLE-FLIGHT: the pipelined chunks impose ordering only within one
+ * invocation (chunk 0's deletes awaited before the middle Puts). The
+ * mass-claim fast path and the debounce could overlap two invocations,
+ * racing pipeline B's deletes against pipeline A's still-in-flight Puts
+ * through independent fetches — a stale Put landing after its codeword's
+ * Delete resurrects a dead grammar entry. One sync runs at a time; a
+ * request arriving mid-flight coalesces into one trailing re-run (its
+ * delta is ambient module state, so nothing is lost by coalescing).
  */
-export async function syncNow(reason: string): Promise<void> {
+let syncInFlight: Promise<void> | null = null;
+let syncRerunReason: string | null = null;
+
+export function syncNow(reason: string): Promise<void> {
+  if (syncInFlight) {
+    syncRerunReason = reason;
+    return syncInFlight;
+  }
+  syncInFlight = (async () => {
+    try {
+      await doSyncNow(reason);
+      while (syncRerunReason !== null) {
+        const r = syncRerunReason;
+        syncRerunReason = null;
+        await doSyncNow(r);
+      }
+    } finally {
+      syncInFlight = null;
+    }
+  })();
+  return syncInFlight;
+}
+
+async function doSyncNow(reason: string): Promise<void> {
   // Grammar is pushed to the plugin only when BranchKit is connected (voice
   // overlay loaded). Standalone there is no plugin to receive it; hints still
   // render and are typeable without this push.
@@ -614,9 +664,10 @@ export async function syncNow(reason: string): Promise<void> {
   };
 
   if (puts.length === 0) {
-    // Pure-delete push. postBatch drains pendingDeleteCodewords
-    // and piggybacks them via delete_codewords on a single empty batch.
-    const drainedDeletes = pendingDeleteCodewords.slice();
+    // Pure-delete push: one empty batch carrying the queued deletes.
+    // postBatch settles them (shadow drop on apply, queue restore on
+    // refusal or transport failure) — this path only paces the retry.
+    const drainedDeletes = drainPendingDeletes();
     const resp = await postBatch({
       session_id: sessionId,
       batch_index: 0,
@@ -624,18 +675,10 @@ export async function syncNow(reason: string): Promise<void> {
       kind: 'incremental',
       ...sessionMeta,
       elements: [],
-    });
-    // Plugin doesn't report deletes in `succeeded`/`failed`, but it
-    // honors them as long as the batch itself didn't error. On error,
-    // postBatch restores pendingDeleteCodewords for us. 'stored' (non-focused
-    // source) applied the deletes to the session just like 'ok' did.
+    }, drainedDeletes);
     if (resp.result === 'ok' || resp.result === 'stored') {
-      for (const cw of drainedDeletes) sentCodewords.delete(cw);
       checkGrammarEpoch(resp, reason);
     } else if (isWholesaleRefusal(resp)) {
-      // Refused without error (calibration): the deletes were drained by
-      // postBatch but never applied — restore and retry after calibration.
-      pendingDeleteCodewords.push(...drainedDeletes);
       bkLog('BK_SYNC_REFUSED', { result: resp.result, deletes: drainedDeletes.length });
       scheduleRefusalRetry();
     }
@@ -664,13 +707,13 @@ export async function syncNow(reason: string): Promise<void> {
 
   const handleResponse = (chunk: ElementWrapper[], resp: GrammarBatchResponse, deletesRiding: string[], isLast: boolean): void => {
     if (isWholesaleRefusal(resp)) {
-      // Applied nothing (calibration). Re-queue this chunk's puts, restore
-      // the deletes that rode it, stop dispatching further chunks, and
-      // retry once calibration releases. Already-in-flight siblings settle
-      // through this same handler and re-queue themselves too.
+      // Applied nothing (calibration). Re-queue this chunk's puts, stop
+      // dispatching further chunks, and retry once calibration releases
+      // (postBatch already restored any deletes that rode it).
+      // Already-in-flight siblings settle through this same handler and
+      // re-queue themselves too.
       refused = true;
       for (const w of chunk) pendingPuts.add(w);
-      pendingDeleteCodewords.push(...deletesRiding);
       bkLog('BK_SYNC_REFUSED', {
         result: resp.result, requeued: chunk.length, deletes: deletesRiding.length,
       });
@@ -693,9 +736,7 @@ export async function syncNow(reason: string): Promise<void> {
     }
     const succeededSet = new Set(resp.succeeded);
     for (const cw of succeededSet) sentCodewords.add(cw);
-    if (resp.result === 'ok' || resp.result === 'stored') {
-      for (const cw of deletesRiding) sentCodewords.delete(cw);
-    }
+    // (Deletes that rode this chunk were already settled by postBatch.)
     // Voice-layer ACK: codewords the plugin just confirmed are live in the
     // grammar. ElementWrapper.markGrammarReady flips the flag and, if the
     // badge is visible with bk-pending, clears the class to transition to
@@ -725,7 +766,15 @@ export async function syncNow(reason: string): Promise<void> {
     const chunk = chunks[index].filter(
       (w) => w.scanned.codeword && deps.store.findWrapperFor(w.element) === w,
     );
-    const deletesRiding = index === 0 ? pendingDeleteCodewords.slice() : [];
+    // Deletes ride only the ORDERED posts: chunk 0 (awaited before the
+    // middle Puts — the freed-letter-reuse constraint) and the final chunk
+    // (posted after every middle settles, so deletes queued mid-pipeline by
+    // the post-batch sweeps ship this sync instead of hitchhiking on a
+    // parallel middle chunk, where arrival order vs the in-flight Puts is
+    // unconstrained). A letter freed mid-pipeline can't be re-Put within
+    // this same pipeline (its reclaim lands in pendingPuts for the NEXT
+    // sync), so a final-chunk delete never clobbers a fresh Put.
+    const deletesRiding = index === 0 || isLast ? drainPendingDeletes() : [];
     if (chunk.length === 0 && deletesRiding.length === 0 && !isLast) return;
     stampStrictViewport(chunk);
     const resp = await postBatch({
@@ -735,7 +784,7 @@ export async function syncNow(reason: string): Promise<void> {
       kind: 'incremental',
       ...sessionMeta,
       elements: chunk.map(w => w.scanned),
-    });
+    }, deletesRiding);
     handleResponse(chunk, resp, deletesRiding, isLast);
   };
 
