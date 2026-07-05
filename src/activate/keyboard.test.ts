@@ -111,11 +111,17 @@ describe('hint mode — codeword filtering', () => {
     expect(cb).not.toHaveBeenCalled();
   });
 
-  it('escape exits hint mode (no prefix) and hides hints', () => {
+  it('escape exits hint mode (no prefix) and fires the escape callback', () => {
+    // The badges do NOT hide from the KeyHandler — that's a content-side
+    // visibility decision (always-visible keeps them; manual dismisses). We
+    // just exit the mode and notify.
+    const escapeCb = vi.fn();
+    handler.setHintEscapeCallback(escapeCb);
     handler.enterHintMode();
     handler.handleKeyDown(makeKey('Escape'));
     expect(handler.getMode()).toBe('normal');
-    expect(dispatchSpy).toHaveBeenCalledWith('hide_hints');
+    expect(escapeCb).toHaveBeenCalled();
+    expect(dispatchSpy).not.toHaveBeenCalledWith('hide_hints');
   });
 
   it('escape with a typed prefix cancels just the prefix and stays in hint mode', () => {
@@ -129,12 +135,10 @@ describe('hint mode — codeword filtering', () => {
     expect(result).toBe(true);
     expect(cb).toHaveBeenLastCalledWith(''); // prefix cleared
     expect(handler.getMode()).toBe('hint'); // did NOT exit
-    expect(dispatchSpy).not.toHaveBeenCalledWith('hide_hints');
 
-    // A second Escape (no prefix in progress) hides + exits.
+    // A second Escape (no prefix in progress) exits to normal.
     handler.handleKeyDown(makeKey('Escape'));
     expect(handler.getMode()).toBe('normal');
-    expect(dispatchSpy).toHaveBeenCalledWith('hide_hints');
   });
 
   it('intercepts inside an editable field (hint mode wins over insert)', () => {

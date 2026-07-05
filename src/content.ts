@@ -1149,6 +1149,14 @@ dispatcher.register('show_hints_category', (params) => {
 // hints) and hide it back in Normal. See notes/DESIGN_KEYBOARD_MODES.md.
 keyHandler.setModeChangeCallback((mode) => setModeChip(mode));
 
+// Escape out of hint mode: in ALWAYS-visible mode the badges stay painted
+// (they're for voice — Escape just leaves keyboard typing mode); in MANUAL
+// mode Escape dismisses the summoned hints, the Vimium behavior. The mode
+// exit itself already happened in the KeyHandler.
+keyHandler.setHintEscapeCallback(() => {
+  if (getHintVisibility() !== 'always') hideHints();
+});
+
 // Reject a codeword keystroke that no painted badge starts with, so a stray
 // key doesn't filter every hint off the screen. Only consults codeword
 // prefixes (not the `/` text filter, which accepts anything).

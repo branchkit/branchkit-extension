@@ -44,6 +44,10 @@ export class KeyHandler {
   // Notified whenever the mode changes (normal ↔ hint), so the mode indicator
   // chip can reflect it. Set by content.ts.
   private onModeChange: ((mode: KeyMode) => void) | null = null;
+  // Fired when the user presses Escape (no typed prefix) to leave hint mode.
+  // Content decides whether to also hide the badges: manual visibility
+  // dismisses them, always-visible keeps them. Set by content.ts.
+  private onHintEscape: (() => void) | null = null;
   // Whether at least one codeword starts with a given prefix. Used to reject a
   // codeword keystroke that matches nothing — otherwise the filter hides every
   // badge until Escape. Set by content.ts; null means accept any char.
@@ -60,6 +64,10 @@ export class KeyHandler {
 
   setModeChangeCallback(cb: (mode: KeyMode) => void): void {
     this.onModeChange = cb;
+  }
+
+  setHintEscapeCallback(cb: () => void): void {
+    this.onHintEscape = cb;
   }
 
   setMatchPredicate(fn: (prefix: string) => boolean): void {
@@ -139,15 +147,16 @@ export class KeyHandler {
         this.onFilterChange?.('');
         return true;
       }
-      // No typed prefix. Only the explicitly-entered hint mode treats Escape as
-      // "hide hints". Under passive always-visible typing, Escape stays native
-      // (close a dropdown/dialog, cancel find) — hiding is the configurable chord
-      // handled in content.ts instead.
-      if (this.mode !== 'hint') return false;
+      // No typed prefix → leave hint mode. Whether the badges also HIDE is a
+      // visibility decision, made in content via onHintEscape: manual
+      // visibility dismisses the summoned hints; always-visible keeps them
+      // painted (they exist for voice regardless of keyboard mode). handleHintKey
+      // only runs in hint mode now, so this always exits it — no `hide_hints`
+      // dispatch here.
       e.preventDefault();
       e.stopPropagation();
-      this.dispatcher.dispatch('hide_hints');
       this.exitHintMode();
+      this.onHintEscape?.();
       return true;
     }
 
