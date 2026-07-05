@@ -99,7 +99,7 @@ const STYLE = `
   font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 .panel {
-  width: min(880px, 94vw); max-height: 90vh; overflow: auto;
+  width: min(1060px, 94vw); max-height: 90vh; overflow: auto;
   background: #0d1117; color: #c9d1d9;
   border: 1px solid #30363d; border-radius: 10px;
   box-shadow: 0 16px 48px rgba(1, 4, 9, 0.6);
@@ -110,12 +110,20 @@ const STYLE = `
 .hint { font-size: 11px; color: #8b949e; }
 .sec { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
   color: #58a6ff; margin: 0 0 6px; }
-/* Spoken alphabet — read DOWN each column in a–z order (column-major). Far
-   faster to eye-scan than row-major: a letter's rough column is predictable,
-   then you scan down. ~6 columns → clean 4–5 letter blocks (a–e, f–j, …). */
-.alpha { column-count: 6; column-gap: 24px; margin-bottom: 12px; }
+/* Commands beside the alphabet on wide screens; stack when narrow. */
+.body { display: flex; gap: 30px; align-items: flex-start; }
+.commands-area { flex: 1 1 auto; min-width: 0; }
+.alpha-area { flex: 0 0 auto; }
+/* Spoken alphabet — the third column, split into TWO vertical a–z lines
+   (a–m, n–z), read DOWN each (column-major) so a letter's line is predictable
+   and you scan down. */
+.alpha { column-count: 2; column-gap: 20px; }
 .alpha .a { display: flex; gap: 6px; align-items: baseline; font-size: 12px;
   min-width: 0; break-inside: avoid; margin-bottom: 3px; }
+@media (max-width: 760px) {
+  .body { flex-direction: column; }
+  .alpha { column-count: 4; } /* full-width when stacked */
+}
 .alpha .l { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700;
   color: #e6edf3; width: 1.1em; flex: 0 0 auto; }
 .alpha .w { color: #c9d1d9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -146,8 +154,9 @@ function el(tag: string, cls?: string, text?: string): HTMLElement {
   return e;
 }
 
-/** Build the shadow-isolated host element. Alphabet first (most visible), then
- * compact one-line commands. Backdrop click closes via the supplied callback. */
+/** Build the shadow-isolated host element: commands (left) beside the spoken
+ * alphabet (right, two a–z columns) on wide screens, stacking when narrow.
+ * Backdrop click closes via the supplied callback. */
 function buildHelpOverlay(
   model: HelpGroup[],
   alphabet: { loaded: boolean; entries: AlphabetEntry[] },
@@ -173,23 +182,14 @@ function buildHelpOverlay(
   head.appendChild(el('div', 'hint', 'Esc or ? to close'));
   panel.appendChild(head);
 
-  // Spoken alphabet — top, so it's visible without scrolling.
-  panel.appendChild(el('div', 'sec', 'Spoken alphabet'));
-  if (alphabet.loaded) {
-    const grid = el('div', 'alpha');
-    for (const { letter, word } of alphabet.entries) {
-      const a = el('div', 'a');
-      a.appendChild(el('span', 'l', letter));
-      a.appendChild(el('span', 'w', word));
-      grid.appendChild(a);
-    }
-    panel.appendChild(grid);
-  } else {
-    panel.appendChild(el('div', 'alpha-empty', 'Connect BranchKit voice to see the spoken alphabet.'));
-  }
+  // Body: commands (left, the bulk) beside the spoken alphabet (right, a
+  // narrow reference column). On wide screens they sit side by side; a media
+  // query stacks them when there isn't room.
+  const body = el('div', 'body');
 
-  // Commands — compact, one line each.
-  panel.appendChild(el('div', 'sec', 'Commands'));
+  // Commands — compact, one line each, two internal columns.
+  const cmdArea = el('div', 'commands-area');
+  cmdArea.appendChild(el('div', 'sec', 'Commands'));
   const cmds = el('div', 'cmds');
   for (const g of model) {
     const groupEl = el('div', 'group');
@@ -209,7 +209,27 @@ function buildHelpOverlay(
     }
     cmds.appendChild(groupEl);
   }
-  panel.appendChild(cmds);
+  cmdArea.appendChild(cmds);
+  body.appendChild(cmdArea);
+
+  // Spoken alphabet — the third column, itself two vertical a–z lines.
+  const alphaArea = el('div', 'alpha-area');
+  alphaArea.appendChild(el('div', 'sec', 'Spoken alphabet'));
+  if (alphabet.loaded) {
+    const grid = el('div', 'alpha');
+    for (const { letter, word } of alphabet.entries) {
+      const a = el('div', 'a');
+      a.appendChild(el('span', 'l', letter));
+      a.appendChild(el('span', 'w', word));
+      grid.appendChild(a);
+    }
+    alphaArea.appendChild(grid);
+  } else {
+    alphaArea.appendChild(el('div', 'alpha-empty', 'Connect BranchKit voice to see the spoken alphabet.'));
+  }
+  body.appendChild(alphaArea);
+
+  panel.appendChild(body);
 
   const usage = el('div', 'usage');
   usage.innerHTML =
