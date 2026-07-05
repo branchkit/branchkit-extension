@@ -95,6 +95,18 @@ function unobserveTarget(el: Element): void {
 }
 
 /**
+ * The clipping scroller currently bound to a hinted target, if any (round
+ * 36b): placement uses this to flip a badge below its icon when the
+ * above-position would poke past the scroller's top edge and get clipped
+ * mid-letters. Read-only view over the same bookkeeping the clip IO uses,
+ * so placement and clip detection can't disagree about which scroller
+ * clips a target.
+ */
+export function clipRootOf(el: Element): Element | null {
+  return rootByTarget.get(el) ?? null;
+}
+
+/**
  * Level-triggered sync: observe every currently-hinted, connected target that
  * lives inside an inner scroll container; drop targets that are gone. Called
  * from the settle handlers. The IO drives `clipped` continuously between calls —

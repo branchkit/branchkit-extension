@@ -1,6 +1,7 @@
 import { ElementWrapper } from '../scan/element-wrapper';
 import { getCachedRect, getCachedStyle } from '../layout-cache';
 import { computePlacement, Nudge } from './compute';
+import { clipRootOf } from '../observe/clip-observer';
 import { type BadgeSettings, DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
 
 export type TextProbe = { hasText: true; rect: DOMRect } | { hasText: false };
@@ -181,10 +182,26 @@ function positionAtTopLeft(w: ElementWrapper, probe?: TextProbe): void {
   // see the sticky-clamp sub-question in
   // notes/completed/DESIGN_HINT_POSITIONING_REARCH.md.
   const targetRect = probe.hasText ? probe.rect : getCachedRect(w.element);
+  const nudge = getNudge(w.element, probe.hasText);
   const result = computePlacement({
     targetRect,
     badgeSize: w.hint.badgeSize,
-    nudge: getNudge(w.element, probe.hasText),
+    nudge,
   });
-  w.hint.updatePosition({ x: result.x, y: result.y });
+  let y = result.y;
+  // Fully-above icon placement vs the clipping scroller (round 36b): for a
+  // FIRST-visible-row icon, "fully above" pokes past the scroller's top
+  // edge and the container cuts the badge off mid-letters. Flip to fully
+  // BELOW the icon — a DISCRETE, target-relative choice, deliberately NOT
+  // a clamp: a partial push-down delta would bake into the scroll-anchored
+  // offset and strand the badge when the row scrolls away from the edge
+  // (the d35201a scroll-back class). Re-derived every placement pass, so
+  // the badge flips back above once the row has headroom.
+  if (!probe.hasText && nudge.y === 0) {
+    const clipRoot = clipRootOf(w.element);
+    if (clipRoot && result.y < getCachedRect(clipRoot).top) {
+      y = getCachedRect(w.element).bottom;
+    }
+  }
+  w.hint.updatePosition({ x: result.x, y });
 }
