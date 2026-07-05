@@ -46,7 +46,7 @@ export function maxVoiceRows(): number {
 export function codewordDisplay(
   codeword: string,
   alphabet: readonly string[],
-  mode: 'letter' | 'word' | 'both' | 'first-word',
+  mode: 'letter' | 'word' | 'expand',
 ): string {
   const words = codeword.split(' ');
   const letters = words.map((w) => {
@@ -58,9 +58,7 @@ export function codewordDisplay(
       return letters.join('');
     case 'word':
       return words.join(' ');
-    case 'both':
-      return words.length === 1 ? `${letters[0]} ${words[0]}` : words.join(' ');
-    case 'first-word':
+    case 'expand':
       return words.length === 1 ? words[0] : `${words[0]} ${letters[1]}`;
   }
 }

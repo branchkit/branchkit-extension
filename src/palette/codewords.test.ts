@@ -88,13 +88,8 @@ describe('codewordDisplay', () => {
     expect(codewordDisplay('ocean pearl', ALPHABET, 'word')).toBe('ocean pearl');
   });
 
-  it('both mode pairs letter+word for singles, words for pairs', () => {
-    expect(codewordDisplay('arch', ALPHABET, 'both')).toBe('a arch');
-    expect(codewordDisplay('ocean pearl', ALPHABET, 'both')).toBe('ocean pearl');
-  });
-
-  it('first-word mode shows word for singles, word+letter for pairs', () => {
-    expect(codewordDisplay('arch', ALPHABET, 'first-word')).toBe('arch');
-    expect(codewordDisplay('ocean pearl', ALPHABET, 'first-word')).toBe('ocean p');
+  it('expand mode shows word for singles, word+letter for pairs', () => {
+    expect(codewordDisplay('arch', ALPHABET, 'expand')).toBe('arch');
+    expect(codewordDisplay('ocean pearl', ALPHABET, 'expand')).toBe('ocean p');
   });
 });

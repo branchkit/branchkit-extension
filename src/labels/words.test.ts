@@ -5,6 +5,7 @@ import {
   isVoiceAlphabetLoaded,
   letterToSpokenWord,
   labelToDisplay,
+  migrateDisplayMode,
   codewordToAssignment,
   LabelAssignment,
   WORD_TO_LETTER,
@@ -94,32 +95,40 @@ describe('labelToDisplay', () => {
     expect(labelToDisplay(label, 'word')).toBe('cape glad');
   });
 
-  it('both mode for a single letter shows letter + spoken word', () => {
+  it('word mode for a single letter shows just the spoken word', () => {
     const label = codewordToAssignment('a')!;
-    expect(labelToDisplay(label, 'both')).toBe('a arch');
+    expect(labelToDisplay(label, 'word')).toBe('arch');
   });
 
-  it('first-word mode shows the first spoken word + the second letter', () => {
+  it('expand mode shows the first spoken word + the second letter', () => {
     const label = codewordToAssignment('c g')!;
-    expect(labelToDisplay(label, 'first-word')).toBe('cape g');
+    expect(labelToDisplay(label, 'expand')).toBe('cape g');
   });
 
   it('round-trips a token through every mode', () => {
     const a = codewordToAssignment('c g')!;
     expect(labelToDisplay(a, 'letter')).toBe('cg');
     expect(labelToDisplay(a, 'word')).toBe('cape glad');
-    expect(labelToDisplay(a, 'first-word')).toBe('cape g');
+    expect(labelToDisplay(a, 'expand')).toBe('cape g');
+  });
+
+  it('migrates legacy display-mode values onto the current set', () => {
+    expect(migrateDisplayMode('first-word')).toBe('expand');
+    expect(migrateDisplayMode('both')).toBe('word');
+    expect(migrateDisplayMode('word')).toBe('word');
+    expect(migrateDisplayMode('bogus')).toBe('letter');
   });
 });
 
 describe('labelToDisplay — standalone (no overlay)', () => {
   beforeEach(() => clearAlphabet());
 
-  it('word/both modes fall back to the letters', () => {
+  it('word/expand modes fall back to the letters', () => {
     const pair: LabelAssignment = { words: ['c', 'g'], letter: 'cg', isSingle: false };
     expect(labelToDisplay(pair, 'word')).toBe('c g');
     expect(labelToDisplay(pair, 'letter')).toBe('cg');
+    expect(labelToDisplay(pair, 'expand')).toBe('c g');
     const single: LabelAssignment = { words: ['a'], letter: 'a', isSingle: true };
-    expect(labelToDisplay(single, 'both')).toBe('a a');
+    expect(labelToDisplay(single, 'expand')).toBe('a');
   });
 });

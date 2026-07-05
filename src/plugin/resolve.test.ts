@@ -53,10 +53,10 @@ describe('resolveHintLocally — WYSIWYG hint matching', () => {
     expect(resolveHintLocally(store, 'cape glad', 'word').ok).toBe(true);
   });
 
-  it('resolves the first-word form in first-word mode', () => {
+  it('resolves the first-word form in expand mode', () => {
     document.body.innerHTML = `<button id="x">X</button>`;
     const store = storeWith(document.getElementById('x')!, 'c g');
-    expect(resolveHintLocally(store, 'cape g', 'first-word').ok).toBe(true);
+    expect(resolveHintLocally(store, 'cape g', 'expand').ok).toBe(true);
   });
 
   it('resolves a letter token directly via byCodeword', () => {

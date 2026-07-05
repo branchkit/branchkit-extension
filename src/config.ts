@@ -17,6 +17,7 @@
  */
 
 import { BadgeDisplayMode, HintVisibility } from './types';
+import { migrateDisplayMode } from './labels/words';
 
 let displayMode: BadgeDisplayMode = 'letter';
 let hintVisibility: HintVisibility = 'always';
@@ -67,7 +68,7 @@ export function loadConfig(handlers: ConfigHandlers): void {
 
   chrome.storage.sync.get(['badgeDisplayMode', 'hintVisibility'], (result) => {
     if (result.badgeDisplayMode) {
-      displayMode = result.badgeDisplayMode;
+      displayMode = migrateDisplayMode(result.badgeDisplayMode);
     }
     if (result.hintVisibility) {
       hintVisibility = result.hintVisibility;
@@ -83,7 +84,7 @@ export function loadConfig(handlers: ConfigHandlers): void {
 
   chrome.storage.onChanged.addListener((changes) => {
     if (changes.badgeDisplayMode) {
-      displayMode = changes.badgeDisplayMode.newValue || 'letter';
+      displayMode = migrateDisplayMode(changes.badgeDisplayMode.newValue);
       handlers.onDisplayModeChange();
     }
     if (changes.hintVisibility) {

@@ -11,7 +11,7 @@ export type Category = 'link' | 'button' | 'input' | 'tab' | 'edit' | 'view' | '
 
 // --- Badge Display ---
 
-export type BadgeDisplayMode = 'word' | 'letter' | 'both' | 'first-word';
+export type BadgeDisplayMode = 'word' | 'letter' | 'expand';
 export type HintVisibility = 'always' | 'manual';
 
 // --- Scanned Elements ---

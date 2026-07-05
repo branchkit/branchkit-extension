@@ -124,9 +124,11 @@ export function codewordToAssignment(token: string): LabelAssignment | null {
 
 /**
  * Format a label for display. Letter mode (the default) shows the letters and
- * needs no overlay — that's the standalone path. The word/both/first-word
- * modes show the spoken codeword via the voice overlay; with no overlay loaded
- * they fall back to the letters.
+ * needs no overlay — that's the standalone path. The word/expand modes show
+ * the spoken codeword via the voice overlay; with no overlay loaded they fall
+ * back to the letters. `expand` is the staged reveal: it shows the first word
+ * plus the second letter compactly, then `setMatchedChars` collapses the
+ * spoken word to its letter and expands the second word once it's spoken.
  */
 export function labelToDisplay(assignment: LabelAssignment, mode: BadgeDisplayMode): string {
   const spoken = assignment.words.map(letterToSpokenWord);
@@ -135,15 +137,31 @@ export function labelToDisplay(assignment: LabelAssignment, mode: BadgeDisplayMo
       return assignment.letter;
     case 'word':
       return spoken.join(' ');
-    case 'both':
-      if (assignment.isSingle) {
-        return `${assignment.letter} ${spoken[0]}`;
-      }
-      return spoken.join(' ');
-    case 'first-word':
+    case 'expand':
       if (assignment.isSingle) {
         return spoken[0];
       }
       return `${spoken[0]} ${assignment.letter[1] ?? ''}`;
+  }
+}
+
+/**
+ * Map a persisted `badgeDisplayMode` value (possibly a legacy one) onto the
+ * current BadgeDisplayMode set. `first-word` → `expand` (renamed); `both` →
+ * `word` (Both rendered identically to Words for two-letter codewords, so it
+ * folded in). Unknown/absent values fall back to `letter`.
+ */
+export function migrateDisplayMode(v: unknown): BadgeDisplayMode {
+  switch (v) {
+    case 'first-word':
+      return 'expand';
+    case 'both':
+      return 'word';
+    case 'letter':
+    case 'word':
+    case 'expand':
+      return v;
+    default:
+      return 'letter';
   }
 }

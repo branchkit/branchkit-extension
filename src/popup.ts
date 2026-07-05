@@ -17,6 +17,7 @@ import {
   type RevealMethod,
 } from './rules/domain-rules';
 import { loadDomainRules, saveDomainRules } from './rules/domain-rules-storage';
+import { migrateDisplayMode } from './labels/words';
 import { suggestPattern, isValidSelector } from './rules/options-helpers';
 import {
   KIND_META,
@@ -104,10 +105,20 @@ function initGrantButton(): void {
   });
 }
 
-function initSyncedSelect(id: string, storageKey: string): void {
+function initSyncedSelect(
+  id: string,
+  storageKey: string,
+  migrate?: (v: unknown) => string,
+): void {
   const select = document.getElementById(id) as HTMLSelectElement;
   chrome.storage.sync.get(storageKey, (result) => {
-    if (result[storageKey]) select.value = result[storageKey];
+    const raw = result[storageKey];
+    if (raw === undefined) return;
+    const value = migrate ? migrate(raw) : raw;
+    select.value = value;
+    // Persist the migrated value once so the dropdown (which no longer has an
+    // <option> for the legacy value) doesn't render a blank/first selection.
+    if (migrate && value !== raw) chrome.storage.sync.set({ [storageKey]: value });
   });
   select.addEventListener('change', () => {
     chrome.storage.sync.set({ [storageKey]: select.value });
@@ -498,7 +509,7 @@ async function init(): Promise<void> {
   checkStatus();
   initGrantButton();
   initSyncedSelect('hint-visibility', 'hintVisibility');
-  initSyncedSelect('hint-mode', 'badgeDisplayMode');
+  initSyncedSelect('hint-mode', 'badgeDisplayMode', migrateDisplayMode);
   initSyncedCheckbox('tab-markers', 'tabMarkersEnabled', true);
   initOptionsLink();
 

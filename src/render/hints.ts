@@ -980,17 +980,7 @@ export class HintBadge {
         remainingText = spoken.slice(count).join(' ');
         if (matchedText && remainingText) remainingText = ' ' + remainingText;
         break;
-      case 'both':
-        if (words.length === 1) {
-          matchedText = labelToDisplay(this.label, 'both');
-          remainingText = '';
-        } else {
-          matchedText = spoken.slice(0, count).join(' ');
-          remainingText = spoken.slice(count).join(' ');
-          if (matchedText && remainingText) remainingText = ' ' + remainingText;
-        }
-        break;
-      case 'first-word':
+      case 'expand':
         if (count >= 1 && words.length >= 2) {
           matchedText = letter[0];
           remainingText = ' ' + spoken[1];
