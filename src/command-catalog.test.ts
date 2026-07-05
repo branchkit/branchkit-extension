@@ -196,7 +196,6 @@ describe('default keymap', () => {
       { keys: 'shift+KeyM', command: 'mute_tab' },
       { keys: 'ctrl+KeyK', command: 'toggle_palette' },
       { keys: 'shift+KeyT', command: 'toggle_tab_palette' },
-      { keys: 'ctrl+KeyT', command: 'toggle_tab_palette' },
       { keys: 'shift+Slash', command: 'toggle_help' },
     ]);
   });

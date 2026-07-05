@@ -217,9 +217,12 @@ queryInput.addEventListener('input', () => {
 });
 
 window.addEventListener('keydown', (e) => {
-  // Common navigation (both modes).
-  if ((e.ctrlKey || e.metaKey) && (e.code === 'KeyK' || e.code === 'KeyT')) {
-    e.preventDefault(); close(); return; // opening chord toggles closed
+  // Common navigation (both modes). Ctrl+K closes either palette (the full
+  // palette's opener toggles it; a convenience for the tab palette). The tab
+  // palette opens with bare `T`, which is a mark letter inside letter mode, so
+  // it can't toggle-close — Escape / backdrop close it, like Vimium-C.
+  if ((e.ctrlKey || e.metaKey) && e.code === 'KeyK') {
+    e.preventDefault(); close(); return;
   }
   if (e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey)) {
     e.preventDefault(); moveSelection(1); return;

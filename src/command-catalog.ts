@@ -293,8 +293,8 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     description: 'Search open tabs and every command in one overlay.',
     voice: [{ pattern: 'palette' }] },
   // The same overlay scoped to open tabs — the keyboard + voice way to switch
-  // tabs by codeword or fuzzy title (see notes/DESIGN_TAB_MARKERS.md). Ctrl+T
-  // (free on macOS — the browser's new-tab is Cmd+T); voice "tab".
+  // tabs by codeword or fuzzy title (see notes/DESIGN_TAB_MARKERS.md). Bare
+  // `T` in Normal mode (Vimium-C's tab-search key); voice "tab".
   { id: 'toggle_tab_palette', label: 'Tab palette', group: 'Tabs', mappable: true, params: [],
     description: 'Switch tabs — search by title or codeword in the palette overlay.',
     voice: [{ pattern: 'tab' }] },
@@ -404,8 +404,7 @@ export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   { keys: 'shift+KeyM', command: 'mute_tab' },        // M
   // Palette / tab palette
   { keys: 'ctrl+KeyK', command: 'toggle_palette' },   // Ctrl+K — full palette (works everywhere)
-  { keys: 'shift+KeyT', command: 'toggle_tab_palette' }, // T — tab palette (Vimium's tab-search key)
-  { keys: 'ctrl+KeyT', command: 'toggle_tab_palette' },  // Ctrl+T — tab palette, also works in fields
+  { keys: 'shift+KeyT', command: 'toggle_tab_palette' }, // T — tab palette (Vimium-C's tab-search key)
   // Help
   { keys: 'shift+Slash', command: 'toggle_help' },    // ?
 ];
