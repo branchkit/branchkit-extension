@@ -35,6 +35,11 @@ the mode is held:
   the codeword → switch + clear the mode. Or "tab arch" in one breath — the
   fast path always works; the mode never gates speed.
 
+**One voice language for tabs: markers, not positions.** The trigger is
+"tab", and what follows is always a codeword — never a number. See "Markers
+supersede voice-positional" for why the existing "tab {number}" voice phrase
+is retired here.
+
 ```
   you say "tab"  ──►  exclusive tab-mode tag set:
                         • page hints suppressed
@@ -84,6 +89,29 @@ Capacity is `S + P·(P−1)` with `P = 26 − S`:
 **Default S = 16**: sixteen single-letter fast markers + ninety pairs cover
 a 100-tab session. Drop to 14 for habitual 100+ hoarders. One-line constant,
 retune once seen live.
+
+### Markers supersede voice-positional
+
+We ship a positional voice command today: `goto_tab`, phrase **"tab
+{number}"** — switch to the Nth tab by position (1-based, shipped
+2026-07-01). Keeping it alongside marker mode would put **two addressing
+languages under one concept** — say "tab" and you'd be offered both numbers
+and letters for the same tabs. That ambiguity is exactly what a voice UI
+should avoid, so **markers become the sole voice tab-addressing** and the
+"tab {number}" *voice phrase is retired*.
+
+- `goto_tab` keeps `mappable: true` — it stays a **keyboard-bindable**
+  action (a key isn't a spoken option, so it can't pollute the voice space).
+  It just loses its `voice` pattern. (Dropping the command outright is also
+  fine; keeping the mappable action is the zero-regret choice.)
+- Nothing of value is lost from voice: **"first tab" / "last tab"** already
+  name the common endpoints, so the only thing "tab {number}" uniquely did
+  was *count to the Nth tab* — the awkward-at-scale chore markers exist to
+  replace. You stop counting and say the codeword you can see.
+
+This also removes the trigger-collision worry entirely: with "tab {number}"
+gone from voice, "tab" is free to be the marker trigger with nothing to
+compete against. (Open-question #2, closed.)
 
 ### Marker assignment & stability
 
@@ -261,10 +289,12 @@ Display mode is NOT a second toggle — it follows `badgeDisplayMode`.
    codeword per tab everywhere. Requires the palette to read the mark table
    for its tab rows. Desirable for coherence; deferred to after the mode
    ships.
-2. **Trigger word.** "tab" is clean but collides conceptually with the
-   `goto_tab` "tab {number}" phrase — number vs. marker-word capture, which
-   the matcher distinguishes, but worth verifying the two coexist (say "tab
-   five" vs "tab arch"). Alternative triggers: "tabs", "go tab" (Rango's).
+2. ~~**Trigger word.**~~ **RESOLVED** — see "Markers supersede
+   voice-positional". "tab {number}" voice is retired, so "tab" is the
+   marker trigger with no collision. One remaining sub-choice: whether bare
+   "tab" is a robust enough recognition trigger or wants a more distinctive
+   form ("go tab", Rango's) — a recognition-robustness call to make once
+   live, not a collision problem.
 3. **Reserved-letter tuning.** S = 16 default; confirm against real
    peak-tab-count once live. MRU-vs-longest-lived for single assignment is a
    sub-knob.
@@ -283,7 +313,9 @@ Display mode is NOT a second toggle — it follows `badgeDisplayMode`.
 2. **Exclusive tab mode** — `plugin.browser.tab_mode` tag +
    `browser_tab_marks` collection + "tab" trigger command + marker-select
    command, with the palette's stuck-tag drains (select / blur / focus-loss
-   / disconnect). "tab \<marker\>" live end to end, engine-narrowed.
+   / disconnect). "tab \<marker\>" live end to end, engine-narrowed. **Retire
+   `goto_tab`'s "tab {number}" voice phrase** in the same change (keep the
+   mappable action) so voice tab-addressing is markers-only.
 3. **Palette convergence** (open question 1) + soak, then the default-on
    decision.
 
