@@ -263,6 +263,37 @@ describe('tryRebindByStrongKey', () => {
     expect(ok).toBeTruthy();
     expect(pool).toEqual([]); // consumed, so the fingerprint path can't double-bind it
   });
+
+  it('never rebinds a wrapper the store no longer holds (finalize-sweeper race)', () => {
+    // The key index is a pass-start snapshot; the finalize sweeper can detach
+    // a queued wrapper during a batched-walk yield. The stale entry must be
+    // skipped — rebinding it would put a wrapper in byElement that store.all
+    // lacks, leaving the new element permanently undiscoverable.
+    const w = makeAnchor('/users', 1);
+    w.element.remove(); // disconnected — exactly what the dead-first pop prefers
+    const index = collectStrongKeyIndex();
+    store.removeWrapperByElement(w.element); // what the sweeper's detach does
+
+    const newEl = freeAnchor('/users');
+    expect(tryRebindByStrongKey(newEl, index, [])).toBeNull();
+    expect(store.findWrapperFor(newEl)).toBeUndefined();
+    expect(store.all).not.toContain(w);
+  });
+
+  it('skips a swept corpse and pops the next live holder instead', () => {
+    const corpse = makeAnchor('/home', 1);
+    corpse.element.remove();
+    const survivor = makeAnchor('/home', 2);
+    survivor.element.remove(); // disconnected but still store-held (in limbo)
+    const index = collectStrongKeyIndex();
+    store.removeWrapperByElement(corpse.element); // sweeper reaps the first
+
+    const n = freeAnchor('/home');
+    const res = tryRebindByStrongKey(n, index, []);
+    expect(res).toBeTruthy();
+    expect(survivor.element).toBe(n);
+    expect(store.all).not.toContain(corpse);
+  });
 });
 
 describe('tryRebindBySlot (DESIGN_FLING_WAVE Part 2)', () => {
@@ -357,6 +388,20 @@ describe('tryRebindBySlot (DESIGN_FLING_WAVE Part 2)', () => {
     const replacement = newLinkIn(otherCell);
 
     expect(tryRebindBySlot(replacement, [w])).toBeNull();
+    expect(rebindCounters.rebind_slot).toBe(0);
+  });
+
+  it('never rebinds a wrapper the store no longer holds (finalize-sweeper race)', () => {
+    // Same race as the strong-key tier: the pool is a pass-start snapshot,
+    // the sweeper detached the wrapper mid-pass. Must fall through to fresh.
+    const [cell, w] = cellWithLimboLink(1);
+    const pool = [w];
+    store.removeWrapperByElement(w.element); // sweeper reaped it
+
+    const replacement = newLinkIn(cell);
+    expect(tryRebindBySlot(replacement, pool)).toBeNull();
+    expect(store.findWrapperFor(replacement)).toBeUndefined();
+    expect(store.all).not.toContain(w);
     expect(rebindCounters.rebind_slot).toBe(0);
   });
 

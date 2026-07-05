@@ -110,6 +110,15 @@ export function tryRebindBySlot(newEl: Element, pool: ElementWrapper[]): Element
   let match: ElementWrapper | null = null;
   let matchAnchor: Element | null = null;
   for (const w of pool) {
+    // The pool is a pass-start snapshot and the batched walk yields between
+    // slices — the finalize sweeper (250ms interval) can detach a limbo
+    // wrapper mid-pass. Rebinding such a corpse re-inserts it into byElement
+    // without re-adding it to the wrappers array (store invariant broken:
+    // findWrapperFor hits, store.all misses), leaving the new element
+    // permanently skipped by discovery and reconcile. Only live wrappers
+    // may rebind. (The fingerprint tier gets this via its idRegistry check;
+    // coattail via its live findWrapperFor lookup.)
+    if (store.findWrapperFor(w.element) !== w) continue;
     if (w.element.tagName !== newTag) continue;
     if (w.element.getAttribute('role') !== newRole) continue;
     sawKind = true;
@@ -335,8 +344,16 @@ export function tryRebindByStrongKey(
   // NEXT visible duplicate — musical chairs with a rotating badge-less
   // link (16 visible bare links on the client drill, all repeated-value).
   // Never steal from the new node itself.
-  let idx = queue.findIndex((cand) => cand.element !== newEl && !cand.element.isConnected);
-  if (idx === -1) idx = queue.findIndex((cand) => cand.element !== newEl);
+  // Liveness guard: the key index is a pass-start snapshot and the batched
+  // walk yields between slices, so the finalize sweeper can detach a queued
+  // wrapper mid-pass — and the disconnected-first pop below preferentially
+  // selects exactly that population. Rebinding a detached wrapper corrupts
+  // the store (byElement entry with no wrappers-array entry: the element
+  // becomes permanently undiscoverable). Skip corpses; a stale entry just
+  // means this key falls through to the other tiers or a fresh attach.
+  const live = (cand: ElementWrapper) => store.findWrapperFor(cand.element) === cand;
+  let idx = queue.findIndex((cand) => cand.element !== newEl && !cand.element.isConnected && live(cand));
+  if (idx === -1) idx = queue.findIndex((cand) => cand.element !== newEl && live(cand));
   if (idx === -1) return null;
   const w = queue[idx];
   queue.splice(idx, 1);
