@@ -27,6 +27,7 @@
 import { loadMru } from './tab-mru';
 import { bgState, connId } from './state';
 import { postToPlugin } from '../plugin/actuator-client';
+import { stripTabMarker } from '../tab-marker-format';
 
 /** Input shape: the fields of chrome.tabs.Tab this module consumes. */
 export interface OpenTab {
@@ -227,7 +228,11 @@ async function publishTabs(): Promise<void> {
   }
   const open: OpenTab[] = tabs
     .filter((t): t is chrome.tabs.Tab & { id: number } => typeof t.id === 'number')
-    .map((t) => ({ tabId: t.id, title: t.title ?? '', url: t.url ?? '' }));
+    // Strip any tab-marker decoration before words are derived, or the marker
+    // letters leak into the spoken word grammar (see DESIGN_TAB_MARKERS.md,
+    // "The churn war"). Rango's getBareTitle twin, at the titles→grammar
+    // chokepoint. No-op when the feature is off (title has no prefix).
+    .map((t) => ({ tabId: t.id, title: stripTabMarker(t.title ?? ''), url: t.url ?? '' }));
   const entries = buildTabEntries(open, await loadMru());
 
   // Unchanged-set guard: retitles that don't change the published words (or

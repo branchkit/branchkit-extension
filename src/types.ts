@@ -215,6 +215,16 @@ export type Message =
   // content dispatcher — the palette's command rows use the exact semantics
   // of pressing the command's keybind.
   | { type: 'PALETTE_COMMAND'; action: string; params?: Record<string, string> }
+  // --- Tab markers (notes/DESIGN_TAB_MARKERS.md, Phase 1) ---
+  // Content (top frame) → background on load: fetch this tab's marker letters.
+  // Response: { letters: string | null }. Assignment is lazy on this call.
+  | { type: 'GET_TAB_MARKER' }
+  // Background → content (top frame). Set (or clear, with null) the tab's
+  // marker letters; the decorator force-writes the title prefix.
+  | { type: 'TAB_MARKER'; letters: string | null }
+  // Background → content (top frame) on page retitle. Re-apply the current
+  // marker through the echo + incremental-edit guards.
+  | { type: 'TAB_MARKER_REAPPLY' }
   // Palette page → background. The palette's voice session: codeword badges
   // assigned to every row at open. Background keeps the row_id → dispatch
   // map and POSTs the (spoken, row_id) entries to the plugin's /palette,

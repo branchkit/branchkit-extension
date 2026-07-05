@@ -499,6 +499,7 @@ async function init(): Promise<void> {
   initSyncedSelect('hint-visibility', 'hintVisibility');
   initSyncedSelect('hint-mode', 'badgeDisplayMode');
   initSyncedCheckbox('aggressive-hints', 'aggressiveHints');
+  initSyncedCheckbox('tab-markers', 'tabMarkersEnabled');
   initOptionsLink();
 
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });

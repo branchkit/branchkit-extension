@@ -50,6 +50,7 @@ import { captureDebugSnapshot } from './debug/debug-snapshot';
 import { toggleOverlay } from './render/debug-overlay';
 import { toggleHelpOverlay } from './render/help-overlay';
 import { togglePalette, closePalette } from './render/palette-host';
+import { setTabMarker, reapplyTabMarker } from './render/tab-title';
 import {
   CodewordSnapshot,
   takeSnapshot,
@@ -655,6 +656,16 @@ loadConfig({
     scheduleDoScan();
   },
 });
+
+// Tab markers (notes/DESIGN_TAB_MARKERS.md): the top frame bootstraps its
+// marker on load. Background assigns lazily and replies with the letter form
+// (or null when the feature is off / no alphabet). Retitles arrive later as
+// TAB_MARKER_REAPPLY; assignment changes as TAB_MARKER.
+if (isTopFrame && typeof chrome !== 'undefined' && chrome.runtime) {
+  chrome.runtime.sendMessage({ type: 'GET_TAB_MARKER' } as Message)
+    .then((resp) => { if (resp && 'letters' in resp) setTabMarker(resp.letters ?? null); })
+    .catch(() => {});
+}
 
 // Warm the per-frame label reservoir so the first scan's batch claim has
 // codewords on hand without waiting for the SW round-trip.
@@ -2908,6 +2919,16 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
 
   if (message.type === 'RESOLVE_HINT') {
     sendResponse(resolveHintLocally(store, message.codeword, getDisplayMode()));
+    return false;
+  }
+
+  if (message.type === 'TAB_MARKER') {
+    if (isTopFrame) setTabMarker(message.letters);
+    return false;
+  }
+
+  if (message.type === 'TAB_MARKER_REAPPLY') {
+    if (isTopFrame) reapplyTabMarker();
     return false;
   }
 

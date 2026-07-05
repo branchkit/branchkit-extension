@@ -19,6 +19,10 @@ import { buildReconcileReport, type ReconcileWrapper, type ReconcileReport, type
 import { cycleTabIndex } from './background/tab-nav';
 import { loadMru, previousCandidates, recordTabActivated } from './background/tab-mru';
 import { scheduleTabPublish, resetTabPublishCache } from './background/tab-collection';
+import {
+  getTabMarkerLetters, pushTabMarker, reapplyTabMarker as reapplyTabMarkerFor,
+  releaseTabMarker, transferTabMarker, setTabMarkersEnabled,
+} from './background/tab-markers';
 import { ensureContentScriptInjected } from './background/injection';
 import { bgState, connId } from './background/state';
 import { republishActiveTab, broadcastToAllTabs, resolveActiveContentTab, notifyActiveTab, resolveHintFromTab } from './background/frame-router';
@@ -1067,6 +1071,17 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     return false;
   }
 
+  if (message.type === 'GET_TAB_MARKER') {
+    // Content bootstrapping its tab marker on load. Assign lazily, reply with
+    // the letter form (title supplies a preferred marker for reconciliation).
+    const tabId = _sender.tab?.id;
+    if (typeof tabId !== 'number') { sendResponse({ letters: null }); return false; }
+    getTabMarkerLetters(tabId, _sender.tab?.title ?? undefined)
+      .then((letters) => sendResponse({ letters }))
+      .catch(() => sendResponse({ letters: null }));
+    return true; // async response
+  }
+
   if (message.type === 'GET_VOICE_STATUS') {
     // The keymap editor sources voice phrases from its own catalog now; it only
     // needs to know whether BranchKit is connected (for the not-connected note).
@@ -1333,13 +1348,29 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.title !== undefined || changeInfo.url !== undefined) {
     scheduleTabPublish();
   }
+  // Tab markers: on a page-driven title change, tell the tab to re-apply its
+  // marker (guarded re-apply on the content side). No-op when the feature is
+  // off. Our own decoration write also fires onUpdated(title), but the
+  // content-side echo guard makes that re-apply a no-op.
+  if (changeInfo.title !== undefined) {
+    reapplyTabMarkerFor(tabId);
+  }
 });
 
 // New tabs join the voice collection once they have a title/URL; the
 // onUpdated hook above covers the loading transitions, but a restored or
 // pre-rendered tab can arrive fully formed.
-chrome.tabs.onCreated.addListener(() => {
+chrome.tabs.onCreated.addListener((tab) => {
   scheduleTabPublish();
+  // Pre-assign + decorate a fully-formed (restored/pre-rendered) tab; a plain
+  // new tab has no content script yet and bootstraps via GET_TAB_MARKER.
+  if (typeof tab.id === 'number') void pushTabMarker(tab.id, tab.title ?? undefined);
+});
+
+// Chrome discards/replaces a tab (memory pressure, prerender swap): carry the
+// marker to the new id so the visible mark doesn't jump, then re-push it.
+chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
+  void transferTabMarker(removedTabId, addedTabId).then(() => pushTabMarker(addedTabId));
 });
 
 // SPA navigation (History API pushState/replaceState, or in-page hash
@@ -1459,6 +1490,8 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   scheduleTabPublish();
   // Backstop: a palette whose host tab died can't send PALETTE_CLOSED.
   if (paletteVoice?.tabId === tabId) void clearPaletteVoice('tab_removed');
+  // Return the closed tab's marker to the free pool.
+  void releaseTabMarker(tabId);
 });
 
 // Dead-tab label-stack sweep (long-session audit finding 6). tabs.onRemoved
@@ -1502,9 +1535,15 @@ async function init(): Promise<void> {
   // stability across SW restart in exchange for correctness.
   await clearAllStacks();
 
-  const result = await chrome.storage.sync.get('hintVisibility');
+  const result = await chrome.storage.sync.get(['hintVisibility', 'tabMarkersEnabled']);
   if (result.hintVisibility) {
     hintVisibility = result.hintVisibility;
+  }
+  // Tab markers: apply the persisted toggle. When on, decorateAllTabs()
+  // reconciles the strip and re-adopts marks already baked into restored
+  // titles (each tab's title supplies a preferred marker).
+  if (result.tabMarkersEnabled === true) {
+    void setTabMarkersEnabled(true);
   }
 
   // Prime the active-tab cache so the first active_tab_id signal to the plugin
@@ -1536,6 +1575,10 @@ async function init(): Promise<void> {
 chrome.storage.onChanged.addListener((changes) => {
   if (changes.hintVisibility) {
     hintVisibility = changes.hintVisibility.newValue || 'always';
+  }
+  // Tab-markers toggle flipped: decorate every tab, or strip every tab live.
+  if (changes.tabMarkersEnabled) {
+    void setTabMarkersEnabled(changes.tabMarkersEnabled.newValue === true);
   }
 });
 

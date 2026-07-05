@@ -232,16 +232,16 @@ its own — and marks that never render (chrome://, PDFs) are still speakable.
 
 ## Display
 
-Title prefix follows **`badgeDisplayMode`** (the knob hints and the palette
-already read):
-- `letter` → `a| GitHub — pulls` (1–2 chars — the sane default in the
-  space-starved strip)
-- `word` → `arch | GitHub — pulls`
-- `both` / `first-word` → the palette's `codewordDisplay` mapping.
-
-Delimiter: Rango's `|` (compact, regex-friendly, visually quiet). The strip
-regex must cover every display mode's emission and match ONLY at string
-start.
+**Phase 1 decision: the strip decoration is always the compact LETTER form**
+(1–2 chars, `a|` / `qr|`), regardless of `badgeDisplayMode`. Tab titles are
+space-constrained — a word/pair prefix ("quill reef | GitHub — Pull
+Requests…") is too long — and a bounded letter token keeps the strip regex
+robust (`^[a-z]{1,2} ?\| ?`, Rango's). The spoken codeword is unchanged; the
+strip shows "a", you still say "arch". Word/both display stay HUD- and
+palette-only (where space isn't tight). The format lives in ONE place,
+`src/tab-marker-format.ts` (`MARKER_DELIMITER`, `stripTabMarker`,
+`decorateTitle`), imported by both the content decorator and the grammar
+publisher so the write and strip sides can't drift.
 
 ## The churn war (the part that needs care)
 
