@@ -60,7 +60,7 @@ describe('buildCommandItems', () => {
 
   it('shows the live keybind display for a bound command', () => {
     const sd = items.find((i) => i.id === 'cmd:scroll_down')!;
-    expect(sd.keys).toEqual(['Shift+J']);
+    expect(sd.keys).toEqual(['J']);
   });
 
   it('indexes voice phrases so typing a spoken form finds the command', () => {

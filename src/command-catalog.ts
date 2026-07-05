@@ -359,47 +359,53 @@ export function buildCommandContributions(): CommandContribution[] {
   return out;
 }
 
-// The shipping keybinds — one binding per command, preferring the form that
-// works in every mode. While hints are visible (always-mode) bare letters are
-// codeword input, so a Shift/modifier chord is the always-mode form and is
-// strictly more robust than the bare key (which only fires with hints hidden);
-// we ship the robust one. The editor groups bindings under each command and
-// auto-tags context, so a user can ADD a bare key (e.g. plain J) as a
-// hidden-only convenience — it's just opt-in rather than a default.
-//
-// A few commands have no always-mode form and stay bare/hidden-only: horizontal
-// scroll (Shift+H/L are tabs), the `cs` sequence, `/` find, and find-next.
-// Comments show the keys as typed; tokens are canonical combos.
+// The shipping keybinds — Vimium/Vimium-C parity, now that Normal mode owns
+// the alphabet (notes/DESIGN_KEYBOARD_MODES.md). Bare letters are keybinds;
+// hints are typed only after `f` (hint mode); text fields (Insert) yield;
+// real-modifier chords (Ctrl+K/Ctrl+T) fire in every mode. Tokens are
+// canonical combos (key-combo.ts); comments show the keys as pressed. All
+// user-customizable in the keymap editor.
 export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
-  { keys: 'ctrl+KeyS', command: 'toggle_hints' }, // Ctrl+S — show/hide (leaves Ctrl+F find free)
-  { keys: 'KeyF', command: 'hint_mode' }, // f — enter hint mode (Vimium's link-hint key)
-  { keys: 'shift+KeyJ', command: 'scroll_down' },
-  { keys: 'shift+KeyK', command: 'scroll_up' },
-  { keys: 'shift+KeyD', command: 'scroll_half_down' },
-  { keys: 'shift+KeyU', command: 'scroll_half_up' },
-  { keys: 'shift+KeyT', command: 'scroll_top' }, // Shift+T (gg has no always-mode form)
-  { keys: 'shift+KeyG', command: 'scroll_bottom' }, // Shift+G
-  { keys: 'KeyH', command: 'scroll_left' }, // hidden-only (Shift+H is previous-tab)
-  { keys: 'KeyL', command: 'scroll_right' }, // hidden-only (Shift+L is next-tab)
-  { keys: 'KeyC KeyS', command: 'cycle_scroll_target' }, // cs — hidden-only
-  { keys: 'Slash', command: 'find_open' }, // / — hidden-only
-  { keys: 'KeyN', command: 'find_next' }, // hidden-only
-  { keys: 'shift+KeyN', command: 'find_previous' }, // Shift+N
-  { keys: 'shift+KeyH', command: 'previous_tab' }, // Shift+H
-  { keys: 'shift+KeyL', command: 'next_tab' }, // Shift+L
-  { keys: 'shift+Slash', command: 'toggle_help' }, // ? — keyboard command reference
-  { keys: 'shift+KeyI', command: 'focus_input' }, // Shift+I — focus first input (works in always-mode)
-  { keys: 'shift+KeyO', command: 'new_tab' }, // Shift+O — open a new tab
-  { keys: 'shift+KeyX', command: 'close_tab' }, // Shift+X (Vimium x)
-  { keys: 'shift+KeyZ', command: 'restore_tab' }, // Shift+Z — undo the close
-  { keys: 'shift+KeyY', command: 'duplicate_tab' }, // Shift+Y (Vimium yt)
-  { keys: 'shift+KeyP', command: 'pin_tab' }, // Shift+P
-  { keys: 'shift+KeyM', command: 'mute_tab' }, // Shift+M
-  { keys: 'shift+Digit1', command: 'first_tab' }, // Shift+1
-  { keys: 'shift+Digit9', command: 'last_tab' }, // Shift+9 (browser Cmd/Ctrl+9 convention)
-  { keys: 'shift+Digit6', command: 'last_active_tab' }, // Shift+6 = ^ (Vimium ^)
-  { keys: 'shift+Comma', command: 'move_tab_left' }, // Shift+, = < (Vimium <<)
-  { keys: 'shift+Period', command: 'move_tab_right' }, // Shift+. = > (Vimium >>)
-  { keys: 'ctrl+KeyK', command: 'toggle_palette' }, // Ctrl+K — the universal palette chord
-  { keys: 'ctrl+KeyT', command: 'toggle_tab_palette' }, // Ctrl+T — tabs-only palette (macOS: browser new-tab is Cmd+T)
+  // Hints
+  { keys: 'KeyF', command: 'hint_mode' },        // f — enter hint mode (Vimium f)
+  { keys: 'ctrl+KeyS', command: 'toggle_hints' },// Ctrl+S — show/hide the always-badges (works in fields)
+  // Scroll (Vimium j/k/h/l, d/u, gg/G)
+  { keys: 'KeyJ', command: 'scroll_down' },
+  { keys: 'KeyK', command: 'scroll_up' },
+  { keys: 'KeyH', command: 'scroll_left' },
+  { keys: 'KeyL', command: 'scroll_right' },
+  { keys: 'KeyD', command: 'scroll_half_down' },
+  { keys: 'KeyU', command: 'scroll_half_up' },
+  { keys: 'KeyG KeyG', command: 'scroll_top' },  // gg
+  { keys: 'shift+KeyG', command: 'scroll_bottom' }, // G
+  { keys: 'KeyC KeyS', command: 'cycle_scroll_target' }, // cs
+  // Find (Vimium / n N)
+  { keys: 'Slash', command: 'find_open' },       // /
+  { keys: 'KeyN', command: 'find_next' },         // n
+  { keys: 'shift+KeyN', command: 'find_previous' }, // N
+  // Navigation (Vimium H/L history, r reload, gi focus input)
+  { keys: 'shift+KeyH', command: 'history_back' },    // H
+  { keys: 'shift+KeyL', command: 'history_forward' }, // L
+  { keys: 'KeyR', command: 'refresh' },               // r
+  { keys: 'KeyG KeyI', command: 'focus_input' },      // gi
+  // Tabs (Vimium t/x/X, gt/gT, yt, ^)
+  { keys: 'KeyT', command: 'new_tab' },               // t
+  { keys: 'KeyX', command: 'close_tab' },             // x
+  { keys: 'shift+KeyX', command: 'restore_tab' },     // X — undo close
+  { keys: 'KeyG KeyT', command: 'next_tab' },         // gt
+  { keys: 'KeyG shift+KeyT', command: 'previous_tab' }, // gT
+  { keys: 'KeyY KeyT', command: 'duplicate_tab' },    // yt
+  { keys: 'shift+Digit6', command: 'last_active_tab' }, // ^ (Vimium)
+  { keys: 'KeyG Digit0', command: 'first_tab' },      // g0
+  { keys: 'KeyG shift+Digit4', command: 'last_tab' }, // g$
+  { keys: 'shift+Comma', command: 'move_tab_left' },  // < (Vimium <<)
+  { keys: 'shift+Period', command: 'move_tab_right' },// > (Vimium >>)
+  { keys: 'shift+KeyP', command: 'pin_tab' },         // P
+  { keys: 'shift+KeyM', command: 'mute_tab' },        // M
+  // Palette / tab palette
+  { keys: 'ctrl+KeyK', command: 'toggle_palette' },   // Ctrl+K — full palette (works everywhere)
+  { keys: 'shift+KeyT', command: 'toggle_tab_palette' }, // T — tab palette (Vimium's tab-search key)
+  { keys: 'ctrl+KeyT', command: 'toggle_tab_palette' },  // Ctrl+T — tab palette, also works in fields
+  // Help
+  { keys: 'shift+Slash', command: 'toggle_help' },    // ?
 ];

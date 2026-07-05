@@ -1,9 +1,9 @@
 # Design: Keyboard Modes — reclaim the alphabet with a Normal/Hint/Insert model
 
-**Status:** Step 1 landed 2026-07-05 (mode split + `f` + mode chip). Direct
-change — no feature flag, no back-compat (pre-release). Supersedes the
-"everything is a chord" workaround. Steps 2–4 (full bare-key keymap, hint-
-dimming, help note) still open.
+**Status:** Steps 1–2 landed 2026-07-05 (mode split + `f` + mode chip; full
+bare-key Vimium keymap). Direct change — no feature flag, no back-compat
+(pre-release). Supersedes the "everything is a chord" workaround. Step 3
+(hint-dimming) still open; step 4 (help note) partly done.
 
 ## Problem
 
@@ -137,8 +137,11 @@ than adding machinery.
    overlay updated. Keyboard tests rewritten for the new model. The alphabet
    is reclaimed — the previously "hidden-only" bare binds (h/l/n/cs//) now work
    in always-mode.
-2. Rewrite `DEFAULT_KEYMAP` to bare Vim/Vimium-C keys; migrate the tab verbs
-   off Shift-chords; add bare `T` for the tab palette; update lock tests.
+2. **LANDED** — `DEFAULT_KEYMAP` rewritten to Vimium/Vimium-C parity: scroll
+   `j`/`k`/`h`/`l`, `d`/`u`, `gg`/`G`; find `/`/`n`/`N`; history `H`/`L`,
+   reload `r`, focus `gi`; tabs `t`/`x`/`X`/`gt`/`gT`/`yt`/`^`/`g0`/`g$`; pin
+   `P`, mute `M`; palette `Ctrl+K`, tab palette bare `T` + `Ctrl+T`; help `?`.
+   Lock + dispatcher + palette-display tests updated.
 3. Hint-dimming in Normal (visual arm on `f`).
 4. Help-overlay note on the mode model. (Partly done — usage text updated.)
 
