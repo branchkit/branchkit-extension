@@ -2926,6 +2926,7 @@ const DISPATCH_PASSTHROUGH_ACTIONS = new Set([
   'find_open', 'find_close', 'find_next', 'find_previous', 'find_immediate',
   'focus_input',
   'toggle_palette', // voice "palette" — same handler as the Ctrl+K bind
+  'toggle_tab_palette', // voice "tab" — opens the tabs-only palette (Ctrl+T twin)
 ]);
 
 chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {
