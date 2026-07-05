@@ -3,7 +3,9 @@
 **Status:** Steps 1–2 landed 2026-07-05 (mode split + `f` + mode chip; full
 bare-key Vimium keymap). Direct change — no feature flag, no back-compat
 (pre-release). Supersedes the "everything is a chord" workaround. Step 3
-(hint-dimming) still open; step 4 (help note) partly done.
+(hint-dimming) dropped — the chip is the honest mode signal; badge visuals
+would mischaracterize the always-voice-live hints (see step 3 below).
+Functionally complete.
 
 ## Problem
 
@@ -142,7 +144,15 @@ than adding machinery.
    reload `r`, focus `gi`; tabs `t`/`x`/`X`/`gt`/`gT`/`yt`/`^`/`g0`/`g$`; pin
    `P`, mute `M`; palette `Ctrl+K`, tab palette bare `T` + `Ctrl+T`; help `?`.
    Lock + dispatcher + palette-display tests updated.
-3. Hint-dimming in Normal (visual arm on `f`).
+3. ~~Hint-dimming in Normal~~ **DROPPED (2026-07-05).** Dimming the badges in
+   Normal mode sends the wrong signal: the hints stay fully **voice**-live in
+   every keyboard mode, so de-emphasizing them reads as "inactive" when
+   they're not. The keyboard's mode is a property of the *keyboard*, not of
+   the hints, so it belongs on the mode chip (which lives in the keyboard's
+   corner), not on the always-on badges. A future badge visual, if any, must
+   read as "keyboard-armed" (additive) rather than "hints-dimmed"
+   (subtractive) — a careful design, not shipped for now. The chip is
+   sufficient.
 4. Help-overlay note on the mode model. (Partly done — usage text updated.)
 
 Each step is shippable on its own; step 1 reclaimed the alphabet.
