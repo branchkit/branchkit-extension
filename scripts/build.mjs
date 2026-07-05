@@ -61,6 +61,7 @@ const entries = [
   { in: 'src/offscreen.ts',  out: 'offscreen.js',  format: 'iife' },
   { in: 'src/popup.ts',      out: 'popup.js',      format: 'iife' },
   { in: 'src/options.ts',    out: 'options.js',    format: 'iife' },
+  { in: 'src/palette-page.ts', out: 'palette.js',  format: 'iife' },
 ];
 
 await Promise.all(entries.map((e) =>
@@ -81,6 +82,7 @@ await Promise.all(entries.map((e) =>
 cpSync(resolve(root, 'offscreen.html'), resolve(outDir, 'offscreen.html'));
 cpSync(resolve(root, 'popup.html'),     resolve(outDir, 'popup.html'));
 cpSync(resolve(root, 'options.html'),   resolve(outDir, 'options.html'));
+cpSync(resolve(root, 'palette.html'),   resolve(outDir, 'palette.html'));
 cpSync(resolve(root, 'icons'),          resolve(outDir, 'icons'), { recursive: true });
 
 // Target-specific manifest patch. Delegated to keep that logic in one

@@ -49,6 +49,7 @@ import {
 import { captureDebugSnapshot } from './debug/debug-snapshot';
 import { toggleOverlay } from './render/debug-overlay';
 import { toggleHelpOverlay } from './render/help-overlay';
+import { togglePalette, closePalette } from './render/palette-host';
 import {
   CodewordSnapshot,
   takeSnapshot,
@@ -1024,6 +1025,17 @@ dispatcher.register('find_previous', () => {
 // user's actual binds. Extension-owned — works without BranchKit connected.
 dispatcher.register('toggle_help', () => {
   toggleHelpOverlay(currentKeymap);
+});
+
+// Command palette (notes/DESIGN_TAB_NAVIGATION.md, Layer 2). The overlay
+// iframe always lives in the top frame; a bind fired inside a subframe relays
+// up through the background (PALETTE_OPEN → PALETTE_COMMAND at frame 0).
+dispatcher.register('toggle_palette', () => {
+  if (window !== window.top) {
+    chrome.runtime.sendMessage({ type: 'PALETTE_OPEN' } as Message).catch(() => {});
+    return;
+  }
+  togglePalette();
 });
 
 // Tab verbs — forward to the background SW's handleTabAction (content scripts
@@ -2895,6 +2907,17 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
 
   if (message.type === 'RESOLVE_HINT') {
     sendResponse(resolveHintLocally(store, message.codeword, getDisplayMode()));
+    return false;
+  }
+
+  if (message.type === 'PALETTE_CLOSE') {
+    closePalette();
+    sendResponse(true); // background awaits the close before dispatching
+    return false;
+  }
+
+  if (message.type === 'PALETTE_COMMAND') {
+    dispatcher.dispatch(message.action, message.params ?? {});
     return false;
   }
 

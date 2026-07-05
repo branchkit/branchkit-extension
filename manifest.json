@@ -37,6 +37,12 @@
       "match_origin_as_fallback": true
     }
   ],
+  "web_accessible_resources": [
+    {
+      "resources": ["palette.html", "palette.js"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "action": {
     "default_popup": "popup.html",
     "default_icon": {

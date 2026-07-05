@@ -1,6 +1,6 @@
 # Design: Tab Navigation + Command Palette
 
-**Status:** Layer 0 (MRU stack) + Layer 1 (cycling) + tab verbs (Vimium parity, below) shipped 2026-07-01. Layer 2 reframed the same day: not a tab switcher, a **command palette** with pluggable sources. Layer 3 (voice "switch to \<tab>") is resequenced to ship BEFORE Layer 2. Both remain proposals.
+**Status:** Layer 0 (MRU stack) + Layer 1 (cycling) + tab verbs (Vimium parity, below) shipped 2026-07-01. Layer 3 (voice "switch to \<tab>") shipped 2026-07-02. Layer 2 (the palette) keyboard MVP shipped 2026-07-05 — Ctrl+K, extension-served iframe, tabs (MRU-first) + commands sources; see "Layer 2 shipped" below for what's in vs. still open (codeword badges / voice symmetry, frecency, bookmarks).
 **Goal:** Move between tabs and jump to specific ones via keyboard and voice — without building a keyboard-only thing that can't be reused for voice — and grow the overlay into the modern successor of Vimium's Vomnibar rather than a one-source switcher.
 
 ## Prior art (what we're borrowing)
@@ -62,6 +62,38 @@ Not a tab switcher with growth ambitions — a **generic filter-a-list overlay w
 **Non-goals (deliberate):**
 - **URL entry / web-search fallback** (Vimium `o` typing a URL): the address bar does this better; zero marginal value.
 - **History search:** corpus too large/churny for a recognition grammar (no voice analog), privacy-sensitive, and Ctrl+H + the address bar already cover it. Skipped indefinitely, not deferred.
+
+### Layer 2 shipped — keyboard MVP (2026-07-05)
+
+What landed:
+- **Trigger:** `toggle_palette` catalog command, default `Ctrl+K` (backfills to
+  existing users via `mergeNewDefaults`). Works in every mode — real-modifier
+  chords route to the command path before the insert-mode yield. A bind fired
+  in a subframe relays to the top frame (`PALETTE_OPEN` → `PALETTE_COMMAND`
+  at frame 0).
+- **Isolation:** full-viewport transparent iframe serving `palette.html`
+  (`web_accessible_resources`), injected/removed by `render/palette-host.ts`
+  with focus save/restore. Keystrokes never touch the host page.
+- **Sources (pure model, `src/palette/model.ts`):** tabs — MRU-first empty
+  state with the active tab demoted to the end, so open + Enter = previous
+  tab; commands — every mappable catalog entry with live keybind + first
+  voice phrase per row (the discoverability surface). Rows carry stable ids
+  (`tab:<id>` / `cmd:<id>`) as the future voice-codeword anchor.
+- **Ranking:** all query tokens must match; word-prefix > substring, small
+  first-word lead bonus; ties fall back to source order (recency / catalog).
+- **Dispatch:** palette page → `PALETTE_ACTION` → background closes the
+  overlay in the origin tab (round-trip, so ordering is real), then switches
+  the tab directly or runs the command through the origin tab's content
+  dispatcher (`PALETTE_COMMAND`) — exact keybind semantics, tab verbs bounce
+  back as `TAB_ACTION`.
+
+Still open (the voice-symmetry half + v2 items):
+- **Codeword badges per row** — publish visible rows as a collection so
+  speaking a codeword selects it (the palette as a synthetic page of hints).
+  The stable row ids and reserved row-badge space are the hooks.
+- **Frecency** ranking; **bookmarks** as source #3 (batch the `bookmarks`
+  permission with a store update); palette pre-warm if open latency ever
+  bothers (today the iframe is created fresh per open).
 
 ## Tab verbs (Vimium parity) — shipped 2026-07-01
 

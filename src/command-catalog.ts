@@ -271,6 +271,12 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // --- Help ---
   { id: 'toggle_help', label: 'Keyboard help', group: 'Help', mappable: true, params: [],
     description: 'Show or hide this keyboard command reference.' },
+  // Layer 2 of notes/DESIGN_TAB_NAVIGATION.md: an extension-served iframe
+  // overlay searching pluggable sources (open tabs MRU-first, this catalog).
+  // A real-modifier chord by design — it must open in every mode, mid-hint
+  // and inside text fields (the Ctrl+S precedent).
+  { id: 'toggle_palette', label: 'Command palette', group: 'Help', mappable: true, params: [],
+    description: 'Search open tabs and every command in one overlay.' },
 ];
 
 export const COMMAND_BY_ID: ReadonlyMap<string, CommandMeta> = new Map(
@@ -351,4 +357,5 @@ export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   { keys: 'shift+Digit6', command: 'last_active_tab' }, // Shift+6 = ^ (Vimium ^)
   { keys: 'shift+Comma', command: 'move_tab_left' }, // Shift+, = < (Vimium <<)
   { keys: 'shift+Period', command: 'move_tab_right' }, // Shift+. = > (Vimium >>)
+  { keys: 'ctrl+KeyK', command: 'toggle_palette' }, // Ctrl+K — the universal palette chord
 ];

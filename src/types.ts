@@ -3,6 +3,7 @@
  */
 
 import type { CodewordMemoryEntry } from './labels/codeword-memory';
+import type { PaletteDispatch } from './palette/model';
 
 // --- Categories ---
 
@@ -197,7 +198,23 @@ export type Message =
   // Options → background. The keymap editor renders voice phrases from its own
   // catalog now; it only asks whether BranchKit is connected so it can show the
   // not-connected note. Response: { connected: boolean }.
-  | { type: 'GET_VOICE_STATUS' };
+  | { type: 'GET_VOICE_STATUS' }
+  // --- Command palette (notes/DESIGN_TAB_NAVIGATION.md, Layer 2) ---
+  // Content (subframe) → background. A toggle_palette keybind fired in a frame
+  // that can't host the overlay; background relays it to the top frame as a
+  // PALETTE_COMMAND so the palette always opens over the whole page.
+  | { type: 'PALETTE_OPEN' }
+  // Palette page (extension iframe) → background. A selection or an explicit
+  // close. Background closes the overlay in the sender's tab first, then
+  // executes: switch_tab directly, command via PALETTE_COMMAND to the tab.
+  | { type: 'PALETTE_ACTION'; action: PaletteDispatch | { kind: 'close' } }
+  // Background → content (top frame). Remove the palette iframe and restore
+  // focus to the page.
+  | { type: 'PALETTE_CLOSE' }
+  // Background → content (top frame). Run a catalog command through the
+  // content dispatcher — the palette's command rows use the exact semantics
+  // of pressing the command's keybind.
+  | { type: 'PALETTE_COMMAND'; action: string; params?: Record<string, string> };
 
 // Response to RESOLVE_HINT / RESOLVE_HINT_FROM_TAB.
 export type ResolveHintResponse =

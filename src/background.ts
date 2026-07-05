@@ -452,6 +452,41 @@ async function handleTabAction(action: TabAction, index?: number): Promise<void>
   }
 }
 
+// Command palette selection (notes/DESIGN_TAB_NAVIGATION.md, Layer 2). Always
+// close the overlay in the origin tab FIRST — a tab switch moves focus away
+// and must not leave a dead palette behind, and a command dispatch (e.g.
+// focus_input) needs page focus restored before it runs. The close message
+// round-trips (content sendResponse) so ordering is real, not racy.
+async function handlePaletteAction(
+  action: { kind: 'switch_tab'; tabId: number } | { kind: 'command'; command: string; params?: Record<string, string> } | { kind: 'close' },
+  originTabId: number | undefined,
+): Promise<void> {
+  if (typeof originTabId === 'number') {
+    try {
+      await chrome.tabs.sendMessage(originTabId, { type: 'PALETTE_CLOSE' }, { frameId: 0 });
+    } catch { /* content script gone — the iframe died with the page */ }
+  }
+  if (action.kind === 'switch_tab') {
+    // Same focus-window-then-activate dispatch as switchToTabById — cross-
+    // window by design. A stale id (tab closed while the palette was open)
+    // is a silent no-op.
+    try {
+      const t = await chrome.tabs.get(action.tabId);
+      await chrome.windows.update(t.windowId, { focused: true });
+      await chrome.tabs.update(action.tabId, { active: true });
+    } catch { /* tab gone */ }
+  } else if (action.kind === 'command' && typeof originTabId === 'number') {
+    // Through the content dispatcher in the top frame — the exact semantics
+    // of pressing the command's keybind (tab verbs bounce back here as
+    // TAB_ACTION, page commands run in place).
+    try {
+      await chrome.tabs.sendMessage(originTabId, {
+        type: 'PALETTE_COMMAND', action: action.command, params: action.params ?? {},
+      }, { frameId: 0 });
+    } catch { /* content script gone */ }
+  }
+}
+
 // Voice "switch to <tab>": the matched collection entry's tab_id arrives as an
 // action param (the browser_tabs collection's value_field). Same focus-window-
 // then-activate dispatch as handleTabAction's last_active branch — cross-window
@@ -934,6 +969,24 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
 
   if (message.type === 'TAB_ACTION' && typeof message.action === 'string') {
     void handleTabAction(message.action, typeof message.index === 'number' ? message.index : undefined);
+    return false;
+  }
+
+  if (message.type === 'PALETTE_OPEN') {
+    // A toggle_palette bind fired in a subframe; the overlay must live in the
+    // top frame. Route it there as a PALETTE_COMMAND through the dispatcher.
+    const tabId = _sender.tab?.id;
+    if (typeof tabId === 'number') {
+      chrome.tabs.sendMessage(tabId, { type: 'PALETTE_COMMAND', action: 'toggle_palette' }, { frameId: 0 })
+        .catch(() => {});
+    }
+    return false;
+  }
+
+  if (message.type === 'PALETTE_ACTION' && message.action?.kind) {
+    // From the palette iframe (extension origin, embedded in a tab — so
+    // _sender.tab is set). Close-then-execute; see handlePaletteAction.
+    void handlePaletteAction(message.action, _sender.tab?.id);
     return false;
   }
 
