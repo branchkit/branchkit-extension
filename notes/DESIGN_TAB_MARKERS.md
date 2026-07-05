@@ -68,7 +68,7 @@ Say "tab", the strip is your menu; say a tab's codeword, you're there.
 
 Extensions cannot draw on the native tab strip. The only pixels we control
 up there are the tab's **title** and its **favicon**. So a tab marker is a
-**title prefix** — the tab reads `a| GitHub — pulls` (letter display) —
+**title prefix** — the tab reads `[a] GitHub — pulls` (letter display) —
 applied by the content script via `document.title`. The favicon is a
 possible second surface (covers pinned tabs) but is out of scope for v1.
 
@@ -104,8 +104,8 @@ is retired here.
                         • engine narrows to tab words (accuracy ↑)
                         • strip shows each tab's codeword
                           ┌──────────────────────────┐
-                          │ a| GitHub   b| Gmail       │
-                          │ c| Docs     d| Figma       │
+                          │ [a] GitHub   [b] Gmail     │
+                          │ [c] Docs     [d] Figma     │
                           └──────────────────────────┘
   you say "arch" ──►  switch to GitHub + exit mode
   (or "tab arch" in one breath — fast path still works)
@@ -290,16 +290,20 @@ its own — and marks that never render (chrome://, PDFs) are still speakable.
 
 ## Display
 
-**Phase 1 decision: the strip decoration is always the compact LETTER form**
-(1–2 chars, `a|` / `qr|`), regardless of `badgeDisplayMode`. Tab titles are
-space-constrained — a word/pair prefix ("quill reef | GitHub — Pull
-Requests…") is too long — and a bounded letter token keeps the strip regex
-robust (`^[a-z]{1,2} ?\| ?`, Rango's). The spoken codeword is unchanged; the
-strip shows "a", you still say "arch". Word/both display stay HUD- and
-palette-only (where space isn't tight). The format lives in ONE place,
-`src/tab-marker-format.ts` (`MARKER_DELIMITER`, `stripTabMarker`,
-`decorateTitle`), imported by both the content decorator and the grammar
-publisher so the write and strip sides can't drift.
+**Decision: the strip decoration is a bracketed LETTER label** — `[a]` /
+`[qr]`, always the compact letter form regardless of `badgeDisplayMode`. The
+brackets bound the marker so it reads as a distinct label, not part of the
+title (the earlier pipe form `a|` read like a stray letter — changed
+2026-07-05 after review). Tab titles are space-constrained — a word/pair
+prefix ("[quill reef] GitHub — Pull Requests…") is too long — and a bounded
+letter token keeps the strip regex robust (`^\[[a-z]{1,2}\] ?`, with an
+`[a-z]{1,2} ?\|` alternative kept transitionally so old pipe-format tabs
+strip clean). The spoken codeword is unchanged; the strip shows "a", you
+still say "arch". Word/both display stay HUD- and palette-only (where space
+isn't tight). The format lives in ONE place, `src/tab-marker-format.ts`
+(`decorateTitle`, `stripTabMarker`, `hasTabMarker`), imported by both the
+content decorator and the grammar publisher so the write and strip sides
+can't drift.
 
 ## The churn war (the part that needs care)
 
