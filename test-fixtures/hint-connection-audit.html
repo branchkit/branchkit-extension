@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<!-- Fixture for scripts/_test-hint-connection-audit.mjs — the 2026-07-01
+     hint↔DOM connection audit fixes. Everything sits inside the IO band
+     (viewport + 1000px) so no test depends on scrolling; scroll fires the
+     band-discovery sweep, which rediscovers everything and would destroy
+     attribution. -->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>hint connection audit</title>
+  <style>
+    body { font-family: sans-serif; margin: 16px; }
+    .g { display: inline-block; width: 56px; padding: 2px 4px; margin: 1px; }
+    #menu a { display: block; padding: 8px 14px; }
+    /* Vertical separation so the geometry probe (host center near target
+       rect) can't cross-match a neighbor's badge. */
+    #menu, #dsd-host, #tab-later, #inject-slot { margin: 36px 0; }
+    #menu a { margin-bottom: 14px; }
+  </style>
+</head>
+<body>
+  <h1>Hint connection audit fixture</h1>
+
+  <!-- C: pre-mounted CSS-hidden menu (the late-reveal case). visibility:hidden,
+       NOT display:none — hidden-but-laid-out is the designed invisible-candidate
+       path (zero-rect display:none candidates never fire the attention IO). -->
+  <div id="menu" style="visibility:hidden">
+    <a href="#" id="menu-a">Menu item A</a>
+    <a href="#" id="menu-b">Menu item B</a>
+    <a href="#" id="menu-c">Menu item C</a>
+  </div>
+
+  <!-- E: declarative shadow DOM on a spec-permitted non-div host. The old
+       COMMON_LEAF_TAGS skipped section, so this link was invisible to every
+       walk (no attachShadow call ever fires for parser-created shadow). -->
+  <section id="dsd-host">
+    <template shadowrootmode="open">
+      <a href="#" id="dsd-link" style="display:block;padding:10px 16px;">DSD link</a>
+    </template>
+  </section>
+
+  <!-- A: becomes hintable later via tabindex="0" (not in the old attributeFilter). -->
+  <div id="tab-later" style="padding:10px 16px;">I become focusable later</div>
+
+  <!-- B: anchor point; the disconnected-attachShadow host is appended here. -->
+  <div id="inject-slot"></div>
+
+  <!-- F: react-select-style autosized combobox — the visible "box" is the
+       wrapper div; the real input measures ~2px while empty (QuickBase grid
+       column filter shape, 2026-07-01 snapshot). -->
+  <div id="combo" style="margin:36px 0;border:1px solid #999;width:220px;padding:6px;">
+    <!-- The inline-grid sizer is as tiny as the input itself (react-select's
+         measuring container) — the visible box is TWO levels up. The
+         placeholder paints OVER the input's 2px column (a SIBLING, so the
+         occlusion exemption can't clear it by ancestry): the badge must
+         still show, judged against the visual box, not the raw input. -->
+    <div style="position:relative;display:grid;">
+      <div style="grid-area:1/1;display:inline-grid;width:2px;">
+        <input id="combo-input" type="text" aria-label="Filter by thing"
+               style="width:2px;border:none;outline:none;padding:0;background:transparent;">
+      </div>
+      <div style="grid-area:1/1;color:#888;">Filter by thing…</div>
+    </div>
+  </div>
+
+  <!-- G: display-based reveal via the `open` attribute (no class/style
+       mutation, no pointer). Summary is hintable at baseline; the link is
+       display:none until open. -->
+  <details id="det" style="margin:36px 0;">
+    <summary>More options</summary>
+    <a href="#" id="det-link" style="display:block;padding:8px 14px;">Detail link</a>
+  </details>
+
+  <!-- H: dialog.showModal() — top-layer reveal, `open` attribute. -->
+  <dialog id="dlg">
+    <a href="#" id="dlg-link" style="display:block;padding:8px 14px;">Dialog link</a>
+    <button id="dlg-close">Close</button>
+  </dialog>
+
+  <!-- I: `hidden` attribute reveal (display:none until cleared). -->
+  <div id="hid" hidden style="margin:36px 0;">
+    <a href="#" id="hid-link" style="display:block;padding:8px 14px;">Hidden link</a>
+  </div>
+
+  <!-- J: dropzone — opacity:0 file input STRETCHED over a styled button
+       (the standard upload pattern). The transparent input hit-tests on top
+       of the button at every sample point; it must not count as a visual
+       occluder of the button's badge. -->
+  <div id="drop" style="position:relative;border:2px dashed #999;padding:14px;width:220px;margin:36px 0;">
+    <button id="drop-btn">Choose file</button>
+    <input id="drop-file" type="file" aria-label="Upload"
+           style="position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer;">
+  </div>
+
+  <!-- D: dense in-band grid to overflow the 100-codeword initial reservation. -->
+  <div id="grid"></div>
+  <script>
+    const grid = document.getElementById('grid');
+    let html = '';
+    for (let i = 1; i <= 180; i++) html += `<a href="#" class="g" id="g${i}">L${i}</a>`;
+    grid.innerHTML = html;
+  </script>
+</body>
+</html>
