@@ -31,7 +31,7 @@
  *
  * `attachWrapper` is a direct import from core/wrapper-lifecycle; the
  * `pageSession` singleton is imported from lifecycle/page-session, and the
- * remaining content.ts orchestration (`showHints`, the strict-viewport
+ * remaining content.ts orchestration (`showBadges`, the strict-viewport
  * re-push) arrives through `pageSession.deps`. The two observers here are
  * constructed by `constructVisibilityObservers()`, called from
  * `PageSession.start()` — the session owns observer construction (Tier 3 of
@@ -135,7 +135,7 @@ export function constructVisibilityObservers(): void {
       dirty = true;
     }
     // attachWrapper above emits a store attach delta → grammar sync (Tier 2).
-    if (dirty && pageSession.hintsVisible) pageSession.deps.showHints();
+    if (dirty && pageSession.badgesVisible) pageSession.deps.showBadges();
     if (pendingVisibility.size === 0) disconnectVisibilityMO();
   }, { root: null, rootMargin: '200px', threshold: 0 });
 
@@ -203,12 +203,12 @@ export function schedulePointerVisibilitySweep(): void {
   schedulePromoteThrottled();
   // RE-SHOW half: demoted to the settle pass (Phase E) — the plan's
   // toShow/toHide/cssHidden derivation converges hinted badges, including
-  // the "user just hid" guard (the pipeline gates on hintsVisible) and the
+  // the "user just hid" guard (the pipeline gates on badgesVisible) and the
   // strict re-push (the plan's strictDelta rides the same pass).
   pageSession.deps.schedulePassSoon();
 }
 
-// (recheckHintedVisibility is gone — Phase E of
+// (recheckBadgeVisibility is gone — Phase E of
 // notes/DESIGN_UNIFIED_RECONCILER.md. Badge show/hide convergence, the
 // cssHidden write-through, and the QuickBase ghost-badge policy ("if the
 // badge is hidden, voice can't match it either") live in the plan's
@@ -289,7 +289,7 @@ function recheckPendingVisibility(): void {
     clearLayoutCache();
   }
   // attachWrapper above emits a store attach delta → grammar sync (Tier 2).
-  if (dirty && pageSession.hintsVisible) pageSession.deps.showHints();
+  if (dirty && pageSession.badgesVisible) pageSession.deps.showBadges();
   if (pendingVisibility.size === 0) disconnectVisibilityMO();
   recordCpu('recheckPendingVisibility', performance.now() - __cpuStart);
   if (__initialSize > 0) recordCpu(`recheckPendingVisibility:size:${__initialSize > 1000 ? '1000+' : __initialSize > 100 ? '100-1000' : '<100'}`, __initialSize);

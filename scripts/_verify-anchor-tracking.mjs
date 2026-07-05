@@ -39,7 +39,7 @@ const ctx = await chromium.launchPersistentContext(profile, {
 });
 
 const sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent('serviceworker');
-// Seed an alphabet so showHints() doesn't bail at isAlphabetLoaded(). Normally
+// Seed an alphabet so showBadges() doesn't bail at isAlphabetLoaded(). Normally
 // BranchKit pushes this over SSE; here we inject 26 words straight into storage.
 const ALPHABET = 'arch bat cat dog echo fox golf hotel india jam kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu'.split(' ');
 await sw.evaluate(async (a) => {

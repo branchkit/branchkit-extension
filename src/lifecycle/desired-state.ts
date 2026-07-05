@@ -14,7 +14,7 @@
  * diverge. See notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md.
  *
  * Note: "in viewport" here is the IntersectionObserver band notion
- * (`wrapper.isInViewport`, a VIEWPORT_MARGIN_PX-band flag), NOT showHints' fresh
+ * (`wrapper.isInViewport`, a VIEWPORT_MARGIN_PX-band flag), NOT showBadges' fresh
  * getBoundingClientRect strict-viewport test. They deliberately differ; do not
  * unify them here.
  */

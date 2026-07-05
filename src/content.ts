@@ -400,7 +400,7 @@ function onTrackerCodewordsChanged(claimed: ElementWrapper[], released: string[]
 // than total observation overhead.)
 
 setFindCallbacks({
-  onActivate: () => { hideHints(); },
+  onActivate: () => { hideBadges(); },
   onDeactivate: () => { resetCycleTarget(); },
 });
 
@@ -417,14 +417,14 @@ setScrollBoundaryCallback((boundary) => {
 
 // Wire the LabelStage's catchup sync to content.ts-owned collaborators.
 // detachWrapper is imported from core/wrapper-lifecycle; reconcile is a hoisted
-// declaration; store is imported; the visibility flag (pageSession.hintsVisible)
+// declaration; store is imported; the visibility flag (pageSession.badgesVisible)
 // is read lazily via the arrow. Catchup-built badges converge through the single
 // reconcile entry.
 initLabelSync({
   store,
   detachWrapper,
   reconcile,
-  isHintsVisible: () => pageSession.hintsVisible,
+  isBadgesVisible: () => pageSession.badgesVisible,
   // Phase 2b (DESIGN_GRAMMAR_EPOCH_HANDSHAKE.md): a quiescent epoch mismatch
   // fires the same full-republish recovery the enumerated triggers use.
   // republishAllGrammar is a hoisted declaration below.
@@ -583,8 +583,8 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
 // HARD-CAPPED: a page that never goes mutation-quiet (ad churn, animated
 // thumbnails — YouTube results) must still fire. Uncapped, this was the
 // no-badges-on-refresh boot race (2026-06-12): when the hintsShown config
-// load beat the alphabet load, the boot showHints() early-returned on the
-// missing alphabet WITHOUT setting hintsVisible, and the alphabet-callback
+// load beat the alphabet load, the boot showBadges() early-returned on the
+// missing alphabet WITHOUT setting badgesVisible, and the alphabet-callback
 // recovery sat behind this settle wait forever — codewords claimed, zero
 // badges painted, settle pass never armed. Hydration is comfortably done
 // within the cap; trading a rare React #418 console error on a
@@ -617,7 +617,7 @@ function whenDOMSettles(callback: () => void): void {
 // Hints appear on their own — on a fresh page or after an action — only in
 // "always" mode AND when the user hasn't switched them off with F. "manual"
 // mode never auto-shows; an F-hide suppresses always-mode auto-show globally.
-function shouldAutoShowHints(): boolean {
+function shouldAutoShowBadges(): boolean {
   return getHintVisibility() === 'always' && getHintsShown();
 }
 
@@ -627,16 +627,16 @@ function shouldAutoShowHints(): boolean {
 // always mode (manual reveals are per-page and must not auto-show here).
 function applyHintsShownState(): void {
   if (!getHintsShown()) {
-    if (pageSession.hintsVisible) hideHints();
-  } else if (getHintVisibility() === 'always' && !pageSession.hintsVisible) {
+    if (pageSession.badgesVisible) hideBadges();
+  } else if (getHintVisibility() === 'always' && !pageSession.badgesVisible) {
     doScan();
-    showHints();
+    showBadges();
   }
 }
 
 loadConfig({
   onDisplayModeChange: () => {
-    if (pageSession.hintsVisible) updateBadgeLabels();
+    if (pageSession.badgesVisible) updateBadgeLabels();
   },
   onHintVisibilityChange: () => {
     const v = getHintVisibility();
@@ -644,9 +644,9 @@ loadConfig({
       // Re-picking "Always visible" is an explicit show intent — clear any
       // prior F-hide so hints come back (and stay back on later pages).
       setHintsShown(true);
-      if (!pageSession.hintsVisible) showHints();
-    } else if (v === 'manual' && pageSession.hintsVisible) {
-      hideHints();
+      if (!pageSession.badgesVisible) showBadges();
+    } else if (v === 'manual' && pageSession.badgesVisible) {
+      hideBadges();
     }
   },
   onHintsShownLoaded: () => applyHintsShownState(),
@@ -746,10 +746,10 @@ function kickInitialScan(): void {
     // arrived in the same tick folds into this scan instead of triggering a
     // second back-to-back doScanBatched.
     scheduleDoScan();
-    if (shouldAutoShowHints()) {
+    if (shouldAutoShowBadges()) {
       whenDOMSettles(() => {
         pageSession.tracker.flushNow().then(() => {
-          if (shouldAutoShowHints() && !pageSession.hintsVisible) showHints();
+          if (shouldAutoShowBadges() && !pageSession.badgesVisible) showBadges();
         });
       });
     }
@@ -885,7 +885,7 @@ function enterHintModeIfManual(): void {
 
 dispatcher.register('show_hints', () => {
   doScan();
-  showHints();
+  showBadges();
   enterHintModeIfManual();
 });
 
@@ -894,7 +894,7 @@ dispatcher.register('show_hints', () => {
 // `f` ensures hints are painted and puts the keyboard in hint mode; the mode
 // chip then signals "type a codeword". Escape / activation returns to Normal.
 dispatcher.register('hint_mode', () => {
-  if (!pageSession.hintsVisible) { doScan(); showHints(); }
+  if (!pageSession.badgesVisible) { doScan(); showBadges(); }
   keyHandler.enterHintMode();
 });
 
@@ -903,12 +903,12 @@ let activateInNewTab = false;
 dispatcher.register('show_hints_newtab', () => {
   activateInNewTab = true;
   doScan();
-  showHints();
+  showBadges();
   enterHintModeIfManual();
 });
 
 dispatcher.register('hide_hints', () => {
-  hideHints();
+  hideBadges();
   keyHandler.exitHintMode();
 });
 
@@ -923,14 +923,14 @@ dispatcher.register('toggle_hints', () => {
   // makes the toggle "show" a second set on top instead of hiding — the
   // double-badge / "Ctrl+S won't hide" report. Treat any actually-visible
   // badge as "showing" so the toggle always dismisses what the user sees.
-  const showing = pageSession.hintsVisible || store.all.some((w) => w.hint?.isVisible);
+  const showing = pageSession.badgesVisible || store.all.some((w) => w.hint?.isVisible);
   if (showing) {
-    hideHints();
+    hideBadges();
     keyHandler.exitHintMode();
     setHintsShown(false);  // sticky: stay hidden across navigation
   } else {
     doScan();
-    showHints();
+    showBadges();
     enterHintModeIfManual();
     setHintsShown(true);
   }
@@ -1134,7 +1134,7 @@ dispatcher.register('show_hints_category', (params) => {
   const cat = params.category as Category;
   if (!cat) return;
   doScan();
-  showHints(cat);
+  showBadges(cat);
 });
 
 // --- Keyboard Filter Callback ---
@@ -1148,7 +1148,7 @@ keyHandler.setModeChangeCallback((mode) => setModeChip(mode));
 // mode Escape dismisses the summoned hints, the Vimium behavior. The mode
 // exit itself already happened in the KeyHandler.
 keyHandler.setHintEscapeCallback(() => {
-  if (getHintVisibility() !== 'always') hideHints();
+  if (getHintVisibility() !== 'always') hideBadges();
 });
 
 // Reject a codeword keystroke that no painted badge starts with, so a stray
@@ -1157,7 +1157,7 @@ keyHandler.setHintEscapeCallback(() => {
 keyHandler.setMatchPredicate((prefix) => store.matchingLetterPrefix(prefix).length > 0);
 
 keyHandler.setFilterCallback((prefix: string) => {
-  if (!pageSession.hintsVisible) return;
+  if (!pageSession.badgesVisible) return;
 
   if (prefix === '') {
     for (const w of store.all) {
@@ -1183,7 +1183,7 @@ keyHandler.setFilterCallback((prefix: string) => {
     // resets it, same as the `F` arm.
     if (keyHandler.isNewTabArmed()) activateInNewTab = true;
     activateWrapper(first);
-    hideHints();
+    hideBadges();
     keyHandler.exitHintMode();
   }
 });
@@ -1361,7 +1361,7 @@ function applyUserRuleToScan(
   result.elements.push(...extra.elements);
 }
 
-async function showHints(filter?: Category | Category[]): Promise<void> {
+async function showBadges(filter?: Category | Category[]): Promise<void> {
   // Wait one frame so any pending IntersectionObserver entries (queued
   // synchronously by observe(), delivered async) have a chance to fire,
   // then drain pending claims/releases. Without this, a `f` keypress
@@ -1382,23 +1382,23 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
     ? store.all.filter(w => categories.includes(w.category))
     : [...store.all];
 
-  // pageSession.hintsVisible is the mode flag — "user wants hints showing." Set it
+  // pageSession.badgesVisible is the mode flag — "user wants hints showing." Set it
   // even when the store has nothing to paint right now so subsequent
   // wrappers arriving via the batched scan (or MutationObserver
-  // discovery) paint via badgeNewlyCodeworded, which is pageSession.hintsVisible-
+  // discovery) paint via badgeNewlyCodeworded, which is pageSession.badgesVisible-
   // gated. Under the old whole-grammar path the store was always
-  // populated by the time showHints fired, so an empty return here
-  // never mattered; under batched mode the scan is async and showHints
+  // populated by the time showBadges fired, so an empty return here
+  // never mattered; under batched mode the scan is async and showBadges
   // can race ahead of the first batch landing.
   if (allTargets.length === 0) {
-    pageSession.hintsVisible = true;
+    pageSession.badgesVisible = true;
     return;
   }
 
   // Filter to viewport-visible and sort by position (same as grammar push)
   const targets = viewportSort(allTargets);
   if (targets.length === 0) {
-    pageSession.hintsVisible = true;
+    pageSession.badgesVisible = true;
     return;
   }
 
@@ -1412,13 +1412,13 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
   // Breadcrumbs around the heavy per-batch paint: HintBadge construction
   // (shadow root + DOM per badge) + placeBadges layout reads. Suspected wedge
   // on heavy SPA targets (YouTube /@channel/videos with 80+ badges).
-  firehoseStep('showHints:start', renderable.length, 20);
+  firehoseStep('showBadges:start', renderable.length, 20);
   cacheLayout(renderable.map(w => w.element));
   // Ancestor warm (rect + style + dims) for the same construction walks the
-  // build pass warms for (see badgeNewlyCodeworded) — showHints constructs
+  // build pass warms for (see badgeNewlyCodeworded) — showBadges constructs
   // the strict-viewport slice and pays them per badge otherwise.
   cacheConstruction(renderable.map(w => w.element));
-  firehoseStep('showHints:cache_end', renderable.length, 20);
+  firehoseStep('showBadges:cache_end', renderable.length, 20);
   try {
     for (const wrapper of renderable) {
       const label = poolLabelToAssignment(wrapper.scanned.codeword);
@@ -1452,7 +1452,7 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
         wrapper.hint.hide();
       }
     }
-    firehoseStep('showHints:mount_end', renderable.length, 20);
+    firehoseStep('showBadges:mount_end', renderable.length, 20);
 
     // Ensure visibilityMO is running so class/style-driven visibility
     // transitions (YouTube controls fading out, etc.) request the settle
@@ -1463,13 +1463,13 @@ async function showHints(filter?: Category | Category[]): Promise<void> {
     const __pbStart = performance.now();
     try { placeBadges(renderable); } finally {
       recordCpu('placeBadges:show', performance.now() - __pbStart);
-      firehoseStep('showHints:place_end', renderable.length, 20);
+      firehoseStep('showBadges:place_end', renderable.length, 20);
     }
   } finally {
     clearLayoutCache();
   }
-  pageSession.hintsVisible = true;
-  // showHints painted only the strict-viewport `renderable` slice. Converge
+  pageSession.badgesVisible = true;
+  // showBadges painted only the strict-viewport `renderable` slice. Converge
   // the rest of the desired set: build badges for in-band (IO-margin)
   // codeworded wrappers that fell outside the strict viewport — the
   // noHintObject set that otherwise stayed hintless until the next scroll.
@@ -1498,9 +1498,9 @@ function clearHintFilter(): void {
   }
 }
 
-function hideHints(): void {
+function hideBadges(): void {
   clearHintFilter();
-  pageSession.hintsVisible = false;
+  pageSession.badgesVisible = false;
   activeCategory = null;
   for (const w of store.all) {
     w.hint?.hideLeader();
@@ -1533,9 +1533,9 @@ function scheduleHintRefresh(): void {
   hintRefreshScheduled = true;
   pageSession.resources.timeout(() => {
     hintRefreshScheduled = false;
-    if (!shouldAutoShowHints()) return;
+    if (!shouldAutoShowBadges()) return;
     doScan();
-    showHints();
+    showBadges();
   }, HINT_REFRESH_DELAY_MS);
 }
 
@@ -1557,7 +1557,7 @@ function scheduleHintRefresh(): void {
 const scheduleBandBuildContinuation = createSingleFlight(
   scheduleYieldTask,
   () => {
-    if (pageSession.isTornDown || !pageSession.hintsVisible) return;
+    if (pageSession.isTornDown || !pageSession.badgesVisible) return;
     badgeNewlyCodeworded();
   },
 );
@@ -1569,7 +1569,7 @@ const scheduleBandBuildContinuation = createSingleFlight(
 // (notes/DESIGN_PAINT_THE_BAND.md): off-viewport band wrappers paint too and
 // ride the scroll into view already painted, Rango-style.
 //
-// Two-phase like showHints: construct/show everything first (DOM writes),
+// Two-phase like showBadges: construct/show everything first (DOM writes),
 // THEN one batched placeBadges (probe reads before transform writes). The
 // first cut placed per badge inside the build loop (append host → Range
 // gBCR → append host …), forcing a reflow PER BADGE — which inflated
@@ -1643,7 +1643,7 @@ function prepareBadge(w: ElementWrapper): boolean {
   const label = poolLabelToAssignment(w.scanned.codeword);
   w.label = label;
   // A CSS-invisible target (visibility:hidden / opacity:0 hover-reveal) must
-  // not paint — same reason as showHints: no visibility transition fires for
+  // not paint — same reason as showBadges: no visibility transition fires for
   // a never-revealed target, so the recheck never cleans it up. `cssHidden`
   // keeps the voice (strict-viewport) gate in lockstep.
   const cssVisible = isVisible(w.element);
@@ -1651,7 +1651,7 @@ function prepareBadge(w: ElementWrapper): boolean {
   // Restore the label on an existing dormant (scroll-back) hint even when the
   // target is CSS-hidden. A dormant hint was clearLabel()d on band exit;
   // skipping the label here (the 116b321 regression) leaves it null — and
-  // recheckHintedVisibility shows it as an empty box when the target is later
+  // recheckBadgeVisibility shows it as an empty box when the target is later
   // revealed. The label is just data on a hidden badge.
   if (w.hint) {
     w.hint.setLabel(label);
@@ -1691,9 +1691,9 @@ function prepareBadge(w: ElementWrapper): boolean {
 //     exhausted claims don't re-fire the callback (doFlush gates on `dirty`),
 //     so this converges rather than spins.
 //   - build: construct badges for in-band codeworded wrappers that lack one —
-//     the set showHints' strict-viewport slice leaves behind (the noHintObject
+//     the set showBadges' strict-viewport slice leaves behind (the noHintObject
 //     root): they sit in the IO band but outside the strict viewport, so
-//     showHints never built them and nothing rebuilt until a scroll.
+//     showBadges never built them and nothing rebuilt until a scroll.
 // Tear-down is the separate gBCR pass `reconcileTeardown` (Phase 4); the IO
 // viewport-exit remains the cheap fast-path. Keep reconcile gBCR-free — it runs
 // on the frequent onCodewordsChanged cadence and the coalesced scheduleReconcile.
@@ -1728,7 +1728,7 @@ function reattachStrippedHosts(): void {
 
 function reconcile(): void {
   pageSession.tracker.refreshViewportClaims();
-  if (pageSession.hintsVisible) {
+  if (pageSession.badgesVisible) {
     badgeNewlyCodeworded();
     reattachStrippedHosts();
   }
@@ -1746,7 +1746,7 @@ function reconcile(): void {
 // settle): a 100ms debounce collapses a churny burst into one reconcile so we
 // act on real {claim, build} deltas only — the steady state is a cheap O(store)
 // no-op walk; grammar churn happens solely when a genuinely new in-band wrapper
-// needs a codeword. Sites needing synchronous flush→showHints ordering (nav,
+// needs a codeword. Sites needing synchronous flush→showBadges ordering (nav,
 // alphabet) call reconcile() directly instead.
 function scheduleReconcile(): void {
   if (pageSession.reconcileTimer) return;
@@ -1835,7 +1835,7 @@ function applyStrictPlan(delta: ElementWrapper[]): void {
 // Demoted backstop entry (Phase E): between-settle signals — the visibility
 // MO's class/style ticks, pointer-driven reveals — request the unified pass
 // instead of running their own convergence loops (the old 100ms-throttled
-// recheckHintedVisibility + the strict re-push it triggered). Non-extending
+// recheckBadgeVisibility + the strict re-push it triggered). Non-extending
 // single-flight timer, deliberately NOT the scheduleDeferredReposition
 // debounce: a debounce pushes back under sustained churn, and the demotion
 // contract is "must not get slower than the loops it replaced" — this fires
@@ -1908,7 +1908,7 @@ const DISCOVERY_SWEEP_IDLE_TIMEOUT_MS = 500;
 // that region), so we record the coalesce on `discoverySweepRerun` and, in the
 // `finally`, conditionally re-arm — but ONLY when the sweep added nothing AND
 // a coalesce happened (strongest signal of a race-missed node). When the sweep
-// added nodes, we DO NOT retry: reconcile()/showHints() can ripple into more
+// added nodes, we DO NOT retry: reconcile()/showBadges() can ripple into more
 // scroll-settles and chained reruns produced the codeword-churn loop the
 // earlier retry attempt was reverted for. Retries are also depth-capped and
 // cooldown-gated so even worst-case the chain terminates quickly.
@@ -1973,14 +1973,14 @@ function scheduleBandDiscovery(settleKind: 'band' | 'store', revealRepairs = 0):
         // (known-wrapper skip), added===0, and the early return here
         // stranded their claim flush + paint for seconds until some sweep
         // attached a genuinely new element (log tell: added=1 followed by
-        // showHints 166 — one element unlocking a ~165-badge backlog).
+        // showBadges 166 — one element unlocking a ~165-badge backlog).
         if (added === 0 && !fastReveal) return;
         // New wrappers landed (or a mass reveal armed this sweep): claim
         // codewords for the in-band ones and build their badges
         // (reconcile), flush the claims, then paint.
         reconcile();
         await pageSession.tracker.flushNow();
-        if (pageSession.hintsVisible) await showHints(activeCategory ?? undefined);
+        if (pageSession.badgesVisible) await showBadges(activeCategory ?? undefined);
       } finally {
         pageSession.discoverySweepPending = false;
         // Mass-reveal rerun (round 18b): a >=25-repair settle landed while
@@ -2050,11 +2050,11 @@ function activateWrapper(wrapper: ElementWrapper): void {
   // Visibility handoff: same rules as the SSE activate path above. In
   // always-mode we clear narrowing/keyboard state and schedule a refresh;
   // in manual-mode we fully hide so the user can re-summon explicitly.
-  if (shouldAutoShowHints()) {
+  if (shouldAutoShowBadges()) {
     clearHintFilter();
     scheduleHintRefresh();
   } else {
-    hideHints();
+    hideBadges();
   }
 
   wrapper.hint?.flash();
@@ -2290,9 +2290,9 @@ async function processScanBatch(
   if (candidates.length > 0) rememberClaimedCodewords(candidates);
 
   // Paint immediately, translucent (grammarReady is still false, so the
-  // badge carries bk-pending). Gated by pageSession.hintsVisible so
+  // badge carries bk-pending). Gated by pageSession.badgesVisible so
   // manual-mode batches don't paint until "show".
-  if (pageSession.hintsVisible && candidates.length > 0) {
+  if (pageSession.badgesVisible && candidates.length > 0) {
     reconcile();
   }
 
@@ -2485,7 +2485,7 @@ pageSession.start({
   onUrlChange: (fromCache, reason) => rescanForNav(fromCache, reason),
   restore: () => restoreFromBfcache(),
   onCodewordsChanged: onTrackerCodewordsChanged,
-  showHints,
+  showBadges,
   schedulePassSoon,
   discoverInSubtree,
   onMassDiscovery: (added) => scheduleMassRevealPaint(added),
@@ -2686,7 +2686,7 @@ function preNavObserverTeardown(triggerReason: string): number {
 // QuickBase writes a pagination offset (?skip=N) into the grid URL during
 // scrolling; webNavigation reports every tick as a history-state update, and
 // the drill firehose showed FIVE overlapping full rescans (document-wide
-// doScan + syncNow + wholesale showHints) landing mid-swap-storm — pure
+// doScan + syncNow + wholesale showBadges) landing mid-swap-storm — pure
 // self-inflicted load at the worst moment. A user cannot click-navigate
 // mid-fling: a URL change while scroll events are arriving is in-page
 // state, so the rescan defers to scroll settle and coalesces (latest args
@@ -2721,8 +2721,8 @@ function rescanForNav(fromCache: boolean, reason: string): void {
   // script alive, so F-shown hints from the previous URL would otherwise
   // linger. Refocus (the other from_cache caller) is NOT a new page — only
   // reset on spa_nav.
-  if (reason === 'spa_nav' && !shouldAutoShowHints() && pageSession.hintsVisible) {
-    hideHints();
+  if (reason === 'spa_nav' && !shouldAutoShowBadges() && pageSession.badgesVisible) {
+    hideBadges();
   }
 
   if (fromCache) {
@@ -2794,7 +2794,7 @@ function rescanForNav(fromCache: boolean, reason: string): void {
         // unchanged. A scroll-driven URL tick (QuickBase ?skip=N fires at
         // ITS settle, after our incremental path already rebuilt the store)
         // arrives ~fully connected → the document walk would discover
-        // nothing and the wholesale showHints would re-churn a converged
+        // nothing and the wholesale showBadges would re-churn a converged
         // badge population, seconds after every fling (round-11 firehose:
         // 913ms-3.2s deferred scans chasing each drill). Light path: one
         // reconcile + a settle pass. O(store) pointer reads to decide.
@@ -2831,7 +2831,7 @@ function rescanForNav(fromCache: boolean, reason: string): void {
         void doScan('rescan').then(async () => {
           reconcile();
           await pageSession.tracker.flushNow();
-          if (pageSession.hintsVisible) showHints(activeCategory ?? undefined);
+          if (pageSession.badgesVisible) showBadges(activeCategory ?? undefined);
           void navStep('deferred_scan:end');
         });
       };
@@ -2964,9 +2964,9 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
     if (action === 'show_hints') {
       phraseSnapshot = takeSnapshot(store.all, performance.now());
       doScan();
-      showHints();
+      showBadges();
     } else if (action === 'hide_hints') {
-      hideHints();
+      hideBadges();
     } else if (action === 'rescan') {
       pageSession.onUrlChange(params?.from_cache === 'true', params?.reason ?? '');
     } else if (action === 'reactivate') {
@@ -3033,7 +3033,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         // Visibility handoff after activation:
         //  - Always-mode: keep badges visible so the user can immediately
         //    voice-trigger the next action. Just clear narrowing/keyboard
-        //    state, then schedule a doScan + showHints after a short delay
+        //    state, then schedule a doScan + showBadges after a short delay
         //    so post-activate DOM changes (modal open, form expansion,
         //    autocomplete dropdown) get reflected in the next badge set.
         //  - Manual-mode: full hide. Activate is the "I'm done" gesture;
@@ -3044,12 +3044,12 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         //    prefix narrowing/keyboard state.
         if (tabTarget === 'background') {
           clearHintFilter();
-          if (shouldAutoShowHints()) scheduleHintRefresh();
-        } else if (shouldAutoShowHints()) {
+          if (shouldAutoShowBadges()) scheduleHintRefresh();
+        } else if (shouldAutoShowBadges()) {
           clearHintFilter();
           scheduleHintRefresh();
         } else {
-          hideHints();
+          hideBadges();
         }
         // Branch on the live element's tag, not the voice plugin's elem_type
         // hint. elem_type was captured at grammar-push time and can become
@@ -3211,7 +3211,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       // forwarding (see frame-router), so `prefix` is already a letter here.
       const letter = params?.prefix;
       if (letter) {
-        if (!pageSession.hintsVisible) showHints();
+        if (!pageSession.badgesVisible) showBadges();
         const matchSet = new Set(store.matchingLetterPrefix(letter));
         for (const w of store.all) {
           const isMatch = matchSet.has(w);
@@ -3266,11 +3266,11 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         }
       });
     }
-  } else if (message.type === 'SHOW_HINTS') {
+  } else if (message.type === 'SHOW_BADGES') {
     doScan();
-    showHints(message.category);
-  } else if (message.type === 'HIDE_HINTS') {
-    hideHints();
+    showBadges(message.category);
+  } else if (message.type === 'HIDE_BADGES') {
+    hideBadges();
   }
 });
 
@@ -3289,7 +3289,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
 // clamp inside reconcileRead (hints.ts).
 let repositionRafPending = false;
 function scheduleReposition(): void {
-  if (!pageSession.hintsVisible) return;
+  if (!pageSession.badgesVisible) return;
   if (repositionRafPending) return;
   repositionRafPending = true;
   requestAnimationFrame(() => {
@@ -3363,7 +3363,7 @@ function reconcileScrollFrame(): void {
 //   4. reconcileScrollAccel — level-triggered accelerator re-detection: arm
 //      badges whose scroller only became scrollable after they were shown,
 //      rebuild changed chains. Cheap post-settle; no-op when accel is off.
-//   5. recheckHintedVisibility — re-evaluate CSS visibility BEFORE the strict
+//   5. recheckBadgeVisibility — re-evaluate CSS visibility BEFORE the strict
 //      pass so a hover-reveal target that went visibility:hidden gets its
 //      badge hidden AND `cssHidden` set, keeping voice in lockstep with the
 //      visual hide. Also re-hides any badge a mid-scroll reposition re-showed
@@ -3385,7 +3385,7 @@ function reconcileScrollFrame(): void {
 //             rows), so converge claim+build over the store. Coalesced so a
 //             churny burst collapses to one pass acting on real deltas only.
 //
-// Steps 1-6 are gated on hintsVisible: the activate command requires the
+// Steps 1-6 are gated on badgesVisible: the activate command requires the
 // hints tag, so voice can't match while hints are down — stale strict
 // membership doesn't matter, and the next `show` re-scans from scratch.
 // Applied-counts telemetry (Phase E of notes/DESIGN_UNIFIED_RECONCILER.md,
@@ -3674,7 +3674,7 @@ function snapshotExtras() {
     // flag says hidden, so Ctrl+S routes to "show" instead of "hide"). If
     // painted_badges > 0 while hints_visible is false, that's the desync.
     visibility: {
-      hints_visible: pageSession.hintsVisible,
+      hints_visible: pageSession.badgesVisible,
       hints_shown: getHintsShown(),
       hint_visibility: getHintVisibility(),
       painted_badges: store.all.filter((w) => w.hint !== null).length,
@@ -3718,13 +3718,13 @@ function scheduleMassRevealPaint(repairs: number): void {
       firehoseStep('mass_reveal:direct_paint', repairs, 0);
       reconcile();
       await pageSession.tracker.flushNow();
-      if (pageSession.hintsVisible) await showHints(activeCategory ?? undefined);
+      if (pageSession.badgesVisible) await showBadges(activeCategory ?? undefined);
     })();
   });
 }
 
 function runSettlePipeline(discovery: 'band' | 'store'): void {
-  if (pageSession.hintsVisible) {
+  if (pageSession.badgesVisible) {
     // Clip-membership sync FIRST: its leave-path is the one mid-pipeline
     // writer of the plan's occlusion inputs (clearing `clipped` for targets
     // that left observation) — running it before the gather keeps every
@@ -3784,12 +3784,12 @@ function runSettlePipeline(discovery: 'band' | 'store'): void {
 // Mid-fling band sweep throttle (notes/DESIGN_FLING_WAVE.md Part 1c +
 // drill round 2). 10Hz while scroll events arrive; a timestamp, not a
 // timer — nothing to tear down, nothing free-running (wedge discipline).
-// Gated on hintsVisible: with hints down the IO's own cadence is fine
+// Gated on badgesVisible: with hints down the IO's own cadence is fine
 // (nothing user-facing waits), and the next show re-converges from scratch.
 const MID_SCROLL_BAND_SWEEP_MS = 100;
 let bandSweepLastAt = 0;
 function noteBandSweep(): void {
-  if (!pageSession.hintsVisible) return;
+  if (!pageSession.badgesVisible) return;
   const now = performance.now();
   if (now - bandSweepLastAt < MID_SCROLL_BAND_SWEEP_MS) return;
   bandSweepLastAt = now;
@@ -4307,7 +4307,7 @@ function resumeHintMachinery(): void {
   void doScan().then(() => {
     reconcile();
     void pageSession.tracker.flushNow();
-    if (pageSession.hintsVisible) showHints(activeCategory ?? undefined);
+    if (pageSession.badgesVisible) showBadges(activeCategory ?? undefined);
   });
   bkLog('BK_RESUME', { url: trimFrameUrl(window.location.href), wrappers: store.all.length });
 }
@@ -4445,8 +4445,8 @@ doScan();
 watchUndefinedCustomElements(document);
 
 // Expose for console debugging
-(window as any).branchkitShowHints = () => { doScan(); showHints(); };
-(window as any).branchkitHideHints = () => hideHints();
+(window as any).branchkitShowBadges = () => { doScan(); showBadges(); };
+(window as any).branchkitHideBadges = () => hideBadges();
 (window as any).branchkitScan = () => { doScan(); return store.all; };
 // Snapshot of the wrapper-rebind counters (step 5 instrumentation).
 // Returns a fresh copy on each call so callers can take a baseline,

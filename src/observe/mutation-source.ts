@@ -357,7 +357,7 @@ function fireHugeMutationRefresh(): void {
     .then((added) => {
       firehoseStep('huge_path:batched_end', added);
       // Newly-attached wrappers emit store deltas → grammar sync.
-      if (pageSession.hintsVisible) {
+      if (pageSession.badgesVisible) {
         pageSession.deps.scheduleReposition();
       }
     });
@@ -369,10 +369,10 @@ function handlePageMutations(records: MutationRecord[]): void {
   firehoseStep('moCallback:start', records.length, FIREHOSE_MIN);
   // Hints are visible — behavior depends on visibility mode.
   // In "manual" mode, defer mutations so codewords don't shuffle while
-  // the user is reading badges. hideHints() flushes via doScan().
+  // the user is reading badges. hideBadges() flushes via doScan().
   // In "always" mode, process mutations incrementally so SPA navigation
   // and dynamic content get badges without requiring escape+re-show.
-  if (pageSession.hintsVisible && getHintVisibility() === 'manual') {
+  if (pageSession.badgesVisible && getHintVisibility() === 'manual') {
     pageSession.pendingMutation = true;
     recordCpu('moCallback', performance.now() - __cpuStart);
     firehoseStep('moCallback:end_manual_deferred', records.length, FIREHOSE_MIN);
@@ -431,7 +431,7 @@ function handlePageMutations(records: MutationRecord[]): void {
   // the dominant scroll-time CPU bucket. A mutation batch means "layout
   // may have shifted"; coalescing to one reposition after mutations
   // settle is the same trade already accepted for scroll/resize.
-  if (pageSession.hintsVisible) pageSession.deps.scheduleDeferredReposition();
+  if (pageSession.badgesVisible) pageSession.deps.scheduleDeferredReposition();
   recordCpu('moCallback', performance.now() - __cpuStart);
   firehoseStep('moCallback:end_normal', records.length, FIREHOSE_MIN);
 }

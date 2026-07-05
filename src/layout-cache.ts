@@ -57,7 +57,7 @@ export function getCachedRect(el: Element): DOMRect {
  * is band-scoped (notes/DESIGN_PAINT_THE_BAND.md), so this is no longer a
  * paint gate; the strict-viewport consumers that remain are the voice
  * `_strict` set, occlusion, the build queue's on-screen-first prioritization
- * (showHints/viewportSort, badgeNewlyCodeworded's sync-vs-budgeted split),
+ * (showBadges/viewportSort, badgeNewlyCodeworded's sync-vs-budgeted split),
  * and reconcileRead's fully-off-screen write-time clamp. All route through
  * this one predicate so they agree.
  */

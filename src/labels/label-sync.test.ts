@@ -79,7 +79,7 @@ describe('syncNow wholesale refusal (calibration_active)', () => {
       store,
       detachWrapper: vi.fn(),
       reconcile: vi.fn(),
-      isHintsVisible: () => false,
+      isBadgesVisible: () => false,
       republishAll: vi.fn(),
     });
     // Clear module-level delta-sync state from prior tests.
@@ -197,7 +197,7 @@ describe('pipelined delete accounting (audit 2026-07-04)', () => {
       store,
       detachWrapper: vi.fn(),
       reconcile: vi.fn(),
-      isHintsVisible: () => false,
+      isBadgesVisible: () => false,
       republishAll: vi.fn(),
     });
     rotateSession();
@@ -289,7 +289,7 @@ describe('grammar epoch handshake', () => {
       store,
       detachWrapper: vi.fn(),
       reconcile: vi.fn(),
-      isHintsVisible: () => false,
+      isBadgesVisible: () => false,
       republishAll,
     });
     rotateSession(); // clear sentCodewords between tests
@@ -381,7 +381,7 @@ describe('grammar epoch 2b loop guards (cap + reset)', () => {
       store,
       detachWrapper: vi.fn(),
       reconcile: vi.fn(),
-      isHintsVisible: () => false,
+      isBadgesVisible: () => false,
       republishAll,
     });
     rotateSession();
@@ -517,7 +517,7 @@ describe('grammar epoch phase 3a trigger-redundancy probe', () => {
       store,
       detachWrapper: vi.fn(),
       reconcile: vi.fn(),
-      isHintsVisible: () => false,
+      isBadgesVisible: () => false,
       republishAll,
     });
     rotateSession();
@@ -611,7 +611,7 @@ describe('scheduleSync debounce + max-wait deadline (round 22c)', () => {
       store,
       detachWrapper: vi.fn(),
       reconcile: vi.fn(),
-      isHintsVisible: () => false,
+      isBadgesVisible: () => false,
       republishAll: vi.fn(),
     });
     rotateSession();

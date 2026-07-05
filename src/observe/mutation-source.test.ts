@@ -31,7 +31,7 @@ beforeEach(() => {
   session.pendingDiscoveryRoots.clear();
   session.discoveryScheduled = false;
   session.hugeMutationTimer = null;
-  session.hintsVisible = false;
+  session.badgesVisible = false;
   session.pendingMutation = false;
   session.deps = {
     discoverInSubtree: vi.fn(() => 0),

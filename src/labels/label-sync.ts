@@ -56,7 +56,7 @@ export interface LabelSyncDeps {
   detachWrapper: (element: Element) => void;
   /** Single level-triggered convergence pass (claim + build). */
   reconcile: () => void;
-  isHintsVisible: () => boolean;
+  isBadgesVisible: () => boolean;
   /**
    * Full grammar republish (content.ts republishAllGrammar): rotate the
    * session and re-queue every live wrapper. Phase 2b's epoch_mismatch
@@ -749,7 +749,7 @@ async function doSyncNow(reason: string): Promise<void> {
     // Epoch tripwire on the final chunk only — intermediate responses
     // describe a half-applied sync by construction.
     if (isLast) checkGrammarEpoch(resp, reason);
-    if (deps.isHintsVisible() && resp.succeeded.length > 0) {
+    if (deps.isBadgesVisible() && resp.succeeded.length > 0) {
       deps.reconcile();
     }
   };

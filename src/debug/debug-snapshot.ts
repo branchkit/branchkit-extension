@@ -75,7 +75,7 @@ interface WrapperRecord {
      * the badge currently believes itself to be painted. Used to diagnose
      * the hover-revealed-UI visibility recheck (notes/...): if a player
      * control element is CSS-invisible (opacity:0 via `ytp-autohide`) but
-     * its hint reports `isVisible: true`, recheckHintedVisibility didn't
+     * its hint reports `isVisible: true`, recheckBadgeVisibility didn't
      * catch the transition. Mirrors the host's `data-bk-shown` attribute. */
     isVisible: boolean;
     /** True when the target element passes `isVisible()` *right now*. If

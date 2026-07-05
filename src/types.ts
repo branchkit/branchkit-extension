@@ -139,8 +139,8 @@ export type Message =
       /** Content omits tab_id/frame_id; SW stamps them from sender. */
       request: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'>;
     }
-  | { type: 'SHOW_HINTS'; category?: Category }
-  | { type: 'HIDE_HINTS' }
+  | { type: 'SHOW_BADGES'; category?: Category }
+  | { type: 'HIDE_BADGES' }
   | { type: 'BRANCHKIT_ACTION'; payload: { action: string; params: Record<string, string>; correlation_id?: string } }
   // Content → background: open an http(s) href in a new background tab (the
   // "stash" hint verb). Content scripts can't reach chrome.tabs.

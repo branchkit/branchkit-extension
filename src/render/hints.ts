@@ -791,7 +791,7 @@ export class HintBadge {
     // text is empty. Painting now yields an empty badge BOX with no letters — the
     // recheck/pointerover show path can race ahead of the setLabel the claim
     // pipeline issues. Stay hidden; the setLabel + show() that badgeNewlyCodeworded
-    // / showHints run once the label is restored will paint it. Enforces the
+    // / showBadges run once the label is restored will paint it. Enforces the
     // dormant invariant documented on `label` and mirrors setMatchedChars's guard.
     if (this.label === null) return;
     this._visible = true;

@@ -6,7 +6,7 @@
  * overlapping slice of the store with fresh layout reads —
  * `reconcileTeardown` (band check over hinted + never-hinted candidates),
  * `collectStrictViewportDelta` (strict check over the codeworded set), and
- * `recheckHintedVisibility` (CSS visibility over the hinted in-viewport set).
+ * `recheckBadgeVisibility` (CSS visibility over the hinted in-viewport set).
  *
  * Discipline (the wedge guard, inherited from reconcileTeardown):
  *   - Bounded sets only — hinted, codeworded, and codeword-less stale-FALSE

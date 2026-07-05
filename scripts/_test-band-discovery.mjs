@@ -60,7 +60,7 @@ const ctx = await chromium.launchPersistentContext(PROFILE, {
   args: ['--disable-extensions-except=' + EXT, '--load-extension=' + EXT],
 });
 
-// Seed an alphabet so showHints() doesn't bail at isAlphabetLoaded(), plus
+// Seed an alphabet so showBadges() doesn't bail at isAlphabetLoaded(), plus
 // always-mode so badges paint on load without a "show" command.
 const ALPHABET = 'arch bat cat dog echo fox golf hotel india jam kilo lima mike november oscar papa quebec romeo sierra tango uniform victor whiskey xray yankee zulu'.split(' ');
 const sw = ctx.serviceWorkers()[0] || await ctx.waitForEvent('serviceworker');

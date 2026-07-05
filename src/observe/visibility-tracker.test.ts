@@ -32,7 +32,7 @@ const session = pageSession;
 beforeEach(() => {
   vi.useFakeTimers();
   session.visibilityMOConnected = false;
-  session.hintsVisible = false;
+  session.badgesVisible = false;
   constructVisibilityObservers();
 });
 

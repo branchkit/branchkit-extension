@@ -75,7 +75,7 @@ export class IntersectionTracker {
   // CLAIM_LABELS while flushNow's `await this.flush()` starts a second
   // flush concurrently. The second sees an empty queue and returns
   // immediately, so flushNow resolves before the first claim finishes —
-  // showHints would then render badges before all wrappers have
+  // showBadges would then render badges before all wrappers have
   // codewords. Chaining ensures every doFlush waits for the prior one.
   private flushChain: Promise<void> = Promise.resolve();
 
@@ -248,7 +248,7 @@ export class IntersectionTracker {
    * Force pending work to flush. Awaitable. Drains until both queues are
    * stable — a doFlush awaiting CLAIM_LABELS may have IO fire more
    * entries (or refreshViewportClaims push more wrappers) by the time
-   * it returns; we loop so showHints sees a quiescent tracker.
+   * it returns; we loop so showBadges sees a quiescent tracker.
    */
   async flushNow(): Promise<void> {
     // Drop any pending microtask flush — we're going to drive flushes directly.

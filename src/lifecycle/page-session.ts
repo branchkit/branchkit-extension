@@ -87,7 +87,7 @@ export interface PageSessionDeps {
   // --- visibility-tracker collaborators ---
 
   /** Paint badges after a visibility promotion attached new wrappers. */
-  showHints: () => void;
+  showBadges: () => void;
 
   /** Demoted backstop entry (Phase E of DESIGN_UNIFIED_RECONCILER.md): a
    * between-settle signal (class/style mutation, pointer reveal) requests
@@ -238,7 +238,7 @@ export class PageSession {
   visibilityMOConnected = false;
 
   /** The mode flag — "user wants hints showing." */
-  hintsVisible = false;
+  badgesVisible = false;
 
   /**
    * Manual-mode defer flag: set when the mutation observer sees a mutation
