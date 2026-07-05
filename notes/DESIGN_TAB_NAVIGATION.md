@@ -111,8 +111,14 @@ published. Exclusivity does two things:
    Palette codewords can therefore reuse the same alphabet words as painted
    hints with zero ambiguity: "the same word means different things by
    context" is the eligibility filter's whole job. No pool claim, no
-   exhaustion, deterministic assignment (row N gets alphabet word N, pairs
-   after 26).
+   exhaustion, deterministic assignment. Badges are UNIFORM two-word pairs
+   (26×25 = 650, decided 2026-07-05 after weighing a 14-single head): every
+   key is exactly two words, so a chopped utterance is never a complete key
+   — chop safety without the hints bridge — and heavy-tab sessions never
+   outgrow the badge space. Triples are ruled out by the same argument (a
+   chopped triple's first two words WOULD be a pair key); 650 makes them
+   moot anyway. `SINGLES` in palette/codewords.ts is the knob if lived use
+   ever wants one-word badges back on the head rows.
 2. **Layer 1, free:** an exclusive gate drives `compute_narrow_to`, so the
    engine narrows to the palette's word set at the next utterance boundary —
    off-mode acoustic neighbors become unproducible at the source. The palette

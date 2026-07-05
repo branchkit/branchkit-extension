@@ -11,41 +11,33 @@ const ALPHABET = [
 const ids = (n: number): string[] => Array.from({ length: n }, (_, i) => `row:${i}`);
 
 describe('assignCodewords', () => {
-  it('gives the first 14 rows single-word badges from the alphabet head', () => {
-    const m = assignCodewords(ids(14), ALPHABET);
-    expect(m.get('row:0')).toBe('arch');
-    expect(m.get('row:13')).toBe('nest');
-  });
-
-  it('gives later rows pairs drawn only from the alphabet tail', () => {
-    const m = assignCodewords(ids(20), ALPHABET);
-    const tail = new Set(ALPHABET.slice(14));
-    for (let i = 14; i < 20; i++) {
-      const cw = m.get(`row:${i}`)!;
-      const [a, b] = cw.split(' ');
-      expect(tail.has(a)).toBe(true);
-      expect(tail.has(b)).toBe(true);
-      expect(a).not.toBe(b); // no doubled pairs
-    }
-    expect(m.get('row:14')).toBe('ocean pearl');
-  });
-
-  it('never uses a single badge word as a pair word (chop safety)', () => {
-    const m = assignCodewords(ids(maxVoiceRows()), ALPHABET);
-    const singles = new Set(ALPHABET.slice(0, 14));
-    for (const [id, cw] of m) {
+  it('badges every row with a two-word pair (uniform length = chop safety)', () => {
+    const m = assignCodewords(ids(40), ALPHABET);
+    expect(m.size).toBe(40);
+    for (const cw of m.values()) {
       const words = cw.split(' ');
-      if (words.length === 2) {
-        expect(singles.has(words[0]), `${id}: ${cw}`).toBe(false);
-        expect(singles.has(words[1]), `${id}: ${cw}`).toBe(false);
-      }
+      expect(words.length).toBe(2);
+      expect(ALPHABET).toContain(words[0]);
+      expect(ALPHABET).toContain(words[1]);
+      expect(words[0]).not.toBe(words[1]); // no doubled pairs
+    }
+    expect(m.get('row:0')).toBe('arch bolt');
+  });
+
+  it('no key is a prefix of another (a chopped pair matches nothing)', () => {
+    const m = assignCodewords(ids(maxVoiceRows()), ALPHABET);
+    const keys = new Set(m.values());
+    for (const cw of keys) {
+      const [first] = cw.split(' ');
+      expect(keys.has(first), `bare "${first}" must not be a key`).toBe(false);
     }
   });
 
-  it('assigns unique codewords up to maxVoiceRows and stops after', () => {
+  it('caps at 650 pairs (26×25) — no triples ever needed', () => {
+    expect(maxVoiceRows()).toBe(650);
     const m = assignCodewords(ids(maxVoiceRows() + 10), ALPHABET);
     expect(m.size).toBe(maxVoiceRows());
-    expect(new Set(m.values()).size).toBe(m.size);
+    expect(new Set(m.values()).size).toBe(m.size); // all unique
   });
 
   it('is deterministic for a given row order', () => {

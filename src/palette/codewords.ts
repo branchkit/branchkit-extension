@@ -6,23 +6,28 @@
  * in empty-state row order, once per palette open. Pure and deterministic —
  * stable row order in = stable badges; refiltering never reassigns.
  *
- * The single/pair split is DISJOINT by construction: singles come from the
- * head of the alphabet, pair words only from the tail. A pair's first word is
- * therefore never itself a badge, so an utterance chopped mid-pair ("ocean" …
- * pause … "quill") matches nothing rather than mis-selecting a single-badge
- * row. (Page hints solve the same chop with the matcher bridge; the palette
- * has no bridge, so it removes the ambiguity structurally instead.)
+ * Badges are UNIFORM two-word pairs. Uniform length is the chop-safety
+ * property: every key is exactly two words, so a partial utterance ("ocean" …
+ * pause) is never a complete key — it matches nothing rather than
+ * mis-selecting another row. (Page hints solve the same chop with the matcher
+ * bridge; the palette has no bridge, so it removes the ambiguity
+ * structurally.) The same argument rules out mixing in triples: a chopped
+ * triple's first two words WOULD be a valid pair key. Pairs over the full
+ * alphabet give 26×25 = 650 badges — beyond any realistic tabs+commands
+ * list, so escalation never comes up.
  *
  * No label-pool claim: the palette runs under the plugin's EXCLUSIVE palette
  * tag, which suppresses page-hint captures while open — reusing the same
  * alphabet words as painted hints is safe by context, not by partition.
  */
 
-// Head-of-alphabet rows get one-word badges; the tail feeds pairs. 14/12
-// yields 14 singles + 12×11 = 132 pairs — 146 addressable rows, comfortably
-// above a typical tabs+commands palette. Rows beyond that render unbadged
-// (keyboard/typing still reaches them).
-const SINGLES = 14;
+// One-word badges for the first N rows (from the alphabet head; pairs then
+// draw only from the tail — the disjoint split that keeps a chopped pair
+// from matching a single). 0 — pairs-only — is the shipped default: uniform
+// badges and a 650-row ceiling beat a one-word fast path that caps badging
+// at 146 rows for heavy-tab sessions. Raising this buys back one-word badges
+// on the head rows if lived use ever wants them.
+const SINGLES = 0;
 
 /** Maximum rows that can carry a voice badge. */
 export function maxVoiceRows(): number {
