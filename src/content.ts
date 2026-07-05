@@ -30,6 +30,7 @@ import { attachWrapper, detachWrapper, seedPreferredFromMemory, attachDiscovered
 import { attachPageMutationObserver, getObserverFirstAttachedAt, teardownMutationSource } from './observe/mutation-source';
 import { firehoseStep } from './debug/firehose';
 import { bkLog } from './debug/bk-log';
+import { harnessHooksEnabled } from './debug/harness-hooks';
 import { store } from './core/store';
 import { HintBadge } from './render/hints';
 import { reconcilePass, drain as drainReconcilePositioner, reconcileRegistrySize } from './render/reconcile-positioner';
@@ -167,14 +168,16 @@ if (guardOwner !== null) {
   // A content script already owns this frame. Leave an aborted-marker on the
   // page-world bridge (diagnostic — lets harnesses count guard trips), then
   // throw to abort the IIFE without re-binding listeners. No-op for the page.
-  try {
-    const pw = ((window as unknown as { wrappedJSObject?: Window }).wrappedJSObject ?? window) as unknown as {
-      __branchkitDebugJSON?: string;
-    };
-    const arr = JSON.parse(pw.__branchkitDebugJSON ?? '[]');
-    arr.push({ aborted_at: performance.now(), ready: document.readyState, owner: guardOwner });
-    pw.__branchkitDebugJSON = JSON.stringify(arr);
-  } catch { /* diagnostic only */ }
+  if (harnessHooksEnabled()) {
+    try {
+      const pw = ((window as unknown as { wrappedJSObject?: Window }).wrappedJSObject ?? window) as unknown as {
+        __branchkitDebugJSON?: string;
+      };
+      const arr = JSON.parse(pw.__branchkitDebugJSON ?? '[]');
+      arr.push({ aborted_at: performance.now(), ready: document.readyState, owner: guardOwner });
+      pw.__branchkitDebugJSON = JSON.stringify(arr);
+    } catch { /* diagnostic only */ }
+  }
   throw new Error('[BranchKit] content script duplicate injection — bailing');
 }
 document.documentElement.setAttribute(CS_GUARD_ATTR, BK_CS_ID);
@@ -196,32 +199,36 @@ const isTopFrame = window === window.top;
 // isolated world aren't transparently readable from the page main world without
 // `cloneInto`, so we encode as a primitive string — strings cross the Xray
 // boundary cleanly. Failures here are non-fatal: this is diagnostic, not
-// load-bearing for any feature.
-try {
-  const pageWindow = ((window as unknown as { wrappedJSObject?: Window }).wrappedJSObject ?? window) as unknown as {
-    __branchkitDebugJSON?: string;
-  };
-  const entry = {
-    cs_id: BK_CS_ID,
-    loaded_at: performance.now(),
-    is_top_frame: isTopFrame,
-    initial_url: location.href,
-    ready: document.readyState,
-  };
-  let existing: typeof entry[] = [];
-  if (typeof pageWindow.__branchkitDebugJSON === 'string') {
-    try { existing = JSON.parse(pageWindow.__branchkitDebugJSON); } catch { existing = []; }
+// load-bearing for any feature. Harness builds only (release builds must not
+// hand pages a fingerprintable page-world global).
+if (harnessHooksEnabled()) {
+  try {
+    const pageWindow = ((window as unknown as { wrappedJSObject?: Window }).wrappedJSObject ?? window) as unknown as {
+      __branchkitDebugJSON?: string;
+    };
+    const entry = {
+      cs_id: BK_CS_ID,
+      loaded_at: performance.now(),
+      is_top_frame: isTopFrame,
+      initial_url: location.href,
+      ready: document.readyState,
+    };
+    let existing: typeof entry[] = [];
+    if (typeof pageWindow.__branchkitDebugJSON === 'string') {
+      try { existing = JSON.parse(pageWindow.__branchkitDebugJSON); } catch { existing = []; }
+    }
+    if (!Array.isArray(existing)) existing = [];
+    existing.push(entry);
+    pageWindow.__branchkitDebugJSON = JSON.stringify(existing);
+  } catch {
+    // ignore — debug surface only, no behavior depends on it
   }
-  if (!Array.isArray(existing)) existing = [];
-  existing.push(entry);
-  pageWindow.__branchkitDebugJSON = JSON.stringify(existing);
-} catch {
-  // ignore — debug surface only, no behavior depends on it
 }
 
 // Append a diagnostic entry to the page-world bridge (see boot entry above
 // for the Xray/string-encoding rationale). Non-fatal by construction.
 function pushDebugBridge(entry: Record<string, unknown>): void {
+  if (!harnessHooksEnabled()) return;
   try {
     const pw = ((window as unknown as { wrappedJSObject?: Window }).wrappedJSObject ?? window) as unknown as {
       __branchkitDebugJSON?: string;
@@ -776,14 +783,18 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
     // positives (a real badge hidden) — `chrome.storage.local.set({ bkOcclusion: false })`
     // to rule it out.
     setOcclusionEnabled(result.bkOcclusion !== false);
-    document.documentElement.setAttribute('data-bk-occlusion', result.bkOcclusion !== false ? 'on' : 'off');
+    if (harnessHooksEnabled()) {
+      document.documentElement.setAttribute('data-bk-occlusion', result.bkOcclusion !== false ? 'on' : 'off');
+    }
   });
   chrome.storage.local.get('bkClipObserver', (result) => {
     // Scroll-container clip detection (IO-root=scroller, Rango's idea). Default ON;
     // only an explicit `false` disables. Composes with bkOcclusion — the IO-clip
     // path and the elementFromPoint overlay path both feed the effective occlusion.
     setClipObserverEnabled(result.bkClipObserver !== false);
-    document.documentElement.setAttribute('data-bk-clip-observer', result.bkClipObserver !== false ? 'on' : 'off');
+    if (harnessHooksEnabled()) {
+      document.documentElement.setAttribute('data-bk-clip-observer', result.bkClipObserver !== false ? 'on' : 'off');
+    }
   });
   // Both accelerator flags in ONE get so they're set atomically — otherwise a
   // badge can arm between the two callbacks with the base flag on but the nested
@@ -809,11 +820,14 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
     // Page-visible diagnostic markers on <html>: 'on' = flag set + ScrollTimeline
     // supported; 'unsupported' = no ScrollTimeline (Firefox stable); 'off' = not
     // set. Pair with `document.querySelectorAll('[data-bk-accel]').length`.
-    document.documentElement.setAttribute(
-      'data-bk-scroll-accel',
-      enabled ? (isScrollTimelineSupported() ? 'on' : 'unsupported') : 'off',
-    );
-    document.documentElement.setAttribute('data-bk-scroll-accel-nested', nested ? 'on' : 'off');
+    // Harness builds only (same fingerprint class as the perf mirror).
+    if (harnessHooksEnabled()) {
+      document.documentElement.setAttribute(
+        'data-bk-scroll-accel',
+        enabled ? (isScrollTimelineSupported() ? 'on' : 'unsupported') : 'off',
+      );
+      document.documentElement.setAttribute('data-bk-scroll-accel-nested', nested ? 'on' : 'off');
+    }
   });
 }
 
@@ -2489,6 +2503,7 @@ openLivenessPort({
 let orphanHits = 0;
 function recordOrphanHit(): void {
   orphanHits++;
+  if (!harnessHooksEnabled()) return; // gauge mirror is a harness affordance
   try {
     document.documentElement.dataset.branchkitOrphanHits = String(orphanHits);
   } catch { /* document gone */ }
@@ -3966,23 +3981,29 @@ pageSession.resources.listen(document, 'keyup', (e: KeyboardEvent) => {
 //   });
 // Unlike the Ctrl+Alt+A path this deliberately does NOT toggle the debug
 // overlay — a test driving captures shouldn't mutate the page's visuals.
-pageSession.resources.listen(document, '__branchkit__capture_snapshot', () => {
-  try {
-    const payload = captureDebugSnapshot(store, trimFrameUrl(window.location.href), snapshotExtras());
-    document.documentElement.dataset.branchkitSnapshot = JSON.stringify(payload);
-  } catch {
-    // Snapshot build failed (detached store, serialization); leave the
-    // previous mirror in place rather than wedging the page.
-  }
-}, true);
+if (harnessHooksEnabled()) {
+  pageSession.resources.listen(document, '__branchkit__capture_snapshot', () => {
+    try {
+      const payload = captureDebugSnapshot(store, trimFrameUrl(window.location.href), snapshotExtras());
+      document.documentElement.dataset.branchkitSnapshot = JSON.stringify(payload);
+    } catch {
+      // Snapshot build failed (detached store, serialization); leave the
+      // previous mirror in place rather than wedging the page.
+    }
+  }, true);
+}
 
 // Soak hook: a page-world dispatch of this event forces the orphan teardown
 // path, so the harness (notes/SOAK_TEARDOWN.md) can induce the torn-down state
 // deterministically without a real extension reload, then fire events and read
 // the branchkitOrphanHits gauge. `once` so it self-removes after firing.
-document.addEventListener('__branchkit__force_teardown', () => {
-  pageSession.teardown('orphan');
-}, { once: true });
+// Harness builds only — in a release build any page could quiesce the CS in
+// its own tab (SOAK_TEARDOWN.md: gate before shipping).
+if (harnessHooksEnabled()) {
+  document.addEventListener('__branchkit__force_teardown', () => {
+    pageSession.teardown('orphan');
+  }, { once: true });
+}
 
 // --- MutationObserver (discovery-only) ---
 //
@@ -4478,6 +4499,7 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
 // hidden tab must confirm with zeroed counters or drivers diff against
 // pre-reset history (scripts/test-perf.mjs).
 function publishPerfSnapshot(force = false): void {
+  if (!harnessHooksEnabled()) return;
   if (!force && document.visibilityState !== 'visible') return;
   try {
     document.documentElement.dataset.branchkitPerf =
@@ -4487,7 +4509,11 @@ function publishPerfSnapshot(force = false): void {
 // Top frame only: the dataset mirror exists for Playwright/in-page inspection,
 // which reads the top document's element. A subframe publishing to its own
 // (unread) documentElement is pure 4Hz waste across the ad-frame swarm.
-if (isTopFrame) {
+// Harness builds only: in release this is a 4Hz store-walk+stringify forever
+// AND a page-readable disclosure surface (any site can fingerprint the
+// extension and read the full perf payload). The 5s PERF_REPORT ship below
+// stays — it goes to the paired plugin, not the page.
+if (isTopFrame && harnessHooksEnabled()) {
   pageSession.resources.interval(publishPerfSnapshot, 250);
   publishPerfSnapshot(true);
 }
@@ -4536,16 +4562,19 @@ if (isTopFrame) {
     if (document.visibilityState === 'visible') rearmCpuShareBaseline();
   });
   // Reset trigger from main world — set the dataset to "1" and we reset.
-  new MutationObserver(() => {
-    if (document.documentElement.dataset.branchkitResetPerf === '1') {
-      resetPerfCounters();
-      resetMessageCounters();
-      resetLifecycleCounters();
-      resetCpuCounters();
-      resetLongtask();
-      delete document.documentElement.dataset.branchkitResetPerf;
-      publishPerfSnapshot(true);
-    }
-  }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-branchkit-reset-perf'] });
+  // Harness builds only (page-dispatchable, plus a standing attribute MO).
+  if (harnessHooksEnabled()) {
+    new MutationObserver(() => {
+      if (document.documentElement.dataset.branchkitResetPerf === '1') {
+        resetPerfCounters();
+        resetMessageCounters();
+        resetLifecycleCounters();
+        resetCpuCounters();
+        resetLongtask();
+        delete document.documentElement.dataset.branchkitResetPerf;
+        publishPerfSnapshot(true);
+      }
+    }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-branchkit-reset-perf'] });
+  }
 }
 

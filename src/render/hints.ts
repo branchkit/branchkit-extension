@@ -17,6 +17,7 @@ import { computeBadgeColors } from './badge-colors';
 import { type BadgeSettings, DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
 import { leaderLineGeometry } from '../placement/geometry';
 import { trackContainerResize, untrackContainerResize } from '../observe/container-resize-tracker';
+import { harnessHooksEnabled } from '../debug/harness-hooks';
 import { trackTargetMutations, untrackTargetMutations } from '../observe/target-mutation-tracker';
 import { trackHostAttributes, untrackHostAttributes } from '../observe/host-attribute-tracker';
 import { register as registerReconcile, unregister as unregisterReconcile, type ReconcileWrite } from './reconcile-positioner';
@@ -172,10 +173,13 @@ function zIndexFor(target: Element, host: HTMLElement, anchorParent: HTMLElement
 // own rect does NOT reflect (the host carries the docY0 base). Closed in
 // production (keeps hostile pages out of badge internals). Read once at module
 // load from a localStorage flag the test sets before the content script boots
-// (localStorage is shared between the page and the CS isolated world).
+// (localStorage is shared between the page and the CS isolated world). The
+// harness-hooks gate keeps release builds closed even if a page pre-seeds the
+// flag in its own localStorage — one flag away was the whole protection.
 const SHADOW_MODE: ShadowRootMode = (() => {
   try {
-    return typeof localStorage !== 'undefined' && localStorage.getItem('bkOpenShadow') === '1'
+    return harnessHooksEnabled()
+      && typeof localStorage !== 'undefined' && localStorage.getItem('bkOpenShadow') === '1'
       ? 'open' : 'closed';
   } catch {
     return 'closed';

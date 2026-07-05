@@ -3,7 +3,7 @@
  * Build the extension for a single target into `dist/<target>/`.
  *
  * Usage:
- *   node scripts/build.mjs <chrome|firefox>
+ *   node scripts/build.mjs <chrome|firefox> [--release]
  *
  * Each target gets its own output directory so both can coexist on
  * disk — load `dist/chrome/` into Chrome and `dist/firefox/` into
@@ -11,6 +11,13 @@
  * only `manifest.json` differs (see `scripts/build-manifest.mjs`).
  *
  * `npm run build` runs this for both targets in sequence.
+ *
+ * `--release` (or BK_RELEASE=1) builds with __HARNESS_HOOKS__=false,
+ * stripping every page-exposed test affordance (perf dataset mirror,
+ * snapshot/teardown CustomEvent hooks, debug bridge, open-shadow toggle
+ * — see src/debug/harness-hooks.ts). Default builds keep them on so the
+ * local Playwright harnesses work against dist/ unchanged. Packaging
+ * scripts (package:firefox) MUST go through --release.
  */
 
 import * as esbuild from 'esbuild';
@@ -24,9 +31,10 @@ const root = resolve(__dirname, '..');
 
 const target = process.argv[2];
 if (target !== 'chrome' && target !== 'firefox') {
-  console.error('usage: build.mjs <chrome|firefox>');
+  console.error('usage: build.mjs <chrome|firefox> [--release]');
   process.exit(1);
 }
+const release = process.argv.includes('--release') || process.env.BK_RELEASE === '1';
 
 const finalDir = resolve(root, 'dist', target);
 // Build into a staging dir and swap at the end. An MV3 service worker
@@ -62,7 +70,10 @@ await Promise.all(entries.map((e) =>
     bundle: true,
     format: e.format,
     logLevel: 'warning',
-    define: { __BUILD_ID__: JSON.stringify(buildId) },
+    define: {
+      __BUILD_ID__: JSON.stringify(buildId),
+      __HARNESS_HOOKS__: release ? 'false' : 'true',
+    },
   })
 ));
 
