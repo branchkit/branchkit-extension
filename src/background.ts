@@ -33,6 +33,10 @@ let hintVisibility: HintVisibility = 'always';
 
 // Firefox direct SSE (no offscreen document needed)
 let directSSE: EventSource | null = null;
+// URL of the EventSource `directSSE` currently points at — the
+// already-connecting guard in connectDirectSSE compares against it so a
+// redundant connect with unchanged creds keeps the in-flight socket.
+let directSSEUrl: string | null = null;
 
 // SSE reconnect backoff state. Shared by Chrome (offscreen→HEALTH_STATUS)
 // and Firefox (direct EventSource) paths. Policy (ladder + stable-connection
@@ -685,15 +689,30 @@ function notifyOffscreenConnect(): void {
 // --- Firefox: Direct SSE in background script ---
 
 function connectDirectSSE(port: number, token: string): void {
+  // conn_id identifies this connection; the plugin binds it to the OS-focused
+  // bundle via the focus handshake so dispatch/rescan target only the focused
+  // browser and a spoken command doesn't also fire in a background browser.
+  const url = `http://127.0.0.1:${port}/events?token=${token}&conn_id=${encodeURIComponent(connId)}`;
+
+  // Already-connecting guard (DESIGN_SSE_RESILIENCE.md's deliberately-open
+  // item, closed 2026-07-04). connectSSE() fires un-awaited from several
+  // sites (retry ladder, init, postGrammarBatch's fresh-creds path); this
+  // path used to close and reopen the EventSource unconditionally, so a
+  // burst landing while the prior socket was still CONNECTING churned
+  // connect/disconnect under one conn_id and could abort onSSEConnected's
+  // heal (rescan + grammar republish) mid-flight. Chrome is immune — the
+  // offscreen document serializes CONNECT_SSE. Keep the existing socket iff
+  // it targets the same creds and isn't CLOSED; changed creds (host restart
+  // minted a new port/token) still tear down and reconnect.
+  if (directSSE && directSSEUrl === url && directSSE.readyState !== EventSource.CLOSED) {
+    return;
+  }
   if (directSSE) {
     directSSE.close();
     directSSE = null;
   }
 
-  // conn_id identifies this connection; the plugin binds it to the OS-focused
-  // bundle via the focus handshake so dispatch/rescan target only the focused
-  // browser and a spoken command doesn't also fire in a background browser.
-  const url = `http://127.0.0.1:${port}/events?token=${token}&conn_id=${encodeURIComponent(connId)}`;
+  directSSEUrl = url;
   directSSE = new EventSource(url);
 
   directSSE.addEventListener('connected', () => {
