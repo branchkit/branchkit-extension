@@ -33,7 +33,13 @@
       padding: 12px 14px;
     }
     #query::placeholder { color: #6e7681; }
-    #list { max-height: 52vh; overflow-y: auto; padding: 6px 0 8px; }
+    #list {
+      max-height: 52vh; overflow-y: auto; padding: 6px 0 8px;
+      /* Slim scrollbar, track matching the panel background. The standard
+         properties cover Chrome 121+ and Firefox alike. */
+      scrollbar-width: thin;
+      scrollbar-color: #30363d #0d1117;
+    }
     .sec {
       font-size: 10px; font-weight: 700; text-transform: uppercase;
       letter-spacing: 0.05em; color: #58a6ff;
