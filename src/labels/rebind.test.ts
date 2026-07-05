@@ -168,6 +168,7 @@ describe('bumpRebindCounter', () => {
       refuse_no_match: 0,
       rebind_key: 0,
       rebind_slot: 0,
+      rebind_coattail: 0,
     });
   });
 
@@ -184,6 +185,7 @@ describe('bumpRebindCounter', () => {
       refuse_no_match: 0,
       rebind_key: 0,
       rebind_slot: 0,
+      rebind_coattail: 0,
     });
   });
 
@@ -199,8 +201,9 @@ describe('bumpRebindCounter', () => {
     expect(c).toHaveProperty('refuse_no_match');
     expect(c).toHaveProperty('rebind_key');
     expect(c).toHaveProperty('rebind_slot');
+    expect(c).toHaveProperty('rebind_coattail');
     expect(Object.keys(c).sort()).toEqual([
-      'rebind_clean', 'rebind_position', 'refuse_distance', 'refuse_no_match', 'rebind_key', 'rebind_slot',
+      'rebind_clean', 'rebind_position', 'refuse_distance', 'refuse_no_match', 'rebind_key', 'rebind_slot', 'rebind_coattail',
     ].sort());
   });
 });

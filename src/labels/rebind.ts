@@ -116,6 +116,11 @@ export interface RebindCounters {
    *  ancestor — different fingerprint, different key, same slot. Also the
    *  live probe for whether the grid's shells survive its swaps. */
   rebind_slot: number;
+  /** Row-coattail rides (round 35): a keyless row control (checkbox /
+   *  pencil / eye) inherited its predecessor's wrapper because a strong-key
+   *  ride pinned its row to the predecessor row, and the control sits at
+   *  the same structural path within that row. */
+  rebind_coattail: number;
 }
 
 export function newRebindCounters(): RebindCounters {
@@ -126,6 +131,7 @@ export function newRebindCounters(): RebindCounters {
     refuse_no_match: 0,
     rebind_key: 0,
     rebind_slot: 0,
+    rebind_coattail: 0,
   };
 }
 

@@ -21,7 +21,7 @@ import { domSeenAt } from '../observe/dom-seen';
 import * as idRegistry from '../scan/registry';
 import { isRecallLoaded, resolvePreferredCodeword } from '../labels/codeword-recall';
 import { dropPendingPut, hasSent, queueDelete, queuePut, scheduleSync } from '../labels/label-sync';
-import { tryRebindFromLimbo, tryRebindByStrongKey, tryRebindBySlot, recordSlotAncestors, isRecentlyOrphaned } from '../observe/limbo';
+import { tryRebindFromLimbo, tryRebindByStrongKey, tryRebindByCoattail, tryRebindBySlot, recordSlotAncestors, isRecentlyOrphaned } from '../observe/limbo';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { geometryInBand, getCachedRect, isRectOnScreen } from '../layout-cache';
 import { lifecycleCounters } from '../debug/perf-counters';
@@ -151,6 +151,14 @@ export function attachDiscovered(
 ): number {
   let added = 0;
   const attached: ElementWrapper[] = [];
+  // Row pairs proven by strong-key rides this pass (round 35): a link
+  // riding old-element -> new-element pins its old row to its new row, and
+  // the row's KEYLESS controls (checkbox/pencil/eye) coattail that pin in
+  // pass 2. Two passes because document order puts the checkbox BEFORE the
+  // row's first link — the pin doesn't exist yet on a single walk
+  // (round 26's ordering lesson).
+  const rowPairs = new Map<Element, Element>();
+  const deferred: number[] = [];
   for (let i = 0; i < refs.length; i++) {
     const ref = refs[i];
     // Skip a node we just transferred a wrapper *off* of (key-ownership rebind).
@@ -163,6 +171,11 @@ export function attachDiscovered(
     // pool-availability race that churns the QuickBase sidebar.
     const rode = tryRebindByStrongKey(ref, keyIndex, limboPool);
     if (rode) {
+      const prevRow = rode.prevElement.closest('tr, [role="row"]');
+      const newRow = ref.closest('tr, [role="row"]');
+      if (prevRow && newRow && prevRow !== newRow && !rowPairs.has(newRow)) {
+        rowPairs.set(newRow, prevRow);
+      }
       // Round 34e: the steal orphaned a still-CONNECTED predecessor (no
       // dead holder was available). Re-attach it fresh RIGHT NOW — the
       // orphan guard blocks it from rebind tiers (ping-pong), and waiting
@@ -175,6 +188,22 @@ export function attachDiscovered(
         if (sc) added += eagerAttach(rode.orphaned, sc, source, attached);
       }
       continue;
+    }
+    deferred.push(i);
+  }
+  for (const i of deferred) {
+    const ref = refs[i];
+    if (store.findWrapperFor(ref)) continue; // orphan re-attach above may have covered it
+    // Coattail (round 35): ride the row pair a strong-key ride proved.
+    if (rowPairs.size > 0) {
+      const coat = tryRebindByCoattail(ref, rowPairs, limboPool);
+      if (coat) {
+        if (coat.orphaned) {
+          const sc = scanSingle(coat.orphaned);
+          if (sc) added += eagerAttach(coat.orphaned, sc, source, attached);
+        }
+        continue;
+      }
     }
     if (limboPool.length > 0 && tryRebindFromLimbo(ref, limboPool)) continue;
     // Slot tier (DESIGN_FLING_WAVE Part 2): a recycled cell's new content —

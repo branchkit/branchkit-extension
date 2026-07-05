@@ -229,6 +229,43 @@ describe('attachDiscovered — key-ownership transfer on a same-document re-moun
     expect(added).toBe(1);
   });
 
+  it('coattails a keyless row control across a strong-key row pair (round 35)', () => {
+    // Old row: [td>a(href), td>button]; new row: identical shape. The link
+    // rides by strong key, pinning oldRow->newRow; the button — no href,
+    // no key — must ride the pin by structural path instead of dying.
+    const mkRow = () => {
+      const tr = document.createElement('tr');
+      const td1 = document.createElement('td');
+      const a = document.createElement('a');
+      a.setAttribute('href', '/record/9');
+      td1.appendChild(a);
+      const td2 = document.createElement('td');
+      const btn = document.createElement('button');
+      td2.appendChild(btn);
+      tr.append(td1, td2);
+      document.body.appendChild(tr);
+      return { tr, a, btn };
+    };
+    const oldRow = mkRow();
+    const wLink = new ElementWrapper(oldRow.a, scanned('old-link'));
+    attachWrapper(wLink, 'scan');
+    const wBtn = new ElementWrapper(oldRow.btn, scanned('old-btn'));
+    wBtn.scanned.codeword = 'coat tail';
+    attachWrapper(wBtn, 'scan');
+
+    const newRow = mkRow();
+    const added = attachDiscovered(
+      [newRow.a, newRow.btn], [scanned('new-link'), scanned('new-btn')],
+      collectLimboWrappers(), collectStrongKeyIndex(), 'mo',
+    );
+
+    expect(wLink.element).toBe(newRow.a);        // strong-key ride pinned the rows
+    expect(wBtn.element).toBe(newRow.btn);       // the keyless control coattailed
+    expect(wBtn.scanned.codeword).toBe('coat tail'); // letter survived the swap
+    // happy-dom rects are 0x0 so orphan re-attach no-ops; no fresh attaches.
+    expect(added).toBe(0);
+  });
+
   it('transfers from a multi-holder key queue in order (round 34)', () => {
     // Repeated-value column: two live wrappers share the href. The old
     // ambiguous-null forced the replacement to attach fresh (badge flash +

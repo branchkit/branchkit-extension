@@ -319,7 +319,7 @@ export function tryRebindByStrongKey(
   newEl: Element,
   keyIndex: Map<string, ElementWrapper[]>,
   limboPool: ElementWrapper[],
-): { orphaned: Element | null } | null {
+): { orphaned: Element | null; prevElement: Element } | null {
   const key = computeStrongKey(newEl);
   if (!key) return null;
   const queue = keyIndex.get(key);
@@ -342,13 +342,68 @@ export function tryRebindByStrongKey(
   queue.splice(idx, 1);
   if (queue.length === 0) keyIndex.delete(key);
   consume(limboPool, w);
-  const orphaned = w.element.isConnected ? w.element : null;
+  // prevElement: where the wrapper lived before this ride — the row-pair
+  // pin for the coattail tier (round 35). Captured before rebindWrapper
+  // re-anchors; reported whether or not it's still connected.
+  const prevElement = w.element;
+  const orphaned = prevElement.isConnected ? prevElement : null;
   if (orphaned) orphanedByKeyRebind.set(orphaned, Date.now());
   rebindCounters.rebind_key++;
   rebindWrapper(w, newEl);
-  return { orphaned };
+  return { orphaned, prevElement };
 }
 
+
+/**
+ * Row-coattail tier (round 35 — the round-26 mechanism rebuilt on
+ * strong-key pins). A grid re-render replaces whole rows; the row's LINK
+ * rides via its strong key (href+column — reliable, 271/fling on the client
+ * grid), which proves old-row -> new-row correspondence. The row's KEYLESS
+ * controls (checkbox / pencil / eye — the once-per-swap blink cohort, 3 of
+ * ~6 badges per row) then ride that pin: same structural child-index path
+ * within the paired rows, same tag -> inherit the predecessor's wrapper
+ * (badge, letter, grammar entry).
+ *
+ * Guards (all fall through to fresh attach): no row / no pair for the row /
+ * path miss / tag mismatch / predecessor has no live wrapper. A connected
+ * predecessor is reported as `orphaned` so the caller re-attaches it fresh
+ * (the 34e visual invariant: every visible hintable stays badged).
+ */
+export function tryRebindByCoattail(
+  newEl: Element,
+  rowPairs: Map<Element, Element>,
+  limboPool: ElementWrapper[],
+): { orphaned: Element | null } | null {
+  const row = newEl.closest('tr, [role="row"]');
+  if (!row) return null;
+  const prevRow = rowPairs.get(row);
+  if (!prevRow) return null;
+  // Structural path of newEl within its row (child indices, root-first).
+  const path: number[] = [];
+  let n: Element = newEl;
+  while (n !== row) {
+    const parent: Element | null = n.parentElement;
+    if (!parent) return null;
+    path.push(Array.prototype.indexOf.call(parent.children, n));
+    n = parent;
+  }
+  path.reverse();
+  let old: Element = prevRow;
+  for (const seg of path) {
+    const child = old.children[seg];
+    if (!child) return null;
+    old = child;
+  }
+  if (old.tagName !== newEl.tagName) return null;
+  const w = store.findWrapperFor(old);
+  if (!w) return null;
+  consume(limboPool, w);
+  const orphaned = old.isConnected ? old : null;
+  if (orphaned) orphanedByKeyRebind.set(orphaned, Date.now());
+  rebindCounters.rebind_coattail++;
+  rebindWrapper(w, newEl);
+  return { orphaned };
+}
 
 /**
  * Move disconnected wrappers into limbo. Per
