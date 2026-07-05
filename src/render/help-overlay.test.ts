@@ -56,7 +56,7 @@ describe('buildHelpModel', () => {
     expect(model[0].rows[0].keys).toEqual(['H', 'Shift+A']);
   });
 
-  it('formats space-joined key sequences and punctuation', () => {
+  it('formats space-joined key sequences and shifted-symbol punctuation', () => {
     const catalog = [cmd('cyc', 'Scroll'), cmd('help', 'Help')];
     const keymap: KeymapEntry[] = [
       { keys: 'KeyC KeyS', command: 'cyc' },
@@ -64,7 +64,8 @@ describe('buildHelpModel', () => {
     ];
     const model = buildHelpModel(catalog, keymap);
     expect(model[0].rows[0].keys).toEqual(['C S']);
-    expect(model[1].rows[0].keys).toEqual(['Shift+/']);
+    // shift+Slash reads as the character pressed, "?", not "Shift+/".
+    expect(model[1].rows[0].keys).toEqual(['?']);
   });
 });
 

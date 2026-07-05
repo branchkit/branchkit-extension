@@ -80,7 +80,17 @@ function keyLabel(code: string): string {
   return code;
 }
 
-/** Human label for a stored combo, e.g. "Ctrl+F", "Alt+Shift+H". */
+// US-layout shifted symbols, so a bind reads as the character you actually
+// press — "?" for Shift+/, "!" for Shift+1 — instead of "Shift+/". Layout-
+// specific, but matches the default-keyboard assumption used elsewhere.
+const SHIFTED_SYMBOL: Record<string, string> = {
+  Slash: '?', Digit1: '!', Digit2: '@', Digit3: '#', Digit4: '$', Digit5: '%',
+  Digit6: '^', Digit7: '&', Digit8: '*', Digit9: '(', Digit0: ')',
+  Minus: '_', Equal: '+', BracketLeft: '{', BracketRight: '}', Backslash: '|',
+  Semicolon: ':', Quote: '"', Comma: '<', Period: '>', Backquote: '~',
+};
+
+/** Human label for a stored combo, e.g. "Ctrl+F", "Alt+Shift+H", "?". */
 export function comboDisplay(spec: string): string {
   const c = parseCombo(spec);
   if (!c) return spec;
@@ -88,7 +98,13 @@ export function comboDisplay(spec: string): string {
   if (c.ctrl) parts.push('Ctrl');
   if (c.alt) parts.push('Alt');
   if (c.meta) parts.push('Cmd');
-  if (c.shift) parts.push('Shift');
-  parts.push(keyLabel(c.code));
+  const shifted = c.shift ? SHIFTED_SYMBOL[c.code] : undefined;
+  if (shifted) {
+    // The symbol already implies Shift (e.g. "?"), so don't prefix "Shift+".
+    parts.push(shifted);
+  } else {
+    if (c.shift) parts.push('Shift');
+    parts.push(keyLabel(c.code));
+  }
   return parts.join('+');
 }
