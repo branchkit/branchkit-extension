@@ -108,8 +108,10 @@ schedule a redundant cycle; it self-corrects and connects are rare.
   wait for CONNECT_SSE). The SW owns retry policy; two independent
   reconnectors racing each other is how the Firefox `connectDirectSSE` thrash
   (review MED) happens. That finding (guard un-awaited `connectSSE()` bursts
-  in `postGrammarBatch`) is narrower after this change — connectSSE only
-  fires there when creds were just rediscovered — and is left open.
+  in `postGrammarBatch`) was narrower after this change — connectSSE only
+  fires there when creds were just rediscovered — and was left open here;
+  CLOSED 2026-07-04: `connectDirectSSE` now keeps an in-flight socket whose
+  creds URL is unchanged and not CLOSED, tearing down only on changed creds.
 - No change to grammar-batch semantics or the hint-gate follow-up in
   DESIGN_HOST_RESTART_RESYNC.md ("mid-lifetime hint-gate desync").
 
