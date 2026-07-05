@@ -58,6 +58,24 @@ voice path unchanged. The full palette (Ctrl+K) still uses ephemeral codewords
 for its tab+command rows — convergence there is a later, lower-priority
 follow-up.
 
+**Landed — voice one-breath "tab \<codeword\>".** The palette voice path is
+lazy: saying "tab" opens the overlay, which THEN publishes the codewords
+(async), so "tab huge" in one breath drops "huge" (it isn't in the grammar
+yet). To match how every other command works — pre-published vocabulary, so
+one-breath and paused both resolve — each tab's mark is now published as its
+spoken word into the always-live `browser_tabs` collection (with priority: a
+mark claims its word ahead of any colliding title word, and publishes even for
+a titleless tab). `switch_to_tab` gains a second spoken form `tab
+{browser_tabs}` alongside `switch to {browser_tabs}`. Net:
+- **"tab huge"** (one breath) → the flat, pre-published path resolves it
+  directly, no overlay. Also **"switch to huge"** works (same collection).
+- **"tab"** (alone) → still opens the palette (paused/browse path).
+The two coexist by the standard verb-vs-bare-verb disambiguation (like the old
+"tab {number}"). This makes the palette the *browse* affordance, not the only
+voice mechanism — the special case that had broken the one-breath expectation.
+`buildMarkWords` in `tab-collection.ts` needs the alphabet (voice connected) to
+speak the letter; the letter itself still works for the keyboard without it.
+
 Everything below is the original Option C design, kept for history.
 
 ---

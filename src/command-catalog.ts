@@ -278,9 +278,16 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // (background/tab-collection.ts) — spoken title/domain words resolve to a
   // tab_id through the matcher, no overlay. Not keyboard-bindable: the value
   // is a runtime spoken word (the palette is the keyboard analog, Layer 2).
+  // Two spoken forms, both resolving to the same switch: "switch to <word>"
+  // (a distinctive title/site word) and "tab <codeword>" (the stable mark shown
+  // on the strip). Both are the FLAT, always-live path, so "tab huge" resolves
+  // in one breath — the tab palette (bare "tab") is the paused/browse path.
   { id: 'switch_to_tab', label: 'Switch to tab by name', group: 'Tabs', mappable: false, params: [],
-    description: 'Switch to an open tab by speaking a distinctive word from its title or site.',
-    voice: [{ pattern: 'switch to {browser_tabs}', params: { tab_id: '{browser_tabs}' } }] },
+    description: 'Switch to an open tab by speaking a distinctive word from its title or site, or its codeword.',
+    voice: [
+      { pattern: 'switch to {browser_tabs}', params: { tab_id: '{browser_tabs}' } },
+      { pattern: 'tab {browser_tabs}', params: { tab_id: '{browser_tabs}' } },
+    ] },
 
   // --- Help ---
   { id: 'toggle_help', label: 'Keyboard help', group: 'Help', mappable: true, params: [],

@@ -134,4 +134,24 @@ describe('buildTabEntries', () => {
     expect(entries[0].tab_id).toBe('7');
     expect(entries[0].title.length).toBeLessThanOrEqual(80);
   });
+
+  it('publishes a tab’s mark word with priority over a colliding title word', () => {
+    // "huge" is both tab 1's title word AND tab 2's mark. The mark wins, so
+    // "tab huge" resolves to the marked tab.
+    const entries = buildTabEntries(
+      [tab(1, 'huge report', 'https://a.com'), tab(2, 'Docs', 'https://b.com')],
+      [],
+      new Map([[2, 'huge']]),
+    );
+    const huge = entries.filter((e) => e.spoken === 'huge');
+    expect(huge).toHaveLength(1);
+    expect(huge[0].tab_id).toBe('2'); // the marked tab, not the title-word tab
+    // tab 1 still keeps its other word.
+    expect(entries.some((e) => e.spoken === 'report' && e.tab_id === '1')).toBe(true);
+  });
+
+  it('includes the mark even for a tab with no title/domain words', () => {
+    const entries = buildTabEntries([tab(5, '', 'about:blank')], [], new Map([[5, 'arch']]));
+    expect(entries).toEqual([{ spoken: 'arch', tab_id: '5', title: '' }]);
+  });
 });

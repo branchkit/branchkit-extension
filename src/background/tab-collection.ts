@@ -28,6 +28,7 @@ import { loadMru } from './tab-mru';
 import { bgState, connId } from './state';
 import { postToPlugin } from '../plugin/actuator-client';
 import { stripTabMarker } from '../tab-marker-format';
+import { loadMarkerMap, markToSpokenWords } from './tab-markers';
 
 /** Input shape: the fields of chrome.tabs.Tab this module consumes. */
 export interface OpenTab {
@@ -125,20 +126,44 @@ export function domainWords(url: string): string[] {
  * `mruStack` is tab-mru's recency stack (index 0 = most recent). Tabs absent
  * from the stack rank last, ties broken by tab id for determinism.
  */
-export function buildTabEntries(tabs: readonly OpenTab[], mruStack: readonly number[]): TabWordEntry[] {
+export function buildTabEntries(
+  tabs: readonly OpenTab[],
+  mruStack: readonly number[],
+  marks?: ReadonlyMap<number, string>,
+): TabWordEntry[] {
   const mruRank = new Map<number, number>();
   mruStack.forEach((id, i) => mruRank.set(id, i));
   const rank = (id: number) => mruRank.get(id) ?? mruStack.length + id;
+
+  const entries: TabWordEntry[] = [];
+
+  // Marks first — a tab's stable spoken codeword (the one shown on the strip)
+  // is its guaranteed handle, so it publishes ahead of any title/domain word,
+  // claims its word, and bypasses the per-tab cap. This is what lets "tab
+  // <codeword>" resolve in one breath (the flat, always-live path — the palette
+  // is the paused/browse path). MRU-most wins a shared word (marks are unique,
+  // so this is just belt-and-suspenders).
+  const markClaimed = new Set<string>();
+  if (marks && marks.size) {
+    const byMru = [...tabs].sort((a, b) => rank(a.tabId) - rank(b.tabId));
+    for (const tab of byMru) {
+      const mw = marks.get(tab.tabId);
+      if (!mw || markClaimed.has(mw)) continue;
+      markClaimed.add(mw);
+      entries.push({ spoken: mw, tab_id: String(tab.tabId), title: tab.title.slice(0, 80) });
+    }
+  }
 
   interface Candidate {
     tab: OpenTab;
     title: string[];
     domain: string[];
   }
+  // Title/domain words never re-claim a word a mark already owns.
   const candidates: Candidate[] = tabs.map((tab) => ({
     tab,
-    title: titleWords(tab.title).slice(0, TITLE_WORDS_CONSIDERED),
-    domain: domainWords(tab.url),
+    title: titleWords(tab.title).slice(0, TITLE_WORDS_CONSIDERED).filter((w) => !markClaimed.has(w)),
+    domain: domainWords(tab.url).filter((w) => !markClaimed.has(w)),
   }));
 
   // Document frequency + winner (MRU-most claimant) per word.
@@ -161,7 +186,6 @@ export function buildTabEntries(tabs: readonly OpenTab[], mruStack: readonly num
 
   // Per-tab selection among won words, MRU-first so the total cap trims the
   // least recently used tabs' vocabulary rather than the current ones'.
-  const entries: TabWordEntry[] = [];
   const ordered = [...candidates].sort((a, b) => rank(a.tab.tabId) - rank(b.tab.tabId));
   for (const c of ordered) {
     if (entries.length >= MAX_TOTAL_ENTRIES) break;
@@ -207,6 +231,28 @@ export function resetTabPublishCache(): void {
   lastPublishedJson = null;
 }
 
+/**
+ * Each tab's stable mark as its SPOKEN codeword (tabId → "huge"), for the
+ * flat "tab <codeword>" path. Empty when the feature is off (no marks) or
+ * voice isn't connected (no alphabet to speak the letter) — the marker letter
+ * still works for the keyboard, but the spoken form needs the alphabet.
+ */
+async function buildMarkWords(): Promise<Map<number, string>> {
+  const out = new Map<number, string>();
+  let alphabet: string[] = [];
+  try {
+    const got = await chrome.storage.local.get('alphabet');
+    if (Array.isArray(got.alphabet)) alphabet = got.alphabet as string[];
+  } catch { /* no alphabet */ }
+  if (alphabet.length !== 26) return out;
+  const markMap = await loadMarkerMap();
+  for (const [tabId, mark] of Object.entries(markMap)) {
+    const spoken = markToSpokenWords(mark, alphabet);
+    if (spoken) out.set(Number(tabId), spoken);
+  }
+  return out;
+}
+
 /** Debounced entry point — call from any tab-strip event. Cheap no-op while
  * BranchKit is disconnected (standalone keyboard/hints use). */
 export function scheduleTabPublish(): void {
@@ -233,7 +279,7 @@ async function publishTabs(): Promise<void> {
     // "The churn war"). Rango's getBareTitle twin, at the titles→grammar
     // chokepoint. No-op when the feature is off (title has no prefix).
     .map((t) => ({ tabId: t.id, title: stripTabMarker(t.title ?? ''), url: t.url ?? '' }));
-  const entries = buildTabEntries(open, await loadMru());
+  const entries = buildTabEntries(open, await loadMru(), await buildMarkWords());
 
   // Unchanged-set guard: retitles that don't change the published words (or
   // events that net out to nothing after the debounce) emit no POST, so the
