@@ -259,6 +259,18 @@ describe('normal mode — bare letters are keybinds, even with hints painted', (
     expect(dispatchSpy).not.toHaveBeenCalled();
     input.remove();
   });
+
+  it('Escape in an editable field blurs it (back to Normal, Vimium behavior)', () => {
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    input.focus();
+    expect(document.activeElement).toBe(input);
+
+    const result = handler.handleKeyDown(makeKey('Escape'));
+    expect(result).toBe(true); // consumed, not passed to the page
+    expect(document.activeElement).not.toBe(input); // blurred → Normal mode
+    input.remove();
+  });
 });
 
 describe('normal mode — command sequences', () => {

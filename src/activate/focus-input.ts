@@ -95,6 +95,10 @@ export function handleFocusInputKey(e: KeyboardEvent): boolean {
     e.preventDefault();
     e.stopPropagation();
     active = false;
+    // Blur the field too (same as the general Insert-mode Escape) so you land
+    // back in Normal mode rather than still focused and unable to press keys.
+    const el = document.activeElement;
+    if (el instanceof HTMLElement) el.blur();
     return true;
   }
   if (e.key === 'Shift' || e.key === 'Control' || e.key === 'Alt' || e.key === 'Meta') {

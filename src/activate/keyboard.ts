@@ -114,10 +114,22 @@ export class KeyHandler {
       return this.handleNormalKey(e);
     }
 
-    // Bare / Shift keys: pass through inside editable fields. Only the
-    // explicitly-entered `hint` mode (the user pressed `f`) intercepts in a
-    // field; NORMAL-mode keybinds must NOT hijack a search box.
-    if (this.mode !== 'hint' && isInsertMode()) return false;
+    // Insert (focused in an editable field): NORMAL-mode keybinds must NOT
+    // hijack a search box, so bare/Shift keys pass through to the field.
+    // Escape is the exception — it blurs the field (Vimium behavior), so an
+    // autofocused input on page load doesn't trap the keyboard: press Escape,
+    // you're back in Normal mode and `f`/keybinds work. `hint` mode always
+    // intercepts (it was entered explicitly).
+    if (this.mode !== 'hint' && isInsertMode()) {
+      if (e.key === 'Escape') {
+        const el = document.activeElement;
+        if (el instanceof HTMLElement) el.blur();
+        e.preventDefault();
+        e.stopPropagation();
+        return true;
+      }
+      return false;
+    }
 
     // Hint mode ONLY (entered via `f`): letters filter/activate the painted
     // hints. Hints stay always-VISIBLE for voice, but they're only TYPEABLE
