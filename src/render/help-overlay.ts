@@ -110,19 +110,23 @@ const STYLE = `
 .hint { font-size: 11px; color: #8b949e; }
 .sec { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
   color: #58a6ff; margin: 0 0 6px; }
-/* Commands beside the alphabet on wide screens; stack when narrow. */
+/* Commands (left) beside the spoken alphabet (right) on wide screens. */
 .body { display: flex; gap: 30px; align-items: flex-start; }
 .commands-area { flex: 1 1 auto; min-width: 0; }
-.alpha-area { flex: 0 0 auto; }
-/* Spoken alphabet — the third column, split into TWO vertical a–z lines
-   (a–m, n–z), read DOWN each (column-major) so a letter's line is predictable
-   and you scan down. */
-.alpha { column-count: 2; column-gap: 20px; }
+.alpha-area { flex: 0 0 auto; order: 2; } /* right of the commands */
+/* Alphabet — a single a–z line when there's room; a second line only when the
+   screen is too short to show one without scrolling. Read DOWN (column-major). */
+.alpha { column-count: 1; column-gap: 20px; }
 .alpha .a { display: flex; gap: 6px; align-items: baseline; font-size: 12px;
   min-width: 0; break-inside: avoid; margin-bottom: 3px; }
-@media (max-width: 760px) {
+@media (max-height: 680px) { .alpha { column-count: 2; } }
+@media (max-height: 460px) { .alpha { column-count: 3; } }
+/* Not enough width for side-by-side (e.g. large font): stack, with the
+   alphabet on TOP (not pushed below the commands), spread full-width. */
+@media (max-width: 780px) {
   .body { flex-direction: column; }
-  .alpha { column-count: 4; } /* full-width when stacked */
+  .alpha-area { order: -1; }
+  .alpha { column-count: 4; }
 }
 .alpha .l { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700;
   color: #e6edf3; width: 1.1em; flex: 0 0 auto; }
@@ -155,8 +159,9 @@ function el(tag: string, cls?: string, text?: string): HTMLElement {
 }
 
 /** Build the shadow-isolated host element: commands (left) beside the spoken
- * alphabet (right, two a–z columns) on wide screens, stacking when narrow.
- * Backdrop click closes via the supplied callback. */
+ * alphabet (right, a single a–z column when it fits) on wide screens; when
+ * there isn't room it stacks with the alphabet on top. Backdrop click closes
+ * via the supplied callback. */
 function buildHelpOverlay(
   model: HelpGroup[],
   alphabet: { loaded: boolean; entries: AlphabetEntry[] },
@@ -212,7 +217,9 @@ function buildHelpOverlay(
   cmdArea.appendChild(cmds);
   body.appendChild(cmdArea);
 
-  // Spoken alphabet — the third column, itself two vertical a–z lines.
+  // Spoken alphabet — the right-hand reference column (single a–z line when it
+  // fits; CSS adds lines only to avoid a scroll, and moves it on top when
+  // the layout has to stack).
   const alphaArea = el('div', 'alpha-area');
   alphaArea.appendChild(el('div', 'sec', 'Spoken alphabet'));
   if (alphabet.loaded) {
