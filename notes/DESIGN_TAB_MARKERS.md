@@ -44,14 +44,19 @@ marks — a tab row's badge is its strip mark letter, and its spoken form is the
 mark's overlay words, so the strip and the palette show the SAME letter.
 Titles are stripped of the decoration in the palette (badge, not baked in).
 
-**Deferred — keyboard letter-jump.** "Type the mark letter → switch" conflicts
-with fuzzy title search: since every single letter is a mark, a one-keystroke
-auto-jump would preempt typing a title ("g" jumps instead of letting you type
-"github"). It needs its own UX (a pure mark-pick mode, or a non-typing
-trigger), so it's a separate decision. Today the tabs-only palette keyboard
-path is fuzzy-title + arrows + Enter; the mark badge is the visual/voice
-handle. The full palette (Ctrl+K) still uses ephemeral codewords for its
-tab+command rows — convergence there is a later, lower-priority follow-up.
+**Landed — keyboard letter-jump (mirrors the page's "hints vs / find").** The
+fuzzy-vs-letter conflict is resolved with an explicit mode switch, exactly
+like a page: the tab palette opens in **letter mode** (type a tab's mark
+letter to jump — prefix-free marks activate a single on one keystroke, a pair
+on the second; a non-mark keystroke is a no-op), and **`/` switches to fuzzy**
+title search (arrows + Enter). Escape clears the typed prefix, then closes; in
+fuzzy mode Escape returns to letter mode. No collision because `/` is
+punctuation and marks are letters. Keystroke-capture (the input is readonly in
+letter mode), matching how page hints work. Falls back to fuzzy when no marks
+exist (feature off / pool empty). Core `classifyMarkInput` is pure + tested;
+voice path unchanged. The full palette (Ctrl+K) still uses ephemeral codewords
+for its tab+command rows — convergence there is a later, lower-priority
+follow-up.
 
 Everything below is the original Option C design, kept for history.
 

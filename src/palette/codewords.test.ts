@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { assignCodewords, codewordDisplay, maxVoiceRows } from './codewords';
+import { assignCodewords, codewordDisplay, classifyMarkInput, maxVoiceRows } from './codewords';
 
 // A–Z order, as BranchKit pushes it.
 const ALPHABET = [
@@ -50,6 +50,28 @@ describe('assignCodewords', () => {
     expect(assignCodewords(ids(5), []).size).toBe(0);
     expect(assignCodewords(ids(5), ALPHABET.slice(0, 25)).size).toBe(0);
     expect(assignCodewords(ids(5), [...ALPHABET.slice(0, 25), '']).size).toBe(0);
+  });
+});
+
+describe('classifyMarkInput (tab palette letter-jump)', () => {
+  // Prefix-free marks: singles from the head, pairs from a disjoint tail.
+  const marks = ['a', 'b', 'c', 'iz', 'io', 'zx'];
+
+  it('exact single-letter mark → jump on one keystroke', () => {
+    expect(classifyMarkInput(marks, 'a')).toBe('exact');
+  });
+
+  it('first letter of a pair → prefix (narrow, wait for the second)', () => {
+    expect(classifyMarkInput(marks, 'i')).toBe('prefix');
+  });
+
+  it('completed pair → exact', () => {
+    expect(classifyMarkInput(marks, 'iz')).toBe('exact');
+  });
+
+  it('a letter no mark uses → none (keystroke ignored)', () => {
+    expect(classifyMarkInput(marks, 'q')).toBe('none');
+    expect(classifyMarkInput(marks, 'ix')).toBe('none'); // no "ix" pair
   });
 });
 

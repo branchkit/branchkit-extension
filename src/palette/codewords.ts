@@ -66,6 +66,23 @@ export function codewordDisplay(
 }
 
 /**
+ * Classify a typed mark string against the assigned marks, for the tab
+ * palette's letter-jump: 'exact' → activate that tab; 'prefix' → narrow and
+ * wait for more; 'none' → reject the keystroke (never blank the list). Relies
+ * on marks being prefix-free (a single letter is never the start of a pair),
+ * so 'exact' is unambiguous — a complete single-letter mark activates on one
+ * keystroke.
+ */
+export function classifyMarkInput(
+  marks: readonly string[],
+  typed: string,
+): 'exact' | 'prefix' | 'none' {
+  if (marks.includes(typed)) return 'exact';
+  if (marks.some((m) => m.startsWith(typed))) return 'prefix';
+  return 'none';
+}
+
+/**
  * Map row ids to spoken badges. `alphabet` is the 26-word voice alphabet in
  * A–Z order (empty/invalid → empty map: the palette degrades to keyboard-only).
  * Rows past `maxVoiceRows()` are left out of the map.

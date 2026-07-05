@@ -22,7 +22,7 @@ import {
   buildTabItems, buildCommandItems, filterPalette,
   type PaletteItem, type PaletteSection, type PaletteTab,
 } from './palette/model';
-import { assignCodewords, codewordDisplay } from './palette/codewords';
+import { assignCodewords, codewordDisplay, classifyMarkInput } from './palette/codewords';
 import { loadMarkerMap, markToSpokenWords, type MarkerMap } from './background/tab-markers';
 import { stripTabMarker } from './tab-marker-format';
 import type { BadgeDisplayMode } from './types';
@@ -55,6 +55,16 @@ let markMap: MarkerMap = {};
  *  read, so palette badges show letters/words per the user's one preference.
  *  Same 'letter' fallback as config.ts. */
 let displayMode: BadgeDisplayMode = 'letter';
+
+// Tab-palette input model (notes/DESIGN_TAB_MARKERS.md): the tab palette opens
+// in LETTER mode — like a page of tab hints, you type a tab's mark letter to
+// jump (prefix-free marks activate instantly). `/` switches to FUZZY title
+// search, matching the page's "hints vs / find" model. The full palette
+// (scope=all) is always fuzzy.
+type PaletteMode = 'letter' | 'fuzzy';
+let mode: PaletteMode = 'fuzzy';
+/** The mark letters typed so far in letter mode ("i" waiting for a pair). */
+let markPrefix = '';
 
 function send(action: Extract<Message, { type: 'PALETTE_ACTION' }>['action']): void {
   chrome.runtime.sendMessage({ type: 'PALETTE_ACTION', action } as Message).catch(() => {});
@@ -129,38 +139,125 @@ function render(sections: PaletteSection[]): void {
   listEl.querySelector('.sel')?.scrollIntoView({ block: 'nearest' });
 }
 
-function refilter(): void {
-  render(filterPalette(tabItems, commandItems, queryInput.value));
+/** Render for the current mode: letter mode narrows tabs by mark prefix; fuzzy
+ *  mode filters by the typed title query. */
+function renderCurrent(): void {
+  if (scope === 'tabs' && mode === 'letter') {
+    const items = markPrefix === ''
+      ? tabItems
+      : tabItems.filter((it) => (codewords.get(it.id) ?? '').startsWith(markPrefix));
+    render([{ source: 'tabs', label: 'Tabs', items }]);
+  } else {
+    render(filterPalette(tabItems, commandItems, queryInput.value));
+  }
 }
 
 function moveSelection(delta: number): void {
   if (flat.length === 0) return;
   selected = (selected + delta + flat.length) % flat.length;
-  refilter();
+  renderCurrent();
 }
 
-queryInput.addEventListener('input', () => {
+// A mark letter in letter mode. Prefix-free marks make this crisp: an exact
+// match jumps immediately (a single-letter mark can't be the start of a pair);
+// a prefix narrows the list; anything else is a no-op (never blanks the list).
+function typeMarkLetter(ch: string): void {
+  const next = markPrefix + ch;
+  switch (classifyMarkInput([...codewords.values()], next)) {
+    case 'exact': {
+      const item = tabItems.find((it) => codewords.get(it.id) === next);
+      if (item) dispatchItem(item);
+      return;
+    }
+    case 'none':
+      return; // no mark continues this — ignore the keystroke
+    case 'prefix':
+      markPrefix = next;
+      queryInput.value = markPrefix;
+      selected = 0;
+      renderCurrent();
+  }
+}
+
+function backspaceMark(): void {
+  if (markPrefix.length === 0) return;
+  markPrefix = markPrefix.slice(0, -1);
+  queryInput.value = markPrefix;
   selected = 0;
-  refilter();
+  renderCurrent();
+}
+
+function enterFuzzyMode(): void {
+  mode = 'fuzzy';
+  markPrefix = '';
+  queryInput.readOnly = false;
+  queryInput.value = '';
+  queryInput.placeholder = 'Search tabs…';
+  queryInput.focus();
+  selected = 0;
+  renderCurrent();
+}
+
+function enterLetterMode(): void {
+  mode = 'letter';
+  markPrefix = '';
+  queryInput.readOnly = true;
+  queryInput.value = '';
+  queryInput.placeholder = 'Type a tab’s letter — or / to search';
+  selected = 0;
+  renderCurrent();
+}
+
+// Fuzzy typing only — letter mode captures keys in the keydown handler and the
+// input is readonly there, so this fires only in fuzzy mode.
+queryInput.addEventListener('input', () => {
+  if (scope === 'tabs' && mode === 'letter') return;
+  selected = 0;
+  renderCurrent();
 });
 
 window.addEventListener('keydown', (e) => {
+  // Common navigation (both modes).
+  if ((e.ctrlKey || e.metaKey) && (e.code === 'KeyK' || e.code === 'KeyT')) {
+    e.preventDefault(); close(); return; // opening chord toggles closed
+  }
+  if (e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey)) {
+    e.preventDefault(); moveSelection(1); return;
+  }
+  if (e.key === 'ArrowUp' || (e.key === 'Tab' && e.shiftKey)) {
+    e.preventDefault(); moveSelection(-1); return;
+  }
+  if (e.key === 'Enter') {
+    e.preventDefault(); dispatchItem(flat[selected]); return;
+  }
+
+  // Letter mode (tab palette default): keystroke-capture for mark-jump.
+  if (scope === 'tabs' && mode === 'letter') {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      if (markPrefix) {
+        // Two-stage: clear the typed prefix first, then a second Escape closes.
+        markPrefix = '';
+        queryInput.value = '';
+        selected = 0;
+        renderCurrent();
+      } else {
+        close();
+      }
+      return;
+    }
+    if (e.key === '/') { e.preventDefault(); enterFuzzyMode(); return; }
+    if (e.key === 'Backspace') { e.preventDefault(); backspaceMark(); return; }
+    if (/^[a-z]$/i.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault(); typeMarkLetter(e.key.toLowerCase()); return;
+    }
+    return; // swallow anything else in letter mode
+  }
+
+  // Fuzzy mode: Escape returns to letter mode (tab palette) or closes (full).
   if (e.key === 'Escape') {
     e.preventDefault();
-    close();
-  } else if (e.key === 'ArrowDown' || (e.key === 'Tab' && !e.shiftKey)) {
-    e.preventDefault();
-    moveSelection(1);
-  } else if (e.key === 'ArrowUp' || (e.key === 'Tab' && e.shiftKey)) {
-    e.preventDefault();
-    moveSelection(-1);
-  } else if (e.key === 'Enter') {
-    e.preventDefault();
-    dispatchItem(flat[selected]);
-  } else if ((e.ctrlKey || e.metaKey) && (e.code === 'KeyK' || e.code === 'KeyT')) {
-    // Either opening chord (Ctrl+K full, Ctrl+T tabs) toggles closed.
-    e.preventDefault();
-    close();
+    if (scope === 'tabs') enterLetterMode(); else close();
   }
 });
 
@@ -220,7 +317,6 @@ function assignAndPublish(alphabet: string[]): void {
 }
 
 async function init(): Promise<void> {
-  if (scope === 'tabs') queryInput.placeholder = 'Search tabs…';
   queryInput.focus();
   const [tabs, mru, keymap, activeId, stored, sync, marks] = await Promise.all([
     chrome.tabs.query({}).catch(() => [] as chrome.tabs.Tab[]),
@@ -246,7 +342,12 @@ async function init(): Promise<void> {
   commandItems = scope === 'tabs' ? [] : buildCommandItems(COMMAND_CATALOG, keymap);
   const alphabet = Array.isArray(stored.alphabet) ? (stored.alphabet as string[]) : [];
   assignAndPublish(alphabet);
-  refilter();
+  // Tab palette opens in letter mode when marks exist (the fast path); with no
+  // marks (feature off / pool empty) fall back to fuzzy so the palette is still
+  // usable. Full palette is always fuzzy.
+  if (scope === 'tabs' && codewords.size > 0) enterLetterMode();
+  else if (scope === 'tabs') { mode = 'fuzzy'; queryInput.placeholder = 'Search tabs…'; }
+  renderCurrent();
 }
 
 void init();
