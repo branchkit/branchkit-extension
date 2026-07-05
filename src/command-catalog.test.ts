@@ -10,7 +10,7 @@ import {
 // Mirrored here as a drift guard: a new dispatcher action without a catalog
 // entry (or vice-versa) fails this test, prompting the catalog update.
 const REGISTERED_ACTIONS = [
-  'show_hints', 'show_hints_newtab', 'hide_hints', 'toggle_hints',
+  'show_hints', 'show_hints_newtab', 'hide_hints', 'toggle_hints', 'hint_mode',
   'activate_first_visible', 'activate_hint', 'show_hints_category',
   'scroll_down', 'scroll_up', 'scroll_half_down', 'scroll_half_up',
   'scroll_full_down', 'scroll_full_up',
@@ -164,6 +164,7 @@ describe('default keymap', () => {
     // Locks the defaults (and their token format) against accidental drift.
     expect(DEFAULT_KEYMAP).toEqual([
       { keys: 'ctrl+KeyS', command: 'toggle_hints' },
+      { keys: 'KeyF', command: 'hint_mode' },
       { keys: 'shift+KeyJ', command: 'scroll_down' },
       { keys: 'shift+KeyK', command: 'scroll_up' },
       { keys: 'shift+KeyD', command: 'scroll_half_down' },

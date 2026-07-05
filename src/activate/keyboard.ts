@@ -41,10 +41,9 @@ export class KeyHandler {
   private registry: CommandRegistry;
   private dispatcher: ActionDispatcher;
   private onFilterChange: ((prefix: string) => void) | null = null;
-  // Whether hints are currently painted. When true, typed letters filter
-  // badges even without the explicit `f`-entered hint mode — so always-visible
-  // hints are keyboard-reachable without first pressing `f`. Set by content.ts.
-  private hintsVisible: () => boolean = () => false;
+  // Notified whenever the mode changes (normal ↔ hint), so the mode indicator
+  // chip can reflect it. Set by content.ts.
+  private onModeChange: ((mode: KeyMode) => void) | null = null;
   // Whether at least one codeword starts with a given prefix. Used to reject a
   // codeword keystroke that matches nothing — otherwise the filter hides every
   // badge until Escape. Set by content.ts; null means accept any char.
@@ -59,8 +58,8 @@ export class KeyHandler {
     this.onFilterChange = cb;
   }
 
-  setHintsVisible(fn: () => boolean): void {
-    this.hintsVisible = fn;
+  setModeChangeCallback(cb: (mode: KeyMode) => void): void {
+    this.onModeChange = cb;
   }
 
   setMatchPredicate(fn: (prefix: string) => boolean): void {
@@ -75,13 +74,16 @@ export class KeyHandler {
     this.mode = 'hint';
     this.filterText = '';
     this.newTabArmed = false;
+    this.onModeChange?.('hint');
   }
 
   exitHintMode(): void {
+    const was = this.mode;
     this.mode = 'normal';
     this.filterText = '';
     this.sequence = '';
     this.newTabArmed = false;
+    if (was !== 'normal') this.onModeChange?.('normal');
   }
 
   /** True when a capital was typed mid-codeword — the current pick should open
@@ -106,33 +108,19 @@ export class KeyHandler {
 
     // Bare / Shift keys: pass through inside editable fields. Only the
     // explicitly-entered `hint` mode (the user pressed `f`) intercepts in a
-    // field; passive always-visible typing must NOT hijack a search box.
+    // field; NORMAL-mode keybinds must NOT hijack a search box.
     if (this.mode !== 'hint' && isInsertMode()) return false;
 
-    // Hints are typeable in explicit hint mode OR whenever hints are painted
-    // (always-mode, no `f` needed). Routing within, in priority order:
-    if (this.mode === 'hint' || this.hintsVisible()) {
-      // 1. A Shift combo with NO codeword in progress is a command "outlier":
-      //    route it to the command path so modifier-style keybinds work in
-      //    always-mode. Shift+letter (BranchKit's F/G/N) matches there, unbound
-      //    ones (e.g. Vimium-C's H/L) fall through to other extensions, and
-      //    Shift+punctuation likewise — Shift+/ (?) opens the help overlay.
-      //    Punctuation is never a codeword char (codewords are [a-zA-Z]), and a
-      //    first-key capital is a command not a codeword start by design, so
-      //    diverting every empty-prefix Shift combo is safe. (The combo token
-      //    carries the `shift+` prefix, so the registry distinguishes
-      //    "shift+KeyH" from "KeyH"; real-modifier chords already routed above.)
-      //    A Shift+letter *mid*-codeword (filterText > 0) is deliberately NOT
-      //    diverted — it stays with the hint filter for the capital-means-new-tab
-      //    affordance.
-      if (this.filterText.length === 0 && e.shiftKey) {
-        return this.handleNormalKey(e);
-      }
-      // 2. Lowercase / control keys / mid-codeword keys → codeword filter.
+    // Hint mode ONLY (entered via `f`): letters filter/activate the painted
+    // hints. Hints stay always-VISIBLE for voice, but they're only TYPEABLE
+    // here — everywhere else the alphabet belongs to Normal-mode keybinds.
+    // See notes/DESIGN_KEYBOARD_MODES.md.
+    if (this.mode === 'hint') {
       return this.handleHintKey(e);
     }
 
-    // Normal mode
+    // Normal mode (the default, even with hints painted): bare letters and
+    // sequences are keybinds.
     return this.handleNormalKey(e);
   }
 

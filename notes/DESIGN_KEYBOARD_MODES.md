@@ -1,7 +1,9 @@
 # Design: Keyboard Modes — reclaim the alphabet with a Normal/Hint/Insert model
 
-**Status:** Proposal (2026-07-05). Direct change — no feature flag, no
-back-compat (pre-release). Supersedes the "everything is a chord" workaround.
+**Status:** Step 1 landed 2026-07-05 (mode split + `f` + mode chip). Direct
+change — no feature flag, no back-compat (pre-release). Supersedes the
+"everything is a chord" workaround. Steps 2–4 (full bare-key keymap, hint-
+dimming, help note) still open.
 
 ## Problem
 
@@ -128,11 +130,16 @@ than adding machinery.
 
 ## Plan
 
-1. Mode split in `keyboard.ts` (Normal default; `f` → Hint; delete the
-   always-typeable branch) + the mode chip.
+1. **LANDED** — Mode split in `keyboard.ts` (Normal default; the always-
+   typeable `hintsVisible` branch deleted; `f` → `hint_mode` command enters
+   Hint) + the mode chip (`render/mode-chip.ts`, shown in Hint only) wired via
+   `setModeChangeCallback`. `KeyF` → `hint_mode` in `DEFAULT_KEYMAP`. Help
+   overlay updated. Keyboard tests rewritten for the new model. The alphabet
+   is reclaimed — the previously "hidden-only" bare binds (h/l/n/cs//) now work
+   in always-mode.
 2. Rewrite `DEFAULT_KEYMAP` to bare Vim/Vimium-C keys; migrate the tab verbs
    off Shift-chords; add bare `T` for the tab palette; update lock tests.
 3. Hint-dimming in Normal (visual arm on `f`).
-4. Help-overlay note on the mode model.
+4. Help-overlay note on the mode model. (Partly done — usage text updated.)
 
-Each step is shippable on its own; step 1 alone reclaims the alphabet.
+Each step is shippable on its own; step 1 reclaimed the alphabet.

@@ -108,6 +108,10 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     voice: [{ pattern: 'hide' }] },
   { id: 'toggle_hints', label: 'Toggle hints', group: 'Hints', mappable: true, params: [],
     description: 'Show hints when hidden, hide them when shown (sticky across navigation).' },
+  // `f` — enter hint mode: hints (always visible for voice) become keyboard-
+  // typeable here, and only here. See notes/DESIGN_KEYBOARD_MODES.md.
+  { id: 'hint_mode', label: 'Hint mode', group: 'Hints', mappable: true, params: [],
+    description: 'Make the painted hints keyboard-typeable — then type a codeword to activate it. Esc exits.' },
   { id: 'activate_first_visible', label: 'Activate first hint', group: 'Hints', mappable: true, params: [],
     description: 'Activate the top-left visible hinted element.' },
   { id: 'show_hints_category', label: 'Show hints by category', group: 'Hints', mappable: true,
@@ -368,6 +372,7 @@ export function buildCommandContributions(): CommandContribution[] {
 // Comments show the keys as typed; tokens are canonical combos.
 export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   { keys: 'ctrl+KeyS', command: 'toggle_hints' }, // Ctrl+S — show/hide (leaves Ctrl+F find free)
+  { keys: 'KeyF', command: 'hint_mode' }, // f — enter hint mode (Vimium's link-hint key)
   { keys: 'shift+KeyJ', command: 'scroll_down' },
   { keys: 'shift+KeyK', command: 'scroll_up' },
   { keys: 'shift+KeyD', command: 'scroll_half_down' },

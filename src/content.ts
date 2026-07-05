@@ -51,6 +51,7 @@ import { toggleOverlay } from './render/debug-overlay';
 import { toggleHelpOverlay } from './render/help-overlay';
 import { togglePalette, closePalette } from './render/palette-host';
 import { setTabMarker, reapplyTabMarker } from './render/tab-title';
+import { setModeChip } from './render/mode-chip';
 import {
   CodewordSnapshot,
   takeSnapshot,
@@ -894,6 +895,15 @@ dispatcher.register('show_hints', () => {
   enterHintModeIfManual();
 });
 
+// `f` — the keyboard entry into hint mode (notes/DESIGN_KEYBOARD_MODES.md).
+// Hints stay always-visible for voice, but letters only filter them here. So
+// `f` ensures hints are painted and puts the keyboard in hint mode; the mode
+// chip then signals "type a codeword". Escape / activation returns to Normal.
+dispatcher.register('hint_mode', () => {
+  if (!pageSession.hintsVisible) { doScan(); showHints(); }
+  keyHandler.enterHintMode();
+});
+
 let activateInNewTab = false;
 
 dispatcher.register('show_hints_newtab', () => {
@@ -1135,10 +1145,9 @@ dispatcher.register('show_hints_category', (params) => {
 
 // --- Keyboard Filter Callback ---
 
-// Keyboard hint-typing is gated on whether hints are actually painted, not on
-// the `f`-entered hint mode — so always-visible hints accept typed codewords
-// immediately, no `f` first.
-keyHandler.setHintsVisible(() => pageSession.hintsVisible);
+// Show the mode chip when the keyboard enters hint mode (letters now filter
+// hints) and hide it back in Normal. See notes/DESIGN_KEYBOARD_MODES.md.
+keyHandler.setModeChangeCallback((mode) => setModeChip(mode));
 
 // Reject a codeword keystroke that no painted badge starts with, so a stray
 // key doesn't filter every hint off the screen. Only consults codeword
