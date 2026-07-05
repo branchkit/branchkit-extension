@@ -149,13 +149,48 @@ export function markerFromLetters(
 //   TAB_MARKER_REAPPLY  bg → content on page retitle; reapplyTabMarker runs the
 //                    echo + incremental-edit guards against the page's new title.
 //
-// `enabled` mirrors the tabMarkersEnabled sync setting; background.ts keeps it
-// current from storage + onChanged.
+// Effective-enabled = the tabMarkersEnabled setting AND a live BranchKit
+// connection. The marker is a SPOKEN codeword whose alphabet comes from the
+// host, so a mark with no voice is meaningless clutter (and the extension is
+// designed to run standalone) — no connection, no marks. background.ts keeps
+// both inputs current (setting from storage, connection from the SSE
+// connect/disconnect hooks).
 
-let enabled = false;
+let settingEnabled = false;
+let connected = false;
+let effective = false;
 
 export function isTabMarkersEnabled(): boolean {
-  return enabled;
+  return effective;
+}
+
+/** Recompute effective-enabled and reconcile the strip to match. */
+async function recompute(): Promise<void> {
+  const next = settingEnabled && connected;
+  if (next === effective) return;
+  effective = next;
+  if (effective) await decorateAllTabs();
+  else await undecorateAllTabs();
+}
+
+/** The tabMarkersEnabled setting changed (toggle / init). */
+export async function setTabMarkersSetting(on: boolean): Promise<void> {
+  settingEnabled = on;
+  await recompute();
+}
+
+/** BranchKit connected/disconnected (SSE hooks). Disconnect strips every mark;
+ *  connect re-derives (once the alphabet lands, see refreshAllTabMarkers). */
+export async function setTabMarkersConnected(isConnected: boolean): Promise<void> {
+  connected = isConnected;
+  await recompute();
+}
+
+/** The voice alphabet just arrived or changed — re-derive marks if active. The
+ *  connect hook fires before the alphabet SSE event, so this is what actually
+ *  paints marks on a fresh connection. */
+export async function refreshAllTabMarkers(): Promise<void> {
+  if (effective) await decorateAllTabs();
 }
 
 async function getAlphabet(): Promise<string[]> {
@@ -174,7 +209,7 @@ async function getAlphabet(): Promise<string[]> {
  * reconciled/restored tab re-adopts the mark already baked into its title.
  */
 export async function getTabMarkerLetters(tabId: number, title?: string): Promise<string | null> {
-  if (!enabled) return null;
+  if (!effective) return null;
   const alphabet = await getAlphabet();
   const sequence = buildMarkerSequence(alphabet);
   if (sequence.length === 0) return null; // alphabet not loaded yet
@@ -206,7 +241,7 @@ export async function pushTabMarker(tabId: number, title?: string): Promise<void
 /** Page retitled — tell the tab to re-apply its (unchanged) marker with the
  *  content-side guards. Cheap no-op when disabled. */
 export function reapplyTabMarker(tabId: number): void {
-  if (!enabled) return;
+  if (!effective) return;
   sendToTopFrame(tabId, { type: 'TAB_MARKER_REAPPLY' });
 }
 
@@ -254,13 +289,4 @@ async function undecorateAllTabs(): Promise<void> {
   for (const t of tabs) {
     if (typeof t.id === 'number') sendToTopFrame(t.id, { type: 'TAB_MARKER', letters: null });
   }
-}
-
-/** Apply the enabled flag and reconcile the strip to match. Called at init and
- *  on the tabMarkersEnabled setting change. */
-export async function setTabMarkersEnabled(next: boolean): Promise<void> {
-  if (next === enabled) return;
-  enabled = next;
-  if (enabled) await decorateAllTabs();
-  else await undecorateAllTabs();
 }

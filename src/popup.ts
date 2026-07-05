@@ -114,10 +114,11 @@ function initSyncedSelect(id: string, storageKey: string): void {
   });
 }
 
-function initSyncedCheckbox(id: string, storageKey: string): void {
+function initSyncedCheckbox(id: string, storageKey: string, defaultOn = false): void {
   const cb = document.getElementById(id) as HTMLInputElement;
   chrome.storage.sync.get(storageKey, (result) => {
-    cb.checked = result[storageKey] === true;
+    // defaultOn keys are on unless explicitly stored false (absent → on).
+    cb.checked = defaultOn ? result[storageKey] !== false : result[storageKey] === true;
   });
   cb.addEventListener('change', () => {
     chrome.storage.sync.set({ [storageKey]: cb.checked });
@@ -499,7 +500,7 @@ async function init(): Promise<void> {
   initSyncedSelect('hint-visibility', 'hintVisibility');
   initSyncedSelect('hint-mode', 'badgeDisplayMode');
   initSyncedCheckbox('aggressive-hints', 'aggressiveHints');
-  initSyncedCheckbox('tab-markers', 'tabMarkersEnabled');
+  initSyncedCheckbox('tab-markers', 'tabMarkersEnabled', true);
   initOptionsLink();
 
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });

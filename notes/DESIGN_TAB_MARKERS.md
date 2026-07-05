@@ -1,6 +1,11 @@
 # Design: Tab Markers — spoken codewords on the tab strip
 
-**Status:** Proposal (2026-07-05). Behind a toggle, default OFF.
+**Status:** Phase 1 landed 2026-07-05. Behind a toggle, **default ON**, and
+**voice-gated**: marks only appear while BranchKit is connected (the marker is
+a spoken codeword — a mark you can't say is clutter, and the extension runs
+standalone). Effective-enabled = `tabMarkersEnabled` setting AND live SSE
+connection; disconnect strips every mark, reconnect (once the alphabet lands)
+repaints.
 **Goal:** Make every open tab addressable by voice *without* opening the
 palette — a stable spoken codeword visibly attached to each tab, readable
 straight off the tab strip. Say "tab", the strip is your menu; say a tab's
@@ -276,11 +281,23 @@ unchanged).
 
 ## Settings surface
 
-One toggle: **"Mark tabs with spoken codewords"**, default off, in the
-options page by the hint appearance settings (`chrome.storage.sync`, picked
-up by background + content on `storage.onChanged` — flipping it off must
-strip every decorated title live, not just stop decorating new ones).
-Display mode is NOT a second toggle — it follows `badgeDisplayMode`.
+One toggle: **"Mark tabs"** (popup), default **on**, gated on the BranchKit
+connection. The original "default off" call was reversed by the user
+2026-07-05 — they accept the history-pollution / side-effect tradeoffs. Lives
+in the popup by the hint appearance settings (`chrome.storage.sync`,
+`tabMarkersEnabled`, picked up by background on `storage.onChanged`). Flipping
+it off strips every decorated title live, not just stops decorating new ones.
+
+**Voice-gated (Phase 1 landed):** effective-enabled = the setting AND a live
+BranchKit SSE connection, tracked in `background/tab-markers.ts`
+(`setTabMarkersSetting` / `setTabMarkersConnected`, both feed one `recompute`).
+`onSSEDisconnected` strips every mark; `onSSEConnected` repaints once the
+alphabet arrives (`storeAlphabet → refreshAllTabMarkers` — the connect hook
+fires before the alphabet SSE event, so the alphabet arrival is what actually
+paints). The marker is a spoken codeword whose alphabet comes from the host,
+so no connection ⇒ no marks, consistent with the extension's standalone
+posture. Display is NOT a second toggle — strip decoration is always the
+letter form (above).
 
 ## Open questions
 
