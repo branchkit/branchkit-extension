@@ -759,12 +759,17 @@ export class HintBadge {
       unscheduleRefine(this);
     }
 
-    // Paint the new target's host now when the accelerator is enabled, keeping
-    // the base consistent with the (re-armed or cleared) accelerator animation —
-    // the old-target disarm + new-target re-arm flip `outer`'s -scrollTop, so
-    // the base must move in lockstep. Accel off: the next reconcile pass moves
-    // the host to the new target.
-    if (isScrollAccelEnabled()) this.repositionHostNow();
+    // Paint the new target's host NOW, unconditionally. With the accelerator
+    // enabled this keeps the base consistent with the (re-armed or cleared)
+    // accelerator animation — the old-target disarm + new-target re-arm flip
+    // `outer`'s -scrollTop, so the base must move in lockstep. With it off
+    // (Firefox stable: no ScrollTimeline, so the isScrollAccelEnabled() gate
+    // never passed after the 2026-07-03 feature-detect fix), the old gate
+    // left a rebound badge at its previous position until the next
+    // settle/reconcile tick — a visible ~100ms lag on every limbo rebind
+    // (long-session review backlog: retarget repaint gap). One rect read +
+    // one transform write per rebind — cheap on both engines.
+    this.repositionHostNow();
   }
 
   /**
