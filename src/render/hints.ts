@@ -10,7 +10,7 @@
  */
 
 import { Category, BadgeDisplayMode } from '../types';
-import { LabelAssignment, labelToDisplay } from '../labels/words';
+import { LabelAssignment, labelToDisplay, letterToSpokenWord } from '../labels/words';
 import { getCachedRect, getCachedStyle, isRectOnScreen } from '../layout-cache';
 import { calculateZIndex } from '../placement/stacking';
 import { computeBadgeColors } from './badge-colors';
@@ -962,6 +962,11 @@ export class HintBadge {
     }
 
     const { words, letter } = this.label;
+    // `words` holds single-letter tokens (label inversion, da74214); the spoken
+    // codeword comes from the voice overlay via letterToSpokenWord, exactly as
+    // labelToDisplay does. Without this, word/both/first-word reveals emit the
+    // raw letter (e.g. "a s") instead of the expanded word ("a stone").
+    const spoken = words.map(letterToSpokenWord);
     let matchedText: string;
     let remainingText: string;
 
@@ -971,8 +976,8 @@ export class HintBadge {
         remainingText = letter.slice(count);
         break;
       case 'word':
-        matchedText = words.slice(0, count).join(' ');
-        remainingText = words.slice(count).join(' ');
+        matchedText = spoken.slice(0, count).join(' ');
+        remainingText = spoken.slice(count).join(' ');
         if (matchedText && remainingText) remainingText = ' ' + remainingText;
         break;
       case 'both':
@@ -980,15 +985,15 @@ export class HintBadge {
           matchedText = labelToDisplay(this.label, 'both');
           remainingText = '';
         } else {
-          matchedText = words.slice(0, count).join(' ');
-          remainingText = words.slice(count).join(' ');
+          matchedText = spoken.slice(0, count).join(' ');
+          remainingText = spoken.slice(count).join(' ');
           if (matchedText && remainingText) remainingText = ' ' + remainingText;
         }
         break;
       case 'first-word':
         if (count >= 1 && words.length >= 2) {
           matchedText = letter[0];
-          remainingText = ' ' + words[1];
+          remainingText = ' ' + spoken[1];
         } else {
           matchedText = letter.slice(0, count);
           remainingText = '';
