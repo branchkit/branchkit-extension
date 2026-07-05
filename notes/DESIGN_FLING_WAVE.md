@@ -3117,3 +3117,26 @@ VERIFY (user): reload + close/reopen + fling. Expected: checkbox/pencil/
 eye badges HOLD through the second render — same letters, no bare
 window. The full Rango-stability profile, plus letter continuity Rango
 doesn't have.
+
+## Round 35 VERIFY — USER-APPROVED CLOSE (2026-07-05, snapshot 00-15-33)
+
+User: "it worked really well. This is the best I've ever seen it...
+this is a success and it's approved." The snapshot agrees on every axis:
+
+- rebind_coattail **488** + rebind_key 195 on the real client fling — the
+  whole population rides the second render.
+- **In-viewport churn: 0** (43-71 every prior drill) — not one visible
+  badge died during the fling. Total churn 63, all off-viewport.
+- Bare-link detector: 0.
+- Photon eye: 168-176 in-viewport badges solid and FLAT through the
+  entire window; translucent transient solidifying within one sample.
+- Paint: p50 52ms, max **694ms** — nothing on the page painted later
+  than 0.7s.
+
+THE ARC IS CLOSED. End state vs the original mission ("why does Rango
+paint faster"): first paint at/beyond Rango parity, swap stability
+beyond Rango (letters survive; theirs reshuffle), the remaining
+interruption is QuickBase's own void. 35 rounds, 7 instrumentation
+deceptions catalogued, 4 structural bugs (scan-path serialization,
+sweep early-return, reveal-sensor gate, key-queue bare links), and the
+photon eye now lives in every future drill.
