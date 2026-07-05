@@ -95,10 +95,11 @@ describe('hint mode — codeword filtering', () => {
     expect(cb).toHaveBeenLastCalledWith('a');
   });
 
-  it('enter dispatches activate_first_visible', () => {
+  it('enter is not special in hint mode — hints complete by typing, not Enter', () => {
     handler.enterHintMode();
-    handler.handleKeyDown(makeKey('Enter'));
-    expect(dispatchSpy).toHaveBeenCalledWith('activate_first_visible');
+    const result = handler.handleKeyDown(makeKey('Enter'));
+    expect(result).toBe(false);
+    expect(dispatchSpy).not.toHaveBeenCalled();
   });
 
   it('/ dispatches find_open (find-in-page), not a hint filter', () => {

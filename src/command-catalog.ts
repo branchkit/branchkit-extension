@@ -109,10 +109,8 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     voice: [{ pattern: 'toggle' }] },
   // `f` — enter hint mode: hints (always visible for voice) become keyboard-
   // typeable here, and only here. See notes/DESIGN_KEYBOARD_MODES.md.
-  { id: 'hint_mode', label: 'Hint mode', group: 'Hints', mappable: true, params: [],
+  { id: 'hint_mode', label: 'Type a hint', group: 'Hints', mappable: true, params: [],
     description: 'Make the painted hints keyboard-typeable — then type a codeword to activate it. Esc exits.' },
-  { id: 'activate_first_visible', label: 'Activate first hint', group: 'Hints', mappable: true, params: [],
-    description: 'Activate the top-left visible hinted element.' },
   { id: 'show_hints_category', label: 'Show hints by category', group: 'Hints', mappable: true,
     description: 'Show only hints of one element category (links, buttons, inputs, …).',
     params: [{ name: 'category', type: 'enum', options: HINT_CATEGORIES, default: 'link' }] },

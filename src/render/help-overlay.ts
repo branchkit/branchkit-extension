@@ -132,24 +132,60 @@ const STYLE = `
   color: #e6edf3; width: 1.1em; flex: 0 0 auto; }
 .alpha .w { color: #c9d1d9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .alpha-empty { font-size: 12px; color: #8b949e; margin-bottom: 12px; }
-/* Commands — one line each (key + label + spoken phrase), multi-column. */
-.cmds { columns: 2; column-gap: 22px; }
+/* Commands — an aligned three-column mini-table per group:
+     name | keys | spoken phrase
+   Columns line up within each group (the row is display:contents, promoting
+   its three cells into the group's grid) so the eye scans straight down
+   instead of parsing a squished inline run. */
+.cmds { columns: 2; column-gap: 26px; }
 @media (max-width: 560px) { .cmds { columns: 1; } }
-.group { break-inside: avoid; margin-bottom: 9px; }
-.group-name { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
-  color: #8b949e; margin-bottom: 3px; }
-.row { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; margin-bottom: 3px; font-size: 12px; }
-.keys { flex: 0 0 auto; display: flex; gap: 3px; flex-wrap: wrap; }
+.group {
+  break-inside: avoid;
+  margin-bottom: 13px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  column-gap: 12px;
+  row-gap: 5px;
+  align-items: baseline;
+}
+.group-name {
+  grid-column: 1 / -1;
+  font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+  color: #58a6ff; margin: 0 0 2px;
+  padding-bottom: 4px; border-bottom: 1px solid #21262d;
+}
+.row { display: contents; }
+.label {
+  color: #e6edf3; font-size: 12px; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.keys { display: inline-flex; gap: 3px; flex-wrap: wrap; }
 kbd {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px;
   background: #21262d; color: #e6edf3; border: 1px solid #30363d;
-  border-bottom-width: 2px; border-radius: 3px; padding: 0 4px; white-space: nowrap;
+  border-bottom-width: 2px; border-radius: 4px; padding: 1px 5px; white-space: nowrap;
 }
-.label { color: #e6edf3; }
-.say { color: #8b949e; font-style: italic; }
+/* Spoken phrase — mic glyph + italic text, set apart from the key chips so
+   "say this" reads distinctly from "press this". Empty cell when a command
+   has no voice form, which keeps the three columns aligned. */
+.voice {
+  display: inline-flex; align-items: baseline; gap: 4px;
+  color: #7d8590; font-size: 11px; font-style: italic; white-space: nowrap;
+}
+.voice svg { width: 11px; height: 11px; flex: 0 0 auto; align-self: center;
+  color: #58a6ff; opacity: 0.85; }
 .usage { margin-top: 10px; font-size: 11px; color: #8b949e; line-height: 1.45; }
 .usage b { color: #c9d1d9; font-weight: 600; }
 `;
+
+// Small mic glyph that precedes a spoken phrase, so voice rows are instantly
+// distinguishable from key rows. Inline SVG (static, no page input) — matches
+// the innerHTML already used for the usage note below.
+const MIC_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<rect x="9" y="2" width="6" height="12" rx="3"/>' +
+  '<path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="22"/></svg>';
 
 function el(tag: string, cls?: string, text?: string): HTMLElement {
   const e = document.createElement(tag);
@@ -200,16 +236,27 @@ function buildHelpOverlay(
     const groupEl = el('div', 'group');
     groupEl.appendChild(el('div', 'group-name', g.group));
     for (const r of g.rows) {
+      // `.row` is display:contents, so these three cells become the group
+      // grid's columns. Always append all three (keys/voice may be empty) so
+      // rows stay column-aligned.
       const row = el('div', 'row');
-      if (r.keys.length) {
-        const keys = el('div', 'keys');
-        for (const k of r.keys) keys.appendChild(el('kbd', undefined, k));
-        row.appendChild(keys);
-      }
+
+      // 1 — what it does: the anchor you scan by.
       row.appendChild(el('span', 'label', r.label));
+
+      // 2 — how to type it: aligned key chips.
+      const keys = el('div', 'keys');
+      for (const k of r.keys) keys.appendChild(el('kbd', undefined, k));
+      row.appendChild(keys);
+
+      // 3 — how to say it: mic glyph + phrase(s), set apart from the keys.
+      const voice = el('div', 'voice');
       if (r.voice.length) {
-        row.appendChild(el('span', 'say', r.voice.map((v) => `“${v}”`).join(' / ')));
+        voice.innerHTML = MIC_SVG;
+        voice.appendChild(el('span', undefined, r.voice.join('  /  ')));
       }
+      row.appendChild(voice);
+
       groupEl.appendChild(row);
     }
     cmds.appendChild(groupEl);
@@ -240,10 +287,9 @@ function buildHelpOverlay(
 
   const usage = el('div', 'usage');
   usage.innerHTML =
-    'Press <b>f</b> to type hints, then <b>a badge’s letters</b> to activate it ' +
-    '(the “HINT” chip shows you’re in hint mode). A <b>capital</b> opens it in a new tab. ' +
-    '<b>Enter</b> activates the first visible hint; <b>/</b> opens find-in-page; <b>Esc</b> exits. ' +
-    'Otherwise bare keys are normal-mode shortcuts.';
+    'Badges stay visible for voice. Press <b>f</b> to type them by keyboard — enter a ' +
+    'badge’s letters to click it, or a <b>capital</b> to open it in a new tab (<b>Esc</b> exits). ' +
+    'Every other bare key is a Normal-mode shortcut, listed above.';
   panel.appendChild(usage);
 
   backdrop.appendChild(panel);

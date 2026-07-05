@@ -183,13 +183,6 @@ export class KeyHandler {
       return true;
     }
 
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      e.stopPropagation();
-      this.dispatcher.dispatch('activate_first_visible');
-      return true;
-    }
-
     // `/` opens find-in-page (Vimium-style: a visible query bar that highlights
     // text matches and steps through them with Enter / Shift+Enter — it never
     // clicks a link). It used to enter a hint-text-filter that auto-activated a

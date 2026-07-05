@@ -937,13 +937,6 @@ function toggleHints(): boolean {
 
 dispatcher.register('toggle_hints', () => { toggleHints(); });
 
-dispatcher.register('activate_first_visible', () => {
-  const visible = store.all.filter(w => w.hint?.isVisible && w.label);
-  if (visible.length > 0) {
-    activateWrapper(visible[0]);
-  }
-});
-
 dispatcher.register('activate_hint', (params) => {
   const codeword = params.word2 ? `${params.word} ${params.word2}` : params.word;
   if (!codeword) return;
