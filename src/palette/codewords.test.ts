@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { assignCodewords, maxVoiceRows } from './codewords';
+import { assignCodewords, codewordDisplay, maxVoiceRows } from './codewords';
 
 // A–Z order, as BranchKit pushes it.
 const ALPHABET = [
@@ -58,5 +58,29 @@ describe('assignCodewords', () => {
     expect(assignCodewords(ids(5), []).size).toBe(0);
     expect(assignCodewords(ids(5), ALPHABET.slice(0, 25)).size).toBe(0);
     expect(assignCodewords(ids(5), [...ALPHABET.slice(0, 25), '']).size).toBe(0);
+  });
+});
+
+describe('codewordDisplay', () => {
+  // Mirrors labels/words.ts labelToDisplay so palette badges and page hints
+  // read the same under every badgeDisplayMode value.
+  it('letter mode shows the letter(s)', () => {
+    expect(codewordDisplay('arch', ALPHABET, 'letter')).toBe('a');
+    expect(codewordDisplay('ocean pearl', ALPHABET, 'letter')).toBe('op');
+  });
+
+  it('word mode shows the spoken form', () => {
+    expect(codewordDisplay('arch', ALPHABET, 'word')).toBe('arch');
+    expect(codewordDisplay('ocean pearl', ALPHABET, 'word')).toBe('ocean pearl');
+  });
+
+  it('both mode pairs letter+word for singles, words for pairs', () => {
+    expect(codewordDisplay('arch', ALPHABET, 'both')).toBe('a arch');
+    expect(codewordDisplay('ocean pearl', ALPHABET, 'both')).toBe('ocean pearl');
+  });
+
+  it('first-word mode shows word for singles, word+letter for pairs', () => {
+    expect(codewordDisplay('arch', ALPHABET, 'first-word')).toBe('arch');
+    expect(codewordDisplay('ocean pearl', ALPHABET, 'first-word')).toBe('ocean p');
   });
 });

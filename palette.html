@@ -53,13 +53,16 @@
     .row.sel { background: #1f6feb33; }
     .row:hover:not(.sel) { background: #161b22; }
     .title { color: #e6edf3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    /* Spoken codeword badge — the voice handle for the row. Hint-badge yellow
-       family so the affordance reads the same as page hints. */
+    /* Spoken codeword badge — the voice handle for the row. Muted purple:
+       distinct from the blue selection/section accents and the gray metadata,
+       and calm against the dark panel (unlike page hints, we control the
+       background here, so no high-contrast yellow needed). */
     .cw {
       flex: 0 0 auto;
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px;
       font-weight: 600;
-      background: #f2cc60; color: #1c2128;
+      background: rgba(137, 87, 229, 0.18); color: #d2a8ff;
+      border: 1px solid rgba(137, 87, 229, 0.45);
       border-radius: 3px; padding: 0 4px; white-space: nowrap;
     }
     .sub {

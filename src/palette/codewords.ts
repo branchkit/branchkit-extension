@@ -31,6 +31,36 @@ export function maxVoiceRows(): number {
 }
 
 /**
+ * Badge display for a spoken codeword under the shared `badgeDisplayMode`
+ * setting — the SAME knob the page hints read, so both surfaces agree.
+ * Mirrors labels/words.ts labelToDisplay: the spoken form is always the
+ * word(s) (that's what the recognizer hears); this only shapes the visible
+ * chip. `alphabet` is the same A–Z word list the codeword was assigned from,
+ * so each word maps back to its letter by index.
+ */
+export function codewordDisplay(
+  codeword: string,
+  alphabet: readonly string[],
+  mode: 'letter' | 'word' | 'both' | 'first-word',
+): string {
+  const words = codeword.split(' ');
+  const letters = words.map((w) => {
+    const i = alphabet.indexOf(w);
+    return i >= 0 ? 'abcdefghijklmnopqrstuvwxyz'[i] : '?';
+  });
+  switch (mode) {
+    case 'letter':
+      return letters.join('');
+    case 'word':
+      return words.join(' ');
+    case 'both':
+      return words.length === 1 ? `${letters[0]} ${words[0]}` : words.join(' ');
+    case 'first-word':
+      return words.length === 1 ? words[0] : `${words[0]} ${letters[1]}`;
+  }
+}
+
+/**
  * Map row ids to spoken badges. `alphabet` is the 26-word voice alphabet in
  * A–Z order (empty/invalid → empty map: the palette degrades to keyboard-only).
  * Rows past `maxVoiceRows()` are left out of the map.

@@ -22,7 +22,8 @@ import {
   buildTabItems, buildCommandItems, filterPalette,
   type PaletteItem, type PaletteSection, type PaletteTab,
 } from './palette/model';
-import { assignCodewords } from './palette/codewords';
+import { assignCodewords, codewordDisplay } from './palette/codewords';
+import type { BadgeDisplayMode } from './types';
 import type { Message, PaletteVoiceEntry, PaletteVoiceRow } from './types';
 
 const queryInput = document.getElementById('query') as HTMLInputElement;
@@ -38,6 +39,12 @@ let selected = 0;
  *  refiltering never reassigns, so a row's badge is stable for the palette's
  *  lifetime). Empty when the voice alphabet isn't loaded. */
 let codewords: Map<string, string> = new Map();
+/** The alphabet the codewords were assigned from (for letter display). */
+let voiceAlphabet: string[] = [];
+/** Shared badge display setting — the same `badgeDisplayMode` the page hints
+ *  read, so palette badges show letters/words per the user's one preference.
+ *  Same 'letter' fallback as config.ts. */
+let displayMode: BadgeDisplayMode = 'letter';
 
 function send(action: Extract<Message, { type: 'PALETTE_ACTION' }>['action']): void {
   chrome.runtime.sendMessage({ type: 'PALETTE_ACTION', action } as Message).catch(() => {});
@@ -89,7 +96,7 @@ function render(sections: PaletteSection[]): void {
       const i = idx++;
       const row = el('div', i === selected ? 'row sel' : 'row');
       const cw = codewords.get(item.id);
-      if (cw) row.appendChild(el('span', 'cw', cw));
+      if (cw) row.appendChild(el('span', 'cw', codewordDisplay(cw, voiceAlphabet, displayMode)));
       row.appendChild(el('span', 'title', item.title));
       if (item.subtitle && item.subtitle !== item.title) {
         row.appendChild(el('span', 'sub', item.subtitle));
@@ -160,6 +167,7 @@ window.addEventListener('blur', () => close());
  */
 function publishVoiceRows(alphabet: string[]): void {
   const all = [...tabItems, ...commandItems];
+  voiceAlphabet = alphabet;
   codewords = assignCodewords(all.map((r) => r.id), alphabet);
   if (codewords.size === 0) return;
   const entries: PaletteVoiceEntry[] = [];
@@ -175,13 +183,17 @@ function publishVoiceRows(alphabet: string[]): void {
 
 async function init(): Promise<void> {
   queryInput.focus();
-  const [tabs, mru, keymap, activeId, stored] = await Promise.all([
+  const [tabs, mru, keymap, activeId, stored, sync] = await Promise.all([
     chrome.tabs.query({}).catch(() => [] as chrome.tabs.Tab[]),
     loadMru().catch(() => [] as number[]),
     loadKeymap().catch(() => []),
     currentTabId(),
     chrome.storage.local.get('alphabet').catch(() => ({} as Record<string, unknown>)),
+    chrome.storage.sync.get('badgeDisplayMode').catch(() => ({} as Record<string, unknown>)),
   ]);
+  if (typeof sync.badgeDisplayMode === 'string') {
+    displayMode = sync.badgeDisplayMode as BadgeDisplayMode;
+  }
   const open: PaletteTab[] = tabs
     .filter((t): t is chrome.tabs.Tab & { id: number } => typeof t.id === 'number')
     .map((t) => ({ tabId: t.id, title: t.title ?? '', url: t.url ?? '' }));
