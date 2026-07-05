@@ -120,11 +120,20 @@ export function setNudgesFromSettings(s: BadgeSettings): void {
 
 function getNudge(element: Element, hasText: boolean): Nudge {
   const rect = getCachedRect(element);
-  // Large icon-only elements (icon-only buttons big enough to host the
-  // badge inside): place hint at the target's top-left INSIDE the element.
-  // Matches Rango's "nudge=1" branch.
-  if (rect.width > 30 && rect.height > 30 && !hasText) {
-    return { x: 1, y: 1 };
+  if (!hasText) {
+    // Large icon-only elements (icon-only buttons big enough to host the
+    // badge inside): place hint at the target's top-left INSIDE the element.
+    // Matches Rango's "nudge=1" branch.
+    if (rect.width > 30 && rect.height > 30) {
+      return { x: 1, y: 1 };
+    }
+    // SMALL icon-only targets (round 36): no left overhang. The ratio
+    // overhang exists to keep the badge off a text target's glyphs — an
+    // icon has none, and in dense action clusters (QuickBase's
+    // pencil/eye: 18px icons, 4px apart) a badge hanging 70% past the
+    // left edge lands ON the neighboring control. Fully above, left
+    // edges aligned: zero horizontal bleed, icon stays uncovered.
+    return { x: 1, y: 0 };
   }
 
   // Everything else — Rango-style ratio nudge per font-size bucket.
