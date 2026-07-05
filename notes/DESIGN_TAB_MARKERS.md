@@ -1,11 +1,12 @@
 # Design: Tab Markers — spoken codewords on the tab strip
 
-**Status:** Phase 1 landed 2026-07-05. Behind a toggle, **default ON**, and
-**voice-gated**: marks only appear while BranchKit is connected (the marker is
-a spoken codeword — a mark you can't say is clutter, and the extension runs
-standalone). Effective-enabled = `tabMarkersEnabled` setting AND live SSE
-connection; disconnect strips every mark, reconnect (once the alphabet lands)
-repaints.
+**Status:** Landed 2026-07-05 (Phase 1 + letter-first + tab-scoped palette +
+convergence). Behind a toggle, **default ON**. **Letter-first:** the marker IS
+a letter token ("a", "iz") — the extension-owned identity, like hint letters —
+assigned/shown/typed with NO voice dependency; the spoken codeword is an
+overlay (`markToSpokenWords`, "iz" → "iris zone") consulted only at voice-
+publish time. So marks are **no longer connection-gated** (a letter works for
+the keyboard standalone); they show whenever the toggle is on.
 **Goal:** Make every open tab addressable by voice *without* opening the
 palette — a stable spoken codeword visibly attached to each tab, readable
 straight off the tab strip.
@@ -35,12 +36,22 @@ session's history; the short version:
 overlay; `goto_tab`'s "tab {number}" voice retired (kept keyboard-mappable)
 so voice tab-addressing is one language.
 
-**Next (increment 2):** converge the palette's tab rows onto the STABLE strip
-marks (palette open-question #1) so the strip letter and the palette
-quick-select letter agree; make marks **letter-first** (the letter is the
-extension-owned identity like hint letters, voice word is the overlay) so
-they work for keyboard standalone; then **drop the connection-gating** —
-keyboard makes marks useful without voice, so gate on the toggle alone.
+**Landed (increment 2):** marks are **letter-first** (`tab-markers.ts` — the
+marker is a letter token from a reserved split of `LETTERS_26`, no voice
+dependency; `markToSpokenWords` is the overlay); **connection-gating dropped**
+(gate on the toggle alone); the **tabs-only palette converges** on the stable
+marks — a tab row's badge is its strip mark letter, and its spoken form is the
+mark's overlay words, so the strip and the palette show the SAME letter.
+Titles are stripped of the decoration in the palette (badge, not baked in).
+
+**Deferred — keyboard letter-jump.** "Type the mark letter → switch" conflicts
+with fuzzy title search: since every single letter is a mark, a one-keystroke
+auto-jump would preempt typing a title ("g" jumps instead of letting you type
+"github"). It needs its own UX (a pure mark-pick mode, or a non-typing
+trigger), so it's a separate decision. Today the tabs-only palette keyboard
+path is fuzzy-title + arrows + Enter; the mark badge is the visual/voice
+handle. The full palette (Ctrl+K) still uses ephemeral codewords for its
+tab+command rows — convergence there is a later, lower-priority follow-up.
 
 Everything below is the original Option C design, kept for history.
 

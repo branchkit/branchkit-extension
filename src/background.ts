@@ -20,9 +20,8 @@ import { cycleTabIndex } from './background/tab-nav';
 import { loadMru, previousCandidates, recordTabActivated } from './background/tab-mru';
 import { scheduleTabPublish, resetTabPublishCache } from './background/tab-collection';
 import {
-  getTabMarkerLetters, pushTabMarker, reapplyTabMarker as reapplyTabMarkerFor,
-  releaseTabMarker, transferTabMarker, setTabMarkersSetting,
-  setTabMarkersConnected, refreshAllTabMarkers,
+  getTabMarker, pushTabMarker, reapplyTabMarker as reapplyTabMarkerFor,
+  releaseTabMarker, transferTabMarker, setTabMarkersEnabled,
 } from './background/tab-markers';
 import { ensureContentScriptInjected } from './background/injection';
 import { bgState, connId } from './background/state';
@@ -105,9 +104,6 @@ function updateConnectionBadge(connected: boolean): void {
 function onSSEConnected(): void {
   bgState.branchkitConnected = true;
   updateConnectionBadge(true);
-  // Tab markers are voice-gated: paint them now the host is connected (the
-  // alphabet arrives moments later via storeAlphabet → refreshAllTabMarkers).
-  void setTabMarkersConnected(true);
   sseBackoff.onConnected(Date.now());
   clearSSERetryTimer();
   // Cold-start focus handshake: this browser may already be frontmost when
@@ -140,8 +136,6 @@ function onSSEDisconnected(): void {
   bgState.branchkitConnected = false;
   updateConnectionBadge(false);
   scheduleSSERetry();
-  // Voice gone → strip every tab mark (a mark you can't speak is just clutter).
-  void setTabMarkersConnected(false);
 }
 
 function rescanActiveTab(): void {
@@ -187,10 +181,6 @@ async function storeAlphabet(words: string[]): Promise<void> {
       return;
     }
     await chrome.storage.local.set({ alphabet: words });
-    // Alphabet is now available — (re)derive tab marks if the feature is
-    // active. On a fresh connection the connect hook fires before this event,
-    // so this is what actually paints the marks.
-    void refreshAllTabMarkers();
   } catch (err) {
     console.error('[BranchKit BG] alphabet store error:', err);
   }
@@ -1087,7 +1077,7 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     // the letter form (title supplies a preferred marker for reconciliation).
     const tabId = _sender.tab?.id;
     if (typeof tabId !== 'number') { sendResponse({ letters: null }); return false; }
-    getTabMarkerLetters(tabId, _sender.tab?.title ?? undefined)
+    getTabMarker(tabId, _sender.tab?.title ?? undefined)
       .then((letters) => sendResponse({ letters }))
       .catch(() => sendResponse({ letters: null }));
     return true; // async response
@@ -1551,9 +1541,8 @@ async function init(): Promise<void> {
     hintVisibility = result.hintVisibility;
   }
   // Tab markers: default ON (absent → on; only an explicit false disables).
-  // Sets the setting input only — marks paint once BranchKit connects
-  // (onSSEConnected → setTabMarkersConnected), since they're voice-gated.
-  void setTabMarkersSetting(result.tabMarkersEnabled !== false);
+  // Letter-first, so marks paint immediately — no connection dependency.
+  void setTabMarkersEnabled(result.tabMarkersEnabled !== false);
 
   // Prime the active-tab cache so the first active_tab_id signal to the plugin
   // (and rescanActiveTab) has a value before the first tabs.onActivated /
@@ -1586,9 +1575,9 @@ chrome.storage.onChanged.addListener((changes) => {
     hintVisibility = changes.hintVisibility.newValue || 'always';
   }
   // Tab-markers toggle flipped: decorate every tab, or strip every tab live.
-  // Default ON — only an explicit false disables. (No-op unless connected.)
+  // Default ON — only an explicit false disables.
   if (changes.tabMarkersEnabled) {
-    void setTabMarkersSetting(changes.tabMarkersEnabled.newValue !== false);
+    void setTabMarkersEnabled(changes.tabMarkersEnabled.newValue !== false);
   }
 });
 

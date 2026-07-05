@@ -23,6 +23,8 @@ import {
   type PaletteItem, type PaletteSection, type PaletteTab,
 } from './palette/model';
 import { assignCodewords, codewordDisplay } from './palette/codewords';
+import { loadMarkerMap, markToSpokenWords, type MarkerMap } from './background/tab-markers';
+import { stripTabMarker } from './tab-marker-format';
 import type { BadgeDisplayMode } from './types';
 import type { Message, PaletteVoiceEntry, PaletteVoiceRow } from './types';
 
@@ -45,6 +47,10 @@ let selected = 0;
 let codewords: Map<string, string> = new Map();
 /** The alphabet the codewords were assigned from (for letter display). */
 let voiceAlphabet: string[] = [];
+/** tabId → stable strip mark (letter token). In tabs scope the palette rows
+ *  use these instead of ephemeral codewords, so the strip and the palette show
+ *  the SAME letter. */
+let markMap: MarkerMap = {};
 /** Shared badge display setting — the same `badgeDisplayMode` the page hints
  *  read, so palette badges show letters/words per the user's one preference.
  *  Same 'letter' fallback as config.ts. */
@@ -100,7 +106,13 @@ function render(sections: PaletteSection[]): void {
       const i = idx++;
       const row = el('div', i === selected ? 'row sel' : 'row');
       const cw = codewords.get(item.id);
-      if (cw) row.appendChild(el('span', 'cw', codewordDisplay(cw, voiceAlphabet, displayMode)));
+      if (cw) {
+        // Tabs scope: the codeword IS the stable mark letter — show it as-is so
+        // the badge matches the strip. Full palette: word codewords → display
+        // per badgeDisplayMode.
+        const badge = scope === 'tabs' ? cw : codewordDisplay(cw, voiceAlphabet, displayMode);
+        row.appendChild(el('span', 'cw', badge));
+      }
       row.appendChild(el('span', 'title', item.title));
       if (item.subtitle && item.subtitle !== item.title) {
         row.appendChild(el('span', 'sub', item.subtitle));
@@ -163,51 +175,77 @@ backdrop.addEventListener('click', (e) => {
 // tag through the normal path (the plugin's focus-loss drain is the backstop).
 window.addEventListener('blur', () => close());
 
+const tabIdOf = (rowId: string): number | null =>
+  rowId.startsWith('tab:') ? Number(rowId.slice(4)) : null;
+
 /**
- * Voice session: badge every row (empty-state order = assignment order) and
- * hand the background the spoken entries plus the row → dispatch map. Skipped
- * entirely when the alphabet isn't loaded — a keyboard-only palette must not
- * set the exclusive tag.
+ * Assign each row's codeword and, if voice is connected, publish the spoken
+ * entries + row→dispatch map so the exclusive-tag voice half can resolve them.
+ *
+ * Tabs scope CONVERGES on the stable strip marks: a row's codeword is its
+ * tab's mark letter (badge matches the strip), and the spoken form is that
+ * mark's alphabet-overlay words. With no alphabet (voice off) the marks still
+ * badge the rows — keyboard-usable — but nothing is published, so no exclusive
+ * tag is set. Full palette keeps ephemeral word codewords.
  */
-function publishVoiceRows(alphabet: string[]): void {
-  const all = [...tabItems, ...commandItems];
+function assignAndPublish(alphabet: string[]): void {
   voiceAlphabet = alphabet;
-  codewords = assignCodewords(all.map((r) => r.id), alphabet);
+  const all = [...tabItems, ...commandItems];
+  if (scope === 'tabs') {
+    codewords = new Map();
+    for (const item of tabItems) {
+      const id = tabIdOf(item.id);
+      const mark = id != null ? markMap[id] : undefined;
+      if (mark) codewords.set(item.id, mark);
+    }
+  } else {
+    codewords = assignCodewords(all.map((r) => r.id), alphabet);
+  }
   if (codewords.size === 0) return;
+
   const entries: PaletteVoiceEntry[] = [];
   const rows: PaletteVoiceRow[] = [];
   for (const item of all) {
-    const spoken = codewords.get(item.id);
-    if (!spoken) continue;
-    entries.push({ spoken, row_id: item.id });
+    const cw = codewords.get(item.id);
+    if (!cw) continue;
+    // Tabs: cw is a mark letter → spoken is its overlay words (empty when no
+    // alphabet). Full palette: cw is already the spoken word.
+    const spoken = scope === 'tabs' ? markToSpokenWords(cw, alphabet) : cw;
+    if (spoken) entries.push({ spoken, row_id: item.id });
     rows.push({ row_id: item.id, dispatch: item.dispatch });
   }
+  // No spoken entries (voice off) → don't open a voice session / exclusive tag.
+  if (entries.length === 0) return;
   chrome.runtime.sendMessage({ type: 'PALETTE_PUBLISH', entries, rows } as Message).catch(() => {});
 }
 
 async function init(): Promise<void> {
   if (scope === 'tabs') queryInput.placeholder = 'Search tabs…';
   queryInput.focus();
-  const [tabs, mru, keymap, activeId, stored, sync] = await Promise.all([
+  const [tabs, mru, keymap, activeId, stored, sync, marks] = await Promise.all([
     chrome.tabs.query({}).catch(() => [] as chrome.tabs.Tab[]),
     loadMru().catch(() => [] as number[]),
     loadKeymap().catch(() => []),
     currentTabId(),
     chrome.storage.local.get('alphabet').catch(() => ({} as Record<string, unknown>)),
     chrome.storage.sync.get('badgeDisplayMode').catch(() => ({} as Record<string, unknown>)),
+    loadMarkerMap().catch(() => ({} as MarkerMap)),
   ]);
   if (typeof sync.badgeDisplayMode === 'string') {
     displayMode = sync.badgeDisplayMode as BadgeDisplayMode;
   }
+  markMap = marks;
   const open: PaletteTab[] = tabs
     .filter((t): t is chrome.tabs.Tab & { id: number } => typeof t.id === 'number')
-    .map((t) => ({ tabId: t.id, title: t.title ?? '', url: t.url ?? '' }));
+    // Strip the marker decoration from titles — the mark shows as the row's
+    // badge, not baked into the title text.
+    .map((t) => ({ tabId: t.id, title: stripTabMarker(t.title ?? ''), url: t.url ?? '' }));
   tabItems = buildTabItems(open, mru, activeId);
   // Tabs-only scope drops the command source entirely — same overlay, one
   // source (the Vomnibar "scoped by trigger key" pattern).
   commandItems = scope === 'tabs' ? [] : buildCommandItems(COMMAND_CATALOG, keymap);
   const alphabet = Array.isArray(stored.alphabet) ? (stored.alphabet as string[]) : [];
-  publishVoiceRows(alphabet);
+  assignAndPublish(alphabet);
   refilter();
 }
 
