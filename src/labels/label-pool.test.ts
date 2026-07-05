@@ -16,6 +16,7 @@ import {
   releaseLabels,
   releaseFrame,
   getFrameForLabel,
+  sweepDeadStacks,
   alphabetsEqual,
 } from './label-pool';
 import { LETTERS_26 } from './words';
@@ -441,6 +442,57 @@ describe('label-pool', () => {
 
     it('returns true for two empty arrays', () => {
       expect(alphabetsEqual([], [])).toBe(true);
+    });
+  });
+
+  describe('sweepDeadStacks (long-session audit finding 6)', () => {
+    it('clears stacks for dead tabs, leaves live tabs untouched', async () => {
+      const liveTab = nextTabId();
+      const deadTab = nextTabId();
+      const liveClaims = await claimLabels(liveTab, 0, 3);
+      await confirmLabels(liveTab, 0, liveClaims);
+      await claimLabels(deadTab, 0, 3);
+
+      const swept = await sweepDeadStacks(async () => new Set([liveTab]));
+
+      // The module-level stack cache carries prior tests' tabs (each test
+      // claims under a fresh id), so assert membership, not equality.
+      expect(swept).toContain(deadTab);
+      expect(swept).not.toContain(liveTab);
+      // Live tab's assignments survive.
+      for (const label of liveClaims) {
+        expect(await getFrameForLabel(liveTab, label)).toBe(0);
+      }
+      // Dead tab's stack is gone — a hypothetical re-claim starts from the
+      // head of a fresh pool (nothing held by the swept assignments).
+      const reClaim = await claimLabels(deadTab, 0, 3);
+      expect(reClaim).toEqual(LP.slice(0, 3));
+    });
+
+    it('snapshots tracked stacks before querying live tabs (mid-sweep tab creation is safe)', async () => {
+      const oldDead = nextTabId();
+      await claimLabels(oldDead, 0, 2);
+      let newTab = -1;
+
+      const swept = await sweepDeadStacks(async () => {
+        // A tab born (and claiming) between the snapshot and the query —
+        // its stack must not be reaped even though it's absent from the
+        // alive set built below.
+        newTab = nextTabId();
+        await claimLabels(newTab, 0, 2);
+        return new Set<number>();
+      });
+
+      expect(swept).toContain(oldDead);
+      expect(swept).not.toContain(newTab);
+      const next = await claimLabels(newTab, 0, 1);
+      expect(next).toEqual([LP[2]]); // pool continued — stack survived
+    });
+
+    it('does not sweep a tracked tab reported alive', async () => {
+      const tab = nextTabId();
+      await claimLabels(tab, 0, 2);
+      expect(await sweepDeadStacks(async () => new Set([tab]))).not.toContain(tab);
     });
   });
 });

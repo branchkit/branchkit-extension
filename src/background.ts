@@ -9,7 +9,7 @@
  */
 
 import { Message, ScannedElement, HintVisibility, DispatchResult, GrammarBatchRequest, GrammarBatchResponse, TabAction } from './types';
-import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearStack, clearAllStacks, alphabetsEqual } from './labels/label-pool';
+import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearStack, clearAllStacks, sweepDeadStacks, alphabetsEqual } from './labels/label-pool';
 import { setAlphabet, tokenToSpokenCodeword, spokenCodewordToToken } from './labels/words';
 import { buildCommandContributions } from './command-catalog';
 import { rememberCodewords, clearCodewordMemory, recallCodewords } from './labels/codeword-memory';
@@ -1072,7 +1072,9 @@ function purgeTab(tabId: number): void {
 // The Port carries no messages — its lifetime IS the signal. Service worker
 // idle-termination is a known small leak window (frames that die while the
 // SW is asleep don't get cleaned by either path); the browser plugin's TTL
-// backstop catches its share, the label pool's gap is accepted for v1.
+// backstop catches its share. The label pool's dead-TAB share is reclaimed
+// by the periodic sweep below (sweepDeadTabState); dead FRAMES inside a
+// still-open tab remain the accepted v1 gap.
 const LIVENESS_PORT_NAME = 'frame-liveness';
 
 chrome.runtime.onConnect.addListener((port) => {
@@ -1307,6 +1309,35 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   // Drop the closed tab's words from the voice collection.
   scheduleTabPublish();
 });
+
+// Dead-tab label-stack sweep (long-session audit finding 6). tabs.onRemoved
+// and the liveness Port's onDisconnect both miss when this background is
+// asleep at the moment a tab dies. Chrome heals on the next SW recycle
+// (init → clearAllStacks), but the persistent Firefox background can run
+// for days — missed reclaims accumulate until the pool exhausts, claims
+// return empty, and badges silently stop painting ("restart fixes it").
+// Level-triggered reclaim: every 15 min, purge tracked stacks whose tab no
+// longer exists (mirrors purgeTab: stack + codeword memory). setInterval,
+// not chrome.alarms, on purpose — the leak only matters while THIS
+// background instance stays alive; a fresh instance heals in init.
+const DEAD_TAB_SWEEP_MS = 15 * 60_000;
+async function sweepDeadTabState(): Promise<void> {
+  try {
+    const swept = await sweepDeadStacks(async () => {
+      const tabs = await chrome.tabs.query({});
+      const alive = new Set<number>();
+      for (const t of tabs) if (typeof t.id === 'number') alive.add(t.id);
+      return alive;
+    });
+    for (const tabId of swept) clearCodewordMemory(tabId).catch(() => {});
+    if (swept.length > 0) {
+      console.info('[BranchKit] dead-tab sweep reclaimed label stacks for tabs:', swept.join(','));
+    }
+  } catch {
+    // tabs API unavailable (shutdown) — next tick or next init covers it.
+  }
+}
+setInterval(sweepDeadTabState, DEAD_TAB_SWEEP_MS);
 
 // --- Startup ---
 

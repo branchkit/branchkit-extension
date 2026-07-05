@@ -417,6 +417,47 @@ export async function clearAllStacks(): Promise<void> {
 }
 
 /**
+ * Release every per-tab stack whose tab no longer exists. The liveness
+ * Port's onDisconnect and tabs.onRemoved are the primary reclaims, but
+ * both are lost when the background is asleep at the moment a tab dies.
+ * Chrome re-heals via clearAllStacks() on every SW recycle; the persistent
+ * Firefox background runs init once per BROWSER session, so missed
+ * disconnects accumulate over days of uptime until the pool exhausts —
+ * claims return empty and badges silently stop painting (2026-07
+ * long-session audit, finding 6).
+ *
+ * Ordering matters: the tracked-stack snapshot is taken BEFORE the caller's
+ * live-tab query runs (`getAliveTabIds` is invoked after the snapshot), so
+ * a tab created mid-sweep can never have its fresh stack reaped — any stack
+ * in the snapshot belongs to a tab that predates the query, and if that tab
+ * is alive the query sees it. Returns the swept tab ids so the caller can
+ * purge sibling per-tab state (codeword memory) for the same tabs.
+ */
+export async function sweepDeadStacks(
+  getAliveTabIds: () => Promise<ReadonlySet<number>>,
+): Promise<number[]> {
+  const tracked = new Set<number>(stackCache.keys());
+  try {
+    const all = await chrome.storage.session.get();
+    for (const k of Object.keys(all)) {
+      if (!k.startsWith('labelStack:')) continue;
+      const id = Number(k.slice('labelStack:'.length));
+      if (Number.isFinite(id)) tracked.add(id);
+    }
+  } catch {
+    // storage gone mid-shutdown — the cache half still sweeps.
+  }
+  const alive = await getAliveTabIds();
+  const swept: number[] = [];
+  for (const tabId of tracked) {
+    if (alive.has(tabId)) continue;
+    await clearStack(tabId);
+    swept.push(tabId);
+  }
+  return swept;
+}
+
+/**
  * Strict order-preserving equality on two alphabet arrays. Used by
  * `storeAlphabet` to short-circuit a redundant alphabet write: voice re-pushes
  * the alphabet on a hot path (almost all identical), and each distinct write
