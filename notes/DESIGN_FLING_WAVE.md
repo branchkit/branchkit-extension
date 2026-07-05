@@ -3076,3 +3076,44 @@ the immediate re-attach now provides.
 
 VERIFY (user): reload + close/reopen + fling; the Doe/email columns
 should be fully badged at rest, no bare links.
+
+## Round 35 — row-coattail on strong-key pins (de652e8, user-approved
+## partial reversal of round 29)
+
+branchkit4.mov (34e build) measured what remained: FIRST PAINT AT RANGO
+PARITY (rows ~2.6s → all badge types translucent at ~3.0-3.2s =
+rows+0.4-0.6s) and link badges riding stone-stable with unchanged
+letters — but at QuickBase's second render (~3.5s) the checkbox/pencil/
+eye badges died and the action column sat BARE ~3.7→5.5s before
+repainting translucent with new letters. Once per fling, 3 badges per
+row, plus pool churn from ~500 letters cycling.
+
+FIX — the round-26 coattail rebuilt on today's foundation (strong-key
+rides, not the deleted fp/reservation stack):
+- attachDiscovered is now TWO passes. Pass 1 runs the strong-key tier;
+  each ride records oldRow→newRow in a per-pass rowPairs map
+  (tryRebindByStrongKey now returns prevElement — captured before
+  rebindWrapper re-anchors). Two passes because document order puts the
+  checkbox BEFORE the row's first link (round 26's ordering lesson).
+- Pass 2: tryRebindByCoattail — a deferred ref whose row is pinned
+  inherits the wrapper at the same structural child-index path in the
+  predecessor row (tag-guarded). Badge, letter, grammar entry survive.
+- 34e's visual invariant carries over: a connected-predecessor steal
+  returns `orphaned` and the caller re-attaches it fresh in-pass
+  (scanSingle-gated).
+
+Fixture: rebind_coattail 330/fling alongside rebind_key 398; recovery
+446ms; unit test pins link-pin + button-ride + letter survival; 1025
+tests; wedge/dual-CS/orphan/key-ownership gates green.
+
+Risk ledger vs the round-29 deletion: no reservations, no deferral, no
+fingerprint index — the pin is the SAME ride the video shows working,
+and the transfer is immediate (discovery-time), so the stranding class
+(28/29) is structurally absent. The mispair exposure is bounded by the
+pin (a wrong coattail requires a wrong key ride first) and self-heals
+via rediscovery like any wrong steal.
+
+VERIFY (user): reload + close/reopen + fling. Expected: checkbox/pencil/
+eye badges HOLD through the second render — same letters, no bare
+window. The full Rango-stability profile, plus letter continuity Rango
+doesn't have.
