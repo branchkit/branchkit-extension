@@ -360,6 +360,9 @@ export class HintBadge {
   // Tests: refineImmediately makes the constructor call refine() inline
   // so observer state is asserted right after `new HintBadge(...)`.
   private _refined: boolean = false;
+  // Whether THIS badge holds a container-resize refcount on anchorParent.
+  // Guards the shared-refcount untracks in retarget()/remove().
+  private _containerTracked: boolean = false;
   // Has remove() been called? Refinement on a removed badge would register
   // observers on a torn-down host — wasted work and a memory leak. The
   // scheduler can't atomically pull a badge out of its pending set during
@@ -472,6 +475,7 @@ export class HintBadge {
     if (this._refined || this._removed) return;
     this._refined = true;
     trackContainerResize(this.anchorParent);
+    this._containerTracked = true;
     trackTargetMutations(this.target);
     // Stacking: place the badge in its target's natural stacking context so
     // modals/dropdowns with a higher-z context still cover it. Deferred here
@@ -709,7 +713,13 @@ export class HintBadge {
    * routinely mis-paint.
    */
   retarget(newEl: Element): void {
-    untrackContainerResize(this.anchorParent);
+    // Only release a container refcount this badge actually holds. The
+    // container-resize tracker is a SHARED refcount (many badges per
+    // anchorParent): an unconditional untrack on a not-yet-refined badge
+    // decrements a sibling's count and can unobserve a container that
+    // surviving badges still depend on — silently killing their resize
+    // tracking (2026-07 long-session audit, finding 8).
+    if (this._containerTracked) untrackContainerResize(this.anchorParent);
     untrackTargetMutations(this.target);
     // The accelerator is bound to the OLD target's scroller; drop it before the
     // swap and re-detect for the new node below.
@@ -730,6 +740,7 @@ export class HintBadge {
     }
 
     trackContainerResize(this.anchorParent);
+    this._containerTracked = true;
     trackTargetMutations(this.target);
     // Recompute stacking for the new target's container (cached per
     // anchorParent). The host-attribute defender allows style writes that
@@ -996,10 +1007,16 @@ export class HintBadge {
   remove(): void {
     this._removed = true;
     unscheduleRefine(this);
-    // Untracks are no-ops when the corresponding track* was never called
-    // (refine() may not have run yet), so it's safe to call them
-    // unconditionally — they just clean up whichever subscriptions exist.
-    untrackContainerResize(this.anchorParent);
+    // untrackTargetMutations/untrackHostAttributes are keyed 1:1 and no-op
+    // when never tracked. untrackContainerResize is NOT: it's a shared
+    // refcount, and untracking a container this badge never tracked
+    // (refine() pending — routine for badges churned within the swap
+    // window) underflows a sibling badge's count and unobserves a
+    // container survivors still track (audit finding 8).
+    if (this._containerTracked) {
+      untrackContainerResize(this.anchorParent);
+      this._containerTracked = false;
+    }
     untrackTargetMutations(this.target);
     untrackHostAttributes(this.host);
     unregisterReconcile(this);

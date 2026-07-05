@@ -213,6 +213,71 @@ describe('HintBadge.retarget (reconcile mode)', () => {
   });
 });
 
+describe('container-resize refcount guard (2026-07 audit finding 8)', () => {
+  // The container-resize tracker is a SHARED refcount (many badges per
+  // anchorParent). A badge whose deferred refine() never ran holds no
+  // refcount — its remove()/retarget() must not untrack, or it drains a
+  // sibling's count and unobserves a container survivors still track.
+  const label = { letter: 'a', words: ['arch'], isSingle: true };
+
+  afterEach(() => {
+    containerTracker.reset();
+    targetTracker.reset();
+    hostTracker.reset();
+  });
+
+  it('removing a never-refined badge does not steal a refined sibling\'s refcount', () => {
+    const root = mount('<div id="c"><button id="b1">x</button><button id="b2">y</button></div>');
+    const b1 = root.querySelector('#b1')!;
+    const b2 = root.querySelector('#b2')!;
+    const container = resolveContainer(b1);
+    expect(resolveContainer(b2)).toBe(container); // same anchorParent
+
+    const refined = new HintBadge(b1, label, 'button', 'word'); // refines inline
+    expect(containerTracker.getRefCount(container)).toBe(1);
+
+    // Leave immediate mode OFF for the rest of the test — flipping it back
+    // on drains the queue and refines the badge we need unrefined.
+    __refineScheduler.setImmediate(false);
+    const unrefined = new HintBadge(b2, label, 'button', 'word');
+    expect(containerTracker.getRefCount(container)).toBe(1); // never tracked
+
+    unrefined.remove(); // pre-fix: underflowed to 0 and unobserved the container
+    expect(containerTracker.getRefCount(container)).toBe(1);
+
+    refined.remove();
+    expect(containerTracker.getRefCount(container)).toBe(0);
+  });
+
+  it('retargeting a never-refined badge tracks the new container without draining the old', () => {
+    const root = mount(
+      '<div id="c1"><button id="b1">x</button><button id="b2">y</button></div>' +
+      '<div id="c2"><button id="b3">z</button></div>'
+    );
+    const b1 = root.querySelector('#b1')!;
+    const b2 = root.querySelector('#b2')!;
+    const b3 = root.querySelector('#b3')!;
+    const c1 = resolveContainer(b1);
+    const c2 = resolveContainer(b3);
+
+    const refined = new HintBadge(b1, label, 'button', 'word');
+    __refineScheduler.setImmediate(false); // stays off — see sibling test
+    const unrefined = new HintBadge(b2, label, 'button', 'word');
+    expect(containerTracker.getRefCount(c1)).toBe(1);
+
+    unrefined.retarget(b3); // pre-fix: drained c1's count on the way out
+    expect(containerTracker.getRefCount(c1)).toBe(1);
+    expect(containerTracker.getRefCount(c2)).toBe(1); // retarget tracks the new one
+
+    unrefined.remove(); // now holds a real refcount on c2 — released once
+    expect(containerTracker.getRefCount(c2)).toBe(0);
+    expect(containerTracker.getRefCount(c1)).toBe(1);
+
+    refined.remove();
+    expect(containerTracker.getRefCount(c1)).toBe(0);
+  });
+});
+
 describe('HintBadge.reconcileRead (positioning math)', () => {
   // The crux of the pure-JS reconcile model: convert the live target rect +
   // baked offset into the host's transform coords. Anchoring is per-target —
