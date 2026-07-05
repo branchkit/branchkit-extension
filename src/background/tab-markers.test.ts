@@ -97,7 +97,7 @@ describe('assignMarker / releaseMarker', () => {
 describe('title decoration round-trip', () => {
   it('decorate then strip recovers the bare title', () => {
     const decorated = decorateTitle('a', 'GitHub — pulls');
-    expect(decorated).toBe('a| GitHub — pulls');
+    expect(decorated).toBe('[a] GitHub — pulls');
     expect(hasTabMarker(decorated)).toBe(true);
     expect(stripTabMarker(decorated)).toBe('GitHub — pulls');
   });

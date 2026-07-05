@@ -2,7 +2,7 @@
  * BranchKit Browser — tab title decorator (content side, Phase 1 of
  * notes/DESIGN_TAB_MARKERS.md).
  *
- * Writes this tab's marker letters as a `document.title` prefix ("a| GitHub")
+ * Writes this tab's marker letters as a `document.title` prefix ("[a] GitHub")
  * and keeps it applied as the page rewrites its own title. Top frame only —
  * `document.title` is a per-document, top-level concern.
  *
@@ -37,7 +37,7 @@ let lastDecorated = lastUndecorated;
 function writeFromBare(): void {
   lastUndecorated = stripTabMarker(document.title);
 
-  // Empty title (PDFs, pre-load): leave it alone — a bare "a| " prefix on an
+  // Empty title (PDFs, pre-load): leave it alone — a bare "[a] " prefix on an
   // empty title reads as junk in the tab.
   if (lastUndecorated === '') {
     lastDecorated = document.title;
