@@ -254,10 +254,12 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   { id: 'last_tab', label: 'Last tab', group: 'Tabs', mappable: true, params: [],
     description: 'Switch to the rightmost tab in the current window.',
     voice: [{ pattern: 'last tab' }] },
+  // Positional "tab {number}" voice was retired 2026-07-05: voice tab-
+  // addressing is markers-only (one language — see DESIGN_TAB_MARKERS.md),
+  // and "tab" is now the tab-palette trigger. Kept keyboard-mappable.
   { id: 'goto_tab', label: 'Go to tab N', group: 'Tabs', mappable: true,
     description: 'Switch to the Nth tab in the current window (1-based, clamped).',
-    params: [{ name: 'index', type: 'number', min: 1, default: '1' }],
-    voice: [{ pattern: 'tab {number}', params: { index: '{number}' } }] },
+    params: [{ name: 'index', type: 'number', min: 1, default: '1' }] },
   { id: 'move_tab_left', label: 'Move tab left', group: 'Tabs', mappable: true, params: [],
     description: 'Move the current tab one position to the left.',
     voice: [{ pattern: 'move tab left' }] },
@@ -286,6 +288,12 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   { id: 'toggle_palette', label: 'Command palette', group: 'Help', mappable: true, params: [],
     description: 'Search open tabs and every command in one overlay.',
     voice: [{ pattern: 'palette' }] },
+  // The same overlay scoped to open tabs — the keyboard + voice way to switch
+  // tabs by codeword or fuzzy title (see notes/DESIGN_TAB_MARKERS.md). Ctrl+T
+  // (free on macOS — the browser's new-tab is Cmd+T); voice "tab".
+  { id: 'toggle_tab_palette', label: 'Tab palette', group: 'Tabs', mappable: true, params: [],
+    description: 'Switch tabs — search by title or codeword in the palette overlay.',
+    voice: [{ pattern: 'tab' }] },
   // Palette voice selection (voice half of Layer 2): every palette row shows
   // an alphabet codeword badge; the spoken codeword resolves to the row_id
   // through the browser_palette collection (as_named_entities, value=row_id),
@@ -388,4 +396,5 @@ export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   { keys: 'shift+Comma', command: 'move_tab_left' }, // Shift+, = < (Vimium <<)
   { keys: 'shift+Period', command: 'move_tab_right' }, // Shift+. = > (Vimium >>)
   { keys: 'ctrl+KeyK', command: 'toggle_palette' }, // Ctrl+K — the universal palette chord
+  { keys: 'ctrl+KeyT', command: 'toggle_tab_palette' }, // Ctrl+T — tabs-only palette (macOS: browser new-tab is Cmd+T)
 ];

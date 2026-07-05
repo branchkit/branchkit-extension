@@ -24,7 +24,11 @@ export function isPaletteOpen(): boolean {
   return frame !== null;
 }
 
-export function openPalette(): void {
+/** Palette scope: the full command station, or tabs only (Ctrl+T / voice
+ *  "tab"). Tabs-only reuses the same overlay + voice-half, just one source. */
+export type PaletteScope = 'all' | 'tabs';
+
+export function openPalette(scope: PaletteScope = 'all'): void {
   if (frame) return;
   prevFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const f = document.createElement('iframe');
@@ -32,7 +36,8 @@ export function openPalette(): void {
   // Tag as BranchKit's own UI so the page MutationObserver skips it (isOwnMutation).
   f.setAttribute('data-branchkit-hint', '');
   f.setAttribute('allowtransparency', 'true');
-  f.src = chrome.runtime.getURL('palette.html');
+  // Scope rides the URL so palette-page.ts can read it before first paint.
+  f.src = chrome.runtime.getURL(`palette.html${scope === 'tabs' ? '?scope=tabs' : ''}`);
   f.style.cssText =
     `position: fixed; inset: 0; width: 100vw; height: 100vh; border: 0; ` +
     `margin: 0; padding: 0; z-index: ${Z_INDEX}; background: transparent; ` +
@@ -64,7 +69,7 @@ export function closePalette(): void {
   prevFocus = null;
 }
 
-export function togglePalette(): void {
+export function togglePalette(scope: PaletteScope = 'all'): void {
   if (frame) closePalette();
-  else openPalette();
+  else openPalette(scope);
 }

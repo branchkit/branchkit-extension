@@ -200,10 +200,11 @@ export type Message =
   // not-connected note. Response: { connected: boolean }.
   | { type: 'GET_VOICE_STATUS' }
   // --- Command palette (notes/DESIGN_TAB_NAVIGATION.md, Layer 2) ---
-  // Content (subframe) → background. A toggle_palette keybind fired in a frame
-  // that can't host the overlay; background relays it to the top frame as a
-  // PALETTE_COMMAND so the palette always opens over the whole page.
-  | { type: 'PALETTE_OPEN' }
+  // Content (subframe) → background. A palette keybind fired in a frame that
+  // can't host the overlay; background relays it to the top frame as a
+  // PALETTE_COMMAND so the palette always opens over the whole page. `command`
+  // is which palette (full vs tabs-only); defaults to toggle_palette.
+  | { type: 'PALETTE_OPEN'; command?: 'toggle_palette' | 'toggle_tab_palette' }
   // Palette page (extension iframe) → background. A selection or an explicit
   // close. Background closes the overlay in the sender's tab first, then
   // executes: switch_tab directly, command via PALETTE_COMMAND to the tab.

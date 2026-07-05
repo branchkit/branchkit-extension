@@ -1041,13 +1041,17 @@ dispatcher.register('toggle_help', () => {
 // Command palette (notes/DESIGN_TAB_NAVIGATION.md, Layer 2). The overlay
 // iframe always lives in the top frame; a bind fired inside a subframe relays
 // up through the background (PALETTE_OPEN → PALETTE_COMMAND at frame 0).
-dispatcher.register('toggle_palette', () => {
+// `toggle_tab_palette` is the same overlay scoped to open tabs (Ctrl+T /
+// voice "tab").
+function openPaletteFromCommand(command: 'toggle_palette' | 'toggle_tab_palette'): void {
   if (window !== window.top) {
-    chrome.runtime.sendMessage({ type: 'PALETTE_OPEN' } as Message).catch(() => {});
+    chrome.runtime.sendMessage({ type: 'PALETTE_OPEN', command } as Message).catch(() => {});
     return;
   }
-  togglePalette();
-});
+  togglePalette(command === 'toggle_tab_palette' ? 'tabs' : 'all');
+}
+dispatcher.register('toggle_palette', () => openPaletteFromCommand('toggle_palette'));
+dispatcher.register('toggle_tab_palette', () => openPaletteFromCommand('toggle_tab_palette'));
 
 // Tab verbs — forward to the background SW's handleTabAction (content scripts
 // can't touch chrome.tabs). These registrations serve the keyboard path only;

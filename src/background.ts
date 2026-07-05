@@ -1048,11 +1048,12 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   }
 
   if (message.type === 'PALETTE_OPEN') {
-    // A toggle_palette bind fired in a subframe; the overlay must live in the
-    // top frame. Route it there as a PALETTE_COMMAND through the dispatcher.
+    // A palette bind fired in a subframe; the overlay must live in the top
+    // frame. Route it there as a PALETTE_COMMAND through the dispatcher.
     const tabId = _sender.tab?.id;
     if (typeof tabId === 'number') {
-      chrome.tabs.sendMessage(tabId, { type: 'PALETTE_COMMAND', action: 'toggle_palette' }, { frameId: 0 })
+      const action = message.command === 'toggle_tab_palette' ? 'toggle_tab_palette' : 'toggle_palette';
+      chrome.tabs.sendMessage(tabId, { type: 'PALETTE_COMMAND', action }, { frameId: 0 })
         .catch(() => {});
     }
     return false;

@@ -30,6 +30,10 @@ const queryInput = document.getElementById('query') as HTMLInputElement;
 const listEl = document.getElementById('list') as HTMLDivElement;
 const backdrop = document.getElementById('backdrop') as HTMLDivElement;
 
+// Scope from the host URL: 'tabs' shows only the open-tabs source (Ctrl+T /
+// voice "tab"); anything else is the full command station.
+const scope = new URLSearchParams(location.search).get('scope') === 'tabs' ? 'tabs' : 'all';
+
 let tabItems: PaletteItem[] = [];
 let commandItems: PaletteItem[] = [];
 /** Flat render order of the current sections — the selection index space. */
@@ -141,8 +145,8 @@ window.addEventListener('keydown', (e) => {
   } else if (e.key === 'Enter') {
     e.preventDefault();
     dispatchItem(flat[selected]);
-  } else if ((e.ctrlKey || e.metaKey) && e.code === 'KeyK') {
-    // The opening chord toggles closed — same key, same result.
+  } else if ((e.ctrlKey || e.metaKey) && (e.code === 'KeyK' || e.code === 'KeyT')) {
+    // Either opening chord (Ctrl+K full, Ctrl+T tabs) toggles closed.
     e.preventDefault();
     close();
   }
@@ -182,6 +186,7 @@ function publishVoiceRows(alphabet: string[]): void {
 }
 
 async function init(): Promise<void> {
+  if (scope === 'tabs') queryInput.placeholder = 'Search tabs…';
   queryInput.focus();
   const [tabs, mru, keymap, activeId, stored, sync] = await Promise.all([
     chrome.tabs.query({}).catch(() => [] as chrome.tabs.Tab[]),
@@ -198,7 +203,9 @@ async function init(): Promise<void> {
     .filter((t): t is chrome.tabs.Tab & { id: number } => typeof t.id === 'number')
     .map((t) => ({ tabId: t.id, title: t.title ?? '', url: t.url ?? '' }));
   tabItems = buildTabItems(open, mru, activeId);
-  commandItems = buildCommandItems(COMMAND_CATALOG, keymap);
+  // Tabs-only scope drops the command source entirely — same overlay, one
+  // source (the Vomnibar "scoped by trigger key" pattern).
+  commandItems = scope === 'tabs' ? [] : buildCommandItems(COMMAND_CATALOG, keymap);
   const alphabet = Array.isArray(stored.alphabet) ? (stored.alphabet as string[]) : [];
   publishVoiceRows(alphabet);
   refilter();

@@ -21,7 +21,7 @@ const REGISTERED_ACTIONS = [
   'next_tab', 'previous_tab', 'first_tab', 'last_tab', 'goto_tab', 'last_active_tab',
   'new_tab', 'close_tab', 'restore_tab', 'duplicate_tab', 'pin_tab', 'mute_tab',
   'move_tab_left', 'move_tab_right',
-  'toggle_help', 'toggle_palette',
+  'toggle_help', 'toggle_palette', 'toggle_tab_palette',
 ] as const;
 
 // Voice-only commands dispatched entirely in the background (SSE intercept),
@@ -192,6 +192,7 @@ describe('default keymap', () => {
       { keys: 'shift+Comma', command: 'move_tab_left' },
       { keys: 'shift+Period', command: 'move_tab_right' },
       { keys: 'ctrl+KeyK', command: 'toggle_palette' },
+      { keys: 'ctrl+KeyT', command: 'toggle_tab_palette' },
     ]);
   });
 });

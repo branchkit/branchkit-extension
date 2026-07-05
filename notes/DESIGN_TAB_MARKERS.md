@@ -8,8 +8,45 @@ connection; disconnect strips every mark, reconnect (once the alphabet lands)
 repaints.
 **Goal:** Make every open tab addressable by voice *without* opening the
 palette — a stable spoken codeword visibly attached to each tab, readable
-straight off the tab strip. Say "tab", the strip is your menu; say a tab's
-codeword, you're there.
+straight off the tab strip.
+
+## Phase 2 REFRAMED (2026-07-05): a tab-scoped palette, not a plugin mode
+
+The original Phase 2 below (Option C — a plugin-side exclusive `tab_mode` tag
++ `browser_tab_marks` collection + contributed trigger/select commands) is
+**superseded**. Instead, **"tab" opens the command palette scoped to open
+tabs** — both by keyboard (**Ctrl+T**; free on macOS since the browser's
+new-tab is Cmd+T) and by voice ("tab"). This reuses the entire palette (the
+overlay, fuzzy filter, codeword badges, keyboard nav, dispatch) and its
+voice-half (which already holds an exclusive tag → the same engine-narrowing
+accuracy Option C wanted). Net: almost no new code, and NO new plugin
+machinery. Rationale and the keyboard/voice/HUD discussion are in this
+session's history; the short version:
+- The Discovery HUD populates generically from any capture, so discovery
+  was never the reason to build the dependent/plugin structure.
+- A tab set is small and eyeballable — one-shot "see all, pick one" beats
+  progressive per-word narrowing, which only pays at hint scale.
+- Opening the palette is a plain command match that does NOT fire the HUD
+  (the exclusive tag is set out-of-band via the extension's publish), so the
+  palette and HUD coexist without doubling up.
+
+**Landed (increment 1, ext):** palette `scope` param (`all` | `tabs`);
+`toggle_tab_palette` command (Ctrl+T + voice "tab") opens the tabs-only
+overlay; `goto_tab`'s "tab {number}" voice retired (kept keyboard-mappable)
+so voice tab-addressing is one language.
+
+**Next (increment 2):** converge the palette's tab rows onto the STABLE strip
+marks (palette open-question #1) so the strip letter and the palette
+quick-select letter agree; make marks **letter-first** (the letter is the
+extension-owned identity like hint letters, voice word is the overlay) so
+they work for keyboard standalone; then **drop the connection-gating** —
+keyboard makes marks useful without voice, so gate on the toggle alone.
+
+Everything below is the original Option C design, kept for history.
+
+---
+
+Say "tab", the strip is your menu; say a tab's codeword, you're there.
 
 ## The constraint that shapes everything
 
