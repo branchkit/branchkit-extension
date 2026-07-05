@@ -65,10 +65,11 @@ yet). To match how every other command works — pre-published vocabulary, so
 one-breath and paused both resolve — each tab's mark is now published as its
 spoken word into the always-live `browser_tabs` collection (with priority: a
 mark claims its word ahead of any colliding title word, and publishes even for
-a titleless tab). `switch_to_tab` gains a second spoken form `tab
-{browser_tabs}` alongside `switch to {browser_tabs}`. Net:
-- **"tab huge"** (one breath) → the flat, pre-published path resolves it
-  directly, no overlay. Also **"switch to huge"** works (same collection).
+a titleless tab). `switch_to_tab`'s spoken form is now `tab {browser_tabs}`
+(the earlier `switch to {browser_tabs}` was dropped 2026-07-05 — one verb for
+tabs). `{browser_tabs}` matches both a mark and a title/site word, so:
+- **"tab huge"** (mark) and **"tab github"** (title word) both resolve in one
+  breath via the flat, pre-published path — no overlay.
 - **"tab"** (alone) → still opens the palette (paused/browse path).
 The two coexist by the standard verb-vs-bare-verb disambiguation (like the old
 "tab {number}"). This makes the palette the *browse* affordance, not the only

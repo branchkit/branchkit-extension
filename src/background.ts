@@ -124,7 +124,7 @@ function onSSEConnected(): void {
   if (bgState.cachedActiveTabId != null) {
     republishActiveTab(bgState.cachedActiveTabId, 'sse_reconnect');
   }
-  // Seed the open-tab voice collection ("switch to <tab>"). The publish cache
+  // Seed the open-tab voice collection ("tab <codeword>"). The publish cache
   // is cleared first: a reconnected plugin may have restarted and lost its
   // per-connection tab entries, so the unchanged-set guard must not suppress
   // this re-seed.
@@ -533,7 +533,7 @@ async function handlePaletteAction(
   }
 }
 
-// Voice "switch to <tab>": the matched collection entry's tab_id arrives as an
+// Voice "tab <codeword>": the matched collection entry's tab_id arrives as an
 // action param (the browser_tabs collection's value_field). Same focus-window-
 // then-activate dispatch as handleTabAction's last_active branch — cross-window
 // by design. A stale id (tab closed since the last publish) just refreshes the
@@ -848,7 +848,7 @@ function handleSSEEvent(data: any): void {
     return;
   }
 
-  // "switch to <tab>" — like the tab verbs, handled here so it works
+  // "tab <codeword>" — like the tab verbs, handled here so it works
   // regardless of the active page's content-script state.
   if (data.action === 'switch_to_tab') {
     const id = parseInt(data.params?.tab_id ?? '', 10);

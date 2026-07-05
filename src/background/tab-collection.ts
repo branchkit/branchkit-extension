@@ -3,9 +3,10 @@
  * notes/DESIGN_TAB_NAVIGATION.md).
  *
  * Publishes the open-tab set to the browser plugin as spoken-word entries so
- * "switch to <tab>" resolves through the matcher's collection capture — the
- * same machinery as the apps list ("open <app>"). Voice-only: with no
- * BranchKit host connected nothing publishes and the feature is simply absent.
+ * "tab <codeword>" resolves through the matcher's collection capture — the
+ * same machinery as the apps list ("open <app>"). Entries are each tab's
+ * stable mark (priority) plus distinctive title/site words. Voice-only: with
+ * no BranchKit host connected nothing publishes and the feature is absent.
  *
  * Word selection honors the three design cares:
  *  - Lexicon gap: the recognition model silently drops words missing from its
