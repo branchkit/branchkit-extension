@@ -99,15 +99,14 @@ const HINT_CATEGORIES = ['link', 'button', 'input', 'tab', 'edit', 'view', 'tabl
 export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // --- Hints ---
   { id: 'show_hints', label: 'Show hints', group: 'Hints', mappable: true, params: [],
-    description: 'Scan the page and paint hint badges.',
-    voice: [{ pattern: 'show' }] },
+    description: 'Scan the page and paint hint badges.' },
   { id: 'show_hints_newtab', label: 'Show hints (new tab)', group: 'Hints', mappable: true, params: [],
     description: 'Show hints with the next activation armed to open in a new tab.' },
   { id: 'hide_hints', label: 'Hide hints', group: 'Hints', mappable: true, params: [],
-    description: 'Remove all hint badges.',
-    voice: [{ pattern: 'hide' }] },
+    description: 'Remove all hint badges.' },
   { id: 'toggle_hints', label: 'Toggle hints', group: 'Hints', mappable: true, params: [],
-    description: 'Show hints when hidden, hide them when shown (sticky across navigation).' },
+    description: 'Show hints when hidden, hide them when shown (sticky across navigation).',
+    voice: [{ pattern: 'toggle' }] },
   // `f` — enter hint mode: hints (always visible for voice) become keyboard-
   // typeable here, and only here. See notes/DESIGN_KEYBOARD_MODES.md.
   { id: 'hint_mode', label: 'Hint mode', group: 'Hints', mappable: true, params: [],
@@ -289,7 +288,8 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
 
   // --- Help ---
   { id: 'toggle_help', label: 'Keyboard help', group: 'Help', mappable: true, params: [],
-    description: 'Show or hide this keyboard command reference.' },
+    description: 'Show or hide this keyboard command reference.',
+    voice: [{ pattern: 'help' }] },
   // Layer 2 of notes/DESIGN_TAB_NAVIGATION.md: an extension-served iframe
   // overlay searching pluggable sources (open tabs MRU-first, this catalog).
   // A real-modifier chord by design — it must open in every mode, mid-hint

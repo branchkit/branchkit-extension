@@ -912,29 +912,30 @@ dispatcher.register('hide_hints', () => {
   keyHandler.exitHintMode();
 });
 
-// `f` toggle: branches on the live visibility state. Hides when shown,
-// shows when hidden. Keeps the new-tab modifier untouched so a stray
-// toggle doesn't re-arm new-tab activation. Voice "show"/"hide" continue
-// to route through the dedicated handlers above; this is the keyboard
-// affordance for users in manual visibility mode.
-dispatcher.register('toggle_hints', () => {
-  // Branch on what's actually on screen, not just the visibility flag. If the
-  // flag desyncs (badges painted while it reads hidden), keying off it alone
-  // makes the toggle "show" a second set on top instead of hiding — the
-  // double-badge / "Ctrl+S won't hide" report. Treat any actually-visible
-  // badge as "showing" so the toggle always dismisses what the user sees.
+// The shared toggle used by both Ctrl+S (keyboard) and the voice "toggle"
+// command, so the two entry points can't drift. Branches on what's actually on
+// screen, not just the visibility flag: if the flag desyncs (badges painted
+// while it reads hidden), keying off it alone makes the toggle "show" a second
+// set on top instead of hiding — the double-badge / "Ctrl+S won't hide"
+// report. Treat any actually-visible badge as "showing" so the toggle always
+// dismisses what the user sees. Keeps the new-tab modifier untouched so a stray
+// toggle doesn't re-arm new-tab activation. Returns true if it ended up showing.
+function toggleHints(): boolean {
   const showing = pageSession.badgesVisible || store.all.some((w) => w.hint?.isVisible);
   if (showing) {
     hideBadges();
     keyHandler.exitHintMode();
     setHintsShown(false);  // sticky: stay hidden across navigation
-  } else {
-    doScan();
-    showBadges();
-    enterHintModeIfManual();
-    setHintsShown(true);
+    return false;
   }
-});
+  doScan();
+  showBadges();
+  enterHintModeIfManual();
+  setHintsShown(true);
+  return true;
+}
+
+dispatcher.register('toggle_hints', () => { toggleHints(); });
 
 dispatcher.register('activate_first_visible', () => {
   const visible = store.all.filter(w => w.hint?.isVisible && w.label);
@@ -2921,6 +2922,7 @@ const DISPATCH_PASSTHROUGH_ACTIONS = new Set([
   'focus_input',
   'toggle_palette', // voice "palette" — same handler as the Ctrl+K bind
   'toggle_tab_palette', // voice "tab" — opens the tabs-only palette (Ctrl+T twin)
+  'toggle_help', // voice "help" — same handler as the ? bind
 ]);
 
 chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {
@@ -2967,6 +2969,11 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       showBadges();
     } else if (action === 'hide_hints') {
       hideBadges();
+    } else if (action === 'toggle_hints') {
+      // Voice "toggle" — the same handler as Ctrl+S. Snapshot on the show
+      // direction so a codeword spoken in the same phrase resolves, mirroring
+      // show_hints above.
+      if (toggleHints()) phraseSnapshot = takeSnapshot(store.all, performance.now());
     } else if (action === 'rescan') {
       pageSession.onUrlChange(params?.from_cache === 'true', params?.reason ?? '');
     } else if (action === 'reactivate') {
