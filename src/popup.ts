@@ -271,6 +271,8 @@ function initShortcutsToggle(): void {
     document.getElementById('key-rules-section')?.setAttribute('hidden', '');
     return;
   }
+  const keyHostEl = document.getElementById('key-rules-host');
+  if (keyHostEl) keyHostEl.textContent = activeHostname();
   const buttons = Array.from(group.querySelectorAll<HTMLButtonElement>('.seg'));
   const passRow = document.getElementById('key-passthrough-setting');
   const passInput = document.getElementById('key-passthrough') as HTMLInputElement | null;
