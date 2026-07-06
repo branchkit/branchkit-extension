@@ -134,11 +134,18 @@ y    yank + exit        Y    yank line       Esc  collapse + exit
 v    → visual           V    → visual-line   c    → caret
 ```
 
-MVP subset: `h/j/k/l`, `w/b/e`, `0/$`, `gg/G`, `o`, `y`, `Esc`, and the
-`v`/`V`/`c` mode switches. Sentence/paragraph/`aw`/`as`/find-in-selection can
-follow. Vimium implements **word-forward char-by-char** (native `word`
-granularity differs Linux/Windows); MVP uses native `word` and refines if it
-misbehaves on macOS.
+Implemented: `h/j/k/l`, `w/b/e`, `0/$`, `(`/`)` sentence, `{`/`}` paragraph,
+`gg/G`, `o`, `y`, `Y` (yank line), `C` (yank without exit), `aw`/`as`/`ap` text
+objects, `Esc`, and the `v`/`V`/`c` mode switches. (sentence/paragraph
+granularity spot-checked in real Chromium 2026-07-06.)
+
+Still deferred (present in both Vimiums, low priority): **find-in-selection**
+(`f`/`n`/`N`/`/` — needs integration with BranchKit's separate find bar),
+**`p`/`P`** (yank-a-URL-and-open — needs tab-open plumbing, marginal use),
+**`Ctrl+E`/`Ctrl+Y`** scroll-while-selecting, and the true vim **`w`-vs-`e`**
+word nuance (Vimium ports it char-by-char with a big Unicode regexp because
+native `word` movement differs Linux/Windows; on macOS native `word` is fine —
+we map both `w` and `e` to forward-word for now).
 
 ### Entry / exit
 

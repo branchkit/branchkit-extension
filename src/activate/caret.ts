@@ -23,7 +23,11 @@ import { copyText } from '../clipboard';
 import { flashToast } from '../render/toast';
 
 type Dir = 'forward' | 'backward';
-type Gran = 'character' | 'word' | 'line' | 'lineboundary' | 'documentboundary';
+type Gran =
+  | 'character' | 'word' | 'line' | 'lineboundary'
+  | 'sentence' | 'paragraph' | 'documentboundary';
+/** Text objects for `aw`/`as`/`ap`. */
+type Entity = 'word' | 'sentence' | 'paragraph';
 type Alter = 'move' | 'extend';
 
 export type CaretMode = 'caret' | 'visual';
@@ -76,6 +80,12 @@ class Movement {
   collapseToAnchor(): void {
     if (this.sel.toString().length === 0) return;
     if (this.getDirection() === 'backward') this.sel.collapseToEnd();
+    else this.sel.collapseToStart();
+  }
+
+  collapseToFocus(): void {
+    if (this.sel.toString().length === 0) return;
+    if (this.getDirection() === 'forward') this.sel.collapseToEnd();
     else this.sel.collapseToStart();
   }
 
@@ -143,6 +153,10 @@ const MOVES: Record<string, [Dir, Gran]> = {
   b: ['backward', 'word'],
   '0': ['backward', 'lineboundary'],
   $: ['forward', 'lineboundary'],
+  ')': ['forward', 'sentence'],
+  '(': ['backward', 'sentence'],
+  '}': ['forward', 'paragraph'],
+  '{': ['backward', 'paragraph'],
   G: ['forward', 'documentboundary'],
 };
 
@@ -163,6 +177,7 @@ export class CaretController {
   private mode: CaretMode | null = null;
   private lineWise = false;
   private pendingG = false;
+  private pendingA = false; // `a` prefix for the aw/as/ap text objects
 
   constructor(private opts: CaretOptions) {}
 
@@ -215,6 +230,18 @@ export class CaretController {
       // Not `gg` — fall through and treat this key normally.
     }
 
+    // Text objects: `a` then w/s/p selects a whole word/sentence/paragraph.
+    if (this.pendingA) {
+      this.pendingA = false;
+      const entity: Entity | null =
+        e.key === 'w' ? 'word' : e.key === 's' ? 'sentence' : e.key === 'p' ? 'paragraph' : null;
+      if (entity) {
+        this.selectLexicalEntity(entity);
+        return suppress(e);
+      }
+      // Not a text object — fall through.
+    }
+
     switch (e.key) {
       case 'Escape':
         this.exit();
@@ -222,8 +249,18 @@ export class CaretController {
       case 'g':
         this.pendingG = true;
         return suppress(e);
+      case 'a':
+        this.pendingA = true;
+        return suppress(e);
       case 'y':
         this.yank();
+        return suppress(e);
+      case 'Y':
+        this.selectLine();
+        this.yank();
+        return suppress(e);
+      case 'C': // yank but stay in the mode (Vimium-C YankWithoutExit)
+        this.yank(false);
         return suppress(e);
       case 'o':
         if (this.mode === 'visual') {
@@ -259,6 +296,7 @@ export class CaretController {
     this.mode = null;
     this.lineWise = false;
     this.pendingG = false;
+    this.pendingA = false;
     this.opts.onModeChange(null);
   }
 
@@ -297,19 +335,41 @@ export class CaretController {
     m.scrollFocusIntoView();
   }
 
-  /** Extend the selection to whole line boundaries at both ends (visual-line). */
+  /** Extend the selection to whole line boundaries at both ends. Forces extend
+   *  (caret mode is "move") and seeds a char so it works from a bare caret —
+   *  used by visual-line and by `Y` (yank line). */
   private selectLine(): void {
     const m = this.movement;
-    if (!m || m.sel.isCollapsed) return;
+    if (!m) return;
+    m.alter = 'extend';
+    if (m.sel.isCollapsed) m.extendByOneCharacter('forward');
     m.run('forward', 'lineboundary');
     m.reverse();
     m.run('backward', 'lineboundary');
     m.reverse();
   }
 
-  private yank(): void {
+  /** Select the word/sentence/paragraph around the caret (`aw`/`as`/`ap`).
+   *  Ported from Vimium's selectLexicalEntity; always yields a visual-mode
+   *  range. */
+  private selectLexicalEntity(entity: Entity): void {
+    const m = this.movement;
+    if (!m) return;
+    m.alter = 'extend';
+    this.mode = 'visual';
+    this.lineWise = false;
+    m.collapseToFocus();
+    if (entity === 'word') m.run('forward', 'character'); // vim-like nudge
+    m.run('backward', entity);
+    m.collapseToFocus();
+    m.run('forward', entity);
+    m.scrollFocusIntoView();
+    this.opts.onModeChange('visual');
+  }
+
+  private yank(exit = true): void {
     const text = this.movement?.sel.toString() ?? '';
-    this.exit();
+    if (exit) this.exit();
     if (!text) {
       flashToast('Nothing selected');
       return;
