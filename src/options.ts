@@ -44,6 +44,7 @@ import {
   onBadgeSettingsChanged,
 } from './badge-settings-storage';
 import { initKeymapEditor } from './keymap-options';
+import { loadKeyboardRules, saveKeyboardRules, type KeyboardRule } from './keyboard-rules';
 
 // --- State ---
 
@@ -636,7 +637,91 @@ async function init(): Promise<void> {
 
   await initBadgeSettings();
   await initKeymapEditor();
+  await initKeyboardRules();
   initSideNav();
+}
+
+// --- Keyboard rules (per-site pass-through / disable) ---
+
+async function initKeyboardRules(): Promise<void> {
+  const container = document.getElementById('keyboard-rules');
+  const addBtn = document.getElementById('add-keyboard-rule');
+  if (!container) return;
+
+  let rules: KeyboardRule[] = await loadKeyboardRules();
+  const persist = (): void => { void saveKeyboardRules(rules); };
+
+  const renderRow = (rule: KeyboardRule, index: number): HTMLElement => {
+    const row = document.createElement('div');
+    row.className = 'kb-rule';
+
+    const pattern = document.createElement('input');
+    pattern.type = 'text';
+    pattern.className = 'kb-pattern';
+    pattern.placeholder = '*.example.com';
+    pattern.spellcheck = false;
+    pattern.value = rule.pattern;
+    pattern.setAttribute('aria-label', 'URL pattern');
+    pattern.addEventListener('input', () => { rule.pattern = pattern.value.trim(); persist(); });
+
+    const passInput = document.createElement('input');
+    passInput.type = 'text';
+    passInput.className = 'kb-pass';
+    passInput.placeholder = 'pass keys, e.g. jke#';
+    passInput.spellcheck = false;
+    passInput.value = rule.passKeys ?? '';
+    passInput.disabled = !!rule.off;
+    passInput.setAttribute('aria-label', 'Keys to pass to the site');
+    passInput.addEventListener('input', () => {
+      const keys = Array.from(passInput.value).filter((c) => c.trim() !== '').join('');
+      if (keys) rule.passKeys = keys; else delete rule.passKeys;
+      persist();
+    });
+
+    const offLabel = document.createElement('label');
+    offLabel.className = 'kb-off';
+    const off = document.createElement('input');
+    off.type = 'checkbox';
+    off.checked = !!rule.off;
+    off.addEventListener('change', () => {
+      if (off.checked) rule.off = true; else delete rule.off;
+      passInput.disabled = off.checked; // "off" passes everything — per-key is moot
+      persist();
+    });
+    offLabel.append(off, document.createTextNode(' Disable all'));
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'kb-del danger';
+    del.textContent = 'Delete';
+    del.addEventListener('click', () => { rules.splice(index, 1); persist(); render(); });
+
+    row.append(pattern, offLabel, passInput, del);
+    return row;
+  };
+
+  const render = (): void => {
+    container.replaceChildren();
+    if (rules.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'kb-empty';
+      empty.textContent =
+        'No keyboard rules. Add one to disable BranchKit’s shortcuts, or pass specific keys, on sites matching a pattern.';
+      container.appendChild(empty);
+      return;
+    }
+    rules.forEach((rule, i) => container.appendChild(renderRow(rule, i)));
+  };
+
+  addBtn?.addEventListener('click', () => {
+    rules.push({ pattern: '' });
+    render();
+    // Focus the new row's pattern field.
+    const last = container.querySelector<HTMLInputElement>('.kb-rule:last-child .kb-pattern');
+    last?.focus();
+  });
+
+  render();
 }
 
 // Sticky section nav: highlight the link whose section is currently at the top.
