@@ -742,10 +742,18 @@ function initSideNav(): void {
   let ticking = false;
   const update = (): void => {
     ticking = false;
-    // Active = the last section whose heading has crossed the top line.
-    let active = sections[0];
-    for (const s of sections) {
-      if (s.getBoundingClientRect().top <= 80) active = s;
+    // At (or within a hair of) the page bottom, the last section wins — a short
+    // final section (e.g. Badge appearance) can't scroll its heading up to the
+    // trigger line, so the heading test alone would leave the previous section lit.
+    const atBottom =
+      window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2;
+    let active = sections[sections.length - 1];
+    if (!atBottom) {
+      // Otherwise: the last section whose heading has crossed the top line.
+      active = sections[0];
+      for (const s of sections) {
+        if (s.getBoundingClientRect().top <= 80) active = s;
+      }
     }
     setActive(active.id);
   };
