@@ -219,6 +219,20 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     description: 'Hand every keypress to the site until you press Escape — for pages with their own keyboard shortcuts (Gmail, GitHub, web apps, games).' },
   { id: 'pass_next_key', label: 'Pass next key to the page', group: 'Navigation', mappable: true, params: [],
     description: 'Send just the next keystroke straight to the site, then resume BranchKit shortcuts.' },
+  { id: 'go_next', label: 'Next page', group: 'Navigation', mappable: true, params: [],
+    description: 'Follow the page’s "next" link (rel=next, or a link labelled Next/Newer/›) — paginated results, docs, galleries.',
+    voice: [{ pattern: 'next page' }] },
+  { id: 'go_previous', label: 'Previous page', group: 'Navigation', mappable: true, params: [],
+    description: 'Follow the page’s "previous" link (rel=prev, or a link labelled Previous/Older/‹).',
+    voice: [{ pattern: 'previous page' }] },
+  { id: 'copy_url', label: 'Copy page URL', group: 'Navigation', mappable: true, params: [],
+    description: 'Copy this page’s address to the clipboard.',
+    voice: [{ pattern: 'copy url' }, { pattern: 'copy page url' }, { pattern: 'copy address' }] },
+  // Keyboard-only hint action (Vimium yf): enter hint mode, then a codeword
+  // copies that link’s URL instead of following it. Voice yank would need a
+  // contributed hint verb — deferred.
+  { id: 'yank_hint', label: 'Copy a link (hint)', group: 'Hints', mappable: true, params: [],
+    description: 'Enter hint mode, then type a codeword to copy that link’s URL instead of opening it.' },
 
   // --- Tabs ---
   // All tab verbs share one background handler (handleTabAction): keyboard
@@ -391,6 +405,10 @@ export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   { keys: 'KeyR', command: 'refresh' },               // r
   { keys: 'KeyG KeyI', command: 'focus_input' },      // gi
   { keys: 'KeyI', command: 'insert_mode' },           // i — pass keys to the page
+  { keys: 'BracketRight BracketRight', command: 'go_next' },     // ]]
+  { keys: 'BracketLeft BracketLeft', command: 'go_previous' },   // [[
+  { keys: 'KeyY KeyY', command: 'copy_url' },          // yy
+  { keys: 'KeyY KeyF', command: 'yank_hint' },         // yf
   // Tabs (Vimium t/x/X, gt/gT, yt, ^)
   { keys: 'KeyT', command: 'new_tab' },               // t
   { keys: 'KeyX', command: 'close_tab' },             // x

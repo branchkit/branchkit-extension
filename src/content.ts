@@ -54,6 +54,9 @@ import { togglePalette, closePalette } from './render/palette-host';
 import { setTabMarker, reapplyTabMarker, refreshTabMarker } from './render/tab-title';
 import { setModeChip } from './render/mode-chip';
 import { isHostExcluded, onKeyExclusionsChanged } from './key-exclusions';
+import { findPageLink, type Rel } from './pagination';
+import { copyText } from './clipboard';
+import { flashToast } from './render/toast';
 import {
   CodewordSnapshot,
   takeSnapshot,
@@ -909,6 +912,9 @@ dispatcher.register('hint_mode', () => {
 // read + cleared by the activation path. (The discrete show_hints_newtab
 // command that also set this was removed 2026-07-05 — toggle + capital cover it.)
 let activateInNewTab = false;
+// Armed by `yank_hint` (Vimium yf): the next hint resolved by keyboard copies
+// the link's URL instead of following it. Read + cleared in activateWrapper.
+let yankHintArmed = false;
 
 // The shared toggle used by both Ctrl+S (keyboard) and the voice "toggle"
 // command, so the two entry points can't drift. Branches on what's actually on
@@ -1107,6 +1113,24 @@ dispatcher.register('insert_mode', () => {
 dispatcher.register('pass_next_key', () => {
   keyHandler.armPassNextKey();
 });
+// Pagination — follow the page's next/prev link (Vimium goNext/goPrevious).
+dispatcher.register('go_next', () => navigatePage('next'));
+dispatcher.register('go_previous', () => navigatePage('prev'));
+function navigatePage(rel: Rel): void {
+  const href = findPageLink(document, rel);
+  if (href) location.href = href;
+  else flashToast(rel === 'next' ? 'No next page' : 'No previous page');
+}
+// Copy the current page URL (Vimium yy).
+dispatcher.register('copy_url', () => {
+  void copyText(location.href).then((ok) => flashToast(ok ? 'Copied URL' : 'Copy failed'));
+});
+// Yank a link via hint (Vimium yf): enter hint mode; the resolved codeword
+// copies the link's URL instead of following it. Keyboard-only.
+dispatcher.register('yank_hint', () => {
+  yankHintArmed = true;
+  keyHandler.enterHintMode();
+});
 
 dispatcher.register('find_immediate', (params) => {
   const query = params.query || '';
@@ -1160,6 +1184,7 @@ onKeyExclusionsChanged((list) => keyHandler.setExcluded(list.includes(location.h
 // mode Escape dismisses the summoned hints, the Vimium behavior. The mode
 // exit itself already happened in the KeyHandler.
 keyHandler.setHintEscapeCallback(() => {
+  yankHintArmed = false; // abandoned yank (yf then Esc) must not leak to the next hint
   if (getHintVisibility() !== 'always') hideBadges();
 });
 
@@ -1495,6 +1520,7 @@ async function showBadges(): Promise<void> {
 // badges via updateLabel, which resets the text naturally.
 function clearHintFilter(): void {
   activateInNewTab = false;
+  yankHintArmed = false;
   keyHandler.exitHintMode();
   for (const w of store.all) {
     w.hint?.setFiltered(false);
@@ -2046,6 +2072,20 @@ function updateBadgeLabels(): void {
 
 function activateWrapper(wrapper: ElementWrapper): void {
   const el = wrapper.element as HTMLElement;
+
+  // Yank (Vimium yf): copy the link's URL instead of following it. Guarded by
+  // an opt-in keyboard flag, so steady-state activation is untouched.
+  if (yankHintArmed) {
+    yankHintArmed = false;
+    const anchor = el.closest('a') as HTMLAnchorElement | null;
+    const href = anchor?.href ?? '';
+    wrapper.hint?.flash();
+    if (href) void copyText(href).then((ok) => flashToast(ok ? 'Copied link' : 'Copy failed'));
+    else flashToast('Not a link');
+    if (shouldAutoShowBadges()) { clearHintFilter(); scheduleHintRefresh(); } else { hideBadges(); }
+    return;
+  }
+
   const openNewTab = activateInNewTab;
   lastActivatedElement = el;
 
@@ -2924,6 +2964,8 @@ const DISPATCH_PASSTHROUGH_ACTIONS = new Set([
   'toggle_palette', // voice "palette" — same handler as the Ctrl+K bind
   'toggle_tab_palette', // voice "tab" — opens the tabs-only palette (Ctrl+T twin)
   'toggle_help', // voice "help" — same handler as the ? bind
+  'go_next', 'go_previous', // voice "next/previous page"
+  'copy_url', // voice "copy url"
 ]);
 
 chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {
