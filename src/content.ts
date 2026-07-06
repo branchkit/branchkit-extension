@@ -4144,7 +4144,10 @@ pageSession.resources.listen(document, 'keydown', (e: KeyboardEvent) => {
   // After Enter commits the search the bar closes but highlights persist; n /
   // Shift+n cycle matches and Escape clears. This runs before the hint key
   // handler so bare n isn't swallowed as codeword input in always-mode.
-  if (handleFindNavKey(e)) return;
+  // EXCEPT in caret/visual mode, which owns n/N/Escape to extend the selection
+  // to matches (findExtend) — let those keys fall through to the caret handler.
+  const inCaretMode = keyHandler.getMode() === 'caret' || keyHandler.getMode() === 'visual';
+  if (!inCaretMode && handleFindNavKey(e)) return;
   // Focus-input mode (Vimium gi): Tab/Shift+Tab cycle text fields. Runs before
   // the hint handler so Tab cycling isn't pre-empted, and in capture phase so it
   // beats the focused input's native Tab.

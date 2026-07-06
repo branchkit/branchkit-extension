@@ -141,16 +141,25 @@ v    → visual           V    → visual-line   c    → caret
 
 Implemented: `h/j/k/l`, `w/b/e`, `0/$`, `(`/`)` sentence, `{`/`}` paragraph,
 `gg/G`, `o`, `y`, `Y` (yank line), `C` (yank without exit), `aw`/`as`/`ap` text
-objects, `Esc`, and the `v`/`V`/`c` mode switches. (sentence/paragraph
-granularity spot-checked in real Chromium 2026-07-06.)
+objects, **`/`/`n`/`N` find-in-selection**, `Esc`, and the `v`/`V`/`c` mode
+switches. (sentence/paragraph granularity spot-checked in real Chromium
+2026-07-06.)
 
-Still deferred (present in both Vimiums, low priority): **find-in-selection**
-(`f`/`n`/`N`/`/` — needs integration with BranchKit's separate find bar),
-**`p`/`P`** (yank-a-URL-and-open — needs tab-open plumbing, marginal use),
-**`Ctrl+E`/`Ctrl+Y`** scroll-while-selecting, and the true vim **`w`-vs-`e`**
-word nuance (Vimium ports it char-by-char with a big Unicode regexp because
-native `word` movement differs Linux/Windows; on macOS native `word` is fine —
-we map both `w` and `e` to forward-word for now).
+**Find-in-selection** is BranchKit-native, not Vimium-literal: BranchKit's find
+is Range-based (CSS Custom Highlight API) and separate from the document
+selection, so `/` opens the find bar and, once committed, `n`/`N` advance the
+match AND extend the caret's `Selection` to it (entering visual). `find.ts`
+exposes `hasActiveMatches`/`getCurrentMatchRange`/`findNavigate`; the content
+keydown path lets `n`/`N` reach the caret handler (instead of the normal
+find-nav) while caret/visual is active. If the find-input focus drops the page
+selection, `findExtend` falls back to selecting the match itself.
+
+Still deferred (present in both Vimiums, low priority): **`p`/`P`**
+(yank-a-URL-and-open — needs tab-open plumbing, marginal use), **`Ctrl+E`/
+`Ctrl+Y`** scroll-while-selecting, and the true vim **`w`-vs-`e`** word nuance
+(Vimium ports it char-by-char with a big Unicode regexp because native `word`
+movement differs Linux/Windows; on macOS native `word` is fine — we map both
+`w` and `e` to forward-word for now).
 
 ### Entry / exit
 

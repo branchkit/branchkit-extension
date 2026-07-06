@@ -21,6 +21,7 @@
 
 import { copyText } from '../clipboard';
 import { flashToast } from '../render/toast';
+import { openFindMode, hasActiveMatches, findNavigate } from '../scan/find';
 
 type Dir = 'forward' | 'backward';
 type Gran =
@@ -252,6 +253,18 @@ export class CaretController {
       case 'a':
         this.pendingA = true;
         return suppress(e);
+      case '/':
+        // Open find; the search runs with the bar focused, then `n`/`N` extend
+        // the selection to matches (BranchKit find is Range-based, so caret mode
+        // syncs its selection to the current match — see findExtend).
+        openFindMode();
+        return suppress(e);
+      case 'n':
+        this.findExtend(1);
+        return suppress(e);
+      case 'N':
+        this.findExtend(-1);
+        return suppress(e);
       case 'y':
         this.yank();
         return suppress(e);
@@ -363,6 +376,40 @@ export class CaretController {
     m.run('backward', entity);
     m.collapseToFocus();
     m.run('forward', entity);
+    m.scrollFocusIntoView();
+    this.opts.onModeChange('visual');
+  }
+
+  /** Extend the selection to the next/previous find match, entering visual mode
+   *  (Vimium's find-in-visual). Reuses the last committed find query — press `/`
+   *  first to set one. */
+  private findExtend(delta: number): void {
+    const m = this.movement;
+    if (!m) return;
+    if (!hasActiveMatches()) {
+      flashToast('No search — press / first');
+      return;
+    }
+    const range = findNavigate(delta);
+    if (!range) {
+      flashToast('No matches');
+      return;
+    }
+    m.alter = 'extend';
+    this.mode = 'visual';
+    this.lineWise = false;
+    if (m.sel.rangeCount === 0) {
+      // The selection was dropped (e.g. focusing the find input) — select the
+      // match itself as the new range.
+      const r = document.createRange();
+      r.setStart(range.startContainer, range.startOffset);
+      r.setEnd(range.endContainer, range.endOffset);
+      m.sel.removeAllRanges();
+      m.sel.addRange(r);
+    } else {
+      // Keep the anchor; move the focus to the match end.
+      m.sel.extend(range.endContainer, range.endOffset);
+    }
     m.scrollFocusIntoView();
     this.opts.onModeChange('visual');
   }

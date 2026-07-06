@@ -411,6 +411,29 @@ export function findPrevious(): void {
   if (matchRanges.length) move(-1);
 }
 
+// --- Caret/visual-mode find-in-selection (notes/DESIGN_MARKS_AND_CARET.md) ---
+// The current match is a Range, separate from the document selection; caret
+// mode reads it to extend its selection to the match.
+
+/** True while find is active and has at least one match. */
+export function hasActiveMatches(): boolean {
+  return state.active && matchRanges.length > 0;
+}
+
+/** The current match Range, or null when find is inactive / has no matches. */
+export function getCurrentMatchRange(): Range | null {
+  return currentIndex >= 0 && currentIndex < matchRanges.length ? matchRanges[currentIndex] : null;
+}
+
+/** Advance the current match by `delta` (also updates the highlight + count),
+ *  returning the new current Range — for caret mode to extend its selection to
+ *  the next/previous match. Null when there are no matches. */
+export function findNavigate(delta: number): Range | null {
+  if (matchRanges.length === 0) return null;
+  move(delta);
+  return getCurrentMatchRange();
+}
+
 /**
  * Post-commit navigation: while find is active but the bar is closed, `n` cycles
  * to the next match, `Shift+n` to the previous, and Escape clears + exits.
