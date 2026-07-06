@@ -264,41 +264,33 @@ function activeHostname(): string {
 // exact hostname (a shortcut for the common "fix this site now" case). Broader
 // patterns are managed on the options page. See notes/DESIGN_PASS_THROUGH.md.
 function initShortcutsToggle(): void {
-  const group = document.getElementById('key-shortcuts');
   const url = activeTab?.url ?? '';
-  if (!group) return;
   if (!activeHostname()) {
     document.getElementById('key-rules-section')?.setAttribute('hidden', '');
     return;
   }
   const keyHostEl = document.getElementById('key-rules-host');
   if (keyHostEl) keyHostEl.textContent = activeHostname();
-  const buttons = Array.from(group.querySelectorAll<HTMLButtonElement>('.seg'));
-  const passRow = document.getElementById('key-passthrough-setting');
+
+  const disableAll = document.getElementById('key-disable-all') as HTMLInputElement | null;
   const passInput = document.getElementById('key-passthrough') as HTMLInputElement | null;
 
-  const select = (on: boolean): void => {
-    for (const b of buttons) {
-      const active = (b.dataset.value === 'on') === on;
-      b.classList.toggle('active', active);
-      b.setAttribute('aria-checked', String(active));
-    }
-    // Granular pass-through only makes sense while shortcuts are On — Off passes
-    // everything already.
-    passRow?.toggleAttribute('hidden', !on);
+  // "Disable all" is the whole-site off switch; the pass-keys field is the
+  // granular list. When everything's disabled, per-key is moot — grey it out.
+  const reflectOff = (off: boolean): void => {
+    if (disableAll) disableAll.checked = off;
+    if (passInput) passInput.disabled = off;
   };
 
   void getHostRule(url).then((rule) => {
-    select(!rule?.off); // On = not disabled
+    reflectOff(!!rule?.off);
     if (passInput) passInput.value = rule?.passKeys ?? '';
   });
-  for (const b of buttons) {
-    b.addEventListener('click', () => {
-      const on = b.dataset.value === 'on';
-      select(on);
-      void setHostOff(url, !on);
-    });
-  }
+
+  disableAll?.addEventListener('change', () => {
+    reflectOff(disableAll.checked);
+    void setHostOff(url, disableAll.checked);
+  });
 
   // Pass-through keys: each typed character is one key handed to the site.
   passInput?.addEventListener('input', () => {
