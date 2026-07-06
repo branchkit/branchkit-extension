@@ -61,7 +61,7 @@ import { flashToast } from './render/toast';
 import {
   PREV_POSITION_REGISTERS, isPrevPositionRegister, marksToHash, type StoredMark,
 } from './marks';
-import { CaretController } from './activate/caret';
+import { CaretController, type CaretVoiceOp } from './activate/caret';
 import {
   CodewordSnapshot,
   takeSnapshot,
@@ -3455,6 +3455,19 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
           fp: resolved.fp,
         });
       }
+    } else if (action === 'caret_voice') {
+      // Voice-driven caret/visual selection ("select word", "copy that", …).
+      // No-op unless caret mode is active — the CaretController guards it. See
+      // notes/DESIGN_HINT_ACTION_MODES.md (voice caret control).
+      const op = (params?.op || 'word') as CaretVoiceOp;
+      caret.applyVoice(op);
+      reportDispatchResult({
+        action, codeword: '', resolution: 'none', elem_tag: '',
+        taken: caret.isActive() ? 'click' : 'skipped', ok: caret.isActive(),
+        frame: trimFrameUrl(window.location.href),
+        detail: caret.isActive() ? `caret ${op}` : 'caret mode not active',
+        fp: '',
+      });
     } else if (action === 'noop') {
       // The SW translates the inbound spoken prefix word to its letter before
       // forwarding (see frame-router), so `prefix` is already a letter here.

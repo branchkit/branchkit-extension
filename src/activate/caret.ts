@@ -34,6 +34,9 @@ type Alter = 'move' | 'extend';
 export type CaretMode = 'caret' | 'visual';
 /** Entry kinds — `visual-line` resolves to visual mode with `lineWise`. */
 export type CaretEntry = CaretMode | 'visual-line';
+/** Voice-driven selection ops (extend the selection, then copy) — the spoken
+ *  twin of the keyboard movement keys. See notes/DESIGN_HINT_ACTION_MODES.md. */
+export type CaretVoiceOp = 'word' | 'line' | 'sentence' | 'end' | 'start' | 'copy' | 'exit';
 
 const opposite = (d: Dir): Dir => (d === 'forward' ? 'backward' : 'forward');
 
@@ -412,6 +415,36 @@ export class CaretController {
     }
     m.scrollFocusIntoView();
     this.opts.onModeChange('visual');
+  }
+
+  /** Ensure we're in visual (extend) mode, seeding a 1-char selection from a
+   *  bare caret so the first extend has an anchor. */
+  private ensureVisual(): void {
+    const m = this.movement;
+    if (!m || this.mode === 'visual') return;
+    m.alter = 'extend';
+    this.mode = 'visual';
+    this.lineWise = false;
+    if (m.sel.isCollapsed) m.extendByOneCharacter('forward');
+    this.opts.onModeChange('visual');
+  }
+
+  /** Voice-driven selection while caret mode is active — the spoken twin of the
+   *  keyboard movement/yank keys. No-op when caret mode isn't active (a stray
+   *  "copy that" outside selection does nothing). See DESIGN_HINT_ACTION_MODES.md. */
+  applyVoice(op: CaretVoiceOp): void {
+    if (!this.isActive() || !this.movement) return;
+    if (op === 'copy') { this.yank(); return; }
+    if (op === 'exit') { this.exit(); return; }
+    this.ensureVisual();
+    if (op === 'line') {
+      this.selectLine();
+      this.movement.scrollFocusIntoView();
+      return;
+    }
+    const dir = op === 'start' ? 'backward' : 'forward';
+    const gran = op === 'word' ? 'word' : op === 'sentence' ? 'sentence' : 'lineboundary';
+    this.applyMove(dir, gran);
   }
 
   private yank(exit = true): void {

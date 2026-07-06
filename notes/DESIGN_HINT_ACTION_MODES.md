@@ -1,13 +1,17 @@
 # Design: Hint action modes — pick a badge, do X (not just click)
 
-**Status:** Phases 1–3a **landed + live-verified** 2026-07-06 (committed local,
+**Status:** Phases 1–4 **landed + live-verified** 2026-07-06 (committed local,
 unpushed). Phase 1 (unify armed booleans → `pendingHintAction`), phase 2
 (focus + copy-text, keyboard `gf`/`yc` + voice "focus {hint}"/"copy text
-{hint}"), phase 3a (keyboard hover `gh`). Live-verified 6/6 against the real
-extension via `scripts/_verify-hint-actions.mjs` (yank regression intact; focus/
-copytext/hover work). **Deferred:** phase 3b (move hover's voice contribution
-from the plugin into the extension catalog — cross-repo, needs plugin-test +
-voice live-verify), phase 4 (voice caret control), phase 5 (enter-caret-at-badge).
+{hint}"), phase 3a (keyboard hover `gh`), phase 4 (**voice caret control**,
+extension-only `caret_voice` — see the revised section below). Live-verified
+against the real extension: 6/6 in `scripts/_verify-hint-actions.mjs` (yank
+regression + focus/copytext/hover), 22/22 in `scripts/_verify-marks-caret.mjs`
+(incl. the voice-caret dispatch path). **Deferred:** phase 3b (move hover's
+voice contribution from the plugin into the extension catalog — cross-repo,
+needs plugin-test + voice live-verify), phase 4-gating (caret-mode-gated voice
+via a plugin tag — a refinement over the shipped always-on form), phase 5
+(enter-caret-at-badge).
 
 Vimium's "hint modes": a badge you
 pick can do more than click — hover it, focus it, copy it, start a selection at
@@ -95,7 +99,34 @@ mode, and the user then drives movement and yank **by voice** (not only
 keyboard). That means caret/visual mode itself must be voice-drivable, which is
 its own capability, below.
 
-## Voice control of caret/visual mode (the load-bearing new piece)
+## Voice control of caret/visual mode — SHIPPED extension-only (phase 4, revised)
+
+**Landed 2026-07-06 as an extension-only feature — no plugin change.** The
+gated design below (an exclusive plugin tag) was reconsidered during
+implementation and deferred as a refinement, because: (1) gating voice
+eligibility *requires* a plugin-managed tag (matching is plugin/actuator-side —
+there's no extension-only gate), (2) the exclusive tag is a real footgun (an
+orphaned exclusive tag suppresses every command system-wide — see palette.go's
+drain guards), and (3) the standalone harness has no plugin, so the
+extension→plugin→tag→eligibility chain would have been entirely unverifiable.
+
+What shipped instead: `caret_voice` — a normal browser-active voice command
+(id `caret_voice`, op enum) contributed via the generic path, dispatching to
+`CaretController.applyVoice(op)`. Phrases: "select word/line/sentence",
+"select to end/start", "copy selection"/"copy that", "stop selecting". It's a
+**no-op unless caret mode is active** (the controller guards it), so a stray
+"copy that" outside a selection does nothing. Verified 22/22 in
+`scripts/_verify-marks-caret.mjs` by injecting the real BRANCHKIT_ACTION message
+(no-op-when-inactive guard + "select word"→visual + "copy that"→clipboard).
+Speech recognition itself is the only unverified link (needs a live host+mic).
+
+Trade-off vs the gated design: the phrases are eligible whenever the browser is
+focused (minor command-list clutter), not caret-mode-gated. If that clutter or
+a misfire ever bites, the gated version below is a clean *additive* layer.
+
+## (Deferred) Gated design — exclusive/context tag
+
+The original plan, kept for when/if gating is wanted:
 
 Caret/visual movement keys are currently owned by the self-contained caret
 handler (they bypass the command registry, by design). To drive them by voice we

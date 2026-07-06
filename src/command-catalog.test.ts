@@ -37,7 +37,7 @@ const VOICE_ONLY_BACKGROUND = ['switch_to_tab', 'palette_select', 'palette_dismi
 // Voice-only commands handled inline in content's BRANCHKIT_ACTION listener
 // (the activate family shares plain activate's resolution path there), with
 // no content-dispatcher registration: the target is a runtime spoken codeword.
-const VOICE_ONLY_CONTENT = ['activate_hint_newtab', 'activate_hint_background'] as const;
+const VOICE_ONLY_CONTENT = ['activate_hint_newtab', 'activate_hint_background', 'caret_voice'] as const;
 
 const NOT_MAPPABLE = new Set([
   'activate_hint', 'find_immediate', 'scroll_to_element', 'scroll',
@@ -143,7 +143,7 @@ describe('command catalog — voice patterns', () => {
   it('attaches voice only to hint / scroll / find / navigation / tab / palette commands this phase', () => {
     // Help entered via the palette voice loop: "palette" opens it,
     // {browser_palette} selects a row, "hide" dismisses.
-    const allowed = new Set(['Badges', 'Scroll', 'Zoom', 'Find', 'Navigation', 'Tabs', 'Help']);
+    const allowed = new Set(['Badges', 'Scroll', 'Zoom', 'Find', 'Navigation', 'Tabs', 'Help', 'Selection']);
     for (const c of withVoice) {
       expect(allowed.has(c.group), `${c.id} in ${c.group}`).toBe(true);
     }

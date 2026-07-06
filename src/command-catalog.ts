@@ -348,6 +348,25 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     description: 'Place a text caret on the page — move with hjkl/w/b, press v to start selecting, y to copy the selection. Esc exits.' },
   { id: 'visual_line_mode', label: 'Visual line mode', group: 'Selection', mappable: true, params: [],
     description: 'Start a line-wise selection at the caret — j/k extend by whole lines, y copies. Esc exits.' },
+  // Voice-driven caret/visual selection — the spoken twin of the movement keys,
+  // so "voice for everything" covers selecting + copying by voice. Voice-only
+  // (movement keys are the keyboard form); no-op unless caret mode is active.
+  // Contributed as a normal browser-active command (no context gate) —
+  // gating to caret mode is a deferred refinement (needs a plugin tag). See
+  // notes/DESIGN_HINT_ACTION_MODES.md.
+  { id: 'caret_voice', label: 'Voice caret control', group: 'Selection', mappable: false,
+    description: 'While the caret/visual selection is active, extend it by voice — "select word", "select line", "select to end" — then "copy that". "stop selecting" exits.',
+    params: [{ name: 'op', type: 'enum', options: ['word', 'line', 'sentence', 'end', 'start', 'copy', 'exit'], default: 'word' }],
+    voice: [
+      { pattern: 'select word', params: { op: 'word' } },
+      { pattern: 'select line', params: { op: 'line' } },
+      { pattern: 'select sentence', params: { op: 'sentence' } },
+      { pattern: 'select to end', params: { op: 'end' } },
+      { pattern: 'select to start', params: { op: 'start' } },
+      { pattern: 'copy selection', params: { op: 'copy' } },
+      { pattern: 'copy that', params: { op: 'copy' } },
+      { pattern: 'stop selecting', params: { op: 'exit' } },
+    ] },
 
   // --- Help ---
   { id: 'toggle_help', label: 'Keyboard help', group: 'Help', mappable: true, params: [],
