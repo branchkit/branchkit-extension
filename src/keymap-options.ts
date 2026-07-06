@@ -563,26 +563,48 @@ function renderBinding(entry: KeymapEntry, dupes: Set<string>): HTMLElement {
 }
 
 // One-shot key capture: the next real (non-modifier) keypress becomes the key.
-// Bare Escape cancels (onResult(null)). Single-combo only — sequences keep
-// their stored value (editor v1; see DESIGN_KEYMAP_CONFIG.md).
-function capture(btn: HTMLButtonElement, restore: string, onResult: (keys: string | null) => void): void {
-  btn.textContent = 'Press a key…';
+// Cancels — restoring the previous binding — on Escape OR a click anywhere
+// outside the button, so it never traps the user in "press a key" mode. A
+// visible hint spells out both exits. Single-combo only — sequences keep their
+// stored value (editor v1; see DESIGN_KEYMAP_CONFIG.md).
+export function capture(btn: HTMLButtonElement, restore: string, onResult: (keys: string | null) => void): void {
+  if (btn.classList.contains('capturing')) return; // already prompting — don't stack
+  const isAdd = restore === '+ key';
+  btn.textContent = 'press a key…';
   btn.classList.add('capturing');
+
+  const hint = document.createElement('span');
+  hint.className = 'km-capture-hint';
+  hint.textContent = isAdd ? 'esc or click away to cancel' : 'esc or click away keeps ' + restore;
+  btn.closest('.km-keys')?.appendChild(hint);
+
+  let done = false;
+  const finish = (result: string | null): void => {
+    if (done) return;
+    done = true;
+    window.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('pointerdown', onOutside, true);
+    btn.classList.remove('capturing');
+    hint.remove();
+    if (result === null) btn.textContent = restore; // put the previous binding back
+    onResult(result);
+  };
   const onKey = (e: KeyboardEvent): void => {
     if (/^(Control|Alt|Meta|Shift)/.test(e.code)) return; // wait for a real key
     e.preventDefault();
     e.stopPropagation();
-    window.removeEventListener('keydown', onKey, true);
-    btn.classList.remove('capturing');
     const bare = !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey;
-    if (e.key === 'Escape' && bare) {
-      btn.textContent = restore;
-      onResult(null);
-      return;
-    }
-    onResult(serializeCombo(comboFromEvent(e)));
+    if (e.key === 'Escape' && bare) { finish(null); return; }
+    finish(serializeCombo(comboFromEvent(e)));
+  };
+  // A pointer-down anywhere but this button cancels — the intuitive "click out
+  // to back out." Capture phase so it beats other click handlers; the initiating
+  // click already completed before this listener was added, so it won't self-fire.
+  const onOutside = (e: PointerEvent): void => {
+    if (e.target !== btn) finish(null);
   };
   window.addEventListener('keydown', onKey, true);
+  window.addEventListener('pointerdown', onOutside, true);
 }
 
 function renderParams(container: HTMLElement, entry: KeymapEntry): void {

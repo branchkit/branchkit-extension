@@ -1,5 +1,59 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { openInlineEditor, cloneKeymap } from './keymap-options';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { openInlineEditor, cloneKeymap, capture } from './keymap-options';
+
+describe('capture (key-rebind prompt)', () => {
+  // A couple of tests intentionally leave a capture active; finish it so its
+  // window keydown/pointerdown listeners don't leak into later suites.
+  afterEach(() => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape' }));
+    document.body.replaceChildren();
+  });
+
+  function setup(): HTMLButtonElement {
+    const keys = document.createElement('div');
+    keys.className = 'km-keys';
+    const btn = document.createElement('button');
+    btn.textContent = 'Shift+J';
+    keys.appendChild(btn);
+    document.body.replaceChildren(keys);
+    return btn;
+  }
+
+  it('cancels + restores the previous binding on a click outside', () => {
+    const btn = setup();
+    const onResult = vi.fn();
+    capture(btn, 'Shift+J', onResult);
+    expect(btn.textContent).toBe('press a key…');
+    document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    expect(onResult).toHaveBeenCalledWith(null);
+    expect(btn.textContent).toBe('Shift+J'); // not lost
+  });
+
+  it('does not cancel on a pointerdown on the button itself', () => {
+    const btn = setup();
+    const onResult = vi.fn();
+    capture(btn, 'Shift+J', onResult);
+    btn.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    expect(onResult).not.toHaveBeenCalled();
+    expect(btn.textContent).toBe('press a key…');
+  });
+
+  it('cancels on Escape', () => {
+    const btn = setup();
+    const onResult = vi.fn();
+    capture(btn, 'Shift+J', onResult);
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape' }));
+    expect(onResult).toHaveBeenCalledWith(null);
+    expect(btn.textContent).toBe('Shift+J');
+  });
+
+  it('does not stack a second prompt on the same button', () => {
+    const btn = setup();
+    capture(btn, 'Shift+J', vi.fn());
+    capture(btn, 'Shift+J', vi.fn()); // guarded no-op
+    expect(document.querySelectorAll('.km-capture-hint').length).toBe(1);
+  });
+});
 
 describe('cloneKeymap (staged-edit isolation)', () => {
   it('produces independent entry + params objects so draft edits never touch the baseline', () => {
