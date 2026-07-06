@@ -314,6 +314,16 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     description: 'Switch to an open tab — say "tab" then its codeword (or a distinctive word from its title or site).',
     voice: [{ pattern: 'tab {browser_tabs}', params: { tab_id: '{browser_tabs}' } }] },
 
+  // --- Marks (Vimium m / `) ---
+  // Two-step: the command arms capture, the NEXT key names the mark (a wildcard
+  // no static keybind can express), so no voice and no params. See
+  // notes/DESIGN_MARKS_AND_CARET.md. Keyboard-only for now — free-letter voice
+  // capture against the closed grammar is a deferred follow-up.
+  { id: 'mark_set', label: 'Set mark', group: 'Marks', mappable: true, params: [],
+    description: 'Set a mark at the current scroll position — press m then a letter. Shift+letter sets a global mark you can jump to from any tab.' },
+  { id: 'mark_jump', label: 'Jump to mark', group: 'Marks', mappable: true, params: [],
+    description: 'Jump to a mark — press ` then its letter (Shift+letter for a global mark). Press ` twice to return to where you were before the last jump.' },
+
   // --- Help ---
   { id: 'toggle_help', label: 'Keyboard help', group: 'Help', mappable: true, params: [],
     description: 'Show or hide this keyboard command reference.',
@@ -446,6 +456,9 @@ export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   { keys: 'shift+Period', command: 'move_tab_right' },// > (Vimium >>)
   { keys: 'shift+KeyP', command: 'pin_tab' },         // P
   { keys: 'shift+KeyM', command: 'mute_tab' },        // M
+  // Marks (Vimium m / `) — the next key names the mark
+  { keys: 'KeyM', command: 'mark_set' },              // m — set mark
+  { keys: 'Backquote', command: 'mark_jump' },        // ` — jump to mark
   // Palette / tab palette
   { keys: 'ctrl+KeyK', command: 'toggle_palette' },   // Ctrl+K — full palette (works everywhere)
   { keys: 'shift+KeyT', command: 'toggle_tab_palette' }, // T — tab palette (Vimium-C's tab-search key)

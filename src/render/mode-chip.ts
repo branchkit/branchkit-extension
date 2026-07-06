@@ -32,13 +32,18 @@ const STYLE = `
 .chip .sub { color: #8b949e; font-weight: 500; letter-spacing: 0; }
 `;
 
-// Per-mode chip copy. Normal has no chip (the quiet default).
-const CHIP_TEXT: Record<'hint' | 'insert', { label: string; sub: string }> = {
+type ChipMode = 'hint' | 'insert' | 'mark-set' | 'mark-jump';
+
+// Per-mode chip copy. Normal has no chip (the quiet default). The two mark
+// states are transient prompts (the next key names the mark).
+const CHIP_TEXT: Record<ChipMode, { label: string; sub: string }> = {
   hint: { label: 'BADGE', sub: 'type a letter · Esc' },
   insert: { label: 'PASS-THROUGH', sub: 'keys go to the page · Esc' },
+  'mark-set': { label: 'SET MARK', sub: 'press a letter (⇧ = global) · Esc' },
+  'mark-jump': { label: 'JUMP TO MARK', sub: 'press a letter · Esc' },
 };
 
-function build(mode: 'hint' | 'insert'): HTMLElement {
+function build(mode: ChipMode): HTMLElement {
   const el = document.createElement('div');
   el.setAttribute(HOST_ATTR, '');
   // Tag as BranchKit's own UI so the page MutationObserver skips it.
@@ -63,8 +68,10 @@ function build(mode: 'hint' | 'insert'): HTMLElement {
  * is chip-less. Rebuilds when the shown mode changes (hint ↔ pass-through). */
 export function setModeChip(mode: KeyMode): void {
   if (typeof document === 'undefined' || window !== window.top) return;
-  const shown: 'hint' | 'insert' | null =
-    mode === 'hint' ? 'hint' : mode === 'insert' ? 'insert' : null;
+  const shown: ChipMode | null =
+    mode === 'hint' || mode === 'insert' || mode === 'mark-set' || mode === 'mark-jump'
+      ? mode
+      : null;
   host?.remove();
   host = null;
   if (shown) {

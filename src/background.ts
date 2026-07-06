@@ -17,6 +17,8 @@ import { rememberCodewords, clearCodewordMemory, recallCodewords } from './label
 import { discoverPlugin, ensureConnected, postToPlugin, getFromPlugin, getPluginPort, getPluginToken, getActuatorJson } from './plugin/actuator-client';
 import { buildReconcileReport, type ReconcileWrapper, type ReconcileReport, type MatchableView } from './debug/reconcile';
 import { cycleTabIndex } from './background/tab-nav';
+import { setLocalMark, getLocalMark, setGlobalMark, gotoGlobalMark } from './background/marks';
+import { baseUrl, type GlobalMark, type StoredMark } from './marks';
 import { loadMru, previousCandidates, recordTabActivated } from './background/tab-mru';
 import { scheduleTabPublish, resetTabPublishCache } from './background/tab-collection';
 import {
@@ -1093,6 +1095,32 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   if (message.type === 'ZOOM_ACTION' && typeof message.action === 'string') {
     void handleZoomAction(message.action);
     return false;
+  }
+
+  if (message.type === 'MARK_SET') {
+    // Content captured the position; the background owns storage. For a global
+    // mark the tab id/URL come from the sender (the tab it was set in).
+    const mark: StoredMark = { scrollX: message.scrollX, scrollY: message.scrollY, hash: message.hash };
+    if (message.scope === 'global') {
+      const global: GlobalMark = {
+        ...mark,
+        url: baseUrl(_sender.tab?.url ?? message.url),
+        tabId: _sender.tab?.id,
+      };
+      void setGlobalMark(message.letter, global);
+    } else {
+      void setLocalMark(message.url, message.letter, mark);
+    }
+    return false;
+  }
+
+  if (message.type === 'MARK_JUMP') {
+    if (message.scope === 'global') {
+      gotoGlobalMark(message.letter).then((ok) => sendResponse({ ok }));
+    } else {
+      getLocalMark(message.url, message.letter).then((mark) => sendResponse({ mark }));
+    }
+    return true; // async sendResponse
   }
 
   if (message.type === 'PALETTE_OPEN') {

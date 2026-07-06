@@ -451,3 +451,71 @@ describe('granular per-site passkeys', () => {
     expect(dispatchSpy).toHaveBeenCalledWith('scroll_down', {});
   });
 });
+
+describe('mark capture (Vimium m / `)', () => {
+  it('armMarkSet captures the next letter as a local mark and fires onMark', () => {
+    const onMark = vi.fn();
+    handler.setMarkCallback(onMark);
+    handler.armMarkSet();
+    expect(handler.getMode()).toBe('mark-set');
+    const consumed = handler.handleKeyDown(makeKey('q'));
+    expect(consumed).toBe(true);
+    expect(onMark).toHaveBeenCalledWith('set', 'q', false);
+    // Arm is a one-shot: back to normal, the next key is a keybind again.
+    expect(handler.getMode()).toBe('normal');
+  });
+
+  it('Shift+letter marks it global', () => {
+    const onMark = vi.fn();
+    handler.setMarkCallback(onMark);
+    handler.armMarkJump();
+    handler.handleKeyDown(makeKey('A', { shiftKey: true }));
+    expect(onMark).toHaveBeenCalledWith('jump', 'A', true);
+  });
+
+  it('the ` / \' registers stay local even with Shift', () => {
+    const onMark = vi.fn();
+    handler.setMarkCallback(onMark);
+    handler.armMarkJump();
+    handler.handleKeyDown(makeKey('`', { shiftKey: true }));
+    expect(onMark).toHaveBeenCalledWith('jump', '`', false);
+  });
+
+  it('a bare modifier keydown does not abandon the arm — the letter after it lands', () => {
+    const onMark = vi.fn();
+    handler.setMarkCallback(onMark);
+    handler.armMarkSet();
+    expect(handler.handleKeyDown(makeKey('Shift', { shiftKey: true }))).toBe(true);
+    expect(handler.getMode()).toBe('mark-set'); // still armed
+    handler.handleKeyDown(makeKey('B', { shiftKey: true }));
+    expect(onMark).toHaveBeenCalledWith('set', 'B', true);
+  });
+
+  it('Escape cancels the arm without firing onMark', () => {
+    const onMark = vi.fn();
+    handler.setMarkCallback(onMark);
+    handler.armMarkSet();
+    expect(handler.handleKeyDown(makeKey('Escape'))).toBe(true);
+    expect(onMark).not.toHaveBeenCalled();
+    expect(handler.getMode()).toBe('normal');
+  });
+
+  it('a non-printable key (arrow) abandons the arm', () => {
+    const onMark = vi.fn();
+    handler.setMarkCallback(onMark);
+    handler.armMarkJump();
+    expect(handler.handleKeyDown(makeKey('ArrowDown'))).toBe(false);
+    expect(onMark).not.toHaveBeenCalled();
+    expect(handler.getMode()).toBe('normal');
+  });
+
+  it('mark capture pre-empts hint filtering', () => {
+    handler.setFilterCallback(vi.fn());
+    const onMark = vi.fn();
+    handler.setMarkCallback(onMark);
+    handler.enterHintMode();
+    handler.armMarkSet();
+    handler.handleKeyDown(makeKey('z'));
+    expect(onMark).toHaveBeenCalledWith('set', 'z', false);
+  });
+});

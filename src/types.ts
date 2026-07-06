@@ -207,6 +207,18 @@ export type Message =
   // before content forwarding. `index` is goto's 1-based tab position.
   | { type: 'TAB_ACTION'; action: TabAction; index?: number }
   | { type: 'ZOOM_ACTION'; action: ZoomAction }
+  // --- Marks (notes/DESIGN_MARKS_AND_CARET.md, Part 1) ---
+  // Content → background. Set a mark at the current position. Local marks are
+  // stored per-URL; global marks (Shift at capture) carry the tab. `url`/scroll
+  // come from the sending frame; the background stamps the tabId for globals.
+  | { type: 'MARK_SET'; scope: 'local' | 'global'; letter: string; url: string; scrollX: number; scrollY: number; hash: string }
+  // Content → background. Jump to a mark. Local: background replies
+  // `{ mark }` (or null) and content restores in place. Global: background does
+  // the find-tab-or-open + restore itself and replies `{ ok }`.
+  | { type: 'MARK_JUMP'; scope: 'local' | 'global'; letter: string; url: string }
+  // Background → content (target tab of a global jump / freshly-opened tab):
+  // restore this saved position.
+  | { type: 'MARK_RESTORE'; scrollX: number; scrollY: number; hash: string }
   // Options → background. The keymap editor renders voice phrases from its own
   // catalog now; it only asks whether BranchKit is connected so it can show the
   // not-connected note. Response: { connected: boolean }.

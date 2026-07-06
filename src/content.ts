@@ -59,6 +59,9 @@ import { urlUp, urlRoot } from './url-nav';
 import { copyText } from './clipboard';
 import { flashToast } from './render/toast';
 import {
+  PREV_POSITION_REGISTERS, isPrevPositionRegister, marksToHash, type StoredMark,
+} from './marks';
+import {
   CodewordSnapshot,
   takeSnapshot,
   resolveFromSnapshot,
@@ -1125,6 +1128,78 @@ dispatcher.register('insert_mode', () => {
 });
 dispatcher.register('pass_next_key', () => {
   keyHandler.armPassNextKey();
+});
+
+// Marks (Vimium m / `). `m`/`` ` `` arm a one-shot; KeyHandler captures the next
+// key and calls back here with (op, letter, global). See
+// notes/DESIGN_MARKS_AND_CARET.md. Storage lives in the background (never the
+// page's localStorage); local jumps restore in place, globals go cross-tab.
+dispatcher.register('mark_set', () => keyHandler.armMarkSet());
+dispatcher.register('mark_jump', () => keyHandler.armMarkJump());
+
+// Previous-position registers (`` ` `` and `'`): in-memory, per page, holding the
+// spot before the last jump so `` `` `` returns you.
+const prevPositionRegisters: Record<string, StoredMark> = {};
+
+function currentPosition(): StoredMark {
+  return { scrollX: window.scrollX, scrollY: window.scrollY, hash: location.hash };
+}
+function savePreviousPosition(): void {
+  const pos = currentPosition();
+  for (const reg of PREV_POSITION_REGISTERS) prevPositionRegisters[reg] = pos;
+}
+function restorePosition(mark: StoredMark): void {
+  if (marksToHash(mark)) location.hash = mark.hash;
+  else window.scrollTo(mark.scrollX, mark.scrollY);
+}
+
+keyHandler.setMarkCallback((op, letter, global) => {
+  if (op === 'set') {
+    const pos = currentPosition();
+    chrome.runtime
+      .sendMessage({
+        type: 'MARK_SET',
+        scope: global ? 'global' : 'local',
+        letter,
+        url: location.href,
+        scrollX: pos.scrollX,
+        scrollY: pos.scrollY,
+        hash: pos.hash,
+      } as Message)
+      .catch(() => {});
+    flashToast(`${global ? 'Global' : 'Local'} mark ${letter} set`);
+    return;
+  }
+
+  // Jump. Previous-position registers restore from in-memory state.
+  if (!global && isPrevPositionRegister(letter)) {
+    const prev = prevPositionRegisters[letter];
+    if (!prev) { flashToast('No previous position'); return; }
+    savePreviousPosition(); // so `` toggles back and forth
+    restorePosition(prev);
+    return;
+  }
+
+  if (global) {
+    void chrome.runtime
+      .sendMessage({ type: 'MARK_JUMP', scope: 'global', letter, url: location.href } as Message)
+      .then((resp: { ok?: boolean } | undefined) => {
+        flashToast(resp?.ok ? `Jumped to global mark ${letter}` : `Global mark ${letter} not set`);
+      })
+      .catch(() => {});
+    return;
+  }
+
+  void chrome.runtime
+    .sendMessage({ type: 'MARK_JUMP', scope: 'local', letter, url: location.href } as Message)
+    .then((resp: { mark?: StoredMark | null } | undefined) => {
+      const mark = resp?.mark;
+      if (!mark) { flashToast(`Local mark ${letter} not set`); return; }
+      savePreviousPosition();
+      restorePosition(mark);
+      flashToast(`Jumped to local mark ${letter}`);
+    })
+    .catch(() => {});
 });
 // Pagination — follow the page's next/prev link (Vimium goNext/goPrevious).
 dispatcher.register('go_next', () => navigatePage('next'));
@@ -3026,6 +3101,13 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
 
   if (message.type === 'TAB_MARKER') {
     if (isTopFrame) setTabMarker(message.letters);
+    return false;
+  }
+
+  if (message.type === 'MARK_RESTORE') {
+    // A global-mark jump landed on (or opened) this tab — restore the saved
+    // position. Top frame only; sub-frame scroll is out of scope for MVP.
+    if (isTopFrame) restorePosition({ scrollX: message.scrollX, scrollY: message.scrollY, hash: message.hash });
     return false;
   }
 

@@ -9,7 +9,15 @@
 import { ActionDispatcher, CommandRegistry } from '../dispatcher';
 import { comboFromEvent, serializeCombo } from './key-combo';
 
-export type KeyMode = 'normal' | 'insert' | 'hint';
+import { isMarkChar, isPrevPositionRegister } from '../marks';
+
+// 'mark-set'/'mark-jump' are transient one-shot states (the next key names the
+// mark), surfaced only so the mode chip can prompt "press a letter". They don't
+// change key ROUTING — the arm is handled at the top of handleKeyDown.
+export type KeyMode = 'normal' | 'insert' | 'hint' | 'mark-set' | 'mark-jump';
+
+/** Which mark operation the next key completes. */
+export type MarkArm = 'set' | 'jump';
 
 /** Check if user is focused on an editable field. */
 function isInsertMode(): boolean {
@@ -62,6 +70,11 @@ export class KeyHandler {
   private excluded = false;
   // One-shot: hand exactly the next keystroke to the page (Vimium passNextKey).
   private passNextArmed = false;
+  // Marks (Vimium m / `): after `m` or `` ` ``, the NEXT printable key names the
+  // mark. A wildcard second key can't be a registry binding, so it's an armed
+  // one-shot like passNextArmed. See notes/DESIGN_MARKS_AND_CARET.md.
+  private markArm: MarkArm | null = null;
+  private onMark: ((op: MarkArm, letter: string, global: boolean) => void) | null = null;
   // Granular per-site pass-through: specific keys (matched against `event.key`,
   // e.g. "j", "#") reach the page while the REST of BranchKit's binds keep
   // working — for keyboard-heavy sites like Gmail. The persistent, per-key twin
@@ -89,7 +102,33 @@ export class KeyHandler {
     this.matchPredicate = fn;
   }
 
+  /** Invoked when the user completes a mark (`m`/`` ` `` then a letter). `global`
+   *  is true for a Shift-held letter (never for the `` ` ``/`'` registers). */
+  setMarkCallback(cb: (op: MarkArm, letter: string, global: boolean) => void): void {
+    this.onMark = cb;
+  }
+
+  /** Arm mark-set: the next printable key names a new mark. */
+  armMarkSet(): void {
+    this.markArm = 'set';
+    this.onModeChange?.(this.getMode());
+  }
+
+  /** Arm mark-jump: the next printable key names the mark to jump to. */
+  armMarkJump(): void {
+    this.markArm = 'jump';
+    this.onModeChange?.(this.getMode());
+  }
+
+  private clearMarkArm(): void {
+    if (this.markArm == null) return;
+    this.markArm = null;
+    this.onModeChange?.(this.getMode());
+  }
+
   getMode(): KeyMode {
+    if (this.markArm === 'set') return 'mark-set';
+    if (this.markArm === 'jump') return 'mark-jump';
     if (this.mode === 'hint') return 'hint';
     return (this.forcedInsert || this.excluded) ? 'insert' : 'normal';
   }
@@ -166,6 +205,36 @@ export class KeyHandler {
     if (this.passNextArmed) {
       this.passNextArmed = false;
       this.onModeChange?.(this.getMode());
+      return false;
+    }
+
+    // Mark capture (Vimium m / `): the next printable key names the mark. Runs
+    // before every other route so it captures regardless of hints/fields —
+    // though `m`/`` ` `` only fire from Normal mode, so a field never has us
+    // armed. Escape cancels; a bare modifier keydown (Shift before the letter)
+    // is ignored so the arm survives to the actual letter.
+    if (this.markArm != null) {
+      if (e.key === 'Escape') {
+        this.clearMarkArm();
+        e.preventDefault();
+        e.stopPropagation();
+        return true;
+      }
+      if (isModifierKey(e.key)) return true; // wait for the letter
+      if (isMarkChar(e.key)) {
+        e.preventDefault();
+        e.stopPropagation();
+        const op = this.markArm;
+        const letter = e.key;
+        // Shift → global, except the `` ` ``/`'` previous-position registers
+        // which are always local (Vimium's isGlobalMark).
+        const global = e.shiftKey && !isPrevPositionRegister(letter);
+        this.clearMarkArm();
+        this.onMark?.(op, letter, global);
+        return true;
+      }
+      // Any other non-printable (Tab, arrows, …) abandons the capture.
+      this.clearMarkArm();
       return false;
     }
 
@@ -349,4 +418,10 @@ export class KeyHandler {
 // bindings are written in, so a key event and a binding compare directly.
 function keyToString(e: KeyboardEvent): string {
   return serializeCombo(comboFromEvent(e));
+}
+
+// A modifier-only keydown (the Shift held before a global mark's letter, etc.).
+// Ignored during mark capture so the arm survives to the real key.
+function isModifierKey(key: string): boolean {
+  return key === 'Shift' || key === 'Control' || key === 'Alt' || key === 'Meta';
 }

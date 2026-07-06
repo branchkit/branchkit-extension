@@ -23,6 +23,7 @@ const REGISTERED_ACTIONS = [
   'next_tab', 'previous_tab', 'first_tab', 'last_tab', 'goto_tab', 'last_active_tab',
   'new_tab', 'close_tab', 'restore_tab', 'duplicate_tab', 'pin_tab', 'mute_tab',
   'move_tab_left', 'move_tab_right',
+  'mark_set', 'mark_jump',
   'toggle_help', 'toggle_palette', 'toggle_tab_palette',
 ] as const;
 
@@ -206,6 +207,8 @@ describe('default keymap', () => {
       { keys: 'shift+Period', command: 'move_tab_right' },
       { keys: 'shift+KeyP', command: 'pin_tab' },
       { keys: 'shift+KeyM', command: 'mute_tab' },
+      { keys: 'KeyM', command: 'mark_set' },
+      { keys: 'Backquote', command: 'mark_jump' },
       { keys: 'ctrl+KeyK', command: 'toggle_palette' },
       { keys: 'shift+KeyT', command: 'toggle_tab_palette' },
       { keys: 'shift+Slash', command: 'toggle_help' },
