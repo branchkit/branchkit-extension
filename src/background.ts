@@ -527,6 +527,15 @@ async function clearPaletteVoice(reason: string): Promise<void> {
   await postToPlugin('/palette', { conn_id: connId, entries: [] });
 }
 
+// Caret voice mode: reflect the content script's caret/visual state to the
+// plugin so it holds the exclusive caret tag while active (gating the voice
+// selection commands). Boolean twin of the palette publish. See
+// notes/DESIGN_HINT_ACTION_MODES.md.
+async function setCaretActive(active: boolean): Promise<void> {
+  if (!(await ensureConnected())) return;
+  await postToPlugin('/caret', { conn_id: connId, active });
+}
+
 // Command palette selection (notes/DESIGN_TAB_NAVIGATION.md, Layer 2). Always
 // close the overlay in the origin tab FIRST — a tab switch moves focus away
 // and must not leave a dead palette behind, and a command dispatch (e.g.
@@ -1121,6 +1130,11 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
       getLocalMark(message.url, message.letter).then((mark) => sendResponse({ mark }));
     }
     return true; // async sendResponse
+  }
+
+  if (message.type === 'CARET_ACTIVE') {
+    void setCaretActive(message.active);
+    return false;
   }
 
   if (message.type === 'PALETTE_OPEN') {

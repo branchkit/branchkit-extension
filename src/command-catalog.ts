@@ -75,11 +75,14 @@ export interface CommandMeta {
   /**
    * Voice-context gate for the command's spoken forms. 'palette' = only
    * matchable while the command palette is open (the plugin gates on its
-   * exclusive palette tag and clears it at match time). Absent = the plugin's
-   * default app-active gate. A semantic, not a tag name — tags stay
+   * exclusive palette tag and clears it at match time). 'caret' = only matchable
+   * while caret/visual selection is active (the plugin gates on its exclusive
+   * caret tag, held while the extension's caret mode is active — does NOT clear
+   * at match, since caret persists across many selection commands). Absent = the
+   * plugin's default app-active gate. A semantic, not a tag name — tags stay
    * plugin-owned, same contract as retainsHints.
    */
-  voiceContext?: 'palette';
+  voiceContext?: 'palette' | 'caret';
 }
 
 export interface KeymapEntry {
@@ -350,13 +353,15 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     description: 'Start a line-wise selection at the caret — j/k extend by whole lines, y copies. Esc exits.' },
   // Voice-driven caret/visual selection — the spoken twin of the movement keys,
   // so "voice for everything" covers selecting + copying by voice. Voice-only
-  // (movement keys are the keyboard form); no-op unless caret mode is active.
-  // Contributed as a normal browser-active command (no context gate) —
-  // gating to caret mode is a deferred refinement (needs a plugin tag). See
+  // (movement keys are the keyboard form). Gated on the caret mode via
+  // voiceContext:'caret' — the plugin holds an exclusive caret tag while the
+  // extension's caret mode is active (POST /caret), so these are eligible ONLY
+  // while selecting, mirroring the keyboard's modal capture. See
   // notes/DESIGN_HINT_ACTION_MODES.md.
   { id: 'caret_voice', label: 'Voice caret control', group: 'Selection', mappable: false,
     description: 'While the caret/visual selection is active, extend it by voice — "select word", "select line", "select to end" — then "copy that". "stop selecting" exits.',
     params: [{ name: 'op', type: 'enum', options: ['word', 'line', 'sentence', 'end', 'start', 'copy', 'exit'], default: 'word' }],
+    voiceContext: 'caret',
     voice: [
       { pattern: 'select word', params: { op: 'word' } },
       { pattern: 'select line', params: { op: 'line' } },

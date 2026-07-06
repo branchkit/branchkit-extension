@@ -3,15 +3,16 @@
 **Status:** Phases 1–4 **landed + live-verified** 2026-07-06 (committed local,
 unpushed). Phase 1 (unify armed booleans → `pendingHintAction`), phase 2
 (focus + copy-text, keyboard `gf`/`yc` + voice "focus {hint}"/"copy text
-{hint}"), phase 3a (keyboard hover `gh`), phase 4 (**voice caret control**,
-extension-only `caret_voice` — see the revised section below). Live-verified
-against the real extension: 6/6 in `scripts/_verify-hint-actions.mjs` (yank
-regression + focus/copytext/hover), 22/22 in `scripts/_verify-marks-caret.mjs`
-(incl. the voice-caret dispatch path). **Deferred:** phase 3b (move hover's
-voice contribution from the plugin into the extension catalog — cross-repo,
-needs plugin-test + voice live-verify), phase 4-gating (caret-mode-gated voice
-via a plugin tag — a refinement over the shipped always-on form), phase 5
-(enter-caret-at-badge).
+{hint}"), phase 3a (keyboard hover `gh`), phase 4 (**voice caret control** — the
+architecture-aligned tag-mode: plugin `plugin.browser.caret` exclusive tag +
+`POST /caret` + `context:"caret"`; extension `voiceContext:'caret'` +
+`CARET_ACTIVE` push). Live-verified against the real extension: 6/6 in
+`scripts/_verify-hint-actions.mjs` (yank regression + focus/copytext/hover),
+24/24 in `scripts/_verify-marks-caret.mjs` (incl. voice-caret dispatch + the
+`CARET_ACTIVE` push edges); plugin tag lifecycle in `caret_test.go`. Only the
+matcher's tag-gating needs a live host to confirm. **Deferred:** phase 3b (move
+hover's voice contribution from the plugin into the extension catalog —
+cross-repo), phase 5 (enter-caret-at-badge).
 
 Vimium's "hint modes": a badge you
 pick can do more than click — hover it, focus it, copy it, start a selection at
@@ -99,34 +100,55 @@ mode, and the user then drives movement and yank **by voice** (not only
 keyboard). That means caret/visual mode itself must be voice-drivable, which is
 its own capability, below.
 
-## Voice control of caret/visual mode — SHIPPED extension-only (phase 4, revised)
+## Voice control of caret/visual mode — SHIPPED, aligned tag-mode (phase 4)
 
-**Landed 2026-07-06 as an extension-only feature — no plugin change.** The
-gated design below (an exclusive plugin tag) was reconsidered during
-implementation and deferred as a refinement, because: (1) gating voice
-eligibility *requires* a plugin-managed tag (matching is plugin/actuator-side —
-there's no extension-only gate), (2) the exclusive tag is a real footgun (an
-orphaned exclusive tag suppresses every command system-wide — see palette.go's
-drain guards), and (3) the standalone harness has no plugin, so the
-extension→plugin→tag→eligibility chain would have been entirely unverifiable.
+**Landed 2026-07-06 as the architecture-aligned gated version** (an initial
+extension-only always-on form was upgraded the same day). An investigation into
+"are we fighting the architecture?" found that BranchKit already has the exact
+pattern for a sustained modal voice mode — `snap_mode`/`desk_mode` (declarative
+tag) — and the content-owned-mode → derived-plugin-tag half is the palette
+(`POST /palette` → tag). Caret is a composition of both. Crucially, the
+"exclusive tag footgun" I'd feared is managed declaratively (the palette's
+imperative tag has no `clear_on_unrelated_command`, so it can't drift; drains on
+exit/focus-loss/disconnect bound any orphan) — so the gated version is *less*
+risky than I'd thought, not more.
 
-What shipped instead: `caret_voice` — a normal browser-active voice command
-(id `caret_voice`, op enum) contributed via the generic path, dispatching to
-`CaretController.applyVoice(op)`. Phrases: "select word/line/sentence",
-"select to end/start", "copy selection"/"copy that", "stop selecting". It's a
-**no-op unless caret mode is active** (the controller guards it), so a stray
-"copy that" outside a selection does nothing. Verified 22/22 in
-`scripts/_verify-marks-caret.mjs` by injecting the real BRANCHKIT_ACTION message
-(no-op-when-inactive guard + "select word"→visual + "copy that"→clipboard).
-Speech recognition itself is the only unverified link (needs a live host+mic).
+What shipped:
+- **Plugin** (`plugins/browser`): a `plugin.browser.caret` **exclusive** tag
+  collection (mirrors the palette tag), a `POST /caret {active}` endpoint
+  (`caret.go`, the boolean twin of `POST /palette`) that Puts/Deletes the tag,
+  a `context: "caret"` branch in `contribute.go` (`RequiresTags(caretTag)` — and
+  *not* `ClearsTags`, since caret persists across many selection commands),
+  and caret drains alongside the palette ones (focus loss / switch / SSE
+  disconnect). Tag-lifecycle unit tests in `caret_test.go`.
+- **Extension**: `caret_voice` gains `voiceContext:'caret'` (gated on the tag);
+  the content CaretController pushes `CARET_ACTIVE {active}` to the background on
+  the active/inactive edge (deduped across caret↔visual), which `POST`s `/caret`.
+  `caret_voice` still dispatches to `CaretController.applyVoice(op)` and remains
+  a content-side no-op if somehow reached while inactive (belt-and-suspenders).
 
-Trade-off vs the gated design: the phrases are eligible whenever the browser is
-focused (minor command-list clutter), not caret-mode-gated. If that clutter or
-a misfire ever bites, the gated version below is a clean *additive* layer.
+Phrases: "select word/line/sentence", "select to end/start", "copy selection"/
+"copy that", "stop selecting". Because the tag is exclusive, while selecting only
+the caret voice commands match — mirroring the keyboard's modal capture.
 
-## (Deferred) Gated design — exclusive/context tag
+Verified: plugin tag lifecycle (`caret_test.go`, Go), and the extension contract
+in `scripts/_verify-marks-caret.mjs` (24/24: `CARET_ACTIVE` pushed true-on-enter/
+false-on-exit with caret↔visual dedup, "select word"→visual, "copy that"→
+clipboard). The one link the standalone harness can't exercise (no actuator/mic):
+the matcher actually gating eligibility on the tag — verify on a live host.
 
-The original plan, kept for when/if gating is wanted:
+### Design detail — why exclusive + imperative (not snap_mode's command-driven tag)
+
+`snap_mode`'s tag is *command-driven* (`sets_tags`/`requires_tags` +
+`clear_on_unrelated_command`). Caret can't use that shape: caret is
+content-stateful and dual-input (keyboard `v` enters it without ever touching the
+matcher), so the tag must be a **pure mirror** of the content mode (palette's
+imperative Put/Delete from a content push), not something a voice command sets.
+And `clear_on_unrelated_command` is deliberately OFF: under an exclusive tag,
+unrelated commands are suppressed before they can match, so it would rarely fire
+anyway — but more importantly, letting the matcher clear the tag could drift it
+from the content's still-active selection. The tag changes *only* via the
+extension's push, so content-state and tag stay in lockstep by construction.
 
 Caret/visual movement keys are currently owned by the self-contained caret
 handler (they bypass the command registry, by design). To drive them by voice we

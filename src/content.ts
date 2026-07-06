@@ -1206,10 +1206,21 @@ keyHandler.setMarkCallback((op, letter, global) => {
 // Caret / visual mode (Vimium v / V). The controller owns the Selection-API
 // movement + yank; it reports its mode so the KeyHandler capture state and the
 // mode chip stay in lockstep. See notes/DESIGN_MARKS_AND_CARET.md (Part 2).
+// Tracks the caret-active state last pushed to the background, so caret↔visual
+// transitions (both non-null) don't re-POST; only the active/inactive edge does.
+let caretActivePushed = false;
 const caret = new CaretController({
   onModeChange: (mode) => {
     if (mode) keyHandler.enterCaretMode(mode);
     else keyHandler.exitCaretMode();
+    // Reflect caret-active to the plugin (via background) so the exclusive caret
+    // tag gates the voice selection commands. Top frame only — the tag is a
+    // single per-browser mode, and the mode chip is top-frame too.
+    const active = mode !== null;
+    if (isTopFrame && active !== caretActivePushed) {
+      caretActivePushed = active;
+      chrome.runtime.sendMessage({ type: 'CARET_ACTIVE', active } as Message).catch(() => {});
+    }
   },
 });
 keyHandler.setCaretKeyHandler((e) => caret.handleKey(e));

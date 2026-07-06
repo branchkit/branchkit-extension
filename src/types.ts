@@ -219,6 +219,10 @@ export type Message =
   // Background → content (target tab of a global jump / freshly-opened tab):
   // restore this saved position.
   | { type: 'MARK_RESTORE'; scrollX: number; scrollY: number; hash: string }
+  // Content → background: caret/visual mode entered (active) or exited. The
+  // background POSTs /caret so the plugin holds the exclusive caret tag while
+  // active, gating the voice selection commands. See DESIGN_HINT_ACTION_MODES.md.
+  | { type: 'CARET_ACTIVE'; active: boolean }
   // Options → background. The keymap editor renders voice phrases from its own
   // catalog now; it only asks whether BranchKit is connected so it can show the
   // not-connected note. Response: { connected: boolean }.
