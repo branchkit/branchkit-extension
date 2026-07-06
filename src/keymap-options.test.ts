@@ -1,5 +1,24 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { openInlineEditor } from './keymap-options';
+import { openInlineEditor, cloneKeymap } from './keymap-options';
+
+describe('cloneKeymap (staged-edit isolation)', () => {
+  it('produces independent entry + params objects so draft edits never touch the baseline', () => {
+    const baseline = [
+      { keys: 'KeyJ', command: 'scroll_down' },
+      { keys: 'KeyG', command: 'goto_tab', params: { index: '1' } },
+    ];
+    const draft = cloneKeymap(baseline);
+
+    // Mutate the draft the way the editor does (in place).
+    draft[0].keys = 'shift+KeyJ';
+    draft[1].params!.index = '5';
+
+    expect(baseline[0].keys).toBe('KeyJ');
+    expect(baseline[1].params!.index).toBe('1');
+    // And the clone is value-equal to a fresh clone of the same input.
+    expect(cloneKeymap(baseline)).toEqual(baseline);
+  });
+});
 
 // Behavior of the shared inline phrase editor — the dismissal handling the
 // first cut lacked (blur/Escape cancel + close, Enter commits).

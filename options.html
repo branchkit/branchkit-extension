@@ -371,13 +371,38 @@
       keys act as shortcuts in Normal mode — they pause while you're typing in a
       text field, or typing a hint codeword after <em>f</em>. Add a Ctrl/Cmd
       modifier if you want a shortcut to fire even while typing in a field.
-      Shortcuts sync across browsers. Voice phrases are built in (not editable).
+      Shortcuts sync across browsers. Keybinding changes are staged — click
+      <strong>Save</strong> to apply or <strong>Cancel</strong> to revert. Voice
+      phrases can be customized below (each edit applies immediately).
     </div>
     <div class="toolbar">
       <button id="km-reset">Reset to defaults</button>
     </div>
+    <div id="km-savebar" class="km-savebar" hidden>
+      <span class="km-savebar-msg">You have unsaved shortcut changes</span>
+      <span class="km-savebar-actions">
+        <button id="km-discard" class="km-btn-ghost">Cancel</button>
+        <button id="km-save" class="km-btn-primary">Save</button>
+      </span>
+    </div>
     <div id="keymap"></div>
     <style>
+      /* Sticky Save/Cancel bar — appears while there are unsaved keybinding
+         edits, stays reachable while scrolling a long list. */
+      .km-savebar:not([hidden]) { display: flex; }
+      .km-savebar {
+        position: sticky; top: 8px; z-index: 5;
+        align-items: center; justify-content: space-between; gap: 12px;
+        padding: 8px 12px; margin-bottom: 12px;
+        background: var(--bg); border: 1px solid var(--accent); border-radius: 8px;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.28);
+      }
+      .km-savebar-msg { font-size: 13px; font-weight: 600; color: var(--accent); }
+      .km-savebar-actions { display: inline-flex; gap: 8px; }
+      .km-btn-primary { background: var(--accent); color: #fff; border: none; border-radius: 6px; padding: 5px 16px; cursor: pointer; font-weight: 600; }
+      .km-btn-primary:hover { filter: brightness(1.08); }
+      .km-btn-ghost { background: transparent; color: var(--fg); border: 1px solid var(--border); border-radius: 6px; padding: 5px 14px; cursor: pointer; }
+      .km-btn-ghost:hover { border-color: var(--accent); }
       /* Keyboard shortcuts as a dense table: one row per command, grouped under
          accent section headers (matching the ? help overlay). No per-command
          box — the hairline row separators carry the structure. */
@@ -428,6 +453,7 @@
         border: 1px dashed var(--border); border-radius: 6px; padding: 3px 9px; cursor: pointer;
       }
       .km-addkey:hover, .km-addkey.capturing { border-color: var(--accent); color: var(--accent); }
+      .km-no-shortcut { font-size: 11px; font-style: italic; color: var(--fg-muted); opacity: 0.7; }
       /* Voice phrase on the row — "or say this" beside "press this". */
       .km-row-voice { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-muted); font-style: italic; }
       .km-row-voice svg { width: 13px; height: 13px; flex: 0 0 auto; color: var(--accent); opacity: 0.9; }

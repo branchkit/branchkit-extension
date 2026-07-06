@@ -12,6 +12,7 @@
 import {
   COMMAND_CATALOG,
   COMMAND_BY_ID,
+  DEFAULT_KEYMAP,
   type CommandMeta,
   type KeymapEntry,
   type ParamSchema,
@@ -21,7 +22,6 @@ import { overrideKey, validateOverridePhrase, overridesFromList, type OverrideRe
 import {
   loadKeymap,
   saveKeymap,
-  resetKeymap,
   onKeymapChanged,
   keymapsEqual,
 } from './keymap-storage';
@@ -32,7 +32,13 @@ import { nativeOverride, detectOS, detectBrowser } from './browser-shortcuts';
 const OS = detectOS();
 const BROWSER = detectBrowser();
 
+// Keybinding edits are STAGED: `keymap` is the working draft the UI mutates;
+// `savedKeymap` is the last-persisted baseline. Nothing hits storage until the
+// user clicks Save; Cancel reverts the draft to the baseline (so a fumbled
+// rebind can't silently clobber the previous binding). Voice edits keep their
+// own per-edit Enter/Escape commit — they apply live for testing.
 let keymap: KeymapEntry[] = [];
+let savedKeymap: KeymapEntry[] = [];
 let suppressEcho = false;
 // Voice phrases come from the command catalog (the extension owns them). The
 // only runtime signal is whether BranchKit is connected, which gates the
@@ -62,9 +68,29 @@ const MIC_SVG =
   '<rect x="9" y="2" width="6" height="12" rx="3"/>' +
   '<path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="22"/></svg>';
 
-function save(): void {
+/** Deep-clone a keymap so the draft and baseline never share entry/param
+ * objects (edits mutate entries in place). */
+export function cloneKeymap(k: readonly KeymapEntry[]): KeymapEntry[] {
+  return k.map((e) => ({ ...e, ...(e.params ? { params: { ...e.params } } : {}) }));
+}
+
+/** True when the draft differs from the last-saved baseline. */
+function isDirty(): boolean {
+  return !keymapsEqual(keymap, savedKeymap);
+}
+
+/** Persist the draft and make it the new baseline. */
+function commitKeymap(): void {
   suppressEcho = true;
   saveKeymap(keymap);
+  savedKeymap = cloneKeymap(keymap);
+  updateSaveBar();
+}
+
+/** Show/hide the sticky Save/Cancel bar based on the dirty state. */
+function updateSaveBar(): void {
+  const bar = document.getElementById('km-savebar');
+  if (bar) bar.hidden = !isDirty();
 }
 
 function render(): void {
@@ -92,6 +118,7 @@ function render(): void {
       keymapEl.appendChild(renderCommand(cmd, dupes));
     }
   }
+  updateSaveBar();
 }
 
 // One command = one dense row: label (left, description in its tooltip), then
@@ -113,6 +140,15 @@ function renderCommand(meta: CommandMeta, dupes: Set<string>): HTMLElement {
 
   const keys = document.createElement('div');
   keys.className = 'km-keys';
+  // Unbound is a valid, permanent state — the command still exists (and stays
+  // voice-reachable). Show a calm "no shortcut" so it reads as optional, not
+  // removed; commands are never deletable (they come from the catalog).
+  if (entries.length === 0) {
+    const none = document.createElement('span');
+    none.className = 'km-no-shortcut';
+    none.textContent = 'no shortcut';
+    keys.appendChild(none);
+  }
   for (const entry of entries) keys.appendChild(renderBinding(entry, dupes));
 
   // Inline add-key — a dashed pill sitting right after the existing keys, where
@@ -126,8 +162,7 @@ function renderCommand(meta: CommandMeta, dupes: Set<string>): HTMLElement {
     capture(add, '+ key', (k) => {
       if (!k) return;
       keymap = [...keymap, { keys: k, command: meta.id }];
-      save();
-      render();
+      render(); // stages into the draft; Save/Cancel bar reflects it
     });
   });
   keys.appendChild(add);
@@ -487,8 +522,7 @@ function renderBinding(entry: KeymapEntry, dupes: Set<string>): HTMLElement {
     capture(keyBtn, displayKeys(entry.keys), (k) => {
       if (!k) return;
       entry.keys = k;
-      save();
-      render();
+      render(); // staged — Cancel restores the previous binding
     });
   });
   pill.appendChild(keyBtn);
@@ -500,8 +534,7 @@ function renderBinding(entry: KeymapEntry, dupes: Set<string>): HTMLElement {
   remove.title = `Remove ${displayKeys(entry.keys)}`;
   remove.addEventListener('click', () => {
     keymap = keymap.filter((e) => e !== entry);
-    save();
-    render();
+    render(); // staged — Cancel brings the key back
   });
   pill.appendChild(remove);
   group.appendChild(pill);
@@ -567,7 +600,7 @@ function renderParamControl(schema: ParamSchema, entry: KeymapEntry): HTMLElemen
 
   const setParam = (value: string): void => {
     entry.params = { ...(entry.params ?? {}), [schema.name]: value };
-    save();
+    updateSaveBar(); // stage without a full re-render (keep the field focused)
   };
 
   if (schema.type === 'enum') {
@@ -598,6 +631,8 @@ export async function initKeymapEditor(): Promise<void> {
   if (!keymapEl) return; // section absent (older options.html)
 
   keymap = await loadKeymap();
+  savedKeymap = cloneKeymap(keymap);
+  wireSaveBar();
   render();
 
   // Voice phrases render synchronously from the catalog; only probe BranchKit's
@@ -630,11 +665,11 @@ export async function initKeymapEditor(): Promise<void> {
     })
     .catch(() => {});
 
+  // "Reset to defaults" now STAGES the defaults into the draft (revertible via
+  // Cancel) instead of persisting immediately — no confirm needed, Save applies.
   const resetBtn = document.getElementById('km-reset') as HTMLButtonElement | null;
-  resetBtn?.addEventListener('click', async () => {
-    if (!confirm('Reset all keyboard shortcuts to the defaults?')) return;
-    resetKeymap();
-    keymap = await loadKeymap();
+  resetBtn?.addEventListener('click', () => {
+    keymap = cloneKeymap(DEFAULT_KEYMAP);
     render();
   });
 
@@ -643,8 +678,26 @@ export async function initKeymapEditor(): Promise<void> {
       suppressEcho = false;
       return; // our own save
     }
-    if (keymapsEqual(incoming, keymap)) return;
-    keymap = incoming;
+    if (keymapsEqual(incoming, savedKeymap)) return; // no change to the baseline
+    // Another options tab (or instance) saved. Track the new baseline; adopt it
+    // as the draft only when we have no local edits, so an in-progress edit
+    // isn't clobbered — Cancel then reverts to the newest saved state.
+    const hadEdits = isDirty();
+    savedKeymap = cloneKeymap(incoming);
+    if (!hadEdits) keymap = cloneKeymap(incoming);
+    render();
+  });
+}
+
+// Wire the sticky Save/Cancel bar (present in options.html; absent in older
+// markup, in which case staging still works — just without the bar).
+function wireSaveBar(): void {
+  document.getElementById('km-save')?.addEventListener('click', () => {
+    commitKeymap();
+    render();
+  });
+  document.getElementById('km-discard')?.addEventListener('click', () => {
+    keymap = cloneKeymap(savedKeymap);
     render();
   });
 }
