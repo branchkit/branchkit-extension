@@ -267,6 +267,9 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // deferred phase-3b cleanup (notes/DESIGN_HINT_ACTION_MODES.md).
   { id: 'hover_hint', label: 'Hover a badge', group: 'Badges', mappable: true, params: [],
     description: 'Hover a badge’s element to reveal menus or controls without clicking it. Press the key then type a letter. (Voice: say "hover" then the codeword.)' },
+  { id: 'caret_hint', label: 'Select from a badge', group: 'Badges', mappable: true, params: [],
+    description: 'Start a text selection at a badge’s element — say "select" then its codeword (or press the key then type a letter), then drive the selection by keyboard (hjkl/y) or voice ("select word" / "copy that").',
+    voice: [{ pattern: 'select {hint}' }] },
 
   // --- Tabs ---
   // All tab verbs share one background handler (handleTabAction): keyboard
@@ -492,6 +495,7 @@ export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   { keys: 'KeyY KeyC', command: 'copytext_hint' },     // yc — copy a badge's text
   { keys: 'KeyG KeyF', command: 'focus_hint' },        // gf — focus a badge (frame-nav dropped)
   { keys: 'KeyG KeyH', command: 'hover_hint' },        // gh — hover a badge
+  { keys: 'KeyG KeyV', command: 'caret_hint' },        // gv — select from a badge
   { keys: 'KeyG KeyU', command: 'go_up' },             // gu
   { keys: 'KeyG shift+KeyU', command: 'go_root' },     // gU
   // Tabs (Vimium t/x/X, gt/gT, yt, ^)

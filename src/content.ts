@@ -918,7 +918,7 @@ dispatcher.register('hint_mode', () => {
 // Set by a verb command (or the capital-letter new-tab affordance) before/while
 // in hint mode; consumed + reset in activateWrapper. See
 // notes/DESIGN_HINT_ACTION_MODES.md.
-type HintAction = 'activate' | 'newtab' | 'yank' | 'hover' | 'focus' | 'copytext';
+type HintAction = 'activate' | 'newtab' | 'yank' | 'hover' | 'focus' | 'copytext' | 'caret';
 let pendingHintAction: HintAction = 'activate';
 
 // The shared toggle used by both Ctrl+S (keyboard) and the voice "toggle"
@@ -1271,6 +1271,12 @@ dispatcher.register('copytext_hint', () => {
 // "hover {hint}" (still plugin-contributed; see DESIGN_HINT_ACTION_MODES.md 3b).
 dispatcher.register('hover_hint', () => {
   pendingHintAction = 'hover';
+  keyHandler.enterHintMode();
+});
+// Start a caret/visual selection at a badge's element (Vimium hint→caret) —
+// then drive it by keyboard or voice ("select word" / "copy that").
+dispatcher.register('caret_hint', () => {
+  pendingHintAction = 'caret';
   keyHandler.enterHintMode();
 });
 
@@ -2272,6 +2278,14 @@ function activateWrapper(wrapper: ElementWrapper): void {
     dispatchHover(el);
     flashToast('Hovered');
     hintActionHandoff();
+    return;
+  }
+  if (action === 'caret') {
+    // Start a caret/visual selection AT this element (Vimium hint→caret). Then
+    // drive it by keyboard (hjkl/y) or voice ("select word" / "copy that").
+    wrapper.hint?.flash();
+    hintActionHandoff();
+    caret.enterAt(el);
     return;
   }
 
@@ -3403,7 +3417,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         detail,
         fp,
       });
-    } else if (action === 'hover' || action === 'focus_hint' || action === 'copytext_hint') {
+    } else if (action === 'hover' || action === 'focus_hint' || action === 'copytext_hint' || action === 'caret_hint') {
       // Element-verb voice actions (Vimium hint modes): resolve the codeword to
       // a wrapper and act ON it without following it —
       //   hover        → pointer-in event sequence (pointerover/enter/move +
@@ -3412,6 +3426,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       //                  (mirrors Rango's hoverElement).
       //   focus_hint   → focus the element (a field to type in, or any element).
       //   copytext_hint→ copy the element's visible text.
+      //   caret_hint   → start a caret/visual selection at the element.
       // All share the same three-tier resolution as activate so codewords stay
       // consistent across verbs. None tear down wrappers or hide hints
       // (always-mode keeps badges so the user can follow up on what appeared).
@@ -3444,6 +3459,9 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         } else if (action === 'focus_hint') {
           target.focus();
           detail = 'focused';
+        } else if (action === 'caret_hint') {
+          caret.enterAt(target);
+          detail = 'caret at element';
         } else {
           const text = (target.textContent || '').trim();
           if (text) void copyText(text).then((ok) => flashToast(ok ? 'Copied text' : 'Copy failed'));

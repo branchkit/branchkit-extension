@@ -10,9 +10,15 @@ architecture-aligned tag-mode: plugin `plugin.browser.caret` exclusive tag +
 `scripts/_verify-hint-actions.mjs` (yank regression + focus/copytext/hover),
 24/24 in `scripts/_verify-marks-caret.mjs` (incl. voice-caret dispatch + the
 `CARET_ACTIVE` push edges); plugin tag lifecycle in `caret_test.go`. Only the
-matcher's tag-gating needs a live host to confirm. **Deferred:** phase 3b (move
+matcher's tag-gating needs a live host to confirm. Phase 5
+(**enter-caret-at-badge**): `caret_hint` (keyboard `gv` + voice "select {hint}")
+→ `CaretController.enterAt(el)` starts a caret/visual selection at a picked
+element — completing the pure-voice flow (pick by voice → drive by voice → "copy
+that"). Extension-only (the voice verb rides the generic `{hint}` contribution
+path). Verified 7/7 in `scripts/_verify-hint-actions.mjs` (`gv` + codeword →
+caret at the link, extend+yank captures its text). **Deferred:** phase 3b (move
 hover's voice contribution from the plugin into the extension catalog —
-cross-repo), phase 5 (enter-caret-at-badge).
+cross-repo).
 
 Vimium's "hint modes": a badge you
 pick can do more than click — hover it, focus it, copy it, start a selection at

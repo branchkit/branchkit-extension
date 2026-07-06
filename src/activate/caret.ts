@@ -205,6 +205,30 @@ export class CaretController {
     }
   }
 
+  /** Enter caret mode anchored at a specific element (Vimium's hint→caret). The
+   *  caret lands on the first non-whitespace character of the element's first
+   *  text node — used by the `select {hint}` verb (voice + keyboard). */
+  enterAt(el: HTMLElement): void {
+    const sel = window.getSelection();
+    if (!sel) return;
+    const range = document.createRange();
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    const node = walker.nextNode();
+    if (node) {
+      const text = node.textContent ?? '';
+      const offset = text.length - text.replace(/^\s+/, '').length;
+      range.setStart(node, offset);
+      range.setEnd(node, offset);
+    } else {
+      range.setStart(el, 0);
+      range.setEnd(el, 0);
+    }
+    sel.removeAllRanges();
+    sel.addRange(range);
+    this.movement = new Movement('move', sel);
+    this.applyKind('caret');
+  }
+
   /** Enter from Normal mode. Establishes a caret position if there's no usable
    *  selection; aborts with a toast if the page has no selectable text. */
   enter(kind: CaretEntry): void {
