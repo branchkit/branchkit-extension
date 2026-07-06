@@ -931,6 +931,20 @@ function handleSSEEvent(data: any): void {
 
 // --- Message Listener ---
 
+// Map a failed plugin phrase-write to an editor-friendly message. A 400 carries
+// the actuator's validation text (user-actionable — relay it); a 404 means the
+// running BranchKit predates these routes (needs a rebuild); anything else is a
+// transport/availability problem. Avoids surfacing raw "404 page not found".
+async function phraseWriteError(resp: Response | null): Promise<string> {
+  if (!resp) return 'BranchKit isn’t running.';
+  if (resp.status === 400) {
+    const detail = (await resp.text().catch(() => '')).trim();
+    return detail || 'That phrase isn’t allowed.';
+  }
+  if (resp.status === 404) return 'Update BranchKit — this build can’t edit voice phrases yet.';
+  return 'Couldn’t save — is BranchKit up to date and running?';
+}
+
 chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   if (message.type === 'GRAMMAR_BATCH') {
     // Content's batched doScan (Option B) sent a grammar batch. Stamp
@@ -1117,9 +1131,7 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
       }))
       .then(async (resp) => {
         if (resp && resp.ok) { sendResponse({ ok: true }); return; }
-        // Relay the actuator's validation message (400) so the editor can show it.
-        const detail = resp ? (await resp.text().catch(() => '')) : '';
-        sendResponse({ ok: false, error: detail || 'Not connected to BranchKit.' });
+        sendResponse({ ok: false, error: await phraseWriteError(resp) });
       })
       .catch(() => sendResponse({ ok: false, error: 'Not connected to BranchKit.' }));
     return true; // async response
@@ -1158,8 +1170,7 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
       }))
       .then(async (resp) => {
         if (resp && resp.ok) { sendResponse({ ok: true }); return; }
-        const detail = resp ? (await resp.text().catch(() => '')) : '';
-        sendResponse({ ok: false, error: detail || 'Not connected to BranchKit.' });
+        sendResponse({ ok: false, error: await phraseWriteError(resp) });
       })
       .catch(() => sendResponse({ ok: false, error: 'Not connected to BranchKit.' }));
     return true; // async response
