@@ -25,12 +25,19 @@ reach the page.
 2. **Pass next key (`pass_next_key`, unbound by default).** `armPassNextKey()`
    hands exactly the next keystroke to the page, then normal handling resumes.
    Vimium's `passNextKey`.
-3. **Per-site exclusion.** `setExcluded(true)` = keybinds off for this host,
-   every key to the page (Escape included — the site may use it). Persisted in
-   `chrome.storage.sync` under `keyExclusions` (`src/key-exclusions.ts`), toggled
-   from the popup ("Shortcuts here: On/Off"), read by the content script on load
-   and kept live via `onKeyExclusionsChanged`. Voice still works; re-enable from
-   the popup.
+3. **Per-site exclusion (all-or-nothing).** `setExcluded(true)` = keybinds off
+   for this host, every key to the page (Escape included). Persisted under
+   `keyExclusions`, toggled from the popup ("Shortcuts here: On/Off").
+4. **Per-site granular passthrough.** `setPassKeys([...])` = pass just these keys
+   (matched against `event.key`) to the page while the REST of BranchKit's binds
+   keep working — the Gmail case: pass `j`/`k`/`e`, keep `f`. Checked in normal
+   mode only (hint typing + Ctrl/Cmd chords unaffected). Persisted under
+   `keyPassthrough` (host → chars), edited from the popup's "Pass keys to site"
+   field (each typed character is one key). Vimium's passKeys.
+
+Both per-site levels live in `src/key-exclusions.ts`; the content script reads
+the combined `getSiteKeyState(host)` on load and re-applies via
+`onSiteKeysChanged`. Voice is always unaffected.
 
 `getMode()` reports `insert` whenever `forcedInsert || excluded`, so the chip and
 any consumer see one "pass-through" state. Automatic field-insert stays quiet
@@ -38,6 +45,7 @@ any consumer see one "pass-through" state. Automatic field-insert stays quiet
 
 ## Not doing (yet)
 
-- Per-site **pass-only-these-keys** (Vimium's granular passkeys) — V1 is
-  all-or-nothing per site.
-- Glob patterns for exclusions — V1 matches exact `hostname`.
+- Glob patterns for exclusions/passthrough — V1 matches exact `hostname`.
+- Special-key passthrough (Enter/Tab/arrows) in the popup field — V1 takes
+  printable characters (matched against `event.key`), which covers Gmail-style
+  letter/symbol shortcuts.

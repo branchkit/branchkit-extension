@@ -414,3 +414,40 @@ describe('per-site exclusion', () => {
     expect(handler.getMode()).toBe('normal');
   });
 });
+
+describe('granular per-site passkeys', () => {
+  it('passes a listed key to the page even when it is bound', () => {
+    registry.add({ keys: 'KeyJ', action: 'scroll_down' });
+    handler.setPassKeys(['j']);
+    // The passkey wins: reaches the page, and the bind does NOT fire.
+    expect(handler.handleKeyDown(makeKey('j'))).toBe(false);
+    expect(dispatchSpy).not.toHaveBeenCalled();
+  });
+
+  it('leaves unlisted binds working', () => {
+    registry.add({ keys: 'KeyF', action: 'hint_mode' });
+    handler.setPassKeys(['j', 'k']); // f not listed
+    expect(handler.handleKeyDown(makeKey('f'))).toBe(true);
+    expect(dispatchSpy).toHaveBeenCalledWith('hint_mode', {});
+  });
+
+  it('matches event.key exactly (symbols pass through)', () => {
+    handler.setPassKeys(['#']);
+    expect(handler.handleKeyDown(makeKey('#', { shiftKey: true }))).toBe(false);
+  });
+
+  it('does not apply in hint mode (letters still filter hints)', () => {
+    handler.setPassKeys(['a']);
+    handler.setFilterCallback(vi.fn());
+    handler.enterHintMode();
+    expect(handler.handleKeyDown(makeKey('a'))).toBe(true); // consumed as codeword
+  });
+
+  it('clears when set to empty — the bind fires again', () => {
+    registry.add({ keys: 'KeyJ', action: 'scroll_down' });
+    handler.setPassKeys(['j']);
+    handler.setPassKeys([]);
+    expect(handler.handleKeyDown(makeKey('j'))).toBe(true);
+    expect(dispatchSpy).toHaveBeenCalledWith('scroll_down', {});
+  });
+});

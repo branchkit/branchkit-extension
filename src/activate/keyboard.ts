@@ -62,6 +62,11 @@ export class KeyHandler {
   private excluded = false;
   // One-shot: hand exactly the next keystroke to the page (Vimium passNextKey).
   private passNextArmed = false;
+  // Granular per-site pass-through: specific keys (matched against `event.key`,
+  // e.g. "j", "#") reach the page while the REST of BranchKit's binds keep
+  // working — for keyboard-heavy sites like Gmail. The persistent, per-key twin
+  // of full `excluded`. Vimium's passKeys. See notes/DESIGN_PASS_THROUGH.md.
+  private passKeys = new Set<string>();
 
   constructor(registry: CommandRegistry, dispatcher: ActionDispatcher) {
     this.registry = registry;
@@ -126,6 +131,12 @@ export class KeyHandler {
 
   isExcluded(): boolean {
     return this.excluded;
+  }
+
+  /** Set the granular per-site pass-through keys (matched against `event.key`).
+   *  Empty = none. */
+  setPassKeys(keys: readonly string[]): void {
+    this.passKeys = new Set(keys);
   }
 
   enterHintMode(): void {
@@ -199,6 +210,14 @@ export class KeyHandler {
         e.stopPropagation();
         return true;
       }
+      return false;
+    }
+
+    // Granular per-site pass-through: these specific keys reach the page while
+    // the rest of BranchKit's binds keep working (the Gmail case — pass j/k/e,
+    // keep f). Normal mode only; hint typing and Ctrl/Cmd chords are unaffected
+    // (chords already took the path above). See notes/DESIGN_PASS_THROUGH.md.
+    if (this.mode !== 'hint' && this.passKeys.has(e.key)) {
       return false;
     }
 

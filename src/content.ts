@@ -53,7 +53,7 @@ import { overridesFromList, type OverrideRecord } from './command-override';
 import { togglePalette, closePalette } from './render/palette-host';
 import { setTabMarker, reapplyTabMarker, refreshTabMarker } from './render/tab-title';
 import { setModeChip } from './render/mode-chip';
-import { isHostExcluded, onKeyExclusionsChanged } from './key-exclusions';
+import { getSiteKeyState, onSiteKeysChanged } from './key-exclusions';
 import { findPageLink, type Rel } from './pagination';
 import { urlUp, urlRoot } from './url-nav';
 import { copyText } from './clipboard';
@@ -1184,12 +1184,18 @@ dispatcher.register('scroll_to_element', (params) => {
 // hints) and hide it back in Normal. See notes/DESIGN_KEYBOARD_MODES.md.
 keyHandler.setModeChangeCallback((mode) => setModeChip(mode));
 
-// Per-site keyboard exclusion: on hosts the user has switched off, BranchKit
-// hands the keyboard to the page (its own shortcuts work; voice still works).
-// Applied on load and kept live as the popup toggles it. See
-// notes/DESIGN_PASS_THROUGH.md.
-void isHostExcluded(location.hostname).then((ex) => keyHandler.setExcluded(ex));
-onKeyExclusionsChanged((list) => keyHandler.setExcluded(list.includes(location.hostname)));
+// Per-site keyboard policy — full exclusion (all keys to the page) and/or
+// granular passthrough (specific keys to the page, the rest of BranchKit's
+// binds still work). Applied on load and kept live as the popup edits it.
+// Voice is unaffected. See notes/DESIGN_PASS_THROUGH.md.
+function applySiteKeys(): void {
+  void getSiteKeyState(location.hostname).then(({ excluded, passKeys }) => {
+    keyHandler.setExcluded(excluded);
+    keyHandler.setPassKeys(passKeys);
+  });
+}
+applySiteKeys();
+onSiteKeysChanged(applySiteKeys);
 
 // Escape out of hint mode: in ALWAYS-visible mode the badges stay painted
 // (they're for voice — Escape just leaves keyboard typing mode); in MANUAL

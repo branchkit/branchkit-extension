@@ -111,6 +111,14 @@
       border-top: 1px solid var(--border);
     }
     .setting label { font-size: 12px; color: #adbac7; }
+    .passkeys-input {
+      font: inherit; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      width: 130px; padding: 4px 8px;
+      background: var(--card); color: var(--fg);
+      border: 1px solid var(--border); border-radius: 6px;
+    }
+    .passkeys-input:focus { border-color: var(--accent); outline: none; }
+    #key-passthrough-setting[hidden] { display: none; }
     .setting select {
       font-size: 12px;
       padding: 2px 4px;
@@ -454,6 +462,10 @@
       <button class="seg active" data-value="on" role="radio">On</button>
       <button class="seg" data-value="off" role="radio">Off</button>
     </div>
+  </div>
+  <div class="setting" id="key-passthrough-setting" title="Keys to hand to this site while your other BranchKit shortcuts keep working — e.g. jke#r for Gmail. Type the characters; each is one key.">
+    <label>Pass keys to site</label>
+    <input type="text" id="key-passthrough" class="passkeys-input" placeholder="e.g. jke#" spellcheck="false" autocomplete="off" autocapitalize="off">
   </div>
 
   <div class="rules-section" id="rules-section">

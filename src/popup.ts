@@ -17,7 +17,7 @@ import {
   type RevealMethod,
 } from './rules/domain-rules';
 import { loadDomainRules, saveDomainRules } from './rules/domain-rules-storage';
-import { isHostExcluded, setHostExcluded } from './key-exclusions';
+import { isHostExcluded, setHostExcluded, getHostPassKeys, setHostPassKeys } from './key-exclusions';
 import { migrateDisplayMode } from './labels/words';
 import { suggestPattern, isValidSelector } from './rules/options-helpers';
 import {
@@ -269,12 +269,18 @@ function initShortcutsToggle(): void {
     return;
   }
   const buttons = Array.from(group.querySelectorAll<HTMLButtonElement>('.seg'));
+  const passRow = document.getElementById('key-passthrough-setting');
+  const passInput = document.getElementById('key-passthrough') as HTMLInputElement | null;
+
   const select = (on: boolean): void => {
     for (const b of buttons) {
       const active = (b.dataset.value === 'on') === on;
       b.classList.toggle('active', active);
       b.setAttribute('aria-checked', String(active));
     }
+    // Granular pass-through only makes sense while shortcuts are On — Off passes
+    // everything already.
+    passRow?.toggleAttribute('hidden', !on);
   };
   void isHostExcluded(host).then((ex) => select(!ex)); // On = not excluded
   for (const b of buttons) {
@@ -282,6 +288,15 @@ function initShortcutsToggle(): void {
       const on = b.dataset.value === 'on';
       select(on);
       void setHostExcluded(host, !on);
+    });
+  }
+
+  // Pass-through keys: each typed character is one key handed to the site.
+  if (passInput) {
+    void getHostPassKeys(host).then((keys) => { passInput.value = keys.join(''); });
+    passInput.addEventListener('input', () => {
+      const keys = Array.from(passInput.value).filter((c) => c.trim() !== '');
+      void setHostPassKeys(host, keys);
     });
   }
 }
