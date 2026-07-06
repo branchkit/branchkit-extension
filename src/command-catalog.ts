@@ -213,6 +213,12 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   { id: 'focus_input', label: 'Focus first input', group: 'Navigation', mappable: true, params: [],
     description: 'Focus the first text field on the page; Tab / Shift+Tab then cycle between fields.',
     voice: [{ pattern: 'focus input' }, { pattern: 'focus first input' }] },
+  // Pass-through: hand the keyboard to the site so its own shortcuts work.
+  // Keyboard-only (voice is unaffected by keyboard modes), so no `voice`.
+  { id: 'insert_mode', label: 'Pass keys to the page', group: 'Navigation', mappable: true, params: [],
+    description: 'Hand every keypress to the site until you press Escape — for pages with their own keyboard shortcuts (Gmail, GitHub, web apps, games).' },
+  { id: 'pass_next_key', label: 'Pass next key to the page', group: 'Navigation', mappable: true, params: [],
+    description: 'Send just the next keystroke straight to the site, then resume BranchKit shortcuts.' },
 
   // --- Tabs ---
   // All tab verbs share one background handler (handleTabAction): keyboard
@@ -384,6 +390,7 @@ export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   { keys: 'shift+KeyL', command: 'history_forward' }, // L
   { keys: 'KeyR', command: 'refresh' },               // r
   { keys: 'KeyG KeyI', command: 'focus_input' },      // gi
+  { keys: 'KeyI', command: 'insert_mode' },           // i — pass keys to the page
   // Tabs (Vimium t/x/X, gt/gT, yt, ^)
   { keys: 'KeyT', command: 'new_tab' },               // t
   { keys: 'KeyX', command: 'close_tab' },             // x

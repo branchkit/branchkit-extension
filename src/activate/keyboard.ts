@@ -52,6 +52,16 @@ export class KeyHandler {
   // codeword keystroke that matches nothing — otherwise the filter hides every
   // badge until Escape. Set by content.ts; null means accept any char.
   private matchPredicate: ((prefix: string) => boolean) | null = null;
+  // Explicit "pass keys to the page" state (Vimium's insert mode): every key
+  // reaches the page until Escape. Distinct from the automatic field-focus
+  // insert (`isInsertMode`) so it works anywhere, e.g. sites with their own
+  // bare-key shortcuts (Gmail, GitHub, games). See notes/DESIGN_PASS_THROUGH.md.
+  private forcedInsert = false;
+  // Persistent per-site form of the above — keybinds off on this host, managed
+  // from the popup. Both hand every key to the page.
+  private excluded = false;
+  // One-shot: hand exactly the next keystroke to the page (Vimium passNextKey).
+  private passNextArmed = false;
 
   constructor(registry: CommandRegistry, dispatcher: ActionDispatcher) {
     this.registry = registry;
@@ -75,7 +85,47 @@ export class KeyHandler {
   }
 
   getMode(): KeyMode {
-    return this.mode;
+    if (this.mode === 'hint') return 'hint';
+    return (this.forcedInsert || this.excluded) ? 'insert' : 'normal';
+  }
+
+  /** Enter explicit pass-through (insert) mode — every key reaches the page
+   *  until Escape. Idempotent. */
+  enterInsertMode(): void {
+    if (this.forcedInsert) return;
+    this.forcedInsert = true;
+    this.onModeChange?.(this.getMode());
+  }
+
+  /** Leave explicit pass-through mode. */
+  exitInsertMode(): void {
+    if (!this.forcedInsert) return;
+    this.forcedInsert = false;
+    this.onModeChange?.(this.getMode());
+  }
+
+  /** Toggle explicit pass-through mode. */
+  toggleInsertMode(): void {
+    if (this.forcedInsert) this.exitInsertMode();
+    else this.enterInsertMode();
+  }
+
+  /** Arm a one-shot: the next keystroke is handed to the page, then normal
+   *  handling resumes (Vimium passNextKey). */
+  armPassNextKey(): void {
+    this.passNextArmed = true;
+  }
+
+  /** Per-site exclusion: when set, keybinds are off and every key reaches the
+   *  page (toggled from the popup for the current host). */
+  setExcluded(v: boolean): void {
+    if (this.excluded === v) return;
+    this.excluded = v;
+    this.onModeChange?.(this.getMode());
+  }
+
+  isExcluded(): boolean {
+    return this.excluded;
   }
 
   enterHintMode(): void {
@@ -101,6 +151,27 @@ export class KeyHandler {
   }
 
   handleKeyDown(e: KeyboardEvent): boolean {
+    // passNextKey: hand exactly the next keystroke to the page, then resume.
+    if (this.passNextArmed) {
+      this.passNextArmed = false;
+      this.onModeChange?.(this.getMode());
+      return false;
+    }
+
+    // Explicit pass-through (insert toggle) or per-site exclusion: EVERY key
+    // reaches the page — checked before the chord path so even Ctrl/Cmd combos
+    // go to the site. Escape leaves an explicit toggle; on an excluded site
+    // Escape just reaches the page (exclusion is toggled from the popup).
+    if (this.mode !== 'hint' && (this.forcedInsert || this.excluded)) {
+      if (e.key === 'Escape' && this.forcedInsert) {
+        this.exitInsertMode();
+        e.preventDefault();
+        e.stopPropagation();
+        return true;
+      }
+      return false;
+    }
+
     // A real-modifier combo (Ctrl/Alt/Meta) is never codeword / filter / text
     // input, so route it straight to the command registry — checked BEFORE the
     // insert-mode yield so a bound chord fires even while typing in a field.

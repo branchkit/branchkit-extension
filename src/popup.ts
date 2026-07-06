@@ -17,6 +17,7 @@ import {
   type RevealMethod,
 } from './rules/domain-rules';
 import { loadDomainRules, saveDomainRules } from './rules/domain-rules-storage';
+import { isHostExcluded, setHostExcluded } from './key-exclusions';
 import { migrateDisplayMode } from './labels/words';
 import { suggestPattern, isValidSelector } from './rules/options-helpers';
 import {
@@ -248,6 +249,41 @@ function saveRules(): void {
 function activeHost(): string {
   if (!activeTab?.url) return '';
   try { return new URL(activeTab.url).host; } catch { return ''; }
+}
+
+// Hostname (no port) — matches `location.hostname` in the content script, the
+// key used for per-site keyboard exclusions.
+function activeHostname(): string {
+  if (!activeTab?.url) return '';
+  try { return new URL(activeTab.url).hostname; } catch { return ''; }
+}
+
+// "Shortcuts here" On/Off — per-site keyboard exclusion. On = BranchKit's keys
+// active; Off = handed to the page. Hidden on pages with no host (chrome://).
+function initShortcutsToggle(): void {
+  const group = document.getElementById('key-shortcuts');
+  const host = activeHostname();
+  if (!group) return;
+  if (!host) {
+    document.getElementById('key-shortcuts-setting')?.setAttribute('hidden', '');
+    return;
+  }
+  const buttons = Array.from(group.querySelectorAll<HTMLButtonElement>('.seg'));
+  const select = (on: boolean): void => {
+    for (const b of buttons) {
+      const active = (b.dataset.value === 'on') === on;
+      b.classList.toggle('active', active);
+      b.setAttribute('aria-checked', String(active));
+    }
+  };
+  void isHostExcluded(host).then((ex) => select(!ex)); // On = not excluded
+  for (const b of buttons) {
+    b.addEventListener('click', () => {
+      const on = b.dataset.value === 'on';
+      select(on);
+      void setHostExcluded(host, !on);
+    });
+  }
 }
 
 // Every rule whose pattern matches the active tab, enabled or not, so a
@@ -596,6 +632,7 @@ async function init(): Promise<void> {
 
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   activeTab = tab ?? null;
+  initShortcutsToggle();
   initPageReadout();
   await loadRules();
   render();

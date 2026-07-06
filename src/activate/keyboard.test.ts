@@ -350,3 +350,67 @@ describe('normal mode — modifier-combo commands', () => {
     input.remove();
   });
 });
+
+describe('pass-through (explicit insert) mode', () => {
+  it('enterInsertMode reports insert and passes all keys to the page', () => {
+    const modeCb = vi.fn();
+    handler.setModeChangeCallback(modeCb);
+    handler.enterInsertMode();
+    expect(handler.getMode()).toBe('insert');
+    expect(modeCb).toHaveBeenLastCalledWith('insert');
+    // A bare letter that would normally be a keybind now reaches the page.
+    expect(handler.handleKeyDown(makeKey('f'))).toBe(false);
+    // Even a chord reaches the page in pass-through.
+    expect(handler.handleKeyDown(makeKey('s', { ctrlKey: true }))).toBe(false);
+    expect(dispatchSpy).not.toHaveBeenCalled();
+  });
+
+  it('Escape leaves pass-through and returns to normal', () => {
+    const modeCb = vi.fn();
+    handler.setModeChangeCallback(modeCb);
+    handler.enterInsertMode();
+    const result = handler.handleKeyDown(makeKey('Escape'));
+    expect(result).toBe(true); // intercepted to exit, not passed to page
+    expect(handler.getMode()).toBe('normal');
+    expect(modeCb).toHaveBeenLastCalledWith('normal');
+  });
+
+  it('toggleInsertMode flips in and out', () => {
+    handler.toggleInsertMode();
+    expect(handler.getMode()).toBe('insert');
+    handler.toggleInsertMode();
+    expect(handler.getMode()).toBe('normal');
+  });
+});
+
+describe('passNextKey', () => {
+  it('hands exactly the next keystroke to the page, then resumes', () => {
+    handler.armPassNextKey();
+    // The next key passes through unhandled…
+    expect(handler.handleKeyDown(makeKey('f'))).toBe(false);
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    // …and the one after that is handled normally again (a bound keybind would
+    // dispatch; with an empty registry it just falls through, but we're back in
+    // normal mode either way).
+    expect(handler.getMode()).toBe('normal');
+  });
+});
+
+describe('per-site exclusion', () => {
+  it('excluded reports insert and passes every key to the page', () => {
+    handler.setExcluded(true);
+    expect(handler.isExcluded()).toBe(true);
+    expect(handler.getMode()).toBe('insert');
+    expect(handler.handleKeyDown(makeKey('f'))).toBe(false);
+    // Escape is NOT special on an excluded site — it reaches the page too.
+    expect(handler.handleKeyDown(makeKey('Escape'))).toBe(false);
+    expect(dispatchSpy).not.toHaveBeenCalled();
+  });
+
+  it('clearing exclusion restores normal keybind handling', () => {
+    handler.setExcluded(true);
+    handler.setExcluded(false);
+    expect(handler.isExcluded()).toBe(false);
+    expect(handler.getMode()).toBe('normal');
+  });
+});

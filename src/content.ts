@@ -53,6 +53,7 @@ import { overridesFromList, type OverrideRecord } from './command-override';
 import { togglePalette, closePalette } from './render/palette-host';
 import { setTabMarker, reapplyTabMarker, refreshTabMarker } from './render/tab-title';
 import { setModeChip } from './render/mode-chip';
+import { isHostExcluded, onKeyExclusionsChanged } from './key-exclusions';
 import {
   CodewordSnapshot,
   takeSnapshot,
@@ -1098,6 +1099,14 @@ dispatcher.register('focus_input', () => {
 dispatcher.register('refresh', () => {
   location.reload();
 });
+// Pass-through: hand the keyboard to the page (its own shortcuts work) until
+// Escape. See notes/DESIGN_PASS_THROUGH.md.
+dispatcher.register('insert_mode', () => {
+  keyHandler.enterInsertMode();
+});
+dispatcher.register('pass_next_key', () => {
+  keyHandler.armPassNextKey();
+});
 
 dispatcher.register('find_immediate', (params) => {
   const query = params.query || '';
@@ -1138,6 +1147,13 @@ dispatcher.register('scroll_to_element', (params) => {
 // Show the mode chip when the keyboard enters hint mode (letters now filter
 // hints) and hide it back in Normal. See notes/DESIGN_KEYBOARD_MODES.md.
 keyHandler.setModeChangeCallback((mode) => setModeChip(mode));
+
+// Per-site keyboard exclusion: on hosts the user has switched off, BranchKit
+// hands the keyboard to the page (its own shortcuts work; voice still works).
+// Applied on load and kept live as the popup toggles it. See
+// notes/DESIGN_PASS_THROUGH.md.
+void isHostExcluded(location.hostname).then((ex) => keyHandler.setExcluded(ex));
+onKeyExclusionsChanged((list) => keyHandler.setExcluded(list.includes(location.hostname)));
 
 // Escape out of hint mode: in ALWAYS-visible mode the badges stay painted
 // (they're for voice — Escape just leaves keyboard typing mode); in MANUAL

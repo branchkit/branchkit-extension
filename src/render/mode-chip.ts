@@ -32,7 +32,13 @@ const STYLE = `
 .chip .sub { color: #8b949e; font-weight: 500; letter-spacing: 0; }
 `;
 
-function build(): HTMLElement {
+// Per-mode chip copy. Normal has no chip (the quiet default).
+const CHIP_TEXT: Record<'hint' | 'insert', { label: string; sub: string }> = {
+  hint: { label: 'HINT', sub: 'type a codeword · Esc' },
+  insert: { label: 'PASS-THROUGH', sub: 'keys go to the page · Esc' },
+};
+
+function build(mode: 'hint' | 'insert'): HTMLElement {
   const el = document.createElement('div');
   el.setAttribute(HOST_ATTR, '');
   // Tag as BranchKit's own UI so the page MutationObserver skips it.
@@ -44,25 +50,26 @@ function build(): HTMLElement {
   const chip = document.createElement('div');
   chip.className = 'chip';
   const label = document.createElement('span');
-  label.textContent = 'HINT';
+  label.textContent = CHIP_TEXT[mode].label;
   const sub = document.createElement('span');
   sub.className = 'sub';
-  sub.textContent = 'type a codeword · Esc';
+  sub.textContent = CHIP_TEXT[mode].sub;
   chip.append(label, sub);
   shadow.appendChild(chip);
   return el;
 }
 
-/** Reflect the current keyboard mode. Only the top frame shows the chip. */
+/** Reflect the current keyboard mode. Only the top frame shows the chip; Normal
+ * is chip-less. Rebuilds when the shown mode changes (hint ↔ pass-through). */
 export function setModeChip(mode: KeyMode): void {
   if (typeof document === 'undefined' || window !== window.top) return;
-  const show = mode === 'hint';
-  if (show && !host) {
-    host = build();
+  const shown: 'hint' | 'insert' | null =
+    mode === 'hint' ? 'hint' : mode === 'insert' ? 'insert' : null;
+  host?.remove();
+  host = null;
+  if (shown) {
+    host = build(shown);
     document.documentElement.appendChild(host);
-  } else if (!show && host) {
-    host.remove();
-    host = null;
   }
 }
 
