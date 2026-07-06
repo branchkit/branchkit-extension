@@ -106,9 +106,9 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // `f` — enter badge-typing mode: badges (always visible for voice) become
   // keyboard-typeable here, and only here. See notes/DESIGN_KEYBOARD_MODES.md.
   { id: 'hint_mode', label: 'Type a badge', group: 'Badges', mappable: true, params: [],
-    description: 'Make the painted badges keyboard-typeable — then type a codeword to activate one. Esc exits.' },
-  { id: 'activate_hint', label: 'Activate badge by codeword', group: 'Badges', mappable: false, params: [],
-    description: 'Activate the badge matching a spoken/typed codeword (runtime value — not bindable).' },
+    description: 'Make the painted badges keyboard-typeable — then type a letter to activate one. Esc exits.' },
+  { id: 'activate_hint', label: 'Activate badge by letter or word', group: 'Badges', mappable: false, params: [],
+    description: 'Activate the badge matching a spoken word or typed letter (runtime value — not bindable).' },
   // blank / stash — the voice twins of the typed-capital new-tab affordance,
   // which spoken codewords can't express (no capitals in speech). Verbs match
   // the Rango convention; choice rationale in
@@ -238,7 +238,7 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // copies that link’s URL instead of following it. Voice yank would need a
   // contributed hint verb — deferred.
   { id: 'yank_hint', label: 'Copy a link (badge)', group: 'Badges', mappable: true, params: [],
-    description: 'Enter badge-typing mode, then type a codeword to copy that link’s URL instead of opening it.' },
+    description: 'Enter badge-typing mode, then type a letter to copy that link’s URL instead of opening it.' },
 
   // --- Tabs ---
   // All tab verbs share one background handler (handleTabAction): keyboard

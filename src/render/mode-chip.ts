@@ -34,7 +34,7 @@ const STYLE = `
 
 // Per-mode chip copy. Normal has no chip (the quiet default).
 const CHIP_TEXT: Record<'hint' | 'insert', { label: string; sub: string }> = {
-  hint: { label: 'BADGE', sub: 'type a codeword · Esc' },
+  hint: { label: 'BADGE', sub: 'type a letter · Esc' },
   insert: { label: 'PASS-THROUGH', sub: 'keys go to the page · Esc' },
 };
 

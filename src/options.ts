@@ -575,7 +575,7 @@ function wireResolvePanel(rule: DomainRule, ruleNode: HTMLElement): void {
       return;
     }
     if (!codeword) {
-      setFeedbackError(result, 'Enter a badge codeword.');
+      setFeedbackError(result, 'Enter the badge label.');
       return;
     }
     clearFeedback(result);
