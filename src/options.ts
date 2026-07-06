@@ -79,7 +79,7 @@ function render(): void {
   if (rules.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'empty-state';
-    empty.textContent = 'No rules yet. Add one to customize hints for a site.';
+    empty.textContent = 'No rules yet. Add one to customize badges for a site.';
     rulesEl.appendChild(empty);
     return;
   }
@@ -575,7 +575,7 @@ function wireResolvePanel(rule: DomainRule, ruleNode: HTMLElement): void {
       return;
     }
     if (!codeword) {
-      setFeedbackError(result, 'Enter a hint codeword.');
+      setFeedbackError(result, 'Enter a badge codeword.');
       return;
     }
     clearFeedback(result);

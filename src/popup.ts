@@ -557,7 +557,7 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
   const codewordInput = document.createElement('input');
   codewordInput.type = 'text';
   codewordInput.className = 'codeword';
-  codewordInput.placeholder = 'hint codeword';
+  codewordInput.placeholder = 'badge codeword';
   codewordInput.spellcheck = false;
   row2.appendChild(codewordInput);
 
@@ -614,7 +614,7 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
   resolveBtn.addEventListener('click', async () => {
     const codeword = codewordInput.value.trim();
     if (!codeword) {
-      setFeedbackError(feedback, 'Type a hint codeword first.');
+      setFeedbackError(feedback, 'Type a badge codeword first.');
       return;
     }
     // Re-query the active tab so a tab-switch mid-popup doesn't target stale state.
