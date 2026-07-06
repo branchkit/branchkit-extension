@@ -641,7 +641,7 @@ async function init(): Promise<void> {
   initSideNav();
 }
 
-// --- Shortcut rules (per-site keyboard pass-through / disable) ---
+// --- Key rules (per-site keyboard pass-through / disable) ---
 
 async function initKeyboardRules(): Promise<void> {
   const container = document.getElementById('keyboard-rules');

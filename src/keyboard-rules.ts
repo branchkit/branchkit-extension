@@ -92,35 +92,29 @@ export async function getSiteKeyState(url: string): Promise<{ excluded: boolean;
   return { excluded, passKeys: Array.from(chars) };
 }
 
-// --- Popup convenience: the rule keyed to the current site's exact hostname ---
+// --- Popup convenience: the rule for a single pattern (the current site) ---
 
-function hostOf(url: string): string {
-  try { return new URL(url).hostname; } catch { return ''; }
+export async function getRuleForPattern(pattern: string): Promise<KeyboardRule | null> {
+  if (!pattern) return null;
+  return (await loadKeyboardRules()).find((r) => r.pattern === pattern) ?? null;
 }
 
-export async function getHostRule(url: string): Promise<KeyboardRule | null> {
-  const host = hostOf(url);
-  if (!host) return null;
-  return (await loadKeyboardRules()).find((r) => r.pattern === host) ?? null;
-}
-
-async function upsertHostRule(url: string, mut: (r: KeyboardRule) => void): Promise<void> {
-  const host = hostOf(url);
-  if (!host) return;
+async function upsertRule(pattern: string, mut: (r: KeyboardRule) => void): Promise<void> {
+  if (!pattern) return;
   const rules = await loadKeyboardRules();
-  let rule = rules.find((r) => r.pattern === host);
-  if (!rule) { rule = { pattern: host }; rules.push(rule); }
+  let rule = rules.find((r) => r.pattern === pattern);
+  if (!rule) { rule = { pattern }; rules.push(rule); }
   mut(rule);
   await saveKeyboardRules(rules); // saveKeyboardRules drops now-empty rules
 }
 
-export async function setHostOff(url: string, off: boolean): Promise<void> {
-  await upsertHostRule(url, (r) => { if (off) r.off = true; else delete r.off; });
+export async function setRuleOff(pattern: string, off: boolean): Promise<void> {
+  await upsertRule(pattern, (r) => { if (off) r.off = true; else delete r.off; });
 }
 
-export async function setHostPassKeys(url: string, keys: string): Promise<void> {
+export async function setRulePassKeys(pattern: string, keys: string): Promise<void> {
   const clean = Array.from(keys).filter((c) => c.trim() !== '').join('');
-  await upsertHostRule(url, (r) => { if (clean) r.passKeys = clean; else delete r.passKeys; });
+  await upsertRule(pattern, (r) => { if (clean) r.passKeys = clean; else delete r.passKeys; });
 }
 
 /** Subscribe to any change in the keyboard rules. Returns an unsubscribe. */

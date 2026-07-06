@@ -17,7 +17,7 @@ import {
   type RevealMethod,
 } from './rules/domain-rules';
 import { loadDomainRules, saveDomainRules } from './rules/domain-rules-storage';
-import { getHostRule, setHostOff, setHostPassKeys } from './keyboard-rules';
+import { getRuleForPattern, setRuleOff, setRulePassKeys } from './keyboard-rules';
 import { migrateDisplayMode } from './labels/words';
 import { suggestPattern, isValidSelector } from './rules/options-helpers';
 import {
@@ -187,9 +187,9 @@ async function initPageReadout(): Promise<void> {
   dot.className = on ? 'readout-dot on' : 'readout-dot';
 
   if (hintCount === 0) {
-    text.textContent = 'No hints on this page';
+    text.textContent = 'No badges on this page';
   } else {
-    const noun = hintCount === 1 ? 'hint' : 'hints';
+    const noun = hintCount === 1 ? 'badge' : 'badges';
     const state = badgesVisible ? 'Showing' : 'Hidden';
     text.replaceChildren(
       document.createTextNode(`${state} · `),
@@ -265,36 +265,47 @@ function activeHostname(): string {
 // patterns are managed on the options page. See notes/DESIGN_PASS_THROUGH.md.
 function initShortcutsToggle(): void {
   const url = activeTab?.url ?? '';
-  if (!activeHostname()) {
+  // The quick control targets the whole-domain pattern (*.wikipedia.org), the
+  // same suggestion the badge rules offer — not just this exact subdomain.
+  const pattern = url ? suggestPattern(url) : null;
+  if (!pattern) {
     document.getElementById('key-rules-section')?.setAttribute('hidden', '');
     return;
   }
   const keyHostEl = document.getElementById('key-rules-host');
-  if (keyHostEl) keyHostEl.textContent = activeHostname();
+  if (keyHostEl) keyHostEl.textContent = pattern;
 
-  const disableAll = document.getElementById('key-disable-all') as HTMLInputElement | null;
+  const seg = document.getElementById('key-disable-all');
+  const buttons = seg ? Array.from(seg.querySelectorAll<HTMLButtonElement>('.seg')) : [];
   const passInput = document.getElementById('key-passthrough') as HTMLInputElement | null;
 
   // "Disable all" is the whole-site off switch; the pass-keys field is the
   // granular list. When everything's disabled, per-key is moot — grey it out.
   const reflectOff = (off: boolean): void => {
-    if (disableAll) disableAll.checked = off;
+    for (const b of buttons) {
+      const active = (b.dataset.value === 'on') === off;
+      b.classList.toggle('active', active);
+      b.setAttribute('aria-checked', String(active));
+    }
     if (passInput) passInput.disabled = off;
   };
 
-  void getHostRule(url).then((rule) => {
+  void getRuleForPattern(pattern).then((rule) => {
     reflectOff(!!rule?.off);
     if (passInput) passInput.value = rule?.passKeys ?? '';
   });
 
-  disableAll?.addEventListener('change', () => {
-    reflectOff(disableAll.checked);
-    void setHostOff(url, disableAll.checked);
-  });
+  for (const b of buttons) {
+    b.addEventListener('click', () => {
+      const off = b.dataset.value === 'on'; // "Disable all: On" == shortcuts off
+      reflectOff(off);
+      void setRuleOff(pattern, off);
+    });
+  }
 
   // Pass-through keys: each typed character is one key handed to the site.
   passInput?.addEventListener('input', () => {
-    void setHostPassKeys(url, passInput.value);
+    void setRulePassKeys(pattern, passInput.value);
   });
 }
 

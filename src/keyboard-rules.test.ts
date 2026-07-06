@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
-  loadKeyboardRules, getSiteKeyState, getHostRule, setHostOff, setHostPassKeys,
+  loadKeyboardRules, getSiteKeyState, getRuleForPattern, setRuleOff, setRulePassKeys,
   type KeyboardRule,
 } from './keyboard-rules';
 
@@ -42,16 +42,16 @@ describe('keyboard-rules', () => {
     expect(await getSiteKeyState('https://unrelated.test/')).toEqual({ excluded: false, passKeys: [] });
   });
 
-  it('popup helpers upsert + clear the exact-host rule', async () => {
+  it('popup helpers upsert + clear a pattern rule', async () => {
     const store = mockChrome();
-    await setHostOff('https://en.wikipedia.org/wiki/X', true);
-    expect(store.keyboardRules).toEqual([{ pattern: 'en.wikipedia.org', off: true }]);
-    await setHostPassKeys('https://en.wikipedia.org/wiki/X', 'j k e'); // spaces stripped
-    expect(await getHostRule('https://en.wikipedia.org/wiki/X'))
-      .toEqual({ pattern: 'en.wikipedia.org', off: true, passKeys: 'jke' });
+    await setRuleOff('*.wikipedia.org', true);
+    expect(store.keyboardRules).toEqual([{ pattern: '*.wikipedia.org', off: true }]);
+    await setRulePassKeys('*.wikipedia.org', 'j k e'); // spaces stripped
+    expect(await getRuleForPattern('*.wikipedia.org'))
+      .toEqual({ pattern: '*.wikipedia.org', off: true, passKeys: 'jke' });
     // Clearing both empties the rule out of storage.
-    await setHostOff('https://en.wikipedia.org/wiki/X', false);
-    await setHostPassKeys('https://en.wikipedia.org/wiki/X', '');
+    await setRuleOff('*.wikipedia.org', false);
+    await setRulePassKeys('*.wikipedia.org', '');
     expect(store.keyboardRules).toEqual([]);
   });
 

@@ -110,6 +110,8 @@
       padding: 6px 0;
       border-top: 1px solid var(--border);
     }
+    /* Rows that belong to a section (no dividing line above them). */
+    .setting.flush { border-top: none; padding: 4px 0; }
     .setting label { font-size: 12px; color: #adbac7; }
     .passkeys-input {
       font: inherit; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -325,13 +327,14 @@
     .no-rule button {
       font: inherit;
       padding: 4px 10px;
-      border: 1px solid var(--accent-btn);
-      background: var(--accent-btn);
-      color: #fff;
+      border: 1px solid var(--border);
+      background: none;
+      color: var(--accent);
       border-radius: 4px;
       cursor: pointer;
       font-size: 12px;
     }
+    .no-rule button:hover { border-color: var(--accent); background: rgba(88, 166, 255, 0.1); }
     .no-rule button:disabled {
       opacity: 0.5;
       cursor: not-allowed;
@@ -397,10 +400,11 @@
       line-height: 1;
     }
     .footer-settings {
-      color: var(--accent);
-      border-color: var(--border);
+      color: #fff;
+      background: var(--accent-btn);
+      border-color: var(--accent-btn);
     }
-    .footer-settings:hover { border-color: var(--accent); background: rgba(88, 166, 255, 0.1); }
+    .footer-settings:hover { filter: brightness(1.1); }
     .grant-access {
       font: inherit;
       font-size: 12px;
@@ -465,14 +469,17 @@
   </div>
 
   <div class="rules-section" id="key-rules-section">
-    <div class="rules-header">Shortcut rules for <span class="rules-host" id="key-rules-host">…</span></div>
-    <div class="setting" id="key-passthrough-setting" title="Keys to hand to this site while your other BranchKit shortcuts keep working — e.g. jke#r for Gmail. Type the characters; each is one key.">
+    <div class="rules-header">Key rules for <span class="rules-host" id="key-rules-host">…</span></div>
+    <div class="setting flush" id="key-passthrough-setting" title="Keys to hand to this site while your other BranchKit shortcuts keep working — e.g. jke#r for Gmail. Type the characters; each is one key.">
       <label for="key-passthrough">Pass keys to site</label>
       <input type="text" id="key-passthrough" class="passkeys-input" placeholder="e.g. jke#" spellcheck="false" autocomplete="off" autocapitalize="off">
     </div>
-    <div class="setting" id="key-shortcuts-setting" title="Turn off ALL of BranchKit's keyboard shortcuts on this site so the site's own keys work. Voice still works. (Press i on any page to pass keys through temporarily.)">
-      <label for="key-disable-all">Disable all shortcuts here</label>
-      <input type="checkbox" id="key-disable-all">
+    <div class="setting flush" id="key-shortcuts-setting" title="Turn off ALL of BranchKit's keyboard shortcuts on this site so the site's own keys work. Voice still works. (Press i on any page to pass keys through temporarily.)">
+      <label>Disable all shortcuts</label>
+      <div class="segmented" id="key-disable-all" role="radiogroup" aria-label="Disable all shortcuts">
+        <button class="seg" data-value="on" role="radio">On</button>
+        <button class="seg active" data-value="off" role="radio">Off</button>
+      </div>
     </div>
   </div>
 
