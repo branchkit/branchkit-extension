@@ -43,6 +43,10 @@ let voiceLoaded = false;
 // the replacement phrase. Loaded from the actuator via the plugin; the editor
 // is the only writer. See notes/DESIGN_COMMAND_PHRASE_OVERRIDES.md.
 let overrides = new Map<string, string>();
+// User-added spoken forms (the "+ voice" free list), as flat records
+// {action(=command id), default_pattern, new_pattern}. Filtered per command
+// at render time.
+let aliases: OverrideRecord[] = [];
 
 let keymapEl: HTMLDivElement;
 
@@ -96,6 +100,7 @@ function render(): void {
 function renderCommand(meta: CommandMeta, dupes: Set<string>): HTMLElement {
   const row = document.createElement('div');
   row.className = 'km-row';
+  row.dataset.command = meta.id; // for async add-alias error reopen
   const entries = keymap.filter((e) => e.command === meta.id);
   // Recede unbound (optional) commands so bound ones lead the eye.
   if (entries.length === 0) row.classList.add('unbound');
@@ -160,8 +165,149 @@ function renderVoiceRow(meta: CommandMeta): HTMLElement {
     }
     phrases.appendChild(renderVoicePattern(meta, vp, disconnected));
   });
+
+  // User-added extra spoken forms (aliases) — each removable, like a keybind.
+  for (const a of aliasesForCommand(meta.id)) {
+    phrases.appendChild(renderAliasPhrase(meta, a, disconnected));
+  }
+
+  // "+ voice" — the free-list add, mirroring the keys' "+ key". Only when
+  // connected (the phrase is stored in the actuator through the plugin).
+  if (!disconnected) {
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'km-voice-add';
+    add.textContent = '+ voice';
+    add.title = `Add another way to say “${meta.label}”`;
+    add.addEventListener('click', () => addAliasEditor(add, meta));
+    phrases.appendChild(add);
+  }
+
   row.appendChild(phrases);
   return row;
+}
+
+/** The user's added phrases for a command, in stored order. */
+function aliasesForCommand(commandId: string): OverrideRecord[] {
+  return aliases.filter((a) => a.action === commandId);
+}
+
+/** The base pattern a "+ voice" add clones — the command's primary spoken form
+ * (its params are what the added phrase inherits; a per-phrase picker is a
+ * later nicety for multi-pattern commands). */
+function primaryPattern(meta: CommandMeta): string | null {
+  return meta.voice?.[0]?.pattern ?? null;
+}
+
+// An added phrase: a removable chip (the free-list analog of a key pill).
+function renderAliasPhrase(meta: CommandMeta, alias: OverrideRecord, disconnected: boolean): HTMLElement {
+  const wrap = document.createElement('span');
+  wrap.className = 'km-voice-item';
+
+  const phrase = document.createElement('span');
+  phrase.className = 'km-voice-phrase km-voice-added';
+  phrase.textContent = alias.new_pattern;
+  wrap.appendChild(phrase);
+
+  if (!disconnected) {
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'km-voice-reset';
+    remove.textContent = '×';
+    remove.title = 'Remove this phrase';
+    remove.addEventListener('click', () => void removeAlias(meta, alias));
+    wrap.appendChild(remove);
+  }
+  return wrap;
+}
+
+// Inline input to add a new spoken form. Validated against the command's
+// primary phrase so the added phrase keeps the same placeholders (params ride
+// along from the base).
+function addAliasEditor(addBtn: HTMLElement, meta: CommandMeta, initialValue = '', initialError?: string): void {
+  const base = primaryPattern(meta);
+  if (base === null) return;
+
+  const editor = document.createElement('span');
+  editor.className = 'km-voice-edit';
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'km-voice-input';
+  input.value = initialValue;
+  input.spellcheck = false;
+  input.placeholder = 'another way to say it';
+  input.setAttribute('aria-label', `Add a spoken phrase for ${meta.label}`);
+
+  const err = document.createElement('span');
+  err.className = 'km-voice-err';
+
+  const validate = (): string | null => {
+    const value = input.value.trim();
+    const msg = value === '' ? null : validateOverridePhrase(base, value);
+    err.textContent = msg ?? '';
+    input.classList.toggle('invalid', msg !== null);
+    return msg;
+  };
+
+  const commit = (): void => {
+    const value = input.value.trim();
+    if (value === '') { render(); return; }
+    if (validate() !== null) return;
+    void saveAlias(meta, base, value);
+  };
+
+  input.addEventListener('input', validate);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); render(); }
+  });
+
+  editor.appendChild(input);
+  editor.appendChild(err);
+  addBtn.replaceWith(editor);
+  input.focus();
+  if (initialError) { err.textContent = initialError; input.classList.add('invalid'); }
+}
+
+async function saveAlias(meta: CommandMeta, base: string, newPattern: string): Promise<void> {
+  const r = await chrome.runtime.sendMessage({
+    type: 'ADD_COMMAND_ALIAS',
+    action: meta.id,
+    defaultPattern: base,
+    newPattern,
+  }).catch(() => ({ ok: false, error: 'Not connected to BranchKit.' }));
+
+  if (r?.ok) {
+    aliases = [...aliases, { action: meta.id, default_pattern: base, new_pattern: newPattern }];
+    render();
+    return;
+  }
+  // Server rejected it (rare — the client mirror catches most). Reopen the add
+  // editor with the attempted value + message.
+  render();
+  const addBtn = findVoiceAddButton(meta.id);
+  if (addBtn) addAliasEditor(addBtn, meta, newPattern, r?.error || 'Could not add the phrase.');
+}
+
+async function removeAlias(meta: CommandMeta, alias: OverrideRecord): Promise<void> {
+  const r = await chrome.runtime.sendMessage({
+    type: 'REMOVE_COMMAND_ALIAS',
+    action: alias.action,
+    defaultPattern: alias.default_pattern,
+    newPattern: alias.new_pattern,
+  }).catch(() => ({ ok: false }));
+  if (r?.ok) {
+    aliases = aliases.filter((a) => !(
+      a.action === alias.action && a.default_pattern === alias.default_pattern && a.new_pattern === alias.new_pattern
+    ));
+  }
+  render();
+}
+
+// Locate a freshly-rendered "+ voice" button so an async add error can reopen it.
+function findVoiceAddButton(commandId: string): HTMLElement | null {
+  return keymapEl.querySelector<HTMLElement>(`.km-row[data-command="${CSS.escape(commandId)}"] .km-voice-add`);
 }
 
 // One spoken form: the effective phrase (override or default) as a button that
@@ -441,6 +587,14 @@ export async function initKeymapEditor(): Promise<void> {
   void chrome.runtime.sendMessage({ type: 'GET_COMMAND_OVERRIDES' })
     .then((r: { overrides?: OverrideRecord[] } | undefined) => {
       overrides = overridesFromList(r?.overrides ?? []);
+      render();
+    })
+    .catch(() => {});
+
+  // Load user-added spoken forms (aliases) so they render + can be removed.
+  void chrome.runtime.sendMessage({ type: 'GET_COMMAND_ALIASES' })
+    .then((r: { aliases?: OverrideRecord[] } | undefined) => {
+      aliases = r?.aliases ?? [];
       render();
     })
     .catch(() => {});

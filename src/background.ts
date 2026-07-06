@@ -1136,6 +1136,47 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     return true; // async response
   }
 
+  // Aliases: extra spoken forms (the "+ voice" free list).
+
+  if (message.type === 'GET_COMMAND_ALIASES') {
+    ensureConnected()
+      .then(() => getFromPlugin('/commands/aliases'))
+      .then((data) => {
+        const aliases = (data as { aliases?: unknown })?.aliases;
+        sendResponse({ aliases: Array.isArray(aliases) ? aliases : [] });
+      })
+      .catch(() => sendResponse({ aliases: [] }));
+    return true; // async response
+  }
+
+  if (message.type === 'ADD_COMMAND_ALIAS') {
+    ensureConnected()
+      .then(() => postToPlugin('/commands/alias', {
+        action: message.action,
+        default_pattern: message.defaultPattern,
+        new_pattern: message.newPattern,
+      }))
+      .then(async (resp) => {
+        if (resp && resp.ok) { sendResponse({ ok: true }); return; }
+        const detail = resp ? (await resp.text().catch(() => '')) : '';
+        sendResponse({ ok: false, error: detail || 'Not connected to BranchKit.' });
+      })
+      .catch(() => sendResponse({ ok: false, error: 'Not connected to BranchKit.' }));
+    return true; // async response
+  }
+
+  if (message.type === 'REMOVE_COMMAND_ALIAS') {
+    ensureConnected()
+      .then(() => postToPlugin('/commands/alias/remove', {
+        action: message.action,
+        default_pattern: message.defaultPattern,
+        new_pattern: message.newPattern,
+      }))
+      .then((resp) => sendResponse({ ok: !!(resp && resp.ok) }))
+      .catch(() => sendResponse({ ok: false }));
+    return true; // async response
+  }
+
   if (message.type === 'HEALTH_STATUS') {
     // The full connect/disconnect work runs on every report, not on flag
     // edges — edge-gating masked the reconnect healer (the reconnect paths
