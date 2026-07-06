@@ -204,10 +204,25 @@ async function initPageReadout(): Promise<void> {
 
 function initOptionsLink(): void {
   const btn = document.getElementById('open-options');
-  if (!btn) return;
-  btn.addEventListener('click', () => {
-    chrome.runtime.openOptionsPage();
-    window.close();
+  if (btn) {
+    btn.addEventListener('click', () => {
+      chrome.runtime.openOptionsPage();
+      window.close();
+    });
+  }
+
+  // Help: open the shortcuts/help overlay on the active tab (same as ? / "help"),
+  // then close the popup so the overlay is visible on the page.
+  const help = document.getElementById('open-help');
+  help?.addEventListener('click', async () => {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (tab?.id !== undefined) {
+        await chrome.tabs.sendMessage(tab.id, { type: 'OPEN_HELP' }, { frameId: 0 }).catch(() => {});
+      }
+    } finally {
+      window.close();
+    }
   });
 }
 

@@ -202,6 +202,9 @@ export type Message =
   // catalog now; it only asks whether BranchKit is connected so it can show the
   // not-connected note. Response: { connected: boolean }.
   | { type: 'GET_VOICE_STATUS' }
+  // Popup "Help" button → active tab: open the shortcuts/help overlay (same as
+  // pressing ? or saying "help").
+  | { type: 'OPEN_HELP' }
   // --- Command palette (notes/DESIGN_TAB_NAVIGATION.md, Layer 2) ---
   // Content (subframe) → background. A palette keybind fired in a frame that
   // can't host the overlay; background relays it to the top frame as a

@@ -350,20 +350,48 @@
       border-top: 1px solid var(--border);
       padding-top: 8px;
     }
-    .options-link {
-      display: block;
-      text-align: center;
-      margin-top: 6px;
-      padding: 6px 0;
+    .popup-footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px solid var(--border);
+    }
+    .footer-btn {
+      font: inherit;
       font-size: 12px;
-      color: var(--accent);
-      text-decoration: none;
       cursor: pointer;
       background: none;
-      border: none;
-      width: 100%;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      padding: 5px 10px;
     }
-    .options-link:hover { text-decoration: underline; }
+    .footer-help {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--fg-muted);
+    }
+    .footer-help:hover { color: var(--fg); border-color: var(--border); }
+    .footer-key {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 17px;
+      height: 17px;
+      padding: 0 3px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1;
+    }
+    .footer-settings {
+      color: var(--accent);
+      border-color: var(--border);
+    }
+    .footer-settings:hover { border-color: var(--accent); background: rgba(88, 166, 255, 0.1); }
     .grant-access {
       font: inherit;
       font-size: 12px;
@@ -428,7 +456,13 @@
     <div id="rules-body"></div>
   </div>
 
-  <button id="open-options" class="options-link">All domain rules…</button>
+  <div class="popup-footer">
+    <button id="open-help" class="footer-btn footer-help"
+            title="Press ? or say &quot;help&quot; to open this anytime">
+      <span class="footer-key">?</span> Help
+    </button>
+    <button id="open-options" class="footer-btn footer-settings">Settings</button>
+  </div>
   <script src="popup.js"></script>
 </body>
 </html>

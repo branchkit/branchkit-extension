@@ -2956,6 +2956,12 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
     return false;
   }
 
+  if (message.type === 'OPEN_HELP') {
+    // Popup Help button — top frame owns the overlay. Same path as ? / "help".
+    if (isTopFrame) dispatcher.dispatch('toggle_help', {});
+    return false;
+  }
+
   if (message.type === 'BRANCHKIT_ACTION') {
     const { action, params, correlation_id: correlationId } = message.payload;
     if (action === 'toggle_hints') {
