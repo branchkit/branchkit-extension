@@ -140,7 +140,7 @@ describe('command catalog — voice patterns', () => {
   it('attaches voice only to hint / scroll / find / navigation / tab / palette commands this phase', () => {
     // Help entered via the palette voice loop: "palette" opens it,
     // {browser_palette} selects a row, "hide" dismisses.
-    const allowed = new Set(['Hints', 'Scroll', 'Find', 'Navigation', 'Tabs', 'Help']);
+    const allowed = new Set(['Badges', 'Scroll', 'Find', 'Navigation', 'Tabs', 'Help']);
     for (const c of withVoice) {
       expect(allowed.has(c.group), `${c.id} in ${c.group}`).toBe(true);
     }

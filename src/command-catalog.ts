@@ -100,27 +100,27 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // Show/hide are subsumed by toggle_hints (Ctrl+S) + hint_mode (f) + the
   // capital-letter new-tab affordance, so the discrete verbs were dropped
   // 2026-07-05 rather than lingering as unbound, voiceless editor clutter.
-  { id: 'toggle_hints', label: 'Toggle hints', group: 'Hints', mappable: true, params: [],
-    description: 'Show hints when hidden, hide them when shown (sticky across navigation).',
+  { id: 'toggle_hints', label: 'Toggle badges', group: 'Badges', mappable: true, params: [],
+    description: 'Show badges when hidden, hide them when shown (sticky across navigation).',
     voice: [{ pattern: 'toggle' }] },
-  // `f` — enter hint mode: hints (always visible for voice) become keyboard-
-  // typeable here, and only here. See notes/DESIGN_KEYBOARD_MODES.md.
-  { id: 'hint_mode', label: 'Type a hint', group: 'Hints', mappable: true, params: [],
-    description: 'Make the painted hints keyboard-typeable — then type a codeword to activate it. Esc exits.' },
-  { id: 'activate_hint', label: 'Activate hint by codeword', group: 'Hints', mappable: false, params: [],
-    description: 'Activate the hint matching a spoken/typed codeword (runtime value — not bindable).' },
+  // `f` — enter badge-typing mode: badges (always visible for voice) become
+  // keyboard-typeable here, and only here. See notes/DESIGN_KEYBOARD_MODES.md.
+  { id: 'hint_mode', label: 'Type a badge', group: 'Badges', mappable: true, params: [],
+    description: 'Make the painted badges keyboard-typeable — then type a codeword to activate one. Esc exits.' },
+  { id: 'activate_hint', label: 'Activate badge by codeword', group: 'Badges', mappable: false, params: [],
+    description: 'Activate the badge matching a spoken/typed codeword (runtime value — not bindable).' },
   // blank / stash — the voice twins of the typed-capital new-tab affordance,
   // which spoken codewords can't express (no capitals in speech). Verbs match
   // the Rango convention; choice rationale in
   // notes/DESIGN_MULTI_TARGET_COMMANDS.md (phase 1).
-  { id: 'activate_hint_newtab', label: 'Open hint in new tab', group: 'Hints', mappable: false, params: [],
-    description: 'Open the hinted link in a new focused tab.',
+  { id: 'activate_hint_newtab', label: 'Open badge in new tab', group: 'Badges', mappable: false, params: [],
+    description: 'Open the badge’s link in a new focused tab.',
     voice: [{ pattern: 'blank {hint}' }] },
   // {hint+} = one or more hint codewords in a single breath ("stash huge gap
   // arch same" opens both) — the plugin expands it to its repeated capture
   // macro and delivers the ordered target list; the SW fans it out per target.
-  { id: 'activate_hint_background', label: 'Open hints in background tabs', group: 'Hints', mappable: false, params: [],
-    description: 'Open one or more hinted links in background tabs; hints stay up for the next command.',
+  { id: 'activate_hint_background', label: 'Open badges in background tabs', group: 'Badges', mappable: false, params: [],
+    description: 'Open one or more badge links in background tabs; badges stay up for the next command.',
     voice: [{ pattern: 'stash {hint+}' }],
     retainsHints: true },
 
@@ -237,8 +237,8 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // Keyboard-only hint action (Vimium yf): enter hint mode, then a codeword
   // copies that link’s URL instead of following it. Voice yank would need a
   // contributed hint verb — deferred.
-  { id: 'yank_hint', label: 'Copy a link (hint)', group: 'Hints', mappable: true, params: [],
-    description: 'Enter hint mode, then type a codeword to copy that link’s URL instead of opening it.' },
+  { id: 'yank_hint', label: 'Copy a link (badge)', group: 'Badges', mappable: true, params: [],
+    description: 'Enter badge-typing mode, then type a codeword to copy that link’s URL instead of opening it.' },
 
   // --- Tabs ---
   // All tab verbs share one background handler (handleTabAction): keyboard

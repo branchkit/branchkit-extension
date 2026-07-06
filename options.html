@@ -309,8 +309,8 @@
 <body>
   <nav class="side-nav" id="side-nav" aria-label="Settings sections">
     <a href="#sec-rules" class="side-link">Badge rules</a>
-    <a href="#sec-keyboard" class="side-link">Keyboard shortcuts</a>
     <a href="#sec-keyboard-rules" class="side-link">Key rules</a>
+    <a href="#sec-keyboard" class="side-link">Keyboard shortcuts</a>
     <a href="#sec-badge" class="side-link">Badge appearance</a>
   </nav>
   <div class="container">
@@ -326,6 +326,30 @@
     </div>
 
     <div id="rules"></div>
+
+    <h1 id="sec-keyboard-rules" class="sec" style="margin-top: 40px">Key rules</h1>
+    <div class="subtitle">
+      Per-site control over BranchKit’s keyboard shortcuts. Disable them entirely
+      on sites that have their own keys, or pass just specific keys through
+      (e.g. <code>jke#</code> for Gmail) while the rest of your shortcuts keep
+      working. Patterns match like badge rules (<code>*.example.com</code>).
+      Voice is unaffected. Sync across browsers.
+    </div>
+    <div class="toolbar">
+      <button id="add-keyboard-rule" class="primary">+ New keyboard rule</button>
+    </div>
+    <div id="keyboard-rules"></div>
+    <style>
+      .kb-rule { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); }
+      .kb-pattern, .kb-pass { font: inherit; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; padding: 5px 8px; background: var(--card); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); }
+      .kb-pattern { flex: 1 1 190px; min-width: 120px; }
+      .kb-pass { flex: 1 1 150px; min-width: 100px; }
+      .kb-pattern:focus, .kb-pass:focus { border-color: var(--accent); outline: none; }
+      .kb-pass:disabled { opacity: 0.4; }
+      .kb-off { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--fg-muted); white-space: nowrap; }
+      .kb-del { font-size: 12px; flex: 0 0 auto; }
+      .kb-empty { color: var(--fg-muted); font-size: 13px; padding: 12px 0; line-height: 1.4; }
+    </style>
 
     <h1 id="sec-keyboard" class="sec" style="margin-top: 40px">Keyboard shortcuts</h1>
     <div class="subtitle">
@@ -449,30 +473,6 @@
       .km-param { font-size: 12px; color: var(--fg-muted); display: inline-flex; align-items: center; gap: 4px; }
       .km-param input, .km-param select { font: inherit; font-size: 12px; padding: 2px 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); }
       .km-param input[type=number] { width: 56px; text-align: right; }
-    </style>
-
-    <h1 id="sec-keyboard-rules" class="sec" style="margin-top: 40px">Key rules</h1>
-    <div class="subtitle">
-      Per-site control over BranchKit’s keyboard shortcuts. Disable them entirely
-      on sites that have their own keys, or pass just specific keys through
-      (e.g. <code>jke#</code> for Gmail) while the rest of your shortcuts keep
-      working. Patterns match like badge rules (<code>*.example.com</code>).
-      Voice is unaffected. Sync across browsers.
-    </div>
-    <div class="toolbar">
-      <button id="add-keyboard-rule" class="primary">+ New keyboard rule</button>
-    </div>
-    <div id="keyboard-rules"></div>
-    <style>
-      .kb-rule { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--border); }
-      .kb-pattern, .kb-pass { font: inherit; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; padding: 5px 8px; background: var(--card); border: 1px solid var(--border); border-radius: 6px; color: var(--fg); }
-      .kb-pattern { flex: 1 1 190px; min-width: 120px; }
-      .kb-pass { flex: 1 1 150px; min-width: 100px; }
-      .kb-pattern:focus, .kb-pass:focus { border-color: var(--accent); outline: none; }
-      .kb-pass:disabled { opacity: 0.4; }
-      .kb-off { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--fg-muted); white-space: nowrap; }
-      .kb-del { font-size: 12px; flex: 0 0 auto; }
-      .kb-empty { color: var(--fg-muted); font-size: 13px; padding: 12px 0; line-height: 1.4; }
     </style>
 
     <h1 id="sec-badge" class="sec" style="margin-top: 40px">Badge appearance</h1>
