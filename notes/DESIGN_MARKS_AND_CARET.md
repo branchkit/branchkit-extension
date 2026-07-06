@@ -1,11 +1,16 @@
 # Design: Marks + Caret/Visual mode — the last Vimium features
 
-**Status:** Both parts **landed** 2026-07-06 (committed locally, unpushed;
-in-browser live-verify still pending). Part 1 (Marks) and Part 2 (Caret/Visual)
-are the two remaining substantial Vimium features BranchKit lacked. The
-`Selection.modify` core the caret port depends on was spot-checked in real
-Chromium (caret paint / word-move / lineboundary-extend / yank all behave as
-assumed). Reference read against real source:
+**Status:** Both parts **landed + live-verified** 2026-07-06 (committed
+locally, unpushed). Part 1 (Marks) and Part 2 (Caret/Visual) are the two
+remaining substantial Vimium features BranchKit lacked. Live-verified against
+the real unpacked extension in headed Chromium via
+`scripts/_verify-marks-caret.mjs` (gitignored repro) — 15/15: local mark
+round-trip, `` `` `` previous-position, cross-tab **global** marks (origin tab
+restored to the marked scroll), caret/visual chips, real-clipboard yank,
+sentence movement, `Y` yank-line, `aw` text object, Escape exit, and the
+critical **hint-mode regression** (the keyboard-routing rewire didn't break
+`f`). Known imprecision: `aw` can be one char off at a word boundary (the
+deferred native-word caveat). Reference read against real source:
 `/tmp/vimium/content_scripts/marks.js`, `/tmp/vimium/background_scripts/marks.js`,
 `/tmp/vimium/content_scripts/mode_visual.js`. **No Vimium-C clone available
 locally** — this note is Vimium-parity; Vimium-C divergences called out where
