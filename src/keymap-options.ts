@@ -155,16 +155,11 @@ function renderVoiceRow(meta: CommandMeta): HTMLElement {
   row.innerHTML = MIC_SVG;
   const phrases = document.createElement('span');
   phrases.className = 'km-voice-phrases';
-  const vps = meta.voice ?? [];
-  vps.forEach((vp, i) => {
-    if (i > 0) {
-      const sep = document.createElement('span');
-      sep.className = 'km-voice-sep';
-      sep.textContent = '/';
-      phrases.appendChild(sep);
-    }
+  // Each phrase is a self-contained chip (no "/" separators — those strand at
+  // line-wraps). Chips read cleanly however the row wraps, like the key pills.
+  for (const vp of meta.voice ?? []) {
     phrases.appendChild(renderVoicePattern(meta, vp, disconnected));
-  });
+  }
 
   // User-added extra spoken forms (aliases) — each removable, like a keybind.
   for (const a of aliasesForCommand(meta.id)) {
