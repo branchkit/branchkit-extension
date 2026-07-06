@@ -1,0 +1,63 @@
+import { describe, it, expect } from 'vitest';
+import { captureTokens, overrideKey, validateOverridePhrase } from './command-override';
+
+describe('captureTokens', () => {
+  it('extracts and sorts {..} tokens, ignoring literals', () => {
+    expect(captureTokens('scroll down {number}')).toEqual(['{number}']);
+    expect(captureTokens('no captures')).toEqual([]);
+    expect(captureTokens('go {b} then {a}')).toEqual(['{a}', '{b}']);
+  });
+});
+
+describe('overrideKey', () => {
+  it('is deterministic and collision-safe across space-bearing inputs', () => {
+    expect(overrideKey('scroll', 'down')).toBe(overrideKey('scroll', 'down'));
+    // (action "a b", pattern "c") must not collide with (action "a", pattern "b c").
+    expect(overrideKey('a b', 'c')).not.toBe(overrideKey('a', 'b c'));
+  });
+});
+
+describe('validateOverridePhrase', () => {
+  it('accepts a literal rename', () => {
+    expect(validateOverridePhrase('toggle', 'hints')).toBeNull();
+  });
+
+  it('accepts a capture-preserving rename', () => {
+    expect(validateOverridePhrase('scroll down {number}', 'zoom {number}')).toBeNull();
+  });
+
+  it('accepts reordered literals around a closed capture', () => {
+    expect(validateOverridePhrase('scroll down {number}', '{number} zoom')).toBeNull();
+  });
+
+  it('rejects empty', () => {
+    expect(validateOverridePhrase('toggle', '   ')).toMatch(/enter a phrase/i);
+  });
+
+  it('rejects a dropped placeholder', () => {
+    expect(validateOverridePhrase('scroll down {number}', 'zoom')).toMatch(/placeholder/i);
+  });
+
+  it('rejects an added placeholder', () => {
+    expect(validateOverridePhrase('toggle', 'toggle {number}')).toMatch(/placeholder/i);
+  });
+
+  it('rejects non-lowercase literals', () => {
+    expect(validateOverridePhrase('toggle', 'Hints')).toMatch(/lowercase/i);
+    expect(validateOverridePhrase('toggle', 'hint2')).toMatch(/lowercase/i);
+    expect(validateOverridePhrase('toggle', 'hint-mode')).toMatch(/lowercase/i);
+  });
+
+  it('rejects a free-text capture that is not last', () => {
+    expect(validateOverridePhrase('find {text}', 'find {text} now')).toMatch(/last word/i);
+  });
+
+  it('rejects a phrase beginning with a free-text slot', () => {
+    expect(validateOverridePhrase('find {text}', '{text}')).toMatch(/begin with a free-text/i);
+  });
+
+  it('requires the hint slot to stay last', () => {
+    expect(validateOverridePhrase('blank {hint}', 'grab {hint}')).toBeNull();
+    expect(validateOverridePhrase('blank {hint}', '{hint} grab')).toMatch(/last word/i);
+  });
+});

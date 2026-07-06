@@ -12,7 +12,7 @@ import { describe, it, expect } from 'vitest';
 import { ElementWrapper } from '../scan/element-wrapper';
 import { ScannedElement, Category } from '../types';
 import { HintBadge } from '../render/hints';
-import { categoryMatches, wantsCodeword, wantsHint, wantsShown, wantsStrict } from './desired-state';
+import { wantsCodeword, wantsHint, wantsShown, wantsStrict } from './desired-state';
 
 function fakeElement(): Element {
   return { tagName: 'A' } as unknown as Element;
@@ -36,23 +36,6 @@ function makeWrapper(opts: {
   return w;
 }
 
-describe('categoryMatches', () => {
-  it('matches everything when no category is active', () => {
-    const w = makeWrapper({ inViewport: true, codeword: 'ape', category: 'button' });
-    expect(categoryMatches(w, null)).toBe(true);
-  });
-
-  it('matches when categories are equal', () => {
-    const w = makeWrapper({ inViewport: true, codeword: 'ape', category: 'link' });
-    expect(categoryMatches(w, 'link')).toBe(true);
-  });
-
-  it('rejects when categories differ', () => {
-    const w = makeWrapper({ inViewport: true, codeword: 'ape', category: 'link' });
-    expect(categoryMatches(w, 'button')).toBe(false);
-  });
-});
-
 describe('wantsCodeword', () => {
   it('wants a codeword when in the viewport band', () => {
     expect(wantsCodeword(makeWrapper({ inViewport: true, codeword: '' }))).toBe(true);
@@ -64,25 +47,19 @@ describe('wantsCodeword', () => {
 });
 
 describe('wantsHint', () => {
-  it('wants a hint when in-viewport, codeworded, and category matches', () => {
+  it('wants a hint when in-viewport and codeworded', () => {
     const w = makeWrapper({ inViewport: true, codeword: 'ape', category: 'link' });
-    expect(wantsHint(w, null)).toBe(true);
-    expect(wantsHint(w, 'link')).toBe(true);
+    expect(wantsHint(w)).toBe(true);
   });
 
   it('does not want a hint without a codeword', () => {
     const w = makeWrapper({ inViewport: true, codeword: '' });
-    expect(wantsHint(w, null)).toBe(false);
+    expect(wantsHint(w)).toBe(false);
   });
 
   it('does not want a hint when off-band', () => {
     const w = makeWrapper({ inViewport: false, codeword: 'ape' });
-    expect(wantsHint(w, null)).toBe(false);
-  });
-
-  it('does not want a hint when the category filter excludes it', () => {
-    const w = makeWrapper({ inViewport: true, codeword: 'ape', category: 'link' });
-    expect(wantsHint(w, 'button')).toBe(false);
+    expect(wantsHint(w)).toBe(false);
   });
 });
 

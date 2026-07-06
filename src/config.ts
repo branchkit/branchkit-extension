@@ -9,8 +9,8 @@
  * Deliberately NOT here: the per-machine `alphabet` adoption (storage.local
  * + its onChanged branch). That's vocab adoption coupled to the delta-sync
  * session state (sessionId, pendingPuts, sentCodewords), not a user setting,
- * so it stays in content.ts. `activeCategory` likewise stays — it's runtime
- * UI state, not storage-backed.
+ * so it stays in content.ts — as does other runtime UI state that isn't
+ * storage-backed.
  *
  * Extracted from content.ts as part of the extension restructure (step 1,
  * carve leaf concerns). See notes/DESIGN_EXTENSION_RESTRUCTURE.md.

@@ -4,18 +4,22 @@
   <meta charset="utf-8">
   <title>BranchKit Browser — Domain rules</title>
   <style>
+    /* GitHub-dark palette, matched to the popup and the keyboard help overlay
+       (src/render/help-overlay.ts) so every BranchKit surface reads as one. */
     :root {
-      --fg: #1c1c1e;
-      --fg-muted: #6b6b6f;
-      --bg: #fbfbfb;
-      --card: #fff;
-      --border: #e5e5ea;
-      --accent: #0a84ff;
-      --danger: #ff3b30;
-      --ok: #34c759;
-      --exclude: #ff3b30;
-      --include: #34c759;
-      --reveal: #0a84ff;
+      color-scheme: dark;
+      --fg: #c9d1d9;
+      --fg-muted: #8b949e;
+      --bg: #0d1117;
+      --card: #161b22;
+      --border: #30363d;
+      --accent: #58a6ff;      /* links, text, outlines */
+      --accent-btn: #1f6feb;  /* filled primary buttons */
+      --danger: #f85149;
+      --ok: #3fb950;
+      --exclude: #f85149;
+      --include: #3fb950;
+      --reveal: #58a6ff;
     }
     body {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -25,6 +29,10 @@
       margin: 0;
       padding: 32px 24px 64px;
     }
+    /* Every form control's text follows the theme; backgrounds are set
+       per-control below, so the typed text must be explicitly light. */
+    input, select, textarea { color: var(--fg); }
+    input[type="checkbox"] { accent-color: var(--accent); }
     .container {
       max-width: 720px;
       margin: 0 auto;
@@ -58,9 +66,9 @@
       cursor: pointer;
     }
     button.primary {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: white;
+      background: var(--accent-btn);
+      border-color: var(--accent-btn);
+      color: #fff;
     }
     button.danger {
       color: var(--danger);
@@ -78,7 +86,7 @@
     }
     .rule.disabled { opacity: 0.55; }
     .rule.dragging { opacity: 0.4; }
-    .rule.drag-over { box-shadow: inset 0 2px 0 #0078ff; }
+    .rule.drag-over { box-shadow: inset 0 2px 0 var(--accent); }
     .drag-handle {
       cursor: grab;
       color: var(--fg-muted);
@@ -111,14 +119,6 @@
       background: var(--bg);
     }
     .pattern input.invalid { border-color: var(--danger); }
-    .match-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--border);
-      flex-shrink: 0;
-    }
-    .match-dot.match { background: var(--ok); }
     .toggle {
       cursor: pointer;
     }
@@ -137,9 +137,9 @@
       padding: 6px 8px;
       border-radius: 6px;
     }
-    .entry:hover { background: rgba(0,0,0,0.025); }
+    .entry:hover { background: rgba(255,255,255,0.04); }
     .entry.dragging { opacity: 0.4; }
-    .entry.drag-over { box-shadow: inset 0 2px 0 #0078ff; }
+    .entry.drag-over { box-shadow: inset 0 2px 0 var(--accent); }
     .entry-drag {
       cursor: grab;
       color: var(--fg-muted);
@@ -152,7 +152,7 @@
     .entry-toggle { margin: 0; flex-shrink: 0; cursor: pointer; }
     .entry-off .entry-desc { opacity: 0.45; text-decoration: line-through; }
     .entry-off .entry-kind { opacity: 0.4; }
-    .entry.editing { background: rgba(0, 120, 255, 0.08); }
+    .entry.editing { background: rgba(88, 166, 255, 0.12); }
     .entry-kind {
       width: 14px;
       height: 14px;
@@ -291,8 +291,7 @@
     </div>
 
     <div class="toolbar">
-      <button id="add-current" class="primary">+ Add rule for current site</button>
-      <button id="add-blank">+ Add blank rule</button>
+      <button id="add-rule" class="primary">+ New rule</button>
     </div>
 
     <div id="rules"></div>
@@ -368,74 +367,100 @@
 
     <h1 style="margin-top: 40px">Keyboard shortcuts</h1>
     <div class="subtitle">
-      Rebind the in-page keyboard commands. Each command can have more than one
-      key. While hints are visible, bare letters type hint codewords, so a key
-      tagged <em>hints hidden</em> only fires with hints off — use Shift+letter
-      or a Ctrl/Alt/Cmd chord (tagged <em>always</em>) to work in both. Shortcuts
-      sync across browsers.
+      Rebind the in-page keyboard commands; each can have more than one key. Bare
+      keys act as shortcuts in Normal mode — they pause while you're typing in a
+      text field, or typing a hint codeword after <em>f</em>. Add a Ctrl/Cmd
+      modifier if you want a shortcut to fire even while typing in a field.
+      Shortcuts sync across browsers. Voice phrases are built in (not editable).
     </div>
     <div class="toolbar">
       <button id="km-reset">Reset to defaults</button>
     </div>
     <div id="keymap"></div>
     <style>
-      .km-group-head { font-size: 13px; font-weight: 600; color: var(--fg-muted); margin: 18px 0 6px; }
-      .km-cmd { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; }
-      .km-cmd-head { display: flex; align-items: flex-start; gap: 10px; }
-      .km-cmd-text { flex: 1; min-width: 0; }
-      .km-cmd-label { font-weight: 600; }
-      .km-cmd-desc { font-size: 12px; color: var(--fg-muted); margin-top: 2px; }
-      .km-cmd-voice { font-size: 12px; color: var(--accent); margin-top: 2px; }
-      .km-cmd-voice:empty { display: none; }
+      /* Keyboard shortcuts as a dense table: one row per command, grouped under
+         accent section headers (matching the ? help overlay). No per-command
+         box — the hairline row separators carry the structure. */
+      .km-group-head {
+        font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
+        color: var(--accent); margin: 24px 0 2px; padding-bottom: 5px;
+        border-bottom: 1px solid var(--border);
+      }
+      /* Three aligned columns — command | keys | voice. fr tracks are relative
+         to the (shared) container width, so every row's columns line up: all
+         keybinds start at the same x, all voice phrases at the same x. */
+      .km-row {
+        display: grid;
+        grid-template-columns: minmax(140px, 1.3fr) minmax(150px, 1.2fr) minmax(130px, 1.5fr);
+        align-items: center; column-gap: 16px; row-gap: 4px;
+        padding: 7px 6px; border-bottom: 1px solid var(--border);
+      }
+      .km-row:hover { background: rgba(255, 255, 255, 0.02); }
+      .km-row-label { font-size: 13px; min-width: 0; }
+      .km-row.unbound .km-row-label { color: var(--fg-muted); }
+      /* Keys column: pills + inline add, left-aligned so they form a column. */
+      .km-keys { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+      .km-bind-group { display: inline-flex; align-items: center; gap: 5px; }
+      /* One binding = a pill with the key text (click to rebind) and the ✕ that
+         removes THAT key, attached to it — not stranded on the far right. */
+      .km-bind {
+        display: inline-flex; align-items: stretch; overflow: hidden;
+        background: var(--bg); border: 1px solid var(--border);
+        border-bottom-width: 2px; border-radius: 6px;
+      }
+      .km-bind:hover { border-color: var(--accent); }
+      .km-keycap {
+        font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+        font-size: 12px; color: var(--fg); background: transparent; border: none;
+        padding: 3px 9px; cursor: pointer;
+      }
+      .km-keycap:hover, .km-keycap.capturing { color: var(--accent); }
+      .km-keycap-remove {
+        font: inherit; font-size: 13px; line-height: 1; color: var(--fg-muted);
+        background: transparent; border: none; border-left: 1px solid var(--border);
+        padding: 0 7px; cursor: pointer;
+      }
+      .km-keycap-remove:hover { color: var(--danger); background: rgba(248, 81, 73, 0.14); }
+      /* Inline add — a dashed pill right after the keys. */
+      .km-addkey {
+        font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+        font-size: 12px; color: var(--fg-muted); background: transparent;
+        border: 1px dashed var(--border); border-radius: 6px; padding: 3px 9px; cursor: pointer;
+      }
+      .km-addkey:hover, .km-addkey.capturing { border-color: var(--accent); color: var(--accent); }
+      /* Voice phrase on the row — "or say this" beside "press this". */
+      .km-row-voice { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg-muted); font-style: italic; }
+      .km-row-voice svg { width: 13px; height: 13px; flex: 0 0 auto; color: var(--accent); opacity: 0.9; }
+      .km-row-voice.disconnected { opacity: 0.45; }
+      .km-row-voice.disconnected svg { color: var(--fg-muted); }
       .km-voice-note { font-size: 12px; color: var(--fg-muted); font-style: italic; background: var(--bg); border: 1px dashed var(--border); border-radius: 6px; padding: 8px 10px; margin-bottom: 10px; }
-      .km-add-key { flex-shrink: 0; font-size: 12px; padding: 4px 8px; }
-      .km-bindings { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
-      .km-bindings:empty { display: none; }
-      .km-binding { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-      .km-key { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace; min-width: 88px; text-align: center; }
-      .km-key.capturing { border-color: var(--accent); color: var(--accent); }
-      .km-context { font-size: 11px; color: var(--fg-muted); border: 1px solid var(--border); border-radius: 10px; padding: 1px 8px; white-space: nowrap; }
-      .km-context.always { color: var(--ok); border-color: var(--ok); }
+      /* Editable voice phrases. */
+      .km-voice-phrases { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+      .km-voice-sep { color: var(--fg-muted); opacity: 0.6; }
+      .km-voice-item { display: inline-flex; align-items: center; gap: 2px; }
+      .km-voice-phrase { font: inherit; font-style: italic; color: var(--fg-muted); background: transparent; border: 1px solid transparent; border-radius: 5px; padding: 1px 5px; cursor: text; }
+      .km-voice-phrase:hover:not(:disabled) { border-color: var(--border); color: var(--fg); }
+      .km-voice-phrase:disabled { cursor: default; }
+      .km-voice-phrase.changed { color: var(--accent); font-style: normal; }
+      .km-voice-phrase.changed::after { content: '•'; margin-left: 4px; color: var(--accent); }
+      .km-voice-reset { font-size: 12px; line-height: 1; color: var(--fg-muted); background: transparent; border: none; cursor: pointer; padding: 0 2px; }
+      .km-voice-reset:hover { color: var(--accent); }
+      .km-voice-edit { display: inline-flex; align-items: center; gap: 6px; }
+      .km-voice-input { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--accent); border-radius: 5px; padding: 1px 5px; min-width: 140px; }
+      .km-voice-input.invalid { border-color: #d9534f; }
+      .km-voice-err { font-size: 11px; font-style: normal; color: #d9534f; max-width: 260px; }
       .km-warn { color: var(--accent); cursor: help; }
       .km-warn.conflict { color: var(--danger); }
-      .km-warn:empty { display: none; }
-      .km-binding-params { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .km-binding-params { display: inline-flex; gap: 8px; align-items: center; flex-wrap: wrap; }
       .km-param { font-size: 12px; color: var(--fg-muted); display: inline-flex; align-items: center; gap: 4px; }
       .km-param input, .km-param select { font: inherit; font-size: 12px; padding: 2px 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); }
       .km-param input[type=number] { width: 56px; text-align: right; }
-      .km-remove { margin-left: auto; padding: 2px 9px; font-size: 14px; line-height: 1; }
-      .km-empty-binding { font-size: 12px; color: var(--fg-muted); font-style: italic; margin-top: 6px; }
     </style>
-
-    <template id="keymap-command-template">
-      <div class="km-cmd">
-        <div class="km-cmd-head">
-          <div class="km-cmd-text">
-            <div class="km-cmd-label"></div>
-            <div class="km-cmd-desc"></div>
-            <div class="km-cmd-voice"></div>
-          </div>
-          <button type="button" class="km-add-key">+ Add key</button>
-        </div>
-        <div class="km-bindings"></div>
-      </div>
-    </template>
-
-    <template id="keymap-binding-template">
-      <div class="km-binding">
-        <button type="button" class="km-key"></button>
-        <span class="km-context"></span>
-        <span class="km-warn" title=""></span>
-        <span class="km-binding-params"></span>
-        <button type="button" class="km-remove danger" title="Remove this key">×</button>
-      </div>
-    </template>
 
     <template id="rule-template">
       <div class="rule">
         <div class="rule-header">
           <span class="drag-handle" draggable="true" title="Drag to reorder">⠿</span>
-          <span class="match-dot" title="Matches the current tab"></span>
           <span class="pattern">
             <input type="text" class="pattern-input" spellcheck="false">
           </span>

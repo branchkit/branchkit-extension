@@ -72,7 +72,7 @@ async function checkStatus(): Promise<void> {
       hasHostAccess = await chrome.permissions.contains({ origins: [HOST_ORIGIN] });
     } catch { /* permissions API unavailable — report the generic state */ }
     if (!hasHostAccess && grantBtn) {
-      text.textContent = 'Browser is blocking local access';
+      text.textContent = 'Browser is blocking the BranchKit connection';
       grantBtn.hidden = false;
     } else {
       text.textContent = 'BranchKit not detected';
@@ -105,35 +105,101 @@ function initGrantButton(): void {
   });
 }
 
-function initSyncedSelect(
+// Segmented pill control bound to a string-valued sync key. The buttons carry
+// the stored value in `data-value`; the `.active` one in markup is the default
+// shown until storage loads (mirrors the old <select>'s first-option default).
+function initSyncedSegmented(
   id: string,
   storageKey: string,
   migrate?: (v: unknown) => string,
 ): void {
-  const select = document.getElementById(id) as HTMLSelectElement;
+  const group = document.getElementById(id)!;
+  const buttons = Array.from(group.querySelectorAll<HTMLButtonElement>('.seg'));
+  const select = (value: string) => {
+    for (const b of buttons) {
+      const on = b.dataset.value === value;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-checked', String(on));
+    }
+  };
   chrome.storage.sync.get(storageKey, (result) => {
     const raw = result[storageKey];
-    if (raw === undefined) return;
-    const value = migrate ? migrate(raw) : raw;
-    select.value = value;
-    // Persist the migrated value once so the dropdown (which no longer has an
-    // <option> for the legacy value) doesn't render a blank/first selection.
+    if (raw === undefined) return; // markup default (.active) stands
+    const value = migrate ? migrate(raw) : String(raw);
+    select(value);
+    // Persist the migrated value once so a legacy stored value doesn't leave
+    // every pill inactive on the next open.
     if (migrate && value !== raw) chrome.storage.sync.set({ [storageKey]: value });
   });
-  select.addEventListener('change', () => {
-    chrome.storage.sync.set({ [storageKey]: select.value });
-  });
+  for (const b of buttons) {
+    b.addEventListener('click', () => {
+      const value = b.dataset.value!;
+      select(value);
+      chrome.storage.sync.set({ [storageKey]: value });
+    });
+  }
 }
 
-function initSyncedCheckbox(id: string, storageKey: string, defaultOn = false): void {
-  const cb = document.getElementById(id) as HTMLInputElement;
+// Segmented On/Off bound to a boolean-valued sync key (data-value "on"/"off").
+function initSyncedSegmentedBool(id: string, storageKey: string, defaultOn = false): void {
+  const group = document.getElementById(id)!;
+  const buttons = Array.from(group.querySelectorAll<HTMLButtonElement>('.seg'));
+  const select = (on: boolean) => {
+    for (const b of buttons) {
+      const active = (b.dataset.value === 'on') === on;
+      b.classList.toggle('active', active);
+      b.setAttribute('aria-checked', String(active));
+    }
+  };
   chrome.storage.sync.get(storageKey, (result) => {
     // defaultOn keys are on unless explicitly stored false (absent → on).
-    cb.checked = defaultOn ? result[storageKey] !== false : result[storageKey] === true;
+    select(defaultOn ? result[storageKey] !== false : result[storageKey] === true);
   });
-  cb.addEventListener('change', () => {
-    chrome.storage.sync.set({ [storageKey]: cb.checked });
-  });
+  for (const b of buttons) {
+    b.addEventListener('click', () => {
+      const on = b.dataset.value === 'on';
+      select(on);
+      chrome.storage.sync.set({ [storageKey]: on });
+    });
+  }
+}
+
+// Live "this page" readout — asks the active tab's content script how many
+// hint candidates it's tracking and whether badges are painted. Stays hidden
+// on pages with no content script (chrome://, the web store, not-yet-injected).
+async function initPageReadout(): Promise<void> {
+  const wrap = document.getElementById('readout')!;
+  const dot = document.getElementById('readout-dot')!;
+  const text = document.getElementById('readout-text')!;
+  if (!activeTab?.id) return;
+
+  let status: { hintCount: number; badgesVisible: boolean } | undefined;
+  try {
+    status = await chrome.tabs.sendMessage(activeTab.id, { type: 'GET_PAGE_STATUS' });
+  } catch {
+    return; // no content script on this page — leave the readout hidden
+  }
+  if (!status) return;
+
+  const { hintCount, badgesVisible } = status;
+  const on = badgesVisible && hintCount > 0;
+  dot.className = on ? 'readout-dot on' : 'readout-dot';
+
+  if (hintCount === 0) {
+    text.textContent = 'No hints on this page';
+  } else {
+    const noun = hintCount === 1 ? 'hint' : 'hints';
+    const state = badgesVisible ? 'Showing' : 'Hidden';
+    text.replaceChildren(
+      document.createTextNode(`${state} · `),
+      Object.assign(document.createElement('span'), {
+        className: 'readout-count',
+        textContent: String(hintCount),
+      }),
+      document.createTextNode(` ${noun} on this page`),
+    );
+  }
+  wrap.hidden = false;
 }
 
 function initOptionsLink(): void {
@@ -508,13 +574,14 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
 async function init(): Promise<void> {
   checkStatus();
   initGrantButton();
-  initSyncedSelect('hint-visibility', 'hintVisibility');
-  initSyncedSelect('hint-mode', 'badgeDisplayMode', migrateDisplayMode);
-  initSyncedCheckbox('tab-markers', 'tabMarkersEnabled', true);
+  initSyncedSegmented('hint-visibility', 'hintVisibility');
+  initSyncedSegmented('hint-mode', 'badgeDisplayMode', migrateDisplayMode);
+  initSyncedSegmentedBool('tab-markers', 'tabMarkersEnabled', true);
   initOptionsLink();
 
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   activeTab = tab ?? null;
+  initPageReadout();
   await loadRules();
   render();
 }

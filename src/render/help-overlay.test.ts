@@ -46,6 +46,20 @@ describe('buildHelpModel', () => {
     expect(model[0].rows[0].voice).toEqual(['scroll down']);
   });
 
+  it('drops voice phrases and voice-only commands when voice is disconnected', () => {
+    const catalog = [
+      cmd('scroll_down', 'Scroll', ['scroll down']), // key + voice
+      cmd('toggle', 'Hints', ['toggle']),            // voice only, no keybind
+    ];
+    const keymap: KeymapEntry[] = [{ keys: 'shift+KeyJ', command: 'scroll_down' }];
+    const model = buildHelpModel(catalog, keymap, false);
+    // voice-only command falls out entirely (unreachable without voice)
+    expect(model.map((g) => g.group)).toEqual(['Scroll']);
+    // the surviving row keeps its keys but shows no spoken phrase
+    expect(model[0].rows[0].keys).toEqual(['Shift+J']);
+    expect(model[0].rows[0].voice).toEqual([]);
+  });
+
   it('shows every binding of a command, formatted for display', () => {
     const catalog = [cmd('scroll_left', 'Scroll')];
     const keymap: KeymapEntry[] = [

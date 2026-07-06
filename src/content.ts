@@ -5,7 +5,7 @@
  * Voice commands arrive via background → BRANCHKIT_ACTION messages.
  */
 
-import { Category, HintVisibility, ScannedElement, Message, DispatchResult, TabAction } from './types';
+import { HintVisibility, ScannedElement, Message, DispatchResult, TabAction } from './types';
 import { LabelAssignment, isVoiceAlphabetLoaded, setAlphabet } from './labels/words';
 import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters } from './scan/scanner';
 import { noteDisconnectedShadowAttach } from './scan/shadow-attach-signal';
@@ -50,7 +50,7 @@ import { captureDebugSnapshot } from './debug/debug-snapshot';
 import { toggleOverlay } from './render/debug-overlay';
 import { toggleHelpOverlay } from './render/help-overlay';
 import { togglePalette, closePalette } from './render/palette-host';
-import { setTabMarker, reapplyTabMarker } from './render/tab-title';
+import { setTabMarker, reapplyTabMarker, refreshTabMarker } from './render/tab-title';
 import { setModeChip } from './render/mode-chip';
 import {
   CodewordSnapshot,
@@ -487,7 +487,6 @@ labelReservoir.installLeakSweep(
 // the starved wrappers claim + paint without waiting for the user to move.
 labelReservoir.onRefillLanded(() => scheduleReconcile());
 
-let activeCategory: Category | null = null;
 let lastActivatedElement: Element | null = null;
 const MAX_BADGE_COUNT = 676; // No artificial cap; word pairs for >26
 
@@ -637,6 +636,9 @@ function applyHintsShownState(): void {
 loadConfig({
   onDisplayModeChange: () => {
     if (pageSession.badgesVisible) updateBadgeLabels();
+    // The tab-title marker follows the same setting — re-render it in place so
+    // the tab prefix and the on-page hints for a letter stay in lockstep.
+    refreshTabMarker();
   },
   onHintVisibilityChange: () => {
     const v = getHintVisibility();
@@ -709,6 +711,9 @@ if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
         w.hint?.updateLabel(w.label, getDisplayMode());
         queuePut(w);
       }
+      // Word/expand-mode tab markers show spoken words, so a new alphabet
+      // changes them too (no-op in letter mode / unmarked frames).
+      refreshTabMarker();
       void syncNow('alphabet_change');
     }
   });
@@ -758,7 +763,12 @@ function kickInitialScan(): void {
 
 if (typeof chrome !== 'undefined' && chrome.storage?.local) {
   chrome.storage.local.get('alphabet', (result) => {
-    if (Array.isArray(result.alphabet)) setAlphabet(result.alphabet);
+    if (Array.isArray(result.alphabet)) {
+      setAlphabet(result.alphabet);
+      // If the marker bootstrapped (letter mode) before this overlay loaded, a
+      // word/expand setting needs a re-render to show spoken words.
+      refreshTabMarker();
+    }
     // No initial scan yet when the machinery is off: either an ineligible frame
     // (tiny/about:blank subframe — woken via wake-on-resize) or a backgrounded
     // tab whose activation was deferred (Lever 2 — woken on first show).
@@ -849,11 +859,11 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
 // The default set, for reference: one binding per command, preferring the
 // always-mode form (Shift/modifier chords route to commands even with hints
 // painted; bare letters are codeword input then, so they'd be eaten).
-// Shift+J/K/D/U/T/G scroll; Shift+H/L cycle tabs; Ctrl+S toggles hints
-// (show_hints_newtab is still bindable, just not a default — Ctrl+S + the "aA"
-// new-tab affordance cover it). A few inherently-bare, hidden-only binds (h/l
-// horizontal scroll, `cs`, `/`, `n`). Users add extra binds (e.g. plain j) via
-// the options editor.
+// Shift+J/K/D/U/T/G scroll; Shift+H/L cycle tabs; Ctrl+S toggles hints, `f`
+// enters hint mode, and a capital letter in hint mode opens in a new tab — the
+// trio that replaced the discrete show/hide/show-new-tab commands. A few
+// inherently-bare, hidden-only binds (h/l horizontal scroll, `cs`, `/`, `n`).
+// Users add extra binds (e.g. plain j) via the options editor.
 // The effective keymap, kept in sync with the registry so the help overlay can
 // render the user's actual binds (not just the defaults).
 let currentKeymap: readonly KeymapEntry[] = DEFAULT_KEYMAP;
@@ -883,12 +893,6 @@ function enterHintModeIfManual(): void {
   if (getHintVisibility() !== 'always') keyHandler.enterHintMode();
 }
 
-dispatcher.register('show_hints', () => {
-  doScan();
-  showBadges();
-  enterHintModeIfManual();
-});
-
 // `f` — the keyboard entry into hint mode (notes/DESIGN_KEYBOARD_MODES.md).
 // Hints stay always-visible for voice, but letters only filter them here. So
 // `f` ensures hints are painted and puts the keyboard in hint mode; the mode
@@ -898,19 +902,11 @@ dispatcher.register('hint_mode', () => {
   keyHandler.enterHintMode();
 });
 
+// Armed when the next activation should open in a new tab. Set by the capital-
+// letter new-tab affordance in hint mode (keyHandler.isNewTabArmed, below),
+// read + cleared by the activation path. (The discrete show_hints_newtab
+// command that also set this was removed 2026-07-05 — toggle + capital cover it.)
 let activateInNewTab = false;
-
-dispatcher.register('show_hints_newtab', () => {
-  activateInNewTab = true;
-  doScan();
-  showBadges();
-  enterHintModeIfManual();
-});
-
-dispatcher.register('hide_hints', () => {
-  hideBadges();
-  keyHandler.exitHintMode();
-});
 
 // The shared toggle used by both Ctrl+S (keyboard) and the voice "toggle"
 // command, so the two entry points can't drift. Branches on what's actually on
@@ -1123,13 +1119,6 @@ dispatcher.register('scroll_to_element', (params) => {
   }
 });
 
-// Category-specific hint display (for voice: "go", "set", "tables", etc.)
-dispatcher.register('show_hints_category', (params) => {
-  const cat = params.category as Category;
-  if (!cat) return;
-  doScan();
-  showBadges(cat);
-});
 
 // --- Keyboard Filter Callback ---
 
@@ -1355,7 +1344,7 @@ function applyUserRuleToScan(
   result.elements.push(...extra.elements);
 }
 
-async function showBadges(filter?: Category | Category[]): Promise<void> {
+async function showBadges(): Promise<void> {
   // Wait one frame so any pending IntersectionObserver entries (queued
   // synchronously by observe(), delivered async) have a chance to fire,
   // then drain pending claims/releases. Without this, a `f` keypress
@@ -1365,16 +1354,7 @@ async function showBadges(filter?: Category | Category[]): Promise<void> {
   await new Promise(r => requestAnimationFrame(() => r(null)));
   await pageSession.tracker.flushNow();
 
-  // Determine which categories to show
-  const categories: Category[] | null = filter
-    ? (Array.isArray(filter) ? filter : [filter])
-    : null;
-  activeCategory = typeof filter === 'string' ? filter : null;
-
-  // Get elements, optionally filtered by category
-  const allTargets = categories
-    ? store.all.filter(w => categories.includes(w.category))
-    : [...store.all];
+  const allTargets = [...store.all];
 
   // pageSession.badgesVisible is the mode flag — "user wants hints showing." Set it
   // even when the store has nothing to paint right now so subsequent
@@ -1495,7 +1475,6 @@ function clearHintFilter(): void {
 function hideBadges(): void {
   clearHintFilter();
   pageSession.badgesVisible = false;
-  activeCategory = null;
   for (const w of store.all) {
     w.hint?.hideLeader();
     w.hint?.hide();
@@ -1584,7 +1563,7 @@ function badgeNewlyCodeworded(budgetMs: number = WAVE_BUILD_BUDGET_MS): void {
     // `!w.hint` filter would skip every dormant hint forever. The new
     // filter catches both first-time hints (w.hint absent) and reused
     // dormant hints (w.hint present but hidden + cleared).
-    if (wantsHint(w, activeCategory) && !w.hint?.isVisible) {
+    if (wantsHint(w) && !w.hint?.isVisible) {
       newBadges.push(w);
     }
   }
@@ -1974,7 +1953,7 @@ function scheduleBandDiscovery(settleKind: 'band' | 'store', revealRepairs = 0):
         // (reconcile), flush the claims, then paint.
         reconcile();
         await pageSession.tracker.flushNow();
-        if (pageSession.badgesVisible) await showBadges(activeCategory ?? undefined);
+        if (pageSession.badgesVisible) await showBadges();
       } finally {
         pageSession.discoverySweepPending = false;
         // Mass-reveal rerun (round 18b): a >=25-repair settle landed while
@@ -2825,7 +2804,7 @@ function rescanForNav(fromCache: boolean, reason: string): void {
         void doScan('rescan').then(async () => {
           reconcile();
           await pageSession.tracker.flushNow();
-          if (pageSession.badgesVisible) showBadges(activeCategory ?? undefined);
+          if (pageSession.badgesVisible) showBadges();
           void navStep('deferred_scan:end');
         });
       };
@@ -2933,6 +2912,16 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
     return false;
   }
 
+  if (message.type === 'GET_PAGE_STATUS') {
+    // Only the top frame answers so the popup receives a single response. The
+    // count is this frame's hint candidates; subframe hints aren't aggregated.
+    if (!isTopFrame) return false;
+    const badgesVisible =
+      pageSession.badgesVisible || store.all.some((w) => w.hint?.isVisible);
+    sendResponse({ hintCount: store.all.length, badgesVisible });
+    return false;
+  }
+
   if (message.type === 'TAB_MARKER') {
     if (isTopFrame) setTabMarker(message.letters);
     return false;
@@ -2956,16 +2945,10 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
 
   if (message.type === 'BRANCHKIT_ACTION') {
     const { action, params, correlation_id: correlationId } = message.payload;
-    if (action === 'show_hints') {
-      phraseSnapshot = takeSnapshot(store.all, performance.now());
-      doScan();
-      showBadges();
-    } else if (action === 'hide_hints') {
-      hideBadges();
-    } else if (action === 'toggle_hints') {
+    if (action === 'toggle_hints') {
       // Voice "toggle" — the same handler as Ctrl+S. Snapshot on the show
-      // direction so a codeword spoken in the same phrase resolves, mirroring
-      // show_hints above.
+      // direction so a codeword spoken in the same phrase resolves against the
+      // freshly-painted badges.
       if (toggleHints()) phraseSnapshot = takeSnapshot(store.all, performance.now());
     } else if (action === 'rescan') {
       pageSession.onUrlChange(params?.from_cache === 'true', params?.reason ?? '');
@@ -3266,11 +3249,6 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         }
       });
     }
-  } else if (message.type === 'SHOW_BADGES') {
-    doScan();
-    showBadges(message.category);
-  } else if (message.type === 'HIDE_BADGES') {
-    hideBadges();
   }
 });
 
@@ -3718,7 +3696,7 @@ function scheduleMassRevealPaint(repairs: number): void {
       firehoseStep('mass_reveal:direct_paint', repairs, 0);
       reconcile();
       await pageSession.tracker.flushNow();
-      if (pageSession.badgesVisible) await showBadges(activeCategory ?? undefined);
+      if (pageSession.badgesVisible) await showBadges();
     })();
   });
 }
@@ -3741,7 +3719,7 @@ function runSettlePipeline(discovery: 'band' | 'store'): void {
     // PLAN: the one desired-state derivation deciding every action class
     // over the snapshot, simulating the apply order (flag repairs feed
     // shown-ness; occlusion/cssHidden feed strict).
-    const planLists = computeReconcilePlanLists(store, activeCategory, gather);
+    const planLists = computeReconcilePlanLists(store, gather);
     // APPLY: thin appliers in the load-bearing step order — enforced here
     // by structure, not comment discipline.
     applyLifecyclePlan(planLists);
@@ -4307,7 +4285,7 @@ function resumeHintMachinery(): void {
   void doScan().then(() => {
     reconcile();
     void pageSession.tracker.flushNow();
-    if (pageSession.badgesVisible) showBadges(activeCategory ?? undefined);
+    if (pageSession.badgesVisible) showBadges();
   });
   bkLog('BK_RESUME', { url: trimFrameUrl(window.location.href), wrappers: store.all.length });
 }

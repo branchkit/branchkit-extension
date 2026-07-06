@@ -90,20 +90,16 @@ export interface KeymapEntry {
 }
 
 // Enum option lists mirror the source unions: ScrollDirection / ScrollAmount
-// (activate/scroller.ts), Category (types.ts). Kept as literal arrays because
-// TS type unions have no runtime form for the editor to enumerate.
+// (activate/scroller.ts). Kept as literal arrays because TS type unions have
+// no runtime form for the editor to enumerate.
 const SCROLL_DIRECTIONS = ['up', 'down', 'left', 'right'] as const;
 const SCROLL_AMOUNTS = ['step', 'half', 'full', 'top', 'bottom'] as const;
-const HINT_CATEGORIES = ['link', 'button', 'input', 'tab', 'edit', 'view', 'tables'] as const;
 
 export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // --- Hints ---
-  { id: 'show_hints', label: 'Show hints', group: 'Hints', mappable: true, params: [],
-    description: 'Scan the page and paint hint badges.' },
-  { id: 'show_hints_newtab', label: 'Show hints (new tab)', group: 'Hints', mappable: true, params: [],
-    description: 'Show hints with the next activation armed to open in a new tab.' },
-  { id: 'hide_hints', label: 'Hide hints', group: 'Hints', mappable: true, params: [],
-    description: 'Remove all hint badges.' },
+  // Show/hide are subsumed by toggle_hints (Ctrl+S) + hint_mode (f) + the
+  // capital-letter new-tab affordance, so the discrete verbs were dropped
+  // 2026-07-05 rather than lingering as unbound, voiceless editor clutter.
   { id: 'toggle_hints', label: 'Toggle hints', group: 'Hints', mappable: true, params: [],
     description: 'Show hints when hidden, hide them when shown (sticky across navigation).',
     voice: [{ pattern: 'toggle' }] },
@@ -111,9 +107,6 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // typeable here, and only here. See notes/DESIGN_KEYBOARD_MODES.md.
   { id: 'hint_mode', label: 'Type a hint', group: 'Hints', mappable: true, params: [],
     description: 'Make the painted hints keyboard-typeable — then type a codeword to activate it. Esc exits.' },
-  { id: 'show_hints_category', label: 'Show hints by category', group: 'Hints', mappable: true,
-    description: 'Show only hints of one element category (links, buttons, inputs, …).',
-    params: [{ name: 'category', type: 'enum', options: HINT_CATEGORIES, default: 'link' }] },
   { id: 'activate_hint', label: 'Activate hint by codeword', group: 'Hints', mappable: false, params: [],
     description: 'Activate the hint matching a spoken/typed codeword (runtime value — not bindable).' },
   // blank / stash — the voice twins of the typed-capital new-tab affordance,

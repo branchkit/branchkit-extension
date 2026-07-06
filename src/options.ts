@@ -1,10 +1,11 @@
 /**
  * BranchKit Browser — Options page logic.
  *
- * Vanilla JS cross-site rule editor. Pattern editing with live
- * "matches current tab" indicator, all matcher types (CSS / text /
- * class), and a per-rule tab-picker for codeword resolve. Storage
- * and message-passing go through ./domain-rules-storage and ./rule-ui.
+ * Vanilla JS cross-site rule editor: pattern editing, all matcher types
+ * (CSS / text / class), and a per-rule tab-picker for codeword resolve.
+ * Current-site affordances live in the popup — this page opens as its own
+ * tab, so it has no meaningful "current site" of its own. Storage and
+ * message-passing go through ./domain-rules-storage and ./rule-ui.
  */
 
 import type {
@@ -22,7 +23,6 @@ import {
   rulesEqual,
 } from './rules/domain-rules-storage';
 import {
-  suggestPattern,
   isValidSelector,
   validatePattern,
   reorderRules,
@@ -48,7 +48,6 @@ import { initKeymapEditor } from './keymap-options';
 // --- State ---
 
 let rules: DomainRule[] = [];
-let activeTabUrl: string | null = null;
 let draggedRuleId: string | null = null;
 let draggedEntry: { ruleId: string; entryId: string } | null = null;
 const PATTERN_SAVE_DEBOUNCE_MS = 350;
@@ -66,14 +65,6 @@ async function load(): Promise<void> {
 
 function save(): void {
   saveDomainRules(rules);
-}
-
-async function getActiveTabUrl(): Promise<string | null> {
-  return new Promise((resolve) => {
-    chrome.tabs.query({ active: true, lastFocusedWindow: true }, (tabs) => {
-      resolve(tabs[0]?.url ?? null);
-    });
-  });
 }
 
 function uuid(): string {
@@ -114,7 +105,6 @@ function renderRule(rule: DomainRule): HTMLElement {
     rule.enabled = toggle.checked;
     node.classList.toggle('disabled', !rule.enabled);
     save();
-    updateMatchDot(rule, node);
   });
 
   const deleteBtn = node.querySelector('.delete') as HTMLButtonElement;
@@ -135,7 +125,6 @@ function renderRule(rule: DomainRule): HTMLElement {
 
   wireAddEntry(rule, node);
   wireResolvePanel(rule, node);
-  updateMatchDot(rule, node);
   validatePatternUI(rule, patternInput, node);
 
   return node;
@@ -314,7 +303,6 @@ function renderEntry(rule: DomainRule, entry: RuleEntry): HTMLElement {
 function onPatternInput(rule: DomainRule, input: HTMLInputElement, ruleNode: HTMLElement): void {
   rule.pattern = input.value;
   validatePatternUI(rule, input, ruleNode);
-  updateMatchDot(rule, ruleNode);
 
   const existing = patternSaveTimers.get(rule.id);
   if (existing) clearTimeout(existing);
@@ -345,18 +333,6 @@ function validatePatternUI(rule: DomainRule, input: HTMLInputElement, ruleNode: 
     input.classList.remove('invalid');
     errEl.textContent = '';
   }
-}
-
-function updateMatchDot(rule: DomainRule, ruleNode: HTMLElement): void {
-  const dot = ruleNode.querySelector('.match-dot') as HTMLElement;
-  if (!activeTabUrl) {
-    dot.classList.remove('match');
-    dot.title = 'No active tab';
-    return;
-  }
-  const matched = urlMatchesPattern(activeTabUrl, rule.pattern);
-  dot.classList.toggle('match', matched);
-  dot.title = matched ? 'Matches the current tab' : 'Does not match the current tab';
 }
 
 // --- Entry editing ---
@@ -643,26 +619,14 @@ function addRule(pattern: string): void {
 // --- Init ---
 
 async function init(): Promise<void> {
-  activeTabUrl = await getActiveTabUrl();
   await load();
   render();
 
-  const addCurrent = document.getElementById('add-current') as HTMLButtonElement;
-  const addBlank = document.getElementById('add-blank') as HTMLButtonElement;
-
-  if (!activeTabUrl || !suggestPattern(activeTabUrl)) {
-    addCurrent.disabled = true;
-    addCurrent.title = 'Open this page from a regular http(s) tab to use this shortcut.';
-  }
-
-  addCurrent.addEventListener('click', () => {
-    if (!activeTabUrl) return;
-    const suggestion = suggestPattern(activeTabUrl);
-    if (!suggestion) return;
-    addRule(suggestion);
-  });
-
-  addBlank.addEventListener('click', () => addRule(''));
+  // A blank-pattern rule the user types the pattern into — the cross-site
+  // authoring path. Per-site creation lives in the popup, which has an actual
+  // current site; this page opens as its own tab and has none.
+  const addRuleBtn = document.getElementById('add-rule') as HTMLButtonElement;
+  addRuleBtn.addEventListener('click', () => addRule(''));
 
   onDomainRulesChanged((incoming) => {
     if (rulesEqual(incoming, rules)) return;

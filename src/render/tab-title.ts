@@ -2,9 +2,17 @@
  * BranchKit Browser — tab title decorator (content side, Phase 1 of
  * notes/DESIGN_TAB_MARKERS.md).
  *
- * Writes this tab's marker letters as a `document.title` prefix ("[a] GitHub")
- * and keeps it applied as the page rewrites its own title. Top frame only —
+ * Writes this tab's marker as a `document.title` prefix ("[a] GitHub") and keeps
+ * it applied as the page rewrites its own title. Top frame only —
  * `document.title` is a per-document, top-level concern.
+ *
+ * The background pushes the marker's LETTER token ("a" / "iz") — the stable
+ * identity. What we DISPLAY follows the user's badgeDisplayMode, exactly like
+ * hint badges: letter "[a]", word "[iris zone]", expand "[iris z]". Word/expand
+ * need the voice alphabet overlay and fall back to letters when it's absent. The
+ * letter stays the machine identity (pool, palette, grammar); the word is a pure
+ * display overlay. `refreshTabMarker()` re-renders in place when the mode or the
+ * alphabet changes, so switching the label setting updates open tabs live.
  *
  * The background owns assignment and pushes the letters (or null to clear);
  * this module owns only the write, with Rango's three anti-fight guards so we
@@ -19,10 +27,29 @@
  */
 
 import { stripTabMarker, decorateTitle } from '../tab-marker-format';
+import { labelToDisplay, type LabelAssignment } from '../labels/words';
+import { getDisplayMode } from '../config';
 
 // The current marker letters ("a" / "qr"), or null when the feature is off /
 // this tab is unmarked. Set by the background push.
 let letters: string | null = null;
+
+/**
+ * The display form of the marker letters under the current badgeDisplayMode,
+ * via the same labelToDisplay used for hint badges — so the tab prefix and the
+ * on-page hint for the same letter always read identically. The marker token is
+ * adjacent letters ("iz"); split it into the single-letter words labelToDisplay
+ * expects. Falls back to the letters themselves when the voice overlay is absent
+ * (word/expand have nothing to say without an alphabet).
+ */
+function markerDisplay(marker: string): string {
+  const assignment: LabelAssignment = {
+    words: marker.split(''),
+    letter: marker,
+    isSingle: marker.length === 1,
+  };
+  return labelToDisplay(assignment, getDisplayMode());
+}
 // Bare title before our decoration, and the exact decorated string we last
 // wrote — the echo guard compares against the latter.
 let lastUndecorated = typeof document !== 'undefined' ? document.title : '';
@@ -44,7 +71,7 @@ function writeFromBare(): void {
     return;
   }
 
-  const next = letters ? decorateTitle(letters, lastUndecorated) : lastUndecorated;
+  const next = letters ? decorateTitle(markerDisplay(letters), lastUndecorated) : lastUndecorated;
   if (next !== document.title) document.title = next;
   lastDecorated = next;
 }
@@ -54,6 +81,17 @@ function writeFromBare(): void {
 export function setTabMarker(next: string | null): void {
   if (typeof document === 'undefined') return;
   letters = next;
+  writeFromBare();
+}
+
+/**
+ * Re-render the marker in place — the letters are unchanged, but the display
+ * form or the voice overlay moved (badgeDisplayMode switched, or the alphabet
+ * loaded/changed). No-op on unmarked frames/tabs (letters === null), so a
+ * mode-change broadcast to every frame only rewrites the one that's decorated.
+ */
+export function refreshTabMarker(): void {
+  if (typeof document === 'undefined' || letters === null) return;
   writeFromBare();
 }
 

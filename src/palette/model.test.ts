@@ -69,14 +69,16 @@ describe('buildCommandItems', () => {
   });
 
   it('binds catalog param defaults into the dispatch payload', () => {
+    // Synthetic fixture — exercises enum-param default binding generically,
+    // independent of which real catalog commands currently carry enum params.
     const cat: CommandMeta[] = [{
-      id: 'show_hints_category', label: 'Show hints by category', group: 'Hints',
+      id: 'demo_enum_cmd', label: 'Demo enum command', group: 'Hints',
       description: 'x', mappable: true,
       params: [{ name: 'category', type: 'enum', options: ['link'], default: 'link' }],
     }];
     const [item] = buildCommandItems(cat, []);
     expect(item.dispatch).toEqual({
-      kind: 'command', command: 'show_hints_category', params: { category: 'link' },
+      kind: 'command', command: 'demo_enum_cmd', params: { category: 'link' },
     });
   });
 

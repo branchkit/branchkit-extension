@@ -19,16 +19,7 @@
  * unify them here.
  */
 
-import { Category } from '../types';
 import { ElementWrapper } from '../scan/element-wrapper';
-
-/**
- * Does the wrapper's category pass the active category filter?
- * A null filter (no category narrowing active) matches everything.
- */
-export function categoryMatches(w: ElementWrapper, activeCategory: Category | null): boolean {
-  return !activeCategory || w.category === activeCategory;
-}
 
 /** Should this wrapper hold a codeword right now? (IO-band viewport gate.) */
 export function wantsCodeword(w: ElementWrapper): boolean {
@@ -37,10 +28,10 @@ export function wantsCodeword(w: ElementWrapper): boolean {
 
 /**
  * Should this wrapper have a rendered hint badge right now?
- * Requires viewport presence, an assigned codeword, and a category match.
+ * Requires viewport presence and an assigned codeword.
  */
-export function wantsHint(w: ElementWrapper, activeCategory: Category | null): boolean {
-  return w.isInViewport && w.scanned.codeword.length > 0 && categoryMatches(w, activeCategory);
+export function wantsHint(w: ElementWrapper): boolean {
+  return w.isInViewport && w.scanned.codeword.length > 0;
 }
 
 /**

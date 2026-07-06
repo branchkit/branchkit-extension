@@ -139,8 +139,6 @@ export type Message =
       /** Content omits tab_id/frame_id; SW stamps them from sender. */
       request: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'>;
     }
-  | { type: 'SHOW_BADGES'; category?: Category }
-  | { type: 'HIDE_BADGES' }
   | { type: 'BRANCHKIT_ACTION'; payload: { action: string; params: Record<string, string>; correlation_id?: string } }
   // Content → background: open an http(s) href in a new background tab (the
   // "stash" hint verb). Content scripts can't reach chrome.tabs.
@@ -177,6 +175,11 @@ export type Message =
   // Used to route keyboard-derived actions to whichever frame the user is
   // actually interacting with (vs. chrome's default top-frame routing).
   | { type: 'GET_FOCUS_STATUS' }
+  // Popup → content (top frame). A live readout of what BranchKit is doing on
+  // this page right now: how many hint candidates exist and whether badges are
+  // currently painted. Only the top frame answers (single response); subframe
+  // hints aren't summed. Response: { hintCount: number; badgesVisible: boolean }.
+  | { type: 'GET_PAGE_STATUS' }
   | { type: 'SCROLL_BOUNDARY'; boundary: 'top' | 'bottom' | 'left' | 'right' }
   | { type: 'REFERENCE_NAMES_CHANGED' }
   | { type: 'REFERENCE_SAVED'; host: string; name: string; reference: Record<string, unknown> }

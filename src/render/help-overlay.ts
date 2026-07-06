@@ -44,6 +44,7 @@ function formatKeysToken(token: string): string {
 export function buildHelpModel(
   catalog: readonly CommandMeta[],
   keymap: readonly KeymapEntry[],
+  voiceConnected = true,
 ): HelpGroup[] {
   const keysByCommand = new Map<string, string[]>();
   for (const e of keymap) {
@@ -55,7 +56,9 @@ export function buildHelpModel(
   const indexByGroup = new Map<string, number>();
   for (const c of catalog) {
     const keys = keysByCommand.get(c.id) ?? [];
-    const voice = (c.voice ?? []).map((v) => v.pattern);
+    // With voice disconnected the spoken phrases are unusable, so drop them —
+    // and any command reachable ONLY by voice falls out via the skip below.
+    const voice = voiceConnected ? (c.voice ?? []).map((v) => v.pattern) : [];
     if (keys.length === 0 && voice.length === 0) continue; // not reachable → skip
     let gi = indexByGroup.get(c.group);
     if (gi === undefined) {
@@ -104,12 +107,18 @@ const STYLE = `
   border: 1px solid #30363d; border-radius: 10px;
   box-shadow: 0 16px 48px rgba(1, 4, 9, 0.6);
   padding: 14px 16px;
+  /* Thin, near-black scrollbar so it recedes into the dark panel instead of
+     showing the OS default light track. */
+  scrollbar-width: thin;
+  scrollbar-color: #010409 transparent;
 }
+.panel::-webkit-scrollbar { width: 8px; height: 8px; }
+.panel::-webkit-scrollbar-track { background: transparent; }
+.panel::-webkit-scrollbar-thumb { background: #010409; border-radius: 4px; }
+.panel::-webkit-scrollbar-thumb:hover { background: #161b22; }
 .head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
 .title { font-size: 14px; font-weight: 650; color: #f0f6fc; }
 .hint { font-size: 11px; color: #8b949e; }
-.sec { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em;
-  color: #58a6ff; margin: 0 0 6px; }
 /* Commands (left) beside the spoken alphabet (right) on wide screens. */
 .body { display: flex; gap: 30px; align-items: flex-start; }
 .commands-area { flex: 1 1 auto; min-width: 0; }
@@ -148,10 +157,15 @@ const STYLE = `
   row-gap: 5px;
   align-items: baseline;
 }
-.group-name {
+/* Voice disconnected: no spoken-phrase column, so the mini-table is name | keys. */
+.cmds.no-voice .group { grid-template-columns: minmax(0, 1fr) auto; }
+/* Shared section header — command groups (Scroll, Hints, …) AND the spoken
+   alphabet, so every labeled block reads the same. grid-column only applies
+   inside a .group grid; it's a harmless no-op on the alphabet header. */
+.sec-head {
   grid-column: 1 / -1;
   font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;
-  color: #58a6ff; margin: 0 0 2px;
+  color: #58a6ff; margin: 0 0 6px;
   padding-bottom: 4px; border-bottom: 1px solid #21262d;
 }
 .row { display: contents; }
@@ -228,17 +242,22 @@ function buildHelpOverlay(
   // query stacks them when there isn't room.
   const body = el('div', 'body');
 
-  // Commands — compact, one line each, two internal columns.
+  // With voice disconnected the spoken-phrase column is dropped (the model
+  // already excluded the phrases + any voice-only command).
+  const voiceConnected = alphabet.loaded;
+
+  // Commands — compact, one line each, two internal columns. No "Commands"
+  // super-label: each group's header carries the section styling, matching the
+  // spoken-alphabet header, so both sides read as peer labeled blocks.
   const cmdArea = el('div', 'commands-area');
-  cmdArea.appendChild(el('div', 'sec', 'Commands'));
-  const cmds = el('div', 'cmds');
+  const cmds = el('div', voiceConnected ? 'cmds' : 'cmds no-voice');
   for (const g of model) {
     const groupEl = el('div', 'group');
-    groupEl.appendChild(el('div', 'group-name', g.group));
+    groupEl.appendChild(el('div', 'sec-head', g.group));
     for (const r of g.rows) {
-      // `.row` is display:contents, so these three cells become the group
-      // grid's columns. Always append all three (keys/voice may be empty) so
-      // rows stay column-aligned.
+      // `.row` is display:contents, so these cells become the group grid's
+      // columns. Always append the same set (keys/voice may be empty) so rows
+      // stay column-aligned.
       const row = el('div', 'row');
 
       // 1 — what it does: the anchor you scan by.
@@ -250,12 +269,15 @@ function buildHelpOverlay(
       row.appendChild(keys);
 
       // 3 — how to say it: mic glyph + phrase(s), set apart from the keys.
-      const voice = el('div', 'voice');
-      if (r.voice.length) {
-        voice.innerHTML = MIC_SVG;
-        voice.appendChild(el('span', undefined, r.voice.join('  /  ')));
+      // Omitted entirely when voice is disconnected (two-column table).
+      if (voiceConnected) {
+        const voice = el('div', 'voice');
+        if (r.voice.length) {
+          voice.innerHTML = MIC_SVG;
+          voice.appendChild(el('span', undefined, r.voice.join('  /  ')));
+        }
+        row.appendChild(voice);
       }
-      row.appendChild(voice);
 
       groupEl.appendChild(row);
     }
@@ -268,7 +290,7 @@ function buildHelpOverlay(
   // fits; CSS adds lines only to avoid a scroll, and moves it on top when
   // the layout has to stack).
   const alphaArea = el('div', 'alpha-area');
-  alphaArea.appendChild(el('div', 'sec', 'Spoken alphabet'));
+  alphaArea.appendChild(el('div', 'sec-head', 'Spoken alphabet'));
   if (alphabet.loaded) {
     const grid = el('div', 'alpha');
     for (const { letter, word } of alphabet.entries) {
@@ -287,9 +309,8 @@ function buildHelpOverlay(
 
   const usage = el('div', 'usage');
   usage.innerHTML =
-    'Badges stay visible for voice. Press <b>f</b> to type them by keyboard — enter a ' +
-    'badge’s letters to click it, or a <b>capital</b> to open it in a new tab (<b>Esc</b> exits). ' +
-    'Every other bare key is a Normal-mode shortcut, listed above.';
+    'Press <b>f</b>, then a badge’s letters to click it — or a <b>capital</b> to open it ' +
+    'in a new tab (<b>Esc</b> exits). Every other bare key is a Normal-mode shortcut, listed above.';
   panel.appendChild(usage);
 
   backdrop.appendChild(panel);
@@ -316,7 +337,11 @@ function close(): void {
  * binds are reflected. */
 export function toggleHelpOverlay(keymap: readonly KeymapEntry[]): void {
   if (state.active) { close(); return; }
-  const host = buildHelpOverlay(buildHelpModel(COMMAND_CATALOG, keymap), buildAlphabetModel(), close);
+  // One connection signal drives both surfaces: disconnected → no spoken
+  // phrases in the command table and the alphabet shows a connect prompt.
+  const alphabet = buildAlphabetModel();
+  const model = buildHelpModel(COMMAND_CATALOG, keymap, alphabet.loaded);
+  const host = buildHelpOverlay(model, alphabet, close);
   document.documentElement.appendChild(host);
   // Capture-phase Escape so we close before the page (or the key handler) can
   // act on it; other keys (including `?`, which toggles us off via the registry)

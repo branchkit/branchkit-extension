@@ -7,20 +7,26 @@
  * (background/tab-collection.ts) so the write side and the strip side can
  * never drift. See notes/DESIGN_TAB_MARKERS.md.
  *
- * The marker is a bracketed LETTER label prefix: "[a] GitHub". The brackets
- * bound the marker so it reads as a distinct label, not part of the title (the
- * earlier pipe form "a|" read like a stray letter). Tab titles are space-
- * constrained, so it's always the compact letter form regardless of the user's
- * badgeDisplayMode (which still drives the HUD / palette). The spoken codeword
- * is unchanged — the strip just shows "a", you still say "arch".
+ * The marker is a bracketed label prefix: "[a] GitHub". The brackets bound the
+ * marker so it reads as a distinct label, not part of the title (the earlier
+ * pipe form "a|" read like a stray letter). The DISPLAYED content follows the
+ * user's badgeDisplayMode, exactly like hint badges (render/tab-title.ts formats
+ * it via labelToDisplay): "[a]" in letter mode, "[arch]" / "[iris zone]" in word
+ * mode, "[arch]" / "[iris z]" in expand mode. The letter is still the machine
+ * identity — the pool, palette letter-jump, and grammar all key off it — so the
+ * displayed word is a pure overlay, present only when the voice alphabet is
+ * loaded (word/expand fall back to letters otherwise).
  */
 
-// Anchored at string start. Matches the current bracket form "[a] " AND the
-// previous pipe form "a| " so a title left over from an older build strips
-// clean instead of double-marking; the pipe alternative is transitional and
-// can go once no old-format tabs remain. Case-insensitive for a future
-// uppercase display option.
-const MARKER_PREFIX_RE = /^(?:\[[a-z]{1,2}\]|[a-z]{1,2} ?\|) ?/i;
+// Anchored at string start. Matches every emitted display form — letter "[a]",
+// pair "[iz]", word "[iris zone]", expand "[iris z]" — plus the legacy pipe form
+// "a| " so an old-build title strips clean instead of double-marking. LOWERCASE
+// only (no /i): our emissions are always lowercase (letters + ascii alphabet
+// words), and requiring lowercase keeps a page's own capitalized bracket prefix
+// (e.g. "[Draft] ", "[TODO] ") from being mistaken for a marker and eaten. At
+// most two space-separated letter tokens, matching the widest form (word-mode
+// pair / expand-mode pair). The pipe alternative is transitional.
+const MARKER_PREFIX_RE = /^(?:\[[a-z]+(?: [a-z]+)?\]|[a-z]{1,2} ?\|) ?/;
 
 /**
  * Remove a leading marker decoration if present. Idempotent — a title with no
@@ -36,8 +42,10 @@ export function hasTabMarker(title: string): boolean {
   return MARKER_PREFIX_RE.test(title);
 }
 
-/** Compose a decorated title from bare letters + the undecorated title:
- *  "a" + "GitHub" → "[a] GitHub". */
-export function decorateTitle(letters: string, bareTitle: string): string {
-  return `[${letters}] ${bareTitle}`;
+/** Compose a decorated title from the display form + the undecorated title:
+ *  "a" + "GitHub" → "[a] GitHub"; "iris zone" + "GitHub" → "[iris zone] GitHub".
+ *  The display form is chosen by render/tab-title.ts per badgeDisplayMode; this
+ *  just brackets it. */
+export function decorateTitle(display: string, bareTitle: string): string {
+  return `[${display}] ${bareTitle}`;
 }

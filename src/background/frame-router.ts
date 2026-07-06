@@ -153,7 +153,7 @@ export async function notifyActiveTab(message: Message): Promise<void> {
 /**
  * If the message is a hint activation that names a codeword, look up which
  * frame owns that codeword in the tab's label pool and return its frameId.
- * Returns null for actions that don't carry a codeword (show_hints, rescan,
+ * Returns null for actions that don't carry a codeword (toggle_hints, rescan,
  * reactivate, etc.) — caller then sends with no frameId, which delivers to
  * every frame in the tab (both Chrome and Firefox treat an omitted frameId as
  * "all frames"). Frames with nothing to do early-out cheaply on their side

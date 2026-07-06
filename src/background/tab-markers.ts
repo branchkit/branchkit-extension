@@ -22,7 +22,6 @@
  */
 
 import { LETTERS_26 } from '../labels/words';
-import { stripTabMarker } from '../tab-marker-format';
 
 /** Reserved single-letter markers (from the typing-ergonomic head); the rest
  *  form the pair pool. 16 → 16 singles + 10×9 = 90 pairs = 106 tabs. See the
@@ -127,15 +126,20 @@ export async function saveMarkerMap(map: MarkerMap): Promise<void> {
 
 /**
  * Parse the marker back out of a tab's decorated title (restart
- * reconciliation) — the letter token ("a" / "iz"), or null if undecorated.
- * The token IS the marker (letter-first), so it re-grants directly.
+ * reconciliation) — the letter token ("a" / "iz"), or null.
+ *
+ * Only the compact LETTER form re-grants: it's the stable machine identity, and
+ * "[iz] " reads back to "iz" directly. A word/expand-mode title ("[iris zone] ")
+ * returns null — reversing displayed words to a letter needs the voice alphabet,
+ * which may be absent at restart, so those tabs are reassigned from the free
+ * pool instead. Marks live in chrome.storage.session and survive most SW
+ * restarts, so this title parse is only the cold-start fallback; the cost of a
+ * miss is a possibly-different mark on a marked-in-word-mode tab after a cold
+ * restart, not a correctness bug.
  */
 export function parseMarker(title: string): string | null {
-  const bare = stripTabMarker(title);
-  if (title === bare) return null;
-  const removed = title.slice(0, title.length - bare.length);
-  const m = removed.match(/[a-z]{1,2}/i);
-  return m ? m[0].toLowerCase() : null;
+  const m = title.match(/^\[([a-z]{1,2})\] /);
+  return m ? m[1] : null;
 }
 
 // --- Orchestration (chrome.tabs + messaging) ---

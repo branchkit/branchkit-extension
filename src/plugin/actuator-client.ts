@@ -131,6 +131,31 @@ export async function ensureConnected(): Promise<boolean> {
  * currently connected or the request threw. Does NOT discover — callers that
  * want lazy reconnect call `ensureConnected()` first.
  */
+/**
+ * Authed GET to a plugin endpoint, parsed as JSON. Returns null if not
+ * connected or the request failed. Does NOT discover — callers that want lazy
+ * reconnect call `ensureConnected()` first.
+ */
+export async function getFromPlugin(endpoint: string): Promise<unknown | null> {
+  if (!pluginPort || !pluginToken) return null;
+  try {
+    const resp = await fetch(`http://127.0.0.1:${pluginPort}${endpoint}`, {
+      headers: { 'Authorization': `Bearer ${pluginToken}` },
+    });
+    if (resp.status === 401 || resp.status === 403) {
+      pluginPort = null;
+      pluginToken = null;
+      return null;
+    }
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    pluginPort = null;
+    pluginToken = null;
+    return null;
+  }
+}
+
 export async function postToPlugin(endpoint: string, body: unknown): Promise<Response | null> {
   if (!pluginPort || !pluginToken) return null;
   try {

@@ -106,4 +106,29 @@ describe('title decoration round-trip', () => {
     expect(parseMarker(decorateTitle('iz', 'Docs'))).toBe('iz');
     expect(parseMarker('Undecorated')).toBeNull();
   });
+
+  it('strips word- and expand-mode decorations', () => {
+    // The display follows badgeDisplayMode, so the strip must clear every form
+    // or the shown words leak into the voice tab-word grammar.
+    expect(stripTabMarker('[arch] Docs')).toBe('Docs');      // word, single
+    expect(stripTabMarker('[iris zone] Docs')).toBe('Docs'); // word, pair
+    expect(stripTabMarker('[iris z] Docs')).toBe('Docs');    // expand, pair
+    const d = decorateTitle('iris zone', 'GitHub');
+    expect(d).toBe('[iris zone] GitHub');
+    expect(stripTabMarker(d)).toBe('GitHub');
+  });
+
+  it("does not eat a page's own capitalized bracket prefix", () => {
+    // Our emissions are lowercase; a capitalized "[Draft] " is the page's, and
+    // the lowercase-only strip regex must leave it intact.
+    expect(stripTabMarker('[Draft] Report')).toBe('[Draft] Report');
+    expect(stripTabMarker('[TODO] Fix')).toBe('[TODO] Fix');
+    expect(hasTabMarker('[Draft] Report')).toBe(false);
+  });
+
+  it('parseMarker takes the letter form only (word-mode titles reassign)', () => {
+    expect(parseMarker('[arch] Docs')).toBeNull();
+    expect(parseMarker('[iris zone] Docs')).toBeNull();
+    expect(parseMarker('[a] Docs')).toBe('a');
+  });
 });

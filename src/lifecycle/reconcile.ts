@@ -16,7 +16,6 @@
  * reconcilePlan:size:lazyReads bucket as a tripwire.
  */
 
-import { Category } from '../types';
 import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { wantsShown, wantsStrict } from './desired-state';
@@ -92,7 +91,6 @@ function lazyOnScreen(w: ElementWrapper, vw: number, vh: number, counter: { read
 
 export function computeReconcilePlanLists(
   store: WrapperStore,
-  activeCategory: Category | null,
   gather: SettleGather,
 ): ReconcilePlanLists {
   const lazy = { reads: 0 };
@@ -159,8 +157,7 @@ export function computeReconcilePlanLists(
     // currently showing, target CSS-visible. Band-scoped, NOT strict-viewport
     // (notes/DESIGN_PAINT_THE_BAND.md): off-viewport band wrappers build and
     // paint too, riding the scroll into view already painted.
-    const wantsHintNow = flag && codeworded
-      && (!activeCategory || w.category === activeCategory);
+    const wantsHintNow = flag && codeworded;
     const showingAtPlan = w.hint?.isVisible ?? false;
     let builtAndShown = false;
     if (wantsHintNow && !showingAtPlan) {

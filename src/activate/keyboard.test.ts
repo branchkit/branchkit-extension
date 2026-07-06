@@ -122,7 +122,8 @@ describe('hint mode — codeword filtering', () => {
     handler.handleKeyDown(makeKey('Escape'));
     expect(handler.getMode()).toBe('normal');
     expect(escapeCb).toHaveBeenCalled();
-    expect(dispatchSpy).not.toHaveBeenCalledWith('hide_hints');
+    // Exiting the mode dispatches nothing — badge visibility is content-side.
+    expect(dispatchSpy).not.toHaveBeenCalled();
   });
 
   it('escape with a typed prefix cancels just the prefix and stays in hint mode', () => {

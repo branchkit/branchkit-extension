@@ -10,8 +10,8 @@ import {
 // Mirrored here as a drift guard: a new dispatcher action without a catalog
 // entry (or vice-versa) fails this test, prompting the catalog update.
 const REGISTERED_ACTIONS = [
-  'show_hints', 'show_hints_newtab', 'hide_hints', 'toggle_hints', 'hint_mode',
-  'activate_hint', 'show_hints_category',
+  'toggle_hints', 'hint_mode',
+  'activate_hint',
   'scroll_down', 'scroll_up', 'scroll_half_down', 'scroll_half_up',
   'scroll_full_down', 'scroll_full_up',
   'scroll_top', 'scroll_bottom', 'scroll_left', 'scroll_right',

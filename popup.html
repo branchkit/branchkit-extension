@@ -3,16 +3,25 @@
 <head>
   <meta charset="utf-8">
   <style>
+    /* GitHub-dark palette, matched to the keyboard help overlay
+       (src/render/help-overlay.ts) so the two surfaces read as one product. */
     :root {
-      --fg: #333;
-      --fg-muted: #777;
-      --border: #eee;
-      --accent: #0a84ff;
-      --ok: #34c759;
-      --danger: #ff3b30;
-      --exclude: #ff3b30;
-      --include: #34c759;
-      --reveal: #0a84ff;
+      color-scheme: dark;
+      --bg: #0d1117;
+      --surface: #161b22;
+      --deep: #010409;
+      --fg: #c9d1d9;
+      --fg-bright: #f0f6fc;
+      --fg-muted: #8b949e;
+      --border: #21262d;
+      --border-strong: #30363d;
+      --accent: #58a6ff;      /* links, text, outlines */
+      --accent-btn: #1f6feb;  /* filled button backgrounds */
+      --ok: #3fb950;
+      --danger: #f85149;
+      --exclude: #f85149;
+      --include: #3fb950;
+      --reveal: #58a6ff;
     }
     body {
       width: 340px;
@@ -20,8 +29,10 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       font-size: 13px;
       color: var(--fg);
+      background: var(--bg);
       margin: 0;
     }
+    input[type="checkbox"] { accent-color: var(--accent); }
     h2 {
       font-size: 15px;
       margin: 0 0 10px 0;
@@ -44,6 +55,54 @@
     }
     .dot.connected { background: var(--ok); }
     .dot.disconnected { background: var(--danger); }
+
+    /* --- Live "this page" readout --- */
+    .readout {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 0 0 10px;
+      font-size: 12px;
+      color: var(--fg-muted);
+    }
+    .readout-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: #484f58;
+    }
+    .readout-dot.on { background: var(--accent); }
+    .readout-count { color: var(--fg); font-variant-numeric: tabular-nums; }
+
+    /* --- Segmented pill controls (replaces per-setting dropdowns) --- */
+    .segmented {
+      display: inline-flex;
+      gap: 2px;
+      padding: 2px;
+      background: var(--deep);
+      border: 1px solid var(--border-strong);
+      border-radius: 7px;
+    }
+    .seg {
+      font: inherit;
+      font-size: 12px;
+      line-height: 1.3;
+      padding: 3px 10px;
+      border: none;
+      border-radius: 5px;
+      background: transparent;
+      color: var(--fg-muted);
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .seg:hover:not(.active) { color: var(--fg); }
+    .seg.active {
+      background: var(--border-strong);
+      color: var(--fg-bright);
+      font-weight: 500;
+      box-shadow: 0 1px 2px rgba(1, 4, 9, 0.6);
+    }
     .setting {
       display: flex;
       align-items: center;
@@ -51,27 +110,29 @@
       padding: 6px 0;
       border-top: 1px solid var(--border);
     }
-    .setting label { font-size: 12px; color: #555; }
+    .setting label { font-size: 12px; color: #adbac7; }
     .setting select {
       font-size: 12px;
       padding: 2px 4px;
-      border: 1px solid #ccc;
+      border: 1px solid var(--border-strong);
       border-radius: 4px;
-      background: #fff;
+      background: var(--bg);
+      color: var(--fg);
     }
     .setting button.keycapture {
       font-size: 12px;
       font-family: inherit;
       padding: 2px 8px;
       min-width: 92px;
-      border: 1px solid #ccc;
+      border: 1px solid var(--border-strong);
       border-radius: 4px;
-      background: #fff;
+      background: var(--bg);
+      color: var(--fg);
       cursor: pointer;
     }
     .setting button.keycapture.capturing {
-      border-color: #4a90d9;
-      color: #888;
+      border-color: var(--accent);
+      color: var(--fg-muted);
       font-style: italic;
     }
     .setting-hint {
@@ -100,7 +161,7 @@
       letter-spacing: 0;
     }
     .rule-card {
-      background: #fafafa;
+      background: var(--surface);
       border: 1px solid var(--border);
       border-radius: 6px;
       padding: 8px 10px;
@@ -190,11 +251,13 @@
     .add-entry-row button {
       font: inherit;
       padding: 3px 6px;
-      border: 1px solid #ccc;
+      border: 1px solid var(--border-strong);
       border-radius: 4px;
-      background: #fff;
+      background: var(--bg);
+      color: var(--fg);
       font-size: 12px;
     }
+    .add-entry-row input::placeholder { color: var(--fg-muted); }
     .add-entry-row select { flex: 0 0 auto; }
     .add-entry-row input.matcher,
     .add-entry-row input.codeword {
@@ -204,9 +267,9 @@
     }
     .add-entry-row input.matcher.invalid { border-color: var(--danger); }
     .add-entry-row button.primary {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: white;
+      background: var(--accent-btn);
+      border-color: var(--accent-btn);
+      color: #fff;
       cursor: pointer;
     }
     .add-entry-row button.primary:disabled {
@@ -236,7 +299,7 @@
     }
     .feedback.error { color: var(--danger); }
     .feedback code {
-      background: #f0f0f3;
+      background: var(--border);
       padding: 0 3px;
       border-radius: 3px;
       font-family: ui-monospace, SFMono-Regular, monospace;
@@ -253,9 +316,9 @@
     .no-rule button {
       font: inherit;
       padding: 4px 10px;
-      border: 1px solid var(--accent);
-      background: var(--accent);
-      color: white;
+      border: 1px solid var(--accent-btn);
+      background: var(--accent-btn);
+      color: #fff;
       border-radius: 4px;
       cursor: pointer;
       font-size: 12px;
@@ -263,8 +326,8 @@
     .no-rule button:disabled {
       opacity: 0.5;
       cursor: not-allowed;
-      background: #ccc;
-      border-color: #ccc;
+      background: var(--surface);
+      border-color: var(--border-strong);
     }
     .add-rule-row { margin-top: 10px; }
     .add-rule-row button {
@@ -278,10 +341,10 @@
       border-radius: 4px;
       cursor: pointer;
     }
-    .add-rule-row button:hover { background: rgba(0, 0, 0, 0.04); }
+    .add-rule-row button:hover { background: rgba(255, 255, 255, 0.06); }
 
     .info {
-      color: #888;
+      color: var(--fg-muted);
       font-size: 11px;
       margin-top: 12px;
       border-top: 1px solid var(--border);
@@ -308,12 +371,16 @@
       width: 100%;
       margin: 2px 0 8px;
       padding: 5px 10px;
-      border: 1px solid var(--accent);
-      background: var(--accent);
-      color: white;
+      border: 1px solid var(--accent-btn);
+      background: var(--accent-btn);
+      color: #fff;
       border-radius: 4px;
       cursor: pointer;
     }
+    /* The `display: block` above overrides the UA `[hidden] { display: none }`,
+       so the button would show even when JS sets `hidden` (e.g. once connected).
+       Restore hidden's effect explicitly. */
+    .grant-access[hidden] { display: none; }
   </style>
 </head>
 <body>
@@ -323,27 +390,35 @@
     <span id="status-text">Checking...</span>
   </div>
   <button id="grant-access" class="grant-access" hidden
-          title="Firefox requires granting host access before the extension can reach BranchKit on this machine">
-    Grant local access
+          title="Lets the extension reach the BranchKit app on your computer (127.0.0.1). Firefox requires granting this host access before voice can connect.">
+    Allow BranchKit connection
   </button>
+  <div class="readout" id="readout" hidden>
+    <span class="readout-dot" id="readout-dot"></span>
+    <span id="readout-text"></span>
+  </div>
+
   <div class="setting">
-    <label for="hint-visibility">Hints</label>
-    <select id="hint-visibility">
-      <option value="always">Always visible</option>
-      <option value="manual">Toggle (f)</option>
-    </select>
+    <label>Hints</label>
+    <div class="segmented" id="hint-visibility" role="radiogroup" aria-label="Hints">
+      <button class="seg active" data-value="always" role="radio">Always</button>
+      <button class="seg" data-value="manual" role="radio">Toggle (f)</button>
+    </div>
   </div>
   <div class="setting">
-    <label for="hint-mode">Hint labels</label>
-    <select id="hint-mode">
-      <option value="letter">Letters</option>
-      <option value="word">Words</option>
-      <option value="expand">Expand word</option>
-    </select>
+    <label>Hint labels</label>
+    <div class="segmented" id="hint-mode" role="radiogroup" aria-label="Hint labels">
+      <button class="seg active" data-value="letter" role="radio">Letters</button>
+      <button class="seg" data-value="word" role="radio">Words</button>
+      <button class="seg" data-value="expand" role="radio">Expand</button>
+    </div>
   </div>
   <div class="setting" title="Prefix each tab's title with a codeword label (e.g. '[a] GitHub') so you can see the word to say or the letter to type. Press T or say 'tab' to switch.">
-    <label for="tab-markers">Mark tabs</label>
-    <input type="checkbox" id="tab-markers">
+    <label>Tab Hints</label>
+    <div class="segmented" id="tab-markers" role="radiogroup" aria-label="Tab Hints">
+      <button class="seg active" data-value="on" role="radio">On</button>
+      <button class="seg" data-value="off" role="radio">Off</button>
+    </div>
   </div>
 
   <div class="rules-section" id="rules-section">

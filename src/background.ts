@@ -14,7 +14,7 @@ import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearStack, cl
 import { setAlphabet, tokenToSpokenCodeword, spokenCodewordToToken } from './labels/words';
 import { buildCommandContributions } from './command-catalog';
 import { rememberCodewords, clearCodewordMemory, recallCodewords } from './labels/codeword-memory';
-import { discoverPlugin, ensureConnected, postToPlugin, getPluginPort, getPluginToken, getActuatorJson } from './plugin/actuator-client';
+import { discoverPlugin, ensureConnected, postToPlugin, getFromPlugin, getPluginPort, getPluginToken, getActuatorJson } from './plugin/actuator-client';
 import { buildReconcileReport, type ReconcileWrapper, type ReconcileReport, type MatchableView } from './debug/reconcile';
 import { cycleTabIndex } from './background/tab-nav';
 import { loadMru, previousCandidates, recordTabActivated } from './background/tab-mru';
@@ -1092,6 +1092,50 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     return true; // async response
   }
 
+  // --- Command-phrase overrides (editor on the keyboard-shortcuts page) ---
+  // The keymap editor can't reach the plugin directly; the SW forwards to the
+  // browser plugin's passthrough, which relays to the actuator override layer.
+  // See notes/DESIGN_COMMAND_PHRASE_OVERRIDES.md.
+
+  if (message.type === 'GET_COMMAND_OVERRIDES') {
+    ensureConnected()
+      .then(() => getFromPlugin('/commands/overrides'))
+      .then((data) => {
+        const overrides = (data as { overrides?: unknown })?.overrides;
+        sendResponse({ overrides: Array.isArray(overrides) ? overrides : [] });
+      })
+      .catch(() => sendResponse({ overrides: [] }));
+    return true; // async response
+  }
+
+  if (message.type === 'SET_COMMAND_OVERRIDE') {
+    ensureConnected()
+      .then(() => postToPlugin('/commands/override', {
+        action: message.action,
+        default_pattern: message.defaultPattern,
+        new_pattern: message.newPattern,
+      }))
+      .then(async (resp) => {
+        if (resp && resp.ok) { sendResponse({ ok: true }); return; }
+        // Relay the actuator's validation message (400) so the editor can show it.
+        const detail = resp ? (await resp.text().catch(() => '')) : '';
+        sendResponse({ ok: false, error: detail || 'Not connected to BranchKit.' });
+      })
+      .catch(() => sendResponse({ ok: false, error: 'Not connected to BranchKit.' }));
+    return true; // async response
+  }
+
+  if (message.type === 'RESET_COMMAND_OVERRIDE') {
+    ensureConnected()
+      .then(() => postToPlugin('/commands/override/reset', {
+        action: message.action,
+        default_pattern: message.defaultPattern,
+      }))
+      .then((resp) => sendResponse({ ok: !!(resp && resp.ok) }))
+      .catch(() => sendResponse({ ok: false }));
+    return true; // async response
+  }
+
   if (message.type === 'HEALTH_STATUS') {
     // The full connect/disconnect work runs on every report, not on flag
     // edges — edge-gating masked the reconnect healer (the reconnect paths
@@ -1267,7 +1311,7 @@ chrome.runtime.onConnect.addListener((port) => {
 // Hints follow focus at the matcher level: clear the plugin's hints tag so
 // a subsequent voice dispatch can't be routed via the new tab's content
 // script onto a stale or coincidentally-matching element. We deliberately
-// do NOT dispatch hide_hints to the old tab — in always-mode hint badges
+// do NOT hide the old tab's badges — in always-mode hint badges
 // are a persistent visual property of every browser tab, and hiding them
 // on switch-away destroys the case where the user switches back (rescan
 // doesn't re-show in always mode, so badges would stay hidden forever).
