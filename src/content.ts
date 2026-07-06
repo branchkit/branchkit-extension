@@ -55,6 +55,7 @@ import { setTabMarker, reapplyTabMarker, refreshTabMarker } from './render/tab-t
 import { setModeChip } from './render/mode-chip';
 import { isHostExcluded, onKeyExclusionsChanged } from './key-exclusions';
 import { findPageLink, type Rel } from './pagination';
+import { urlUp, urlRoot } from './url-nav';
 import { copyText } from './clipboard';
 import { flashToast } from './render/toast';
 import {
@@ -1124,6 +1125,17 @@ function navigatePage(rel: Rel): void {
 // Copy the current page URL (Vimium yy).
 dispatcher.register('copy_url', () => {
   void copyText(location.href).then((ok) => flashToast(ok ? 'Copied URL' : 'Copy failed'));
+});
+// URL hierarchy — up one level / to the site root (Vimium gu/gU).
+dispatcher.register('go_up', () => {
+  const up = urlUp(location.href);
+  if (up && up !== location.href) location.href = up;
+  else flashToast('Already at the top');
+});
+dispatcher.register('go_root', () => {
+  const root = urlRoot(location.href);
+  if (root && root !== location.href) location.href = root;
+  else flashToast('Already at the root');
 });
 // Yank a link via hint (Vimium yf): enter hint mode; the resolved codeword
 // copies the link's URL instead of following it. Keyboard-only.
@@ -2966,6 +2978,7 @@ const DISPATCH_PASSTHROUGH_ACTIONS = new Set([
   'toggle_help', // voice "help" — same handler as the ? bind
   'go_next', 'go_previous', // voice "next/previous page"
   'copy_url', // voice "copy url"
+  'go_up', 'go_root', // voice "go up" / "site root"
 ]);
 
 chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {

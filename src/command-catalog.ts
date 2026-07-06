@@ -228,6 +228,12 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   { id: 'copy_url', label: 'Copy page URL', group: 'Navigation', mappable: true, params: [],
     description: 'Copy this page’s address to the clipboard.',
     voice: [{ pattern: 'copy url' }, { pattern: 'copy page url' }, { pattern: 'copy address' }] },
+  { id: 'go_up', label: 'URL up one level', group: 'Navigation', mappable: true, params: [],
+    description: 'Climb one level in the address — drop the #anchor, then the ?query, then the last path segment.',
+    voice: [{ pattern: 'go up' }, { pattern: 'up level' }] },
+  { id: 'go_root', label: 'URL to site root', group: 'Navigation', mappable: true, params: [],
+    description: 'Jump to the site root (the domain’s home).',
+    voice: [{ pattern: 'site root' }, { pattern: 'go to root' }] },
   // Keyboard-only hint action (Vimium yf): enter hint mode, then a codeword
   // copies that link’s URL instead of following it. Voice yank would need a
   // contributed hint verb — deferred.
@@ -409,6 +415,8 @@ export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   { keys: 'BracketLeft BracketLeft', command: 'go_previous' },   // [[
   { keys: 'KeyY KeyY', command: 'copy_url' },          // yy
   { keys: 'KeyY KeyF', command: 'yank_hint' },         // yf
+  { keys: 'KeyG KeyU', command: 'go_up' },             // gu
+  { keys: 'KeyG shift+KeyU', command: 'go_root' },     // gU
   // Tabs (Vimium t/x/X, gt/gT, yt, ^)
   { keys: 'KeyT', command: 'new_tab' },               // t
   { keys: 'KeyX', command: 'close_tab' },             // x
