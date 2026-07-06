@@ -174,6 +174,18 @@ export class CaretController {
     return this.mode;
   }
 
+  /** Normal-mode `v`: extend a pre-existing selection in visual mode, else drop
+   *  to caret mode. Mirrors Vimium / Vimium-C's enterVisualMode (which falls back
+   *  to caret when there's no usable selection). */
+  enterFromNormal(): void {
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && sel.type === 'Range' && !sel.isCollapsed) {
+      this.enter('visual');
+    } else {
+      this.enter('caret');
+    }
+  }
+
   /** Enter from Normal mode. Establishes a caret position if there's no usable
    *  selection; aborts with a toast if the page has no selectable text. */
   enter(kind: CaretEntry): void {

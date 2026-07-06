@@ -1213,7 +1213,8 @@ const caret = new CaretController({
   },
 });
 keyHandler.setCaretKeyHandler((e) => caret.handleKey(e));
-dispatcher.register('caret_mode', () => caret.enter('caret'));
+// `v` extends an existing selection (visual) or drops to caret — Vimium parity.
+dispatcher.register('caret_mode', () => caret.enterFromNormal());
 dispatcher.register('visual_line_mode', () => caret.enter('visual-line'));
 // Pagination — follow the page's next/prev link (Vimium goNext/goPrevious).
 dispatcher.register('go_next', () => navigatePage('next'));

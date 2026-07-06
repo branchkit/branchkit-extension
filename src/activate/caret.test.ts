@@ -27,4 +27,22 @@ describe('CaretController — control flow', () => {
     expect(c.isActive()).toBe(false);
     expect(onModeChange).not.toHaveBeenCalled();
   });
+
+  it('enterFromNormal keeps a pre-existing selection and goes to visual (Vimium parity)', () => {
+    // A non-collapsed selection — no Selection.modify needed to build one.
+    document.body.innerHTML = '<p>some selectable words here on the page</p>';
+    const p = document.querySelector('p')!;
+    const range = document.createRange();
+    range.setStart(p.firstChild!, 0);
+    range.setEnd(p.firstChild!, 4); // "some"
+    const sel = window.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+
+    const onModeChange = vi.fn();
+    const c = new CaretController({ onModeChange });
+    c.enterFromNormal();
+    expect(c.getMode()).toBe('visual');
+    expect(onModeChange).toHaveBeenCalledWith('visual');
+  });
 });
