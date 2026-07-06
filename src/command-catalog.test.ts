@@ -16,6 +16,7 @@ const REGISTERED_ACTIONS = [
   'scroll_full_down', 'scroll_full_up',
   'scroll_top', 'scroll_bottom', 'scroll_left', 'scroll_right',
   'cycle_scroll_target', 'scroll', 'scroll_to_percent', 'scroll_to_element',
+  'zoom_in', 'zoom_out', 'zoom_reset',
   'find_open', 'find_close', 'find_next', 'find_previous', 'find_immediate',
   'history_back', 'history_forward', 'refresh', 'focus_input',
   'insert_mode', 'pass_next_key', 'go_next', 'go_previous', 'copy_url', 'go_up', 'go_root',
@@ -140,7 +141,7 @@ describe('command catalog — voice patterns', () => {
   it('attaches voice only to hint / scroll / find / navigation / tab / palette commands this phase', () => {
     // Help entered via the palette voice loop: "palette" opens it,
     // {browser_palette} selects a row, "hide" dismisses.
-    const allowed = new Set(['Badges', 'Scroll', 'Find', 'Navigation', 'Tabs', 'Help']);
+    const allowed = new Set(['Badges', 'Scroll', 'Zoom', 'Find', 'Navigation', 'Tabs', 'Help']);
     for (const c of withVoice) {
       expect(allowed.has(c.group), `${c.id} in ${c.group}`).toBe(true);
     }
@@ -178,6 +179,9 @@ describe('default keymap', () => {
       { keys: 'Slash', command: 'find_open' },
       { keys: 'KeyN', command: 'find_next' },
       { keys: 'shift+KeyN', command: 'find_previous' },
+      { keys: 'KeyZ KeyI', command: 'zoom_in' },
+      { keys: 'KeyZ KeyO', command: 'zoom_out' },
+      { keys: 'KeyZ Digit0', command: 'zoom_reset' },
       { keys: 'shift+KeyH', command: 'history_back' },
       { keys: 'shift+KeyL', command: 'history_forward' },
       { keys: 'KeyR', command: 'refresh' },

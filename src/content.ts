@@ -5,7 +5,7 @@
  * Voice commands arrive via background → BRANCHKIT_ACTION messages.
  */
 
-import { HintVisibility, ScannedElement, Message, DispatchResult, TabAction } from './types';
+import { HintVisibility, ScannedElement, Message, DispatchResult, TabAction, ZoomAction } from './types';
 import { LabelAssignment, isVoiceAlphabetLoaded, setAlphabet } from './labels/words';
 import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters } from './scan/scanner';
 import { noteDisconnectedShadowAttach } from './scan/shadow-attach-signal';
@@ -1087,6 +1087,18 @@ for (const [command, action] of TAB_COMMANDS) {
       ? { type: 'TAB_ACTION', action, index: n }
       : { type: 'TAB_ACTION', action };
     chrome.runtime.sendMessage(msg).catch(() => {});
+  });
+}
+
+// Page zoom — like the tab verbs, forwarded to the background SW (chrome.tabs
+// zoom APIs are unavailable in content scripts). Keyboard path only; voice is
+// intercepted off the SSE stream in the background.
+const ZOOM_COMMANDS: ReadonlyArray<readonly [string, ZoomAction]> = [
+  ['zoom_in', 'in'], ['zoom_out', 'out'], ['zoom_reset', 'reset'],
+];
+for (const [command, action] of ZOOM_COMMANDS) {
+  dispatcher.register(command, () => {
+    chrome.runtime.sendMessage({ type: 'ZOOM_ACTION', action } as Message).catch(() => {});
   });
 }
 

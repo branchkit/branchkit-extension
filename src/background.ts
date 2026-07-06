@@ -8,7 +8,7 @@
  * - Manage offscreen document lifecycle (Chrome only)
  */
 
-import { Message, ScannedElement, HintVisibility, DispatchResult, GrammarBatchRequest, GrammarBatchResponse, TabAction, PaletteVoiceEntry, PaletteVoiceRow } from './types';
+import { Message, ScannedElement, HintVisibility, DispatchResult, GrammarBatchRequest, GrammarBatchResponse, TabAction, ZoomAction, PaletteVoiceEntry, PaletteVoiceRow } from './types';
 import type { PaletteDispatch } from './palette/model';
 import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearStack, clearAllStacks, sweepDeadStacks, alphabetsEqual } from './labels/label-pool';
 import { setAlphabet, tokenToSpokenCodeword, spokenCodewordToToken } from './labels/words';
@@ -457,6 +457,37 @@ async function handleTabAction(action: TabAction, index?: number): Promise<void>
   }
 }
 
+// Page zoom (Vimium zi/zo/z0). chrome.tabs.getZoom/setZoom act per-tab, so —
+// like the tab verbs — this runs in the background for both keyboard (ZOOM_ACTION
+// message) and voice (SSE intercept). Steps by 10% within Chrome's own 25%–500%
+// bounds; `reset` (setZoom 0) returns to the tab's default factor.
+const ZOOM_STEP = 0.1;
+const ZOOM_MIN = 0.25;
+const ZOOM_MAX = 5;
+
+async function handleZoomAction(action: ZoomAction): Promise<void> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (tab?.id == null) return;
+  try {
+    if (action === 'reset') {
+      await chrome.tabs.setZoom(tab.id, 0);
+      return;
+    }
+    const current = await chrome.tabs.getZoom(tab.id);
+    const next = action === 'in' ? current + ZOOM_STEP : current - ZOOM_STEP;
+    await chrome.tabs.setZoom(tab.id, Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, next)));
+  } catch {
+    // Zoom is disallowed on some pages (e.g. the New Tab Page, PDF viewer) —
+    // a silent no-op there matches Chrome's own behaviour.
+  }
+}
+
+// Voice → zoom verb intercept: catalog command id → ZoomAction, mirroring
+// TAB_ACTION_BY_ID. Lets the background claim these off the SSE stream.
+const ZOOM_ACTION_BY_ID: Readonly<Record<string, ZoomAction>> = {
+  zoom_in: 'in', zoom_out: 'out', zoom_reset: 'reset',
+};
+
 // --- Palette voice session (voice half of Layer 2) ---
 //
 // While the palette is open with badges, the plugin holds its EXCLUSIVE
@@ -848,6 +879,14 @@ function handleSSEEvent(data: any): void {
     return;
   }
 
+  // Page zoom — also chrome.tabs, also handled here so it works regardless of
+  // the active page's content-script state.
+  const zoomAction = ZOOM_ACTION_BY_ID[data.action];
+  if (zoomAction) {
+    void handleZoomAction(zoomAction);
+    return;
+  }
+
   // "tab <codeword>" — like the tab verbs, handled here so it works
   // regardless of the active page's content-script state.
   if (data.action === 'switch_to_tab') {
@@ -1048,6 +1087,11 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
 
   if (message.type === 'TAB_ACTION' && typeof message.action === 'string') {
     void handleTabAction(message.action, typeof message.index === 'number' ? message.index : undefined);
+    return false;
+  }
+
+  if (message.type === 'ZOOM_ACTION' && typeof message.action === 'string') {
+    void handleZoomAction(message.action);
     return false;
   }
 

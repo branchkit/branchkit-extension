@@ -132,6 +132,14 @@ export type TabAction =
   | 'new' | 'close' | 'restore' | 'duplicate'
   | 'pin' | 'mute' | 'move_left' | 'move_right';
 
+/**
+ * Page-zoom verbs handleZoomAction (background.ts) implements. Like the tab
+ * verbs, zoom acts on chrome.tabs (getZoom/setZoom) so it lives in the
+ * background for both entry points: keyboard (content dispatcher → ZOOM_ACTION
+ * message) and voice (SSE action intercept).
+ */
+export type ZoomAction = 'in' | 'out' | 'reset';
+
 export type Message =
   | { type: 'SCAN_RESULT'; elements: ScannedElement[]; adapter: string | null }
   | {
@@ -198,6 +206,7 @@ export type Message =
   // path never sends this — it's intercepted in the background's SSE handler
   // before content forwarding. `index` is goto's 1-based tab position.
   | { type: 'TAB_ACTION'; action: TabAction; index?: number }
+  | { type: 'ZOOM_ACTION'; action: ZoomAction }
   // Options → background. The keymap editor renders voice phrases from its own
   // catalog now; it only asks whether BranchKit is connected so it can show the
   // not-connected note. Response: { connected: boolean }.

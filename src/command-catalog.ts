@@ -182,6 +182,17 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   { id: 'scroll_to_element', label: 'Scroll to element', group: 'Scroll', mappable: false, params: [],
     description: 'Scroll a specific element into view (runtime selector — not bindable).' },
 
+  // --- Zoom (Vimium zi/zo/z0) — chrome.tabs zoom, handled in the background ---
+  { id: 'zoom_in', label: 'Zoom in', group: 'Zoom', mappable: true, params: [],
+    description: 'Make the page bigger (10% per step, up to 500%).',
+    voice: [{ pattern: 'zoom in' }] },
+  { id: 'zoom_out', label: 'Zoom out', group: 'Zoom', mappable: true, params: [],
+    description: 'Make the page smaller (10% per step, down to 25%).',
+    voice: [{ pattern: 'zoom out' }] },
+  { id: 'zoom_reset', label: 'Reset zoom', group: 'Zoom', mappable: true, params: [],
+    description: 'Return the page to its default zoom (100%).',
+    voice: [{ pattern: 'reset zoom' }, { pattern: 'actual size' }] },
+
   // --- Find ---
   { id: 'find_open', label: 'Open find', group: 'Find', mappable: true, params: [],
     description: 'Open the in-page find bar.' },
@@ -405,6 +416,10 @@ export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   { keys: 'Slash', command: 'find_open' },       // /
   { keys: 'KeyN', command: 'find_next' },         // n
   { keys: 'shift+KeyN', command: 'find_previous' }, // N
+  // Zoom (Vimium zi/zo/z0)
+  { keys: 'KeyZ KeyI', command: 'zoom_in' },      // zi
+  { keys: 'KeyZ KeyO', command: 'zoom_out' },     // zo
+  { keys: 'KeyZ Digit0', command: 'zoom_reset' }, // z0
   // Navigation (Vimium H/L history, r reload, gi focus input)
   { keys: 'shift+KeyH', command: 'history_back' },    // H
   { keys: 'shift+KeyL', command: 'history_forward' }, // L
