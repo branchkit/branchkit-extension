@@ -50,6 +50,31 @@
       margin-bottom: 24px;
       line-height: 1.4;
     }
+    html { scroll-behavior: smooth; }
+    .sec { scroll-margin-top: 64px; } /* clear the sticky top bar on anchor jumps */
+    /* Section nav: a sticky top bar on narrow windows; a fixed left sidebar
+       once there's room beside the centered content column. */
+    .side-nav {
+      position: sticky; top: 0; z-index: 10;
+      display: flex; flex-wrap: wrap; gap: 4px;
+      max-width: 720px; margin: 0 auto 12px;
+      padding: 8px 0; background: var(--bg);
+      border-bottom: 1px solid var(--border);
+    }
+    .side-link {
+      font-size: 13px; color: var(--fg-muted); text-decoration: none;
+      padding: 5px 10px; border-radius: 6px; white-space: nowrap;
+    }
+    .side-link:hover { color: var(--fg); background: var(--card); }
+    .side-link.active { color: var(--accent); background: rgba(88, 166, 255, 0.12); }
+    @media (min-width: 1100px) {
+      .side-nav {
+        position: fixed; top: 40px; left: max(16px, calc(50% - 530px));
+        flex-direction: column; width: 150px; max-width: none;
+        margin: 0; padding: 0; background: none; border: none;
+      }
+      .side-link { padding: 6px 10px; }
+    }
     .toolbar {
       display: flex;
       gap: 8px;
@@ -282,8 +307,13 @@
   </style>
 </head>
 <body>
+  <nav class="side-nav" id="side-nav" aria-label="Settings sections">
+    <a href="#sec-rules" class="side-link">Domain rules</a>
+    <a href="#sec-keyboard" class="side-link">Keyboard shortcuts</a>
+    <a href="#sec-badge" class="side-link">Badge appearance</a>
+  </nav>
   <div class="container">
-    <h1><img src="icons/icon48.png" alt="">Domain rules</h1>
+    <h1 id="sec-rules" class="sec"><img src="icons/icon48.png" alt="">Domain rules</h1>
     <div class="subtitle">
       Customize which elements get hint badges on specific sites. Excludes hide
       cluttering elements, includes pick up widgets the scanner misses, and
@@ -296,7 +326,7 @@
 
     <div id="rules"></div>
 
-    <h1 style="margin-top: 40px">Keyboard shortcuts</h1>
+    <h1 id="sec-keyboard" class="sec" style="margin-top: 40px">Keyboard shortcuts</h1>
     <div class="subtitle">
       Rebind the in-page keyboard commands; each can have more than one key. Bare
       keys act as shortcuts in Normal mode — they pause while you're typing in a
@@ -420,7 +450,7 @@
       .km-param input[type=number] { width: 56px; text-align: right; }
     </style>
 
-    <h1 style="margin-top: 40px">Badge appearance</h1>
+    <h1 id="sec-badge" class="sec" style="margin-top: 40px">Badge appearance</h1>
     <div class="subtitle">
       Tune the size and placement of hint badges. Changes apply live to every
       tab. The preview chip on the right reflects the current values against

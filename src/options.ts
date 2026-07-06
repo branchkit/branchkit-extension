@@ -636,6 +636,38 @@ async function init(): Promise<void> {
 
   await initBadgeSettings();
   await initKeymapEditor();
+  initSideNav();
+}
+
+// Sticky section nav: highlight the link whose section is currently at the top.
+// Anchor clicks scroll natively (scroll-behavior: smooth + .sec scroll-margin).
+function initSideNav(): void {
+  const nav = document.getElementById('side-nav');
+  if (!nav) return;
+  const links = Array.from(nav.querySelectorAll<HTMLAnchorElement>('.side-link'));
+  const sections = links
+    .map((l) => document.querySelector<HTMLElement>(l.getAttribute('href') ?? ''))
+    .filter((el): el is HTMLElement => el !== null);
+  if (sections.length === 0) return;
+
+  const setActive = (id: string): void => {
+    for (const l of links) l.classList.toggle('active', l.getAttribute('href') === '#' + id);
+  };
+
+  let ticking = false;
+  const update = (): void => {
+    ticking = false;
+    // Active = the last section whose heading has crossed the top line.
+    let active = sections[0];
+    for (const s of sections) {
+      if (s.getBoundingClientRect().top <= 80) active = s;
+    }
+    setActive(active.id);
+  };
+  update();
+  window.addEventListener('scroll', () => {
+    if (!ticking) { ticking = true; requestAnimationFrame(update); }
+  }, { passive: true });
 }
 
 // --- Badge appearance ---
