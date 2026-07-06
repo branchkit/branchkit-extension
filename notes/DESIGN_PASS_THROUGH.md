@@ -25,19 +25,22 @@ reach the page.
 2. **Pass next key (`pass_next_key`, unbound by default).** `armPassNextKey()`
    hands exactly the next keystroke to the page, then normal handling resumes.
    Vimium's `passNextKey`.
-3. **Per-site exclusion (all-or-nothing).** `setExcluded(true)` = keybinds off
-   for this host, every key to the page (Escape included). Persisted under
-   `keyExclusions`, toggled from the popup ("Shortcuts here: On/Off").
+3. **Per-site exclusion (all-or-nothing).** `setExcluded(true)` = keybinds off,
+   every key to the page (Escape included).
 4. **Per-site granular passthrough.** `setPassKeys([...])` = pass just these keys
    (matched against `event.key`) to the page while the REST of BranchKit's binds
    keep working — the Gmail case: pass `j`/`k`/`e`, keep `f`. Checked in normal
-   mode only (hint typing + Ctrl/Cmd chords unaffected). Persisted under
-   `keyPassthrough` (host → chars), edited from the popup's "Pass keys to site"
-   field (each typed character is one key). Vimium's passKeys.
+   mode only (hint typing + Ctrl/Cmd chords unaffected). Vimium's passKeys.
 
-Both per-site levels live in `src/key-exclusions.ts`; the content script reads
-the combined `getSiteKeyState(host)` on load and re-applies via
-`onSiteKeysChanged`. Voice is always unaffected.
+Both per-site levels are **pattern-based keyboard rules** (`src/keyboard-rules.ts`),
+a `KeyboardRule[]` of `{pattern, off?, passKeys?}` stored under `keyboardRules`.
+Patterns reuse the domain-rule glob matcher (`urlMatchesPattern`), so they behave
+exactly like hint rules; the effective policy for a page is the UNION of all
+matching rules. The content script reads `getSiteKeyState(location.href)` on load
+and re-applies via `onSiteKeysChanged`. Managed from the popup (a quick control
+for the current site's exact hostname) and the options page (full per-pattern
+manager). The earlier exact-host `keyExclusions`/`keyPassthrough` storage is
+migrated once on load. Voice is always unaffected.
 
 `getMode()` reports `insert` whenever `forcedInsert || excluded`, so the chip and
 any consumer see one "pass-through" state. Automatic field-insert stays quiet

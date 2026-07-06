@@ -53,7 +53,7 @@ import { overridesFromList, type OverrideRecord } from './command-override';
 import { togglePalette, closePalette } from './render/palette-host';
 import { setTabMarker, reapplyTabMarker, refreshTabMarker } from './render/tab-title';
 import { setModeChip } from './render/mode-chip';
-import { getSiteKeyState, onSiteKeysChanged } from './key-exclusions';
+import { getSiteKeyState, onSiteKeysChanged } from './keyboard-rules';
 import { findPageLink, type Rel } from './pagination';
 import { urlUp, urlRoot } from './url-nav';
 import { copyText } from './clipboard';
@@ -1189,7 +1189,7 @@ keyHandler.setModeChangeCallback((mode) => setModeChip(mode));
 // binds still work). Applied on load and kept live as the popup edits it.
 // Voice is unaffected. See notes/DESIGN_PASS_THROUGH.md.
 function applySiteKeys(): void {
-  void getSiteKeyState(location.hostname).then(({ excluded, passKeys }) => {
+  void getSiteKeyState(location.href).then(({ excluded, passKeys }) => {
     keyHandler.setExcluded(excluded);
     keyHandler.setPassKeys(passKeys);
   });

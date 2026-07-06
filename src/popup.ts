@@ -17,7 +17,7 @@ import {
   type RevealMethod,
 } from './rules/domain-rules';
 import { loadDomainRules, saveDomainRules } from './rules/domain-rules-storage';
-import { isHostExcluded, setHostExcluded, getHostPassKeys, setHostPassKeys } from './key-exclusions';
+import { getHostRule, setHostOff, setHostPassKeys } from './keyboard-rules';
 import { migrateDisplayMode } from './labels/words';
 import { suggestPattern, isValidSelector } from './rules/options-helpers';
 import {
@@ -260,12 +260,16 @@ function activeHostname(): string {
 
 // "Shortcuts here" On/Off — per-site keyboard exclusion. On = BranchKit's keys
 // active; Off = handed to the page. Hidden on pages with no host (chrome://).
+// The popup's quick control edits the keyboard rule for the CURRENT site's
+// exact hostname (a shortcut for the common "fix this site now" case). Broader
+// patterns are managed on the options page. See notes/DESIGN_PASS_THROUGH.md.
 function initShortcutsToggle(): void {
   const group = document.getElementById('key-shortcuts');
-  const host = activeHostname();
+  const url = activeTab?.url ?? '';
   if (!group) return;
-  if (!host) {
+  if (!activeHostname()) {
     document.getElementById('key-shortcuts-setting')?.setAttribute('hidden', '');
+    document.getElementById('key-passthrough-setting')?.setAttribute('hidden', '');
     return;
   }
   const buttons = Array.from(group.querySelectorAll<HTMLButtonElement>('.seg'));
@@ -282,23 +286,23 @@ function initShortcutsToggle(): void {
     // everything already.
     passRow?.toggleAttribute('hidden', !on);
   };
-  void isHostExcluded(host).then((ex) => select(!ex)); // On = not excluded
+
+  void getHostRule(url).then((rule) => {
+    select(!rule?.off); // On = not disabled
+    if (passInput) passInput.value = rule?.passKeys ?? '';
+  });
   for (const b of buttons) {
     b.addEventListener('click', () => {
       const on = b.dataset.value === 'on';
       select(on);
-      void setHostExcluded(host, !on);
+      void setHostOff(url, !on);
     });
   }
 
   // Pass-through keys: each typed character is one key handed to the site.
-  if (passInput) {
-    void getHostPassKeys(host).then((keys) => { passInput.value = keys.join(''); });
-    passInput.addEventListener('input', () => {
-      const keys = Array.from(passInput.value).filter((c) => c.trim() !== '');
-      void setHostPassKeys(host, keys);
-    });
-  }
+  passInput?.addEventListener('input', () => {
+    void setHostPassKeys(url, passInput.value);
+  });
 }
 
 // Every rule whose pattern matches the active tab, enabled or not, so a
