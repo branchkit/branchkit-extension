@@ -470,15 +470,21 @@
 
   <div class="rules-section" id="key-rules-section">
     <div class="rules-header">Key rules for <span class="rules-host" id="key-rules-host">…</span></div>
-    <div class="setting flush" id="key-passthrough-setting" title="Keys to hand to this site while your other BranchKit shortcuts keep working — e.g. jke#r for Gmail. Type the characters; each is one key.">
-      <label for="key-passthrough">Pass keys to site</label>
-      <input type="text" id="key-passthrough" class="passkeys-input" placeholder="e.g. jke#" spellcheck="false" autocomplete="off" autocapitalize="off">
+    <div class="no-rule" id="key-rule-empty">
+      No rule for this site.
+      <button id="key-create-rule">+ Create rule</button>
     </div>
-    <div class="setting flush" id="key-shortcuts-setting" title="Turn off ALL of BranchKit's keyboard shortcuts on this site so the site's own keys work. Voice still works. (Press i on any page to pass keys through temporarily.)">
-      <label>Disable all shortcuts</label>
-      <div class="segmented" id="key-disable-all" role="radiogroup" aria-label="Disable all shortcuts">
-        <button class="seg" data-value="on" role="radio">On</button>
-        <button class="seg active" data-value="off" role="radio">Off</button>
+    <div id="key-rule-controls" hidden>
+      <div class="setting flush" id="key-passthrough-setting" title="Keys to hand to this site while your other BranchKit shortcuts keep working — e.g. jke#r for Gmail. Type the characters; each is one key.">
+        <label for="key-passthrough">Pass keys to site</label>
+        <input type="text" id="key-passthrough" class="passkeys-input" placeholder="e.g. jke#" spellcheck="false" autocomplete="off" autocapitalize="off">
+      </div>
+      <div class="setting flush" id="key-shortcuts-setting" title="Turn off ALL of BranchKit's keyboard shortcuts on this site so the site's own keys work. Voice still works. (Press i on any page to pass keys through temporarily.)">
+        <label>Disable all shortcuts</label>
+        <div class="segmented" id="key-disable-all" role="radiogroup" aria-label="Disable all shortcuts">
+          <button class="seg" data-value="on" role="radio">On</button>
+          <button class="seg active" data-value="off" role="radio">Off</button>
+        </div>
       </div>
     </div>
   </div>

@@ -279,6 +279,22 @@ function initShortcutsToggle(): void {
   const buttons = seg ? Array.from(seg.querySelectorAll<HTMLButtonElement>('.seg')) : [];
   const passInput = document.getElementById('key-passthrough') as HTMLInputElement | null;
 
+  // A key rule is one object per pattern ({off, passKeys}), so — like the badge
+  // rules — the controls stay collapsed behind a "+ Create rule" button until
+  // there's a rule to edit. An existing rule shows its controls straight away.
+  const empty = document.getElementById('key-rule-empty');
+  const controls = document.getElementById('key-rule-controls');
+  const createBtn = document.getElementById('key-create-rule');
+  if (createBtn) createBtn.textContent = '+ Create rule for ' + pattern;
+  const showControls = (show: boolean): void => {
+    controls?.toggleAttribute('hidden', !show);
+    empty?.toggleAttribute('hidden', show);
+  };
+  createBtn?.addEventListener('click', () => {
+    showControls(true);
+    passInput?.focus();
+  });
+
   // "Disable all" is the whole-site off switch; the pass-keys field is the
   // granular list. When everything's disabled, per-key is moot — grey it out.
   const reflectOff = (off: boolean): void => {
@@ -291,6 +307,9 @@ function initShortcutsToggle(): void {
   };
 
   void getRuleForPattern(pattern).then((rule) => {
+    // A persisted rule always carries off or passKeys (empty ones are dropped
+    // on save), so its mere presence means "show the controls".
+    showControls(!!rule);
     reflectOff(!!rule?.off);
     if (passInput) passInput.value = rule?.passKeys ?? '';
   });
