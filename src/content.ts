@@ -912,14 +912,14 @@ dispatcher.register('hint_mode', () => {
   keyHandler.enterHintMode();
 });
 
-// Armed when the next activation should open in a new tab. Set by the capital-
-// letter new-tab affordance in hint mode (keyHandler.isNewTabArmed, below),
-// read + cleared by the activation path. (The discrete show_hints_newtab
-// command that also set this was removed 2026-07-05 — toggle + capital cover it.)
-let activateInNewTab = false;
-// Armed by `yank_hint` (Vimium yf): the next hint resolved by keyboard copies
-// the link's URL instead of following it. Read + cleared in activateWrapper.
-let yankHintArmed = false;
+// The keyboard "hint action mode": what the next badge resolved by keyboard
+// should DO instead of a plain click. One armed value replaces the old pair of
+// booleans (activateInNewTab + yankHintArmed) so new verbs are a one-line add.
+// Set by a verb command (or the capital-letter new-tab affordance) before/while
+// in hint mode; consumed + reset in activateWrapper. See
+// notes/DESIGN_HINT_ACTION_MODES.md.
+type HintAction = 'activate' | 'newtab' | 'yank' | 'hover' | 'focus' | 'copytext';
+let pendingHintAction: HintAction = 'activate';
 
 // The shared toggle used by both Ctrl+S (keyboard) and the voice "toggle"
 // command, so the two entry points can't drift. Branches on what's actually on
@@ -1242,7 +1242,24 @@ dispatcher.register('go_root', () => {
 // Yank a link via hint (Vimium yf): enter hint mode; the resolved codeword
 // copies the link's URL instead of following it. Keyboard-only.
 dispatcher.register('yank_hint', () => {
-  yankHintArmed = true;
+  pendingHintAction = 'yank';
+  keyHandler.enterHintMode();
+});
+// Focus a badge's element without activating it (Vimium focus hint). Then type
+// via Insert. Distinct from focus_input (first field) — this picks any element.
+dispatcher.register('focus_hint', () => {
+  pendingHintAction = 'focus';
+  keyHandler.enterHintMode();
+});
+// Copy a badge's visible text (vs yank_hint's URL).
+dispatcher.register('copytext_hint', () => {
+  pendingHintAction = 'copytext';
+  keyHandler.enterHintMode();
+});
+// Hover a badge's element (reveal menus/controls) — keyboard twin of the voice
+// "hover {hint}" (still plugin-contributed; see DESIGN_HINT_ACTION_MODES.md 3b).
+dispatcher.register('hover_hint', () => {
+  pendingHintAction = 'hover';
   keyHandler.enterHintMode();
 });
 
@@ -1304,7 +1321,7 @@ onSiteKeysChanged(applySiteKeys);
 // mode Escape dismisses the summoned hints, the Vimium behavior. The mode
 // exit itself already happened in the KeyHandler.
 keyHandler.setHintEscapeCallback(() => {
-  yankHintArmed = false; // abandoned yank (yf then Esc) must not leak to the next hint
+  pendingHintAction = 'activate'; // an abandoned verb (yf/hover/… then Esc) must not leak to the next hint
   if (getHintVisibility() !== 'always') hideBadges();
 });
 
@@ -1336,9 +1353,10 @@ keyHandler.setFilterCallback((prefix: string) => {
   if (matchSet.size === 1) {
     const first = matchSet.values().next().value!;
     // "aA" affordance: a capital typed mid-codeword opens this pick in a new
-    // tab. `activateWrapper` reads `activateInNewTab` and `clearHintFilter`
-    // resets it, same as the `F` arm.
-    if (keyHandler.isNewTabArmed()) activateInNewTab = true;
+    // tab. `activateWrapper` reads `pendingHintAction` and resets it. Don't
+    // override an explicit verb (e.g. yf then a capital keeps yank precedence,
+    // matching the old yankHintArmed-checked-first behavior).
+    if (keyHandler.isNewTabArmed() && pendingHintAction === 'activate') pendingHintAction = 'newtab';
     activateWrapper(first);
     hideBadges();
     keyHandler.exitHintMode();
@@ -1639,8 +1657,7 @@ async function showBadges(): Promise<void> {
 // scheduled hint refresh (after the flash completes) re-renders all
 // badges via updateLabel, which resets the text naturally.
 function clearHintFilter(): void {
-  activateInNewTab = false;
-  yankHintArmed = false;
+  pendingHintAction = 'activate';
   keyHandler.exitHintMode();
   for (const w of store.all) {
     w.hint?.setFiltered(false);
@@ -2190,40 +2207,71 @@ function updateBadgeLabels(): void {
   }
 }
 
-function activateWrapper(wrapper: ElementWrapper): void {
-  const el = wrapper.element as HTMLElement;
-
-  // Yank (Vimium yf): copy the link's URL instead of following it. Guarded by
-  // an opt-in keyboard flag, so steady-state activation is untouched.
-  if (yankHintArmed) {
-    yankHintArmed = false;
-    const anchor = el.closest('a') as HTMLAnchorElement | null;
-    const href = anchor?.href ?? '';
-    wrapper.hint?.flash();
-    if (href) void copyText(href).then((ok) => flashToast(ok ? 'Copied link' : 'Copy failed'));
-    else flashToast('Not a link');
-    if (shouldAutoShowBadges()) { clearHintFilter(); scheduleHintRefresh(); } else { hideBadges(); }
-    return;
-  }
-
-  const openNewTab = activateInNewTab;
-  lastActivatedElement = el;
-
-  // Visibility handoff: same rules as the SSE activate path above. In
-  // always-mode we clear narrowing/keyboard state and schedule a refresh;
-  // in manual-mode we fully hide so the user can re-summon explicitly.
+// Visibility handoff after a keyboard hint action. In always-mode we clear
+// narrowing/keyboard state and schedule a refresh; in manual-mode we fully hide
+// so the user can re-summon explicitly. Shared by every activateWrapper verb.
+function hintActionHandoff(): void {
   if (shouldAutoShowBadges()) {
     clearHintFilter();
     scheduleHintRefresh();
   } else {
     hideBadges();
   }
+}
+
+function activateWrapper(wrapper: ElementWrapper): void {
+  const el = wrapper.element as HTMLElement;
+  // Consume the keyboard hint action and reset immediately, so no path can leak
+  // it to the next activation. See notes/DESIGN_HINT_ACTION_MODES.md.
+  const action = pendingHintAction;
+  pendingHintAction = 'activate';
+
+  // Verbs that act ON the element without following it (Vimium hint modes).
+  if (action === 'yank') {
+    // Copy the link's URL (Vimium yf).
+    const href = (el.closest('a') as HTMLAnchorElement | null)?.href ?? '';
+    wrapper.hint?.flash();
+    if (href) void copyText(href).then((ok) => flashToast(ok ? 'Copied link' : 'Copy failed'));
+    else flashToast('Not a link');
+    hintActionHandoff();
+    return;
+  }
+  if (action === 'copytext') {
+    // Copy the element's visible text (Vimium copy-link-text).
+    const text = (el.textContent || '').trim();
+    wrapper.hint?.flash();
+    if (text) void copyText(text).then((ok) => flashToast(ok ? 'Copied text' : 'Copy failed'));
+    else flashToast('No text');
+    hintActionHandoff();
+    return;
+  }
+  if (action === 'focus') {
+    // Focus without activating — a field to type in, or any element (Vimium focus).
+    wrapper.hint?.flash();
+    el.focus();
+    flashToast('Focused');
+    hintActionHandoff();
+    return;
+  }
+  if (action === 'hover') {
+    // Reveal hover-state UI (menus, player controls) without clicking (Vimium
+    // hover). The always-mode handoff re-scans, so badges appear for whatever
+    // the hover just exposed. Voice "hover {hint}" is the twin (plugin-side).
+    wrapper.hint?.flash();
+    dispatchHover(el);
+    flashToast('Hovered');
+    hintActionHandoff();
+    return;
+  }
+
+  lastActivatedElement = el;
+  hintActionHandoff();
 
   wrapper.hint?.flash();
   if (wrapper.category === 'input') {
     el.focus();
   } else {
-    activateElement(el, { newTab: openNewTab });
+    activateElement(el, { newTab: action === 'newtab' });
   }
 }
 
@@ -3344,17 +3392,18 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         detail,
         fp,
       });
-    } else if (action === 'hover') {
-      // Hover voice action: resolve the codeword to a wrapper and dispatch
-      // the pointer-in event sequence (pointerover/enter/move + mouse
-      // equivalents) on the target. Reveals hover-state UI (YouTube
-      // player controls, dropdown menus, slide-out panels) that the site
-      // hides until cursor presence — without forcing the user to grab
-      // the mouse. Mirrors Rango's hoverElement. Resolution uses the
-      // same three-tier lookup as activate so codewords stay consistent
-      // across the two actions. Does NOT teardown wrappers (no pre-nav
-      // detach), does NOT hide hints (always-mode keeps badges so user
-      // can follow up with activate on whatever the hover just exposed).
+    } else if (action === 'hover' || action === 'focus_hint' || action === 'copytext_hint') {
+      // Element-verb voice actions (Vimium hint modes): resolve the codeword to
+      // a wrapper and act ON it without following it —
+      //   hover        → pointer-in event sequence (pointerover/enter/move +
+      //                  mouse equivalents), revealing hover-state UI (player
+      //                  controls, dropdown menus) without grabbing the mouse
+      //                  (mirrors Rango's hoverElement).
+      //   focus_hint   → focus the element (a field to type in, or any element).
+      //   copytext_hint→ copy the element's visible text.
+      // All share the same three-tier resolution as activate so codewords stay
+      // consistent across verbs. None tear down wrappers or hide hints
+      // (always-mode keeps badges so the user can follow up on what appeared).
       const codeword = params?.codeword ?? '';
       const idParam = parseInt(params?.id ?? '0', 10);
       const frameIdParam = params?.frame_id != null ? parseInt(params.frame_id, 10) : -1;
@@ -3377,12 +3426,24 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       const target = resolved.target;
       if (target instanceof HTMLElement) {
         store.findWrapperFor(target)?.hint?.flash();
-        dispatchHover(target);
+        let detail = '';
+        if (action === 'hover') {
+          dispatchHover(target);
+          detail = 'hover dispatched';
+        } else if (action === 'focus_hint') {
+          target.focus();
+          detail = 'focused';
+        } else {
+          const text = (target.textContent || '').trim();
+          if (text) void copyText(text).then((ok) => flashToast(ok ? 'Copied text' : 'Copy failed'));
+          else flashToast('No text');
+          detail = text ? 'text copied' : 'no text';
+        }
         reportDispatchResult({
           action, codeword, resolution: resolved.resolution, elem_tag: target.tagName.toLowerCase(),
           taken: 'click', ok: true,
           frame: trimFrameUrl(window.location.href),
-          detail: 'hover dispatched',
+          detail,
           fp: resolved.fp,
         });
       } else {
@@ -3390,7 +3451,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
           action, codeword, resolution: resolved.resolution, elem_tag: '',
           taken: 'skipped', ok: false,
           frame: trimFrameUrl(window.location.href),
-          detail: resolved.detail || 'hover target not resolved',
+          detail: resolved.detail || `${action} target not resolved`,
           fp: resolved.fp,
         });
       }

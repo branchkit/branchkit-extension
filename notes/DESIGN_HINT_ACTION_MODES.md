@@ -1,6 +1,15 @@
 # Design: Hint action modes — pick a badge, do X (not just click)
 
-**Status:** Scope / proposal (2026-07-06). Vimium's "hint modes": a badge you
+**Status:** Phases 1–3a **landed + live-verified** 2026-07-06 (committed local,
+unpushed). Phase 1 (unify armed booleans → `pendingHintAction`), phase 2
+(focus + copy-text, keyboard `gf`/`yc` + voice "focus {hint}"/"copy text
+{hint}"), phase 3a (keyboard hover `gh`). Live-verified 6/6 against the real
+extension via `scripts/_verify-hint-actions.mjs` (yank regression intact; focus/
+copytext/hover work). **Deferred:** phase 3b (move hover's voice contribution
+from the plugin into the extension catalog — cross-repo, needs plugin-test +
+voice live-verify), phase 4 (voice caret control), phase 5 (enter-caret-at-badge).
+
+Vimium's "hint modes": a badge you
 pick can do more than click — hover it, focus it, copy it, start a selection at
 it. Vimium-C ships ~20; this scopes the high-value subset for BranchKit and,
 importantly, cleans up an inconsistency the audit surfaced. Follow-on to

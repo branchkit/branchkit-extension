@@ -250,6 +250,20 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // contributed hint verb — deferred.
   { id: 'yank_hint', label: 'Copy a link (badge)', group: 'Badges', mappable: true, params: [],
     description: 'Enter badge-typing mode, then type a letter to copy that link’s URL instead of opening it.' },
+  // Hint action modes (Vimium): pick a badge, do X instead of clicking. Both
+  // keyboard (arm + type a letter) and voice (say the verb + the codeword). See
+  // notes/DESIGN_HINT_ACTION_MODES.md.
+  { id: 'focus_hint', label: 'Focus a badge', group: 'Badges', mappable: true, params: [],
+    description: 'Focus a badge’s element without activating it — a form field to type in, or any element. Say "focus" then its codeword, or press the key then type a letter.',
+    voice: [{ pattern: 'focus {hint}' }] },
+  { id: 'copytext_hint', label: 'Copy a badge’s text', group: 'Badges', mappable: true, params: [],
+    description: 'Copy a badge’s visible text (not its URL). Say "copy text" then its codeword, or press the key then type a letter.',
+    voice: [{ pattern: 'copy text {hint}' }] },
+  // Keyboard-only for now: the voice twin ("hover {hint}") is still contributed
+  // by the browser plugin. Consolidating it into this catalog entry is the
+  // deferred phase-3b cleanup (notes/DESIGN_HINT_ACTION_MODES.md).
+  { id: 'hover_hint', label: 'Hover a badge', group: 'Badges', mappable: true, params: [],
+    description: 'Hover a badge’s element to reveal menus or controls without clicking it. Press the key then type a letter. (Voice: say "hover" then the codeword.)' },
 
   // --- Tabs ---
   // All tab verbs share one background handler (handleTabAction): keyboard
@@ -450,7 +464,10 @@ export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   { keys: 'BracketRight BracketRight', command: 'go_next' },     // ]]
   { keys: 'BracketLeft BracketLeft', command: 'go_previous' },   // [[
   { keys: 'KeyY KeyY', command: 'copy_url' },          // yy
-  { keys: 'KeyY KeyF', command: 'yank_hint' },         // yf
+  { keys: 'KeyY KeyF', command: 'yank_hint' },         // yf — copy a link's URL
+  { keys: 'KeyY KeyC', command: 'copytext_hint' },     // yc — copy a badge's text
+  { keys: 'KeyG KeyF', command: 'focus_hint' },        // gf — focus a badge (frame-nav dropped)
+  { keys: 'KeyG KeyH', command: 'hover_hint' },        // gh — hover a badge
   { keys: 'KeyG KeyU', command: 'go_up' },             // gu
   { keys: 'KeyG shift+KeyU', command: 'go_root' },     // gU
   // Tabs (Vimium t/x/X, gt/gT, yt, ^)
