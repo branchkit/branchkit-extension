@@ -272,8 +272,10 @@ function initShortcutsToggle(): void {
     document.getElementById('key-rules-section')?.setAttribute('hidden', '');
     return;
   }
+  // Header names the host you're on (like the badge rules), while the create
+  // button names the broader pattern the rule will cover.
   const keyHostEl = document.getElementById('key-rules-host');
-  if (keyHostEl) keyHostEl.textContent = pattern;
+  if (keyHostEl) keyHostEl.textContent = activeHost() || pattern;
 
   const seg = document.getElementById('key-disable-all');
   const buttons = seg ? Array.from(seg.querySelectorAll<HTMLButtonElement>('.seg')) : [];
@@ -406,11 +408,9 @@ function noRuleNode(message?: string): HTMLElement {
     return wrap;
   }
 
+  // Header already names the host you're on; the button names the pattern the
+  // rule will cover. No standalone pattern line — it just duplicated the button.
   wrap.append('No rule for this site.');
-  const sugLine = document.createElement('div');
-  sugLine.className = 'suggested';
-  sugLine.textContent = suggested;
-  wrap.appendChild(sugLine);
 
   const btn = document.createElement('button');
   btn.textContent = `+ Create rule for ${suggested}`;
