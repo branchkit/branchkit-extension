@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>BranchKit Browser — Domain rules</title>
+  <title>BranchKit Browser — Settings</title>
   <style>
     /* GitHub-dark palette, matched to the popup and the keyboard help overlay
        (src/render/help-overlay.ts) so every BranchKit surface reads as one. */
@@ -308,13 +308,13 @@
 </head>
 <body>
   <nav class="side-nav" id="side-nav" aria-label="Settings sections">
-    <a href="#sec-rules" class="side-link">Domain rules</a>
+    <a href="#sec-rules" class="side-link">Badge rules</a>
     <a href="#sec-keyboard" class="side-link">Keyboard shortcuts</a>
-    <a href="#sec-keyboard-rules" class="side-link">Keyboard rules</a>
+    <a href="#sec-keyboard-rules" class="side-link">Shortcut rules</a>
     <a href="#sec-badge" class="side-link">Badge appearance</a>
   </nav>
   <div class="container">
-    <h1 id="sec-rules" class="sec"><img src="icons/icon48.png" alt="">Domain rules</h1>
+    <h1 id="sec-rules" class="sec"><img src="icons/icon48.png" alt="">Badge rules</h1>
     <div class="subtitle">
       Customize which elements get hint badges on specific sites. Excludes hide
       cluttering elements, includes pick up widgets the scanner misses, and
@@ -451,12 +451,12 @@
       .km-param input[type=number] { width: 56px; text-align: right; }
     </style>
 
-    <h1 id="sec-keyboard-rules" class="sec" style="margin-top: 40px">Keyboard rules</h1>
+    <h1 id="sec-keyboard-rules" class="sec" style="margin-top: 40px">Shortcut rules</h1>
     <div class="subtitle">
       Per-site control over BranchKit’s keyboard shortcuts. Disable them entirely
       on sites that have their own keys, or pass just specific keys through
       (e.g. <code>jke#</code> for Gmail) while the rest of your shortcuts keep
-      working. Patterns match like domain rules (<code>*.example.com</code>).
+      working. Patterns match like badge rules (<code>*.example.com</code>).
       Voice is unaffected. Sync across browsers.
     </div>
     <div class="toolbar">
