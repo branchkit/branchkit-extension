@@ -173,18 +173,23 @@ function renderVoiceRow(meta: CommandMeta): HTMLElement {
 
   // "+ voice" — the free-list add, mirroring the keys' "+ key". Only when
   // connected (the phrase is stored in the actuator through the plugin).
-  if (!disconnected) {
-    const add = document.createElement('button');
-    add.type = 'button';
-    add.className = 'km-voice-add';
-    add.textContent = '+ voice';
-    add.title = `Add another way to say “${meta.label}”`;
-    add.addEventListener('click', () => addAliasEditor(add, meta));
-    phrases.appendChild(add);
-  }
+  if (!disconnected) phrases.appendChild(makeVoiceAddButton(meta));
 
   row.appendChild(phrases);
   return row;
+}
+
+// The dashed "+ voice" button. Extracted so the inline editor can restore it in
+// place on cancel (a local swap, not a full re-render — a re-render mid-click
+// would destroy the element the next click is headed for).
+function makeVoiceAddButton(meta: CommandMeta): HTMLButtonElement {
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'km-voice-add';
+  add.textContent = '+ voice';
+  add.title = `Add another way to say “${meta.label}”`;
+  add.addEventListener('click', () => addAliasEditor(add, meta));
+  return add;
 }
 
 /** The user's added phrases for a command, in stored order. */
@@ -223,51 +228,20 @@ function renderAliasPhrase(meta: CommandMeta, alias: OverrideRecord, disconnecte
 
 // Inline input to add a new spoken form. Validated against the command's
 // primary phrase so the added phrase keeps the same placeholders (params ride
-// along from the base).
+// along from the base). Dismisses on blur/Escape, saves on Enter.
 function addAliasEditor(addBtn: HTMLElement, meta: CommandMeta, initialValue = '', initialError?: string): void {
   const base = primaryPattern(meta);
   if (base === null) return;
-
-  const editor = document.createElement('span');
-  editor.className = 'km-voice-edit';
-
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.className = 'km-voice-input';
-  input.value = initialValue;
-  input.spellcheck = false;
-  input.placeholder = 'another way to say it';
-  input.setAttribute('aria-label', `Add a spoken phrase for ${meta.label}`);
-
-  const err = document.createElement('span');
-  err.className = 'km-voice-err';
-
-  const validate = (): string | null => {
-    const value = input.value.trim();
-    const msg = value === '' ? null : validateOverridePhrase(base, value);
-    err.textContent = msg ?? '';
-    input.classList.toggle('invalid', msg !== null);
-    return msg;
-  };
-
-  const commit = (): void => {
-    const value = input.value.trim();
-    if (value === '') { render(); return; }
-    if (validate() !== null) return;
-    void saveAlias(meta, base, value);
-  };
-
-  input.addEventListener('input', validate);
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); commit(); }
-    else if (e.key === 'Escape') { e.preventDefault(); render(); }
+  openInlineEditor({
+    base,
+    initial: initialValue,
+    placeholder: 'another way to say it',
+    ariaLabel: `Add a spoken phrase for ${meta.label}`,
+    initialError,
+    mount: (editor) => addBtn.replaceWith(editor),
+    restore: (editor) => editor.replaceWith(makeVoiceAddButton(meta)),
+    commit: (value) => void saveAlias(meta, base, value),
   });
-
-  editor.appendChild(input);
-  editor.appendChild(err);
-  addBtn.replaceWith(editor);
-  input.focus();
-  if (initialError) { err.textContent = initialError; input.classList.add('invalid'); }
 }
 
 async function saveAlias(meta: CommandMeta, base: string, newPattern: string): Promise<void> {
@@ -316,7 +290,15 @@ function renderVoicePattern(meta: CommandMeta, vp: VoicePattern, disconnected: b
   const wrap = document.createElement('span');
   wrap.className = 'km-voice-item';
   wrap.dataset.key = meta.id + ' ' + vp.pattern; // for async save-error reopen
+  fillVoicePatternItem(wrap, meta, vp, disconnected);
+  return wrap;
+}
 
+// Populate a voice-item wrapper with the phrase button (+ reset when
+// overridden). Shared by initial render and the editor's cancel-restore, so a
+// cancel repaints just this item rather than the whole list.
+function fillVoicePatternItem(wrap: HTMLElement, meta: CommandMeta, vp: VoicePattern, disconnected = false): void {
+  wrap.replaceChildren();
   const custom = overrides.get(overrideKey(meta.id, vp.pattern));
   const effective = custom ?? vp.pattern;
 
@@ -342,10 +324,10 @@ function renderVoicePattern(meta: CommandMeta, vp: VoicePattern, disconnected: b
     reset.addEventListener('click', () => void resetVoicePattern(meta, vp));
     wrap.appendChild(reset);
   }
-  return wrap;
 }
 
-// Swap the phrase button for an inline text input with live validation.
+// Swap the phrase button for an inline text input. Dismisses on blur/Escape,
+// saves on Enter (Enter on an invalid phrase keeps the editor open to fix).
 function editVoicePattern(
   wrap: HTMLElement,
   meta: CommandMeta,
@@ -354,51 +336,105 @@ function editVoicePattern(
   initialError?: string,
 ): void {
   const effective = initialValue ?? overrides.get(overrideKey(meta.id, vp.pattern)) ?? vp.pattern;
+  openInlineEditor({
+    base: vp.pattern,
+    initial: effective,
+    selectAll: true,
+    ariaLabel: 'Spoken phrase',
+    initialError,
+    mount: (editor) => wrap.replaceChildren(editor),
+    restore: () => fillVoicePatternItem(wrap, meta, vp),
+    // Typing exactly what's already shown is not a change — just close.
+    isNoChange: (value) => value === effective,
+    commit: (value) => {
+      if (value === vp.pattern) {
+        // Reverted to the default: drop any existing override.
+        if (overrides.has(overrideKey(meta.id, vp.pattern))) void resetVoicePattern(meta, vp);
+        else fillVoicePatternItem(wrap, meta, vp);
+      } else {
+        void saveVoicePattern(meta, vp, value);
+      }
+    },
+  });
+}
 
+/** A well-behaved inline text editor for a spoken phrase, shared by the
+ * override (edit) and alias (add) flows. Handles focus, live validation, and
+ * the three exits every inline field needs but the first cut lacked:
+ *   - Enter  → commit if valid + non-empty + changed (invalid keeps it open),
+ *   - Escape → cancel,
+ *   - blur   → cancel (click-away dismisses; the field never lingers).
+ * `restore` repaints the item locally on cancel (no full re-render, which would
+ * race the click that dismissed it). A `done` latch keeps the async commit from
+ * double-firing with the blur it triggers. */
+export interface InlineEditorSpec {
+  base: string;                        // pattern the new phrase must match placeholders of
+  initial: string;
+  ariaLabel: string;
+  placeholder?: string;
+  selectAll?: boolean;
+  initialError?: string;
+  mount: (editor: HTMLElement) => void;
+  restore: (editor: HTMLElement) => void;
+  isNoChange?: (value: string) => boolean;
+  commit: (value: string) => void;     // gets a validated, non-empty, changed value
+}
+
+export function openInlineEditor(spec: InlineEditorSpec): void {
   const editor = document.createElement('span');
   editor.className = 'km-voice-edit';
 
   const input = document.createElement('input');
   input.type = 'text';
   input.className = 'km-voice-input';
-  input.value = effective;
+  input.value = spec.initial;
   input.spellcheck = false;
-  input.setAttribute('aria-label', 'Spoken phrase');
+  if (spec.placeholder) input.placeholder = spec.placeholder;
+  input.setAttribute('aria-label', spec.ariaLabel);
 
   const err = document.createElement('span');
   err.className = 'km-voice-err';
 
+  const hint = document.createElement('span');
+  hint.className = 'km-voice-hint';
+  hint.textContent = '↵ save · esc cancel';
+
+  let done = false;
   const validate = (): string | null => {
-    const msg = validateOverridePhrase(vp.pattern, input.value);
+    const value = input.value.trim();
+    const msg = value === '' ? null : validateOverridePhrase(spec.base, value);
     err.textContent = msg ?? '';
     input.classList.toggle('invalid', msg !== null);
     return msg;
   };
-
-  const commit = (): void => {
-    if (validate() !== null) return; // stay in the editor on invalid input
-    const value = input.value.trim();
-    if (value === vp.pattern) {
-      // Reverted to the default: drop any existing override.
-      if (overrides.has(overrideKey(meta.id, vp.pattern))) void resetVoicePattern(meta, vp);
-      else render();
-      return;
-    }
-    void saveVoicePattern(meta, vp, value);
-  };
+  const cancel = (): void => { if (done) return; done = true; spec.restore(editor); };
+  const commit = (value: string): void => { if (done) return; done = true; spec.commit(value); };
 
   input.addEventListener('input', validate);
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); commit(); }
-    else if (e.key === 'Escape') { e.preventDefault(); render(); }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const value = input.value.trim();
+      if (value === '') { cancel(); return; }
+      if (validate() !== null) return; // invalid → stay open so the user can fix it
+      if (spec.isNoChange?.(value)) { cancel(); return; }
+      commit(value);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      cancel();
+    }
   });
+  // Click-away discards the in-progress edit and closes — the field never
+  // lingers highlighted. (Enter, which commits, latches `done` first.)
+  input.addEventListener('blur', () => cancel());
 
   editor.appendChild(input);
   editor.appendChild(err);
-  wrap.replaceChildren(editor);
+  editor.appendChild(hint);
+  spec.mount(editor);
   input.focus();
-  input.select();
-  if (initialError) { err.textContent = initialError; input.classList.add('invalid'); }
+  if (spec.selectAll) input.select();
+  if (spec.initialError) { err.textContent = spec.initialError; input.classList.add('invalid'); }
   else validate();
 }
 
