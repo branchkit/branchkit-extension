@@ -1,5 +1,36 @@
 import { describe, it, expect } from 'vitest';
-import { captureTokens, overrideKey, validateOverridePhrase } from './command-override';
+import {
+  captureTokens,
+  overrideKey,
+  validateOverridePhrase,
+  effectiveVoice,
+  overridesFromList,
+} from './command-override';
+
+describe('overridesFromList + effectiveVoice', () => {
+  const list = [
+    { action: 'toggle_hints', default_pattern: 'toggle', new_pattern: 'hints' },
+    { action: 'scroll', default_pattern: 'scroll down {number}', new_pattern: 'zoom {number}' },
+  ];
+
+  it('applies a matching override and leaves others as-is', () => {
+    const ov = overridesFromList(list);
+    expect(effectiveVoice('toggle_hints', ['toggle'], ov)).toEqual(['hints']);
+    expect(effectiveVoice('scroll', ['scroll down', 'scroll down {number}'], ov))
+      .toEqual(['scroll down', 'zoom {number}']);
+  });
+
+  it('is a no-op with no overrides', () => {
+    expect(effectiveVoice('toggle_hints', ['toggle'])).toEqual(['toggle']);
+    expect(effectiveVoice('toggle_hints', ['toggle'], new Map())).toEqual(['toggle']);
+  });
+
+  it('does not cross command ids', () => {
+    const ov = overridesFromList(list);
+    // Same default pattern text under a different command id must not match.
+    expect(effectiveVoice('other', ['toggle'], ov)).toEqual(['toggle']);
+  });
+});
 
 describe('captureTokens', () => {
   it('extracts and sorts {..} tokens, ignoring literals', () => {

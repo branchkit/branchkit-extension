@@ -17,6 +17,7 @@
 import { COMMAND_CATALOG, type CommandMeta, type KeymapEntry } from '../command-catalog';
 import { comboDisplay } from '../activate/key-combo';
 import { letterToSpokenWord, isVoiceAlphabetLoaded } from '../labels/words';
+import { effectiveVoice, type OverrideMap } from '../command-override';
 
 export interface HelpRow {
   /** Display strings for every binding of this command (e.g. ["Shift+J"]). */
@@ -45,6 +46,7 @@ export function buildHelpModel(
   catalog: readonly CommandMeta[],
   keymap: readonly KeymapEntry[],
   voiceConnected = true,
+  overrides?: OverrideMap,
 ): HelpGroup[] {
   const keysByCommand = new Map<string, string[]>();
   for (const e of keymap) {
@@ -58,7 +60,10 @@ export function buildHelpModel(
     const keys = keysByCommand.get(c.id) ?? [];
     // With voice disconnected the spoken phrases are unusable, so drop them —
     // and any command reachable ONLY by voice falls out via the skip below.
-    const voice = voiceConnected ? (c.voice ?? []).map((v) => v.pattern) : [];
+    // Overrides are applied so the overlay shows what actually works.
+    const voice = voiceConnected
+      ? effectiveVoice(c.id, (c.voice ?? []).map((v) => v.pattern), overrides)
+      : [];
     if (keys.length === 0 && voice.length === 0) continue; // not reachable → skip
     let gi = indexByGroup.get(c.group);
     if (gi === undefined) {
@@ -333,14 +338,14 @@ function close(): void {
   state.active = false;
 }
 
-/** Toggle the help overlay. Reads the effective keymap each open so custom
- * binds are reflected. */
-export function toggleHelpOverlay(keymap: readonly KeymapEntry[]): void {
+/** Toggle the help overlay. Reads the effective keymap + phrase overrides each
+ * open so custom binds and custom spoken phrases are reflected. */
+export function toggleHelpOverlay(keymap: readonly KeymapEntry[], overrides?: OverrideMap): void {
   if (state.active) { close(); return; }
   // One connection signal drives both surfaces: disconnected → no spoken
   // phrases in the command table and the alphabet shows a connect prompt.
   const alphabet = buildAlphabetModel();
-  const model = buildHelpModel(COMMAND_CATALOG, keymap, alphabet.loaded);
+  const model = buildHelpModel(COMMAND_CATALOG, keymap, alphabet.loaded, overrides);
   const host = buildHelpOverlay(model, alphabet, close);
   document.documentElement.appendChild(host);
   // Capture-phase Escape so we close before the page (or the key handler) can

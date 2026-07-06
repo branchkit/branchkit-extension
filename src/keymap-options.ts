@@ -17,7 +17,7 @@ import {
   type ParamSchema,
   type VoicePattern,
 } from './command-catalog';
-import { overrideKey, validateOverridePhrase } from './command-override';
+import { overrideKey, validateOverridePhrase, overridesFromList, type OverrideRecord } from './command-override';
 import {
   loadKeymap,
   saveKeymap,
@@ -439,8 +439,8 @@ export async function initKeymapEditor(): Promise<void> {
   // Load any existing phrase overrides so changed rows prefill + mark. Best
   // effort — absent (disconnected) just means no overrides shown.
   void chrome.runtime.sendMessage({ type: 'GET_COMMAND_OVERRIDES' })
-    .then((r: { overrides?: Array<{ action: string; default_pattern: string; new_pattern: string }> } | undefined) => {
-      overrides = new Map((r?.overrides ?? []).map((o) => [overrideKey(o.action, o.default_pattern), o.new_pattern]));
+    .then((r: { overrides?: OverrideRecord[] } | undefined) => {
+      overrides = overridesFromList(r?.overrides ?? []);
       render();
     })
     .catch(() => {});

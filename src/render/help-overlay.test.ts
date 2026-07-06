@@ -46,6 +46,14 @@ describe('buildHelpModel', () => {
     expect(model[0].rows[0].voice).toEqual(['scroll down']);
   });
 
+  it('shows the user override phrase, not the catalog default', () => {
+    const catalog = [cmd('scroll_down', 'Scroll', ['scroll down', 'page down'])];
+    const overrides = new Map([['scroll_down\0scroll down', 'zoom']]);
+    const model = buildHelpModel(catalog, [], true, overrides);
+    // First phrase overridden; the untouched second phrase rides along.
+    expect(model[0].rows[0].voice).toEqual(['zoom', 'page down']);
+  });
+
   it('drops voice phrases and voice-only commands when voice is disconnected', () => {
     const catalog = [
       cmd('scroll_down', 'Scroll', ['scroll down']), // key + voice

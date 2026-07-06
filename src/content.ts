@@ -48,7 +48,8 @@ import {
 } from './activate/activate-path-log';
 import { captureDebugSnapshot } from './debug/debug-snapshot';
 import { toggleOverlay } from './render/debug-overlay';
-import { toggleHelpOverlay } from './render/help-overlay';
+import { toggleHelpOverlay, isHelpOverlayActive } from './render/help-overlay';
+import { overridesFromList, type OverrideRecord } from './command-override';
 import { togglePalette, closePalette } from './render/palette-host';
 import { setTabMarker, reapplyTabMarker, refreshTabMarker } from './render/tab-title';
 import { setModeChip } from './render/mode-chip';
@@ -1028,9 +1029,21 @@ dispatcher.register('find_previous', () => {
 
 // Keyboard help overlay (default ?). Reads the live keymap so it shows the
 // user's actual binds. Extension-owned — works without BranchKit connected.
+// On open, fetch phrase overrides so spoken forms match what actually works;
+// on close, toggle immediately (no round trip).
 dispatcher.register('toggle_help', () => {
-  toggleHelpOverlay(currentKeymap);
+  if (isHelpOverlayActive()) { toggleHelpOverlay(currentKeymap); return; }
+  void fetchOverridesForDisplay().then((ov) => toggleHelpOverlay(currentKeymap, ov));
 });
+
+// Fetch the user's phrase overrides via the SW → plugin. Best effort — an empty
+// map (disconnected / no overrides) just shows catalog defaults.
+async function fetchOverridesForDisplay(): Promise<Map<string, string>> {
+  const r = (await chrome.runtime
+    .sendMessage({ type: 'GET_COMMAND_OVERRIDES' })
+    .catch(() => undefined)) as { overrides?: OverrideRecord[] } | undefined;
+  return overridesFromList(r?.overrides ?? []);
+}
 
 // Command palette (notes/DESIGN_TAB_NAVIGATION.md, Layer 2). The overlay
 // iframe always lives in the top frame; a bind fired inside a subframe relays

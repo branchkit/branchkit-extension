@@ -14,6 +14,7 @@
 
 import type { CommandMeta, KeymapEntry } from '../command-catalog';
 import { comboDisplay } from '../activate/key-combo';
+import { effectiveVoice, type OverrideMap } from '../command-override';
 
 export type PaletteSourceId = 'tabs' | 'commands';
 
@@ -126,6 +127,7 @@ export function buildCommandItems(
   catalog: readonly CommandMeta[],
   keymap: readonly KeymapEntry[],
   excludeIds: readonly string[] = ['toggle_palette'],
+  overrides?: OverrideMap,
 ): PaletteItem[] {
   const keysByCommand = new Map<string, string[]>();
   for (const e of keymap) {
@@ -137,7 +139,9 @@ export function buildCommandItems(
   for (const c of catalog) {
     if (!c.mappable || excludeIds.includes(c.id)) continue;
     const keys = keysByCommand.get(c.id) ?? [];
-    const voice = (c.voice ?? []).map((v) => v.pattern);
+    // Effective phrases (user overrides applied) so a searched/shown phrase
+    // matches what the actuator actually hears.
+    const voice = effectiveVoice(c.id, (c.voice ?? []).map((v) => v.pattern), overrides);
     out.push({
       source: 'commands',
       id: `cmd:${c.id}`,

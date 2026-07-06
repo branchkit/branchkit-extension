@@ -17,6 +17,7 @@
 
 import { COMMAND_CATALOG } from './command-catalog';
 import { loadKeymap } from './keymap-storage';
+import { overridesFromList, type OverrideRecord } from './command-override';
 import { loadMru } from './background/tab-mru';
 import {
   buildTabItems, buildCommandItems, filterPalette,
@@ -321,7 +322,7 @@ function assignAndPublish(alphabet: string[]): void {
 
 async function init(): Promise<void> {
   queryInput.focus();
-  const [tabs, mru, keymap, activeId, stored, sync, marks] = await Promise.all([
+  const [tabs, mru, keymap, activeId, stored, sync, marks, overridesResp] = await Promise.all([
     chrome.tabs.query({}).catch(() => [] as chrome.tabs.Tab[]),
     loadMru().catch(() => [] as number[]),
     loadKeymap().catch(() => []),
@@ -329,7 +330,11 @@ async function init(): Promise<void> {
     chrome.storage.local.get('alphabet').catch(() => ({} as Record<string, unknown>)),
     chrome.storage.sync.get('badgeDisplayMode').catch(() => ({} as Record<string, unknown>)),
     loadMarkerMap().catch(() => ({} as MarkerMap)),
+    chrome.runtime.sendMessage({ type: 'GET_COMMAND_OVERRIDES' }).catch(() => undefined),
   ]);
+  const overrides = overridesFromList(
+    ((overridesResp as { overrides?: OverrideRecord[] } | undefined)?.overrides) ?? [],
+  );
   if (typeof sync.badgeDisplayMode === 'string') {
     displayMode = sync.badgeDisplayMode as BadgeDisplayMode;
   }
@@ -342,7 +347,7 @@ async function init(): Promise<void> {
   tabItems = buildTabItems(open, mru, activeId);
   // Tabs-only scope drops the command source entirely — same overlay, one
   // source (the Vomnibar "scoped by trigger key" pattern).
-  commandItems = scope === 'tabs' ? [] : buildCommandItems(COMMAND_CATALOG, keymap);
+  commandItems = scope === 'tabs' ? [] : buildCommandItems(COMMAND_CATALOG, keymap, undefined, overrides);
   const alphabet = Array.isArray(stored.alphabet) ? (stored.alphabet as string[]) : [];
   assignAndPublish(alphabet);
   // Tab palette opens in letter mode when marks exist (the fast path); with no

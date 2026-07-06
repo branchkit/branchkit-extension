@@ -85,6 +85,19 @@ describe('buildCommandItems', () => {
   it('excludes the palette toggle itself', () => {
     expect(items.map((i) => i.id)).not.toContain('cmd:toggle_palette');
   });
+
+  it('applies phrase overrides to the shown + indexed voice forms', () => {
+    const cat: CommandMeta[] = [{
+      id: 'scroll_down', label: 'Scroll down', group: 'Scroll',
+      description: 'x', mappable: true, params: [],
+      voice: [{ pattern: 'scroll down' }],
+    }];
+    const overrides = new Map([['scroll_down\0scroll down', 'zoom']]);
+    const [item] = buildCommandItems(cat, [], undefined, overrides);
+    expect(item.voice).toEqual(['zoom']);
+    // The override phrase is searchable (it flows into the item's words).
+    expect(scoreItem(item, ['zoom'])).toBeGreaterThan(0);
+  });
 });
 
 describe('scoreItem', () => {

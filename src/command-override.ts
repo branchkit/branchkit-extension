@@ -50,6 +50,36 @@ export function overrideKey(action: string, defaultPattern: string): string {
   return action + String.fromCharCode(0) + defaultPattern;
 }
 
+/** A read-only override lookup: overrideKey(action, defaultPattern) → newPattern. */
+export type OverrideMap = ReadonlyMap<string, string>;
+
+/** One override record as returned by the plugin's GET /commands/overrides. */
+export interface OverrideRecord {
+  action: string;
+  default_pattern: string;
+  new_pattern: string;
+}
+
+/** Build the lookup map from the plugin's override list. */
+export function overridesFromList(list: readonly OverrideRecord[]): Map<string, string> {
+  return new Map(list.map((o) => [overrideKey(o.action, o.default_pattern), o.new_pattern]));
+}
+
+/**
+ * The effective spoken forms for a command: each default pattern replaced by
+ * the user's override when one exists. The single place display surfaces (help
+ * overlay, palette, keymap editor) apply overrides, so what's shown always
+ * matches what the actuator actually matches.
+ */
+export function effectiveVoice(
+  commandId: string,
+  patterns: readonly string[],
+  overrides?: OverrideMap,
+): string[] {
+  if (!overrides || overrides.size === 0) return [...patterns];
+  return patterns.map((p) => overrides.get(overrideKey(commandId, p)) ?? p);
+}
+
 /**
  * Validate a replacement phrase against the default it replaces. Returns a
  * user-facing error message, or `null` when the phrase is well-formed.
