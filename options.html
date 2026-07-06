@@ -296,75 +296,6 @@
 
     <div id="rules"></div>
 
-    <h1 style="margin-top: 40px">Badge appearance</h1>
-    <div class="subtitle">
-      Tune the size and placement of hint badges. Changes apply live to every
-      tab. The preview chip on the right reflects the current values against
-      a small-font target.
-    </div>
-    <div id="badge-settings" class="rule">
-      <div style="display: grid; grid-template-columns: 1fr 200px; gap: 24px; padding: 16px">
-        <div>
-          <h3 style="margin: 0 0 8px 0; font-size: 14px">Size</h3>
-          <div class="badge-row">
-            <label>Scale (×target font)</label>
-            <input type="number" id="bs-scale" step="0.05" min="0.4" max="1.2">
-          </div>
-          <div class="badge-row">
-            <label>Min font (px)</label>
-            <input type="number" id="bs-fontMin" step="1" min="6" max="20">
-          </div>
-          <div class="badge-row">
-            <label>Max font (px)</label>
-            <input type="number" id="bs-fontMax" step="1" min="8" max="24">
-          </div>
-          <h3 style="margin: 16px 0 8px 0; font-size: 14px">Nudge ratios (0 = above/left of text, 1 = inside target)</h3>
-          <div class="badge-row">
-            <label>Small font (&lt;15px) — X / Y</label>
-            <span>
-              <input type="number" id="bs-nudgeXSmall" step="0.05" min="0" max="1">
-              <input type="number" id="bs-nudgeYSmall" step="0.05" min="0" max="1">
-            </span>
-          </div>
-          <div class="badge-row">
-            <label>Medium font (&lt;20px) — X / Y</label>
-            <span>
-              <input type="number" id="bs-nudgeXMed" step="0.05" min="0" max="1">
-              <input type="number" id="bs-nudgeYMed" step="0.05" min="0" max="1">
-            </span>
-          </div>
-          <div class="badge-row">
-            <label>Large font (≥20px) — X / Y</label>
-            <span>
-              <input type="number" id="bs-nudgeXLarge" step="0.05" min="0" max="1">
-              <input type="number" id="bs-nudgeYLarge" step="0.05" min="0" max="1">
-            </span>
-          </div>
-          <div style="margin-top: 16px">
-            <button id="bs-reset">Reset to defaults</button>
-          </div>
-        </div>
-        <div style="border-left: 1px solid var(--border); padding-left: 24px">
-          <h3 style="margin: 0 0 8px 0; font-size: 14px">Preview</h3>
-          <div id="bs-preview" style="position: relative; padding: 24px 8px; background: var(--bg); border-radius: 6px">
-            <div style="font-size: 14px; line-height: 1.4; position: relative; display: inline-block">
-              <span id="bs-preview-badge" style="position: absolute; font-weight: bold; border: 1px solid; border-radius: 3px; padding: 0 0.1em; background: #ffd966; color: #000; border-color: #806600; white-space: nowrap; line-height: 1.2">ax</span>
-              <span id="bs-preview-text">Sample link text</span>
-            </div>
-          </div>
-          <div style="font-size: 12px; color: var(--fg-muted); margin-top: 8px">
-            Approximate; live badges adapt per-target.
-          </div>
-        </div>
-      </div>
-    </div>
-    <style>
-      .badge-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
-      .badge-row label { color: var(--fg-muted); font-size: 13px; }
-      .badge-row input[type=number] { width: 64px; font: inherit; padding: 3px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); text-align: right; }
-      .badge-row span input { margin-left: 4px; }
-    </style>
-
     <h1 style="margin-top: 40px">Keyboard shortcuts</h1>
     <div class="subtitle">
       Rebind the in-page keyboard commands; each can have more than one key. Bare
@@ -487,6 +418,75 @@
       .km-param { font-size: 12px; color: var(--fg-muted); display: inline-flex; align-items: center; gap: 4px; }
       .km-param input, .km-param select { font: inherit; font-size: 12px; padding: 2px 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); }
       .km-param input[type=number] { width: 56px; text-align: right; }
+    </style>
+
+    <h1 style="margin-top: 40px">Badge appearance</h1>
+    <div class="subtitle">
+      Tune the size and placement of hint badges. Changes apply live to every
+      tab. The preview chip on the right reflects the current values against
+      a small-font target.
+    </div>
+    <div id="badge-settings" class="rule">
+      <div style="display: grid; grid-template-columns: 1fr 200px; gap: 24px; padding: 16px">
+        <div>
+          <h3 style="margin: 0 0 8px 0; font-size: 14px">Size</h3>
+          <div class="badge-row">
+            <label>Scale (×target font)</label>
+            <input type="number" id="bs-scale" step="0.05" min="0.4" max="1.2">
+          </div>
+          <div class="badge-row">
+            <label>Min font (px)</label>
+            <input type="number" id="bs-fontMin" step="1" min="6" max="20">
+          </div>
+          <div class="badge-row">
+            <label>Max font (px)</label>
+            <input type="number" id="bs-fontMax" step="1" min="8" max="24">
+          </div>
+          <h3 style="margin: 16px 0 8px 0; font-size: 14px">Nudge ratios (0 = above/left of text, 1 = inside target)</h3>
+          <div class="badge-row">
+            <label>Small font (&lt;15px) — X / Y</label>
+            <span>
+              <input type="number" id="bs-nudgeXSmall" step="0.05" min="0" max="1">
+              <input type="number" id="bs-nudgeYSmall" step="0.05" min="0" max="1">
+            </span>
+          </div>
+          <div class="badge-row">
+            <label>Medium font (&lt;20px) — X / Y</label>
+            <span>
+              <input type="number" id="bs-nudgeXMed" step="0.05" min="0" max="1">
+              <input type="number" id="bs-nudgeYMed" step="0.05" min="0" max="1">
+            </span>
+          </div>
+          <div class="badge-row">
+            <label>Large font (≥20px) — X / Y</label>
+            <span>
+              <input type="number" id="bs-nudgeXLarge" step="0.05" min="0" max="1">
+              <input type="number" id="bs-nudgeYLarge" step="0.05" min="0" max="1">
+            </span>
+          </div>
+          <div style="margin-top: 16px">
+            <button id="bs-reset">Reset to defaults</button>
+          </div>
+        </div>
+        <div style="border-left: 1px solid var(--border); padding-left: 24px">
+          <h3 style="margin: 0 0 8px 0; font-size: 14px">Preview</h3>
+          <div id="bs-preview" style="position: relative; padding: 24px 8px; background: var(--bg); border-radius: 6px">
+            <div style="font-size: 14px; line-height: 1.4; position: relative; display: inline-block">
+              <span id="bs-preview-badge" style="position: absolute; font-weight: bold; border: 1px solid; border-radius: 3px; padding: 0 0.1em; background: #ffd966; color: #000; border-color: #806600; white-space: nowrap; line-height: 1.2">ax</span>
+              <span id="bs-preview-text">Sample link text</span>
+            </div>
+          </div>
+          <div style="font-size: 12px; color: var(--fg-muted); margin-top: 8px">
+            Approximate; live badges adapt per-target.
+          </div>
+        </div>
+      </div>
+    </div>
+    <style>
+      .badge-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+      .badge-row label { color: var(--fg-muted); font-size: 13px; }
+      .badge-row input[type=number] { width: 64px; font: inherit; padding: 3px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); text-align: right; }
+      .badge-row span input { margin-left: 4px; }
     </style>
 
     <template id="rule-template">
