@@ -1,9 +1,11 @@
 # Design: Marks + Caret/Visual mode — the last Vimium features
 
-**Status:** Part 1 (Marks) **landed** 2026-07-06 (committed locally, unpushed,
-live-verify pending). Part 2 (Caret/Visual) is still proposal. The two remaining
-substantial Vimium features BranchKit doesn't have. Reference read against real
-source:
+**Status:** Both parts **landed** 2026-07-06 (committed locally, unpushed;
+in-browser live-verify still pending). Part 1 (Marks) and Part 2 (Caret/Visual)
+are the two remaining substantial Vimium features BranchKit lacked. The
+`Selection.modify` core the caret port depends on was spot-checked in real
+Chromium (caret paint / word-move / lineboundary-extend / yank all behave as
+assumed). Reference read against real source:
 `/tmp/vimium/content_scripts/marks.js`, `/tmp/vimium/background_scripts/marks.js`,
 `/tmp/vimium/content_scripts/mode_visual.js`. **No Vimium-C clone available
 locally** — this note is Vimium-parity; Vimium-C divergences called out where

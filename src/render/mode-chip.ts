@@ -32,7 +32,7 @@ const STYLE = `
 .chip .sub { color: #8b949e; font-weight: 500; letter-spacing: 0; }
 `;
 
-type ChipMode = 'hint' | 'insert' | 'mark-set' | 'mark-jump';
+type ChipMode = 'hint' | 'insert' | 'mark-set' | 'mark-jump' | 'caret' | 'visual';
 
 // Per-mode chip copy. Normal has no chip (the quiet default). The two mark
 // states are transient prompts (the next key names the mark).
@@ -41,6 +41,8 @@ const CHIP_TEXT: Record<ChipMode, { label: string; sub: string }> = {
   insert: { label: 'PASS-THROUGH', sub: 'keys go to the page · Esc' },
   'mark-set': { label: 'SET MARK', sub: 'press a letter (⇧ = global) · Esc' },
   'mark-jump': { label: 'JUMP TO MARK', sub: 'press a letter · Esc' },
+  caret: { label: 'CARET', sub: 'hjkl move · v select · y copy · Esc' },
+  visual: { label: 'VISUAL', sub: 'hjkl extend · y copy · o swap · Esc' },
 };
 
 function build(mode: ChipMode): HTMLElement {
@@ -70,6 +72,7 @@ export function setModeChip(mode: KeyMode): void {
   if (typeof document === 'undefined' || window !== window.top) return;
   const shown: ChipMode | null =
     mode === 'hint' || mode === 'insert' || mode === 'mark-set' || mode === 'mark-jump'
+      || mode === 'caret' || mode === 'visual'
       ? mode
       : null;
   host?.remove();

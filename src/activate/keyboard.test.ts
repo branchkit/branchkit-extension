@@ -519,3 +519,54 @@ describe('mark capture (Vimium m / `)', () => {
     expect(onMark).toHaveBeenCalledWith('set', 'z', false);
   });
 });
+
+describe('caret / visual mode routing', () => {
+  it('enterCaretMode routes bare keys to the injected caret handler', () => {
+    const caretKey = vi.fn().mockReturnValue(true);
+    handler.setCaretKeyHandler(caretKey);
+    // A Normal-mode bind that must NOT fire while caret owns the keyboard.
+    registry.add({ keys: 'KeyJ', action: 'scroll_down' });
+
+    handler.enterCaretMode('caret');
+    expect(handler.getMode()).toBe('caret');
+
+    const consumed = handler.handleKeyDown(makeKey('j'));
+    expect(consumed).toBe(true);
+    expect(caretKey).toHaveBeenCalledTimes(1);
+    expect(dispatchSpy).not.toHaveBeenCalled(); // scroll_down suppressed
+  });
+
+  it('reports the visual sub-mode and fires the mode callback', () => {
+    const modeCb = vi.fn();
+    handler.setModeChangeCallback(modeCb);
+    handler.enterCaretMode('visual');
+    expect(handler.getMode()).toBe('visual');
+    expect(modeCb).toHaveBeenCalledWith('visual');
+  });
+
+  it('exitCaretMode returns to normal and fires the callback', () => {
+    const modeCb = vi.fn();
+    handler.setModeChangeCallback(modeCb);
+    handler.setCaretKeyHandler(vi.fn().mockReturnValue(true));
+    handler.enterCaretMode('caret');
+    handler.exitCaretMode();
+    expect(handler.getMode()).toBe('normal');
+    expect(modeCb).toHaveBeenLastCalledWith('normal');
+  });
+
+  it('real-modifier chords still reach the registry (Ctrl+C copies)', () => {
+    handler.setCaretKeyHandler(vi.fn().mockReturnValue(true));
+    handler.enterCaretMode('visual');
+    // Ctrl+C is unbound → handleNormalKey returns false → browser copies.
+    expect(handler.handleKeyDown(makeKey('c', { ctrlKey: true }))).toBe(false);
+  });
+
+  it('caret capture overrides an editable-field focus (modal capture)', () => {
+    const caretKey = vi.fn().mockReturnValue(true);
+    handler.setCaretKeyHandler(caretKey);
+    handler.enterCaretMode('caret');
+    // Even if a field were focused, caret owns the key (isModalCapture()).
+    handler.handleKeyDown(makeKey('l'));
+    expect(caretKey).toHaveBeenCalled();
+  });
+});

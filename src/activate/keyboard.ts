@@ -14,7 +14,9 @@ import { isMarkChar, isPrevPositionRegister } from '../marks';
 // 'mark-set'/'mark-jump' are transient one-shot states (the next key names the
 // mark), surfaced only so the mode chip can prompt "press a letter". They don't
 // change key ROUTING — the arm is handled at the top of handleKeyDown.
-export type KeyMode = 'normal' | 'insert' | 'hint' | 'mark-set' | 'mark-jump';
+// 'caret'/'visual' are the caret/visual-mode capture states; while active, all
+// bare keys route to the injected caret handler (see setCaretKeyHandler).
+export type KeyMode = 'normal' | 'insert' | 'hint' | 'mark-set' | 'mark-jump' | 'caret' | 'visual';
 
 /** Which mark operation the next key completes. */
 export type MarkArm = 'set' | 'jump';
@@ -75,6 +77,11 @@ export class KeyHandler {
   // one-shot like passNextArmed. See notes/DESIGN_MARKS_AND_CARET.md.
   private markArm: MarkArm | null = null;
   private onMark: ((op: MarkArm, letter: string, global: boolean) => void) | null = null;
+  // Caret/visual mode (Vimium v / V). While set, bare keys route to the injected
+  // caret handler (a self-contained modal handler, like hint mode). The value is
+  // the chip-facing sub-mode; the controller owns the movement/selection logic.
+  private caretMode: 'caret' | 'visual' | null = null;
+  private onCaretKey: ((e: KeyboardEvent) => boolean) | null = null;
   // Granular per-site pass-through: specific keys (matched against `event.key`,
   // e.g. "j", "#") reach the page while the REST of BranchKit's binds keep
   // working — for keyboard-heavy sites like Gmail. The persistent, per-key twin
@@ -126,9 +133,36 @@ export class KeyHandler {
     this.onModeChange?.(this.getMode());
   }
 
+  /** Inject the caret-mode key handler (the CaretController). Called by content. */
+  setCaretKeyHandler(fn: (e: KeyboardEvent) => boolean): void {
+    this.onCaretKey = fn;
+  }
+
+  /** Enter/switch caret capture. Driven by the CaretController's onModeChange
+   *  so the KeyHandler mode + chip stay in lockstep with the controller. */
+  enterCaretMode(sub: 'caret' | 'visual'): void {
+    if (this.caretMode === sub) return;
+    this.caretMode = sub;
+    this.onModeChange?.(this.getMode());
+  }
+
+  exitCaretMode(): void {
+    if (this.caretMode == null) return;
+    this.caretMode = null;
+    this.onModeChange?.(this.getMode());
+  }
+
+  /** True while an explicit modal capture owns the keyboard (hint or caret/
+   *  visual): the field-yield / pass-through / passKeys short-circuits are
+   *  suspended so the mode fully owns bare keys. */
+  private isModalCapture(): boolean {
+    return this.mode === 'hint' || this.caretMode !== null;
+  }
+
   getMode(): KeyMode {
     if (this.markArm === 'set') return 'mark-set';
     if (this.markArm === 'jump') return 'mark-jump';
+    if (this.caretMode) return this.caretMode;
     if (this.mode === 'hint') return 'hint';
     return (this.forcedInsert || this.excluded) ? 'insert' : 'normal';
   }
@@ -242,7 +276,7 @@ export class KeyHandler {
     // reaches the page — checked before the chord path so even Ctrl/Cmd combos
     // go to the site. Escape leaves an explicit toggle; on an excluded site
     // Escape just reaches the page (exclusion is toggled from the popup).
-    if (this.mode !== 'hint' && (this.forcedInsert || this.excluded)) {
+    if (!this.isModalCapture() && (this.forcedInsert || this.excluded)) {
       if (e.key === 'Escape' && this.forcedInsert) {
         this.exitInsertMode();
         e.preventDefault();
@@ -271,7 +305,7 @@ export class KeyHandler {
     // autofocused input on page load doesn't trap the keyboard: press Escape,
     // you're back in Normal mode and `f`/keybinds work. `hint` mode always
     // intercepts (it was entered explicitly).
-    if (this.mode !== 'hint' && isInsertMode()) {
+    if (!this.isModalCapture() && isInsertMode()) {
       if (e.key === 'Escape') {
         const el = document.activeElement;
         if (el instanceof HTMLElement) el.blur();
@@ -286,8 +320,16 @@ export class KeyHandler {
     // the rest of BranchKit's binds keep working (the Gmail case — pass j/k/e,
     // keep f). Normal mode only; hint typing and Ctrl/Cmd chords are unaffected
     // (chords already took the path above). See notes/DESIGN_PASS_THROUGH.md.
-    if (this.mode !== 'hint' && this.passKeys.has(e.key)) {
+    if (!this.isModalCapture() && this.passKeys.has(e.key)) {
       return false;
+    }
+
+    // Caret/visual mode (entered via `v`/`V`): the injected controller owns the
+    // Vim movement alphabet + yank/exit. Like hint mode, it fully captures bare
+    // keys; real-modifier chords already took the fast path above (so Ctrl+C
+    // still copies the visual selection). See notes/DESIGN_MARKS_AND_CARET.md.
+    if (this.caretMode) {
+      return this.onCaretKey ? this.onCaretKey(e) : false;
     }
 
     // Hint mode ONLY (entered via `f`): letters filter/activate the painted

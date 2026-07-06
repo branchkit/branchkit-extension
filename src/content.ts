@@ -61,6 +61,7 @@ import { flashToast } from './render/toast';
 import {
   PREV_POSITION_REGISTERS, isPrevPositionRegister, marksToHash, type StoredMark,
 } from './marks';
+import { CaretController } from './activate/caret';
 import {
   CodewordSnapshot,
   takeSnapshot,
@@ -1201,6 +1202,19 @@ keyHandler.setMarkCallback((op, letter, global) => {
     })
     .catch(() => {});
 });
+
+// Caret / visual mode (Vimium v / V). The controller owns the Selection-API
+// movement + yank; it reports its mode so the KeyHandler capture state and the
+// mode chip stay in lockstep. See notes/DESIGN_MARKS_AND_CARET.md (Part 2).
+const caret = new CaretController({
+  onModeChange: (mode) => {
+    if (mode) keyHandler.enterCaretMode(mode);
+    else keyHandler.exitCaretMode();
+  },
+});
+keyHandler.setCaretKeyHandler((e) => caret.handleKey(e));
+dispatcher.register('caret_mode', () => caret.enter('caret'));
+dispatcher.register('visual_line_mode', () => caret.enter('visual-line'));
 // Pagination — follow the page's next/prev link (Vimium goNext/goPrevious).
 dispatcher.register('go_next', () => navigatePage('next'));
 dispatcher.register('go_previous', () => navigatePage('prev'));

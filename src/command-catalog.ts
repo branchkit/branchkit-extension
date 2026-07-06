@@ -324,6 +324,17 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   { id: 'mark_jump', label: 'Jump to mark', group: 'Marks', mappable: true, params: [],
     description: 'Jump to a mark — press ` then its letter (Shift+letter for a global mark). Press ` twice to return to where you were before the last jump.' },
 
+  // --- Selection (Vimium v / V — caret & visual mode) ---
+  // A keyboard text caret over page content, ending in a yank (copy). The
+  // movement keys (hjkl/w/b/e/0/$/gg/G) are owned by the caret handler, not the
+  // registry — they shadow the Normal-mode binds by design. Keyboard-only;
+  // coarse voice selection ("select word") is a deferred follow-up. See
+  // notes/DESIGN_MARKS_AND_CARET.md (Part 2).
+  { id: 'caret_mode', label: 'Caret / visual mode', group: 'Selection', mappable: true, params: [],
+    description: 'Place a text caret on the page — move with hjkl/w/b, press v to start selecting, y to copy the selection. Esc exits.' },
+  { id: 'visual_line_mode', label: 'Visual line mode', group: 'Selection', mappable: true, params: [],
+    description: 'Start a line-wise selection at the caret — j/k extend by whole lines, y copies. Esc exits.' },
+
   // --- Help ---
   { id: 'toggle_help', label: 'Keyboard help', group: 'Help', mappable: true, params: [],
     description: 'Show or hide this keyboard command reference.',
@@ -459,6 +470,9 @@ export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   // Marks (Vimium m / `) — the next key names the mark
   { keys: 'KeyM', command: 'mark_set' },              // m — set mark
   { keys: 'Backquote', command: 'mark_jump' },        // ` — jump to mark
+  // Selection (Vimium v / V — caret & visual mode)
+  { keys: 'KeyV', command: 'caret_mode' },            // v — caret mode
+  { keys: 'shift+KeyV', command: 'visual_line_mode' },// V — visual line mode
   // Palette / tab palette
   { keys: 'ctrl+KeyK', command: 'toggle_palette' },   // Ctrl+K — full palette (works everywhere)
   { keys: 'shift+KeyT', command: 'toggle_tab_palette' }, // T — tab palette (Vimium-C's tab-search key)
