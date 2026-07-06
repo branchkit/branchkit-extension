@@ -268,8 +268,7 @@ function initShortcutsToggle(): void {
   const url = activeTab?.url ?? '';
   if (!group) return;
   if (!activeHostname()) {
-    document.getElementById('key-shortcuts-setting')?.setAttribute('hidden', '');
-    document.getElementById('key-passthrough-setting')?.setAttribute('hidden', '');
+    document.getElementById('key-rules-section')?.setAttribute('hidden', '');
     return;
   }
   const buttons = Array.from(group.querySelectorAll<HTMLButtonElement>('.seg'));
