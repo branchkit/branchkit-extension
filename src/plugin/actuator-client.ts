@@ -18,6 +18,27 @@ const ACTUATOR_URL = 'http://127.0.0.1:21551';
 let pluginPort: number | null = null;
 let pluginToken: string | null = null;
 
+// Voice-pause gate (notes/DESIGN_VOICE_PAUSE.md). The authoritative paused
+// intent + its persistence live in background.ts's pause lifecycle; this is a
+// single injected mirror it flips at the three sites that change the intent
+// (boot load, pause, resume) — same setter-injection shape as setAlphabet.
+// While paused every outbound path bails: ensureConnected refuses to vouch or
+// rediscover, so postGrammarBatch returns transport failure (badges stay
+// painted, per the flash-loop fix) and the discover-on-miss forwarders no-op.
+// This is the "stop engaging voice" floor — no grammar, references, or
+// diagnostics reach the host while paused, not just a closed stream.
+let voicePaused = false;
+
+export function setVoicePaused(paused: boolean): void {
+  voicePaused = paused;
+  if (paused) {
+    // Drop cached creds so nothing lingers to vouch for a connection the user
+    // asked us to stop maintaining.
+    pluginPort = null;
+    pluginToken = null;
+  }
+}
+
 // Harness isolation (notes/DESIGN_EXTENSION_CONNECTION_HEALTH.md, piece B).
 // Test harnesses copy dist/ and drop a `harness.json` marker into the copy;
 // its presence makes this extension deterministically standalone — no
@@ -72,6 +93,7 @@ export function getPluginToken(): string | null {
  * endpoint. Caches the connection and returns true on success.
  */
 export async function discoverPlugin(): Promise<boolean> {
+  if (voicePaused) return false;
   if (await isDiscoveryDisabled()) return false;
   try {
     const resp = await fetch(`${ACTUATOR_URL}/v1/plugins/browser/status`);
@@ -115,6 +137,7 @@ let lastFailedDiscoveryAt = 0;
 /** True if connected; discovers on miss (single-flight, negative-cached).
  * Use before a forward that should lazily reconnect. */
 export async function ensureConnected(): Promise<boolean> {
+  if (voicePaused) return false;
   if (pluginPort && pluginToken) return true;
   if (discoveryInFlight) return discoveryInFlight;
   if (Date.now() - lastFailedDiscoveryAt < DISCOVERY_NEGATIVE_TTL_MS) return false;

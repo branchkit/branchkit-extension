@@ -14,7 +14,7 @@ import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearStack, cl
 import { setAlphabet, tokenToSpokenCodeword, spokenCodewordToToken } from './labels/words';
 import { buildCommandContributions } from './command-catalog';
 import { rememberCodewords, clearCodewordMemory, recallCodewords } from './labels/codeword-memory';
-import { discoverPlugin, ensureConnected, postToPlugin, getFromPlugin, getPluginPort, getPluginToken, getActuatorJson } from './plugin/actuator-client';
+import { discoverPlugin, ensureConnected, postToPlugin, getFromPlugin, getPluginPort, getPluginToken, getActuatorJson, setVoicePaused } from './plugin/actuator-client';
 import { buildReconcileReport, type ReconcileWrapper, type ReconcileReport, type MatchableView } from './debug/reconcile';
 import { cycleTabIndex } from './background/tab-nav';
 import { setLocalMark, getLocalMark, setGlobalMark, gotoGlobalMark } from './background/marks';
@@ -51,6 +51,18 @@ let directSSEUrl: string | null = null;
 let sseRetryTimer: ReturnType<typeof setTimeout> | null = null;
 const sseBackoff = new SSEBackoff();
 
+// Voice-pause intent (notes/DESIGN_VOICE_PAUSE.md). A standing user choice to
+// stop the browser engaging voice while keeping hints + keyboard live —
+// persisted in chrome.storage.local (per-machine, like the alphabet + mirror),
+// sticky until explicitly un-paused. The SW's authoritative copy; loaded at
+// init() before any auto-connect decision. Every auto-connect entry point
+// (init, the connection-check alarm, permissions.onAdded) and the retry ladder
+// respect it; the actuator-client transport gate (setVoicePaused) enforces it
+// for outbound traffic. Distinct from the transient branchkitConnected: paused
+// is intent, connected is reality, and paused implies not-connected.
+const VOICE_PAUSED_KEY = 'voicePaused';
+let voicePaused = false;
+
 function clearSSERetryTimer(): void {
   if (sseRetryTimer) {
     clearTimeout(sseRetryTimer);
@@ -59,6 +71,9 @@ function clearSSERetryTimer(): void {
 }
 
 function scheduleSSERetry(): void {
+  // Never chase a reconnect the user paused — the single defensive choke for
+  // the retry ladder, so a stray disconnect event can't re-arm it.
+  if (voicePaused) return;
   if (sseRetryTimer) return;
   sseRetryTimer = setTimeout(async () => {
     sseRetryTimer = null;
@@ -104,6 +119,10 @@ function updateConnectionBadge(connected: boolean): void {
 // idempotent (same rotate+re-Put as every tab focus) and connects are rare.
 // See notes/DESIGN_SSE_RESILIENCE.md (1).
 function onSSEConnected(): void {
+  // Paused wins over a stray connect. Pause tears the stream down and stops
+  // the retry ladder, but a superseded offscreen instance could still emit one
+  // late HEALTH_STATUS(true); honoring it would re-open voice the user paused.
+  if (voicePaused) return;
   bgState.branchkitConnected = true;
   updateConnectionBadge(true);
   // Mirror for content scripts (paint only — see plugin/connection-mirror.ts):
@@ -138,10 +157,19 @@ function onSSEConnected(): void {
 }
 
 function onSSEDisconnected(): void {
+  markConnectionDown();
+  scheduleSSERetry();
+}
+
+// The connected→down flip shared by the stream drop (onSSEDisconnected) and a
+// deliberate pause (pauseVoice). Flag + toolbar badge + the content-facing
+// paint mirror, kept together so the mirror write can't be forgotten on one
+// path. Does NOT arm the retry ladder — that's the caller's call (the drop
+// re-arms; pause must not).
+function markConnectionDown(): void {
   bgState.branchkitConnected = false;
   updateConnectionBadge(false);
   void chrome.storage.local.set({ branchkitConnected: false });
-  scheduleSSERetry();
 }
 
 function rescanActiveTab(): void {
@@ -813,6 +841,46 @@ function notifyOffscreenConnect(): void {
   }).catch(() => {});
 }
 
+// Close whichever SSE this engine holds. Chrome delegates to the offscreen
+// document (which owns the EventSource); Firefox holds it directly. Closing
+// via close() fires no onerror, so no HEALTH_STATUS(false) bounces back — the
+// caller (pauseVoice) flips the connection-down state itself.
+function teardownSSE(): void {
+  if (hasOffscreenAPI) {
+    chrome.runtime.sendMessage({ type: 'DISCONNECT_SSE' }).catch(() => {});
+  } else if (directSSE) {
+    directSSE.close();
+    directSSE = null;
+    directSSEUrl = null;
+  }
+}
+
+// --- Voice pause (notes/DESIGN_VOICE_PAUSE.md) ---
+
+// Enter the paused state: a standing choice to stop engaging voice. Tears the
+// stream down, gates outbound transport, flips the connection-down paint
+// mirror, and — crucially — does NOT arm the retry ladder. Sticky: persisted
+// so an SW restart (init) honors it instead of auto-connecting.
+async function pauseVoice(): Promise<void> {
+  voicePaused = true;
+  setVoicePaused(true);        // gate outbound transport + drop cached creds
+  clearSSERetryTimer();
+  teardownSSE();
+  markConnectionDown();        // flag + badge + mirror false (no retry)
+  await chrome.storage.local.set({ [VOICE_PAUSED_KEY]: true });
+}
+
+// Leave the paused state and resume the normal boot path: discover, and either
+// bring the stream up or arm the retry ladder if the host isn't there yet.
+async function resumeVoice(): Promise<void> {
+  voicePaused = false;
+  setVoicePaused(false);
+  await chrome.storage.local.set({ [VOICE_PAUSED_KEY]: false });
+  const found = await discoverPlugin();
+  if (found) connectSSE();
+  else scheduleSSERetry();
+}
+
 // --- Firefox: Direct SSE in background script ---
 
 function connectDirectSSE(port: number, token: string): void {
@@ -884,6 +952,11 @@ function connectDirectSSE(port: number, token: string): void {
 // --- SSE Event Handling (shared by both paths) ---
 
 function handleSSEEvent(data: any): void {
+  // Paused: drop any action from a stream that outlived the teardown (a
+  // surviving offscreen doc, an in-flight event mid-pause). Voice must not act
+  // while the user has it paused. The stream is torn down on pause and on a
+  // paused wake, so this is defense-in-depth for the race window.
+  if (voicePaused) return;
   // Tab verbs are handled here, not forwarded to content: they act on
   // chrome.tabs regardless of what page is focused (content scripts can't
   // reach the API, and the active page may not even have one).
@@ -1291,8 +1364,21 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   }
 
   if (message.type === 'GET_HEALTH') {
-    sendResponse({ branchkit: bgState.branchkitConnected });
+    // Three states the popup renders distinctly: connected, paused-by-choice,
+    // and not-detected. `paused` lets it show "Voice paused" instead of
+    // inferring "not detected" while the host may well be running.
+    sendResponse({ branchkit: bgState.branchkitConnected, paused: voicePaused });
     return false;
+  }
+
+  if (message.type === 'SET_VOICE_PAUSED') {
+    // Popup toggle. Await the lifecycle so the response reflects the settled
+    // state (the popup re-reads status right after).
+    const fn = message.paused ? pauseVoice : resumeVoice;
+    fn()
+      .then(() => sendResponse({ paused: voicePaused, branchkit: bgState.branchkitConnected }))
+      .catch(() => sendResponse({ paused: voicePaused, branchkit: bgState.branchkitConnected }));
+    return true; // async response
   }
 
   // Per-tab label pool. Only trust messages from a content script in a tab —
@@ -1737,6 +1823,23 @@ async function init(): Promise<void> {
   // can't cause a clobber — but it keeps the focus signal accurate from boot.
   await resolveActiveContentTab();
 
+  // Voice-pause intent (sticky across SW restart). Load BEFORE any auto-connect
+  // decision and honor it: a paused SW must not discover or connect on wake.
+  // Sync the transport gate and the content-facing mirror so a wake in the
+  // paused state presents identically to the pause action — opaque badges, no
+  // grammar traffic — without a flicker of connection.
+  const paused = await chrome.storage.local.get(VOICE_PAUSED_KEY);
+  voicePaused = paused[VOICE_PAUSED_KEY] === true;
+  setVoicePaused(voicePaused);
+  if (voicePaused) {
+    // Close any stream that survived a pre-restart connection into this wake
+    // (the offscreen document can outlive the SW). No-op if none exists — we
+    // don't spin up an offscreen doc just to tear nothing down.
+    teardownSSE();
+    markConnectionDown();
+    return;
+  }
+
   const found = await discoverPlugin();
 
   if (hasOffscreenAPI) {
@@ -1869,6 +1972,7 @@ chrome.alarms.create('connection-check', { periodInMinutes: 0.5 });
 // just-granted permission should feel instant. Chrome grants host
 // permissions at install, so this listener never fires there in practice.
 chrome.permissions?.onAdded?.addListener(async (added) => {
+  if (voicePaused) return; // a just-granted permission must not override a pause
   if (bgState.branchkitConnected) return;
   if (!added.origins?.length) return;
   const found = await discoverPlugin();
@@ -1876,6 +1980,9 @@ chrome.permissions?.onAdded?.addListener(async (added) => {
 });
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'connection-check') {
+    // Paused: the safety net's whole job is keeping a connection alive, so it
+    // has nothing to do. No probe, no retry.
+    if (voicePaused) return;
     if (hasOffscreenAPI) {
       await ensureOffscreen();
       if (bgState.branchkitConnected && !(await probeOffscreenSSE())) {

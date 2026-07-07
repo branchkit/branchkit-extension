@@ -162,6 +162,10 @@ export type Message =
   | { type: 'GRAMMAR_PUSH'; elements: ScannedElement[] }
   | { type: 'GET_HEALTH' }
   | { type: 'CONNECT_SSE'; port: number; token: string; connId: string }
+  // Voice pause (notes/DESIGN_VOICE_PAUSE.md). Popup → background toggles the
+  // sticky paused intent; background → offscreen tears the stream down.
+  | { type: 'SET_VOICE_PAUSED'; paused: boolean }
+  | { type: 'DISCONNECT_SSE' }
   // Content → background, after handling a BRANCHKIT_ACTION. Background
   // forwards to the browser plugin's POST /dispatch-result so the actuator
   // log carries end-to-end visibility (voice → match → dispatch → frame

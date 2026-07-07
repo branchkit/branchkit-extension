@@ -1,8 +1,16 @@
 # Design: Pause voice (manual disconnect)
 
-**Status:** Proposal (2026-07-07). No code yet. Behavior spec + implementation
-sketch for a user-facing "pause voice" toggle in the popup. Builds directly on
-the connection-mirror work landed the same day (see "Substrate" below).
+**Status:** IMPLEMENTED (2026-07-07). Behavior spec for the user-facing "pause
+voice" toggle in the popup. Built on the connection-mirror work landed the same
+day (see "Substrate" below). Live verify pending.
+
+**Landed as:** actuator-client transport gate (`setVoicePaused` + `voicePaused`
+checks in `discoverPlugin`/`ensureConnected`); background pause lifecycle
+(`pauseVoice`/`resumeVoice`/`teardownSSE`, sticky `voicePaused` loaded in
+`init()`, guards on the retry ladder / connection-check alarm /
+`permissions.onAdded` / `onSSEConnected` / `handleSSEEvent`, `SET_VOICE_PAUSED`
+message, `GET_HEALTH` gains `paused`); offscreen `DISCONNECT_SSE`; popup
+"Voice: On / Paused" toggle + "Voice paused" status state.
 
 **Goal:** Let a user who is running BranchKit deliberately stop the browser
 extension from engaging voice — while keeping hints + keyboard fully live —

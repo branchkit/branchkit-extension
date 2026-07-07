@@ -94,3 +94,33 @@ describe('ensureConnected', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1); // no second status fetch
   });
 });
+
+describe('voice pause gate', () => {
+  it('setVoicePaused(true) makes ensureConnected refuse and drops cached creds', async () => {
+    fetchMock.mockResolvedValueOnce(statusOk());
+    await mod.ensureConnected();
+    expect(mod.getPluginToken()).not.toBeNull();
+
+    mod.setVoicePaused(true);
+    expect(mod.getPluginPort()).toBeNull();   // cached creds dropped
+    expect(mod.getPluginToken()).toBeNull();
+
+    fetchMock.mockClear();
+    expect(await mod.ensureConnected()).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled(); // no rediscovery while paused
+  });
+
+  it('paused discoverPlugin bails before fetching', async () => {
+    mod.setVoicePaused(true);
+    expect(await mod.discoverPlugin()).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('resume (setVoicePaused(false)) restores normal discovery', async () => {
+    mod.setVoicePaused(true);
+    mod.setVoicePaused(false);
+    fetchMock.mockResolvedValueOnce(statusOk(999, 'back'));
+    expect(await mod.ensureConnected()).toBe(true);
+    expect(mod.getPluginToken()).toBe('back');
+  });
+});

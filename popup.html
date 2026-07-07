@@ -55,6 +55,7 @@
     }
     .dot.connected { background: var(--ok); }
     .dot.disconnected { background: var(--danger); }
+    .dot.paused { background: #9e9e9e; }
 
     /* --- Live "this page" readout --- */
     .readout {
@@ -432,6 +433,15 @@
   <div class="readout" id="readout" hidden>
     <span class="readout-dot" id="readout-dot"></span>
     <span id="readout-text"></span>
+  </div>
+
+  <div class="setting" id="voice-pause-setting" hidden
+       title="Pause voice to stop this browser engaging BranchKit. Hints and keyboard keep working and badges stay visible — only spoken control stops. Stays paused until you switch it back on.">
+    <label>Voice</label>
+    <div class="segmented" id="voice-pause" role="radiogroup" aria-label="Voice">
+      <button class="seg active" data-value="on" role="radio">On</button>
+      <button class="seg" data-value="off" role="radio">Paused</button>
+    </div>
   </div>
 
   <div class="setting">

@@ -71,6 +71,17 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     connect(message.port, message.token, message.connId ?? '');
     return false;
   }
+  // Voice pause (notes/DESIGN_VOICE_PAUSE.md): close the stream on request.
+  // close() fires no onerror, so no HEALTH_STATUS(false) bounces to the SW —
+  // pauseVoice flips the connection-down state itself. Nulling `source` also
+  // makes the SSE_STATUS probe report not-connected.
+  if (message.type === 'DISCONNECT_SSE') {
+    if (source) {
+      source.close();
+      source = null;
+    }
+    return false;
+  }
   // Liveness probe from the SW's connection-check alarm: report whether the
   // stream is actually OPEN. The SW treats no-answer as dead, so this must
   // stay synchronous. See notes/DESIGN_SSE_RESILIENCE.md (4).

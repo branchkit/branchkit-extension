@@ -54,20 +54,50 @@ let draftRuleId: string | null = null;
 // install, so the blocked state never shows there.
 const HOST_ORIGIN = 'http://127.0.0.1/*';
 
+// Once the pause toggle has been shown (because we were connected or paused on
+// open, or the user interacted), keep it visible for the life of this popup so
+// a resume's brief connecting gap doesn't flicker it out from under the cursor.
+// The popup is ephemeral, so "sticky for this open" is the whole scope.
+let voiceToggleShown = false;
+
+function setVoicePauseToggle(paused: boolean): void {
+  const setting = document.getElementById('voice-pause-setting')!;
+  setting.hidden = false;
+  voiceToggleShown = true;
+  const buttons = setting.querySelectorAll<HTMLButtonElement>('.seg');
+  for (const b of buttons) {
+    const active = (b.dataset.value === 'off') === paused;
+    b.classList.toggle('active', active);
+    b.setAttribute('aria-checked', String(active));
+  }
+}
+
 async function checkStatus(): Promise<void> {
   const dot = document.getElementById('dot')!;
   const text = document.getElementById('status-text')!;
   const grantBtn = document.getElementById('grant-access') as HTMLButtonElement | null;
+  const pauseSetting = document.getElementById('voice-pause-setting')!;
   if (grantBtn) grantBtn.hidden = true;
 
   try {
     const resp = await chrome.runtime.sendMessage({ type: 'GET_HEALTH' });
+    if (resp?.paused) {
+      // Paused by choice — an explicit state, never "not detected".
+      dot.className = 'dot paused';
+      text.textContent = 'Voice paused';
+      setVoicePauseToggle(true);
+      return;
+    }
     if (resp?.branchkit) {
       dot.className = 'dot connected';
       text.textContent = 'Connected to BranchKit';
+      setVoicePauseToggle(false);
       return;
     }
+    // Standalone: nothing to pause. Hide the toggle unless a resume-in-progress
+    // already surfaced it this open (voiceToggleShown), to avoid the flicker.
     dot.className = 'dot disconnected';
+    if (!voiceToggleShown) pauseSetting.hidden = true;
     let hasHostAccess = true;
     try {
       hasHostAccess = await chrome.permissions.contains({ origins: [HOST_ORIGIN] });
@@ -81,6 +111,28 @@ async function checkStatus(): Promise<void> {
   } catch {
     dot.className = 'dot disconnected';
     text.textContent = 'Extension error';
+  }
+}
+
+// The voice On/Paused toggle. Unlike the sync-key segmented controls, this
+// drives the SW's pause lifecycle (SET_VOICE_PAUSED) — which tears down /
+// re-establishes the connection — and the SW owns the persisted flag. Poll
+// checkStatus after so the dot/text settle once the stream comes up (resume)
+// or the teardown lands (pause), mirroring the grant button's poll.
+function initVoicePauseToggle(): void {
+  const setting = document.getElementById('voice-pause-setting')!;
+  const text = document.getElementById('status-text')!;
+  for (const b of setting.querySelectorAll<HTMLButtonElement>('.seg')) {
+    b.addEventListener('click', async () => {
+      const paused = b.dataset.value === 'off';
+      setVoicePauseToggle(paused);           // optimistic
+      text.textContent = paused ? 'Pausing…' : 'Connecting…';
+      try {
+        await chrome.runtime.sendMessage({ type: 'SET_VOICE_PAUSED', paused });
+      } catch { /* SW asleep/among reloads — the poll below re-reads truth */ }
+      checkStatus();
+      setTimeout(checkStatus, 1_200);
+    });
   }
 }
 
@@ -667,6 +719,7 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
 async function init(): Promise<void> {
   checkStatus();
   initGrantButton();
+  initVoicePauseToggle();
   initSyncedSegmented('hint-visibility', 'hintVisibility');
   initSyncedSegmented('hint-mode', 'badgeDisplayMode', migrateDisplayMode);
   initSyncedSegmentedBool('tab-markers', 'tabMarkersEnabled', true);
