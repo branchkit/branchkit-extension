@@ -16,9 +16,15 @@ matcher's tag-gating needs a live host to confirm. Phase 5
 element — completing the pure-voice flow (pick by voice → drive by voice → "copy
 that"). Extension-only (the voice verb rides the generic `{hint}` contribution
 path). Verified 7/7 in `scripts/_verify-hint-actions.mjs` (`gv` + codeword →
-caret at the link, extend+yank captures its text). **Deferred:** phase 3b (move
-hover's voice contribution from the plugin into the extension catalog —
-cross-repo).
+caret at the link, extend+yank captures its text). Phase 3b (**hover contribution
+consolidation**): hover's voice ("hover {hint}") moved from the plugin's bespoke
+`collections.go` command into the extension catalog (`hover_hint`,
+`retainsHints:true`) via the generic `{hint}` path — so every badge verb now
+lives in one place. The plugin's manual hover block is deleted; the generic path
+even improves it (uses the `_strict` voice-matchable suffix like the other
+verbs). Plugin `grammar_test.go` count 6→5. Keyboard hover re-verified (7/7);
+live "hover {codeword}" voice match needs a host. **All phases (1–5 + 3b)
+complete.**
 
 Vimium's "hint modes": a badge you
 pick can do more than click — hover it, focus it, copy it, start a selection at

@@ -262,11 +262,14 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   { id: 'copytext_hint', label: 'Copy a badge’s text', group: 'Badges', mappable: true, params: [],
     description: 'Copy a badge’s visible text (not its URL). Say "copy text" then its codeword, or press the key then type a letter.',
     voice: [{ pattern: 'copy text {hint}' }] },
-  // Keyboard-only for now: the voice twin ("hover {hint}") is still contributed
-  // by the browser plugin. Consolidating it into this catalog entry is the
-  // deferred phase-3b cleanup (notes/DESIGN_HINT_ACTION_MODES.md).
+  // retainsHints: hover doesn't follow/clear — badges stay up so the user can
+  // chain a command on whatever the hover exposed. Voice contributed here (not
+  // plugin-side) so every badge verb lives in one place (was the phase-3b
+  // split-contribution cleanup; notes/DESIGN_HINT_ACTION_MODES.md).
   { id: 'hover_hint', label: 'Hover a badge', group: 'Badges', mappable: true, params: [],
-    description: 'Hover a badge’s element to reveal menus or controls without clicking it. Press the key then type a letter. (Voice: say "hover" then the codeword.)' },
+    description: 'Hover a badge’s element to reveal menus or controls without clicking it. Say "hover" then its codeword, or press the key then type a letter.',
+    voice: [{ pattern: 'hover {hint}' }],
+    retainsHints: true },
   { id: 'caret_hint', label: 'Select from a badge', group: 'Badges', mappable: true, params: [],
     description: 'Start a text selection at a badge’s element — say "select" then its codeword (or press the key then type a letter), then drive the selection by keyboard (hjkl/y) or voice ("select word" / "copy that").',
     voice: [{ pattern: 'select {hint}' }] },

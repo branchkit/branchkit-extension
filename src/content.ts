@@ -3417,7 +3417,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         detail,
         fp,
       });
-    } else if (action === 'hover' || action === 'focus_hint' || action === 'copytext_hint' || action === 'caret_hint') {
+    } else if (action === 'hover_hint' || action === 'focus_hint' || action === 'copytext_hint' || action === 'caret_hint') {
       // Element-verb voice actions (Vimium hint modes): resolve the codeword to
       // a wrapper and act ON it without following it —
       //   hover        → pointer-in event sequence (pointerover/enter/move +
@@ -3453,7 +3453,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       if (target instanceof HTMLElement) {
         store.findWrapperFor(target)?.hint?.flash();
         let detail = '';
-        if (action === 'hover') {
+        if (action === 'hover_hint') {
           dispatchHover(target);
           detail = 'hover dispatched';
         } else if (action === 'focus_hint') {
