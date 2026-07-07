@@ -703,16 +703,36 @@ async function doSyncNow(reason: string): Promise<void> {
   for (let start = 0; start < puts.length; start += DEFAULT_SCAN_BATCH_SIZE) {
     chunks.push(puts.slice(start, Math.min(start + DEFAULT_SCAN_BATCH_SIZE, puts.length)));
   }
-  let refused = false;
+  let halted = false;
 
   const handleResponse = (chunk: ElementWrapper[], resp: GrammarBatchResponse, deletesRiding: string[], isLast: boolean): void => {
+    if (resp.result === 'error') {
+      // Transport failure ('error' is synthetic — the SW's transportFailure
+      // or a failed sendMessage; the plugin only answers ok/stored/
+      // calibration_active). The plugin never saw this chunk, so its
+      // per-codeword `failed` list describes nothing the plugin decided —
+      // detaching on it is what turned "BranchKit closed" into a
+      // paint→detach→rediscover→repaint flash loop on every live page.
+      // Keep the wrappers painted (bk-pending carries voice-not-live;
+      // typing works regardless), re-queue their Puts, and stop dispatching
+      // further chunks (they'd fail the same way). postBatch already
+      // restored any deletes that rode this chunk. No retry timer:
+      // convergence comes from the next churn-triggered sync, the liveness
+      // onResync after an SW restart, or the sse_connect reactivate
+      // (rotate + full re-Put) once the host returns — a timer here would
+      // hammer forever in the standalone-with-stale-alphabet steady state.
+      halted = true;
+      for (const w of chunk) pendingPuts.add(w);
+      bkLog('BK_SYNC_TRANSPORT_FAILED', { requeued: chunk.length, deletes: deletesRiding.length });
+      return;
+    }
     if (isWholesaleRefusal(resp)) {
       // Applied nothing (calibration). Re-queue this chunk's puts, stop
       // dispatching further chunks, and retry once calibration releases
       // (postBatch already restored any deletes that rode it).
       // Already-in-flight siblings settle through this same handler and
       // re-queue themselves too.
-      refused = true;
+      halted = true;
       for (const w of chunk) pendingPuts.add(w);
       bkLog('BK_SYNC_REFUSED', {
         result: resp.result, requeued: chunk.length, deletes: deletesRiding.length,
@@ -788,19 +808,36 @@ async function doSyncNow(reason: string): Promise<void> {
     handleResponse(chunk, resp, deletesRiding, isLast);
   };
 
+  // A halt (refusal or transport failure) leaves chunks that were never
+  // dispatched: their puts were drained from pendingPuts at the top of this
+  // sync but no handleResponse will ever re-queue them — without this they
+  // silently vanish from the delta, stranding painted badges unmatchable
+  // until an unrelated rotation. Dispatched chunks re-queue themselves in
+  // handleResponse; this covers only the ones the halt short-circuited.
+  const requeueUndispatched = (fromIndex: number): void => {
+    for (const c of chunks.slice(fromIndex)) {
+      for (const w of c) pendingPuts.add(w);
+    }
+  };
+
   // Batch 0 (carries the deletes) alone and awaited — a freed letter
   // reused by a later chunk's Put must see its Delete applied first.
   await postChunk(0, chunks.length === 1);
-  if (refused || chunks.length === 1) { void reason; return; }
+  if (halted || chunks.length === 1) {
+    if (halted) requeueUndispatched(1);
+    void reason;
+    return;
+  }
 
   // Middle chunks in parallel; the final chunk waits for all of them so
   // is_final genuinely arrives last (epoch finalization).
   if (chunks.length > 2) {
     await Promise.all(
-      chunks.slice(1, -1).map((_, i) => refused ? Promise.resolve() : postChunk(i + 1, false)),
+      chunks.slice(1, -1).map((_, i) => halted ? Promise.resolve() : postChunk(i + 1, false)),
     );
   }
-  if (!refused) await postChunk(chunks.length - 1, true);
+  if (!halted) await postChunk(chunks.length - 1, true);
+  else requeueUndispatched(chunks.length - 1);
 
   void reason;
 }

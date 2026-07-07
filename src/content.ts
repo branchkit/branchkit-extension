@@ -2550,6 +2550,32 @@ async function processScanBatch(
     elements: candidates.map(w => w.scanned),
   });
 
+  // Transport failure (result 'error' is synthetic — the SW's
+  // transportFailure or a failed sendMessage; the plugin only ever answers
+  // ok/stored/calibration_active): the plugin never saw the batch, so this
+  // is not a rejection and the rollback below must not run. Detaching here
+  // is what made hints FLASH whenever BranchKit was closed with a persisted
+  // voice alphabet: paint → failed POST → detach → the reconcile/MO
+  // machinery rediscovers the bare elements → repaint → fail again. Keep
+  // the wrappers attached and painted (bk-pending carries the voice-not-
+  // live signal; typing works regardless — the extension-independence
+  // contract) and queue their Puts. Convergence when voice returns needs no
+  // retry timer: the sse_connect reactivate and the liveness onResync both
+  // rotate + re-queue every live codeworded wrapper.
+  if (resp.result === 'error') {
+    for (const w of candidates) {
+      if (w.scanned.codeword === '' || store.findWrapperFor(w.element) !== w) continue;
+      if (!w.element.isConnected) {
+        // Disconnected during the round-trip; never sent, so a plain
+        // detach (no plugin-side Delete) is correct.
+        detachWrapper(w.element);
+        continue;
+      }
+      queuePut(w);
+    }
+    return;
+  }
+
   // Response partitioning — solidify or roll back. The wrapper may have
   // been detached (MO removal, dedup by a later scan) or its element
   // disconnected during the round-trip, so revalidate store ownership

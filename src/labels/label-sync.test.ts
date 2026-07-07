@@ -262,6 +262,134 @@ describe('pipelined delete accounting (audit 2026-07-04)', () => {
   });
 });
 
+describe('syncNow transport failure keeps wrappers (BranchKit down)', () => {
+  // The flash-loop bug (2026-07-06): with a persisted voice alphabet and the
+  // host down, every GRAMMAR_BATCH came back as the SW's synthetic
+  // result:'error' with all elements in `failed` — and the per-codeword
+  // failure path detached every freshly painted wrapper. The reconcile/MO
+  // machinery then rediscovered the bare elements, repainted, failed again:
+  // visible badge flashing whenever BranchKit was closed. Transport failure
+  // now keeps the wrappers painted and re-queues their puts; only a genuine
+  // plugin response may detach.
+  let store: WrapperStore;
+  let sendMessage: ReturnType<typeof vi.fn>;
+  let detachWrapper: ReturnType<typeof vi.fn>;
+  // Scripted per-batch behavior; the last entry repeats. 'echo' answers ok
+  // with every requested codeword.
+  let script: ('error' | 'reject' | 'echo')[];
+
+  const batchCalls = () =>
+    sendMessage.mock.calls.filter((c) => c[0]?.type === 'GRAMMAR_BATCH');
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    setAlphabet(ALPHABET);
+    store = new WrapperStore();
+    script = [];
+    detachWrapper = vi.fn();
+    sendMessage = vi.fn((msg: { type: string; request?: { elements: ScannedElement[] } }) => {
+      if (msg.type !== 'GRAMMAR_BATCH') return Promise.resolve(undefined);
+      const step = script.length > 1 ? script.shift()! : script[0];
+      if (step === 'reject') return Promise.reject(new Error('sw unreachable'));
+      if (step === 'error') {
+        // The SW's transportFailure shape: synthetic result:'error' with
+        // every element in failed, reason 'transport'.
+        return Promise.resolve({
+          result: 'error',
+          succeeded: [],
+          failed: msg.request!.elements.map((e) => ({ codeword: e.codeword, reason: 'transport' })),
+        });
+      }
+      return Promise.resolve(ok(msg.request!.elements.map((e) => e.codeword)));
+    });
+    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+    initLabelSync({
+      store,
+      detachWrapper,
+      reconcile: vi.fn(),
+      isBadgesVisible: () => false,
+      republishAll: vi.fn(),
+    });
+    rotateSession();
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = '';
+  });
+
+  async function runSync(): Promise<void> {
+    const p = syncNow('test');
+    // Flush the chunk loop's setTimeout(0) yields under fake timers.
+    await vi.advanceTimersByTimeAsync(10);
+    await p;
+  }
+
+  it('does not detach on the SW transportFailure response; the put re-queues and ships on the next sync', async () => {
+    const w = makeWrapper('arch', store);
+    queuePut(w);
+    script = ['error', 'echo'];
+
+    await runSync();
+    expect(batchCalls()).toHaveLength(1);
+    expect(detachWrapper).not.toHaveBeenCalled();
+    expect(w.grammarReady).toBe(false);
+    expect(hasSent('arch')).toBe(false);
+
+    // No retry timer for transport failures (it would hammer forever while
+    // BranchKit stays closed) — the put waits for the next churn-driven sync
+    // or the reconnect reactivate.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(batchCalls()).toHaveLength(1);
+
+    await runSync();
+    expect(batchCalls()).toHaveLength(2);
+    const second = batchCalls()[1][0].request;
+    expect(second.elements.map((e: ScannedElement) => e.codeword)).toContain('arch');
+    expect(w.grammarReady).toBe(true);
+    expect(hasSent('arch')).toBe(true);
+  });
+
+  it('a sendMessage rejection (SW restarting) behaves the same', async () => {
+    const w = makeWrapper('bake', store);
+    queuePut(w);
+    script = ['reject', 'echo'];
+
+    await runSync();
+    expect(detachWrapper).not.toHaveBeenCalled();
+    expect(w.grammarReady).toBe(false);
+
+    await runSync();
+    expect(w.grammarReady).toBe(true);
+  });
+
+  it('a chunk-0 transport failure halts the pipeline and re-queues the undispatched chunks too', async () => {
+    // 16 puts → two chunks (batch size 15). Chunk 0 fails on transport, so
+    // the final chunk never dispatches — its puts were drained at the top of
+    // the sync and no handleResponse will re-queue them. Pre-fix they
+    // silently vanished from the delta (painted badges unmatchable until an
+    // unrelated rotation).
+    const wrappers = ALPHABET.slice(0, 16).map((cw) => {
+      const w = makeWrapper(cw, store);
+      queuePut(w);
+      return w;
+    });
+    script = ['error', 'echo'];
+
+    await runSync();
+    expect(batchCalls()).toHaveLength(1); // halted after chunk 0
+    expect(detachWrapper).not.toHaveBeenCalled();
+
+    await runSync();
+    const resent = batchCalls().slice(1).flatMap(
+      (c) => c[0].request.elements.map((e: ScannedElement) => e.codeword));
+    expect(new Set(resent)).toEqual(new Set(ALPHABET.slice(0, 16)));
+    for (const w of wrappers) expect(w.grammarReady).toBe(true);
+  });
+});
+
 // --- Grammar epoch handshake (Phases 2a+2b of DESIGN_GRAMMAR_EPOCH_HANDSHAKE.md) ---
 
 import { grammarEpochStats, resetGrammarEpochActForTest } from './label-sync';
