@@ -54,29 +54,38 @@ let draftRuleId: string | null = null;
 // install, so the blocked state never shows there.
 const HOST_ORIGIN = 'http://127.0.0.1/*';
 
-// Once the pause toggle has been shown (because we were connected or paused on
-// open, or the user interacted), keep it visible for the life of this popup so
-// a resume's brief connecting gap doesn't flicker it out from under the cursor.
-// The popup is ephemeral, so "sticky for this open" is the whole scope.
-let voiceToggleShown = false;
+// The Voice row has two faces: the interactive On/Paused control (connected or
+// paused) and a read-only "Off" (BranchKit not detected — nothing to pause,
+// voice just isn't available). Once we've shown the interactive control this
+// popup open, keep showing it — a resume's brief connecting gap reports
+// not-detected transiently, and downgrading to "Off" under the cursor would
+// flicker. The popup is ephemeral, so "sticky for this open" is the whole scope.
+let voiceInteractive = false;
 
-function setVoicePauseToggle(paused: boolean): void {
-  const setting = document.getElementById('voice-pause-setting')!;
-  setting.hidden = false;
-  voiceToggleShown = true;
-  const buttons = setting.querySelectorAll<HTMLButtonElement>('.seg');
-  for (const b of buttons) {
+// Show the interactive On/Paused control (BranchKit connected or paused).
+function showVoiceInteractive(paused: boolean): void {
+  document.getElementById('voice-pause-setting')!.hidden = false;
+  document.getElementById('voice-pause')!.hidden = false;
+  document.getElementById('voice-off')!.hidden = true;
+  voiceInteractive = true;
+  for (const b of document.querySelectorAll<HTMLButtonElement>('#voice-pause .seg')) {
     const active = (b.dataset.value === 'off') === paused;
     b.classList.toggle('active', active);
     b.setAttribute('aria-checked', String(active));
   }
 }
 
+// Show the read-only Off (BranchKit not detected — nothing to pause).
+function showVoiceOff(): void {
+  document.getElementById('voice-pause-setting')!.hidden = false;
+  document.getElementById('voice-pause')!.hidden = true;
+  document.getElementById('voice-off')!.hidden = false;
+}
+
 async function checkStatus(): Promise<void> {
   const dot = document.getElementById('dot')!;
   const text = document.getElementById('status-text')!;
   const grantBtn = document.getElementById('grant-access') as HTMLButtonElement | null;
-  const pauseSetting = document.getElementById('voice-pause-setting')!;
   if (grantBtn) grantBtn.hidden = true;
 
   try {
@@ -85,19 +94,20 @@ async function checkStatus(): Promise<void> {
       // Paused by choice — an explicit state, never "not detected".
       dot.className = 'dot paused';
       text.textContent = 'Voice paused';
-      setVoicePauseToggle(true);
+      showVoiceInteractive(true);
       return;
     }
     if (resp?.branchkit) {
       dot.className = 'dot connected';
       text.textContent = 'Connected to BranchKit';
-      setVoicePauseToggle(false);
+      showVoiceInteractive(false);
       return;
     }
-    // Standalone: nothing to pause. Hide the toggle unless a resume-in-progress
-    // already surfaced it this open (voiceToggleShown), to avoid the flicker.
+    // Standalone: nothing to pause — show the read-only Off. But if we've
+    // already shown the interactive control this open (e.g. a resume in
+    // progress reporting not-detected transiently), keep it to avoid flicker.
     dot.className = 'dot disconnected';
-    if (!voiceToggleShown) pauseSetting.hidden = true;
+    if (!voiceInteractive) showVoiceOff();
     let hasHostAccess = true;
     try {
       hasHostAccess = await chrome.permissions.contains({ origins: [HOST_ORIGIN] });
@@ -120,12 +130,13 @@ async function checkStatus(): Promise<void> {
 // checkStatus after so the dot/text settle once the stream comes up (resume)
 // or the teardown lands (pause), mirroring the grant button's poll.
 function initVoicePauseToggle(): void {
-  const setting = document.getElementById('voice-pause-setting')!;
   const text = document.getElementById('status-text')!;
-  for (const b of setting.querySelectorAll<HTMLButtonElement>('.seg')) {
+  // Scope to the interactive control only — the read-only Off segment is
+  // `disabled` and lives in a separate container.
+  for (const b of document.querySelectorAll<HTMLButtonElement>('#voice-pause .seg')) {
     b.addEventListener('click', async () => {
       const paused = b.dataset.value === 'off';
-      setVoicePauseToggle(paused);           // optimistic
+      showVoiceInteractive(paused);          // optimistic
       text.textContent = paused ? 'Pausing…' : 'Connecting…';
       try {
         await chrome.runtime.sendMessage({ type: 'SET_VOICE_PAUSED', paused });

@@ -123,6 +123,11 @@
       font-weight: 500;
       box-shadow: 0 1px 2px rgba(1, 4, 9, 0.6);
     }
+    /* Read-only Off (BranchKit not detected): a single muted, non-interactive
+       segment — reads as "voice is off, nothing to toggle" without offering a
+       control that can't act. */
+    .voice-off .seg:disabled { cursor: default; color: var(--fg-muted); opacity: 0.7; }
+    .voice-off .seg:hover { color: var(--fg-muted); }
     .setting {
       display: flex;
       align-items: center;
@@ -453,9 +458,15 @@
   <div class="setting" id="voice-pause-setting" hidden
        title="Pause voice to stop this browser engaging BranchKit. Hints and keyboard keep working and badges stay visible — only spoken control stops. Stays paused until you switch it back on.">
     <label>Voice</label>
+    <!-- Interactive On/Paused — shown when BranchKit is connected or paused. -->
     <div class="segmented" id="voice-pause" role="radiogroup" aria-label="Voice">
       <button class="seg active" data-value="on" role="radio">On</button>
       <button class="seg" data-value="off" role="radio">Paused</button>
+    </div>
+    <!-- Read-only Off — shown when BranchKit is not detected (nothing to
+         pause; voice just isn't available). -->
+    <div class="segmented voice-off" id="voice-off" hidden aria-label="Voice off — BranchKit not detected">
+      <button class="seg" disabled>Off</button>
     </div>
   </div>
 
