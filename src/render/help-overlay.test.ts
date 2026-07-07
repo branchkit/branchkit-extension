@@ -1,7 +1,8 @@
-import { describe, it, expect, afterEach } from 'vitest';
-import { buildHelpModel, buildAlphabetModel } from './help-overlay';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { buildHelpModel, buildAlphabetModel, toggleHelpOverlay, _resetHelpForTesting } from './help-overlay';
 import type { CommandMeta, KeymapEntry } from '../command-catalog';
 import { setAlphabet, clearAlphabet } from '../labels/words';
+import { initConnectionMirror, resetConnectionMirrorForTest } from '../plugin/connection-mirror';
 
 function cmd(id: string, group: string, voice?: string[]): CommandMeta {
   return {
@@ -109,5 +110,54 @@ describe('buildAlphabetModel', () => {
     expect(m.loaded).toBe(true);
     expect(m.entries[0]).toEqual({ letter: 'a', word: 'w0' });
     expect(m.entries[25]).toEqual({ letter: 'z', word: 'w25' });
+  });
+});
+
+describe('toggleHelpOverlay voice availability (alphabet AND connection)', () => {
+  // The alphabet persists in chrome.storage.local across BranchKit sessions
+  // and is never cleared, so alphabet.loaded alone only says voice was seen
+  // ONCE. With the host disconnected the overlay must not advertise spoken
+  // phrases or the alphabet table — voice isn't usable right now.
+  const shadow = (): ShadowRoot =>
+    document.querySelector('[data-branchkit-help]')!.shadowRoot!;
+
+  const setConnected = (): void => {
+    // Drive the mirror through its public path: init against a stubbed
+    // chrome.storage and fire the connected edge.
+    let listener!: (changes: Record<string, { newValue?: unknown }>, area: string) => void;
+    vi.stubGlobal('chrome', {
+      storage: {
+        local: { get: vi.fn(() => new Promise(() => {})) }, // boot read never resolves
+        onChanged: { addListener: (l: typeof listener) => { listener = l; } },
+      },
+    });
+    initConnectionMirror(() => {});
+    listener({ branchkitConnected: { newValue: true } }, 'local');
+  };
+
+  afterEach(() => {
+    _resetHelpForTesting();
+    clearAlphabet();
+    resetConnectionMirrorForTest();
+    vi.unstubAllGlobals();
+  });
+
+  it('cached alphabet + disconnected host → connect prompt, no phrase column', () => {
+    setAlphabet(Array.from({ length: 26 }, (_, i) => `w${i}`));
+    toggleHelpOverlay([]); // mirror default: disconnected
+    expect(shadow().querySelector('.alpha-empty')).not.toBeNull();
+    expect(shadow().querySelector('.alpha')).toBeNull();
+    expect(shadow().querySelector('.cmds')!.classList.contains('no-voice')).toBe(true);
+    expect(shadow().querySelector('.voice')).toBeNull();
+  });
+
+  it('cached alphabet + connected host → alphabet table and phrase column', () => {
+    setAlphabet(Array.from({ length: 26 }, (_, i) => `w${i}`));
+    setConnected();
+    toggleHelpOverlay([]);
+    expect(shadow().querySelector('.alpha')).not.toBeNull();
+    expect(shadow().querySelector('.alpha-empty')).toBeNull();
+    expect(shadow().querySelector('.cmds')!.classList.contains('no-voice')).toBe(false);
+    expect(shadow().querySelector('.voice')).not.toBeNull();
   });
 });

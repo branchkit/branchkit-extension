@@ -17,6 +17,7 @@
 import { COMMAND_CATALOG, type CommandMeta, type KeymapEntry } from '../command-catalog';
 import { comboDisplay } from '../activate/key-combo';
 import { letterToSpokenWord, isVoiceAlphabetLoaded } from '../labels/words';
+import { isBranchKitConnected } from '../plugin/connection-mirror';
 import { effectiveVoice, type OverrideMap } from '../command-override';
 
 export interface HelpRow {
@@ -220,6 +221,7 @@ function el(tag: string, cls?: string, text?: string): HTMLElement {
 function buildHelpOverlay(
   model: HelpGroup[],
   alphabet: { loaded: boolean; entries: AlphabetEntry[] },
+  voiceAvailable: boolean,
   onClose: () => void,
 ): HTMLElement {
   const host = document.createElement('div');
@@ -247,15 +249,14 @@ function buildHelpOverlay(
   // query stacks them when there isn't room.
   const body = el('div', 'body');
 
-  // With voice disconnected the spoken-phrase column is dropped (the model
+  // With voice unavailable the spoken-phrase column is dropped (the model
   // already excluded the phrases + any voice-only command).
-  const voiceConnected = alphabet.loaded;
 
   // Commands — compact, one line each, two internal columns. No "Commands"
   // super-label: each group's header carries the section styling, matching the
   // spoken-alphabet header, so both sides read as peer labeled blocks.
   const cmdArea = el('div', 'commands-area');
-  const cmds = el('div', voiceConnected ? 'cmds' : 'cmds no-voice');
+  const cmds = el('div', voiceAvailable ? 'cmds' : 'cmds no-voice');
   for (const g of model) {
     const groupEl = el('div', 'group');
     groupEl.appendChild(el('div', 'sec-head', g.group));
@@ -274,8 +275,8 @@ function buildHelpOverlay(
       row.appendChild(keys);
 
       // 3 — how to say it: mic glyph + phrase(s), set apart from the keys.
-      // Omitted entirely when voice is disconnected (two-column table).
-      if (voiceConnected) {
+      // Omitted entirely when voice is unavailable (two-column table).
+      if (voiceAvailable) {
         const voice = el('div', 'voice');
         if (r.voice.length) {
           voice.innerHTML = MIC_SVG;
@@ -296,7 +297,10 @@ function buildHelpOverlay(
   // the layout has to stack).
   const alphaArea = el('div', 'alpha-area');
   alphaArea.appendChild(el('div', 'sec-head', 'Spoken alphabet'));
-  if (alphabet.loaded) {
+  // Gated on availability, not alphabet.loaded: with the host disconnected
+  // the cached alphabet still decodes to words, but showing the table would
+  // suggest speaking works right now — the connect prompt is the truth.
+  if (voiceAvailable) {
     const grid = el('div', 'alpha');
     for (const { letter, word } of alphabet.entries) {
       const a = el('div', 'a');
@@ -342,11 +346,15 @@ function close(): void {
  * open so custom binds and custom spoken phrases are reflected. */
 export function toggleHelpOverlay(keymap: readonly KeymapEntry[], overrides?: OverrideMap): void {
   if (state.active) { close(); return; }
-  // One connection signal drives both surfaces: disconnected → no spoken
-  // phrases in the command table and the alphabet shows a connect prompt.
+  // One availability signal drives both surfaces: no spoken phrases in the
+  // command table and a connect prompt in the alphabet column unless voice is
+  // usable RIGHT NOW. That's alphabet-loaded AND host-connected — the alphabet
+  // persists across BranchKit sessions and is never cleared, so alone it only
+  // says voice was seen once, not that speaking works today.
   const alphabet = buildAlphabetModel();
-  const model = buildHelpModel(COMMAND_CATALOG, keymap, alphabet.loaded, overrides);
-  const host = buildHelpOverlay(model, alphabet, close);
+  const voiceAvailable = alphabet.loaded && isBranchKitConnected();
+  const model = buildHelpModel(COMMAND_CATALOG, keymap, voiceAvailable, overrides);
+  const host = buildHelpOverlay(model, alphabet, voiceAvailable, close);
   document.documentElement.appendChild(host);
   // Capture-phase Escape so we close before the page (or the key handler) can
   // act on it; other keys (including `?`, which toggles us off via the registry)
