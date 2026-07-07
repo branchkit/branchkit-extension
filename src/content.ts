@@ -938,15 +938,26 @@ let pendingHintAction: HintAction = 'activate';
 // Returns true if it ended up showing.
 function toggleHints(): boolean {
   const showing = pageSession.badgesVisible || store.all.some((w) => w.hint?.isVisible);
-  if (showing) {
+  return setBadgesVisible(!showing);
+}
+
+// Drive badges to a definite visibility. The popup's Show/Hide button uses this
+// (a definite set, not a blind toggle, so a click can't race the read that
+// labeled the button). Momentary — no persistence, exactly like Shift+F: in
+// always mode the next page repaints; in manual mode a fresh page is hidden by
+// the mode. Returns the resulting shown state. No-op when already there.
+function setBadgesVisible(visible: boolean): boolean {
+  const showing = pageSession.badgesVisible || store.all.some((w) => w.hint?.isVisible);
+  if (visible === showing) return showing;
+  if (visible) {
+    doScan();
+    showBadges();
+    enterHintModeIfManual();
+  } else {
     hideBadges();
     keyHandler.exitHintMode();
-    return false;
   }
-  doScan();
-  showBadges();
-  enterHintModeIfManual();
-  return true;
+  return visible;
 }
 
 dispatcher.register('toggle_hints', () => { toggleHints(); });
@@ -3222,6 +3233,16 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
     const badgesVisible =
       pageSession.badgesVisible || store.all.some((w) => w.hint?.isVisible);
     sendResponse({ hintCount: store.all.length, badgesVisible });
+    return false;
+  }
+
+  if (message.type === 'SET_BADGES_VISIBLE') {
+    // Popup Show/Hide button — the UI twin of Shift+F. Sent to every frame
+    // (no frameId) so "this page" means the whole page, not just the top
+    // frame; each frame drives its own badges. Only the top frame answers, so
+    // the popup gets one response to refresh its readout from.
+    const nowShowing = setBadgesVisible(message.visible);
+    if (isTopFrame) sendResponse({ badgesVisible: nowShowing, hintCount: store.all.length });
     return false;
   }
 

@@ -75,6 +75,20 @@
     }
     .readout-dot.on { background: var(--accent); }
     .readout-count { color: var(--fg); font-variant-numeric: tabular-nums; }
+    /* Show/Hide button — the UI twin of Shift+F, right-aligned in the readout. */
+    .readout-toggle {
+      margin-left: auto;
+      font: inherit;
+      font-size: 11px;
+      padding: 3px 9px;
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--fg);
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .readout-toggle:hover { border-color: var(--accent); background: rgba(88, 166, 255, 0.1); }
+    .readout-toggle[hidden] { display: none; }
 
     /* --- Segmented pill controls (replaces per-setting dropdowns) --- */
     .segmented {
@@ -433,6 +447,7 @@
   <div class="readout" id="readout" hidden>
     <span class="readout-dot" id="readout-dot"></span>
     <span id="readout-text"></span>
+    <button id="readout-toggle" class="readout-toggle" hidden></button>
   </div>
 
   <div class="setting" id="voice-pause-setting" hidden

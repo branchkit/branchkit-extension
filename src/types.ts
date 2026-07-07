@@ -192,6 +192,9 @@ export type Message =
   // currently painted. Only the top frame answers (single response); subframe
   // hints aren't summed. Response: { hintCount: number; badgesVisible: boolean }.
   | { type: 'GET_PAGE_STATUS' }
+  // Popup Show/Hide button (the UI twin of Shift+F) → content: drive badge
+  // visibility to a definite state on this page. Momentary, no persistence.
+  | { type: 'SET_BADGES_VISIBLE'; visible: boolean }
   | { type: 'SCROLL_BOUNDARY'; boundary: 'top' | 'bottom' | 'left' | 'right' }
   | { type: 'REFERENCE_NAMES_CHANGED' }
   | { type: 'REFERENCE_SAVED'; host: string; name: string; reference: Record<string, unknown> }

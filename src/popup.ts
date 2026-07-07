@@ -238,8 +238,11 @@ async function initPageReadout(): Promise<void> {
   const on = badgesVisible && hintCount > 0;
   dot.className = on ? 'readout-dot on' : 'readout-dot';
 
+  const toggle = document.getElementById('readout-toggle') as HTMLButtonElement;
   if (hintCount === 0) {
+    // Nothing to show or hide on this page — the button would be a no-op.
     text.textContent = 'No badges on this page';
+    toggle.hidden = true;
   } else {
     const noun = hintCount === 1 ? 'badge' : 'badges';
     const state = badgesVisible ? 'Showing' : 'Hidden';
@@ -251,8 +254,36 @@ async function initPageReadout(): Promise<void> {
       }),
       document.createTextNode(` ${noun} on this page`),
     );
+    // The UI twin of Shift+F: label names the action (the opposite of now).
+    pageBadgesVisible = badgesVisible;
+    toggle.textContent = badgesVisible ? 'Hide' : 'Show';
+    toggle.hidden = false;
   }
   wrap.hidden = false;
+}
+
+// Last-read badge visibility of the active tab, so the Show/Hide click sends a
+// definite target (the opposite) without re-querying first.
+let pageBadgesVisible = false;
+
+// Wire the readout's Show/Hide button once. Momentary — same as Shift+F: hiding
+// in always mode lasts for this page (nav/reload repaints), so this is a
+// "right now, this page" control, not a preference.
+function initReadoutToggle(): void {
+  const toggle = document.getElementById('readout-toggle') as HTMLButtonElement | null;
+  if (!toggle) return;
+  toggle.addEventListener('click', async () => {
+    if (!activeTab?.id) return;
+    const target = !pageBadgesVisible;
+    toggle.disabled = true;
+    try {
+      await chrome.tabs.sendMessage(activeTab.id, { type: 'SET_BADGES_VISIBLE', visible: target });
+    } catch {
+      // No content script on this page — nothing to toggle.
+    }
+    toggle.disabled = false;
+    await initPageReadout(); // re-read to resync label + dot with the result
+  });
 }
 
 function initOptionsLink(): void {
@@ -728,6 +759,7 @@ async function init(): Promise<void> {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   activeTab = tab ?? null;
   initShortcutsToggle();
+  initReadoutToggle();
   initPageReadout();
   await loadRules();
   render();
