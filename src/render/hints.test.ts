@@ -485,7 +485,8 @@ describe('HintBadge reuse contract (setLabel + clearLabel)', () => {
 describe('HintBadge bk-pending opacity indicator (voice-not-ready state)', () => {
   // Option B: badge paints translucent when the wrapper's codeword isn't
   // yet ACK'd by the plugin's grammar. The bk-pending class drives the
-  // CSS opacity; markGrammarReady removes it when the ACK lands.
+  // CSS opacity; clearPending removes it when the ACK lands (or the
+  // connection-mirror disconnect flip — voice isn't coming).
 
   const label = { letter: 'a', words: ['arch'], isSingle: true };
 
@@ -495,7 +496,7 @@ describe('HintBadge bk-pending opacity indicator (voice-not-ready state)', () =>
     hostTracker.reset();
   });
 
-  it('show(false) adds bk-pending; markGrammarReady removes it', async () => {
+  it('show(false) adds bk-pending; clearPending removes it', async () => {
     const root = mount('<div id="c"><button id="btn">click</button></div>');
     const badge = new HintBadge(root.querySelector('#btn')!, label, 'button', 'word');
     badge.show(false);
@@ -504,9 +505,9 @@ describe('HintBadge bk-pending opacity indicator (voice-not-ready state)', () =>
     expect((badge as unknown as { inner: HTMLDivElement }).inner.classList.contains('bk-pending')).toBe(true);
     expect((badge as unknown as { inner: HTMLDivElement }).inner.classList.contains('visible')).toBe(true);
 
-    badge.markGrammarReady();
+    badge.clearPending();
     expect((badge as unknown as { inner: HTMLDivElement }).inner.classList.contains('bk-pending')).toBe(false);
-    // visible stays — markGrammarReady only flips the pending state.
+    // visible stays — clearPending only flips the pending state.
     expect((badge as unknown as { inner: HTMLDivElement }).inner.classList.contains('visible')).toBe(true);
     badge.remove();
   });
@@ -521,12 +522,12 @@ describe('HintBadge bk-pending opacity indicator (voice-not-ready state)', () =>
     badge.remove();
   });
 
-  it('markGrammarReady is idempotent', () => {
+  it('clearPending is idempotent', () => {
     const root = mount('<div id="c"><button id="btn">click</button></div>');
     const badge = new HintBadge(root.querySelector('#btn')!, label, 'button', 'word');
     badge.show(false);
-    badge.markGrammarReady();
-    expect(() => badge.markGrammarReady()).not.toThrow();
+    badge.clearPending();
+    expect(() => badge.clearPending()).not.toThrow();
     expect((badge as unknown as { inner: HTMLDivElement }).inner.classList.contains('bk-pending')).toBe(false);
     badge.remove();
   });

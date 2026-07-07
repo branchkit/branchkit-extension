@@ -7,6 +7,7 @@
 
 import { HintVisibility, ScannedElement, Message, DispatchResult, TabAction, ZoomAction } from './types';
 import { LabelAssignment, isVoiceAlphabetLoaded, setAlphabet } from './labels/words';
+import { initConnectionMirror, isBranchKitConnected } from './plugin/connection-mirror';
 import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters } from './scan/scanner';
 import { noteDisconnectedShadowAttach } from './scan/shadow-attach-signal';
 import { DiscoverySource, ElementWrapper } from './scan/element-wrapper';
@@ -729,6 +730,21 @@ if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
   });
 }
 
+// Host-connection mirror (paint only — never gates grammar transport; see
+// plugin/connection-mirror.ts). Disconnected badges paint at full opacity:
+// voice isn't coming, so bk-pending ("voice not ready YET") would be a
+// permanent lie, and the hint is fully functional by typing regardless. On a
+// live disconnect, flip the already-painted pending badges opaque in place.
+// No flip back on connect: the plugin's sse_connect reactivate re-Puts every
+// live wrapper and the ACKs solidify (or per-codeword-fail detach) within a
+// round-trip, so the opaque-but-unacked window self-heals.
+initConnectionMirror((nowConnected) => {
+  if (nowConnected) return;
+  for (const w of store.all) {
+    if (!w.grammarReady) w.hint?.clearPending();
+  }
+});
+
 // Adopt the BranchKit voice alphabet (overlay) from chrome.storage.local on
 // script load, if BranchKit was already connected. Local (not sync) because the
 // alphabet is per-machine: it tracks whatever voice plugin happens to be running
@@ -1410,9 +1426,16 @@ function poolLabelToAssignment(token: string): LabelAssignment {
  * voice isn't in play at all. The `grammarReady` flag tracks the plugin's
  * grammar ACK, which only arrives when BranchKit is connected; standalone a
  * badge is functional (type / click) the moment it paints, so don't gate it.
+ *
+ * "Voice isn't in play" is two distinct states: no alphabet ever loaded
+ * (fresh install, never connected) AND host currently disconnected. The
+ * alphabet persists in chrome.storage.local across BranchKit sessions and is
+ * never cleared, so without the connection-mirror term a machine that had
+ * connected ONCE painted bk-pending translucent forever while the host was
+ * closed — "not ready YET" for a voice that wasn't coming.
  */
 function isPaintReady(w: ElementWrapper): boolean {
-  return w.grammarReady || !isVoiceAlphabetLoaded();
+  return w.grammarReady || !isVoiceAlphabetLoaded() || !isBranchKitConnected();
 }
 
 // (The ResizeObserver hintability safety net and the viewport-scoped

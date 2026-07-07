@@ -273,7 +273,7 @@ describe('syncNow transport failure keeps wrappers (BranchKit down)', () => {
   // plugin response may detach.
   let store: WrapperStore;
   let sendMessage: ReturnType<typeof vi.fn>;
-  let detachWrapper: ReturnType<typeof vi.fn>;
+  let detachWrapper: ReturnType<typeof vi.fn<(element: Element) => void>>;
   // Scripted per-batch behavior; the last entry repeats. 'echo' answers ok
   // with every requested codeword.
   let script: ('error' | 'reject' | 'echo')[];
@@ -286,7 +286,7 @@ describe('syncNow transport failure keeps wrappers (BranchKit down)', () => {
     setAlphabet(ALPHABET);
     store = new WrapperStore();
     script = [];
-    detachWrapper = vi.fn();
+    detachWrapper = vi.fn<(element: Element) => void>();
     sendMessage = vi.fn((msg: { type: string; request?: { elements: ScannedElement[] } }) => {
       if (msg.type !== 'GRAMMAR_BATCH') return Promise.resolve(undefined);
       const step = script.length > 1 ? script.shift()! : script[0];

@@ -227,8 +227,10 @@ const BADGE_CSS = `
   /* Voice-pending: badge is painted but the native plugin hasn't yet
    * acknowledged its codeword in the grammar. The translucent state
    * communicates "visible, identifiable, but voice may not match this
-   * yet" — the keyboard layer can still operate on it. Removed when
-   * the grammar push ACK arrives via wrapper.grammarReady → markGrammarReady.
+   * yet" — the keyboard layer can still operate on it. Removed when the
+   * grammar push ACK arrives (wrapper.markGrammarReady → clearPending),
+   * or when the host disconnects (voice isn't coming; the connection-
+   * mirror flip in content.ts clears it so badges sit at full opacity).
    */
   .bk-inner.visible.bk-pending {
     opacity: 0.55;
@@ -775,14 +777,15 @@ export class HintBadge {
   /**
    * Show the badge.
    *
-   * @param grammarReady — does the codeword already have a confirmed
-   *   place in the native plugin's voice grammar? If false (typical
-   *   first-paint case), the badge paints translucent (`bk-pending`
-   *   class) so the user can tell the visual is there but voice isn't
-   *   ready yet. When `markGrammarReady()` is called later (from the
-   *   grammar push ACK), the class is removed and the badge transitions
-   *   to full opacity. If true (rare race where ACK landed before the
-   *   first show — or alphabet-stable post-rotate path), paint opaque.
+   * @param grammarReady — is this badge paint-ready at full opacity?
+   *   True when the codeword has a confirmed place in the native
+   *   plugin's voice grammar — or when voice isn't in play at all
+   *   (standalone / host disconnected; see content.ts isPaintReady).
+   *   If false (typical first-paint case while connected), the badge
+   *   paints translucent (`bk-pending` class) so the user can tell the
+   *   visual is there but voice isn't ready yet; `clearPending()` (from
+   *   the grammar push ACK or the disconnect flip) transitions it to
+   *   full opacity.
    */
   show(grammarReady = false): void {
     if (this._visible) return;
@@ -822,10 +825,11 @@ export class HintBadge {
     });
   }
 
-  /** Clear the `bk-pending` class on the inner. Called from content.ts
-   *  when the grammar push ACK for this wrapper's codeword lands —
-   *  signalling that voice will now match it. Idempotent. */
-  markGrammarReady(): void {
+  /** Clear the `bk-pending` translucency. Two callers: the grammar push
+   *  ACK (via ElementWrapper.markGrammarReady — voice will now match this
+   *  badge) and the connection-mirror disconnect flip (host gone, voice
+   *  isn't coming, so "not ready YET" would be a permanent lie). Idempotent. */
+  clearPending(): void {
     this.inner.classList.remove('bk-pending');
     this.host.removeAttribute('data-bk-pending');
   }

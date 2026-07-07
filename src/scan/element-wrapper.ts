@@ -200,7 +200,7 @@ export class ElementWrapper {
   markGrammarReady(): void {
     this.grammarReady = true;
     this.tGrammarReady ??= performance.now();
-    if (this.hint?.isVisible) this.hint.markGrammarReady();
+    if (this.hint?.isVisible) this.hint.clearPending();
   }
 
   get category(): Category {

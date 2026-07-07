@@ -47,7 +47,7 @@ function reconcile(host: HTMLElement, attributeName: string, expectedDisplay = '
     attributeName === 'data-bk-accel-builds' ||
     attributeName === 'data-bk-occluded'
   ) {
-    // Owned by HintBadge.show()/hide()/markGrammarReady() and the inner-scroll
+    // Owned by HintBadge.show()/hide()/clearPending() and the inner-scroll
     // accelerator arm/disarm; the tracker MO sees our own writes echo back, so
     // it must allow them through. Tests + dev tools can query `[data-bk-shown]`,
     // `[data-bk-pending]`, `[data-bk-accel]`, and `[data-bk-accel-rearms]` to

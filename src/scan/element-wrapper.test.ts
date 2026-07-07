@@ -443,7 +443,7 @@ describe('ElementWrapper.releaseLabel', () => {
 
 describe('ElementWrapper.markGrammarReady', () => {
   // Helper extracted from the scan-path + IO-syncNow-ACK sites. Flips
-  // grammarReady and forwards to the badge's markGrammarReady when the
+  // grammarReady and forwards to the badge's clearPending when the
   // badge is currently visible. Both effects are needed; testing the
   // helper protects against the two ACK sites drifting apart.
 
@@ -454,26 +454,26 @@ describe('ElementWrapper.markGrammarReady', () => {
     expect(w.grammarReady).toBe(true);
   });
 
-  it('calls hint.markGrammarReady when the badge is visible', () => {
+  it('calls hint.clearPending when the badge is visible', () => {
     const w = new ElementWrapper(fakeElement(), fakeScanned());
     const markFn = vi.fn();
     // Fake hint with the surface markGrammarReady reads (isVisible getter
-    // + markGrammarReady method). The wrapper only touches these two.
+    // + clearPending method). The wrapper only touches these two.
     w.hint = {
       isVisible: true,
-      markGrammarReady: markFn,
+      clearPending: markFn,
     } as unknown as ElementWrapper['hint'];
 
     w.markGrammarReady();
     expect(markFn).toHaveBeenCalledTimes(1);
   });
 
-  it('does NOT call hint.markGrammarReady when the badge is not visible', () => {
+  it('does NOT call hint.clearPending when the badge is not visible', () => {
     const w = new ElementWrapper(fakeElement(), fakeScanned());
     const markFn = vi.fn();
     w.hint = {
       isVisible: false,
-      markGrammarReady: markFn,
+      clearPending: markFn,
     } as unknown as ElementWrapper['hint'];
 
     w.markGrammarReady();
@@ -495,7 +495,7 @@ describe('ElementWrapper.markGrammarReady', () => {
     const markFn = vi.fn();
     w.hint = {
       isVisible: true,
-      markGrammarReady: markFn,
+      clearPending: markFn,
     } as unknown as ElementWrapper['hint'];
 
     w.markGrammarReady();

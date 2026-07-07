@@ -106,6 +106,9 @@ function updateConnectionBadge(connected: boolean): void {
 function onSSEConnected(): void {
   bgState.branchkitConnected = true;
   updateConnectionBadge(true);
+  // Mirror for content scripts (paint only — see plugin/connection-mirror.ts):
+  // disconnected badges render full-opacity instead of bk-pending translucent.
+  void chrome.storage.local.set({ branchkitConnected: true });
   sseBackoff.onConnected(Date.now());
   clearSSERetryTimer();
   // Cold-start focus handshake: this browser may already be frontmost when
@@ -137,6 +140,7 @@ function onSSEConnected(): void {
 function onSSEDisconnected(): void {
   bgState.branchkitConnected = false;
   updateConnectionBadge(false);
+  void chrome.storage.local.set({ branchkitConnected: false });
   scheduleSSERetry();
 }
 
@@ -1748,6 +1752,15 @@ async function init(): Promise<void> {
     // 30s for the connection-check alarm. With no host at all (standalone
     // keyboard/hints use) this settles at one discovery fetch per 30s — the
     // same steady-state the alarm already produced.
+    //
+    // Reconcile the content-facing connection mirror. A browser restart with
+    // the host down leaves a stale `true` from the previous session — no
+    // disconnect event ever fires to correct it (onSSEDisconnected needs a
+    // connection to lose), so badges would paint bk-pending translucent
+    // forever. Written only on discovery FAILURE: the discovery-succeeded
+    // path converges through the stream's own connected/error events, and an
+    // unconditional write here would flap the mirror on every SW idle-wake.
+    void chrome.storage.local.set({ branchkitConnected: false });
     scheduleSSERetry();
   }
 }
