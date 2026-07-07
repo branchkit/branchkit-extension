@@ -33,6 +33,12 @@
       margin: 0;
     }
     input[type="checkbox"] { accent-color: var(--accent); }
+    /* Make the `hidden` attribute authoritative. Several rows set display:flex
+       (.setting, .readout), which outranks the UA `[hidden] { display: none }`
+       — so JS setting `.hidden = true` (e.g. the Voice toggle when BranchKit is
+       not detected) silently did nothing and the row stayed visible. One rule
+       enforces the HTML semantics everywhere instead of per-class patches. */
+    [hidden] { display: none !important; }
     h2 {
       font-size: 15px;
       margin: 0 0 10px 0;
@@ -88,7 +94,6 @@
       cursor: pointer;
     }
     .readout-toggle:hover { border-color: var(--accent); background: rgba(88, 166, 255, 0.1); }
-    .readout-toggle[hidden] { display: none; }
 
     /* --- Segmented pill controls (replaces per-setting dropdowns) --- */
     .segmented {
@@ -136,7 +141,6 @@
     }
     .passkeys-input:focus { border-color: var(--accent); outline: none; }
     .passkeys-input:disabled { opacity: 0.4; cursor: not-allowed; }
-    #key-passthrough-setting[hidden] { display: none; }
     .setting select {
       font-size: 12px;
       padding: 2px 4px;
@@ -428,10 +432,6 @@
       border-radius: 4px;
       cursor: pointer;
     }
-    /* The `display: block` above overrides the UA `[hidden] { display: none }`,
-       so the button would show even when JS sets `hidden` (e.g. once connected).
-       Restore hidden's effect explicitly. */
-    .grant-access[hidden] { display: none; }
   </style>
 </head>
 <body>
@@ -462,8 +462,8 @@
   <div class="setting">
     <label>Badge Persistence</label>
     <div class="segmented" id="hint-visibility" role="radiogroup" aria-label="Badge Persistence">
-      <button class="seg active" data-value="always" role="radio">On</button>
-      <button class="seg" data-value="manual" role="radio">Off</button>
+      <button class="seg active" data-value="always" role="radio">Always</button>
+      <button class="seg" data-value="manual" role="radio">Manual</button>
     </div>
   </div>
   <div class="setting">
