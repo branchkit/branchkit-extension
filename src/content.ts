@@ -126,7 +126,7 @@ import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot
 import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, rearmCpuShareBaseline, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, stopPerfObservers, lifecycleCounters, resetLifecycleCounters } from './debug/perf-counters';
 import { churnStats } from './debug/churn-log';
 import { syncTraceStats } from './debug/sync-trace';
-import { loadConfig, getDisplayMode, getHintVisibility, getHintsShown, setHintsShown } from './config';
+import { loadConfig, getDisplayMode, getHintVisibility } from './config';
 import {
   grammarEpochStats,
   probeGrammarEpoch,
@@ -592,7 +592,7 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
 //
 // HARD-CAPPED: a page that never goes mutation-quiet (ad churn, animated
 // thumbnails — YouTube results) must still fire. Uncapped, this was the
-// no-badges-on-refresh boot race (2026-06-12): when the hintsShown config
+// no-badges-on-refresh boot race (2026-06-12): when the visibility config
 // load beat the alphabet load, the boot showBadges() early-returned on the
 // missing alphabet WITHOUT setting badgesVisible, and the alphabet-callback
 // recovery sat behind this settle wait forever — codewords claimed, zero
@@ -625,23 +625,12 @@ function whenDOMSettles(callback: () => void): void {
 // --- User settings from storage (core/config.ts) ---
 
 // Hints appear on their own — on a fresh page or after an action — only in
-// "always" mode AND when the user hasn't switched them off with F. "manual"
-// mode never auto-shows; an F-hide suppresses always-mode auto-show globally.
+// "always" mode. "manual" mode never auto-shows (summon with `f`). A Shift+F
+// hide in always mode is momentary (this page only): there is no persisted
+// hidden state, so the next page paints them again — "Always" always means
+// always, and a stray hide can never silently strand the badges off.
 function shouldAutoShowBadges(): boolean {
-  return getHintVisibility() === 'always' && getHintsShown();
-}
-
-// Bring this frame's visibility in line with the persisted F state. Run once
-// after hintsShown loads at boot (corrects a racing boot-time auto-show when
-// the persisted state was an F-hide). Hides on F-off; shows on F-on only in
-// always mode (manual reveals are per-page and must not auto-show here).
-function applyHintsShownState(): void {
-  if (!getHintsShown()) {
-    if (pageSession.badgesVisible) hideBadges();
-  } else if (getHintVisibility() === 'always' && !pageSession.badgesVisible) {
-    doScan();
-    showBadges();
-  }
+  return getHintVisibility() === 'always';
 }
 
 loadConfig({
@@ -654,15 +643,11 @@ loadConfig({
   onHintVisibilityChange: () => {
     const v = getHintVisibility();
     if (v === 'always') {
-      // Re-picking "Always visible" is an explicit show intent — clear any
-      // prior F-hide so hints come back (and stay back on later pages).
-      setHintsShown(true);
       if (!pageSession.badgesVisible) showBadges();
     } else if (v === 'manual' && pageSession.badgesVisible) {
       hideBadges();
     }
   },
-  onHintsShownLoaded: () => applyHintsShownState(),
 });
 
 // Tab markers (notes/DESIGN_TAB_MARKERS.md): the top frame bootstraps its
@@ -885,7 +870,7 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
 // The default set, for reference: one binding per command, preferring the
 // always-mode form (Shift/modifier chords route to commands even with hints
 // painted; bare letters are codeword input then, so they'd be eaten).
-// Shift+J/K/D/U/T/G scroll; Shift+H/L cycle tabs; Ctrl+S toggles hints, `f`
+// Shift+J/K/D/U/T/G scroll; Shift+H/L cycle tabs; Shift+F toggles hints, `f`
 // enters hint mode, and a capital letter in hint mode opens in a new tab — the
 // trio that replaced the discrete show/hide/show-new-tab commands. A few
 // inherently-bare, hidden-only binds (h/l horizontal scroll, `cs`, `/`, `n`).
@@ -937,26 +922,30 @@ dispatcher.register('hint_mode', () => {
 type HintAction = 'activate' | 'newtab' | 'yank' | 'hover' | 'focus' | 'copytext' | 'caret';
 let pendingHintAction: HintAction = 'activate';
 
-// The shared toggle used by both Ctrl+S (keyboard) and the voice "toggle"
-// command, so the two entry points can't drift. Branches on what's actually on
-// screen, not just the visibility flag: if the flag desyncs (badges painted
-// while it reads hidden), keying off it alone makes the toggle "show" a second
-// set on top instead of hiding — the double-badge / "Ctrl+S won't hide"
-// report. Treat any actually-visible badge as "showing" so the toggle always
-// dismisses what the user sees. Keeps the new-tab modifier untouched so a stray
-// toggle doesn't re-arm new-tab activation. Returns true if it ended up showing.
+// The shared show/hide toggle used by both Shift+F (keyboard) and the voice
+// "toggle" command, so the two entry points can't drift. Branches on what's
+// actually on screen, not just the visibility flag: if the flag desyncs
+// (badges painted while it reads hidden), keying off it alone makes the toggle
+// "show" a second set on top instead of hiding — the double-badge / "won't
+// hide" report. Treat any actually-visible badge as "showing" so the toggle
+// always dismisses what the user sees. Keeps the new-tab modifier untouched so
+// a stray toggle doesn't re-arm new-tab activation.
+//
+// The hide is momentary — NOT persisted. In always mode the next page repaints
+// the badges (shouldAutoShowBadges); in manual mode a fresh page is hidden by
+// the mode itself. Persistent "stay hidden while I browse" IS manual mode, so
+// there's no separate hidden flag to silently override the visible setting.
+// Returns true if it ended up showing.
 function toggleHints(): boolean {
   const showing = pageSession.badgesVisible || store.all.some((w) => w.hint?.isVisible);
   if (showing) {
     hideBadges();
     keyHandler.exitHintMode();
-    setHintsShown(false);  // sticky: stay hidden across navigation
     return false;
   }
   doScan();
   showBadges();
   enterHintModeIfManual();
-  setHintsShown(true);
   return true;
 }
 
@@ -3273,7 +3262,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
   if (message.type === 'BRANCHKIT_ACTION') {
     const { action, params, correlation_id: correlationId } = message.payload;
     if (action === 'toggle_hints') {
-      // Voice "toggle" — the same handler as Ctrl+S. Snapshot on the show
+      // Voice "toggle" — the same handler as Shift+F. Snapshot on the show
       // direction so a codeword spoken in the same phrase resolves against the
       // freshly-painted badges.
       if (toggleHints()) phraseSnapshot = takeSnapshot(store.all, performance.now());
@@ -4006,11 +3995,10 @@ function snapshotExtras() {
       total: { ...reconcileApplied.total },
     },
     // Visibility state — to diagnose a stuck toggle (badges painted but the
-    // flag says hidden, so Ctrl+S routes to "show" instead of "hide"). If
+    // flag says hidden, so Shift+F routes to "show" instead of "hide"). If
     // painted_badges > 0 while hints_visible is false, that's the desync.
     visibility: {
       hints_visible: pageSession.badgesVisible,
-      hints_shown: getHintsShown(),
       hint_visibility: getHintVisibility(),
       painted_badges: store.all.filter((w) => w.hint !== null).length,
       claimed_codewords: store.all.filter((w) => w.scanned.codeword.length > 0).length,

@@ -21,10 +21,6 @@ import { migrateDisplayMode } from './labels/words';
 
 let displayMode: BadgeDisplayMode = 'letter';
 let hintVisibility: HintVisibility = 'always';
-// F-driven sticky show/hide. The mode (always/manual) decides what a fresh
-// page does on its own; this is the user's explicit "hints on/off" intent,
-// which overrides always-mode auto-show. Default on.
-let hintsShown = true;
 
 export function getDisplayMode(): BadgeDisplayMode {
   return displayMode;
@@ -34,27 +30,11 @@ export function getHintVisibility(): HintVisibility {
   return hintVisibility;
 }
 
-export function getHintsShown(): boolean {
-  return hintsShown;
-}
-
-// Persist the F state to storage.local (per-machine UI state, not a synced
-// preference) so a hide/show survives navigation and browser restart. Read
-// on every page load; propagates to other open frames/tabs via onChanged.
-export function setHintsShown(value: boolean): void {
-  hintsShown = value;
-  if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-    chrome.storage.local.set({ hintsShown: value });
-  }
-}
-
 export interface ConfigHandlers {
   /** badgeDisplayMode changed — re-label currently visible badges. */
   onDisplayModeChange: () => void;
   /** hintVisibility changed — show or hide hints to match the new value. */
   onHintVisibilityChange: () => void;
-  /** hintsShown loaded from storage — reconcile this page's initial visibility. */
-  onHintsShownLoaded: () => void;
 }
 
 /**
@@ -75,13 +55,6 @@ export function loadConfig(handlers: ConfigHandlers): void {
     }
   });
 
-  if (chrome.storage?.local) {
-    chrome.storage.local.get(['hintsShown'], (result) => {
-      if (typeof result.hintsShown === 'boolean') hintsShown = result.hintsShown;
-      handlers.onHintsShownLoaded();
-    });
-  }
-
   chrome.storage.onChanged.addListener((changes) => {
     if (changes.badgeDisplayMode) {
       displayMode = migrateDisplayMode(changes.badgeDisplayMode.newValue);
@@ -90,14 +63,6 @@ export function loadConfig(handlers: ConfigHandlers): void {
     if (changes.hintVisibility) {
       hintVisibility = changes.hintVisibility.newValue || 'always';
       handlers.onHintVisibilityChange();
-    }
-    if (changes.hintsShown) {
-      // Keep the value current for this frame's next decision (e.g. an SPA
-      // nav), but DON'T live-reconcile visibility here: reacting to our own
-      // storage echo can hide a just-shown toggle, and manual mode can't
-      // re-show. The F handler applies show/hide locally; new page loads
-      // read this value via onHintsShownLoaded.
-      hintsShown = changes.hintsShown.newValue !== false;  // absent/removed → on
     }
   });
 }

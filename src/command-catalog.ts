@@ -100,11 +100,11 @@ const SCROLL_AMOUNTS = ['step', 'half', 'full', 'top', 'bottom'] as const;
 
 export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // --- Hints ---
-  // Show/hide are subsumed by toggle_hints (Ctrl+S) + hint_mode (f) + the
+  // Show/hide are subsumed by toggle_hints (Shift+F) + hint_mode (f) + the
   // capital-letter new-tab affordance, so the discrete verbs were dropped
   // 2026-07-05 rather than lingering as unbound, voiceless editor clutter.
   { id: 'toggle_hints', label: 'Toggle badges', group: 'Badges', mappable: true, params: [],
-    description: 'Show badges when hidden, hide them when shown (sticky across navigation).',
+    description: 'Show badges when hidden, hide them when shown. In Always mode the hide is momentary — the next page repaints them.',
     voice: [{ pattern: 'toggle' }] },
   // `f` — enter badge-typing mode: badges (always visible for voice) become
   // keyboard-typeable here, and only here. See notes/DESIGN_KEYBOARD_MODES.md.
@@ -386,7 +386,7 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // Layer 2 of notes/DESIGN_TAB_NAVIGATION.md: an extension-served iframe
   // overlay searching pluggable sources (open tabs MRU-first, this catalog).
   // A real-modifier chord by design — it must open in every mode, mid-hint
-  // and inside text fields (the Ctrl+S precedent).
+  // and inside text fields (the Ctrl+K/Ctrl+T-fire-in-fields path).
   { id: 'toggle_palette', label: 'Command palette', group: 'Help', mappable: true, params: [],
     description: 'Search open tabs and every command in one overlay.',
     voice: [{ pattern: 'palette' }] },
@@ -466,7 +466,7 @@ export function buildCommandContributions(): CommandContribution[] {
 export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   // Hints
   { keys: 'KeyF', command: 'hint_mode' },        // f — enter hint mode (Vimium f)
-  { keys: 'ctrl+KeyS', command: 'toggle_hints' },// Ctrl+S — show/hide the always-badges (works in fields)
+  { keys: 'shift+KeyF', command: 'toggle_hints' },// Shift+F — show/hide badges (momentary in always mode); f re-shows + types
   // Scroll (Vimium j/k/h/l, d/u, gg/G)
   { keys: 'KeyJ', command: 'scroll_down' },
   { keys: 'KeyK', command: 'scroll_up' },

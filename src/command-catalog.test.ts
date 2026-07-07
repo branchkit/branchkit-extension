@@ -168,7 +168,7 @@ describe('default keymap', () => {
     // Locks the defaults (and their token format) against accidental drift.
     expect(DEFAULT_KEYMAP).toEqual([
       { keys: 'KeyF', command: 'hint_mode' },
-      { keys: 'ctrl+KeyS', command: 'toggle_hints' },
+      { keys: 'shift+KeyF', command: 'toggle_hints' },
       { keys: 'KeyJ', command: 'scroll_down' },
       { keys: 'KeyK', command: 'scroll_up' },
       { keys: 'KeyH', command: 'scroll_left' },

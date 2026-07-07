@@ -29,8 +29,10 @@ else, bare letters are keybinds.
 
 - **Insert** — focused in an editable field (`isInsertMode()` already detects
   this). Keys pass through to the page. Real-modifier chords (Ctrl/Alt/Meta)
-  still fire commands even here — the Ctrl+S / Ctrl+K precedent — so the
-  palette and hide-hints work while typing in a search box. Unchanged.
+  still fire commands even here — the Ctrl+K/Ctrl+T palette precedent — so the
+  palette opens while typing in a search box. (Shift+F hide is NOT a real-
+  modifier chord, so it yields to the field — see the 2026-07-07 unification
+  section.) Unchanged.
 - **Normal** — the default, and the reclaimed one. Bare letters and sequences
   are **keybinds** (`gg`, `d`, `gt`, `f`, …). Hints are visible (for voice)
   but NOT typeable. This is the new behavior.
@@ -156,3 +158,39 @@ than adding machinery.
 4. Help-overlay note on the mode model. (Partly done — usage text updated.)
 
 Each step is shippable on its own; step 1 reclaimed the alphabet.
+
+## Show/hide unification + the invisible-override fix (2026-07-07)
+
+**Problem.** Badge show/hide had two settings on one axis: the *visible*
+`hintVisibility` (Always / Toggle, in the popup) and an *invisible*, persisted
+`hintsShown` sticky flag (the old Ctrl+S). The invisible one won — a stray
+Ctrl+S left `hintsShown=false` in `chrome.storage.local`, so a user on "Always"
+with voice connected saw no badges and no way to discover why. Two settings on
+the same axis, one hidden, hidden wins = the footgun. Compounded by
+inconsistent keys: `f` in Toggle mode, Ctrl+S in Always.
+
+**Fix — one visible source of truth, one consistent gesture.**
+
+- **`hintsShown` deleted entirely** (state, storage, getters, the
+  `applyHintsShownState` boot reconcile, the `onHintsShownLoaded` handler).
+  `shouldAutoShowBadges()` is now just `hintVisibility === 'always'`.
+- **Hide in Always mode is momentary** — `toggleHints()` no longer persists
+  anything. It flips this page's live `pageSession.badgesVisible`; the next
+  page repaints (always mode) so "Always" always means always. A stray hide can
+  never strand the badges off across navigation.
+- **Persistent "stay hidden while I browse" *is* Toggle mode** — that's the
+  one place a fresh page starts hidden. There is no longer a second mechanism
+  that does the same thing invisibly inside Always mode.
+- **One keybind, both modes:** `toggle_hints` rebound `Ctrl+S` → **`Shift+F`**
+  (retiring Ctrl+S, which had also been shadowing the browser's Save Page As).
+  `f` shows + enters hint mode; `Shift+F` toggles visibility. Trade-off: Shift+F
+  is not a real-modifier chord, so unlike Ctrl+S it yields to text fields
+  (types "F") instead of firing there — accepted (hiding badges mid-typing is
+  rare; per-site passthrough covers any site that binds Shift+F).
+- **Popup unchanged** — the existing Always / Toggle control is now the single
+  source of truth and cannot lie about a hidden state, so no new popup control
+  was needed (the originally-requested "expose Ctrl+S in the popup" became moot
+  once the invisible flag was gone).
+
+Orphaned `hintsShown:false` values left in some dev profiles are inert (nothing
+reads them) and, if anything, resolve toward the correct "shown" behavior.
