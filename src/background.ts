@@ -1498,11 +1498,12 @@ function purgeTab(tabId: number): void {
 // Per-frame liveness via long-lived Port. Each content-script context opens
 // one Port at startup; when the context dies (iframe removed, navigation,
 // tab closed, bfcache evict) Chrome closes the Port and onDisconnect fires
-// here. Two cleanups run on disconnect: the per-tab label pool
-// (`releaseFrame`) and the browser plugin's per-frame hint session
-// (`forwardHintsSessionEnd`). Without either, dead frames' state leaks —
-// label codewords until the next tab close, hint-session per-prefix
-// contributions until the plugin's 30s TTL backstop fires.
+// here. Three cleanups run on disconnect: the per-tab label pool
+// (`releaseFrame`), the browser plugin's per-frame hint session
+// (`forwardHintsSessionEnd`), and the frame's fingerprint->codeword memory
+// (`clearCodewordMemory`). Without them, dead frames' state leaks — label
+// codewords until the next tab close, hint-session per-prefix contributions
+// until the plugin's 30s TTL backstop fires, codeword-memory keys forever.
 // See docs/completed/DESIGN_BROWSER_FRAME_POOL_EXHAUSTION.md for the
 // label-pool half.
 //
@@ -1532,6 +1533,13 @@ chrome.runtime.onConnect.addListener((port) => {
   port.onDisconnect.addListener(() => {
     releaseFrame(tabId, frameId).catch(() => {});
     forwardHintsSessionEnd('frame_liveness_disconnect', tabId, frameId).catch(() => {});
+    // Evict this dead frame's fingerprint->codeword memory (chrome.storage.session).
+    // The per-frame keys were previously only cleared on TAB close
+    // (clearCodewordMemory(tabId)); the frame-scoped clear had no caller, so an
+    // iframe-churny long-lived tab accumulated dead-frame keys indefinitely
+    // (long-session-perf: codewordMemory accumulator). Frame death is the
+    // eviction point — siblings' memory is untouched (frame-scoped key).
+    clearCodewordMemory(tabId, frameId).catch(() => {});
   });
 });
 
