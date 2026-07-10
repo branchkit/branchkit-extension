@@ -11,6 +11,11 @@
 export interface ScrollAccelReconcilable {
   syncScrollAccel(): void;
   syncScrollAccelInside(scroller: Element): void;
+  // Re-evaluate transform-ancestor tracking against the current bkTransformTrigger
+  // flag (arm if newly on, disarm if newly off). Lets a live flag flip take
+  // effect without a page reload. Unrelated to the accelerator, but reuses this
+  // module's live-badge registry.
+  syncTransformTracker(): void;
 }
 
 // Inner-scroll accelerator gate. Production default is ON, set at
@@ -87,6 +92,13 @@ export function reconcileScrollAccel(): void {
 export function reconcileScrollAccelForScroller(scroller: Element): void {
   if (!scrollAccelEnabled) return;
   for (const b of liveBadges) b.syncScrollAccelInside(scroller);
+}
+
+/** Re-evaluate transform-ancestor tracking for every live badge — called on a
+ *  live `bkTransformTrigger` flag flip so testing takes effect without a reload.
+ *  Each badge arms or disarms per the (already-updated) flag. */
+export function reconcileTransformTrigger(): void {
+  for (const b of liveBadges) b.syncTransformTracker();
 }
 
 export function sameElements(a: readonly Element[], b: readonly Element[]): boolean {

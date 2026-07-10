@@ -137,6 +137,36 @@ export function findScrollableAncestors(el: Element): Element[] {
 }
 
 /**
+ * ALL shadow-piercing ancestors of `el` with a non-identity `transform`
+ * (excluding documentElement/body), innermost first. Used by the transform-
+ * ancestor reconcile trigger: a pan/zoom canvas (React Flow) moves its whole
+ * viewport by mutating that ancestor's `transform` via pointermove, firing NO
+ * scroll event — so the scroll-driven follow loop never runs and badges freeze
+ * mid-pan. The trigger watches each of these elements' `style`.
+ *
+ * ALL, not just the nearest: React Flow nests transforms — `.react-flow__node`
+ * carries a per-node `translate` (STATIC during a pan) between the target and
+ * `.react-flow__viewport` (which carries the pan `translate` that actually
+ * MOVES). Watching only the nearest would watch the static node wrapper and
+ * never fire on a pan. Pure: reads computed style only. Sibling of
+ * {@link findScrollableAncestors}.
+ */
+export function findTransformedAncestors(el: Element): Element[] {
+  const doc = el.ownerDocument;
+  const docEl = doc ? doc.documentElement : null;
+  const body = doc ? doc.body : null;
+  const out: Element[] = [];
+  let node = parentPiercingShadow(el);
+  while (node) {
+    if (node !== docEl && node !== body && getComputedStyle(node).transform !== 'none') {
+      out.push(node);
+    }
+    node = parentPiercingShadow(node);
+  }
+  return out;
+}
+
+/**
  * Like {@link findScrollableAncestor}, but for OVERFLOW-CLIP detection rather
  * than scroll-riding: the nearest ancestor scroller that actually CLIPS `el`,
  * or null. A `position: fixed` element — and everything inside it — is laid out

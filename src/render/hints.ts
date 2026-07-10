@@ -17,6 +17,11 @@ import { computeBadgeColors } from './badge-colors';
 import { type BadgeSettings, DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
 import { leaderLineGeometry } from '../placement/geometry';
 import { trackContainerResize, untrackContainerResize } from '../observe/container-resize-tracker';
+import {
+  isTransformTriggerEnabled,
+  trackTransformAncestor,
+  untrackTransformAncestor,
+} from '../observe/transform-ancestor-tracker';
 import { harnessHooksEnabled } from '../debug/harness-hooks';
 import { trackTargetMutations, untrackTargetMutations } from '../observe/target-mutation-tracker';
 import { trackHostAttributes, untrackHostAttributes } from '../observe/host-attribute-tracker';
@@ -40,6 +45,7 @@ import {
   scrollAccelScrollOffset,
   findScrollableAncestor,
   findScrollableAncestors,
+  findTransformedAncestors,
 } from './scroll-accel';
 
 // --- Refinement scheduler (phase 3 of the two-pass paint plan) ---
@@ -365,6 +371,13 @@ export class HintBadge {
   // Whether THIS badge holds a container-resize refcount on anchorParent.
   // Guards the shared-refcount untracks in retarget()/remove().
   private _containerTracked: boolean = false;
+  // The transformed ancestors this badge tracks for the pan/zoom-canvas reconcile
+  // trigger (all of them up the chain — a React Flow canvas nests a static
+  // per-node transform under the moving viewport transform). Empty when the flag
+  // is off or there are none. Held so remove()/retarget() untrack exactly what
+  // was registered, since the shared refcounts can't be recomputed from a
+  // possibly-changed target.
+  private _transformAncestors: Element[] = [];
   // Has remove() been called? Refinement on a removed badge would register
   // observers on a torn-down host — wasted work and a memory leak. The
   // scheduler can't atomically pull a badge out of its pending set during
@@ -491,8 +504,41 @@ export class HintBadge {
     // Anchor/reconcile hosts need a real box (position → display block);
     // nesting hosts stay display:contents.
     trackHostAttributes(this.host, 'block');
+    this.armTransformTracker();
     // Colors are NOT touched here — they were already applied accurately
     // (APCA) at show() time. Refinement is observer-only now.
+  }
+
+  // Register this badge's nearest transformed ancestor with the shared
+  // MutationObserver so a pan/zoom-canvas transform mutation (which fires no
+  // scroll event) pokes the reconcile loop. No-op when the flag is off, no
+  // transformed ancestor exists, or one is already tracked. Called from refine()
+  // and retarget() (target swap → possibly a different ancestor).
+  private armTransformTracker(): void {
+    if (!isTransformTriggerEnabled() || this._transformAncestors.length) return;
+    const ancestors = findTransformedAncestors(this.target);
+    if (!ancestors.length) return;
+    this._transformAncestors = ancestors;
+    for (const a of ancestors) trackTransformAncestor(a);
+  }
+
+  // Release this badge's transformed-ancestor refcounts (shared: many badges per
+  // canvas viewport). Guarded on the stored elements so we untrack exactly what
+  // we tracked. Called from remove() and retarget() (before the target swap).
+  private disarmTransformTracker(): void {
+    if (!this._transformAncestors.length) return;
+    for (const a of this._transformAncestors) untrackTransformAncestor(a);
+    this._transformAncestors = [];
+  }
+
+  // Re-evaluate transform tracking against the current flag — arm if newly on,
+  // disarm if newly off. Called from the glue's reconcileTransformTrigger() on a
+  // live `bkTransformTrigger` flip so a toggle applies without a page reload.
+  // (Part of ScrollAccelReconcilable, which reuses the live-badge registry.)
+  syncTransformTracker(): void {
+    if (this._removed) return;
+    if (isTransformTriggerEnabled()) this.armTransformTracker();
+    else this.disarmTransformTracker();
   }
 
   // Option 3. Body-mount a 0x0 box and write `transform: translate(x, y)` from
@@ -726,6 +772,9 @@ export class HintBadge {
     // The accelerator is bound to the OLD target's scroller; drop it before the
     // swap and re-detect for the new node below.
     this.disarmScrollAccel();
+    // Same for the transformed-ancestor tracker — the new target may live under
+    // a different (or no) transformed ancestor; re-detect after the swap.
+    this.disarmTransformTracker();
 
     // No page-DOM binding to move (no anchor-name); just swap the tracked
     // target. The baked offset is target-relative, so it stays valid for a
@@ -744,6 +793,7 @@ export class HintBadge {
     trackContainerResize(this.anchorParent);
     this._containerTracked = true;
     trackTargetMutations(this.target);
+    this.armTransformTracker();
     // Recompute stacking for the new target's container (cached per
     // anchorParent). The host-attribute defender allows style writes that
     // keep display intact, so this is safe with the tracker live.
@@ -1026,6 +1076,7 @@ export class HintBadge {
     unregisterReconcile(this);
     unregisterScrollAccelBadge(this);
     this.disarmScrollAccel();
+    this.disarmTransformTracker();
     this.host.remove();
   }
 

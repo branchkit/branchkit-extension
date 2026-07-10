@@ -36,6 +36,7 @@ import { store } from './core/store';
 import { HintBadge } from './render/hints';
 import { reconcilePass, drain as drainReconcilePositioner, reconcileRegistrySize } from './render/reconcile-positioner';
 import { onContainerResize } from './observe/container-resize-tracker';
+import { onTransformAncestorMutation, setTransformTriggerEnabled } from './observe/transform-ancestor-tracker';
 import { onTargetMutation } from './observe/target-mutation-tracker';
 import { setOcclusionEnabled, applyOcclusion } from './observe/occlusion';
 import { reconcileClipObservation, drainClipObservers, setClipObserverEnabled } from './observe/clip-observer';
@@ -114,7 +115,7 @@ import {
 import { loadDomainRules, onDomainRulesChanged, rulesEqual } from './rules/domain-rules-storage';
 import { loadBadgeSettings, onBadgeSettingsChanged } from './badge-settings-storage';
 import { setBadgeSizingFromSettings } from './render/hints';
-import { setScrollAccelEnabled, setScrollAccelNestedEnabled, reconcileScrollAccel, reconcileScrollAccelForScroller } from './render/scroll-accel-glue';
+import { setScrollAccelEnabled, setScrollAccelNestedEnabled, reconcileScrollAccel, reconcileScrollAccelForScroller, reconcileTransformTrigger } from './render/scroll-accel-glue';
 import { isScrollTimelineSupported } from './render/scroll-accel';
 import { setNudgesFromSettings } from './placement';
 import { labelReservoir } from './labels/label-reservoir';
@@ -712,6 +713,18 @@ if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
       refreshTabMarker();
       void syncNow('alphabet_change');
     }
+    // Live-apply the bkTransformTrigger kill-switch so a console flip takes
+    // effect in open tabs without a reload: re-arm/disarm every live badge's
+    // transform-ancestor tracking against the new value. Default-on semantics —
+    // only an explicit `false` disables (a removed key reads as on).
+    if (changes.bkTransformTrigger) {
+      const on = changes.bkTransformTrigger.newValue !== false;
+      setTransformTriggerEnabled(on);
+      reconcileTransformTrigger();
+      if (harnessHooksEnabled()) {
+        document.documentElement.setAttribute('data-bk-transform-trigger', on ? 'on' : 'off');
+      }
+    }
   });
 }
 
@@ -804,6 +817,13 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
 //   EXIT: keep on if the soak stays clean, else investigate; reconfirm at launch.
 // bkClipObserver - default ON, composes with bkOcclusion (IO-clip vs
 //   elementFromPoint hit-test). Same exit as bkOcclusion.
+// bkTransformTrigger - default ON, GRADUATED (user-validated on the QuickBase
+//   pipeline builder). Adds a MutationObserver on each badge's transformed
+//   ancestors so pan/zoom canvases (React Flow) that move by `transform` with no
+//   scroll event still drive the reconcile follow loop — fixes the badge wiggle.
+//   Only an explicit `false` disables (console kill-switch if a chatty inline-
+//   transform ancestor ever causes reposition churn). See
+//   notes/DESIGN_TRANSFORM_ANCESTOR_RECONCILE.md.
 if (typeof chrome !== 'undefined' && chrome.storage?.local) {
   chrome.storage.local.get('bkOcclusion', (result) => {
     // Occlusion filtering (notes/DESIGN_HINT_OCCLUSION_FILTERING.md). Default ON
@@ -813,6 +833,14 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
     setOcclusionEnabled(result.bkOcclusion !== false);
     if (harnessHooksEnabled()) {
       document.documentElement.setAttribute('data-bk-occlusion', result.bkOcclusion !== false ? 'on' : 'off');
+    }
+  });
+  chrome.storage.local.get('bkTransformTrigger', (result) => {
+    // Default ON (graduated): only an explicit `false` disables. See registry above.
+    const on = result.bkTransformTrigger !== false;
+    setTransformTriggerEnabled(on);
+    if (harnessHooksEnabled()) {
+      document.documentElement.setAttribute('data-bk-transform-trigger', on ? 'on' : 'off');
     }
   });
   chrome.storage.local.get('bkClipObserver', (result) => {
@@ -4214,6 +4242,20 @@ pageSession.resources.listen(document, 'scroll', scheduleScrollReposition, { pas
 // trades a ~100ms lag on resize-driven repositions — imperceptible
 // mid-scroll, same trade already accepted for scroll.
 onContainerResize(scheduleDeferredReposition);
+
+// Transform-ancestor trigger (notes/DESIGN_TRANSFORM_ANCESTOR_RECONCILE.md).
+// A pan/zoom canvas (React Flow — QuickBase pipeline builder) moves its viewport
+// by mutating an ancestor's `transform` via pointermove, firing NO scroll event,
+// so the scroll-driven follow loop never runs and badges freeze mid-pan. When a
+// tracked transformed ancestor's style mutates, poke the SAME bounded, self-
+// cancelling per-frame follow loop the scroll path uses (noteReconcileScroll),
+// and debounce a settle so post-pan discovery/strict converge (a pan can reveal
+// new in-band nodes). No-op unless a badge registered a transformed ancestor,
+// which only happens when the bkTransformTrigger flag is on.
+onTransformAncestorMutation(() => {
+  noteReconcileScroll();
+  scheduleDeferredReposition();
+});
 
 // Deferred reposition for signals that hint "layout is about to settle":
 // - focusin/focusout: :focus-within can resize parents, focus-driven
