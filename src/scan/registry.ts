@@ -162,30 +162,27 @@ export function fingerprintToString(fp: Fingerprint): string {
  * codeword assignment is the addressing layer (like Rango's label pool).
  */
 export function register(wrapper: ElementWrapper): number {
+  // `reverseIndex` (Element→id WeakMap) is the identity index: it is written on
+  // every register/rebind and cleared on unregister, so it stays in lockstep
+  // with `registry` for all live elements. It answers "is this exact element
+  // already registered?" in O(1) — which is all registration needs. A previous
+  // version also linear-scanned the whole registry for a fingerprint+identity
+  // match; that scan was redundant with this fast path (the same-element reuse
+  // branch was unreachable once reverseIndex existed) and made registration
+  // O(N) per call → O(N²) discovery on large stores. Removed. Re-mounted
+  // elements are a *different* Element object, so they correctly mint a fresh
+  // id; codeword inheritance across a re-mount is the key-ownership layer's job
+  // (computeStrongKey / DESIGN_CODEWORD_KEY_OWNERSHIP), not the registry's.
   const existing = reverseIndex.get(wrapper.element);
   if (existing !== undefined && registry.has(existing)) {
     wrapper.scanned.id = existing;
     return existing;
   }
 
-  const fp = computeFingerprint(wrapper.element);
-
-  for (const [otherId, entry] of registry) {
-    if (!fingerprintsEqual(entry.fingerprint, fp)) continue;
-    const otherEl = entry.ref.deref();
-    if (!otherEl) continue;
-    if (otherEl === wrapper.element) {
-      wrapper.scanned.id = otherId;
-      reverseIndex.set(wrapper.element, otherId);
-      return otherId;
-    }
-    break;
-  }
-
   const id = nextId++;
   registry.set(id, {
     ref: new WeakRef(wrapper.element),
-    fingerprint: fp,
+    fingerprint: computeFingerprint(wrapper.element),
     createdAt: performance.now(),
     category: wrapper.category,
   });

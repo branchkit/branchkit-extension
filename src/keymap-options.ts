@@ -294,7 +294,7 @@ async function saveAlias(meta: CommandMeta, base: string, newPattern: string): P
   if (addBtn) addAliasEditor(addBtn, meta, newPattern, r?.error || 'Could not add the phrase.');
 }
 
-async function removeAlias(meta: CommandMeta, alias: OverrideRecord): Promise<void> {
+async function removeAlias(_meta: CommandMeta, alias: OverrideRecord): Promise<void> {
   const r = await chrome.runtime.sendMessage({
     type: 'REMOVE_COMMAND_ALIAS',
     action: alias.action,
