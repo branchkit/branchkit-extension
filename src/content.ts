@@ -4607,8 +4607,9 @@ function activateHintMachinery(trigger: 'load' | 'resize'): void {
   hintMachineryEnabled = true;
   attachPageMutationObserver();
   // Registry-owned (Phase 2a): teardown clears it instead of leaving an orphan
-  // limbo sweeper running. Behavior-identical while the session is alive.
-  pageSession.resources.interval(finalizeExpiredLimboWrappers, LIMBO_DEADLINE_MS);
+  // limbo sweeper running. Paused on hidden-tab suspend and restarted on resume
+  // (long-session-perf finding 7) — see startLimboSweep/stopLimboSweep.
+  startLimboSweep();
   if (trigger === 'resize') {
     // Subframe that just grew past the eligibility threshold. The module-
     // load reservoir warm-up was skipped (frame was too small / blank),
@@ -4631,6 +4632,11 @@ function suspendHintMachinery(): void {
   if (suspended || !hintMachineryEnabled) return;
   suspended = true;
   teardownMutationSource();
+  // The limbo finalize sweep is a second continuous cost (a 250ms whole-store
+  // walk) the original suspend missed. Pausing it is safe: the mutation source
+  // is now down, so no new wrappers enter limbo while hidden; resume restarts it
+  // and doScan reaps anything expired (long-session-perf finding 7).
+  stopLimboSweep();
   // The discovery drain is a yield task (not cancellable): clearing the
   // queue makes an already-scheduled continuation a no-op (empty-set
   // return), and the reset flag lets resume re-schedule cleanly.
@@ -4651,12 +4657,28 @@ function resumeHintMachinery(): void {
   if (!suspended) return;
   suspended = false;
   attachPageMutationObserver();
+  startLimboSweep();
   void doScan().then(() => {
     reconcile();
     void pageSession.tracker.flushNow();
     if (pageSession.badgesVisible) showBadges();
   });
   bkLog('BK_RESUME', { url: trimFrameUrl(window.location.href), wrappers: store.all.length });
+}
+
+// The limbo finalize sweep, started on activate and paused across hidden-tab
+// suspend so a backgrounded tab stops paying the 250ms whole-store walk
+// (long-session-perf finding 7). Idempotent start/stop; the handle stays
+// registered with pageSession.resources so teardown still clears it.
+let limboSweepInterval: ReturnType<typeof setInterval> | null = null;
+function startLimboSweep(): void {
+  if (limboSweepInterval !== null) return;
+  limboSweepInterval = pageSession.resources.interval(finalizeExpiredLimboWrappers, LIMBO_DEADLINE_MS);
+}
+function stopLimboSweep(): void {
+  if (limboSweepInterval === null) return;
+  pageSession.resources.stopInterval(limboSweepInterval);
+  limboSweepInterval = null;
 }
 
 // One persistent visibilitychange handler driving the deferred/active/suspended

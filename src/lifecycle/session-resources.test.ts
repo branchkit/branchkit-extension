@@ -34,6 +34,24 @@ describe('SessionResources', () => {
     expect(r.counts.intervals).toBe(0);
   });
 
+  it('stopInterval cancels one interval and forgets it (pause without teardown)', () => {
+    const r = new SessionResources();
+    const a = vi.fn();
+    const b = vi.fn();
+    const idA = r.interval(a, 100);
+    r.interval(b, 100);
+    expect(r.counts.intervals).toBe(2);
+
+    r.stopInterval(idA);
+    expect(r.counts.intervals).toBe(1); // only A dropped
+    vi.advanceTimersByTime(250);
+    expect(a).not.toHaveBeenCalled(); // A paused
+    expect(b).toHaveBeenCalledTimes(2); // B still runs
+
+    r.stopInterval(idA); // no-op on an already-stopped id
+    expect(r.counts.intervals).toBe(1);
+  });
+
   it('clears pending timeouts on teardown', () => {
     const r = new SessionResources();
     const fn = vi.fn();

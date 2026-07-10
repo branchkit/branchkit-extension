@@ -68,6 +68,14 @@ export class SessionResources {
     return id;
   }
 
+  /** Stop a single interval created via `interval()` and forget it — for a
+   *  sweeper that should pause before teardown (e.g. the limbo finalize sweep
+   *  paused on hidden-tab suspend, restarted on resume). No-op if the id isn't
+   *  registered; `teardownAll()` still covers everything else. */
+  stopInterval(id: ReturnType<typeof setInterval>): void {
+    if (this.intervals.delete(id)) clearInterval(id);
+  }
+
   /** `setTimeout` that teardown clears; self-removes from the set when it fires
    *  so a long-lived session doesn't accumulate dead ids. */
   timeout(fn: () => void, ms: number): ReturnType<typeof setTimeout> {
