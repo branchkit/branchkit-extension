@@ -1,156 +1,57 @@
 import { describe, it, expect } from 'vitest';
-import { titleWords, domainWords, buildTabEntries, type OpenTab } from './tab-collection';
+import { buildTabEntries, type OpenTab } from './tab-collection';
 
-describe('titleWords', () => {
-  it('lowercases and keeps only pure a-z words of 3+ chars', () => {
-    expect(titleWords('BranchKit — PR #42 review')).toEqual(['branchkit', 'review']);
-  });
-
-  it('drops digits and punctuation-bearing tokens entirely (lexicon gap)', () => {
-    // "v2.1" fragments to "v" (too short); "(3)" contributes nothing.
-    expect(titleWords('(3) Inbox v2.1 notes')).toEqual(['inbox', 'notes']);
-  });
-
-  it('drops stopwords and boilerplate', () => {
-    expect(titleWords('How to get the most from your new tab page')).toEqual(['most']);
-  });
-
-  it('dedupes while preserving first-seen order', () => {
-    expect(titleWords('rust rust book — the rust book')).toEqual(['rust', 'book']);
-  });
-
-  it('splits non-ASCII as boundaries rather than emitting it', () => {
-    // The accented char is a boundary; the ASCII fragment survives if long
-    // enough (a fragment absent from the BPE lexicon is dropped engine-side,
-    // which is harmless).
-    expect(titleWords('café menu')).toEqual(['caf', 'menu']);
-  });
-});
-
-describe('domainWords', () => {
-  it('returns the registrable label first, subdomains after', () => {
-    expect(domainWords('https://mail.google.com/mail/u/0')).toEqual(['google', 'mail']);
-  });
-
-  it('handles bare domains', () => {
-    expect(domainWords('https://github.com/foo/bar')).toEqual(['github']);
-  });
-
-  it('drops www and short labels', () => {
-    expect(domainWords('https://www.nytimes.com/section')).toEqual(['nytimes']);
-  });
-
-  it('yields nothing for non-http URLs', () => {
-    expect(domainWords('chrome://settings')).toEqual([]);
-    expect(domainWords('about:blank')).toEqual([]);
-    expect(domainWords('not a url')).toEqual([]);
-  });
-
-  it('skips labels with digits or hyphens (lexicon gap)', () => {
-    expect(domainWords('https://s3-us-west.amazonaws.com/x')).toEqual(['amazonaws']);
-  });
-});
-
+// Tab titles/domains are no longer projected into the voice grammar (removed
+// 2026-07-12 — privacy + churn). buildTabEntries now publishes only each tab's
+// stable MARK codeword; title-word matching is gone.
 describe('buildTabEntries', () => {
   const tab = (tabId: number, title: string, url: string): OpenTab => ({ tabId, title, url });
 
-  it('gives each tab its unique title words plus domain words', () => {
+  it('publishes nothing without marks (titles/domains are not projected)', () => {
     const entries = buildTabEntries(
       [tab(1, 'Quarterly Report', 'https://docs.google.com/x')],
       [1],
     );
-    const bySpoken = Object.fromEntries(entries.map((e) => [e.spoken, e.tab_id]));
-    expect(bySpoken).toEqual({ quarterly: '1', report: '1', google: '1' });
+    expect(entries).toEqual([]);
   });
 
-  it('assigns a shared word to the MRU-most claimant only', () => {
+  it('publishes each tab’s mark codeword', () => {
     const entries = buildTabEntries(
-      [
-        tab(1, 'BranchKit PR alpha', 'https://github.com/a'),
-        tab(2, 'BranchKit PR beta', 'https://github.com/b'),
-      ],
-      [2, 1], // tab 2 most recent
+      [tab(1, 'Docs', 'https://a.com'), tab(2, 'Mail', 'https://b.com')],
+      [1, 2],
+      new Map([[1, 'arch'], [2, 'bam']]),
     );
-    const githubOwners = entries.filter((e) => e.spoken === 'github');
-    expect(githubOwners).toHaveLength(1);
-    expect(githubOwners[0].tab_id).toBe('2');
-    // Unique title words still reach each tab.
-    expect(entries.find((e) => e.spoken === 'alpha')?.tab_id).toBe('1');
-    expect(entries.find((e) => e.spoken === 'beta')?.tab_id).toBe('2');
+    const bySpoken = Object.fromEntries(entries.map((e) => [e.spoken, e.tab_id]));
+    expect(bySpoken).toEqual({ arch: '1', bam: '2' });
   });
 
-  it('never publishes the same spoken word twice', () => {
+  it('never publishes the same mark twice', () => {
     const entries = buildTabEntries(
-      [
-        tab(1, 'News feed', 'https://news.example.com'),
-        tab(2, 'News archive', 'https://news.example.com/old'),
-        tab(3, 'News search', 'https://news.example.com/find'),
-      ],
-      [1, 2, 3],
+      [tab(1, 'A', 'https://a.com'), tab(2, 'B', 'https://b.com')],
+      [1, 2],
+      new Map([[1, 'arch'], [2, 'arch']]), // colliding marks (shouldn't happen, but guard)
     );
     const words = entries.map((e) => e.spoken);
     expect(new Set(words).size).toBe(words.length);
   });
 
-  it('caps words per tab at 3, preferring unique title words', () => {
-    const entries = buildTabEntries(
-      [tab(1, 'alpha bravo charlie delta echo', 'https://example.com')],
-      [1],
-    );
-    expect(entries).toHaveLength(3);
-    expect(entries.map((e) => e.spoken).sort()).toEqual(['alpha', 'bravo', 'charlie']);
-  });
-
-  it('leaves a fully-shadowed tab with no entries (palette handles the rest)', () => {
-    const entries = buildTabEntries(
-      [
-        tab(1, 'Inbox', 'https://mail.example.com'),
-        tab(2, 'Inbox', 'https://mail.example.com'),
-      ],
-      [1, 2], // tab 1 wins every shared word
-    );
-    expect(entries.every((e) => e.tab_id === '1')).toBe(true);
-  });
-
-  it('handles chrome:// tabs via title words only', () => {
-    const entries = buildTabEntries([tab(1, 'Extensions', 'chrome://extensions')], []);
-    expect(entries).toEqual([{ spoken: 'extensions', tab_id: '1', title: 'Extensions' }]);
-  });
-
   it('is deterministic and sorted for the unchanged-set guard', () => {
-    const tabs = [
-      tab(2, 'Zebra docs', 'https://zebra.dev'),
-      tab(1, 'Apple docs', 'https://apple.dev'),
-    ];
-    const a = buildTabEntries(tabs, [1, 2]);
-    const b = buildTabEntries([...tabs].reverse(), [1, 2]);
+    const tabs = [tab(2, 'Zebra', 'https://zebra.dev'), tab(1, 'Apple', 'https://apple.dev')];
+    const marks = new Map([[1, 'arch'], [2, 'zoom']]);
+    const a = buildTabEntries(tabs, [1, 2], marks);
+    const b = buildTabEntries([...tabs].reverse(), [1, 2], marks);
     expect(a).toEqual(b);
     expect(a.map((e) => e.spoken)).toEqual([...a.map((e) => e.spoken)].sort());
   });
 
   it('stamps tab_id as a string and trims long titles', () => {
     const long = 'word '.repeat(40) + 'end';
-    const entries = buildTabEntries([tab(7, long, 'https://example.com')], []);
+    const entries = buildTabEntries([tab(7, long, 'https://example.com')], [], new Map([[7, 'arch']]));
     expect(entries[0].tab_id).toBe('7');
     expect(entries[0].title.length).toBeLessThanOrEqual(80);
   });
 
-  it('publishes a tab’s mark word with priority over a colliding title word', () => {
-    // "huge" is both tab 1's title word AND tab 2's mark. The mark wins, so
-    // "tab huge" resolves to the marked tab.
-    const entries = buildTabEntries(
-      [tab(1, 'huge report', 'https://a.com'), tab(2, 'Docs', 'https://b.com')],
-      [],
-      new Map([[2, 'huge']]),
-    );
-    const huge = entries.filter((e) => e.spoken === 'huge');
-    expect(huge).toHaveLength(1);
-    expect(huge[0].tab_id).toBe('2'); // the marked tab, not the title-word tab
-    // tab 1 still keeps its other word.
-    expect(entries.some((e) => e.spoken === 'report' && e.tab_id === '1')).toBe(true);
-  });
-
-  it('includes the mark even for a tab with no title/domain words', () => {
+  it('includes the mark for a tab with an empty title', () => {
     const entries = buildTabEntries([tab(5, '', 'about:blank')], [], new Map([[5, 'arch']]));
     expect(entries).toEqual([{ spoken: 'arch', tab_id: '5', title: '' }]);
   });

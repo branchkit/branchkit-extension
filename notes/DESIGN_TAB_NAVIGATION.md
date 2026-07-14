@@ -1,6 +1,8 @@
 # Design: Tab Navigation + Command Palette
 
 **Status:** Layer 0 (MRU stack) + Layer 1 (cycling) + tab verbs (Vimium parity, below) shipped 2026-07-01. Layer 3 (voice "switch to \<tab>") shipped 2026-07-02. Layer 2 (the palette) shipped 2026-07-05 in two same-day halves: keyboard MVP (Ctrl+K, extension-served iframe, tabs MRU-first + commands sources), then the voice half (codeword badges under an exclusive palette mode — see "Layer 2 voice half" below). Live verify pending. Still open: frecency, bookmarks source.
+
+**Layer 3 narrowed 2026-07-12 — marks only, no title/domain words.** `tab-collection.ts` used to publish distinctive title/site words ("tab github") alongside each tab's mark. Removed: the title-derived words (a) leaked open-tab/search history onto the on-screen Entities HUD (privacy hazard when presenting), (b) churned the recognition grammar on every SPA retitle, and (c) surfaced as strange/stale keyword fragments. `buildTabEntries` now publishes only each tab's stable MARK codeword, so "tab \<codeword>" still resolves in one breath and the strip hints are unchanged — title-word switching is gone; use the mark or the palette (Layer 2). The browser plugin and `browser_tabs` schema are unchanged (they just project fewer entries).
 **Goal:** Move between tabs and jump to specific ones via keyboard and voice — without building a keyboard-only thing that can't be reused for voice — and grow the overlay into the modern successor of Vimium's Vomnibar rather than a one-source switcher.
 
 ## Prior art (what we're borrowing)
