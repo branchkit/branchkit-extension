@@ -111,6 +111,21 @@ const OPAQUE_SUBTREE_TAGS = new Set([
   'svg', 'math', 'canvas', 'video', 'audio', 'picture', 'iframe',
 ]);
 
+// Sighting hook for open shadow roots the walk pierces. The mutation source
+// registers each sighted root on the page MutationObserver (one instance, many
+// targets) so appends INSIDE a long-lived shadow root take the normal
+// incremental discovery path instead of waiting for a band sweep — the page MO
+// does not descend into shadow trees on its own. Set once at observer
+// construction (setShadowRootSightingHook in mutation-source); a hook keeps
+// the dependency direction scanner ← mutation-source (the source already
+// imports the scanner). See notes/DESIGN_BAND_SWEEP_DIRTY_GATE.md.
+type ShadowRootSighting = (root: ShadowRoot) => void;
+let shadowRootSighting: ShadowRootSighting | null = null;
+
+export function setShadowRootSightingHook(cb: ShadowRootSighting | null): void {
+  shadowRootSighting = cb;
+}
+
 function findShadowHosts(root: ParentNode): Element[] {
   const hosts: Element[] = [];
   // The TreeWalker below only visits descendants. When `root` itself is a
@@ -118,6 +133,7 @@ function findShadowHosts(root: ParentNode): Element[] {
   // content.ts on attachShadow), we'd miss its shadow root entirely.
   if (root instanceof Element && !COMMON_LEAF_TAGS.has(root.tagName.toLowerCase()) && root.shadowRoot) {
     hosts.push(root);
+    shadowRootSighting?.(root.shadowRoot);
   }
   // A TreeWalker (vs querySelectorAll('*')) lets us FILTER_REJECT opaque
   // subtrees so their descendants are never visited — on media-heavy pages
@@ -138,7 +154,10 @@ function findShadowHosts(root: ParentNode): Element[] {
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     const el = node as Element;
     if (COMMON_LEAF_TAGS.has(el.tagName.toLowerCase())) continue;
-    if (el.shadowRoot) hosts.push(el);
+    if (el.shadowRoot) {
+      hosts.push(el);
+      shadowRootSighting?.(el.shadowRoot);
+    }
   }
   return hosts;
 }

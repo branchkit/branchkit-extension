@@ -11,7 +11,11 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { pageSession, type PageSessionDeps } from '../lifecycle/page-session';
-import { processMutations, teardownMutationSource } from './mutation-source';
+import {
+  processMutations, teardownMutationSource,
+  constructPageMutationObserver, attachPageMutationObserver, observeShadowRootForMutations,
+} from './mutation-source';
+import { deepQuerySelectorAll, setShadowRootSightingHook } from '../scan/scanner';
 
 function childListRecord(added: Node[] = [], removed: Node[] = []): MutationRecord {
   return { type: 'childList', addedNodes: added, removedNodes: removed } as unknown as MutationRecord;
@@ -76,5 +80,76 @@ describe('teardownMutationSource', () => {
       teardownMutationSource();
       teardownMutationSource();
     }).not.toThrow();
+  });
+});
+
+describe('shadow-root observation (observeShadowRootForMutations)', () => {
+  // Pin OUR registration logic (guards, dedup, lifecycle) via an observe()
+  // spy — record delivery for shadow-root targets is engine territory the
+  // happy-dom env can't be trusted to model.
+  let observeSpy: ReturnType<typeof vi.spyOn>;
+
+  function makeOpenShadowHost(): { host: HTMLElement; root: ShadowRoot } {
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = host.attachShadow({ mode: 'open' });
+    return { host, root };
+  }
+
+  beforeEach(() => {
+    constructPageMutationObserver();
+    observeSpy = vi.spyOn(MutationObserver.prototype, 'observe');
+    attachPageMutationObserver();
+  });
+
+  afterEach(() => {
+    observeSpy.mockRestore();
+    setShadowRootSightingHook(null);
+    document.body.innerHTML = '';
+  });
+
+  it('registers a sighted root with the page-observation options', () => {
+    const { root } = makeOpenShadowHost();
+    observeShadowRootForMutations(root);
+    const call = observeSpy.mock.calls.find(([target]) => target === root);
+    expect(call).toBeDefined();
+    const options = call?.[1] as MutationObserverInit;
+    expect(options.childList).toBe(true);
+    expect(options.subtree).toBe(true);
+    expect(options.attributes).toBe(true);
+    expect(options.attributeFilter).toContain('href');
+  });
+
+  it('registers each root once (WeakSet dedup)', () => {
+    const { root } = makeOpenShadowHost();
+    observeShadowRootForMutations(root);
+    observeShadowRootForMutations(root);
+    expect(observeSpy.mock.calls.filter(([target]) => target === root)).toHaveLength(1);
+  });
+
+  it('skips our own UI roots (host carries data-branchkit-hint)', () => {
+    const { host, root } = makeOpenShadowHost();
+    host.setAttribute('data-branchkit-hint', '');
+    observeShadowRootForMutations(root);
+    expect(observeSpy.mock.calls.some(([target]) => target === root)).toBe(false);
+  });
+
+  it('is a no-op after teardown and resumes after re-attach (fresh dedup set)', () => {
+    const { root } = makeOpenShadowHost();
+    teardownMutationSource();
+    observeShadowRootForMutations(root);
+    expect(observeSpy.mock.calls.some(([target]) => target === root)).toBe(false);
+    attachPageMutationObserver();
+    observeShadowRootForMutations(root);
+    expect(observeSpy.mock.calls.filter(([target]) => target === root)).toHaveLength(1);
+  });
+
+  it('is sighted by the scanner walk (hook wired at construction)', () => {
+    const { root } = makeOpenShadowHost();
+    const link = document.createElement('a');
+    link.setAttribute('href', '/x');
+    root.appendChild(link);
+    deepQuerySelectorAll(document.body, 'a[href]');
+    expect(observeSpy.mock.calls.some(([target]) => target === root)).toBe(true);
   });
 });

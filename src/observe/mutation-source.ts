@@ -21,7 +21,7 @@ import { store } from '../core/store';
 import { detachWrapper } from '../core/wrapper-lifecycle';
 import { markDomSeen } from './dom-seen';
 import { dropDisconnectedWrappers } from './limbo';
-import { subtreeMaybeHintable } from '../scan/scanner';
+import { subtreeMaybeHintable, setShadowRootSightingHook } from '../scan/scanner';
 import { consumeShadowAttachSignal } from '../scan/shadow-attach-signal';
 import { cacheVisibility, clearLayoutCache } from '../layout-cache';
 import { getHintVisibility } from '../config';
@@ -438,6 +438,55 @@ function handlePageMutations(records: MutationRecord[]): void {
 
 let observer: MutationObserver | undefined;
 
+// The page-observation options, shared verbatim by the document target and
+// every registered open shadow root (observeShadowRootForMutations) — shadow
+// interiors must reevaluate/discover on exactly the signals the light DOM does.
+const PAGE_OBSERVE_OPTIONS: MutationObserverInit = {
+  childList: true,
+  subtree: true,
+  attributes: true,
+  // Watch attributes that flip hintability AND those that feed the
+  // fingerprint. Without aria-label/title/type in the filter, a button
+  // renamed from "Save" to "Save changes" would still register against
+  // its stale fingerprint and the WeakRef-dead-fingerprint-fallback
+  // path could never recover it. tabindex/inert are hintability gates
+  // too ([tabindex]:not([tabindex="-1"]) in HINTABLE, [inert] in
+  // EXCLUDE) — without them, an element JS-enhanced with tabindex="0"
+  // or un-inerted never reevaluates until a full walk happens by.
+  attributeFilter: [
+    'disabled', 'aria-hidden', 'role', 'contenteditable', 'href',
+    'aria-label', 'aria-labelledby', 'aria-describedby', 'aria-roledescription',
+    'title', 'type', 'tabindex', 'inert',
+  ],
+};
+
+// Open shadow roots registered on the page observer this attach cycle. The
+// page MO's subtree observation stops at shadow boundaries, so every open
+// root the scanner's walk pierces is added as an additional observe() target
+// (setShadowRootSightingHook, wired at construction). WeakSet so a root dies
+// with its host; recreated on teardown because disconnect() drops all targets
+// — the post-resume walk re-sights and re-registers live roots.
+let observedShadowRoots = new WeakSet<ShadowRoot>();
+// False between teardownMutationSource and the next attach: a sighting that
+// lands mid-suspend (or after session teardown) must not re-arm a
+// disconnected observer — observe() on it would resurrect delivery.
+let sourceAttached = false;
+
+/** Register an open shadow root as an additional page-observation target so
+ * appends inside it take the incremental discovery path (the doc-level
+ * subtree observation never crosses shadow boundaries). Own UI roots are
+ * skipped — every BranchKit host carries `data-branchkit-hint`. */
+export function observeShadowRootForMutations(root: ShadowRoot): void {
+  if (!observer || !sourceAttached) return;
+  if (observedShadowRoots.has(root)) return;
+  if (root.host.hasAttribute('data-branchkit-hint')) return;
+  observedShadowRoots.add(root);
+  try {
+    observer.observe(root, PAGE_OBSERVE_OPTIONS);
+    lifecycleCounters.shadowRootsObserved++;
+  } catch { /* detached-document root; the walk that sighted it is stale */ }
+}
+
 // When the page MO FIRST attached (performance.now ms). dom-seen stamps only
 // exist for insertions after this moment, so an unstamped wrapper attached
 // near it is pre-observer BOOT content — not a "materialized with no MO
@@ -455,34 +504,23 @@ export function getObserverFirstAttachedAt(): number | null {
  * nothing is observed until `attachPageMutationObserver()`. */
 export function constructPageMutationObserver(): void {
   observer = new MutationObserver(handlePageMutations);
+  setShadowRootSightingHook(observeShadowRootForMutations);
 }
 
 export function attachPageMutationObserver(): void {
   if (observerFirstAttachedAt === null) observerFirstAttachedAt = performance.now();
-  observer?.observe(document.body || document.documentElement, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    // Watch attributes that flip hintability AND those that feed the
-    // fingerprint. Without aria-label/title/type in the filter, a button
-    // renamed from "Save" to "Save changes" would still register against
-    // its stale fingerprint and the WeakRef-dead-fingerprint-fallback
-    // path could never recover it. tabindex/inert are hintability gates
-    // too ([tabindex]:not([tabindex="-1"]) in HINTABLE, [inert] in
-    // EXCLUDE) — without them, an element JS-enhanced with tabindex="0"
-    // or un-inerted never reevaluates until a full walk happens by.
-    attributeFilter: [
-      'disabled', 'aria-hidden', 'role', 'contenteditable', 'href',
-      'aria-label', 'aria-labelledby', 'aria-describedby', 'aria-roledescription',
-      'title', 'type', 'tabindex', 'inert',
-    ],
-  });
+  sourceAttached = true;
+  observer?.observe(document.body || document.documentElement, PAGE_OBSERVE_OPTIONS);
 }
 
 /** Disconnect the page observer and cancel the pending reevaluation frame.
  * Idempotent; called from teardown. (The discovery rAF + huge-mutation timer
  * live on PageSession and are cancelled by the session teardown.) */
 export function teardownMutationSource(): void {
+  sourceAttached = false;
+  // disconnect() drops the document AND every registered shadow root; a fresh
+  // WeakSet lets the post-resume walk re-register the roots that survive.
+  observedShadowRoots = new WeakSet<ShadowRoot>();
   try { observer?.disconnect(); } catch { /* may not be initialized yet */ }
   if (reevaluationFrame !== null) {
     cancelAnimationFrame(reevaluationFrame);

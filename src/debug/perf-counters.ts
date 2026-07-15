@@ -402,6 +402,12 @@ export interface LifecycleCounters {
   // signals climbing while visibility attaches stay flat means the promote
   // recheck is rejecting what the sensor reports.
   visibilityRoSignals: number;
+  // Open shadow roots registered as additional page-MO targets (the walk's
+  // sighting hook → observeShadowRootForMutations). Sizes the extra
+  // observation surface on shadow-heavy pages; resets with the attach cycle
+  // it describes only via resetLifecycleCounters (registration itself is
+  // WeakSet-deduped per cycle).
+  shadowRootsObserved: number;
   // Cumulative wrapper attaches by discovery source (attachWrapper stamps
   // the same value on the wrapper — see DiscoverySource in element-wrapper).
   // Window-scoped per-source latency lives in the debug snapshot's
@@ -427,6 +433,7 @@ export const lifecycleCounters: LifecycleCounters = {
   bandSweepReleases: 0,
   invisibleCandidatesObserved: 0,
   visibilityRoSignals: 0,
+  shadowRootsObserved: 0,
   attachedBySource: {},
 };
 
