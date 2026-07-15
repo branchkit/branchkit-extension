@@ -293,21 +293,27 @@ export function isVisible(el: Element): boolean {
     return false;
   }
 
-  // Skipped-subtree gate: Chrome hides closed-<details> content (and other
-  // c-v subtrees) with content-visibility, NOT display:none — the boxes
-  // keep real size and position, so the rect/style gates above pass and
-  // the content would get a ghost badge. checkVisibility() with no options
-  // checks exactly the display:none chain + content-visibility skipped
-  // state (opacity/visibility are handled above, where their carve-outs
-  // apply), so it can sit after the carve-out block without disturbing
-  // custom-checkbox/autosize handling.
-  const cv = (el as Element & { checkVisibility?: () => boolean }).checkVisibility;
-  if (typeof cv === 'function' && !cv.call(el)) return false;
+  // Ancestor-chain gate. Element-own visibility/opacity/size ran above,
+  // where their carve-outs (custom checkbox, autosized input) apply; what
+  // remains is everything an ANCESTOR can do: display:none chain,
+  // content-visibility skipped state (Chrome hides closed-<details> content
+  // this way — boxes keep real size, so the rect/style gates pass), and
+  // opacity:0 anywhere up the chain. Native checkVisibility with
+  // checkOpacity+checkVisibilityCSS answers all of it in one engine-side
+  // call — this is what deleted the per-wrapper ancestor getComputedStyle
+  // walk that dominated settleGather (3.2M gCS on the live trail,
+  // notes/DESIGN_BAND_SWEEP_DIRTY_GATE.md investigation). Chrome 105+ /
+  // FF 125+; engines without it fall back to the hand-rolled walk below.
+  const cv = (el as Element & { checkVisibility?: (opts?: object) => boolean }).checkVisibility;
+  if (typeof cv === 'function') {
+    return cv.call(el, { checkOpacity: true, checkVisibilityCSS: true });
+  }
 
-  // Walk ancestors checking for opacity:0. Hit the cache first — the
-  // first descendant of an ancestor chain pays the full walk, every
-  // subsequent descendant within the same scan short-circuits the
-  // moment it hits a cached ancestor.
+  // Legacy fallback: walk ancestors checking for opacity:0. Hit the cache
+  // first — the first descendant of an ancestor chain pays the full walk,
+  // every subsequent descendant within the same scan short-circuits the
+  // moment it hits a cached ancestor. (display:none ancestors need no probe
+  // here: they collapse the rect, caught above.)
   const chain: Element[] = [];
   let current = el.parentElement;
   while (current) {

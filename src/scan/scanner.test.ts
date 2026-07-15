@@ -235,6 +235,35 @@ describe('scanInBatches', () => {
   });
 });
 
+describe('isVisible — native checkVisibility delegation', () => {
+  // happy-dom has no Element.checkVisibility, so the suite otherwise runs the
+  // legacy ancestor-opacity walk. Stub it per-element to pin the native
+  // branch: the ancestor gate must delegate with checkOpacity +
+  // checkVisibilityCSS and trust the verdict.
+  it('returns the native verdict and passes the opacity/CSS options', () => {
+    html('<div><button id="b">go</button></div>');
+    const el = document.getElementById('b')! as Element & {
+      checkVisibility?: (opts?: Record<string, boolean>) => boolean;
+    };
+    let seenOpts: Record<string, boolean> | undefined;
+    el.checkVisibility = (opts) => { seenOpts = opts as Record<string, boolean>; return false; };
+    expect(isVisible(el)).toBe(false);
+    expect(seenOpts?.checkOpacity).toBe(true);
+    expect(seenOpts?.checkVisibilityCSS).toBe(true);
+    el.checkVisibility = () => true;
+    expect(isVisible(el)).toBe(true);
+  });
+
+  it('own-style carve-outs still run before the native gate (opacity:0 rejects without consulting it)', () => {
+    html('<div><button id="b" style="opacity: 0">go</button></div>');
+    const el = document.getElementById('b')! as Element & { checkVisibility?: () => boolean };
+    let consulted = false;
+    el.checkVisibility = () => { consulted = true; return true; };
+    expect(isVisible(el)).toBe(false);
+    expect(consulted).toBe(false);
+  });
+});
+
 describe('isVisible — autosized text-entry carve-out (QuickBase 2px filter inputs)', () => {
   // The shared beforeEach patches every rect to 100x20; narrow it here so
   // [data-tiny] elements measure 2x19 (the react-select empty-input shape).

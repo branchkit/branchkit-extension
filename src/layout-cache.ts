@@ -126,20 +126,31 @@ export function peekCachedStyle(el: Element): CSSStyleDeclaration | null {
  * one ancestor pre-read. (Badge construction uses the heavier
  * `cacheConstruction` below — it needs ancestor rects + dims too.)
  */
+// When the engine has Element.checkVisibility, isVisible's ancestor gate is
+// one native call — it never reads ancestor styles, so warming the chain is
+// pure waste (the dominant getComputedStyle producer in settleGather before
+// this: ~15 styles/element/settle). Only engines on the legacy opacity walk
+// still want the chain.
+const NATIVE_ANCESTOR_VISIBILITY =
+  typeof Element !== 'undefined' && typeof Element.prototype.checkVisibility === 'function';
+
 export function cacheVisibility(elements: Iterable<Element>): { rects: number; styles: number } {
-  // isVisible reads the *element's* rect once, then walks ancestors probing
-  // only `opacity` (a style read). It never reads an ancestor's rect. So we
-  // cache rect for the seed elements only, and style for seed + ancestor
-  // chain. Caching ancestor rects (the old behavior) was pure waste — on a
-  // YouTube comment mount that's thousands of needless getBoundingClientRect.
+  // isVisible reads the *element's* rect + style once, then gates ancestors
+  // via native checkVisibility (no reads) or, on legacy engines, walks them
+  // probing only `opacity` (a style read). It never reads an ancestor's
+  // rect. So we cache rect for the seed elements only, and style for seed
+  // (+ ancestor chain on legacy engines only). Caching ancestor rects (the
+  // old behavior) was pure waste — on a YouTube comment mount that's
+  // thousands of needless getBoundingClientRect.
   let rects = 0;
   let styles = 0;
+  const chainDepth = NATIVE_ANCESTOR_VISIBILITY ? 1 : 15;
   const toCacheStyle = new Set<Element>();
   for (const el of elements) {
     if (!boundingRects.has(el)) { boundingRects.set(el, el.getBoundingClientRect()); rects++; }
     let current: Element | null = el;
     let depth = 0;
-    while (current && depth < 15) {
+    while (current && depth < chainDepth) {
       if (toCacheStyle.has(current)) break;
       toCacheStyle.add(current);
       current = current.parentElement;
