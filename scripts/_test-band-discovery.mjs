@@ -1,26 +1,23 @@
 // Guardrail for the band-discovery backstop (Phase 3b of
-// notes/DESIGN_HINT_LIFECYCLE_RECONCILER.md — reconcile's "discover" step).
+// notes/DESIGN_HINT_LIFECYCLE_RECONCILER.md — reconcile's "discover" step),
+// its dirty gate, and the shadow-interior observation that made the gate
+// sound (notes/DESIGN_BAND_SWEEP_DIRTY_GATE.md).
 //
-// The gap it covers: a hintable element enters the DOM while the doc-level
-// MutationObserver drops/coalesces its insertion record under a mutation
-// storm, so no wrapper is ever created. reconcile() converges {codeword,hint}
-// over EXISTING wrappers — it can't see an element that has none. The discover
-// step re-walks the document via the sliced/batched discovery on scroll-settle
-// and idempotently attaches anything missed.
+// The gap the sweep covers: a hintable element enters the DOM but its
+// discovery walk never runs (race, skip, engine oddity), so no wrapper is
+// ever created. reconcile() converges {codeword,hint} over EXISTING wrappers
+// — it can't see an element that has none. The sweep re-walks the document
+// on settle and idempotently attaches anything missed.
 //
-// Synthesizing that gap deterministically, no app required: the doc-level
-// MutationObserver does NOT observe inside a shadow root, but the scanner's
-// deepQuerySelectorAll DOES pierce OPEN shadow roots. So appending a hintable
-// <a href> into an open shadow root post-baseline is a real discovery gap —
-// hintable + in-band, but our observer never saw it, so the normal path makes
-// no wrapper. ONLY scheduleBandDiscovery (fired by scroll-settle) can find it.
-//
-// Flow: baseline (static links badged) -> inject <a> into the open shadow root
-// -> confirm it is NOT yet badged (the gap is real) -> small scroll-and-back to
-// fire the scroll-settle reconcile + discover sweep -> assert the injected
-// element is now badged. The static links stay in-band throughout (the only
-// scrollable region is an empty below-the-fold spacer), so the post-sweep badge
-// delta is uniquely attributable to the discover step.
+// This script's ORIGINAL synthesis — append into an open shadow root, which
+// the doc-level MO can't see — stopped being a gap when the scanner's
+// sighting hook began registering open roots on the page observer: shadow
+// appends now take the incremental path. Part A asserts exactly that (badge
+// with NO scroll — no sweep needed). Part B synthesizes a genuine walk-miss
+// via the harness fault hook: data-bk-test-drop-discovery-roots makes
+// drainDiscovery skip one root's walk, so a light-DOM insert is SEEN (the
+// DOM-add epoch goes dirty) but never walked — the dirty-gated settle sweep
+// must recover it.
 //
 // Runs on Chromium (CSS anchor positioning + open-shadow scan, same engine the
 // production backstop runs on).
@@ -106,7 +103,7 @@ if (base.totalHosts < 3) {
   pass(`baseline badges painted (${base.totalHosts} hosts)`);
 }
 
-console.log('[4] inject a hintable <a> into the OPEN shadow root (the discovery gap)');
+console.log('[4] PART A — inject a hintable <a> into the OPEN shadow root');
 await page.evaluate((injectedId) => {
   const sr = document.getElementById('shadow-host').shadowRoot;
   const a = document.createElement('a');
@@ -117,37 +114,69 @@ await page.evaluate((injectedId) => {
   sr.appendChild(a);
 }, INJECTED_ID);
 
-console.log('[5] confirm the gap is real: settle briefly, element must NOT be badged yet');
-await sleep(600);
-const gapped = await probe();
-console.log('   ', JSON.stringify(gapped));
-if (!gapped.injectedExists) {
+console.log('[5] assert it badges INCREMENTALLY (registered root, no scroll, no sweep)');
+await sleep(1500);
+const afterShadow = await probe();
+console.log('   ', JSON.stringify(afterShadow));
+if (!afterShadow.injectedExists) {
   fail('injected element vanished — fixture/shadow setup broken');
-} else if (gapped.totalHosts !== base.totalHosts) {
-  fail(`element got a badge WITHOUT the sweep (hosts ${base.totalHosts} -> ${gapped.totalHosts}) — `
-    + 'the MutationObserver saw the shadow insertion; gap not synthesized, test invalid');
+} else if (afterShadow.totalHosts <= base.totalHosts) {
+  fail(`shadow-interior append NOT badged without a scroll (hosts ${base.totalHosts} -> ${afterShadow.totalHosts}) — `
+    + 'open-root observation (observeShadowRootForMutations) is not delivering');
 } else {
-  pass('injected element is NOT badged before the sweep (genuine discovery gap)');
+  pass(`shadow-interior append badged incrementally (hosts ${base.totalHosts} -> ${afterShadow.totalHosts})`);
 }
 
-console.log('[6] small window scroll-and-back to fire scroll-settle -> band-discovery sweep');
-// Keep the static links + shadow host in-band the whole time (only the empty
-// spacer is below the fold) so nothing is torn down/rebuilt; the sole post-sweep
-// badge delta is the discover step attaching the missed shadow element.
+console.log('[6] PART B — arm the drop hook, inject a light-DOM link (seen but never walked)');
+const GAP_LIGHT_ID = 'gap-light-link';
+await page.evaluate((id) => {
+  document.documentElement.setAttribute('data-bk-test-drop-discovery-roots', '1');
+  const a = document.createElement('a');
+  a.href = '#';
+  a.id = id;
+  a.textContent = 'Dropped link';
+  a.style.cssText = 'display:block;padding:16px 20px;';
+  document.body.insertBefore(a, document.body.firstChild);
+}, GAP_LIGHT_ID);
+await sleep(250);
+const dropState = await page.evaluate((id) => ({
+  dropAttr: document.documentElement.getAttribute('data-bk-test-drop-discovery-roots'),
+  sweepGate: document.documentElement.getAttribute('data-bk-sweep-gate'),
+  badged: !!document.getElementById(id)?.previousElementSibling?.hasAttribute?.('data-branchkit-hint')
+    || false,
+}), GAP_LIGHT_ID);
+console.log('   ', JSON.stringify(dropState));
+if (dropState.dropAttr !== '0') {
+  fail(`drop hook not consumed (attr=${dropState.dropAttr}) — harness fault injection broken, gap not synthesized`);
+} else {
+  pass('drainDiscovery consumed the drop hook (walk skipped for the inserted link)');
+}
+if (dropState.sweepGate !== 'on') {
+  fail(`dirty gate not active (data-bk-sweep-gate=${dropState.sweepGate}) — recovery would not exercise the gated path`);
+} else {
+  pass('band-sweep dirty gate is ON');
+}
+
+console.log('[7] scroll-and-back to fire a settle; a self-heal layer must recover the dropped link');
+// Which layer wins the recovery is timing-dependent: the insert dirties the
+// DOM-add epoch, so the settle's gated sweep recovers it — but an earlier
+// self-heal (a scan pass) may get there first on an idle fixture. The
+// guardrail contract is layer-agnostic: a walk-miss is badged promptly, and
+// the gate did not starve it. The wrapper's discovery source is reported by
+// the snapshot check below.
 await page.evaluate(() => window.scrollTo(0, 60));
 await sleep(150);
 await page.evaluate(() => window.scrollTo(0, 0));
-console.log('   wait 1500ms for settle debounce + idle sweep + reconcile + paint');
-await sleep(1500);
+console.log('   wait 2000ms for settle debounce + idle sweep + reconcile + paint');
+await sleep(2000);
 
-console.log('[7] assert the injected element is now badged');
 const after = await probe();
 console.log('   ', JSON.stringify(after));
-if (after.totalHosts <= base.totalHosts) {
-  fail(`no new badge after sweep (hosts ${base.totalHosts} -> ${after.totalHosts}) — `
-    + 'scheduleBandDiscovery did not attach the missed element');
+if (after.totalHosts <= afterShadow.totalHosts) {
+  fail(`no new badge for the dropped link (hosts ${afterShadow.totalHosts} -> ${after.totalHosts}) — `
+    + 'the dirty gate starved recovery of a seen-but-unwalked element');
 } else {
-  pass(`a new badge appeared after the sweep (hosts ${base.totalHosts} -> ${after.totalHosts})`);
+  pass(`the dropped link was recovered (hosts ${afterShadow.totalHosts} -> ${after.totalHosts})`);
 }
 // Stronger attribution: the injected element must own a wrapper with a
 // claimed codeword. (The old checks — inline anchor-name, or a host nested
@@ -157,19 +186,19 @@ if (after.totalHosts <= base.totalHosts) {
 // transform, so both branches were unreachable and the fixture failed on a
 // working backstop.)
 const snap = await captureSnapshot(page);
-const gapWrapper = (snap?.wrappers ?? []).find(
-  (w) => /Gap link/.test(w.element?.accessibleName ?? ''),
+const droppedWrapper = (snap?.wrappers ?? []).find(
+  (w) => /Dropped link/.test(w.element?.accessibleName ?? ''),
 );
-if (gapWrapper && gapWrapper.scanned?.codeword) {
-  pass(`injected element owns a wrapper with codeword "${gapWrapper.scanned.codeword}"`
-    + (gapWrapper.discovery ? ` (source=${gapWrapper.discovery.source})` : ''));
+if (droppedWrapper && droppedWrapper.scanned?.codeword) {
+  pass(`dropped element owns a wrapper with codeword "${droppedWrapper.scanned.codeword}"`
+    + (droppedWrapper.discovery ? ` (source=${droppedWrapper.discovery.source})` : ''));
 } else {
-  fail('a badge appeared but the injected element has no codeworded wrapper');
+  fail('a badge appeared but the dropped element has no codeworded wrapper');
 }
 
 console.log('\n=== VERDICT ===');
-console.log(failed ? '  ✗ FAIL — band-discovery backstop did not attach the missed in-band hintable'
-                   : '  ✓ PASS — band-discovery backstop attached the missed in-band hintable');
+console.log(failed ? '  ✗ FAIL — shadow incremental path or gated band-sweep recovery broken'
+                   : '  ✓ PASS — shadow appends badge incrementally; the dirty-gated sweep recovers a walk-miss');
 
 await page.screenshot({ path: '/tmp/branchkit-band-discovery.png' });
 await ctx.close();

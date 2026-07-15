@@ -28,7 +28,8 @@ import { resolveTarget } from './activate/activate-resolution';
 import { schedulePointerVisibilitySweep, connectVisibilityMO, teardownVisibilityTracker, observeRevealCandidate } from './observe/visibility-tracker';
 import { rebindCounters, LIMBO_DEADLINE_MS, collectLimboWrappers, collectStrongKeyIndex, dropDisconnectedWrappers, finalizeExpiredLimboWrappers, slotProbe, limboSlotLiveness } from './observe/limbo';
 import { attachWrapper, detachWrapper, seedPreferredFromMemory, attachDiscovered } from './core/wrapper-lifecycle';
-import { attachPageMutationObserver, getObserverFirstAttachedAt, teardownMutationSource } from './observe/mutation-source';
+import { attachPageMutationObserver, getObserverFirstAttachedAt, teardownMutationSource, getDomAddEpoch } from './observe/mutation-source';
+import { shouldRunBandSweep, setSweepGateEnabled } from './lifecycle/band-sweep-gate';
 import { firehoseStep } from './debug/firehose';
 import { bkLog } from './debug/bk-log';
 import { harnessHooksEnabled } from './debug/harness-hooks';
@@ -817,6 +818,12 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
 //   EXIT: keep on if the soak stays clean, else investigate; reconfirm at launch.
 // bkClipObserver - default ON, composes with bkOcclusion (IO-clip vs
 //   elementFromPoint hit-test). Same exit as bkOcclusion.
+// bkSweepGate - default ON. Skips the per-settle band-discovery body re-walk
+//   while the DOM-add epoch is clean (no observed childList adds since the
+//   last walk) and the last sweep is <30s old; mass-reveal fast-arm bypasses.
+//   EXIT: watch bandDiscovery:skipClean vs discoverInSubtreeBatched in the
+//   perf trail + no badge-appearance lag reports, then graduate. See
+//   notes/DESIGN_BAND_SWEEP_DIRTY_GATE.md.
 // bkTransformTrigger - default ON, GRADUATED (user-validated on the QuickBase
 //   pipeline builder). Adds a MutationObserver on each badge's transformed
 //   ancestors so pan/zoom canvases (React Flow) that move by `transform` with no
@@ -841,6 +848,17 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
     setTransformTriggerEnabled(on);
     if (harnessHooksEnabled()) {
       document.documentElement.setAttribute('data-bk-transform-trigger', on ? 'on' : 'off');
+    }
+  });
+  chrome.storage.local.get('bkSweepGate', (result) => {
+    // Band-sweep dirty gate (notes/DESIGN_BAND_SWEEP_DIRTY_GATE.md). Default
+    // ON; only an explicit `false` disables — restoring every-settle arming.
+    // Watch for content that appears without badges until the 30s long-stop
+    // (an MO-blind add class the epoch misses) — that's the gate's tell.
+    const on = result.bkSweepGate !== false;
+    setSweepGateEnabled(on);
+    if (harnessHooksEnabled()) {
+      document.documentElement.setAttribute('data-bk-sweep-gate', on ? 'on' : 'off');
     }
   });
   chrome.storage.local.get('bkClipObserver', (result) => {
@@ -2161,12 +2179,30 @@ const DISCOVERY_MAX_RETRY_DEPTH = 2;
 // the gate is a flat +500ms on exactly the wave the user is watching for.
 const REVEAL_REPAIR_FAST_ARM = 25;
 function scheduleBandDiscovery(settleKind: 'band' | 'store', revealRepairs = 0): void {
+  const fastReveal = revealRepairs >= REVEAL_REPAIR_FAST_ARM;
+  // Dirty gate (notes/DESIGN_BAND_SWEEP_DIRTY_GATE.md): no observed adds since
+  // the last walk started + last sweep recent → the re-walk can find nothing
+  // the incremental paths haven't. Evaluated BEFORE the single-flight check so
+  // a skipped request never sets rerun flags; retries re-enter here with the
+  // then-current epoch (a mid-walk add reads dirty — exactly the race the
+  // retry exists for). Fast-arm bypasses inside the gate.
+  if (!shouldRunBandSweep({
+    domAddEpoch: getDomAddEpoch(),
+    sweptEpoch: pageSession.discoverySweptEpoch,
+    sweepEndAt: pageSession.discoverySweepEndAt,
+    now: performance.now(),
+    fastReveal,
+  })) {
+    recordCpu('bandDiscovery:skipClean', 0);
+    firehoseStep('band_discovery:skip_clean', 1);
+    return;
+  }
   if (pageSession.discoverySweepPending) {
     pageSession.discoverySweepRerun = true;
     // A mass reveal landing mid-sweep must not be demoted to the noise-retry
     // path — record the urgency; the in-flight sweep's finally re-arms
     // immediately regardless of its added count (round 18b).
-    if (revealRepairs >= REVEAL_REPAIR_FAST_ARM) {
+    if (fastReveal) {
       pageSession.discoverySweepFastRerun = true;
     }
     firehoseStep('band_discovery:coalesced', 1);
@@ -2179,10 +2215,12 @@ function scheduleBandDiscovery(settleKind: 'band' | 'store', revealRepairs = 0):
   // coalesced request of the other kind folds in — labels are diagnostic):
   // scroll settles → band_sweep, non-scroll (store) settles → settle_sweep.
   const source: DiscoverySource = settleKind === 'band' ? 'band_sweep' : 'settle_sweep';
-  const fastReveal = revealRepairs >= REVEAL_REPAIR_FAST_ARM;
   const sweepBody = () => {
     void (async () => {
       let added = 0;
+      // Captured at walk start: adds landing during the walk push the live
+      // epoch past this, so the next settle's gate reads dirty.
+      const epochAtStart = getDomAddEpoch();
       try {
         if (pageSession.isTornDown || !document.body) return;
         // Attribution stamp (round 20c): fast_arm→sweep_start is the entry
@@ -2215,6 +2253,8 @@ function scheduleBandDiscovery(settleKind: 'band' | 'store', revealRepairs = 0):
         await pageSession.tracker.flushNow();
         if (pageSession.badgesVisible) await showBadges();
       } finally {
+        pageSession.discoverySweptEpoch = epochAtStart;
+        pageSession.discoverySweepEndAt = performance.now();
         pageSession.discoverySweepPending = false;
         // Mass-reveal rerun (round 18b): a >=25-repair settle landed while
         // this sweep was in flight, and its fast-arm was swallowed by the

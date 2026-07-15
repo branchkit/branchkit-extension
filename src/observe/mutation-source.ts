@@ -25,6 +25,7 @@ import { subtreeMaybeHintable, setShadowRootSightingHook } from '../scan/scanner
 import { consumeShadowAttachSignal } from '../scan/shadow-attach-signal';
 import { cacheVisibility, clearLayoutCache } from '../layout-cache';
 import { getHintVisibility } from '../config';
+import { harnessHooksEnabled } from '../debug/harness-hooks';
 import { recordCpu, lifecycleCounters } from '../debug/perf-counters';
 import { firehoseStep } from '../debug/firehose';
 import { pageSession, scheduleYieldTask } from '../lifecycle/page-session';
@@ -223,6 +224,12 @@ function drainDiscovery(): void {
       lifecycleCounters.discoveryRootsSkipped++;
       continue;
     }
+    // Harness-only fault injection: drop this root's walk (consume the
+    // counter attribute the fixture set). With shadow interiors observed,
+    // no fixture can synthesize a naturally-missed add anymore — the
+    // band-sweep guardrail (scripts/_test-band-discovery.mjs) injects the
+    // miss here to prove the sweep still self-heals under the dirty gate.
+    if (harnessHooksEnabled() && consumeTestDropDiscoveryRoot()) continue;
     // Newly-attached wrappers emit store deltas → grammar sync (Tier 2 delta cut).
     addedTotal += pageSession.deps.discoverInSubtree(root, 'mo');
     // Yield to the event loop once we've exceeded the budget — but
@@ -374,6 +381,9 @@ function handlePageMutations(records: MutationRecord[]): void {
   // and dynamic content get badges without requiring escape+re-show.
   if (pageSession.badgesVisible && getHintVisibility() === 'manual') {
     pageSession.pendingMutation = true;
+    // Batch deferred unfiltered — assume adds so the gate can't starve the
+    // sweep on content this path never inspected.
+    domAddEpoch++;
     recordCpu('moCallback', performance.now() - __cpuStart);
     firehoseStep('moCallback:end_manual_deferred', records.length, FIREHOSE_MIN);
     return;
@@ -392,6 +402,9 @@ function handlePageMutations(records: MutationRecord[]): void {
   });
   firehoseStep('moCallback:filter_end', records.length, FIREHOSE_MIN);
   lifecycleCounters.moForeignRecords += foreign.length;
+  if (foreign.some(m => m.type === 'childList' && m.addedNodes.length > 0)) {
+    domAddEpoch++;
+  }
   if (foreign.length === 0) {
     recordCpu('moCallback', performance.now() - __cpuStart);
     firehoseStep('moCallback:end_all_own', records.length, FIREHOSE_MIN);
@@ -487,6 +500,37 @@ export function observeShadowRootForMutations(root: ShadowRoot): void {
   } catch { /* detached-document root; the walk that sighted it is stale */ }
 }
 
+// Harness fault hook: the fixture (page world) sets
+// data-bk-test-drop-discovery-roots="<n>" on documentElement; each consume
+// decrements it and skips one root's discovery walk. Attributes cross the
+// MAIN/ISOLATED world boundary, unlike object properties. Harness builds only
+// (call sites gate on harnessHooksEnabled).
+const TEST_DROP_ATTR = 'data-bk-test-drop-discovery-roots';
+function consumeTestDropDiscoveryRoot(): boolean {
+  const raw = document.documentElement.getAttribute(TEST_DROP_ATTR);
+  if (raw === null) return false;
+  const n = parseInt(raw, 10);
+  if (!(n > 0)) return false;
+  document.documentElement.setAttribute(TEST_DROP_ATTR, String(n - 1));
+  firehoseStep('test:dropped_discovery_root', n);
+  return true;
+}
+
+// DOM-add epoch: bumped whenever observed content is ADDED (foreign childList
+// record with added nodes — light DOM or a registered shadow root), when the
+// manual-mode path defers a batch unprocessed, and on every attach (boot +
+// hidden-tab resume, whose suspend window is unobserved). The band-sweep gate
+// compares this against the epoch the last sweep started with: unchanged means
+// no walkable content can have appeared, so the body re-walk is skippable
+// (notes/DESIGN_BAND_SWEEP_DIRTY_GATE.md). Removals and attribute records
+// deliberately do not bump — they cannot create never-walked elements, and the
+// parked-candidate sensors own attribute-driven reveals.
+let domAddEpoch = 0;
+
+export function getDomAddEpoch(): number {
+  return domAddEpoch;
+}
+
 // When the page MO FIRST attached (performance.now ms). dom-seen stamps only
 // exist for insertions after this moment, so an unstamped wrapper attached
 // near it is pre-observer BOOT content — not a "materialized with no MO
@@ -510,6 +554,9 @@ export function constructPageMutationObserver(): void {
 export function attachPageMutationObserver(): void {
   if (observerFirstAttachedAt === null) observerFirstAttachedAt = performance.now();
   sourceAttached = true;
+  // Boot, and every hidden-tab resume: whatever happened while unobserved is
+  // epoch-invisible, so force the next settle's sweep to walk it.
+  domAddEpoch++;
   observer?.observe(document.body || document.documentElement, PAGE_OBSERVE_OPTIONS);
 }
 

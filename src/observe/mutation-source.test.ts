@@ -14,6 +14,7 @@ import { pageSession, type PageSessionDeps } from '../lifecycle/page-session';
 import {
   processMutations, teardownMutationSource,
   constructPageMutationObserver, attachPageMutationObserver, observeShadowRootForMutations,
+  getDomAddEpoch,
 } from './mutation-source';
 import { deepQuerySelectorAll, setShadowRootSightingHook } from '../scan/scanner';
 
@@ -83,6 +84,20 @@ describe('teardownMutationSource', () => {
   });
 });
 
+describe('DOM-add epoch', () => {
+  // The epoch feeds the band-sweep dirty gate; only ADDS may bump it. The
+  // real bump site is handlePageMutations (observer callback), exercised here
+  // through the attach path since the callback itself is private.
+  it('bumps on attach (boot + hidden-tab resume force the next sweep)', () => {
+    constructPageMutationObserver();
+    const before = getDomAddEpoch();
+    attachPageMutationObserver();
+    expect(getDomAddEpoch()).toBe(before + 1);
+    attachPageMutationObserver();
+    expect(getDomAddEpoch()).toBe(before + 2);
+  });
+});
+
 describe('shadow-root observation (observeShadowRootForMutations)', () => {
   // Pin OUR registration logic (guards, dedup, lifecycle) via an observe()
   // spy — record delivery for shadow-root targets is engine territory the
@@ -111,7 +126,7 @@ describe('shadow-root observation (observeShadowRootForMutations)', () => {
   it('registers a sighted root with the page-observation options', () => {
     const { root } = makeOpenShadowHost();
     observeShadowRootForMutations(root);
-    const call = observeSpy.mock.calls.find(([target]) => target === root);
+    const call = observeSpy.mock.calls.find((call: unknown[]) => call[0] === root);
     expect(call).toBeDefined();
     const options = call?.[1] as MutationObserverInit;
     expect(options.childList).toBe(true);
@@ -124,24 +139,24 @@ describe('shadow-root observation (observeShadowRootForMutations)', () => {
     const { root } = makeOpenShadowHost();
     observeShadowRootForMutations(root);
     observeShadowRootForMutations(root);
-    expect(observeSpy.mock.calls.filter(([target]) => target === root)).toHaveLength(1);
+    expect(observeSpy.mock.calls.filter((call: unknown[]) => call[0] === root)).toHaveLength(1);
   });
 
   it('skips our own UI roots (host carries data-branchkit-hint)', () => {
     const { host, root } = makeOpenShadowHost();
     host.setAttribute('data-branchkit-hint', '');
     observeShadowRootForMutations(root);
-    expect(observeSpy.mock.calls.some(([target]) => target === root)).toBe(false);
+    expect(observeSpy.mock.calls.some((call: unknown[]) => call[0] === root)).toBe(false);
   });
 
   it('is a no-op after teardown and resumes after re-attach (fresh dedup set)', () => {
     const { root } = makeOpenShadowHost();
     teardownMutationSource();
     observeShadowRootForMutations(root);
-    expect(observeSpy.mock.calls.some(([target]) => target === root)).toBe(false);
+    expect(observeSpy.mock.calls.some((call: unknown[]) => call[0] === root)).toBe(false);
     attachPageMutationObserver();
     observeShadowRootForMutations(root);
-    expect(observeSpy.mock.calls.filter(([target]) => target === root)).toHaveLength(1);
+    expect(observeSpy.mock.calls.filter((call: unknown[]) => call[0] === root)).toHaveLength(1);
   });
 
   it('is sighted by the scanner walk (hook wired at construction)', () => {
@@ -150,6 +165,6 @@ describe('shadow-root observation (observeShadowRootForMutations)', () => {
     link.setAttribute('href', '/x');
     root.appendChild(link);
     deepQuerySelectorAll(document.body, 'a[href]');
-    expect(observeSpy.mock.calls.some(([target]) => target === root)).toBe(true);
+    expect(observeSpy.mock.calls.some((call: unknown[]) => call[0] === root)).toBe(true);
   });
 });

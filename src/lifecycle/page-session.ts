@@ -234,6 +234,20 @@ export class PageSession {
    */
   discoveryRetryDepth = 0;
 
+  /**
+   * DOM-add epoch the last band sweep's walk STARTED with (-1 = no sweep this
+   * session). The dirty gate (band-sweep-gate.ts) skips arming a sweep while
+   * the mutation source's current epoch still equals this — no observed adds
+   * means no never-walked content. Captured at walk start so adds landing
+   * mid-walk read as dirty for the next settle.
+   */
+  discoverySweptEpoch = -1;
+
+  /** performance.now() when the last band sweep finished (0 = never). Feeds
+   * the gate's long-stop: a clean epoch still sweeps every 30s as self-heal
+   * insurance for adds no observer delivers. */
+  discoverySweepEndAt = 0;
+
   /** Whether the visibility MutationObserver is currently connected. */
   visibilityMOConnected = false;
 
