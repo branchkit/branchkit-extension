@@ -193,16 +193,26 @@ function positionAtTopLeft(w: ElementWrapper, probe?: TextProbe): void {
   let y = result.y;
   // Fully-above icon placement vs the clipping scroller (round 36b): for a
   // FIRST-visible-row icon, "fully above" pokes past the scroller's top
-  // edge and the container cuts the badge off mid-letters. Flip to fully
-  // BELOW the icon — a DISCRETE, target-relative choice, deliberately NOT
-  // a clamp: a partial push-down delta would bake into the scroll-anchored
+  // edge and the container cuts the badge off mid-letters. Fall back to
+  // OVERLAP — badge top aligned to the icon's own top edge, covering its
+  // upper part — a DISCRETE, target-relative choice, deliberately NOT a
+  // clamp: a partial push-down delta would bake into the scroll-anchored
   // offset and strand the badge when the row scrolls away from the edge
   // (the d35201a scroll-back class). Re-derived every placement pass, so
   // the badge flips back above once the row has headroom.
+  //
+  // Overlap, not fully-below (the original 36b choice): a below-badge lands
+  // in the NEXT row's badge territory — on Gmail's list the top row's
+  // dropped pair sat in a 2x2 cluster with row 2's normal above-pair,
+  // ambiguous about which row either pair activates. On-target placement
+  // keeps the badge inside its own target's footprint (Vimium/Rango's
+  // default position), and if the icon itself is part-clipped the badge
+  // clips WITH it — honest, and the clip observer hides it once the
+  // target is fully out.
   if (!probe.hasText && nudge.y < 1) {
     const clipRoot = clipRootOf(w.element);
     if (clipRoot && result.y < getCachedRect(clipRoot).top) {
-      y = getCachedRect(w.element).bottom;
+      y = getCachedRect(w.element).top;
     }
   }
   w.hint.updatePosition({ x: result.x, y });
