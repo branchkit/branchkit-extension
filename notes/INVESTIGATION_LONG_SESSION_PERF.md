@@ -150,7 +150,12 @@ Medium:
 9. codewordMemory dead-frame eviction (call the existing frame-scoped clear on liveness loss).
 Strategic:
 10. Giant-DOM circuit breaker à la Rango.
-11. DESIGN_HINT_REUSE observer half: shared singletons instead of 2 MOs/badge.
+11. ~~DESIGN_HINT_REUSE observer half: shared singletons instead of 2 MOs/badge.~~
+    RETRACTED 2026-07-15 — re-recommended a measured dead end:
+    INVESTIGATION_OBSERVER_CONSOLIDATION.md already rejected it (13ms/session;
+    no MO.unobserve makes shared instances O(live badges) on teardown), and a
+    live re-measure confirmed (38ms lifetime across 4 tabs). The settle-side
+    lever that replaced it: notes/DESIGN_BAND_SWEEP_DIRTY_GATE.md.
 
 ## Doc housekeeping
 - PLAN_RANGO_TECHNIQUES.md item 2 (stacking-context z-index) marked "Not built" — stale;

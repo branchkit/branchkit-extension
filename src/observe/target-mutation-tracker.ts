@@ -1,12 +1,14 @@
 /**
- * Per-target MutationObserver for anchor-name self-heal.
+ * Per-target MutationObserver for prompt repositioning on style clobber.
  *
  * Single load-bearing job: detect when a re-rendering host (YouTube
- * comments/player rewrite a target's inline `style` ~10x/sec) clobbers the
- * `anchor-name` we injected, and re-assert it synchronously before paint
- * so the badge never visibly unbinds. See the callback in content.ts
- * (`onTargetMutation`) — the relevant signal is exclusively a `style`
- * attribute change on the target itself.
+ * comments/player rewrite a target's inline `style` ~10x/sec) moves the
+ * target via an inline style change, and invalidate the placement probe +
+ * schedule a deferred reposition so the badge follows without waiting for
+ * the next scroll/resize/focus settle. See the callback in content.ts
+ * (`onTargetMutation`). (Historical: this observer originally re-asserted
+ * an injected `anchor-name`; anchor positioning was deleted with the JS
+ * reconcile re-arch, df8b89a — the reposition fast-path is what remains.)
  *
  * Scope intentionally narrow: `{ attributes: true, attributeFilter: ['style'] }`.
  *   - No `subtree: true`: descendant churn on dynamic pages (Google SERPs
