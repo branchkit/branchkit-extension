@@ -125,7 +125,7 @@ import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
 import { openLivenessPort } from './plugin/liveness';
 import { pageSession, scheduleYieldTask, yieldTask, TeardownReason } from './lifecycle/page-session';
 import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './debug/message-counters';
-import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, rearmCpuShareBaseline, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, stopPerfObservers, lifecycleCounters, resetLifecycleCounters } from './debug/perf-counters';
+import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, rearmCpuShareBaseline, rearmWatchdogBaseline, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, lifecycleCounters, resetLifecycleCounters } from './debug/perf-counters';
 import { churnStats } from './debug/churn-log';
 import { syncTraceStats } from './debug/sync-trace';
 import { loadConfig, getDisplayMode, getHintVisibility } from './config';
@@ -310,7 +310,7 @@ const guardKeeper = setInterval(() => {
   pageSession.teardown('superseded');
 }, GUARD_KEEPER_INTERVAL_MS);
 
-if (isTopFrame) startPerfObservers();
+if (isTopFrame) startPerfObservers(pageSession.resources);
 
 // Lever 1 (frame-skip): a subframe that is about:blank or renders below a
 // usable badge size (tracking pixels, collapsed/hidden ad slots) cannot show a
@@ -2929,10 +2929,6 @@ function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
   pageSession.discoveryScheduled = false;
   pageSession.pendingDiscoveryRoots.clear();
   teardownVisibilityTracker();
-  // Stop the watchdog setTimeout chain + longtask observer — raw timers in
-  // perf-counters, not SessionResources-owned, so teardownAll() below never
-  // reaches them and an orphan would keep a 4Hz diagnostic timer forever.
-  try { stopPerfObservers(); } catch { /* same */ }
   // Stop the reconcile scroll loop and drop every reconcile-mode badge from the
   // positioner registry. The host-removal sweep below removes hosts via raw DOM
   // (bypassing HintBadge.remove(), the only per-badge unregister site), so
@@ -4688,10 +4684,13 @@ function activateHintMachinery(trigger: 'load' | 'resize'): void {
   if (hintMachineryEnabled) return;
   hintMachineryEnabled = true;
   attachPageMutationObserver();
-  // Registry-owned (Phase 2a): teardown clears it instead of leaving an orphan
-  // limbo sweeper running. Paused on hidden-tab suspend and restarted on resume
-  // (long-session-perf finding 7) — see startLimboSweep/stopLimboSweep.
-  startLimboSweep();
+  // The limbo finalize sweep, registered exactly once per session (this
+  // function is guarded by hintMachineryEnabled). A pausable: it stops while
+  // the tab is hidden — a 250ms whole-store walk was the second continuous
+  // hidden-tab cost after the MO (long-session-perf finding 7) — and
+  // teardownAll clears it instead of leaving an orphan sweeper running.
+  // onVisibilityChange drives pause/resume at the registry level.
+  pageSession.resources.pausableInterval(finalizeExpiredLimboWrappers, LIMBO_DEADLINE_MS);
   if (trigger === 'resize') {
     // Subframe that just grew past the eligibility threshold. The module-
     // load reservoir warm-up was skipped (frame was too small / blank),
@@ -4714,11 +4713,11 @@ function suspendHintMachinery(): void {
   if (suspended || !hintMachineryEnabled) return;
   suspended = true;
   teardownMutationSource();
-  // The limbo finalize sweep is a second continuous cost (a 250ms whole-store
-  // walk) the original suspend missed. Pausing it is safe: the mutation source
-  // is now down, so no new wrappers enter limbo while hidden; resume restarts it
-  // and doScan reaps anything expired (long-session-perf finding 7).
-  stopLimboSweep();
+  // The limbo finalize sweep pauses too, but at the registry level: the
+  // caller (onVisibilityChange) follows this with resources.pause(), which
+  // stops every pausable interval. Pausing it is safe: the mutation source
+  // is now down, so no new wrappers enter limbo while hidden; resume re-arms
+  // it and doScan reaps anything expired (long-session-perf finding 7).
   // The discovery drain is a yield task (not cancellable): clearing the
   // queue makes an already-scheduled continuation a no-op (empty-set
   // return), and the reset flag lets resume re-schedule cleanly.
@@ -4739,7 +4738,6 @@ function resumeHintMachinery(): void {
   if (!suspended) return;
   suspended = false;
   attachPageMutationObserver();
-  startLimboSweep();
   void doScan().then(() => {
     reconcile();
     void pageSession.tracker.flushNow();
@@ -4748,29 +4746,21 @@ function resumeHintMachinery(): void {
   bkLog('BK_RESUME', { url: trimFrameUrl(window.location.href), wrappers: store.all.length });
 }
 
-// The limbo finalize sweep, started on activate and paused across hidden-tab
-// suspend so a backgrounded tab stops paying the 250ms whole-store walk
-// (long-session-perf finding 7). Idempotent start/stop; the handle stays
-// registered with pageSession.resources so teardown still clears it.
-let limboSweepInterval: ReturnType<typeof setInterval> | null = null;
-function startLimboSweep(): void {
-  if (limboSweepInterval !== null) return;
-  limboSweepInterval = pageSession.resources.interval(finalizeExpiredLimboWrappers, LIMBO_DEADLINE_MS);
-}
-function stopLimboSweep(): void {
-  if (limboSweepInterval === null) return;
-  pageSession.resources.stopInterval(limboSweepInterval);
-  limboSweepInterval = null;
-}
-
 // One persistent visibilitychange handler driving the deferred/active/suspended
-// state machine for an eligible frame. A subframe inherits the top document's
-// visibility, so the whole tab transitions as a unit.
+// state machine for an eligible frame, plus the registry-level pause/resume of
+// every pausable interval (limbo sweep, top-frame watchdog + perf publishers).
+// A subframe inherits the top document's visibility, so the whole tab
+// transitions as a unit.
 //   - Lever 2 (lazy discovery): a tab that loaded hidden activates on first show.
 //   - Lever 3 (suspend): an active tab suspends when hidden, resumes when shown.
 function onVisibilityChange(): void {
-  if (!frameMayHoldHints()) return;
   if (document.visibilityState === 'visible') {
+    // Re-arm pausables BEFORE the eligibility gate and the machinery resume:
+    // pausables exist independently of hint machinery (the top-frame watchdog
+    // and perf publishers run even before activation), and resumeHintMachinery's
+    // doScan should run with a live limbo sweep.
+    pageSession.resources.resume();
+    if (!frameMayHoldHints()) return;
     if (!hintMachineryEnabled) {
       // First show of a tab that loaded hidden. 'load' relies on the storage
       // callback for the first scan, but that returned early while hidden —
@@ -4780,11 +4770,19 @@ function onVisibilityChange(): void {
     } else if (suspended) {
       resumeHintMachinery();
     }
-  } else if (hintMachineryEnabled && !suspended) {
-    suspendHintMachinery();
+  } else {
+    if (frameMayHoldHints() && hintMachineryEnabled && !suspended) {
+      suspendHintMachinery();
+    }
+    pageSession.resources.pause();
   }
 }
 pageSession.resources.listen(document, 'visibilitychange', onVisibilityChange);
+// Initial pausable state must match initial visibility: a tab loaded hidden
+// (background open, prerender) pays no pausable wakeups until first shown.
+// Module evaluation is synchronous, so intervals armed earlier in this file
+// (the top-frame watchdog) cannot tick before this pause lands.
+if (document.visibilityState !== 'visible') pageSession.resources.pause();
 
 if (frameMayHoldHints()) {
   // Visible (foreground) tab: activate now (the storage callback kicks the
@@ -4998,21 +4996,20 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
 // Cross-world bridge: content script globals live in the isolated world,
 // so Playwright's page.evaluate (main world) can't call them directly.
 // Mirror the snapshot to a documentElement dataset attribute every 250ms
-// so any world can read it. Hidden tabs skip the work (the dataset goes
-// stale, not empty): the snapshot walks the whole wrapper store and the
-// JSON grows with CPU-bucket count, and Firefox only throttles hidden-tab
-// timers to ~1s (vs Chrome's ~1/min), so ungated this was a store-walk +
-// stringify per second per hidden tab, times days of accumulated tabs.
-// `force` bypasses the visibility gate for one-shot publishes (boot marker,
-// reset-handshake confirmation) — the gate exists to kill the 4Hz interval's
-// hidden-tab cost, not to strand harness handshakes. A tab loaded hidden must
-// still publish once so dataset presence works as a liveness probe
-// (scripts/_test-extension-reload-firefox.mjs), and a reset delivered to a
-// hidden tab must confirm with zeroed counters or drivers diff against
-// pre-reset history (scripts/test-perf.mjs).
-function publishPerfSnapshot(force = false): void {
+// so any world can read it. The interval is a pausable, so hidden tabs skip
+// the work entirely — including the timer wakeup (the dataset goes stale,
+// not empty): the snapshot walks the whole wrapper store and the JSON grows
+// with CPU-bucket count, and Firefox only throttles hidden-tab timers to
+// ~1s (vs Chrome's ~1/min), so unpaused this was a store-walk + stringify
+// per second per hidden tab, times days of accumulated tabs. Direct one-shot
+// calls (boot marker, reset-handshake confirmation) publish regardless of
+// visibility: a tab loaded hidden must still publish once so dataset
+// presence works as a liveness probe (scripts/_test-extension-reload-
+// firefox.mjs), and a reset delivered to a hidden tab must confirm with
+// zeroed counters or drivers diff against pre-reset history
+// (scripts/test-perf.mjs).
+function publishPerfSnapshot(): void {
   if (!harnessHooksEnabled()) return;
-  if (!force && document.visibilityState !== 'visible') return;
   try {
     document.documentElement.dataset.branchkitPerf =
       JSON.stringify(buildPerfSnapshot());
@@ -5026,8 +5023,8 @@ function publishPerfSnapshot(force = false): void {
 // extension and read the full perf payload). The 5s PERF_REPORT ship below
 // stays — it goes to the paired plugin, not the page.
 if (isTopFrame && harnessHooksEnabled()) {
-  pageSession.resources.interval(publishPerfSnapshot, 250);
-  publishPerfSnapshot(true);
+  pageSession.resources.pausableInterval(publishPerfSnapshot, 250);
+  publishPerfSnapshot();
 }
 
 // Periodic ship to the browser plugin's /perf-report endpoint so we have
@@ -5036,13 +5033,13 @@ if (isTopFrame && harnessHooksEnabled()) {
 // publish above is for live in-page inspection; this is the durable
 // record. Every 5s is the sample interval — slow enough to be cheap,
 // fast enough to bracket a Firefox unresponsive-script event.
-// Visible tabs only: a hidden tab has nothing new to report, and every
-// ship is a sendMessage that resets the background's idle timer — with N
-// accumulated tabs that's N/5 wakeups/sec keeping the Firefox event page
-// (and the plugin's /perf-report handler) permanently hot. The trail
-// keeps full coverage of the tab the user is actually looking at.
+// Visible tabs only (the interval is a pausable, stopped while hidden): a
+// hidden tab has nothing new to report, and every ship is a sendMessage
+// that resets the background's idle timer — with N accumulated tabs that's
+// N/5 wakeups/sec keeping the Firefox event page (and the plugin's
+// /perf-report handler) permanently hot. The trail keeps full coverage of
+// the tab the user is actually looking at.
 function shipPerfReport(): void {
-  if (document.visibilityState !== 'visible') return;
   try {
     const snapshot = buildPerfSnapshot(true);
     const ua = navigator.userAgent;
@@ -5063,15 +5060,20 @@ const PERF_REPORT_INTERVAL_MS = 5000;
 // The top-frame snapshot carries `frames` (subframe count) so the trail still
 // surfaces swarm size without 700 separate sendMessage round-trips.
 if (isTopFrame) {
-  pageSession.resources.interval(shipPerfReport, PERF_REPORT_INTERVAL_MS);
-  // The visibility gate stops ships while hidden, which also stops the only
-  // cpu.share baseline advance — without a re-arm, the first ship after
-  // refocus would compute its share window over the entire hidden span
-  // (hours), diluting pct toward 0 and lumping all hidden-period bucket
-  // deltas into one bogus trail sample. Re-arm (without shipping) on the
-  // visible transition so the first sample covers a normal window.
+  pageSession.resources.pausableInterval(shipPerfReport, PERF_REPORT_INTERVAL_MS);
+  // Pause stops ships while hidden, which also stops the only cpu.share
+  // baseline advance — without a re-arm, the first ship after refocus would
+  // compute its share window over the entire hidden span (hours), diluting
+  // pct toward 0 and lumping all hidden-period bucket deltas into one bogus
+  // trail sample. Re-arm (without shipping) on the visible transition so the
+  // first sample covers a normal window; the watchdog baseline needs the
+  // same treatment or its first post-resume tick reads the hidden span as
+  // one giant stall.
   pageSession.resources.listen(document, 'visibilitychange', () => {
-    if (document.visibilityState === 'visible') rearmCpuShareBaseline();
+    if (document.visibilityState === 'visible') {
+      rearmCpuShareBaseline();
+      rearmWatchdogBaseline();
+    }
   });
   // Reset trigger from main world — set the dataset to "1" and we reset.
   // Harness builds only (page-dispatchable, plus a standing attribute MO).
@@ -5084,7 +5086,7 @@ if (isTopFrame) {
         resetCpuCounters();
         resetLongtask();
         delete document.documentElement.dataset.branchkitResetPerf;
-        publishPerfSnapshot(true);
+        publishPerfSnapshot();
       }
     }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-branchkit-reset-perf'] });
   }

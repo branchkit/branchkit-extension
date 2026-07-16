@@ -42,7 +42,10 @@ export function isClipObserverEnabled(): boolean {
 }
 
 const observersByRoot = new Map<Element, IntersectionObserver>();
-const targetsByRoot = new Map<Element, Set<Element>>();
+// Live-target refcount per root, release-at-zero (container-resize-tracker's
+// pattern). Only the count matters — membership already lives in rootByTarget,
+// so a Set here was a second sync surface whose contents were never read.
+const targetCountByRoot = new Map<Element, number>();
 const rootByTarget = new Map<Element, Element>();
 const wrapperByTarget = new Map<Element, ElementWrapper>();
 
@@ -73,15 +76,18 @@ function unobserveTarget(el: Element): void {
   if (root) {
     const io = observersByRoot.get(root);
     io?.unobserve(el);
-    const targets = targetsByRoot.get(root);
-    targets?.delete(el);
     // Last target gone → release the root's observer. Without this the Map
     // entry (strong ref to the root) survives the root's own disconnection,
-    // pinning detached SPA subtrees until teardown.
-    if (targets && targets.size === 0) {
+    // pinning detached SPA subtrees until teardown. Underflow can't occur:
+    // the decrement only runs for a target rootByTarget still holds, and
+    // every rootByTarget entry contributed exactly one count.
+    const count = targetCountByRoot.get(root) ?? 0;
+    if (count <= 1) {
       io?.disconnect();
       observersByRoot.delete(root);
-      targetsByRoot.delete(root);
+      targetCountByRoot.delete(root);
+    } else {
+      targetCountByRoot.set(root, count - 1);
     }
   }
   rootByTarget.delete(el);
@@ -158,14 +164,14 @@ export function reconcileClipObservation(wrappers: Iterable<ElementWrapper>): vo
     const root = findClippingScroller(w.element);
     if (!root) continue; // viewport-only / fixed: clipping is covered by isInViewport
     // Bookkeeping BEFORE observe(): a throwing observe() must not strand a
-    // root with no targets Set (release could then never fire) or a
+    // root with a zero count (release could then never fire) or a
     // believed-observed target. Nothing depends on the order — the initial
     // IO callback is async (long-session review backlog, add-path ordering).
+    // The count can't double-increment for one element: a still-bound target
+    // either `continue`d above or went through unobserveTarget's decrement.
     rootByTarget.set(w.element, root);
     wrapperByTarget.set(w.element, w);
-    let targets = targetsByRoot.get(root);
-    if (!targets) targetsByRoot.set(root, targets = new Set());
-    targets.add(w.element);
+    targetCountByRoot.set(root, (targetCountByRoot.get(root) ?? 0) + 1);
     getObserver(root).observe(w.element);
   }
   for (const el of [...rootByTarget.keys()]) {
@@ -181,7 +187,7 @@ export function reconcileClipObservation(wrappers: Iterable<ElementWrapper>): vo
 export function drainClipObservers(): void {
   for (const io of observersByRoot.values()) io.disconnect();
   observersByRoot.clear();
-  targetsByRoot.clear();
+  targetCountByRoot.clear();
   for (const w of wrapperByTarget.values()) {
     if (w.clipped) {
       w.clipped = false;

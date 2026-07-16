@@ -13,12 +13,16 @@
  * in content.ts is the integrator that stitches these together with the
  * store/lifecycle counters it owns.
  *
- * Side effects on import: installs the longtask observer, starts the
- * watchdog, and publishes recordCpu on globalThis for peer observer modules.
+ * Side effect on import: publishes recordCpu on globalThis for peer observer
+ * modules. The watchdog interval and longtask observer start via
+ * `startPerfObservers(resources)` — owned by the session's resource registry,
+ * so teardown stops them and pause/resume quiesces the watchdog while hidden.
  *
  * Extracted from content.ts as part of the extension restructure (step 1,
  * carve leaf concerns). See notes/DESIGN_EXTENSION_RESTRUCTURE.md.
  */
+
+import type { SessionResources } from '../lifecycle/session-resources';
 
 const CPU_TOP_N = 10;
 
@@ -220,22 +224,24 @@ export function longtaskSnapshot(): { count: number; totalMs: number; maxMs: num
   };
 }
 
-// Watchdog: self-rescheduling setTimeout that records the gap between
-// expected and actual fire times. Firefox doesn't support the Long Tasks
-// API, so this is our only direct measurement of "did the main thread
-// freeze." Any source — page scripts, browser-internal layout, extension
-// paths we don't instrument — shows up here as a delayed fire.
+// Watchdog: a 4Hz interval that records the gap between expected and actual
+// fire times. Firefox doesn't support the Long Tasks API, so this is our only
+// direct measurement of "did the main thread freeze." Any source — page
+// scripts, browser-internal layout, extension paths we don't instrument —
+// shows up here as a delayed fire.
 //
-// Skipped while the tab is hidden because Firefox throttles setTimeout to
-// 1000ms in background tabs; the throttling would otherwise look like a
-// continuous freeze. visibilitychange resets the baseline on un-hide.
+// The interval is a SessionResources pausable: it stops entirely while the
+// tab is hidden (background-tab timer throttling would otherwise read as a
+// continuous freeze, and the wakeups themselves are the hidden-tab cost the
+// long-session audit flagged). `rearmWatchdogBaseline()` resets the baseline
+// on the visible transition so the first post-resume tick doesn't read the
+// whole hidden span as one stall.
 //
 // Top-N preserves the wall-clock timestamps of the worst stalls so we can
 // correlate trail entries to user-reported unresponsive-script events.
 const WATCHDOG_INTERVAL_MS = 250;
 const WATCHDOG_RECORD_THRESHOLD_MS = 100;
 let watchdogLastFire = performance.now();
-let watchdogVisibleOnLastFire = document.visibilityState === 'visible';
 
 // Top-N worst stalls with attribution: how much of the stall landed in our
 // instrumented buckets (`trackedMs`) vs. went unaccounted (`unattributedMs` =
@@ -270,74 +276,72 @@ function attributeStall(windowStart: number, windowEnd: number): { trackedMs: nu
 }
 
 function watchdogTick(): void {
-  if (perfObserversStopped) return; // teardown: let the chain die here
   const now = performance.now();
-  const visible = document.visibilityState === 'visible';
-  // Only attribute delay when the tab was visible during BOTH the prior
-  // fire and this one. If either was hidden, the gap could be Firefox /
-  // Chrome's background-tab setTimeout throttling (clamps to ≥1000ms,
-  // further when inactive >5min), not a real main-thread block. Check
-  // both ends because event-driven visibility tracking misses tabs that
-  // were never visible to begin with (loader iframes, OAuth popups,
-  // hidden gapi frames on about:blank) — those would otherwise look
-  // like permanent 750-1000ms freezes from the throttle.
-  if (visible && watchdogVisibleOnLastFire) {
-    const expected = watchdogLastFire + WATCHDOG_INTERVAL_MS;
-    const delay = Math.max(0, now - expected);
-    if (delay > WATCHDOG_RECORD_THRESHOLD_MS) {
-      recordCpu('watchdog:delay', delay);
-      // The blocking work ran somewhere in [watchdogLastFire, now]. Attribute
-      // it against the breadcrumb ring captured over that same gap.
-      const { trackedMs, topLabels } = attributeStall(watchdogLastFire, now);
-      const stall: WatchdogStall = {
-        ts: Date.now(),
-        delayMs: +delay.toFixed(1),
-        trackedMs,
-        unattributedMs: +Math.max(0, delay - trackedMs).toFixed(1),
-        topLabels,
-      };
-      if (watchdogStalls.length < STALL_TOP_N || delay > (watchdogStalls[watchdogStalls.length - 1]?.delayMs ?? 0)) {
-        watchdogStalls.push(stall);
-        watchdogStalls.sort((a, b) => b.delayMs - a.delayMs);
-        if (watchdogStalls.length > STALL_TOP_N) watchdogStalls.length = STALL_TOP_N;
-      }
+  // Defense-in-depth, not the primary gate (that's the registry pause): if a
+  // tick still lands while hidden — a pause wire missed, or a document that
+  // never gets a visibilitychange at all — background-tab timer throttling
+  // (≥1000ms clamps, further when inactive >5min) would read as a permanent
+  // fake freeze. Reset the baseline and skip; safe for an interval, where the
+  // old self-rescheduling chain would have died on an early return.
+  if (document.visibilityState !== 'visible') {
+    watchdogLastFire = now;
+    return;
+  }
+  const expected = watchdogLastFire + WATCHDOG_INTERVAL_MS;
+  const delay = Math.max(0, now - expected);
+  if (delay > WATCHDOG_RECORD_THRESHOLD_MS) {
+    recordCpu('watchdog:delay', delay);
+    // The blocking work ran somewhere in [watchdogLastFire, now]. Attribute
+    // it against the breadcrumb ring captured over that same gap.
+    const { trackedMs, topLabels } = attributeStall(watchdogLastFire, now);
+    const stall: WatchdogStall = {
+      ts: Date.now(),
+      delayMs: +delay.toFixed(1),
+      trackedMs,
+      unattributedMs: +Math.max(0, delay - trackedMs).toFixed(1),
+      topLabels,
+    };
+    if (watchdogStalls.length < STALL_TOP_N || delay > (watchdogStalls[watchdogStalls.length - 1]?.delayMs ?? 0)) {
+      watchdogStalls.push(stall);
+      watchdogStalls.sort((a, b) => b.delayMs - a.delayMs);
+      if (watchdogStalls.length > STALL_TOP_N) watchdogStalls.length = STALL_TOP_N;
     }
   }
   watchdogLastFire = now;
-  watchdogVisibleOnLastFire = visible;
-  setTimeout(watchdogTick, WATCHDOG_INTERVAL_MS);
 }
 
-// Standing per-frame observers (watchdog timer loop + longtask PerformanceObserver)
+// Standing per-frame observers (watchdog interval + longtask PerformanceObserver)
 // are diagnostic-only and their output is read solely from the top frame's
 // snapshot. Subframes — especially the 1000+ ad/about:blank frames on ad-heavy
 // pages — would otherwise each run a 4Hz timer forever, inflating the very
 // per-frame CPU footprint that trips Firefox's slow-extension warning. The
 // caller gates this to the top frame; inline recordCpu marks stay everywhere
 // (cheap) so a frame promoted to top-of-its-process still has fresh attribution.
+//
+// Both are owned by the passed registry (parameter, NOT a pageSession import —
+// that would close a cycle through mutation-source): the watchdog as a
+// pausable interval (stops while hidden, dies with teardownAll), the longtask
+// observer via track() (disconnected by teardownAll). There is no separate
+// stop function — teardown of the registry is the stop.
 let perfObserversStarted = false;
-let perfObserversStopped = false;
-export function startPerfObservers(): void {
+export function startPerfObservers(resources: SessionResources): void {
   if (perfObserversStarted) return;
   perfObserversStarted = true;
   watchdogLastFire = performance.now();
-  watchdogVisibleOnLastFire = document.visibilityState === 'visible';
-  setTimeout(watchdogTick, WATCHDOG_INTERVAL_MS);
+  resources.pausableInterval(watchdogTick, WATCHDOG_INTERVAL_MS);
   startLongtaskObserver();
+  if (longtaskObserver) resources.track(longtaskObserver);
 }
 
 /**
- * Stop the watchdog timeout chain and the longtask PerformanceObserver. The
- * watchdog is a raw self-rescheduling setTimeout — not SessionResources-owned,
- * so `teardownAll()` never reaches it and an orphaned content script would
- * keep a 4Hz timer alive for the life of the tab. Called from quiesceOrphan.
- * One-way: a torn-down context never restarts its session (the successor CS
- * is a fresh JS context), so there is no resume path.
+ * Reset the watchdog baseline without recording. Called on the hidden→visible
+ * transition: the watchdog pausable was stopped while hidden, so
+ * `watchdogLastFire` still points at the last pre-hide tick — without this,
+ * the first post-resume tick would read the entire hidden span as one giant
+ * stall. Companion to `rearmCpuShareBaseline` on the same transition.
  */
-export function stopPerfObservers(): void {
-  perfObserversStopped = true;
-  longtaskObserver?.disconnect();
-  longtaskObserver = null;
+export function rearmWatchdogBaseline(): void {
+  watchdogLastFire = performance.now();
 }
 
 export function resetWatchdog(): void {

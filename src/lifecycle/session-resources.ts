@@ -27,12 +27,21 @@ interface ListenerRecord {
   options?: boolean | AddEventListenerOptions;
 }
 
+interface PausableRecord {
+  fn: () => void;
+  ms: number;
+  /** Live interval id while armed; null while paused (or registered-while-paused). */
+  id: ReturnType<typeof setInterval> | null;
+}
+
 export class SessionResources {
   private listeners: ListenerRecord[] = [];
   private intervals = new Set<ReturnType<typeof setInterval>>();
   private timeouts = new Set<ReturnType<typeof setTimeout>>();
   private rafs = new Set<number>();
   private observers = new Set<Disconnectable>();
+  private pausables = new Set<PausableRecord>();
+  private isPaused = false;
 
   /**
    * `addEventListener` that teardown removes. Pass the same handler reference
@@ -68,12 +77,51 @@ export class SessionResources {
     return id;
   }
 
-  /** Stop a single interval created via `interval()` and forget it — for a
-   *  sweeper that should pause before teardown (e.g. the limbo finalize sweep
-   *  paused on hidden-tab suspend, restarted on resume). No-op if the id isn't
-   *  registered; `teardownAll()` still covers everything else. */
-  stopInterval(id: ReturnType<typeof setInterval>): void {
-    if (this.intervals.delete(id)) clearInterval(id);
+  /**
+   * `setInterval` that additionally stops across `pause()`/`resume()` — for
+   * the continuous per-frame costs that should quiesce while the tab is
+   * hidden (limbo finalize sweep, watchdog tick, perf publishers). Registered
+   * while paused, it stays unarmed until `resume()`. Covered by
+   * `teardownAll()` like everything else, and teardown is final: a torn-down
+   * registry has nothing left for `resume()` to re-arm.
+   *
+   * This is the registry-level replacement for per-callback
+   * `document.visibilityState` gates: the gate ran the wakeup and then
+   * discarded the work, so N accumulated hidden tabs still paid N timer
+   * wakeups/interval; pausing stops the wakeups themselves
+   * (notes/INVESTIGATION_LONG_SESSION_PERF.md, review backlog).
+   */
+  pausableInterval(fn: () => void, ms: number): void {
+    const rec: PausableRecord = { fn, ms, id: null };
+    if (!this.isPaused) rec.id = setInterval(fn, ms);
+    this.pausables.add(rec);
+  }
+
+  /** Stop every pausable interval (tab hidden). Idempotent. */
+  pause(): void {
+    if (this.isPaused) return;
+    this.isPaused = true;
+    for (const rec of this.pausables) {
+      if (rec.id !== null) {
+        clearInterval(rec.id);
+        rec.id = null;
+      }
+    }
+  }
+
+  /** Re-arm every pausable interval (tab visible again). Idempotent; a no-op
+   *  after `teardownAll()` since teardown empties the registry. */
+  resume(): void {
+    if (!this.isPaused) return;
+    this.isPaused = false;
+    for (const rec of this.pausables) {
+      rec.id = setInterval(rec.fn, rec.ms);
+    }
+  }
+
+  /** Whether `pause()` is in effect — for tests and the debug snapshot. */
+  get paused(): boolean {
+    return this.isPaused;
   }
 
   /** `setTimeout` that teardown clears; self-removes from the set when it fires
@@ -122,6 +170,11 @@ export class SessionResources {
     this.rafs.clear();
     for (const o of this.observers) { try { o.disconnect(); } catch { /* idempotent */ } }
     this.observers.clear();
+    for (const rec of this.pausables) {
+      if (rec.id !== null) { try { clearInterval(rec.id); } catch { /* idempotent */ } }
+      rec.id = null;
+    }
+    this.pausables.clear();
   }
 
   /** Live counts of registered resources — for tests and the debug snapshot. */
@@ -131,6 +184,7 @@ export class SessionResources {
     timeouts: number;
     rafs: number;
     observers: number;
+    pausables: number;
   } {
     return {
       listeners: this.listeners.length,
@@ -138,6 +192,7 @@ export class SessionResources {
       timeouts: this.timeouts.size,
       rafs: this.rafs.size,
       observers: this.observers.size,
+      pausables: this.pausables.size,
     };
   }
 }

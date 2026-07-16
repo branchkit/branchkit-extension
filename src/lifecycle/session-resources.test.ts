@@ -34,22 +34,59 @@ describe('SessionResources', () => {
     expect(r.counts.intervals).toBe(0);
   });
 
-  it('stopInterval cancels one interval and forgets it (pause without teardown)', () => {
+  it('pause stops pausable intervals; resume re-arms them; plain intervals unaffected', () => {
     const r = new SessionResources();
-    const a = vi.fn();
-    const b = vi.fn();
-    const idA = r.interval(a, 100);
-    r.interval(b, 100);
-    expect(r.counts.intervals).toBe(2);
+    const pausable = vi.fn();
+    const plain = vi.fn();
+    r.pausableInterval(pausable, 100);
+    r.interval(plain, 100);
+    expect(r.counts.pausables).toBe(1);
+    expect(r.paused).toBe(false);
 
-    r.stopInterval(idA);
-    expect(r.counts.intervals).toBe(1); // only A dropped
     vi.advanceTimersByTime(250);
-    expect(a).not.toHaveBeenCalled(); // A paused
-    expect(b).toHaveBeenCalledTimes(2); // B still runs
+    expect(pausable).toHaveBeenCalledTimes(2);
 
-    r.stopInterval(idA); // no-op on an already-stopped id
-    expect(r.counts.intervals).toBe(1);
+    r.pause();
+    expect(r.paused).toBe(true);
+    r.pause(); // idempotent
+    vi.advanceTimersByTime(500);
+    expect(pausable).toHaveBeenCalledTimes(2); // stopped
+    expect(plain).toHaveBeenCalledTimes(7); // plain interval keeps running
+
+    r.resume();
+    expect(r.paused).toBe(false);
+    r.resume(); // idempotent — must not double-arm
+    vi.advanceTimersByTime(250);
+    expect(pausable).toHaveBeenCalledTimes(4); // 2 more ticks, not 4
+  });
+
+  it('a pausable registered while paused stays unarmed until resume', () => {
+    const r = new SessionResources();
+    const fn = vi.fn();
+    r.pause();
+    r.pausableInterval(fn, 100);
+    vi.advanceTimersByTime(500);
+    expect(fn).not.toHaveBeenCalled();
+
+    r.resume();
+    vi.advanceTimersByTime(250);
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it('teardown clears pausables and resume cannot resurrect them', () => {
+    const r = new SessionResources();
+    const armed = vi.fn();
+    const parked = vi.fn();
+    r.pausableInterval(armed, 100);
+    r.pause();
+    r.pausableInterval(parked, 100);
+    r.teardownAll();
+    expect(r.counts.pausables).toBe(0);
+
+    r.resume(); // torn down: nothing left to re-arm
+    vi.advanceTimersByTime(500);
+    expect(armed).not.toHaveBeenCalled();
+    expect(parked).not.toHaveBeenCalled();
   });
 
   it('clears pending timeouts on teardown', () => {

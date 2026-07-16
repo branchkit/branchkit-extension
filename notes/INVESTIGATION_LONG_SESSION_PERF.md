@@ -137,7 +137,8 @@ share of worst-page scroll stalls is the minority (70-95% is the page's own work
 Quick (hours, high yield):
 1. Firehose: restore ≥100 thresholds or add a global gate (finding 5).
 2. Perf publishers: pause on `document.hidden` + dev-flag the 5s ship; fold watchdog chain into
-   SessionResources (finding 2).
+   SessionResources (finding 2). DONE 2026-07-15 (registry pause/resume — see review backlog)
+   except the dev-flag on the 5s ship, which still runs in release builds.
 3. `setScrollAccelEnabled(enabled && isScrollTimelineSupported())` or short-circuit
    `syncScrollAccelChain` when no ctor (finding 3).
 4. Clip-observer root release at zero targets (finding 1).
@@ -146,7 +147,9 @@ Medium:
 6. `idRegistry.register` linear scan → Map lookup (finding 4 multiplier).
 7. Limbo sweeper: skip when store small/tab hidden, or event-arm it (finding 4 multiplier;
    HIDDEN_TAB_SUSPEND deferred this — the deferral predates knowing store size grows unboundedly).
-8. Container-resize refcount underflow (finding 8).
+   Tab-hidden half DONE 2026-07-15 (pausable, stops while hidden); store-small skip /
+   event-arming for VISIBLE tabs still open.
+8. ~~Container-resize refcount underflow (finding 8).~~ DONE (ext c45a8d1, `_containerTracked`).
 9. codewordMemory dead-frame eviction (call the existing frame-scoped clear on liveness loss).
 Strategic:
 10. Giant-DOM circuit breaker à la Rango.
@@ -197,18 +200,24 @@ Structural (verified premises):
   rate, and firehoseStep's default threshold is still 1 (policy lives in a comment). Fix shape:
   move burst policy into the firehose module (rate limiter or required threshold param), or a
   storage-flag master gate like bkClipObserver.
-- **Per-callback visibility gates don't generalize** — the limbo sweeper (250ms
-  finalizeExpiredLimboWrappers, whole-store copy) still runs hidden, in the same registry as
-  the two gated intervals. Right altitude: SessionResources pause/resume wired to the existing
-  onVisibilityChange, replacing per-callback checks (also kills the residual ~1 wakeup/s/tab).
-- **Watchdog belongs in SessionResources.** resources.timeout self-removes on fire (a chain
-  re-registered per tick is cleanly covered by teardownAll) and track() takes the longtask
-  observer. Pass pageSession.resources into startPerfObservers (do NOT import pageSession from
-  perf-counters — cycle via mutation-source). Deletes stopPerfObservers + the flag + the
-  hand-added quiesceOrphan call.
-- **targetsByRoot → refcount.** container-resize-tracker.ts already uses Map<Element, number>
-  release-at-zero; the Set's contents are never read. One number, one fewer sync surface.
-  (Fix the resize tracker's own underflow bug — audit finding 8 — while converging.)
+- **[FIXED 2026-07-15] Per-callback visibility gates don't generalize** — folded into
+  `SessionResources.pausableInterval` + `pause()`/`resume()` wired to onVisibilityChange
+  (resume before the eligibility gate, pause after suspend; boot pauses if loaded hidden).
+  Converted: limbo sweep (replacing the bespoke startLimboSweep/stopLimboSweep pair and
+  `stopInterval`), watchdog, dataset publish, 5s ship — the per-callback visibility gates and
+  `publishPerfSnapshot`'s `force` param are gone (direct one-shot calls always publish). Kills
+  the residual hidden-tab wakeups, not just the work behind the gates.
+- **[FIXED 2026-07-15] Watchdog belongs in SessionResources.** Now a pausable interval owned via
+  `startPerfObservers(resources)` (parameter, not a pageSession import — cycle via
+  mutation-source); track() takes the longtask observer. stopPerfObservers + its flag + the
+  hand-added quiesceOrphan call deleted. The two-ended visible-on-both-fires check collapsed to
+  `rearmWatchdogBaseline()` on the visible transition (beside rearmCpuShareBaseline) plus a
+  one-line self-healing skip in the tick as defense-in-depth (safe now it's an interval — an
+  early return no longer kills the chain).
+- **[FIXED 2026-07-15] targetsByRoot → refcount.** `targetCountByRoot: Map<Element, number>`,
+  release-at-zero (container-resize-tracker's pattern); the Set's contents were never read.
+  (The parenthetical about fixing the resize tracker's underflow — finding 8 — was stale: the
+  `_containerTracked` guard in hints.ts, ext c45a8d1, had already fixed it.)
 - **Scroll-accel gate at setter altitude.** Only one caller today (verified: no
   storage.onChanged handles bkScrollAccel), but folding `&& isScrollTimelineSupported()` into
   the glue setters makes future bypass impossible; deeper still: short-circuit
