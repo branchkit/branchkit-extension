@@ -278,6 +278,20 @@ records stay unflagged (conservative: fail open, never wrongly skip).
 Dropped transients count in occlusionMemoTransientDrops. Gate: diverged=0,
 transientDrops absorbing Gmail/YT's resolve-vanished.
 
+**Round-3 shadow soak (2026-07-16): diverged=0 on every fresh-build host
+(QB reuse 306 + github 82), transient path fired live once (QB) with no
+divergence — AUTHORITATIVE restored.** Coverage caveat, recorded honestly:
+Gmail didn't get a pass this round and YouTube's fresh tab produced no
+gathers, so the transient rule's target volume runs under authoritative
+with the counters as the ongoing signal — transientDrops climbing during
+normal Gmail use is the confirmation; a badge lingering hidden after a
+dropdown closes would be the tell to re-shadow. The rule itself is
+boundary-exact (absent at both gather endpoints ⇒ can affect neither
+answer), not a heuristic. Arc status: hit cost solved (0.4ms clean-window
+gathers), fail-open frequency addressed on QB (resolve-vanished → ~0) and
+structurally for the Gmail-tick class (transient-skip + K=128 + history
+localization).
+
 ## Open questions
 
 - Grid size / K cap tuning (start 8×8 / 16, revisit with Phase-1 counters).

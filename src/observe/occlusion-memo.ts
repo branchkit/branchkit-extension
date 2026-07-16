@@ -74,12 +74,8 @@ const POINTER_POINT_CAP = 32;
 
 // Kill switch (bkOcclusionMemo, denylist posture): default 'on'
 // (authoritative), explicit false → 'off', 'shadow' → verify-only.
-//
-// SOAK BUILD: defaulting to 'shadow' while the transient-skip tap change
-// re-verifies — flip back to 'on' on zero divergence. content.ts's flag
-// mapping carries the same temporary default.
 export type OcclusionMemoMode = 'off' | 'shadow' | 'on';
-let memoMode: OcclusionMemoMode = 'shadow';
+let memoMode: OcclusionMemoMode = 'on';
 
 export function setOcclusionMemoMode(mode: OcclusionMemoMode): void {
   memoMode = mode;
