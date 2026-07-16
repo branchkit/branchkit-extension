@@ -34,6 +34,28 @@
  */
 
 import { ElementWrapper } from '../scan/element-wrapper';
+import { harnessHooksEnabled } from '../debug/harness-hooks';
+import { lastStrictProbe } from './strict-probe';
+
+// Harness-only (settle-storm diagnosis): counts of batch-POST stamps whose
+// recomputed inStrict DISAGREED with the plan's value from the last settle
+// pass, attributed to the input that moved between plan time and POST time.
+// A persistent nonzero here names the stamp as the baseline writer that
+// keeps knocking lastSentStrictViewport away from the plan's view — the
+// plan then re-detects the same delta every pass (the re-push loop).
+// Drained by the settle pipeline into the firehose; plain counters so this
+// module needs no messaging dependency (unit tests just see them idle).
+const stampDisagree = { total: 0, geometry: 0, occluded: 0, cssHidden: 0, ancestor: 0 };
+
+export function drainStampDisagree(): typeof stampDisagree {
+  const out = { ...stampDisagree };
+  stampDisagree.total = 0;
+  stampDisagree.geometry = 0;
+  stampDisagree.occluded = 0;
+  stampDisagree.cssHidden = 0;
+  stampDisagree.ancestor = 0;
+  return out;
+}
 
 /**
  * True iff every iframe in this window's ancestor chain has its `<iframe>`
@@ -106,8 +128,18 @@ export function stampStrictViewport(wrappers: ElementWrapper[]): void {
     // `!w.cssHidden`: same rule for a CSS-invisible target (visibility:hidden /
     // opacity:0 — a hover-reveal action bar) whose badge the visibility recheck
     // has hidden. If the user can't see the badge, voice shouldn't match it.
-    const inStrict = ancestorOk && !w.occluded && !w.cssHidden
-      && r != null && r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
+    const stampOnScreen = r != null && r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
+    const inStrict = ancestorOk && !w.occluded && !w.cssHidden && stampOnScreen;
+    if (harnessHooksEnabled()) {
+      const probe = lastStrictProbe.get(w);
+      if (probe && probe.inStrict !== inStrict) {
+        stampDisagree.total++;
+        if (probe.onScreen !== stampOnScreen) stampDisagree.geometry++;
+        if ((probe.clipped || probe.overlayCovered) !== w.occluded) stampDisagree.occluded++;
+        if (probe.cssHidden !== w.cssHidden) stampDisagree.cssHidden++;
+        if (probe.ancestor !== ancestorOk) stampDisagree.ancestor++;
+      }
+    }
     w.scanned.in_strict_viewport = inStrict;
     // The reconciler reads `lastSentStrictViewport` to decide whether a
     // post-scroll re-push is needed. The batch send that follows this

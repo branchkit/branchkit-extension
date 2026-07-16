@@ -93,8 +93,9 @@ export interface PageSessionDeps {
    * between-settle signal (class/style mutation, pointer reveal) requests
    * the unified settle pass instead of running its own loop. Non-extending —
    * the pass fires within the backstop's old 100ms cadence even under
-   * sustained churn. */
-  schedulePassSoon: () => void;
+   * sustained churn. The reason string feeds the harness-only settle-trigger
+   * attribution (settle-storm diagnosis). */
+  schedulePassSoon: (reason?: string) => void;
 
   // --- mutation-source collaborators ---
 
@@ -108,7 +109,7 @@ export interface PageSessionDeps {
   discoverInSubtreeBatched: (root: Element, source: DiscoverySource, slabBudgetMs?: number) => Promise<number>;
   reevaluateAttribute: (target: Element) => boolean;
   scheduleReposition: () => void;
-  scheduleDeferredReposition: () => void;
+  scheduleDeferredReposition: (src?: Event | string) => void;
 }
 
 export class PageSession {

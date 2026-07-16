@@ -444,7 +444,7 @@ function handlePageMutations(records: MutationRecord[]): void {
   // the dominant scroll-time CPU bucket. A mutation batch means "layout
   // may have shifted"; coalescing to one reposition after mutations
   // settle is the same trade already accepted for scroll/resize.
-  if (pageSession.badgesVisible) pageSession.deps.scheduleDeferredReposition();
+  if (pageSession.badgesVisible) pageSession.deps.scheduleDeferredReposition('mo-batch');
   recordCpu('moCallback', performance.now() - __cpuStart);
   firehoseStep('moCallback:end_normal', records.length, FIREHOSE_MIN);
 }

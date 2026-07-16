@@ -105,7 +105,7 @@ function handleParkedResizeEntries(entries: ResizeObserverEntry[]): void {
   // Same two-cadence signal as the class/style MO: rAF promote + settle-pass
   // request (the pass converges already-hinted badges; the promote turns the
   // revealed candidate into a wrapper).
-  if (dirty) scheduleVisibilitySweep();
+  if (dirty) scheduleVisibilitySweep('vis-ro');
 }
 
 /** Construct the two visibility observers. Called once from
@@ -140,7 +140,7 @@ export function constructVisibilityObservers(): void {
   }, { root: null, rootMargin: '200px', threshold: 0 });
 
   visibilityMO = new MutationObserver(() => {
-    scheduleVisibilitySweep();
+    scheduleVisibilitySweep('vis-mo');
   });
 
   // Layer 3 (round 21). Constructed inert like the others; candidates are
@@ -172,12 +172,12 @@ export function constructVisibilityObservers(): void {
 // storms; coupling the RE-SHOW to rAF was what compounded into ~200ms
 // CPU/min and tripped Firefox's slow-extension warning, reverted 2026-06-02
 // — the re-show cadence stays 100ms via the pass timer).
-function scheduleVisibilitySweep(): void {
+function scheduleVisibilitySweep(source: string): void {
   if (!visibilityRafPending) {
     visibilityRafPending = true;
     requestAnimationFrame(recheckPendingVisibility);
   }
-  pageSession.deps.schedulePassSoon();
+  pageSession.deps.schedulePassSoon(source);
 }
 
 // Pointer-driven sweep variant. Same two halves, but the PROMOTE runs on a 100ms
@@ -205,7 +205,7 @@ export function schedulePointerVisibilitySweep(): void {
   // toShow/toHide/cssHidden derivation converges hinted badges, including
   // the "user just hid" guard (the pipeline gates on badgesVisible) and the
   // strict re-push (the plan's strictDelta rides the same pass).
-  pageSession.deps.schedulePassSoon();
+  pageSession.deps.schedulePassSoon('pointer');
 }
 
 // (recheckBadgeVisibility is gone — Phase E of

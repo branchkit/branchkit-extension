@@ -127,6 +127,7 @@ describe('computeReconcilePlanLists', () => {
     const w = liveWrapper({ hint: 'visible', inViewport: true, codeword: 'ape', disconnected: true });
     const lists = computeReconcilePlanLists(storeOf([w]), gatherOf([[w, OFF_BAND, true]]));
     for (const k of Object.keys(lists) as Array<keyof ReconcilePlanLists>) {
+      if (k === 'strictFlips') continue; // harness counters, not an action class
       expect(lists[k]).toEqual([]);
     }
   });

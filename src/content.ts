@@ -19,7 +19,7 @@ import {
   type ReconcilePlanLists,
 } from './lifecycle/reconcile';
 import { gatherSettleReads, SettleGather } from './lifecycle/gather';
-import { stampStrictViewport } from './lifecycle/strict-viewport';
+import { stampStrictViewport, drainStampDisagree } from './lifecycle/strict-viewport';
 import * as idRegistry from './scan/registry';
 import type { CodewordMemoryEntry } from './labels/codeword-memory';
 import { loadRecall, recalledCodewords, rememberLive, resolvePreferredCodeword, isRecallLoaded } from './labels/codeword-recall';
@@ -2093,7 +2093,8 @@ function applyStrictPlan(delta: ElementWrapper[]): void {
 // within the same 100ms cadence the old throttle guaranteed. The pass is
 // budget-priced for that cadence (gather+plan ≈ 4-6ms, Phase B/D evidence).
 let passSoonTimer: ReturnType<typeof setTimeout> | null = null;
-function schedulePassSoon(): void {
+function schedulePassSoon(reason?: string): void {
+  noteSettleTrigger(`passSoon:${reason ?? 'unknown'}`);
   if (passSoonTimer !== null) return;
   passSoonTimer = pageSession.resources.timeout(() => {
     passSoonTimer = null;
@@ -3155,7 +3156,7 @@ function rescanForNav(fromCache: boolean, reason: string): void {
         if (!wholesale) {
           void navStep('deferred_scan:light');
           reconcile();
-          schedulePassSoon();
+          schedulePassSoon('nav-light');
           return;
         }
         void navStep('deferred_scan:start');
@@ -4131,7 +4132,24 @@ function scheduleMassRevealPaint(repairs: number): void {
   });
 }
 
+// Harness-only settle-trigger attribution (settle-storm diagnosis): every
+// scheduler that can arm the pipeline notes WHY, the notes accumulate across
+// the debounce window (a Set — coalesced duplicates collapse), and the settle
+// entry ships them as one firehose step. Names the re-arm edge of a settle
+// loop directly instead of inferring it from step ordering.
+const settleTriggerReasons = new Set<string>();
+function noteSettleTrigger(reason: string): void {
+  if (harnessHooksEnabled()) settleTriggerReasons.add(reason);
+}
+
 function runSettlePipeline(discovery: 'band' | 'store'): void {
+  if (harnessHooksEnabled()) {
+    const src = settleTriggerReasons.size > 0
+      ? [...settleTriggerReasons].sort().join('+')
+      : 'unattributed';
+    settleTriggerReasons.clear();
+    firehoseStep(`settle:enter:${discovery}:${src}`, 1);
+  }
   if (pageSession.badgesVisible) {
     // Clip-membership sync FIRST: its leave-path is the one mid-pipeline
     // writer of the plan's occlusion inputs (clearing `clipped` for targets
@@ -4185,6 +4203,24 @@ function runSettlePipeline(discovery: 'band' | 'store'): void {
     applyVisibilityPlan(planLists);
     applyStrictPlan(planLists.strictDelta);
     recordApplied(planLists);
+    // Harness-only strict-flip attribution (settle-storm diagnosis): which
+    // plan input moved for the delta cohort since the last pass, plus the
+    // stamp-vs-plan disagreements accrued from the batch POSTs in between.
+    // 'stable' flips (no input moved) + stamp_disagree name the baseline
+    // writer (stampStrictViewport / the sync drain) as the loop's other leg.
+    if (harnessHooksEnabled()) {
+      for (const [k, v] of Object.entries(planLists.strictFlips)) {
+        if (v > 0) firehoseStep(`strictflip:${k}`, v);
+      }
+      const sd = drainStampDisagree();
+      if (sd.total > 0) {
+        firehoseStep('stamp_disagree:total', sd.total);
+        if (sd.geometry > 0) firehoseStep('stamp_disagree:geometry', sd.geometry);
+        if (sd.occluded > 0) firehoseStep('stamp_disagree:occluded', sd.occluded);
+        if (sd.cssHidden > 0) firehoseStep('stamp_disagree:cssHidden', sd.cssHidden);
+        if (sd.ancestor > 0) firehoseStep('stamp_disagree:ancestor', sd.ancestor);
+      }
+    }
   }
   scheduleReposition();
 }
@@ -4239,6 +4275,7 @@ function scheduleScrollReposition(e?: Event): void {
   if (pageSession.scrollRepositionTimer == null && e && e.target instanceof Element) {
     reconcileScrollAccelForScroller(e.target);
   }
+  noteSettleTrigger('scroll');
   if (pageSession.scrollRepositionTimer) clearTimeout(pageSession.scrollRepositionTimer);
   pageSession.scrollRepositionTimer = setTimeout(() => {
     pageSession.scrollRepositionTimer = null;
@@ -4277,7 +4314,7 @@ pageSession.resources.listen(document, 'scroll', scheduleScrollReposition, { pas
 // RO fires ~15/sec. Coalescing to one settle after layout stabilizes
 // trades a ~100ms lag on resize-driven repositions — imperceptible
 // mid-scroll, same trade already accepted for scroll.
-onContainerResize(scheduleDeferredReposition);
+onContainerResize(() => scheduleDeferredReposition('container-resize'));
 
 // Transform-ancestor trigger (notes/DESIGN_TRANSFORM_ANCESTOR_RECONCILE.md).
 // A pan/zoom canvas (React Flow — QuickBase pipeline builder) moves its viewport
@@ -4290,7 +4327,7 @@ onContainerResize(scheduleDeferredReposition);
 // which only happens when the bkTransformTrigger flag is on.
 onTransformAncestorMutation(() => {
   noteReconcileScroll();
-  scheduleDeferredReposition();
+  scheduleDeferredReposition('transform-ancestor');
 });
 
 // Deferred reposition for signals that hint "layout is about to settle":
@@ -4308,7 +4345,8 @@ onTransformAncestorMutation(() => {
 // focusout+focusin <16ms apart) into one reposition after things
 // settle. Matches Rango's ElementWrapper.ts focus debounce.
 const DEFERRED_REPOSITION_DEBOUNCE_MS = 100;
-function scheduleDeferredReposition(): void {
+function scheduleDeferredReposition(src?: Event | string): void {
+  noteSettleTrigger(`deferred:${typeof src === 'string' ? src : src?.type ?? 'direct'}`);
   if (pageSession.deferredRepositionTimer) clearTimeout(pageSession.deferredRepositionTimer);
   pageSession.deferredRepositionTimer = setTimeout(() => {
     pageSession.deferredRepositionTimer = null;
@@ -4365,7 +4403,7 @@ pageSession.resources.listen(window, 'resize', scheduleDeferredReposition, { pas
 onTargetMutation((target) => {
   const w = store.findWrapperFor(target);
   if (w) invalidateProbe(w);
-  scheduleDeferredReposition();
+  scheduleDeferredReposition('target-mutation');
 });
 
 // --- Keyboard Listener ---

@@ -22,6 +22,8 @@ import { wantsShown, wantsStrict } from './desired-state';
 import { isVisible } from '../scan/scanner';
 import { geometryInBand, isRectOnScreen } from '../layout-cache';
 import { recordCpu } from '../debug/perf-counters';
+import { harnessHooksEnabled } from '../debug/harness-hooks';
+import { lastStrictProbe } from './strict-probe';
 import type { SettleGather } from './gather';
 
 /** Viewport band margin, in px. Derived from the IntersectionObserver
@@ -77,7 +79,26 @@ export interface ReconcilePlanLists {
   /** Wrappers whose `_strict` membership (wantsStrict over simulated
    * post-apply flags) differs from the last value pushed to the plugin. */
   strictDelta: ElementWrapper[];
+  /** Harness-only (settle-storm diagnosis): per-input attribution for the
+   * strictDelta cohort — which plan input changed since the PREVIOUS pass.
+   * A delta member with NO changed input ('stable') means the disagreement
+   * is with the lastSent baseline itself (the stamp/sync side), not with a
+   * between-settle input writer. Always present; all-zero in release. */
+  strictFlips: StrictFlipCounts;
 }
+
+export interface StrictFlipCounts {
+  geometry: number;
+  clipped: number;
+  overlayCovered: number;
+  cssHidden: number;
+  ancestor: number;
+  /** In the delta with inputs identical to last pass — baseline mismatch. */
+  stable: number;
+  /** In the delta with no previous-pass probe (first sighting). */
+  first: number;
+}
+
 
 function lazyCssVisible(w: ElementWrapper, counter: { reads: number }): boolean {
   counter.reads++;
@@ -97,7 +118,9 @@ export function computeReconcilePlanLists(
   const lists: ReconcilePlanLists = {
     toRelease: [], toRepair: [], toClaim: [], toBuild: [], toShow: [], toHide: [],
     cssHiddenDelta: [], strictDelta: [],
+    strictFlips: { geometry: 0, clipped: 0, overlayCovered: 0, cssHidden: 0, ancestor: 0, stable: 0, first: 0 },
   };
+  const probing = harnessHooksEnabled();
 
   // Step-1 sim — mirrors reconcileTeardown over the same gather rects.
   for (const w of store.all) {
@@ -192,14 +215,41 @@ export function computeReconcilePlanLists(
     // lastSentStrictViewport is only written at batch POST, so it is stable
     // across the pipeline.
     if (codeworded) {
-      const occluded5 = (gather.overlayCovered.get(w) ?? w.overlayCovered) || w.clipped;
+      const overlay5 = gather.overlayCovered.get(w) ?? w.overlayCovered;
+      const occluded5 = overlay5 || w.clipped;
       const inStrict = wantsStrict(w, {
         ancestorChainVisible: gather.ancestorChainVisible,
         onScreen: onScreen(),
         occluded: occluded5,
         cssHidden: cssHidden5,
       });
-      if (inStrict !== w.lastSentStrictViewport) lists.strictDelta.push(w);
+      if (inStrict !== w.lastSentStrictViewport) {
+        lists.strictDelta.push(w);
+        if (probing) {
+          const prev = lastStrictProbe.get(w);
+          if (!prev) {
+            lists.strictFlips.first++;
+          } else {
+            let changed = false;
+            if (prev.onScreen !== onScreen()) { lists.strictFlips.geometry++; changed = true; }
+            if (prev.clipped !== w.clipped) { lists.strictFlips.clipped++; changed = true; }
+            if (prev.overlayCovered !== overlay5) { lists.strictFlips.overlayCovered++; changed = true; }
+            if (prev.cssHidden !== cssHidden5) { lists.strictFlips.cssHidden++; changed = true; }
+            if (prev.ancestor !== gather.ancestorChainVisible) { lists.strictFlips.ancestor++; changed = true; }
+            if (!changed) lists.strictFlips.stable++;
+          }
+        }
+      }
+      if (probing) {
+        lastStrictProbe.set(w, {
+          onScreen: onScreen(),
+          clipped: w.clipped,
+          overlayCovered: overlay5,
+          cssHidden: cssHidden5,
+          ancestor: gather.ancestorChainVisible,
+          inStrict,
+        });
+      }
     }
   }
 
