@@ -265,6 +265,35 @@ describe('fail-open taps', () => {
     expect(lifecycleCounters.occlusionMemoReuse).toBe(1);
   });
 
+  it('history survives a vanish fail-open — the Gmail-tick shape converges to localization', () => {
+    const w = wrapper();
+    const r = rect(100, 100, 100, 50);
+    gatherOnce([[w, r, false]]);
+
+    // Tick 1: a NEVER-SEEN span is removed (no history → window fails open)
+    // while its replacement is added (resolved → history recorded). The
+    // fail-open must NOT wipe that fresh history.
+    const gen1 = elementAt(rect(600, 450, 60, 20));
+    occlusionMemoNoteMutations([
+      { type: 'childList', addedNodes: [gen1], removedNodes: [elementAt(rect(0, 0, 0, 0), false)], target: document.body } as unknown as MutationRecord,
+    ]);
+    gatherOnce([[w, r, false]]);
+    expect(lifecycleCounters.occlusionMemoAllDirtyBy['resolve-vanished']).toBe(1);
+
+    // Tick 2: gen1 is removed, gen2 added — gen1 HAS history now, so the
+    // swap localizes and the distant wrapper reuses.
+    resetLifecycleCounters();
+    gen1.remove();
+    const gen2 = elementAt(rect(600, 450, 60, 20));
+    occlusionMemoNoteMutations([
+      { type: 'childList', addedNodes: [gen2], removedNodes: [gen1], target: document.body } as unknown as MutationRecord,
+    ]);
+    gatherOnce([[w, r, false]]);
+    expect(lifecycleCounters.occlusionMemoVanishLocalized).toBe(1);
+    expect(lifecycleCounters.occlusionMemoAllDirtyBy).toEqual({});
+    expect(lifecycleCounters.occlusionMemoReuse).toBe(1);
+  });
+
   it('vanish history does not survive an all-dirty window', () => {
     const w = wrapper();
     const r = rect(100, 100, 100, 50);

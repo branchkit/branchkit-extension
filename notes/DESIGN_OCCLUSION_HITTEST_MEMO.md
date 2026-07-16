@@ -218,6 +218,23 @@ Gate: zero occlusion_memo:diverged over Gmail interaction (removal-heavy),
 QB dropdown/hover interaction, YouTube — then restore the 'on' default
 (content.ts flag mapping + module default, both marked SOAK BUILD).
 
+**Shadow soak 2a (2026-07-16): diverged=0 everywhere, but vanishLocalized=0
+too — the wipe rule was self-defeating.** A no-history vanish failed the
+window open, the fail-open wiped the history map, so the NEXT vanisher had
+no history either: on churny pages the map never survived a window (Gmail:
+resolve-vanished ×10 ≈ 1,920 of its 2,171 all-dirty retests, localization
+never fired). Fix: classify all-dirty reasons — geometry-shifting ones
+(scroll/resize/transform, mo-attach, manual-deferred, huge,
+element-overflow: a history'd element may have MOVED unresolved, and stale
+history would later UNDER-mark its vanish) still wipe; resolve-vanished and
+pointer-overflow keep history (one element disappearing / losing pointer
+coords moves nothing else). The resolve loop also now finishes the whole
+queue after a doomed window — the history writes are the point. With the
+loop broken, the Gmail-tick shape converges: tick 1 fails open once, every
+later tick localizes (unit-pinned). Re-soaking under the same gate. (Also
+noted from 2a: the data.quickbase.com tab was stale-CS that round — the QB
+dropdown evidence must come from a reopened tab.)
+
 ## Open questions
 
 - Grid size / K cap tuning (start 8×8 / 16, revisit with Phase-1 counters).

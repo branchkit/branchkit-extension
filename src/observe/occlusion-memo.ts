@@ -32,9 +32,10 @@
  * cells it LAST painted instead of failing the whole window open; the
  * all-dirty fail-open remains for elements with no recorded history. A
  * re-resolved element marks old ∪ new cells, closing the in-viewport-slide
- * gap for anything seen before. The history is wiped on every all-dirty
- * window (scroll/resize move content without per-element records, so
- * recorded cells are only trusted across CLEAN windows).
+ * gap for anything seen before. The history is wiped on geometry-shifting
+ * all-dirty windows (scroll/resize/transform, unobserved spans,
+ * element-overflow — content moved without per-element records) but
+ * survives vanish- and pointer-driven fail-opens, which move nothing.
  *
  * AUTHORITATIVE as of 2026-07-16: a reuse hit returns the cached verdict and
  * the fresh hit-test is skipped. Gated by the Phase-1 shadow soak — zero
@@ -104,10 +105,10 @@ let allDirty = true;
 const dirtyCells = new Uint8Array(CELL_COUNT);
 const pendingElements = new Set<Element>();
 const pendingPointer: number[] = []; // flat x,y pairs
-// The cells each element occupied at its LAST clean-window resolve — the
-// localization source for elements that have vanished by the time they
-// resolve. Only trusted across clean windows: any all-dirty wipes it
-// (unrecorded in-flow shifts make older positions unreliable).
+// The cells each element occupied at its LAST resolve — the localization
+// source for elements that have vanished by the time they resolve. Wiped
+// when geometry shifts without per-element records (see
+// occlusionMemoAllDirty's keepHistory rule).
 let lastKnownCells = new WeakMap<Element, readonly number[]>();
 // Viewport dims of the last resolve, for sample-point→cell mapping in the
 // per-wrapper check (same values batch 3 samples against).
@@ -119,13 +120,24 @@ function bumpAllDirtyReason(reason: string): void {
     (lifecycleCounters.occlusionMemoAllDirtyBy[reason] ?? 0) + 1;
 }
 
-/** Fail open: everything retests at the next gather. Idempotent per window. */
-export function occlusionMemoAllDirty(reason: string): void {
+/**
+ * Fail open: everything retests at the next gather. Idempotent per window.
+ *
+ * The cell history survives IFF the reason can't have moved recorded
+ * elements. Geometry-shifting reasons (scroll/resize/transform, unobserved
+ * windows, element-overflow — where a history'd element may have moved
+ * without resolving) must wipe: a stale recorded position later UNDER-marks
+ * a vanish. A no-history vanish or a pointer-coordinate overflow moves
+ * nothing, so keeping history there is what breaks the self-defeating loop
+ * the first shadow round exposed (fail-open → wipe → next vanisher has no
+ * history → fail-open again; vanishLocalized never fired).
+ */
+export function occlusionMemoAllDirty(reason: string, keepHistory = false): void {
   if (memoMode === 'off' || allDirty) return;
   allDirty = true;
   pendingElements.clear();
   pendingPointer.length = 0;
-  lastKnownCells = new WeakMap();
+  if (!keepHistory) lastKnownCells = new WeakMap();
   bumpAllDirtyReason(reason);
 }
 
@@ -177,7 +189,7 @@ export function occlusionMemoNoteMutations(records: MutationRecord[]): void {
 export function occlusionMemoNotePointer(x: number, y: number): void {
   if (memoMode === 'off' || allDirty) return;
   if (pendingPointer.length >= POINTER_POINT_CAP * 2) {
-    occlusionMemoAllDirty('pointer-overflow');
+    occlusionMemoAllDirty('pointer-overflow', true); // coords lost, nothing moved
     return;
   }
   pendingPointer.push(x, y);
@@ -242,6 +254,10 @@ export function occlusionMemoResolveDirty(vw: number, vh: number): void {
   }
   pendingPointer.length = 0;
   let reads = 0;
+  let sawNoHistoryVanish = false;
+  // Resolve EVERY queued element even once a no-history vanish has doomed
+  // the window: the point of continuing is the history writes — they are
+  // what let the NEXT window's vanishes localize (warm-cache reads, cheap).
   for (const el of pendingElements) {
     let r: DOMRect | null = null;
     if (el.isConnected) {
@@ -266,12 +282,14 @@ export function occlusionMemoResolveDirty(vw: number, vh: number): void {
       lastKnownCells.delete(el);
       lifecycleCounters.occlusionMemoVanishLocalized++;
     } else {
-      occlusionMemoAllDirty('resolve-vanished');
-      break;
+      sawNoHistoryVanish = true;
     }
   }
   pendingElements.clear();
   if (reads > 0) recordCpu('occlusionMemo:size:resolveReads', reads);
+  // After the loop (not mid-iteration): fail the window open, but keep the
+  // history just written — a vanish moves nothing else.
+  if (sawNoHistoryVanish) occlusionMemoAllDirty('resolve-vanished', true);
 }
 
 // Reuse requires the cells under the wrapper's SAMPLE POINTS clean — cell
