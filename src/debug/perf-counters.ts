@@ -419,6 +419,22 @@ export interface LifecycleCounters {
   // page-MO batches downgraded from full settle to a positioner pass.
   visMoIrrelevantSkips: number;
   moBatchRepositionOnly: number;
+  // Occlusion hit-test memoization, SHADOW phase
+  // (notes/DESIGN_OCCLUSION_HITTEST_MEMO.md): per-wrapper reuse decisions the
+  // cache WOULD have made while the fresh hit-test still runs. Reuse rate =
+  // wouldReuse / (wouldReuse + retest*). Diverged (would-reuse verdict ≠
+  // fresh result) must be ZERO at real volume before the cache goes
+  // authoritative; each divergence also firehoses occlusion_memo:diverged.
+  // AllDirtyBy attributes which fail-open tap keeps nuking the window —
+  // the K-cap / removal-policy tuning signal.
+  occlusionMemoWouldReuse: number;
+  occlusionMemoRetestCold: number;
+  occlusionMemoRetestEpoch: number;
+  occlusionMemoRetestRect: number;
+  occlusionMemoRetestCells: number;
+  occlusionMemoRetestAllDirty: number;
+  occlusionMemoDiverged: number;
+  occlusionMemoAllDirtyBy: Record<string, number>;
   // Cumulative wrapper attaches by discovery source (attachWrapper stamps
   // the same value on the wrapper — see DiscoverySource in element-wrapper).
   // Window-scoped per-source latency lives in the debug snapshot's
@@ -447,13 +463,22 @@ export const lifecycleCounters: LifecycleCounters = {
   shadowRootsObserved: 0,
   visMoIrrelevantSkips: 0,
   moBatchRepositionOnly: 0,
+  occlusionMemoWouldReuse: 0,
+  occlusionMemoRetestCold: 0,
+  occlusionMemoRetestEpoch: 0,
+  occlusionMemoRetestRect: 0,
+  occlusionMemoRetestCells: 0,
+  occlusionMemoRetestAllDirty: 0,
+  occlusionMemoDiverged: 0,
+  occlusionMemoAllDirtyBy: {},
   attachedBySource: {},
 };
 
 export function resetLifecycleCounters(): void {
   for (const k of Object.keys(lifecycleCounters) as (keyof LifecycleCounters)[]) {
-    if (k === 'attachedBySource') continue;
+    if (k === 'attachedBySource' || k === 'occlusionMemoAllDirtyBy') continue;
     (lifecycleCounters as unknown as Record<string, number>)[k] = 0;
   }
   lifecycleCounters.attachedBySource = {};
+  lifecycleCounters.occlusionMemoAllDirtyBy = {};
 }

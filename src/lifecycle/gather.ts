@@ -28,7 +28,11 @@ import { ElementWrapper } from '../scan/element-wrapper';
 import { isVisible } from '../scan/scanner';
 import { cacheVisibility, clearLayoutCache, peekCachedRect } from '../layout-cache';
 import { isAncestorChainInVisibleViewport } from './strict-viewport';
-import { isOccluded, isOcclusionEnabled, drainElementFromPointCalls } from '../observe/occlusion';
+import { isOccluded, isOccludedBox, isOcclusionEnabled, visualBoxFor, drainElementFromPointCalls } from '../observe/occlusion';
+import {
+  isOcclusionMemoEnabled, occlusionMemoResolveDirty, occlusionMemoShadowTest,
+  occlusionMemoEndGather,
+} from '../observe/occlusion-memo';
 import { recordCpu } from '../debug/perf-counters';
 
 export interface SettleGather {
@@ -123,13 +127,43 @@ export function gatherSettleReads(wrappers: readonly ElementWrapper[]): SettleGa
   // Resolve CSS visibility against the warm cache (style reads were batch 1).
   const cssVisible = new Map<ElementWrapper, boolean>();
   for (const w of visSet) cssVisible.set(w, isVisible(w.element));
+
+  // Batch-2 fold (notes/DESIGN_OCCLUSION_HITTEST_MEMO.md): resolve each
+  // occlusion-set wrapper's visual-box element (cached per wrapper — stable)
+  // and read ITS rect here, against the warm cache, instead of paying a
+  // duplicate uncached gBCR inside every batch-3 hit-test. For the common
+  // case (visual box IS the element) the rect comes out of the batch-2 cache
+  // for free; only tiny form controls resolve an ancestor box.
+  const occlusionBoxes = new Map<ElementWrapper, { el: Element; rect: DOMRect }>();
+  for (const w of occlusionSet) {
+    try {
+      const boxEl = visualBoxFor(w);
+      let r = peekCachedRect(boxEl);
+      if (r === null) {
+        r = boxEl.getBoundingClientRect();
+        rectReads++;
+      }
+      occlusionBoxes.set(w, { el: boxEl, rect: r });
+    } catch { /* detached mid-read — batch 3 falls back to the legacy path */ }
+  }
   const __b2End = performance.now();
 
   // Read batch 3: occlusion hit-tests over the visible badge set. Pure reads
-  // (elementFromPoint + the target rect), still against clean layout.
+  // (elementFromPoint over the batch-2 visual-box rects), still against
+  // clean layout. Memoization (SHADOW mode): the fresh test always runs;
+  // the memo just records the reuse decision it would have made and counts
+  // divergences (notes/DESIGN_OCCLUSION_HITTEST_MEMO.md).
   drainElementFromPointCalls();
+  const memoOn = occlusionOn && occlusionSet.length > 0 && isOcclusionMemoEnabled();
+  if (memoOn) occlusionMemoResolveDirty(vw, vh);
   const overlayCovered = new Map<ElementWrapper, boolean>();
-  for (const w of occlusionSet) overlayCovered.set(w, isOccluded(w.element));
+  for (const w of occlusionSet) {
+    const box = occlusionBoxes.get(w);
+    const fresh = box ? isOccludedBox(box.el, box.rect) : isOccluded(w.element);
+    overlayCovered.set(w, fresh);
+    if (memoOn && box) occlusionMemoShadowTest(w, box.rect, fresh);
+  }
+  if (memoOn) occlusionMemoEndGather();
   const efpCalls = drainElementFromPointCalls();
   const __b3End = performance.now();
 

@@ -45,6 +45,7 @@ import { lifecycleCounters, recordCpu } from '../debug/perf-counters';
 import { firehoseStep, describeMutation } from '../debug/firehose';
 import { harnessHooksEnabled } from '../debug/harness-hooks';
 import { mutationTouchesTracked } from './mutation-relevance';
+import { occlusionMemoNoteMutations } from './occlusion-memo';
 import { store } from '../core/store';
 import { attachWrapper } from '../core/wrapper-lifecycle';
 import { pageSession } from '../lifecycle/page-session';
@@ -155,6 +156,12 @@ export function constructVisibilityObservers(): void {
   }, { root: null, rootMargin: '200px', threshold: 0 });
 
   visibilityMO = new MutationObserver((records) => {
+    // Occlusion-memo tap, BEFORE the relevance gate: this MO is the only
+    // observer that carries class/style records (the page MO's
+    // attributeFilter excludes them), and a restyle on an UNtracked element
+    // can move an overlay across tracked targets — relevance to the settle
+    // triggers and relevance to occlusion are different questions.
+    occlusionMemoNoteMutations(records);
     // Harness-only target attribution (settle-storm diagnosis): this MO has
     // no own-mutation filter (document-wide class/style watch), so name what
     // it actually saw before it requests a settle pass.

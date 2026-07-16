@@ -29,6 +29,7 @@ import { harnessHooksEnabled } from '../debug/harness-hooks';
 import { recordCpu, lifecycleCounters } from '../debug/perf-counters';
 import { firehoseStep, describeMutation } from '../debug/firehose';
 import { mutationTouchesTracked } from './mutation-relevance';
+import { occlusionMemoNoteMutations, occlusionMemoAllDirty } from './occlusion-memo';
 import { pendingVisibilityCandidates } from './visibility-tracker';
 import { pageSession, scheduleYieldTask } from '../lifecycle/page-session';
 import { WAVE_WALK_BUDGET_MS } from '../lifecycle/build-queue';
@@ -392,6 +393,8 @@ function handlePageMutations(records: MutationRecord[]): void {
     // Batch deferred unfiltered — assume adds so the gate can't starve the
     // sweep on content this path never inspected.
     domAddEpoch++;
+    // Deferred = never enumerated, so the occlusion memo can't localize it.
+    occlusionMemoAllDirty('manual-deferred');
     recordCpu('moCallback', performance.now() - __cpuStart);
     firehoseStep('moCallback:end_manual_deferred', records.length, FIREHOSE_MIN);
     return;
@@ -422,6 +425,7 @@ function handlePageMutations(records: MutationRecord[]): void {
   if (foreign.length >= HUGE_MUTATIONS_COUNT) {
     lifecycleCounters.moHugePathFired++;
     hugeMutationLastCount = foreign.length;
+    occlusionMemoAllDirty('huge');
     // Stamp added elements for the paint-latency decomposition even on the
     // coarse path — the deferred full-body rediscovery is a prime suspect
     // for pre-attach latency, so its inputs must carry sighting times too.
@@ -443,6 +447,12 @@ function handlePageMutations(records: MutationRecord[]): void {
     firehoseStep('moCallback:end_huge_scheduled', records.length, FIREHOSE_MIN);
     return;
   }
+
+  // Occlusion-memo tap, deliberately BEFORE the relevance gate below: a
+  // batch that touches no tracked element can still move paint over tracked
+  // targets (an untracked overlay sliding in), so the memo must see every
+  // foreign batch even when the settle triggers ignore it.
+  occlusionMemoNoteMutations(foreign);
 
   processMutations(foreign);
   // Debounced, not direct: on churny pages (YouTube /watch) this callback
@@ -586,6 +596,8 @@ export function attachPageMutationObserver(): void {
   // Boot, and every hidden-tab resume: whatever happened while unobserved is
   // epoch-invisible, so force the next settle's sweep to walk it.
   domAddEpoch++;
+  // Same reasoning for the occlusion memo: the suspend window was unobserved.
+  occlusionMemoAllDirty('mo-attach');
   observer?.observe(document.body || document.documentElement, PAGE_OBSERVE_OPTIONS);
 }
 

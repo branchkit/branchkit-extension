@@ -141,7 +141,9 @@ export function isHitOccluding(target: Element, hit: Element | null): boolean {
 // inset to 0.2/0.8 so they probe the box's extent without landing on a border or
 // an adjacent element. A point off the viewport hit-tests to null (counts as
 // not-covered) — a partially-off-viewport target won't be aggressively hidden.
-const SAMPLE_FRACTIONS: ReadonlyArray<readonly [number, number]> = [
+// Exported for the memoization layer (occlusion-memo): the reuse decision
+// checks dirty-cell membership of exactly these probe points.
+export const SAMPLE_FRACTIONS: ReadonlyArray<readonly [number, number]> = [
   [0.5, 0.5],
   [0.2, 0.2],
   [0.8, 0.2],
@@ -173,6 +175,37 @@ export function isOccluded(el: Element): boolean {
   } catch {
     return false;
   }
+  return isOccludedBox(el, r);
+}
+
+/**
+ * The wrapper's visual-box ELEMENT, cached — it is stable per wrapper
+ * (effectiveVisualBox climbs to the same ancestor every time for a tiny
+ * control, and is the identity for everything else), so the settle gather
+ * resolves it once and folds its rect read into batch 2 instead of paying a
+ * fresh gBCR inside every batch-3 hit-test. Entries die with the wrapper; a
+ * rebind (same wrapper, new element) or a DOM restructure that orphans the
+ * cached box from its control re-resolves via the containment guard.
+ */
+const visualBoxCache = new WeakMap<ElementWrapper, Element>();
+
+export function visualBoxFor(w: ElementWrapper): Element {
+  let box = visualBoxCache.get(w);
+  if (box && box !== w.element && !box.contains(w.element)) box = undefined;
+  if (!box) {
+    box = effectiveVisualBox(w.element);
+    visualBoxCache.set(w, box);
+  }
+  return box;
+}
+
+/**
+ * The sampling core of `isOccluded`, with the visual box already resolved
+ * and its rect already read (the settle gather reads it in batch 2 — the
+ * fold that removes the duplicate per-wrapper gBCR batch 3 used to pay).
+ */
+export function isOccludedBox(el: Element, r: DOMRect): boolean {
+  if (!occlusionEnabled) return false;
   if (r.width < 1 || r.height < 1) return false;
   const doc = el.ownerDocument;
   if (!doc) return false;

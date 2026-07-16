@@ -40,6 +40,7 @@ import { onContainerResize } from './observe/container-resize-tracker';
 import { onTransformAncestorMutation, setTransformTriggerEnabled } from './observe/transform-ancestor-tracker';
 import { onTargetMutation } from './observe/target-mutation-tracker';
 import { setOcclusionEnabled, applyOcclusion } from './observe/occlusion';
+import { setOcclusionMemoEnabled, occlusionMemoAllDirty, occlusionMemoNoteTarget, occlusionMemoNotePointer } from './observe/occlusion-memo';
 import { reconcileClipObservation, drainClipObservers, setClipObserverEnabled } from './observe/clip-observer';
 import { cacheLayout, cacheConstruction, clearLayoutCache, geometryInBand, getCachedRect, isRectOnScreen } from './layout-cache';
 import { placeBadges, invalidateProbe } from './placement';
@@ -818,6 +819,11 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
 //   EXIT: keep on if the soak stays clean, else investigate; reconfirm at launch.
 // bkClipObserver - default ON, composes with bkOcclusion (IO-clip vs
 //   elementFromPoint hit-test). Same exit as bkOcclusion.
+// bkOcclusionMemo - default ON, SHADOW phase (notes/DESIGN_OCCLUSION_HITTEST_
+//   MEMO.md): the fresh hit-test still runs; the memo only counts the reuse
+//   decisions it would have made + divergences (occlusion_memo:diverged).
+//   EXIT: zero divergence at real volume → flip authoritative (skip the fresh
+//   test on reuse), keeping this as the kill switch.
 // bkSweepGate - default ON. Skips the per-settle band-discovery body re-walk
 //   while the DOM-add epoch is clean (no observed childList adds since the
 //   last walk) and the last sweep is <30s old; mass-reveal fast-arm bypasses.
@@ -840,6 +846,14 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
     setOcclusionEnabled(result.bkOcclusion !== false);
     if (harnessHooksEnabled()) {
       document.documentElement.setAttribute('data-bk-occlusion', result.bkOcclusion !== false ? 'on' : 'off');
+    }
+  });
+  chrome.storage.local.get('bkOcclusionMemo', (result) => {
+    // Occlusion hit-test memoization (shadow phase — see the registry above).
+    // Only an explicit `false` disables: `chrome.storage.local.set({ bkOcclusionMemo: false })`.
+    setOcclusionMemoEnabled(result.bkOcclusionMemo !== false);
+    if (harnessHooksEnabled()) {
+      document.documentElement.setAttribute('data-bk-occlusion-memo', result.bkOcclusionMemo !== false ? 'on' : 'off');
     }
   });
   chrome.storage.local.get('bkTransformTrigger', (result) => {
@@ -4276,6 +4290,10 @@ function noteBandSweep(): void {
 }
 
 function scheduleScrollReposition(e?: Event): void {
+  // Scroll reshuffles fixed/sticky vs content — the occlusion memo can't
+  // localize that, so the whole window fails open (targets move anyway, so
+  // their rect keys retest them regardless). Idempotent per window.
+  occlusionMemoAllDirty('scroll');
   // Reconcile badges need per-frame re-pinning during the scroll itself (they
   // don't ride the compositor); this fires on every scroll event, before the
   // trailing-edge settle below. No-op when the flag is off (empty registry).
@@ -4369,6 +4387,22 @@ onTransformAncestorMutation(() => {
 // settle. Matches Rango's ElementWrapper.ts focus debounce.
 const DEFERRED_REPOSITION_DEBOUNCE_MS = 100;
 function scheduleDeferredReposition(src?: Event | string): void {
+  // Occlusion-memo invalidation taps (notes/DESIGN_OCCLUSION_HITTEST_MEMO.md),
+  // riding the signals already routed here. resize (incl. zoom) reshuffles
+  // fixed/sticky vs content → fail open; transform-ancestor pans move
+  // everything → fail open; focus/transition/animation events queue their
+  // target for cell-marking at the next gather (:focus-within and
+  // end-of-animation restyles can repaint with no MO record the page
+  // observer's attributeFilter would carry). 'mo-batch' and
+  // 'target-mutation' are already tapped at their sources; 'container-resize'
+  // is deliberately untapped (anchor resizes move the targets themselves —
+  // the rect key retests them).
+  if (src === 'transform-ancestor') {
+    occlusionMemoAllDirty('transform-ancestor');
+  } else if (src instanceof Event) {
+    if (src.type === 'resize') occlusionMemoAllDirty('resize');
+    else if (src.target instanceof Element) occlusionMemoNoteTarget(src.target);
+  }
   noteSettleTrigger(`deferred:${typeof src === 'string' ? src : src?.type ?? 'direct'}`);
   if (pageSession.deferredRepositionTimer) clearTimeout(pageSession.deferredRepositionTimer);
   pageSession.deferredRepositionTimer = setTimeout(() => {
@@ -4394,7 +4428,15 @@ pageSession.resources.listen(document, 'animationend', scheduleDeferredRepositio
 // entering any element (not per-pixel like mousemove), and the pointer variant
 // throttles BOTH halves to 100ms (the promote doesn't need rAF cadence here), so
 // movement-driven cost stays bounded.
-pageSession.resources.listen(document, 'pointerover', schedulePointerVisibilitySweep, { passive: true, capture: true });
+// The pointerover wrapper ALSO feeds the occlusion memo the event
+// coordinates (zero layout reads — the memo's only signal for pure-CSS
+// :hover paints). The sweep call itself is unchanged: the memo tap must not
+// touch recheckPendingVisibility behavior (the temperamental hover-reveal
+// promote path).
+pageSession.resources.listen(document, 'pointerover', (e: PointerEvent) => {
+  occlusionMemoNotePointer(e.clientX, e.clientY);
+  schedulePointerVisibilitySweep();
+}, { passive: true, capture: true });
 // Pointer left the window entirely: the `:hover` reveal collapses back to
 // visibility:hidden, but no further `pointerover` fires to catch it, so the badge
 // would linger until the next settle. `pointerout` with a null `relatedTarget`
@@ -4404,6 +4446,9 @@ pageSession.resources.listen(document, 'pointerover', schedulePointerVisibilityS
 // `pointerover`. Gated on the null check so ordinary in-page pointerouts (every
 // element boundary crossing) don't double the sweep rate.
 pageSession.resources.listen(document, 'pointerout', (e: PointerEvent) => {
+  // Memo tap on EVERY pointerout (un-hover collapses happen at each boundary
+  // crossing, not just window exit); the sweep keeps its null-check gate.
+  occlusionMemoNotePointer(e.clientX, e.clientY);
   if (e.relatedTarget === null) schedulePointerVisibilitySweep();
 }, { passive: true, capture: true });
 // Window resize covers genuine viewport changes (drag corner, device
@@ -4426,6 +4471,9 @@ pageSession.resources.listen(window, 'resize', scheduleDeferredReposition, { pas
 onTargetMutation((target) => {
   const w = store.findWrapperFor(target);
   if (w) invalidateProbe(w);
+  // Class/style/subtree churn on a badge target can restyle paint around it
+  // (this tracker sees records the doc-level attributeFilter misses).
+  occlusionMemoNoteTarget(target);
   scheduleDeferredReposition('target-mutation');
 });
 
