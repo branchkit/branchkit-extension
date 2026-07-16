@@ -5081,6 +5081,11 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
     // Subframe count of this (top) frame — preserves the ad-frame-swarm signal
     // now that subframes no longer ship their own trail entries.
     frames: window.length,
+    // Total DOM element count (live-collection length, O(1) read) — the
+    // giant-DOM breaker's Phase-0 input (notes/DESIGN_GIANT_DOM_BREAKER.md):
+    // correlate >25k-element pages with the walk/store cpu buckets to pick
+    // the breaker option. No machinery before the numbers.
+    domElementCount: document.getElementsByTagName('*').length,
     wrapperCount: store.all.length,
     wrapperLimboCount: limbo,
     // claim.* splits codeword acquisition by path so we can see if the scan
