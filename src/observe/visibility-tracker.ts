@@ -44,6 +44,7 @@ import { cacheVisibility, clearLayoutCache } from '../layout-cache';
 import { lifecycleCounters, recordCpu } from '../debug/perf-counters';
 import { firehoseStep, describeMutation } from '../debug/firehose';
 import { harnessHooksEnabled } from '../debug/harness-hooks';
+import { mutationTouchesTracked } from './mutation-relevance';
 import { store } from '../core/store';
 import { attachWrapper } from '../core/wrapper-lifecycle';
 import { pageSession } from '../lifecycle/page-session';
@@ -60,6 +61,18 @@ import { pageSession } from '../lifecycle/page-session';
 // the recheckPendingVisibility:size perf bucket is the growth tripwire.
 const pendingVisibility = new Set<Element>();
 let visibilityRafPending = false;
+
+/** Lazy view of the store's wrapper elements for the relevance gate — a
+ * generator so no per-batch array is allocated at MO cadence. */
+function* wrapperElements(): Generator<Element> {
+  for (const w of store.all) yield w.element;
+}
+
+/** The parked-candidate set, exposed (read-only by convention) so the page
+ * MO's relevance gate (mutation-source) can include reveal candidates. */
+export function pendingVisibilityCandidates(): Iterable<Element> {
+  return pendingVisibility;
+}
 
 let visibilityIO: IntersectionObserver | undefined;
 let visibilityMO: MutationObserver | undefined;
@@ -147,6 +160,16 @@ export function constructVisibilityObservers(): void {
     // it actually saw before it requests a settle pass.
     if (harnessHooksEnabled() && records.length > 0) {
       firehoseStep(`vismo_target:${describeMutation(records[0])}`, records.length);
+    }
+    // Relevance gate (notes/DESIGN_SETTLE_TRIGGER_SCOPING.md): a class/style
+    // flip can only matter here by revealing/hiding a tracked element — a
+    // wrapper or a parked candidate, via itself or an ancestor. A batch
+    // touching neither (Gmail's 2Hz `T-aT4-Mp` cosmetic tick was costing two
+    // full settles per tick, forever) buys neither the promote recheck nor a
+    // settle request. Counted, never silent.
+    if (!mutationTouchesTracked(records, [pendingVisibility, wrapperElements()])) {
+      lifecycleCounters.visMoIrrelevantSkips++;
+      return;
     }
     scheduleVisibilitySweep('vis-mo');
   });

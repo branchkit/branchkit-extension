@@ -60,7 +60,7 @@ export function isOcclusionEnabled(): boolean {
  * target would be judged occluded. Climb from `node` through its shadow
  * hosts and ask `contains` at each light-tree level.
  */
-function composedContains(ancestor: Element, node: Element): boolean {
+export function composedContains(ancestor: Element, node: Element): boolean {
   let cur: Node | null = node;
   while (cur) {
     if (ancestor.contains(cur)) return true;

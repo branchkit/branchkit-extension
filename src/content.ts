@@ -4156,6 +4156,23 @@ function runSettlePipeline(discovery: 'band' | 'store'): void {
     settleTriggerReasons.clear();
     firehoseStep(`settle:enter:${discovery}:${src}`, 1);
   }
+  // One store pass per signal window (notes/DESIGN_SETTLE_TRIGGER_SCOPING.md):
+  // the deferred-reposition debounce and the passSoon single-flight are two
+  // independent 100ms timers that both request THIS unified pass — letting
+  // the sibling fire would re-run an identical pass over unchanged state
+  // ~100ms later (the idle-storm doubler: two full settles per page tick).
+  // The firing timer nulled itself before calling here, so this cancels only
+  // the sibling; a signal landing after this synchronous pass re-arms fresh.
+  if (discovery === 'store') {
+    if (passSoonTimer !== null) {
+      clearTimeout(passSoonTimer);
+      passSoonTimer = null;
+    }
+    if (pageSession.deferredRepositionTimer) {
+      clearTimeout(pageSession.deferredRepositionTimer);
+      pageSession.deferredRepositionTimer = null;
+    }
+  }
   if (pageSession.badgesVisible) {
     // Clip-membership sync FIRST: its leave-path is the one mid-pipeline
     // writer of the plan's occlusion inputs (clearing `clipped` for targets

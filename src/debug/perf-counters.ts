@@ -412,6 +412,13 @@ export interface LifecycleCounters {
   // it describes only via resetLifecycleCounters (registration itself is
   // WeakSet-deduped per cycle).
   shadowRootsObserved: number;
+  // Settle-trigger scoping (notes/DESIGN_SETTLE_TRIGGER_SCOPING.md): visible
+  // compression counters for the relevance gates — never silent drops.
+  // visMoIrrelevantSkips = class/style batches that touched no tracked
+  // element (no promote, no settle request); moBatchRepositionOnly = foreign
+  // page-MO batches downgraded from full settle to a positioner pass.
+  visMoIrrelevantSkips: number;
+  moBatchRepositionOnly: number;
   // Cumulative wrapper attaches by discovery source (attachWrapper stamps
   // the same value on the wrapper — see DiscoverySource in element-wrapper).
   // Window-scoped per-source latency lives in the debug snapshot's
@@ -438,6 +445,8 @@ export const lifecycleCounters: LifecycleCounters = {
   invisibleCandidatesObserved: 0,
   visibilityRoSignals: 0,
   shadowRootsObserved: 0,
+  visMoIrrelevantSkips: 0,
+  moBatchRepositionOnly: 0,
   attachedBySource: {},
 };
 

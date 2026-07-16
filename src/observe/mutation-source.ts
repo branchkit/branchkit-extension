@@ -28,6 +28,8 @@ import { getHintVisibility } from '../config';
 import { harnessHooksEnabled } from '../debug/harness-hooks';
 import { recordCpu, lifecycleCounters } from '../debug/perf-counters';
 import { firehoseStep, describeMutation } from '../debug/firehose';
+import { mutationTouchesTracked } from './mutation-relevance';
+import { pendingVisibilityCandidates } from './visibility-tracker';
 import { pageSession, scheduleYieldTask } from '../lifecycle/page-session';
 import { WAVE_WALK_BUDGET_MS } from '../lifecycle/build-queue';
 
@@ -63,6 +65,12 @@ const HUGE_MUTATION_MAX_WAIT_MS = 250;
 
 function isOwnMutation(n: Node): boolean {
   return n instanceof HTMLElement && n.hasAttribute('data-branchkit-hint');
+}
+
+/** Lazy view of the store's wrapper elements for the relevance gate — a
+ * generator so no per-batch array is allocated at MO cadence. */
+function* storeElements(): Generator<Element> {
+  for (const w of store.all) yield w.element;
 }
 
 // --- Per-frame coalesce of attribute reevaluations ---
@@ -451,7 +459,20 @@ function handlePageMutations(records: MutationRecord[]): void {
     if (harnessHooksEnabled()) {
       firehoseStep(`mo_target:${describeMutation(foreign[0])}`, foreign.length);
     }
-    pageSession.deps.scheduleDeferredReposition('mo-batch');
+    // Relevance-scoped settle (notes/DESIGN_SETTLE_TRIGGER_SCOPING.md): a
+    // foreign batch whose mutated nodes touch no tracked element can reflow
+    // layout — the positioner pass converges badge positions — but cannot
+    // change anything a settle derives (added-node discovery already rode
+    // drainDiscovery above; removals rode dropDisconnectedWrappers). Batches
+    // touching tracked elements keep the full settle: the QuickBase
+    // double-buffered flip (class reveal over a container of wrappers) stays
+    // on the settle + sweep-arm path (round 14).
+    if (mutationTouchesTracked(foreign, [pendingVisibilityCandidates(), storeElements()])) {
+      pageSession.deps.scheduleDeferredReposition('mo-batch');
+    } else {
+      lifecycleCounters.moBatchRepositionOnly++;
+      pageSession.deps.scheduleReposition();
+    }
   }
   recordCpu('moCallback', performance.now() - __cpuStart);
   firehoseStep('moCallback:end_normal', records.length, FIREHOSE_MIN);
