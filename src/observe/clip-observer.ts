@@ -157,12 +157,16 @@ export function reconcileClipObservation(wrappers: Iterable<ElementWrapper>): vo
     // false-flag it `clipped` whenever it floats outside that scroller's box.
     const root = findClippingScroller(w.element);
     if (!root) continue; // viewport-only / fixed: clipping is covered by isInViewport
+    // Bookkeeping BEFORE observe(): a throwing observe() must not strand a
+    // root with no targets Set (release could then never fire) or a
+    // believed-observed target. Nothing depends on the order — the initial
+    // IO callback is async (long-session review backlog, add-path ordering).
     rootByTarget.set(w.element, root);
     wrapperByTarget.set(w.element, w);
-    getObserver(root).observe(w.element);
     let targets = targetsByRoot.get(root);
     if (!targets) targetsByRoot.set(root, targets = new Set());
     targets.add(w.element);
+    getObserver(root).observe(w.element);
   }
   for (const el of [...rootByTarget.keys()]) {
     if (!wanted.has(el)) unobserveTarget(el);

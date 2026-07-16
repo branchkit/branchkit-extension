@@ -6,6 +6,8 @@
  * HintBadge; the ScrollTimeline plumbing lives in scroll-accel.ts.
  */
 
+import { isScrollTimelineSupported } from './scroll-accel';
+
 /** The slice of HintBadge the glue drives. Kept as a structural interface so
  *  this module doesn't import the badge class. */
 export interface ScrollAccelReconcilable {
@@ -28,7 +30,11 @@ export interface ScrollAccelReconcilable {
 let scrollAccelEnabled = false;
 
 export function setScrollAccelEnabled(enabled: boolean): void {
-  scrollAccelEnabled = enabled;
+  // Feature-detect folded into the setter (long-session review backlog): the
+  // Firefox re-arm loop happened because a caller could enable the flag on an
+  // engine with no ScrollTimeline ctor. content.ts ANDs at the call site too,
+  // but the setter is the altitude where a future caller can't bypass it.
+  scrollAccelEnabled = enabled && isScrollTimelineSupported();
 }
 
 export function isScrollAccelEnabled(): boolean {
