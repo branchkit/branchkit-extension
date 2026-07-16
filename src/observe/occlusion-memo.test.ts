@@ -278,6 +278,46 @@ describe('fail-open taps', () => {
     expect(lifecycleCounters.occlusionMemoReuse).toBe(1);
   });
 
+  it('a same-window add+remove is a transient — dropped, window stays clean', () => {
+    const w = wrapper();
+    const r = rect(100, 100, 100, 50);
+    gatherOnce([[w, r, false]]);
+
+    // Born and gone between gathers: the whole Gmail-tick-while-reading
+    // class. First record is the add, so the birth is provable.
+    const span = elementAt(rect(90, 90, 60, 20));
+    occlusionMemoNoteMutations([
+      { type: 'childList', addedNodes: [span], removedNodes: [], target: document.body } as unknown as MutationRecord,
+    ]);
+    span.remove();
+    occlusionMemoNoteMutations([
+      { type: 'childList', addedNodes: [], removedNodes: [span], target: document.body } as unknown as MutationRecord,
+    ]);
+    gatherOnce([[w, r, false]]);
+    expect(lifecycleCounters.occlusionMemoTransientDrops).toBe(1);
+    expect(lifecycleCounters.occlusionMemoReuse).toBe(1);
+    expect(lifecycleCounters.occlusionMemoAllDirtyBy).toEqual({});
+  });
+
+  it('a REPARENTED element that then vanishes is NOT a transient (remove record came first)', () => {
+    const w = wrapper();
+    const r = rect(100, 100, 100, 50);
+    gatherOnce([[w, r, false]]);
+
+    // Pre-existing node moved (remove → add order, per DOM), never resolved
+    // before, then gone for good: its old paint region is unknowable —
+    // must fail open, not skip.
+    const moved = elementAt(rect(90, 90, 60, 20));
+    occlusionMemoNoteMutations([
+      { type: 'childList', addedNodes: [], removedNodes: [moved], target: document.body } as unknown as MutationRecord,
+      { type: 'childList', addedNodes: [moved], removedNodes: [], target: document.body } as unknown as MutationRecord,
+    ]);
+    moved.remove();
+    gatherOnce([[w, r, false]]);
+    expect(lifecycleCounters.occlusionMemoTransientDrops).toBe(0);
+    expect(lifecycleCounters.occlusionMemoAllDirtyBy['resolve-vanished']).toBe(1);
+  });
+
   it('history survives a vanish fail-open — the Gmail-tick shape converges to localization', () => {
     const w = wrapper();
     const r = rect(100, 100, 100, 50);

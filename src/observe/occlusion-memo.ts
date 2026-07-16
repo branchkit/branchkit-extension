@@ -36,6 +36,9 @@
  * all-dirty windows (scroll/resize/transform, unobserved spans,
  * element-overflow — content moved without per-element records) but
  * survives vanish- and pointer-driven fail-opens, which move nothing.
+ * Transients — born (first record an add) AND gone within one window —
+ * are dropped outright: they existed at neither gather boundary and
+ * occlusion is only queried at boundaries.
  *
  * AUTHORITATIVE as of 2026-07-16: a reuse hit returns the cached verdict and
  * the fresh hit-test is skipped. Gated by the Phase-1 shadow soak — zero
@@ -71,8 +74,12 @@ const POINTER_POINT_CAP = 32;
 
 // Kill switch (bkOcclusionMemo, denylist posture): default 'on'
 // (authoritative), explicit false → 'off', 'shadow' → verify-only.
+//
+// SOAK BUILD: defaulting to 'shadow' while the transient-skip tap change
+// re-verifies — flip back to 'on' on zero divergence. content.ts's flag
+// mapping carries the same temporary default.
 export type OcclusionMemoMode = 'off' | 'shadow' | 'on';
-let memoMode: OcclusionMemoMode = 'on';
+let memoMode: OcclusionMemoMode = 'shadow';
 
 export function setOcclusionMemoMode(mode: OcclusionMemoMode): void {
   memoMode = mode;
@@ -103,7 +110,13 @@ let gatherEpoch = 1;
 // (fail open; cold entries always retest anyway, but be explicit).
 let allDirty = true;
 const dirtyCells = new Uint8Array(CELL_COUNT);
-const pendingElements = new Set<Element>();
+// Value = "queued as an ADDED node this window". An element that was added
+// within the window and is gone again (disconnected or boxless) by resolve
+// time existed at NEITHER gather boundary — occlusion is only ever queried
+// at gathers, so such a transient cannot affect either answer and is
+// skipped instead of failing the window open (Gmail's 2Hz tick swaps spans
+// entirely between settles; this was its whole residual fail-open class).
+const pendingElements = new Map<Element, boolean>();
 const pendingPointer: number[] = []; // flat x,y pairs
 // The cells each element occupied at its LAST resolve — the localization
 // source for elements that have vanished by the time they resolve. Wiped
@@ -148,11 +161,20 @@ function isOwn(el: Element): boolean {
 }
 
 /** Queue an element whose mutation/restyle may have moved an occluder. Its
- * rect is resolved at the next gather (clean layout) and its cells marked. */
-export function occlusionMemoNoteTarget(el: Element): void {
+ * rect is resolved at the next gather (clean layout) and its cells marked.
+ * `isAdd` marks childList-added nodes for the transient-skip rule (an
+ * element born and gone within one window affects neither gather).
+ * FIRST sighting wins, deliberately not an OR-merge: moving a connected
+ * node emits its removal record BEFORE its addition (the DOM removes
+ * first), so a reparented pre-existing element — whose old paint region
+ * still matters — is first seen as a removal and stays unflagged; only an
+ * element whose very first record is an add was born this window. A
+ * born-this-window descendant first seen via a later attribute record
+ * stays unflagged too — conservative (fails open instead of skipping). */
+export function occlusionMemoNoteTarget(el: Element, isAdd = false): void {
   if (memoMode === 'off' || allDirty) return;
   if (isOwn(el)) return;
-  pendingElements.add(el);
+  if (!pendingElements.has(el)) pendingElements.set(el, isAdd);
   if (pendingElements.size > QUEUED_ELEMENT_CAP) occlusionMemoAllDirty('element-overflow');
 }
 
@@ -170,7 +192,7 @@ export function occlusionMemoNoteMutations(records: MutationRecord[]): void {
       // resolve step localizes them via their last-known cells when we've
       // seen them in this clean-window streak, and fails open otherwise.
       for (const n of m.addedNodes) {
-        if (n instanceof Element) occlusionMemoNoteTarget(n);
+        if (n instanceof Element) occlusionMemoNoteTarget(n, true);
         if (allDirty) return;
       }
       for (const n of m.removedNodes) {
@@ -274,7 +296,7 @@ export function occlusionMemoResolveDirty(vw: number, vh: number): void {
   // Resolve EVERY queued element even once a no-history vanish has doomed
   // the window: the point of continuing is the history writes — they are
   // what let the NEXT window's vanishes localize (warm-cache reads, cheap).
-  for (const el of pendingElements) {
+  for (const [el, addedThisWindow] of pendingElements) {
     let r: DOMRect | null = null;
     if (el.isConnected) {
       r = peekCachedRect(el);
@@ -297,6 +319,11 @@ export function occlusionMemoResolveDirty(vw: number, vh: number): void {
       markCells(known);
       lastKnownCells.delete(el);
       lifecycleCounters.occlusionMemoVanishLocalized++;
+    } else if (addedThisWindow) {
+      // Born after the previous gather, gone (or boxless) before this one:
+      // it existed at neither boundary, and occlusion is only queried at
+      // boundaries — a pure transient, nothing to invalidate.
+      lifecycleCounters.occlusionMemoTransientDrops++;
     } else {
       sawNoHistoryVanish = true;
     }

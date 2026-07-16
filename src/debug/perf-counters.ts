@@ -438,6 +438,10 @@ export interface LifecycleCounters {
   // — should absorb most of what allDirtyBy previously attributed to
   // removal / resolve-vanished.
   occlusionMemoVanishLocalized: number;
+  // Queued elements born AND gone within one inter-settle window — they
+  // existed at neither gather boundary, so they're dropped without marking
+  // or failing open (the Gmail-tick residual class).
+  occlusionMemoTransientDrops: number;
   occlusionMemoAllDirtyBy: Record<string, number>;
   // Cumulative wrapper attaches by discovery source (attachWrapper stamps
   // the same value on the wrapper — see DiscoverySource in element-wrapper).
@@ -475,6 +479,7 @@ export const lifecycleCounters: LifecycleCounters = {
   occlusionMemoRetestAllDirty: 0,
   occlusionMemoDiverged: 0,
   occlusionMemoVanishLocalized: 0,
+  occlusionMemoTransientDrops: 0,
   occlusionMemoAllDirtyBy: {},
   attachedBySource: {},
 };

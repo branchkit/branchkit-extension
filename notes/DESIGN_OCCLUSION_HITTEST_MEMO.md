@@ -264,9 +264,19 @@ Queued next lever — **transient-skip** (needs its own shadow round; it
 changes tap semantics): a disconnected no-history element that was queued
 as an ADDED node within this same window existed at NEITHER gather
 boundary, so it cannot affect either gather's answer — skip it instead of
-failing open. Provably sound at gather granularity; implementation =
-pendingElements as Map<Element,{addedThisWindow}> merged with OR. Expected
-to zero Gmail/YT's residual resolve-vanished windows.
+failing open. Expected to zero Gmail/YT's residual resolve-vanished
+windows.
+
+**Transient-skip implemented (2026-07-16, round 3 — IN SHADOW).**
+pendingElements is now Map<Element, bornThisWindow>, FIRST sighting wins
+(not an OR-merge): moving a connected node emits its removal record before
+its addition (the DOM removes first), so a reparented pre-existing element
+— whose old paint region still matters — is first seen as a removal and
+stays unflagged; only a first-record-is-add element is provably born this
+window. Born-this-window descendants first seen via later attribute
+records stay unflagged (conservative: fail open, never wrongly skip).
+Dropped transients count in occlusionMemoTransientDrops. Gate: diverged=0,
+transientDrops absorbing Gmail/YT's resolve-vanished.
 
 ## Open questions
 

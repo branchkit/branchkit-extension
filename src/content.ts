@@ -853,9 +853,12 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
   chrome.storage.local.get('bkOcclusionMemo', (result) => {
     // Occlusion hit-test memoization (see the registry above). Denylist
     // posture: `chrome.storage.local.set({ bkOcclusionMemo: false })` kills
-    // it, `'shadow'` forces verify-only mode, anything else = on.
+    // it, `'shadow'` forces verify-only mode.
+    // SOAK BUILD: unset defaults to 'shadow' while the transient-skip tap
+    // change re-verifies — restore `: 'on'` on zero divergence
+    // (occlusion-memo.ts module default carries the same temporary flip).
     const v = result.bkOcclusionMemo;
-    const mode = v === false ? 'off' : v === 'shadow' ? 'shadow' : 'on';
+    const mode = v === false ? 'off' : v === true ? 'on' : 'shadow';
     setOcclusionMemoMode(mode);
     if (harnessHooksEnabled()) {
       document.documentElement.setAttribute('data-bk-occlusion-memo', mode);
