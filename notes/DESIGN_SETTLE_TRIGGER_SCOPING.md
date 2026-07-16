@@ -44,14 +44,21 @@ idle). The regression is pure amplification of a cosmetic page tick:
    cancels the sibling store timer at entry (the firing timer already
    nulled itself). Any signal arriving after the synchronous pass re-arms
    fresh. Not damping — the sibling was requesting the pass that just ran.
-2. **Relevance gate on the visibility MO.** A class/style batch requests
-   promote+settle only if some record target is, contains, or is contained
-   by a tracked element (wrapper or parked candidate; composed-tree
-   containment so shadow-hosted wrappers count; own badge hosts excluded).
-   Batches with more than a handful of distinct targets pass automatically
-   (storms are usually real reveals, and the gate must stay cheaper than
-   what it gates). Skips are counted (`visMoIrrelevantSkips`) — visible
-   compression, not a silent drop.
+2. **Relevance gate on the visibility MO.** Refined after round 3 (the
+   first containment-only gate still passed the Gmail tick — `T-aT4-Mp`
+   relates to tracked elements by containment). Per mutated node: relevant
+   if it IS a tracked element (wrapper or parked candidate); if it's an
+   ANCESTOR of one, a `style` record must touch a visibility-affecting
+   property (display / visibility / opacity / content-visibility / clip —
+   checked against new AND old inline style via `attributeOldValue`, so
+   removing `display:none` is a reveal) while class/open/hidden flips stay
+   fail-open; a node strictly INSIDE a tracked element is irrelevant
+   (computed visibility flows from self + ancestors; size-collapse side
+   effects ride the ResizeObserver paths). Composed-tree containment so
+   shadow-hosted wrappers count; own badge hosts excluded. Batches with
+   more than a handful of distinct nodes pass automatically. Skips are
+   counted (`visMoIrrelevantSkips`) — visible compression, not a silent
+   drop.
 3. **mo-batch downgrade.** A foreign batch whose records touch no tracked
    element schedules the positioner pass (badge positions still converge
    after reflow) instead of a full settle. Batches touching tracked

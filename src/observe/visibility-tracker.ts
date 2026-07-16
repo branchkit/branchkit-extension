@@ -267,6 +267,10 @@ export function connectVisibilityMO(): void {
     // open-attr mutation is the only reveal signal for candidates parked
     // by the checkVisibility gate.
     attributeFilter: ['class', 'style', 'open', 'hidden'],
+    // The relevance gate's ancestor-style rule needs the PREVIOUS inline
+    // style: removing `display:none` is a reveal whose new value carries no
+    // visibility keyword (notes/DESIGN_SETTLE_TRIGGER_SCOPING.md).
+    attributeOldValue: true,
   });
   pageSession.visibilityMOConnected = true;
 }

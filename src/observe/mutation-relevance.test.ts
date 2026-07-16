@@ -14,8 +14,10 @@ afterEach(() => {
   mounted.length = 0;
 });
 
-function attrRecord(target: Element): MutationRecord {
-  return { type: 'attributes', target, addedNodes: [], removedNodes: [] } as unknown as MutationRecord;
+function attrRecord(target: Element, attributeName = 'class', oldValue: string | null = null): MutationRecord {
+  return {
+    type: 'attributes', target, attributeName, oldValue, addedNodes: [], removedNodes: [],
+  } as unknown as MutationRecord;
 }
 function childRecord(target: Element, added: Element[] = [], removed: Element[] = []): MutationRecord {
   return {
@@ -38,11 +40,40 @@ describe('mutationTouchesTracked', () => {
     expect(mutationTouchesTracked([attrRecord(panel)], [[tracked]])).toBe(true);
   });
 
-  it('relevant: attribute flip on a node inside a tracked element', () => {
+  it('irrelevant: attribute flip on a node strictly inside a tracked element', () => {
+    // A descendant's style/class cannot change the tracked element's computed
+    // visibility; size-collapse side effects ride the ResizeObserver paths.
     const root = mount('<a id="tracked" href="#"><span id="label">x</span></a>');
     const label = root.querySelector('#label')!;
     const tracked = root.querySelector('#tracked')!;
-    expect(mutationTouchesTracked([attrRecord(label)], [[tracked]])).toBe(true);
+    expect(mutationTouchesTracked([attrRecord(label)], [[tracked]])).toBe(false);
+  });
+
+  it('relevant: attribute flip on the tracked element itself', () => {
+    const root = mount('<a id="tracked" href="#">x</a>');
+    const tracked = root.querySelector('#tracked')!;
+    expect(mutationTouchesTracked([attrRecord(tracked, 'style')], [[tracked]])).toBe(true);
+  });
+
+  it('irrelevant: ancestor style tick that cannot affect visibility (the Gmail T-aT4-Mp case)', () => {
+    const root = mount('<div id="panel" style="width: 30%"><a id="tracked" href="#">x</a></div>');
+    const panel = root.querySelector('#panel')!;
+    const tracked = root.querySelector('#tracked')!;
+    expect(mutationTouchesTracked([attrRecord(panel, 'style', 'width: 20%')], [[tracked]])).toBe(false);
+  });
+
+  it('relevant: ancestor style write that touches display', () => {
+    const root = mount('<div id="panel" style="display: none"><a id="tracked" href="#">x</a></div>');
+    const panel = root.querySelector('#panel')!;
+    const tracked = root.querySelector('#tracked')!;
+    expect(mutationTouchesTracked([attrRecord(panel, 'style', '')], [[tracked]])).toBe(true);
+  });
+
+  it('relevant: ancestor reveal by REMOVING display:none (old value carries the keyword)', () => {
+    const root = mount('<div id="panel"><a id="tracked" href="#">x</a></div>');
+    const panel = root.querySelector('#panel')!;
+    const tracked = root.querySelector('#tracked')!;
+    expect(mutationTouchesTracked([attrRecord(panel, 'style', 'display: none')], [[tracked]])).toBe(true);
   });
 
   it('relevant: removed subtree contained a tracked element', () => {

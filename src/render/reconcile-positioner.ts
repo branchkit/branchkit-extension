@@ -48,9 +48,13 @@ const registry = new Set<ReconcileBadge>();
 // writes actually CHANGED value. On a truly idle page this should be 0 — a
 // persistent nonzero names a badge whose derived position oscillates
 // (boundary clamp flapping, sub-pixel gBCR jitter) and whose style writes
-// then feed the document-wide visibility MO. Measure-only: the write itself
-// stays unconditional this round so behavior is unchanged while we attribute.
+// then feed the document-wide visibility MO. Compared against what THIS
+// module last wrote, not the readback — CSSOM re-serializes `translate(x,y)`
+// with a space, so a readback compare reports every write as changed.
+// Measure-only: the write itself stays unconditional (identical-value CSSOM
+// writes emit no mutation records and cost nothing).
 let lastChangedWrites = 0;
+const lastWrittenTransform = new WeakMap<HTMLElement, string>();
 export function lastReconcileChangedWrites(): number {
   return lastChangedWrites;
 }
@@ -106,7 +110,8 @@ export function reconcilePass(): Map<ReconcileBadge, DOMRect> {
   let changed = 0;
   for (const w of writes) {
     const next = `translate(${w.x}px,${w.y}px)`;
-    if (w.host.style.transform !== next) changed++;
+    if (lastWrittenTransform.get(w.host) !== next) changed++;
+    lastWrittenTransform.set(w.host, next);
     w.host.style.transform = next;
   }
   lastChangedWrites = changed;
