@@ -201,9 +201,10 @@ function positionAtTopLeft(w: ElementWrapper, probe?: TextProbe): void {
   // the literal top edge is the least-bad state: it sits where badges
   // always sit (consistent grammar), it enters the viewport with its row
   // like everything else, and voice is unaffected (codeword eligibility
-  // tracks the TARGET's visibility, not the badge's). If edge clipping
-  // ever needs solving for real, fix the re-derivation stickiness first —
-  // no discrete fallback looks right while placement offsets outlive the
-  // edge condition that chose them.
+  // tracks the TARGET's visibility, not the badge's). The edge case is
+  // handled where it CAN'T stick: HintBadge.reconcileRead applies a
+  // write-time top-edge clamp per pass (same shape as its off-screen
+  // clamp) — see the QuickBase header-band case in hints.ts. Placement
+  // itself stays edge-unaware by design.
   w.hint.updatePosition({ x: result.x, y: result.y });
 }

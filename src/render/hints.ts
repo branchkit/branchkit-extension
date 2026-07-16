@@ -25,6 +25,7 @@ import {
 import { harnessHooksEnabled } from '../debug/harness-hooks';
 import { trackTargetMutations, untrackTargetMutations } from '../observe/target-mutation-tracker';
 import { trackHostAttributes, untrackHostAttributes } from '../observe/host-attribute-tracker';
+import { clipRootOf } from '../observe/clip-observer';
 import { register as registerReconcile, unregister as unregisterReconcile, type ReconcileWrite } from './reconcile-positioner';
 import { hasViewportPinnedAncestor, resolveContainer } from './container-resolution';
 import {
@@ -613,6 +614,29 @@ export class HintBadge {
       const clamped = clampOffscreenBadgeBox({ x: bx, y: by, w: size.w, h: size.h }, r, vw, vh);
       x += clamped.x - bx;
       y += clamped.y - by;
+    }
+    // Top-edge clamp vs the target's clipping scroller, evaluated per pass
+    // (level-triggered). The retired PLACEMENT-time fallbacks (36b flip-below,
+    // then a one-day overlap) baked the edge decision into the offset at
+    // build/show time and were followed by pure translation, so rows wore the
+    // fallback long after leaving the edge (Gmail: whole bands of dropped/
+    // covering badges). This is a WRITE-time delta in the same shape as the
+    // off-screen clamp above — recomputed from live rects every pass, never
+    // baked: a badge poking above the scroller's top edge (where QuickBase's
+    // header band paints over it) is pinned at the edge, sliding down over
+    // its own target's upper part as the row reaches the very top, and
+    // releasing the moment the row gains headroom. Never pushed past the
+    // target's own top, so it stays inside its target's footprint —
+    // unambiguous, no neighbor collisions.
+    else {
+      const clipRoot = clipRootOf(this.target);
+      if (clipRoot) {
+        const by = r.top + this._reconcileOffset.y;
+        const rootTop = clipRoot.getBoundingClientRect().top;
+        if (by < rootTop) {
+          y += Math.min(rootTop, r.top) - by;
+        }
+      }
     }
     return {
       host: this.host,
