@@ -40,7 +40,7 @@ import { onContainerResize } from './observe/container-resize-tracker';
 import { onTransformAncestorMutation, setTransformTriggerEnabled } from './observe/transform-ancestor-tracker';
 import { onTargetMutation } from './observe/target-mutation-tracker';
 import { setOcclusionEnabled, applyOcclusion } from './observe/occlusion';
-import { setOcclusionMemoEnabled, occlusionMemoAllDirty, occlusionMemoNoteTarget, occlusionMemoNotePointer } from './observe/occlusion-memo';
+import { setOcclusionMemoMode, occlusionMemoAllDirty, occlusionMemoNoteTarget, occlusionMemoNotePointer } from './observe/occlusion-memo';
 import { reconcileClipObservation, drainClipObservers, setClipObserverEnabled } from './observe/clip-observer';
 import { cacheLayout, cacheConstruction, clearLayoutCache, geometryInBand, getCachedRect, isRectOnScreen } from './layout-cache';
 import { placeBadges, invalidateProbe } from './placement';
@@ -819,11 +819,13 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
 //   EXIT: keep on if the soak stays clean, else investigate; reconfirm at launch.
 // bkClipObserver - default ON, composes with bkOcclusion (IO-clip vs
 //   elementFromPoint hit-test). Same exit as bkOcclusion.
-// bkOcclusionMemo - default ON, SHADOW phase (notes/DESIGN_OCCLUSION_HITTEST_
-//   MEMO.md): the fresh hit-test still runs; the memo only counts the reuse
-//   decisions it would have made + divergences (occlusion_memo:diverged).
-//   EXIT: zero divergence at real volume → flip authoritative (skip the fresh
-//   test on reuse), keeping this as the kill switch.
+// bkOcclusionMemo - default ON = AUTHORITATIVE (notes/DESIGN_OCCLUSION_
+//   HITTEST_MEMO.md): a dirty-region cache hit skips the batch-3
+//   elementFromPoint probes. Flipped 2026-07-16 after a zero-divergence
+//   shadow soak (1,856 verdicts, QuickBase + YouTube). `false` kills the
+//   memo (always-fresh); `'shadow'` re-enters verify-only mode (fresh test
+//   runs and wins, divergences counted + firehosed) — set it when changing
+//   any invalidation tap. EXIT: keep; this is the lasting kill switch.
 // bkSweepGate - default ON. Skips the per-settle band-discovery body re-walk
 //   while the DOM-add epoch is clean (no observed childList adds since the
 //   last walk) and the last sweep is <30s old; mass-reveal fast-arm bypasses.
@@ -849,11 +851,14 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
     }
   });
   chrome.storage.local.get('bkOcclusionMemo', (result) => {
-    // Occlusion hit-test memoization (shadow phase — see the registry above).
-    // Only an explicit `false` disables: `chrome.storage.local.set({ bkOcclusionMemo: false })`.
-    setOcclusionMemoEnabled(result.bkOcclusionMemo !== false);
+    // Occlusion hit-test memoization (see the registry above). Denylist
+    // posture: `chrome.storage.local.set({ bkOcclusionMemo: false })` kills
+    // it, `'shadow'` re-enters verify-only mode, anything else = on.
+    const v = result.bkOcclusionMemo;
+    const mode = v === false ? 'off' : v === 'shadow' ? 'shadow' : 'on';
+    setOcclusionMemoMode(mode);
     if (harnessHooksEnabled()) {
-      document.documentElement.setAttribute('data-bk-occlusion-memo', result.bkOcclusionMemo !== false ? 'on' : 'off');
+      document.documentElement.setAttribute('data-bk-occlusion-memo', mode);
     }
   });
   chrome.storage.local.get('bkTransformTrigger', (result) => {

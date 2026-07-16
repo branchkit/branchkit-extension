@@ -26,12 +26,15 @@
  *   - focusin/focusout, transitionend/animationend → queue the event target
  *     (:focus-within can restyle with no record)
  *
- * SHADOW MODE (Phase 1, verification-first): the fresh hit-test still runs
- * every settle; this module only computes the reuse decision it WOULD have
- * made, counts reuse/retest attribution in lifecycleCounters (trail-visible
- * via the 5s PERF_REPORT), and firehoses `occlusion_memo:diverged` when a
- * would-reuse verdict disagrees with the fresh result. Gate to authoritative
- * on zero divergence at real volume.
+ * AUTHORITATIVE as of 2026-07-16: a reuse hit returns the cached verdict and
+ * the fresh hit-test is skipped. Gated by the Phase-1 shadow soak — zero
+ * divergence across 1,856 would-reuse verdicts (QuickBase interaction +
+ * YouTube playback), with the cells/rect/epoch retest paths all exercised.
+ * Reuse/retest attribution stays in lifecycleCounters (trail-visible via the
+ * 5s PERF_REPORT). `bkOcclusionMemo: 'shadow'` re-enters shadow mode (the
+ * decision is computed and counted, divergences firehose as
+ * `occlusion_memo:diverged`, but the fresh test still runs and wins) — use
+ * it to re-verify after changing any tap. `false` kills the memo entirely.
  */
 
 import type { ElementWrapper } from '../scan/element-wrapper';
@@ -50,16 +53,17 @@ const QUEUED_ELEMENT_CAP = 16;
 // while the pointer moves, so this is generous for one window.
 const POINTER_POINT_CAP = 32;
 
-// Kill switch (bkOcclusionMemo, denylist posture: only an explicit false
-// disables). In shadow mode "off" just stops the bookkeeping.
-let memoEnabled = true;
+// Kill switch (bkOcclusionMemo, denylist posture): default 'on'
+// (authoritative), explicit false → 'off', 'shadow' → verify-only.
+export type OcclusionMemoMode = 'off' | 'shadow' | 'on';
+let memoMode: OcclusionMemoMode = 'on';
 
-export function setOcclusionMemoEnabled(on: boolean): void {
-  memoEnabled = on;
+export function setOcclusionMemoMode(mode: OcclusionMemoMode): void {
+  memoMode = mode;
 }
 
-export function isOcclusionMemoEnabled(): boolean {
-  return memoEnabled;
+export function getOcclusionMemoMode(): OcclusionMemoMode {
+  return memoMode;
 }
 
 interface MemoEntry {
@@ -97,7 +101,7 @@ function bumpAllDirtyReason(reason: string): void {
 
 /** Fail open: everything retests at the next gather. Idempotent per window. */
 export function occlusionMemoAllDirty(reason: string): void {
-  if (!memoEnabled || allDirty) return;
+  if (memoMode === 'off' || allDirty) return;
   allDirty = true;
   pendingElements.clear();
   pendingPointer.length = 0;
@@ -113,7 +117,7 @@ function isOwn(el: Element): boolean {
 /** Queue an element whose mutation/restyle may have moved an occluder. Its
  * rect is resolved at the next gather (clean layout) and its cells marked. */
 export function occlusionMemoNoteTarget(el: Element): void {
-  if (!memoEnabled || allDirty) return;
+  if (memoMode === 'off' || allDirty) return;
   if (isOwn(el)) return;
   pendingElements.add(el);
   if (pendingElements.size > QUEUED_ELEMENT_CAP) occlusionMemoAllDirty('element-overflow');
@@ -125,7 +129,7 @@ export function occlusionMemoNoteTarget(el: Element): void {
  * on an UNtracked overlay is irrelevant to the settle triggers but still
  * moves paint over tracked targets. */
 export function occlusionMemoNoteMutations(records: MutationRecord[]): void {
-  if (!memoEnabled || allDirty) return;
+  if (memoMode === 'off' || allDirty) return;
   for (const m of records) {
     if (m.type === 'childList') {
       // Adds occlude only at their CURRENT position (they didn't exist
@@ -151,7 +155,7 @@ export function occlusionMemoNoteMutations(records: MutationRecord[]): void {
 /** Pointer tap: event coordinates only, zero layout reads. Covers pure-CSS
  * :hover paints along the pointer path — the only signal for them. */
 export function occlusionMemoNotePointer(x: number, y: number): void {
-  if (!memoEnabled || allDirty) return;
+  if (memoMode === 'off' || allDirty) return;
   if (pendingPointer.length >= POINTER_POINT_CAP * 2) {
     occlusionMemoAllDirty('pointer-overflow');
     return;
@@ -202,7 +206,7 @@ function markRect(r: DOMRect, vw: number, vh: number): void {
  * shadow-mode divergence is the meter for whether that happens in practice.
  */
 export function occlusionMemoResolveDirty(vw: number, vh: number): void {
-  if (!memoEnabled) return;
+  if (memoMode === 'off') return;
   resolvedVw = vw;
   resolvedVh = vh;
   if (allDirty) return; // queues were cleared when the window failed open
@@ -255,15 +259,24 @@ function ident(el: Element): string {
   return `${el.tagName.toLowerCase()}${cls}`.slice(0, 48);
 }
 
+function rectKeyOf(rect: DOMRect): string {
+  return `${Math.round(rect.left)},${Math.round(rect.top)},${Math.round(rect.width)},${Math.round(rect.height)}`;
+}
+
 /**
- * Shadow check for one wrapper in gather batch 3: compute the reuse decision
- * the memo WOULD have made, count it, flag divergence (would-reuse verdict ≠
- * fresh hit-test), and store the fresh result for the next gather. `rect` is
- * the batch-2 visual-box rect — the exact surface the fresh test sampled.
+ * The reuse decision for one wrapper in gather batch 3, with retest
+ * attribution counted. `rect` is the batch-2 visual-box rect — the exact
+ * surface the hit-test samples. Returns the cached verdict on a hit, null
+ * when a fresh test is needed (the caller then stores it via
+ * `occlusionMemoStore`). A hit revalidates the entry's epoch, so
+ * consecutive clean gathers keep reusing.
+ *
+ * In authoritative mode the caller SKIPS the fresh test on a hit; in shadow
+ * mode it runs the fresh test regardless and passes this hit into
+ * `occlusionMemoStore`, which counts/firehoses any divergence.
  */
-export function occlusionMemoShadowTest(w: ElementWrapper, rect: DOMRect, fresh: boolean): void {
-  if (!memoEnabled) return;
-  const rectKey = `${Math.round(rect.left)},${Math.round(rect.top)},${Math.round(rect.width)},${Math.round(rect.height)}`;
+export function occlusionMemoLookup(w: ElementWrapper, rect: DOMRect): { value: boolean } | null {
+  if (memoMode === 'off') return null;
   const entry = entries.get(w);
   if (allDirty) {
     lifecycleCounters.occlusionMemoRetestAllDirty++;
@@ -271,29 +284,42 @@ export function occlusionMemoShadowTest(w: ElementWrapper, rect: DOMRect, fresh:
     lifecycleCounters.occlusionMemoRetestCold++;
   } else if (entry.epoch !== gatherEpoch - 1) {
     lifecycleCounters.occlusionMemoRetestEpoch++;
-  } else if (entry.rectKey !== rectKey) {
+  } else if (entry.rectKey !== rectKeyOf(rect)) {
     lifecycleCounters.occlusionMemoRetestRect++;
   } else if (sampleCellsDirty(rect)) {
     lifecycleCounters.occlusionMemoRetestCells++;
   } else {
-    lifecycleCounters.occlusionMemoWouldReuse++;
-    if (entry.result !== fresh) {
-      lifecycleCounters.occlusionMemoDiverged++;
-      // The reuse decision said "nothing above these sample points changed";
-      // the fresh test disagrees, so a signal is missing a tap. Direction
-      // names the class: false->true = an occluder appeared with no signal
-      // (untapped reveal path?); true->false = one left with no signal
-      // (in-viewport slide-away?). Correlate with mo_target/vismo_target
-      // steps in the same window to name the writer.
-      firehoseStep(`occlusion_memo:diverged:${entry.result}->${fresh}:${ident(w.element)}`, 1);
-    }
+    lifecycleCounters.occlusionMemoReuse++;
+    entry.epoch = gatherEpoch;
+    return { value: entry.result };
   }
+  return null;
+}
+
+/**
+ * Store a fresh hit-test result. `shadowHit` is non-null only in shadow mode
+ * when the lookup said "reusable" — a disagreement there means a signal is
+ * missing a tap. Direction names the class: false->true = an occluder
+ * appeared with no signal (untapped reveal path?); true->false = one left
+ * with no signal (in-viewport slide-away?). Correlate with
+ * mo_target/vismo_target steps in the same window to name the writer.
+ */
+export function occlusionMemoStore(
+  w: ElementWrapper, rect: DOMRect, fresh: boolean,
+  shadowHit: { value: boolean } | null = null,
+): void {
+  if (memoMode === 'off') return;
+  if (shadowHit !== null && shadowHit.value !== fresh) {
+    lifecycleCounters.occlusionMemoDiverged++;
+    firehoseStep(`occlusion_memo:diverged:${shadowHit.value}->${fresh}:${ident(w.element)}`, 1);
+  }
+  const entry = entries.get(w);
   if (entry) {
     entry.result = fresh;
-    entry.rectKey = rectKey;
+    entry.rectKey = rectKeyOf(rect);
     entry.epoch = gatherEpoch;
   } else {
-    entries.set(w, { result: fresh, rectKey, epoch: gatherEpoch });
+    entries.set(w, { result: fresh, rectKey: rectKeyOf(rect), epoch: gatherEpoch });
   }
 }
 
@@ -301,7 +327,7 @@ export function occlusionMemoShadowTest(w: ElementWrapper, rect: DOMRect, fresh:
  * cares about against the accumulated dirt, so reset it and open the next
  * epoch. Only called when batch 3 actually ran over a nonempty set. */
 export function occlusionMemoEndGather(): void {
-  if (!memoEnabled) return;
+  if (memoMode === 'off') return;
   dirtyCells.fill(0);
   allDirty = false;
   gatherEpoch++;
@@ -317,5 +343,5 @@ export function _resetOcclusionMemoForTests(): void {
   pendingPointer.length = 0;
   resolvedVw = 0;
   resolvedVh = 0;
-  memoEnabled = true;
+  memoMode = 'on';
 }

@@ -141,6 +141,49 @@ numbers.
   arbitrary z-order paint, which is the whole reason `elementFromPoint`
   exists here (DESIGN_HINT_OCCLUSION_FILTERING). Rejected.
 
+## Phase 1 results — shadow soak + authoritative flip (2026-07-16)
+
+Shadow mode (ext 4436438) soaked over live QuickBase interaction and YouTube
+playback: **zero divergence across 1,856 would-reuse verdicts** (QB 1,617,
+YT 239), with the cells (31/29), rect (2), and epoch (31) retest paths all
+exercised. QB clean-window reuse ≈ 98% of decisions; b2 stayed ~3.3ms with
+the gBCR fold (no inflation); the memo's own resolve cost ≈ 1 rect read per
+gather. Soak caveats, recorded honestly: Gmail idle produced no gathers (as
+expected post settle-trigger scoping — no settles means no decisions, so it
+neither confirms nor threatens), and most of the QB session ran a stale CS
+(only ~9 new-build gathers) — accepted on the strength of the fail-open
+structure (staleness self-heals at the next all-dirty window) plus the kill
+switch.
+
+**Authoritative since ext (this commit): a hit skips the probes.**
+`bkOcclusionMemo`: default on; `false` kills the memo; `'shadow'` re-enters
+verify-only mode (fresh test runs and wins, divergences counted + firehosed)
+— set it whenever an invalidation tap changes, and gate on zero divergence
+again.
+
+Implementation deltas from the sketch above, all fail-open:
+- childList REMOVALS go straight to all-dirty (a removed occluder's old
+  position is unreadable once out of the DOM); adds queue normally (they
+  didn't exist before, so only their current position matters).
+- A queued element that resolves disconnected / zero-box / fully
+  off-viewport → all-dirty (catches display:none and slide-out occluder
+  disappearances soundly). Residual accepted gap: an occluder slid to a
+  DIFFERENT in-viewport position by a direct style write marks only its new
+  cells — zero divergences from it in the soak.
+- The manual-deferred MO path and observer re-attach (hidden-tab resume) →
+  all-dirty; own-badge mutations are skipped (pointer-events:none).
+- Reuse additionally requires validation at the immediately preceding gather
+  (`epoch === gatherEpoch - 1`): a wrapper absent from a gather missed that
+  window's dirt, which was reset.
+- All-dirty reason attribution is first-setter-wins per window
+  (occlusionMemoAllDirtyBy), so e.g. 'scroll' under-reports when another tap
+  failed the window open first.
+
+Tuning lead for later: YouTube reuse was only ~13% (fail-opens dominate —
+resolve-vanished ×12, element-overflow ×2 in one short session). No
+correctness issue; if YT gather cost ever matters, revisit K and the
+vanished-element policy with these counters.
+
 ## Open questions
 
 - Grid size / K cap tuning (start 8×8 / 16, revisit with Phase-1 counters).

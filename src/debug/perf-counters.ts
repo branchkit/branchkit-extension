@@ -419,15 +419,14 @@ export interface LifecycleCounters {
   // page-MO batches downgraded from full settle to a positioner pass.
   visMoIrrelevantSkips: number;
   moBatchRepositionOnly: number;
-  // Occlusion hit-test memoization, SHADOW phase
-  // (notes/DESIGN_OCCLUSION_HITTEST_MEMO.md): per-wrapper reuse decisions the
-  // cache WOULD have made while the fresh hit-test still runs. Reuse rate =
-  // wouldReuse / (wouldReuse + retest*). Diverged (would-reuse verdict ≠
-  // fresh result) must be ZERO at real volume before the cache goes
-  // authoritative; each divergence also firehoses occlusion_memo:diverged.
-  // AllDirtyBy attributes which fail-open tap keeps nuking the window —
-  // the K-cap / removal-policy tuning signal.
-  occlusionMemoWouldReuse: number;
+  // Occlusion hit-test memoization (notes/DESIGN_OCCLUSION_HITTEST_MEMO.md):
+  // per-wrapper reuse decisions in gather batch 3. Reuse rate =
+  // reuse / (reuse + retest*). Diverged only moves in shadow mode
+  // (bkOcclusionMemo: 'shadow' — fresh test still runs and wins) and must be
+  // ZERO before trusting a tap change; each divergence also firehoses
+  // occlusion_memo:diverged. AllDirtyBy attributes which fail-open tap keeps
+  // nuking the window — the K-cap / removal-policy tuning signal.
+  occlusionMemoReuse: number;
   occlusionMemoRetestCold: number;
   occlusionMemoRetestEpoch: number;
   occlusionMemoRetestRect: number;
@@ -463,7 +462,7 @@ export const lifecycleCounters: LifecycleCounters = {
   shadowRootsObserved: 0,
   visMoIrrelevantSkips: 0,
   moBatchRepositionOnly: 0,
-  occlusionMemoWouldReuse: 0,
+  occlusionMemoReuse: 0,
   occlusionMemoRetestCold: 0,
   occlusionMemoRetestEpoch: 0,
   occlusionMemoRetestRect: 0,

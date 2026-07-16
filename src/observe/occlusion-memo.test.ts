@@ -1,12 +1,13 @@
 /**
- * BranchKit Browser — occlusion-memo unit tests (shadow phase).
+ * BranchKit Browser — occlusion-memo unit tests.
  *
  * Pins the reuse/retest decision table of the dirty-region epoch cache
  * (notes/DESIGN_OCCLUSION_HITTEST_MEMO.md): rect-key changes, dirty cells
  * under sample points, the epoch rule (a wrapper that skipped a gather can't
- * reuse), the fail-open taps (removal, overflow, disconnected resolve), and
- * divergence counting. Geometry is driven through explicit DOMRects; queued
- * elements get mocked getBoundingClientRect.
+ * reuse), the fail-open taps (removal, overflow, disconnected resolve),
+ * authoritative reuse (hit returns the cached verdict and revalidates the
+ * epoch), and shadow-mode divergence counting. Geometry is driven through
+ * explicit DOMRects; queued elements get mocked getBoundingClientRect.
  *
  * Run: npm test
  */
@@ -19,9 +20,10 @@ import {
   occlusionMemoNotePointer,
   occlusionMemoNoteTarget,
   occlusionMemoResolveDirty,
-  occlusionMemoShadowTest,
+  occlusionMemoLookup,
+  occlusionMemoStore,
   occlusionMemoEndGather,
-  setOcclusionMemoEnabled,
+  setOcclusionMemoMode,
   _resetOcclusionMemoForTests,
 } from './occlusion-memo';
 import { lifecycleCounters, resetLifecycleCounters } from '../debug/perf-counters';
@@ -52,11 +54,22 @@ function elementAt(r: DOMRect, connected = true): Element {
   return el;
 }
 
-/** One full warm-up gather so the cache leaves boot all-dirty with an entry. */
-function primeGather(w: ElementWrapper, r: DOMRect, result = false): void {
+/** One gather over (wrapper, rect, freshResult) tuples, mimicking batch 3's
+ * authoritative loop. Returns the effective verdicts (cache hit or fresh). */
+function gatherOnce(items: Array<[ElementWrapper, DOMRect, boolean]>): boolean[] {
   occlusionMemoResolveDirty(VW, VH);
-  occlusionMemoShadowTest(w, r, result);
+  const out: boolean[] = [];
+  for (const [w, r, fresh] of items) {
+    const hit = occlusionMemoLookup(w, r);
+    if (hit !== null) {
+      out.push(hit.value);
+      continue;
+    }
+    occlusionMemoStore(w, r, fresh);
+    out.push(fresh);
+  }
   occlusionMemoEndGather();
+  return out;
 }
 
 beforeEach(() => {
@@ -76,58 +89,58 @@ beforeEach(() => {
 });
 
 describe('reuse decision table', () => {
-  it('boot is all-dirty; a clean second gather would reuse', () => {
+  it('boot is all-dirty; a clean second gather reuses the cached verdict', () => {
     const w = wrapper();
     const r = rect(100, 100, 100, 50);
-    primeGather(w, r);
+    expect(gatherOnce([[w, r, true]])).toEqual([true]);
     expect(lifecycleCounters.occlusionMemoRetestAllDirty).toBe(1);
 
-    occlusionMemoResolveDirty(VW, VH);
-    occlusionMemoShadowTest(w, r, false);
-    occlusionMemoEndGather();
-    expect(lifecycleCounters.occlusionMemoWouldReuse).toBe(1);
-    expect(lifecycleCounters.occlusionMemoDiverged).toBe(0);
+    // Fresh result deliberately contradicts the cache: the hit must win
+    // (fresh is never computed on a hit in authoritative mode).
+    expect(gatherOnce([[w, r, false]])).toEqual([true]);
+    expect(lifecycleCounters.occlusionMemoReuse).toBe(1);
+  });
+
+  it('a hit revalidates the epoch — consecutive clean gathers keep reusing', () => {
+    const w = wrapper();
+    const r = rect(100, 100, 100, 50);
+    gatherOnce([[w, r, false]]);
+    gatherOnce([[w, r, false]]);
+    gatherOnce([[w, r, false]]);
+    gatherOnce([[w, r, false]]);
+    expect(lifecycleCounters.occlusionMemoReuse).toBe(3);
   });
 
   it('a moved rect retests (rect key), sub-pixel jitter does not', () => {
     const w = wrapper();
-    primeGather(w, rect(100, 100, 100, 50));
+    gatherOnce([[w, rect(100, 100, 100, 50), false]]);
 
-    occlusionMemoResolveDirty(VW, VH);
-    occlusionMemoShadowTest(w, rect(100.3, 99.8, 100.2, 50.1), false);
-    occlusionMemoEndGather();
-    expect(lifecycleCounters.occlusionMemoWouldReuse).toBe(1);
+    gatherOnce([[w, rect(100.3, 99.8, 100.2, 50.1), false]]);
+    expect(lifecycleCounters.occlusionMemoReuse).toBe(1);
 
-    occlusionMemoResolveDirty(VW, VH);
-    occlusionMemoShadowTest(w, rect(140, 100, 100, 50), false);
-    occlusionMemoEndGather();
+    gatherOnce([[w, rect(140, 100, 100, 50), false]]);
     expect(lifecycleCounters.occlusionMemoRetestRect).toBe(1);
   });
 
   it('a cold wrapper retests as cold once the window is clean', () => {
-    const seeded = wrapper();
-    primeGather(seeded, rect(0, 0, 10, 10)); // consumes boot all-dirty
-
-    occlusionMemoResolveDirty(VW, VH);
-    occlusionMemoShadowTest(wrapper(), rect(100, 100, 100, 50), false);
-    occlusionMemoEndGather();
+    gatherOnce([[wrapper(), rect(0, 0, 10, 10), false]]); // consumes boot all-dirty
+    gatherOnce([[wrapper(), rect(100, 100, 100, 50), false]]);
     expect(lifecycleCounters.occlusionMemoRetestCold).toBe(1);
   });
 
   it('a wrapper that skipped a gather retests (epoch rule)', () => {
     const w = wrapper();
     const r = rect(100, 100, 100, 50);
-    primeGather(w, r);
+    const bystander = wrapper();
+    const br = rect(0, 0, 10, 10);
+    gatherOnce([[w, r, false], [bystander, br, false]]);
+    // Gather w sat out (badge hidden that settle): the dirt window was
+    // consumed without validating w.
+    gatherOnce([[bystander, br, false]]);
 
-    // Gather it sat out (badge hidden that settle): dirt window consumed
-    // without validating w.
-    primeGather(wrapper(), rect(0, 0, 10, 10));
-
-    occlusionMemoResolveDirty(VW, VH);
-    occlusionMemoShadowTest(w, r, false);
-    occlusionMemoEndGather();
+    gatherOnce([[w, r, false], [bystander, br, false]]);
     expect(lifecycleCounters.occlusionMemoRetestEpoch).toBe(1);
-    expect(lifecycleCounters.occlusionMemoWouldReuse).toBe(0);
+    expect(lifecycleCounters.occlusionMemoReuse).toBe(2); // bystander both times
   });
 });
 
@@ -137,51 +150,37 @@ describe('dirty cells', () => {
     const nearRect = rect(100, 100, 100, 50); // top-left region
     const far = wrapper();
     const farRect = rect(600, 450, 100, 50); // bottom-right region
-    // Boot gather validates both.
-    occlusionMemoResolveDirty(VW, VH);
-    occlusionMemoShadowTest(near, nearRect, false);
-    occlusionMemoShadowTest(far, farRect, false);
-    occlusionMemoEndGather();
+    gatherOnce([[near, nearRect, false], [far, farRect, false]]);
     resetLifecycleCounters();
 
     // An overlay mutated over the near wrapper's cells only.
     occlusionMemoNoteMutations([
       { type: 'attributes', target: elementAt(rect(90, 90, 60, 60)) } as unknown as MutationRecord,
     ]);
-    occlusionMemoResolveDirty(VW, VH);
-    occlusionMemoShadowTest(near, nearRect, false);
-    occlusionMemoShadowTest(far, farRect, false);
-    occlusionMemoEndGather();
+    gatherOnce([[near, nearRect, false], [far, farRect, false]]);
     expect(lifecycleCounters.occlusionMemoRetestCells).toBe(1);
-    expect(lifecycleCounters.occlusionMemoWouldReuse).toBe(1);
+    expect(lifecycleCounters.occlusionMemoReuse).toBe(1);
   });
 
   it('a pointer tap marks the cell under the event coordinates', () => {
     const w = wrapper();
     const r = rect(100, 100, 100, 50);
-    primeGather(w, r);
+    gatherOnce([[w, r, false]]);
 
     occlusionMemoNotePointer(150, 125); // inside the wrapper's box
-    occlusionMemoResolveDirty(VW, VH);
-    occlusionMemoShadowTest(w, r, false);
-    occlusionMemoEndGather();
+    gatherOnce([[w, r, false]]);
     expect(lifecycleCounters.occlusionMemoRetestCells).toBe(1);
   });
 
   it('cells reset after the gather consumes them', () => {
     const w = wrapper();
     const r = rect(100, 100, 100, 50);
-    primeGather(w, r);
+    gatherOnce([[w, r, false]]);
 
     occlusionMemoNotePointer(150, 125);
-    occlusionMemoResolveDirty(VW, VH);
-    occlusionMemoShadowTest(w, r, false);
-    occlusionMemoEndGather();
-
-    occlusionMemoResolveDirty(VW, VH);
-    occlusionMemoShadowTest(w, r, false);
-    occlusionMemoEndGather();
-    expect(lifecycleCounters.occlusionMemoWouldReuse).toBe(1);
+    gatherOnce([[w, r, false]]);
+    gatherOnce([[w, r, false]]);
+    expect(lifecycleCounters.occlusionMemoReuse).toBe(1);
   });
 });
 
@@ -189,22 +188,18 @@ describe('fail-open taps', () => {
   it('a childList removal fails the window open', () => {
     const w = wrapper();
     const r = rect(100, 100, 100, 50);
-    primeGather(w, r);
+    gatherOnce([[w, r, false]]);
 
-    const removed = document.createElement('div');
     occlusionMemoNoteMutations([
-      { type: 'childList', addedNodes: [], removedNodes: [removed], target: document.body } as unknown as MutationRecord,
+      { type: 'childList', addedNodes: [], removedNodes: [document.createElement('div')], target: document.body } as unknown as MutationRecord,
     ]);
-    occlusionMemoResolveDirty(VW, VH);
-    occlusionMemoShadowTest(w, r, false);
-    occlusionMemoEndGather();
+    gatherOnce([[w, r, false]]);
     expect(lifecycleCounters.occlusionMemoRetestAllDirty).toBe(2); // boot + removal
     expect(lifecycleCounters.occlusionMemoAllDirtyBy['removal']).toBe(1);
   });
 
   it('more than K queued elements fails open', () => {
-    const w = wrapper();
-    primeGather(w, rect(100, 100, 100, 50));
+    gatherOnce([[wrapper(), rect(100, 100, 100, 50), false]]);
     for (let i = 0; i < 17; i++) {
       occlusionMemoNoteTarget(elementAt(rect(10 * i, 10, 5, 5)));
     }
@@ -214,12 +209,10 @@ describe('fail-open taps', () => {
   it('a queued element that vanished before the gather fails open', () => {
     const w = wrapper();
     const r = rect(100, 100, 100, 50);
-    primeGather(w, r);
+    gatherOnce([[w, r, false]]);
 
     occlusionMemoNoteTarget(elementAt(rect(600, 450, 50, 50), false)); // disconnected
-    occlusionMemoResolveDirty(VW, VH);
-    occlusionMemoShadowTest(w, r, false);
-    occlusionMemoEndGather();
+    gatherOnce([[w, r, false]]);
     expect(lifecycleCounters.occlusionMemoAllDirtyBy['resolve-disconnected']).toBe(1);
     expect(lifecycleCounters.occlusionMemoRetestAllDirty).toBe(2);
   });
@@ -227,18 +220,17 @@ describe('fail-open taps', () => {
   it('a queued element that collapsed to zero box fails open', () => {
     const w = wrapper();
     const r = rect(100, 100, 100, 50);
-    primeGather(w, r);
+    gatherOnce([[w, r, false]]);
 
     occlusionMemoNoteTarget(elementAt(rect(600, 450, 0, 0)));
-    occlusionMemoResolveDirty(VW, VH);
-    occlusionMemoShadowTest(w, r, false);
-    occlusionMemoEndGather();
+    gatherOnce([[w, r, false]]);
     expect(lifecycleCounters.occlusionMemoAllDirtyBy['resolve-vanished']).toBe(1);
   });
 
   it('own badge elements never queue', () => {
     const w = wrapper();
-    primeGather(w, rect(100, 100, 100, 50));
+    const r = rect(100, 100, 100, 50);
+    gatherOnce([[w, r, false]]);
     const own = document.createElement('div');
     own.setAttribute('data-branchkit-hint', '');
     document.body.appendChild(own);
@@ -246,47 +238,61 @@ describe('fail-open taps', () => {
       { type: 'attributes', target: own } as unknown as MutationRecord,
       { type: 'childList', addedNodes: [], removedNodes: [own], target: document.body } as unknown as MutationRecord,
     ]);
-    occlusionMemoResolveDirty(VW, VH);
-    occlusionMemoShadowTest(w, rect(100, 100, 100, 50), false);
-    occlusionMemoEndGather();
-    expect(lifecycleCounters.occlusionMemoWouldReuse).toBe(1);
+    gatherOnce([[w, r, false]]);
+    expect(lifecycleCounters.occlusionMemoReuse).toBe(1);
   });
 });
 
-describe('divergence', () => {
-  it('counts and firehoses a would-reuse verdict that disagrees with the fresh test', () => {
+describe('shadow mode', () => {
+  it('counts and firehoses a hit that disagrees with the fresh test; fresh wins', () => {
+    setOcclusionMemoMode('shadow');
     const el = document.createElement('a');
     el.className = 'buy-button';
     const w = wrapper(el);
     const r = rect(100, 100, 100, 50);
-    primeGather(w, r, false);
+
+    // Shadow caller shape: lookup always followed by a fresh test + store.
+    occlusionMemoResolveDirty(VW, VH);
+    expect(occlusionMemoLookup(w, r)).toBeNull(); // boot all-dirty
+    occlusionMemoStore(w, r, false, null);
+    occlusionMemoEndGather();
 
     occlusionMemoResolveDirty(VW, VH);
-    occlusionMemoShadowTest(w, r, true); // flipped with no signal
+    const hit = occlusionMemoLookup(w, r);
+    expect(hit).toEqual({ value: false });
+    occlusionMemoStore(w, r, true, hit); // fresh flipped with no signal
     occlusionMemoEndGather();
     expect(lifecycleCounters.occlusionMemoDiverged).toBe(1);
     expect(sentSteps).toContain('occlusion_memo:diverged:false->true:a.buy-button');
 
     // The fresh result was stored — a clean follow-up gather agrees again.
     occlusionMemoResolveDirty(VW, VH);
-    occlusionMemoShadowTest(w, r, true);
+    const hit2 = occlusionMemoLookup(w, r);
+    expect(hit2).toEqual({ value: true });
+    occlusionMemoStore(w, r, true, hit2);
     occlusionMemoEndGather();
     expect(lifecycleCounters.occlusionMemoDiverged).toBe(1);
   });
 });
 
 describe('kill switch', () => {
-  it('disabled: taps and shadow checks are no-ops', () => {
-    setOcclusionMemoEnabled(false);
+  it('off: taps, lookups, and stores are no-ops', () => {
+    setOcclusionMemoMode('off');
     const w = wrapper();
     const r = rect(100, 100, 100, 50);
     occlusionMemoAllDirty('scroll');
     occlusionMemoNotePointer(10, 10);
     occlusionMemoResolveDirty(VW, VH);
-    occlusionMemoShadowTest(w, r, false);
+    expect(occlusionMemoLookup(w, r)).toBeNull();
+    occlusionMemoStore(w, r, true);
     occlusionMemoEndGather();
     expect(lifecycleCounters.occlusionMemoRetestAllDirty).toBe(0);
-    expect(lifecycleCounters.occlusionMemoWouldReuse).toBe(0);
+    expect(lifecycleCounters.occlusionMemoReuse).toBe(0);
     expect(lifecycleCounters.occlusionMemoAllDirtyBy).toEqual({});
+
+    // Nothing was cached while off.
+    setOcclusionMemoMode('on');
+    occlusionMemoResolveDirty(VW, VH);
+    expect(occlusionMemoLookup(w, r)).toBeNull();
   });
 });

@@ -30,8 +30,8 @@ import { cacheVisibility, clearLayoutCache, peekCachedRect } from '../layout-cac
 import { isAncestorChainInVisibleViewport } from './strict-viewport';
 import { isOccluded, isOccludedBox, isOcclusionEnabled, visualBoxFor, drainElementFromPointCalls } from '../observe/occlusion';
 import {
-  isOcclusionMemoEnabled, occlusionMemoResolveDirty, occlusionMemoShadowTest,
-  occlusionMemoEndGather,
+  getOcclusionMemoMode, occlusionMemoResolveDirty, occlusionMemoLookup,
+  occlusionMemoStore, occlusionMemoEndGather,
 } from '../observe/occlusion-memo';
 import { recordCpu } from '../debug/perf-counters';
 
@@ -150,18 +150,27 @@ export function gatherSettleReads(wrappers: readonly ElementWrapper[]): SettleGa
 
   // Read batch 3: occlusion hit-tests over the visible badge set. Pure reads
   // (elementFromPoint over the batch-2 visual-box rects), still against
-  // clean layout. Memoization (SHADOW mode): the fresh test always runs;
-  // the memo just records the reuse decision it would have made and counts
-  // divergences (notes/DESIGN_OCCLUSION_HITTEST_MEMO.md).
+  // clean layout. Memoized (notes/DESIGN_OCCLUSION_HITTEST_MEMO.md): a
+  // dirty-region cache hit reuses the previous verdict and skips the probes
+  // entirely; in shadow mode ('bkOcclusionMemo: "shadow"') the fresh test
+  // still runs and wins, with divergences counted — the re-verification
+  // lever for future tap changes.
   drainElementFromPointCalls();
-  const memoOn = occlusionOn && occlusionSet.length > 0 && isOcclusionMemoEnabled();
+  const memoMode = getOcclusionMemoMode();
+  const memoOn = occlusionOn && occlusionSet.length > 0 && memoMode !== 'off';
   if (memoOn) occlusionMemoResolveDirty(vw, vh);
   const overlayCovered = new Map<ElementWrapper, boolean>();
   for (const w of occlusionSet) {
     const box = occlusionBoxes.get(w);
-    const fresh = box ? isOccludedBox(box.el, box.rect) : isOccluded(w.element);
+    if (!box) { overlayCovered.set(w, isOccluded(w.element)); continue; }
+    const hit = memoOn ? occlusionMemoLookup(w, box.rect) : null;
+    if (hit !== null && memoMode === 'on') {
+      overlayCovered.set(w, hit.value);
+      continue;
+    }
+    const fresh = isOccludedBox(box.el, box.rect);
     overlayCovered.set(w, fresh);
-    if (memoOn && box) occlusionMemoShadowTest(w, box.rect, fresh);
+    if (memoOn) occlusionMemoStore(w, box.rect, fresh, hit);
   }
   if (memoOn) occlusionMemoEndGather();
   const efpCalls = drainElementFromPointCalls();
