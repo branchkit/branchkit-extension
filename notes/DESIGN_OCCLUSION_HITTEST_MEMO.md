@@ -179,10 +179,19 @@ Implementation deltas from the sketch above, all fail-open:
   (occlusionMemoAllDirtyBy), so e.g. 'scroll' under-reports when another tap
   failed the window open first.
 
-Tuning lead for later: YouTube reuse was only ~13% (fail-opens dominate —
-resolve-vanished ×12, element-overflow ×2 in one short session). No
-correctness issue; if YT gather cost ever matters, revisit K and the
-vanished-element policy with these counters.
+**Post-flip live confirmation (QB, 401-badge occlusion set, ~90s of
+interaction):** per-gather b3 = [171, 167, 137, 137, 58, 44, 15, **0.4**]ms
+with efp = [676, 676, 676, 676, 442, 243, 75, **0**]. A clean-window gather
+costs 0.4ms / zero probes — past the ~10ms target; the expensive gathers are
+the (correct) fail-opens: boot, mo-attach, scroll, and resolve-vanished ×3.
+The session mix, not the hit cost, is now the number that matters.
+
+Tuning lead for later: fail-open frequency. QB interaction hit
+resolve-vanished ×3 in ~90s (each nukes a window); YouTube shadow reuse was
+only ~13% (resolve-vanished ×12, element-overflow ×2). No correctness issue
+— if interactive gather cost still shows up, revisit K and the
+vanished-element policy (e.g. localize a vanished element via its still-
+connected parent) with these counters, re-shadowing first.
 
 ## Open questions
 
