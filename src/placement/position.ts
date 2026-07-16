@@ -1,7 +1,6 @@
 import { ElementWrapper } from '../scan/element-wrapper';
 import { getCachedRect, getCachedStyle } from '../layout-cache';
 import { computePlacement, Nudge } from './compute';
-import { clipRootOf } from '../observe/clip-observer';
 import { type BadgeSettings, DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
 
 export type TextProbe = { hasText: true; rect: DOMRect } | { hasText: false };
@@ -190,30 +189,21 @@ function positionAtTopLeft(w: ElementWrapper, probe?: TextProbe): void {
     badgeSize: w.hint.badgeSize,
     nudge,
   });
-  let y = result.y;
-  // Fully-above icon placement vs the clipping scroller (round 36b): for a
-  // FIRST-visible-row icon, "fully above" pokes past the scroller's top
-  // edge and the container cuts the badge off mid-letters. Fall back to
-  // OVERLAP — badge top aligned to the icon's own top edge, covering its
-  // upper part — a DISCRETE, target-relative choice, deliberately NOT a
-  // clamp: a partial push-down delta would bake into the scroll-anchored
-  // offset and strand the badge when the row scrolls away from the edge
-  // (the d35201a scroll-back class). Re-derived every placement pass, so
-  // the badge flips back above once the row has headroom.
-  //
-  // Overlap, not fully-below (the original 36b choice): a below-badge lands
-  // in the NEXT row's badge territory — on Gmail's list the top row's
-  // dropped pair sat in a 2x2 cluster with row 2's normal above-pair,
-  // ambiguous about which row either pair activates. On-target placement
-  // keeps the badge inside its own target's footprint (Vimium/Rango's
-  // default position), and if the icon itself is part-clipped the badge
-  // clips WITH it — honest, and the clip observer hides it once the
-  // target is fully out.
-  if (!probe.hasText && nudge.y < 1) {
-    const clipRoot = clipRootOf(w.element);
-    if (clipRoot && result.y < getCachedRect(clipRoot).top) {
-      y = getCachedRect(w.element).top;
-    }
-  }
-  w.hint.updatePosition({ x: result.x, y });
+  // Top-edge fallbacks RETIRED (2026-07-15). Round 36b flipped a
+  // first-visible-row icon's badge fully below when fully-above poked past
+  // the clipping scroller (badge cut off mid-letters); a brief overlap
+  // variant followed. Both failed the same way in practice: position is
+  // derived at placement time but followed by pure scroll translation
+  // between passes, so the fallback offset STUCK to rows long after they
+  // left the edge — on Gmail, whole bands of rows wore the fallback
+  // (below-badges clustered ambiguously with the next row's pair; overlap
+  // badges covered their icons mid-list). A momentarily-clipped badge at
+  // the literal top edge is the least-bad state: it sits where badges
+  // always sit (consistent grammar), it enters the viewport with its row
+  // like everything else, and voice is unaffected (codeword eligibility
+  // tracks the TARGET's visibility, not the badge's). If edge clipping
+  // ever needs solving for real, fix the re-derivation stickiness first —
+  // no discrete fallback looks right while placement offsets outlive the
+  // edge condition that chose them.
+  w.hint.updatePosition({ x: result.x, y: result.y });
 }
