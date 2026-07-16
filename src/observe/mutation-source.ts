@@ -27,7 +27,7 @@ import { cacheVisibility, clearLayoutCache } from '../layout-cache';
 import { getHintVisibility } from '../config';
 import { harnessHooksEnabled } from '../debug/harness-hooks';
 import { recordCpu, lifecycleCounters } from '../debug/perf-counters';
-import { firehoseStep } from '../debug/firehose';
+import { firehoseStep, describeMutation } from '../debug/firehose';
 import { pageSession, scheduleYieldTask } from '../lifecycle/page-session';
 import { WAVE_WALK_BUDGET_MS } from '../lifecycle/build-queue';
 
@@ -444,7 +444,15 @@ function handlePageMutations(records: MutationRecord[]): void {
   // the dominant scroll-time CPU bucket. A mutation batch means "layout
   // may have shifted"; coalescing to one reposition after mutations
   // settle is the same trade already accepted for scroll/resize.
-  if (pageSession.badgesVisible) pageSession.deps.scheduleDeferredReposition('mo-batch');
+  if (pageSession.badgesVisible) {
+    // Harness-only target attribution (settle-storm diagnosis): name WHAT
+    // keeps arming the settle on an idle page. First foreign record only —
+    // idle-storm batches are small and homogeneous.
+    if (harnessHooksEnabled()) {
+      firehoseStep(`mo_target:${describeMutation(foreign[0])}`, foreign.length);
+    }
+    pageSession.deps.scheduleDeferredReposition('mo-batch');
+  }
   recordCpu('moCallback', performance.now() - __cpuStart);
   firehoseStep('moCallback:end_normal', records.length, FIREHOSE_MIN);
 }

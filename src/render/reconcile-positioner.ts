@@ -44,6 +44,17 @@ export interface ReconcileBadge {
 
 const registry = new Set<ReconcileBadge>();
 
+// Harness diagnostic (settle-storm): how many of the last pass's transform
+// writes actually CHANGED value. On a truly idle page this should be 0 — a
+// persistent nonzero names a badge whose derived position oscillates
+// (boundary clamp flapping, sub-pixel gBCR jitter) and whose style writes
+// then feed the document-wide visibility MO. Measure-only: the write itself
+// stays unconditional this round so behavior is unchanged while we attribute.
+let lastChangedWrites = 0;
+export function lastReconcileChangedWrites(): number {
+  return lastChangedWrites;
+}
+
 export function register(b: ReconcileBadge): void {
   registry.add(b);
 }
@@ -92,9 +103,13 @@ export function reconcilePass(): Map<ReconcileBadge, DOMRect> {
   }
   // Phase 2 — batched composited writes. transform does not dirty layout, so
   // this can't re-trigger reflow between entries.
+  let changed = 0;
   for (const w of writes) {
-    w.host.style.transform = `translate(${w.x}px,${w.y}px)`;
+    const next = `translate(${w.x}px,${w.y}px)`;
+    if (w.host.style.transform !== next) changed++;
+    w.host.style.transform = next;
   }
+  lastChangedWrites = changed;
   const rec = (globalThis as { __branchkitRecordCpu?: (label: string, ms: number) => void }).__branchkitRecordCpu;
   if (rec && t0) rec('reconcilePositioner:tick', performance.now() - t0);
   return rects;

@@ -65,3 +65,28 @@ export function _resetFirehoseForTests(): void {
   windowCount = 0;
   droppedSinceSummary = 0;
 }
+
+/**
+ * Compact one-line descriptor of a mutation record for target attribution
+ * (settle-storm diagnosis): names WHAT keeps mutating on an idle page so the
+ * settle triggers can be traced to a concrete writer. Attribute records carry
+ * the attribute name + target identity; childList records carry the first
+ * added/removed node's identity. Callers gate on harnessHooksEnabled().
+ */
+export function describeMutation(m: MutationRecord): string {
+  const ident = (n: Node | null): string => {
+    if (!(n instanceof Element)) return n ? n.nodeName.toLowerCase() : 'null';
+    const cls = n.classList.length > 0 ? `.${n.classList[0]}` : '';
+    const own = n.hasAttribute('data-branchkit-hint') ? '[own]' : '';
+    return `${n.tagName.toLowerCase()}${cls}${own}`.slice(0, 48);
+  };
+  if (m.type === 'attributes') {
+    return `attr:${m.attributeName}:${ident(m.target)}`;
+  }
+  if (m.type === 'childList') {
+    const node = m.addedNodes[0] ?? m.removedNodes[0] ?? null;
+    const dir = m.addedNodes.length > 0 ? 'add' : 'rm';
+    return `child:${dir}:${ident(node)}:under:${ident(m.target)}`;
+  }
+  return `${m.type}:${ident(m.target)}`;
+}

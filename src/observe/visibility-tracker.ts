@@ -42,6 +42,8 @@ import { ElementWrapper } from '../scan/element-wrapper';
 import { scanSingle } from '../scan/scanner';
 import { cacheVisibility, clearLayoutCache } from '../layout-cache';
 import { lifecycleCounters, recordCpu } from '../debug/perf-counters';
+import { firehoseStep, describeMutation } from '../debug/firehose';
+import { harnessHooksEnabled } from '../debug/harness-hooks';
 import { store } from '../core/store';
 import { attachWrapper } from '../core/wrapper-lifecycle';
 import { pageSession } from '../lifecycle/page-session';
@@ -139,7 +141,13 @@ export function constructVisibilityObservers(): void {
     if (pendingVisibility.size === 0) disconnectVisibilityMO();
   }, { root: null, rootMargin: '200px', threshold: 0 });
 
-  visibilityMO = new MutationObserver(() => {
+  visibilityMO = new MutationObserver((records) => {
+    // Harness-only target attribution (settle-storm diagnosis): this MO has
+    // no own-mutation filter (document-wide class/style watch), so name what
+    // it actually saw before it requests a settle pass.
+    if (harnessHooksEnabled() && records.length > 0) {
+      firehoseStep(`vismo_target:${describeMutation(records[0])}`, records.length);
+    }
     scheduleVisibilitySweep('vis-mo');
   });
 

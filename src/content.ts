@@ -35,7 +35,7 @@ import { bkLog } from './debug/bk-log';
 import { harnessHooksEnabled } from './debug/harness-hooks';
 import { store } from './core/store';
 import { HintBadge } from './render/hints';
-import { reconcilePass, drain as drainReconcilePositioner, reconcileRegistrySize } from './render/reconcile-positioner';
+import { reconcilePass, drain as drainReconcilePositioner, reconcileRegistrySize, lastReconcileChangedWrites } from './render/reconcile-positioner';
 import { onContainerResize } from './observe/container-resize-tracker';
 import { onTransformAncestorMutation, setTransformTriggerEnabled } from './observe/transform-ancestor-tracker';
 import { onTargetMutation } from './observe/target-mutation-tracker';
@@ -3715,6 +3715,12 @@ function scheduleReposition(): void {
     // notes/INVESTIGATION_LIMBO_BADGE_FLASH.md).
     const rects = reconcilePass();
     firehoseStep('reposition:end', rects.size, 20);
+    // Harness-only (settle-storm diagnosis): transforms that actually changed
+    // value this pass. Emits only when nonzero (threshold 1) — a sustained
+    // nonzero on an idle page names an oscillating badge position.
+    if (harnessHooksEnabled()) {
+      firehoseStep('reposition:changed', lastReconcileChangedWrites(), 1);
+    }
   });
 }
 pageSession.resources.listen(window, 'resize', () => scheduleReposition(), { passive: true });
