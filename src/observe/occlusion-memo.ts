@@ -15,16 +15,26 @@
  *
  * Taps (all zero-layout-read at signal time; queued element rects resolve
  * inside the next gather against clean layout):
- *   - page MO + visibility MO batches → queue mutated elements (≤K distinct;
- *     bigger, the huge path, or the manual-deferred path → all-dirty)
- *   - childList REMOVALS → all-dirty (the removed occluder's old position is
- *     unknowable once it's out of the DOM — fail open)
+ *   - page MO + visibility MO batches → queue mutated elements, ADDED and
+ *     REMOVED nodes included (≤K distinct; bigger, the huge path, or the
+ *     manual-deferred path → all-dirty)
  *   - pointerover/pointerout → mark the cell under the event coordinates.
  *     The load-bearing novelty: pure-CSS :hover paints produce NO observer
  *     record of any kind — only the pointer position knows.
  *   - scroll / resize / transform-ancestor → all-dirty (targets move anyway)
  *   - focusin/focusout, transitionend/animationend → queue the event target
  *     (:focus-within can restyle with no record)
+ *
+ * History localization (fail-open tuning, 2026-07-16): every resolved
+ * element's cells are remembered (WeakMap), so a queued element that turns
+ * up disconnected / zero-box / off-viewport at resolve time — a closed
+ * dropdown, a removed row, a display:none'd overlay — dirties exactly the
+ * cells it LAST painted instead of failing the whole window open; the
+ * all-dirty fail-open remains for elements with no recorded history. A
+ * re-resolved element marks old ∪ new cells, closing the in-viewport-slide
+ * gap for anything seen before. The history is wiped on every all-dirty
+ * window (scroll/resize move content without per-element records, so
+ * recorded cells are only trusted across CLEAN windows).
  *
  * AUTHORITATIVE as of 2026-07-16: a reuse hit returns the cached verdict and
  * the fresh hit-test is skipped. Gated by the Phase-1 shadow soak — zero
@@ -46,17 +56,22 @@ import { firehoseStep } from '../debug/firehose';
 const GRID = 8;
 const CELL_COUNT = GRID * GRID;
 // K: distinct queued elements per gather window before failing open to
-// all-dirty. Start 16 (design note open question — revisit with the shadow
-// counters' retest attribution).
-const QUEUED_ELEMENT_CAP = 16;
+// all-dirty. 16→32 (2026-07-16): Gmail/YouTube hit element-overflow within
+// short sessions; a resolve read is a warm-cache rect lookup, so doubling K
+// costs ~nothing against the ~150ms full retest it avoids.
+const QUEUED_ELEMENT_CAP = 32;
 // Pointer taps are boundary-crossing events; settles run at ~100ms cadence
 // while the pointer moves, so this is generous for one window.
 const POINTER_POINT_CAP = 32;
 
 // Kill switch (bkOcclusionMemo, denylist posture): default 'on'
 // (authoritative), explicit false → 'off', 'shadow' → verify-only.
+//
+// SOAK BUILD: defaulting to 'shadow' while the history-localization tap
+// change (lastKnownCells) re-verifies — flip back to 'on' on zero
+// divergence. content.ts's flag mapping carries the same temporary default.
 export type OcclusionMemoMode = 'off' | 'shadow' | 'on';
-let memoMode: OcclusionMemoMode = 'on';
+let memoMode: OcclusionMemoMode = 'shadow';
 
 export function setOcclusionMemoMode(mode: OcclusionMemoMode): void {
   memoMode = mode;
@@ -89,6 +104,11 @@ let allDirty = true;
 const dirtyCells = new Uint8Array(CELL_COUNT);
 const pendingElements = new Set<Element>();
 const pendingPointer: number[] = []; // flat x,y pairs
+// The cells each element occupied at its LAST clean-window resolve — the
+// localization source for elements that have vanished by the time they
+// resolve. Only trusted across clean windows: any all-dirty wipes it
+// (unrecorded in-flow shifts make older positions unreliable).
+let lastKnownCells = new WeakMap<Element, readonly number[]>();
 // Viewport dims of the last resolve, for sample-point→cell mapping in the
 // per-wrapper check (same values batch 3 samples against).
 let resolvedVw = 0;
@@ -105,6 +125,7 @@ export function occlusionMemoAllDirty(reason: string): void {
   allDirty = true;
   pendingElements.clear();
   pendingPointer.length = 0;
+  lastKnownCells = new WeakMap();
   bumpAllDirtyReason(reason);
 }
 
@@ -133,15 +154,14 @@ export function occlusionMemoNoteMutations(records: MutationRecord[]): void {
   for (const m of records) {
     if (m.type === 'childList') {
       // Adds occlude only at their CURRENT position (they didn't exist
-      // before) — queue for localized marking. Removals uncover their OLD
-      // position, which is unreadable once they're out of the DOM: fail open.
-      for (const n of m.removedNodes) {
-        if (n instanceof Element && !isOwn(n)) {
-          occlusionMemoAllDirty('removal');
-          return;
-        }
-      }
+      // before). Removals uncover their OLD position — queued too: the
+      // resolve step localizes them via their last-known cells when we've
+      // seen them in this clean-window streak, and fails open otherwise.
       for (const n of m.addedNodes) {
+        if (n instanceof Element) occlusionMemoNoteTarget(n);
+        if (allDirty) return;
+      }
+      for (const n of m.removedNodes) {
         if (n instanceof Element) occlusionMemoNoteTarget(n);
         if (allDirty) return;
       }
@@ -174,21 +194,28 @@ function markPoint(x: number, y: number, vw: number, vh: number): void {
   dirtyCells[cellIndex(x, y, vw, vh)] = 1;
 }
 
-// Mark every cell the rect's viewport-clamped extent overlaps. Over-marking
-// (boundary-straddling rects) is conservative and fine.
-function markRect(r: DOMRect, vw: number, vh: number): void {
+// Every cell the rect's viewport-clamped extent overlaps (null when the
+// rect has no in-viewport area). Over-covering on boundary-straddling rects
+// is conservative and fine.
+function cellsOfRect(r: DOMRect, vw: number, vh: number): number[] | null {
   const left = Math.max(0, r.left);
   const top = Math.max(0, r.top);
   const right = Math.min(vw, r.right);
   const bottom = Math.min(vh, r.bottom);
-  if (right <= left || bottom <= top) return;
+  if (right <= left || bottom <= top) return null;
   const c0 = Math.min(GRID - 1, Math.floor((left / vw) * GRID));
   const c1 = Math.min(GRID - 1, Math.floor((right / vw) * GRID));
   const r0 = Math.min(GRID - 1, Math.floor((top / vh) * GRID));
   const r1 = Math.min(GRID - 1, Math.floor((bottom / vh) * GRID));
+  const cells: number[] = [];
   for (let row = r0; row <= r1; row++) {
-    for (let col = c0; col <= c1; col++) dirtyCells[row * GRID + col] = 1;
+    for (let col = c0; col <= c1; col++) cells.push(row * GRID + col);
   }
+  return cells;
+}
+
+function markCells(cells: readonly number[]): void {
+  for (const c of cells) dirtyCells[c] = 1;
 }
 
 /**
@@ -197,13 +224,13 @@ function markRect(r: DOMRect, vw: number, vh: number): void {
  * queued element costs one clean-layout rect lookup (deduped through the
  * gather's warm layout cache; counted in occlusionMemo:size:resolveReads).
  *
- * Fail-open cases: a queued element that is disconnected, zero-box, or fully
- * off-viewport HID or LEFT since it was queued — its old position (where it
- * may have uncovered a target) is unknowable, so the whole window goes
- * all-dirty. This is what makes display:none / removal / slide-out of
- * occluders sound; the residual gap is an occluder slid to a DIFFERENT
- * in-viewport position by a style write (new cells marked, old cells not) —
- * shadow-mode divergence is the meter for whether that happens in practice.
+ * A queued element that is disconnected, zero-box, or fully off-viewport
+ * HID or LEFT since it was queued (closed dropdown, removed row,
+ * display:none'd overlay). If it resolved during this clean-window streak
+ * its last-known cells localize the uncovered region
+ * (occlusionMemoVanishLocalized); with no history the whole window fails
+ * open — the old position is unknowable. A connected element that MOVED
+ * marks old ∪ new cells for the same reason.
  */
 export function occlusionMemoResolveDirty(vw: number, vh: number): void {
   if (memoMode === 'off') return;
@@ -216,26 +243,32 @@ export function occlusionMemoResolveDirty(vw: number, vh: number): void {
   pendingPointer.length = 0;
   let reads = 0;
   for (const el of pendingElements) {
-    if (!el.isConnected) {
-      occlusionMemoAllDirty('resolve-disconnected');
-      break;
-    }
-    let r = peekCachedRect(el);
-    if (r === null) {
-      try {
-        r = el.getBoundingClientRect();
-        reads++;
-      } catch {
-        occlusionMemoAllDirty('resolve-throw');
-        break;
+    let r: DOMRect | null = null;
+    if (el.isConnected) {
+      r = peekCachedRect(el);
+      if (r === null) {
+        try {
+          r = el.getBoundingClientRect();
+          reads++;
+        } catch { r = null; }
       }
     }
-    if (r.width < 1 || r.height < 1 ||
-        r.right <= 0 || r.bottom <= 0 || r.left >= vw || r.top >= vh) {
+    const cells = r !== null && r.width >= 1 && r.height >= 1
+      ? cellsOfRect(r, vw, vh)
+      : null;
+    const known = lastKnownCells.get(el);
+    if (cells !== null) {
+      markCells(cells);
+      if (known) markCells(known); // moved: its old cells are uncovered
+      lastKnownCells.set(el, cells);
+    } else if (known) {
+      markCells(known);
+      lastKnownCells.delete(el);
+      lifecycleCounters.occlusionMemoVanishLocalized++;
+    } else {
       occlusionMemoAllDirty('resolve-vanished');
       break;
     }
-    markRect(r, vw, vh);
   }
   pendingElements.clear();
   if (reads > 0) recordCpu('occlusionMemo:size:resolveReads', reads);
@@ -341,6 +374,7 @@ export function _resetOcclusionMemoForTests(): void {
   dirtyCells.fill(0);
   pendingElements.clear();
   pendingPointer.length = 0;
+  lastKnownCells = new WeakMap();
   resolvedVw = 0;
   resolvedVh = 0;
   memoMode = 'on';

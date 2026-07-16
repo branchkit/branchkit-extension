@@ -186,12 +186,37 @@ costs 0.4ms / zero probes — past the ~10ms target; the expensive gathers are
 the (correct) fail-opens: boot, mo-attach, scroll, and resolve-vanished ×3.
 The session mix, not the hit cost, is now the number that matters.
 
-Tuning lead for later: fail-open frequency. QB interaction hit
-resolve-vanished ×3 in ~90s (each nukes a window); YouTube shadow reuse was
-only ~13% (resolve-vanished ×12, element-overflow ×2). No correctness issue
-— if interactive gather cost still shows up, revisit K and the
-vanished-element policy (e.g. localize a vanished element via its still-
-connected parent) with these counters, re-shadowing first.
+## Round 2 — fail-open frequency tuning (2026-07-16, IN SHADOW)
+
+The post-flip mix said the remaining cost is fail-open frequency, not hit
+cost: QB hit resolve-vanished ×3 in ~90s, Gmail removal ×7 +
+element-overflow ×2, YouTube shadow reuse only ~13%. Three changes, shipped
+as a re-shadow round (mode default temporarily 'shadow' — tap semantics
+changed, so the zero-divergence gate applies again):
+
+- **Last-known-cells history**: every resolved element's cells are recorded
+  (WeakMap). A queued element that turns up disconnected / zero-box /
+  off-viewport localizes to the cells it last painted
+  (occlusionMemoVanishLocalized counter) instead of nuking the window;
+  no-history vanishes still fail open ('resolve-vanished' — the
+  'removal'/'resolve-disconnected' reasons folded into it since removals now
+  queue like adds). The history is wiped on EVERY all-dirty window: scroll
+  and friends shift content with no per-element records, so recorded cells
+  are only trusted across clean-window streaks. This also absorbs the
+  dropdown-close case (menu resolved at open → its cells localize the
+  close).
+- **Old ∪ new marking**: a re-resolved element that moved marks both its
+  previous and current cells — closing round 1's acknowledged
+  in-viewport-slide gap for any element seen within the streak. The
+  remaining unrecorded-shift exposure: in-flow siblings displaced by
+  someone else's mutation carry stale history until a wipe — shadow
+  adjudicates.
+- **K 16→32** (element-overflow was firing on Gmail/YT; resolve reads are
+  warm-cache lookups, measured 1-2/gather).
+
+Gate: zero occlusion_memo:diverged over Gmail interaction (removal-heavy),
+QB dropdown/hover interaction, YouTube — then restore the 'on' default
+(content.ts flag mapping + module default, both marked SOAK BUILD).
 
 ## Open questions
 

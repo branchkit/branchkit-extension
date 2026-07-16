@@ -433,6 +433,11 @@ export interface LifecycleCounters {
   occlusionMemoRetestCells: number;
   occlusionMemoRetestAllDirty: number;
   occlusionMemoDiverged: number;
+  // Vanished elements (disconnected / zero-box / off-viewport at resolve)
+  // localized via their last-known cells instead of failing the window open
+  // — should absorb most of what allDirtyBy previously attributed to
+  // removal / resolve-vanished.
+  occlusionMemoVanishLocalized: number;
   occlusionMemoAllDirtyBy: Record<string, number>;
   // Cumulative wrapper attaches by discovery source (attachWrapper stamps
   // the same value on the wrapper — see DiscoverySource in element-wrapper).
@@ -469,6 +474,7 @@ export const lifecycleCounters: LifecycleCounters = {
   occlusionMemoRetestCells: 0,
   occlusionMemoRetestAllDirty: 0,
   occlusionMemoDiverged: 0,
+  occlusionMemoVanishLocalized: 0,
   occlusionMemoAllDirtyBy: {},
   attachedBySource: {},
 };

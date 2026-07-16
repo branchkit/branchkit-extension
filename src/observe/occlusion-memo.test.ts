@@ -185,7 +185,7 @@ describe('dirty cells', () => {
 });
 
 describe('fail-open taps', () => {
-  it('a childList removal fails the window open', () => {
+  it('a removal of a never-seen element fails the window open', () => {
     const w = wrapper();
     const r = rect(100, 100, 100, 50);
     gatherOnce([[w, r, false]]);
@@ -195,35 +195,93 @@ describe('fail-open taps', () => {
     ]);
     gatherOnce([[w, r, false]]);
     expect(lifecycleCounters.occlusionMemoRetestAllDirty).toBe(2); // boot + removal
-    expect(lifecycleCounters.occlusionMemoAllDirtyBy['removal']).toBe(1);
+    expect(lifecycleCounters.occlusionMemoAllDirtyBy['resolve-vanished']).toBe(1);
   });
 
   it('more than K queued elements fails open', () => {
     gatherOnce([[wrapper(), rect(100, 100, 100, 50), false]]);
-    for (let i = 0; i < 17; i++) {
+    for (let i = 0; i < 33; i++) {
       occlusionMemoNoteTarget(elementAt(rect(10 * i, 10, 5, 5)));
     }
     expect(lifecycleCounters.occlusionMemoAllDirtyBy['element-overflow']).toBe(1);
   });
 
-  it('a queued element that vanished before the gather fails open', () => {
+  it('a never-seen queued element that vanished before the gather fails open', () => {
     const w = wrapper();
     const r = rect(100, 100, 100, 50);
     gatherOnce([[w, r, false]]);
 
     occlusionMemoNoteTarget(elementAt(rect(600, 450, 50, 50), false)); // disconnected
     gatherOnce([[w, r, false]]);
-    expect(lifecycleCounters.occlusionMemoAllDirtyBy['resolve-disconnected']).toBe(1);
+    expect(lifecycleCounters.occlusionMemoAllDirtyBy['resolve-vanished']).toBe(1);
     expect(lifecycleCounters.occlusionMemoRetestAllDirty).toBe(2);
   });
 
-  it('a queued element that collapsed to zero box fails open', () => {
+  it('a seen element that vanishes localizes to its last-known cells', () => {
+    const near = wrapper();
+    const nearRect = rect(100, 100, 100, 50);
+    const far = wrapper();
+    const farRect = rect(600, 450, 100, 50);
+    gatherOnce([[near, nearRect, false], [far, farRect, false]]);
+
+    // The overlay resolves once while visible (recording its cells)...
+    const overlayRect = rect(90, 90, 60, 60); // over `near` only
+    const overlay = elementAt(overlayRect);
+    occlusionMemoNoteTarget(overlay);
+    gatherOnce([[near, nearRect, false], [far, farRect, false]]);
+    resetLifecycleCounters();
+
+    // ...then collapses (display:none) — a dropdown closing. Localized:
+    // only the wrapper under its old cells retests; no fail-open.
+    overlay.getBoundingClientRect = () => rect(90, 90, 0, 0);
+    occlusionMemoNoteTarget(overlay);
+    gatherOnce([[near, nearRect, false], [far, farRect, false]]);
+    expect(lifecycleCounters.occlusionMemoVanishLocalized).toBe(1);
+    expect(lifecycleCounters.occlusionMemoRetestCells).toBe(1);
+    expect(lifecycleCounters.occlusionMemoReuse).toBe(1);
+    expect(lifecycleCounters.occlusionMemoAllDirtyBy).toEqual({});
+  });
+
+  it('a seen element that MOVES marks old and new cells', () => {
+    const near = wrapper();
+    const nearRect = rect(100, 100, 100, 50); // top-left
+    const far = wrapper();
+    const farRect = rect(600, 450, 100, 50); // bottom-right
+    const mid = wrapper();
+    const midRect = rect(350, 250, 80, 40); // center — untouched region
+    gatherOnce([[near, nearRect, false], [far, farRect, false], [mid, midRect, false]]);
+
+    const overlay = elementAt(rect(90, 90, 60, 60)); // over `near`
+    occlusionMemoNoteTarget(overlay);
+    gatherOnce([[near, nearRect, false], [far, farRect, false], [mid, midRect, false]]);
+    resetLifecycleCounters();
+
+    // Slides to cover `far`: both its old cells (near) and new cells (far)
+    // must retest; `mid` reuses.
+    overlay.getBoundingClientRect = () => rect(590, 440, 60, 60);
+    occlusionMemoNoteTarget(overlay);
+    gatherOnce([[near, nearRect, false], [far, farRect, false], [mid, midRect, false]]);
+    expect(lifecycleCounters.occlusionMemoRetestCells).toBe(2);
+    expect(lifecycleCounters.occlusionMemoReuse).toBe(1);
+  });
+
+  it('vanish history does not survive an all-dirty window', () => {
     const w = wrapper();
     const r = rect(100, 100, 100, 50);
     gatherOnce([[w, r, false]]);
 
-    occlusionMemoNoteTarget(elementAt(rect(600, 450, 0, 0)));
+    const overlay = elementAt(rect(600, 450, 60, 60));
+    occlusionMemoNoteTarget(overlay);
     gatherOnce([[w, r, false]]);
+
+    occlusionMemoAllDirty('scroll'); // wipes the history
+    gatherOnce([[w, r, false]]);
+    resetLifecycleCounters();
+
+    overlay.getBoundingClientRect = () => rect(600, 450, 0, 0);
+    occlusionMemoNoteTarget(overlay);
+    gatherOnce([[w, r, false]]);
+    expect(lifecycleCounters.occlusionMemoVanishLocalized).toBe(0);
     expect(lifecycleCounters.occlusionMemoAllDirtyBy['resolve-vanished']).toBe(1);
   });
 
