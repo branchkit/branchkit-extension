@@ -235,6 +235,23 @@ later tick localizes (unit-pinned). Re-soaking under the same gate. (Also
 noted from 2a: the data.quickbase.com tab was stale-CS that round — the QB
 dropdown evidence must come from a reopened tab.)
 
+**Shadow soak 2b (2026-07-16): ONE divergence in 44,831 reuse verdicts —
+and it answered the design's open pointer question.** tldraw.com (canvas
+app, off-recipe — shadow's whole point), `false->true` on an `<a>`, riding
+a `passSoon:pointer` settle: a pure-CSS :hover paint EXTENDED into the cell
+next to the one the pointer crossed. The boundary-crossing tap marks where
+the cursor is, not where the hover paint reaches. Fixes:
+- pointer coords now mark a 3×3 cell neighborhood (~1/3 viewport span
+  around the cursor on the 8×8 grid) — bounds cursor-anchored tooltips;
+- the pointerover/out TARGET element is queued too — bounds hover paints
+  sized to the trigger's own box (background swells, outlines).
+Also from 2b: vanishLocalized was STILL 0 on Gmail/QB — element-overflow
+(which wipes history, correctly) is the steady state for long inter-settle
+windows (Gmail's tick queues ~4 el/s; K=32 blew inside any ~8s reading
+pause). K → 128 (~30s of coverage; resolve reads are clean-layout
+lookups). tldraw itself: vanishLocalized 103, resolve-vanished 693 — the
+history mechanism works where windows stay short. Re-soaking (soak 3).
+
 ## Open questions
 
 - Grid size / K cap tuning (start 8×8 / 16, revisit with Phase-1 counters).

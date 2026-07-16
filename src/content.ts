@@ -4438,11 +4438,15 @@ pageSession.resources.listen(document, 'animationend', scheduleDeferredRepositio
 // movement-driven cost stays bounded.
 // The pointerover wrapper ALSO feeds the occlusion memo the event
 // coordinates (zero layout reads — the memo's only signal for pure-CSS
-// :hover paints). The sweep call itself is unchanged: the memo tap must not
-// touch recheckPendingVisibility behavior (the temperamental hover-reveal
-// promote path).
+// :hover paints) and queues the hovered element itself (a hover paint sized
+// to the trigger's box — e.g. a :hover background/outline swell — is
+// bounded by the target's rect at the next gather; the coordinate tap's
+// cell neighborhood bounds cursor-anchored tooltips). The sweep call itself
+// is unchanged: the memo tap must not touch recheckPendingVisibility
+// behavior (the temperamental hover-reveal promote path).
 pageSession.resources.listen(document, 'pointerover', (e: PointerEvent) => {
   occlusionMemoNotePointer(e.clientX, e.clientY);
+  if (e.target instanceof Element) occlusionMemoNoteTarget(e.target);
   schedulePointerVisibilitySweep();
 }, { passive: true, capture: true });
 // Pointer left the window entirely: the `:hover` reveal collapses back to
@@ -4457,6 +4461,7 @@ pageSession.resources.listen(document, 'pointerout', (e: PointerEvent) => {
   // Memo tap on EVERY pointerout (un-hover collapses happen at each boundary
   // crossing, not just window exit); the sweep keeps its null-check gate.
   occlusionMemoNotePointer(e.clientX, e.clientY);
+  if (e.target instanceof Element) occlusionMemoNoteTarget(e.target);
   if (e.relatedTarget === null) schedulePointerVisibilitySweep();
 }, { passive: true, capture: true });
 // Window resize covers genuine viewport changes (drag corner, device

@@ -57,10 +57,14 @@ import { firehoseStep } from '../debug/firehose';
 const GRID = 8;
 const CELL_COUNT = GRID * GRID;
 // K: distinct queued elements per gather window before failing open to
-// all-dirty. 16→32 (2026-07-16): Gmail/YouTube hit element-overflow within
-// short sessions; a resolve read is a warm-cache rect lookup, so doubling K
-// costs ~nothing against the ~150ms full retest it avoids.
-const QUEUED_ELEMENT_CAP = 32;
+// all-dirty. 16→32→128 (2026-07-16): overflow WIPES the vanish history
+// (unresolved elements may have moved), and soak 2b showed overflow is the
+// steady state for long inter-settle windows — Gmail's 2Hz tick queues ~4
+// elements/sec, so K=32 blew inside any ~8s reading pause and localization
+// never fired there. 128 covers ~30s windows; a resolve read is a
+// clean-layout rect lookup, so even a full queue is ~sub-ms against the
+// ~45-150ms full retest it avoids.
+const QUEUED_ELEMENT_CAP = 128;
 // Pointer taps are boundary-crossing events; settles run at ~100ms cadence
 // while the pointer moves, so this is generous for one window.
 const POINTER_POINT_CAP = 32;
@@ -201,9 +205,25 @@ function cellIndex(x: number, y: number, vw: number, vh: number): number {
   return row * GRID + col;
 }
 
+// Pointer coords mark a 3×3 CELL NEIGHBORHOOD, not just the crossed cell.
+// Soak 2b caught the hole live (tldraw, occlusion_memo:diverged
+// false->true on a pointer-driven settle): a pure-CSS :hover paint —
+// no record of any kind — extended into the cell NEXT to the one the
+// pointer crossed. The neighborhood (~1/3 viewport span around the cursor
+// on the 8×8 grid) bounds hover paints anchored near their trigger; the
+// pointerover target element is queued separately for paints sized to the
+// trigger's own box.
 function markPoint(x: number, y: number, vw: number, vh: number): void {
   if (x < 0 || y < 0 || x > vw || y > vh) return;
-  dirtyCells[cellIndex(x, y, vw, vh)] = 1;
+  const col = Math.min(GRID - 1, Math.max(0, Math.floor((x / vw) * GRID)));
+  const row = Math.min(GRID - 1, Math.max(0, Math.floor((y / vh) * GRID)));
+  for (let dr = -1; dr <= 1; dr++) {
+    for (let dc = -1; dc <= 1; dc++) {
+      const rr = row + dr, cc = col + dc;
+      if (rr < 0 || rr >= GRID || cc < 0 || cc >= GRID) continue;
+      dirtyCells[rr * GRID + cc] = 1;
+    }
+  }
 }
 
 // Every cell the rect's viewport-clamped extent overlaps (null when the

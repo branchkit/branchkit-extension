@@ -172,6 +172,19 @@ describe('dirty cells', () => {
     expect(lifecycleCounters.occlusionMemoRetestCells).toBe(1);
   });
 
+  it('a pointer tap dirties the neighboring cells too (hover paints extend past the crossed cell)', () => {
+    const adjacent = wrapper();
+    const adjacentRect = rect(220, 170, 40, 30); // one cell over from the pointer's cell
+    const far = wrapper();
+    const farRect = rect(600, 450, 100, 50);
+    gatherOnce([[adjacent, adjacentRect, false], [far, farRect, false]]);
+
+    occlusionMemoNotePointer(150, 125); // cell (1,1); neighborhood spans rows/cols 0-2
+    gatherOnce([[adjacent, adjacentRect, false], [far, farRect, false]]);
+    expect(lifecycleCounters.occlusionMemoRetestCells).toBe(1);
+    expect(lifecycleCounters.occlusionMemoReuse).toBe(1);
+  });
+
   it('cells reset after the gather consumes them', () => {
     const w = wrapper();
     const r = rect(100, 100, 100, 50);
@@ -200,8 +213,8 @@ describe('fail-open taps', () => {
 
   it('more than K queued elements fails open', () => {
     gatherOnce([[wrapper(), rect(100, 100, 100, 50), false]]);
-    for (let i = 0; i < 33; i++) {
-      occlusionMemoNoteTarget(elementAt(rect(10 * i, 10, 5, 5)));
+    for (let i = 0; i < 129; i++) {
+      occlusionMemoNoteTarget(elementAt(rect((i % 100) * 8, 10, 5, 5)));
     }
     expect(lifecycleCounters.occlusionMemoAllDirtyBy['element-overflow']).toBe(1);
   });
