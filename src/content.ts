@@ -25,7 +25,7 @@ import type { CodewordMemoryEntry } from './labels/codeword-memory';
 import { loadRecall, recalledCodewords, rememberLive, resolvePreferredCodeword, isRecallLoaded } from './labels/codeword-recall';
 import { type RebindCounters } from './labels/rebind';
 import { resolveTarget } from './activate/activate-resolution';
-import { schedulePointerVisibilitySweep, connectVisibilityMO, teardownVisibilityTracker, observeRevealCandidate } from './observe/visibility-tracker';
+import { schedulePointerVisibilitySweep, setPointerRecheckScopeEnabled, connectVisibilityMO, teardownVisibilityTracker, observeRevealCandidate } from './observe/visibility-tracker';
 import { rebindCounters, LIMBO_DEADLINE_MS, collectLimboWrappers, collectStrongKeyIndex, dropDisconnectedWrappers, finalizeExpiredLimboWrappers, slotProbe, limboSlotLiveness } from './observe/limbo';
 import { attachWrapper, detachWrapper, seedPreferredFromMemory, attachDiscovered } from './core/wrapper-lifecycle';
 import { attachPageMutationObserver, getObserverFirstAttachedAt, teardownMutationSource, getDomAddEpoch } from './observe/mutation-source';
@@ -819,6 +819,13 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
 //   EXIT: keep on if the soak stays clean, else investigate; reconfirm at launch.
 // bkClipObserver - default ON, composes with bkOcclusion (IO-clip vs
 //   elementFromPoint hit-test). Same exit as bkOcclusion.
+// bkPointerRecheckScope - default ON (notes/DESIGN_POINTER_RECHECK_SCOPING.md):
+//   pointer-driven promote rechecks scan only the pointer target's 5th-
+//   ancestor subtree at the 100ms throttle, with a full recheck ~300ms after
+//   the pointer settles as the remote-reveal backstop. EXIT: watch the
+//   scoped/full cpu buckets + visibilityPromoteScopedSkips; the tell for a
+//   scope miss is a hover-revealed control whose badge appears only after
+//   the pointer pauses (~300ms late) — `false` restores full-set rechecks.
 // bkOcclusionMemo - default ON = AUTHORITATIVE (notes/DESIGN_OCCLUSION_
 //   HITTEST_MEMO.md): a dirty-region cache hit skips the batch-3
 //   elementFromPoint probes. Flipped 2026-07-16 after a zero-divergence
@@ -848,6 +855,15 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
     setOcclusionEnabled(result.bkOcclusion !== false);
     if (harnessHooksEnabled()) {
       document.documentElement.setAttribute('data-bk-occlusion', result.bkOcclusion !== false ? 'on' : 'off');
+    }
+  });
+  chrome.storage.local.get('bkPointerRecheckScope', (result) => {
+    // Pointer-recheck subtree scoping (see the registry above). Only an
+    // explicit `false` disables.
+    const on = result.bkPointerRecheckScope !== false;
+    setPointerRecheckScopeEnabled(on);
+    if (harnessHooksEnabled()) {
+      document.documentElement.setAttribute('data-bk-pointer-recheck-scope', on ? 'on' : 'off');
     }
   });
   chrome.storage.local.get('bkOcclusionMemo', (result) => {
@@ -4444,7 +4460,10 @@ pageSession.resources.listen(document, 'animationend', scheduleDeferredRepositio
 pageSession.resources.listen(document, 'pointerover', (e: PointerEvent) => {
   occlusionMemoNotePointer(e.clientX, e.clientY);
   if (e.target instanceof Element) occlusionMemoNoteTarget(e.target);
-  schedulePointerVisibilitySweep();
+  // The target scopes the throttled promote to its ancestor subtree
+  // (notes/DESIGN_POINTER_RECHECK_SCOPING.md); a trailing full sweep
+  // inside the tracker backstops remote reveals.
+  schedulePointerVisibilitySweep(e.target instanceof Element ? e.target : undefined);
 }, { passive: true, capture: true });
 // Pointer left the window entirely: the `:hover` reveal collapses back to
 // visibility:hidden, but no further `pointerover` fires to catch it, so the badge
@@ -4459,7 +4478,9 @@ pageSession.resources.listen(document, 'pointerout', (e: PointerEvent) => {
   // crossing, not just window exit); the sweep keeps its null-check gate.
   occlusionMemoNotePointer(e.clientX, e.clientY);
   if (e.target instanceof Element) occlusionMemoNoteTarget(e.target);
-  if (e.relatedTarget === null) schedulePointerVisibilitySweep();
+  if (e.relatedTarget === null) {
+    schedulePointerVisibilitySweep(e.target instanceof Element ? e.target : undefined);
+  }
 }, { passive: true, capture: true });
 // Window resize covers genuine viewport changes (drag corner, device
 // rotation, DevTools open/close) AND browser zoom (Cmd+= reflows the

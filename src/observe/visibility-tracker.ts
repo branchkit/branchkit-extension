@@ -46,6 +46,7 @@ import { firehoseStep, describeMutation } from '../debug/firehose';
 import { harnessHooksEnabled } from '../debug/harness-hooks';
 import { mutationTouchesTracked } from './mutation-relevance';
 import { occlusionMemoNoteMutations } from './occlusion-memo';
+import { composedContains } from './occlusion';
 import { store } from '../core/store';
 import { attachWrapper } from '../core/wrapper-lifecycle';
 import { pageSession } from '../lifecycle/page-session';
@@ -213,7 +214,9 @@ export function constructVisibilityObservers(): void {
 function scheduleVisibilitySweep(source: string): void {
   if (!visibilityRafPending) {
     visibilityRafPending = true;
-    requestAnimationFrame(recheckPendingVisibility);
+    // Wrapped: rAF passes its timestamp as the first argument, which must
+    // not land in recheckPendingVisibility's scope parameter.
+    requestAnimationFrame(() => recheckPendingVisibility());
   }
   pageSession.deps.schedulePassSoon(source);
 }
@@ -226,19 +229,76 @@ function scheduleVisibilitySweep(source: string): void {
 // throttle cuts that movement-driven cost ~6× while leaving the MutationObserver
 // on its fast rAF promote (which must keep up with mutation storms). The re-show
 // half is already 100ms-throttled and shared.
+//
+// Subtree scoping (notes/DESIGN_POINTER_RECHECK_SCOPING.md): a pure-CSS
+// :hover reveal is driven by `X:hover .candidate` where X is on the pointer
+// target's ancestor chain — in real UIs the revealed control sits close to
+// its trigger. The throttled promote therefore scans only candidates inside
+// the pointer target's Nth-ancestor subtree (composed-tree containment, no
+// layout reads), and a trailing FULL recheck fires once the pointer settles
+// (~300ms idle) as the backstop for remote reveals (`:has()`-portal class):
+// bounded degradation — worst case a scope-missed reveal promotes ~300ms
+// later than today, never a permanent miss. The MO/RO rAF path is untouched.
 let promoteThrottlePending = false;
 const PROMOTE_THROTTLE_MS = 100;
+const POINTER_IDLE_FULL_MS = 300;
+const SCOPE_ANCESTOR_DEPTH = 5;
+let pointerScopeTarget: Element | null = null;
+let pointerIdleTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Kill switch (bkPointerRecheckScope, default ON; explicit false restores
+// full-set rechecks on every pointer tick — denylist posture).
+let pointerScopeEnabled = true;
+export function setPointerRecheckScopeEnabled(on: boolean): void {
+  pointerScopeEnabled = on;
+}
+
+function composedParent(el: Element): Element | null {
+  if (el.parentElement) return el.parentElement;
+  const root = el.getRootNode();
+  return root instanceof ShadowRoot ? root.host : null;
+}
+
+// The subtree root the scoped promote scans under: the pointer target's
+// Nth composed ancestor (short pages/shallow targets just reach the root
+// element, degrading gracefully to a full scan).
+function scopeRootFor(el: Element): Element {
+  let cur = el;
+  for (let i = 0; i < SCOPE_ANCESTOR_DEPTH; i++) {
+    const p = composedParent(cur);
+    if (!p) break;
+    cur = p;
+  }
+  return cur;
+}
+
 function schedulePromoteThrottled(): void {
   if (promoteThrottlePending) return;
   promoteThrottlePending = true;
   setTimeout(() => {
     promoteThrottlePending = false;
-    recheckPendingVisibility();
+    recheckPendingVisibility(
+      pointerScopeEnabled ? pointerScopeTarget ?? undefined : undefined,
+    );
   }, PROMOTE_THROTTLE_MS);
 }
 
-export function schedulePointerVisibilitySweep(): void {
+export function schedulePointerVisibilitySweep(target?: Element): void {
+  // Latest target wins for the 100ms window — its crossings are spatially
+  // adjacent, and the trailing full sweep covers any drift.
+  if (target) pointerScopeTarget = target;
   schedulePromoteThrottled();
+  if (pointerScopeEnabled) {
+    // Trailing full recheck once the pointer settles: reset on every
+    // pointer event, so it runs ONCE per hover-pause instead of 10×/sec
+    // during movement. Fires on an empty/torn-down set harmlessly (same
+    // posture as the promote throttle's timer).
+    if (pointerIdleTimer !== null) clearTimeout(pointerIdleTimer);
+    pointerIdleTimer = setTimeout(() => {
+      pointerIdleTimer = null;
+      recheckPendingVisibility();
+    }, POINTER_IDLE_FULL_MS);
+  }
   // RE-SHOW half: demoted to the settle pass (Phase E) — the plan's
   // toShow/toHide/cssHidden derivation converges hinted badges, including
   // the "user just hid" guard (the pipeline gates on badgesVisible) and the
@@ -294,19 +354,38 @@ function disconnectVisibilityMO(): void {
   pageSession.visibilityMOConnected = false;
 }
 
-function recheckPendingVisibility(): void {
+function recheckPendingVisibility(scope?: Element): void {
   const __cpuStart = performance.now();
   const __initialSize = pendingVisibility.size;
   visibilityRafPending = false;
   let dirty = false;
+  // Scoped (pointer-driven) variant: only candidates inside the pointer
+  // target's Nth-ancestor subtree. Containment is a pure tree walk — the
+  // layout-read savings come from cacheVisibility and scanSingle running
+  // over the subset instead of the whole parked set.
+  let candidates: Iterable<Element> = pendingVisibility;
+  const __label = scope ? 'recheckPendingVisibilityScoped' : 'recheckPendingVisibility';
+  if (scope !== undefined) {
+    const root = scopeRootFor(scope);
+    const subset: Element[] = [];
+    for (const el of pendingVisibility) {
+      if (composedContains(root, el)) subset.push(el);
+    }
+    lifecycleCounters.visibilityPromoteScopedSkips += pendingVisibility.size - subset.length;
+    if (subset.length === 0) {
+      recordCpu(__label, performance.now() - __cpuStart);
+      return;
+    }
+    candidates = subset;
+  }
   // Pre-cache the union of (target + ancestor chain) so the many
   // isVisible() reads inside scanSingle share the read. Same trick as
   // drainReevaluations — siblings under one parent reuse the ancestor
   // walk's computedStyle reads. Cleared in `finally` so the next frame
   // sees live state.
-  cacheVisibility(pendingVisibility);
+  cacheVisibility(candidates);
   try {
-    for (const el of pendingVisibility) {
+    for (const el of candidates) {
       if (!el.isConnected) {
         pendingVisibility.delete(el);
         visibilityIO?.unobserve(el);
@@ -333,8 +412,8 @@ function recheckPendingVisibility(): void {
   // attachWrapper above emits a store attach delta → grammar sync (Tier 2).
   if (dirty && pageSession.badgesVisible) pageSession.deps.showBadges();
   if (pendingVisibility.size === 0) disconnectVisibilityMO();
-  recordCpu('recheckPendingVisibility', performance.now() - __cpuStart);
-  if (__initialSize > 0) recordCpu(`recheckPendingVisibility:size:${__initialSize > 1000 ? '1000+' : __initialSize > 100 ? '100-1000' : '<100'}`, __initialSize);
+  recordCpu(__label, performance.now() - __cpuStart);
+  if (__initialSize > 0) recordCpu(`${__label}:size:${__initialSize > 1000 ? '1000+' : __initialSize > 100 ? '100-1000' : '<100'}`, __initialSize);
 }
 
 /**
@@ -387,6 +466,11 @@ export function teardownVisibilityTracker(): void {
   try { visibilityMO?.disconnect(); } catch { /* idempotent */ }
   try { visibilityRO?.disconnect(); } catch { /* idempotent */ }
   pendingVisibility.clear();
+  pointerScopeTarget = null;
+  if (pointerIdleTimer !== null) {
+    clearTimeout(pointerIdleTimer);
+    pointerIdleTimer = null;
+  }
 }
 
 // Test seams: happy-dom constructs the observers but never delivers entries,

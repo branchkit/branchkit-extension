@@ -1,5 +1,14 @@
 # Pointer-recheck subtree scoping — design
 
+**IMPLEMENTED 2026-07-16** per the sketch below (visibility-tracker.ts:
+scoped promote at the 100ms throttle, 300ms pointer-idle full backstop,
+bkPointerRecheckScope kill switch, scoped/full cpu-bucket split +
+visibilityPromoteScopedSkips). Implementation caught one live bug the
+sketch missed: the rAF-scheduled MO-path recheck passed its TIMESTAMP into
+the new scope parameter — wrapped in a closure. Live verification pending:
+the QuickBase hover-the-report check + before/after
+recheckPendingVisibility totals from the trail.
+
 2026-07-16. Next lever from the long-session perf audit after the occlusion
 memo: `recheckPendingVisibility` measured 3.6s / 4,364 calls over a 25-min
 active window. Design-first on purpose: this touches the temperamental

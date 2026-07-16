@@ -443,6 +443,12 @@ export interface LifecycleCounters {
   // or failing open (the Gmail-tick residual class).
   occlusionMemoTransientDrops: number;
   occlusionMemoAllDirtyBy: Record<string, number>;
+  // Pointer-recheck subtree scoping (notes/DESIGN_POINTER_RECHECK_SCOPING.md):
+  // parked candidates excluded from a pointer-driven promote scan by the
+  // Nth-ancestor scope. Read with the recheckPendingVisibilityScoped vs
+  // recheckPendingVisibility cpu buckets — scoped ≈ full sizes on real
+  // pages would mean the scope buys nothing.
+  visibilityPromoteScopedSkips: number;
   // Cumulative wrapper attaches by discovery source (attachWrapper stamps
   // the same value on the wrapper — see DiscoverySource in element-wrapper).
   // Window-scoped per-source latency lives in the debug snapshot's
@@ -481,6 +487,7 @@ export const lifecycleCounters: LifecycleCounters = {
   occlusionMemoVanishLocalized: 0,
   occlusionMemoTransientDrops: 0,
   occlusionMemoAllDirtyBy: {},
+  visibilityPromoteScopedSkips: 0,
   attachedBySource: {},
 };
 

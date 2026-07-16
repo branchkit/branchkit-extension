@@ -22,6 +22,8 @@ import {
   trackPendingCandidate,
   untrackPendingCandidate,
   teardownVisibilityTracker,
+  schedulePointerVisibilitySweep,
+  setPointerRecheckScopeEnabled,
   __testing,
 } from './visibility-tracker';
 
@@ -159,5 +161,92 @@ describe('layer-3 parked ResizeObserver signal (round 21)', () => {
     expect(store.findWrapperFor(anchor)?.discoverySource).toBe('visibility');
     expect(__testing.isPending(anchor)).toBe(false);
     anchor.remove();
+  });
+});
+
+describe('pointer-recheck subtree scoping (notes/DESIGN_POINTER_RECHECK_SCOPING.md)', () => {
+  function hintableAnchor(label: string): HTMLAnchorElement {
+    const a = document.createElement('a');
+    a.setAttribute('href', '/x');
+    a.setAttribute('aria-label', label);
+    a.getBoundingClientRect = () =>
+      ({ top: 100, left: 40, bottom: 120, right: 200, width: 160, height: 20, x: 40, y: 100, toJSON: () => ({}) }) as DOMRect;
+    return a;
+  }
+
+  /** Two parked, now-hintable candidates in two separate deep subtrees plus
+   * a pointer target next to the first — the scope discriminator fixture. */
+  function fixture() {
+    store.clear();
+    idRegistry.clear();
+    pageSession.tracker = { observe: vi.fn(), unobserve: vi.fn() } as unknown as IntersectionTracker;
+    pageSession.resizeObserver = { observe: vi.fn(), unobserve: vi.fn(), disconnect: vi.fn() } as unknown as ResizeObserver;
+    pageSession.deps = {
+      ...(pageSession.deps ?? {}),
+      schedulePassSoon: vi.fn(),
+      showBadges: vi.fn(),
+    } as never;
+
+    // Deep chains so the 5th-ancestor scope root stays inside each branch.
+    const mk = (label: string) => {
+      let root = document.createElement('div');
+      document.body.appendChild(root);
+      const branchTop = root;
+      for (let i = 0; i < 7; i++) {
+        const next = document.createElement('div');
+        root.appendChild(next);
+        root = next;
+      }
+      const cand = hintableAnchor(label);
+      root.appendChild(cand);
+      const pointerSpot = document.createElement('span');
+      root.appendChild(pointerSpot);
+      return { branchTop, cand, pointerSpot };
+    };
+    const near = mk('Near, Control');
+    const far = mk('Far, Control');
+    trackPendingCandidate(near.cand);
+    trackPendingCandidate(far.cand);
+    return { near, far };
+  }
+
+  it('a scoped recheck promotes only candidates inside the pointer subtree', () => {
+    const { near, far } = fixture();
+    const skipsBefore = lifecycleCounters.visibilityPromoteScopedSkips;
+
+    __testing.recheckNow(near.pointerSpot);
+    expect(store.findWrapperFor(near.cand)).toBeDefined();
+    expect(store.findWrapperFor(far.cand)).toBeUndefined();
+    expect(__testing.isPending(far.cand)).toBe(true);
+    expect(lifecycleCounters.visibilityPromoteScopedSkips).toBe(skipsBefore + 1);
+
+    // The full (backstop) recheck picks up the remote candidate.
+    __testing.recheckNow();
+    expect(store.findWrapperFor(far.cand)).toBeDefined();
+  });
+
+  it('pointer sweep: scoped promote at the throttle, full backstop at pointer idle', () => {
+    const { near, far } = fixture();
+
+    schedulePointerVisibilitySweep(near.pointerSpot);
+    vi.advanceTimersByTime(100); // promote throttle → scoped
+    expect(store.findWrapperFor(near.cand)).toBeDefined();
+    expect(store.findWrapperFor(far.cand)).toBeUndefined();
+
+    vi.advanceTimersByTime(300); // pointer idle → full backstop
+    expect(store.findWrapperFor(far.cand)).toBeDefined();
+  });
+
+  it('kill switch off: the throttled promote is full-set again', () => {
+    const { near, far } = fixture();
+    try {
+      setPointerRecheckScopeEnabled(false);
+      schedulePointerVisibilitySweep(near.pointerSpot);
+      vi.advanceTimersByTime(100);
+      expect(store.findWrapperFor(near.cand)).toBeDefined();
+      expect(store.findWrapperFor(far.cand)).toBeDefined();
+    } finally {
+      setPointerRecheckScopeEnabled(true);
+    }
   });
 });
