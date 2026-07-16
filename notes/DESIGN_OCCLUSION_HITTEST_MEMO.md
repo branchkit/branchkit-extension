@@ -252,6 +252,22 @@ pause). K → 128 (~30s of coverage; resolve reads are clean-layout
 lookups). tldraw itself: vanishLocalized 103, resolve-vanished 693 — the
 history mechanism works where windows stay short. Re-soaking (soak 3).
 
+**Shadow soak 3 (2026-07-16): diverged=0 on every host — gate met,
+AUTHORITATIVE restored.** tldraw re-exercised clean under the neighborhood
+fix. QuickBase converged completely: resolve-vanished 0 (was the top
+fail-open), one scroll all-dirty in the whole session, reuse 1,044.
+Gmail/YouTube still burn resolve-vanished windows with vanishLocalized=0 —
+diagnosed shape: elements ADDED AND REMOVED within one inter-settle window
+(Gmail's tick between rare gathers) can never carry history.
+
+Queued next lever — **transient-skip** (needs its own shadow round; it
+changes tap semantics): a disconnected no-history element that was queued
+as an ADDED node within this same window existed at NEITHER gather
+boundary, so it cannot affect either gather's answer — skip it instead of
+failing open. Provably sound at gather granularity; implementation =
+pendingElements as Map<Element,{addedThisWindow}> merged with OR. Expected
+to zero Gmail/YT's residual resolve-vanished windows.
+
 ## Open questions
 
 - Grid size / K cap tuning (start 8×8 / 16, revisit with Phase-1 counters).
