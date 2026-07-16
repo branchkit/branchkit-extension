@@ -28,6 +28,18 @@ import { effectiveVisualBox } from '../scan/scanner';
 
 let occlusionEnabled = false;
 
+// Phase-0 cost decomposition (notes/DESIGN_OCCLUSION_HITTEST_MEMO.md): true
+// elementFromPoint call count. Element count ≠ probe count — off-viewport
+// sample points skip the call and the majority vote early-exits — so the
+// memoization decision needs the real number. Drained by the settle gather
+// around read batch 3.
+let efpCalls = 0;
+export function drainElementFromPointCalls(): number {
+  const n = efpCalls;
+  efpCalls = 0;
+  return n;
+}
+
 export function setOcclusionEnabled(enabled: boolean): void {
   occlusionEnabled = enabled;
 }
@@ -176,6 +188,7 @@ export function isOccluded(el: Element): boolean {
     // Off-viewport points hit-test to null → not-covered (don't hide a target
     // that's partly scrolled past the viewport edge).
     const inViewport = x >= 0 && y >= 0 && x <= vw && y <= vh;
+    if (inViewport) efpCalls++;
     const hit = inViewport ? doc.elementFromPoint(x, y) : null;
     if (isHitOccluding(el, hit)) covered++;
     if (covered >= OCCLUDED_MAJORITY) return true;

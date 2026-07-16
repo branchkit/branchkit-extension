@@ -28,7 +28,7 @@ import { ElementWrapper } from '../scan/element-wrapper';
 import { isVisible } from '../scan/scanner';
 import { cacheVisibility, clearLayoutCache, peekCachedRect } from '../layout-cache';
 import { isAncestorChainInVisibleViewport } from './strict-viewport';
-import { isOccluded, isOcclusionEnabled } from '../observe/occlusion';
+import { isOccluded, isOcclusionEnabled, drainElementFromPointCalls } from '../observe/occlusion';
 import { recordCpu } from '../debug/perf-counters';
 
 export interface SettleGather {
@@ -103,8 +103,10 @@ export function gatherSettleReads(wrappers: readonly ElementWrapper[]): SettleGa
   const ancestorChainVisible = isAncestorChainInVisibleViewport(window);
 
   // Read batch 1: seed rects + ancestor styles for the visibility set.
+  const __b1Start = performance.now();
   const counts = cacheVisibility(visSet.map(w => w.element));
   let rectReads = counts.rects;
+  const __b1End = performance.now();
 
   // Read batch 2: rects for the rest of the rect set (vis-set members come
   // out of the warm cache).
@@ -121,11 +123,15 @@ export function gatherSettleReads(wrappers: readonly ElementWrapper[]): SettleGa
   // Resolve CSS visibility against the warm cache (style reads were batch 1).
   const cssVisible = new Map<ElementWrapper, boolean>();
   for (const w of visSet) cssVisible.set(w, isVisible(w.element));
+  const __b2End = performance.now();
 
   // Read batch 3: occlusion hit-tests over the visible badge set. Pure reads
   // (elementFromPoint + the target rect), still against clean layout.
+  drainElementFromPointCalls();
   const overlayCovered = new Map<ElementWrapper, boolean>();
   for (const w of occlusionSet) overlayCovered.set(w, isOccluded(w.element));
+  const efpCalls = drainElementFromPointCalls();
+  const __b3End = performance.now();
 
   clearLayoutCache();
 
@@ -134,6 +140,13 @@ export function gatherSettleReads(wrappers: readonly ElementWrapper[]): SettleGa
   recordCpu('settleGather:size:gbcr', rectReads);
   recordCpu('settleGather:size:gcs', counts.styles);
   if (occlusionSet.length > 0) recordCpu('settleGather:size:hitTests', occlusionSet.length);
+  // Phase-0 cost decomposition (notes/DESIGN_OCCLUSION_HITTEST_MEMO.md):
+  // per-batch wall time + TRUE elementFromPoint call count. The memoization
+  // design only gets built if b3 dominates the QuickBase gather.
+  recordCpu('settleGather:b1_visibility', __b1End - __b1Start);
+  recordCpu('settleGather:b2_rects', __b2End - __b1End);
+  recordCpu('settleGather:b3_occlusion', __b3End - __b2End);
+  if (efpCalls > 0) recordCpu('settleGather:size:efpCalls', efpCalls);
   recordCpu('settleGather', performance.now() - __cpuStart);
 
   return { vw, vh, ancestorChainVisible, rects, cssVisible, overlayCovered };
