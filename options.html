@@ -478,50 +478,76 @@
     <h1 id="sec-badge" class="sec" style="margin-top: 40px">Badge appearance</h1>
     <div class="subtitle">
       Tune the size and placement of badges. Changes apply live to every
-      tab. The preview on the right shows one sample per font bucket, with
-      the computed badge font underneath.
+      open tab — the fastest loop is this page side-by-side with a real
+      site. The preview shows one sample per font bucket.
     </div>
     <div id="badge-settings" class="rule">
       <div style="display: grid; grid-template-columns: 1fr 240px; gap: 24px; padding: 16px">
         <div>
-          <h3 style="margin: 0 0 8px 0; font-size: 14px">Size</h3>
-          <div class="badge-row">
-            <label>Scale (×target font)</label>
-            <input type="number" id="bs-scale" step="0.05" min="0.4" max="1.2">
+          <div class="bs-presets">
+            <button type="button" class="bs-preset" data-preset="subtle">Subtle</button>
+            <button type="button" class="bs-preset" data-preset="default">Default</button>
+            <button type="button" class="bs-preset" data-preset="prominent">Prominent</button>
           </div>
           <div class="badge-row">
-            <label>Min font (px)</label>
-            <input type="number" id="bs-fontMin" step="1" min="6" max="20">
-          </div>
-          <div class="badge-row">
-            <label>Max font (px)</label>
-            <input type="number" id="bs-fontMax" step="1" min="8" max="24">
-          </div>
-          <h3 style="margin: 16px 0 8px 0; font-size: 14px">Nudge ratios (0 = above/left of text, 1 = inside target)</h3>
-          <div class="badge-row">
-            <label>Small font (&lt;15px) — X / Y</label>
-            <span>
-              <input type="number" id="bs-nudgeXSmall" step="0.05" min="0" max="1">
-              <input type="number" id="bs-nudgeYSmall" step="0.05" min="0" max="1">
+            <label>Badge size (px on 14px text)</label>
+            <span class="bs-pair">
+              <input type="range" id="bs-size" min="6" max="18" step="0.5">
+              <input type="number" id="bs-size-num" min="6" max="18" step="0.5">
             </span>
           </div>
           <div class="badge-row">
-            <label>Medium font (&lt;20px) — X / Y</label>
-            <span>
-              <input type="number" id="bs-nudgeXMed" step="0.05" min="0" max="1">
-              <input type="number" id="bs-nudgeYMed" step="0.05" min="0" max="1">
+            <label>Overlap — horizontal</label>
+            <span class="bs-pair">
+              <input type="range" id="bs-overlapX" min="0" max="1" step="0.05">
+              <input type="number" id="bs-overlapX-num" min="0" max="1" step="0.05">
             </span>
           </div>
           <div class="badge-row">
-            <label>Large font (≥20px) — X / Y</label>
-            <span>
-              <input type="number" id="bs-nudgeXLarge" step="0.05" min="0" max="1">
-              <input type="number" id="bs-nudgeYLarge" step="0.05" min="0" max="1">
+            <label>Overlap — vertical</label>
+            <span class="bs-pair">
+              <input type="range" id="bs-overlapY" min="0" max="1" step="0.05">
+              <input type="number" id="bs-overlapY-num" min="0" max="1" step="0.05">
             </span>
           </div>
-          <div style="margin-top: 16px">
-            <button id="bs-reset">Reset to defaults</button>
+          <div class="bs-note">
+            Overlap: 0 = badge sits fully outside the text, 1 = tucked fully
+            inside. The sliders move all three font buckets together,
+            preserving their relative offsets.
           </div>
+          <details id="bs-advanced">
+            <summary>Advanced</summary>
+            <div class="badge-row">
+              <label>Min font (px)</label>
+              <input type="number" id="bs-fontMin" step="1" min="6" max="20">
+            </div>
+            <div class="badge-row">
+              <label>Max font (px)</label>
+              <input type="number" id="bs-fontMax" step="1" min="8" max="24">
+            </div>
+            <h3 style="margin: 12px 0 8px 0; font-size: 13px">Per-bucket overlap (X / Y)</h3>
+            <div class="badge-row">
+              <label>Small font (&lt;15px)</label>
+              <span>
+                <input type="number" id="bs-nudgeXSmall" step="0.05" min="0" max="1">
+                <input type="number" id="bs-nudgeYSmall" step="0.05" min="0" max="1">
+              </span>
+            </div>
+            <div class="badge-row">
+              <label>Medium font (&lt;20px)</label>
+              <span>
+                <input type="number" id="bs-nudgeXMed" step="0.05" min="0" max="1">
+                <input type="number" id="bs-nudgeYMed" step="0.05" min="0" max="1">
+              </span>
+            </div>
+            <div class="badge-row">
+              <label>Large font (≥20px)</label>
+              <span>
+                <input type="number" id="bs-nudgeXLarge" step="0.05" min="0" max="1">
+                <input type="number" id="bs-nudgeYLarge" step="0.05" min="0" max="1">
+              </span>
+            </div>
+          </details>
         </div>
         <div style="border-left: 1px solid var(--border); padding-left: 24px">
           <h3 style="margin: 0 0 8px 0; font-size: 14px">Preview</h3>
@@ -554,6 +580,15 @@
       .badge-row span input { margin-left: 4px; }
       .bs-sample { line-height: 1.4; position: relative; display: inline-block; align-self: flex-start; }
       .bs-chip { position: absolute; font-weight: bold; border: 1px solid #806600; border-radius: 3px; padding: 0 0.1em; background: #ffd966; color: #000; white-space: nowrap; line-height: 1.2; }
+      .bs-presets { display: flex; gap: 8px; margin-bottom: 14px; }
+      .bs-preset { font: inherit; font-size: 12px; padding: 3px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--card); color: var(--fg); cursor: pointer; }
+      .bs-preset:hover { border-color: var(--accent); color: var(--accent); }
+      .bs-pair { display: inline-flex; align-items: center; gap: 8px; }
+      .bs-pair input[type=range] { width: 110px; accent-color: var(--accent); }
+      .bs-note { font-size: 12px; color: var(--fg-muted); margin-top: 10px; }
+      #bs-advanced { margin-top: 16px; }
+      #bs-advanced summary { cursor: pointer; font-size: 13px; color: var(--fg-muted); }
+      #bs-advanced[open] summary { margin-bottom: 10px; }
     </style>
 
     <template id="rule-template">

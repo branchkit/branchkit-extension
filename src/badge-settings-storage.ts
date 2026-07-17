@@ -24,8 +24,10 @@ export interface BadgeSettings {
 
 export const DEFAULT_BADGE_SETTINGS: BadgeSettings = {
   scale: 0.8,
-  fontMin: 10,
-  fontMax: 12,
+  // Clamp is a wide guard rail, not the effective size control — the old
+  // [10,12] window swallowed the scale entirely on typical 13-16px text.
+  fontMin: 8,
+  fontMax: 18,
   nudgeXSmall: 0.3,
   nudgeYSmall: 0.2,
   nudgeXMed: 0.4,

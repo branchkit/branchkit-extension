@@ -40,7 +40,6 @@ import {
   DEFAULT_BADGE_SETTINGS,
   loadBadgeSettings,
   saveBadgeSettings,
-  resetBadgeSettings,
   onBadgeSettingsChanged,
 } from './badge-settings-storage';
 import { initKeymapEditor } from './keymap-options';
@@ -765,35 +764,62 @@ function initSideNav(): void {
 
 // --- Badge appearance ---
 
-const BADGE_FIELDS: Array<keyof BadgeSettings> = [
-  'scale', 'fontMin', 'fontMax',
+// Advanced number inputs bind 1:1 to storage keys. The primary controls
+// (size, overlap X/Y) are derived views over the same BadgeSettings —
+// size quotes the badge font at a nominal 14px target, overlap moves all
+// three nudge buckets together.
+const BADGE_ADV_FIELDS: Array<keyof BadgeSettings> = [
+  'fontMin', 'fontMax',
   'nudgeXSmall', 'nudgeYSmall',
   'nudgeXMed', 'nudgeYMed',
   'nudgeXLarge', 'nudgeYLarge',
 ];
 
+const BADGE_PRESETS: Record<string, BadgeSettings> = {
+  subtle: { ...DEFAULT_BADGE_SETTINGS, scale: 0.65, fontMin: 7, fontMax: 10 },
+  default: { ...DEFAULT_BADGE_SETTINGS },
+  prominent: { ...DEFAULT_BADGE_SETTINGS, scale: 1.0, fontMin: 10, fontMax: 20 },
+};
+
+const BADGE_NORMAL_TEXT_PX = 14;
 const BADGE_SAVE_DEBOUNCE_MS = 250;
 let badgeSaveTimer: ReturnType<typeof setTimeout> | null = null;
 let suppressBadgeChangeEcho = false;
+// Single source of truth for the form; every control mutates this and
+// re-syncs the others (skipping the control being edited, so typing in a
+// number box isn't clobbered mid-keystroke).
+let badgeCurrent: BadgeSettings = { ...DEFAULT_BADGE_SETTINGS };
 
-function readBadgeForm(): BadgeSettings {
-  const out = { ...DEFAULT_BADGE_SETTINGS };
-  for (const key of BADGE_FIELDS) {
-    const el = document.getElementById(`bs-${key}`) as HTMLInputElement | null;
-    if (!el) continue;
-    const v = parseFloat(el.value);
-    if (Number.isFinite(v)) (out as Record<string, number>)[key] = v;
-  }
-  return out;
+function clamp01(v: number): number {
+  return Math.min(Math.max(v, 0), 1);
 }
 
-function writeBadgeForm(s: BadgeSettings): void {
-  for (const key of BADGE_FIELDS) {
-    const el = document.getElementById(`bs-${key}`) as HTMLInputElement | null;
-    if (!el) continue;
-    el.value = String(s[key]);
-  }
+function setBadgeInput(id: string, value: number, except?: HTMLElement): void {
+  const el = document.getElementById(id) as HTMLInputElement | null;
+  if (!el || el === except) return;
+  // Trim float noise from overlap-delta arithmetic (0.30000000000000004).
+  el.value = String(Math.round(value * 1000) / 1000);
+}
+
+function syncBadgeControls(except?: HTMLElement): void {
+  const s = badgeCurrent;
+  const sizePx = Math.round(s.scale * BADGE_NORMAL_TEXT_PX * 2) / 2;
+  setBadgeInput('bs-size', sizePx, except);
+  setBadgeInput('bs-size-num', sizePx, except);
+  setBadgeInput('bs-overlapX', s.nudgeXSmall, except);
+  setBadgeInput('bs-overlapX-num', s.nudgeXSmall, except);
+  setBadgeInput('bs-overlapY', s.nudgeYSmall, except);
+  setBadgeInput('bs-overlapY-num', s.nudgeYSmall, except);
+  for (const key of BADGE_ADV_FIELDS) setBadgeInput(`bs-${key}`, s[key], except);
   updateBadgePreview(s);
+}
+
+function scheduleBadgeSave(): void {
+  if (badgeSaveTimer) clearTimeout(badgeSaveTimer);
+  badgeSaveTimer = setTimeout(() => {
+    suppressBadgeChangeEcho = true;
+    saveBadgeSettings(badgeCurrent);
+  }, BADGE_SAVE_DEBOUNCE_MS);
 }
 
 // One preview sample per nudge bucket, pegged to a representative target
@@ -832,29 +858,55 @@ function updateBadgePreview(s: BadgeSettings): void {
   if (readout) readout.textContent = lines.join('\n');
 }
 
-async function initBadgeSettings(): Promise<void> {
-  const current = await loadBadgeSettings();
-  writeBadgeForm(current);
-
-  for (const key of BADGE_FIELDS) {
-    const el = document.getElementById(`bs-${key}`) as HTMLInputElement | null;
+function bindBadgeControl(ids: string[], apply: (v: number) => void): void {
+  for (const id of ids) {
+    const el = document.getElementById(id) as HTMLInputElement | null;
     if (!el) continue;
     el.addEventListener('input', () => {
-      const next = readBadgeForm();
-      updateBadgePreview(next);
-      if (badgeSaveTimer) clearTimeout(badgeSaveTimer);
-      badgeSaveTimer = setTimeout(() => {
-        suppressBadgeChangeEcho = true;
-        saveBadgeSettings(next);
-      }, BADGE_SAVE_DEBOUNCE_MS);
+      const v = parseFloat(el.value);
+      if (!Number.isFinite(v)) return;
+      apply(v);
+      syncBadgeControls(el);
+      scheduleBadgeSave();
+    });
+  }
+}
+
+async function initBadgeSettings(): Promise<void> {
+  badgeCurrent = await loadBadgeSettings();
+  syncBadgeControls();
+
+  bindBadgeControl(['bs-size', 'bs-size-num'], (v) => {
+    badgeCurrent.scale = Math.round((v / BADGE_NORMAL_TEXT_PX) * 1000) / 1000;
+  });
+  // Overlap sliders shift all three buckets by the same delta, preserving
+  // whatever relative offsets are currently set (defaults or advanced
+  // edits). The small bucket is the slider's readback position.
+  bindBadgeControl(['bs-overlapX', 'bs-overlapX-num'], (v) => {
+    const d = v - badgeCurrent.nudgeXSmall;
+    badgeCurrent.nudgeXSmall = clamp01(v);
+    badgeCurrent.nudgeXMed = clamp01(badgeCurrent.nudgeXMed + d);
+    badgeCurrent.nudgeXLarge = clamp01(badgeCurrent.nudgeXLarge + d);
+  });
+  bindBadgeControl(['bs-overlapY', 'bs-overlapY-num'], (v) => {
+    const d = v - badgeCurrent.nudgeYSmall;
+    badgeCurrent.nudgeYSmall = clamp01(v);
+    badgeCurrent.nudgeYMed = clamp01(badgeCurrent.nudgeYMed + d);
+    badgeCurrent.nudgeYLarge = clamp01(badgeCurrent.nudgeYLarge + d);
+  });
+  for (const key of BADGE_ADV_FIELDS) {
+    bindBadgeControl([`bs-${key}`], (v) => {
+      badgeCurrent[key] = v;
     });
   }
 
-  const resetBtn = document.getElementById('bs-reset') as HTMLButtonElement | null;
-  if (resetBtn) {
-    resetBtn.addEventListener('click', () => {
-      resetBadgeSettings();
-      writeBadgeForm(DEFAULT_BADGE_SETTINGS);
+  for (const btn of document.querySelectorAll<HTMLButtonElement>('.bs-preset')) {
+    btn.addEventListener('click', () => {
+      const preset = BADGE_PRESETS[btn.dataset.preset ?? ''];
+      if (!preset) return;
+      badgeCurrent = { ...preset };
+      syncBadgeControls();
+      scheduleBadgeSave();
     });
   }
 
@@ -865,7 +917,8 @@ async function initBadgeSettings(): Promise<void> {
       suppressBadgeChangeEcho = false;
       return;
     }
-    writeBadgeForm(incoming);
+    badgeCurrent = incoming;
+    syncBadgeControls();
   });
 }
 
