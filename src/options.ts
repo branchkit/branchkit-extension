@@ -878,6 +878,11 @@ async function initBadgeSettings(): Promise<void> {
 
   bindBadgeControl(['bs-size', 'bs-size-num'], (v) => {
     badgeCurrent.scale = Math.round((v / BADGE_NORMAL_TEXT_PX) * 1000) / 1000;
+    // The clamp yields to the primary control — otherwise a narrow stored
+    // clamp (e.g. the retired [10,12] defaults still in storage.sync)
+    // silently caps the slider and it feels dead again.
+    badgeCurrent.fontMax = Math.max(badgeCurrent.fontMax, Math.ceil(v));
+    badgeCurrent.fontMin = Math.min(badgeCurrent.fontMin, Math.floor(v));
   });
   // Overlap sliders shift all three buckets by the same delta, preserving
   // whatever relative offsets are currently set (defaults or advanced
