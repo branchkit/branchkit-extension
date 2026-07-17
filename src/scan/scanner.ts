@@ -27,6 +27,25 @@ const EXCLUDE = [
 const HINTABLE_SELECTOR = HINTABLE.join(', ');
 const EXCLUDE_SELECTOR = EXCLUDE.join(', ');
 
+// A <label> is clickable only by proxy: the browser forwards activation to
+// its associated control (the `for=` target or first labelable descendant,
+// both surfaced as `label.control`). With no live control a label is plain
+// text — QuickBase's view-mode record pages keep <label> markup for field
+// names with no inputs rendered, which put dead badges on every field name.
+// Gate only the bare-`label` claim: a label that also matches another
+// hintable selector (role, tabindex, contenteditable) earns its hint on
+// those terms. A hidden-but-present control keeps its label hintable — in
+// the styled-label-over-hidden-checkbox pattern the label IS the real
+// click target. Layout-free (property reads), so safe in pass-1 filters.
+const HINTABLE_SANS_LABEL_SELECTOR = HINTABLE.filter((s) => s !== 'label').join(', ');
+
+function isOrphanLabel(el: Element): boolean {
+  if (!(el instanceof HTMLLabelElement)) return false;
+  if (el.matches(HINTABLE_SANS_LABEL_SELECTOR)) return false;
+  const ctrl = el.control;
+  return !ctrl || ('disabled' in ctrl && (ctrl as HTMLInputElement).disabled === true);
+}
+
 // --- Perf instrumentation ---
 // Counters incremented during scan + hintability checks. Exposed via
 // `window.branchkitPerfStats()` so a soak on a real page can answer
@@ -42,6 +61,7 @@ export interface PerfCounters {
   scanRejectedExclude: number;
   scanRejectedInvisible: number;
   scanRejectedRedundant: number;
+  scanRejectedOrphanLabel: number;   // bare <label> with no live associated control
   scanSkippedKnown: number;          // already-tracked, skipped before any layout read
   scanSingleCalls: number;           // scanSingle (per-element re-check via MO)
   computedStyleCalls: number;        // total getComputedStyle calls (all sites)
@@ -57,6 +77,7 @@ const perfCounters: PerfCounters = {
   scanRejectedExclude: 0,
   scanRejectedInvisible: 0,
   scanRejectedRedundant: 0,
+  scanRejectedOrphanLabel: 0,
   scanSkippedKnown: 0,
   scanSingleCalls: 0,
   computedStyleCalls: 0,
@@ -410,6 +431,7 @@ export function isHintable(el: Element): boolean {
   if (el.matches(EXCLUDE_SELECTOR)) return false;
   if (el.closest('[data-branchkit-hint]')) return false;
   if (!el.matches(HINTABLE_SELECTOR)) return false;
+  if (isOrphanLabel(el)) return false;
   if (!isVisible(el)) return false;
   if (isRedundant(el)) return false;
   return true;
@@ -419,7 +441,7 @@ export function isHintable(el: Element): boolean {
  * wrapper. Used by the debug snapshot to explain "this should have a
  * badge but doesn't" cases — the negative-space signal `BK_ACTIVATE_PATH`
  * can't surface on principle. */
-export type AlmostHintableReason = 'EXCLUDE' | 'invisible' | 'redundant';
+export type AlmostHintableReason = 'EXCLUDE' | 'invisible' | 'redundant' | 'orphan-label';
 
 export interface AlmostHintable {
   el: Element;
@@ -444,6 +466,10 @@ export function enumerateAlmostHintable(
     }
     if (el.closest('[data-branchkit-hint]')) {
       // Hint badge subtree — neither hintable nor "almost"; just noise.
+      continue;
+    }
+    if (isOrphanLabel(el)) {
+      out.push({ el, reason: 'orphan-label' });
       continue;
     }
     if (!isVisible(el)) {
@@ -527,6 +553,7 @@ function collectHintables(
     if (isKnown && isKnown(el)) { perfCounters.scanSkippedKnown++; continue; }
     if (el.matches(EXCLUDE_SELECTOR)) { perfCounters.scanRejectedExclude++; continue; }
     if (el.closest('[data-branchkit-hint]')) continue;
+    if (isOrphanLabel(el)) { perfCounters.scanRejectedOrphanLabel++; continue; }
     survivors.push(el);
   }
 

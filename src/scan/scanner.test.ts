@@ -14,7 +14,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   scanElements, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, subtreeMaybeHintable,
   deepQuerySelectorAll, getPerfCounters, resetPerfCounters, isVisible,
-  effectiveVisualBox,
+  effectiveVisualBox, isHintable,
 } from './scanner';
 
 function html(markup: string): void {
@@ -362,5 +362,46 @@ describe('effectiveVisualBox', () => {
     html(markup);
     const f = document.getElementById('f')!;
     expect(effectiveVisualBox(f)).toBe(f);
+  });
+});
+
+describe('orphan labels — bare <label> with no live associated control', () => {
+  it('rejects a label with no control (QuickBase view-mode field names)', () => {
+    html('<label id="l">Billing Address 1</label>');
+    expect(isHintable(document.getElementById('l')!)).toBe(false);
+  });
+
+  it('accepts a label associated via for=', () => {
+    html('<label id="l" for="f">City</label><input id="f" type="text">');
+    expect(isHintable(document.getElementById('l')!)).toBe(true);
+  });
+
+  it('accepts a label wrapping its control', () => {
+    html('<label id="l"><input type="checkbox">Remember me</label>');
+    expect(isHintable(document.getElementById('l')!)).toBe(true);
+  });
+
+  it('accepts a label whose control is hidden (styled-checkbox pattern)', () => {
+    html('<label id="l" for="f">Toggle</label><input id="f" type="checkbox" style="display:none">');
+    expect(isHintable(document.getElementById('l')!)).toBe(true);
+  });
+
+  it('rejects a label whose control is disabled', () => {
+    html('<label id="l" for="f">Locked</label><input id="f" type="text" disabled>');
+    expect(isHintable(document.getElementById('l')!)).toBe(false);
+  });
+
+  it('accepts an orphan label that earns hintability another way (role)', () => {
+    html('<label id="l" role="button">Act</label>');
+    expect(isHintable(document.getElementById('l')!)).toBe(true);
+  });
+
+  it('scanElements skips orphan labels and counts them', () => {
+    resetPerfCounters();
+    html('<label>Dead one</label><label>Dead two</label><label for="f">Live</label><input id="f" type="text">');
+    const { elements } = scanElements();
+    const labels = elements.filter((e) => e.type === 'label');
+    expect(labels.length).toBe(1);
+    expect(getPerfCounters().scanRejectedOrphanLabel).toBe(2);
   });
 });
