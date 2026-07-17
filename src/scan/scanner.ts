@@ -399,6 +399,18 @@ function isRedundant(el: Element): boolean {
     return false;
   }
 
+  // One badge per control: a bare <label> whose control is visible is a
+  // duplicate — the control earns its own hint (Rango and Vimium both
+  // converge on this). Gated to the bare-label claim like isOrphanLabel.
+  // Combined effect of the two label gates: a bare label is hinted ONLY
+  // when its control is alive but hidden — the styled-checkbox pattern,
+  // where the label is the one visible click surface.
+  if (el instanceof HTMLLabelElement &&
+      !el.matches(HINTABLE_SANS_LABEL_SELECTOR) &&
+      el.control && isVisible(el.control)) {
+    return true;
+  }
+
   const parent = el.parentElement;
   if (!parent) return false;
 

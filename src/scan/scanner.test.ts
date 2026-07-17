@@ -371,19 +371,29 @@ describe('orphan labels — bare <label> with no live associated control', () =>
     expect(isHintable(document.getElementById('l')!)).toBe(false);
   });
 
-  it('accepts a label associated via for=', () => {
+  it('suppresses a label whose control is visible — the control carries the hint', () => {
     html('<label id="l" for="f">City</label><input id="f" type="text">');
-    expect(isHintable(document.getElementById('l')!)).toBe(true);
+    expect(isHintable(document.getElementById('l')!)).toBe(false);
+    expect(isHintable(document.getElementById('f')!)).toBe(true);
   });
 
-  it('accepts a label wrapping its control', () => {
-    html('<label id="l"><input type="checkbox">Remember me</label>');
-    expect(isHintable(document.getElementById('l')!)).toBe(true);
+  it('suppresses a label wrapping a visible control — the control carries the hint', () => {
+    html('<label id="l"><input id="f" type="checkbox">Remember me</label>');
+    expect(isHintable(document.getElementById('l')!)).toBe(false);
+    expect(isHintable(document.getElementById('f')!)).toBe(true);
   });
 
-  it('accepts a label whose control is hidden (styled-checkbox pattern)', () => {
-    html('<label id="l" for="f">Toggle</label><input id="f" type="checkbox" style="display:none">');
+  it('keeps the label when its control is hidden (styled file-upload pattern)', () => {
+    // checkVisibility stub = the suite's stand-in for a display:none control
+    // (happy-dom has no layout; the patched 100x20 rect makes everything
+    // "visible" otherwise). type=file, not checkbox: hidden checkboxes with
+    // a visible parent are answered visible by isVisible's carve-out and
+    // carry their own badge, so their labels are correctly suppressed.
+    html('<label id="l" for="f">Upload</label><input id="f" type="file">');
+    const f = document.getElementById('f')! as Element & { checkVisibility?: () => boolean };
+    f.checkVisibility = () => false;
     expect(isHintable(document.getElementById('l')!)).toBe(true);
+    expect(isHintable(f)).toBe(false);
   });
 
   it('rejects a label whose control is disabled', () => {
@@ -396,12 +406,14 @@ describe('orphan labels — bare <label> with no live associated control', () =>
     expect(isHintable(document.getElementById('l')!)).toBe(true);
   });
 
-  it('scanElements skips orphan labels and counts them', () => {
+  it('scanElements skips orphan labels (counted) and visible-control labels (redundant)', () => {
     resetPerfCounters();
     html('<label>Dead one</label><label>Dead two</label><label for="f">Live</label><input id="f" type="text">');
     const { elements } = scanElements();
     const labels = elements.filter((e) => e.type === 'label');
-    expect(labels.length).toBe(1);
+    expect(labels.length).toBe(0);
+    expect(elements.filter((e) => e.type === 'input').length).toBe(1);
     expect(getPerfCounters().scanRejectedOrphanLabel).toBe(2);
+    expect(getPerfCounters().scanRejectedRedundant).toBe(1);
   });
 });
