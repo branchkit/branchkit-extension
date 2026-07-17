@@ -339,12 +339,15 @@ export function clampOffscreenBadgeBox(
 }
 
 function computeBadgeFontSize(target: Element): number {
-  // Targets with font-size: 0 (the common a11y-text-hiding trick on
-  // role=checkbox / role=button divs) would otherwise yield a 0px or
-  // tiny badge — `0 || 12` would fall back to 12 but only when targetSize
-  // is exactly 0. Floor at the configured min so any sub-readable value
-  // (parsing oddities, 0px declarations, vw/em below floor) lifts up.
-  const targetSize = parseFloat(getCachedStyle(target).fontSize) || 12;
+  // Sub-readable target font sizes are CSS accidents, not signal: 0px or
+  // a-few-px declarations exist to hide accessible-name text nodes from
+  // layout (Gmail's email-row div[role=checkbox] is the canonical case).
+  // Scaling from them pins the badge at fontMin no matter what badge size
+  // the user picked. Treat anything below readable as "no target font"
+  // and scale from the nominal 14px the size slider is quoted against,
+  // so icon-only targets track the slider exactly.
+  const raw = parseFloat(getCachedStyle(target).fontSize);
+  const targetSize = Number.isFinite(raw) && raw >= 9 ? raw : 14;
   const scaled = Math.round(targetSize * badgeFontScale);
   return Math.min(Math.max(scaled, badgeFontMin), badgeFontMax);
 }
