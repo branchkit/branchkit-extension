@@ -25,7 +25,10 @@
     }
     body {
       width: 340px;
-      padding: 14px 16px;
+      /* No bottom padding — the sticky footer owns the bottom inset, so it
+         can sit flush against the popup's bottom edge while content scrolls
+         beneath it. */
+      padding: 14px 16px 0;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       font-size: 13px;
       color: var(--fg);
@@ -385,8 +388,15 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-top: 10px;
-      padding-top: 8px;
+      /* Sticky at the popup's bottom edge so Settings/Help stay reachable
+         when long rule lists push the natural footer position below the
+         fold. Bleeds over the body's side padding (negative margins) and
+         carries an opaque background so scrolling content passes under it. */
+      position: sticky;
+      bottom: 0;
+      background: var(--bg);
+      margin: 10px -16px 0;
+      padding: 8px 16px 12px;
       border-top: 1px solid var(--border);
     }
     .footer-btn {
