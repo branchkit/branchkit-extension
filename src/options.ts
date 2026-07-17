@@ -796,24 +796,40 @@ function writeBadgeForm(s: BadgeSettings): void {
   updateBadgePreview(s);
 }
 
+// One preview sample per nudge bucket, pegged to a representative target
+// font (bucket thresholds: <15px small, <20px medium, ≥20px large — see
+// placement/position.ts getNudge). Mirrors computeBadgeFontSize:
+// round(target × scale) clamped to [fontMin, fontMax].
+const PREVIEW_BUCKETS: Array<{
+  key: string;
+  targetFont: number;
+  nudgeX: keyof BadgeSettings;
+  nudgeY: keyof BadgeSettings;
+}> = [
+  { key: 'small', targetFont: 14, nudgeX: 'nudgeXSmall', nudgeY: 'nudgeYSmall' },
+  { key: 'med', targetFont: 18, nudgeX: 'nudgeXMed', nudgeY: 'nudgeYMed' },
+  { key: 'large', targetFont: 24, nudgeX: 'nudgeXLarge', nudgeY: 'nudgeYLarge' },
+];
+
 function updateBadgePreview(s: BadgeSettings): void {
-  const badge = document.getElementById('bs-preview-badge') as HTMLSpanElement | null;
-  const text = document.getElementById('bs-preview-text') as HTMLSpanElement | null;
-  if (!badge || !text) return;
-  // Preview pegs to a 14px target — the "small font" bucket — to match
-  // what the user sees on body text. computeBadgeFontSize applies the
-  // scale × 14, then clamps to [fontMin, fontMax].
-  const targetFont = 14;
-  const scaled = Math.round(targetFont * s.scale);
-  const badgeFont = Math.min(Math.max(scaled, s.fontMin), s.fontMax);
-  badge.style.fontSize = `${badgeFont}px`;
-  // Use the small-font nudge ratios for the preview.
-  const badgeW = badge.offsetWidth || 16;
-  const badgeH = badge.offsetHeight || 14;
-  const offsetX = badgeW * (1 - s.nudgeXSmall);
-  const offsetY = badgeH * (1 - s.nudgeYSmall);
-  badge.style.left = `${-offsetX}px`;
-  badge.style.top = `${-offsetY}px`;
+  const lines: string[] = [];
+  for (const bucket of PREVIEW_BUCKETS) {
+    const badge = document.getElementById(`bs-preview-badge-${bucket.key}`) as HTMLSpanElement | null;
+    if (!badge) continue;
+    const scaled = Math.round(bucket.targetFont * s.scale);
+    const badgeFont = Math.min(Math.max(scaled, s.fontMin), s.fontMax);
+    badge.style.fontSize = `${badgeFont}px`;
+    const badgeW = badge.offsetWidth || 16;
+    const badgeH = badge.offsetHeight || 14;
+    badge.style.left = `${-(badgeW * (1 - s[bucket.nudgeX]))}px`;
+    badge.style.top = `${-(badgeH * (1 - s[bucket.nudgeY]))}px`;
+    // Flag when the clamp — not the scale — decided the size, so a scale
+    // change that visibly does nothing explains itself.
+    const clamp = scaled < s.fontMin ? ' (min)' : scaled > s.fontMax ? ' (max)' : '';
+    lines.push(`${bucket.targetFont}px text → ${badgeFont}px badge${clamp}`);
+  }
+  const readout = document.getElementById('bs-preview-readout');
+  if (readout) readout.textContent = lines.join('\n');
 }
 
 async function initBadgeSettings(): Promise<void> {

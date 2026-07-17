@@ -478,11 +478,11 @@
     <h1 id="sec-badge" class="sec" style="margin-top: 40px">Badge appearance</h1>
     <div class="subtitle">
       Tune the size and placement of badges. Changes apply live to every
-      tab. The preview chip on the right reflects the current values against
-      a small-font target.
+      tab. The preview on the right shows one sample per font bucket, with
+      the computed badge font underneath.
     </div>
     <div id="badge-settings" class="rule">
-      <div style="display: grid; grid-template-columns: 1fr 200px; gap: 24px; padding: 16px">
+      <div style="display: grid; grid-template-columns: 1fr 240px; gap: 24px; padding: 16px">
         <div>
           <h3 style="margin: 0 0 8px 0; font-size: 14px">Size</h3>
           <div class="badge-row">
@@ -525,14 +525,24 @@
         </div>
         <div style="border-left: 1px solid var(--border); padding-left: 24px">
           <h3 style="margin: 0 0 8px 0; font-size: 14px">Preview</h3>
-          <div id="bs-preview" style="position: relative; padding: 24px 8px; background: var(--bg); border-radius: 6px">
-            <div style="font-size: 14px; line-height: 1.4; position: relative; display: inline-block">
-              <span id="bs-preview-badge" style="position: absolute; font-weight: bold; border: 1px solid; border-radius: 3px; padding: 0 0.1em; background: #ffd966; color: #000; border-color: #806600; white-space: nowrap; line-height: 1.2">ax</span>
-              <span id="bs-preview-text">Sample link text</span>
+          <div id="bs-preview" style="padding: 20px 8px 12px; background: var(--bg); border-radius: 6px; display: flex; flex-direction: column; gap: 22px">
+            <div class="bs-sample" style="font-size: 14px">
+              <span id="bs-preview-badge-small" class="bs-chip">ax</span>
+              <span>Sample link text</span>
+            </div>
+            <div class="bs-sample" style="font-size: 18px">
+              <span id="bs-preview-badge-med" class="bs-chip">bo</span>
+              <span>Medium text</span>
+            </div>
+            <div class="bs-sample" style="font-size: 24px">
+              <span id="bs-preview-badge-large" class="bs-chip">cu</span>
+              <span>Heading</span>
             </div>
           </div>
+          <div id="bs-preview-readout" style="font-size: 12px; color: var(--fg-muted); margin-top: 8px; white-space: pre-line; font-variant-numeric: tabular-nums"></div>
           <div style="font-size: 12px; color: var(--fg-muted); margin-top: 8px">
-            Approximate; live badges adapt per-target.
+            Approximate; live badges adapt per-target. "min"/"max" means the
+            font clamp is overriding the scale — widen it to let scale through.
           </div>
         </div>
       </div>
@@ -542,6 +552,8 @@
       .badge-row label { color: var(--fg-muted); font-size: 13px; }
       .badge-row input[type=number] { width: 64px; font: inherit; padding: 3px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--card); text-align: right; }
       .badge-row span input { margin-left: 4px; }
+      .bs-sample { line-height: 1.4; position: relative; display: inline-block; align-self: flex-start; }
+      .bs-chip { position: absolute; font-weight: bold; border: 1px solid #806600; border-radius: 3px; padding: 0 0.1em; background: #ffd966; color: #000; white-space: nowrap; line-height: 1.2; }
     </style>
 
     <template id="rule-template">
