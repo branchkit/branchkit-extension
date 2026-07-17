@@ -14,7 +14,7 @@
  */
 
 import { APCAcontrast, sRGBtoY } from 'apca-w3';
-import { getCachedStyle } from '../layout-cache';
+import { getCachedStyle, getCachedRect } from '../layout-cache';
 
 // --- RGB type and parsing ---
 
@@ -243,6 +243,38 @@ function toCSS(c: RGB, alpha?: number): string {
   return `rgb(${Math.round(c.r)},${Math.round(c.g)},${Math.round(c.b)})`;
 }
 
+/**
+ * The element whose computed color the user actually SEES. The hintable
+ * target is often a container — a sidebar <a> whose CSS `color` is blue
+ * while the visible text inside is a span re-styled black (QuickBase's
+ * table list). Sampling the container painted badge text in a color that
+ * appears nowhere on screen. Mirrors Rango's reference-element semantics,
+ * simplified: first visible text node's parent wins, an icon-ish
+ * descendant covers text-free targets, the target itself is the fallback.
+ * Form controls answer for themselves (their own color IS the visible
+ * text color).
+ */
+function resolveColorReference(target: Element): Element {
+  if (target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement ||
+      target instanceof HTMLOptionElement) {
+    return target;
+  }
+  const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
+  let node: Text | null;
+  while ((node = walker.nextNode() as Text | null)) {
+    if (!node.textContent || !/\S/.test(node.textContent)) continue;
+    const parent = node.parentElement;
+    if (!parent) continue;
+    // Skip sr-only / visually-hidden text (1px clip technique).
+    const rect = getCachedRect(parent);
+    if (rect.width < 3 && rect.height < 3) continue;
+    return parent;
+  }
+  return target.querySelector('svg, img') ?? target;
+}
+
 function getElementForegroundColor(target: Element): RGB {
   if (target instanceof SVGElement) {
     const stroke = target.getAttribute('stroke');
@@ -270,7 +302,7 @@ function getElementForegroundColor(target: Element): RGB {
 export function computeBadgeColors(target: Element): BadgeColors {
   const pageBg = resolveBackgroundColor(target);
 
-  const elementFg = getElementForegroundColor(target);
+  const elementFg = getElementForegroundColor(resolveColorReference(target));
   const compositedFg = compositeOver(elementFg, pageBg);
   const adjustedFg = adjustForContrast(compositedFg, pageBg);
 
