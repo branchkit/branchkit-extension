@@ -70,9 +70,47 @@ Change the hint command's captures from the live per-prefix collections to the
 Costs/open questions carry over from section 4 (mishears can now match
 non-live pairs → dispatch-time not-found feedback; strict-viewport bias moves
 to dispatch; HUD display cadence). Section 4's decode-accuracy question (cost
-1) is answered by production; the remaining gate is UX: is dispatch-time
-"no such hint" feedback acceptable where today the utterance silently fails
-to match? Recommend prototyping behind a plugin flag.
+1) is answered by production; the UX gate (explicit "no such hint" vs today's
+silent no-match) was ACCEPTED by the user 2026-07-18. Implementation plan
+below.
+
+## 0c. Implementation plan (seams identified 2026-07-18)
+
+What the investigation of `plugins/browser/plugin.json` + the extension
+showed the cut actually moves — three responsibilities, not one:
+
+1. **Element metadata resolution.** The `hint_pair` capture macro's fields
+   pull `{suffix.letter}`, `{suffix.id}`, `{suffix.frame_id}`,
+   `{suffix.codeword}`, `{suffix.type}` from the pushed collection entries AT
+   MATCH TIME — the action arrives pre-resolved. Under sealed captures the
+   match yields only the two spoken words; the plugin forwards them and the
+   extension SW resolves spoken pair → letter pair (`WORD_TO_LETTER`) →
+   tab/frame/wrapper. Landing seam exists: `plugin/resolve.ts`
+   `resolveHintLocally` + the SW's letter-pool routing.
+2. **The strict gate.** The suffix slot targets the `_strict` companion
+   collection, so seen-is-clickable is enforced by the MATCHER today. Moves
+   to dispatch: the CS checks the wrapper's live strict state (fresher than
+   the pushed mirror ever was) and refuses with the same not-found feedback.
+3. **Not-found feedback.** New dispatch outcome (extension →
+   `reportDispatchResult` → plugin): distinct HUD/audio cue for "no such
+   hint"; also the mishear surface. Feedback design should reuse the
+   existing dispatch-result plumbing, not add a channel.
+
+Steps (each independently landable, plugin + extension only):
+  0. Flag: plugin setting `hints_pull_resolution` (default off) selecting
+     between the two capture macros — manifest carries both; the gated
+     command contribution flips (contribute.go owns the command patterns).
+  1. Add the sealed macro (`<prefix:S_alpha> <suffix:S_alpha>` over the
+     consumed `alphabet` collection) + plugin dispatch path forwarding raw
+     words; extension SW resolution + strict check + not-found result.
+  2. Soak with the flag ON (daily driving); the old path stays one flip away.
+  3. Retirement pass (flag default on → old macro deleted → push demotes to
+     HUD cadence → delta-mirror urgency machinery retires incrementally:
+     epoch handshake re-push ladder, reservoir pre-fetch, `_strict`
+     match-mirror). Clean-end-state rule: the final commit deletes the flag.
+
+Grammar note: `grammar_seeds` already maps `browser_hints_*` → `alphabet`,
+so Layer 1 is untouched by every step above.
 
 ---
 
