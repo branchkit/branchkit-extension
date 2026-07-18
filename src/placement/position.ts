@@ -181,13 +181,24 @@ export function setNudgesFromSettings(s: BadgeSettings): void {
   nudgeYLarge = s.nudgeYLarge;
 }
 
-function getNudge(element: Element, anchor: AnchorKind | 'none'): Nudge {
-  // Icon-led targets (a sidebar row's leading svg before its text): same
-  // posture as small icon-only targets — left edges aligned, ~20% overlap
-  // on the icon's top, so the badge reads as attached to the glyph and the
-  // rail of badges aligns down the icon column.
+function getNudge(
+  element: Element,
+  anchor: AnchorKind | 'none',
+  anchorRect?: { width: number; height: number },
+): Nudge {
+  // Icon-led targets (a sidebar row's leading svg before its text): Rango's
+  // posture — small glyphs get the ratio overhang (badge mostly above-left,
+  // corner overlap; their non-Text default is 0.3/0.5), big icon boxes host
+  // the badge fully inside. We use the user's small-bucket ratios so the
+  // Overlap sliders govern icon badges too. NOT the icon-only {1, 0.2}
+  // posture below — that's tuned for dense icon clusters with no text,
+  // where a left overhang lands on the neighboring control; an icon-led
+  // row's top-left gutter is free space.
   if (anchor === 'icon') {
-    return { x: 1, y: 0.2 };
+    if (anchorRect && anchorRect.width > 30 && anchorRect.height > 30) {
+      return { x: 1, y: 1 };
+    }
+    return { x: nudgeXSmall, y: nudgeYSmall };
   }
   const rect = getCachedRect(element);
   if (anchor === 'none') {
@@ -253,7 +264,7 @@ function positionAtTopLeft(w: ElementWrapper, probe?: AnchorProbe): void {
   // see the sticky-clamp sub-question in
   // notes/completed/DESIGN_HINT_POSITIONING_REARCH.md.
   const targetRect = probe.kind !== 'none' ? probe.rect : getCachedRect(w.element);
-  const nudge = getNudge(w.element, probe.kind);
+  const nudge = getNudge(w.element, probe.kind, probe.kind !== 'none' ? probe.rect : undefined);
   const result = computePlacement({
     targetRect,
     badgeSize: w.hint.badgeSize,
