@@ -23,7 +23,6 @@ import { suggestPattern, isValidSelector } from './rules/options-helpers';
 import {
   KIND_META,
   matcherSummary,
-  nudgeSummary,
   resolveCodewordFromTab,
   renderResolvePreview,
   setFeedbackError,
@@ -567,6 +566,76 @@ function renderEntries(rule: DomainRule, container: HTMLElement): void {
   }
 }
 
+// --- Inline entry editing ---
+//
+// The popup is where you can SEE the page you're tuning — an edit that
+// forces a round-trip through the settings tab loses sight of the badge
+// being adjusted. Entry rows carry an edit button that loads the entry
+// into the rule card's add form (Add becomes Save); nudge rows
+// additionally get inline x/y steppers that save live, so the badge moves
+// on the page under the open popup.
+
+interface AddFormRefs {
+  kindSelect: HTMLSelectElement;
+  revealSelect: HTMLSelectElement;
+  nudgeX: HTMLInputElement;
+  nudgeY: HTMLInputElement;
+  matcherInput: HTMLInputElement;
+  labelInput: HTMLInputElement;
+  addBtn: HTMLButtonElement;
+  cancelBtn: HTMLButtonElement;
+  feedback: HTMLElement;
+}
+
+let editSession: { ruleId: string; entryId: string } | null = null;
+const addFormRefs = new Map<string, AddFormRefs>();
+// Debounce for the inline nudge steppers — chrome.storage.sync has
+// per-minute write quotas, and each saved write re-places badges live.
+let nudgeTweakTimer: ReturnType<typeof setTimeout> | null = null;
+
+function beginEditEntry(rule: DomainRule, entry: RuleEntry): void {
+  for (const id of addFormRefs.keys()) {
+    if (id !== rule.id) resetAddForm(id);
+  }
+  const refs = addFormRefs.get(rule.id);
+  if (!refs) return;
+  editSession = { ruleId: rule.id, entryId: entry.id };
+  refs.kindSelect.value = entry.kind;
+  refs.kindSelect.dispatchEvent(new Event('change'));
+  const m = entry.matcher;
+  // The popup authors CSS matchers only; a text/class matcher (authored on
+  // the settings page) shows read-only — kind, label, and per-kind params
+  // stay editable, the matcher itself keeps its original form on save.
+  refs.matcherInput.value = m.type === 'css' ? m.selector : matcherSummary(m);
+  refs.matcherInput.readOnly = m.type !== 'css';
+  refs.matcherInput.title = m.type !== 'css'
+    ? 'Text/class matchers can be edited on the Settings page' : '';
+  refs.labelInput.value = entry.label ?? '';
+  if (entry.kind === 'reveal') refs.revealSelect.value = entry.reveal ?? 'opacity';
+  if (entry.kind === 'nudge') {
+    refs.nudgeX.value = String(entry.nudge?.dx ?? 0);
+    refs.nudgeY.value = String(entry.nudge?.dy ?? 0);
+  }
+  refs.addBtn.textContent = 'Save';
+  refs.cancelBtn.hidden = false;
+  refs.matcherInput.focus();
+}
+
+function resetAddForm(ruleId: string): void {
+  const refs = addFormRefs.get(ruleId);
+  if (!refs) return;
+  if (editSession?.ruleId === ruleId) editSession = null;
+  refs.addBtn.textContent = 'Add';
+  refs.cancelBtn.hidden = true;
+  refs.matcherInput.readOnly = false;
+  refs.matcherInput.title = '';
+  refs.matcherInput.value = '';
+  refs.labelInput.value = '';
+  refs.nudgeX.value = '';
+  refs.nudgeY.value = '';
+  clearFeedback(refs.feedback);
+}
+
 function renderEntry(rule: DomainRule, entry: RuleEntry, entriesEl: HTMLElement): HTMLElement {
   const node = document.createElement('div');
   node.className = 'entry';
@@ -587,24 +656,52 @@ function renderEntry(rule: DomainRule, entry: RuleEntry, entriesEl: HTMLElement)
   const kind = document.createElement('span');
   kind.className = `entry-kind ${entry.kind}`;
   kind.textContent = KIND_META[entry.kind].glyph;
-  kind.title = entry.kind
-    + (entry.reveal ? ` (${entry.reveal})` : '')
-    + (entry.nudge ? ` ${nudgeSummary(entry)}` : '');
+  kind.title = entry.kind + (entry.reveal ? ` (${entry.reveal})` : '');
   node.appendChild(kind);
 
   const text = document.createElement('span');
   text.className = 'entry-text';
-  let summary = matcherSummary(entry.matcher);
-  if (entry.nudge) summary += ` ${nudgeSummary(entry)}`;
+  const summary = matcherSummary(entry.matcher);
   text.textContent = entry.label ? `${entry.label} — ${summary}` : summary;
   text.title = summary;
   node.appendChild(text);
+
+  // Nudge rows: live x/y steppers in place of a static offset readout.
+  // Saves are debounced through the normal storage path, so the badge
+  // moves on the page while the popup stays open.
+  if (entry.kind === 'nudge' && entry.nudge) {
+    const stepper = (axis: 'dx' | 'dy', title: string): HTMLInputElement => {
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.className = 'entry-nudge-px';
+      input.step = '1';
+      input.value = String(entry.nudge![axis]);
+      input.title = title;
+      input.addEventListener('input', () => {
+        const v = parseFloat(input.value);
+        entry.nudge![axis] = Number.isFinite(v) ? v : 0;
+        if (nudgeTweakTimer) clearTimeout(nudgeTweakTimer);
+        nudgeTweakTimer = setTimeout(saveRules, 400);
+      });
+      return input;
+    };
+    node.appendChild(stepper('dx', 'Horizontal offset (px, negative = left) — applies live'));
+    node.appendChild(stepper('dy', 'Vertical offset (px, negative = up) — applies live'));
+  }
+
+  const editBtn = document.createElement('button');
+  editBtn.className = 'entry-edit';
+  editBtn.textContent = '✎';
+  editBtn.title = 'Edit entry';
+  editBtn.addEventListener('click', () => beginEditEntry(rule, entry));
+  node.appendChild(editBtn);
 
   const remove = document.createElement('button');
   remove.className = 'entry-remove';
   remove.textContent = '×';
   remove.title = 'Remove entry';
   remove.addEventListener('click', () => {
+    if (editSession?.entryId === entry.id) resetAddForm(rule.id);
     rule.entries = rule.entries.filter(e => e.id !== entry.id);
     saveRules();
     renderEntries(rule, entriesEl);
@@ -680,6 +777,13 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
   addBtn.textContent = 'Add';
   row1.appendChild(addBtn);
 
+  const cancelBtn = document.createElement('button');
+  cancelBtn.className = 'entry-cancel';
+  cancelBtn.textContent = 'Cancel';
+  cancelBtn.title = 'Discard changes and go back to adding';
+  cancelBtn.hidden = true;
+  row1.appendChild(cancelBtn);
+
   wrap.appendChild(row1);
 
   // Row 2: resolve from active tab
@@ -707,6 +811,11 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
   feedback.className = 'feedback';
   wrap.appendChild(feedback);
 
+  addFormRefs.set(rule.id, {
+    kindSelect, revealSelect, nudgeX, nudgeY,
+    matcherInput, labelInput, addBtn, cancelBtn, feedback,
+  });
+
   kindSelect.addEventListener('change', () => {
     revealSelect.hidden = kindSelect.value !== 'reveal';
     nudgeX.hidden = nudgeY.hidden = kindSelect.value !== 'nudge';
@@ -717,25 +826,36 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
     clearFeedback(feedback);
   });
 
+  cancelBtn.addEventListener('click', () => resetAddForm(rule.id));
+
   addBtn.addEventListener('click', () => {
+    const editing = editSession?.ruleId === rule.id
+      ? rule.entries.find((e) => e.id === editSession!.entryId)
+      : undefined;
     const selector = matcherInput.value.trim();
-    if (!selector) {
-      matcherInput.classList.add('invalid');
-      setFeedbackError(feedback, 'Selector is required.');
-      return;
-    }
-    if (!isValidSelector(selector)) {
-      matcherInput.classList.add('invalid');
-      setFeedbackError(feedback, 'Invalid CSS selector.');
-      return;
+    // A read-only matcher (text/class, authored on the settings page) is a
+    // display string, not a selector — keep the original matcher on save.
+    const keepMatcher = matcherInput.readOnly && editing;
+    if (!keepMatcher) {
+      if (!selector) {
+        matcherInput.classList.add('invalid');
+        setFeedbackError(feedback, 'Selector is required.');
+        return;
+      }
+      if (!isValidSelector(selector)) {
+        matcherInput.classList.add('invalid');
+        setFeedbackError(feedback, 'Invalid CSS selector.');
+        return;
+      }
     }
     const kind = kindSelect.value as RuleEntry['kind'];
     const entry: RuleEntry = {
-      id: crypto.randomUUID(),
+      id: editing ? editing.id : crypto.randomUUID(),
       kind,
-      matcher: { type: 'css', selector },
+      matcher: keepMatcher ? editing.matcher : { type: 'css', selector },
       label: labelInput.value.trim() || undefined,
     };
+    if (editing) entry.enabled = editing.enabled;
     if (kind === 'reveal') {
       entry.reveal = revealSelect.value as RevealMethod;
     }
@@ -751,13 +871,14 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
         dy: Number.isFinite(dy) ? dy : 0,
       };
     }
-    rule.entries.push(entry);
+    if (editing) {
+      const idx = rule.entries.findIndex((e) => e.id === editing.id);
+      rule.entries[idx] = entry;
+    } else {
+      rule.entries.push(entry);
+    }
     saveRules();
-    matcherInput.value = '';
-    labelInput.value = '';
-    nudgeX.value = '';
-    nudgeY.value = '';
-    clearFeedback(feedback);
+    resetAddForm(rule.id);
     renderEntries(rule, entriesEl);
   });
 

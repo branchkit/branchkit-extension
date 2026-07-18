@@ -257,6 +257,40 @@
     .entry-kind.reveal { background: var(--reveal); }
     .entry-kind.nudge { background: var(--accent-btn); }
     .add-entry-row input.nudge-px { width: 52px; flex: none; text-align: right; }
+    .entry-edit {
+      font: inherit;
+      padding: 0 4px;
+      border: none;
+      background: none;
+      color: var(--fg-muted);
+      cursor: pointer;
+      font-size: 12px;
+      line-height: 1;
+    }
+    .entry-edit:hover { color: var(--accent); }
+    .entry .entry-nudge-px {
+      width: 44px;
+      flex: none;
+      font: inherit;
+      font-size: 11px;
+      padding: 1px 3px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--surface);
+      color: var(--fg);
+      text-align: right;
+    }
+    .entry-cancel {
+      font: inherit;
+      font-size: 12px;
+      padding: 5px 8px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: none;
+      color: var(--fg-muted);
+      cursor: pointer;
+    }
+    .entry-cancel:hover { color: var(--fg); border-color: var(--border-strong); }
     .entry-text {
       flex: 1;
       font-family: ui-monospace, SFMono-Regular, monospace;
