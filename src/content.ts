@@ -3214,8 +3214,8 @@ function rescanForNav(fromCache: boolean, reason: string): void {
       // A `:start` without matching `:end` pins the body that killed the
       // main thread. The post-completion cs_scan_completed below never
       // ships when the thread wedges. See nav-time wedge investigation.
-      const navStep = (step: string) =>
-        chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_nav_step', data: { step, reason, at_ms: Math.round(performance.now() - t0) } } as Message).catch(() => {});
+      const navStep = (step: string, extra?: Record<string, number>) =>
+        chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_nav_step', data: { step, reason, at_ms: Math.round(performance.now() - t0), ...extra } } as Message).catch(() => {});
 
       void navStep('idle_fired');
 
@@ -3260,14 +3260,21 @@ function rescanForNav(fromCache: boolean, reason: string): void {
           if (!w.element.isConnected) disconnected++;
         }
         const total = store.all.length;
-        const wholesale = total === 0 || disconnected / total > 0.25;
+        // Wholesale needs the ratio AND a meaningful absolute count. Ratio
+        // alone misfires on small stores: a YouTube Shorts advance recycles
+        // ~8-10 of ~25 wrappers (>25%) yet answered with a full-document
+        // scan 2-3x per advance, right as the new video primes its buffers.
+        // Small swaps are exactly where the incremental path with
+        // prime-at-attach is fast — the heavy path is for genuinely bulk
+        // claim storms (QuickBase report→report: ~230 fresh claims).
+        const wholesale = total === 0 || (disconnected / total > 0.25 && disconnected > 50);
         if (!wholesale) {
-          void navStep('deferred_scan:light');
+          void navStep('deferred_scan:light', { disconnected, total });
           reconcile();
           schedulePassSoon('nav-light');
           return;
         }
-        void navStep('deferred_scan:start');
+        void navStep('deferred_scan:start', { disconnected, total });
         // Both rescan kinds run the idempotent doScan. For spa_nav this is
         // NOT about discovery (the MutationObserver huge-path covers that) —
         // doScanBatched is the BULK claim + grammar pipeline: it claims

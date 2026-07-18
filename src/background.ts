@@ -1676,6 +1676,9 @@ chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
 // pushState calls.
 const SPA_RESCAN_DEBOUNCE_MS = 150;
 const spaRescanTimers = new Map<number, ReturnType<typeof setTimeout>>();
+// Last spa_nav rescan actually dispatched per tab, for identical-URL dedup.
+const spaLastRescanDispatch = new Map<number, { url: string; at: number }>();
+const SPA_RESCAN_DEDUP_MS = 2000;
 
 function isHintableUrl(url: string): boolean {
   return /^https?:\/\//.test(url);
@@ -1686,7 +1689,7 @@ function onSameDocumentNav(details: { tabId: number; frameId: number; url: strin
   // trigger a whole-tab rescan.
   if (details.frameId !== 0) return;
   if (!isHintableUrl(details.url)) return;
-  scheduleSpaRescan(details.tabId);
+  scheduleSpaRescan(details.tabId, details.url);
 }
 
 chrome.webNavigation.onHistoryStateUpdated.addListener(onSameDocumentNav);
@@ -1694,12 +1697,24 @@ chrome.webNavigation.onReferenceFragmentUpdated.addListener(onSameDocumentNav);
 
 // Coalesce bursts of same-document URL changes (SPAs often fire several
 // pushState/replaceState calls settling on one route) into a single
-// bounded rescan per tab.
-function scheduleSpaRescan(tabId: number): void {
+// bounded rescan per tab. The 150ms debounce alone doesn't catch SPAs that
+// re-announce the SAME route wider apart (YouTube Shorts pushes /shorts/<id>
+// then canonicalizes it 200ms–1s later — each advance dispatched 2–4 full
+// rescan cycles, landing exactly while the new video primes its buffers), so
+// an identical-URL dispatch within SPA_RESCAN_DEDUP_MS is suppressed — the
+// CS already rescanned this route; residual DOM churn is the generic
+// mutation path's job. Suppressions are breadcrumbed, never silent.
+function scheduleSpaRescan(tabId: number, url: string): void {
+  const last = spaLastRescanDispatch.get(tabId);
+  if (last && last.url === url && Date.now() - last.at < SPA_RESCAN_DEDUP_MS) {
+    forwardDebugLog('pipeline.bg_rescan_deduped', { tab_id: tabId, source: 'spa_nav' });
+    return;
+  }
   const existing = spaRescanTimers.get(tabId);
   if (existing) clearTimeout(existing);
   spaRescanTimers.set(tabId, setTimeout(() => {
     spaRescanTimers.delete(tabId);
+    spaLastRescanDispatch.set(tabId, { url, at: Date.now() });
     forwardDebugLog('pipeline.bg_rescan_dispatched', { tab_id: tabId, source: 'spa_nav' });
     chrome.tabs.sendMessage(tabId, {
       type: 'BRANCHKIT_ACTION',
@@ -1766,6 +1781,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     clearTimeout(pendingSpaRescan);
     spaRescanTimers.delete(tabId);
   }
+  spaLastRescanDispatch.delete(tabId);
   purgeTab(tabId);
   // Drop the closed tab's words from the voice collection.
   scheduleTabPublish();

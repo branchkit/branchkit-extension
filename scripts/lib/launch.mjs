@@ -22,7 +22,8 @@
  * conscious act.
  */
 
-import { chromium } from 'playwright';
+import { chromium, firefox } from 'playwright';
+import { withExtension } from 'playwright-webextext/dist/factory.js';
 import { cpSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -89,6 +90,59 @@ export async function launchExtension({
   const sw = ctx.serviceWorkers()[0]
     ?? await ctx.waitForEvent('serviceworker', { timeout: 10_000 });
   return { ctx, sw, extDir };
+}
+
+/**
+ * Launch a persistent Firefox context with the extension loaded
+ * (playwright-webextext). Same isolation contract as launchExtension:
+ * default is a staged harness.json-marked copy (standalone); live tests
+ * opt in with {allowDiscovery: true} and pass the same pre-flight.
+ *
+ * @param {object} opts
+ * @param {string} opts.profile - persistent profile dir (wiped when freshProfile)
+ * @param {boolean} [opts.allowDiscovery=false]
+ * @param {boolean} [opts.freshProfile=true]
+ * @param {boolean} [opts.headless=false]
+ * @param {object} [opts.firefoxUserPrefs={}]
+ * @param {object} [opts.contextOptions={}]
+ * @returns {Promise<{ctx: import('playwright').BrowserContext, extDir: string}>}
+ */
+export async function launchFirefoxExtension({
+  profile,
+  allowDiscovery = false,
+  freshProfile = true,
+  headless = false,
+  firefoxUserPrefs = {},
+  contextOptions = {},
+} = {}) {
+  if (!profile) throw new Error('launchFirefoxExtension: profile is required');
+
+  const dist = resolve(root, 'dist/firefox');
+  if (!existsSync(resolve(dist, 'manifest.json'))) {
+    throw new Error(`No manifest at ${dist}/manifest.json — run \`npm run build:firefox\` first.`);
+  }
+
+  let extDir = dist;
+  if (allowDiscovery) {
+    await preflightLiveActuator();
+  } else {
+    extDir = `${profile}-ext`;
+    if (existsSync(extDir)) rmSync(extDir, { recursive: true });
+    cpSync(dist, extDir, { recursive: true });
+    writeFileSync(
+      resolve(extDir, 'harness.json'),
+      JSON.stringify({ discovery: 'disabled', staged_from: dist }) + '\n',
+    );
+  }
+
+  if (freshProfile && existsSync(profile)) rmSync(profile, { recursive: true });
+
+  const ctx = await withExtension(firefox, extDir).launchPersistentContext(profile, {
+    headless,
+    firefoxUserPrefs,
+    ...contextOptions,
+  });
+  return { ctx, extDir };
 }
 
 /**
