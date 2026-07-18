@@ -23,6 +23,7 @@ import { suggestPattern, isValidSelector } from './rules/options-helpers';
 import {
   KIND_META,
   matcherSummary,
+  nudgeSummary,
   resolveCodewordFromTab,
   renderResolvePreview,
   setFeedbackError,
@@ -589,9 +590,6 @@ interface AddFormRefs {
 
 let editSession: { ruleId: string; entryId: string } | null = null;
 const addFormRefs = new Map<string, AddFormRefs>();
-// Debounce for the inline nudge steppers — chrome.storage.sync has
-// per-minute write quotas, and each saved write re-places badges live.
-let nudgeTweakTimer: ReturnType<typeof setTimeout> | null = null;
 
 function beginEditEntry(rule: DomainRule, entry: RuleEntry): void {
   for (const id of addFormRefs.keys()) {
@@ -661,33 +659,14 @@ function renderEntry(rule: DomainRule, entry: RuleEntry, entriesEl: HTMLElement)
 
   const text = document.createElement('span');
   text.className = 'entry-text';
-  const summary = matcherSummary(entry.matcher);
+  // Offsets display read-only here, same pattern as reveal's method suffix.
+  // Editing happens in ONE place — the edit form (✎) — two live inputs for
+  // the same value drifted.
+  let summary = matcherSummary(entry.matcher);
+  if (entry.nudge) summary += ` ${nudgeSummary(entry)}`;
   text.textContent = entry.label ? `${entry.label} — ${summary}` : summary;
   text.title = summary;
   node.appendChild(text);
-
-  // Nudge rows: live x/y steppers in place of a static offset readout.
-  // Saves are debounced through the normal storage path, so the badge
-  // moves on the page while the popup stays open.
-  if (entry.kind === 'nudge' && entry.nudge) {
-    const stepper = (axis: 'dx' | 'dy', title: string): HTMLInputElement => {
-      const input = document.createElement('input');
-      input.type = 'number';
-      input.className = 'entry-nudge-px';
-      input.step = '1';
-      input.value = String(entry.nudge![axis]);
-      input.title = title;
-      input.addEventListener('input', () => {
-        const v = parseFloat(input.value);
-        entry.nudge![axis] = Number.isFinite(v) ? v : 0;
-        if (nudgeTweakTimer) clearTimeout(nudgeTweakTimer);
-        nudgeTweakTimer = setTimeout(saveRules, 400);
-      });
-      return input;
-    };
-    node.appendChild(stepper('dx', 'Horizontal offset (px, negative = left) — applies live'));
-    node.appendChild(stepper('dy', 'Vertical offset (px, negative = up) — applies live'));
-  }
 
   const editBtn = document.createElement('button');
   editBtn.className = 'entry-edit';
