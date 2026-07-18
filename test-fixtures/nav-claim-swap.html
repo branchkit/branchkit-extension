@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Nav claim-swap fixture</title>
+<style>
+  body { margin: 0; font-family: sans-serif; }
+  .row { padding: 3px 16px; border-bottom: 1px solid #eee; }
+  a { color: #0a84ff; text-decoration: none; font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="content"></div>
+<script>
+  // Claim-heavy SPA-nav fixture (QuickBase report→report class): doSwap()
+  // pushes a new URL and replaces EVERY link with fresh text+href, so
+  // fingerprint rebind cannot rescue identity — all in-band codewords are
+  // fresh claims. Harness: scripts/_test-nav-claim-latency.mjs.
+  const N = 250;
+  function render(view) {
+    const rows = [];
+    for (let i = 0; i < N; i++) {
+      rows.push('<div class="row"><a href="#' + view + '-' + i + '">' +
+        (view === 'alpha' ? 'Alpha record ' : 'Beta ledger ') + (i + 1) + '</a></div>');
+    }
+    document.getElementById('content').innerHTML = rows.join('\n');
+  }
+  window.doSwap = function () {
+    history.pushState({}, '', '?view=beta');
+    render('beta');
+    document.title = 'Nav claim-swap fixture — beta';
+    return performance.now();
+  };
+  render('alpha');
+</script>
+</body>
+</html>
