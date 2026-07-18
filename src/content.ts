@@ -3078,6 +3078,9 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
           !w?.cssHidden && !w?.occluded
         );
         if (!seen) {
+          // The accepted UX (2026-07-18): explicit feedback over silence.
+          flashToast(`No hint "${(params?.prefix_word && params?.suffix_word)
+            ? `${params.prefix_word} ${params.suffix_word}` : codeword}"`);
           reportDispatchResult({
             action, codeword, resolution, elem_tag: '', taken: 'skipped',
             ok: false,
