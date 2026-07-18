@@ -26,24 +26,47 @@ interface Sample {
   frames: number;
 }
 
+// Firefox-only painted/presented counters — the discriminator between a
+// DECODE stall (totalVideoFrames flat) and a PRESENTATION stall (decode
+// counters advance but the on-screen frame is stuck; mozPaintedFrames goes
+// flat). -1 where unsupported (Chromium).
+interface MozVideoElement extends HTMLVideoElement {
+  mozPaintedFrames?: number;
+  mozPresentedFrames?: number;
+}
+
 export function startVideoStallProbe(resources: SessionResources): void {
   if (window.top !== window) return; // top frame only
 
   let last: Sample | null = null;
   let stalledSince: number | null = null;
+  let tick = 0;
 
   resources.interval(() => {
-    let v: HTMLVideoElement | null = null;
+    let v: MozVideoElement | null = null;
     for (const cand of document.querySelectorAll('video')) {
-      if (!cand.paused && cand.currentTime > 0) { v = cand; break; }
+      if (!cand.paused && cand.currentTime > 0) { v = cand as MozVideoElement; break; }
     }
     if (!v || typeof v.getVideoPlaybackQuality !== 'function') {
       last = null;
       stalledSince = null;
       return;
     }
-    const frames = v.getVideoPlaybackQuality().totalVideoFrames;
+    const q = v.getVideoPlaybackQuality();
+    const frames = q.totalVideoFrames;
     const ct = v.currentTime;
+
+    // Periodic counter dump (every 5th sample while a video plays): decodes
+    // post-hoc which pipeline stage died even when the transition detector
+    // below sees "healthy" (a presentation stall keeps decode counters
+    // advancing). Step-name-encoded; 0.2 msg/s, far under the limiter.
+    if (++tick % 5 === 0) {
+      firehoseStep(
+        `video_counters:ct${ct.toFixed(1)}:tf${frames}:df${q.droppedVideoFrames}` +
+        `:pp${v.mozPaintedFrames ?? -1}:pr${v.mozPresentedFrames ?? -1}:rs${v.readyState}`,
+        1,
+      );
+    }
 
     if (last && last.v === v) {
       const clockAdvanced = ct - last.ct > 0.5;
