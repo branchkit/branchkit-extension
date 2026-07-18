@@ -1,6 +1,15 @@
 # Settle Engine extraction — make the badge-lifecycle reachable without a browser
 
-**Status:** proposal, 2026-06-13. The follow-on the restructure deferred.
+**Status:** IMPLEMENTED 2026-07-18 (steps 0-4 of section 8): `22d2d25` (step 0,
+seams + BadgeHandle), `2442713` (step 1, settle pass + 14 unit tests),
+`a56df22` (step 2, discovery/reposition/front-ends + 4 tests), `a858d3c`
+(step 3, wireSettleSignals), `3d51567` (step 4, PageSessionDeps collapse via
+pageSession.engine). Engine = src/lifecycle/settle-engine.ts over
+settle-deps.ts. Deliberate delta from the proposal: front-end debounces are
+SessionResources-backed (cancel at teardown). OPEN: step 5 (convert/prune the
+~52 Playwright repro scripts down to a maintained soak suite) and the
+consolidated real-Chrome soak before push. Original proposal (2026-06-13)
+below.
 
 **One-line motivation:** the render reaction never got a home. Grammar-sync
 landed cleanly in `labels/label-sync.ts`; the settle/paint half — the largest
