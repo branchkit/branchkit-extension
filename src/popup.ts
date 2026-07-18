@@ -590,6 +590,13 @@ interface AddFormRefs {
 
 let editSession: { ruleId: string; entryId: string } | null = null;
 const addFormRefs = new Map<string, AddFormRefs>();
+// Pre-edit snapshot of the entry being edited, for Cancel-reverts: nudge
+// offsets apply LIVE while the form is open (the whole point is watching
+// the badge move), so Cancel must be able to undo applied changes.
+let editOriginal: RuleEntry | null = null;
+// Debounced write-through for live offset edits — chrome.storage.sync has
+// per-minute write quotas, and each save re-places badges on the page.
+let nudgeLiveTimer: ReturnType<typeof setTimeout> | null = null;
 
 function beginEditEntry(rule: DomainRule, entry: RuleEntry): void {
   for (const id of addFormRefs.keys()) {
@@ -598,6 +605,7 @@ function beginEditEntry(rule: DomainRule, entry: RuleEntry): void {
   const refs = addFormRefs.get(rule.id);
   if (!refs) return;
   editSession = { ruleId: rule.id, entryId: entry.id };
+  editOriginal = JSON.parse(JSON.stringify(entry)) as RuleEntry;
   refs.kindSelect.value = entry.kind;
   refs.kindSelect.dispatchEvent(new Event('change'));
   const m = entry.matcher;
@@ -622,7 +630,10 @@ function beginEditEntry(rule: DomainRule, entry: RuleEntry): void {
 function resetAddForm(ruleId: string): void {
   const refs = addFormRefs.get(ruleId);
   if (!refs) return;
-  if (editSession?.ruleId === ruleId) editSession = null;
+  if (editSession?.ruleId === ruleId) {
+    editSession = null;
+    editOriginal = null;
+  }
   refs.addBtn.textContent = 'Add';
   refs.cancelBtn.hidden = true;
   refs.matcherInput.readOnly = false;
@@ -815,7 +826,38 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
     clearFeedback(feedback);
   });
 
-  cancelBtn.addEventListener('click', () => resetAddForm(rule.id));
+  // Live write-through while EDITING an existing nudge entry: offsets apply
+  // as you type/step (debounced), so the badge moves on the page under the
+  // open popup. Save confirms; Cancel reverts to the pre-edit snapshot.
+  // New-entry authoring stays Save-gated — there's no entry to apply yet.
+  const liveApplyOffsets = (): void => {
+    if (editSession?.ruleId !== rule.id || kindSelect.value !== 'nudge') return;
+    const editing = rule.entries.find((e) => e.id === editSession!.entryId);
+    if (!editing || editing.kind !== 'nudge') return;
+    const dx = parseFloat(nudgeX.value);
+    const dy = parseFloat(nudgeY.value);
+    editing.nudge = {
+      dx: Number.isFinite(dx) ? dx : 0,
+      dy: Number.isFinite(dy) ? dy : 0,
+    };
+    if (nudgeLiveTimer) clearTimeout(nudgeLiveTimer);
+    nudgeLiveTimer = setTimeout(saveRules, 400);
+  };
+  nudgeX.addEventListener('input', liveApplyOffsets);
+  nudgeY.addEventListener('input', liveApplyOffsets);
+
+  cancelBtn.addEventListener('click', () => {
+    // Undo any live-applied offset changes from this edit session.
+    if (editSession?.ruleId === rule.id && editOriginal) {
+      const idx = rule.entries.findIndex((e) => e.id === editOriginal!.id);
+      if (idx >= 0) {
+        rule.entries[idx] = editOriginal;
+        saveRules();
+        renderEntries(rule, entriesEl);
+      }
+    }
+    resetAddForm(rule.id);
+  });
 
   addBtn.addEventListener('click', () => {
     const editing = editSession?.ruleId === rule.id
