@@ -90,6 +90,12 @@ export interface ScrollAccelOps {
   reconcileScrollAccelForScroller(scroller: Element): void;
 }
 
+/** Batched badge placement (placement/position.ts): one read phase (anchor
+ *  probes) over the set, then the writes. */
+export interface PlacementOps {
+  placeBadges(wrappers: ElementWrapper[]): void;
+}
+
 /** The band-discovery walk (content.ts `discoverInSubtreeBatched`): one
  *  isKnown-skipping slab over `root`, returns wrappers added. */
 export interface DiscoveryOps {
@@ -129,6 +135,7 @@ export interface SettleDeps {
   occlusion: OcclusionOps;
   clip: ClipOps;
   scrollAccel: ScrollAccelOps;
+  placement: PlacementOps;
   discovery: DiscoveryOps;
   scheduler: Scheduler;
   /** Master paint gate — pageSession.badgesVisible. */
@@ -136,6 +143,9 @@ export interface SettleDeps {
   /** Orphan/teardown gate — pageSession.isTornDown. */
   isTornDown(): boolean;
   displayMode(): BadgeDisplayMode;
+  /** Paint-readiness policy (grammar ACK vs standalone) — content.ts
+   *  `isPaintReady`; decides the badge's pending-vs-solid opacity at show. */
+  isPaintReady(w: ElementWrapper): boolean;
 }
 
 // --- Compile-time conformance: the real impls satisfy their seams. ---
@@ -181,6 +191,11 @@ export type OcclusionSeamCheck = Satisfies<
 export type ClipSeamCheck = Satisfies<
   Pick<typeof import('../observe/clip-observer'), 'reconcileClipObservation'>,
   ClipOps
+>;
+
+export type PlacementSeamCheck = Satisfies<
+  Pick<typeof import('../placement'), 'placeBadges'>,
+  PlacementOps
 >;
 
 export type ScrollAccelSeamCheck = Satisfies<

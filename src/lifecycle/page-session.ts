@@ -194,8 +194,8 @@ export class PageSession {
    * sustained storm can't defer the coarse refresh indefinitely. */
   hugeMutationDeadline: ReturnType<typeof setTimeout> | null = null;
 
-  /** Debounce handle coalescing the level-triggered reconcile (claim + build). */
-  reconcileTimer: ReturnType<typeof setTimeout> | null = null;
+  // (The reconcile debounce handle moved into SettleEngine — the engine owns
+  // its own coalescing timers; they cancel at teardown via SessionResources.)
 
   /**
    * Single-flight guard for the band-discovery sweep (reconcile's discover

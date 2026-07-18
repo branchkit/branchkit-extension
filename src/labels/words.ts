@@ -110,6 +110,18 @@ export interface LabelAssignment {
 }
 
 /**
+ * Convert a pool token ("a" or "a s") to the LabelAssignment shape the
+ * HintBadge renderer expects. The token IS the letter form (extension-owned,
+ * BranchKit-independent), so the letter is the tokens joined. Unvalidated
+ * fast path for tokens the pool itself produced; use codewordToAssignment
+ * for untrusted input.
+ */
+export function poolLabelToAssignment(token: string): LabelAssignment {
+  const words = token.split(/\s+/).filter(w => w.length > 0);
+  return { words, letter: words.join(''), isSingle: words.length === 1 };
+}
+
+/**
  * Rebuild a LabelAssignment from a pool token (the letter form, e.g. "a s" or
  * "a"). Returns null for tokens that aren't one or two single a–z letters.
  */
