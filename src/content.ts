@@ -3335,11 +3335,6 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
   }
 });
 
-pageSession.resources.listen(window, 'resize', () => engine.scheduleReposition(), { passive: true });
-
-
-
-
 // --- Paint-stability sampler: the eye-level truth ---
 // A 10Hz change-log of visible-state counts, armed by scroll activity and
 // self-terminating 5s after the last scroll event (wedge discipline: a
@@ -3630,53 +3625,97 @@ function snapshotExtras() {
 
 
 
-pageSession.resources.listen(window, 'scroll', (e: Event) => engine.scheduleScrollReposition(e), { passive: true });
-// Capture-phase document listener catches scroll events on nested overflow
-// containers (QuickBase's mainBodyDiv table scroll, Gmail's pane scrolls,
-// any modern web-app sidebar / data-grid pattern). Scroll events don't
-// bubble, but they DO participate in capture, so a document-level capture
-// handler sees every scroll target regardless of who scrolled. Without
-// this, inner-pane scroll has NO signal — it never reaches
-// scheduleScrollReposition, so a row revealed by inner-pane scroll never
-// fires the band-discovery sweep. QuickBase 2026-06-05: 15 reposition:drifted
-// events from scheduleDeferredReposition but ZERO band_discovery:entered,
-// because scroll never reached scheduleScrollReposition. The handler is the same
-// debounced scheduleScrollReposition the window listener uses, so the
-// 100 ms coalescing keeps cost bounded even on multi-pane scroll bursts.
-pageSession.resources.listen(document, 'scroll', (e: Event) => engine.scheduleScrollReposition(e), { passive: true, capture: true });
+// --- Settle-signal wiring (step 3 of notes/DESIGN_SETTLE_ENGINE_EXTRACTION.md) ---
+// Every signal that arms the settle engine, registered in one place. The
+// engine module attaches nothing on import; this is the single wiring site.
+// (The pointerover/pointerout listeners below stay separate — they drive the
+// visibility sweep and occlusion-memo taps, not the engine directly.)
+function wireSettleSignals(): void {
+  // Reposition-only viewport signal: window resize re-pins badge transforms
+  // immediately; the deferred-settle resize registration below additionally
+  // runs the full store settle (strict-viewport reconciler) 100ms later.
+  pageSession.resources.listen(window, 'resize', () => engine.scheduleReposition(), { passive: true });
 
-// Per-container resize: each HintBadge registers its anchor with the
-// shared tracker. Catches CSS-only and container-scoped layout shifts
-// (animated dropdowns, sibling row expansion, :focus-within rules)
-// that don't surface as a window scroll/resize or a DOM mutation —
-// the classic "click → hints look stale" case.
-//
-// Debounced (not direct scheduleReposition) for the same reason scroll
-// is: on churny pages (YouTube /watch, where comment threads + player +
-// chapters resize continuously during scroll as content lazy-loads) the
-// RO fires ~15/sec. Coalescing to one settle after layout stabilizes
-// trades a ~100ms lag on resize-driven repositions — imperceptible
-// mid-scroll, same trade already accepted for scroll.
-onContainerResize(() => engine.scheduleDeferredReposition('container-resize'));
+  pageSession.resources.listen(window, 'scroll', (e: Event) => engine.scheduleScrollReposition(e), { passive: true });
+  // Capture-phase document listener catches scroll events on nested overflow
+  // containers (QuickBase's mainBodyDiv table scroll, Gmail's pane scrolls,
+  // any modern web-app sidebar / data-grid pattern). Scroll events don't
+  // bubble, but they DO participate in capture, so a document-level capture
+  // handler sees every scroll target regardless of who scrolled. Without
+  // this, inner-pane scroll has NO signal — it never reaches
+  // scheduleScrollReposition, so a row revealed by inner-pane scroll never
+  // fires the band-discovery sweep. QuickBase 2026-06-05: 15 reposition:drifted
+  // events from scheduleDeferredReposition but ZERO band_discovery:entered,
+  // because scroll never reached scheduleScrollReposition. The handler is the
+  // same debounced scheduleScrollReposition the window listener uses, so the
+  // 100 ms coalescing keeps cost bounded even on multi-pane scroll bursts.
+  pageSession.resources.listen(document, 'scroll', (e: Event) => engine.scheduleScrollReposition(e), { passive: true, capture: true });
 
-// Transform-ancestor trigger (notes/DESIGN_TRANSFORM_ANCESTOR_RECONCILE.md).
-// A pan/zoom canvas (React Flow — QuickBase pipeline builder) moves its viewport
-// by mutating an ancestor's `transform` via pointermove, firing NO scroll event,
-// so the scroll-driven follow loop never runs and badges freeze mid-pan. When a
-// tracked transformed ancestor's style mutates, poke the SAME bounded, self-
-// cancelling per-frame follow loop the scroll path uses (noteReconcileScroll),
-// and debounce a settle so post-pan discovery/strict converge (a pan can reveal
-// new in-band nodes). No-op unless a badge registered a transformed ancestor,
-// which only happens when the bkTransformTrigger flag is on.
-onTransformAncestorMutation(() => {
-  engine.noteReconcileScroll();
-  engine.scheduleDeferredReposition('transform-ancestor');
-});
+  // Per-container resize: each HintBadge registers its anchor with the
+  // shared tracker. Catches CSS-only and container-scoped layout shifts
+  // (animated dropdowns, sibling row expansion, :focus-within rules)
+  // that don't surface as a window scroll/resize or a DOM mutation —
+  // the classic "click → hints look stale" case.
+  //
+  // Debounced (not direct scheduleReposition) for the same reason scroll
+  // is: on churny pages (YouTube /watch, where comment threads + player +
+  // chapters resize continuously during scroll as content lazy-loads) the
+  // RO fires ~15/sec. Coalescing to one settle after layout stabilizes
+  // trades a ~100ms lag on resize-driven repositions — imperceptible
+  // mid-scroll, same trade already accepted for scroll.
+  onContainerResize(() => engine.scheduleDeferredReposition('container-resize'));
 
-pageSession.resources.listen(document, 'focusin', (e: Event) => engine.scheduleDeferredReposition(e), { passive: true });
-pageSession.resources.listen(document, 'focusout', (e: Event) => engine.scheduleDeferredReposition(e), { passive: true });
-pageSession.resources.listen(document, 'transitionend', (e: Event) => engine.scheduleDeferredReposition(e), { passive: true });
-pageSession.resources.listen(document, 'animationend', (e: Event) => engine.scheduleDeferredReposition(e), { passive: true });
+  // Transform-ancestor trigger (notes/DESIGN_TRANSFORM_ANCESTOR_RECONCILE.md).
+  // A pan/zoom canvas (React Flow — QuickBase pipeline builder) moves its
+  // viewport by mutating an ancestor's `transform` via pointermove, firing NO
+  // scroll event, so the scroll-driven follow loop never runs and badges
+  // freeze mid-pan. When a tracked transformed ancestor's style mutates, poke
+  // the SAME bounded, self-cancelling per-frame follow loop the scroll path
+  // uses (noteReconcileScroll), and debounce a settle so post-pan
+  // discovery/strict converge (a pan can reveal new in-band nodes). No-op
+  // unless a badge registered a transformed ancestor, which only happens when
+  // the bkTransformTrigger flag is on.
+  onTransformAncestorMutation(() => {
+    engine.noteReconcileScroll();
+    engine.scheduleDeferredReposition('transform-ancestor');
+  });
+
+  // Layout-settle hints: :focus-within resizes and focus-driven popovers
+  // (focusin/focusout bubble; focus/blur don't), CSS-driven dropdowns that
+  // interpolate layout for 200-300ms after the class change
+  // (transitionend/animationend).
+  pageSession.resources.listen(document, 'focusin', (e: Event) => engine.scheduleDeferredReposition(e), { passive: true });
+  pageSession.resources.listen(document, 'focusout', (e: Event) => engine.scheduleDeferredReposition(e), { passive: true });
+  pageSession.resources.listen(document, 'transitionend', (e: Event) => engine.scheduleDeferredReposition(e), { passive: true });
+  pageSession.resources.listen(document, 'animationend', (e: Event) => engine.scheduleDeferredReposition(e), { passive: true });
+
+  // Window resize covers genuine viewport changes (drag corner, device
+  // rotation, DevTools open/close) AND browser zoom (Cmd+= reflows the
+  // layout and changes innerWidth/innerHeight in CSS pixels). Route through
+  // the deferred path so the strict-viewport reconciler runs.
+  pageSession.resources.listen(window, 'resize', (e: Event) => engine.scheduleDeferredReposition(e), { passive: true });
+
+  // Per-target mutation: each HintBadge registers its target with the
+  // shared tracker. Catches class/style/subtree changes that move a
+  // target without resizing its container — the long tail the doc-level
+  // MutationObserver's attributeFilter misses and the container RO can't
+  // see. Settle-debounced because React renders fire many records in a
+  // burst.
+  //
+  // Per-target invalidation of the cached text probe: the element's
+  // internal layout may have shifted, so the offset-from-element-rect we
+  // stored on the wrapper could now point at the wrong place. Drop the
+  // cache so the next placement re-probes against the fresh layout.
+  onTargetMutation((target) => {
+    const w = store.findWrapperFor(target);
+    if (w) invalidateProbe(w);
+    // Class/style/subtree churn on a badge target can restyle paint around
+    // it (this tracker sees records the doc-level attributeFilter misses).
+    occlusionMemoNoteTarget(target);
+    engine.scheduleDeferredReposition('target-mutation');
+  });
+}
+wireSettleSignals();
 // Pointer-driven visibility sweep. A CSS `:hover` reveal (QuickBase widget
 // action bars, dropdown menus) flips targets from visibility:hidden to visible
 // with NO DOM mutation and often no transition — so neither the class/style
@@ -3721,32 +3760,6 @@ pageSession.resources.listen(document, 'pointerout', (e: PointerEvent) => {
     schedulePointerVisibilitySweep(e.target instanceof Element ? e.target : undefined);
   }
 }, { passive: true, capture: true });
-// Window resize covers genuine viewport changes (drag corner, device
-// rotation, DevTools open/close) AND browser zoom (Cmd+= reflows the
-// layout and changes innerWidth/innerHeight in CSS pixels). Route through
-// the deferred path so the strict-viewport reconciler runs.
-pageSession.resources.listen(window, 'resize', (e: Event) => engine.scheduleDeferredReposition(e), { passive: true });
-
-// Per-target mutation: each HintBadge registers its target with the
-// shared tracker. Catches class/style/subtree changes that move a
-// target without resizing its container — the long tail the doc-level
-// MutationObserver's attributeFilter misses and the container RO can't
-// see. Settle-debounced because React renders fire many records in a
-// burst.
-//
-// Per-target invalidation of the cached text probe: the element's
-// internal layout may have shifted, so the offset-from-element-rect we
-// stored on the wrapper could now point at the wrong place. Drop the
-// cache so the next placement re-probes against the fresh layout.
-onTargetMutation((target) => {
-  const w = store.findWrapperFor(target);
-  if (w) invalidateProbe(w);
-  // Class/style/subtree churn on a badge target can restyle paint around it
-  // (this tracker sees records the doc-level attributeFilter misses).
-  occlusionMemoNoteTarget(target);
-  engine.scheduleDeferredReposition('target-mutation');
-});
-
 // --- Keyboard Listener ---
 
 const scrollKeys = new Set(['j', 'k', 'd', 'u', 'h', 'l']);
