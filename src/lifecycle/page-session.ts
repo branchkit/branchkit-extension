@@ -89,27 +89,18 @@ export interface PageSessionDeps {
   /** Paint badges after a visibility promotion attached new wrappers. */
   showBadges: () => void;
 
-  /** Demoted backstop entry (Phase E of DESIGN_UNIFIED_RECONCILER.md): a
-   * between-settle signal (class/style mutation, pointer reveal) requests
-   * the unified settle pass instead of running its own loop. Non-extending —
-   * the pass fires within the backstop's old 100ms cadence even under
-   * sustained churn. The reason string feeds the harness-only settle-trigger
-   * attribution (settle-storm diagnosis). */
-  schedulePassSoon: (reason?: string) => void;
-
   // --- mutation-source collaborators ---
 
   discoverInSubtree: (root: Element, source: DiscoverySource) => number;
-  /** Round 34c: a drain pass attached a mass-discovery burst (>=25 fresh
-   * wrappers — a swap repaint, not trickle). Fires the direct claim-flush
-   * + paint follow-through so first paint doesn't wait a settle hop. */
-  onMassDiscovery: (added: number) => void;
   /** Third param: one-slab wall budget for reveal-armed sweeps (round 20);
    * omitted/0 = yield every batch (huge path, idle sweeps). */
   discoverInSubtreeBatched: (root: Element, source: DiscoverySource, slabBudgetMs?: number) => Promise<number>;
   reevaluateAttribute: (target: Element) => boolean;
-  scheduleReposition: () => void;
-  scheduleDeferredReposition: (src?: Event | string) => void;
+
+  // (schedulePassSoon / scheduleReposition / scheduleDeferredReposition /
+  // onMassDiscovery collapsed in step 4 of DESIGN_SETTLE_ENGINE_EXTRACTION.md
+  // — they were callbacks only because the settle driver lived in content.ts.
+  // Sources call the engine directly through `pageSession.engine`.)
 }
 
 export class PageSession {
@@ -121,6 +112,16 @@ export class PageSession {
    * tests it is assigned directly with stubs.
    */
   deps!: PageSessionDeps;
+
+  /**
+   * The settle engine (lifecycle/settle-engine.ts), assigned by content.ts at
+   * construction — before start(), so sources may call it as soon as they
+   * exist. Sources reach settle scheduling (schedulePassSoon, reposition,
+   * deferred settle, mass-reveal paint) through this reference; the engine is
+   * constructed over its own SettleDeps seam, so this adds no content.ts
+   * coupling. Type-only import — no runtime cycle.
+   */
+  engine!: import('./settle-engine').SettleEngine;
 
   /**
    * Owned listeners/intervals/timeouts/rAFs/observers (Phase 2a of

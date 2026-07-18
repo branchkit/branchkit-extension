@@ -183,8 +183,10 @@ describe('pointer-recheck subtree scoping (notes/DESIGN_POINTER_RECHECK_SCOPING.
     pageSession.resizeObserver = { observe: vi.fn(), unobserve: vi.fn(), disconnect: vi.fn() } as unknown as ResizeObserver;
     pageSession.deps = {
       ...(pageSession.deps ?? {}),
-      schedulePassSoon: vi.fn(),
       showBadges: vi.fn(),
+    } as never;
+    pageSession.engine = {
+      schedulePassSoon: vi.fn(),
     } as never;
 
     // Deep chains so the 5th-ancestor scope root stays inside each branch.

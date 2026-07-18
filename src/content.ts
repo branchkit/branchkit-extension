@@ -447,6 +447,10 @@ const engine = new SettleEngine(
     afterScrollSettle: () => flushDeferredNavRescan(),
   },
 );
+// Source modules (mutation-source, visibility-tracker) reach settle
+// scheduling through the session singleton — assigned before start() so the
+// reference exists as soon as any source can fire.
+pageSession.engine = engine;
 
 // The IntersectionTracker's codeword-claim sync. The tracker itself is owned
 // by `pageSession` (constructed in start(), Tier 3); this callback stays here
@@ -2520,13 +2524,9 @@ pageSession.start({
   restore: () => restoreFromBfcache(),
   onCodewordsChanged: onTrackerCodewordsChanged,
   showBadges,
-  schedulePassSoon: (reason) => engine.schedulePassSoon(reason),
   discoverInSubtree,
-  onMassDiscovery: (added) => engine.scheduleMassRevealPaint(added),
   discoverInSubtreeBatched,
   reevaluateAttribute,
-  scheduleReposition: () => engine.scheduleReposition(),
-  scheduleDeferredReposition: (src?: Event | string) => engine.scheduleDeferredReposition(src),
 });
 
 // Grammar reaction (Tier 2 delta cut): a wrapper attach/detach means the

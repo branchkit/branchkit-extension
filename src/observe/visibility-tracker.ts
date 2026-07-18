@@ -218,7 +218,7 @@ function scheduleVisibilitySweep(source: string): void {
     // not land in recheckPendingVisibility's scope parameter.
     requestAnimationFrame(() => recheckPendingVisibility());
   }
-  pageSession.deps.schedulePassSoon(source);
+  pageSession.engine.schedulePassSoon(source);
 }
 
 // Pointer-driven sweep variant. Same two halves, but the PROMOTE runs on a 100ms
@@ -303,7 +303,7 @@ export function schedulePointerVisibilitySweep(target?: Element): void {
   // toShow/toHide/cssHidden derivation converges hinted badges, including
   // the "user just hid" guard (the pipeline gates on badgesVisible) and the
   // strict re-push (the plan's strictDelta rides the same pass).
-  pageSession.deps.schedulePassSoon('pointer');
+  pageSession.engine.schedulePassSoon('pointer');
 }
 
 // (recheckBadgeVisibility is gone — Phase E of

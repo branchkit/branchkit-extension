@@ -42,9 +42,12 @@ beforeEach(() => {
     discoverInSubtree: vi.fn(() => 0),
     discoverInSubtreeBatched: vi.fn(async () => 0),
     reevaluateAttribute: vi.fn(() => false),
+  } as unknown as PageSessionDeps;
+  session.engine = {
     scheduleReposition: vi.fn(),
     scheduleDeferredReposition: vi.fn(),
-  } as unknown as PageSessionDeps;
+    scheduleMassRevealPaint: vi.fn(),
+  } as never;
 });
 
 afterEach(() => {

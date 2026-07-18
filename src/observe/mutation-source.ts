@@ -268,8 +268,8 @@ function drainDiscovery(): void {
   // QuickBase's teardown+rebuild). Their badges otherwise wait for the next
   // settle pass / sweep to paint (~200-500ms of pure scheduling — the
   // "translucent badges paint slower than Rango" cohort). Same threshold
-  // class as REVEAL_REPAIR_FAST_ARM in content.ts.
-  if (addedTotal >= 25) pageSession.deps.onMassDiscovery(addedTotal);
+  // class as REVEAL_REPAIR_FAST_ARM in the settle engine.
+  if (addedTotal >= 25) pageSession.engine.scheduleMassRevealPaint(addedTotal);
   recordCpu('drainDiscovery', performance.now() - __cpuStart);
   if (__rootCount > 0) {
     recordCpu(
@@ -374,7 +374,7 @@ function fireHugeMutationRefresh(): void {
       firehoseStep('huge_path:batched_end', added);
       // Newly-attached wrappers emit store deltas → grammar sync.
       if (pageSession.badgesVisible) {
-        pageSession.deps.scheduleReposition();
+        pageSession.engine.scheduleReposition();
       }
     });
 }
@@ -478,10 +478,10 @@ function handlePageMutations(records: MutationRecord[]): void {
     // double-buffered flip (class reveal over a container of wrappers) stays
     // on the settle + sweep-arm path (round 14).
     if (mutationTouchesTracked(foreign, [pendingVisibilityCandidates(), storeElements()])) {
-      pageSession.deps.scheduleDeferredReposition('mo-batch');
+      pageSession.engine.scheduleDeferredReposition('mo-batch');
     } else {
       lifecycleCounters.moBatchRepositionOnly++;
-      pageSession.deps.scheduleReposition();
+      pageSession.engine.scheduleReposition();
     }
   }
   recordCpu('moCallback', performance.now() - __cpuStart);
