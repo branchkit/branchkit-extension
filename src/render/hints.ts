@@ -10,6 +10,7 @@
  */
 
 import { Category, BadgeDisplayMode } from '../types';
+import type { BadgeHandle, BadgeDiagnostics } from './badge-handle';
 import { LabelAssignment, labelToDisplay, letterToSpokenWord } from '../labels/words';
 import { getCachedRect, getCachedStyle, isRectOnScreen } from '../layout-cache';
 import { calculateZIndex } from '../placement/stacking';
@@ -374,7 +375,7 @@ export function computeBadgeFontSize(target: Element): number {
   return Math.min(Math.max(scaled, badgeFontMin), badgeFontMax);
 }
 
-export class HintBadge {
+export class HintBadge implements BadgeHandle {
   public readonly host: HTMLDivElement;
   // Mutable: `retarget(newEl)` resolves a new container when the wrapper
   // rebinds to a replacement DOM node (DESIGN_WRAPPER_IDENTITY_STABILITY
@@ -1179,47 +1180,7 @@ export class HintBadge {
     };
   }
 
-  get diagnostics(): {
-    innerRect: { x: number; y: number; w: number; h: number };
-    outerRect: { x: number; y: number; w: number; h: number };
-    anchorParentRect: { x: number; y: number; w: number; h: number };
-    anchorParentScroll: { top: number; left: number; width: number; height: number };
-    anchorParentOverflow: { x: string; y: string };
-    anchorParentTag: string;
-    anchorParentClasses: string;
-    displayedAs: string;
-    targetTag: string;
-    // Reconcile-model forensics (the live positioning model). `reconcileOffset`
-    // is the baked candidate-minus-target offset the reconciler applies each
-    // pass; a scroll-back-stranded badge typically shows a stale offset here
-    // (e.g. offset.y ~= the scroll delta instead of the small placement nudge).
-    // `hostTransform` is what the reconciler last wrote. `viewportFixed` picks
-    // the host's anchoring (fixed vs absolute). The `scrollAccel*` fields show
-    // whether the inner-scroll accelerator is armed and its live scroll state —
-    // an armed badge's on-screen position is host base + outer's -scrollerTop.
-    reconcileOffset: { x: number; y: number } | null;
-    hostTransform: string;
-    viewportFixed: boolean;
-    scrollAccelArmed: boolean;
-    scrollAccelMax: number | null;
-    scrollAccelScrollerTop: number | null;
-    // The ridden scroller chain, innermost first — one entry per layer. Lets a
-    // snapshot answer "is the OUTER scroller actually in this badge's chain?"
-    // (the aggregate scrollAccelMax/ScrollerTop above can't, being summed). A
-    // report badge that should ride [report, outer] but shows only [report] is a
-    // nested-composition gap (flag off or an ancestor not detected).
-    scrollAccelLayers: { scroller: string; max: number; scrollTop: number }[] | null;
-    // Lifetime count of chain-change events (see _scrollAccelRearms). Climbs on a
-    // report badge whose hover-gated inner scroller flaps during an outer scroll.
-    scrollAccelRearms: number;
-    // Lifetime count of ScrollTimeline anims built (see _scrollAccelAnimBuilds).
-    // LOW relative to rearms = inner wrappers rebuilt but the outermost layer reused.
-    scrollAccelAnimBuilds: number;
-    // True when the occlusion hit-test has hidden this badge (.bk-occluded). With
-    // isVisible (the logical show state) this disambiguates "shown" from "shown
-    // but visually hidden because covered" — the ghost-badge diagnosis.
-    occluded: boolean;
-  } {
+  get diagnostics(): BadgeDiagnostics {
     const ir = this.inner.getBoundingClientRect();
     const or2 = this.outer.getBoundingClientRect();
     const ap = this.anchorParent;

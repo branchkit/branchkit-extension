@@ -7,7 +7,7 @@
 
 import { Category, ScannedElement } from '../types';
 import { LabelAssignment } from '../labels/words';
-import { HintBadge } from '../render/hints';
+import type { BadgeHandle } from '../render/badge-handle';
 import { labelReservoir } from '../labels/label-reservoir';
 
 /**
@@ -67,7 +67,7 @@ export type DiscoverySource =
 export class ElementWrapper {
   element: Element;
   scanned: ScannedElement;
-  hint: HintBadge | null = null;
+  hint: BadgeHandle | null = null;
   label: LabelAssignment | null = null;
   isInViewport: boolean = true;
   // Limbo lifecycle (DESIGN_WRAPPER_IDENTITY_STABILITY steps 1–2).
