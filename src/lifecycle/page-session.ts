@@ -185,9 +185,10 @@ export class PageSession {
   /** Roots queued for the next discovery drain. */
   readonly pendingDiscoveryRoots: Set<Element> = new Set();
 
-  /** Debounce handles for the three reposition paths. */
-  scrollRepositionTimer: ReturnType<typeof setTimeout> | null = null;
-  deferredRepositionTimer: ReturnType<typeof setTimeout> | null = null;
+  // (The scroll/deferred settle debounce handles moved into SettleEngine —
+  // it owns its own coalescing timers; they cancel at teardown via
+  // SessionResources.timeout. The nav path's mid-scroll signal is
+  // engine.isScrollSettlePending().)
   hugeMutationTimer: ReturnType<typeof setTimeout> | null = null;
   /** Max-wait companion to hugeMutationTimer (debounce+deadline shape): armed
    * by the first huge batch of a mutation storm, non-extending, so a

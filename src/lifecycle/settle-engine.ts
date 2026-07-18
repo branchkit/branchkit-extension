@@ -9,12 +9,12 @@
  * layer (computeReconcilePlanLists, gatherSettleReads) stays imported
  * directly — pure functions need no seam.
  *
- * Step-1 scope: the settle pass + reconcile/build cluster. Discovery
- * (scheduleBandDiscovery), reposition (scheduleReposition), and the paint
- * entries (showBadges) are still content.ts residents reached through
- * `SettleEngineHooks`; they move into the engine in step 2, at which point
- * the hooks shrink. No listener is attached by importing this module — the
- * signal wiring stays in content.ts (step 3 moves it to a wire function).
+ * Scope after step 2: the settle pass + reconcile/build cluster, the band
+ * discovery sweep, the reposition/scroll-follow loops, and the two settle
+ * front-ends (scroll + deferred debounces). The paint entry (showBadges) and
+ * the nav path are still content.ts residents reached through
+ * `SettleEngineHooks`. No listener is attached by importing this module —
+ * the signal wiring stays in content.ts, delegating to engine methods.
  *
  * The comments on the individual methods are carried over from content.ts
  * verbatim where they record soak-derived behavior — they are the design
@@ -22,9 +22,10 @@
  * code they constrain.
  */
 
-import type { ElementWrapper } from '../scan/element-wrapper';
+import type { ElementWrapper, DiscoverySource } from '../scan/element-wrapper';
 import type { SettleDeps } from './settle-deps';
 import { wantsHint } from './desired-state';
+import { shouldRunBandSweep } from './band-sweep-gate';
 import { gatherSettleReads, type SettleGather } from './gather';
 import { computeReconcilePlanLists, type ReconcilePlanLists } from './reconcile';
 import { drainStampDisagree } from './strict-viewport';
@@ -36,7 +37,7 @@ import { isVisible } from '../scan/scanner';
 import { poolLabelToAssignment } from '../labels/words';
 import { firehoseStep } from '../debug/firehose';
 import { harnessHooksEnabled } from '../debug/harness-hooks';
-import { recordCpu } from '../debug/perf-counters';
+import { recordCpu, lifecycleCounters } from '../debug/perf-counters';
 
 /** Shared settle debounce (scroll settle, deferred settle, the engine's
  *  coalesced reconcile and passSoon backstop). 100ms coalesces a churny burst
@@ -51,21 +52,20 @@ export const DEFERRED_REPOSITION_DEBOUNCE_MS = 100;
 export const REVEAL_REPAIR_FAST_ARM = 25;
 
 /**
- * Content.ts residents the settle pass still drives — the step-2 cut moves
- * them into the engine and retires this interface. Injected as callbacks so
- * step 1 stays behavior-preserving without content.ts import cycles.
+ * Content.ts residents the settle machinery still drives — each is a nav- or
+ * paint-path member that has not (yet) moved into the engine. Injected as
+ * callbacks so the extraction stays behavior-preserving without content.ts
+ * import cycles.
  */
 export interface SettleEngineHooks {
-  /** Discover step of the reconciler (single-flight band sweep). */
-  scheduleBandDiscovery(settleKind: 'band' | 'store', revealRepairs: number): void;
-  /** The batched positioner pass entry (rAF single-flight). */
-  scheduleReposition(): void;
-  /** Cancel the deferred-settle sibling timer (idle-storm doubler guard —
-   *  see settle()). The passSoon sibling is engine-owned and cancelled
-   *  directly. */
-  cancelDeferredSettle(): void;
-  /** Strict-viewport paint entry — the mass-reveal direct paint ends here. */
+  /** Strict-viewport paint entry — the mass-reveal direct paint and the band
+   *  sweep's follow-through end here. */
   showBadges(): Promise<void>;
+  /** Eye-level paint-stability sampler arm (content.ts telemetry). */
+  notePaintSamplerScroll(): void;
+  /** Runs after the scroll settle completes — the nav path drains a
+   *  mid-scroll-parked spa_nav rescan here (flushDeferredNavRescan). */
+  afterScrollSettle(): void;
 }
 
 /** Per-class applied counts (Phase E of notes/DESIGN_UNIFIED_RECONCILER.md,
@@ -75,10 +75,28 @@ interface AppliedCounts {
   show: number; hide: number; cssHidden: number; strict: number;
 }
 
+const DISCOVERY_SWEEP_IDLE_TIMEOUT_MS = 500;
+const DISCOVERY_RETRY_COOLDOWN_MS = 300;
+const DISCOVERY_MAX_RETRY_DEPTH = 2;
+// Every sweep walks in one slab (fling-wave round 20b) — a per-batch-yielding
+// sweep holds the single-flight lock for seconds mid-storm and the reveal's
+// fast request queues behind it. This is a circuit breaker, not pacing.
+const SWEEP_SLAB_BUDGET_MS = 700;
+// Mid-fling band sweep throttle (notes/DESIGN_FLING_WAVE.md Part 1c + drill
+// round 2). 10Hz while scroll events arrive; a timestamp, not a timer —
+// nothing to tear down, nothing free-running (wedge discipline).
+const MID_SCROLL_BAND_SWEEP_MS = 100;
+
 export class SettleEngine {
   private passSoonTimer: ReturnType<typeof setTimeout> | null = null;
   private reconcileTimer: ReturnType<typeof setTimeout> | null = null;
+  private scrollSettleTimer: ReturnType<typeof setTimeout> | null = null;
+  private deferredSettleTimer: ReturnType<typeof setTimeout> | null = null;
   private massRevealPaintQueued = false;
+  private repositionRafPending = false;
+  private reconcileScrollRaf: number | null = null;
+  private reconcileScrollActive = false;
+  private bandSweepLastAt = 0;
 
   // Harness-only settle-trigger attribution (settle-storm diagnosis): every
   // scheduler that can arm the pipeline notes WHY, the notes accumulate across
@@ -484,7 +502,10 @@ export class SettleEngine {
         this.deps.scheduler.clearTimeout(this.passSoonTimer);
         this.passSoonTimer = null;
       }
-      this.hooks.cancelDeferredSettle();
+      if (this.deferredSettleTimer !== null) {
+        this.deps.scheduler.clearTimeout(this.deferredSettleTimer);
+        this.deferredSettleTimer = null;
+      }
     }
     if (this.deps.isBadgesVisible()) {
       // Clip-membership sync FIRST: its leave-path is the one mid-pipeline
@@ -517,7 +538,7 @@ export class SettleEngine {
       // nothing new exists. The repair count is the mass-reveal tell: a
       // double-buffered flip repairs ~100+ stale band flags in one plan, and
       // that sweep skips the idle gate (round 18 fast-arm).
-      this.hooks.scheduleBandDiscovery(discovery, planLists.toRepair.length);
+      this.scheduleBandDiscovery(discovery, planLists.toRepair.length);
       if (planLists.toRepair.length >= REVEAL_REPAIR_FAST_ARM) {
         this.scheduleMassRevealPaint(planLists.toRepair.length);
       }
@@ -546,6 +567,351 @@ export class SettleEngine {
         }
       }
     }
-    this.hooks.scheduleReposition();
+    this.scheduleReposition();
+  }
+
+  // --- Reposition (step 2 of the extraction) --------------------------------
+  // The JS reconcile positioner owns badge placement: one batched pass reads
+  // every registered badge's live target rect and writes composited
+  // transforms. This drives that pass on a rAF single-flight so the settle
+  // handlers' shared 100ms debounce funnels into one coalescing policy —
+  // wedge-safe by construction. There is deliberately NO off-screen hide
+  // sweep here (retired by notes/DESIGN_PAINT_THE_BAND.md seam 3): shown-ness
+  // is band-scoped, so a sweep would fight applyVisibilityPlan's re-show
+  // every settle. The one artifact it existed for (a parked target's badge
+  // box overhanging the viewport edge) is solved by the write-time clamp
+  // inside reconcileRead (hints.ts).
+  scheduleReposition(): void {
+    if (!this.deps.isBadgesVisible()) return;
+    if (this.repositionRafPending) return;
+    this.repositionRafPending = true;
+    this.deps.scheduler.raf(() => {
+      this.repositionRafPending = false;
+      // Reposition breadcrumbs: a `reposition:start` without matching
+      // `reposition:end` pins this as the wedge body. Threshold-gated so
+      // steady-state scroll doesn't add 60 sendMessages/sec of telemetry.
+      firehoseStep('reposition:start', this.deps.positioner.reconcileRegistrySize(), 20);
+      // One batched pass: reads all target rects, writes all transforms.
+      // reconcileRead() short-circuits hidden badges and disconnected targets
+      // before any gBCR (limbo wrappers — badge held for the ~250ms rebind
+      // window — never reach placement; see
+      // notes/INVESTIGATION_LIMBO_BADGE_FLASH.md).
+      const rects = this.deps.positioner.reconcilePass();
+      firehoseStep('reposition:end', rects.size, 20);
+      // Harness-only (settle-storm diagnosis): transforms that actually
+      // changed value this pass. Emits only when nonzero (threshold 1) — a
+      // sustained nonzero on an idle page names an oscillating badge.
+      if (harnessHooksEnabled()) {
+        firehoseStep('reposition:changed', this.deps.positioner.lastReconcileChangedWrites(), 1);
+      }
+    });
+  }
+
+  // Scroll tracking. A viewport-pinned badge host (position:fixed) does not
+  // ride the compositor, and an inner-pane scroll moves flow targets without
+  // moving their document-anchored hosts — so during a continuous scroll
+  // badges must be re-pinned to their targets every frame; the trailing-edge
+  // 100ms settle would leave them detached until scroll stops. This runs a
+  // per-frame reconcilePass() ONLY while scroll events are arriving and only
+  // when badges exist; it self-cancels ~1 frame after the last scroll event,
+  // so it is bounded and NOT a free-running rAF (the nav-time wedge
+  // discipline).
+  noteReconcileScroll(): void {
+    if (this.deps.positioner.reconcileRegistrySize() === 0) return;
+    this.reconcileScrollActive = true;
+    if (this.reconcileScrollRaf === null) {
+      this.reconcileScrollRaf = this.deps.scheduler.raf(() => this.reconcileScrollFrame());
+    }
+  }
+
+  private reconcileScrollFrame(): void {
+    this.reconcileScrollRaf = null;
+    this.deps.positioner.reconcilePass();
+    // Re-arm for one more frame if a scroll event landed since the last pass;
+    // a quiet frame (no new event) clears the flag and lets the loop stop.
+    if (this.reconcileScrollActive) {
+      this.reconcileScrollActive = false;
+      this.reconcileScrollRaf = this.deps.scheduler.raf(() => this.reconcileScrollFrame());
+    }
+  }
+
+  // Mid-fling band repair (throttled, both directions) — badges for rows
+  // crossing the band edge paint DURING the fling, funded by same-sweep
+  // releases, instead of waiting for the IO to catch up. Gated on
+  // badgesVisible: with hints down the IO's own cadence is fine (nothing
+  // user-facing waits), and the next show re-converges from scratch.
+  private noteBandSweep(): void {
+    if (!this.deps.isBadgesVisible()) return;
+    const now = performance.now();
+    if (now - this.bandSweepLastAt < MID_SCROLL_BAND_SWEEP_MS) return;
+    this.bandSweepLastAt = now;
+    const { repaired, released } = this.deps.tracker.sweepBand(window.innerWidth, window.innerHeight);
+    if (repaired > 0 || released > 0) {
+      lifecycleCounters.bandSweepRepairs += repaired;
+      lifecycleCounters.bandSweepReleases += released;
+      firehoseStep('band_sweep:changed', repaired + released, 20);
+      // Synchronous convergence (round 13): refreshViewportClaims picks up
+      // the just-flipped flags, the build+paint runs inline — edge-crossing
+      // badges appear within the sweep's own 100ms cadence, Rango's
+      // scroll-poll shape. Releases matter here too — the freed letters land
+      // at the front of the local reservoir synchronously, so a claim that
+      // would have returned '' a sweep ago is funded NOW.
+      this.reconcile();
+    }
+  }
+
+  /** True while the trailing-edge scroll settle is armed — the nav path uses
+   *  this as its mid-scroll signal (a spa_nav arriving mid-scroll parks until
+   *  afterScrollSettle). */
+  isScrollSettlePending(): boolean {
+    return this.scrollSettleTimer !== null;
+  }
+
+  /** Teardown assist: stop the per-frame scroll follow loop (quiesceOrphan
+   *  calls this before draining the positioner registry, so a stray frame
+   *  can't iterate dead badges). */
+  stopScrollLoop(): void {
+    if (this.reconcileScrollRaf !== null) {
+      this.deps.scheduler.cancelRaf(this.reconcileScrollRaf);
+      this.reconcileScrollRaf = null;
+    }
+    this.reconcileScrollActive = false;
+  }
+
+  // The scroll front-end. The full settle pipeline on every rAF during scroll
+  // burned ~22% sustained CPU at wrap=99 on YouTube /watch, tripped Firefox's
+  // "extension is slowing things down" warning, and starved YouTube's own
+  // scroll-driven lazy-loading. The 100ms debounce coalesces the burst (~30
+  // events/sec during fast scrolling) into one settle after scroll stops;
+  // per-frame target tracking during the scroll itself is the bounded
+  // reconcileScrollFrame loop, not the pipeline.
+  scheduleScrollReposition(e?: Event): void {
+    // Scroll reshuffles fixed/sticky vs content — the occlusion memo can't
+    // localize that, so the whole window fails open (targets move anyway, so
+    // their rect keys retest them regardless). Idempotent per window.
+    this.deps.occlusion.occlusionMemoAllDirty('scroll');
+    // Reconcile badges need per-frame re-pinning during the scroll itself
+    // (they don't ride the compositor); this fires on every scroll event,
+    // before the trailing-edge settle below. No-op when the registry is empty.
+    this.noteReconcileScroll();
+    // Arm the eye-level paint-stability sampler (self-terminating).
+    this.hooks.notePaintSamplerScroll();
+    this.noteBandSweep();
+    // Gesture-start accelerator re-detection (timer null = first event of
+    // this scroll burst). A scroller that only became scrollable on hover
+    // (QuickBase classic report grids flip overflow:hidden->auto under
+    // :hover) emits no mutation and, under overlay scrollbars, no reflow —
+    // so the settle-time reconcileScrollAccel below hasn't armed it yet and
+    // the badge would chase (wiggle) this whole first gesture. Re-arm the
+    // badges inside the scroller that just scrolled NOW, so they ride the
+    // compositor from the first frame. Scoped to e.target's subtree, so
+    // window/document scroll and already-ridden scrollers cost only a cheap
+    // contains-check per badge.
+    if (this.scrollSettleTimer == null && e && e.target instanceof Element) {
+      this.deps.scrollAccel.reconcileScrollAccelForScroller(e.target);
+    }
+    this.noteSettleTrigger('scroll');
+    if (this.scrollSettleTimer) this.deps.scheduler.clearTimeout(this.scrollSettleTimer);
+    this.scrollSettleTimer = this.deps.scheduler.timeout(() => {
+      this.scrollSettleTimer = null;
+      // Scroll-settle is the canonical viewport-exit moment (stale-TRUE
+      // release) AND where infinite-scroll content lands (band discovery).
+      this.settle('band');
+      // A spa_nav that arrived mid-scroll (scroll-driven URL tick, e.g. a
+      // pagination offset) was parked; run it now that the storm is over.
+      this.hooks.afterScrollSettle();
+    }, DEFERRED_REPOSITION_DEBOUNCE_MS);
+  }
+
+  // Deferred settle for signals that hint "layout is about to settle":
+  // focusin/focusout (:focus-within resizes, focus-driven popovers),
+  // transitionend/animationend (CSS-driven dropdowns interpolate layout over
+  // 200-300ms — the MutationObserver fires at the *start* of the class
+  // change; without a settle signal, reposition runs mid-animation and is
+  // wrong), container resize, window resize/zoom. The 100ms debounce
+  // coalesces the burst (one transition fires many transitionend events; a
+  // click fires focusout+focusin <16ms apart) into one pass after things
+  // settle. Matches Rango's ElementWrapper.ts focus debounce.
+  scheduleDeferredReposition(src?: Event | string): void {
+    // Occlusion-memo invalidation taps (notes/DESIGN_OCCLUSION_HITTEST_MEMO.md),
+    // riding the signals already routed here. resize (incl. zoom) reshuffles
+    // fixed/sticky vs content → fail open; transform-ancestor pans move
+    // everything → fail open; focus/transition/animation events queue their
+    // target for cell-marking at the next gather (:focus-within and
+    // end-of-animation restyles can repaint with no MO record the page
+    // observer's attributeFilter would carry). 'mo-batch' and
+    // 'target-mutation' are already tapped at their sources;
+    // 'container-resize' is deliberately untapped (anchor resizes move the
+    // targets themselves — the rect key retests them).
+    if (src === 'transform-ancestor') {
+      this.deps.occlusion.occlusionMemoAllDirty('transform-ancestor');
+    } else if (src instanceof Event) {
+      if (src.type === 'resize') this.deps.occlusion.occlusionMemoAllDirty('resize');
+      else if (src.target instanceof Element) this.deps.occlusion.occlusionMemoNoteTarget(src.target);
+    }
+    this.noteSettleTrigger(`deferred:${typeof src === 'string' ? src : src?.type ?? 'direct'}`);
+    if (this.deferredSettleTimer) this.deps.scheduler.clearTimeout(this.deferredSettleTimer);
+    this.deferredSettleTimer = this.deps.scheduler.timeout(() => {
+      this.deferredSettleTimer = null;
+      // 'store' discovery: container resize / focus / transition / zoom
+      // reveal new in-band hintables among existing wrappers and can push
+      // wrappers across the strict boundary without a scroll event.
+      this.settle('store');
+    }, DEFERRED_REPOSITION_DEBOUNCE_MS);
+  }
+
+  // --- Discovery (step 2 of the extraction) ---------------------------------
+  // Discover step of the level-triggered reconciler (Phase 3b of
+  // notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md). `reconcile()`
+  // converges {codeword, hint} over EXISTING wrappers; it cannot close the
+  // *discovery gap* — a hintable element that entered the DOM while the
+  // MutationObserver dropped/coalesced its insertion record under a mutation
+  // storm, so no wrapper was ever created. This backstop re-walks the
+  // document via the sliced/batched discovery (yields between batches, skips
+  // known elements), idempotently attaching any missed hintable — a
+  // steady-state sweep attaches nothing and claims nothing (no grammar
+  // churn).
+  //
+  // Single-flight + idle-scheduled: scroll-settle fires repeatedly on a long
+  // scroll, so at most one sweep is in flight and the rest coalesce. A
+  // coalesced request can mean a row was re-rendered DURING the in-flight
+  // sweep, so the finally conditionally re-arms — but ONLY when the sweep
+  // added nothing AND a coalesce happened (strongest signal of a race-missed
+  // node). When the sweep added nodes, DO NOT retry: chained reruns produced
+  // the codeword-churn loop (73cf6e7 → b813e29). Retries are depth-capped and
+  // cooldown-gated so even worst-case the chain terminates quickly.
+  // requestIdleCallback waits for a quiet frame so the DOM walk never lands
+  // on top of the page's reflow (the wedge guard); the timeout caps the wait.
+  //
+  // Distinct from `scheduleDiscovery(root)` (the rAF-coalesced drainer for
+  // subtree roots the MutationObserver DID see): this is the backstop for the
+  // records it DIDN'T.
+  scheduleBandDiscovery(settleKind: 'band' | 'store', revealRepairs = 0): void {
+    const sweep = this.deps.sweepState;
+    const fastReveal = revealRepairs >= REVEAL_REPAIR_FAST_ARM;
+    // Dirty gate (notes/DESIGN_BAND_SWEEP_DIRTY_GATE.md): no observed adds
+    // since the last walk started + last sweep recent → the re-walk can find
+    // nothing the incremental paths haven't. Evaluated BEFORE the
+    // single-flight check so a skipped request never sets rerun flags;
+    // retries re-enter here with the then-current epoch (a mid-walk add
+    // reads dirty — exactly the race the retry exists for). Fast-arm
+    // bypasses inside the gate.
+    if (!shouldRunBandSweep({
+      domAddEpoch: this.deps.discovery.getDomAddEpoch(),
+      sweptEpoch: sweep.sweptEpoch,
+      sweepEndAt: sweep.sweepEndAt,
+      now: performance.now(),
+      fastReveal,
+    })) {
+      recordCpu('bandDiscovery:skipClean', 0);
+      firehoseStep('band_discovery:skip_clean', 1);
+      return;
+    }
+    if (sweep.pending) {
+      sweep.rerun = true;
+      // A mass reveal landing mid-sweep must not be demoted to the
+      // noise-retry path — record the urgency; the in-flight sweep's finally
+      // re-arms immediately regardless of its added count (round 18b).
+      if (fastReveal) {
+        sweep.fastRerun = true;
+      }
+      firehoseStep('band_discovery:coalesced', 1);
+      return;
+    }
+    sweep.pending = true;
+    sweep.rerun = false;
+    sweep.fastRerun = false;
+    // Discovery-source tag by the settle kind that STARTED this sweep (a
+    // coalesced request of the other kind folds in — labels are diagnostic):
+    // scroll settles → band_sweep, non-scroll (store) settles → settle_sweep.
+    const source: DiscoverySource = settleKind === 'band' ? 'band_sweep' : 'settle_sweep';
+    const sweepBody = (): void => {
+      void (async () => {
+        let added = 0;
+        // Captured at walk start: adds landing during the walk push the live
+        // epoch past this, so the next settle's gate reads dirty.
+        const epochAtStart = this.deps.discovery.getDomAddEpoch();
+        try {
+          if (this.deps.isTornDown() || !document.body) return;
+          // Attribution stamp (round 20c): fast_arm→sweep_start is the entry
+          // delay (scheduler/idle queueing); sweep_start→added is walk + the
+          // claim-flush builds in this task's microtask tail.
+          firehoseStep('band_discovery:sweep_start', 0, 0);
+          added = await this.deps.discovery.discoverInSubtreeBatched(
+            document.body, source, SWEEP_SLAB_BUDGET_MS,
+          );
+          // Diagnostic: the sweep's added count INCLUDING zero, to correlate
+          // a miss against whether the walk actually attached anything.
+          firehoseStep('band_discovery:added', added, 0);
+          // A reveal-armed sweep must follow through even with ZERO adds
+          // (round 33c): on double-buffered grids the reveal cohort is
+          // ALREADY-ATTACHED wrappers whose stale-false band flags a
+          // reconcile pass just repaired — the walk skips them all
+          // (known-wrapper skip), added===0, and an early return here
+          // stranded their claim flush + paint for seconds.
+          if (added === 0 && !fastReveal) return;
+          // New wrappers landed (or a mass reveal armed this sweep): claim
+          // codewords for the in-band ones and build their badges
+          // (reconcile), flush the claims, then paint.
+          this.reconcile();
+          await this.deps.tracker.flushNow();
+          if (this.deps.isBadgesVisible()) await this.hooks.showBadges();
+        } finally {
+          sweep.sweptEpoch = epochAtStart;
+          sweep.sweepEndAt = performance.now();
+          sweep.pending = false;
+          // Mass-reveal rerun (round 18b): a >=fast-arm repair settle landed
+          // while this sweep was in flight, and its fast-arm was swallowed by
+          // the single-flight coalesce. Re-arm immediately on the fast path —
+          // added>0 here is EXPECTED (this walk caught part of the wave), so
+          // the added===0 gate below deliberately does not apply. This is not
+          // the 73cf6e7 churn loop: that retried on a raceless heuristic per
+          // scroll settle; this consumes an explicit reveal signal, and it
+          // only recurs if ANOTHER mass reveal lands during the next
+          // (isKnown-skipping, ~100-400ms) walk — sustained real content.
+          const fastRerun = sweep.fastRerun;
+          sweep.fastRerun = false;
+          if (fastRerun && !this.deps.isTornDown()) {
+            sweep.retryDepth = 0;
+            firehoseStep('band_discovery:fast_rerun', added);
+            this.scheduleBandDiscovery(settleKind, REVEAL_REPAIR_FAST_ARM);
+          } else {
+            // Conditional re-arm: retry only when (a) a coalesce happened
+            // during this sweep — without it there's no evidence a race
+            // occurred — AND (b) this sweep added zero new wrappers, which
+            // means the work we did do is NOT the source of any churn the
+            // retry might amplify. Retries when added>0 chained the
+            // codeword-churn loop in 73cf6e7 → b813e29. Cap depth + cooldown
+            // so even a pathological scroll settle pattern terminates.
+            const shouldRetry =
+              sweep.rerun &&
+              added === 0 &&
+              !this.deps.isTornDown() &&
+              sweep.retryDepth < DISCOVERY_MAX_RETRY_DEPTH;
+            if (shouldRetry) {
+              sweep.retryDepth++;
+              firehoseStep('band_discovery:retry', sweep.retryDepth);
+              this.deps.scheduler.timeout(
+                () => this.scheduleBandDiscovery(settleKind),
+                DISCOVERY_RETRY_COOLDOWN_MS,
+              );
+            } else {
+              sweep.retryDepth = 0;
+            }
+          }
+        }
+      })();
+    };
+    if (fastReveal) {
+      // The settle plan just proved a mass reveal — content gained geometry
+      // en masse. Waiting for idle here IS the residual late wave; the walk
+      // runs in one slab (round 20) so front-of-queue entry is safe. Retries
+      // (armed above) deliberately keep the idle path — they are race
+      // backstops, not reveal-urgent.
+      firehoseStep('band_discovery:fast_arm', revealRepairs);
+      this.deps.scheduler.yieldTask(sweepBody);
+    } else {
+      this.deps.scheduler.idle(sweepBody, DISCOVERY_SWEEP_IDLE_TIMEOUT_MS);
+    }
   }
 }

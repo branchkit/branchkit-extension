@@ -70,11 +70,13 @@ export interface PositionerOps {
 }
 
 /** Occlusion write-back (observe/occlusion.ts) + the memo's scroll/pan
- *  fail-open taps (observe/occlusion-memo.ts). Detection itself happens in
- *  the gather (pure, already tested); the engine only applies and dirties. */
+ *  fail-open and per-target invalidation taps (observe/occlusion-memo.ts).
+ *  Detection itself happens in the gather (pure, already tested); the engine
+ *  only applies and dirties. */
 export interface OcclusionOps {
   applyOcclusion(w: ElementWrapper): boolean;
   occlusionMemoAllDirty(reason: string, keepHistory?: boolean): void;
+  occlusionMemoNoteTarget(el: Element): void;
 }
 
 /** Clip-observer membership sync (observe/clip-observer.ts) — step 1 of the
@@ -97,13 +99,27 @@ export interface PlacementOps {
 }
 
 /** The band-discovery walk (content.ts `discoverInSubtreeBatched`): one
- *  isKnown-skipping slab over `root`, returns wrappers added. */
+ *  isKnown-skipping slab over `root`, returns wrappers added. The dom-add
+ *  epoch (observe/mutation-source.ts) feeds the sweep's dirty gate. */
 export interface DiscoveryOps {
   discoverInSubtreeBatched(
     root: Element,
     source: DiscoverySource,
     budgetMs: number,
   ): Promise<number>;
+  getDomAddEpoch(): number;
+}
+
+/** The band-discovery sweep's session-scoped scheduling state. Lives on
+ *  PageSession (a session restart must reset it — the engine outlives
+ *  sessions); the engine reads/writes it through this adapter. */
+export interface SweepStateOps {
+  pending: boolean;
+  rerun: boolean;
+  fastRerun: boolean;
+  retryDepth: number;
+  sweptEpoch: number;
+  sweepEndAt: number;
 }
 
 /** Time and task scheduling — the fake-able clock. Deliberately minimal
@@ -137,6 +153,7 @@ export interface SettleDeps {
   scrollAccel: ScrollAccelOps;
   placement: PlacementOps;
   discovery: DiscoveryOps;
+  sweepState: SweepStateOps;
   scheduler: Scheduler;
   /** Master paint gate — pageSession.badgesVisible. */
   isBadgesVisible(): boolean;
@@ -184,7 +201,10 @@ export type PositionerSeamCheck = Satisfies<
 
 export type OcclusionSeamCheck = Satisfies<
   Pick<typeof import('../observe/occlusion'), 'applyOcclusion'> &
-    Pick<typeof import('../observe/occlusion-memo'), 'occlusionMemoAllDirty'>,
+    Pick<
+      typeof import('../observe/occlusion-memo'),
+      'occlusionMemoAllDirty' | 'occlusionMemoNoteTarget'
+    >,
   OcclusionOps
 >;
 

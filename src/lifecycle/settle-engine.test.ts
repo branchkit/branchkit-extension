@@ -5,8 +5,9 @@
  * These convert the hard-won Playwright repros into deterministic units:
  * stale-flag repair/release, the idle-storm doubler (sibling-timer cancel),
  * passSoon single-flight, dormant-hint reuse (no rebuild churn), the strict
- * re-push delta, stripped-host reattach, the mass-reveal direct paint, and
- * the badgesVisible gate. Geometry is scripted by stubbing each element's
+ * re-push delta, stripped-host reattach, the mass-reveal direct paint, the
+ * scroll/deferred front-end debounces, the band-discovery single-flight +
+ * dirty gate + no-retry-on-added churn guard, and the badgesVisible gate. Geometry is scripted by stubbing each element's
  * getBoundingClientRect — the gather stays the real pure read over it.
  *
  * Occlusion apply is not driven here: gather's overlayCovered is empty with
@@ -126,7 +127,24 @@ function makeHarness(opts?: { badgesVisible?: boolean }) {
   const state = { badgesVisible: opts?.badgesVisible ?? true, tornDown: false };
   const clip = { reconcileClipObservation: vi.fn() };
   const scrollAccel = { reconcileScrollAccel: vi.fn(), reconcileScrollAccelForScroller: vi.fn() };
-  const occlusion = { applyOcclusion: vi.fn(() => false), occlusionMemoAllDirty: vi.fn() };
+  const occlusion = {
+    applyOcclusion: vi.fn(() => false),
+    occlusionMemoAllDirty: vi.fn(),
+    occlusionMemoNoteTarget: vi.fn(),
+  };
+  const positioner = {
+    reconcilePass: vi.fn(() => ({ size: 0 })),
+    reconcileRegistrySize: vi.fn(() => 0),
+    lastReconcileChangedWrites: () => 0,
+  };
+  const discovery = {
+    discoverInSubtreeBatched: vi.fn(() => Promise.resolve(0)),
+    getDomAddEpoch: vi.fn(() => 1), // nonzero vs sweptEpoch 0 → gate reads dirty
+  };
+  const sweepState = {
+    pending: false, rerun: false, fastRerun: false,
+    retryDepth: 0, sweptEpoch: 0, sweepEndAt: 0,
+  };
   const deps: SettleDeps = {
     store,
     tracker,
@@ -134,39 +152,31 @@ function makeHarness(opts?: { badgesVisible?: boolean }) {
     badges: {
       create: () => { const b = new FakeBadge(); created.push(b); return b; },
     },
-    positioner: {
-      reconcilePass: () => ({ size: 0 }),
-      reconcileRegistrySize: () => 0,
-      lastReconcileChangedWrites: () => 0,
-    },
+    positioner,
     occlusion,
     clip,
     scrollAccel,
     placement,
-    discovery: { discoverInSubtreeBatched: vi.fn(() => Promise.resolve(0)) },
+    discovery,
+    sweepState,
     scheduler,
     isBadgesVisible: () => state.badgesVisible,
     isTornDown: () => state.tornDown,
     displayMode: () => 'letter' as BadgeDisplayMode,
     isPaintReady: () => true,
   };
-  const hooks: SettleEngineHooks & {
-    bandDiscoveryCalls: Array<['band' | 'store', number]>;
-    repositionCalls: number;
-    deferredCancels: number;
-    showBadgesCalls: number;
-  } = {
-    bandDiscoveryCalls: [],
-    repositionCalls: 0,
-    deferredCancels: 0,
+  const hooks: SettleEngineHooks & { showBadgesCalls: number; scrollSettleFlushes: number } = {
     showBadgesCalls: 0,
-    scheduleBandDiscovery(kind, repairs) { this.bandDiscoveryCalls.push([kind, repairs]); },
-    scheduleReposition() { this.repositionCalls++; },
-    cancelDeferredSettle() { this.deferredCancels++; },
+    scrollSettleFlushes: 0,
     showBadges() { this.showBadgesCalls++; return Promise.resolve(); },
+    notePaintSamplerScroll() {},
+    afterScrollSettle() { this.scrollSettleFlushes++; },
   };
   const engine = new SettleEngine(deps, hooks);
-  return { engine, store, scheduler, tracker, sync, placement, created, hooks, state };
+  return {
+    engine, store, scheduler, tracker, sync, placement, created, hooks, state,
+    clip, occlusion, positioner, discovery, sweepState,
+  };
 }
 
 let nextId = 1;
@@ -269,11 +279,11 @@ describe('settle: timer discipline', () => {
     // the store-settle's own coalesced reconcile debounce, not a settle.
     expect(h.scheduler.cleared.length).toBe(1);
     expect(h.scheduler.pending.length).toBe(1);
-    expect(h.hooks.deferredCancels).toBe(1);
-    // The cancelled sibling never fires a second settle.
-    const runs = h.hooks.repositionCalls;
+    // The cancelled sibling never fires a second settle (clip sync runs
+    // exactly once per visible settle pass).
+    const settles = h.clip.reconcileClipObservation.mock.calls.length;
     h.scheduler.flushTimers();
-    expect(h.hooks.repositionCalls).toBe(runs);
+    expect(h.clip.reconcileClipObservation.mock.calls.length).toBe(settles);
   });
 
   it('schedulePassSoon is single-flight and re-arms after firing', () => {
@@ -283,7 +293,7 @@ describe('settle: timer discipline', () => {
     expect(h.scheduler.pending.length).toBe(1);
 
     h.scheduler.flushTimers();
-    expect(h.hooks.repositionCalls).toBe(1); // one settle ran
+    expect(h.clip.reconcileClipObservation).toHaveBeenCalledTimes(1); // one settle ran
 
     h.engine.schedulePassSoon('c');
     expect(h.scheduler.pending.length).toBe(1); // re-armed after firing
@@ -291,8 +301,41 @@ describe('settle: timer discipline', () => {
 
   it('band settles do not cancel the deferred sibling', () => {
     const h = makeHarness();
+    h.engine.scheduleDeferredReposition('container-resize');
+    expect(h.scheduler.pending.length).toBe(1);
+
     h.engine.settle('band');
-    expect(h.hooks.deferredCancels).toBe(0);
+
+    expect(h.scheduler.cleared.length).toBe(0);
+    expect(h.scheduler.pending.length).toBe(1); // deferred sibling survives
+  });
+
+  it('scroll front-end: memo fail-open, sweep throttle, trailing band settle + nav flush', () => {
+    const h = makeHarness();
+    h.engine.scheduleScrollReposition();
+    expect(h.occlusion.occlusionMemoAllDirty).toHaveBeenCalledWith('scroll');
+    expect(h.tracker.sweepBand).toHaveBeenCalledTimes(1);
+
+    // Second event inside the 100ms throttle window: no second band sweep,
+    // and the trailing settle timer re-arms (debounce).
+    h.engine.scheduleScrollReposition();
+    expect(h.tracker.sweepBand).toHaveBeenCalledTimes(1);
+    expect(h.engine.isScrollSettlePending()).toBe(true);
+
+    h.scheduler.flushTimers();
+    expect(h.engine.isScrollSettlePending()).toBe(false);
+    expect(h.clip.reconcileClipObservation).toHaveBeenCalledTimes(1); // one band settle
+    expect(h.hooks.scrollSettleFlushes).toBe(1); // parked spa_nav drains here
+  });
+
+  it('deferred front-end: debounce coalesces a burst into one store settle', () => {
+    const h = makeHarness();
+    h.engine.scheduleDeferredReposition('container-resize');
+    h.engine.scheduleDeferredReposition('container-resize');
+    expect(h.scheduler.pending.length).toBe(1);
+
+    h.scheduler.flushTimers();
+    expect(h.clip.reconcileClipObservation).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -393,13 +436,16 @@ describe('settle: mass reveal', () => {
 
     h.engine.settle('store');
 
-    expect(h.hooks.bandDiscoveryCalls).toEqual([['store', REVEAL_REPAIR_FAST_ARM]]);
-    expect(h.scheduler.yieldQueue.length).toBe(1); // direct paint queued
+    // Fast-arm: the sweep enters on the yield chain (not idle), alongside the
+    // mass-reveal direct paint — two queued yield tasks.
+    expect(h.scheduler.yieldQueue.length).toBe(2);
 
     h.scheduler.drainYield();
     await new Promise(r => setTimeout(r, 0));
-    expect(h.hooks.showBadgesCalls).toBe(1);
-    // Reveal-burst settles coalesce: a second settle while queued adds nothing.
+    expect(h.discovery.discoverInSubtreeBatched).toHaveBeenCalledTimes(1);
+    // Both the reveal-armed sweep's follow-through and the direct paint end
+    // in showBadges — idempotent by design.
+    expect(h.hooks.showBadgesCalls).toBe(2);
   });
 
   it('multiple reveal settles coalesce into one direct paint', () => {
@@ -411,15 +457,48 @@ describe('settle: mass reveal', () => {
 });
 
 describe('settle: gates', () => {
-  it('with badges hidden, settle skips the pass but still ends in reposition', () => {
+  it('with badges hidden, settle skips the pass (and reposition no-ops)', () => {
     const h = makeHarness({ badgesVisible: false });
     addWrapper(h.store, { codeword: 'a', inViewport: false, rect: ON_SCREEN });
 
     h.engine.settle('store');
 
     expect(h.engine.applied.passes).toBe(0);
-    expect(h.hooks.repositionCalls).toBe(1);
-    expect(h.hooks.bandDiscoveryCalls.length).toBe(0);
+    expect(h.positioner.reconcilePass).not.toHaveBeenCalled();
+    expect(h.discovery.discoverInSubtreeBatched).not.toHaveBeenCalled();
+  });
+
+  it('band discovery is single-flight: a mid-sweep request coalesces, no double walk', async () => {
+    const h = makeHarness();
+    let resolveWalk!: (n: number) => void;
+    h.discovery.discoverInSubtreeBatched.mockReturnValue(new Promise<number>(r => { resolveWalk = r; }));
+
+    h.engine.scheduleBandDiscovery('band', 0);
+    expect(h.sweepState.pending).toBe(true);
+    h.engine.scheduleBandDiscovery('band', 0);
+    expect(h.sweepState.rerun).toBe(true);
+    expect(h.discovery.discoverInSubtreeBatched).toHaveBeenCalledTimes(1);
+
+    // Walk lands wrappers: follow-through paints; added>0 → NO retry even
+    // with a coalesce recorded (the 73cf6e7 churn-loop guard).
+    resolveWalk(3);
+    await new Promise(r => setTimeout(r, 0));
+    expect(h.sweepState.pending).toBe(false);
+    expect(h.sweepState.retryDepth).toBe(0);
+    expect(h.scheduler.pending.length).toBe(0); // no retry timer armed
+    expect(h.hooks.showBadgesCalls).toBe(1);
+  });
+
+  it('band discovery dirty gate: clean epoch + recent sweep skips the walk', () => {
+    const h = makeHarness();
+    h.discovery.getDomAddEpoch.mockReturnValue(5);
+    h.sweepState.sweptEpoch = 5;
+    h.sweepState.sweepEndAt = performance.now();
+
+    h.engine.scheduleBandDiscovery('band', 0);
+
+    expect(h.sweepState.pending).toBe(false);
+    expect(h.discovery.discoverInSubtreeBatched).not.toHaveBeenCalled();
   });
 
   it('the band-build yield continuation respects the teardown gate', () => {
