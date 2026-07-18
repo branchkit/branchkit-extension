@@ -104,8 +104,14 @@ gate (on-screen + isVisible + !cssHidden + !occluded) + refusal toast, plugin
 warn-log on the no_such_hint dispatch result. Scope: the BARE activate only —
 contributed verbs ({hint}/{hint+}) and the implicit multi-pair stay on the old
 path (one layer at a time). Remaining in step 1: a toast for the SW-unroutable
-path (needs a CS SHOW_TOAST message; today it logs + events only). Next: flip
-the flag on a dev build and daily-drive (step 2).
+path (needs a CS SHOW_TOAST message; today it logs + events only). DEFAULT flipped ON
+2026-07-18 (user call — the flag is scaffolding, not a knob; escape hatch =
+explicit false in plugin.browser.config). Live-verified: preview resolve
+"arch bam" matches browser.activate under the sealed spec. Known soak
+deltas: (1) no SetsOnPartial on the sealed shape (actuator validation
+rejects it on non-dependent captures — the completing-tag scoped narrowing
+during a chopped pair is lost; generic bridge still carries it), (2)
+SW-unroutable path logs/events but has no toast yet. Step 2 = daily drive.
 
 Steps (each independently landable, plugin + extension only):
   0. Flag: plugin setting `hints_pull_resolution` (default off) selecting
