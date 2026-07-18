@@ -132,6 +132,20 @@ mirror is load-bearing for THREE user surfaces (match truth, narrowing, HUD)
 — the retirement payoff shrinks accordingly and the cut must replace all
 three, not one.
 
+**Retirement pass EXECUTED 2026-07-19** (payoff, user call — soak forfeited
+deliberately, escape hatch = git revert): verbs ({hint}) + multi-pair macro
+converted to the sealed shape (sealed captures + display sources + sealed
+identity params; SetsOnPartial dropped per validator); the flag and legacy
+activate branch DELETED; the grammar-epoch handshake DELETED end-to-end
+(ext tripwire/republish ladder/probe/digest module + 3 test suites; plugin
+digest + response field) — the mirror is display-grade and keeps only its
+normal delta pushes. Live-verified: 6 sealed specs registered, 0 legacy
+dependent specs. Net ~-830 lines. Still display-grade (NOT deleted):
+label-sync delta mirror + strict pushes (feed the HUD menus/narrowing),
+reservoir (pool-claim latency, unrelated to grammar truth). Watch during
+daily use: verbs enforce the live strict gate now; chopped-pair
+completing-tag scoping remains absent.
+
 Steps (each independently landable, plugin + extension only):
   0. Flag: plugin setting `hints_pull_resolution` (default off) selecting
      between the two capture macros — manifest carries both; the gated
