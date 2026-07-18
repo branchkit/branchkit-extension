@@ -127,6 +127,7 @@ import { openLivenessPort } from './plugin/liveness';
 import { pageSession, scheduleYieldTask, yieldTask, TeardownReason } from './lifecycle/page-session';
 import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './debug/message-counters';
 import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, rearmCpuShareBaseline, rearmWatchdogBaseline, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, lifecycleCounters, resetLifecycleCounters } from './debug/perf-counters';
+import { startVideoStallProbe } from './debug/video-stall-probe';
 import { churnStats } from './debug/churn-log';
 import { syncTraceStats } from './debug/sync-trace';
 import { loadConfig, getDisplayMode, getHintVisibility } from './config';
@@ -312,6 +313,7 @@ const guardKeeper = setInterval(() => {
 }, GUARD_KEEPER_INTERVAL_MS);
 
 if (isTopFrame) startPerfObservers(pageSession.resources);
+if (isTopFrame) startVideoStallProbe(pageSession.resources);
 
 // Lever 1 (frame-skip): a subframe that is about:blank or renders below a
 // usable badge size (tracking pixels, collapsed/hidden ad slots) cannot show a
