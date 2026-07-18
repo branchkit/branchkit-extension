@@ -48,6 +48,21 @@ export function startVideoStallProbe(resources: SessionResources): void {
       if (!cand.paused && cand.currentTime > 0) { v = cand as MozVideoElement; break; }
     }
     if (!v || typeof v.getVideoPlaybackQuality !== 'function') {
+      // Blind-spot dump (live-catch 2026-07-18 18:02: a 42s counter hole was
+      // the freeze — the element was paused or at ct=0, invisible to the
+      // active-video picker). When videos EXIST but none is playing, emit
+      // the raw state of each so the next such freeze shows what state the
+      // player left the element in: p<paused> ct<time> rs<readyState>
+      // ns<networkState> e<error.code|0>.
+      if (++tick % 5 === 0) {
+        const vids = [...document.querySelectorAll('video')].slice(0, 4);
+        if (vids.length > 0) {
+          const states = vids.map(cand =>
+            `p${cand.paused ? 1 : 0}ct${cand.currentTime.toFixed(1)}rs${cand.readyState}ns${cand.networkState}e${cand.error?.code ?? 0}`,
+          ).join('|');
+          firehoseStep(`video_idle:${vids.length}:${states}`, 1);
+        }
+      }
       last = null;
       stalledSince = null;
       return;
