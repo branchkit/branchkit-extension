@@ -1,9 +1,37 @@
 # Stability Ladder Prune — how much codeword stability is worth keeping
 
-**Status:** proposal, 2026-07-18. Phase 4 of PLAN_RELIABILITY_CONSOLIDATION.md.
+**Status:** EXECUTED 2026-07-18. Phase 4 of PLAN_RELIABILITY_CONSOLIDATION.md.
 Answers the direct question raised after the Rango audit: *"if stability is
 blocking simplicity, I'd consider removing it and letting hints repopulate in
 any order."*
+
+## Result (trail read 2026-07-18, ~7,900 perf records / one full day incl.
+## the QuickBase soak and heavy YouTube — reset-aware cumulative deltas)
+
+| Rung | Successful rebinds | Share | Verdict |
+|---|---|---|---|
+| rebind_coattail | 626 (all QuickBase) | 33.9% | **KEEP — prediction falsified** |
+| rebind_key | 600 (319 YT / 281 QB) | 32.5% | KEEP |
+| rebind_clean (fingerprint) | 579 (574 YT) | 31.4% | KEEP (T1) |
+| rebind_position | 33 (all YT) | 1.8% | KEEP (above the 1% rule) |
+| rebind_slot | 7 (5 YT / 2 QB) | 0.4% | **DELETED** |
+
+(refuse_no_match 7,495 — most disconnects are genuine removals; refuse_distance 23.)
+
+Section 3's prediction — "slot and coattail are the likely deletions" — was
+half wrong in the direction that matters: **coattail is the single
+highest-volume rung** and carries the QuickBase grid churn almost alone.
+Measuring before deleting is the whole point of this doc; had we pruned on
+intuition we'd have re-opened the fling-wave badge-churn class on the user's
+primary work site. Slot met the pre-agreed rule on both prongs: <1% of
+successful rebinds, and its designed niche (recycled-grid cell swaps) is
+demonstrably carried by key+coattail on the exact site class it was built
+for. Deleted with its thresholds, consts, probes (slotProbe /
+limboSlotLiveness), wrapper field (slotAncestors), counter, snapshot
+surfacing, and tests (~200 lines).
+
+Wholesale stability removal: rejected per section 1 (unchanged by the data —
+1,845 successful rebinds in one day is 1,845 avoided badge/codeword churns).
 
 ---
 

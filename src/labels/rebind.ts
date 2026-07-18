@@ -111,11 +111,6 @@ export interface RebindCounters {
    *  fingerprint/position path. Tracked separately so soak data can tell the
    *  two rebind routes apart. */
   rebind_key: number;
-  /** Slot rebinds (DESIGN_FLING_WAVE.md Part 2): a recycled cell's new
-   *  content inherited the limbo predecessor's wrapper via a surviving slot
-   *  ancestor — different fingerprint, different key, same slot. Also the
-   *  live probe for whether the grid's shells survive its swaps. */
-  rebind_slot: number;
   /** Row-coattail rides (round 35): a keyless row control (checkbox /
    *  pencil / eye) inherited its predecessor's wrapper because a strong-key
    *  ride pinned its row to the predecessor row, and the control sits at
@@ -130,7 +125,6 @@ export function newRebindCounters(): RebindCounters {
     refuse_distance: 0,
     refuse_no_match: 0,
     rebind_key: 0,
-    rebind_slot: 0,
     rebind_coattail: 0,
   };
 }

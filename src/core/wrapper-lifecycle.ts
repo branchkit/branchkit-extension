@@ -21,7 +21,7 @@ import { domSeenAt } from '../observe/dom-seen';
 import * as idRegistry from '../scan/registry';
 import { isRecallLoaded, resolvePreferredCodeword } from '../labels/codeword-recall';
 import { dropPendingPut, hasSent, queueDelete, queuePut, scheduleSync } from '../labels/label-sync';
-import { tryRebindFromLimbo, tryRebindByStrongKey, tryRebindByCoattail, tryRebindBySlot, recordSlotAncestors, isRecentlyOrphaned } from '../observe/limbo';
+import { tryRebindFromLimbo, tryRebindByStrongKey, tryRebindByCoattail, isRecentlyOrphaned } from '../observe/limbo';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { geometryInBand, getCachedRect, isRectOnScreen } from '../layout-cache';
 import { lifecycleCounters } from '../debug/perf-counters';
@@ -83,9 +83,6 @@ export function attachWrapper(wrapper: ElementWrapper, source: DiscoverySource):
   // distinguisher.
   idRegistry.register(wrapper);
   seedPreferredFromMemory(wrapper);
-  // Slot identity for the recycle-rebind tier (DESIGN_FLING_WAVE Part 2) —
-  // must be captured while attached; a removed subtree loses its chain.
-  recordSlotAncestors(wrapper);
   store.addWrapper(wrapper);
   pageSession.tracker.observe(wrapper.element);
   pageSession.resizeObserver.observe(wrapper.element);
@@ -206,21 +203,10 @@ export function attachDiscovered(
       }
     }
     if (limboPool.length > 0 && tryRebindFromLimbo(ref, limboPool)) continue;
-    // Slot tier (DESIGN_FLING_WAVE Part 2): a recycled cell's new content —
-    // different fingerprint, different key, same surviving slot ancestor.
-    // The wrapper (badge, letter, grammar entry, grammarReady) survives the
-    // swap; adopt the fresh scan's metadata (the record changed) while
-    // keeping identity, and re-Put so the plugin's entity name converges.
-    const slotRebound = tryRebindBySlot(ref, limboPool);
-    if (slotRebound) {
-      const fresh = elements[i];
-      fresh.codeword = slotRebound.scanned.codeword;
-      fresh.id = slotRebound.scanned.id;
-      slotRebound.scanned = fresh;
-      queuePut(slotRebound);
-      scheduleSync('slot_rebind');
-      continue;
-    }
+    // (The slot rebind tier — DESIGN_FLING_WAVE Part 2 — was pruned
+    // 2026-07-18 per DESIGN_STABILITY_LADDER_PRUNE.md: 0.4% of successful
+    // rebinds in the trail read; its recycled-grid niche is carried by the
+    // strong-key and coattail tiers.)
     added += eagerAttach(refs[i], elements[i], source, attached);
   }
   primeInBandClaims(attached);

@@ -35,144 +35,6 @@ export const rebindCounters: RebindCounters = newRebindCounters();
 
 export const LIMBO_DEADLINE_MS = 250;
 
-// Slot recording depth (notes/DESIGN_FLING_WAVE.md Part 2): on the measured
-// QuickBase grid, hintables put their td at depth 1 (160), 2 (84), and 5
-// (60 — buttons under extra cell layers), so record to 6 or through the
-// first row-shaped ancestor, whichever is shallower.
-const SLOT_ANCESTOR_DEPTH = 6;
-
-// Ancestors that must never anchor a slot: they span MANY slots (a tbody
-// survives every row swap and contains everything), so recording them would
-// let a unique element removed in one place steal onto a unique same-kind
-// element added anywhere under the shared container — the cross-page
-// mis-bind the ambiguity gates can't see (both sides look unique locally).
-const SLOT_STOP_TAGS = new Set(['BODY', 'HTML', 'TABLE', 'TBODY', 'THEAD', 'TFOOT', 'MAIN']);
-const SLOT_STOP_ROLES = new Set(['grid', 'treegrid', 'rowgroup', 'table', 'main']);
-
-/** Record the wrapper's slot identity: WeakRefs to its first few parents,
- * nearest first, stopping after the first row-shaped ancestor (tr /
- * role=row) and BEFORE any multi-slot structural container (stop-list
- * above). Pointer reads only — no layout. Called at attach and re-called on
- * every rebind (the new element's chain is the live slot now). */
-export function recordSlotAncestors(w: ElementWrapper): void {
-  const out: WeakRef<Element>[] = [];
-  let p = w.element.parentElement;
-  while (p && out.length < SLOT_ANCESTOR_DEPTH) {
-    if (SLOT_STOP_TAGS.has(p.tagName)) break;
-    const role = p.getAttribute('role');
-    if (role && SLOT_STOP_ROLES.has(role)) break;
-    out.push(new WeakRef(p));
-    if (p.tagName === 'TR' || role === 'row') break;
-    p = p.parentElement;
-  }
-  w.slotAncestors = out;
-}
-
-/**
- * Slot-rebind tier (third, after strong-key and fingerprint —
- * notes/DESIGN_FLING_WAVE.md Part 2). A virtualized grid swaps a cell's
- * content: the new record's element has a DIFFERENT fingerprint (different
- * text/name) and a DIFFERENT href (no strong key), so both existing tiers
- * miss BY DESIGN and every swap was a full teardown + construction +
- * codeword churn — the pop-then-blink the eye keys on. Here the codeword
- * names the SLOT: if exactly one limbo wrapper's recorded slot ancestor
- * still contains `newEl` (same tag+role), re-anchor it — badge, letter,
- * grammar entry, and grammarReady all survive; activation routes to the new
- * element via the registry ref.
- *
- * Refusal gates (mis-binds must be structurally impossible, per the YouTube
- * duplicate-fingerprint history):
- *   - tag or role differs → not a slot swap, skip.
- *   - two limbo wrappers slot-match the same new element → refuse.
- *   - the surviving slot anchor contains 2+ same-tag/role elements → refuse
- *     (a cell with two links is ambiguous in the other direction).
- * On any refusal the caller falls through to a fresh attach — exactly
- * today's behavior. Grids that replace whole rows never match (no recorded
- * ancestor survives): the tier degrades to a no-op, which also makes its
- * `rebind_slot` counter the live probe for whether shells survive.
- *
- * Returns the rebound wrapper (so the caller can refresh its scanned
- * metadata — the record content changed) or null for fresh-attach.
- */
-export function tryRebindBySlot(newEl: Element, pool: ElementWrapper[]): ElementWrapper | null {
-  slotProbe.attempts++;
-  if (pool.length === 0) {
-    // Nothing to rebind against — if this dominates during grid churn, the
-    // old content hasn't entered limbo by the time the replacement is
-    // discovered (a discovery-vs-removal ordering problem), which is a very
-    // different disease than "the shells die with the rows".
-    slotProbe.pool_empty++;
-    return null;
-  }
-  const newTag = newEl.tagName;
-  const newRole = newEl.getAttribute('role');
-  let sawKind = false;
-  let match: ElementWrapper | null = null;
-  let matchAnchor: Element | null = null;
-  for (const w of pool) {
-    // The pool is a pass-start snapshot and the batched walk yields between
-    // slices — the finalize sweeper (250ms interval) can detach a limbo
-    // wrapper mid-pass. Rebinding such a corpse re-inserts it into byElement
-    // without re-adding it to the wrappers array (store invariant broken:
-    // findWrapperFor hits, store.all misses), leaving the new element
-    // permanently skipped by discovery and reconcile. Only live wrappers
-    // may rebind. (The fingerprint tier gets this via its idRegistry check;
-    // coattail via its live findWrapperFor lookup.)
-    if (store.findWrapperFor(w.element) !== w) continue;
-    if (w.element.tagName !== newTag) continue;
-    if (w.element.getAttribute('role') !== newRole) continue;
-    sawKind = true;
-    // Nearest-first recorded chain: the first still-connected ancestor that
-    // contains the new element is the deepest surviving slot anchor.
-    for (const ref of w.slotAncestors) {
-      const anc = ref.deref();
-      if (!anc || !anc.isConnected || !anc.contains(newEl)) continue;
-      if (match !== null) { slotProbe.multi_wrapper++; return null; }
-      match = w;
-      matchAnchor = anc;
-      break;
-    }
-  }
-  if (!match || !matchAnchor) {
-    if (sawKind) slotProbe.no_survivor++;
-    else slotProbe.kind_mismatch++;
-    return null;
-  }
-  // Reverse-direction ambiguity: the surviving anchor holds 2+ same-tag/role
-  // candidates (a cell with two links) — no safe pick.
-  let sameKind = 0;
-  for (const el of matchAnchor.querySelectorAll(newTag)) {
-    if (el.getAttribute('role') === newRole) sameKind++;
-    if (sameKind > 1) { slotProbe.multi_candidate++; return null; }
-  }
-  rebindCounters.rebind_slot++;
-  slotProbe.rebound++;
-  rebindWrapper(match, newEl);
-  consume(pool, match);
-  return match;
-}
-
-/** Why slot rebinds do or don't fire (surfaced on the debug snapshot's
- * `wave` section). `pool_empty` dominating during grid churn = the old
- * content isn't in limbo yet when the replacement is discovered (ordering);
- * `no_survivor` dominating = the shells genuinely die with the rows;
- * ambiguity counters dominating = the gates are too strict for this DOM. */
-export const slotProbe = {
-  attempts: 0,
-  pool_empty: 0,
-  kind_mismatch: 0,
-  no_survivor: 0,
-  multi_wrapper: 0,
-  multi_candidate: 0,
-  rebound: 0,
-};
-
-/** Slot-ancestor liveness at limbo entry (the other half of the probe): of
- * wrappers entering limbo, how many still have a connected recorded slot
- * ancestor RIGHT NOW? alive≈0 = shells die in the same mutation as their
- * content (slot rebind can never fire); alive high + pool_empty high =
- * ordering, not structure. */
-export const limboSlotLiveness = { alive: 0, dead: 0, unrecorded: 0 };
 
 export function collectLimboWrappers(): ElementWrapper[] {
   const out: ElementWrapper[] = [];
@@ -262,10 +124,6 @@ function rebindWrapper(w: ElementWrapper, newEl: Element): void {
   w.element = newEl;
   w.disconnectedAt = null;
   w.lastRect = null;
-  // The new element's parent chain is the live slot now (Part 2 of
-  // notes/DESIGN_FLING_WAVE.md) — re-record so the NEXT recycle of this
-  // cell can slot-rebind again.
-  recordSlotAncestors(w);
 }
 
 // --- Key-ownership rebind (DESIGN_CODEWORD_KEY_OWNERSHIP.md) ---
@@ -452,15 +310,6 @@ export function dropDisconnectedWrappers(): number {
       if (!w.lastRect) w.lastRect = peekCachedRect(w.element);
       enterLimbo(w, now);
       entered++;
-      // Slot-liveness probe (DESIGN_FLING_WAVE round 7): does any recorded
-      // slot ancestor survive at the moment the content dies? Pointer reads.
-      if (w.slotAncestors.length === 0) {
-        limboSlotLiveness.unrecorded++;
-      } else if (w.slotAncestors.some(r => r.deref()?.isConnected)) {
-        limboSlotLiveness.alive++;
-      } else {
-        limboSlotLiveness.dead++;
-      }
     }
   }
   lifecycleCounters.dropDisconnectedCalls++;

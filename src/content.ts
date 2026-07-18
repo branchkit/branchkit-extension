@@ -23,7 +23,7 @@ import { loadRecall, recalledCodewords, rememberLive, resolvePreferredCodeword, 
 import { type RebindCounters } from './labels/rebind';
 import { resolveTarget } from './activate/activate-resolution';
 import { schedulePointerVisibilitySweep, setPointerRecheckScopeEnabled, connectVisibilityMO, teardownVisibilityTracker, observeRevealCandidate } from './observe/visibility-tracker';
-import { rebindCounters, LIMBO_DEADLINE_MS, collectLimboWrappers, collectStrongKeyIndex, dropDisconnectedWrappers, finalizeExpiredLimboWrappers, slotProbe, limboSlotLiveness } from './observe/limbo';
+import { rebindCounters, LIMBO_DEADLINE_MS, collectLimboWrappers, collectStrongKeyIndex, dropDisconnectedWrappers, finalizeExpiredLimboWrappers } from './observe/limbo';
 import { attachWrapper, detachWrapper, seedPreferredFromMemory, attachDiscovered } from './core/wrapper-lifecycle';
 import { attachPageMutationObserver, getObserverFirstAttachedAt, teardownMutationSource, getDomAddEpoch } from './observe/mutation-source';
 import { setSweepGateEnabled } from './lifecycle/band-sweep-gate';
@@ -3545,10 +3545,6 @@ function snapshotExtras() {
       band_sweep_repairs: lifecycleCounters.bandSweepRepairs,
       band_sweep_releases: lifecycleCounters.bandSweepReleases,
       reservoir: labelReservoir.stats(),
-      // Why slot rebinds do/don't fire + whether slot ancestors survive at
-      // limbo entry (DESIGN_FLING_WAVE round 7 probe).
-      slot_probe: { ...slotProbe },
-      limbo_slot_liveness: { ...limboSlotLiveness },
       // Round 15+: who discovers wrappers, with per-source latency, over the
       // paint-latency window. The MO should own steady-state discovery; a
       // large sweep/scan share on a churny page is the miss being measured.
