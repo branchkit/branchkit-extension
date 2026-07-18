@@ -111,7 +111,26 @@ explicit false in plugin.browser.config). Live-verified: preview resolve
 deltas: (1) no SetsOnPartial on the sealed shape (actuator validation
 rejects it on non-dependent captures — the completing-tag scoped narrowing
 during a chopped pair is lost; generic bridge still carries it), (2)
-SW-unroutable path logs/events but has no toast yet. Step 2 = daily drive.
+SW-unroutable path logs/events but has no toast yet.
+
+**Step-2 outcome: FAILED FAST (2026-07-18, default back OFF).** Two
+regressions the user caught within minutes of default-on, sharing one root —
+the dependent-capture shape carries UX the plan credited to "sync
+bookkeeping":
+  1. **Prefix narrowing died.** Badges filtering to the spoken first word is
+     driven by `_platform.dependent_capture.progress` (plugin consumes it →
+     extension setMatchedChars/filter). Plain captures emit no progress.
+  2. **Discovery HUD showed the alphabet.** The HUD's live-pair display comes
+     from the per-prefix collections behind the dependent capture; the sealed
+     pattern renders as its raw 26-word capture.
+Requirements before any re-flip: (a) generic capture-progress emission for
+plain multi-slot captures (actuator seam — generic, not plugin-specific) or
+extension-side narrowing driven off a partial-dispatch signal; (b) a HUD
+display source for sealed hint patterns (display-form metadata or
+collection-backed rendering at relaxed cadence). REVISED READ: the per-prefix
+mirror is load-bearing for THREE user surfaces (match truth, narrowing, HUD)
+— the retirement payoff shrinks accordingly and the cut must replace all
+three, not one.
 
 Steps (each independently landable, plugin + extension only):
   0. Flag: plugin setting `hints_pull_resolution` (default off) selecting
