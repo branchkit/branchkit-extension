@@ -129,8 +129,38 @@ console.log('stored after Save:', JSON.stringify(stored.domainRules?.rules?.[0]?
 await fixturePage.waitForTimeout(1200);
 const after = await badgeXs();
 
+// --- Authoring preview: a NEW nudge moves badges BEFORE Add is clicked ---
+await popup.locator('.add-entry select').first().selectOption('nudge');
+await popup.locator('.add-entry input.matcher').fill('a');
+await popup.locator('.add-entry input.nudge-px').first().fill('200');
+await popup.waitForTimeout(1000); // 200ms debounce + port + re-place
+const previewXs = await badgeXs();
+// The preview entry is prepended (first-match-wins), so it overrides the
+// stored dx -40 entirely: delta vs `after` should be 200 - (-40) = 240.
+const previewDelta = previewXs[0] - after[0];
+console.log(`preview (pre-Add) badge x: ${after[0]} -> ${previewXs[0]} (delta ${previewDelta}, expected 240)`);
+
+// Add commits the rule; the preview lifts after the real rule lands. The
+// NEW entry appends after the original, which still matches first — so
+// badges settle back to the original entry's offset.
+await popup.locator('.add-entry button.primary').first().click();
+await popup.waitForTimeout(1800);
+const committed = await sw.evaluate(() => chrome.storage.sync.get('domainRules'));
+const entryCount = committed.domainRules?.rules?.[0]?.entries?.length;
+const settledXs = await badgeXs();
+console.log(`entries after Add: ${entryCount} (expected 2); settled x: ${settledXs[0]} (expected ${after[0]})`);
+
 server.close();
 await ctx.close();
+
+if (Math.abs(previewDelta - 240) > 2) {
+  console.error('FAIL: authoring preview did not move badges before Add');
+  process.exit(1);
+}
+if (entryCount !== 2 || Math.abs(settledXs[0] - after[0]) > 2) {
+  console.error('FAIL: Add did not commit cleanly / preview did not lift');
+  process.exit(1);
+}
 
 const movedBy = after.length && before.length ? after[0] - before[0] : NaN;
 console.log(`badge x before/after: ${before[0]} -> ${after[0]} (delta ${movedBy}, expected -140)`);

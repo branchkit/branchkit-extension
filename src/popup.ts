@@ -599,6 +599,38 @@ let editOriginal: RuleEntry | null = null;
 // per-minute write quotas, and each save re-places badges on the page.
 let nudgeLiveTimer: ReturnType<typeof setTimeout> | null = null;
 
+// --- Nudge authoring preview ---
+//
+// A NEW nudge entry has nothing on the page to move until Add — so the add
+// form streams an ephemeral preview to the content script over a port.
+// Nothing persists: the CS drops the preview when told (Add lands the real
+// rule; kind switch abandons it) or when the port disconnects (popup
+// closed). Port messaging has no write quota, so this can be snappier than
+// the storage-backed edit path.
+let previewPort: chrome.runtime.Port | null = null;
+let previewPortTabId: number | null = null;
+let nudgePreviewTimer: ReturnType<typeof setTimeout> | null = null;
+
+function sendNudgePreview(msg: { selector?: string; dx?: number; dy?: number; clear?: boolean }): void {
+  const tabId = activeTab?.id;
+  if (tabId == null) return;
+  if (!previewPort || previewPortTabId !== tabId) {
+    try {
+      previewPort = chrome.tabs.connect(tabId, { name: 'nudge-preview' });
+      previewPortTabId = tabId;
+      previewPort.onDisconnect.addListener(() => { previewPort = null; });
+    } catch {
+      previewPort = null;
+      return;
+    }
+  }
+  try {
+    previewPort.postMessage(msg);
+  } catch {
+    previewPort = null;
+  }
+}
+
 function beginEditEntry(rule: DomainRule, entry: RuleEntry): void {
   for (const id of addFormRefs.keys()) {
     if (id !== rule.id) resetAddForm(id);
@@ -843,25 +875,41 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
     clearFeedback(feedback);
   });
 
-  // Live write-through while EDITING an existing nudge entry: offsets apply
-  // as you type/step (debounced), so the badge moves on the page under the
-  // open popup. Save confirms; Cancel reverts to the pre-edit snapshot.
-  // New-entry authoring stays Save-gated — there's no entry to apply yet.
+  // Live application while the form holds a nudge: EDITING an existing
+  // entry writes through storage (debounced — Save confirms, Cancel reverts
+  // to the pre-edit snapshot); AUTHORING a new one streams an ephemeral
+  // preview over the port (nothing persists until Add). Either way the
+  // badge moves on the page under the open popup.
   const liveApplyOffsets = (): void => {
-    if (editSession?.ruleId !== rule.id || kindSelect.value !== 'nudge') return;
-    const editing = rule.entries.find((e) => e.id === editSession!.entryId);
-    if (!editing || editing.kind !== 'nudge') return;
+    if (kindSelect.value !== 'nudge') return;
     const dx = parseFloat(nudgeX.value);
     const dy = parseFloat(nudgeY.value);
-    editing.nudge = {
+    if (editSession?.ruleId === rule.id) {
+      const editing = rule.entries.find((e) => e.id === editSession!.entryId);
+      if (!editing || editing.kind !== 'nudge') return;
+      editing.nudge = {
+        dx: Number.isFinite(dx) ? dx : 0,
+        dy: Number.isFinite(dy) ? dy : 0,
+      };
+      if (nudgeLiveTimer) clearTimeout(nudgeLiveTimer);
+      nudgeLiveTimer = setTimeout(saveRules, 400);
+      return;
+    }
+    const selector = matcherInput.value.trim();
+    if (!selector || !isValidSelector(selector)) return;
+    if (nudgePreviewTimer) clearTimeout(nudgePreviewTimer);
+    nudgePreviewTimer = setTimeout(() => sendNudgePreview({
+      selector,
       dx: Number.isFinite(dx) ? dx : 0,
       dy: Number.isFinite(dy) ? dy : 0,
-    };
-    if (nudgeLiveTimer) clearTimeout(nudgeLiveTimer);
-    nudgeLiveTimer = setTimeout(saveRules, 400);
+    }), 200);
   };
   nudgeX.addEventListener('input', liveApplyOffsets);
   nudgeY.addEventListener('input', liveApplyOffsets);
+  matcherInput.addEventListener('input', liveApplyOffsets);
+  kindSelect.addEventListener('change', () => {
+    if (kindSelect.value !== 'nudge') sendNudgePreview({ clear: true });
+  });
 
   cancelBtn.addEventListener('click', () => {
     // Undo any live-applied offset changes from this edit session.
@@ -934,6 +982,13 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
       rule.entries.push(entry);
     }
     saveRules();
+    if (!editing && kind === 'nudge') {
+      // The real rule is landing via the storage path; lift the ephemeral
+      // preview after it has had time to apply so the badge doesn't flash
+      // back to its un-nudged spot in between.
+      if (nudgePreviewTimer) clearTimeout(nudgePreviewTimer);
+      setTimeout(() => sendNudgePreview({ clear: true }), 500);
+    }
     resetAddForm(rule.id);
     renderEntries(rule, entriesEl);
   });

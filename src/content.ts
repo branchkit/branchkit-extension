@@ -536,13 +536,11 @@ function applyMatchedRules(matched: DomainRule[]): void {
   }
   if (matched.length === 0) {
     compiledRule = null;
-    setRuleNudges([]);
-    clearRuleNudgeCaches();
+    applyNudgeSet();
     return;
   }
   compiledRule = compileRules(matched);
-  setRuleNudges(compiledRule.nudges);
-  clearRuleNudgeCaches();
+  applyNudgeSet();
   const style = injectRevealStyles(compiledRule.reveals);
   if (style && document.head) document.head.appendChild(style);
 }
@@ -552,6 +550,46 @@ function applyMatchedRules(matched: DomainRule[]): void {
 // placement pass re-resolves lazily.
 function clearRuleNudgeCaches(): void {
   for (const w of store.all) w.cachedRuleNudge = undefined;
+}
+
+// --- Nudge preview (popup authoring) ---
+//
+// While the popup's add form authors a nudge entry, the offset applies to
+// the page EPHEMERALLY so the user tunes against the live badge instead of
+// blind-typing values and clicking Add to see them. Nothing persists: the
+// preview entry is prepended to the compiled set (first-match-wins makes it
+// authoritative while present) and evaporates when the popup clears it,
+// switches kinds, or closes — the port's disconnect covers close/crash.
+let previewNudge: RuleEntry | null = null;
+
+function applyNudgeSet(): void {
+  const compiled = compiledRule?.nudges ?? [];
+  setRuleNudges(previewNudge ? [previewNudge, ...compiled] : compiled);
+  clearRuleNudgeCaches();
+  placeBadges([...store.all].filter((w) => w.hint));
+}
+
+if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
+  chrome.runtime.onConnect.addListener((port) => {
+    if (port.name !== 'nudge-preview') return;
+    if (pageSession.isTornDown) { recordOrphanHit(); port.disconnect(); return; }
+    port.onMessage.addListener(
+      (msg: { selector?: string; dx?: number; dy?: number; clear?: boolean }) => {
+        previewNudge = msg.clear || !msg.selector ? null : {
+          id: '_nudge_preview',
+          kind: 'nudge',
+          matcher: { type: 'css', selector: msg.selector },
+          nudge: { dx: msg.dx ?? 0, dy: msg.dy ?? 0 },
+        };
+        applyNudgeSet();
+      });
+    port.onDisconnect.addListener(() => {
+      if (previewNudge) {
+        previewNudge = null;
+        applyNudgeSet();
+      }
+    });
+  });
 }
 
 if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
@@ -576,11 +614,10 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
         if (isExcludedByRule(w.element, compiledRule.excludes)) detachWrapper(w.element);
       }
     }
-    // Re-place badges already on screen: a doScan only discovers NEW
-    // hintables, but nudge offsets apply at placement time — without this,
-    // a nudge edit (the popup's live steppers) doesn't move existing
-    // badges until some later full re-place.
-    placeBadges([...store.all].filter((w) => w.hint));
+    // Badges already on screen were re-placed by applyMatchedRules →
+    // applyNudgeSet (a doScan only discovers NEW hintables, and nudge
+    // offsets apply at placement time — without the re-place, a nudge edit
+    // wouldn't move existing badges until some later full pass).
     scheduleDoScan();
     schedulePushGrammar();
   });
