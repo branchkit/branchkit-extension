@@ -130,8 +130,6 @@ import { churnStats } from './debug/churn-log';
 import { syncTraceStats } from './debug/sync-trace';
 import { loadConfig, getDisplayMode, getHintVisibility } from './config';
 import {
-  grammarEpochStats,
-  probeGrammarEpoch,
   initLabelSync,
   queuePut,
   dropPendingPut,
@@ -1667,6 +1665,40 @@ function isPaintReady(w: ElementWrapper): boolean {
   return w.grammarReady || !isVoiceAlphabetLoaded() || !isBranchKitConnected();
 }
 
+/**
+ * Pull-resolution live strict gate (ext notes/DESIGN_STATIC_PAIR_GRAMMAR.md
+ * 0c): the sealed-alphabet match doesn't consult the `_strict` mirror, so
+ * seen-is-clickable is enforced at dispatch, against live state — on-screen,
+ * CSS-visible, not occluded. Shared by activate and the element verbs.
+ */
+function sealedDispatchSeen(target: unknown): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const w = store.findWrapperFor(target);
+  const rect = target.getBoundingClientRect();
+  return (
+    isRectOnScreen(rect, window.innerWidth, window.innerHeight) &&
+    isVisible(target) &&
+    !w?.cssHidden && !w?.occluded
+  );
+}
+
+/** The refused-pair feedback + dispatch result for a sealed miss. */
+function reportNoSuchHint(
+  action: string,
+  codeword: string,
+  resolution: DispatchResult['resolution'],
+  fp: string,
+  params: Record<string, string> | undefined,
+): void {
+  flashToast(`No hint "${(params?.prefix_word && params?.suffix_word)
+    ? `${params.prefix_word} ${params.suffix_word}` : codeword}"`);
+  reportDispatchResult({
+    action, codeword, resolution, elem_tag: '', taken: 'skipped',
+    ok: false, frame: trimFrameUrl(window.location.href),
+    detail: 'no_such_hint', fp,
+  });
+}
+
 // (The ResizeObserver hintability safety net and the viewport-scoped
 // AttentionObserver are owned by `pageSession` — constructed in
 // `PageSession.start()` with the other observers, Tier 3 of
@@ -2445,14 +2477,6 @@ pageSession.resources.listen(window, 'pageshow', (e) => {
 // session_id so its `ensureFrameSession` clears stale per-prefix entries;
 // then re-queue every live, hintable wrapper for the next sync.
 function republishAllGrammar(reason: string): void {
-  // Phase 3a trigger-redundancy probe (decision 4): read the plugin's
-  // pre-republish epoch so the soak can answer "would the handshake have
-  // caught this firing?" per enumerated trigger. epoch_mismatch IS the
-  // handshake acting — probing it would be circular, so it's excluded.
-  // Fire-and-forget: the heal must not wait a round-trip on telemetry, and
-  // the probe snapshots the shadow synchronously before rotateSession
-  // clears it.
-  if (reason !== 'epoch_mismatch') void probeGrammarEpoch(reason);
   rotateSession();
   let requeued = 0;
   for (const w of store.all) {
@@ -2875,12 +2899,6 @@ function republishForActivation(reason: string): void {
   // re-push, and reconciliation scan entirely so a refocus doesn't wake a
   // full DOM scan in every empty subframe of the page.
   if (!store.all.some(w => w.scanned.codeword)) return;
-  // Phase 3a trigger-redundancy probe — the reactivate push is the third
-  // enumerated trigger (reasons here: sse_connect from the plugin,
-  // tab_activated from the background). After the early-out so empty
-  // subframes don't probe on every refocus; before rotateSession for the
-  // same pre-rotation snapshot reasons as republishAllGrammar.
-  void probeGrammarEpoch(reason);
   // Rotate to a fresh session id so the re-push rebuilds the plugin's per-frame
   // view cleanly. rotateSession also resets the delta-sync mirror, so every
   // live codeword needs re-Putting below.
@@ -3068,28 +3086,10 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       // CSS-hidden hover target, occluded badge), refuses with detail
       // 'no_such_hint' instead of clicking blind. prefix_letter rides only
       // pull-resolution dispatches — the marker.
-      if (params?.prefix_letter != null) {
-        const w = target instanceof HTMLElement ? store.findWrapperFor(target) : undefined;
-        const rect = target instanceof HTMLElement ? target.getBoundingClientRect() : null;
-        const seen = !!(
-          target instanceof HTMLElement && rect &&
-          isRectOnScreen(rect, window.innerWidth, window.innerHeight) &&
-          isVisible(target) &&
-          !w?.cssHidden && !w?.occluded
-        );
-        if (!seen) {
-          // The accepted UX (2026-07-18): explicit feedback over silence.
-          flashToast(`No hint "${(params?.prefix_word && params?.suffix_word)
-            ? `${params.prefix_word} ${params.suffix_word}` : codeword}"`);
-          reportDispatchResult({
-            action, codeword, resolution, elem_tag: '', taken: 'skipped',
-            ok: false,
-            frame: trimFrameUrl(window.location.href),
-            detail: 'no_such_hint',
-            fp,
-          });
-          return;
-        }
+      if (params?.prefix_letter != null && !sealedDispatchSeen(target)) {
+        // The accepted UX (2026-07-18): explicit feedback over silence.
+        reportNoSuchHint(action, codeword, resolution, fp, params);
+        return;
       }
 
       let taken: DispatchResult['taken'] = 'skipped';
@@ -3257,6 +3257,12 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         },
       );
       const target = resolved.target;
+      // Same live gate as activate — the old path enforced strict at match
+      // time; sealed verbs enforce it here.
+      if (params?.prefix_letter != null && !sealedDispatchSeen(target)) {
+        reportNoSuchHint(action, codeword, resolved.resolution, resolved.fp, params);
+        return;
+      }
       if (target instanceof HTMLElement) {
         store.findWrapperFor(target)?.hint?.flash();
         let detail = '';
@@ -3626,7 +3632,6 @@ function snapshotExtras() {
     // round-trips, wholesale refusals, or session-rotation races
     // (old-session batches failing after a rotate).
     sync_trace: syncTraceStats(PAINT_LATENCY_WINDOW_MS),
-    grammar_epoch: grammarEpochStats(),
     reconcile_applied: {
       passes: engine.applied.passes,
       last: { ...engine.applied.last },
@@ -4397,7 +4402,6 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
     // checks should climb with sync traffic; mismatches should stay 0 except
     // around the enumerated republish triggers — those firings are the
     // evidence Phase 3 needs before retiring them.
-    grammarEpoch: grammarEpochStats(),
     // What the settle pass DID (Phase E, decision 4 of the unified-reconciler
     // note): per-class applied counts for the last pass + cumulative. The
     // plan is authoritative, so this replaces the old shadow counts/diff.

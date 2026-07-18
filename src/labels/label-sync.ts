@@ -35,7 +35,6 @@
 
 import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
 import { stampStrictViewport } from '../lifecycle/strict-viewport';
-import { epochHashOf } from './grammar-epoch';
 import { GrammarBatchRequest, GrammarBatchResponse, Message } from '../types';
 import { isVoiceAlphabetLoaded, tokenToSpokenCodeword } from './words';
 import { DEFAULT_SCAN_BATCH_SIZE } from '../scan/scanner';
@@ -210,7 +209,6 @@ export async function postBatch(
   // next attempt.
   const fullRequest: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'> =
     deletes.length > 0 ? { ...request, delete_codewords: deletes } : request;
-  inFlightBatches++;
   // Transport trace (round 22b): every outcome — including silently-caught
   // sendMessage failures and slow round-trips — lands in the snapshot's
   // sync_trace ring so a stalled post-swap sync names its mechanism.
@@ -246,7 +244,6 @@ export async function postBatch(
       failed: request.elements.map(e => ({ codeword: e.codeword, reason: 'sendMessage_failed' })),
     };
   } finally {
-    inFlightBatches--;
   }
 }
 
@@ -302,243 +299,11 @@ function isWholesaleRefusal(resp: GrammarBatchResponse): boolean {
     && resp.failed.length === 0;
 }
 
-// --- Grammar epoch tripwire (Phase 2a of DESIGN_GRAMMAR_EPOCH_HANDSHAKE.md) ---
-//
-// Detect-only: compares the plugin's post-batch epoch against this frame's
-// delta-sync shadow on final-chunk responses. A mismatch means the shadow
-// has diverged from the plugin's grammar — the class healed today by the
-// enumerated full-republish triggers (sw_restart_resync, bfcache_restore,
-// the plugin's sse_connect reactivate). This tripwire measures whether the
-// handshake would catch each of those firings (and any unknown desync) BEFORE
-// Phase 2b lets a mismatch trigger the republish itself. Counters ride the
-// perf snapshot; mismatch detail goes to browser.log. Known tolerable noise:
-// a session rotation racing a mid-flight sync compares an old-session
-// response against the cleared shadow — detect-only exists to measure
-// exactly this kind of thing.
-interface EpochStats {
-  checks: number;
-  mismatches: number;
-  /** Comparisons skipped because other grammar traffic was in flight. */
-  skippedBusy: number;
-  /** Phase 2b: epoch_mismatch republishes fired by this instance. */
-  republishes: number;
-  /** Phase 2b: the consecutive-republish cap tripped (loud-bug state). */
-  capExhausted: boolean;
-  lastMismatch: {
-    pluginCount: number; pluginHash: string;
-    shadowCount: number; shadowHash: string;
-    reason: string;
-    /** Frame attribution — without it, every mismatch investigation needs
-     * hand-correlation across logs (2026-06-12's chases). */
-    url: string;
-    frame: 'top' | 'iframe';
-  } | null;
-}
-
-// Origin+path only (no query/fragment noise), capped — breadcrumb-sized.
-function trimUrlForLog(href: string): string {
-  try {
-    const u = new URL(href);
-    return `${u.origin}${u.pathname}`.slice(0, 120);
-  } catch {
-    return href.slice(0, 120);
-  }
-}
-const epochStats: EpochStats = {
-  checks: 0, mismatches: 0, skippedBusy: 0, republishes: 0, capExhausted: false, lastMismatch: null,
-};
-
-// --- Phase 2b: mismatch acts (DESIGN_GRAMMAR_EPOCH_HANDSHAKE.md decisions 4+5) ---
-//
-// A confirmed quiescent mismatch fires the same recovery the enumerated
-// triggers use — republishAllGrammar('epoch_mismatch') via deps.republishAll
-// — making grammar convergence level-triggered: any desync, known or future,
-// heals within one batch round-trip of the next quiescent sync instead of
-// waiting for its class to be discovered, named, and wired to a trigger.
-// The enumerated triggers stay (decision 4) until telemetry proves them
-// redundant.
-//
-// Loop guards (decision 5): a republish is itself a full re-Put whose final
-// chunk re-runs this comparison, so a persistent disagreement (plugin bug,
-// the latent plugin↔actuator divergence the epoch can't see) would otherwise
-// republish forever:
-//   - cooldown: at most one epoch_mismatch republish per 5s;
-//   - consecutive cap: after 3 republishes with no clean check in between,
-//     stop the fast ladder and go LOUD (BK_GRAMMAR_EPOCH_CAP + firehose
-//     breadcrumb). A mismatch that survives a full republish is a real bug we
-//     want visible, not a silent republish storm. Any clean check resets the
-//     cap, so a long-lived page whose occasional desyncs DO heal never
-//     exhausts it; detect-only logging continues even when capped.
-//   - post-cap trickle: while capped, retry ONE republish per
-//     EPOCH_CAP_RETRY_MS instead of never. The loud log is dev-only, so a
-//     hard stop left production users with a silently diverged grammar
-//     (painted-but-unmatchable badges) until an unrelated rotation — a
-//     terminal wedge on a tab that never changes focus (2026-06-29 review).
-//     One rotate+republish per 5 minutes bounds staleness for transient
-//     causes while staying far from storm territory.
-const EPOCH_REPUBLISH_COOLDOWN_MS = 5000;
-const EPOCH_REPUBLISH_MAX_CONSECUTIVE = 3;
-const EPOCH_CAP_RETRY_MS = 5 * 60_000;
-let lastEpochRepublishAt = -Infinity;
-let consecutiveEpochRepublishes = 0;
-
-/** Test seam: module state is per-page in production (one module instance
- * per content script) but shared across a vitest file. */
-export function resetGrammarEpochActForTest(): void {
-  lastEpochRepublishAt = -Infinity;
-  consecutiveEpochRepublishes = 0;
-  epochStats.checks = 0;
-  epochStats.mismatches = 0;
-  epochStats.skippedBusy = 0;
-  epochStats.republishes = 0;
-  epochStats.capExhausted = false;
-  epochStats.lastMismatch = null;
-}
-
-/** GRAMMAR_BATCH posts currently awaiting a response (scan + sync paths
- * both route through postBatch). */
-let inFlightBatches = 0;
-
-/** Snapshot for the perf surface (content.ts buildPerfSnapshot). */
-export function grammarEpochStats(): EpochStats {
-  return { ...epochStats, lastMismatch: epochStats.lastMismatch ? { ...epochStats.lastMismatch } : null };
-}
-
-function checkGrammarEpoch(resp: GrammarBatchResponse, reason: string): void {
-  const remote = resp.epoch;
-  if (!remote) return; // refusal, or a plugin build predating the handshake
-  if (resp.result !== 'ok' && resp.result !== 'stored') return;
-  // Quiescence gate: the scan pipeline, incremental syncs, and strict
-  // re-pushes interleave by design, so a response's epoch describes a state
-  // other in-flight batches are still moving — comparing there measures the
-  // interleave, not divergence (first live smoke: 10/10 false mismatches
-  // within 500ms of concurrent traffic). Compare only when this was the
-  // sole in-flight batch and nothing further is queued; a genuinely
-  // diverged grammar is diverged at rest, which is exactly when this fires.
-  if (inFlightBatches > 0 || pendingPuts.size > 0 || pendingDeleteCodewords.length > 0) {
-    epochStats.skippedBusy++;
-    return;
-  }
-  epochStats.checks++;
-  const shadowCount = sentCodewords.size;
-  // The plugin's epoch is computed over the SPOKEN codewords it stored, so the
-  // shadow must hash the spoken translation of our letter tokens — not the
-  // letters themselves — to stay byte-identical (the overlay is loaded whenever
-  // a real epoch response arrives, since voice is connected).
-  const shadowHash = epochHashOf([...sentCodewords].map(tokenToSpokenCodeword));
-  // Count comparison is free; hash only when counts agree (and at mismatch
-  // time for the breadcrumb).
-  if (remote.count === shadowCount && shadowHash === remote.hash) {
-    // Clean check: the grammar converged, so any republish run is over.
-    if (epochStats.capExhausted) {
-      bkLog('BK_GRAMMAR_EPOCH_CAP_CLEARED', { afterRepublishes: consecutiveEpochRepublishes });
-    }
-    consecutiveEpochRepublishes = 0;
-    epochStats.capExhausted = false;
-    return;
-  }
-  epochStats.mismatches++;
-  epochStats.lastMismatch = {
-    pluginCount: remote.count,
-    pluginHash: remote.hash,
-    shadowCount,
-    shadowHash,
-    reason,
-    url: trimUrlForLog(window.location.href),
-    frame: window === window.top ? 'top' : 'iframe',
-  };
-  bkLog('BK_GRAMMAR_EPOCH_MISMATCH', epochStats.lastMismatch);
-
-  // Phase 2b: act on the mismatch (cooldown + consecutive cap + post-cap
-  // trickle, above).
-  if (consecutiveEpochRepublishes >= EPOCH_REPUBLISH_MAX_CONSECUTIVE) {
-    if (!epochStats.capExhausted) {
-      epochStats.capExhausted = true;
-      bkLog('BK_GRAMMAR_EPOCH_CAP', {
-        republishes: consecutiveEpochRepublishes, ...epochStats.lastMismatch,
-      });
-      firehoseStep('grammar_epoch:cap_exhausted', consecutiveEpochRepublishes);
-    }
-    const nowCapped = performance.now();
-    if (nowCapped - lastEpochRepublishAt < EPOCH_CAP_RETRY_MS) return;
-    lastEpochRepublishAt = nowCapped;
-    epochStats.republishes++;
-    bkLog('BK_GRAMMAR_EPOCH_CAP_RETRY', epochStats.lastMismatch);
-    firehoseStep('grammar_epoch:cap_retry', epochStats.republishes);
-    deps.republishAll('epoch_mismatch');
-    return;
-  }
-  const now = performance.now();
-  if (now - lastEpochRepublishAt < EPOCH_REPUBLISH_COOLDOWN_MS) return;
-  lastEpochRepublishAt = now;
-  consecutiveEpochRepublishes++;
-  epochStats.republishes++;
-  firehoseStep('grammar_epoch:republish', consecutiveEpochRepublishes);
-  deps.republishAll('epoch_mismatch');
-}
-
-// --- Phase 3a: trigger-redundancy probe (DESIGN_GRAMMAR_EPOCH_HANDSHAKE.md
-// decision 4) ---
-//
-// Detect-only telemetry for trigger retirement: at each enumerated
-// full-republish trigger firing, read the plugin's PRE-republish epoch and
-// record whether the handshake alone would have seen this divergence
-// (`diverged`) and whether the 2a quiescence gate would have let a check run
-// at that instant (`busy`). An empty incremental batch is a pure read — the
-// plugin applies nothing and answers with its current epoch (same shape the
-// pure-delete push already posts, minus the deletes).
-//
-// The probe is its own read, NOT a sync participant: it bypasses postBatch
-// (no pendingDeleteCodewords piggyback, no inFlightBatches participation —
-// the regular traffic must not see the probe as "busy"), never feeds
-// checkGrammarEpoch, and never republishes. Callers fire it BEFORE
-// rotateSession, so the shadow snapshot below still describes the
-// pre-republish state; the comparison runs against that snapshot when the
-// response lands (rotation will have cleared the live set by then).
-//
-// `diverged: null` = the epoch was unreadable (transport failure, wholesale
-// refusal, or a pre-handshake plugin build); the firing still gets its line
-// so per-firing counts stay honest.
-export function probeGrammarEpoch(reason: string): Promise<void> {
-  const busy = inFlightBatches > 0 || pendingPuts.size > 0 || pendingDeleteCodewords.length > 0;
-  const shadowCount = sentCodewords.size;
-  // Hash the spoken translation of our letter tokens to match the plugin's
-  // epoch (computed over the codewords it stored). See checkGrammarEpoch.
-  const shadowHash = epochHashOf([...sentCodewords].map(tokenToSpokenCodeword));
-  const request: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'> = {
-    session_id: sessionId,
-    batch_index: 0,
-    is_final: true,
-    kind: 'incremental',
-    conn_id: '', // stamped by the background SW
-    hint_visibility: getHintVisibility(),
-    app_id: '',
-    table_id: '',
-    elements: [],
-  };
-  return (async () => {
-    let diverged: boolean | null = null;
-    let pluginCount: number | null = null;
-    let result = 'transport_failed';
-    try {
-      const resp: GrammarBatchResponse =
-        await chrome.runtime.sendMessage({ type: 'GRAMMAR_BATCH', request } as Message);
-      result = resp.result;
-      const remote = (resp.result === 'ok' || resp.result === 'stored') ? resp.epoch : undefined;
-      if (remote) {
-        diverged = remote.count !== shadowCount || remote.hash !== shadowHash;
-        pluginCount = remote.count;
-      }
-    } catch {
-      // SW unreachable — diverged stays null.
-    }
-    bkLog('BK_TRIGGER_PROBE', {
-      reason, diverged, busy, pluginCount, shadowCount, result,
-      url: trimUrlForLog(window.location.href),
-      frame: window === window.top ? 'top' : 'iframe',
-    });
-  })();
-}
+// (The grammar-epoch handshake — tripwire, mismatch republish ladder, and
+// trigger-redundancy probe — was deleted 2026-07-19 in the pull-resolution
+// payoff pass: match truth moved to dispatch-time resolution, so the mirror
+// is display-grade and no longer needs correctness-grade convergence
+// machinery. History: DESIGN_GRAMMAR_EPOCH_HANDSHAKE.md.)
 
 // Mass-claim fast path (round 34b): a swap repaint claims ~100+ letters in
 // one burst, and every one of those badges renders bk-pending translucent
@@ -677,7 +442,6 @@ async function doSyncNow(reason: string): Promise<void> {
       elements: [],
     }, drainedDeletes);
     if (resp.result === 'ok' || resp.result === 'stored') {
-      checkGrammarEpoch(resp, reason);
     } else if (isWholesaleRefusal(resp)) {
       bkLog('BK_SYNC_REFUSED', { result: resp.result, deletes: drainedDeletes.length });
       scheduleRefusalRetry();
@@ -705,7 +469,7 @@ async function doSyncNow(reason: string): Promise<void> {
   }
   let halted = false;
 
-  const handleResponse = (chunk: ElementWrapper[], resp: GrammarBatchResponse, deletesRiding: string[], isLast: boolean): void => {
+  const handleResponse = (chunk: ElementWrapper[], resp: GrammarBatchResponse, deletesRiding: string[], _isLast: boolean): void => {
     if (resp.result === 'error') {
       // Transport failure ('error' is synthetic — the SW's transportFailure
       // or a failed sendMessage; the plugin only answers ok/stored/
@@ -768,7 +532,6 @@ async function doSyncNow(reason: string): Promise<void> {
     sweepDisconnectedAfterBatch(succeededWrappers, (el) => el.isConnected, pendingDeleteCodewords, deps.detachWrapper);
     // Epoch tripwire on the final chunk only — intermediate responses
     // describe a half-applied sync by construction.
-    if (isLast) checkGrammarEpoch(resp, reason);
     if (deps.isBadgesVisible() && resp.succeeded.length > 0) {
       deps.reconcile();
     }

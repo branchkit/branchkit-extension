@@ -112,11 +112,6 @@ export interface GrammarBatchResponse {
   result: 'ok' | 'error' | 'stored' | 'calibration_active';
   succeeded: string[];
   failed: GrammarBatchFailure[];
-  /** The plugin's post-batch view of this frame's grammar membership
-   * (count + order-insensitive codeword digest). Absent on refusals and on
-   * plugin builds that predate the epoch handshake — absence disables the
-   * check. See DESIGN_GRAMMAR_EPOCH_HANDSHAKE.md. */
-  epoch?: { count: number; hash: string };
 }
 
 // --- Messages ---
