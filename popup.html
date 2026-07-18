@@ -222,6 +222,40 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .badge-size-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 6px;
+    }
+    .badge-size-label {
+      font-size: 11px;
+      color: var(--fg-muted);
+      flex: none;
+    }
+    .badge-size-slider { flex: 1; min-width: 0; margin: 0; }
+    .badge-size-num {
+      width: 52px;
+      flex: none;
+      text-align: right;
+      font: inherit;
+      font-size: 12px;
+      padding: 3px 5px;
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border-strong);
+      border-radius: 4px;
+    }
+    .badge-size-num::placeholder { color: var(--fg-muted); }
+    .badge-size-clear {
+      font: inherit;
+      padding: 0 4px;
+      border: none;
+      background: none;
+      color: var(--fg-muted);
+      cursor: pointer;
+    }
+    .badge-size-clear:hover { color: var(--fg); }
     .entries-list {
       margin-top: 6px;
       display: flex;

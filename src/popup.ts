@@ -17,6 +17,7 @@ import {
   type RevealMethod,
 } from './rules/domain-rules';
 import { loadDomainRules, saveDomainRules } from './rules/domain-rules-storage';
+import { loadBadgeSettings, DEFAULT_BADGE_SETTINGS } from './badge-settings-storage';
 import { getRuleForPattern, setRuleOff, setRulePassKeys } from './keyboard-rules';
 import { migrateDisplayMode } from './labels/words';
 import { suggestPattern, isValidSelector } from './rules/options-helpers';
@@ -329,10 +330,11 @@ async function loadRules(): Promise<void> {
 }
 
 function saveRules(): void {
-  // A draft that has gained an entry graduates to a real, persisted rule.
+  // A draft that has gained an entry — or a badge-size override, which is
+  // rule-level content in its own right — graduates to a real, persisted rule.
   if (draftRuleId !== null) {
     const draft = rules.find((r) => r.id === draftRuleId);
-    if (!draft || draft.entries.length > 0) draftRuleId = null;
+    if (!draft || draft.entries.length > 0 || draft.badgeSizePx !== undefined) draftRuleId = null;
   }
   // Never write an empty draft to storage.
   const toPersist = draftRuleId !== null
@@ -550,6 +552,7 @@ function renderRuleCard(rule: DomainRule): HTMLElement {
   headerRow.appendChild(toggle);
 
   card.appendChild(headerRow);
+  card.appendChild(renderBadgeSizeRow(rule));
 
   const entriesEl = document.createElement('div');
   entriesEl.className = 'entries-list';
@@ -558,6 +561,102 @@ function renderRuleCard(rule: DomainRule): HTMLElement {
 
   card.appendChild(renderAddEntry(rule, entriesEl));
   return card;
+}
+
+// --- Rule-level badge size override ---
+//
+// One value per rule, not per entry — size is page-scoped where entries
+// are element-scoped verbs. Quoted like the global "Badge appearance"
+// size control: badge px on 14px text. Empty = use the global setting.
+// Applies live while dragging, debounced through the normal rules save
+// (chrome.storage.sync has write quotas); the content script rebuilds
+// badges when the resolved size changes.
+
+const BADGE_SIZE_MIN_PX = 6;
+const BADGE_SIZE_MAX_PX = 28;
+const BADGE_NORMAL_TEXT_PX = 14;
+
+// The global size (slider resting position for rules with no override) —
+// default until storage loads in init().
+let globalBadgeSizePx = Math.round(DEFAULT_BADGE_SETTINGS.scale * BADGE_NORMAL_TEXT_PX * 2) / 2;
+let badgeSizeLiveTimer: ReturnType<typeof setTimeout> | null = null;
+
+function renderBadgeSizeRow(rule: DomainRule): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'badge-size-row';
+
+  const label = document.createElement('label');
+  label.className = 'badge-size-label';
+  label.textContent = 'Badge size:';
+  row.appendChild(label);
+
+  const slider = document.createElement('input');
+  slider.type = 'range';
+  slider.className = 'badge-size-slider';
+  slider.min = String(BADGE_SIZE_MIN_PX);
+  slider.max = String(BADGE_SIZE_MAX_PX);
+  slider.step = '0.5';
+  slider.title = 'Badge size on this site (px on 14px text)';
+  row.appendChild(slider);
+
+  const num = document.createElement('input');
+  num.type = 'number';
+  num.className = 'badge-size-num';
+  num.min = String(BADGE_SIZE_MIN_PX);
+  num.max = String(BADGE_SIZE_MAX_PX);
+  num.step = '0.5';
+  num.placeholder = 'global';
+  num.title = 'Badge size in px — leave empty to use the global setting';
+  row.appendChild(num);
+
+  const clear = document.createElement('button');
+  clear.className = 'badge-size-clear';
+  clear.textContent = '×';
+  clear.title = 'Use the global badge size';
+  row.appendChild(clear);
+
+  const sync = (): void => {
+    const px = rule.badgeSizePx;
+    slider.value = String(px ?? globalBadgeSizePx);
+    num.value = px !== undefined ? String(px) : '';
+    clear.hidden = px === undefined;
+  };
+  sync();
+
+  const scheduleSave = (): void => {
+    if (badgeSizeLiveTimer) clearTimeout(badgeSizeLiveTimer);
+    badgeSizeLiveTimer = setTimeout(saveRules, 400);
+  };
+
+  slider.addEventListener('input', () => {
+    rule.badgeSizePx = parseFloat(slider.value);
+    num.value = slider.value;
+    clear.hidden = false;
+    scheduleSave();
+  });
+
+  num.addEventListener('input', () => {
+    const v = parseFloat(num.value);
+    if (Number.isFinite(v) && v > 0) {
+      rule.badgeSizePx = v;
+      slider.value = String(v);
+      clear.hidden = false;
+    } else {
+      // Cleared (or mid-edit garbage) — back to "use global".
+      delete rule.badgeSizePx;
+      slider.value = String(globalBadgeSizePx);
+      clear.hidden = true;
+    }
+    scheduleSave();
+  });
+
+  clear.addEventListener('click', () => {
+    delete rule.badgeSizePx;
+    sync();
+    scheduleSave();
+  });
+
+  return row;
 }
 
 function renderEntries(rule: DomainRule, container: HTMLElement): void {
@@ -1041,6 +1140,10 @@ async function init(): Promise<void> {
   initShortcutsToggle();
   initReadoutToggle();
   initPageReadout();
+  // Global badge size feeds the size sliders' resting position — load it
+  // before the first render so override-free rules don't flash a default.
+  const badgeSettings = await loadBadgeSettings();
+  globalBadgeSizePx = Math.round(badgeSettings.scale * BADGE_NORMAL_TEXT_PX * 2) / 2;
   await loadRules();
   render();
 }

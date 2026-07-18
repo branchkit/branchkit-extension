@@ -742,3 +742,50 @@ describe('nudge entries — compile + resolve', () => {
       .toEqual({ dx: 0, dy: 14 });
   });
 });
+
+describe('badge size override — compileRules resolution', () => {
+  it('resolves to null when no matched rule sets badgeSizePx', () => {
+    expect(compile(rule()).badgeSizePx).toBeNull();
+    expect(compileRules([]).badgeSizePx).toBeNull();
+  });
+
+  it('picks the one rule that sets it', () => {
+    const compiled = compile(rule(), rule({ id: 'r2', badgeSizePx: 18 }));
+    expect(compiled.badgeSizePx).toBe(18);
+  });
+
+  it('exact-host rule beats a *. wildcard, in either declaration order', () => {
+    const wild = rule({ id: 'rw', pattern: '*.quickbase.com', badgeSizePx: 10 });
+    const exact = rule({ id: 're', pattern: 'data.quickbase.com', badgeSizePx: 20 });
+    expect(compile(wild, exact).badgeSizePx).toBe(20);
+    expect(compile(exact, wild).badgeSizePx).toBe(20);
+  });
+
+  it('host+path patterns count as exact (they beat wildcards)', () => {
+    const wild = rule({ id: 'rw', pattern: '*.example.com', badgeSizePx: 10 });
+    const path = rule({ id: 'rp', pattern: 'example.com/app/*', badgeSizePx: 16 });
+    expect(compile(wild, path).badgeSizePx).toBe(16);
+  });
+
+  it('ties at equal specificity keep declaration order (first wins)', () => {
+    const a = rule({ id: 'ra', pattern: 'example.com', badgeSizePx: 12 });
+    const b = rule({ id: 'rb', pattern: 'example.com/x', badgeSizePx: 22 });
+    expect(compile(a, b).badgeSizePx).toBe(12);
+    const w1 = rule({ id: 'w1', pattern: '*.example.com', badgeSizePx: 9 });
+    const w2 = rule({ id: 'w2', pattern: '*.example.com', badgeSizePx: 25 });
+    expect(compile(w1, w2).badgeSizePx).toBe(9);
+  });
+
+  it('a wildcard override still applies when the exact rule sets no size', () => {
+    const wild = rule({ id: 'rw', pattern: '*.quickbase.com', badgeSizePx: 10 });
+    const exact = rule({ id: 're', pattern: 'data.quickbase.com' });
+    expect(compile(exact, wild).badgeSizePx).toBe(10);
+  });
+
+  it('ignores non-finite and non-positive values', () => {
+    expect(compile(rule({ badgeSizePx: NaN })).badgeSizePx).toBeNull();
+    expect(compile(rule({ badgeSizePx: 0 })).badgeSizePx).toBeNull();
+    expect(compile(rule({ badgeSizePx: -4 })).badgeSizePx).toBeNull();
+    expect(compile(rule({ badgeSizePx: Infinity })).badgeSizePx).toBeNull();
+  });
+});

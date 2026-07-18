@@ -22,6 +22,11 @@ export interface DomainRule {
   pattern: string;
   enabled: boolean;
   entries: RuleEntry[];
+  /** Per-site badge size override, quoted like the global size control:
+   *  badge font px on nominal 14px text. Rule-level (not an entry) because
+   *  size is page-scoped where entries are element-scoped verbs. Absent =
+   *  use the global Badge appearance setting. */
+  badgeSizePx?: number;
 }
 
 export interface RuleEntry {
@@ -75,6 +80,10 @@ export interface CompiledRule {
   nudges: readonly RuleEntry[];
   /** Joined CSS selector for all valid include entries, or null. */
   includeSelector: string | null;
+  /** Resolved badge-size override for this frame (px on 14px text), or
+   *  null when no matched rule sets one. Exact-host rules beat `*.`
+   *  wildcard rules; ties keep declaration order. */
+  badgeSizePx: number | null;
 }
 
 // --- Pattern matching ---
@@ -183,12 +192,30 @@ export function compileRules(matched: DomainRule[]): CompiledRule {
     }
   }
 
+  // Rule-level badge size: when several matched rules set one (e.g.
+  // *.quickbase.com and data.quickbase.com), the exact-host rule is the
+  // more specific override the user authored for this site — it wins over
+  // a `*.` wildcard. Ties keep the first in declaration order, matching
+  // nudges' first-match-wins.
+  let badgeSizePx: number | null = null;
+  let badgeSizeExact = false;
+  for (const rule of matched) {
+    const px = rule.badgeSizePx;
+    if (typeof px !== 'number' || !Number.isFinite(px) || px <= 0) continue;
+    const exact = !rule.pattern.startsWith('*.');
+    if (badgeSizePx === null || (exact && !badgeSizeExact)) {
+      badgeSizePx = px;
+      badgeSizeExact = exact;
+    }
+  }
+
   return {
     rules: matched,
     excludes,
     reveals,
     nudges,
     includeSelector: includeSelectors.length > 0 ? includeSelectors.join(', ') : null,
+    badgeSizePx,
   };
 }
 

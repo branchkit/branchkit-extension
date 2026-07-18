@@ -154,6 +154,17 @@ export function setBadgeSizingFromSettings(s: BadgeSettings): void {
   badgeFontMax = s.fontMax;
 }
 
+// Per-site override from a matched domain rule (DomainRule.badgeSizePx),
+// quoted the same way as the options page's size slider: badge font px on
+// nominal 14px text — so the effective scale is px/14 per target. Null =
+// use the global settings above. Set by the content script whenever the
+// compiled rule set changes.
+let badgeSizeOverridePx: number | null = null;
+
+export function setBadgeSizeOverridePx(px: number | null): void {
+  badgeSizeOverridePx = px;
+}
+
 // Z-index cache, keyed by anchorParent. calculateZIndex walks the target's
 // descendants plus its ancestor chain with live getComputedStyle — too
 // expensive to run per badge per placement pass (the pre-2026-06 model, the
@@ -338,7 +349,7 @@ export function clampOffscreenBadgeBox(
   return { x, y };
 }
 
-function computeBadgeFontSize(target: Element): number {
+export function computeBadgeFontSize(target: Element): number {
   // Sub-readable target font sizes are CSS accidents, not signal: 0px or
   // a-few-px declarations exist to hide accessible-name text nodes from
   // layout (Gmail's email-row div[role=checkbox] is the canonical case).
@@ -348,6 +359,16 @@ function computeBadgeFontSize(target: Element): number {
   // so icon-only targets track the slider exactly.
   const raw = parseFloat(getCachedStyle(target).fontSize);
   const targetSize = Number.isFinite(raw) && raw >= 9 ? raw : 14;
+  if (badgeSizeOverridePx !== null) {
+    // A rule override replaces the global scale, and the clamp widens
+    // just enough to honor it (mirroring the options size slider, which
+    // stretches fontMin/fontMax to the picked size) — a stored clamp
+    // must never silently cap an explicit per-site choice.
+    const scaled = Math.round(targetSize * (badgeSizeOverridePx / 14));
+    const min = Math.min(badgeFontMin, Math.floor(badgeSizeOverridePx));
+    const max = Math.max(badgeFontMax, Math.ceil(badgeSizeOverridePx));
+    return Math.min(Math.max(scaled, min), max);
+  }
   const scaled = Math.round(targetSize * badgeFontScale);
   return Math.min(Math.max(scaled, badgeFontMin), badgeFontMax);
 }

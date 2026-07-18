@@ -1,6 +1,14 @@
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { findBadgeContainer, findLimitParent, resolveContainer } from './container-resolution';
-import { HintBadge, __refineScheduler, clampOffscreenBadgeBox } from './hints';
+import {
+  HintBadge,
+  __refineScheduler,
+  clampOffscreenBadgeBox,
+  computeBadgeFontSize,
+  setBadgeSizeOverridePx,
+  setBadgeSizingFromSettings,
+} from './hints';
+import { DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
 import { __testing as containerTracker } from '../observe/container-resize-tracker';
 import { __testing as targetTracker } from '../observe/target-mutation-tracker';
 import { __testing as hostTracker } from '../observe/host-attribute-tracker';
@@ -582,5 +590,46 @@ describe('clampOffscreenBadgeBox (paint-the-band write-time clamp)', () => {
     const clamped = clampOffscreenBadgeBox({ x: -20, y: -10, w: 40, h: 15 }, target, VW, VH);
     expect(clamped.x + 40).toBeLessThanOrEqual(target.right);
     expect(clamped.y + 15).toBeLessThanOrEqual(target.bottom);
+  });
+});
+
+describe('computeBadgeFontSize — per-site override', () => {
+  // Defaults: scale 0.8, clamp [8, 18].
+  beforeEach(() => setBadgeSizingFromSettings(DEFAULT_BADGE_SETTINGS));
+  afterEach(() => setBadgeSizeOverridePx(null));
+
+  function targetWithFont(px: number): Element {
+    const el = document.createElement('button');
+    el.style.fontSize = `${px}px`;
+    document.body.appendChild(el);
+    mounted.push(el);
+    return el;
+  }
+
+  it('no override: global scale + clamp apply', () => {
+    expect(computeBadgeFontSize(targetWithFont(14))).toBe(11); // round(14 × 0.8)
+  });
+
+  it('override replaces the scale: px on nominal 14px text', () => {
+    setBadgeSizeOverridePx(20);
+    expect(computeBadgeFontSize(targetWithFont(14))).toBe(20); // round(14 × 20/14)
+  });
+
+  it('fontMax widens to the override instead of silently capping it', () => {
+    // 16px text × 20/14 = 23, above the default fontMax 18 — the clamp
+    // yields to the override (max widened to 20), same as the global slider.
+    setBadgeSizeOverridePx(20);
+    expect(computeBadgeFontSize(targetWithFont(16))).toBe(20);
+  });
+
+  it('fontMin widens for a small override instead of inflating it', () => {
+    setBadgeSizeOverridePx(6); // below the default fontMin 8
+    expect(computeBadgeFontSize(targetWithFont(14))).toBe(6);
+  });
+
+  it('clearing the override restores the global sizing', () => {
+    setBadgeSizeOverridePx(20);
+    setBadgeSizeOverridePx(null);
+    expect(computeBadgeFontSize(targetWithFont(14))).toBe(11);
   });
 });

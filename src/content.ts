@@ -116,7 +116,7 @@ import {
 } from './rules/domain-rules';
 import { loadDomainRules, onDomainRulesChanged, rulesEqual } from './rules/domain-rules-storage';
 import { loadBadgeSettings, onBadgeSettingsChanged } from './badge-settings-storage';
-import { setBadgeSizingFromSettings } from './render/hints';
+import { setBadgeSizingFromSettings, setBadgeSizeOverridePx } from './render/hints';
 import { setScrollAccelEnabled, setScrollAccelNestedEnabled, reconcileScrollAccel, reconcileScrollAccelForScroller, reconcileTransformTrigger } from './render/scroll-accel-glue';
 import { isScrollTimelineSupported } from './render/scroll-accel';
 import { setNudgesFromSettings } from './placement';
@@ -536,13 +536,33 @@ function applyMatchedRules(matched: DomainRule[]): void {
   }
   if (matched.length === 0) {
     compiledRule = null;
+    applyRuleBadgeSize();
     applyNudgeSet();
     return;
   }
   compiledRule = compileRules(matched);
+  applyRuleBadgeSize();
   applyNudgeSet();
   const style = injectRevealStyles(compiledRule.reveals);
   if (style && document.head) document.head.appendChild(style);
+}
+
+// The per-site badge-size override applied to this frame, resolved from
+// the compiled rule set. Tracked so a rule edit that changes the resolved
+// size takes the same rebuild path as a badge-appearance settings change:
+// size feeds badge dimensions/colors/placement caches, so a re-place
+// alone is insufficient — detach everything and let doScan rebuild.
+// Runs BEFORE applyNudgeSet in applyMatchedRules so a size change doesn't
+// waste a placement pass on wrappers about to be detached.
+let appliedRuleBadgeSizePx: number | null = null;
+
+function applyRuleBadgeSize(): void {
+  const next = compiledRule?.badgeSizePx ?? null;
+  if (next === appliedRuleBadgeSizePx) return;
+  appliedRuleBadgeSizePx = next;
+  setBadgeSizeOverridePx(next);
+  for (const w of [...store.all]) detachWrapper(w.element);
+  scheduleDoScan();
 }
 
 // Wrapper-cached nudge offsets are resolved against the compiled rule set;
