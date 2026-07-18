@@ -110,19 +110,20 @@ if (rowState.numValue !== '' || !rowState.clearHidden) {
   await fail('override-free rule should show the empty "use global" state');
 }
 
-// Drag the slider to 20 — fill() fires `input`, the live-apply path.
-await popup.locator('.badge-size-slider').fill('20');
+// Drag the slider to its 16px max — fill() fires `input`, the live-apply
+// path. On the fixture's 16px links: round(16 × 16/14) = 18px badges.
+await popup.locator('.badge-size-slider').fill('16');
 await popup.waitForTimeout(900); // 400ms debounced save + settle
 
 const stored = await sw.evaluate(() => chrome.storage.sync.get('domainRules'));
 const storedPx = stored.domainRules?.rules?.[0]?.badgeSizePx;
-console.log(`stored badgeSizePx after slider drag: ${storedPx} (expected 20)`);
-if (storedPx !== 20) await fail('slider drag did not live-save rule.badgeSizePx');
+console.log(`stored badgeSizePx after slider drag: ${storedPx} (expected 16)`);
+if (storedPx !== 16) await fail('slider drag did not live-save rule.badgeSizePx');
 
 await fixturePage.waitForTimeout(2000);
 const resized = await dominantBadgeFont();
 console.log('badge font under override:', resized);
-if (resized?.px !== 20) await fail(`badges did not resize to 20px, got ${JSON.stringify(resized)}`);
+if (resized?.px !== 18) await fail(`badges did not resize to 18px, got ${JSON.stringify(resized)}`);
 
 // Clear back to global.
 await popup.locator('.badge-size-clear').click();

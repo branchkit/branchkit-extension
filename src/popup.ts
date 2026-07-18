@@ -572,8 +572,11 @@ function renderRuleCard(rule: DomainRule): HTMLElement {
 // (chrome.storage.sync has write quotas); the content script rebuilds
 // badges when the resolved size changes.
 
+// Range centers the default: the global default size (0.8 × 14 = 11px)
+// sits at the slider's midpoint, and the ceiling stays modest — huge
+// badges cover the very targets they label.
 const BADGE_SIZE_MIN_PX = 6;
-const BADGE_SIZE_MAX_PX = 28;
+const BADGE_SIZE_MAX_PX = 16;
 const BADGE_NORMAL_TEXT_PX = 14;
 
 // The global size (slider resting position for rules with no override) —
