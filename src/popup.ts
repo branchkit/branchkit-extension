@@ -585,6 +585,7 @@ interface AddFormRefs {
   labelInput: HTMLInputElement;
   addBtn: HTMLButtonElement;
   cancelBtn: HTMLButtonElement;
+  newBtn: HTMLButtonElement;
   feedback: HTMLElement;
 }
 
@@ -624,6 +625,7 @@ function beginEditEntry(rule: DomainRule, entry: RuleEntry): void {
   }
   refs.addBtn.textContent = 'Save';
   refs.cancelBtn.hidden = false;
+  refs.newBtn.hidden = false;
   refs.matcherInput.focus();
 }
 
@@ -636,6 +638,7 @@ function resetAddForm(ruleId: string): void {
   }
   refs.addBtn.textContent = 'Add';
   refs.cancelBtn.hidden = true;
+  refs.newBtn.hidden = true;
   refs.matcherInput.readOnly = false;
   refs.matcherInput.title = '';
   refs.matcherInput.value = '';
@@ -783,6 +786,13 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
   cancelBtn.hidden = true;
   row1.appendChild(cancelBtn);
 
+  const newBtn = document.createElement('button');
+  newBtn.className = 'entry-cancel';
+  newBtn.textContent = '+ New';
+  newBtn.title = 'Save these changes and start adding a new entry';
+  newBtn.hidden = true;
+  row1.appendChild(newBtn);
+
   wrap.appendChild(row1);
   wrap.appendChild(rowNudge);
 
@@ -813,7 +823,7 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
 
   addFormRefs.set(rule.id, {
     kindSelect, revealSelect, nudgeX, nudgeY,
-    matcherInput, labelInput, addBtn, cancelBtn, feedback,
+    matcherInput, labelInput, addBtn, cancelBtn, newBtn, feedback,
   });
 
   kindSelect.addEventListener('change', () => {
@@ -857,6 +867,14 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
       }
     }
     resetAddForm(rule.id);
+  });
+
+  // Save the edit in progress and hand back the empty form for adding.
+  // Runs the Save handler (with its validation); only a successful save
+  // clears the edit session, so a validation error keeps the edit open.
+  newBtn.addEventListener('click', () => {
+    addBtn.click();
+    if (!editSession) matcherInput.focus();
   });
 
   addBtn.addEventListener('click', () => {
