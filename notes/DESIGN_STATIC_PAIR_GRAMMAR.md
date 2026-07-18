@@ -96,6 +96,17 @@ showed the cut actually moves — three responsibilities, not one:
    hint"; also the mishear surface. Feedback design should reuse the
    existing dispatch-result plumbing, not add a channel.
 
+**Step 0+1 IMPLEMENTED 2026-07-18** (plugin `hints_pull_resolution` flag,
+default OFF — toggling needs a plugin restart): sealed-alphabet activate spec
+(browser plugin collections.go; letters + words ride the params), SW letter
+synth + unroutable-pair "no such hint" report (frame-router), CS live strict
+gate (on-screen + isVisible + !cssHidden + !occluded) + refusal toast, plugin
+warn-log on the no_such_hint dispatch result. Scope: the BARE activate only —
+contributed verbs ({hint}/{hint+}) and the implicit multi-pair stay on the old
+path (one layer at a time). Remaining in step 1: a toast for the SW-unroutable
+path (needs a CS SHOW_TOAST message; today it logs + events only). Next: flip
+the flag on a dev build and daily-drive (step 2).
+
 Steps (each independently landable, plugin + extension only):
   0. Flag: plugin setting `hints_pull_resolution` (default off) selecting
      between the two capture macros — manifest carries both; the gated
