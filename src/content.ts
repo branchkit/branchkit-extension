@@ -576,6 +576,11 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
         if (isExcludedByRule(w.element, compiledRule.excludes)) detachWrapper(w.element);
       }
     }
+    // Re-place badges already on screen: a doScan only discovers NEW
+    // hintables, but nudge offsets apply at placement time — without this,
+    // a nudge edit (the popup's live steppers) doesn't move existing
+    // badges until some later full re-place.
+    placeBadges([...store.all].filter((w) => w.hint));
     scheduleDoScan();
     schedulePushGrammar();
   });

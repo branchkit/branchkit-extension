@@ -317,8 +317,14 @@
     }
     .add-entry-row {
       display: flex;
+      flex-wrap: wrap;
       gap: 4px;
       margin-bottom: 4px;
+    }
+    .nudge-row-label {
+      color: var(--fg-muted);
+      font-size: 12px;
+      align-self: center;
     }
     .add-entry-row select,
     .add-entry-row input,
@@ -336,7 +342,10 @@
     .add-entry-row input.matcher,
     .add-entry-row input.codeword {
       flex: 1;
-      min-width: 0;
+      /* Real floor, not 0: flex items shrink before they wrap, so a
+         crowded row (edit mode: Save + Cancel visible) collapsed the
+         matcher to zero width instead of wrapping it to its own line. */
+      min-width: 120px;
       font-family: ui-monospace, SFMono-Regular, monospace;
     }
     .add-entry-row input.matcher.invalid { border-color: var(--danger); }

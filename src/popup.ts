@@ -740,23 +740,32 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
   }
   row1.appendChild(revealSelect);
 
+  // Nudge offsets live on their own row — squeezed into row1 they crushed
+  // the flex:1 matcher input to zero width in the 340px popup.
+  const rowNudge = document.createElement('div');
+  rowNudge.className = 'add-entry-row nudge-row';
+  rowNudge.hidden = true;
+
+  const nudgeRowLabel = document.createElement('label');
+  nudgeRowLabel.className = 'nudge-row-label';
+  nudgeRowLabel.textContent = 'Offset px (x / y):';
+  rowNudge.appendChild(nudgeRowLabel);
+
   const nudgeX = document.createElement('input');
   nudgeX.type = 'number';
   nudgeX.className = 'nudge-px';
-  nudgeX.placeholder = 'x px';
+  nudgeX.placeholder = 'x';
   nudgeX.title = 'Horizontal offset in pixels (negative = left)';
   nudgeX.step = '1';
-  nudgeX.hidden = true;
-  row1.appendChild(nudgeX);
+  rowNudge.appendChild(nudgeX);
 
   const nudgeY = document.createElement('input');
   nudgeY.type = 'number';
   nudgeY.className = 'nudge-px';
-  nudgeY.placeholder = 'y px';
+  nudgeY.placeholder = 'y';
   nudgeY.title = 'Vertical offset in pixels (negative = up)';
   nudgeY.step = '1';
-  nudgeY.hidden = true;
-  row1.appendChild(nudgeY);
+  rowNudge.appendChild(nudgeY);
 
   const matcherInput = document.createElement('input');
   matcherInput.type = 'text';
@@ -785,6 +794,7 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
   row1.appendChild(cancelBtn);
 
   wrap.appendChild(row1);
+  wrap.appendChild(rowNudge);
 
   // Row 2: resolve from active tab
   const row2 = document.createElement('div');
@@ -818,7 +828,7 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
 
   kindSelect.addEventListener('change', () => {
     revealSelect.hidden = kindSelect.value !== 'reveal';
-    nudgeX.hidden = nudgeY.hidden = kindSelect.value !== 'nudge';
+    rowNudge.hidden = kindSelect.value !== 'nudge';
   });
 
   matcherInput.addEventListener('input', () => {
