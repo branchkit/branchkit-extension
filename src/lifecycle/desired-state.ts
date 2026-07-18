@@ -45,6 +45,12 @@ export interface ShownInputs {
   flagInBand: boolean;
   /** isVisible() — CSS visibility of the target. */
   cssVisible: boolean;
+  /** Target sits mostly inside an actively-playing large video
+   * (render/video-overlay.ts). Painting there re-rolls Firefox's
+   * compositor-surface race (bugzilla 1989948 — the Shorts-freeze
+   * amplifier), so shown-ness is suppressed while the video plays.
+   * Mirrors the HintBadge.show() chokepoint gate. */
+  overVideo: boolean;
 }
 
 /**
@@ -71,7 +77,7 @@ export function wantsShown(w: ElementWrapper, s: ShownInputs): boolean {
   if (w.disconnectedAt !== null) return false;
   if (!w.hint) return false;
   if (!w.element.isConnected) return false;
-  return s.flagInBand && s.cssVisible;
+  return s.flagInBand && s.cssVisible && !s.overVideo;
 }
 
 /**

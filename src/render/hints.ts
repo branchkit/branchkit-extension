@@ -28,6 +28,7 @@ import { trackHostAttributes, untrackHostAttributes } from '../observe/host-attr
 import { clipRootOf } from '../observe/clip-observer';
 import { register as registerReconcile, unregister as unregisterReconcile, type ReconcileWrite } from './reconcile-positioner';
 import { hasViewportPinnedAncestor, resolveContainer } from './container-resolution';
+import { targetOverVideo } from './video-overlay';
 import {
   isScrollAccelEnabled,
   isScrollAccelNestedEnabled,
@@ -895,7 +896,22 @@ export class HintBadge {
     // / showBadges run once the label is restored will paint it. Enforces the
     // dormant invariant documented on `label` and mirrors setMatchedChars's guard.
     if (this.label === null) return;
+    // Video-overlay gate: painting over an actively-playing video re-rolls
+    // Firefox's compositor-surface race (bugzilla 1989948 class) on every
+    // reposition — the measured Shorts-freeze amplifier. Every live show
+    // path funnels through here, so this is the one chokepoint. The
+    // reconciler's wantsShown carries the same predicate for level-triggered
+    // hide of already-painted badges when a video starts beneath them.
+    // Park the host as well — a declined show would otherwise leave the
+    // freshly-built host at display:block, the exact residue layer this
+    // gate exists to remove.
+    if (targetOverVideo(this.target)) {
+      this.host.style.display = 'none';
+      return;
+    }
     this._visible = true;
+    // Un-park the host from the display:none hide() leaves it in.
+    this.host.style.display = 'block';
     this.inner.classList.remove('filtered');
     this.applyColors();
     this._size = null;
@@ -975,6 +991,11 @@ export class HintBadge {
     this.inner.classList.remove('bk-pending');
     this.host.removeAttribute('data-bk-shown');
     this.host.removeAttribute('data-bk-pending');
+    // Park the host out of the layer tree entirely. opacity:0 alone leaves a
+    // compositor-active element (the .visible opacity transition promotes
+    // it), which kept invisible layers stacked over videos — the 2026-07-18
+    // manual-mode freeze confound. show() restores display.
+    this.host.style.display = 'none';
     // Drop the accelerator while dormant; a hidden badge isn't reconciled, so a
     // live ScrollTimeline animation would just hold a stale delta. Re-armed on
     // the next show().

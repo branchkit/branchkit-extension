@@ -86,20 +86,26 @@ function makeShownWrapper(opts: {
   return w;
 }
 
-const SHOWN_OK = { flagInBand: true, cssVisible: true };
+const SHOWN_OK = { flagInBand: true, cssVisible: true, overVideo: false };
 
 describe('wantsShown', () => {
   it('wants shown when in-band and CSS-visible', () => {
     expect(wantsShown(makeShownWrapper({}), SHOWN_OK)).toBe(true);
   });
 
+  it('does not want a badge shown over an actively-playing video (WR freeze amplifier)', () => {
+    expect(wantsShown(makeShownWrapper({}), { ...SHOWN_OK, overVideo: true })).toBe(false);
+  });
+
   it('is IO-band scoped, NOT strict-viewport scoped (paint the band): in-band is sufficient', () => {
     // notes/DESIGN_PAINT_THE_BAND.md: there is deliberately no onScreen
     // input — an in-band, off-viewport badge paints and rides into view.
     // This pins the predicate's input shape so a strict-viewport term can't
-    // silently return.
+    // silently return. `overVideo` (2026-07-18) is NOT a viewport term: it
+    // suppresses painting over actively-playing videos (Firefox WR
+    // compositor-surface race, bugzilla 1989948) regardless of band state.
     const inputKeys = Object.keys(SHOWN_OK).sort();
-    expect(inputKeys).toEqual(['cssVisible', 'flagInBand']);
+    expect(inputKeys).toEqual(['cssVisible', 'flagInBand', 'overVideo']);
     expect(wantsShown(makeShownWrapper({}), SHOWN_OK)).toBe(true);
   });
 

@@ -128,6 +128,7 @@ import { pageSession, scheduleYieldTask, yieldTask, TeardownReason } from './lif
 import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './debug/message-counters';
 import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, rearmCpuShareBaseline, rearmWatchdogBaseline, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, lifecycleCounters, resetLifecycleCounters } from './debug/perf-counters';
 import { startVideoStallProbe } from './debug/video-stall-probe';
+import { setVideoOverlayGateEnabled } from './render/video-overlay';
 import { churnStats } from './debug/churn-log';
 import { syncTraceStats } from './debug/sync-trace';
 import { loadConfig, getDisplayMode, getHintVisibility } from './config';
@@ -930,6 +931,18 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
     setOcclusionEnabled(result.bkOcclusion !== false);
     if (harnessHooksEnabled()) {
       document.documentElement.setAttribute('data-bk-occlusion', result.bkOcclusion !== false ? 'on' : 'off');
+    }
+  });
+  chrome.storage.local.get('bkVideoOverlayGate', (result) => {
+    // Video-overlay gate (render/video-overlay.ts): badges don't paint over
+    // actively-playing large videos — Firefox WebRender compositor-surface
+    // race amplification (bugzilla 1989948; Shorts froze ~1-in-2 with
+    // overlays vs rare without). Default ON; explicit `false` disables:
+    // `chrome.storage.local.set({ bkVideoOverlayGate: false })`.
+    const on = result.bkVideoOverlayGate !== false;
+    setVideoOverlayGateEnabled(on);
+    if (harnessHooksEnabled()) {
+      document.documentElement.setAttribute('data-bk-video-overlay-gate', on ? 'on' : 'off');
     }
   });
   chrome.storage.local.get('bkPointerRecheckScope', (result) => {
