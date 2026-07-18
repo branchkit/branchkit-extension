@@ -457,6 +457,17 @@ describe('settle: mass reveal', () => {
 });
 
 describe('idle-convergence backstop', () => {
+  it('runs the band sweep each tick — the stale-FALSE cohort heals without activity', () => {
+    // The manageusers class: geometry in-band, flag FALSE (dropped IO entry).
+    // No flag walk can see it; the tick's band sweep repairs + reconciles.
+    const h = makeHarness();
+    h.tracker.sweepBand.mockReturnValue({ repaired: 3, released: 0 });
+    h.engine.noteIdleTick();
+    expect(h.tracker.sweepBand).toHaveBeenCalled();
+    // repaired > 0 → inline reconcile ran (claims + build path).
+    expect(h.tracker.refreshViewportClaims).toHaveBeenCalled();
+  });
+
   it('arms passSoon when an in-band wrapper is owed convergence, no-ops when steady', () => {
     const h = makeHarness();
     // Steady state: codeworded + visible badge → no arm.

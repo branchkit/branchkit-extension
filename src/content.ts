@@ -3643,7 +3643,12 @@ function snapshotExtras() {
     visibility: {
       hints_visible: pageSession.badgesVisible,
       hint_visibility: getHintVisibility(),
+      // Constructed badge OBJECTS — includes dormant scroll-back badges
+      // (hidden, label cleared, codeword RELEASED), so this legitimately
+      // exceeds claimed_codewords by the dormant count (the 2026-07-18
+      // "11-badge gap" user report). visible_badges is the shown subset.
       painted_badges: store.all.filter((w) => w.hint !== null).length,
+      visible_badges: store.all.filter((w) => w.hint?.isVisible).length,
       claimed_codewords: store.all.filter((w) => w.scanned.codeword.length > 0).length,
       // Actual badge-host DOM nodes. If this exceeds painted_badges, there are
       // untracked/stale badge nodes in the DOM — i.e. visually doubled hints

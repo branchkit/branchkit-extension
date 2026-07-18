@@ -158,6 +158,16 @@ export class SettleEngine {
   // not a new edge trigger.
   noteIdleTick(): void {
     if (!this.deps.isBadgesVisible() || this.deps.isTornDown()) return;
+    // Stale-FALSE flags first (the actual manageusers cohort — repair=275 in
+    // both user snapshots): elements whose IO entry was dropped in the load
+    // storm sit geometrically in-band with flag FALSE, which no flag walk
+    // can see. The band sweep is the existing bounded geometry pass for
+    // exactly this; it repairs flags and reconciles inline on changes. At
+    // the 2s idle cadence its cost is negligible (it was built for 10Hz
+    // mid-fling).
+    this.noteBandSweep();
+    // Then the flag-visible classes: in-band without a codeword (reservoir
+    // was dry at claim time), or codeworded without a showing badge.
     for (const w of this.deps.store.all) {
       if (w.disconnectedAt !== null) continue;
       const owed =
