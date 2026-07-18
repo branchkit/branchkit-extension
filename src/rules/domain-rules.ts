@@ -26,12 +26,20 @@ export interface DomainRule {
 
 export interface RuleEntry {
   id: string;
-  kind: 'exclude' | 'include' | 'reveal';
+  kind: 'exclude' | 'include' | 'reveal' | 'nudge';
   matcher: Matcher;
   reveal?: RevealMethod;
+  /** Pixel offset applied to matched elements' badges after placement.
+   *  Present iff kind === 'nudge'. */
+  nudge?: NudgeOffset;
   label?: string;
   /** Absent or true = applied. false = kept in the rule but not applied. */
   enabled?: boolean;
+}
+
+export interface NudgeOffset {
+  dx: number;
+  dy: number;
 }
 
 export type RevealMethod = 'opacity' | 'visibility' | 'display';
@@ -64,6 +72,7 @@ export interface CompiledRule {
   rules: DomainRule[];
   excludes: readonly RuleEntry[];
   reveals: readonly RuleEntry[];
+  nudges: readonly RuleEntry[];
   /** Joined CSS selector for all valid include entries, or null. */
   includeSelector: string | null;
 }
@@ -151,6 +160,7 @@ function matchesPattern(pattern: string, host: string, hostPath: string): boolea
 export function compileRules(matched: DomainRule[]): CompiledRule {
   const excludes: RuleEntry[] = [];
   const reveals: RuleEntry[] = [];
+  const nudges: RuleEntry[] = [];
   const includeSelectors: string[] = [];
 
   for (const rule of matched) {
@@ -161,6 +171,10 @@ export function compileRules(matched: DomainRule[]): CompiledRule {
         excludes.push(entry);
       } else if (entry.kind === 'reveal') {
         reveals.push(entry);
+      } else if (entry.kind === 'nudge') {
+        if (!entry.nudge) continue;
+        if (entry.matcher.type === 'css' && !isValidCSSSelector(entry.matcher.selector)) continue;
+        nudges.push(entry);
       } else if (entry.kind === 'include' && entry.matcher.type === 'css') {
         if (isValidCSSSelector(entry.matcher.selector)) {
           includeSelectors.push(entry.matcher.selector);
@@ -173,6 +187,7 @@ export function compileRules(matched: DomainRule[]): CompiledRule {
     rules: matched,
     excludes,
     reveals,
+    nudges,
     includeSelector: includeSelectors.length > 0 ? includeSelectors.join(', ') : null,
   };
 }
@@ -248,6 +263,25 @@ function matchesMatcher(el: Element, matcher: Matcher): boolean {
  */
 export function isExcludedByRule(el: Element, excludes: readonly RuleEntry[]): boolean {
   return matchesAnyExclude(el, excludes);
+}
+
+// --- Nudges ---
+
+/**
+ * Resolve the badge position offset for an element from the rule's nudge
+ * entries. First matching entry in declaration order wins — nudges are
+ * site-specific point fixes, so stacking them would be surprising.
+ * Returns null when nothing matches. Callers cache the result per wrapper
+ * (see ElementWrapper.cachedRuleNudge) — this must not run per scroll frame.
+ */
+export function resolveNudgeOffset(
+  el: Element,
+  nudges: readonly RuleEntry[],
+): NudgeOffset | null {
+  for (const entry of nudges) {
+    if (entry.nudge && matchesMatcher(el, entry.matcher)) return entry.nudge;
+  }
+  return null;
 }
 
 // --- Inclusions ---

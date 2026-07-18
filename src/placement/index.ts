@@ -5,6 +5,7 @@ export {
   getOrComputeProbe,
   invalidateProbe,
   setNudgesFromSettings,
+  setRuleNudges,
   type AnchorProbe,
 } from './position';
 

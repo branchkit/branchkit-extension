@@ -17,6 +17,7 @@ import {
   collectInclusions,
   isExcludedByRule,
   injectRevealStyles,
+  resolveNudgeOffset,
   type DomainRule,
   type RuleEntry,
 } from './domain-rules';
@@ -677,5 +678,67 @@ describe('injectRevealStyles', () => {
 
     expect(style.textContent).not.toContain('.dropped');
     expect(style.textContent).toContain('.kept');
+  });
+});
+
+describe('nudge entries — compile + resolve', () => {
+  function nudgeEntry(selector: string, dx: number, dy: number): RuleEntry {
+    return {
+      id: rid(),
+      kind: 'nudge',
+      matcher: { type: 'css', selector },
+      nudge: { dx, dy },
+    };
+  }
+
+  it('compileRules buckets nudge entries and validates CSS selectors', () => {
+    const compiled = compile(rule({
+      entries: [
+        nudgeEntry('.sidebar a', 20, 0),
+        nudgeEntry(':::garbage', 5, 5),          // invalid selector dropped
+        { id: rid(), kind: 'nudge', matcher: { type: 'css', selector: '.x' } }, // no nudge payload dropped
+        excludeEntry({ type: 'css', selector: '.gone' }),
+      ],
+    }));
+    expect(compiled.nudges).toHaveLength(1);
+    expect(compiled.nudges[0].nudge).toEqual({ dx: 20, dy: 0 });
+    expect(compiled.excludes).toHaveLength(1);
+  });
+
+  it('disabled nudge entries are skipped', () => {
+    const compiled = compile(rule({
+      entries: [{ ...nudgeEntry('.a', 1, 2), enabled: false }],
+    }));
+    expect(compiled.nudges).toHaveLength(0);
+  });
+
+  it('resolveNudgeOffset returns the first matching entry in declaration order', () => {
+    document.body.innerHTML = '<a class="row special" id="t">x</a>';
+    const el = document.getElementById('t')!;
+    const offset = resolveNudgeOffset(el, [
+      nudgeEntry('.nomatch', 1, 1),
+      nudgeEntry('.row', 10, -5),
+      nudgeEntry('.special', 99, 99),  // also matches, but later
+    ]);
+    expect(offset).toEqual({ dx: 10, dy: -5 });
+  });
+
+  it('resolveNudgeOffset returns null when nothing matches', () => {
+    document.body.innerHTML = '<a id="t">x</a>';
+    expect(resolveNudgeOffset(document.getElementById('t')!, [
+      nudgeEntry('.nomatch', 1, 1),
+    ])).toBeNull();
+  });
+
+  it('resolveNudgeOffset supports text matchers', () => {
+    document.body.innerHTML = '<button id="t">Save changes</button>';
+    const entry: RuleEntry = {
+      id: rid(),
+      kind: 'nudge',
+      matcher: { type: 'text', value: 'save', caseSensitive: false, mode: 'contains' },
+      nudge: { dx: 0, dy: 14 },
+    };
+    expect(resolveNudgeOffset(document.getElementById('t')!, [entry]))
+      .toEqual({ dx: 0, dy: 14 });
   });
 });

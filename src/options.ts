@@ -30,6 +30,7 @@ import {
 import {
   KIND_META,
   matcherSummary,
+  nudgeSummary,
   resolveCodewordFromTab,
   renderResolvePreview,
   setFeedbackError,
@@ -278,6 +279,9 @@ function renderEntry(rule: DomainRule, entry: RuleEntry): HTMLElement {
   if (entry.kind === 'reveal' && entry.reveal) {
     desc.appendChild(document.createTextNode(` (${entry.reveal})`));
   }
+  if (entry.kind === 'nudge' && entry.nudge) {
+    desc.appendChild(document.createTextNode(` ${nudgeSummary(entry)}`));
+  }
 
   const editBtn = node.querySelector('.edit-entry') as HTMLButtonElement;
   editBtn.addEventListener('click', () => {
@@ -368,6 +372,12 @@ function beginEdit(
   matcherInput.value = m.type === 'css' ? m.selector : m.type === 'text' ? m.value : m.name;
   labelInput.value = entry.label ?? '';
   if (entry.kind === 'reveal') revealMethodSelect.value = entry.reveal ?? 'opacity';
+  if (entry.kind === 'nudge') {
+    const nudgeDx = ruleNode.querySelector('input.nudge-dx') as HTMLInputElement;
+    const nudgeDy = ruleNode.querySelector('input.nudge-dy') as HTMLInputElement;
+    nudgeDx.value = String(entry.nudge?.dx ?? 0);
+    nudgeDy.value = String(entry.nudge?.dy ?? 0);
+  }
   if (m.type === 'text') matchModeSelect.value = m.mode ?? 'exact';
   kindSelect.dispatchEvent(new Event('change'));  // re-run the form's show/hide
 
@@ -397,6 +407,9 @@ function wireAddEntry(rule: DomainRule, ruleNode: HTMLElement): void {
   const matchModeSelect = ruleNode.querySelector('.match-mode') as HTMLSelectElement;
   const revealMethodLabel = ruleNode.querySelector('.reveal-method-label') as HTMLElement;
   const revealMethodSelect = ruleNode.querySelector('.reveal-method') as HTMLSelectElement;
+  const nudgeOffsetLabel = ruleNode.querySelector('.nudge-offset-label') as HTMLElement;
+  const nudgeDxInput = ruleNode.querySelector('input.nudge-dx') as HTMLInputElement;
+  const nudgeDyInput = ruleNode.querySelector('input.nudge-dy') as HTMLInputElement;
   const matcherInput = ruleNode.querySelector('input.matcher') as HTMLInputElement;
   const labelInput = ruleNode.querySelector('input.entry-label') as HTMLInputElement;
   const matcherErr = ruleNode.querySelector('.matcher-error') as HTMLElement;
@@ -404,6 +417,7 @@ function wireAddEntry(rule: DomainRule, ruleNode: HTMLElement): void {
 
   function syncKindUI(): void {
     const kind = kindSelect.value as RuleEntry['kind'];
+    nudgeOffsetLabel.hidden = kind !== 'nudge';
     if (kind === 'exclude') {
       matcherTypeLabel.hidden = false;
       matchModeLabel.hidden = matcherTypeSelect.value !== 'text';
@@ -417,6 +431,12 @@ function wireAddEntry(rule: DomainRule, ruleNode: HTMLElement): void {
       matchModeLabel.hidden = true;
       revealMethodLabel.hidden = true;
       matcherInput.placeholder = '[data-clickable]';
+    } else if (kind === 'nudge') {
+      // Nudges are CSS-only: they name a specific spot on a specific page.
+      matcherTypeLabel.hidden = true;
+      matchModeLabel.hidden = true;
+      revealMethodLabel.hidden = true;
+      matcherInput.placeholder = 'a.sidebar-item';
     } else {
       matcherTypeLabel.hidden = true;
       matchModeLabel.hidden = true;
@@ -463,7 +483,7 @@ function wireAddEntry(rule: DomainRule, ruleNode: HTMLElement): void {
         matcher = { type: 'class', name: value.replace(/^\./, '') };
       }
     } else {
-      // include + reveal are CSS-only.
+      // include + reveal + nudge are CSS-only.
       if (!isValidSelector(value)) {
         matcherInput.classList.add('invalid');
         matcherErr.textContent = 'Invalid CSS selector.';
@@ -480,6 +500,18 @@ function wireAddEntry(rule: DomainRule, ruleNode: HTMLElement): void {
     };
     if (kind === 'reveal') {
       entry.reveal = revealMethodSelect.value as RevealMethod;
+    }
+    if (kind === 'nudge') {
+      const dx = parseFloat(nudgeDxInput.value);
+      const dy = parseFloat(nudgeDyInput.value);
+      if (!Number.isFinite(dx) && !Number.isFinite(dy)) {
+        matcherErr.textContent = 'Enter an x or y offset in pixels.';
+        return;
+      }
+      entry.nudge = {
+        dx: Number.isFinite(dx) ? dx : 0,
+        dy: Number.isFinite(dy) ? dy : 0,
+      };
     }
 
     if (editSession && editSession.ruleId === rule.id) {
@@ -498,6 +530,8 @@ function wireAddEntry(rule: DomainRule, ruleNode: HTMLElement): void {
     save();
     matcherInput.value = '';
     labelInput.value = '';
+    nudgeDxInput.value = '';
+    nudgeDyInput.value = '';
     matcherErr.textContent = '';
     const entriesEl = ruleNode.querySelector('.entries') as HTMLElement;
     renderEntries(rule, entriesEl);

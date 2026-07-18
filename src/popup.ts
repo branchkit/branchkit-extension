@@ -23,6 +23,7 @@ import { suggestPattern, isValidSelector } from './rules/options-helpers';
 import {
   KIND_META,
   matcherSummary,
+  nudgeSummary,
   resolveCodewordFromTab,
   renderResolvePreview,
   setFeedbackError,
@@ -586,12 +587,15 @@ function renderEntry(rule: DomainRule, entry: RuleEntry, entriesEl: HTMLElement)
   const kind = document.createElement('span');
   kind.className = `entry-kind ${entry.kind}`;
   kind.textContent = KIND_META[entry.kind].glyph;
-  kind.title = entry.kind + (entry.reveal ? ` (${entry.reveal})` : '');
+  kind.title = entry.kind
+    + (entry.reveal ? ` (${entry.reveal})` : '')
+    + (entry.nudge ? ` ${nudgeSummary(entry)}` : '');
   node.appendChild(kind);
 
   const text = document.createElement('span');
   text.className = 'entry-text';
-  const summary = matcherSummary(entry.matcher);
+  let summary = matcherSummary(entry.matcher);
+  if (entry.nudge) summary += ` ${nudgeSummary(entry)}`;
   text.textContent = entry.label ? `${entry.label} — ${summary}` : summary;
   text.title = summary;
   node.appendChild(text);
@@ -620,7 +624,7 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
 
   const kindSelect = document.createElement('select');
   kindSelect.title = 'Entry kind';
-  for (const [val, lbl] of [['exclude', 'Exclude'], ['include', 'Include'], ['reveal', 'Reveal']] as const) {
+  for (const [val, lbl] of [['exclude', 'Exclude'], ['include', 'Include'], ['reveal', 'Reveal'], ['nudge', 'Nudge']] as const) {
     const opt = document.createElement('option');
     opt.value = val;
     opt.textContent = lbl;
@@ -638,6 +642,24 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
     revealSelect.appendChild(opt);
   }
   row1.appendChild(revealSelect);
+
+  const nudgeX = document.createElement('input');
+  nudgeX.type = 'number';
+  nudgeX.className = 'nudge-px';
+  nudgeX.placeholder = 'x px';
+  nudgeX.title = 'Horizontal offset in pixels (negative = left)';
+  nudgeX.step = '1';
+  nudgeX.hidden = true;
+  row1.appendChild(nudgeX);
+
+  const nudgeY = document.createElement('input');
+  nudgeY.type = 'number';
+  nudgeY.className = 'nudge-px';
+  nudgeY.placeholder = 'y px';
+  nudgeY.title = 'Vertical offset in pixels (negative = up)';
+  nudgeY.step = '1';
+  nudgeY.hidden = true;
+  row1.appendChild(nudgeY);
 
   const matcherInput = document.createElement('input');
   matcherInput.type = 'text';
@@ -687,6 +709,7 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
 
   kindSelect.addEventListener('change', () => {
     revealSelect.hidden = kindSelect.value !== 'reveal';
+    nudgeX.hidden = nudgeY.hidden = kindSelect.value !== 'nudge';
   });
 
   matcherInput.addEventListener('input', () => {
@@ -716,10 +739,24 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
     if (kind === 'reveal') {
       entry.reveal = revealSelect.value as RevealMethod;
     }
+    if (kind === 'nudge') {
+      const dx = parseFloat(nudgeX.value);
+      const dy = parseFloat(nudgeY.value);
+      if (!Number.isFinite(dx) && !Number.isFinite(dy)) {
+        setFeedbackError(feedback, 'Enter an x or y offset in pixels.');
+        return;
+      }
+      entry.nudge = {
+        dx: Number.isFinite(dx) ? dx : 0,
+        dy: Number.isFinite(dy) ? dy : 0,
+      };
+    }
     rule.entries.push(entry);
     saveRules();
     matcherInput.value = '';
     labelInput.value = '';
+    nudgeX.value = '';
+    nudgeY.value = '';
     clearFeedback(feedback);
     renderEntries(rule, entriesEl);
   });

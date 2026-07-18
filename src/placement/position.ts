@@ -2,6 +2,17 @@ import { ElementWrapper } from '../scan/element-wrapper';
 import { getCachedRect, getCachedStyle } from '../layout-cache';
 import { computePlacement, Nudge } from './compute';
 import { type BadgeSettings, DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
+import { type RuleEntry, resolveNudgeOffset } from '../rules/domain-rules';
+
+// Per-domain nudge-rule entries for this frame (kind 'nudge' bucket of the
+// compiled rule set). Set by content.ts whenever the matched rules change;
+// placement resolves each wrapper's offset against these once and caches it
+// on the wrapper (see ElementWrapper.cachedRuleNudge).
+let ruleNudges: readonly RuleEntry[] = [];
+
+export function setRuleNudges(entries: readonly RuleEntry[]): void {
+  ruleNudges = entries;
+}
 
 export type AnchorKind = 'text' | 'icon';
 export type AnchorProbe = { kind: AnchorKind; rect: DOMRect } | { kind: 'none' };
@@ -146,6 +157,9 @@ export function getOrComputeProbe(w: ElementWrapper): AnchorProbe {
  */
 export function invalidateProbe(w: ElementWrapper): void {
   w.cachedProbe = null;
+  // Same signal — the element changed, so a nudge rule's selector may now
+  // match differently.
+  w.cachedRuleNudge = undefined;
 }
 
 // Live nudge state — initialized from DEFAULT_BADGE_SETTINGS and overwritten
@@ -245,6 +259,19 @@ function positionAtTopLeft(w: ElementWrapper, probe?: AnchorProbe): void {
     badgeSize: w.hint.badgeSize,
     nudge,
   });
+  // Per-domain nudge rules: a user-authored pixel offset for elements whose
+  // computed position collides with page content. Applied last so it
+  // composes with (never fights) anchor choice and ratio nudges. Resolved
+  // once per wrapper against the rule matchers, then cached.
+  if (w.cachedRuleNudge === undefined) {
+    w.cachedRuleNudge = ruleNudges.length > 0
+      ? resolveNudgeOffset(w.element, ruleNudges)
+      : null;
+  }
+  if (w.cachedRuleNudge) {
+    result.x += w.cachedRuleNudge.dx;
+    result.y += w.cachedRuleNudge.dy;
+  }
   // Top-edge fallbacks RETIRED (2026-07-15). Round 36b flipped a
   // first-visible-row icon's badge fully below when fully-above poked past
   // the clipping scroller (badge cut off mid-letters); a brief overlap

@@ -15,7 +15,15 @@ export const KIND_META: Record<RuleEntry['kind'], { glyph: string; label: string
   exclude: { glyph: '–', label: 'Exclude' },
   include: { glyph: '+', label: 'Include' },
   reveal:  { glyph: '◉', label: 'Reveal'  },
+  nudge:   { glyph: '✥', label: 'Nudge'   },
 };
+
+/** "(+12, -8)" — display suffix for a nudge entry's pixel offset. */
+export function nudgeSummary(entry: RuleEntry): string {
+  if (!entry.nudge) return '';
+  const fmt = (v: number) => (v >= 0 ? `+${v}` : `${v}`);
+  return `(${fmt(entry.nudge.dx)}, ${fmt(entry.nudge.dy)})`;
+}
 
 /**
  * One-line display string for a matcher. `text` matchers carry a

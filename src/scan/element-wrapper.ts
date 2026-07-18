@@ -84,6 +84,12 @@ export class ElementWrapper {
   // See `AnchorProbeOffset` doc above. `null` = not yet computed; set on the
   // first placement that probes this wrapper, cleared on target mutation.
   cachedProbe: AnchorProbeOffset | null = null;
+  // Resolved per-domain nudge-rule offset (rules with kind 'nudge').
+  // `undefined` = not yet resolved; `null` = resolved, no rule matches.
+  // Matcher evaluation must not run per scroll frame, so placement resolves
+  // once and caches here; cleared on target mutation (selector match can
+  // change) and when the compiled rule set changes (content.ts).
+  cachedRuleNudge: { dx: number; dy: number } | null | undefined = undefined;
   // The codeword this wrapper last held, retained after a viewport-leave
   // release. On re-claim the tracker asks the pool to re-grant it (if still
   // free) so an element keeps the same letter across scroll-out/scroll-back

@@ -43,7 +43,7 @@ import { setOcclusionEnabled, applyOcclusion } from './observe/occlusion';
 import { setOcclusionMemoMode, occlusionMemoAllDirty, occlusionMemoNoteTarget, occlusionMemoNotePointer } from './observe/occlusion-memo';
 import { reconcileClipObservation, drainClipObservers, setClipObserverEnabled } from './observe/clip-observer';
 import { cacheLayout, cacheConstruction, clearLayoutCache, geometryInBand, getCachedRect, isRectOnScreen } from './layout-cache';
-import { placeBadges, invalidateProbe } from './placement';
+import { placeBadges, invalidateProbe, setRuleNudges } from './placement';
 import { activateElement, dispatchHover, resolveNavTarget, type ActivationResult } from './activate/event-sequence';
 import {
   emitActivatePath,
@@ -536,11 +536,22 @@ function applyMatchedRules(matched: DomainRule[]): void {
   }
   if (matched.length === 0) {
     compiledRule = null;
+    setRuleNudges([]);
+    clearRuleNudgeCaches();
     return;
   }
   compiledRule = compileRules(matched);
+  setRuleNudges(compiledRule.nudges);
+  clearRuleNudgeCaches();
   const style = injectRevealStyles(compiledRule.reveals);
   if (style && document.head) document.head.appendChild(style);
+}
+
+// Wrapper-cached nudge offsets are resolved against the compiled rule set;
+// a rule change invalidates every one of them. The subsequent doScan's
+// placement pass re-resolves lazily.
+function clearRuleNudgeCaches(): void {
+  for (const w of store.all) w.cachedRuleNudge = undefined;
 }
 
 if (typeof chrome !== 'undefined' && chrome.storage?.sync) {

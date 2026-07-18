@@ -193,6 +193,8 @@
     .entry-kind.exclude { background: var(--exclude); }
     .entry-kind.include { background: var(--include); }
     .entry-kind.reveal { background: var(--reveal); }
+    .entry-kind.nudge { background: var(--accent-btn, #1f6feb); }
+    .nudge-offset-label input { width: 56px; text-align: right; }
     .entry-desc {
       flex: 1;
       font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
@@ -611,6 +613,7 @@
                 <option value="exclude">Exclude</option>
                 <option value="include">Include</option>
                 <option value="reveal">Reveal</option>
+                <option value="nudge">Nudge</option>
               </select>
             </label>
             <label class="matcher-type-label">
@@ -634,6 +637,11 @@
                 <option value="opacity">Opacity</option>
                 <option value="visibility">Visibility</option>
               </select>
+            </label>
+            <label class="nudge-offset-label" hidden>
+              Offset (px)
+              <input type="number" class="nudge-dx" placeholder="x" step="1" title="Horizontal offset in pixels (negative = left)">
+              <input type="number" class="nudge-dy" placeholder="y" step="1" title="Vertical offset in pixels (negative = up)">
             </label>
           </div>
           <div class="add-entry-row">
