@@ -15,6 +15,14 @@ import { spokenCodewordToToken, spokenWordToLetter } from '../labels/words';
 import { bgState } from './state';
 import { isInjectableURL, withInjectLock, injectContentScriptFiles } from './injection';
 
+// Injected by background.ts (which owns the plugin HTTP transport): reports a
+// pull-resolution activate whose pair no frame claims — the "no such hint"
+// feedback surface. Null until wired; the report is best-effort.
+let unroutablePullReporter: ((codeword: string, action: string) => void) | null = null;
+export function setUnroutablePullReporter(fn: (codeword: string, action: string) => void): void {
+  unroutablePullReporter = fn;
+}
+
 /**
  * Voice overlay translation (inbound): the plugin addresses hints by spoken
  * codeword ("cape glad" / prefix word "cape"); the label pool and content
@@ -33,6 +41,15 @@ function translateInboundAction(message: Message): Message {
   if (typeof params.prefix === 'string') next.prefix = spokenWordToLetter(params.prefix);
   if (typeof params.word === 'string') next.word = spokenWordToLetter(params.word);
   if (typeof params.word2 === 'string') next.word2 = spokenWordToLetter(params.word2);
+  // Pull-resolution activate (plugin flag hints_pull_resolution — ext
+  // notes/DESIGN_STATIC_PAIR_GRAMMAR.md 0c): the sealed-alphabet match
+  // delivers letters directly in the params, so no spoken translation is
+  // needed — synthesize the letter-token codeword the pool and content
+  // script key on. prefix_letter's presence doubles as the pull marker
+  // downstream (routing not-found + the CS live strict gate).
+  if (typeof params.prefix_letter === 'string' && typeof params.suffix_letter === 'string') {
+    next.codeword = `${params.prefix_letter} ${params.suffix_letter}`;
+  }
   return { ...message, payload: { ...message.payload, params: next } };
 }
 
@@ -115,6 +132,21 @@ export async function notifyActiveTab(message: Message): Promise<void> {
     // label pool) and the frame both key on letters.
     const translated = translateInboundAction(message);
     const frameId = await routeFrameForAction(tabId, translated);
+    // Pull-resolution not-found: a pull-shaped activate whose pair no frame
+    // in the tab claims cannot succeed anywhere — report "no such hint"
+    // (mishears land here) instead of broadcasting a dispatch every frame
+    // would silently ignore.
+    if (
+      frameId === null &&
+      translated.type === 'BRANCHKIT_ACTION' &&
+      typeof translated.payload.params?.prefix_letter === 'string'
+    ) {
+      unroutablePullReporter?.(
+        translated.payload.params.codeword ?? '',
+        translated.payload.action,
+      );
+      return;
+    }
     const tid = tabId;
     const trySend = (): Promise<unknown> =>
       frameId !== null

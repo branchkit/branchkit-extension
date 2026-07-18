@@ -27,7 +27,7 @@ import {
 } from './background/tab-markers';
 import { ensureContentScriptInjected } from './background/injection';
 import { bgState, connId } from './background/state';
-import { republishActiveTab, broadcastToAllTabs, resolveActiveContentTab, notifyActiveTab, resolveHintFromTab } from './background/frame-router';
+import { republishActiveTab, broadcastToAllTabs, resolveActiveContentTab, notifyActiveTab, resolveHintFromTab, setUnroutablePullReporter } from './background/frame-router';
 import { SSEBackoff } from './background/sse-backoff';
 
 // --- State ---
@@ -290,6 +290,24 @@ async function forwardDispatchResult(result: DispatchResult): Promise<void> {
   if (!(await ensureConnected())) return;
   await postToPlugin('/dispatch-result', result);
 }
+
+// Pull-resolution "no such hint" (ext notes/DESIGN_STATIC_PAIR_GRAMMAR.md 0c):
+// a sealed-alphabet activate whose pair no frame claims reports through the
+// same dispatch-result channel the content script uses, with a distinct
+// detail the plugin can surface as feedback.
+setUnroutablePullReporter((codeword, action) => {
+  void forwardDispatchResult({
+    action,
+    codeword,
+    resolution: 'none',
+    elem_tag: '',
+    taken: 'skipped',
+    ok: false,
+    frame: '',
+    detail: 'no_such_hint',
+    fp: '',
+  });
+});
 
 async function forwardDebugLog(tag: string, data: unknown): Promise<void> {
   if (!(await ensureConnected())) return;

@@ -3060,6 +3060,35 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       const { target, resolution, fp } = resolved;
       let detail = resolved.detail;
 
+      // Pull-resolution live strict gate (ext notes/DESIGN_STATIC_PAIR_GRAMMAR
+      // .md 0c): the sealed-alphabet match no longer consulted the `_strict`
+      // mirror, so seen-is-clickable is enforced HERE, against live state —
+      // fresher than the pushed mirror ever was. A pair resolving to nothing,
+      // or to an element the user can't currently see (off-screen band claim,
+      // CSS-hidden hover target, occluded badge), refuses with detail
+      // 'no_such_hint' instead of clicking blind. prefix_letter rides only
+      // pull-resolution dispatches — the marker.
+      if (params?.prefix_letter != null) {
+        const w = target instanceof HTMLElement ? store.findWrapperFor(target) : undefined;
+        const rect = target instanceof HTMLElement ? target.getBoundingClientRect() : null;
+        const seen = !!(
+          target instanceof HTMLElement && rect &&
+          isRectOnScreen(rect, window.innerWidth, window.innerHeight) &&
+          isVisible(target) &&
+          !w?.cssHidden && !w?.occluded
+        );
+        if (!seen) {
+          reportDispatchResult({
+            action, codeword, resolution, elem_tag: '', taken: 'skipped',
+            ok: false,
+            frame: trimFrameUrl(window.location.href),
+            detail: 'no_such_hint',
+            fp,
+          });
+          return;
+        }
+      }
+
       let taken: DispatchResult['taken'] = 'skipped';
       let elemTag = '';
 
