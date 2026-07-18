@@ -24,7 +24,10 @@
       --reveal: #58a6ff;
     }
     body {
-      width: 340px;
+      /* 400: the popup graduated from status readout to rules editor —
+         selectors and the add form need width — but it also overlays the
+         page during live nudge tuning, so bigger isn't free. */
+      width: 400px;
       /* No bottom padding — the sticky footer owns the bottom inset, so it
          can sit flush against the popup's bottom edge while content scrolls
          beneath it. */
