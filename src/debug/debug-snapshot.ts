@@ -110,6 +110,11 @@ interface WrapperRecord {
   } | null;
   containerResolution: ContainerResolutionDiag | null;
   isInViewport: boolean;
+  /** Which anchor the placement probe resolved for the badge: 'text'
+   * (first visible text), 'icon' (leading svg/img/glyph), 'none' (element
+   * rect fallback), or null when placement hasn't probed yet. Pins which
+   * nudge posture applied — the QuickBase pencil/eye triage question. */
+  anchor: 'text' | 'icon' | 'none' | null;
   /** Which discovery path created this wrapper + the paint-latency stamps
    * (performance.now ms, rounded), so a snapshot can slice the late cohort
    * by element kind — "the sweeps found mostly grid pencil buttons" —
@@ -317,6 +322,7 @@ function captureWrapper(w: ElementWrapper): WrapperRecord {
     hint,
     containerResolution,
     isInViewport: w.isInViewport,
+    anchor: w.cachedProbe === null ? null : w.cachedProbe.kind,
     discovery: {
       source: w.discoverySource,
       dom_seen_by_mo: w.domSeenByMo,

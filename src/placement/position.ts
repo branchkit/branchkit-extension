@@ -181,42 +181,39 @@ export function setNudgesFromSettings(s: BadgeSettings): void {
   nudgeYLarge = s.nudgeYLarge;
 }
 
+// Rango's non-text posture, applied to both icon anchors and small
+// icon-only targets: badge mostly above-left with its bottom-right corner
+// tucked halfway into the glyph. The y=0.5 half-tuck is what makes a badge
+// read as ATTACHED to its icon; adjacent badges in dense clusters
+// (QuickBase pencil/eye) end up staggered against the row line instead of
+// floating in a colliding rank above it. Replaces the {1, 0.2} left-edge
+// posture (user-tuned 2026-07-05, pre-icon-anchoring) after a live
+// side-by-side against Rango on the same grid, 2026-07-18. Revert lever:
+// return {x: 1, y: 0.2} here.
+const ICON_NUDGE: Nudge = { x: 0.3, y: 0.5 };
+
 function getNudge(
   element: Element,
   anchor: AnchorKind | 'none',
   anchorRect?: { width: number; height: number },
 ): Nudge {
-  // Icon-led targets (a sidebar row's leading svg before its text): Rango's
-  // posture — small glyphs get the ratio overhang (badge mostly above-left,
-  // corner overlap; their non-Text default is 0.3/0.5), big icon boxes host
-  // the badge fully inside. We use the user's small-bucket ratios so the
-  // Overlap sliders govern icon badges too. NOT the icon-only {1, 0.2}
-  // posture below — that's tuned for dense icon clusters with no text,
-  // where a left overhang lands on the neighboring control; an icon-led
-  // row's top-left gutter is free space.
+  // Icon anchors (a row's leading svg/img before its text): big icon boxes
+  // host the badge fully inside (Rango's "nudge=1" branch); small glyphs
+  // take the shared icon posture.
   if (anchor === 'icon') {
     if (anchorRect && anchorRect.width > 30 && anchorRect.height > 30) {
       return { x: 1, y: 1 };
     }
-    return { x: nudgeXSmall, y: nudgeYSmall };
+    return ICON_NUDGE;
   }
   const rect = getCachedRect(element);
   if (anchor === 'none') {
     // Large icon-only elements (icon-only buttons big enough to host the
     // badge inside): place hint at the target's top-left INSIDE the element.
-    // Matches Rango's "nudge=1" branch.
     if (rect.width > 30 && rect.height > 30) {
       return { x: 1, y: 1 };
     }
-    // SMALL icon-only targets (round 36, y tuned 36c): no left overhang —
-    // the ratio overhang exists to keep the badge off a text target's
-    // glyphs; an icon has none, and in dense action clusters (QuickBase's
-    // pencil/eye: 18px icons, 4px apart) a badge hanging 70% past the
-    // left edge lands ON the neighboring control. Left edges aligned,
-    // with ~20% of the badge overlapping the icon's top (user-tuned,
-    // 2026-07-05): the slight overlap reads as ATTACHED to the icon,
-    // where fully-above read as floating between rows.
-    return { x: 1, y: 0.2 };
+    return ICON_NUDGE;
   }
 
   // Everything else — Rango-style ratio nudge per font-size bucket.
