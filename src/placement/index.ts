@@ -1,11 +1,11 @@
 export {
   placeBadges,
   placeOne,
-  probeFirstVisibleText,
+  probeAnchor,
   getOrComputeProbe,
   invalidateProbe,
   setNudgesFromSettings,
-  type TextProbe,
+  type AnchorProbe,
 } from './position';
 
 export { leaderLineGeometry } from './geometry';

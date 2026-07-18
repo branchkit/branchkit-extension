@@ -14,9 +14,9 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { ElementWrapper, TextProbeOffset } from '../scan/element-wrapper';
+import { ElementWrapper, AnchorProbeOffset } from '../scan/element-wrapper';
 import { ScannedElement } from '../types';
-import { getOrComputeProbe, invalidateProbe, type TextProbe } from './position';
+import { getOrComputeProbe, invalidateProbe, probeAnchor } from './position';
 
 // `getOrComputeProbe` reads `getCachedRect(element)` from the shared
 // layout-cache and falls through to `Range.getBoundingClientRect()` when
@@ -44,7 +44,7 @@ function makeWrapper(element: Element): ElementWrapper {
   return new ElementWrapper(element, scanned);
 }
 
-function seedProbe(w: ElementWrapper, offset: TextProbeOffset): void {
+function seedProbe(w: ElementWrapper, offset: AnchorProbeOffset): void {
   w.cachedProbe = offset;
 }
 
@@ -55,11 +55,11 @@ describe('getOrComputeProbe — cache read', () => {
     // Expected absolute rect: (112, 204, 30, 16).
     const el = { __rect: new DOMRect(100, 200, 200, 30) } as unknown as Element;
     const w = makeWrapper(el);
-    seedProbe(w, { hasText: true, offsetX: 12, offsetY: 4, width: 30, height: 16 });
+    seedProbe(w, { kind: 'text', offsetX: 12, offsetY: 4, width: 30, height: 16 });
 
     const probe = getOrComputeProbe(w);
-    expect(probe.hasText).toBe(true);
-    if (!probe.hasText) throw new Error('unreachable');
+    expect(probe.kind).toBe('text');
+    if (probe.kind === 'none') throw new Error('unreachable');
     expect(probe.rect.left).toBe(112);
     expect(probe.rect.top).toBe(204);
     expect(probe.rect.width).toBe(30);
@@ -73,24 +73,24 @@ describe('getOrComputeProbe — cache read', () => {
     // re-place without re-probing.
     const el = { __rect: new DOMRect(0, 0, 200, 30) } as unknown as Element;
     const w = makeWrapper(el);
-    seedProbe(w, { hasText: true, offsetX: 12, offsetY: 4, width: 30, height: 16 });
+    seedProbe(w, { kind: 'text', offsetX: 12, offsetY: 4, width: 30, height: 16 });
 
     // Move the element (simulate a scroll).
     (el as unknown as { __rect: DOMRect }).__rect = new DOMRect(0, -500, 200, 30);
 
     const probe = getOrComputeProbe(w);
-    if (!probe.hasText) throw new Error('unreachable');
+    if (probe.kind === 'none') throw new Error('unreachable');
     expect(probe.rect.left).toBe(12);
     expect(probe.rect.top).toBe(-496); // -500 + 4
   });
 
-  it('returns hasText:false for a cached negative result without probing', () => {
+  it('returns kind:none for a cached negative result without probing', () => {
     const el = { __rect: new DOMRect(0, 0, 100, 20) } as unknown as Element;
     const w = makeWrapper(el);
-    seedProbe(w, { hasText: false });
+    seedProbe(w, { kind: 'none' });
 
     const probe = getOrComputeProbe(w);
-    expect(probe.hasText).toBe(false);
+    expect(probe.kind).toBe('none');
   });
 });
 
@@ -98,7 +98,7 @@ describe('invalidateProbe', () => {
   it('drops the cached offset so the next read re-probes', () => {
     const el = { __rect: new DOMRect(0, 0, 200, 30) } as unknown as Element;
     const w = makeWrapper(el);
-    seedProbe(w, { hasText: true, offsetX: 12, offsetY: 4, width: 30, height: 16 });
+    seedProbe(w, { kind: 'text', offsetX: 12, offsetY: 4, width: 30, height: 16 });
 
     invalidateProbe(w);
     expect(w.cachedProbe).toBeNull();
@@ -127,13 +127,76 @@ describe('getOrComputeProbe — compute path', () => {
       const w = makeWrapper(div);
       expect(w.cachedProbe).toBeNull();
       const probe = getOrComputeProbe(w);
-      // JSDOM Range rects are 0x0 → probeFirstVisibleText returns
-      // hasText:false. That's still a cache hit — the cache stores the
-      // negative result so we don't re-walk on every scroll.
+      // JSDOM Range rects are 0x0 → probeAnchor returns kind:'none'.
+      // That's still a cache hit — the cache stores the negative result
+      // so we don't re-walk on every scroll.
       expect(w.cachedProbe).not.toBeNull();
-      expect(w.cachedProbe?.hasText).toBe(probe.hasText);
+      expect(w.cachedProbe?.kind).toBe(probe.kind);
     } finally {
       div.remove();
+    }
+  });
+});
+
+describe('probeAnchor — icon-or-text document order', () => {
+  // The layout-cache mock returns a 100x20 rect for every element, which
+  // fails the icon aspect gate (5:1). Elements opting in as icons carry a
+  // __rect the mock serves instead.
+  function withRect<T extends Element>(el: T, rect: DOMRect): T {
+    (el as unknown as { __rect: DOMRect }).__rect = rect;
+    return el;
+  }
+
+  it('anchors to a leading svg icon before the text (sidebar-row shape)', () => {
+    const a = document.createElement('a');
+    const svg = withRect(
+      document.createElementNS('http://www.w3.org/2000/svg', 'svg') as unknown as Element,
+      new DOMRect(4, 4, 20, 20),
+    );
+    const span = document.createElement('span');
+    span.textContent = 'Companies';
+    a.append(svg, span);
+    document.body.appendChild(a);
+    try {
+      const probe = probeAnchor(a);
+      expect(probe.kind).toBe('icon');
+      if (probe.kind === 'none') throw new Error('unreachable');
+      expect(probe.rect.width).toBe(20);
+    } finally {
+      a.remove();
+    }
+  });
+
+  it('never anchors to svg interior nodes', () => {
+    const a = document.createElement('a');
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    svg.appendChild(path);
+    // Oversized svg fails the icon gate; the probe must pass over the whole
+    // graphic rather than trying the <path> inside it.
+    withRect(svg as unknown as Element, new DOMRect(0, 0, 400, 300));
+    a.append(svg);
+    document.body.appendChild(a);
+    try {
+      expect(probeAnchor(a).kind).toBe('none');
+    } finally {
+      a.remove();
+    }
+  });
+
+  it('an oversized image does not beat following text', () => {
+    const a = document.createElement('a');
+    const img = withRect(document.createElement('img'), new DOMRect(0, 0, 300, 180));
+    const span = document.createElement('span');
+    span.textContent = 'Caption';
+    a.append(img, span);
+    document.body.appendChild(a);
+    try {
+      // JSDOM Range rects are 0x0 so the text branch can't land either —
+      // the assertion is that the big image was NOT taken as an icon.
+      expect(probeAnchor(a).kind).not.toBe('icon');
+    } finally {
+      a.remove();
     }
   });
 });

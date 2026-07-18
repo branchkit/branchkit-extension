@@ -3,36 +3,85 @@ import { getCachedRect, getCachedStyle } from '../layout-cache';
 import { computePlacement, Nudge } from './compute';
 import { type BadgeSettings, DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
 
-export type TextProbe = { hasText: true; rect: DOMRect } | { hasText: false };
+export type AnchorKind = 'text' | 'icon';
+export type AnchorProbe = { kind: AnchorKind; rect: DOMRect } | { kind: 'none' };
+
+// Rango's icon heuristics: small enough and square-ish enough to read as a
+// leading glyph rather than a content image.
+const ICON_MAX_PX = 100;
+const ICON_MAX_ASPECT = 1.5;
+
+function iconAnchorRect(el: Element): DOMRect | null {
+  const r = getCachedRect(el);
+  if (r.width < 3 || r.height < 3) return null;
+  if (r.width > ICON_MAX_PX || r.height > ICON_MAX_PX) return null;
+  if (Math.max(r.width, r.height) / Math.min(r.width, r.height) >= ICON_MAX_ASPECT) return null;
+  return r;
+}
+
+function isPossibleIcon(el: Element): boolean {
+  const tag = el.localName;
+  if (tag === 'svg' || tag === 'img') return true;
+  // Font icons: <i> with ::before glyph content. Pseudo styles aren't in the
+  // layout cache; the live read is bounded to <i> tags seen before the first
+  // text node. (Ligature icon fonts carry their glyph as a text child and are
+  // caught by the text branch, which is the right rect for them anyway.)
+  if (tag === 'i') {
+    const before = getComputedStyle(el, '::before');
+    return before.content !== 'none' && before.content !== 'normal';
+  }
+  // Childless background-image/mask-image sprites.
+  if (el.childNodes.length === 0) {
+    const style = getCachedStyle(el);
+    if (style.backgroundImage && style.backgroundImage !== 'none') return true;
+    if (style.maskImage && style.maskImage !== 'none') return true;
+  }
+  return false;
+}
 
 /**
- * Compute the first-visible-text probe for an element. Each call walks
- * text nodes and reads `Range.getBoundingClientRect()` — the rect read
- * forces synchronous layout unconditionally (the Element rect cache
- * doesn't extend to Ranges). Prefer `getOrComputeProbe(wrapper)` from
- * the hot placement path; this raw function is exported for tests and
- * for callers that don't have a wrapper.
+ * Resolve the badge's anchor inside a hintable target: the first visible
+ * text node OR the first icon-ish element, whichever comes first in
+ * document order (Rango's reference-element rule — a sidebar row's leading
+ * svg beats the span that follows it, so the badge rail aligns on the
+ * icons and stays off the words). Text reads use
+ * `Range.getBoundingClientRect()`, which forces synchronous layout (the
+ * Element rect cache doesn't extend to Ranges) — prefer
+ * `getOrComputeProbe(wrapper)` from the hot placement path; this raw
+ * function is exported for tests and callers without a wrapper.
  */
-export function probeFirstVisibleText(element: Element): TextProbe {
-  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-  let node: Text | null;
-  while ((node = walker.nextNode() as Text | null)) {
-    if (!node.textContent || node.textContent.trim().length === 0) continue;
-    const parent = node.parentElement;
+export function probeAnchor(element: Element): AnchorProbe {
+  const walker = document.createTreeWalker(
+    element, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT);
+  let node: Node | null;
+  while ((node = walker.nextNode())) {
+    if (node instanceof Element) {
+      // Interior svg nodes: the outermost <svg> either anchors as an icon
+      // or the whole graphic is passed over — never anchor to a <path>.
+      if (node instanceof SVGElement && node.ownerSVGElement) continue;
+      if (isPossibleIcon(node)) {
+        const r = iconAnchorRect(node);
+        if (r) return { kind: 'icon', rect: r };
+      }
+      continue;
+    }
+    const textNode = node as Text;
+    if (!textNode.textContent || textNode.textContent.trim().length === 0) continue;
+    const parent = textNode.parentElement;
     if (parent) {
       const pr = getCachedRect(parent);
       if (pr.width < 3 && pr.height < 3) continue;
     }
-    const text = node.textContent;
+    const text = textNode.textContent;
     const start = text.search(/\S/);
     if (start < 0) continue;
     const range = document.createRange();
-    range.setStart(node, start);
-    range.setEnd(node, start + 1);
+    range.setStart(textNode, start);
+    range.setEnd(textNode, start + 1);
     const rect = range.getBoundingClientRect();
-    if (rect.width > 0 && rect.height > 0) return { hasText: true, rect };
+    if (rect.width > 0 && rect.height > 0) return { kind: 'text', rect };
   }
-  return { hasText: false };
+  return { kind: 'none' };
 }
 
 /**
@@ -47,16 +96,16 @@ export function probeFirstVisibleText(element: Element): TextProbe {
  * Invalidation is the caller's responsibility — see `invalidateProbe`. The
  * target-mutation-tracker wires this in `content.ts`.
  */
-export function getOrComputeProbe(w: ElementWrapper): TextProbe {
+export function getOrComputeProbe(w: ElementWrapper): AnchorProbe {
   if (w.cachedProbe !== null) {
-    if (!w.cachedProbe.hasText) return { hasText: false };
+    if (w.cachedProbe.kind === 'none') return { kind: 'none' };
     const el = getCachedRect(w.element);
-    const { offsetX, offsetY, width, height } = w.cachedProbe;
-    return { hasText: true, rect: new DOMRect(el.left + offsetX, el.top + offsetY, width, height) };
+    const { kind, offsetX, offsetY, width, height } = w.cachedProbe;
+    return { kind, rect: new DOMRect(el.left + offsetX, el.top + offsetY, width, height) };
   }
-  const probe = probeFirstVisibleText(w.element);
-  if (!probe.hasText) {
-    w.cachedProbe = { hasText: false };
+  const probe = probeAnchor(w.element);
+  if (probe.kind === 'none') {
+    w.cachedProbe = { kind: 'none' };
     return probe;
   }
   // The probe's `range.getBoundingClientRect()` is a LIVE read that forced a
@@ -72,7 +121,7 @@ export function getOrComputeProbe(w: ElementWrapper): TextProbe {
   const offsetX = probe.rect.left - elLive.left;
   const offsetY = probe.rect.top - elLive.top;
   w.cachedProbe = {
-    hasText: true,
+    kind: probe.kind,
     offsetX,
     offsetY,
     width: probe.rect.width,
@@ -86,7 +135,7 @@ export function getOrComputeProbe(w: ElementWrapper): TextProbe {
   // `anchor()` re-resolves the live target at render time regardless.
   const elCached = getCachedRect(w.element);
   return {
-    hasText: true,
+    kind: probe.kind,
     rect: new DOMRect(elCached.left + offsetX, elCached.top + offsetY, probe.rect.width, probe.rect.height),
   };
 }
@@ -118,9 +167,16 @@ export function setNudgesFromSettings(s: BadgeSettings): void {
   nudgeYLarge = s.nudgeYLarge;
 }
 
-function getNudge(element: Element, hasText: boolean): Nudge {
+function getNudge(element: Element, anchor: AnchorKind | 'none'): Nudge {
+  // Icon-led targets (a sidebar row's leading svg before its text): same
+  // posture as small icon-only targets — left edges aligned, ~20% overlap
+  // on the icon's top, so the badge reads as attached to the glyph and the
+  // rail of badges aligns down the icon column.
+  if (anchor === 'icon') {
+    return { x: 1, y: 0.2 };
+  }
   const rect = getCachedRect(element);
-  if (!hasText) {
+  if (anchor === 'none') {
     // Large icon-only elements (icon-only buttons big enough to host the
     // badge inside): place hint at the target's top-left INSIDE the element.
     // Matches Rango's "nudge=1" branch.
@@ -173,7 +229,7 @@ export function placeOne(wrapper: ElementWrapper): void {
   wrapper.hint.hideLeader();
 }
 
-function positionAtTopLeft(w: ElementWrapper, probe?: TextProbe): void {
+function positionAtTopLeft(w: ElementWrapper, probe?: AnchorProbe): void {
   if (!w.hint) return;
   if (!probe) probe = getOrComputeProbe(w);
 
@@ -182,8 +238,8 @@ function positionAtTopLeft(w: ElementWrapper, probe?: TextProbe): void {
   // reconcile pass, so no container space-clamp or sticky/fixed bound applies —
   // see the sticky-clamp sub-question in
   // notes/completed/DESIGN_HINT_POSITIONING_REARCH.md.
-  const targetRect = probe.hasText ? probe.rect : getCachedRect(w.element);
-  const nudge = getNudge(w.element, probe.hasText);
+  const targetRect = probe.kind !== 'none' ? probe.rect : getCachedRect(w.element);
+  const nudge = getNudge(w.element, probe.kind);
   const result = computePlacement({
     targetRect,
     badgeSize: w.hint.badgeSize,
