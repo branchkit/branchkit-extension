@@ -456,6 +456,31 @@ describe('settle: mass reveal', () => {
   });
 });
 
+describe('idle-convergence backstop', () => {
+  it('arms passSoon when an in-band wrapper is owed convergence, no-ops when steady', () => {
+    const h = makeHarness();
+    // Steady state: codeworded + visible badge → no arm.
+    const badge = new FakeBadge();
+    addWrapper(h.store, { codeword: 'a', inViewport: true, hint: badge, hintVisible: true, lastSentStrict: true });
+    h.engine.noteIdleTick();
+    expect(h.scheduler.pending.length).toBe(0);
+
+    // Owed: in-band wrapper with no codeword (the QuickBase stall cohort).
+    addWrapper(h.store, { codeword: '', inViewport: true });
+    h.engine.noteIdleTick();
+    expect(h.scheduler.pending.length).toBe(1); // passSoon armed
+    h.engine.noteIdleTick();
+    expect(h.scheduler.pending.length).toBe(1); // single-flight holds
+  });
+
+  it('stays silent with badges hidden', () => {
+    const h = makeHarness({ badgesVisible: false });
+    addWrapper(h.store, { codeword: '', inViewport: true });
+    h.engine.noteIdleTick();
+    expect(h.scheduler.pending.length).toBe(0);
+  });
+});
+
 describe('settle: gates', () => {
   it('with badges hidden, settle skips the pass (and reposition no-ops)', () => {
     const h = makeHarness({ badgesVisible: false });

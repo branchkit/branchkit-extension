@@ -3747,6 +3747,11 @@ function wireSettleSignals(): void {
     occlusionMemoNoteTarget(target);
     engine.scheduleDeferredReposition('target-mutation');
   });
+
+  // Idle-convergence backstop (see engine.noteIdleTick): a fully quiet page
+  // fires no settle triggers, stranding stale-flag cohorts until the user
+  // moves. Pausable — stops with the hidden tab.
+  pageSession.resources.pausableInterval(() => engine.noteIdleTick(), 2000);
 }
 wireSettleSignals();
 // Pointer-driven visibility sweep. A CSS `:hover` reveal (QuickBase widget

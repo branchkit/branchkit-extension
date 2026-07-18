@@ -24,7 +24,7 @@
 
 import type { ElementWrapper, DiscoverySource } from '../scan/element-wrapper';
 import type { SettleDeps } from './settle-deps';
-import { wantsHint } from './desired-state';
+import { wantsHint, wantsCodeword } from './desired-state';
 import { shouldRunBandSweep } from './band-sweep-gate';
 import { gatherSettleReads, type SettleGather } from './gather';
 import { computeReconcilePlanLists, type ReconcilePlanLists } from './reconcile';
@@ -143,6 +143,31 @@ export class SettleEngine {
 
   noteSettleTrigger(reason: string): void {
     if (harnessHooksEnabled()) this.settleTriggerReasons.add(reason);
+  }
+
+  // Idle-convergence backstop (2026-07-19, the QuickBase manageusers stall):
+  // every settle trigger is activity-driven, so a page that goes fully quiet
+  // after load never runs a settle — a cohort attached with stale band flags
+  // (or claims the reservoir couldn't fund yet) waits for the user to move
+  // (band_to_claimed p90 was 17.9s in the snapshot). A pausable 2s tick
+  // calls this: a cheap O(store) flag walk (no layout reads), arming the
+  // passSoon single-flight ONLY when convergence is visibly owed — an
+  // in-band wrapper without a codeword, or a codeworded one whose badge
+  // isn't showing. Steady state is a no-op walk; the tick pauses with the
+  // tab. Level-triggered coverage per the consolidation plan's preference,
+  // not a new edge trigger.
+  noteIdleTick(): void {
+    if (!this.deps.isBadgesVisible() || this.deps.isTornDown()) return;
+    for (const w of this.deps.store.all) {
+      if (w.disconnectedAt !== null) continue;
+      const owed =
+        (wantsCodeword(w) && w.scanned.codeword.length === 0) ||
+        (wantsHint(w) && !w.hint?.isVisible);
+      if (owed) {
+        this.schedulePassSoon('idle-backstop');
+        return;
+      }
+    }
   }
 
   // Demoted backstop entry (Phase E): between-settle signals — the visibility
