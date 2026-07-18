@@ -774,24 +774,30 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
   labelInput.spellcheck = false;
   row1.appendChild(labelInput);
 
-  const addBtn = document.createElement('button');
-  addBtn.className = 'primary';
-  addBtn.textContent = 'Add';
-  row1.appendChild(addBtn);
+  // Action buttons live on their own bottom row (after the resolve row) —
+  // inline with the selector/label inputs they wrapped unpredictably and
+  // read as part of the matcher, not as the form's actions.
+  const rowActions = document.createElement('div');
+  rowActions.className = 'add-entry-row actions-row';
 
   const cancelBtn = document.createElement('button');
   cancelBtn.className = 'entry-cancel';
   cancelBtn.textContent = 'Cancel';
   cancelBtn.title = 'Discard changes and go back to adding';
   cancelBtn.hidden = true;
-  row1.appendChild(cancelBtn);
+  rowActions.appendChild(cancelBtn);
 
   const newBtn = document.createElement('button');
   newBtn.className = 'entry-cancel';
   newBtn.textContent = '+ New';
   newBtn.title = 'Save these changes and start adding a new entry';
   newBtn.hidden = true;
-  row1.appendChild(newBtn);
+  rowActions.appendChild(newBtn);
+
+  const addBtn = document.createElement('button');
+  addBtn.className = 'primary';
+  addBtn.textContent = 'Add';
+  rowActions.appendChild(addBtn);
 
   wrap.appendChild(row1);
   wrap.appendChild(rowNudge);
@@ -816,6 +822,7 @@ function renderAddEntry(rule: DomainRule, entriesEl: HTMLElement): HTMLElement {
   row2.appendChild(resolveBtn);
 
   wrap.appendChild(row2);
+  wrap.appendChild(rowActions);
 
   const feedback = document.createElement('div');
   feedback.className = 'feedback';
