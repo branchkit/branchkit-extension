@@ -1,8 +1,10 @@
 # Static Pair Grammar — stop syncing the viewport into the recognizer
 
-**Status:** proposal, 2026-07-18. Phase 3 of PLAN_RELIABILITY_CONSOLIDATION.md.
-Cross-repo (extension + voice plugin + platform vocabulary seam); needs a
-platform-side design pass before code.
+**Status:** RE-SCOPED 2026-07-18 after the platform investigation below. Phase
+3 of PLAN_RELIABILITY_CONSOLIDATION.md. The Layer-1 half of this proposal
+turned out to be ALREADY IMPLEMENTED by the platform's DAG compiler; the
+remaining design is Layer-2 only (match-time resolution). Cross-repo (browser
+plugin + extension; actuator untouched).
 
 **One-line motivation:** the recognizer only ever needs 26 words. Everything
 downstream of "the grammar must track the viewport" — the vocab-lag class, the
@@ -10,6 +12,67 @@ downstream of "the grammar must track the viewport" — the vocab-lag class, the
 delta-mirror bookkeeping in `labels/label-sync.ts` (843 lines) +
 `label-reservoir.ts` (479) + the grammar-epoch handshake — is complexity spent
 keeping three owners agreeing about a set that could be static.
+
+---
+
+## 0. Investigation findings (2026-07-18, live grammar export + compiler read)
+
+The D1 DAG compiler (`actuator/src/pipeline/grammar_dag.rs`) already gives
+hint pairs a static Layer 1:
+
+1. **Dependent-capture tails compile to OPEN STATES** — final + a self-loop
+   bounded by `dependent_capture_alphabet()`, which unions words across every
+   grammar-HWM collection matching the template's skeleton
+   (`browser_hints_*`). Its own doc comment: *"being HWM-fed, keys from
+   since-deleted per-prefix collections survive, so the alphabet converges
+   instead of churning per paint."*
+2. **The live export confirms convergence**: 10 open states, each carrying the
+   full current 26-word alphabet — including state 0 (start), so any alphabet
+   sequence decodes from rest, regardless of which pairs are currently pushed.
+3. **Live probe of the residual failure mode**: with hints gates active,
+   `POST /v1/commands/resolve {"words":["arch","bam"],"preview":true}` →
+   `matched:false` for a pair that decodes fine but isn't in the pushed
+   per-prefix collections. Decode succeeds; MATCH fails on collection lag.
+4. **The decode-empty class (2026-07-02 investigation) survives only for words
+   outside the CURRENT alphabet** (retired decks — the open-state alphabet is
+   the current 26, not the whole HWM union). A steady-state non-issue.
+5. **voice-regress**: static-command clips green under the open-pair grammar
+   (production has been running it through daily use). The formal
+   confirmed-corpus gate is still blocked on the user's confirm-pass; the
+   `--include-unreviewed` run's failures were retired-deck pair clips and
+   unreviewed-quality clips — exactly the classes the corpus rules exclude.
+
+**Consequence:** sections 2's "seed the full pair DAG" step and its accuracy
+measurement are MOOT — the platform already runs an equivalent-or-looser
+grammar, user-validated daily. The vocab-lag/recompile-churn class for hints
+is structurally closed at Layer 1 TODAY. Everything below is re-read in that
+light: the delta mirror's only remaining recognition role is keeping MATCH
+(Layer 2) truthful, and the proposal reduces to moving pair resolution out of
+the pushed collections.
+
+## 0b. Re-scoped proposal (the Layer-2 cut)
+
+Change the hint command's captures from the live per-prefix collections to the
+**sealed 26-word alphabet collection**, and resolve pair→element at dispatch:
+
+- Pattern becomes `<prefix:S_alpha> <suffix:S_alpha>` (browser-plugin-owned
+  spec; the actuator stays generic — no new capture semantics needed).
+- Match now succeeds for any alphabet pair while the hints gate is active;
+  dispatch routes to the SW, which resolves letter-pair → tab/frame/wrapper
+  from its own authoritative pool state (it already does the routing half) and
+  answers "no such hint" with explicit feedback when the pair isn't live.
+- The per-viewport push demotes to Discovery-HUD metadata + `_strict`
+  eligibility on a relaxed cadence — no longer match-critical, so its
+  staleness stops being a correctness bug, and the delta-mirror urgency
+  (reservoir pre-fetch, epoch handshake re-push ladder) can be retired
+  incrementally as consumers drop away.
+
+Costs/open questions carry over from section 4 (mishears can now match
+non-live pairs → dispatch-time not-found feedback; strict-viewport bias moves
+to dispatch; HUD display cadence). Section 4's decode-accuracy question (cost
+1) is answered by production; the remaining gate is UX: is dispatch-time
+"no such hint" feedback acceptable where today the utterance silently fails
+to match? Recommend prototyping behind a plugin flag.
 
 ---
 
