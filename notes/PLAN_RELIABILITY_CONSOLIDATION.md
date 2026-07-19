@@ -192,12 +192,16 @@ for a ledgered miss is out of scope unless its reopen condition fires.
    the element itself. Reopens if: real-site reports of pairs on targets that
    are effectively unclickable.
 
-3. **`pointer-events: none` covers.** Decorative full-bleed overlays defeat
-   elementFromPoint attribution, so hints under them may be suppressed even
-   though clicks would pass through. Safe: it is a missing hint, never a
-   mis-dispatch, and the next settle after any change re-evaluates. Reopens
-   if: a common site pattern leaves a page's primary action chronically
-   unhintable.
+3. **`pointer-events: none` covers.** A visually occluding cover with
+   `pointer-events:none` is invisible to elementFromPoint (the probe returns
+   the element beneath — DESIGN_HINT_OCCLUSION_FILTERING.md research), so a
+   badge may paint on a visually covered target. Safe: such covers are
+   click-transparent by construction, so a spoken dispatch still lands on the
+   target; the wrongness is a badge over content the user can't see (the
+   clip-observer already catches the scroller-clip subset of this). No web
+   primitive detects this class — a fix means geometry-diffing overlays.
+   Reopens if: real usage shows spoken dispatches through such covers acting
+   on content the user couldn't see, with surprising results.
 
 4. **Sub-250ms staleness.** Anything the settle pass repairs (badge position,
    band membership) may be wrong for less than one settle cadence. Safe: the
