@@ -400,6 +400,12 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     voice: [
       { pattern: 'pause', params: { op: 'pause' } },
       { pattern: 'play', params: { op: 'play' } },
+      // Longer aliases: bare "pause"/"play" are single-syllable words the
+      // CTC decoder mistakes for number words on some voices/mics (observed
+      // live: pause → "four"/"five"). Two-word phrases decode far more
+      // reliably; keep both forms.
+      { pattern: 'pause video', params: { op: 'pause' } },
+      { pattern: 'play video', params: { op: 'play' } },
     ],
     voiceContext: 'video' },
   { id: 'media_mute', label: 'Mute video', group: 'Media', mappable: true,
