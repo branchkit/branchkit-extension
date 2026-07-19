@@ -1,7 +1,11 @@
 # Video Media Commands — playing-state accessibility
 
 **Status:** Accepted 2026-07-18 (direction + all open decisions resolved with
-user). Implementation in progress.
+user). v1 LANDED 2026-07-18/19: media commands + `w` layer, Firefox-scoped
+gate, voiceContext `'video'` presence gating, spoken "video" discovery mode
+(exclusive tag, snap-shaped), Discovery HUD fixes (deterministic item order
+actuator-side; bare-word mode rows). NEXT ARC: background media control
+(accepted 2026-07-19, see that section) — phase 1 unbuilt.
 
 ## Motivation
 
@@ -216,6 +220,90 @@ The theme: where the layer is explicit and scoped, match universal player
 conventions exactly (2, 3); where behavior would be heuristic, cut it from
 v1 rather than ship it fuzzy (4); spend an unbound bare letter only on
 something frequent enough to deserve it (1).
+
+## Background media control (accepted 2026-07-19; next arc)
+
+The v1 gating is focused-tab-only and requires the browser frontmost. The
+scenario it can't serve: working in an unrelated app with a video (or web
+music player) playing in a background tab — "pause" from the editor. Design
+agreed with user 2026-07-19.
+
+### Phase 1 — background control works
+
+- **Detection is borrowed, not built.** The SW listens to
+  `chrome.tabs.onUpdated` for the `audible` flag (the speaker icon —
+  hidden-tab-safe, throttle-proof, Chrome + Firefox) and keeps a registry:
+  audible tabs with recency + titles. No content-script surveillance; the
+  2s presence reporter stays visible-tabs-only.
+- **One eligibility tag, union semantics.** The media commands stop
+  requiring `plugin.browser.active`. They gate on a single tag meaning
+  "something is controllable": held while (focused tab has a video) OR
+  (any tab audible) OR (the resume memory below). When nothing qualifies,
+  the words aren't hearable — this bounds the system-wide exposure that
+  un-gating from app-active creates. This is the design's one philosophical
+  shift (browser commands eligible while the browser isn't frontmost);
+  user blessed it explicitly.
+- **Routing picks the target by fixed priority:** (1) focused tab's video
+  when the browser is frontmost — control what you see; (2) the single
+  audible tab — else what you hear; (3) multiple audible → most recently
+  became audible (starting a video over background music means the video).
+  The SW resolves the target and routes the dispatch to that tab; hidden
+  tabs execute fine (one-shot message handling isn't throttled; the
+  element API doesn't need visibility). The audio change is its own
+  confirmation.
+- **Multi-playing gets explicit verbs, not just heuristics.** "pause
+  everything" (and "mute everything") act on ALL audible tabs — the
+  shut-up intent. Asymmetric on purpose: no "faster everything".
+- **Resume memory (the five-minute hole).** Background-pause makes nothing
+  audible; a naive tag drops and "play" goes deaf. The SW remembers the
+  last tab it controlled and holds the tag while that tab still exists
+  and keeps its media (cleared on tab close / full navigation), so
+  pause → work → "play" round-trips indefinitely.
+- **`<audio>` elements join the executor** — same element API; "pause"
+  then covers Spotify web, SoundCloud, podcast players.
+
+### Phase 2 — the media switchboard (user's proposal)
+
+"video" becomes the media switchboard: the Discovery HUD lists everything
+playable, each row wearing a spoken-alphabet codeword, selection locks the
+target. All proven machinery — this is the command palette pattern
+verbatim (rows → named-entity collection → alphabet badges → spoken
+selection), and the alphabet reuse is safe for the same reason the
+palette's is: video mode is exclusive, so hint commands can't collide.
+
+- **Inventory is probed on demand, not tracked.** On mode entry the SW
+  pings every tab's CS: got media? playing/paused? title? One cheap
+  round-trip exactly when the answer matters — fresher than any hidden-tab
+  bookkeeping (whose reporters we deliberately pause), and it catches
+  paused media that was never audible. Sources compose: audible registry
+  (eligibility) + SW presence map (candidates) + probe (truth at open).
+- **HUD shape:** one row per tab with media — codeword, title,
+  playing/paused glyph — above the verb list. With only ONE playable
+  candidate, rows don't render (no ceremony for the common case).
+- **Select-then-verb.** Bare verbs act on the phase-1 default target.
+  Saying a codeword LOCKS the target for the rest of the mode session —
+  "beam … play … faster … skip ahead 30" drives one player without
+  re-selecting, which suits the repeated seek/speed verbs. Compound
+  "pause {codeword}" is a natural later addition via the same capture.
+  Target-lock state lives in the SW; row publish mirrors POST /palette.
+- This supersedes the earlier "pause tab {browser_tabs}" idea — media
+  rows beat tab words (a tab word targets a tab, not its media, and
+  titles churn).
+
+### Deferred
+
+Native media-key command (system plugin): one synthesized play/pause media
+key reaches macOS Now Playing — background browsers, Spotify-the-app,
+Music.app. Maximal reach for bare play/pause, no seek/speed/targeting.
+Different layer; must not gate this arc.
+
+### Open decisions (background arc)
+
+1. Tag naming: `video_present`'s meaning broadens to "media controllable"
+   (audio too, background too) — rename (`plugin.browser.media_active`?)
+   vs keep. Pre-launch, lean rename (no-legacy-debt).
+2. Whether "play" with no resume memory and nothing audible should probe
+   for the most recent paused media or stay ineligible (v1: ineligible).
 
 ## Future: user-authored site commands
 
