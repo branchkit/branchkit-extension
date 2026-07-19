@@ -521,10 +521,6 @@ initLabelSync({
   detachWrapper,
   reconcile: () => engine.reconcile(),
   isBadgesVisible: () => pageSession.badgesVisible,
-  // Phase 2b (DESIGN_GRAMMAR_EPOCH_HANDSHAKE.md): a quiescent epoch mismatch
-  // fires the same full-republish recovery the enumerated triggers use.
-  // republishAllGrammar is a hoisted declaration below.
-  republishAll: (reason) => republishAllGrammar(reason),
 });
 
 // Confirm-rejection handler (epoch-handshake Phase 4, review bug #5): the SW

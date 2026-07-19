@@ -53,11 +53,13 @@ function translateInboundAction(message: Message): Message {
   return { ...message, payload: { ...message.payload, params: next } };
 }
 
-// Tell the newly-active tab to republish its grammar. Because the relay drops
-// grammar batches from non-active tabs, a tab that was backgrounded while
-// scanning never populated the (global) hint collections. On activation it
-// must re-push from scratch so the active tab is the sole, complete contributor
-// to the global vocabulary. The content script's `reactivate` handler flips its
+// Tell the newly-active tab to republish its grammar. There is no active-tab
+// gate on the relay (every tab POSTs freely; the plugin keys sessions per
+// source and projects the focused one), so the content is redundant with the
+// plugin's own deproject/reproject — what this republish still carries is the
+// hints-tag re-arm via its first batch. Retirement is Phase 1 of
+// DESIGN_DISPLAY_GRADE_DEMOTION.md (arm the tag from the focus-recompute
+// reproject instead). The content script's `reactivate` handler flips its
 // local active flag back on and re-queues its whole wrapper store.
 export function republishActiveTab(tabId: number, reason = 'tab_activated'): void {
   chrome.tabs.sendMessage(tabId, {

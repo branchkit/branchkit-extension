@@ -1,7 +1,15 @@
 # Grammar epoch handshake — level-triggered grammar convergence
 
 Date: 2026-06-12
-Status: Phases 0-2b IMPLEMENTED 2026-06-12 (2b landed in the follow-up
+**Status: DELETED END-TO-END 2026-07-19** — the sealed pull-resolution
+payoff removed match truth from the pushed collections, so the handshake's
+job (keeping the mirror truthful for matching) retired with it; the digest,
+tripwire, republish ladder, probe, and both repos' wire fields are gone
+(history in DESIGN_STATIC_PAIR_GRAMMAR.md; residue cleanup in
+DESIGN_DISPLAY_GRADE_DEMOTION.md Phase 0). The arbitrated confirm exchange
+(Phase 4) SURVIVES — it is pool/dispatch machinery, not epoch machinery.
+Historical status trail below.
+Prior status: Phases 0-2b IMPLEMENTED 2026-06-12 (2b landed in the follow-up
 session after the dual-CS race closed — see "Phase 2b LANDED" below).
 Phase 3a (trigger-redundancy probe, detect-only) IMPLEMENTED 2026-06-12 —
 see "Phase 3a LANDED" below. Phase 4 LANDED 2026-06-12 (confirm became the

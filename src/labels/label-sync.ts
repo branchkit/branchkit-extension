@@ -56,12 +56,6 @@ export interface LabelSyncDeps {
   /** Single level-triggered convergence pass (claim + build). */
   reconcile: () => void;
   isBadgesVisible: () => boolean;
-  /**
-   * Full grammar republish (content.ts republishAllGrammar): rotate the
-   * session and re-queue every live wrapper. Phase 2b's epoch_mismatch
-   * recovery — the same body the enumerated triggers call.
-   */
-  republishAll: (reason: string) => void;
 }
 
 let deps: LabelSyncDeps;
@@ -530,7 +524,7 @@ async function doSyncNow(reason: string): Promise<void> {
     }
     const succeededWrappers = chunk.filter(w => succeededSet.has(w.scanned.codeword));
     sweepDisconnectedAfterBatch(succeededWrappers, (el) => el.isConnected, pendingDeleteCodewords, deps.detachWrapper);
-    // Epoch tripwire on the final chunk only — intermediate responses
+    // Reconcile on the final chunk only — intermediate responses
     // describe a half-applied sync by construction.
     if (deps.isBadgesVisible() && resp.succeeded.length > 0) {
       deps.reconcile();

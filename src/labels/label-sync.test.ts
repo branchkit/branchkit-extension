@@ -80,7 +80,6 @@ describe('syncNow wholesale refusal (calibration_active)', () => {
       detachWrapper: vi.fn(),
       reconcile: vi.fn(),
       isBadgesVisible: () => false,
-      republishAll: vi.fn(),
     });
     // Clear module-level delta-sync state from prior tests.
     rotateSession();
@@ -198,7 +197,6 @@ describe('pipelined delete accounting (audit 2026-07-04)', () => {
       detachWrapper: vi.fn(),
       reconcile: vi.fn(),
       isBadgesVisible: () => false,
-      republishAll: vi.fn(),
     });
     rotateSession();
   });
@@ -308,7 +306,6 @@ describe('syncNow transport failure keeps wrappers (BranchKit down)', () => {
       detachWrapper,
       reconcile: vi.fn(),
       isBadgesVisible: () => false,
-      republishAll: vi.fn(),
     });
     rotateSession();
   });
@@ -418,7 +415,6 @@ describe('scheduleSync debounce + max-wait deadline (round 22c)', () => {
       detachWrapper: vi.fn(),
       reconcile: vi.fn(),
       isBadgesVisible: () => false,
-      republishAll: vi.fn(),
     });
     rotateSession();
   });
