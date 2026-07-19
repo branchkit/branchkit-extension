@@ -1675,10 +1675,12 @@ function sealedDispatchSeen(target: unknown): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const w = store.findWrapperFor(target);
   const rect = target.getBoundingClientRect();
+  // isVisible(target) IS the live cssHidden check — no stored flag
+  // (notes/DESIGN_OBSERVED_STATE_READ_TIME.md phase 1).
   return (
     isRectOnScreen(rect, window.innerWidth, window.innerHeight) &&
     isVisible(target) &&
-    !w?.cssHidden && !w?.occluded
+    !w?.occluded
   );
 }
 
@@ -1907,11 +1909,10 @@ async function showBadges(): Promise<void> {
       // (they're hidden from the start, never hovered), so the throttled
       // visibility recheck never gets a transition to clean them up — the badge
       // would stay painted (and flicker on scroll) on something the user can't
-      // see. Gate at the paint source instead. `cssHidden` (same flag the recheck
-      // writes) keeps voice in lockstep via the strict-viewport pass; the cache is
+      // see. Gate at the paint source instead. The voice (strict) side reads
+      // the same fact fresh at plan/stamp time — no stored flag; the cache is
       // warm from cacheLayout above, so isVisible is cheap here.
       const cssVisible = isVisible(wrapper.element);
-      wrapper.cssHidden = !cssVisible;
       if (cssVisible) {
         wrapper.hint.show(isPaintReady(wrapper));
         wrapper.tFirstShown ??= performance.now();

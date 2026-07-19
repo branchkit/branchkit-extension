@@ -57,7 +57,9 @@ export const RECONCILE_BAND_MARGIN_PX = VIEWPORT_MARGIN_PX;
 // as it stands after the conditional build pass the live teardown triggers
 // (badgeNewlyCodeworded runs inside teardown's reconcile() only when a
 // stale-FALSE repair happened), and the strict derivation against `occluded`
-// / `cssHidden` as the occlusion and visibility appliers will leave them.
+// as the occlusion applier will leave it. cssHidden is read-time: derived
+// from the gathered cssVisible at the point of use, never stored
+// (notes/DESIGN_OBSERVED_STATE_READ_TIME.md phase 1).
 //
 // Cost: O(store) over the gather's already-read geometry. The only layout
 // reads are the bounded lazy fallbacks for wrappers the gather couldn't see
@@ -71,12 +73,6 @@ export interface ReconcilePlanLists {
   toBuild: ElementWrapper[];
   toShow: ElementWrapper[];
   toHide: ElementWrapper[];
-  /** The visibility step's write-through side effect: recheck-set wrappers
-   * whose `cssHidden` flag must change to match the gathered cssVisible
-   * (delta-only — writing an unchanged value is a no-op). The strict
-   * predicate reads this flag, so the applier writes it before the strict
-   * delta is queued. */
-  cssHiddenDelta: Array<[ElementWrapper, boolean]>;
   /** Wrappers whose `_strict` membership (wantsStrict over simulated
    * post-apply flags) differs from the last value pushed to the plugin. */
   strictDelta: ElementWrapper[];
@@ -118,7 +114,7 @@ export function computeReconcilePlanLists(
   const lazy = { reads: 0 };
   const lists: ReconcilePlanLists = {
     toRelease: [], toRepair: [], toClaim: [], toBuild: [], toShow: [], toHide: [],
-    cssHiddenDelta: [], strictDelta: [],
+    strictDelta: [],
     strictFlips: { geometry: 0, clipped: 0, overlayCovered: 0, cssHidden: 0, ancestor: 0, stable: 0, first: 0 },
   };
   const probing = harnessHooksEnabled();
@@ -173,10 +169,6 @@ export function computeReconcilePlanLists(
     const cssVisible = (): boolean =>
       cssVisibleMemo ??= (gather.cssVisible.get(w) ?? lazyCssVisible(w, lazy));
 
-    // `cssHidden` as it will stand when the strict re-push runs — after the
-    // build pass's write-through and the visibility apply.
-    let cssHidden5 = w.cssHidden;
-
     // Build sim — badgeNewlyCodeworded's paint set: wants a hint, badge not
     // currently showing, target CSS-visible. Band-scoped, NOT strict-viewport
     // (notes/DESIGN_PAINT_THE_BAND.md): off-viewport band wrappers build and
@@ -185,23 +177,17 @@ export function computeReconcilePlanLists(
     const showingAtPlan = w.hint?.isVisible ?? false;
     let builtAndShown = false;
     if (wantsHintNow && !showingAtPlan) {
-      // The live build pass writes cssHidden for its whole set (painted or
-      // not) — mirror that when it will actually run this settle.
-      if (buildPassRuns) cssHidden5 = !cssVisible();
       if (cssVisible()) {
         lists.toBuild.push(w);
         builtAndShown = buildPassRuns;
       }
     }
 
-    // Step-5 sim — the visibility recheck's show/hide transitions + the
-    // cssHidden write-through, over the post-repair flag and post-build
-    // badge visibility.
+    // Step-5 sim — the visibility recheck's show/hide transitions, over the
+    // post-repair flag and post-build badge visibility.
     const hasBadgeAtRecheck = w.hint !== null || builtAndShown;
     if (hasBadgeAtRecheck && flag && w.element.isConnected) {
       const showingAtRecheck = showingAtPlan || builtAndShown;
-      if (w.cssHidden !== !cssVisible()) lists.cssHiddenDelta.push([w, !cssVisible()]);
-      cssHidden5 = !cssVisible();
       const visible = w.hint
         ? wantsShown(w, { flagInBand: flag, cssVisible: cssVisible(), overVideo: targetOverVideo(w.element) })
         : cssVisible(); // freshly-constructed badge: shown-ness core
@@ -209,15 +195,18 @@ export function computeReconcilePlanLists(
       else if (!visible && showingAtRecheck) lists.toHide.push(w);
     }
 
-    // Step-6 sim (the strict fold, cutover 4/4) — wantsStrict over simulated
-    // post-apply flags: effective occlusion folded from the gather's
+    // Step-6 sim (the strict fold, cutover 4/4) — wantsStrict over the
+    // gather-derived inputs: effective occlusion folded from the gather's
     // hit-tests and the clip flag (stable — the membership sync runs before
-    // the gather); cssHidden as the applies will leave it.
+    // the gather); cssHidden derived from the same gathered cssVisible the
+    // show/hide sim consumed (read-time — there is no stored flag; see
+    // notes/DESIGN_OBSERVED_STATE_READ_TIME.md phase 1).
     // lastSentStrictViewport is only written at batch POST, so it is stable
     // across the pipeline.
     if (codeworded) {
       const overlay5 = gather.overlayCovered.get(w) ?? w.overlayCovered;
       const occluded5 = overlay5 || w.clipped;
+      const cssHidden5 = !cssVisible();
       const inStrict = wantsStrict(w, {
         ancestorChainVisible: gather.ancestorChainVisible,
         onScreen: onScreen(),

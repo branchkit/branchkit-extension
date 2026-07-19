@@ -129,16 +129,10 @@ export class ElementWrapper {
   // by bkClipObserver.
   clipped: boolean = false;
 
-  // CSS-invisible target (visibility:hidden / opacity:0 / display:none — the
-  // `isVisible()` predicate). Written wherever a badge's paint decision is made
-  // from that predicate: the paint sites (showBadges, badgeNewlyCodeworded) and
-  // the visibility recheck, all `cssHidden = !isVisible(el)`. A hover-reveal
-  // action bar (QuickBase WidgetActions) or an autohidden player control is in
-  // the DOM with geometry but visually absent; the badge isn't painted, and
-  // strict-viewport forces in_strict_viewport=false so voice can't match a hint
-  // the user can't see — same rule as `occluded`, applied to CSS-hidden targets.
-  // Distinct from `occluded` (a visible target covered by something on top).
-  cssHidden: boolean = false;
+  // (There is deliberately no stored CSS-visibility flag: `isVisible()` is
+  // read fresh wherever the fact is consumed — the paint gates, the plan's
+  // gathered cssVisible, the strict stamp, the dispatch gate. A stored copy
+  // was the phase-1 retirement of notes/DESIGN_OBSERVED_STATE_READ_TIME.md.)
 
   // Stage timestamps (performance.now ms) for the paint-latency
   // decomposition (notes/DESIGN_PAINT_THE_BAND.md): where does the time go

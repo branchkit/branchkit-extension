@@ -11,10 +11,11 @@
  * them drop silently — saying "gust harp" when harp is below the fold is a
  * no-op, not a click on something the user can't see.
  *
- * Two more "can't see it" cuts share this rule, each read off a wrapper flag set
- * by its own settle pass: `occluded` (a visible target covered by an overlay) and
- * `cssHidden` (a target that is visibility:hidden / opacity:0 — a hover-reveal
- * action bar whose badge the visibility recheck has hidden). Either forces
+ * Two more "can't see it" cuts share this rule: `occluded` (a visible target
+ * covered by an overlay — a wrapper flag set by the occlusion pass) and
+ * CSS-invisibility (visibility:hidden / opacity:0 — a hover-reveal action bar
+ * whose badge the paint gate keeps hidden), read live per batch member
+ * (notes/DESIGN_OBSERVED_STATE_READ_TIME.md phase 1). Either forces
  * in_strict_viewport=false: if the badge isn't shown, voice doesn't match it.
  *
  * Iframe behavior: a wrapper's own rect being in the iframe's viewport is
@@ -34,6 +35,7 @@
  */
 
 import { ElementWrapper } from '../scan/element-wrapper';
+import { isVisible } from '../scan/scanner';
 import { harnessHooksEnabled } from '../debug/harness-hooks';
 import { lastStrictProbe } from './strict-probe';
 
@@ -125,18 +127,22 @@ export function stampStrictViewport(wrappers: ElementWrapper[]): void {
     // off-strict so voice can't match a hint the user can't see — same rule as
     // below-the-fold, applied to visually-covered targets. No-op when the
     // bkOcclusion flag is off (occluded stays false).
-    // `!w.cssHidden`: same rule for a CSS-invisible target (visibility:hidden /
-    // opacity:0 — a hover-reveal action bar) whose badge the visibility recheck
-    // has hidden. If the user can't see the badge, voice shouldn't match it.
+    // `cssHiddenLive`: same rule for a CSS-invisible target (visibility:hidden /
+    // opacity:0 — a hover-reveal action bar) whose badge the paint gate keeps
+    // hidden. Read fresh per batch member — the stamp already pays a live rect
+    // per member; the style read joins it (read-time, no stored flag:
+    // notes/DESIGN_OBSERVED_STATE_READ_TIME.md phase 1).
     const stampOnScreen = r != null && r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
-    const inStrict = ancestorOk && !w.occluded && !w.cssHidden && stampOnScreen;
+    let cssHiddenLive: boolean;
+    try { cssHiddenLive = !isVisible(w.element); } catch { cssHiddenLive = true; }
+    const inStrict = ancestorOk && !w.occluded && !cssHiddenLive && stampOnScreen;
     if (harnessHooksEnabled()) {
       const probe = lastStrictProbe.get(w);
       if (probe && probe.inStrict !== inStrict) {
         stampDisagree.total++;
         if (probe.onScreen !== stampOnScreen) stampDisagree.geometry++;
         if ((probe.clipped || probe.overlayCovered) !== w.occluded) stampDisagree.occluded++;
-        if (probe.cssHidden !== w.cssHidden) stampDisagree.cssHidden++;
+        if (probe.cssHidden !== cssHiddenLive) stampDisagree.cssHidden++;
         if (probe.ancestor !== ancestorOk) stampDisagree.ancestor++;
       }
     }

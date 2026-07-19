@@ -49,7 +49,6 @@ function liveWrapper(opts: {
   hint?: 'visible' | 'dormant' | 'none';
   inViewport?: boolean;
   disconnected?: boolean;
-  cssHidden?: boolean;
   occluded?: boolean;
   lastSent?: boolean;
 }): ElementWrapper {
@@ -64,7 +63,6 @@ function liveWrapper(opts: {
   if (hint !== 'none') w.hint = { isVisible: hint === 'visible' } as HintBadge;
   w.isInViewport = opts.inViewport ?? false;
   if (opts.disconnected) w.disconnectedAt = 1;
-  if (opts.cssHidden) w.cssHidden = true;
   if (opts.occluded) w.occluded = true;
   w.lastSentStrictViewport = opts.lastSent;
   return w;
@@ -168,24 +166,13 @@ describe('computeReconcilePlanLists', () => {
     const lists = computeReconcilePlanLists(storeOf([w]), gatherOf([[w, ON_SCREEN, false]]));
     expect(lists.toHide).toEqual([w]);
     expect(lists.toShow).toEqual([]);
-    // …and the write-through flag flips with it (delta-only).
-    expect(lists.cssHiddenDelta).toEqual([[w, true]]);
   });
 
-  it('emits no cssHidden delta when the flag already matches', () => {
-    const visible = liveWrapper({ hint: 'visible', inViewport: true, codeword: 'ape' });
-    const hidden = liveWrapper({ hint: 'visible', inViewport: true, codeword: 'oak', cssHidden: true });
-    const lists = computeReconcilePlanLists(
-      storeOf([visible, hidden]),
-      gatherOf([[visible, ON_SCREEN, true], [hidden, ON_SCREEN, false]]),
-    );
-    expect(lists.cssHiddenDelta).toEqual([]);
-  });
-
-  it('clears cssHidden for a target that became CSS-visible again', () => {
-    const w = liveWrapper({ hint: 'dormant', inViewport: true, codeword: 'ape', cssHidden: true });
+  it('re-shows a dormant badge whose target became CSS-visible again', () => {
+    // Read-time cssHidden: recovery needs no flag clear — the gather says
+    // visible, the plan acts on it (DESIGN_OBSERVED_STATE_READ_TIME phase 1).
+    const w = liveWrapper({ hint: 'dormant', inViewport: true, codeword: 'ape' });
     const lists = computeReconcilePlanLists(storeOf([w]), gatherOf([[w, ON_SCREEN, true]]));
-    expect(lists.cssHiddenDelta).toEqual([[w, false]]);
     expect(lists.toShow).toEqual([w]);
   });
 
@@ -256,22 +243,25 @@ describe('strictDelta (folded into the plan, cutover 4/4)', () => {
     expect(lists.strictDelta).toEqual([w]);
   });
 
-  it('uses cssHidden as the visibility apply will leave it, not as it stands', () => {
-    // Target went CSS-invisible this settle: the recheck sim writes
-    // cssHidden=true, so strict must already see it hidden — same settle,
-    // no one-settle lag.
+  it('derives cssHidden from the gather, so hide and strict-drop land the same settle', () => {
+    // Target went CSS-invisible this settle: the gather says hidden, so the
+    // hide AND the strict re-push both derive from it — no one-settle lag,
+    // no stored flag to sequence against.
     const w = liveWrapper({ codeword: 'ape', hint: 'visible', inViewport: true, lastSent: true });
     const lists = computeReconcilePlanLists(storeOf([w]), gatherOf([[w, ON_SCREEN, false]]));
     expect(lists.toHide).toEqual([w]);
     expect(lists.strictDelta).toEqual([w]);
   });
 
-  it('keeps a pre-existing cssHidden for wrappers outside the recheck set', () => {
-    // Dormant codeword-holder out of band: not in the recheck set, so the
-    // current flag stands.
-    const w = liveWrapper({ codeword: 'ape', hint: 'dormant', inViewport: false, lastSent: true, cssHidden: true });
-    const lists = computeReconcilePlanLists(storeOf([w]), gatherOf([[w, OFF_BAND]]));
-    expect(lists.strictDelta).toEqual([w]); // off-strict (cssHidden + off-screen) vs lastSent=true
+  it('lazy-reads cssHidden live for wrappers the gather vis set missed', () => {
+    // Codeworded wrapper with an on-screen rect but NO gathered cssVisible
+    // entry: the strict derivation falls back to a live isVisible() read
+    // (bounded, counted by the lazyReads tripwire) — never a stored flag.
+    // happy-dom reports a zero-size box for real elements, so the live read
+    // says hidden → off-strict vs lastSent=true → delta.
+    const w = liveWrapper({ codeword: 'ape', hint: 'dormant', inViewport: true, lastSent: true });
+    const lists = computeReconcilePlanLists(storeOf([w]), gatherOf([[w, ON_SCREEN]]));
+    expect(lists.strictDelta).toEqual([w]);
   });
 
   // Boundary semantics, ported from the deleted collectStrictViewportDelta

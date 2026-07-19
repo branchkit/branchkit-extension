@@ -199,7 +199,7 @@ export function constructVisibilityObservers(): void {
 //      of notes/DESIGN_UNIFIED_RECONCILER.md demoted this half from its own
 //      100ms-throttled loop to a settle-pass request (schedulePassSoon, also
 //      non-extending at the same 100ms cadence): the pass's plan derives
-//      toShow/toHide/cssHidden from the gather, so one convergence engine
+//      toShow/toHide from the gathered cssVisible, so one convergence engine
 //      serves the settle and between-settle triggers alike.
 // The class/style MutationObserver fires this for mutation-driven reveals.
 // Pointer events fire it too (content.ts) for pure CSS `:hover` reveals, which
@@ -300,18 +300,19 @@ export function schedulePointerVisibilitySweep(target?: Element): void {
     }, POINTER_IDLE_FULL_MS);
   }
   // RE-SHOW half: demoted to the settle pass (Phase E) — the plan's
-  // toShow/toHide/cssHidden derivation converges hinted badges, including
+  // toShow/toHide derivation converges hinted badges, including
   // the "user just hid" guard (the pipeline gates on badgesVisible) and the
   // strict re-push (the plan's strictDelta rides the same pass).
   pageSession.engine.schedulePassSoon('pointer');
 }
 
 // (recheckBadgeVisibility is gone — Phase E of
-// notes/DESIGN_UNIFIED_RECONCILER.md. Badge show/hide convergence, the
-// cssHidden write-through, and the QuickBase ghost-badge policy ("if the
-// badge is hidden, voice can't match it either") live in the plan's
-// wantsShown/wantsStrict derivation; the between-settle triggers above just
-// request the pass.)
+// notes/DESIGN_UNIFIED_RECONCILER.md. Badge show/hide convergence and the
+// QuickBase ghost-badge policy ("if the badge is hidden, voice can't match
+// it either") live in the plan's wantsShown/wantsStrict derivation over the
+// gathered cssVisible — there is no stored cssHidden flag to write through
+// (DESIGN_OBSERVED_STATE_READ_TIME phase 1); the between-settle triggers
+// above just request the pass.)
 
 function anyHintedWrapperVisible(): boolean {
   for (const w of store.all) {

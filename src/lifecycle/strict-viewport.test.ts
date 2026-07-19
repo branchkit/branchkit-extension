@@ -6,7 +6,7 @@
  * plan (reconcile.test.ts pins its boundary semantics).
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { ElementWrapper } from '../scan/element-wrapper';
 import { ScannedElement, Category } from '../types';
 import { stampStrictViewport, isAncestorChainInVisibleViewport } from './strict-viewport';
@@ -18,25 +18,28 @@ interface FakeRect {
   height: number;
 }
 
-function fakeElement(rect: FakeRect | null): Element {
-  const el = {
-    tagName: 'A',
-    getBoundingClientRect(): DOMRect {
-      if (rect == null) throw new Error('detached');
-      return {
-        top: rect.top,
-        left: rect.left,
-        bottom: rect.top + rect.height,
-        right: rect.left + rect.width,
-        width: rect.width,
-        height: rect.height,
-        x: rect.left,
-        y: rect.top,
-        toJSON() { return this; },
-      } as DOMRect;
-    },
+// Real DOM element with a mocked rect: the stamp reads BOTH geometry (the
+// mocked gBCR) and live computed style (isVisible — the read-time cssHidden
+// check, DESIGN_OBSERVED_STATE_READ_TIME phase 1), so the element must be a
+// genuine attached node for getComputedStyle to answer.
+function realElement(rect: FakeRect | null): Element {
+  const el = document.createElement('a');
+  document.body.appendChild(el);
+  el.getBoundingClientRect = (): DOMRect => {
+    if (rect == null) throw new Error('detached');
+    return {
+      top: rect.top,
+      left: rect.left,
+      bottom: rect.top + rect.height,
+      right: rect.left + rect.width,
+      width: rect.width,
+      height: rect.height,
+      x: rect.left,
+      y: rect.top,
+      toJSON() { return this; },
+    } as DOMRect;
   };
-  return el as unknown as Element;
+  return el;
 }
 
 function makeWrapper(opts: {
@@ -45,7 +48,7 @@ function makeWrapper(opts: {
   lastSent?: boolean;
   disconnected?: number | null;
   category?: Category;
-  cssHidden?: boolean;
+  cssHiddenStyle?: boolean;
   occluded?: boolean;
 }): ElementWrapper {
   const scanned: ScannedElement = {
@@ -56,10 +59,11 @@ function makeWrapper(opts: {
     adapter: null,
     codeword: opts.codeword ?? 'ape bake',
   };
-  const w = new ElementWrapper(fakeElement(opts.rect), scanned);
+  const el = realElement(opts.rect);
+  if (opts.cssHiddenStyle) (el as HTMLElement).style.visibility = 'hidden';
+  const w = new ElementWrapper(el, scanned);
   w.lastSentStrictViewport = opts.lastSent;
   if (opts.disconnected !== undefined) w.disconnectedAt = opts.disconnected;
-  if (opts.cssHidden !== undefined) w.cssHidden = opts.cssHidden;
   if (opts.occluded !== undefined) w.occluded = opts.occluded;
   return w;
 }
@@ -70,6 +74,10 @@ const VH = 800;
 beforeEach(() => {
   Object.defineProperty(window, 'innerWidth', { value: VW, configurable: true });
   Object.defineProperty(window, 'innerHeight', { value: VH, configurable: true });
+});
+
+afterEach(() => {
+  document.body.replaceChildren();
 });
 
 // (collectStrictViewportDelta's inclusion/visibility-gate/boundary semantics
@@ -104,11 +112,11 @@ describe('stampStrictViewport', () => {
     expect(w.lastSentStrictViewport).toBe(false);
   });
 
-  it('stamps a CSS-hidden but in-viewport target as off-strict', () => {
+  it('stamps a CSS-hidden but in-viewport target as off-strict (live style read)', () => {
     const w = makeWrapper({
       rect: { top: 100, left: 100, width: 50, height: 20 },
       lastSent: undefined,
-      cssHidden: true,
+      cssHiddenStyle: true,
     });
     stampStrictViewport([w]);
     expect(w.scanned.in_strict_viewport).toBe(false);

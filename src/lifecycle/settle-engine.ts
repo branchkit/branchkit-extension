@@ -72,7 +72,7 @@ export interface SettleEngineHooks {
  *  decision 4): what each pass DID. Surfaced on the debug + perf snapshots. */
 interface AppliedCounts {
   release: number; repair: number; claim: number; build: number;
-  show: number; hide: number; cssHidden: number; strict: number;
+  show: number; hide: number; strict: number;
 }
 
 const DISCOVERY_SWEEP_IDLE_TIMEOUT_MS = 500;
@@ -112,8 +112,8 @@ export class SettleEngine {
   // exists, `last` spiking against a quiet page is the tripwire.
   readonly applied = {
     passes: 0,
-    last: { release: 0, repair: 0, claim: 0, build: 0, show: 0, hide: 0, cssHidden: 0, strict: 0 } as AppliedCounts,
-    total: { release: 0, repair: 0, claim: 0, build: 0, show: 0, hide: 0, cssHidden: 0, strict: 0 } as AppliedCounts,
+    last: { release: 0, repair: 0, claim: 0, build: 0, show: 0, hide: 0, strict: 0 } as AppliedCounts,
+    total: { release: 0, repair: 0, claim: 0, build: 0, show: 0, hide: 0, strict: 0 } as AppliedCounts,
   };
 
   // Single-flight yield-chained continuation for band construction the budget
@@ -313,10 +313,10 @@ export class SettleEngine {
     w.label = label;
     // A CSS-invisible target (visibility:hidden / opacity:0 hover-reveal) must
     // not paint — no visibility transition fires for a never-revealed target,
-    // so the recheck never cleans it up. `cssHidden` keeps the voice
-    // (strict-viewport) gate in lockstep.
+    // so the recheck never cleans it up. The voice (strict) side reads the
+    // same fact fresh at plan/stamp time — no stored flag to keep in lockstep
+    // (notes/DESIGN_OBSERVED_STATE_READ_TIME.md phase 1).
     const cssVisible = isVisible(w.element);
-    w.cssHidden = !cssVisible;
     // Restore the label on an existing dormant (scroll-back) hint even when
     // the target is CSS-hidden. A dormant hint was clearLabel()d on band exit;
     // skipping the label here (the 116b321 regression) leaves it null — and
@@ -409,15 +409,14 @@ export class SettleEngine {
 
   // Visibility applier (apply cutover 3/4): the plan decides which badges flip
   // (toShow/toHide via wantsShown over the gather, with dormancy and the
-  // post-repair flag simulated) and which targets' cssHidden changed; this
-  // writes them. The visibility guards mirror the live recheck's
-  // transition-only branches (show only a hidden badge, hide only a showing
-  // one) so the apply stays idempotent against the conditional build pass that
-  // ran during teardown. No onVisibilityChanged trigger here: the strict step
-  // runs next in the pipeline and reads the just-written cssHidden, so the
-  // out-of-band re-push would queue the identical delta.
+  // post-repair flag simulated); this writes them. The visibility guards
+  // mirror the live recheck's transition-only branches (show only a hidden
+  // badge, hide only a showing one) so the apply stays idempotent against the
+  // conditional build pass that ran during teardown. No onVisibilityChanged
+  // trigger here: the strict step runs next in the pipeline and derives
+  // cssHidden from the same gather, so the out-of-band re-push would queue
+  // the identical delta.
   private applyVisibilityPlan(lists: ReconcilePlanLists): void {
-    for (const [w, hidden] of lists.cssHiddenDelta) w.cssHidden = hidden;
     for (const w of lists.toShow) {
       if (w.hint && !w.hint.isVisible) w.hint.show(this.deps.isPaintReady(w));
     }
@@ -468,7 +467,6 @@ export class SettleEngine {
       build: lists.toBuild.length,
       show: lists.toShow.length,
       hide: lists.toHide.length,
-      cssHidden: lists.cssHiddenDelta.length,
       strict: lists.strictDelta.length,
     };
     this.applied.last = last;
