@@ -13,7 +13,6 @@ import {
   REVEAL_REPAIR_FAST_ARM,
 } from './lifecycle/settle-engine';
 import { initConnectionMirror } from './plugin/connection-mirror';
-import { traceCw, cwTrace, setStormAutoCapture } from './debug/cw-trace';
 import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters } from './scan/scanner';
 import { noteDisconnectedShadowAttach } from './scan/shadow-attach-signal';
 import { DiscoverySource, ElementWrapper } from './scan/element-wrapper';
@@ -536,7 +535,6 @@ labelReservoir.onConfirmRejected((codewords) => {
     const w = store.byCodeword(cw);
     if (!w) continue;
     if (hasSent(cw)) queueDelete(cw);
-    traceCw('confirm_reject', '#' + w.scanned.id, cw);
     w.scanned.codeword = '';
     w.label = null;
     if (w.hint) {
@@ -2325,7 +2323,6 @@ async function processScanBatch(
   for (let i = 0; i < newRefs.length; i++) {
     const label = i < labels.length ? labels[i] : '';
     if (!label) continue;  // pool exhausted; element stays unaddressable
-    traceCw('scan_grant', '#' + newElements[i].id + '@' + newElements[i].label, label);
     newElements[i].codeword = label;
     claimCounters.scanPathClaimed++;
     const cw = new ElementWrapper(newRefs[i], newElements[i]);
@@ -3599,8 +3596,6 @@ function paintLatencyStats() {
  * send — see captureDebugSnapshot's extras param. */
 function snapshotExtras() {
   return {
-    // TEMPORARY (DESIGN_STORM_RESILIENCE track 2b): codeword-mutation ring.
-    cw_trace: cwTrace.slice(-5000),
     // Fling-wave pipeline health (notes/DESIGN_FLING_WAVE.md): cohort sizes
     // for the two geometry fast paths and the reservoir state they depend
     // on. reservoir.free pinned at ~0 during a fling = claims starving
@@ -3685,28 +3680,6 @@ function snapshotExtras() {
   };
 }
 
-// TEMPORARY (DESIGN_STORM_RESILIENCE track 2b): when the cw_trace ring
-// detects storm-rate claim/release churn, capture a debug snapshot
-// automatically — the same path as Ctrl+Alt+A minus the overlay toggle
-// (an unattended capture must not mutate the page's visuals). The
-// breadcrumb log fires first so plugin-logs/browser.log records the
-// trigger even if the snapshot chain fails downstream. storm_auto: true
-// in the payload marks the on-disk snapshot as machine-triggered.
-setStormAutoCapture(() => {
-  const url = trimFrameUrl(window.location.href);
-  try {
-    chrome.runtime.sendMessage({
-      type: 'PLUGIN_DEBUG_LOG',
-      tag: 'BK_STORM_AUTO_SNAPSHOT',
-      data: { url, ts: performance.now() },
-      level: 'warn',
-    });
-  } catch {
-    // Extension context invalidated; still capture for the dataset mirror.
-  }
-  const extras = { ...snapshotExtras(), storm_auto: true };
-  captureDebugSnapshot(store, url, extras);
-});
 
 
 

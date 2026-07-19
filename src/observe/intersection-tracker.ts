@@ -25,7 +25,6 @@
 import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
 import { labelReservoir } from '../labels/label-reservoir';
 import { geometryInBand } from '../layout-cache';
-import { traceCw } from '../debug/cw-trace';
 
 // Wide rootMargin to match Rango's lazy-construction model: catch elements
 // while they're still ~5 viewport-line-rows away, so the per-badge work
@@ -235,7 +234,6 @@ export class IntersectionTracker {
     // around to claiming for it.
     this.pendingClaim.delete(wrapper);
     if (wrapper.scanned.codeword) {
-      traceCw('release_applied', '#' + wrapper.scanned.id, wrapper.scanned.codeword);
       this.pendingRelease.push(wrapper.scanned.codeword);
       // Remember the codeword so a scroll-back re-claim can re-grant the same
       // letter (sticky reclaim — kills flicker). See claimLabels pass 1.
@@ -341,23 +339,18 @@ export class IntersectionTracker {
         // still got a label for it, queue the release so the pool doesn't
         // leak.
         let inBandNow = false;
-        let __gy = -99999;
         try {
-          const __gr = wrapper.element.getBoundingClientRect();
-          __gy = Math.round(__gr.y);
           inBandNow = wrapper.element.isConnected && geometryInBand(
-            __gr,
+            wrapper.element.getBoundingClientRect(),
             window.innerWidth, window.innerHeight, VIEWPORT_MARGIN_PX,
           );
         } catch { /* detached mid-flush */ }
         if (!inBandNow) {
-          traceCw('grant_rejected_offband', '#' + wrapper.scanned.id + '@y' + __gy, label ?? '');
           if (label) this.pendingRelease.push(label);
           continue;
         }
 
         if (label) {
-          traceCw('grant', '#' + wrapper.scanned.id + '@y' + __gy + '/dh' + Math.round(document.documentElement.scrollHeight), label);
           wrapper.scanned.codeword = label;
           wrapper.tClaimed ??= performance.now();
           newlyClaimed.push(wrapper);

@@ -23,7 +23,6 @@ import { targetOverVideo } from '../render/video-overlay';
 import { isVisible } from '../scan/scanner';
 import { geometryInBand, isRectOnScreen } from '../layout-cache';
 import { recordCpu } from '../debug/perf-counters';
-import { traceCw } from '../debug/cw-trace';
 import { harnessHooksEnabled } from '../debug/harness-hooks';
 import { lastStrictProbe } from './strict-probe';
 import type { SettleGather } from './gather';
@@ -140,10 +139,6 @@ export function computeReconcilePlanLists(
     if (inBand === null) continue;
     const codeworded = w.scanned.codeword.length > 0;
     if (!inBand && codeworded) {
-      traceCw('plan_release_mark',
-        '#' + w.scanned.id + '@y' + Math.round(gather.rects.get(w)?.y ?? -99999) +
-        '/dh' + Math.round(document.documentElement.scrollHeight),
-        w.scanned.codeword);
       lists.toRelease.push(w);
     }
     else if (inBand && !codeworded) lists.toClaim.push(w);

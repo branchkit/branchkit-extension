@@ -34,7 +34,6 @@ import {
   geometryInBand,
 } from '../layout-cache';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
-import { traceCw } from '../debug/cw-trace';
 import { isVisible } from '../scan/scanner';
 import { poolLabelToAssignment } from '../labels/words';
 import { firehoseStep } from '../debug/firehose';
@@ -298,7 +297,6 @@ export class SettleEngine {
         // Same path as the old IO exit branch: cancels any pending claim,
         // stashes preferredCodeword for sticky reclaim, drops the badge to
         // dormant. >=1000px off-screen, so the hide is imperceptible.
-        traceCw('queue_release_sweep', '#' + w.scanned.id, w.scanned.codeword);
         this.deps.tracker.queueRelease(w);
         releases++;
       }
@@ -478,7 +476,6 @@ export class SettleEngine {
     const now = performance.now();
     for (const w of lists.toRelease) {
       if (this.deps.tracker.strikeOut(w, now)) {
-        traceCw('queue_release_plan', '#' + w.scanned.id + '/dh' + Math.round(document.documentElement.scrollHeight), w.scanned.codeword);
         this.deps.tracker.queueRelease(w);
       }
     }
