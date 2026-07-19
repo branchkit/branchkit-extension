@@ -242,20 +242,20 @@ from logs). The queue from here, in order:
      precedent — "copy that" / "cut that" / "paste that"; bare "close"
      alias dropped from the HUD-hide command ("cancel" / "close hud"
      remain). voice-regress + smoke green (resolve-sweep 50/50).
-   - **OPEN — vocabulary pass** (one product call per word): a flat
-     registry scan found 10 more shadowed singles — full, mute, next,
-     pause, play, previous, speak, toggle, unmute, up (e.g. bare
-     "pause"/"play" vs the new "pause video"/"play video"). Some are false
-     positives: exclusive-mode words ("full" in snap mode) never coexist
-     with their shadowers. Decide per word AFTER the context-aware lint
-     lands so the list is trustworthy.
-   - **OPEN — prefix-collision lint:** promote the smoke sweep's
-     accidental detection into a named check. Requirements: TAG-CONTEXT
-     AWARE (a collision exists only if the short command and its extension
-     are reachable in the same tag context), and a "sealed single word"
-     concept for closed-class words (over, cancel, wake, ...) that the
-     lint guarantees stay unextended. Home: branchkit-cli dev smoke + an
-     inspector surface.
+   - **LINT LANDED 2026-07-19** (`prefix-lint` in `just smoke`, warn-level;
+     cli 3944064 + inspector `exclusive_namespaces` field, app b6626bd).
+     Precision mirrors the matcher's own rules: only an UNGATED literal is
+     swallowable (gated exact beats gated partial — "up" survives "up
+     level"), only a LITERAL continuation swallows (capture next-token
+     doesn't — "scroll down" survives "scroll down <number>"), exclusive
+     modes never co-reach outside commands. Flat scan's 11 flags → 3 real.
+   - **VOCABULARY PASS COMPLETE 2026-07-19** (user calls): "speak" →
+     "speak start"/"speak now" (alternate slot; exits keep their phonetic
+     heads), system "mute"/"unmute" → "mute audio"/"unmute audio". With
+     the earlier clipboard renames the lint is CLEAN (0 collisions, 181
+     commands) — so the accepted-collisions/"sealed words" mechanism was
+     never built (a rename deleted the need for it). All three renamed
+     commands preview-resolve; smoke + voice-regress green. ARC CLOSED.
    (Side catch from the same runtime test: prose subtitles overflowed the
    Discovery HUD — FIXED same day, voice c5d606a.)
 3. **Ladder prune completion** — read the remaining rung counters
