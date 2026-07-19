@@ -209,9 +209,10 @@ describe('resolveVideoModeKey', () => {
       { kind: 'dispatch', action: 'media_restart' });
   });
 
-  it('exits on Escape and q', () => {
+  it('exits on Escape, q, and w (the entry key toggles)', () => {
     expect(resolveVideoModeKey(key('Escape', { key: 'Escape' }))).toEqual({ kind: 'exit' });
     expect(resolveVideoModeKey(key('KeyQ'))).toEqual({ kind: 'exit' });
+    expect(resolveVideoModeKey(key('KeyW'))).toEqual({ kind: 'exit' });
   });
 
   it('consumes unbound keys (modal capture — no fall-through to Normal binds)', () => {

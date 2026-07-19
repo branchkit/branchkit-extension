@@ -145,7 +145,9 @@ export type VideoKeyResolution =
  * chords never reach this (KeyHandler routes them to the registry first).
  */
 export function resolveVideoModeKey(e: KeyboardEvent): VideoKeyResolution {
-  if (e.key === 'Escape' || e.code === 'KeyQ') return { kind: 'exit' };
+  // KeyW makes the entry key a toggle — press w to enter, w again to leave
+  // (the mode-key convention users expect); Escape and q also exit.
+  if (e.key === 'Escape' || e.code === 'KeyQ' || e.code === 'KeyW') return { kind: 'exit' };
   if (e.shiftKey) {
     // < and > — YouTube's speed keys.
     if (e.code === 'Comma') return { kind: 'dispatch', action: 'media_speed', params: { op: 'slower' } };

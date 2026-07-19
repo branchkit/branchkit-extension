@@ -2994,6 +2994,9 @@ const DISPATCH_PASSTHROUGH_ACTIONS = new Set([
   'go_next', 'go_previous', // voice "next/previous page"
   'copy_url', // voice "copy url"
   'go_up', 'go_root', // voice "go up" / "site root"
+  // voice "pause"/"mute"/"faster"/"skip ahead"/"restart video" — the media
+  // executors (activate/media.ts); each no-ops in a frame with no large video
+  'media_play_pause', 'media_mute', 'media_speed', 'media_seek', 'media_restart',
 ]);
 
 chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {

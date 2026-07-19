@@ -45,7 +45,7 @@ const CHIP_TEXT: Record<ChipMode, { label: string; sub: string }> = {
   'mark-jump': { label: 'JUMP TO MARK', sub: 'press a letter · Esc' },
   caret: { label: 'CARET', sub: 'hjkl move · v select · y copy · Esc' },
   visual: { label: 'VISUAL', sub: 'hjkl extend · y copy · o swap · Esc' },
-  video: { label: 'VIDEO', sub: 'k play · j/l seek · m mute · < > speed · 0 restart · Esc' },
+  video: { label: 'VIDEO', sub: 'k play · j/l seek · m mute · < > speed · 0 restart · w/Esc' },
 };
 
 function build(mode: ChipMode): HTMLElement {

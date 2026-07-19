@@ -388,7 +388,7 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // YouTube's own, remapped to these commands so the muscle memory works on
   // any site. Seek phrases avoid bare "back"/"next" (history/find own them).
   { id: 'video_mode', label: 'Video control mode', group: 'Media', mappable: true, params: [],
-    description: 'Enter the video key layer — k/Space play-pause, j/l seek 10s, arrows 5s, m mute, < > speed, 0 restart. YouTube\'s keys, working on any site\'s video. Esc or q exits.' },
+    description: 'Toggle the video key layer — k/Space play-pause, j/l seek 10s, arrows 5s, m mute, < > speed, 0 restart. YouTube\'s keys, working on any site\'s video. w again, Esc, or q exits.' },
   { id: 'media_play_pause', label: 'Play / pause video', group: 'Media', mappable: true,
     description: 'Pause or resume the page\'s video — the largest one playing (any site, works while player controls are hidden).',
     params: [{ name: 'op', type: 'enum', options: ['toggle', 'play', 'pause'], default: 'toggle' }],

@@ -197,8 +197,9 @@ answer, cheapest first:
 
 ## Resolved decisions (2026-07-18, with user)
 
-1. **Layer entry key: `w`** ("watch"), exit `Escape`/`q`. Unbound today,
-   single keystroke for a reactive activity, real mnemonic.
+1. **Layer entry key: `w`** ("watch"), and `w` again exits — the entry key
+   is a toggle (user feedback 2026-07-18); `Escape`/`q` also exit. Unbound
+   today, single keystroke for a reactive activity, real mnemonic.
 2. **`Space` in the layer: yes.** Space-toggles-playback is the most
    universal player convention; the Space-is-page-scroll objection doesn't
    apply inside an explicitly-entered layer, and Normal mode is untouched
