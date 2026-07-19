@@ -49,7 +49,7 @@ function makeWrapper(opts: {
   disconnected?: number | null;
   category?: Category;
   cssHiddenStyle?: boolean;
-  occluded?: boolean;
+  clipped?: boolean;
 }): ElementWrapper {
   const scanned: ScannedElement = {
     label: 'a',
@@ -64,7 +64,7 @@ function makeWrapper(opts: {
   const w = new ElementWrapper(el, scanned);
   w.lastSentStrictViewport = opts.lastSent;
   if (opts.disconnected !== undefined) w.disconnectedAt = opts.disconnected;
-  if (opts.occluded !== undefined) w.occluded = opts.occluded;
+  if (opts.clipped !== undefined) w.clipped = opts.clipped;
   return w;
 }
 

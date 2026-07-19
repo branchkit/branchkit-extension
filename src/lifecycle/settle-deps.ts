@@ -69,12 +69,12 @@ export interface PositionerOps {
   lastReconcileChangedWrites(): number;
 }
 
-/** Occlusion write-back (observe/occlusion.ts) + the memo's scroll/pan
- *  fail-open and per-target invalidation taps (observe/occlusion-memo.ts).
- *  Detection itself happens in the gather (pure, already tested); the engine
- *  only applies and dirties. */
+/** The occlusion memo's scroll/pan fail-open and per-target invalidation
+ *  taps (observe/occlusion-memo.ts). Detection happens in the gather (pure,
+ *  already tested); the applied fold lives on the badge
+ *  (HintBadge.applyOcclusion — DESIGN_OBSERVED_STATE_READ_TIME phase 2), so
+ *  the engine reaches it through the wrapper's hint, no seam needed. */
 export interface OcclusionOps {
-  applyOcclusion(w: ElementWrapper): boolean;
   occlusionMemoAllDirty(reason: string, keepHistory?: boolean): void;
   occlusionMemoNoteTarget(el: Element): void;
 }
@@ -200,11 +200,10 @@ export type PositionerSeamCheck = Satisfies<
 >;
 
 export type OcclusionSeamCheck = Satisfies<
-  Pick<typeof import('../observe/occlusion'), 'applyOcclusion'> &
-    Pick<
-      typeof import('../observe/occlusion-memo'),
-      'occlusionMemoAllDirty' | 'occlusionMemoNoteTarget'
-    >,
+  Pick<
+    typeof import('../observe/occlusion-memo'),
+    'occlusionMemoAllDirty' | 'occlusionMemoNoteTarget'
+  >,
   OcclusionOps
 >;
 

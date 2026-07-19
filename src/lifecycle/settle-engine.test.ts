@@ -64,7 +64,16 @@ class FakeBadge implements BadgeHandle {
   updateLabel(): void { this.calls.push('updateLabel'); }
   setFiltered(): void { this.calls.push('setFiltered'); }
   setMatchedChars(): void { this.calls.push('setMatchedChars'); }
-  setOccluded(): void { this.calls.push('setOccluded'); }
+  private overlayOccluded = false;
+  private occludedApplied = false;
+  applyOcclusion(overlay: boolean | null, clipped: boolean): boolean {
+    this.calls.push('applyOcclusion');
+    if (overlay !== null) this.overlayOccluded = overlay;
+    const eff = this.overlayOccluded || clipped;
+    if (eff === this.occludedApplied) return false;
+    this.occludedApplied = eff;
+    return true;
+  }
   flash(): void { this.calls.push('flash'); }
   clearPending(): void { this.calls.push('clearPending'); }
   updatePosition(): void { this.calls.push('updatePosition'); }
@@ -128,7 +137,6 @@ function makeHarness(opts?: { badgesVisible?: boolean }) {
   const clip = { reconcileClipObservation: vi.fn() };
   const scrollAccel = { reconcileScrollAccel: vi.fn(), reconcileScrollAccelForScroller: vi.fn() };
   const occlusion = {
-    applyOcclusion: vi.fn(() => false),
     occlusionMemoAllDirty: vi.fn(),
     occlusionMemoNoteTarget: vi.fn(),
   };

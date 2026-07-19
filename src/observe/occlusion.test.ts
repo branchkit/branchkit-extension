@@ -1,19 +1,25 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { isHitOccluding, isOccluded, setOcclusionEnabled, applyOcclusion } from './occlusion';
-import type { ElementWrapper } from '../scan/element-wrapper';
+import { isHitOccluding, isOccluded, setOcclusionEnabled } from './occlusion';
+import { HintBadge, __refineScheduler } from '../render/hints';
 
-function fakeWrapper(init: { overlayCovered?: boolean; clipped?: boolean }): {
-  w: ElementWrapper;
-  shown: boolean[];
-} {
-  const shown: boolean[] = [];
-  const w = {
-    overlayCovered: init.overlayCovered ?? false,
-    clipped: init.clipped ?? false,
-    occluded: false,
-    hint: { setOccluded: (b: boolean) => shown.push(b) },
-  } as unknown as ElementWrapper;
-  return { w, shown };
+// The two-input occlusion fold lives on the badge (paint-decision state —
+// DESIGN_OBSERVED_STATE_READ_TIME phase 2). Real HintBadge, real class/attr
+// writes; applied occluded-ness is asserted off the host attribute the fold
+// mirrors for diagnostics.
+function makeBadge(): HintBadge {
+  __refineScheduler.setImmediate(true);
+  const root = document.createElement('div');
+  root.innerHTML = '<button>x</button>';
+  document.body.appendChild(root);
+  mounted.push(root);
+  return new HintBadge(
+    root.querySelector('button')!,
+    { letter: 'a', words: ['arch'], isSingle: true },
+    'button', 'word',
+  );
+}
+function isOccludedApplied(b: HintBadge): boolean {
+  return b.host.getAttribute('data-bk-occluded') === 'true';
 }
 
 const mounted: Element[] = [];
@@ -210,47 +216,50 @@ describe('isOccluded — multi-point sampling', () => {
   });
 });
 
-describe('applyOcclusion — combine overlay + clip signals', () => {
-  it('neither signal → not occluded, no badge write', () => {
-    const { w, shown } = fakeWrapper({});
-    expect(applyOcclusion(w)).toBe(false);
-    expect(w.occluded).toBe(false);
-    expect(shown).toEqual([]);
+describe('HintBadge.applyOcclusion — combine overlay + clip signals', () => {
+  it('neither signal → not occluded, no flip', () => {
+    const b = makeBadge();
+    expect(b.applyOcclusion(false, false)).toBe(false);
+    expect(isOccludedApplied(b)).toBe(false);
   });
 
-  it('overlayCovered alone → occluded, hides the badge', () => {
-    const { w, shown } = fakeWrapper({ overlayCovered: true });
-    expect(applyOcclusion(w)).toBe(true);
-    expect(w.occluded).toBe(true);
-    expect(shown).toEqual([true]);
+  it('overlay verdict alone → occluded, hides the badge', () => {
+    const b = makeBadge();
+    expect(b.applyOcclusion(true, false)).toBe(true);
+    expect(isOccludedApplied(b)).toBe(true);
   });
 
-  it('clipped alone → occluded (the IO signal)', () => {
-    const { w, shown } = fakeWrapper({ clipped: true });
-    expect(applyOcclusion(w)).toBe(true);
-    expect(w.occluded).toBe(true);
-    expect(shown).toEqual([true]);
+  it('clip signal alone (overlay: null — the clip IO path) → occluded', () => {
+    const b = makeBadge();
+    expect(b.applyOcclusion(null, true)).toBe(true);
+    expect(isOccludedApplied(b)).toBe(true);
   });
 
-  it('both signals → occluded once', () => {
-    const { w } = fakeWrapper({ overlayCovered: true, clipped: true });
-    expect(applyOcclusion(w)).toBe(true);
-    expect(w.occluded).toBe(true);
+  it('both signals → occluded, one flip', () => {
+    const b = makeBadge();
+    expect(b.applyOcclusion(true, true)).toBe(true);
+    expect(isOccludedApplied(b)).toBe(true);
   });
 
-  it('is idempotent — no write when effective state is unchanged', () => {
-    const { w, shown } = fakeWrapper({ clipped: true });
-    applyOcclusion(w);
-    expect(applyOcclusion(w)).toBe(false);
-    expect(shown).toEqual([true]);
+  it('is idempotent — no flip when effective state is unchanged', () => {
+    const b = makeBadge();
+    b.applyOcclusion(null, true);
+    expect(b.applyOcclusion(null, true)).toBe(false);
+    expect(isOccludedApplied(b)).toBe(true);
+  });
+
+  it('remembers the overlay half across a clip-only update (the fold memory)', () => {
+    const b = makeBadge();
+    b.applyOcclusion(true, false);           // settle: overlay covers
+    expect(b.applyOcclusion(null, false)).toBe(false); // clip IO: still covered by overlay
+    expect(isOccludedApplied(b)).toBe(true);
   });
 
   it('clearing both un-hides the badge', () => {
-    const { w, shown } = fakeWrapper({ overlayCovered: true });
-    applyOcclusion(w);
-    w.overlayCovered = false;
-    expect(applyOcclusion(w)).toBe(true);
-    expect(w.occluded).toBe(false);
-    expect(shown).toEqual([true, false]);
+    const b = makeBadge();
+    b.applyOcclusion(true, false);
+    expect(b.applyOcclusion(false, false)).toBe(true);
+    expect(isOccludedApplied(b)).toBe(false);
+    expect(b.diagnostics.overlayOccluded).toBe(false);
   });
 });

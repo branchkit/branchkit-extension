@@ -113,20 +113,20 @@ export class ElementWrapper {
   // `stampStrictViewport` after the corresponding postBatch.
   lastSentStrictViewport: boolean | undefined = undefined;
 
-  // EFFECTIVE occlusion (notes/DESIGN_HINT_OCCLUSION_FILTERING.md): the OR of the
-  // two input signals below, recomputed by `applyOcclusion`. Drives the two
-  // consumers — the badge is visually hidden (setOccluded), and strict-viewport
-  // forces in_strict_viewport=false so voice can't match a target the user can't
-  // see. Both inputs default false, so this is false unless a flag is on.
-  occluded: boolean = false;
-  // Input A — `overlayCovered`: the elementFromPoint hit-test found the target
-  // covered by another (hit-testable) element. Set by `reconcileOcclusion`
-  // (settle-debounced); gated by bkOcclusion.
-  overlayCovered: boolean = false;
-  // Input B — `clipped`: an IntersectionObserver rooted at the target's scroll
-  // container reports the target scrolled out of that container (clipped).
-  // Compositor-driven, continuous, flicker-free. Set by the clip-observer; gated
-  // by bkClipObserver.
+  // `clipped`: an IntersectionObserver rooted at the target's scroll container
+  // reports the target scrolled out of that container. Compositor-driven,
+  // continuous, flicker-free. Set by the clip-observer; gated by bkClipObserver.
+  //
+  // This is the ONE observation-shaped field that stays (deliberate deviation
+  // from DESIGN_OBSERVED_STATE_READ_TIME phase 2's first sketch): it is the
+  // clip IO's own continuously-maintained state — single writer, cleared on
+  // unobserve/drain, membership reconciled level-triggered each settle — i.e.
+  // a tracked-invalidation cache (the note's healthy kind), not a copy of an
+  // event someone might have dropped. The retired flags (`occluded`,
+  // `overlayCovered`) were copies of settle/hit-test verdicts; consumers now
+  // derive those where used (gather map in the plan, isOccludedLive at the
+  // stamp/dispatch), and the badge owns the applied visual fold
+  // (HintBadge.applyOcclusion).
   clipped: boolean = false;
 
   // (There is deliberately no stored CSS-visibility flag: `isVisible()` is

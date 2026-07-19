@@ -442,18 +442,19 @@ export class SettleEngine {
   // Occlusion applier (apply cutover 4/4 —
   // notes/DESIGN_HINT_OCCLUSION_FILTERING.md for the detection itself). The
   // elementFromPoint hit-tests live in the gather (read batch 3, over the
-  // visible in-band badge set, flag-gated); this writes the overlay signal and
-  // folds it into the effective occlusion (composes with the clip signal) —
-  // hiding the badge and dropping the target from the voice-matchable
-  // `_strict` collection via the plan's strict delta. Empty map (flag off) →
-  // no-op. A badge built mid-pipeline by the repair path isn't in the map and
-  // gets its first hit-test next settle.
+  // visible in-band badge set, flag-gated); this hands each fresh verdict to
+  // the badge's fold (composes with the clip signal) — hiding the badge and
+  // dropping the target from the voice-matchable `_strict` collection via the
+  // plan's strict delta. No wrapper flag is written: the plan consumed the
+  // gather map directly, and the stamp/dispatch consumers probe live
+  // (DESIGN_OBSERVED_STATE_READ_TIME phase 2). Empty map (flag off) → no-op.
+  // A badge built mid-pipeline by the repair path isn't in the map and gets
+  // its first hit-test next settle.
   private applyOcclusionPlan(gather: SettleGather): void {
     if (gather.overlayCovered.size === 0) return;
     let changed = 0;
     for (const [w, covered] of gather.overlayCovered) {
-      w.overlayCovered = covered;
-      if (this.deps.occlusion.applyOcclusion(w)) changed++;
+      if (w.hint?.applyOcclusion(covered, w.clipped)) changed++;
     }
     if (changed > 0) firehoseStep('occlusion:delta', changed, 1);
   }

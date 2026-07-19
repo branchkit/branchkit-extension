@@ -49,7 +49,6 @@ function liveWrapper(opts: {
   hint?: 'visible' | 'dormant' | 'none';
   inViewport?: boolean;
   disconnected?: boolean;
-  occluded?: boolean;
   lastSent?: boolean;
 }): ElementWrapper {
   const el = document.createElement('a');
@@ -63,7 +62,6 @@ function liveWrapper(opts: {
   if (hint !== 'none') w.hint = { isVisible: hint === 'visible' } as HintBadge;
   w.isInViewport = opts.inViewport ?? false;
   if (opts.disconnected) w.disconnectedAt = 1;
-  if (opts.occluded) w.occluded = true;
   w.lastSentStrictViewport = opts.lastSent;
   return w;
 }

@@ -389,6 +389,12 @@ export class HintBadge implements BadgeHandle {
   private target: Element;
   private category: Category;
   private _visible: boolean = false;
+  // Occlusion paint-decision state (applyOcclusion): the last overlay
+  // hit-test verdict this badge was given, and the applied OR-fold. Decision
+  // state, not an observation — the facts are re-derived at every consumer
+  // (DESIGN_OBSERVED_STATE_READ_TIME phase 2).
+  private _overlayOccluded: boolean = false;
+  private _occludedApplied: boolean = false;
   private _size: { w: number; h: number } | null = null;
   // Has the deferrable refinement (observer registration, etc.) run yet?
   // Production: false until the rIC-scheduled drain runs `refine()`.
@@ -1016,15 +1022,27 @@ export class HintBadge implements BadgeHandle {
   // hide()/_visible (the badge stays "shown" in the visibility-tracker's sense,
   // so it un-hides the instant the cover moves) and from setFiltered (codeword-
   // filter dimming). Mirrors the occluded state onto the light-DOM host as
-  // data-bk-occluded for diagnostics. Idempotent.
-  setOccluded(occluded: boolean): void {
-    if (occluded) {
+  // data-bk-occluded for diagnostics.
+  //
+  // Two-input fold (notes/DESIGN_OBSERVED_STATE_READ_TIME.md phase 2): the
+  // settle applier passes the fresh overlay hit-test verdict; the clip IO
+  // passes `overlay: null` with its fresh clip signal. The badge remembers
+  // the overlay half as paint-decision state ("why am I hidden") so the two
+  // producers — different cadences — compose without a stored observation on
+  // the wrapper. Returns true when the applied visual flipped.
+  applyOcclusion(overlay: boolean | null, clipped: boolean): boolean {
+    if (overlay !== null) this._overlayOccluded = overlay;
+    const eff = this._overlayOccluded || clipped;
+    if (eff === this._occludedApplied) return false;
+    this._occludedApplied = eff;
+    if (eff) {
       this.inner.classList.add('bk-occluded');
       this.host.setAttribute('data-bk-occluded', 'true');
     } else {
       this.inner.classList.remove('bk-occluded');
       this.host.removeAttribute('data-bk-occluded');
     }
+    return true;
   }
 
   // Briefly highlight this badge to confirm "this is the codeword that
@@ -1216,6 +1234,7 @@ export class HintBadge implements BadgeHandle {
       scrollAccelRearms: this._scrollAccelRearms,
       scrollAccelAnimBuilds: this._scrollAccelAnimBuilds,
       occluded: this.inner.classList.contains('bk-occluded'),
+      overlayOccluded: this._overlayOccluded,
     };
   }
 

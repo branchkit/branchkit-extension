@@ -44,24 +44,30 @@ export function setOcclusionEnabled(enabled: boolean): void {
   occlusionEnabled = enabled;
 }
 
-/**
- * Recompute a wrapper's effective occlusion as the OR of its two input signals —
- * `overlayCovered` (elementFromPoint hit-test) and `clipped` (IO rooted at the
- * scroll container) — and, when it changed, hide/show the badge to match. The
- * single writer of `w.occluded` + `setOccluded`, called by both producers so they
- * compose instead of fighting. Voice (strict-viewport) reads `w.occluded`
- * directly on the next settle. Returns true if the effective state flipped.
- */
-export function applyOcclusion(w: ElementWrapper): boolean {
-  const eff = w.overlayCovered || w.clipped;
-  if (eff === w.occluded) return false;
-  w.occluded = eff;
-  w.hint?.setOccluded(eff);
-  return true;
-}
+// (The wrapper-flag fold — applyOcclusion(w) writing w.occluded from
+// w.overlayCovered || w.clipped — is gone: DESIGN_OBSERVED_STATE_READ_TIME
+// phase 2. The badge owns the applied fold (HintBadge.applyOcclusion, called
+// by the settle applier with the fresh gather verdict and by the clip IO with
+// the fresh clip signal); fact consumers derive occlusion where they use it —
+// the plan from the gather map, the strict stamp and the dispatch gate via
+// `isOccludedLive` below.)
 
 export function isOcclusionEnabled(): boolean {
   return occlusionEnabled;
+}
+
+/**
+ * Live effective-occlusion read for the out-of-settle consumers (the strict
+ * stamp's batch-send path, the sealed dispatch gate): the fresh overlay
+ * hit-test (flag-gated; ≤5 elementFromPoint calls, ~25µs each on the live
+ * trail) OR'd with the wrapper's clip signal — `clipped` is the clip IO's
+ * own continuously-maintained state (single writer, cleared on unobserve,
+ * membership reconciled per settle), not a stored copy of anything.
+ */
+export function isOccludedLive(w: ElementWrapper): boolean {
+  if (w.clipped) return true;
+  if (!occlusionEnabled) return false;
+  try { return isOccluded(w.element); } catch { return true; }
 }
 
 /**

@@ -69,7 +69,6 @@ function makeShownWrapper(opts: {
   hint?: boolean;
   connected?: boolean;
   disconnected?: boolean;
-  occluded?: boolean;
 }): ElementWrapper {
   const el = document.createElement('a');
   if (opts.connected ?? true) document.body.appendChild(el);
@@ -80,7 +79,6 @@ function makeShownWrapper(opts: {
   const w = new ElementWrapper(el, scanned);
   if (opts.hint ?? true) w.hint = {} as HintBadge;
   if (opts.disconnected) w.disconnectedAt = 1;
-  if (opts.occluded) w.occluded = true;
   return w;
 }
 

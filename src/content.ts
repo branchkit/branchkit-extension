@@ -36,7 +36,7 @@ import { reconcilePass, drain as drainReconcilePositioner, reconcileRegistrySize
 import { onContainerResize } from './observe/container-resize-tracker';
 import { onTransformAncestorMutation, setTransformTriggerEnabled } from './observe/transform-ancestor-tracker';
 import { onTargetMutation } from './observe/target-mutation-tracker';
-import { setOcclusionEnabled, applyOcclusion } from './observe/occlusion';
+import { setOcclusionEnabled, isOccludedLive } from './observe/occlusion';
 import { setOcclusionMemoMode, occlusionMemoAllDirty, occlusionMemoNoteTarget, occlusionMemoNotePointer } from './observe/occlusion-memo';
 import { reconcileClipObservation, drainClipObservers, setClipObserverEnabled } from './observe/clip-observer';
 import { cacheLayout, cacheConstruction, clearLayoutCache, isRectOnScreen } from './layout-cache';
@@ -400,7 +400,7 @@ const engine = new SettleEngine(
         new HintBadge(target, label, category, displayMode),
     },
     positioner: { reconcilePass, reconcileRegistrySize, lastReconcileChangedWrites },
-    occlusion: { applyOcclusion, occlusionMemoAllDirty, occlusionMemoNoteTarget },
+    occlusion: { occlusionMemoAllDirty, occlusionMemoNoteTarget },
     clip: { reconcileClipObservation },
     scrollAccel: { reconcileScrollAccel, reconcileScrollAccelForScroller },
     placement: { placeBadges },
@@ -1675,12 +1675,13 @@ function sealedDispatchSeen(target: unknown): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const w = store.findWrapperFor(target);
   const rect = target.getBoundingClientRect();
-  // isVisible(target) IS the live cssHidden check — no stored flag
-  // (notes/DESIGN_OBSERVED_STATE_READ_TIME.md phase 1).
+  // isVisible(target) IS the live cssHidden check (phase 1) and
+  // isOccludedLive the live occlusion check (phase 2) — no stored flags
+  // (notes/DESIGN_OBSERVED_STATE_READ_TIME.md).
   return (
     isRectOnScreen(rect, window.innerWidth, window.innerHeight) &&
     isVisible(target) &&
-    !w?.occluded
+    !(w !== undefined && isOccludedLive(w))
   );
 }
 

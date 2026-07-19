@@ -204,7 +204,11 @@ export function computeReconcilePlanLists(
     // lastSentStrictViewport is only written at batch POST, so it is stable
     // across the pipeline.
     if (codeworded) {
-      const overlay5 = gather.overlayCovered.get(w) ?? w.overlayCovered;
+      // Unprobed wrapper (badge not visible/in-band, or the occlusion flag is
+      // off) → not overlay-covered as far as we can tell — the same default an
+      // unprobed stored flag had. The clip signal folds regardless: `clipped`
+      // is the clip IO's own continuously-maintained state, not a copy.
+      const overlay5 = gather.overlayCovered.get(w) ?? false;
       const occluded5 = overlay5 || w.clipped;
       const cssHidden5 = !cssVisible();
       const inStrict = wantsStrict(w, {

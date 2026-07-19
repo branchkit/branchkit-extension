@@ -193,10 +193,18 @@ flag write dies.
 Derivation: gather batch-3 verdicts (memo-accelerated) become the only
 occlusion truth; strict inputs and dispatch consume them (dispatch does a
 live 5-point probe, as the sealed gate already does).
-Deletes: both stored flags, the occlusion applier's flag writes, the
-clip-observer's flag half (it stays as a dirty-marking wake-up for the memo).
+Deletes: both stored flags, the occlusion applier's flag writes.
 Risk: none new — consumers already receive these as inputs "as the appliers
 would leave them" (desired-state.ts); this makes that literal.
+*Deviation recorded at implementation (2026-07-18): `w.clipped` STAYS —
+the first sketch above wanted the clip-observer's flag half gone too, but
+on contact `clipped` is the clip IO's own continuously-maintained state
+(single writer, cleared on unobserve/drain, membership reconciled
+level-triggered each settle), i.e. a tracked-invalidation cache per this
+note's own non-goals taxonomy — not a copy of a droppable event. Retiring
+it would regress the flicker-free clip hide for no lie-class payoff. The
+applied visual OR-fold moved to the badge (HintBadge.applyOcclusion,
+paint-decision state); out-of-settle consumers use `isOccludedLive`.*
 
 **Phase 3 — `isInViewport` + plan-applied claims (the big one, own beachhead).**
 Derivation: `inBand = geometryInBand(gather.rects.get(w))`; `wantsCodeword`/

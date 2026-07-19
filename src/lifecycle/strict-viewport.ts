@@ -36,6 +36,7 @@
 
 import { ElementWrapper } from '../scan/element-wrapper';
 import { isVisible } from '../scan/scanner';
+import { isOccludedLive } from '../observe/occlusion';
 import { harnessHooksEnabled } from '../debug/harness-hooks';
 import { lastStrictProbe } from './strict-probe';
 
@@ -123,25 +124,28 @@ export function stampStrictViewport(wrappers: ElementWrapper[]): void {
   });
   wrappers.forEach((w, i) => {
     const r = rects[i];
-    // `!w.occluded`: a target covered by another element (occlusion hit-test) is
-    // off-strict so voice can't match a hint the user can't see — same rule as
-    // below-the-fold, applied to visually-covered targets. No-op when the
-    // bkOcclusion flag is off (occluded stays false).
+    // `occludedLive`: a target covered by another element (live hit-test,
+    // flag-gated) or clipped by its scroll container is off-strict so voice
+    // can't match a hint the user can't see — same rule as below-the-fold,
+    // applied to visually-covered targets.
     // `cssHiddenLive`: same rule for a CSS-invisible target (visibility:hidden /
     // opacity:0 — a hover-reveal action bar) whose badge the paint gate keeps
-    // hidden. Read fresh per batch member — the stamp already pays a live rect
-    // per member; the style read joins it (read-time, no stored flag:
-    // notes/DESIGN_OBSERVED_STATE_READ_TIME.md phase 1).
+    // hidden. Both read fresh per batch member — the stamp already pays a live
+    // rect per member; the style read and the bounded hit-test join it
+    // (read-time, no stored flags: DESIGN_OBSERVED_STATE_READ_TIME phases 1+2).
     const stampOnScreen = r != null && r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
     let cssHiddenLive: boolean;
     try { cssHiddenLive = !isVisible(w.element); } catch { cssHiddenLive = true; }
-    const inStrict = ancestorOk && !w.occluded && !cssHiddenLive && stampOnScreen;
+    // Only pay the hit-test when the cheaper cuts pass — an off-screen or
+    // CSS-hidden target is off-strict regardless.
+    const occludedLive = stampOnScreen && !cssHiddenLive && isOccludedLive(w);
+    const inStrict = ancestorOk && !occludedLive && !cssHiddenLive && stampOnScreen;
     if (harnessHooksEnabled()) {
       const probe = lastStrictProbe.get(w);
       if (probe && probe.inStrict !== inStrict) {
         stampDisagree.total++;
         if (probe.onScreen !== stampOnScreen) stampDisagree.geometry++;
-        if ((probe.clipped || probe.overlayCovered) !== w.occluded) stampDisagree.occluded++;
+        if ((probe.clipped || probe.overlayCovered) !== occludedLive) stampDisagree.occluded++;
         if (probe.cssHidden !== cssHiddenLive) stampDisagree.cssHidden++;
         if (probe.ancestor !== ancestorOk) stampDisagree.ancestor++;
       }

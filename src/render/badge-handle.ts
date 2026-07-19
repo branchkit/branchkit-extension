@@ -54,10 +54,14 @@ export interface BadgeDiagnostics {
   // Lifetime count of ScrollTimeline anims built (see _scrollAccelAnimBuilds).
   // LOW relative to rearms = inner wrappers rebuilt but the outermost layer reused.
   scrollAccelAnimBuilds: number;
-  // True when the occlusion hit-test has hidden this badge (.bk-occluded). With
+  // True when the occlusion fold has hidden this badge (.bk-occluded). With
   // isVisible (the logical show state) this disambiguates "shown" from "shown
   // but visually hidden because covered" — the ghost-badge diagnosis.
   occluded: boolean;
+  // The overlay half of the fold as last applied (paint-decision state) —
+  // with `occluded` and the wrapper's `clipped`, pins WHICH signal hid the
+  // badge without a flag-bisection round-trip.
+  overlayOccluded: boolean;
 }
 
 export interface BadgeHandle {
@@ -79,7 +83,9 @@ export interface BadgeHandle {
   updateLabel(label: LabelAssignment, displayMode: BadgeDisplayMode): void;
   setFiltered(filtered: boolean): void;
   setMatchedChars(count: number): void;
-  setOccluded(occluded: boolean): void;
+  /** Two-input occlusion fold — overlay verdict (null = unchanged) OR clip
+   *  signal; applies the visual and returns true when it flipped. */
+  applyOcclusion(overlay: boolean | null, clipped: boolean): boolean;
   flash(): void;
   clearPending(): void;
 

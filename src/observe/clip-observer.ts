@@ -15,7 +15,8 @@
  * settle-debounce, no per-frame JS, no flicker), and it sees clipping that
  * `elementFromPoint` misses on `pointer-events:none` covers. It does NOT catch
  * arbitrary overlays (that stays the elementFromPoint job); the two signals
- * compose via `applyOcclusion` (effective = overlayCovered || clipped).
+ * compose in the badge's fold (HintBadge.applyOcclusion — effective =
+ * overlay verdict || clipped; DESIGN_OBSERVED_STATE_READ_TIME phase 2).
  *
  * Flag-gated (`bkClipObserver`, default ON). One shared observer per scroll
  * container root (like Rango's `scrollIntersectionObservers`), released when
@@ -28,7 +29,6 @@
 
 import type { ElementWrapper } from '../scan/element-wrapper';
 import { findClippingScroller } from '../render/scroll-accel';
-import { applyOcclusion } from './occlusion';
 
 let clipObserverEnabled = false;
 
@@ -67,7 +67,7 @@ function onClipIntersection(entries: IntersectionObserverEntry[]): void {
     // IO callback on observe() also lands here, so an already-clipped target is
     // hidden immediately.
     w.clipped = !e.isIntersecting;
-    applyOcclusion(w);
+    w.hint?.applyOcclusion(null, w.clipped);
   }
 }
 
@@ -96,7 +96,7 @@ function unobserveTarget(el: Element): void {
   // Clear the clip signal so dropping observation can't strand a hidden badge.
   if (w && w.clipped) {
     w.clipped = false;
-    applyOcclusion(w);
+    w.hint?.applyOcclusion(null, false);
   }
 }
 
@@ -191,7 +191,7 @@ export function drainClipObservers(): void {
   for (const w of wrapperByTarget.values()) {
     if (w.clipped) {
       w.clipped = false;
-      applyOcclusion(w);
+      w.hint?.applyOcclusion(null, false);
     }
   }
   rootByTarget.clear();
