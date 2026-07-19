@@ -25,7 +25,9 @@ batches / 167 release messages on one QuickBase tab) and produced badge
 DOUBLING on the coverage fixture (176 hosts for 88 anchors at 7fe37a0) —
 it races the scan pipeline's inline claims. REVERTED to emit-only
 telemetry; the standing-claim-backstop idea needs its own design against
-this data. What stands of the retirement: no hard detach, limbo identity
+this data. (That design now exists: DESIGN_OBSERVED_STATE_READ_TIME.md,
+2026-07-18 — plan-applied claims with the inline claim paths deleted, so
+the race this revert protected against has no second participant.) What stands of the retirement: no hard detach, limbo identity
 across navs, no nav-specific wipe, plus the runWhenIdle fix. Coverage
 fixture (400-link grid): load t95 648ms post-revert vs 1664ms pre-arc vs
 2205ms with toClaim — net faster than where we started, swap converges
