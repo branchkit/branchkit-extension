@@ -1,7 +1,11 @@
 # Reliability Consolidation — the way forward after the Rango audit
 
-**Status:** proposal, 2026-07-18. Sequencing plan; the individual phases have
-their own design notes.
+**Status:** EXECUTING, updated 2026-07-19. Phases 1 and 3 executed and Phase 4's
+first cut landed 2026-07-18/19 (details inline per phase below); Phase 2's
+policies take effect on ratification of the ledger (section 5, entries
+PROPOSED). Combined soak in progress before push — watch items listed in
+DESIGN_OBSERVED_STATE_READ_TIME.md and DESIGN_STATIC_PAIR_GRAMMAR.md.
+Remaining work is section 6.
 
 **One-line motivation:** the 2026-07-18 audit (this extension vs Rango) found
 that roughly half of ~280 recent commits were reliability firefighting, ~25 of
@@ -44,6 +48,17 @@ a later phase.
 
 ### Phase 1 — SettleEngine extraction (biggest lever)
 
+**EXECUTED 2026-07-18** — steps 0–5 (`22d2d25`, `2442713`, `a56df22`,
+`a858d3c`, `3d51567`, scripts prune `215398c`). The settle/discovery driver
+now lives in `src/lifecycle/settle-engine.ts` behind injected `SettleDeps`;
+the scroll-back/nav-wedge/band-race/codeword-churn repro classes are
+deterministic unit tests; the sibling 100ms timers have one owner. Soak is
+consolidated with the observed-state read-time arc (which landed on top the
+same day and deleted the stored-flag repair machinery this driver used to
+defend — see DESIGN_OBSERVED_STATE_READ_TIME.md).
+
+Original scope for reference:
+
 Execute `DESIGN_SETTLE_ENGINE_EXTRACTION.md` (Option A, already designed and
 sequenced). The ~1,200-line driver in content.ts is the highest-incident code
 in the repo and is reachable only through Playwright — which the project has
@@ -83,6 +98,24 @@ are product calls.
 
 ### Phase 3 — static pair grammar (shrinks the sync bug factory structurally)
 
+**EXECUTED 2026-07-18/19, with a re-scope that revised this phase's payoff
+estimate.** The investigation found Layer 1 was ALREADY static (the DAG
+compiler's open states carry the full 26-word alphabet), so the work reduced
+to Layer-2 pull-resolution at dispatch. The first default-on FAILED FAST —
+prefix narrowing and the Discovery HUD both depended on the dependent-capture
+shape, teaching us the mirror is load-bearing for THREE user surfaces (match
+truth, narrowing, HUD), not just sync bookkeeping. The missing pieces
+(capture-progress emission, display sources) were built and the retirement
+pass landed 2026-07-19: sealed-only hint path, grammar-epoch handshake
+deleted end-to-end (ext + plugin, ~−830 lines net). The vocab-lag,
+commit-debounce-starvation, and decode-empty classes are structurally closed.
+**Residue:** `label-sync.ts` (606) + `label-reservoir.ts` (479) survive as
+display-grade infrastructure feeding narrowing/HUD/pool-claim latency — a
+further cut must replace all three surfaces and is deferred (section 6).
+Full history in DESIGN_STATIC_PAIR_GRAMMAR.md.
+
+Original scope for reference:
+
 `DESIGN_STATIC_PAIR_GRAMMAR.md` (new). The spoken codewords are pairs over a
 fixed 26-word alphabet. Seed the platform with the full 26×26 pair set once,
 permanently, and demote the per-viewport push from *recognition-critical* to
@@ -96,6 +129,13 @@ own design pass and decode-accuracy measurement via `just voice-regress`.
 
 ### Phase 4 — stability ladder prune (measured deletion, answers "is stability
 worth it")
+
+**FIRST CUT LANDED 2026-07-18** — the slot rebind tier deleted (`6259bf1`):
+counters showed 0.4% of rebinds, its niche covered by key+coattail. Remaining
+rungs (`rebind_key`, `rebind_coattail`, fingerprint) await a trail-read
+window over real browsing before any further deletion (section 6).
+
+Original scope for reference:
 
 `DESIGN_STABILITY_LADDER_PRUNE.md` (new). Keep codeword stability — the audit
 says it is contained, unit-tested, load-bearing for the nav simplifications,
@@ -136,9 +176,56 @@ platform vocabulary seam; it should get its own review before code.
 
 ## 5. Accepted-miss ledger
 
-(Empty until ratified — candidates listed in Phase 2 above. Each entry gets:
-what we accept, why it is safe for voice, and the one condition that would
-reopen it.)
+**PROPOSED 2026-07-19, pending user sign-off.** Each entry: what we accept,
+why it is safe for voice, and the one condition that would reopen it. Once
+ratified, an entry here closes the corresponding ambient open item — a fix
+for a ledgered miss is out of scope unless its reopen condition fires.
+
+1. **First-paint occlusion.** A badge may paint over a cover for up to one
+   settle pass after first paint. Safe: strict-viewport + read-time occlusion
+   protect dispatch; the flash is cosmetic. Reopens if: a dispatch ever
+   routes to a covered element, or the flash outlives one settle cadence.
+
+2. **Partial-occlusion residue.** The 5-point sample can classify a partially
+   covered element as visible, so a badge may sit on a partially covered
+   target. Safe: the badge is readable enough to speak, and dispatch targets
+   the element itself. Reopens if: real-site reports of pairs on targets that
+   are effectively unclickable.
+
+3. **`pointer-events: none` covers.** Decorative full-bleed overlays defeat
+   elementFromPoint attribution, so hints under them may be suppressed even
+   though clicks would pass through. Safe: it is a missing hint, never a
+   mis-dispatch, and the next settle after any change re-evaluates. Reopens
+   if: a common site pattern leaves a page's primary action chronically
+   unhintable.
+
+4. **Sub-250ms staleness.** Anything the settle pass repairs (badge position,
+   band membership) may be wrong for less than one settle cadence. Safe: the
+   speak loop (read pair → speak → decode) is 1–2s, an order of magnitude
+   above the cadence, and dispatch re-reads at action time. Reopens if: the
+   cadence lengthens materially or dispatch stops re-reading.
+
+## 6. Remaining work (post-execution, 2026-07-19)
+
+In leverage order:
+
+1. **Ratify the ledger + adopt the one-in-one-out policy** (Phase 2 —
+   zero code, unblocks closing several ambient open items).
+2. **Soak, `just voice-regress`, then push the batch.** Watch items: badge
+   doubling on 400-link grids, grammar-batch fragmentation during loads,
+   fling first-paint latency (observed-state arc); verbs on the live strict
+   gate, chopped-pair completing-tag scoping absent (pull-resolution).
+3. **Tri-owner codeword sync (CS ↔ SW ↔ plugin) — the last named bug factory
+   (section 1, item c) with no landed structural pass.** With the epoch
+   handshake gone and the mirror display-grade, the SW's remaining role in
+   the sync may have shrunk enough to collapse. Needs its own audit-style
+   read before a design note.
+4. **Ladder prune completion** — read the remaining rung counters after a
+   trail window; delete what isn't earning its keep.
+5. **Display-grade mirror retirement (deferred).** Only worth it with a
+   design that replaces all three surfaces (match truth is already
+   independent; narrowing + HUD + reservoir latency remain). Smaller payoff
+   than originally estimated; do not start before 3.
 
 ---
 
