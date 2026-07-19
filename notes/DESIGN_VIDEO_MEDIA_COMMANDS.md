@@ -4,8 +4,10 @@
 user). v1 LANDED 2026-07-18/19: media commands + `w` layer, Firefox-scoped
 gate, voiceContext `'video'` presence gating, spoken "video" discovery mode
 (exclusive tag, snap-shaped), Discovery HUD fixes (deterministic item order
-actuator-side; bare-word mode rows). NEXT ARC: background media control
-(accepted 2026-07-19, see that section) — phase 1 unbuilt.
+actuator-side; bare-word mode rows). Background media control
+phase 1 LANDED 2026-07-19 (media_active per-conn tag, audible registry,
+priority routing, resume memory, pause/mute everything, audio elements);
+phase 2 (switchboard) unbuilt.
 
 ## Motivation
 
