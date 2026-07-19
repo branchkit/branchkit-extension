@@ -539,6 +539,7 @@ export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   { keys: 'KeyR', command: 'refresh' },               // r
   { keys: 'KeyG KeyI', command: 'focus_input' },      // gi
   { keys: 'KeyI', command: 'insert_mode' },           // i — pass keys to the page
+  { keys: 'Backslash', command: 'pass_next_key' },    // \ — pass just the next key
   { keys: 'BracketRight BracketRight', command: 'go_next' },     // ]]
   { keys: 'BracketLeft BracketLeft', command: 'go_previous' },   // [[
   { keys: 'KeyY KeyY', command: 'copy_url' },          // yy

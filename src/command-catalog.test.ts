@@ -190,6 +190,7 @@ describe('default keymap', () => {
       { keys: 'KeyR', command: 'refresh' },
       { keys: 'KeyG KeyI', command: 'focus_input' },
       { keys: 'KeyI', command: 'insert_mode' },
+      { keys: 'Backslash', command: 'pass_next_key' },
       { keys: 'BracketRight BracketRight', command: 'go_next' },
       { keys: 'BracketLeft BracketLeft', command: 'go_previous' },
       { keys: 'KeyY KeyY', command: 'copy_url' },
