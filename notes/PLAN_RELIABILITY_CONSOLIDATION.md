@@ -221,10 +221,18 @@ In leverage order:
    fling first-paint latency (observed-state arc); verbs on the live strict
    gate, chopped-pair completing-tag scoping absent (pull-resolution).
 3. **Tri-owner codeword sync (CS ↔ SW ↔ plugin) — the last named bug factory
-   (section 1, item c) with no landed structural pass.** With the epoch
-   handshake gone and the mirror display-grade, the SW's remaining role in
-   the sync may have shrunk enough to collapse. Needs its own audit-style
-   read before a design note.
+   (section 1, item c) with no landed structural pass.** AUDIT READ DONE
+   2026-07-19 — REVIEW_TRI_OWNER_SYNC_2026-07-19.md. Key inversion of this
+   item's own hypothesis: the SW did not shrink, it became the single
+   dispatch-resolution authority; the PLUGIN is what shrank (display
+   projector + hints-tag gate + transport). The follow-on design note should
+   be scoped as "display-grade demotion follow-through": (a) decouple the
+   hints-tag arm from the tab-switch wipe/republish cycle, (b) demote the
+   bk-pending ACK/urgency layer (its speakability meaning is gone), plus two
+   verification errands (vocab-commit no-op check, deliberate reload test of
+   the stale-frame_id class, which the sealed path likely closed). Explicit
+   keeps listed in the review; pool machinery and the live strict gate are
+   out of scope.
 4. **Ladder prune completion** — read the remaining rung counters after a
    trail window; delete what isn't earning its keep.
 5. **Display-grade mirror retirement (deferred).** Only worth it with a
