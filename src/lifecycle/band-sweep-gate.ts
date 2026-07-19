@@ -50,10 +50,19 @@ export interface BandSweepGateInput {
   now: number;
   /** Mass-reveal fast-arm (repairs >= REVEAL_REPAIR_FAST_ARM). */
   fastReveal: boolean;
+  /** Boot window (settle-engine BOOT_WINDOW_MS): the add-epoch is BLIND to
+   * visibility-only reveals (a class flip adds no DOM), and late-render
+   * reveals are exactly what page loads produce — the QuickBase tab-reopen
+   * trail showed 31 consecutive skipClean rejections while a revealed
+   * 151-element region waited on the 30s long-stop. During the window the
+   * gate stands aside; the sweep itself stays single-flight,
+   * isKnown-skipping, and slab-budgeted. */
+  bootWindow: boolean;
 }
 
 export function shouldRunBandSweep(input: BandSweepGateInput): boolean {
   if (!gateEnabled) return true;
+  if (input.bootWindow) return true;
   if (input.fastReveal) return true;
   if (input.domAddEpoch !== input.sweptEpoch) return true;
   return input.now - input.sweepEndAt >= SWEEP_LONG_STOP_MS;

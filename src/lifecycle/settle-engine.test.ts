@@ -549,6 +549,24 @@ describe('boot-window pacing (late-render backstops run hot)', () => {
     expect(h.tracker.queueClaims).toHaveBeenCalledTimes(4);
   });
 
+  it('the idle tick arms the discovery sweep during the boot window (quiet class-flip reveal)', () => {
+    // A page that reveals content via a class flip and then goes quiet
+    // fires no settle and adds no DOM — without this arm, the revealed
+    // region waits on the 30s long-stop (the QuickBase 31×skipClean trail).
+    const h = makeHarness();
+    let now = 10_000;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    h.engine.noteActivated();
+    h.engine.noteIdleTick(); // store is converged (empty) — no owed work
+    expect(h.discovery.discoverInSubtreeBatched).toHaveBeenCalledTimes(1);
+
+    now += BOOT_WINDOW_TEST_MS + 2_000; // window closed
+    h.sweepState.pending = false;
+    h.engine.noteIdleTick();
+    // Steady state: the tick converges but does not arm the sweep.
+    expect(h.discovery.discoverInSubtreeBatched).toHaveBeenCalledTimes(1);
+  });
+
   it('caps the discovery sweep idle gate at 100ms during the boot window', () => {
     const h = makeHarness();
     let now = 10_000;

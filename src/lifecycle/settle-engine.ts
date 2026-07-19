@@ -196,6 +196,13 @@ export class SettleEngine {
     this.lastIdleTickAt = now;
     const { claims, releases } = this.reconcile();
     if (claims + releases > 0) this.schedulePassSoon('idle-backstop');
+    // Boot window: a page that reveals content via a class flip and then
+    // goes quiet fires NO settle — nothing arms the discovery sweep, and
+    // the revealed region has no wrappers for the converge walk to see. Arm
+    // the sweep from the tick itself; the gate stands aside during the
+    // window (band-sweep-gate.ts bootWindow input), and the walk is
+    // isKnown-skipping, so a no-change tick costs one bounded DOM walk.
+    if (this.inBootWindow(now)) this.scheduleBandDiscovery('store');
   }
 
   // Demoted backstop entry (Phase E): between-settle signals — the visibility
@@ -907,6 +914,7 @@ export class SettleEngine {
       sweepEndAt: sweep.sweepEndAt,
       now: performance.now(),
       fastReveal,
+      bootWindow: this.inBootWindow(performance.now()),
     })) {
       recordCpu('bandDiscovery:skipClean', 0);
       firehoseStep('band_discovery:skip_clean', 1);

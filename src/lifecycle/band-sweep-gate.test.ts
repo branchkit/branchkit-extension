@@ -3,7 +3,7 @@ import {
   shouldRunBandSweep, setSweepGateEnabled, SWEEP_LONG_STOP_MS,
 } from './band-sweep-gate';
 
-const base = { domAddEpoch: 5, sweptEpoch: 5, sweepEndAt: 10_000, now: 11_000, fastReveal: false };
+const base = { domAddEpoch: 5, sweptEpoch: 5, sweepEndAt: 10_000, now: 11_000, fastReveal: false, bootWindow: false };
 
 afterEach(() => setSweepGateEnabled(true));
 
@@ -32,5 +32,12 @@ describe('shouldRunBandSweep', () => {
   it('kill switch restores every-settle arming', () => {
     setSweepGateEnabled(false);
     expect(shouldRunBandSweep({ ...base })).toBe(true);
+  });
+
+  it('boot window bypasses the gate — the add-epoch is blind to visibility-only reveals', () => {
+    // The QuickBase tab-reopen trail: a class-flip reveal adds no DOM, so a
+    // clean epoch starved the revealed region for up to the 30s long-stop
+    // (31 consecutive skipClean rejections on one load).
+    expect(shouldRunBandSweep({ ...base, bootWindow: true })).toBe(true);
   });
 });
