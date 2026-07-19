@@ -228,14 +228,21 @@ from logs). The queue from here, in order:
    grammar-batch fragmentation + fling first-paint latency (observed-state
    arc, still open), verbs on the live strict gate. Per one-in-one-out, any
    fix that comes out of soak retires something.
-2. **Smoke prefix-shadow question** (found 2026-07-19; details in the
-   agent-primitives memory): bare "copy"/"close" don't preview-resolve
-   while a browser is focused — longer patterns shadow them as
-   continuations. First step is one deliberate runtime test (speak bare
-   "copy" with a selection while browsing). If it fails live, this is a
-   REAL matcher-level UX gap (prefix-blocking of bare literals) and
-   deserves its own design conversation; either way the smoke sweep should
-   learn to classify state-dependent shadowing instead of failing red.
+2. **Prefix-shadowed bare literals — runtime-CONFIRMED 2026-07-19.** The
+   user spoke bare "copy" with a selection in a browser: it did NOT
+   execute — the Discovery HUD opened offering the continuations
+   ("text"/"url"), with no way to fire the bare copy-selection action. So
+   this is a real matcher-level UX gap, not a preview artifact: an exact
+   literal match at utterance end is swallowed by completion mode whenever
+   longer eligible patterns share the prefix. Candidate design:
+   exact-match-wins-at-utterance-boundary (the utterance is complete by
+   definition at mic release, so an exact eligible literal is unambiguous
+   intent; completions remain for genuinely partial input). Actuator-level
+   and generic — needs its own small design note before code. Separately,
+   the smoke sweep should classify state-dependent shadowing instead of
+   failing red. (Side catch from the same test: prose subtitles overflowed
+   the Discovery HUD — FIXED same day, voice c5d606a, keycap vs
+   description-line split.)
 3. **Ladder prune completion** — read the remaining rung counters
    (`rebind_key`, `rebind_coattail`, fingerprint, position) after a fresh
    trail window; delete what isn't earning its keep. Data decides.
