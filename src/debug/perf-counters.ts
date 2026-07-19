@@ -393,6 +393,11 @@ export interface LifecycleCounters {
   // (local reservoir round-trip within one sweep).
   bandConvergeClaims: number;
   bandConvergeReleases: number;
+  /** Wrappers discovered by a sweep that ran ONLY via the 30s long-stop
+   * (clean epoch, no fast-arm, boot window closed) — each one is a
+   * visibility-only reveal the dirty gate starved. Nonzero in real trails
+   * justifies the reveal-scoped epoch bump (observed-state follow-up). */
+  longStopRescues: number;
   // Elements a discovery walk DID reach but rejected as invisible and
   // handed to the attention observer (observeInvisibleCandidates). During a
   // fling, this ≈0 while sweeps attach hundreds means the walk never saw
@@ -472,6 +477,7 @@ export const lifecycleCounters: LifecycleCounters = {
   primedClaims: 0,
   bandConvergeClaims: 0,
   bandConvergeReleases: 0,
+  longStopRescues: 0,
   invisibleCandidatesObserved: 0,
   visibilityRoSignals: 0,
   shadowRootsObserved: 0,

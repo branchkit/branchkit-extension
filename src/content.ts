@@ -3585,6 +3585,7 @@ function snapshotExtras() {
     wave: {
       band_converge_claims: lifecycleCounters.bandConvergeClaims,
       band_converge_releases: lifecycleCounters.bandConvergeReleases,
+      long_stop_rescues: lifecycleCounters.longStopRescues,
       reservoir: labelReservoir.stats(),
       // Round 15+: who discovers wrappers, with per-source latency, over the
       // paint-latency window. The MO should own steady-state discovery; a

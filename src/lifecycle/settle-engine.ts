@@ -901,6 +901,19 @@ export class SettleEngine {
   scheduleBandDiscovery(settleKind: 'band' | 'store', revealRepairs = 0): void {
     const sweep = this.deps.sweepState;
     const fastReveal = revealRepairs >= REVEAL_REPAIR_FAST_ARM;
+    // Tripwire for the accepted steady-state miss (DESIGN_OBSERVED_STATE_
+    // READ_TIME follow-up decision, 2026-07-19): a sweep that runs ONLY
+    // because the 30s long-stop fired — clean epoch, no fast-arm, boot
+    // window closed — and then DISCOVERS something is exactly "the dirty
+    // gate starved a visibility-only reveal for 30s" (the add-epoch cannot
+    // see class-flip reveals). Counted below as longStopRescues; nonzero in
+    // real trails is the evidence that graduates the reveal-scoped epoch
+    // bump from speculative to justified. Until then: visible, not fixed.
+    const nowForGate = performance.now();
+    const longStopOnly =
+      !fastReveal &&
+      !this.inBootWindow(nowForGate) &&
+      this.deps.discovery.getDomAddEpoch() === sweep.sweptEpoch;
     // Dirty gate (notes/DESIGN_BAND_SWEEP_DIRTY_GATE.md): no observed adds
     // since the last walk started + last sweep recent → the re-walk can find
     // nothing the incremental paths haven't. Evaluated BEFORE the
@@ -956,6 +969,10 @@ export class SettleEngine {
           // Diagnostic: the sweep's added count INCLUDING zero, to correlate
           // a miss against whether the walk actually attached anything.
           firehoseStep('band_discovery:added', added, 0);
+          if (longStopOnly && added > 0) {
+            lifecycleCounters.longStopRescues += added;
+            firehoseStep('band_discovery:long_stop_rescue', added, 1);
+          }
           // A reveal-armed sweep must follow through even with ZERO adds
           // (round 33c): on double-buffered grids the reveal cohort is
           // ALREADY-ATTACHED wrappers whose stale-false band flags a
