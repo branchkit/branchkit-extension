@@ -77,6 +77,19 @@ interface AppliedCounts {
 }
 
 const DISCOVERY_SWEEP_IDLE_TIMEOUT_MS = 500;
+// Boot-window pacing (the QuickBase tab-reopen trail, 2026-07-19): a page
+// that renders its app AFTER the boot scan reveals whole regions the MO
+// pre-dated and the parked-candidate promoters partially miss — the
+// discovery sweep is their designed backstop, but its steady-state pacing
+// (2s idle tick + 500ms sweep idle gate) reads as "badges appear a couple
+// seconds late" on every load. During the first BOOT_WINDOW_MS after
+// activation, the backstop runs hot: the idle tick at 500ms and the sweep's
+// idle gate capped at 100ms. Load-transient by construction — the window
+// closes and steady-state costs return to baseline.
+const BOOT_WINDOW_MS = 10_000;
+const IDLE_TICK_BOOT_MS = 500;
+const IDLE_TICK_STEADY_MS = 2_000;
+const DISCOVERY_SWEEP_BOOT_IDLE_TIMEOUT_MS = 100;
 const DISCOVERY_RETRY_COOLDOWN_MS = 300;
 const DISCOVERY_MAX_RETRY_DEPTH = 2;
 // Every sweep walks in one slab (fling-wave round 20b) — a per-batch-yielding
@@ -98,6 +111,12 @@ export class SettleEngine {
   private reconcileScrollRaf: number | null = null;
   private reconcileScrollActive = false;
   private bandSweepLastAt = 0;
+  // Boot-window state (see BOOT_WINDOW_MS): stamped by noteActivated();
+  // 0 = never activated (window closed).
+  private activatedAt = 0;
+  // -Infinity so the first tick always runs regardless of how early in the
+  // page's timeline (or a test worker's) it lands.
+  private lastIdleTickAt = -Infinity;
 
   // Harness-only settle-trigger attribution (settle-storm diagnosis): every
   // scheduler that can arm the pipeline notes WHY, the notes accumulate across
@@ -146,6 +165,17 @@ export class SettleEngine {
     if (harnessHooksEnabled()) this.settleTriggerReasons.add(reason);
   }
 
+  /** Hint machinery just activated for this session (boot / first show /
+   *  resume) — opens the boot window during which the convergence backstops
+   *  run hot (see BOOT_WINDOW_MS). */
+  noteActivated(): void {
+    this.activatedAt = performance.now();
+  }
+
+  private inBootWindow(now: number): boolean {
+    return this.activatedAt > 0 && now - this.activatedAt < BOOT_WINDOW_MS;
+  }
+
   // Idle-convergence backstop (2026-07-19, the QuickBase manageusers stall):
   // every settle trigger is activity-driven, so a page that goes fully quiet
   // after load never converges — a cohort the load storm left behind waits
@@ -156,8 +186,14 @@ export class SettleEngine {
   // cadence). When the pass found owed work, arm the full settle once so the
   // strict/occlusion planes catch up too. Steady state is one bounded rect
   // walk per 2s on a visible tab; the tick pauses with the tab.
+  // Wired at IDLE_TICK_BOOT_MS cadence; self-paces down to
+  // IDLE_TICK_STEADY_MS once the boot window closes.
   noteIdleTick(): void {
     if (!this.deps.isBadgesVisible() || this.deps.isTornDown()) return;
+    const now = performance.now();
+    const cadence = this.inBootWindow(now) ? IDLE_TICK_BOOT_MS : IDLE_TICK_STEADY_MS;
+    if (now - this.lastIdleTickAt < cadence - 50) return; // 50ms timer jitter allowance
+    this.lastIdleTickAt = now;
     const { claims, releases } = this.reconcile();
     if (claims + releases > 0) this.schedulePassSoon('idle-backstop');
   }
@@ -980,7 +1016,14 @@ export class SettleEngine {
       firehoseStep('band_discovery:fast_arm', revealRepairs);
       this.deps.scheduler.yieldTask(sweepBody);
     } else {
-      this.deps.scheduler.idle(sweepBody, DISCOVERY_SWEEP_IDLE_TIMEOUT_MS);
+      // Boot window: cap the idle wait at 100ms — late-reveal regions are
+      // exactly what loads produce, and the steady-state 500ms gate is a
+      // flat tax on every one of them (the sweep itself stays slab-budgeted
+      // and dirty-gated, so the hot pacing only walks when adds happened).
+      const idleTimeout = this.inBootWindow(performance.now())
+        ? DISCOVERY_SWEEP_BOOT_IDLE_TIMEOUT_MS
+        : DISCOVERY_SWEEP_IDLE_TIMEOUT_MS;
+      this.deps.scheduler.idle(sweepBody, idleTimeout);
     }
   }
 }

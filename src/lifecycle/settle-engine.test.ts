@@ -100,7 +100,11 @@ class FakeScheduler {
   };
   raf = (cb: FrameRequestCallback): number => { cb(0); return 0; };
   cancelRaf = (): void => {};
-  idle = (cb: (deadline?: IdleDeadline) => void): void => { cb(); };
+  idleTimeouts: number[] = [];
+  idle = (cb: (deadline?: IdleDeadline) => void, timeoutMs?: number): void => {
+    if (timeoutMs !== undefined) this.idleTimeouts.push(timeoutMs);
+    cb();
+  };
   yieldTask = (cb: () => void): void => { this.yieldQueue.push(cb); };
 
   /** Fire every pending timeout once (new arms during the flush run too). */
@@ -513,6 +517,56 @@ describe('idle-convergence backstop', () => {
     expect(h.scheduler.pending.length).toBe(0);
   });
 });
+
+describe('boot-window pacing (late-render backstops run hot)', () => {
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it('accepts 500ms ticks during the boot window, self-paces to 2s after', () => {
+    const h = makeHarness();
+    const w = addWrapper(h.store, { codeword: '', rect: ON_SCREEN });
+    void w;
+    let now = 10_000;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+
+    h.engine.noteActivated();
+    h.engine.noteIdleTick();                       // first tick runs
+    expect(h.tracker.queueClaims).toHaveBeenCalledTimes(1);
+    now += 500;
+    h.engine.noteIdleTick();                       // boot cadence: 500ms accepted
+    expect(h.tracker.queueClaims).toHaveBeenCalledTimes(2);
+    now += 200;
+    h.engine.noteIdleTick();                       // sub-cadence: skipped
+    expect(h.tracker.queueClaims).toHaveBeenCalledTimes(2);
+
+    now += BOOT_WINDOW_TEST_MS;                    // window closed
+    h.engine.noteIdleTick();                       // long gap: runs
+    expect(h.tracker.queueClaims).toHaveBeenCalledTimes(3);
+    now += 500;
+    h.engine.noteIdleTick();                       // 500ms no longer enough
+    expect(h.tracker.queueClaims).toHaveBeenCalledTimes(3);
+    now += 1_600;
+    h.engine.noteIdleTick();                       // ~2s: steady cadence accepted
+    expect(h.tracker.queueClaims).toHaveBeenCalledTimes(4);
+  });
+
+  it('caps the discovery sweep idle gate at 100ms during the boot window', () => {
+    const h = makeHarness();
+    let now = 10_000;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    h.engine.noteActivated();
+    h.engine.scheduleBandDiscovery('store');
+    expect(h.scheduler.idleTimeouts[h.scheduler.idleTimeouts.length - 1]).toBe(100);
+
+    now += BOOT_WINDOW_TEST_MS;
+    h.sweepState.pending = false;                  // let a fresh sweep arm
+    h.engine.scheduleBandDiscovery('store');
+    expect(h.scheduler.idleTimeouts[h.scheduler.idleTimeouts.length - 1]).toBe(500);
+  });
+});
+
+// Mirror of the engine's BOOT_WINDOW_MS — pinned here so a silent change to
+// the window length shows up as a test edit.
+const BOOT_WINDOW_TEST_MS = 10_000;
 
 describe('settle: gates', () => {
   it('with badges hidden, settle skips the pass (and reposition no-ops)', () => {

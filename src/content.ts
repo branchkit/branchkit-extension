@@ -3757,9 +3757,11 @@ function wireSettleSignals(): void {
   });
 
   // Idle-convergence backstop (see engine.noteIdleTick): a fully quiet page
-  // fires no settle triggers, stranding stale-flag cohorts until the user
-  // moves. Pausable — stops with the hidden tab.
-  pageSession.resources.pausableInterval(() => engine.noteIdleTick(), 2000);
+  // fires no settle triggers, stranding unconverged cohorts until the user
+  // moves. Pausable — stops with the hidden tab. Wired at the BOOT cadence
+  // (500ms); the engine self-paces down to 2s once the boot window closes,
+  // so steady state still ticks at the old rate.
+  pageSession.resources.pausableInterval(() => engine.noteIdleTick(), 500);
 }
 wireSettleSignals();
 // Pointer-driven visibility sweep. A CSS `:hover` reveal (QuickBase widget
@@ -4120,6 +4122,10 @@ function activateHintMachinery(trigger: 'load' | 'resize'): void {
   if (pageSession.isTornDown) { recordOrphanHit(); return; }
   if (hintMachineryEnabled) return;
   hintMachineryEnabled = true;
+  // Open the boot window: convergence backstops run hot while the page's
+  // app renders (late-reveal regions the MO pre-dates — the QuickBase
+  // tab-reopen trail). See BOOT_WINDOW_MS in settle-engine.ts.
+  engine.noteActivated();
   attachPageMutationObserver();
   // The limbo finalize sweep, registered exactly once per session (this
   // function is guarded by hintMachineryEnabled). A pausable: it stops while
@@ -4174,6 +4180,9 @@ function resumeHintMachinery(): void {
   if (pageSession.isTornDown) { recordOrphanHit(); return; }
   if (!suspended) return;
   suspended = false;
+  // Re-opening after a hidden-tab suspend has the same late-render shape as
+  // boot (the suspend window went unobserved) — run the backstops hot again.
+  engine.noteActivated();
   attachPageMutationObserver();
   void doScan().then(() => {
     engine.reconcile();
