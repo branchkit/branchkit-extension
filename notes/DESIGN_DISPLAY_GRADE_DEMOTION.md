@@ -10,10 +10,17 @@ the plugin keeps the session_end deproject branch as a no-op-compat path
 while pre-phase-1 SWs are live. Phase 2 = bk-pending/grammarReady machinery
 deleted end-to-end (badge paints solid; per-codeword ACK demoted to delta
 bookkeeping), failed-Put keeps painted + requeues, cadence 80/400 →
-250/1000ms, mass-claim fast path retired. Verification errand (f) remains
-OPEN (needs a live scroll burst); errand (g) reload test needs the user.
-LIVE-VERIFY PENDING: extension reload + tab-switch pass (badge arm without
-republish, chrome:// tab drops the tag).
+250/1000ms, mass-claim fast path retired. **LIVE-VERIFIED 2026-07-19** (user, Firefox + Chrome, post-reload of the
+new build): per-switch `session_end_tab_switch` traffic STOPPED at the
+reload boundary; the derivation observed doing both halves
+(`active_tab_derived` arms on kept-grammar switch-backs,
+`active_tab_no_grammar` drops on empty/fresh tabs); sealed dispatches
+activated correctly on post-reload fresh frames with zero `no_such_hint` —
+which also CLOSES errand (g): the stale-frame_id reload class is dead
+(memory note updated). Errand (f) remains OPEN: `vocabulary_update` injects
+do fire per debounced commit during browsing (lag zero, committed==desired);
+whether each is a union no-op needs a desired-union diff across one scroll
+burst before deleting the batch.go:964 schedule.
 
 **One-line motivation:** the sealed pull-resolution payoff moved match truth
 and dispatch routing off the grammar push, but the machinery that defended
