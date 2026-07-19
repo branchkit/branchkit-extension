@@ -17,9 +17,11 @@
  * the video (action rail, nav, comments) is untouched.
  *
  * Cost profile: zero on video-less pages (one cached querySelectorAll per
- * 250ms window, early-out on empty). Kill switch: `bkVideoOverlayGate`
- * storage flag (denylist posture, default ON), mirrored to
- * `data-bk-video-overlay-gate` on documentElement for the trail.
+ * 250ms window, early-out on empty). The race is Firefox-only, so the
+ * default is ON iff Firefox (content.ts boot read); on Chrome the gate
+ * would be pure accessibility cost (notes/DESIGN_VIDEO_MEDIA_COMMANDS.md).
+ * `bkVideoOverlayGate` storage flag overrides in both directions, mirrored
+ * to `data-bk-video-overlay-gate` on documentElement for the trail.
  */
 
 let enabled = true;

@@ -127,6 +127,7 @@ import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot
 import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, rearmCpuShareBaseline, rearmWatchdogBaseline, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, lifecycleCounters, resetLifecycleCounters } from './debug/perf-counters';
 import { startVideoStallProbe } from './debug/video-stall-probe';
 import { setVideoOverlayGateEnabled } from './render/video-overlay';
+import { detectBrowser } from './browser-shortcuts';
 import { churnStats } from './debug/churn-log';
 import { syncTraceStats } from './debug/sync-trace';
 import { loadConfig, getDisplayMode, getHintVisibility } from './config';
@@ -1006,9 +1007,15 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
     // Video-overlay gate (render/video-overlay.ts): badges don't paint over
     // actively-playing large videos — Firefox WebRender compositor-surface
     // race amplification (bugzilla 1989948; Shorts froze ~1-in-2 with
-    // overlays vs rare without). Default ON; explicit `false` disables:
-    // `chrome.storage.local.set({ bkVideoOverlayGate: false })`.
-    const on = result.bkVideoOverlayGate !== false;
+    // overlays vs rare without). The race is Firefox-only, so the default
+    // is ON iff Firefox; on Chrome the suppression is pure accessibility
+    // cost (mouse-free users lose the badges on player controls —
+    // notes/DESIGN_VIDEO_MEDIA_COMMANDS.md). The storage flag overrides in
+    // BOTH directions: `chrome.storage.local.set({ bkVideoOverlayGate:
+    // true })` forces it on Chrome (testing), `false` disables on Firefox.
+    const on = typeof result.bkVideoOverlayGate === 'boolean'
+      ? result.bkVideoOverlayGate
+      : detectBrowser() === 'firefox';
     setVideoOverlayGateEnabled(on);
     if (harnessHooksEnabled()) {
       document.documentElement.setAttribute('data-bk-video-overlay-gate', on ? 'on' : 'off');
