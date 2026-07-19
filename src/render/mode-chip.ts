@@ -12,6 +12,7 @@
  */
 
 import type { KeyMode } from '../activate/keyboard';
+import { isBranchKitConnected } from '../plugin/connection-mirror';
 
 const HOST_ATTR = 'data-branchkit-mode-chip';
 const Z_INDEX = 2_147_483_645; // just below the help/palette tier
@@ -27,9 +28,12 @@ const STYLE = `
   color: #f2cc60; background: #1c2128;
   border: 1px solid #3d444d; border-radius: 6px;
   padding: 4px 9px; box-shadow: 0 4px 14px rgba(1, 4, 9, 0.5);
-  display: flex; gap: 8px; align-items: baseline;
+  display: flex; flex-direction: column; gap: 2px;
 }
+.chip .row { display: flex; gap: 8px; align-items: baseline; }
 .chip .sub { color: #8b949e; font-weight: 500; letter-spacing: 0; }
+.chip .voice { color: #7d8590; font-weight: 500; letter-spacing: 0; font-style: italic; }
+.chip .voice .say { color: #58a6ff; font-style: normal; }
 `;
 
 type ChipMode = 'hint' | 'insert' | 'mark-set' | 'mark-jump' | 'caret' | 'visual' | 'video';
@@ -38,17 +42,24 @@ type ChipMode = 'hint' | 'insert' | 'mark-set' | 'mark-jump' | 'caret' | 'visual
 // states are transient prompts (the next key names the mark). The video sub
 // is the layer's in-mode key reference (layer keys aren't keymap entries, so
 // the ? overlay can't list them — the chip is where they're taught).
-const CHIP_TEXT: Record<ChipMode, { label: string; sub: string }> = {
+// `voice` is the mode's spoken-phrase reference, rendered as a second "say:"
+// line only while BranchKit voice is connected — the modes with spoken forms
+// teach them at the moment they're usable (the words aren't hints, so no
+// badge ever spells them out).
+const CHIP_TEXT: Record<ChipMode, { label: string; sub: string; voice?: string }> = {
   hint: { label: 'BADGE', sub: 'type a letter · Esc' },
   insert: { label: 'PASS-THROUGH', sub: 'keys go to the page · Esc' },
   'mark-set': { label: 'SET MARK', sub: 'press a letter (⇧ = global) · Esc' },
   'mark-jump': { label: 'JUMP TO MARK', sub: 'press a letter · Esc' },
-  caret: { label: 'CARET', sub: 'hjkl move · v select · y copy · Esc' },
-  visual: { label: 'VISUAL', sub: 'hjkl extend · y copy · o swap · Esc' },
-  video: { label: 'VIDEO', sub: 'k play · j/l seek · m mute · < > speed · 0 restart · w/Esc' },
+  caret: { label: 'CARET', sub: 'hjkl move · v select · y copy · Esc',
+    voice: 'select word · select line · copy that · stop selecting' },
+  visual: { label: 'VISUAL', sub: 'hjkl extend · y copy · o swap · Esc',
+    voice: 'select word · select line · copy that · stop selecting' },
+  video: { label: 'VIDEO', sub: 'k play · j/l seek · m mute · < > speed · 0 restart · Esc',
+    voice: 'pause · play · faster · slower · skip back 30 · mute · restart video' },
 };
 
-function build(mode: ChipMode): HTMLElement {
+function build(mode: ChipMode, voiceConnected: boolean): HTMLElement {
   const el = document.createElement('div');
   el.setAttribute(HOST_ATTR, '');
   // Tag as BranchKit's own UI so the page MutationObserver skips it.
@@ -59,12 +70,26 @@ function build(mode: ChipMode): HTMLElement {
   shadow.appendChild(style);
   const chip = document.createElement('div');
   chip.className = 'chip';
+  const row = document.createElement('div');
+  row.className = 'row';
   const label = document.createElement('span');
   label.textContent = CHIP_TEXT[mode].label;
   const sub = document.createElement('span');
   sub.className = 'sub';
   sub.textContent = CHIP_TEXT[mode].sub;
-  chip.append(label, sub);
+  row.append(label, sub);
+  chip.appendChild(row);
+  const voicePhrases = CHIP_TEXT[mode].voice;
+  if (voicePhrases && voiceConnected) {
+    const voice = document.createElement('div');
+    voice.className = 'voice';
+    const say = document.createElement('span');
+    say.className = 'say';
+    say.textContent = 'say: ';
+    voice.appendChild(say);
+    voice.appendChild(document.createTextNode(voicePhrases));
+    chip.appendChild(voice);
+  }
   shadow.appendChild(chip);
   return el;
 }
@@ -81,7 +106,9 @@ export function setModeChip(mode: KeyMode): void {
   host?.remove();
   host = null;
   if (shown) {
-    host = build(shown);
+    // Connection is sampled at build time; the chip rebuilds on every mode
+    // change, so a connect/disconnect is reflected at the next mode entry.
+    host = build(shown, isBranchKitConnected());
     document.documentElement.appendChild(host);
   }
 }
