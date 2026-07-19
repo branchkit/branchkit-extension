@@ -344,15 +344,27 @@ export function finalizeExpiredLimboWrappers(): number {
     if (!isLimboExpired(w, now, LIMBO_DEADLINE_MS)) continue;
     // Graduate a still-connected limbo wrapper back to live. Covers both the
     // same-node-reconnect case and soft-detached nav survivors (persistent
-    // chrome). Clear disconnectedAt FIRST, then re-attach the observers
-    // softDetach/teardown removed — so the IntersectionObserver's mandatory
-    // initial callback runs with the wrapper non-limbo and the idempotent claim
-    // (claims only when no codeword is held) can't double-claim. Mirror
-    // attachWrapper: tracker + resize (attentionObserver is managed elsewhere).
+    // chrome). Clear disconnectedAt FIRST, then re-attach the observers —
+    // so the IntersectionObserver's mandatory initial callback runs with the
+    // wrapper non-limbo and the idempotent claim (claims only when no codeword
+    // is held) can't double-claim.
+    //
+    // The unobserve/observe CYCLE is load-bearing (the manageusers stale-FALSE
+    // cohort, 2026-07-18): limbo entry never unobserves, so for a same-node
+    // reconnect the element is STILL in the IO's target list and a bare
+    // observe() is a spec no-op — no initial entry. Meanwhile any entry the IO
+    // delivered during the limbo window was discarded by handleEntries' limbo
+    // guard, so the IO's last-reported state can already match reality (element
+    // in-band, reported true, entry thrown away) and no crossing ever fires
+    // again — isInViewport stays stale-FALSE until a geometry sweep repairs it.
+    // Cycling the observation resets the IO's per-target state and forces a
+    // fresh initial entry. rebindWrapper does the same cycle on its path.
     if (w.element.isConnected) {
       w.disconnectedAt = null;
       w.lastRect = null;
+      pageSession.tracker.unobserve(w.element);
       pageSession.tracker.observe(w.element);
+      pageSession.resizeObserver.unobserve(w.element);
       pageSession.resizeObserver.observe(w.element);
       continue;
     }

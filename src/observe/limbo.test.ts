@@ -153,6 +153,24 @@ describe('finalizeExpiredLimboWrappers', () => {
     expect(resizeObserve).toHaveBeenCalledWith(reconnected.element);
   });
 
+  it('cycles the IO observation on graduation so the initial entry re-fires', () => {
+    // Same-node reconnect: the element never left the IO's target list (limbo
+    // entry does not unobserve), so a bare observe() would be a spec no-op and
+    // the wrapper's isInViewport would stay stale forever — the manageusers
+    // stale-FALSE cohort. The graduation must unobserve BEFORE observing.
+    const reconnected = makeWrapper(true, 1);
+    enterLimbo(reconnected, 1);
+    const calls: string[] = [];
+    pageSession.tracker = {
+      observe: () => calls.push('observe'),
+      unobserve: () => calls.push('unobserve'),
+    } as unknown as IntersectionTracker;
+
+    finalizeExpiredLimboWrappers();
+
+    expect(calls).toEqual(['unobserve', 'observe']);
+  });
+
   it('ignores limbo wrappers whose deadline has not elapsed', () => {
     const fresh = makeWrapper(false, 1);
     enterLimbo(fresh, Date.now()); // just entered — not expired
