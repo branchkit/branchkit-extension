@@ -2,8 +2,8 @@
 
 **Status:** EXECUTING, updated 2026-07-19. Phases 1 and 3 executed and Phase 4's
 first cut landed 2026-07-18/19 (details inline per phase below); Phase 2's
-policies take effect on ratification of the ledger (section 5, entries
-PROPOSED). Combined soak in progress before push — watch items listed in
+policies are IN EFFECT (ledger ratified 2026-07-19; one-in-one-out is now a
+standing review rule). Combined soak in progress before push — watch items listed in
 DESIGN_OBSERVED_STATE_READ_TIME.md and DESIGN_STATIC_PAIR_GRAMMAR.md.
 Remaining work is section 6.
 
@@ -176,7 +176,8 @@ platform vocabulary seam; it should get its own review before code.
 
 ## 5. Accepted-miss ledger
 
-**PROPOSED 2026-07-19, pending user sign-off.** Each entry: what we accept,
+**RATIFIED 2026-07-19 (user sign-off, all four entries + the one-in-one-out
+policy in Phase 2).** Each entry: what we accept,
 why it is safe for voice, and the one condition that would reopen it. Once
 ratified, an entry here closes the corresponding ambient open item — a fix
 for a ledgered miss is out of scope unless its reopen condition fires.
