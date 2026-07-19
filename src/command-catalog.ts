@@ -78,11 +78,16 @@ export interface CommandMeta {
    * exclusive palette tag and clears it at match time). 'caret' = only matchable
    * while caret/visual selection is active (the plugin gates on its exclusive
    * caret tag, held while the extension's caret mode is active — does NOT clear
-   * at match, since caret persists across many selection commands). Absent = the
+   * at match, since caret persists across many selection commands). 'video' =
+   * gated on a large video existing in the focused tab (the plugin's
+   * non-exclusive video_present tag, mirrored from the background's presence
+   * reports); the plugin ALSO emits a mode-gated variant plus the spoken
+   * "video" discovery-mode entry, so these commands work both bare ("pause")
+   * and inside the focused video mode the Discovery HUD teaches. Absent = the
    * plugin's default app-active gate. A semantic, not a tag name — tags stay
    * plugin-owned, same contract as retainsHints.
    */
-  voiceContext?: 'palette' | 'caret';
+  voiceContext?: 'palette' | 'caret' | 'video';
 }
 
 export interface KeymapEntry {
@@ -395,14 +400,16 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     voice: [
       { pattern: 'pause', params: { op: 'pause' } },
       { pattern: 'play', params: { op: 'play' } },
-    ] },
+    ],
+    voiceContext: 'video' },
   { id: 'media_mute', label: 'Mute video', group: 'Media', mappable: true,
     description: 'Mute or unmute the page\'s video (the video itself, not the tab).',
     params: [{ name: 'op', type: 'enum', options: ['toggle', 'mute', 'unmute'], default: 'toggle' }],
     voice: [
       { pattern: 'mute', params: { op: 'mute' } },
       { pattern: 'unmute', params: { op: 'unmute' } },
-    ] },
+    ],
+    voiceContext: 'video' },
   { id: 'media_speed', label: 'Video speed', group: 'Media', mappable: true,
     description: 'Change playback speed in 0.25× steps (works even on sites without a speed control).',
     params: [{ name: 'op', type: 'enum', options: ['faster', 'slower', 'normal'], default: 'faster' }],
@@ -410,7 +417,8 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
       { pattern: 'faster', params: { op: 'faster' } },
       { pattern: 'slower', params: { op: 'slower' } },
       { pattern: 'normal speed', params: { op: 'normal' } },
-    ] },
+    ],
+    voiceContext: 'video' },
   { id: 'media_seek', label: 'Skip in video', group: 'Media', mappable: true,
     description: 'Jump ahead or back in the playing video; say a number for exact seconds ("skip back 30").',
     params: [
@@ -422,10 +430,12 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
       { pattern: 'skip back', params: { direction: 'back' } },
       { pattern: 'skip ahead {number}', params: { direction: 'ahead', seconds: '{number}' } },
       { pattern: 'skip back {number}', params: { direction: 'back', seconds: '{number}' } },
-    ] },
+    ],
+    voiceContext: 'video' },
   { id: 'media_restart', label: 'Restart video', group: 'Media', mappable: true, params: [],
     description: 'Jump the playing video back to the beginning.',
-    voice: [{ pattern: 'restart video' }] },
+    voice: [{ pattern: 'restart video' }],
+    voiceContext: 'video' },
 
   // --- Help ---
   { id: 'toggle_help', label: 'Keyboard help', group: 'Help', mappable: true, params: [],

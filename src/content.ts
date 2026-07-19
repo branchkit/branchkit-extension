@@ -126,6 +126,7 @@ import { pageSession, scheduleYieldTask, yieldTask, TeardownReason } from './lif
 import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './debug/message-counters';
 import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, rearmCpuShareBaseline, rearmWatchdogBaseline, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, lifecycleCounters, resetLifecycleCounters } from './debug/perf-counters';
 import { startVideoStallProbe } from './debug/video-stall-probe';
+import { startVideoPresenceReporter } from './observe/video-presence';
 import { setVideoOverlayGateEnabled } from './render/video-overlay';
 import { detectBrowser } from './browser-shortcuts';
 import {
@@ -316,6 +317,10 @@ const guardKeeper = setInterval(() => {
 
 if (isTopFrame) startPerfObservers(pageSession.resources);
 if (isTopFrame) startVideoStallProbe(pageSession.resources);
+// Video-presence reporter runs in EVERY frame (embeds live in iframes); the
+// SW ORs a tab's frames. Session-resource interval — pauses hidden, dies
+// with the session. See notes/DESIGN_VIDEO_MEDIA_COMMANDS.md step 3.
+startVideoPresenceReporter(pageSession.resources);
 
 // Lever 1 (frame-skip): a subframe that is about:blank or renders below a
 // usable badge size (tracking pixels, collapsed/hidden ad slots) cannot show a

@@ -586,6 +586,34 @@ async function setCaretActive(active: boolean): Promise<void> {
   await postToPlugin('/caret', { conn_id: connId, active });
 }
 
+// Video presence (notes/DESIGN_VIDEO_MEDIA_COMMANDS.md step 3): each frame
+// reports whether it holds a large video (2s change-only ticks from
+// observe/video-presence.ts); the SW ORs a tab's frames and mirrors the
+// ACTIVE tab's answer to the plugin, which gates the media voice commands
+// ("pause", "faster", …) and the spoken "video" discovery mode on its
+// non-exclusive video_present tag. Posts are deliberately redundant on
+// every relevant edge (report, tab switch, window focus, reconnect) — the
+// plugin drains its mirror aggressively on focus/disconnect, and redundant
+// idempotent posts are what make that safe (the palette-clear philosophy:
+// err on firing redundantly).
+const videoPresenceByTab = new Map<number, Map<number, boolean>>();
+
+function tabHasVideo(tabId: number | null): boolean {
+  if (tabId === null) return false;
+  const frames = videoPresenceByTab.get(tabId);
+  if (!frames) return false;
+  for (const present of frames.values()) if (present) return true;
+  return false;
+}
+
+async function syncVideoPresence(): Promise<void> {
+  if (!(await ensureConnected())) return;
+  await postToPlugin('/video-presence', {
+    conn_id: connId,
+    present: tabHasVideo(bgState.cachedActiveTabId),
+  });
+}
+
 // Command palette selection (notes/DESIGN_TAB_NAVIGATION.md, Layer 2). Always
 // close the overlay in the origin tab FIRST — a tab switch moves focus away
 // and must not leave a dead palette behind, and a command dispatch (e.g.
@@ -818,6 +846,9 @@ function connectSSE(): void {
   // The plugin's HTTP server is up once we have a port+token; contribute the
   // command vocabulary now so voice scroll/find/nav are live for this session.
   void contributeCommands();
+  // And re-assert the active tab's video presence — a plugin restart or SSE
+  // reconnect drained its mirror.
+  void syncVideoPresence();
 
   if (hasOffscreenAPI) {
     // Chrome: delegate to offscreen document
@@ -1091,6 +1122,23 @@ async function phraseWriteError(resp: Response | null): Promise<string> {
 }
 
 chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
+  if (message.type === 'VIDEO_PRESENCE') {
+    // A frame's large-video presence changed. Update the tab's frame map and
+    // re-mirror the active tab's OR to the plugin (cheap no-op post when the
+    // change is in a background tab).
+    const tabId = _sender.tab?.id;
+    const frameId = _sender.frameId;
+    if (typeof tabId === 'number' && typeof frameId === 'number') {
+      let frames = videoPresenceByTab.get(tabId);
+      if (!frames) {
+        frames = new Map();
+        videoPresenceByTab.set(tabId, frames);
+      }
+      frames.set(frameId, message.present === true);
+      void syncVideoPresence();
+    }
+    return false;
+  }
   if (message.type === 'GRAMMAR_BATCH') {
     // Content's batched doScan (Option B) sent a grammar batch. Stamp
     // tab_id + frame_id and POST. Returning true keeps sendResponse
@@ -1608,6 +1656,9 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
     // Report the new active tab to the plugin (accepted only if this is the
     // focused browser). Authoritative focused-tab signal for Option B.
     void postActiveTab(activeInfo.tabId);
+    // Mirror the new tab's video presence (last known; its reporter resumes
+    // within one 2s tick if the tab was hidden).
+    void syncVideoPresence();
     endHintSessionOnOldTab(oldTabId, 'tab_switch');
     // Always-mode: signal the new tab's content script that it became the
     // active tab. The session-start path resets per-tab plugin state.
@@ -1713,6 +1764,15 @@ function onSameDocumentNav(details: { tabId: number; frameId: number; url: strin
 chrome.webNavigation.onHistoryStateUpdated.addListener(onSameDocumentNav);
 chrome.webNavigation.onReferenceFragmentUpdated.addListener(onSameDocumentNav);
 
+// Full document load: the old page's frames (and their video-presence
+// reports) are gone; drop the tab's frame map so a stale `true` can't
+// outlive the page. The new page's reporters re-populate within one tick.
+// SPA navs (above) keep frames alive, so their entries stay valid.
+chrome.webNavigation.onCommitted.addListener((details) => {
+  if (details.frameId !== 0) return;
+  if (videoPresenceByTab.delete(details.tabId)) void syncVideoPresence();
+});
+
 // Coalesce bursts of same-document URL changes (SPAs often fire several
 // pushState/replaceState calls settling on one route) into a single
 // bounded rescan per tab. The 150ms debounce alone doesn't catch SPAs that
@@ -1771,6 +1831,8 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
     // focused-tab signal tracks the window switch even when the tab itself
     // didn't change. Authoritative focused-tab source for Option B.
     void postActiveTab(newActive);
+    // Re-assert video presence: the plugin drained its mirror on unfocus.
+    void syncVideoPresence();
     if (oldTabId != null && oldTabId !== newActive) {
       logTabSwitch('window_focus', oldTabId, newActive);
       endHintSessionOnOldTab(oldTabId, 'window_focus');
@@ -1794,6 +1856,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     // but the plugin's hints tag still needs clearing).
     forwardHintsSessionEnd('tab_closed', tabId);
   }
+  videoPresenceByTab.delete(tabId);
   const pendingSpaRescan = spaRescanTimers.get(tabId);
   if (pendingSpaRescan) {
     clearTimeout(pendingSpaRescan);
