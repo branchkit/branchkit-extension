@@ -1,7 +1,14 @@
 # Observed state is read, not stored
 
-**Status: DESIGN — 2026-07-18. Measurement + the enabling bug fix landed this
-session; no arc implementation until this note is reviewed.**
+**Status: EXECUTED — all three phases implemented 2026-07-18 (same day as
+the design, user-approved). Phase 1 cssHidden `4358239`, phase 2 occlusion
+`8459d69`, phase 3 band membership + plan-applied claims `358543f`. Net
+across the arc: ~-380 lines, 1,241 tests green. Execution deviations are
+recorded inline (phase 2: `w.clipped` stays; phase 3: scan pre-POST claims
+stay, the idle tick runs the convergence pass rather than a bare wake-up,
+`bandSweepRepairs/Releases` counters renamed `bandConvergeClaims/Releases`).
+SOAK WATCH (June-revert class): badge doubling on 400-link grids,
+grammar-batch fragmentation during loads, fling first-paint latency.**
 
 ## Thesis
 
@@ -225,6 +232,19 @@ Risk: this is the June-revert territory — land behind a flag, watch the
 coverage fixture for doubling and the grammar-batch counters for
 fragmentation. The structural difference from June (no second claim path
 to race) is the argument; the fixture is the proof.
+*Execution deviations (2026-07-18): (a) the scan pipeline's pre-POST
+inline claims are KEPT — they claim for elements not yet in the store
+(born codeworded, deduped by filterNewBatchRefs), so they are disjoint
+from the plan's store-claim path by construction, and deleting them would
+restructure the batch protocol and regress the paint-at-walk-speed
+reveal; the arc's thesis (no stored observations) is untouched by them.
+(b) No flag gate was used — the phases landed directly per the loop
+mandate; the escape hatch is git revert. (c) The idle tick runs
+reconcile() (band-convergence + build) each tick and arms the full pass
+when work was found — with no stored flag there is no cheaper owed-walk,
+and the v2 tick already ran the geometry sweep at this cadence. (d) The
+two-strike exit ledger gained a 50ms minimum strike spacing so
+near-instant per-batch reconciles can't defeat the temporal hysteresis.*
 
 Sequencing between phases: ship, soak in daily use ≥ a few days of trail,
 read the counters, then next phase. The idle tick stays in place until the
