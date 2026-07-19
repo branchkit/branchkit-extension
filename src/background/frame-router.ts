@@ -53,14 +53,12 @@ function translateInboundAction(message: Message): Message {
   return { ...message, payload: { ...message.payload, params: next } };
 }
 
-// Tell the newly-active tab to republish its grammar. There is no active-tab
-// gate on the relay (every tab POSTs freely; the plugin keys sessions per
-// source and projects the focused one), so the content is redundant with the
-// plugin's own deproject/reproject — what this republish still carries is the
-// hints-tag re-arm via its first batch. Retirement is Phase 1 of
-// DESIGN_DISPLAY_GRADE_DEMOTION.md (arm the tag from the focus-recompute
-// reproject instead). The content script's `reactivate` handler flips its
-// local active flag back on and re-queues its whole wrapper store.
+// Tell a tab to republish its grammar. Since display-grade demotion phase 1
+// the per-tab-switch caller is retired (the plugin deprojects/reprojects and
+// derives the hints tag from its own focus recompute); the survivor is the
+// sse_reconnect healer, where a full re-push is the point — the host restarted
+// and its collections are gone. The content script's `reactivate` handler
+// flips its local active flag back on and re-queues its whole wrapper store.
 export function republishActiveTab(tabId: number, reason = 'tab_activated'): void {
   chrome.tabs.sendMessage(tabId, {
     type: 'BRANCHKIT_ACTION',

@@ -1723,20 +1723,13 @@ chrome.runtime.onConnect.addListener((port) => {
   });
 });
 
-// End the hint session on `oldTabId` (if any) before activating a new tab.
-// Hints follow focus at the matcher level: clear the plugin's hints tag so
-// a subsequent voice dispatch can't be routed via the new tab's content
-// script onto a stale or coincidentally-matching element. We deliberately
-// do NOT hide the old tab's badges — in always-mode hint badges
-// are a persistent visual property of every browser tab, and hiding them
-// on switch-away destroys the case where the user switches back (rescan
-// doesn't re-show in always mode, so badges would stay hidden forever).
+// Note on switch-away badges: in always-mode hint badges are a persistent
+// visual property of every browser tab — never hide them on switch-away
+// (rescan doesn't re-show in always mode, so they'd stay hidden forever).
 // The user can't see the inactive tab anyway, so leaving badges painted
-// there is cosmetically free.
-function endHintSessionOnOldTab(oldTabId: number | null, reason: string): void {
-  if (oldTabId == null) return;
-  forwardHintsSessionEnd(reason, oldTabId);
-}
+// there is cosmetically free. (The per-switch session_end that used to live
+// here retired with display-grade demotion phase 1 — the plugin deprojects
+// and derives the hints tag from its own focus recompute.)
 
 // Log a tab switch to actuator.log so post-hoc debugging shows what the
 // user actually did, not just opaque tab IDs.
@@ -1773,14 +1766,12 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
     // Mirror the new tab's video presence (last known; its reporter resumes
     // within one 2s tick if the tab was hidden).
     void syncMediaActive();
-    endHintSessionOnOldTab(oldTabId, 'tab_switch');
-    // Always-mode: signal the new tab's content script that it became the
-    // active tab. The session-start path resets per-tab plugin state.
+    // No session_end and no republish on tab switch (display-grade demotion
+    // phase 1): the plugin deprojects the old tab and reprojects + re-arms
+    // the hints tag from the postActiveTab recompute above, with zero
+    // extension traffic. Session-start stays as idempotent skeleton insurance.
     if (hintVisibility === 'always') {
       forwardHintsSessionStart('tab_switch', activeInfo.tabId);
-      // The relay suppressed this tab's grammar while it was backgrounded;
-      // force a clean republish so it repopulates the global vocabulary.
-      republishActiveTab(activeInfo.tabId);
     }
   }
   // Lazy injection for tabs that loaded before the extension was
@@ -1959,10 +1950,11 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
     void syncMediaActive();
     if (oldTabId != null && oldTabId !== newActive) {
       logTabSwitch('window_focus', oldTabId, newActive);
-      endHintSessionOnOldTab(oldTabId, 'window_focus');
+      // Same as the tab-switch path: the postActiveTab recompute above
+      // deprojects/reprojects and derives the hints tag plugin-side
+      // (display-grade demotion phase 1).
       if (newActive != null && hintVisibility === 'always') {
         forwardHintsSessionStart('window_focus', newActive);
-        republishActiveTab(newActive);
       }
     }
   } catch {
