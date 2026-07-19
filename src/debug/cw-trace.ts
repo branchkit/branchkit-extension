@@ -25,27 +25,31 @@ export const cwTrace: CwTraceEntry[] = [];
 // capture never runs inside the claim/release hot path that called
 // traceCw.
 //
-// Hardened after the first live fires (2026-07-19, both false positives):
-// - Grace is measured from TRACER BOOT, not page load. performance.now()
-//   is page-relative, so an extension-reload reinjection into an old tab
-//   started with "page life" of nearly an hour and got zero boot grace —
-//   its boot scan wave (~230 events in 0.6s) fired the trap instantly.
-// - Up to MAX_FIRES captures per session, spaced REFIRE_SPACING_MS
-//   apart. A legitimate early burst (boot wave, Wikipedia's restored-
-//   scroll jump releasing/granting ~90 wrappers in one hop) must not
-//   exhaust the trap before a real mid-session storm shows up. Snapshot
-//   ids are timestamps, so multiple captures never collide on disk.
+// Hardened across three rounds of live false positives (2026-07-19):
+// - v2: grace measured from tracer boot, not page load (an extension-
+//   reload reinjection into an old tab started with "page life" of an
+//   hour and got zero grace for its boot scan wave); up to MAX_FIRES
+//   captures per session, spaced, so an early burst can't exhaust the
+//   trap. Snapshot ids are timestamps, so captures never collide.
+// - v3: grace measured from the FIRST RING EVENT, not module load. A
+//   content script injected into a hidden background tab defers its
+//   initial scan until the tab is activated — 15s+ after module load —
+//   so the scan wave (200+ grants in ~300ms on a QuickBase-sized page)
+//   escaped the boot grace. The boot-equivalent moment is when tracing
+//   STARTS, wherever that lands. A real storm still fires: either the
+//   page has prior codeword activity (grace long since expired) or the
+//   storm itself outlasts the grace window and trips on its tail.
 
 const STORM_EVENTS = 200;
 const STORM_WINDOW_MS = 5000;
-const TRACER_BOOT_T = performance.now();
-const BOOT_GRACE_MS = 15_000;
+const FIRST_ACTIVITY_GRACE_MS = 15_000;
 const MAX_FIRES = 3;
 const REFIRE_SPACING_MS = 60_000;
 
 let stormCapture: (() => void) | null = null;
 let stormFires = 0;
 let lastFireT = -Infinity;
+let firstEventT: number | null = null;
 
 export function setStormAutoCapture(cb: () => void): void {
   stormCapture = cb;
@@ -54,9 +58,10 @@ export function setStormAutoCapture(cb: () => void): void {
 export function traceCw(op: string, who: string, cw: string): void {
   if (cwTrace.length >= 5000) cwTrace.shift();
   const t = Math.round(performance.now());
+  if (firstEventT === null) firstEventT = t;
   cwTrace.push({ t, op, cw, who });
   if (stormCapture === null || stormFires >= MAX_FIRES) return;
-  if (t - TRACER_BOOT_T < BOOT_GRACE_MS) return;
+  if (t - firstEventT < FIRST_ACTIVITY_GRACE_MS) return;
   if (t - lastFireT < REFIRE_SPACING_MS) return;
   if (cwTrace.length < STORM_EVENTS) return;
   if (t - cwTrace[cwTrace.length - STORM_EVENTS].t >= STORM_WINDOW_MS) return;
