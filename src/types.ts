@@ -43,7 +43,7 @@ export interface ScannedElement {
   frame_id?: number;
   /**
    * True if the element's rect intersects the strict viewport at batch-
-   * send time. Independent of `isInViewport` (the IO band flag, which
+   * send time. Independent of IO-band membership (which
    * uses a wide margin — VIEWPORT_MARGIN_PX — for scroll-ahead). The plugin pushes only
    * strict-viewport entries into the `browser_hints_<prefix>_strict`
    * companion collection that drives the Discovery HUD and the activate

@@ -23,7 +23,6 @@
  */
 
 import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
-import { wantsCodeword } from '../lifecycle/desired-state';
 import { labelReservoir } from '../labels/label-reservoir';
 import { geometryInBand } from '../layout-cache';
 
@@ -43,6 +42,11 @@ import { geometryInBand } from '../layout-cache';
 // two values (the 200-vs-1000 drift bug, 2026-06-11).
 export const VIEWPORT_MARGIN_PX = 1000;
 const VIEWPORT_MARGIN = `${VIEWPORT_MARGIN_PX}px`;
+// Minimum spacing between the two out-of-band strikes that confirm a release
+// (see strikeOut). Matches the old sweep's ~100ms cadence intent; guards
+// against two near-instant derivations (e.g. per-scan-batch reconciles)
+// defeating the temporal hysteresis.
+const EXIT_STRIKE_MIN_MS = 50;
 
 export interface TrackerEvents {
   /**
@@ -54,6 +58,14 @@ export interface TrackerEvents {
    * side without re-walking the whole store.
    */
   onCodewordsChanged: (claimed: ElementWrapper[], released: string[]) => void;
+  /**
+   * An IO entry crossed the band edge (either direction). The tracker no
+   * longer writes any wrapper state from entries — this is the wake-up
+   * signal (DESIGN_OBSERVED_STATE_READ_TIME phase 3): the engine's
+   * band-convergence pass derives membership from fresh rects and applies
+   * claims/releases. Coalesced by the caller (passSoon single-flight).
+   */
+  onBandActivity: () => void;
 }
 
 export class IntersectionTracker {
@@ -66,9 +78,12 @@ export class IntersectionTracker {
   // Codewords waiting to release. Strings, not wrappers — the wrapper may
   // already have been GC'd by the time we flush.
   private pendingRelease: string[] = [];
-  // Wrappers seen out-of-band by exactly one sweep so far (the two-strike
-  // release ledger — see sweepBand). WeakSet: entries GC with their wrapper.
-  private pendingExit: WeakSet<ElementWrapper> = new WeakSet();
+  // Two-strike release ledger (temporal hysteresis, drill round 6): a
+  // wrapper first seen out-of-band records a strike timestamp; only a second
+  // out-of-band sighting >= EXIT_STRIKE_MIN_MS later releases. Guards the
+  // destructive direction against a virtualizer transiently parking a
+  // recycling shell at odd coordinates. WeakMap: entries GC with the wrapper.
+  private exitStrikeAt: WeakMap<ElementWrapper, number> = new WeakMap();
   private flushScheduled = false;
   // Promise chain that serializes every doFlush. Without this, a flush
   // started by scheduleFlush's timer can be in mid-await on
@@ -125,116 +140,36 @@ export class IntersectionTracker {
   }
 
   /**
-   * Re-queue every viewport-visible wrapper for claim. The claim step of the
-   * level-triggered reconciler — called only by `reconcile()` in content.ts,
-   * not as an independent backstop. Walks the existing store rather than
-   * waiting for IO entries that won't fire until the user scrolls (e.g. after
-   * the pool is regenerated on an alphabet change, or a post-nav mutation storm
-   * drops the initial IO callbacks).
+   * Two-strike out-of-band ledger (temporal hysteresis for the destructive
+   * direction — drill round 6, inherited from the deleted sweepBand). The
+   * band-convergence pass calls `strikeOut` for a codeworded wrapper it
+   * derived out-of-band: the first sighting records a timestamp; a second
+   * sighting at least EXIT_STRIKE_MIN_MS later confirms the exit and the
+   * caller releases. An in-band sighting clears the strike.
    */
-  refreshViewportClaims(): void {
-    for (const w of this.store.all) {
-      // Delta against desired state: wants a codeword but doesn't hold one.
-      if (wantsCodeword(w) && !w.scanned.codeword) {
-        this.pendingClaim.add(w);
-      }
+  strikeOut(w: ElementWrapper, now: number): boolean {
+    const first = this.exitStrikeAt.get(w);
+    if (first === undefined) {
+      this.exitStrikeAt.set(w, now);
+      return false;
     }
-    if (this.pendingClaim.size > 0) this.scheduleFlush();
+    if (now - first < EXIT_STRIKE_MIN_MS) return false;
+    this.exitStrikeAt.delete(w);
+    return true;
+  }
+
+  clearExitStrike(w: ElementWrapper): void {
+    this.exitStrikeAt.delete(w);
   }
 
   /**
-   * Mid-scroll band flag sweep — BOTH directions of the settle plan's
-   * lifecycle repair, run by geometry while the user is actively scrolling
-   * (notes/DESIGN_FLING_WAVE.md Part 1c + drill round 2). On a virtualized
-   * grid most rows are inserted OUTSIDE the band and cross its edge
-   * mid-fling; the IO's delivery of those crossings starves on saturated
-   * frames (attached_to_band p90 581ms, round 1), so this reads geometry
-   * directly. One gBCR per live wrapper, no interleaved writes — a single
-   * reflow per sweep; the caller throttles (10Hz) and runs reconcile() when
-   * anything changed (claims + build flow through the normal convergence
-   * entry — no new claim path).
-   *
-   * The release direction is load-bearing for the POOL, not just flag
-   * hygiene: entries-only drained the local reservoir mid-fling (claims
-   * fast, releases waiting on starved IO/settle — band_to_claimed p90
-   * 13 → 377ms, round 2) and left the leading edge letterless until
-   * settle. `labelReservoir.release` is local-synchronous, so an exit in
-   * this sweep funds a claim in the same sweep's reconcile. This is NOT
-   * the retired off-screen hide sweep (paint-the-band seam 3): that one
-   * hid badges while LEAVING them band-flagged, so the plan re-showed
-   * them — a flap. This flips the flag first; plan and IO agree with the
-   * result.
+   * Queue codeword claims for wrappers the caller just derived in-band by
+   * fresh geometry (the engine's band-convergence pass — the single
+   * store-claim path; DESIGN_OBSERVED_STATE_READ_TIME phase 3). The flush's
+   * fresh-rect guard re-checks band membership at grant time, so a wrapper
+   * that left between queue and flush returns its label to the pool.
    */
-  sweepBand(vw: number, vh: number): { repaired: number; released: number } {
-    const __t0 = performance.now();
-    let repaired = 0;
-    let released = 0;
-    for (const w of this.store.all) {
-      if (w.disconnectedAt !== null) continue;
-      if (!w.element.isConnected) continue;
-      const r = w.element.getBoundingClientRect();
-      // Boxless skip (the reconcile plan's zero-rect guard): display:none
-      // elements report all-zeros, which would false-positive at the origin.
-      if (r.width === 0 && r.height === 0 && r.top === 0 && r.left === 0) continue;
-      // Refresh lastRect on EVERY sweep read, not just band transitions
-      // (round 22, reviving round 12's first-choice lever): the fingerprint
-      // rebind tier's position tiebreak reads lastRect, and mid-storm the
-      // IO's last delivery can be seconds stale — identical-content remounts
-      // then score past the 50px threshold and refuse (rebind_position
-      // frozen at 0 through the whole arc). The sweep already paid for this
-      // rect; writing it keeps every live wrapper's tiebreaker ≤1 sweep
-      // (~100ms while scrolling) fresh at disconnect time.
-      w.lastRect = r;
-      const inBand = geometryInBand(r, vw, vh, VIEWPORT_MARGIN_PX);
-      if (inBand) {
-        this.pendingExit.delete(w);
-        if (!w.isInViewport) {
-          w.isInViewport = true;
-          w.tInBand ??= performance.now();
-          repaired++;
-        }
-      } else if (w.isInViewport) {
-        // Two-strike release (temporal hysteresis — drill round 6): a
-        // virtualizer can transiently park a recycling shell at odd
-        // coordinates, and a single out-of-band read then releases + hides a
-        // badge that is back in-band by the next sweep — the release/repair
-        // oscillation the firehose showed (sweep ~117 → stale_false_repair
-        // ~106 → re-reveal). Require out-of-band on TWO consecutive sweeps
-        // (~100ms apart) before the destructive direction fires; entries are
-        // still repaired immediately.
-        if (!this.pendingExit.has(w)) {
-          this.pendingExit.add(w);
-          continue;
-        }
-        this.pendingExit.delete(w);
-        w.isInViewport = false;
-        // Same path as the IO exit branch: cancels any pending claim,
-        // stashes preferredCodeword for sticky reclaim, drops the badge to
-        // dormant. ≥1000px off-screen, so the hide is imperceptible.
-        this.queueRelease(w);
-        released++;
-      } else {
-        this.pendingExit.delete(w);
-      }
-    }
-    const rec = (globalThis as { __branchkitRecordCpu?: (label: string, ms: number) => void }).__branchkitRecordCpu;
-    if (rec) rec('intersection:sweepBand', performance.now() - __t0);
-    return { repaired, released };
-  }
-
-  /**
-   * Queue codeword claims for wrappers a caller just proved in-band by
-   * geometry, without waiting for the IO to deliver its band-entry callback
-   * (mid-fling that delivery ran ~305ms p50 — the dominant paint-latency
-   * stage; notes/DESIGN_FLING_WAVE.md Part 1). The caller owns the band
-   * check and the optimistic `isInViewport` write — the tracker only ever
-   * learns band state from IO entries or callers that just read geometry.
-   * Idempotent with the IO path: its claim branch skips wrappers that
-   * already hold a codeword, and a wrong optimistic flag is corrected by
-   * the IO's initial callback (a genuine out-of-band wrapper gets the
-   * normal release, sticky reclaim keeps the letter).
-   */
-  primeClaims(wrappers: ElementWrapper[]): void {
+  queueClaims(wrappers: ElementWrapper[]): void {
     let queued = false;
     for (const w of wrappers) {
       if (w.scanned.codeword) continue;
@@ -247,7 +182,7 @@ export class IntersectionTracker {
   /**
    * Force pending work to flush. Awaitable. Drains until both queues are
    * stable — a doFlush awaiting CLAIM_LABELS may have IO fire more
-   * entries (or refreshViewportClaims push more wrappers) by the time
+   * entries (or the convergence pass queue more wrappers) by the time
    * it returns; we loop so showBadges sees a quiescent tracker.
    */
   async flushNow(): Promise<void> {
@@ -261,43 +196,27 @@ export class IntersectionTracker {
   }
 
   private handleEntries = (entries: IntersectionObserverEntry[]): void => {
-    // Sync cost is the whole loop + scheduleFlush. Reported via the
-    // global recorder content.ts wires up (see __branchkitRecordCpu).
-    // No-op when the recorder isn't present (tests, early boot).
+    // Wake-up signal only (DESIGN_OBSERVED_STATE_READ_TIME phase 3): entries
+    // write NO wrapper state and queue NO claims/releases — a dropped,
+    // coalesced, or limbo-discarded entry costs one pass of latency, never a
+    // standing lie. The engine's band-convergence pass derives membership
+    // from fresh rects.
     const __t0 = performance.now();
+    let activity = false;
     for (const entry of entries) {
       const wrapper = this.store.findWrapperFor(entry.target);
       if (!wrapper) continue;
-      // Limbo wrappers hold their codeword by design (decision 3 of
-      // DESIGN_WRAPPER_IDENTITY_STABILITY). A disconnected element
-      // typically fires `isIntersecting: false` from the IO — letting
-      // that release the codeword would defeat the whole limbo
-      // mechanism. Skip until the wrapper rebinds or finalizes; the
-      // pre-disconnect lastRect snapshot is preserved.
+      // Limbo wrappers hold their state by design (decision 3 of
+      // DESIGN_WRAPPER_IDENTITY_STABILITY): preserve the pre-disconnect
+      // lastRect snapshot for the rebind position-tiebreaker.
       if (wrapper.disconnectedAt !== null) continue;
-      // Snapshot the latest rect for the limbo position-tiebreaker.
-      // IO entries give us a free, current rect on every observation —
-      // without this hook, `lastRect` would almost always be null at
-      // disconnect time (the layout cache is cleared after each show/
-      // reposition, so the MO-driven `dropDisconnectedWrappers` path
-      // would observe an empty cache). entry.boundingClientRect IS a
-      // DOMRectReadOnly at runtime; cast is safe.
+      // Snapshot the latest rect for the limbo position-tiebreaker — a
+      // free, current rect on every observation. entry.boundingClientRect
+      // IS a DOMRectReadOnly at runtime; cast is safe.
       wrapper.lastRect = entry.boundingClientRect as DOMRect;
-
-      wrapper.isInViewport = entry.isIntersecting;
-
-      if (entry.isIntersecting) {
-        // Paint-latency stage stamp (first band entry only).
-        wrapper.tInBand ??= performance.now();
-        // Want a codeword if we don't already have one.
-        if (!wrapper.scanned.codeword) {
-          this.pendingClaim.add(wrapper);
-        }
-      } else {
-        this.queueRelease(wrapper);
-      }
+      activity = true;
     }
-    this.scheduleFlush();
+    if (activity) this.events.onBandActivity();
     const rec = (globalThis as { __branchkitRecordCpu?: (label: string, ms: number) => void }).__branchkitRecordCpu;
     if (rec) rec('intersection:handleEntries', performance.now() - __t0);
   };
@@ -419,10 +338,19 @@ export class IntersectionTracker {
         const wrapper = wrappers[i];
         const label = i < labels.length ? labels[i] : '';
 
-        // Wrapper may have left the viewport between queue and flush. If
-        // we still got a label for it, queue the release so the pool
-        // doesn't leak.
-        if (!wrapper.isInViewport) {
+        // Wrapper may have left the band (or the DOM) between queue and
+        // flush — re-derive from a fresh rect at grant time (the queue is
+        // churn-bounded, so this is a handful of gBCRs per flush). If we
+        // still got a label for it, queue the release so the pool doesn't
+        // leak.
+        let inBandNow = false;
+        try {
+          inBandNow = wrapper.element.isConnected && geometryInBand(
+            wrapper.element.getBoundingClientRect(),
+            window.innerWidth, window.innerHeight, VIEWPORT_MARGIN_PX,
+          );
+        } catch { /* detached mid-flush */ }
+        if (!inBandNow) {
           if (label) this.pendingRelease.push(label);
           continue;
         }

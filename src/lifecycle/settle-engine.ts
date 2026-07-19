@@ -24,7 +24,6 @@
 
 import type { ElementWrapper, DiscoverySource } from '../scan/element-wrapper';
 import type { SettleDeps } from './settle-deps';
-import { wantsHint, wantsCodeword } from './desired-state';
 import { shouldRunBandSweep } from './band-sweep-gate';
 import { gatherSettleReads, type SettleGather } from './gather';
 import { computeReconcilePlanLists, type ReconcilePlanLists } from './reconcile';
@@ -32,7 +31,9 @@ import { drainStampDisagree } from './strict-viewport';
 import { runBuildPass, createSingleFlight, WAVE_BUILD_BUDGET_MS } from './build-queue';
 import {
   cacheLayout, cacheConstruction, clearLayoutCache, getCachedRect, isRectOnScreen,
+  geometryInBand,
 } from '../layout-cache';
+import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { isVisible } from '../scan/scanner';
 import { poolLabelToAssignment } from '../labels/words';
 import { firehoseStep } from '../debug/firehose';
@@ -71,7 +72,7 @@ export interface SettleEngineHooks {
 /** Per-class applied counts (Phase E of notes/DESIGN_UNIFIED_RECONCILER.md,
  *  decision 4): what each pass DID. Surfaced on the debug + perf snapshots. */
 interface AppliedCounts {
-  release: number; repair: number; claim: number; build: number;
+  release: number; claim: number; build: number;
   show: number; hide: number; strict: number;
 }
 
@@ -112,8 +113,8 @@ export class SettleEngine {
   // exists, `last` spiking against a quiet page is the tripwire.
   readonly applied = {
     passes: 0,
-    last: { release: 0, repair: 0, claim: 0, build: 0, show: 0, hide: 0, strict: 0 } as AppliedCounts,
-    total: { release: 0, repair: 0, claim: 0, build: 0, show: 0, hide: 0, strict: 0 } as AppliedCounts,
+    last: { release: 0, claim: 0, build: 0, show: 0, hide: 0, strict: 0 } as AppliedCounts,
+    total: { release: 0, claim: 0, build: 0, show: 0, hide: 0, strict: 0 } as AppliedCounts,
   };
 
   // Single-flight yield-chained continuation for band construction the budget
@@ -147,37 +148,18 @@ export class SettleEngine {
 
   // Idle-convergence backstop (2026-07-19, the QuickBase manageusers stall):
   // every settle trigger is activity-driven, so a page that goes fully quiet
-  // after load never runs a settle — a cohort attached with stale band flags
-  // (or claims the reservoir couldn't fund yet) waits for the user to move
-  // (band_to_claimed p90 was 17.9s in the snapshot). A pausable 2s tick
-  // calls this: a cheap O(store) flag walk (no layout reads), arming the
-  // passSoon single-flight ONLY when convergence is visibly owed — an
-  // in-band wrapper without a codeword, or a codeworded one whose badge
-  // isn't showing. Steady state is a no-op walk; the tick pauses with the
-  // tab. Level-triggered coverage per the consolidation plan's preference,
-  // not a new edge trigger.
+  // after load never converges — a cohort the load storm left behind waits
+  // for the user to move (band_to_claimed p90 was 17.9s in the snapshot). A
+  // pausable 2s tick calls this: one band-convergence pass (fresh rects,
+  // claims/releases/builds applied — with no stored flag there is no cheap
+  // flag walk, and the v2 tick already ran the geometry sweep at this
+  // cadence). When the pass found owed work, arm the full settle once so the
+  // strict/occlusion planes catch up too. Steady state is one bounded rect
+  // walk per 2s on a visible tab; the tick pauses with the tab.
   noteIdleTick(): void {
     if (!this.deps.isBadgesVisible() || this.deps.isTornDown()) return;
-    // Stale-FALSE flags first (the actual manageusers cohort — repair=275 in
-    // both user snapshots): elements whose IO entry was dropped in the load
-    // storm sit geometrically in-band with flag FALSE, which no flag walk
-    // can see. The band sweep is the existing bounded geometry pass for
-    // exactly this; it repairs flags and reconciles inline on changes. At
-    // the 2s idle cadence its cost is negligible (it was built for 10Hz
-    // mid-fling).
-    this.noteBandSweep();
-    // Then the flag-visible classes: in-band without a codeword (reservoir
-    // was dry at claim time), or codeworded without a showing badge.
-    for (const w of this.deps.store.all) {
-      if (w.disconnectedAt !== null) continue;
-      const owed =
-        (wantsCodeword(w) && w.scanned.codeword.length === 0) ||
-        (wantsHint(w) && !w.hint?.isVisible);
-      if (owed) {
-        this.schedulePassSoon('idle-backstop');
-        return;
-      }
-    }
+    const { claims, releases } = this.reconcile();
+    if (claims + releases > 0) this.schedulePassSoon('idle-backstop');
   }
 
   // Demoted backstop entry (Phase E): between-settle signals — the visibility
@@ -216,25 +198,74 @@ export class SettleEngine {
   // notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md). This is THE single
   // convergence entry for {codeword, hint} — every edge trigger
   // (codewords-changed, nav-settle, alphabet-change, label-sync catchup,
-  // focus/transition settle) routes here rather than poking the claim or build
-  // step directly. `refreshViewportClaims` and `badgeNewlyCodeworded` are
-  // reconcile-owned steps, not independent backstops. Idempotent:
-  //   - claim: queue in-band wrappers that lack a codeword. The pool RPC is
-  //     async; its completion re-enters here via onCodewordsChanged, so each
-  //     pass builds whatever is currently buildable and queues the rest.
-  //     Pool-exhausted claims don't re-fire the callback, so this converges
-  //     rather than spins.
+  // focus/transition settle, IO band activity, the idle tick) routes here
+  // rather than poking the claim or build step directly. Idempotent:
+  //   - band-converge: derive band membership from fresh rects; queue claims
+  //     for in-band codeword-less wrappers, two-strike releases for
+  //     out-of-band codeworded ones (DESIGN_OBSERVED_STATE_READ_TIME
+  //     phase 3 — there is no stored band flag; owed work is the delta
+  //     between desired state and current decisions, no edge detection).
+  //     The pool RPC is async; its completion re-enters here via
+  //     onCodewordsChanged. Pool-exhausted claims don't re-fire the
+  //     callback, so this converges rather than spins.
   //   - build: construct badges for in-band codeworded wrappers that lack one.
-  // Tear-down is the settle pass's plan (stale-TRUE release); the IO
-  // viewport-exit remains the cheap fast-path. Keep reconcile gBCR-free — it
-  // runs on the frequent onCodewordsChanged cadence and the coalesced
-  // scheduleReconcile.
-  reconcile(): void {
-    this.deps.tracker.refreshViewportClaims();
+  // Cost: one gBCR per live wrapper per call (the old sweepBand's price, now
+  // paid by every reconcile — measured 0.3-6ms even at 719 wrappers).
+  reconcile(): { claims: number; releases: number } {
+    const converged = this.bandConverge();
     if (this.deps.isBadgesVisible()) {
       this.badgeNewlyCodeworded();
       this.reattachStrippedHosts();
     }
+    return converged;
+  }
+
+  // The band-convergence pass: ONE fresh-rect walk over the live store,
+  // deriving band membership and applying the lifecycle deltas — claims
+  // queued on the tracker (its flush re-checks band membership with a fresh
+  // rect at grant time), releases through the two-strike exit ledger
+  // (temporal hysteresis for the destructive direction). Replaces sweepBand
+  // (flag repair) + refreshViewportClaims (flag walk). Also refreshes
+  // lastRect on every read (round 22): the fingerprint rebind tier's
+  // position tiebreak needs a fresh rect at disconnect time.
+  private bandConverge(): { claims: number; releases: number } {
+    const __t0 = performance.now();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const toClaim: ElementWrapper[] = [];
+    let releases = 0;
+    for (const w of this.deps.store.all) {
+      if (w.disconnectedAt !== null) continue;
+      if (!w.element.isConnected) continue;
+      let r: DOMRect;
+      try { r = w.element.getBoundingClientRect(); } catch { continue; }
+      // Boxless skip (the zero-rect guard): display:none elements report
+      // all-zeros, which would false-positive at the origin. No box → no
+      // band membership; a later layout gives it one and re-enters here.
+      if (r.width === 0 && r.height === 0 && r.top === 0 && r.left === 0) continue;
+      w.lastRect = r;
+      const codeworded = w.scanned.codeword.length > 0;
+      if (geometryInBand(r, vw, vh, VIEWPORT_MARGIN_PX)) {
+        this.deps.tracker.clearExitStrike(w);
+        if (!codeworded) {
+          w.tInBand ??= __t0;
+          toClaim.push(w);
+        }
+      } else if (codeworded && this.deps.tracker.strikeOut(w, __t0)) {
+        // Same path as the old IO exit branch: cancels any pending claim,
+        // stashes preferredCodeword for sticky reclaim, drops the badge to
+        // dormant. >=1000px off-screen, so the hide is imperceptible.
+        this.deps.tracker.queueRelease(w);
+        releases++;
+      }
+    }
+    if (toClaim.length > 0) this.deps.tracker.queueClaims(toClaim);
+    if (toClaim.length > 0 || releases > 0) {
+      lifecycleCounters.bandConvergeClaims += toClaim.length;
+      lifecycleCounters.bandConvergeReleases += releases;
+      firehoseStep('band_converge:changed', toClaim.length + releases, 20);
+    }
+    recordCpu('bandConverge', performance.now() - __t0);
+    return { claims: toClaim.length, releases };
   }
 
   // The build step of the reconciler. Called only by reconcile() and the
@@ -253,24 +284,34 @@ export class SettleEngine {
   // reconcile-path and continuation alike: a realistic wave completes in one
   // pass, paying the ancestor warm and the placement reflow once.
   badgeNewlyCodeworded(budgetMs: number = WAVE_BUILD_BUDGET_MS): void {
-    const newBadges: ElementWrapper[] = [];
+    const candidates: ElementWrapper[] = [];
     for (const w of this.deps.store.all) {
-      // Delta against desired state: wants a hint but isn't currently
-      // visible. With hint reuse (DESIGN_HINT_REUSE.md), a wrapper's `w.hint`
-      // persists across viewport exit/re-enter cycles, so the old `!w.hint`
-      // filter would skip every dormant hint forever. This catches both
-      // first-time hints (w.hint absent) and reused dormant hints (w.hint
-      // present but hidden + cleared).
-      if (wantsHint(w) && !w.hint?.isVisible) {
-        newBadges.push(w);
+      // Delta against desired state: codeworded but no visible badge. With
+      // hint reuse (DESIGN_HINT_REUSE.md), a wrapper's `w.hint` persists
+      // across viewport exit/re-enter cycles, so the old `!w.hint` filter
+      // would skip every dormant hint forever. This catches both first-time
+      // hints (w.hint absent) and reused dormant hints (w.hint present but
+      // hidden + cleared). Codewords are band-scoped, so this set ~= the
+      // in-band unbuilt set; the cached-rect band gate below excludes the
+      // residue (out-of-band codeword holders pending their two-strike
+      // release).
+      if (w.disconnectedAt !== null || !w.element.isConnected) continue;
+      if (w.scanned.codeword.length > 0 && !w.hint?.isVisible) {
+        candidates.push(w);
       }
     }
-    if (newBadges.length === 0) return;
+    if (candidates.length === 0) return;
 
     const __start = performance.now();
     try {
-      const elements = newBadges.map(w => w.element);
+      const elements = candidates.map(w => w.element);
       cacheLayout(elements);
+      // Band gate over the just-warmed rects (read-time membership — no
+      // stored flag): only in-band candidates build.
+      const vwB = window.innerWidth, vhB = window.innerHeight;
+      const newBadges = candidates.filter(w =>
+        geometryInBand(getCachedRect(w.element), vwB, vhB, VIEWPORT_MARGIN_PX));
+      if (newBadges.length === 0) return;
       // Warm the full ancestor chain too — rect + style + dims, deduped across
       // wrappers: first-time construction walks ancestors for container
       // resolution, the viewport-pinned check, and APCA background resolution,
@@ -370,40 +411,45 @@ export class SettleEngine {
     if (reattached > 0) firehoseStep('reconcile:reattach', reattached, 1);
   }
 
-  // Lifecycle applier — the codeword/flag half of the settle pass
-  // (notes/DESIGN_UNIFIED_RECONCILER.md + nav-wipe retirement step 1). The
-  // plan computes WHICH wrappers are desynced; this is the thin applier. The
-  // IO entry/exit branches remain the cheap fast-path; this corrects
-  // dropped/reordered IO events in either direction and queues the claims the
-  // IO missed:
+  // Lifecycle applier — the codeword half of the settle pass
+  // (notes/DESIGN_UNIFIED_RECONCILER.md; rect-derived since
+  // DESIGN_OBSERVED_STATE_READ_TIME phase 3 — there is no band flag, so
+  // there is no repair class and nothing to correct, only desired-state
+  // deltas to apply):
   //
-  //   toRelease (stale-TRUE):  flag=in, geometry=out → release codeword; the
-  //                            flush tears the hint down to dormant
-  //   toRepair  (stale-FALSE): flag=out, geometry=in → flip flag; the
-  //                            reconcile below rebuilds
-  //   toClaim:                 emit-only telemetry, NOT applied. The first
-  //                            attempt to apply it per pass (7fe37a0, nav-wipe
-  //                            step 1) fragmented claim/sync into many small
-  //                            waves during page load and produced badge
-  //                            doubling — it races the scan pipeline's inline
-  //                            claims. Reverted 2026-06-12; the
-  //                            standing-claim-backstop idea needs its own
-  //                            design (see DESIGN_NAV_WIPE_RETIREMENT.md).
+  //   toRelease: codeworded, geometry out-of-band → release through the
+  //              two-strike exit ledger (temporal hysteresis; a transient
+  //              virtualizer park must not release a live badge)
+  //   toClaim:   in-band, codeword-less → queue on the tracker; the flush's
+  //              fresh-rect guard re-checks at grant time. This is the
+  //              SINGLE store-claim path — the June-2026 doubling (7fe37a0,
+  //              nav-wipe step 1) came from this applier racing the
+  //              IO/prime inline claim paths, which no longer exist. The
+  //              scan pipeline's pre-POST claims are for elements NOT yet
+  //              in the store (born codeworded, deduped by
+  //              filterNewBatchRefs), so the two claim paths are disjoint
+  //              by construction.
   private applyLifecyclePlan(lists: ReconcilePlanLists): void {
+    const now = performance.now();
     for (const w of lists.toRelease) {
-      w.isInViewport = false;
-      this.deps.tracker.queueRelease(w);
+      if (this.deps.tracker.strikeOut(w, now)) {
+        this.deps.tracker.queueRelease(w);
+      }
     }
-    for (const w of lists.toRepair) {
-      w.isInViewport = true;
-      w.tInBand ??= performance.now();
+    if (lists.toClaim.length > 0) {
+      for (const w of lists.toClaim) w.tInBand ??= now;
+      this.deps.tracker.queueClaims(lists.toClaim);
     }
-    // If we corrected any stale-FALSE flags, run reconcile so the
-    // just-recovered wrappers also go through build (badgeNewlyCodeworded
-    // picks up repaired dormant badges whose codeword survived).
-    if (lists.toRepair.length > 0) {
-      firehoseStep('reconcile:stale_false_repair', lists.toRepair.length, 1);
-      this.reconcile();
+    // Claims/builds owed → run the build half so recovered dormant badges
+    // (codeword survived, badge hidden) rebuild this settle. The claim
+    // flush is async (microtask); completions re-enter via
+    // onCodewordsChanged.
+    if (lists.toClaim.length > 0 || lists.toBuild.length > 0) {
+      firehoseStep('reconcile:lifecycle_owed', lists.toClaim.length + lists.toBuild.length, 1);
+      if (this.deps.isBadgesVisible()) {
+        this.badgeNewlyCodeworded();
+        this.reattachStrippedHosts();
+      }
     }
   }
 
@@ -463,7 +509,6 @@ export class SettleEngine {
     this.applied.passes++;
     const last: AppliedCounts = {
       release: lists.toRelease.length,
-      repair: lists.toRepair.length,
       claim: lists.toClaim.length,
       build: lists.toBuild.length,
       show: lists.toShow.length,
@@ -569,12 +614,13 @@ export class SettleEngine {
       // burst around the flip lands a 'store' settle within ~100ms; arming
       // the sweep here closes the straggler window to ≤~600ms. The sweep is
       // single-flight, idle-scheduled, and isKnown-skipping — cheap when
-      // nothing new exists. The repair count is the mass-reveal tell: a
-      // double-buffered flip repairs ~100+ stale band flags in one plan, and
-      // that sweep skips the idle gate (round 18 fast-arm).
-      this.scheduleBandDiscovery(discovery, planLists.toRepair.length);
-      if (planLists.toRepair.length >= REVEAL_REPAIR_FAST_ARM) {
-        this.scheduleMassRevealPaint(planLists.toRepair.length);
+      // nothing new exists. The claim count is the mass-reveal tell (was the
+      // repair count in the flag era): a double-buffered flip makes ~100+
+      // wrappers claimable in one plan, and that sweep skips the idle gate
+      // (round 18 fast-arm).
+      this.scheduleBandDiscovery(discovery, planLists.toClaim.length);
+      if (planLists.toClaim.length >= REVEAL_REPAIR_FAST_ARM) {
+        this.scheduleMassRevealPaint(planLists.toClaim.length);
       }
       if (discovery === 'store') this.scheduleReconcile();
       this.applyOcclusionPlan(gather);
@@ -669,29 +715,18 @@ export class SettleEngine {
     }
   }
 
-  // Mid-fling band repair (throttled, both directions) — badges for rows
-  // crossing the band edge paint DURING the fling, funded by same-sweep
-  // releases, instead of waiting for the IO to catch up. Gated on
-  // badgesVisible: with hints down the IO's own cadence is fine (nothing
-  // user-facing waits), and the next show re-converges from scratch.
-  private noteBandSweep(): void {
+  // Mid-fling band convergence (throttled, both directions) — badges for
+  // rows crossing the band edge paint DURING the fling, funded by same-pass
+  // releases, instead of waiting for the IO wake-up + settle. Gated on
+  // badgesVisible: with hints down nothing user-facing waits, and the next
+  // show re-converges from scratch. Rango's scroll-poll shape: reconcile()
+  // IS the derivation now (fresh rects → claims/releases/build inline).
+  private noteBandConverge(): void {
     if (!this.deps.isBadgesVisible()) return;
     const now = performance.now();
     if (now - this.bandSweepLastAt < MID_SCROLL_BAND_SWEEP_MS) return;
     this.bandSweepLastAt = now;
-    const { repaired, released } = this.deps.tracker.sweepBand(window.innerWidth, window.innerHeight);
-    if (repaired > 0 || released > 0) {
-      lifecycleCounters.bandSweepRepairs += repaired;
-      lifecycleCounters.bandSweepReleases += released;
-      firehoseStep('band_sweep:changed', repaired + released, 20);
-      // Synchronous convergence (round 13): refreshViewportClaims picks up
-      // the just-flipped flags, the build+paint runs inline — edge-crossing
-      // badges appear within the sweep's own 100ms cadence, Rango's
-      // scroll-poll shape. Releases matter here too — the freed letters land
-      // at the front of the local reservoir synchronously, so a claim that
-      // would have returned '' a sweep ago is funded NOW.
-      this.reconcile();
-    }
+    this.reconcile();
   }
 
   /** True while the trailing-edge scroll settle is armed — the nav path uses
@@ -730,7 +765,7 @@ export class SettleEngine {
     this.noteReconcileScroll();
     // Arm the eye-level paint-stability sampler (self-terminating).
     this.hooks.notePaintSamplerScroll();
-    this.noteBandSweep();
+    this.noteBandConverge();
     // Gesture-start accelerator re-detection (timer null = first event of
     // this scroll burst). A scroller that only became scrollable on hover
     // (QuickBase classic report grids flip overflow:hidden->auto under

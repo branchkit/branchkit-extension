@@ -168,8 +168,10 @@ describe('buildSnapshotPayload', () => {
     expect(payload.wrappers.length).toBe(1);
     expect(payload.wrappers[0].scanned.id).toBe(7);
     expect(payload.wrappers[0].scanned.codeword).toBe('cw-7');
-    // Default isInViewport is true (per ElementWrapper constructor).
-    expect(payload.wrappers[0].isInViewport).toBe(true);
+    // Band membership is derived live from the element's rect (no stored
+    // flag — DESIGN_OBSERVED_STATE_READ_TIME phase 3); the fake element's
+    // zero-size rect derives out-of-band.
+    expect(payload.wrappers[0].isInViewport).toBe(false);
     // No hint attached → null.
     expect(payload.wrappers[0].hint).toBeNull();
   });

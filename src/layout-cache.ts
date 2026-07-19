@@ -52,7 +52,7 @@ export function getCachedRect(el: Element): DOMRect {
 
 /**
  * True when a rect overlaps the actual visible viewport — the STRICT notion,
- * deliberately distinct from the IntersectionTracker's `isInViewport` flag,
+ * deliberately distinct from derived IO-band membership,
  * which is set by a wide-rootMargin IO (VIEWPORT_MARGIN_PX). Badge shown-ness
  * is band-scoped (notes/DESIGN_PAINT_THE_BAND.md), so this is no longer a
  * paint gate; the strict-viewport consumers that remain are the voice

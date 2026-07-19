@@ -27,6 +27,8 @@
  */
 
 import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
+import { geometryInBand } from '../layout-cache';
+import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { enumerateAlmostHintable } from '../scan/scanner';
 import type { RebindCounters } from '../labels/rebind';
 
@@ -65,7 +67,16 @@ const state: OverlayState = { active: false, root: null };
  * tier doesn't have wrappers — it comes from the scanner's
  * enumerateAlmostHintable. Pure function; tested directly. */
 export function classifyWrapper(w: ElementWrapper): 'green' | 'yellow' | 'orange' {
-  if (!w.isInViewport) return 'orange';
+  // Band membership derived live (no stored flag) — the overlay is an
+  // on-demand debug surface, one rect read per wrapper is fine.
+  let inBand = false;
+  try {
+    inBand = w.element.isConnected && geometryInBand(
+      w.element.getBoundingClientRect(),
+      window.innerWidth, window.innerHeight, VIEWPORT_MARGIN_PX,
+    );
+  } catch { /* detached */ }
+  if (!inBand) return 'orange';
   if (w.scanned.codeword) return 'green';
   return 'yellow';
 }

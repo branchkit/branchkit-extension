@@ -2,17 +2,19 @@
  * BranchKit Browser — IntersectionTracker unit tests.
  *
  * IntersectionObserver is mocked as a no-op since its async behavior
- * is environment-driven; the testable logic is the claim/release queue
- * and the flush sequencing. Where a test needs to simulate IO firing,
- * it manipulates wrapper state and uses public surface
- * (refreshViewportClaims, flushNow) to drive the queue.
+ * is environment-driven; the testable logic is the claim/release queue,
+ * the flush sequencing, and the two-strike exit ledger. Since
+ * DESIGN_OBSERVED_STATE_READ_TIME phase 3 the tracker stores no band flag
+ * and IO entries are wake-up signals only — claims arrive via queueClaims
+ * from the engine's band-convergence pass, and the flush re-derives band
+ * membership from a fresh rect at grant time.
  *
  * Run: npm test
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
-import { IntersectionTracker } from './intersection-tracker';
+import { IntersectionTracker, TrackerEvents } from './intersection-tracker';
 import { ScannedElement } from '../types';
 import { labelReservoir } from '../labels/label-reservoir';
 
@@ -51,6 +53,13 @@ function fakeScanned(overrides: Partial<ScannedElement> = {}): ScannedElement {
     codeword: '',
     ...overrides,
   };
+}
+
+function makeEvents() {
+  return {
+    onCodewordsChanged: vi.fn(),
+    onBandActivity: vi.fn(),
+  } satisfies TrackerEvents;
 }
 
 class FakeIntersectionObserver {
@@ -103,97 +112,116 @@ function setupClaimResponse(labels: string[]): void {
   });
 }
 
-describe('IntersectionTracker.refreshViewportClaims', () => {
-  it('claims a codeword for every viewport-visible wrapper that lacks one', async () => {
+describe('IntersectionTracker.queueClaims (the single store-claim path)', () => {
+  it('claims a codeword for every queued wrapper that lacks one', async () => {
     const store = new WrapperStore();
-    const events = { onCodewordsChanged: vi.fn() };
+    const events = makeEvents();
     const tracker = new IntersectionTracker(store, events);
 
-    const onScreen1 = new ElementWrapper(fakeElement('a'), fakeScanned());
-    const onScreen2 = new ElementWrapper(fakeElement('b'), fakeScanned());
-    const offScreen = new ElementWrapper(fakeElement('c'), fakeScanned());
-    onScreen1.isInViewport = true;
-    onScreen2.isInViewport = true;
-    offScreen.isInViewport = false;
-    store.addWrapper(onScreen1);
-    store.addWrapper(onScreen2);
-    store.addWrapper(offScreen);
+    const a = new ElementWrapper(fakeElement('a'), fakeScanned());
+    const b = new ElementWrapper(fakeElement('b'), fakeScanned());
+    store.addWrapper(a);
+    store.addWrapper(b);
 
     setupClaimResponse(['arch', 'bake']);
-    tracker.refreshViewportClaims();
+    tracker.queueClaims([a, b]);
     await tracker.flushNow();
 
-    expect(onScreen1.scanned.codeword).toBe('arch');
-    expect(onScreen2.scanned.codeword).toBe('bake');
-    expect(offScreen.scanned.codeword).toBe('');
+    expect(a.scanned.codeword).toBe('arch');
+    expect(b.scanned.codeword).toBe('bake');
     expect(events.onCodewordsChanged).toHaveBeenCalled();
   });
 
-  it('skips wrappers that already hold a codeword', async () => {
+  it('skips wrappers that already hold a codeword and stays quiet when all skip', async () => {
     const store = new WrapperStore();
-    const events = { onCodewordsChanged: vi.fn() };
+    const events = makeEvents();
     const tracker = new IntersectionTracker(store, events);
 
     const held = new ElementWrapper(fakeElement('held'), fakeScanned({ codeword: 'rain' }));
-    const empty = new ElementWrapper(fakeElement('empty'), fakeScanned());
-    held.isInViewport = true;
-    empty.isInViewport = true;
     store.addWrapper(held);
-    store.addWrapper(empty);
 
     setupClaimResponse(['arch']);
-    tracker.refreshViewportClaims();
+    tracker.queueClaims([held]);
     await tracker.flushNow();
 
     expect(held.scanned.codeword).toBe('rain');
-    expect(empty.scanned.codeword).toBe('arch');
+    expect(events.onCodewordsChanged).not.toHaveBeenCalled();
+  });
+
+  it('the fresh-rect guard returns the label for a wrapper that left the band before flush', async () => {
+    // The caller derived in-band at pass time, but the wrapper moved (or the
+    // page re-laid-out) before the flush microtask — the grant-time re-check
+    // must return the label to the pool instead of granting a codeword the
+    // release direction would have to chase.
+    const store = new WrapperStore();
+    const events = makeEvents();
+    const tracker = new IntersectionTracker(store, events);
+
+    const left = new ElementWrapper(
+      fakeElement('left', { left: 0, top: 5000, width: 10, height: 10 }),
+      fakeScanned(),
+    );
+    store.addWrapper(left);
+
+    setupClaimResponse(['arch']);
+    tracker.queueClaims([left]);
+    await tracker.flushNow();
+
+    expect(left.scanned.codeword).toBe('');
+    // The label went back to the reservoir, not into the void.
+    expect(labelReservoir.claim(1)).toEqual(['arch']);
+  });
+
+  it('the fresh-rect guard drops a wrapper whose element detached before flush', async () => {
+    const store = new WrapperStore();
+    const events = makeEvents();
+    const tracker = new IntersectionTracker(store, events);
+
+    const gone = new ElementWrapper(fakeElement('gone'), fakeScanned());
+    (gone.element as unknown as { isConnected: boolean }).isConnected = false;
+    store.addWrapper(gone);
+
+    setupClaimResponse(['arch']);
+    tracker.queueClaims([gone]);
+    await tracker.flushNow();
+
+    expect(gone.scanned.codeword).toBe('');
+    expect(labelReservoir.claim(1)).toEqual(['arch']);
   });
 
   it('assigns codewords in queue order for the whole batch', async () => {
-    // Post-reservoir: claims are served synchronously from the local pool —
-    // zero IPC per flush batch. The behavioral contract that still holds is
-    // "one claim operation per batch produces consistent labels in queue
-    // order" (so reading the codewords back lines up with how they were
-    // queued). Verified end-to-end without inspecting the (now-absent)
-    // CLAIM_LABELS IPC call.
     const store = new WrapperStore();
-    const events = { onCodewordsChanged: vi.fn() };
+    const events = makeEvents();
     const tracker = new IntersectionTracker(store, events);
 
     const wrappers: ElementWrapper[] = [];
     for (let i = 0; i < 5; i++) {
       const w = new ElementWrapper(fakeElement(`w${i}`), fakeScanned());
-      w.isInViewport = true;
       store.addWrapper(w);
       wrappers.push(w);
     }
 
     setupClaimResponse(['a', 'b', 'c', 'd', 'e']);
-    tracker.refreshViewportClaims();
+    tracker.queueClaims(wrappers);
     await tracker.flushNow();
 
     expect(wrappers.map(w => w.scanned.codeword)).toEqual(['a', 'b', 'c', 'd', 'e']);
-    // A CLAIM_LABELS refill IPC may be in-flight after the claim depletes
-    // the local reservoir below threshold, but the claim itself returned
-    // synchronously — no await-on-IPC during the flush. Not asserted here
-    // because the refill behavior is covered by the reservoir's own tests.
   });
 
   it('handles pool exhaustion by leaving tail wrappers unlabeled', async () => {
     const store = new WrapperStore();
-    const events = { onCodewordsChanged: vi.fn() };
+    const events = makeEvents();
     const tracker = new IntersectionTracker(store, events);
 
     const wrappers = [];
     for (let i = 0; i < 4; i++) {
       const w = new ElementWrapper(fakeElement(`w${i}`), fakeScanned());
-      w.isInViewport = true;
       store.addWrapper(w);
       wrappers.push(w);
     }
 
     setupClaimResponse(['a', 'b']);
-    tracker.refreshViewportClaims();
+    tracker.queueClaims(wrappers);
     await tracker.flushNow();
 
     expect(wrappers[0].scanned.codeword).toBe('a');
@@ -204,32 +232,30 @@ describe('IntersectionTracker.refreshViewportClaims', () => {
 
   it('replays a released codeword on the next claim (sticky reclaim)', async () => {
     const store = new WrapperStore();
-    const events = { onCodewordsChanged: vi.fn() };
+    const events = makeEvents();
     const tracker = new IntersectionTracker(store, events);
 
     const w = new ElementWrapper(fakeElement('w0'), fakeScanned());
-    w.isInViewport = true;
     store.addWrapper(w);
     tracker.observe(w.element);
 
     // Seed two labels so the reservoir has choice — sticky reclaim should
     // pull the preferred one out of order even when other free labels exist.
     setupClaimResponse(['arch bake', 'other']);
-    tracker.refreshViewportClaims();
+    tracker.queueClaims([w]);
     await tracker.flushNow();
     expect(w.scanned.codeword).toBe('arch bake');
 
-    // Scroll out of the viewport: IO exit clears the codeword but stashes
-    // it, and the reservoir takes the label back (front of pool).
-    FakeIntersectionObserver.lastInstance!.fire(w.element, false);
+    // Band exit (the release applier's path): the codeword clears but is
+    // stashed, and the reservoir takes the label back (front of pool).
+    tracker.queueRelease(w);
     await tracker.flushNow();
     expect(w.scanned.codeword).toBe('');
     expect(w.preferredCodeword).toBe('arch bake');
 
     // Scroll back in: the reservoir's sticky-reclaim pass should hand us
     // the same codeword the wrapper held before, NOT the other free label.
-    w.isInViewport = true;
-    tracker.refreshViewportClaims();
+    tracker.queueClaims([w]);
     await tracker.flushNow();
 
     expect(w.scanned.codeword).toBe('arch bake');
@@ -237,7 +263,7 @@ describe('IntersectionTracker.refreshViewportClaims', () => {
 
   it('does not call onCodewordsChanged when nothing was claimed or released', async () => {
     const store = new WrapperStore();
-    const events = { onCodewordsChanged: vi.fn() };
+    const events = makeEvents();
     const tracker = new IntersectionTracker(store, events);
 
     setupClaimResponse([]);
@@ -247,21 +273,58 @@ describe('IntersectionTracker.refreshViewportClaims', () => {
     const claimCalls = sendMessageMock.mock.calls.filter(([m]) => m.type === 'CLAIM_LABELS');
     expect(claimCalls).toHaveLength(0);
   });
+
+  it('is idempotent — re-queueing a codeworded wrapper does not re-claim', async () => {
+    const store = new WrapperStore();
+    const events = makeEvents();
+    const tracker = new IntersectionTracker(store, events);
+
+    const w = new ElementWrapper(fakeElement('w'), fakeScanned());
+    store.addWrapper(w);
+
+    setupClaimResponse(['arch', 'bake']);
+    tracker.queueClaims([w]);
+    await tracker.flushNow();
+    expect(w.scanned.codeword).toBe('arch');
+
+    tracker.queueClaims([w]);
+    await tracker.flushNow();
+
+    expect(w.scanned.codeword).toBe('arch');
+    expect(events.onCodewordsChanged).toHaveBeenCalledTimes(1);
+  });
 });
 
-describe('IntersectionTracker lastRect snapshot', () => {
-  // Without this, lastRect would almost always be null at limbo entry —
-  // the layout cache is cleared after every reposition and the MO-driven
-  // disconnect path runs with an empty cache. IO entries are the
-  // continuous source of "where was this element just now."
+describe('IntersectionTracker entries are wake-up signals', () => {
+  // DESIGN_OBSERVED_STATE_READ_TIME phase 3: entries write no lifecycle
+  // state and queue no claims/releases — a dropped or discarded entry costs
+  // one pass of latency, never a standing lie.
 
   function rect(x: number, y: number, w = 40, h = 20): DOMRect {
     return { x, y, width: w, height: h, top: y, left: x, right: x + w, bottom: y + h, toJSON: () => ({}) } as DOMRect;
   }
 
+  it('fires onBandActivity for a live wrapper entry and writes no codeword state', async () => {
+    const store = new WrapperStore();
+    const events = makeEvents();
+    const tracker = new IntersectionTracker(store, events);
+    const io = FakeIntersectionObserver.lastInstance!;
+
+    const w = new ElementWrapper(fakeElement(), fakeScanned());
+    store.addWrapper(w);
+    tracker.observe(w.element);
+
+    setupClaimResponse(['arch']);
+    io.fire(w.element, true, rect(0, 0));
+    await tracker.flushNow();
+
+    expect(events.onBandActivity).toHaveBeenCalledTimes(1);
+    expect(w.scanned.codeword).toBe(''); // the PASS claims, not the entry
+  });
+
   it('writes entry.boundingClientRect to wrapper.lastRect on every entry', () => {
     const store = new WrapperStore();
-    const events = { onCodewordsChanged: vi.fn() };
+    const events = makeEvents();
     const tracker = new IntersectionTracker(store, events);
     const io = FakeIntersectionObserver.lastInstance!;
 
@@ -283,13 +346,12 @@ describe('IntersectionTracker lastRect snapshot', () => {
     expect(w.lastRect).toBe(second);
   });
 
-  it('does not overwrite lastRect while the wrapper is in limbo', () => {
+  it('does not overwrite lastRect or wake for a limbo wrapper', () => {
     // After disconnect, IO may emit one final not-intersecting entry —
-    // we want to preserve the pre-disconnect rect for the position
-    // tiebreaker, not overwrite it with whatever bogus rect the
-    // disconnected element reports.
+    // preserve the pre-disconnect rect for the position tiebreaker, and
+    // don't burn a settle on a wrapper limbo is deliberately holding.
     const store = new WrapperStore();
-    const events = { onCodewordsChanged: vi.fn() };
+    const events = makeEvents();
     const tracker = new IntersectionTracker(store, events);
     const io = FakeIntersectionObserver.lastInstance!;
 
@@ -300,304 +362,104 @@ describe('IntersectionTracker lastRect snapshot', () => {
     const preDisconnect = rect(100, 200);
     io.fire(w.element, true, preDisconnect);
     expect(w.lastRect).toBe(preDisconnect);
+    events.onBandActivity.mockClear();
 
     w.disconnectedAt = 1_000;  // limbo
     io.fire(w.element, false, rect(0, 0));  // zero rect from disconnected el
     expect(w.lastRect).toBe(preDisconnect);  // unchanged
+    expect(events.onBandActivity).not.toHaveBeenCalled();
   });
-});
 
-describe('IntersectionTracker limbo gating', () => {
-  // DESIGN_WRAPPER_IDENTITY_STABILITY decision 3: a disconnected
-  // element's IO `isIntersecting: false` must not strip the wrapper's
-  // codeword. Otherwise the limbo window would silently release
-  // codewords back to the pool, defeating the rebind story.
-
-  it('does not release codeword when a limbo wrapper fires not-intersecting', async () => {
+  it('never releases a limbo wrapper codeword from an entry', async () => {
+    // DESIGN_WRAPPER_IDENTITY_STABILITY decision 3, now structural: entries
+    // release nothing at all, so the limbo window cannot silently return
+    // codewords to the pool.
     const store = new WrapperStore();
-    const events = { onCodewordsChanged: vi.fn() };
+    const events = makeEvents();
     const tracker = new IntersectionTracker(store, events);
     const io = FakeIntersectionObserver.lastInstance!;
 
     const w = new ElementWrapper(fakeElement(), fakeScanned({ codeword: 'arch' }));
-    w.isInViewport = true;
     w.disconnectedAt = 1_000;  // marked as limbo
     store.addWrapper(w);
     tracker.observe(w.element);
 
-    // Simulate the IO firing the disconnect entry that Chrome emits
-    // after `el.remove()`.
     io.fire(w.element, false);
-
     await tracker.flushNow();
 
-    // Codeword still on the wrapper, badge state untouched, no
-    // RELEASE_LABELS request issued.
     expect(w.scanned.codeword).toBe('arch');
     const releaseCalls = sendMessageMock.mock.calls.filter(([m]) => m.type === 'RELEASE_LABELS');
     expect(releaseCalls).toHaveLength(0);
   });
+});
 
-  it('processes intersection entries normally once the wrapper de-limbos', async () => {
+describe('IntersectionTracker.queueRelease', () => {
+  it('clears the codeword, stashes it for sticky reclaim, and notifies', async () => {
     const store = new WrapperStore();
-    const events = { onCodewordsChanged: vi.fn() };
+    const events = makeEvents();
     const tracker = new IntersectionTracker(store, events);
-    const io = FakeIntersectionObserver.lastInstance!;
 
     const w = new ElementWrapper(fakeElement(), fakeScanned({ codeword: 'arch' }));
-    w.isInViewport = true;
-    w.disconnectedAt = 1_000;
     store.addWrapper(w);
-    tracker.observe(w.element);
 
-    // Rebind clears disconnectedAt — IT should resume normal handling
-    // on the next entry. (We don't drive the full rebind path here;
-    // that lives in content.ts. Just flip the flag.)
-    w.disconnectedAt = null;
-    io.fire(w.element, false);
+    setupClaimResponse([]);
+    tracker.queueRelease(w);
     await tracker.flushNow();
 
     expect(w.scanned.codeword).toBe('');
+    expect(w.preferredCodeword).toBe('arch');
     const releaseCalls = sendMessageMock.mock.calls.filter(([m]) => m.type === 'RELEASE_LABELS');
     expect(releaseCalls).toHaveLength(1);
     expect(releaseCalls[0][0]).toEqual({ type: 'RELEASE_LABELS', labels: ['arch'] });
   });
 });
 
-describe('IntersectionTracker.primeClaims', () => {
-  // Prime-at-attach (DESIGN_FLING_WAVE Part 1): the caller proves band
-  // membership by geometry and writes isInViewport before priming, so a
-  // fresh in-band wrapper claims in the same task instead of waiting for
-  // the IO to deliver its band-entry callback.
+describe('IntersectionTracker exit-strike ledger', () => {
+  // Temporal hysteresis for the destructive direction (drill round 6,
+  // inherited from the deleted sweepBand): the first out-of-band sighting
+  // records a strike; only a second sighting >= EXIT_STRIKE_MIN_MS (50ms)
+  // later confirms. An in-band sighting clears.
 
-  it('claims for primed wrappers without waiting for an IO entry', async () => {
+  it('confirms an exit only on the second strike with real spacing', () => {
     const store = new WrapperStore();
-    const events = { onCodewordsChanged: vi.fn() };
-    const tracker = new IntersectionTracker(store, events);
+    const tracker = new IntersectionTracker(store, makeEvents());
+    const w = new ElementWrapper(fakeElement(), fakeScanned({ codeword: 'arch' }));
 
-    const w = new ElementWrapper(fakeElement('primed'), fakeScanned());
-    w.isInViewport = true; // caller contract: geometry proved, flag written
-    store.addWrapper(w);
-    tracker.observe(w.element);
-
-    setupClaimResponse(['arch']);
-    tracker.primeClaims([w]);
-    await tracker.flushNow();
-
-    expect(w.scanned.codeword).toBe('arch');
-    expect(events.onCodewordsChanged).toHaveBeenCalledWith([w], []);
+    expect(tracker.strikeOut(w, 1000)).toBe(false); // strike one
+    expect(tracker.strikeOut(w, 1100)).toBe(true);  // >= 50ms later — confirmed
   });
 
-  it('skips wrappers that already hold a codeword and stays quiet when all skip', async () => {
+  it('two near-instant sightings do not confirm (per-batch reconcile guard)', () => {
     const store = new WrapperStore();
-    const events = { onCodewordsChanged: vi.fn() };
-    const tracker = new IntersectionTracker(store, events);
+    const tracker = new IntersectionTracker(store, makeEvents());
+    const w = new ElementWrapper(fakeElement(), fakeScanned({ codeword: 'arch' }));
 
-    const held = new ElementWrapper(fakeElement('held'), fakeScanned({ codeword: 'rain' }));
-    held.isInViewport = true;
-    store.addWrapper(held);
-
-    setupClaimResponse(['arch']);
-    tracker.primeClaims([held]);
-    await tracker.flushNow();
-
-    expect(held.scanned.codeword).toBe('rain');
-    expect(events.onCodewordsChanged).not.toHaveBeenCalled();
+    expect(tracker.strikeOut(w, 1000)).toBe(false);
+    expect(tracker.strikeOut(w, 1010)).toBe(false); // 10ms apart — still one strike
+    expect(tracker.strikeOut(w, 1060)).toBe(true);  // spacing satisfied vs first strike
   });
 
-  it('is idempotent with a subsequent IO entry for the same wrapper', async () => {
+  it('clearExitStrike resets the ledger (transient virtualizer park)', () => {
     const store = new WrapperStore();
-    const events = { onCodewordsChanged: vi.fn() };
-    const tracker = new IntersectionTracker(store, events);
-    const io = FakeIntersectionObserver.lastInstance!;
+    const tracker = new IntersectionTracker(store, makeEvents());
+    const w = new ElementWrapper(fakeElement(), fakeScanned({ codeword: 'arch' }));
 
-    const w = new ElementWrapper(fakeElement('w'), fakeScanned());
-    w.isInViewport = true;
-    store.addWrapper(w);
-    tracker.observe(w.element);
-
-    setupClaimResponse(['arch', 'bake']);
-    tracker.primeClaims([w]);
-    await tracker.flushNow();
-    expect(w.scanned.codeword).toBe('arch');
-
-    // The IO's initial callback arrives after the primed claim: its claim
-    // branch must no-op (codeword present), not double-claim.
-    io.fire(w.element, true);
-    await tracker.flushNow();
-
-    expect(w.scanned.codeword).toBe('arch');
-    expect(events.onCodewordsChanged).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe('IntersectionTracker.sweepBand', () => {
-  // Mid-scroll band flag sweep (DESIGN_FLING_WAVE Part 1c + round 2): rows
-  // crossing the band edge mid-fling get their flag repaired by geometry
-  // in BOTH directions instead of waiting out starved IO delivery — the
-  // release direction funds the entry direction's claims via the local
-  // reservoir. vw=800 vh=600 with the 1000px margin puts the band at
-  // y ∈ (-1000, 1600).
-
-  it('repairs the flag for out-of-band wrappers whose geometry is in-band', () => {
-    const store = new WrapperStore();
-    const tracker = new IntersectionTracker(store, { onCodewordsChanged: vi.fn() });
-
-    // Both marked out-of-band by a prior IO delivery (isInViewport defaults
-    // to true on fresh wrappers; the entry cohort is IO-confirmed
-    // out-of-band wrappers that have since crossed the edge).
-    const entering = new ElementWrapper(
-      fakeElement('entering', { left: 0, top: 1200, width: 10, height: 10 }),
-      fakeScanned(),
-    );
-    entering.isInViewport = false;
-    const farBelow = new ElementWrapper(
-      fakeElement('farBelow', { left: 0, top: 5000, width: 10, height: 10 }),
-      fakeScanned(),
-    );
-    farBelow.isInViewport = false;
-    store.addWrapper(entering);
-    store.addWrapper(farBelow);
-
-    const { repaired, released } = tracker.sweepBand(800, 600);
-
-    expect(repaired).toBe(1);
-    expect(released).toBe(0);
-    expect(entering.isInViewport).toBe(true);
-    expect(entering.tInBand).not.toBeNull();
-    expect(entering.lastRect).not.toBeNull(); // fresh rect kept for limbo
-    expect(farBelow.isInViewport).toBe(false);
-  });
-
-  it('refreshes lastRect on every sweep read, transitions or not (round 22)', () => {
-    // The fingerprint tier's position tiebreak reads lastRect at limbo
-    // entry; mid-storm the IO's last delivery is seconds stale, so
-    // identical-content remounts scored past the 50px threshold and refused
-    // (rebind_position frozen at 0 through the whole arc). The sweep pays
-    // for the rect anyway — a steady in-band wrapper must get it too.
-    const store = new WrapperStore();
-    const tracker = new IntersectionTracker(store, { onCodewordsChanged: vi.fn() });
-
-    let top = 100;
-    const el = {
-      tagName: 'BUTTON', isConnected: true,
-      getBoundingClientRect: () => ({ left: 0, top, width: 10, height: 10, right: 10, bottom: top + 10, x: 0, y: top, toJSON: () => ({}) }),
-    } as unknown as Element;
-    const w = new ElementWrapper(el, fakeScanned());
-    w.isInViewport = true; // already in-band: no transition will fire
-    store.addWrapper(w);
-
-    tracker.sweepBand(800, 600);
-    expect(w.lastRect?.top).toBe(100);
-
-    top = 180; // the row moved (scroll); still in-band, still no transition
-    tracker.sweepBand(800, 600);
-    expect(w.lastRect?.top).toBe(180);
-  });
-
-  it('releases in-band-flagged wrappers only after two consecutive out-of-band sweeps', async () => {
-    const store = new WrapperStore();
-    const tracker = new IntersectionTracker(store, { onCodewordsChanged: vi.fn() });
-
-    // Flag says in-band (stale-TRUE — the IO exit never delivered), geometry
-    // is 5000px down. First sweep only arms the two-strike ledger (a
-    // virtualizer can transiently park a shell at odd coordinates); the
-    // second consecutive out-of-band sweep flips the flag and routes through
-    // queueRelease: codeword cleared, stashed for sticky reclaim.
-    const exiting = new ElementWrapper(
-      fakeElement('exiting', { left: 0, top: 5000, width: 10, height: 10 }),
-      fakeScanned({ codeword: 'arch bake' }),
-    );
-    exiting.isInViewport = true;
-    store.addWrapper(exiting);
-
-    setupClaimResponse([]);
-    const first = tracker.sweepBand(800, 600);
-    expect(first.released).toBe(0); // strike one — no destructive action
-    expect(exiting.isInViewport).toBe(true);
-    expect(exiting.scanned.codeword).toBe('arch bake');
-
-    const second = tracker.sweepBand(800, 600);
-    await tracker.flushNow();
-
-    expect(second.repaired).toBe(0);
-    expect(second.released).toBe(1);
-    expect(exiting.isInViewport).toBe(false);
-    expect(exiting.scanned.codeword).toBe('');
-    expect(exiting.preferredCodeword).toBe('arch bake');
-    // The freed letter is back in the local reservoir — the round-2 pool
-    // starvation fix. A fresh claim must be funded by it.
-    expect(labelReservoir.claim(1)).toEqual(['arch bake']);
-  });
-
-  it('a bounce back in-band between sweeps clears the exit strike', () => {
-    const store = new WrapperStore();
-    const tracker = new IntersectionTracker(store, { onCodewordsChanged: vi.fn() });
-
-    // Mutable rect so the same element can move between sweeps.
-    let top = 5000;
-    const el = {
-      tagName: 'BUTTON', isConnected: true,
-      getBoundingClientRect: () => ({ left: 0, top, width: 10, height: 10, right: 10, bottom: top + 10, x: 0, y: top, toJSON: () => ({}) }),
-    } as unknown as Element;
-    const w = new ElementWrapper(el, fakeScanned({ codeword: 'arch' }));
-    w.isInViewport = true;
-    store.addWrapper(w);
-
-    expect(tracker.sweepBand(800, 600).released).toBe(0); // strike one
-    top = 100; // transient park over — back in band
-    tracker.sweepBand(800, 600); // clears the strike
-    top = 5000;
-    expect(tracker.sweepBand(800, 600).released).toBe(0); // strike one again
-    expect(w.scanned.codeword).toBe('arch'); // never released
-  });
-
-  it('skips settled, limbo, disconnected, and boxless wrappers', () => {
-    const store = new WrapperStore();
-    const tracker = new IntersectionTracker(store, { onCodewordsChanged: vi.fn() });
-
-    // Flag and geometry agree (in-band flag, on-screen rect) — untouched.
-    const settled = new ElementWrapper(fakeElement('in'), fakeScanned());
-    settled.isInViewport = true;
-
-    const limbo = new ElementWrapper(fakeElement('limbo'), fakeScanned());
-    limbo.isInViewport = false;
-    limbo.disconnectedAt = 1_000;
-
-    const gone = new ElementWrapper(fakeElement('gone'), fakeScanned());
-    gone.isInViewport = false;
-    (gone.element as unknown as { isConnected: boolean }).isConnected = false;
-
-    const boxless = new ElementWrapper(
-      fakeElement('boxless', { left: 0, top: 0, width: 0, height: 0 }),
-      fakeScanned(),
-    );
-    boxless.isInViewport = false;
-
-    for (const w of [settled, limbo, gone, boxless]) store.addWrapper(w);
-
-    const { repaired, released } = tracker.sweepBand(800, 600);
-
-    expect(repaired).toBe(0);
-    expect(released).toBe(0);
-    expect(settled.isInViewport).toBe(true);
-    expect(limbo.isInViewport).toBe(false);
-    expect(gone.isInViewport).toBe(false);
-    expect(boxless.isInViewport).toBe(false);
+    expect(tracker.strikeOut(w, 1000)).toBe(false);
+    tracker.clearExitStrike(w); // bounced back in-band between passes
+    expect(tracker.strikeOut(w, 2000)).toBe(false); // strike one again
   });
 });
 
 describe('IntersectionTracker.unobserve', () => {
   it('removes the wrapper from pendingClaim so a detached wrapper does not leak a codeword', async () => {
     const store = new WrapperStore();
-    const events = { onCodewordsChanged: vi.fn() };
+    const events = makeEvents();
     const tracker = new IntersectionTracker(store, events);
 
     const w = new ElementWrapper(fakeElement(), fakeScanned());
-    w.isInViewport = true;
     store.addWrapper(w);
     tracker.observe(w.element);
-    tracker.refreshViewportClaims();
+    tracker.queueClaims([w]);
 
     // Wrapper is queued for claim, then detached before flush. The pool
     // would otherwise hand out a codeword for nobody.
@@ -614,26 +476,19 @@ describe('IntersectionTracker.unobserve', () => {
 
 describe('IntersectionTracker.flushNow', () => {
   it('drains pending work that arrives between flushes', async () => {
-    // Post-reservoir: claims are synchronous, so the old "mid-IPC suspend"
-    // race shape is gone. What flushNow's drain loop still guarantees is
-    // that two batches of IO entries — one before flushNow starts, one
-    // queued during its run — both get claimed before flushNow returns.
     const store = new WrapperStore();
-    const events = { onCodewordsChanged: vi.fn() };
+    const events = makeEvents();
     const tracker = new IntersectionTracker(store, events);
-    const io = FakeIntersectionObserver.lastInstance!;
 
     setupClaimResponse(['first', 'second']);
 
     const w1 = new ElementWrapper(fakeElement('w1'), fakeScanned());
     store.addWrapper(w1);
-    tracker.observe(w1.element);
-    io.fire(w1.element, true);
+    tracker.queueClaims([w1]);
 
     const w2 = new ElementWrapper(fakeElement('w2'), fakeScanned());
     store.addWrapper(w2);
-    tracker.observe(w2.element);
-    io.fire(w2.element, true);
+    tracker.queueClaims([w2]);
 
     await tracker.flushNow();
 
@@ -645,14 +500,13 @@ describe('IntersectionTracker.flushNow', () => {
 describe('IntersectionTracker.disconnectAll', () => {
   it('drops all observations and pending claims', () => {
     const store = new WrapperStore();
-    const events = { onCodewordsChanged: vi.fn() };
+    const events = makeEvents();
     const tracker = new IntersectionTracker(store, events);
 
     const w = new ElementWrapper(fakeElement(), fakeScanned());
-    w.isInViewport = true;
     store.addWrapper(w);
     tracker.observe(w.element);
-    tracker.refreshViewportClaims();
+    tracker.queueClaims([w]);
 
     tracker.disconnectAll();
 
@@ -669,11 +523,11 @@ describe('IntersectionTracker.disconnectAll', () => {
 describe('IntersectionTracker claim ordering', () => {
   it('assigns codewords in discovery order, independent of rect distance', async () => {
     // No viewport-distance re-deal: codewords zip onto wrappers in the
-    // order they were discovered (store insertion order), regardless of
-    // where each element sits in the viewport. Rects here are deliberately
-    // "out of distance order" to prove they no longer influence assignment.
+    // order they were queued, regardless of where each element sits in the
+    // viewport. Rects here are deliberately "out of distance order" to
+    // prove they no longer influence assignment.
     const store = new WrapperStore();
-    const events = { onCodewordsChanged: vi.fn() };
+    const events = makeEvents();
     const tracker = new IntersectionTracker(store, events);
 
     const first = new ElementWrapper(
@@ -688,32 +542,25 @@ describe('IntersectionTracker claim ordering', () => {
       fakeElement('third', { left: 0, top: 0, width: 10, height: 10 }),
       fakeScanned({ id: 3 }),
     );
-    first.isInViewport = true;
-    second.isInViewport = true;
-    third.isInViewport = true;
     store.addWrapper(first);
     store.addWrapper(second);
     store.addWrapper(third);
 
     setupClaimResponse(['arch', 'bake', 'check']);
-    tracker.refreshViewportClaims();
+    tracker.queueClaims([first, second, third]);
     await tracker.flushNow();
 
-    // Front-of-pool codeword goes to the first-discovered wrapper.
+    // Front-of-pool codeword goes to the first-queued wrapper.
     expect(first.scanned.codeword).toBe('arch');
     expect(second.scanned.codeword).toBe('bake');
     expect(third.scanned.codeword).toBe('check');
   });
 
   it('preserves codeword assignments across a no-op flush (stability regression)', async () => {
-    // The Sprint C definition of done requires that "re-scan after a
-    // no-op page mutation produces identical hint assignments." In our
-    // pipeline that's enforced not by a stability metric (deferred in
-    // path 1) but by the absence of re-allocation: once a wrapper
-    // holds a codeword, no further flush touches it unless IO fires
-    // for it. This test pins that property.
+    // Once a wrapper holds a codeword, no further flush touches it unless
+    // the release direction fires for it. This test pins that property.
     const store = new WrapperStore();
-    const events = { onCodewordsChanged: vi.fn() };
+    const events = makeEvents();
     const tracker = new IntersectionTracker(store, events);
 
     const a = new ElementWrapper(
@@ -724,23 +571,20 @@ describe('IntersectionTracker claim ordering', () => {
       fakeElement('b', { left: 200, top: 200, width: 10, height: 10 }),
       fakeScanned({ id: 2 }),
     );
-    a.isInViewport = true;
-    b.isInViewport = true;
     store.addWrapper(a);
     store.addWrapper(b);
 
     setupClaimResponse(['arch', 'bake']);
-    tracker.refreshViewportClaims();
+    tracker.queueClaims([a, b]);
     await tracker.flushNow();
     const aFirst = a.scanned.codeword;
     const bFirst = b.scanned.codeword;
     expect(aFirst).toBeTruthy();
     expect(bFirst).toBeTruthy();
 
-    // No-op flush — neither wrapper changed viewport state, no IO
-    // entries fired, refreshViewportClaims sees codewords already on
-    // both wrappers and skips them.
-    tracker.refreshViewportClaims();
+    // No-op flush — re-queueing sees codewords already on both wrappers
+    // and skips them.
+    tracker.queueClaims([a, b]);
     await tracker.flushNow();
 
     // Codewords unchanged.

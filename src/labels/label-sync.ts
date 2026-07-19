@@ -139,7 +139,7 @@ export function getSessionId(): string {
  * swap: the prior alphabet's codewords are invalid and the plugin still
  * holds them, so a fresh session_id makes the plugin's ensureFrameSession
  * clear stale per-prefix entries. The local mirror state is now stale too,
- * so reset it; IT.refreshViewportClaims + onCodewordsChanged re-queue the
+ * so reset it; the engine's band-convergence claims + onCodewordsChanged re-queue the
  * in-viewport wrappers as pending Puts.
  */
 export function rotateSession(): void {

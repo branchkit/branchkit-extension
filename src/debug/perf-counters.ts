@@ -391,8 +391,8 @@ export interface LifecycleCounters {
   // notes/DESIGN_FLING_WAVE.md Part 1c + round 2). Repairs size the
   // entering cohort; releases size the exits that fund the entries' claims
   // (local reservoir round-trip within one sweep).
-  bandSweepRepairs: number;
-  bandSweepReleases: number;
+  bandConvergeClaims: number;
+  bandConvergeReleases: number;
   // Elements a discovery walk DID reach but rejected as invisible and
   // handed to the attention observer (observeInvisibleCandidates). During a
   // fling, this ≈0 while sweeps attach hundreds means the walk never saw
@@ -470,8 +470,8 @@ export const lifecycleCounters: LifecycleCounters = {
   discoveryRootsDeduped: 0,
   discoveryRootsSkipped: 0,
   primedClaims: 0,
-  bandSweepRepairs: 0,
-  bandSweepReleases: 0,
+  bandConvergeClaims: 0,
+  bandConvergeReleases: 0,
   invisibleCandidatesObserved: 0,
   visibilityRoSignals: 0,
   shadowRootsObserved: 0,

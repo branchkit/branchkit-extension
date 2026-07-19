@@ -276,6 +276,10 @@ export class PageSession {
 
     this.tracker = new IntersectionTracker(store, {
       onCodewordsChanged: (claimed, released) => this.deps.onCodewordsChanged(claimed, released),
+      // IO band crossings are wake-up signals only (DESIGN_OBSERVED_STATE_
+      // READ_TIME phase 3): coalesce into the settle single-flight; the
+      // pass derives membership from fresh rects.
+      onBandActivity: () => this.engine?.schedulePassSoon('io'),
     });
 
     this.resizeObserver = new ResizeObserver((entries) => {

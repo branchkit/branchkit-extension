@@ -37,9 +37,10 @@ import { onContainerResize } from './observe/container-resize-tracker';
 import { onTransformAncestorMutation, setTransformTriggerEnabled } from './observe/transform-ancestor-tracker';
 import { onTargetMutation } from './observe/target-mutation-tracker';
 import { setOcclusionEnabled, isOccludedLive } from './observe/occlusion';
+import { VIEWPORT_MARGIN_PX } from './observe/intersection-tracker';
 import { setOcclusionMemoMode, occlusionMemoAllDirty, occlusionMemoNoteTarget, occlusionMemoNotePointer } from './observe/occlusion-memo';
 import { reconcileClipObservation, drainClipObservers, setClipObserverEnabled } from './observe/clip-observer';
-import { cacheLayout, cacheConstruction, clearLayoutCache, isRectOnScreen } from './layout-cache';
+import { cacheLayout, cacheConstruction, clearLayoutCache, isRectOnScreen, geometryInBand } from './layout-cache';
 import { placeBadges, invalidateProbe, setRuleNudges } from './placement';
 import { activateElement, dispatchHover, resolveNavTarget, type ActivationResult } from './activate/event-sequence';
 import {
@@ -390,9 +391,10 @@ const engine = new SettleEngine(
     store,
     tracker: {
       flushNow: () => pageSession.tracker.flushNow(),
-      refreshViewportClaims: () => pageSession.tracker.refreshViewportClaims(),
+      queueClaims: (ws) => pageSession.tracker.queueClaims(ws),
       queueRelease: (w) => pageSession.tracker.queueRelease(w),
-      sweepBand: (vw, vh) => pageSession.tracker.sweepBand(vw, vh),
+      strikeOut: (w, now) => pageSession.tracker.strikeOut(w, now),
+      clearExitStrike: (w) => pageSession.tracker.clearExitStrike(w),
     },
     sync: { queuePut, queueDelete, hasSent, scheduleSync, syncNow },
     badges: {
@@ -3581,9 +3583,8 @@ function snapshotExtras() {
     // on. reservoir.free pinned at ~0 during a fling = claims starving
     // (the round-2 signature); band_sweep_releases should fund it.
     wave: {
-      primed_claims: lifecycleCounters.primedClaims,
-      band_sweep_repairs: lifecycleCounters.bandSweepRepairs,
-      band_sweep_releases: lifecycleCounters.bandSweepReleases,
+      band_converge_claims: lifecycleCounters.bandConvergeClaims,
+      band_converge_releases: lifecycleCounters.bandConvergeReleases,
       reservoir: labelReservoir.stats(),
       // Round 15+: who discovers wrappers, with per-source latency, over the
       // paint-latency window. The MO should own steady-state discovery; a
@@ -4360,10 +4361,18 @@ function buildPerfSnapshot(advanceShareBaseline = false) {
   let sentinelDisconnected = 0;
   let inViewport = 0;
   let inViewportWithCodeword = 0;
+  // Band membership derived live (no stored flag — DESIGN_OBSERVED_STATE_
+  // READ_TIME phase 3): one rect read per live wrapper at snapshot cadence
+  // (5s ship / on-demand), the same price the band-convergence pass pays.
+  const __vw = window.innerWidth, __vh = window.innerHeight;
   for (const w of store.all) {
-    if (w.disconnectedAt !== null) limbo++;
-    else if (!w.element.isConnected) sentinelDisconnected++;
-    if (w.isInViewport) {
+    if (w.disconnectedAt !== null) { limbo++; continue; }
+    if (!w.element.isConnected) { sentinelDisconnected++; continue; }
+    let __inBand = false;
+    try {
+      __inBand = geometryInBand(w.element.getBoundingClientRect(), __vw, __vh, VIEWPORT_MARGIN_PX);
+    } catch { /* detached mid-read */ }
+    if (__inBand) {
       inViewport++;
       if (w.scanned.codeword) inViewportWithCodeword++;
     }

@@ -27,6 +27,20 @@
  */
 
 import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
+import { geometryInBand } from '../layout-cache';
+import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
+
+// Band membership derived live for the snapshot's diagnostic fields (no
+// stored flag — DESIGN_OBSERVED_STATE_READ_TIME phase 3). On-demand surface;
+// one rect read per queried wrapper.
+function bandOf(w: ElementWrapper): boolean {
+  try {
+    return w.element.isConnected && geometryInBand(
+      w.element.getBoundingClientRect(),
+      window.innerWidth, window.innerHeight, VIEWPORT_MARGIN_PX,
+    );
+  } catch { return false; }
+}
 import * as idRegistry from '../scan/registry';
 import { rebindCounters } from '../observe/limbo';
 import type { RebindCounters } from '../labels/rebind';
@@ -323,7 +337,7 @@ function captureWrapper(w: ElementWrapper): WrapperRecord {
     element: baseSnap ? { ...baseSnap, closestAnchor } : null,
     hint,
     containerResolution,
-    isInViewport: w.isInViewport,
+    isInViewport: bandOf(w),
     anchor: w.cachedProbe === null ? null : w.cachedProbe.kind,
     discovery: {
       source: w.discoverySource,
@@ -465,10 +479,10 @@ export function computeRecallStats(store: WrapperStore): RecallStats {
     if (remembered == null) { s.no_memory++; continue; }
     if (remembered === w.scanned.codeword) {
       s.reclaimed++;
-      if (w.isInViewport) s.viewport_reclaimed++;
+      if (bandOf(w)) s.viewport_reclaimed++;
     } else {
       s.missed++;
-      if (w.isInViewport) s.viewport_missed++;
+      if (bandOf(w)) s.viewport_missed++;
     }
   }
   return s;

@@ -30,42 +30,44 @@ function makeScanned(id: number, codeword = ''): ScannedElement {
   };
 }
 
-function makeWrapper(id: number, codeword = '', inViewport = true): ElementWrapper {
+function makeWrapper(id: number, codeword = '', inBand = true): ElementWrapper {
   const el = document.createElement('button');
   el.textContent = `btn-${id}`;
   // Attach to body so getBoundingClientRect returns non-zero — the
   // overlay's "skip detached/collapsed" filter would otherwise drop
   // every test wrapper.
   document.body.appendChild(el);
-  // happy-dom doesn't run layout; stub the rect explicitly so the
-  // filter passes deterministically.
+  // happy-dom doesn't run layout; stub the rect explicitly. Band
+  // membership is derived live from this rect (no stored flag —
+  // DESIGN_OBSERVED_STATE_READ_TIME phase 3): in-band rects sit at the
+  // origin, out-of-band ones far below the +1000px margin.
+  const top = inBand ? 0 : 5000;
   el.getBoundingClientRect = () =>
-    ({ x: 0, y: 0, top: 0, left: 0, right: 10, bottom: 10, width: 10, height: 10, toJSON: () => ({}) }) as DOMRect;
+    ({ x: 0, y: top, top, left: 0, right: 10, bottom: top + 10, width: 10, height: 10, toJSON: () => ({}) }) as DOMRect;
   const w = new ElementWrapper(el, makeScanned(id, codeword));
-  w.isInViewport = inViewport;
   return w;
 }
 
 describe('classifyWrapper', () => {
   it('returns orange when off-screen, regardless of codeword', () => {
-    const w = makeWrapper(1, 'arch', /* inViewport */ false);
+    const w = makeWrapper(1, 'arch', /* inBand */ false);
     expect(classifyWrapper(w)).toBe('orange');
   });
 
   it('returns yellow when in viewport but no codeword (pool exhausted)', () => {
-    const w = makeWrapper(2, '', /* inViewport */ true);
+    const w = makeWrapper(2, '', /* inBand */ true);
     expect(classifyWrapper(w)).toBe('yellow');
   });
 
   it('returns green when in viewport with a codeword', () => {
-    const w = makeWrapper(3, 'arch check', /* inViewport */ true);
+    const w = makeWrapper(3, 'arch check', /* inBand */ true);
     expect(classifyWrapper(w)).toBe('green');
   });
 
   it('orange wins over the codeword check (off-screen with codeword)', () => {
     // Intersection tracker may release codewords on viewport exit, but
     // we're not asserting that here — just the predicate ordering.
-    const w = makeWrapper(4, 'bake', /* inViewport */ false);
+    const w = makeWrapper(4, 'bake', /* inBand */ false);
     expect(classifyWrapper(w)).toBe('orange');
   });
 });

@@ -69,7 +69,13 @@ export class ElementWrapper {
   scanned: ScannedElement;
   hint: BadgeHandle | null = null;
   label: LabelAssignment | null = null;
-  isInViewport: boolean = true;
+  // (There is deliberately no stored band flag: membership in the ±1000px
+  // IO band is derived from fresh rects wherever it is consumed — the
+  // engine's band-convergence pass, the settle plan, the claim flush's
+  // grant-time guard. The stored `isInViewport` was the phase-3 retirement
+  // of notes/DESIGN_OBSERVED_STATE_READ_TIME.md: five writers raced to keep
+  // it honest and a dropped IO entry could strand it forever.)
+
   // Limbo lifecycle (DESIGN_WRAPPER_IDENTITY_STABILITY steps 1–2).
   // `disconnectedAt` is null when the wrapper's element is still in the
   // DOM, and a monotonic timestamp once `dropDisconnectedWrappers` has

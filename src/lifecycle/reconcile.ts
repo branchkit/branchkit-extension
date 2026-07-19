@@ -41,9 +41,8 @@ export const RECONCILE_BAND_MARGIN_PX = VIEWPORT_MARGIN_PX;
 // per action class, WHICH wrappers the settle steps should act on — still
 // shadow-only (drives nothing); the pipeline diffs these lists against what
 // the live steps actually did. Class names follow the live steps' actions:
-//   toRelease  — stale-TRUE: visible hint, geometry off-band → release
-//   toRepair   — stale-FALSE: geometry in-band, flag out → flip flag
-//   toClaim    — in-band (post-repair) wrappers lacking a codeword
+//   toRelease  — codeworded, geometry off-band → release (two-strike applier)
+//   toClaim    — in-band wrappers lacking a codeword
 //   toBuild    — codeworded, paintable, badge not showing → construct/paint
 //   toShow     — visibility recheck would re-show the badge
 //   toHide     — visibility recheck would hide the badge
@@ -53,13 +52,13 @@ export const RECONCILE_BAND_MARGIN_PX = VIEWPORT_MARGIN_PX;
 //                gather)
 //
 // Ordering is simulated, not assumed: the show/hide derivation runs against
-// the band flags as repaired by the teardown sim, against badge visibility
-// as it stands after the conditional build pass the live teardown triggers
-// (badgeNewlyCodeworded runs inside teardown's reconcile() only when a
-// stale-FALSE repair happened), and the strict derivation against `occluded`
-// as the occlusion applier will leave it. cssHidden is read-time: derived
-// from the gathered cssVisible at the point of use, never stored
-// (notes/DESIGN_OBSERVED_STATE_READ_TIME.md phase 1).
+// DERIVED band membership (fresh gather rects — no stored flag exists;
+// DESIGN_OBSERVED_STATE_READ_TIME phase 3), against badge visibility as it
+// stands after the conditional build pass the lifecycle applier triggers
+// (badgeNewlyCodeworded runs when the plan owed claims/builds), and the
+// strict derivation against `occluded` as the occlusion applier will leave
+// it. cssHidden is read-time too: derived from the gathered cssVisible at
+// the point of use (phase 1).
 //
 // Cost: O(store) over the gather's already-read geometry. The only layout
 // reads are the bounded lazy fallbacks for wrappers the gather couldn't see
@@ -68,7 +67,6 @@ export const RECONCILE_BAND_MARGIN_PX = VIEWPORT_MARGIN_PX;
 
 export interface ReconcilePlanLists {
   toRelease: ElementWrapper[];
-  toRepair: ElementWrapper[];
   toClaim: ElementWrapper[];
   toBuild: ElementWrapper[];
   toShow: ElementWrapper[];
@@ -113,48 +111,44 @@ export function computeReconcilePlanLists(
 ): ReconcilePlanLists {
   const lazy = { reads: 0 };
   const lists: ReconcilePlanLists = {
-    toRelease: [], toRepair: [], toClaim: [], toBuild: [], toShow: [], toHide: [],
+    toRelease: [], toClaim: [], toBuild: [], toShow: [], toHide: [],
     strictDelta: [],
     strictFlips: { geometry: 0, clipped: 0, overlayCovered: 0, cssHidden: 0, ancestor: 0, stable: 0, first: 0 },
   };
   const probing = harnessHooksEnabled();
 
-  // Step-1 sim — mirrors reconcileTeardown over the same gather rects.
+  // Band membership is DERIVED per wrapper from the gather's fresh rect
+  // (DESIGN_OBSERVED_STATE_READ_TIME phase 3) — there is no stored flag, no
+  // repair class, and no apply-order simulation for it. A wrapper the
+  // gather has no rect for (detached mid-read) is skipped: the plan cannot
+  // judge lifecycle without geometry, and the next pass re-derives.
+  const inBandOf = (w: ElementWrapper): boolean | null => {
+    const r = gather.rects.get(w);
+    if (!r) return null;
+    // Boxless skip (zero-rect guard): display:none reports all-zeros, which
+    // would false-positive at the origin.
+    if (r.width === 0 && r.height === 0 && r.top === 0 && r.left === 0) return null;
+    return geometryInBand(r, gather.vw, gather.vh, RECONCILE_BAND_MARGIN_PX);
+  };
+
+  // First walk: lifecycle classes (release/claim) from derived membership.
   for (const w of store.all) {
     if (w.disconnectedAt !== null) continue;
-    if (w.hint) {
-      const r = gather.rects.get(w);
-      if (!r) continue; // gather missed it; live step falls back to a fresh read
-      if (geometryInBand(r, gather.vw, gather.vh, RECONCILE_BAND_MARGIN_PX)) {
-        if (!w.isInViewport) lists.toRepair.push(w);
-      } else if (w.hint.isVisible) {
-        lists.toRelease.push(w);
-      }
-    } else if (!w.isInViewport && w.scanned.codeword.length === 0 && w.element.isConnected) {
-      const r = gather.rects.get(w);
-      if (!r) continue;
-      // Boxless skip — see reconcileTeardown's zero-rect guard.
-      if (r.width === 0 && r.height === 0 && r.top === 0 && r.left === 0) continue;
-      if (geometryInBand(r, gather.vw, gather.vh, RECONCILE_BAND_MARGIN_PX)) lists.toRepair.push(w);
-    }
-  }
-  const repaired = new Set(lists.toRepair);
-  const released = new Set(lists.toRelease);
-  const flagAfterTeardown = (w: ElementWrapper): boolean =>
-    repaired.has(w) ? true : released.has(w) ? false : w.isInViewport;
-
-  // The live build pass (badgeNewlyCodeworded) runs inside teardown's
-  // reconcile() only when a repair happened — model that conditionality so
-  // the show/hide sim sees the same badge visibility the recheck step will.
-  const buildPassRuns = lists.toRepair.length > 0;
-
-  for (const w of store.all) {
-    if (w.disconnectedAt !== null) continue;
-    const flag = flagAfterTeardown(w);
+    if (!w.element.isConnected) continue;
+    const inBand = inBandOf(w);
+    if (inBand === null) continue;
     const codeworded = w.scanned.codeword.length > 0;
+    if (!inBand && codeworded) lists.toRelease.push(w);
+    else if (inBand && !codeworded) lists.toClaim.push(w);
+  }
 
-    // Claim sim — refreshViewportClaims over post-repair flags.
-    if (flag && !codeworded) lists.toClaim.push(w);
+  // The build pass runs whenever the lifecycle applier found owed work.
+  const buildPassRuns = lists.toClaim.length > 0;
+
+  for (const w of store.all) {
+    if (w.disconnectedAt !== null) continue;
+    const codeworded = w.scanned.codeword.length > 0;
+    const flag = inBandOf(w) === true;
 
     // Shared inputs, resolved at most once per wrapper from the gather
     // (bounded lazy fallback for snapshot misses).

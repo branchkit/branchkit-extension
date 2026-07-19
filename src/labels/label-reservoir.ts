@@ -21,7 +21,7 @@
  *
  * Pool-exhaustion handling: `claim()` returns `''` for slots that the
  * reservoir can't fill. The caller leaves the wrapper unhinted; the
- * level-triggered reconcile (`refreshViewportClaims`) re-queues those
+ * level-triggered reconcile (the band-convergence pass) re-queues those
  * wrappers on the next `onCodewordsChanged` after a refill arrives.
  *
  * ---

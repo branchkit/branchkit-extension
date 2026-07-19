@@ -68,38 +68,30 @@ export function gatherSettleReads(wrappers: readonly ElementWrapper[]): SettleGa
   const vw = window.innerWidth;
   const vh = window.innerHeight;
 
-  // Enumerate the bounded sets (flags only, no layout):
-  //   rect set  = teardown's hinted set (hint, live)
-  //             ∪ teardown's never-hinted stale-FALSE candidates
-  //               (no hint, flag out, no codeword, connected)
-  //             ∪ strict's codeworded set
-  //   vis set   = recheck's hinted in-viewport set (⊆ hinted)
+  // Enumerate the read sets (field reads only, no layout). With band
+  // membership derived rather than stored (DESIGN_OBSERVED_STATE_READ_TIME
+  // phase 3), the rect set is simply every live connected wrapper — measured
+  // on the trail, the old flag-bounded union was already 90-100% of the
+  // store on every page class, and the batch rect read costs 0.3-6ms even at
+  // 719 wrappers.
+  //   vis set   = showing badges (the recheck set)
   //             ∪ the plan's build candidates (codeworded, badge not
-  //               showing) — the answer to the design note's open question:
-  //               measured live, the plan otherwise pays ~30 unbatched
-  //               cssVisible reads per settle for the claim-gap set
-  //               (reconcilePlan:size:lazyReads tripwire). Dormant badges
-  //               WITHOUT a codeword stay out — style-reading the whole
-  //               scroll-history set every settle is the cost the dormancy
-  //               design avoids; the plan lazy-reads those only in the rare
-  //               stale-FALSE repair case.
+  //               showing). Dormant badges WITHOUT a codeword stay out —
+  //               style-reading the whole scroll-history set every settle is
+  //               the cost the dormancy design avoids; the plan lazy-reads
+  //               those only in rare desync cases.
   const rectSet: ElementWrapper[] = [];
   const visSet: ElementWrapper[] = [];
   const occlusionSet: ElementWrapper[] = [];
   const occlusionOn = isOcclusionEnabled();
   for (const w of wrappers) {
     if (w.disconnectedAt !== null) continue;
-    const hinted = w.hint !== null;
+    if (!w.element.isConnected) continue;
+    rectSet.push(w);
     const codeworded = w.scanned.codeword.length > 0;
-    const unhintedCandidate = !hinted && !w.isInViewport &&
-      !codeworded && w.element.isConnected;
-    if (hinted || unhintedCandidate || codeworded) {
-      rectSet.push(w);
-    }
-    const recheckMember = hinted && w.isInViewport;
-    const buildCandidate = codeworded && !(w.hint?.isVisible ?? false);
-    if ((recheckMember || buildCandidate) && w.element.isConnected) visSet.push(w);
-    if (occlusionOn && w.hint?.isVisible && w.isInViewport && w.element.isConnected) {
+    const showing = w.hint?.isVisible ?? false;
+    if (showing || codeworded) visSet.push(w);
+    if (occlusionOn && showing) {
       occlusionSet.push(w);
     }
   }

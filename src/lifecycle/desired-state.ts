@@ -7,32 +7,26 @@
  * The hint lifecycle has historically been edge-triggered: 7+ independent
  * handlers mutate the {observed, inViewport, codeword, hint} sub-states, and
  * whenever YouTube's mutation storm drops or reorders an event the sub-states
- * desync (discovery gap, stale isInViewport, noHintObject). The fix is one
+ * desync (discovery gap, stale band state, noHintObject). The fix is one
  * level-triggered reconcile pass that re-derives the desired state from
  * ground truth. These pure predicates ARE that desired state; both the legacy
  * edge handlers and the future reconcile() consume them so the two can never
  * diverge. See notes/completed/DESIGN_HINT_LIFECYCLE_RECONCILER.md.
  *
- * Note: "in viewport" here is the IntersectionObserver band notion
- * (`wrapper.isInViewport`, a VIEWPORT_MARGIN_PX-band flag), NOT showBadges' fresh
- * getBoundingClientRect strict-viewport test. They deliberately differ; do not
+ * Note: "in band" here is the IntersectionObserver band notion (±VIEWPORT_
+ * MARGIN_PX, derived from fresh rects since DESIGN_OBSERVED_STATE_READ_TIME
+ * phase 3), NOT the strict-viewport test. They deliberately differ; do not
  * unify them here.
  */
 
 import { ElementWrapper } from '../scan/element-wrapper';
 
-/** Should this wrapper hold a codeword right now? (IO-band viewport gate.) */
-export function wantsCodeword(w: ElementWrapper): boolean {
-  return w.isInViewport;
-}
-
-/**
- * Should this wrapper have a rendered hint badge right now?
- * Requires viewport presence and an assigned codeword.
- */
-export function wantsHint(w: ElementWrapper): boolean {
-  return w.isInViewport && w.scanned.codeword.length > 0;
-}
+// (wantsCodeword / wantsHint are gone — DESIGN_OBSERVED_STATE_READ_TIME
+// phase 3. Both read the stored band flag; with membership derived from
+// fresh rects, the predicates collapsed into their consumers: the plan's
+// lifecycle walk (inBand && !codeworded → claim; !inBand && codeworded →
+// release) and the build step's codeworded-without-visible-badge
+// enumeration + cached-rect band gate.)
 
 /**
  * Geometry/style inputs for `wantsShown`, resolved by the settle gather (or

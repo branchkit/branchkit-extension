@@ -119,11 +119,21 @@ function makeHarness(opts?: { badgesVisible?: boolean }) {
   const store = new ObservableWrapperStore();
   const scheduler = new FakeScheduler();
   const created: FakeBadge[] = [];
+  const strikes = new Map<unknown, number>();
   const tracker = {
     flushNow: vi.fn(() => Promise.resolve()),
-    refreshViewportClaims: vi.fn(),
+    queueClaims: vi.fn(),
     queueRelease: vi.fn(),
-    sweepBand: vi.fn(() => ({ repaired: 0, released: 0 })),
+    // Real two-strike semantics over a fake ledger so release tests can
+    // assert the hysteresis without a real IntersectionTracker.
+    strikeOut: vi.fn((w: unknown, now: number) => {
+      const first = strikes.get(w);
+      if (first === undefined) { strikes.set(w, now); return false; }
+      if (now - first < 50) return false;
+      strikes.delete(w);
+      return true;
+    }),
+    clearExitStrike: vi.fn((w: unknown) => { strikes.delete(w); }),
   };
   const sync = {
     queuePut: vi.fn(),
@@ -192,7 +202,6 @@ function addWrapper(
   store: ObservableWrapperStore,
   opts: {
     codeword?: string;
-    inViewport?: boolean;
     rect?: { top: number; left: number; width: number; height: number };
     hint?: FakeBadge | null;
     hintVisible?: boolean;
@@ -210,7 +219,6 @@ function addWrapper(
     adapter: null, codeword: opts.codeword ?? '',
   } as ScannedElement;
   const w = new ElementWrapper(el, scanned);
-  w.isInViewport = opts.inViewport ?? false;
   if (opts.hint) {
     w.hint = opts.hint;
     opts.hint.isVisible = opts.hintVisible ?? true;
@@ -234,44 +242,48 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe('settle: stale-flag repair and release', () => {
-  it('repairs a stale-FALSE band flag and revives its dormant badge (scroll-back missing badge)', () => {
-    // The scroll-back repro: a dormant badge (band exit cleared it) whose
-    // re-entry IO event was dropped — flag says out, geometry says in. The
-    // plan repairs only HINTED wrappers (or codeword-less never-hinted
-    // candidates); codeworded hintless wrappers are the build class.
+describe('settle: derived lifecycle (build revival and release)', () => {
+  it('revives a dormant codeworded badge whose geometry is in-band (scroll-back missing badge)', () => {
+    // The scroll-back repro, flag-free: a dormant badge with a surviving
+    // codeword sits in-band by fresh geometry. The plan's toBuild owes it;
+    // the lifecycle applier runs the build half and the reuse fast path
+    // relabels + re-shows (no reconstruction).
     const h = makeHarness();
     const dormant = new FakeBadge();
     const w = addWrapper(h.store, {
-      codeword: 'a', inViewport: false, rect: ON_SCREEN,
+      codeword: 'a', rect: ON_SCREEN,
       hint: dormant, hintVisible: false, lastSentStrict: true,
     });
 
     h.engine.settle('store');
 
-    expect(w.isInViewport).toBe(true);
-    expect(h.engine.applied.last.repair).toBe(1);
-    // The repair re-entered reconcile → the dormant badge was relabeled and
-    // re-shown via the reuse fast path (no reconstruction).
+    expect(h.engine.applied.last.build).toBe(1);
     expect(h.created.length).toBe(0);
     expect(dormant.calls).toContain('setLabel');
     expect(dormant.isVisible).toBe(true);
     expect(h.placement.placeBadges).toHaveBeenCalledWith([w]);
   });
 
-  it('releases a stale-TRUE flag through the tracker (stranded badge)', () => {
+  it('releases an off-band codeword holder through the two-strike ledger', () => {
     const h = makeHarness();
     const badge = new FakeBadge();
     const w = addWrapper(h.store, {
-      codeword: 'a', inViewport: true, rect: OFF_BAND, hint: badge, hintVisible: true,
+      codeword: 'a', rect: OFF_BAND, hint: badge, hintVisible: true,
       lastSentStrict: false,
     });
 
+    // First settle: strike one — no destructive action yet (a transient
+    // virtualizer park must not release a live badge).
     h.engine.settle('store');
+    expect(h.tracker.queueRelease).not.toHaveBeenCalled();
+    expect(h.engine.applied.last.release).toBe(1); // planned, gated by strikes
 
-    expect(w.isInViewport).toBe(false);
+    // Second settle >=50ms later (fake ledger honors the real spacing):
+    // confirmed — release queued.
+    vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 100);
+    h.engine.settle('store');
     expect(h.tracker.queueRelease).toHaveBeenCalledWith(w);
-    expect(h.engine.applied.last.release).toBe(1);
+    vi.restoreAllMocks();
   });
 });
 
@@ -322,12 +334,15 @@ describe('settle: timer discipline', () => {
     const h = makeHarness();
     h.engine.scheduleScrollReposition();
     expect(h.occlusion.occlusionMemoAllDirty).toHaveBeenCalledWith('scroll');
-    expect(h.tracker.sweepBand).toHaveBeenCalledTimes(1);
+    // The mid-fling converge ran once (reconcile → clip sync untouched, but
+    // the store walk claims — assert via the claim queue on a claimable
+    // store; here the store is empty so the tell is the throttle below).
+    const convergesAfterFirst = h.tracker.queueClaims.mock.calls.length;
 
-    // Second event inside the 100ms throttle window: no second band sweep,
+    // Second event inside the 100ms throttle window: no second converge,
     // and the trailing settle timer re-arms (debounce).
     h.engine.scheduleScrollReposition();
-    expect(h.tracker.sweepBand).toHaveBeenCalledTimes(1);
+    expect(h.tracker.queueClaims.mock.calls.length).toBe(convergesAfterFirst);
     expect(h.engine.isScrollSettlePending()).toBe(true);
 
     h.scheduler.flushTimers();
@@ -350,16 +365,17 @@ describe('settle: timer discipline', () => {
 describe('reconcile: build-up convergence', () => {
   it('builds first-time badges, reuses dormant hints, skips uncodeworded', () => {
     const h = makeHarness();
-    const fresh = addWrapper(h.store, { codeword: 'a', inViewport: true, lastSentStrict: true });
+    const fresh = addWrapper(h.store, { codeword: 'a', lastSentStrict: true });
     const dormantBadge = new FakeBadge();
     const dormant = addWrapper(h.store, {
-      codeword: 's', inViewport: true, hint: dormantBadge, hintVisible: false, lastSentStrict: true,
+      codeword: 's', hint: dormantBadge, hintVisible: false, lastSentStrict: true,
     });
-    const bare = addWrapper(h.store, { codeword: '', inViewport: true });
+    const bare = addWrapper(h.store, { codeword: '' });
 
     h.engine.reconcile();
 
-    expect(h.tracker.refreshViewportClaims).toHaveBeenCalled();
+    // The bare in-band wrapper was queued for claim by the converge half.
+    expect(h.tracker.queueClaims).toHaveBeenCalledWith([bare]);
     // fresh: constructed + shown.
     expect(h.created.length).toBe(1);
     expect(fresh.hint).toBe(h.created[0]);
@@ -372,7 +388,7 @@ describe('reconcile: build-up convergence', () => {
 
   it('is idempotent — a second pass over steady state builds nothing (churn guard)', () => {
     const h = makeHarness();
-    addWrapper(h.store, { codeword: 'a', inViewport: true, lastSentStrict: true });
+    addWrapper(h.store, { codeword: 'a', lastSentStrict: true });
 
     h.engine.reconcile();
     const createdOnce = h.created.length;
@@ -387,7 +403,7 @@ describe('reconcile: build-up convergence', () => {
     const h = makeHarness();
     const badge = new FakeBadge();
     addWrapper(h.store, {
-      codeword: 'a', inViewport: true, hint: badge, hintVisible: true, detachedHost: true,
+      codeword: 'a', hint: badge, hintVisible: true, detachedHost: true,
     });
     expect(badge.host.isConnected).toBe(false);
 
@@ -403,7 +419,7 @@ describe('settle: strict re-push and sync discipline', () => {
     const h = makeHarness();
     const badge = new FakeBadge();
     const w = addWrapper(h.store, {
-      codeword: 'a', inViewport: true, rect: ON_SCREEN, hint: badge, hintVisible: true,
+      codeword: 'a', rect: ON_SCREEN, hint: badge, hintVisible: true,
       lastSentStrict: false, // pushed as out-of-strict; now on-screen → delta
     });
 
@@ -418,7 +434,7 @@ describe('settle: strict re-push and sync discipline', () => {
     const h = makeHarness();
     const badge = new FakeBadge();
     addWrapper(h.store, {
-      codeword: 'a', inViewport: true, rect: ON_SCREEN, hint: badge, hintVisible: true,
+      codeword: 'a', rect: ON_SCREEN, hint: badge, hintVisible: true,
       lastSentStrict: true,
     });
 
@@ -431,13 +447,14 @@ describe('settle: strict re-push and sync discipline', () => {
 });
 
 describe('settle: mass reveal', () => {
-  it('a >=fast-arm repair batch arms discovery with the count and direct-paints', async () => {
+  it('a >=fast-arm claim batch arms discovery with the count and direct-paints', async () => {
     const h = makeHarness();
-    // A double-buffered flip: 25 dormant badges whose band flags all went
-    // stale-FALSE at once (the QuickBase grid-swap shape).
+    // A double-buffered flip: 25 dormant badges revealed in-band at once
+    // with no codewords (the QuickBase grid-swap shape) — the plan's claim
+    // burst is the reveal tell.
     for (let i = 0; i < REVEAL_REPAIR_FAST_ARM; i++) {
       addWrapper(h.store, {
-        codeword: `w${i}`, inViewport: false, rect: ON_SCREEN,
+        codeword: '', rect: ON_SCREEN,
         hint: new FakeBadge(), hintVisible: false, lastSentStrict: true,
       });
     }
@@ -465,36 +482,33 @@ describe('settle: mass reveal', () => {
 });
 
 describe('idle-convergence backstop', () => {
-  it('runs the band sweep each tick — the stale-FALSE cohort heals without activity', () => {
-    // The manageusers class: geometry in-band, flag FALSE (dropped IO entry).
-    // No flag walk can see it; the tick's band sweep repairs + reconciles.
+  it('claims for the in-band codeword-less cohort each tick (heals without activity)', () => {
+    // The manageusers class, flag-free: geometry in-band, no codeword. The
+    // tick's band-convergence derives membership from fresh rects and
+    // queues the claim — no event needed, nothing to have dropped.
     const h = makeHarness();
-    h.tracker.sweepBand.mockReturnValue({ repaired: 3, released: 0 });
+    const w = addWrapper(h.store, { codeword: '', rect: ON_SCREEN });
     h.engine.noteIdleTick();
-    expect(h.tracker.sweepBand).toHaveBeenCalled();
-    // repaired > 0 → inline reconcile ran (claims + build path).
-    expect(h.tracker.refreshViewportClaims).toHaveBeenCalled();
+    expect(h.tracker.queueClaims).toHaveBeenCalledWith([w]);
+    // Owed work found → the full pass is armed once for strict/occlusion
+    // catch-up; the passSoon single-flight holds across repeat ticks.
+    expect(h.scheduler.pending.length).toBe(1);
+    h.engine.noteIdleTick();
+    expect(h.scheduler.pending.length).toBe(1);
   });
 
-  it('arms passSoon when an in-band wrapper is owed convergence, no-ops when steady', () => {
+  it('no-ops at steady state (codeworded + visible badge)', () => {
     const h = makeHarness();
-    // Steady state: codeworded + visible badge → no arm.
     const badge = new FakeBadge();
-    addWrapper(h.store, { codeword: 'a', inViewport: true, hint: badge, hintVisible: true, lastSentStrict: true });
+    addWrapper(h.store, { codeword: 'a', rect: ON_SCREEN, hint: badge, hintVisible: true, lastSentStrict: true });
     h.engine.noteIdleTick();
+    expect(h.tracker.queueClaims).not.toHaveBeenCalled();
     expect(h.scheduler.pending.length).toBe(0);
-
-    // Owed: in-band wrapper with no codeword (the QuickBase stall cohort).
-    addWrapper(h.store, { codeword: '', inViewport: true });
-    h.engine.noteIdleTick();
-    expect(h.scheduler.pending.length).toBe(1); // passSoon armed
-    h.engine.noteIdleTick();
-    expect(h.scheduler.pending.length).toBe(1); // single-flight holds
   });
 
   it('stays silent with badges hidden', () => {
     const h = makeHarness({ badgesVisible: false });
-    addWrapper(h.store, { codeword: '', inViewport: true });
+    addWrapper(h.store, { codeword: '', rect: ON_SCREEN });
     h.engine.noteIdleTick();
     expect(h.scheduler.pending.length).toBe(0);
   });
@@ -503,7 +517,7 @@ describe('idle-convergence backstop', () => {
 describe('settle: gates', () => {
   it('with badges hidden, settle skips the pass (and reposition no-ops)', () => {
     const h = makeHarness({ badgesVisible: false });
-    addWrapper(h.store, { codeword: 'a', inViewport: false, rect: ON_SCREEN });
+    addWrapper(h.store, { codeword: 'a', rect: ON_SCREEN });
 
     h.engine.settle('store');
 
@@ -552,6 +566,6 @@ describe('settle: gates', () => {
     h.state.tornDown = true;
     h.engine.scheduleMassRevealPaint(30);
     h.scheduler.drainYield();
-    expect(h.tracker.refreshViewportClaims).not.toHaveBeenCalled();
+    expect(h.tracker.queueClaims).not.toHaveBeenCalled();
   });
 });

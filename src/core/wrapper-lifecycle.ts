@@ -209,7 +209,9 @@ export function attachDiscovered(
     // strong-key and coattail tiers.)
     added += eagerAttach(refs[i], elements[i], source, attached);
   }
-  primeInBandClaims(attached);
+  // Arm the settle pass for the fresh attaches — the band-convergence pass
+  // claims for whatever is genuinely in-band (fresh rects at pass time).
+  if (attached.length > 0) pageSession.engine?.schedulePassSoon('attach');
   return added;
 }
 
@@ -229,38 +231,9 @@ function eagerAttach(
   return 1;
 }
 
-// Prime-at-attach (notes/DESIGN_FLING_WAVE.md Part 1): a wrapper that is
-// in-band by geometry right now claims in the flush microtask at the end of
-// THIS task — which also builds and places its badge via the synchronous
-// onCodewordsChanged → reconcile chain — instead of waiting ~305ms p50 for
-// the IO to deliver the band-entry callback on saturated mid-fling frames.
-// The IO demotes to steady-state maintainer for these wrappers: its initial
-// callback finds the codeword present (claim branch no-ops) and keeps
-// owning exits, later entries, and flag corrections.
-//
-// Edge-triggered once per wrapper at creation, inside the path that created
-// it — NOT a level-triggered re-derivation. That distinction is what keeps
-// this from re-arming the reverted settle-pass toClaim fragmentation
-// (7fe37a0; see the design note). Scan-path wrappers never reach this:
-// processScanBatch claims inline pre-POST and attaches via attachWrapper
-// directly.
-function primeInBandClaims(attached: ElementWrapper[]): void {
-  if (attached.length === 0) return;
-  const vw = window.innerWidth, vh = window.innerHeight;
-  const primed: ElementWrapper[] = [];
-  for (const w of attached) {
-    if (w.scanned.codeword) continue;
-    const r = getCachedRect(w.element);
-    // Boxless skip (mirrors computeReconcilePlanLists' zero-rect guard):
-    // display:none / not-yet-laid-out elements report an all-zeros rect that
-    // would false-positive the band test at the viewport origin. Let the IO
-    // decide those when they gain a box.
-    if (r.width === 0 && r.height === 0 && r.top === 0 && r.left === 0) continue;
-    if (!geometryInBand(r, vw, vh, VIEWPORT_MARGIN_PX)) continue;
-    w.isInViewport = true;
-    w.tInBand ??= performance.now();
-    lifecycleCounters.primedClaims++;
-    primed.push(w);
-  }
-  if (primed.length > 0) pageSession.tracker.primeClaims(primed);
-}
+// (primeInBandClaims is gone — DESIGN_OBSERVED_STATE_READ_TIME phase 3.
+// Attach paths arm the settle single-flight instead; the engine's
+// band-convergence pass derives membership from fresh rects and claims.
+// The ~305ms-p50 IO-delivery latency prime bypassed is covered by the
+// passSoon debounce (<=100ms) + the 10Hz mid-fling converge entry.)
+

@@ -1,7 +1,7 @@
 /**
  * BranchKit Browser — strict-viewport flag for grammar batches.
  *
- * The IO band (`isInViewport`) uses a wide margin (VIEWPORT_MARGIN_PX) so wrappers entering the
+ * The IO band (±VIEWPORT_MARGIN_PX, derived from fresh rects) is wide so wrappers entering the
  * margin pre-claim codewords and pre-paint badges — the scroll-ahead UX. The
  * `in_strict_viewport` flag on the batch payload is the *match-eligibility*
  * cut: only entries whose rect intersects the visible viewport land in the

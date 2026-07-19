@@ -12,56 +12,12 @@ import { describe, it, expect } from 'vitest';
 import { ElementWrapper } from '../scan/element-wrapper';
 import { ScannedElement, Category } from '../types';
 import { HintBadge } from '../render/hints';
-import { wantsCodeword, wantsHint, wantsShown, wantsStrict } from './desired-state';
+import { wantsShown, wantsStrict } from './desired-state';
 
-function fakeElement(): Element {
-  return { tagName: 'A' } as unknown as Element;
-}
-
-function makeWrapper(opts: {
-  inViewport: boolean;
-  codeword: string;
-  category?: Category;
-}): ElementWrapper {
-  const scanned: ScannedElement = {
-    label: 'a link',
-    id: 0,
-    category: opts.category ?? 'link',
-    type: 'link',
-    adapter: null,
-    codeword: opts.codeword,
-  };
-  const w = new ElementWrapper(fakeElement(), scanned);
-  w.isInViewport = opts.inViewport;
-  return w;
-}
-
-describe('wantsCodeword', () => {
-  it('wants a codeword when in the viewport band', () => {
-    expect(wantsCodeword(makeWrapper({ inViewport: true, codeword: '' }))).toBe(true);
-  });
-
-  it('does not want a codeword when off-band', () => {
-    expect(wantsCodeword(makeWrapper({ inViewport: false, codeword: 'ape' }))).toBe(false);
-  });
-});
-
-describe('wantsHint', () => {
-  it('wants a hint when in-viewport and codeworded', () => {
-    const w = makeWrapper({ inViewport: true, codeword: 'ape', category: 'link' });
-    expect(wantsHint(w)).toBe(true);
-  });
-
-  it('does not want a hint without a codeword', () => {
-    const w = makeWrapper({ inViewport: true, codeword: '' });
-    expect(wantsHint(w)).toBe(false);
-  });
-
-  it('does not want a hint when off-band', () => {
-    const w = makeWrapper({ inViewport: false, codeword: 'ape' });
-    expect(wantsHint(w)).toBe(false);
-  });
-});
+// (wantsCodeword / wantsHint are gone — DESIGN_OBSERVED_STATE_READ_TIME
+// phase 3: band membership is derived from fresh rects at the consumers,
+// so the flag-reading predicates collapsed into the plan's lifecycle walk
+// and the build step's enumeration. Their specs live in reconcile.test.ts.)
 
 // Real connected elements: wantsShown reads element.isConnected.
 function makeShownWrapper(opts: {

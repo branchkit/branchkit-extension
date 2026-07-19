@@ -28,13 +28,16 @@ import type { ObservableWrapperStore } from '../core/store';
 /** Compile-time "A satisfies B" — used by the SeamCheck aliases below. */
 type Satisfies<A extends B, B> = A;
 
-/** The IntersectionTracker surface the engine drives: claim/release flushing,
- *  the level-triggered claim refresh, and the mid-fling band sweep. */
+/** The IntersectionTracker surface the engine drives: claim/release queues
+ *  + the two-strike exit ledger. Band membership itself is derived by the
+ *  engine's band-convergence pass from fresh rects
+ *  (DESIGN_OBSERVED_STATE_READ_TIME phase 3). */
 export interface TrackerOps {
   flushNow(): Promise<void>;
-  refreshViewportClaims(): void;
+  queueClaims(wrappers: ElementWrapper[]): void;
   queueRelease(w: ElementWrapper): void;
-  sweepBand(vw: number, vh: number): { repaired: number; released: number };
+  strikeOut(w: ElementWrapper, now: number): boolean;
+  clearExitStrike(w: ElementWrapper): void;
 }
 
 /** Grammar sync (labels/label-sync.ts): the engine queues Put/Delete deltas
