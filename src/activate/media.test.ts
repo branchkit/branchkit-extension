@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
-  findMediaVideo,
+  findMediaElement,
   mediaPlayPause,
   mediaMute,
   mediaSpeed,
@@ -58,32 +58,32 @@ afterEach(() => {
   document.body.innerHTML = '';
 });
 
-describe('findMediaVideo', () => {
+describe('findMediaElement', () => {
   it('returns null with no videos', () => {
-    expect(findMediaVideo()).toBeNull();
+    expect(findMediaElement()).toBeNull();
   });
 
   it('ignores videos under the size floor (thumbnails, PiP minis)', () => {
     addVideo({ w: 120, h: 90, playing: true });
-    expect(findMediaVideo()).toBeNull();
+    expect(findMediaElement()).toBeNull();
   });
 
   it('picks the largest large video when none is playing (play targets it)', () => {
     addVideo({ w: 300, h: 200 });
     const big = addVideo({ w: 900, h: 500 });
-    expect(findMediaVideo()).toBe(big);
+    expect(findMediaElement()).toBe(big);
   });
 
   it('prefers a playing video over a larger paused one', () => {
     addVideo({ w: 1200, h: 700 });
     const playing = addVideo({ w: 400, h: 300, playing: true, currentTime: 12 });
-    expect(findMediaVideo()).toBe(playing);
+    expect(findMediaElement()).toBe(playing);
   });
 
   it('breaks playing ties on area', () => {
     addVideo({ w: 300, h: 250, playing: true, currentTime: 3 });
     const big = addVideo({ w: 800, h: 450, playing: true, currentTime: 3 });
-    expect(findMediaVideo()).toBe(big);
+    expect(findMediaElement()).toBe(big);
   });
 
   it('does not treat a cued-but-unstarted video as playing', () => {
@@ -97,9 +97,48 @@ describe('findMediaVideo', () => {
     Object.defineProperty(v, 'readyState', { configurable: true, get: () => 4 });
     Object.defineProperty(v, 'currentTime', { configurable: true, get: () => 0 });
     document.body.appendChild(v);
-    expect(findMediaVideo()).toBe(v); // found — but via the paused fallback…
+    expect(findMediaElement()).toBe(v); // found — but via the paused fallback…
     const playing = addVideo({ w: 320, h: 240, playing: true, currentTime: 8 });
-    expect(findMediaVideo()).toBe(playing); // …so a real player beats it.
+    expect(findMediaElement()).toBe(playing); // …so a real player beats it.
+  });
+});
+
+function addAudio(opts: { playing?: boolean; currentTime?: number } = {}): HTMLAudioElement {
+  const a = document.createElement('audio');
+  const playing = opts.playing ?? false;
+  Object.defineProperty(a, 'paused', { configurable: true, get: () => !playing });
+  Object.defineProperty(a, 'readyState', { configurable: true, get: () => (playing ? 4 : 2) });
+  Object.defineProperty(a, 'currentSrc', { configurable: true, get: () => 'https://x/track.mp3' });
+  let time = opts.currentTime ?? (playing ? 5 : 0);
+  Object.defineProperty(a, 'currentTime', {
+    configurable: true,
+    get: () => time,
+    set: (t: number) => { time = t; },
+  });
+  document.body.appendChild(a);
+  return a;
+}
+
+describe('findMediaElement — audio', () => {
+  it('targets a playing audio element (web music players)', () => {
+    const a = addAudio({ playing: true, currentTime: 30 });
+    expect(findMediaElement()).toBe(a);
+  });
+
+  it('playing audio beats a paused video; playing video beats playing audio', () => {
+    addVideo({ w: 800, h: 450 }); // paused video
+    const a = addAudio({ playing: true, currentTime: 30 });
+    expect(findMediaElement()).toBe(a);
+    const v = addVideo({ w: 640, h: 360, playing: true, currentTime: 2 });
+    expect(findMediaElement()).toBe(v);
+  });
+
+  it('ignores source-less inert audio scaffolding', () => {
+    const a = document.createElement('audio');
+    Object.defineProperty(a, 'currentSrc', { configurable: true, get: () => '' });
+    Object.defineProperty(a, 'readyState', { configurable: true, get: () => 0 });
+    document.body.appendChild(a);
+    expect(findMediaElement()).toBeNull();
   });
 });
 

@@ -39,36 +39,43 @@ function candidateArea(v: HTMLVideoElement): number {
 }
 
 /**
- * The video the media commands drive: the largest actively-playing large
- * video in this frame — the same predicate that suppresses badges names the
- * command target. If nothing is playing, the largest large video present,
- * so `play` works on the paused video the user is looking at. Null when the
- * frame has no large video (the command no-ops; another frame may act).
+ * The media element the commands drive. Candidates are large videos (same
+ * floor as the overlay gate — the suppression predicate and the command
+ * target can never disagree) plus `<audio>` elements holding a source
+ * (Spotify web, SoundCloud, podcast players — identical element API, wider
+ * net). Selection: playing beats paused, video beats audio at equal playing
+ * state, area breaks video ties — so "pause" grabs the thing making noise,
+ * and `play` still works on the paused player you're looking at. Null when
+ * the frame has no candidate (the command no-ops; another frame may act).
  */
-export function findMediaVideo(): HTMLVideoElement | null {
-  let best: HTMLVideoElement | null = null;
-  let bestArea = 0;
-  let bestPlaying = false;
+export function findMediaElement(): HTMLMediaElement | null {
+  let best: HTMLMediaElement | null = null;
+  let bestScore = -1;
+  let bestArea = -1;
+  const consider = (el: HTMLMediaElement, area: number): void => {
+    const playing = isActivelyPlaying(el);
+    const score = (playing ? 2 : 0) + (el instanceof HTMLVideoElement ? 1 : 0);
+    if (score > bestScore || (score === bestScore && area > bestArea)) {
+      best = el;
+      bestScore = score;
+      bestArea = area;
+    }
+  };
   for (const v of document.querySelectorAll('video')) {
     const area = candidateArea(v);
     if (area === 0) continue;
-    const playing = isActivelyPlaying(v);
-    // Playing beats paused regardless of size; ties break on area.
-    if (
-      best === null ||
-      (playing && !bestPlaying) ||
-      (playing === bestPlaying && area > bestArea)
-    ) {
-      best = v;
-      bestArea = area;
-      bestPlaying = playing;
-    }
+    consider(v, area);
+  }
+  for (const a of document.querySelectorAll('audio')) {
+    // A source-less audio element is inert scaffolding, not a player.
+    if (!a.currentSrc && a.readyState === 0) continue;
+    consider(a, 0);
   }
   return best;
 }
 
 export function mediaPlayPause(op: PlayPauseOp): void {
-  const v = findMediaVideo();
+  const v = findMediaElement();
   if (!v) return;
   const wantPlay = op === 'play' || (op === 'toggle' && v.paused);
   if (wantPlay) {
@@ -83,14 +90,14 @@ export function mediaPlayPause(op: PlayPauseOp): void {
 }
 
 export function mediaMute(op: MuteOp): void {
-  const v = findMediaVideo();
+  const v = findMediaElement();
   if (!v) return;
   v.muted = op === 'toggle' ? !v.muted : op === 'mute';
   flashToast(v.muted ? 'Muted' : 'Sound on');
 }
 
 export function mediaSpeed(op: SpeedOp): void {
-  const v = findMediaVideo();
+  const v = findMediaElement();
   if (!v) return;
   const rate =
     op === 'normal'
@@ -102,7 +109,7 @@ export function mediaSpeed(op: SpeedOp): void {
 }
 
 export function mediaSeek(direction: SeekDirection, seconds: number): void {
-  const v = findMediaVideo();
+  const v = findMediaElement();
   if (!v || !Number.isFinite(seconds) || seconds <= 0) return;
   const delta = direction === 'back' ? -seconds : seconds;
   // duration is NaN before metadata and Infinity on live streams — in both
@@ -112,7 +119,7 @@ export function mediaSeek(direction: SeekDirection, seconds: number): void {
 }
 
 export function mediaRestart(): void {
-  const v = findMediaVideo();
+  const v = findMediaElement();
   if (!v) return;
   v.currentTime = 0;
 }

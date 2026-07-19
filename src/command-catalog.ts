@@ -436,6 +436,18 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     description: 'Jump the playing video back to the beginning.',
     voice: [{ pattern: 'restart video' }],
     voiceContext: 'video' },
+  // The *_all forms fan out to every AUDIBLE tab from the service worker
+  // (no content-dispatcher registration — like switch_to_tab). Asymmetric
+  // on purpose: pause/mute have a "shut up, all of it" intent; there is no
+  // "faster everything".
+  { id: 'media_pause_all', label: 'Pause everything', group: 'Media', mappable: false, params: [],
+    description: 'Pause every tab that\'s currently making sound.',
+    voice: [{ pattern: 'pause everything' }],
+    voiceContext: 'video' },
+  { id: 'media_mute_all', label: 'Mute everything', group: 'Media', mappable: false, params: [],
+    description: 'Mute every tab that\'s currently making sound.',
+    voice: [{ pattern: 'mute everything' }],
+    voiceContext: 'video' },
 
   // --- Help ---
   { id: 'toggle_help', label: 'Keyboard help', group: 'Help', mappable: true, params: [],

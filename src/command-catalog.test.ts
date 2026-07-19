@@ -33,7 +33,12 @@ const REGISTERED_ACTIONS = [
 // with no content-dispatcher registration: no keyboard form exists because
 // the value is a runtime spoken word (or, for the palette pair, the overlay
 // itself is the keyboard form).
-const VOICE_ONLY_BACKGROUND = ['switch_to_tab', 'palette_select', 'palette_dismiss'] as const;
+const VOICE_ONLY_BACKGROUND = [
+  'switch_to_tab', 'palette_select', 'palette_dismiss',
+  // Media fan-out verbs — the SW iterates audible tabs; no single-tab
+  // content dispatch exists.
+  'media_pause_all', 'media_mute_all',
+] as const;
 
 // Voice-only commands handled inline in content's BRANCHKIT_ACTION listener
 // (the activate family shares plain activate's resolution path there), with

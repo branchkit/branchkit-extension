@@ -586,17 +586,36 @@ async function setCaretActive(active: boolean): Promise<void> {
   await postToPlugin('/caret', { conn_id: connId, active });
 }
 
-// Video presence (notes/DESIGN_VIDEO_MEDIA_COMMANDS.md step 3): each frame
-// reports whether it holds a large video (2s change-only ticks from
-// observe/video-presence.ts); the SW ORs a tab's frames and mirrors the
-// ACTIVE tab's answer to the plugin, which gates the media voice commands
-// ("pause", "faster", …) and the spoken "video" discovery mode on its
-// non-exclusive video_present tag. Posts are deliberately redundant on
-// every relevant edge (report, tab switch, window focus, reconnect) — the
-// plugin drains its mirror aggressively on focus/disconnect, and redundant
-// idempotent posts are what make that safe (the palette-clear philosophy:
-// err on firing redundantly).
+// Background media control (notes/DESIGN_VIDEO_MEDIA_COMMANDS.md,
+// background-media arc). Three signal sources compose into one
+// "controllable media exists" union, mirrored to the plugin's non-exclusive
+// media_active tag (the gate on the media voice commands and the spoken
+// "video" mode — deliberately NOT behind browser focus, so a background
+// video pauses from any app):
+//
+//   1. Frame presence reports (observe/video-presence.ts, visible tabs
+//      only): 2s change-only ticks; the SW ORs a tab's frames.
+//   2. The audible-tab registry: chrome.tabs.onUpdated's `audible` flag —
+//      the browser's own speaker-icon tracking. Hidden-tab-safe,
+//      throttle-proof, and it needs no content script.
+//   3. The resume memory: the last tab a media command controlled. A
+//      background-pause makes nothing audible; without this, "play" would
+//      go deaf. Held until that tab closes or full-navigates.
+//
+// Posts to the plugin are deliberately redundant on every relevant edge
+// (report, audible change, tab switch, window focus, reconnect) — the
+// plugin drops per-conn slots on disconnect, and redundant idempotent
+// posts are what make that safe (the palette-clear philosophy: err on
+// firing redundantly).
 const videoPresenceByTab = new Map<number, Map<number, boolean>>();
+// tabId → performance-agnostic activation stamp (monotonic counter — most
+// recently became audible wins the multi-playing routing tiebreak).
+const audibleTabs = new Map<number, number>();
+let audibleStamp = 0;
+let lastControlledTab: number | null = null;
+// Tracks chrome.windows.onFocusChanged so routing can prefer the focused
+// tab's media only when the browser actually has OS focus.
+let browserWindowFocused = true;
 
 function tabHasVideo(tabId: number | null): boolean {
   if (tabId === null) return false;
@@ -606,12 +625,90 @@ function tabHasVideo(tabId: number | null): boolean {
   return false;
 }
 
-async function syncVideoPresence(): Promise<void> {
+function mediaControllable(): boolean {
+  return (
+    tabHasVideo(bgState.cachedActiveTabId) ||
+    audibleTabs.size > 0 ||
+    lastControlledTab !== null
+  );
+}
+
+async function syncMediaActive(): Promise<void> {
   if (!(await ensureConnected())) return;
-  await postToPlugin('/video-presence', {
+  await postToPlugin('/media-active', {
     conn_id: connId,
-    present: tabHasVideo(bgState.cachedActiveTabId),
+    active: mediaControllable(),
   });
+}
+
+// Seed the audible registry at SW start — tabs already making sound when
+// the worker wakes must count without waiting for an audible transition.
+void chrome.tabs.query({ audible: true }).then((tabs) => {
+  for (const t of tabs) {
+    if (t.id != null && !audibleTabs.has(t.id)) audibleTabs.set(t.id, ++audibleStamp);
+  }
+  if (tabs.length) void syncMediaActive();
+}).catch(() => {});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (typeof changeInfo.audible !== 'boolean') return;
+  if (changeInfo.audible) {
+    audibleTabs.set(tabId, ++audibleStamp);
+  } else {
+    audibleTabs.delete(tabId);
+  }
+  void syncMediaActive();
+});
+
+const MEDIA_ACTIONS = new Set([
+  'media_play_pause', 'media_mute', 'media_speed', 'media_seek', 'media_restart',
+]);
+
+/**
+ * Which tab should a media verb drive? Fixed priority (design note):
+ * (1) the focused tab's media when the browser is frontmost — control what
+ * you see; (2) the most recently audible tab — else what you hear (the
+ * single-audible case is this rule's n=1 form); (3) the resume memory, so
+ * pause → work → "play" round-trips with nothing audible.
+ */
+function resolveMediaTargetTab(): number | null {
+  if (browserWindowFocused && tabHasVideo(bgState.cachedActiveTabId)) {
+    return bgState.cachedActiveTabId;
+  }
+  let best: number | null = null;
+  let bestStamp = -1;
+  for (const [tabId, stamp] of audibleTabs) {
+    if (stamp > bestStamp) { best = tabId; bestStamp = stamp; }
+  }
+  if (best !== null) return best;
+  return lastControlledTab;
+}
+
+function sendMediaActionToTab(tabId: number, payload: any): void {
+  lastControlledTab = tabId;
+  // All frames — the per-frame no-op executor handles iframe embeds.
+  chrome.tabs.sendMessage(tabId, { type: 'BRANCHKIT_ACTION', payload }).catch((e: Error) => {
+    console.warn('[BranchKit BG] media dispatch failed:', e.message);
+  });
+  // The target may now be controllable only via resume memory — re-assert.
+  void syncMediaActive();
+}
+
+/** "pause everything" / "mute everything": fan the verb out to every
+ *  audible tab — the shut-up intent. Deliberately audible-only (no
+ *  paused-media sweep) and deliberately no "faster everything". */
+function handleMediaAllAction(action: string): void {
+  const op = action === 'media_pause_all'
+    ? { action: 'media_play_pause', params: { op: 'pause' } }
+    : { action: 'media_mute', params: { op: 'mute' } };
+  for (const tabId of audibleTabs.keys()) {
+    lastControlledTab = tabId;
+    chrome.tabs.sendMessage(tabId, {
+      type: 'BRANCHKIT_ACTION',
+      payload: { action: op.action, params: op.params },
+    }).catch(() => {/* tab may be closing */});
+  }
+  void syncMediaActive();
 }
 
 // Command palette selection (notes/DESIGN_TAB_NAVIGATION.md, Layer 2). Always
@@ -848,7 +945,7 @@ function connectSSE(): void {
   void contributeCommands();
   // And re-assert the active tab's video presence — a plugin restart or SSE
   // reconnect drained its mirror.
-  void syncVideoPresence();
+  void syncMediaActive();
 
   if (hasOffscreenAPI) {
     // Chrome: delegate to offscreen document
@@ -1024,6 +1121,23 @@ function handleSSEEvent(data: any): void {
     return;
   }
 
+  // Media verbs route by the media-target priority, not the active tab —
+  // "pause" from an unrelated app must reach the background tab that's
+  // actually playing. The *_all forms fan out to every audible tab.
+  if (data.action === 'media_pause_all' || data.action === 'media_mute_all') {
+    handleMediaAllAction(data.action);
+    return;
+  }
+  if (MEDIA_ACTIONS.has(data.action)) {
+    const target = resolveMediaTargetTab();
+    if (target !== null) {
+      sendMediaActionToTab(target, data);
+      return;
+    }
+    // No known target anywhere — fall through to the active tab, the
+    // pre-background behavior (its frames no-op if truly nothing's there).
+  }
+
   // "tab <codeword>" — like the tab verbs, handled here so it works
   // regardless of the active page's content-script state.
   if (data.action === 'switch_to_tab') {
@@ -1135,7 +1249,7 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
         videoPresenceByTab.set(tabId, frames);
       }
       frames.set(frameId, message.present === true);
-      void syncVideoPresence();
+      void syncMediaActive();
     }
     return false;
   }
@@ -1658,7 +1772,7 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
     void postActiveTab(activeInfo.tabId);
     // Mirror the new tab's video presence (last known; its reporter resumes
     // within one 2s tick if the tab was hidden).
-    void syncVideoPresence();
+    void syncMediaActive();
     endHintSessionOnOldTab(oldTabId, 'tab_switch');
     // Always-mode: signal the new tab's content script that it became the
     // active tab. The session-start path resets per-tab plugin state.
@@ -1764,13 +1878,18 @@ function onSameDocumentNav(details: { tabId: number; frameId: number; url: strin
 chrome.webNavigation.onHistoryStateUpdated.addListener(onSameDocumentNav);
 chrome.webNavigation.onReferenceFragmentUpdated.addListener(onSameDocumentNav);
 
-// Full document load: the old page's frames (and their video-presence
+// Full document load: the old page's frames (and their media-presence
 // reports) are gone; drop the tab's frame map so a stale `true` can't
-// outlive the page. The new page's reporters re-populate within one tick.
-// SPA navs (above) keep frames alive, so their entries stay valid.
+// outlive the page, and release the resume memory if it pointed here (the
+// media it remembered no longer exists). The new page's reporters
+// re-populate within one tick. SPA navs (above) keep frames alive, so
+// their entries stay valid.
 chrome.webNavigation.onCommitted.addListener((details) => {
   if (details.frameId !== 0) return;
-  if (videoPresenceByTab.delete(details.tabId)) void syncVideoPresence();
+  const dropped = videoPresenceByTab.delete(details.tabId);
+  const wasResume = lastControlledTab === details.tabId;
+  if (wasResume) lastControlledTab = null;
+  if (dropped || wasResume) void syncMediaActive();
 });
 
 // Coalesce bursts of same-document URL changes (SPAs often fire several
@@ -1806,9 +1925,14 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
   // plugin this connection is no longer focused so its grammar gate and
   // dispatch scoping stop treating this browser as frontmost.
   if (windowId === chrome.windows.WINDOW_ID_NONE) {
+    browserWindowFocused = false;
     void postFocus(false);
+    // media_active survives unfocus by design (background control); re-post
+    // so the plugin's mirror is asserted from THIS conn even while unfocused.
+    void syncMediaActive();
     return;
   }
+  browserWindowFocused = true;
   try {
     // Only follow focus into normal browser windows. Devtools / popups
     // / extension panels would otherwise blank the active-tab cache (they
@@ -1832,7 +1956,7 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
     // didn't change. Authoritative focused-tab source for Option B.
     void postActiveTab(newActive);
     // Re-assert video presence: the plugin drained its mirror on unfocus.
-    void syncVideoPresence();
+    void syncMediaActive();
     if (oldTabId != null && oldTabId !== newActive) {
       logTabSwitch('window_focus', oldTabId, newActive);
       endHintSessionOnOldTab(oldTabId, 'window_focus');
@@ -1857,6 +1981,9 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     forwardHintsSessionEnd('tab_closed', tabId);
   }
   videoPresenceByTab.delete(tabId);
+  audibleTabs.delete(tabId);
+  if (lastControlledTab === tabId) lastControlledTab = null;
+  void syncMediaActive();
   const pendingSpaRescan = spaRescanTimers.get(tabId);
   if (pendingSpaRescan) {
     clearTimeout(pendingSpaRescan);

@@ -52,7 +52,7 @@ const OVERLAP_FRACTION = 0.5;
  *  decoding real frames, not a cued poster or a stalled load. Shared with
  *  activate/media.ts so the badge-suppression predicate and the command
  *  target selector can never disagree about which video "counts". */
-export function isActivelyPlaying(v: HTMLVideoElement): boolean {
+export function isActivelyPlaying(v: HTMLMediaElement): boolean {
   return !v.paused && v.currentTime > 0 && v.readyState >= 2;
 }
 
