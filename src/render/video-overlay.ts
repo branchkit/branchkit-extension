@@ -42,10 +42,19 @@ interface RectsCache {
 let cache: RectsCache | null = null;
 const CACHE_TTL_MS = 250;
 // "Large player" floor — excludes thumbnails, PiP minis, hover previews.
-const MIN_VIDEO_DIM = 200;
+// Exported for activate/media.ts (same floor for command targets).
+export const MIN_VIDEO_DIM = 200;
 // A target must be MOSTLY on the video to be suppressed; edge-adjacent
 // controls (action rail) keep their badges.
 const OVERLAP_FRACTION = 0.5;
+
+/** The gate's (and the media commands') notion of "actively playing":
+ *  decoding real frames, not a cued poster or a stalled load. Shared with
+ *  activate/media.ts so the badge-suppression predicate and the command
+ *  target selector can never disagree about which video "counts". */
+export function isActivelyPlaying(v: HTMLVideoElement): boolean {
+  return !v.paused && v.currentTime > 0 && v.readyState >= 2;
+}
 
 /** Viewport rects of actively-playing large videos, cached ~250ms. */
 export function playingVideoRects(): DOMRect[] {
@@ -53,7 +62,7 @@ export function playingVideoRects(): DOMRect[] {
   if (cache && now - cache.at < CACHE_TTL_MS) return cache.rects;
   const rects: DOMRect[] = [];
   for (const v of document.querySelectorAll('video')) {
-    if (v.paused || v.currentTime === 0 || v.readyState < 2) continue;
+    if (!isActivelyPlaying(v)) continue;
     const r = v.getBoundingClientRect();
     if (r.width >= MIN_VIDEO_DIM && r.height >= MIN_VIDEO_DIM) rects.push(r);
   }

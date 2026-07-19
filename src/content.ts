@@ -128,6 +128,10 @@ import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuSh
 import { startVideoStallProbe } from './debug/video-stall-probe';
 import { setVideoOverlayGateEnabled } from './render/video-overlay';
 import { detectBrowser } from './browser-shortcuts';
+import {
+  mediaPlayPause, mediaMute, mediaSpeed, mediaSeek, mediaRestart, resolveVideoModeKey,
+  type PlayPauseOp, type MuteOp, type SpeedOp, type SeekDirection,
+} from './activate/media';
 import { churnStats } from './debug/churn-log';
 import { syncTraceStats } from './debug/sync-trace';
 import { loadConfig, getDisplayMode, getHintVisibility } from './config';
@@ -1390,6 +1394,42 @@ dispatcher.register('insert_mode', () => {
 });
 dispatcher.register('pass_next_key', () => {
   keyHandler.armPassNextKey();
+});
+
+// Media commands + video layer (notes/DESIGN_VIDEO_MEDIA_COMMANDS.md).
+// Element-API transport verbs — no-ops in a frame with no large video, so a
+// tab-wide voice broadcast acts only in the frame that has one (embeds work
+// for free). The layer routes bare keys here via the injected handler.
+dispatcher.register('video_mode', () => keyHandler.enterVideoMode());
+dispatcher.register('media_play_pause', (params) => {
+  mediaPlayPause((params.op as PlayPauseOp) || 'toggle');
+});
+dispatcher.register('media_mute', (params) => {
+  mediaMute((params.op as MuteOp) || 'toggle');
+});
+dispatcher.register('media_speed', (params) => {
+  mediaSpeed((params.op as SpeedOp) || 'faster');
+});
+dispatcher.register('media_seek', (params) => {
+  const direction: SeekDirection = params.direction === 'back' ? 'back' : 'ahead';
+  mediaSeek(direction, parseInt(params.seconds || '10', 10));
+});
+dispatcher.register('media_restart', () => mediaRestart());
+keyHandler.setVideoKeyHandler((e) => {
+  const r = resolveVideoModeKey(e);
+  if (r.kind === 'exit') {
+    e.preventDefault();
+    e.stopPropagation();
+    keyHandler.exitVideoMode();
+    return true;
+  }
+  // dispatch and consume both swallow the key — the layer owns bare keys, so
+  // an unbound letter no-ops instead of firing a Normal bind or reaching the
+  // page.
+  e.preventDefault();
+  e.stopPropagation();
+  if (r.kind === 'dispatch') dispatcher.dispatch(r.action, r.params ?? {});
+  return true;
 });
 
 // Marks (Vimium m / `). `m`/`` ` `` arm a one-shot; KeyHandler captures the next

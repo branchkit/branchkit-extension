@@ -25,6 +25,7 @@ const REGISTERED_ACTIONS = [
   'move_tab_left', 'move_tab_right',
   'mark_set', 'mark_jump',
   'caret_mode', 'visual_line_mode',
+  'video_mode', 'media_play_pause', 'media_mute', 'media_speed', 'media_seek', 'media_restart',
   'toggle_help', 'toggle_palette', 'toggle_tab_palette',
 ] as const;
 
@@ -143,7 +144,7 @@ describe('command catalog — voice patterns', () => {
   it('attaches voice only to hint / scroll / find / navigation / tab / palette commands this phase', () => {
     // Help entered via the palette voice loop: "palette" opens it,
     // {browser_palette} selects a row, "hide" dismisses.
-    const allowed = new Set(['Badges', 'Scroll', 'Zoom', 'Find', 'Navigation', 'Tabs', 'Help', 'Selection']);
+    const allowed = new Set(['Badges', 'Scroll', 'Zoom', 'Find', 'Navigation', 'Tabs', 'Help', 'Selection', 'Media']);
     for (const c of withVoice) {
       expect(allowed.has(c.group), `${c.id} in ${c.group}`).toBe(true);
     }
@@ -216,6 +217,7 @@ describe('default keymap', () => {
       { keys: 'Backquote', command: 'mark_jump' },
       { keys: 'KeyV', command: 'caret_mode' },
       { keys: 'shift+KeyV', command: 'visual_line_mode' },
+      { keys: 'KeyW', command: 'video_mode' },
       { keys: 'ctrl+KeyK', command: 'toggle_palette' },
       { keys: 'shift+KeyT', command: 'toggle_tab_palette' },
       { keys: 'shift+Slash', command: 'toggle_help' },

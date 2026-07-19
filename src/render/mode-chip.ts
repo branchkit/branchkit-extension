@@ -32,10 +32,12 @@ const STYLE = `
 .chip .sub { color: #8b949e; font-weight: 500; letter-spacing: 0; }
 `;
 
-type ChipMode = 'hint' | 'insert' | 'mark-set' | 'mark-jump' | 'caret' | 'visual';
+type ChipMode = 'hint' | 'insert' | 'mark-set' | 'mark-jump' | 'caret' | 'visual' | 'video';
 
 // Per-mode chip copy. Normal has no chip (the quiet default). The two mark
-// states are transient prompts (the next key names the mark).
+// states are transient prompts (the next key names the mark). The video sub
+// is the layer's in-mode key reference (layer keys aren't keymap entries, so
+// the ? overlay can't list them — the chip is where they're taught).
 const CHIP_TEXT: Record<ChipMode, { label: string; sub: string }> = {
   hint: { label: 'BADGE', sub: 'type a letter · Esc' },
   insert: { label: 'PASS-THROUGH', sub: 'keys go to the page · Esc' },
@@ -43,6 +45,7 @@ const CHIP_TEXT: Record<ChipMode, { label: string; sub: string }> = {
   'mark-jump': { label: 'JUMP TO MARK', sub: 'press a letter · Esc' },
   caret: { label: 'CARET', sub: 'hjkl move · v select · y copy · Esc' },
   visual: { label: 'VISUAL', sub: 'hjkl extend · y copy · o swap · Esc' },
+  video: { label: 'VIDEO', sub: 'k play · j/l seek · m mute · < > speed · 0 restart · Esc' },
 };
 
 function build(mode: ChipMode): HTMLElement {
@@ -72,7 +75,7 @@ export function setModeChip(mode: KeyMode): void {
   if (typeof document === 'undefined' || window !== window.top) return;
   const shown: ChipMode | null =
     mode === 'hint' || mode === 'insert' || mode === 'mark-set' || mode === 'mark-jump'
-      || mode === 'caret' || mode === 'visual'
+      || mode === 'caret' || mode === 'visual' || mode === 'video'
       ? mode
       : null;
   host?.remove();

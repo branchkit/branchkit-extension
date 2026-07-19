@@ -379,6 +379,54 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
       { pattern: 'stop selecting', params: { op: 'exit' } },
     ] },
 
+  // --- Media (notes/DESIGN_VIDEO_MEDIA_COMMANDS.md) ---
+  // Transport verbs on the HTML5 <video> element API — generic across every
+  // site, working while the video-overlay gate suppresses badges and while
+  // site controls are auto-hidden. Voice phrases are deliberately the words
+  // a person says at a TV (guessability IS the discoverability mechanism);
+  // the video layer's keys (k/j/l/m/</>/0, taught by the mode chip) are
+  // YouTube's own, remapped to these commands so the muscle memory works on
+  // any site. Seek phrases avoid bare "back"/"next" (history/find own them).
+  { id: 'video_mode', label: 'Video control mode', group: 'Media', mappable: true, params: [],
+    description: 'Enter the video key layer — k/Space play-pause, j/l seek 10s, arrows 5s, m mute, < > speed, 0 restart. YouTube\'s keys, working on any site\'s video. Esc or q exits.' },
+  { id: 'media_play_pause', label: 'Play / pause video', group: 'Media', mappable: true,
+    description: 'Pause or resume the page\'s video — the largest one playing (any site, works while player controls are hidden).',
+    params: [{ name: 'op', type: 'enum', options: ['toggle', 'play', 'pause'], default: 'toggle' }],
+    voice: [
+      { pattern: 'pause', params: { op: 'pause' } },
+      { pattern: 'play', params: { op: 'play' } },
+    ] },
+  { id: 'media_mute', label: 'Mute video', group: 'Media', mappable: true,
+    description: 'Mute or unmute the page\'s video (the video itself, not the tab).',
+    params: [{ name: 'op', type: 'enum', options: ['toggle', 'mute', 'unmute'], default: 'toggle' }],
+    voice: [
+      { pattern: 'mute', params: { op: 'mute' } },
+      { pattern: 'unmute', params: { op: 'unmute' } },
+    ] },
+  { id: 'media_speed', label: 'Video speed', group: 'Media', mappable: true,
+    description: 'Change playback speed in 0.25× steps (works even on sites without a speed control).',
+    params: [{ name: 'op', type: 'enum', options: ['faster', 'slower', 'normal'], default: 'faster' }],
+    voice: [
+      { pattern: 'faster', params: { op: 'faster' } },
+      { pattern: 'slower', params: { op: 'slower' } },
+      { pattern: 'normal speed', params: { op: 'normal' } },
+    ] },
+  { id: 'media_seek', label: 'Skip in video', group: 'Media', mappable: true,
+    description: 'Jump ahead or back in the playing video; say a number for exact seconds ("skip back 30").',
+    params: [
+      { name: 'direction', type: 'enum', options: ['ahead', 'back'], default: 'ahead' },
+      { name: 'seconds', type: 'number', min: 1, max: 600, default: '10' },
+    ],
+    voice: [
+      { pattern: 'skip ahead', params: { direction: 'ahead' } },
+      { pattern: 'skip back', params: { direction: 'back' } },
+      { pattern: 'skip ahead {number}', params: { direction: 'ahead', seconds: '{number}' } },
+      { pattern: 'skip back {number}', params: { direction: 'back', seconds: '{number}' } },
+    ] },
+  { id: 'media_restart', label: 'Restart video', group: 'Media', mappable: true, params: [],
+    description: 'Jump the playing video back to the beginning.',
+    voice: [{ pattern: 'restart video' }] },
+
   // --- Help ---
   { id: 'toggle_help', label: 'Keyboard help', group: 'Help', mappable: true, params: [],
     description: 'Show or hide this keyboard command reference.',
@@ -521,6 +569,8 @@ export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   // Selection (Vimium v / V — caret & visual mode)
   { keys: 'KeyV', command: 'caret_mode' },            // v — caret mode
   { keys: 'shift+KeyV', command: 'visual_line_mode' },// V — visual line mode
+  // Media (notes/DESIGN_VIDEO_MEDIA_COMMANDS.md)
+  { keys: 'KeyW', command: 'video_mode' },            // w — "watch": video key layer
   // Palette / tab palette
   { keys: 'ctrl+KeyK', command: 'toggle_palette' },   // Ctrl+K — full palette (works everywhere)
   { keys: 'shift+KeyT', command: 'toggle_tab_palette' }, // T — tab palette (Vimium-C's tab-search key)

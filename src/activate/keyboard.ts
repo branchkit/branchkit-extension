@@ -16,7 +16,9 @@ import { isMarkChar, isPrevPositionRegister } from '../marks';
 // change key ROUTING — the arm is handled at the top of handleKeyDown.
 // 'caret'/'visual' are the caret/visual-mode capture states; while active, all
 // bare keys route to the injected caret handler (see setCaretKeyHandler).
-export type KeyMode = 'normal' | 'insert' | 'hint' | 'mark-set' | 'mark-jump' | 'caret' | 'visual';
+// 'video' is the media-control layer (notes/DESIGN_VIDEO_MEDIA_COMMANDS.md);
+// bare keys route to the injected video handler (see setVideoKeyHandler).
+export type KeyMode = 'normal' | 'insert' | 'hint' | 'mark-set' | 'mark-jump' | 'caret' | 'visual' | 'video';
 
 /** Which mark operation the next key completes. */
 export type MarkArm = 'set' | 'jump';
@@ -82,6 +84,11 @@ export class KeyHandler {
   // the chip-facing sub-mode; the controller owns the movement/selection logic.
   private caretMode: 'caret' | 'visual' | null = null;
   private onCaretKey: ((e: KeyboardEvent) => boolean) | null = null;
+  // Video layer (media controls on YouTube's mnemonics). A modal capture like
+  // caret: bare keys route to the injected handler until Escape/q exits. See
+  // notes/DESIGN_VIDEO_MEDIA_COMMANDS.md.
+  private videoMode = false;
+  private onVideoKey: ((e: KeyboardEvent) => boolean) | null = null;
   // Granular per-site pass-through: specific keys (matched against `event.key`,
   // e.g. "j", "#") reach the page while the REST of BranchKit's binds keep
   // working — for keyboard-heavy sites like Gmail. The persistent, per-key twin
@@ -152,17 +159,36 @@ export class KeyHandler {
     this.onModeChange?.(this.getMode());
   }
 
+  /** Inject the video-layer key handler. Called by content. */
+  setVideoKeyHandler(fn: (e: KeyboardEvent) => boolean): void {
+    this.onVideoKey = fn;
+  }
+
+  /** Enter the video layer (the `video_mode` command, default `w`). */
+  enterVideoMode(): void {
+    if (this.videoMode) return;
+    this.videoMode = true;
+    this.onModeChange?.(this.getMode());
+  }
+
+  exitVideoMode(): void {
+    if (!this.videoMode) return;
+    this.videoMode = false;
+    this.onModeChange?.(this.getMode());
+  }
+
   /** True while an explicit modal capture owns the keyboard (hint or caret/
    *  visual): the field-yield / pass-through / passKeys short-circuits are
    *  suspended so the mode fully owns bare keys. */
   private isModalCapture(): boolean {
-    return this.mode === 'hint' || this.caretMode !== null;
+    return this.mode === 'hint' || this.caretMode !== null || this.videoMode;
   }
 
   getMode(): KeyMode {
     if (this.markArm === 'set') return 'mark-set';
     if (this.markArm === 'jump') return 'mark-jump';
     if (this.caretMode) return this.caretMode;
+    if (this.videoMode) return 'video';
     if (this.mode === 'hint') return 'hint';
     return (this.forcedInsert || this.excluded) ? 'insert' : 'normal';
   }
@@ -332,6 +358,13 @@ export class KeyHandler {
     // still copies the visual selection). See notes/DESIGN_MARKS_AND_CARET.md.
     if (this.caretMode) {
       return this.onCaretKey ? this.onCaretKey(e) : false;
+    }
+
+    // Video layer (entered via `w`): media keys on YouTube's mnemonics drive
+    // the frame's <video> via the element API. Full modal capture like caret;
+    // real-modifier chords already took the fast path above.
+    if (this.videoMode) {
+      return this.onVideoKey ? this.onVideoKey(e) : false;
     }
 
     // Hint mode ONLY (entered via `f`): letters filter/activate the painted

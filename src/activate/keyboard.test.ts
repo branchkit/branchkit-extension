@@ -570,3 +570,41 @@ describe('caret / visual mode routing', () => {
     expect(caretKey).toHaveBeenCalled();
   });
 });
+
+describe('video mode routing', () => {
+  it('enterVideoMode routes bare keys to the injected video handler', () => {
+    const videoKey = vi.fn().mockReturnValue(true);
+    handler.setVideoKeyHandler(videoKey);
+    // Normal-mode binds that must NOT fire while the layer owns the keyboard
+    // — j/k are exactly the collision the layer exists to resolve.
+    registry.add({ keys: 'KeyJ', action: 'scroll_down' });
+    registry.add({ keys: 'KeyK', action: 'scroll_up' });
+
+    handler.enterVideoMode();
+    expect(handler.getMode()).toBe('video');
+
+    expect(handler.handleKeyDown(makeKey('k'))).toBe(true);
+    expect(videoKey).toHaveBeenCalledTimes(1);
+    expect(dispatchSpy).not.toHaveBeenCalled(); // scroll_up suppressed
+  });
+
+  it('exitVideoMode returns to normal and fires the mode callback', () => {
+    const modeCb = vi.fn();
+    handler.setModeChangeCallback(modeCb);
+    handler.setVideoKeyHandler(vi.fn().mockReturnValue(true));
+    handler.enterVideoMode();
+    expect(modeCb).toHaveBeenLastCalledWith('video');
+    handler.exitVideoMode();
+    expect(handler.getMode()).toBe('normal');
+    expect(modeCb).toHaveBeenLastCalledWith('normal');
+  });
+
+  it('real-modifier chords still reach the registry from the layer', () => {
+    handler.setVideoKeyHandler(vi.fn().mockReturnValue(true));
+    handler.enterVideoMode();
+    // Ctrl+K is a palette-tier chord — must fire even inside the layer.
+    registry.add({ keys: 'ctrl+KeyK', action: 'toggle_palette' });
+    expect(handler.handleKeyDown(makeKey('k', { ctrlKey: true }))).toBe(true);
+    expect(dispatchSpy).toHaveBeenCalledWith('toggle_palette', {});
+  });
+});
