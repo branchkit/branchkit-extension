@@ -7,9 +7,9 @@
  * boot-time reconcile in init() for the stale-true case (browser restart
  * with the host down — no disconnect event ever fires to correct it).
  *
- * Content scripts read the mirror for PAINT decisions only — a disconnected
- * host means voice isn't coming, so badges paint at full opacity instead of
- * the bk-pending "voice not ready YET" translucency. Connection state must
+ * Content scripts read the mirror for UI chrome (mode chip, help overlay)
+ * — badges themselves always paint at full opacity since display-grade
+ * demotion phase 2. Connection state must
  * never gate transport: grammar POSTs run regardless, because a wrongly-
  * false mirror that suppressed syncs would strand painted badges
  * unmatchable with no epoch check ever running to heal them.

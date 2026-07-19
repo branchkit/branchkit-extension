@@ -240,11 +240,6 @@ export class IntersectionTracker {
       wrapper.preferredCodeword = wrapper.scanned.codeword;
       wrapper.scanned.codeword = '';
       wrapper.label = null;
-      // The codeword is being released — the plugin will receive a Delete
-      // and the grammar entry goes away. Next reclaim is a fresh codeword
-      // that has to be re-acknowledged by the plugin before it's voice-
-      // matchable, so reset to pending. show() will add bk-pending again.
-      wrapper.grammarReady = false;
       // Keep the badge object alive across visibility cycles (notes/
       // DESIGN_HINT_REUSE.md): drop visibility + label content, but leave
       // the shadow DOM, observers, anchorParent, and color computation

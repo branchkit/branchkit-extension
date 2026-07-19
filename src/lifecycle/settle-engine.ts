@@ -420,10 +420,10 @@ export class SettleEngine {
       w.hint = this.deps.badges.create(w.element, label, w.category, this.deps.displayMode());
     }
     // Direct paint (round 13 — the Rango-parity cut): the badge appears the
-    // moment it is built, translucent (bk-pending) until the grammar ACK
-    // solidifies it ~80ms later. tFirstShown stamps here and is eye-honest:
-    // the paint is immediately visible.
-    w.hint.show(this.deps.isPaintReady(w));
+    // moment it is built, at full opacity (display-grade demotion phase 2 —
+    // speakability rides the hints tag, not a per-codeword ACK). tFirstShown
+    // stamps here and is eye-honest: the paint is immediately visible.
+    w.hint.show();
     w.tFirstShown ??= performance.now();
     return true;
   }
@@ -507,7 +507,7 @@ export class SettleEngine {
   // the identical delta.
   private applyVisibilityPlan(lists: ReconcilePlanLists): void {
     for (const w of lists.toShow) {
-      if (w.hint && !w.hint.isVisible) w.hint.show(this.deps.isPaintReady(w));
+      if (w.hint && !w.hint.isVisible) w.hint.show();
     }
     for (const w of lists.toHide) {
       if (w.hint?.isVisible) w.hint.hide();

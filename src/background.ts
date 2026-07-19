@@ -125,8 +125,7 @@ function onSSEConnected(): void {
   if (voicePaused) return;
   bgState.branchkitConnected = true;
   updateConnectionBadge(true);
-  // Mirror for content scripts (paint only — see plugin/connection-mirror.ts):
-  // disconnected badges render full-opacity instead of bk-pending translucent.
+  // Mirror for content scripts (UI chrome — see plugin/connection-mirror.ts).
   void chrome.storage.local.set({ branchkitConnected: true });
   sseBackoff.onConnected(Date.now());
   clearSSERetryTimer();
@@ -2083,7 +2082,7 @@ async function init(): Promise<void> {
     // Reconcile the content-facing connection mirror. A browser restart with
     // the host down leaves a stale `true` from the previous session — no
     // disconnect event ever fires to correct it (onSSEDisconnected needs a
-    // connection to lose), so badges would paint bk-pending translucent
+    // connection to lose), so the mode chip would claim a live connection
     // forever. Written only on discovery FAILURE: the discovery-succeeded
     // path converges through the stream's own connected/error events, and an
     // unconditional write here would flap the mirror on every SW idle-wake.

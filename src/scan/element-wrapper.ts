@@ -103,15 +103,6 @@ export class ElementWrapper {
   // never cleared (a new release just overwrites it).
   preferredCodeword: string = '';
 
-  // True when this wrapper's codeword has been acknowledged by the native
-  // plugin's grammar (i.e., voice will actually match it). Decouples the
-  // visual layer (badge paints immediately on claim) from the voice layer
-  // (codeword goes live after the async POST round-trip). Badges paint
-  // translucent (`bk-pending` class) while this is false and snap to full
-  // opacity when label-sync's ACK callback flips it. Cleared on label
-  // release (clearLabel) and on alphabet change (rotateSession).
-  grammarReady: boolean = false;
-
   // The in_strict_viewport flag value last pushed to the plugin (or
   // undefined if never pushed). Lets `reconcileStrictViewport` queue a
   // re-push iff the wrapper's current strict-viewport status diverges
@@ -170,12 +161,6 @@ export class ElementWrapper {
   inViewportAtAttach: boolean = false;
   // Which discovery path created this wrapper — see DiscoverySource above.
   discoverySource: DiscoverySource = 'unknown';
-  // First grammar ACK. tFirstShown - tGrammarReady is the show-vs-voice
-  // sequencing: NEGATIVE means the badge painted before voice was ready
-  // (the designed order — visible translucent window); POSITIVE means the
-  // show lagged the whole voice round-trip (zero translucency, the
-  // sequencing inversion reported on production 2026-07-03).
-  tGrammarReady: number | null = null;
   // First time the build pass declined to paint this wrapper because the
   // target was CSS-invisible (skeleton row / fade-in). tFirstShown -
   // tBuildGated is how long the built badge waited for the reveal path.
@@ -184,21 +169,6 @@ export class ElementWrapper {
   constructor(element: Element, scanned: ScannedElement) {
     this.element = element;
     this.scanned = scanned;
-  }
-
-  /**
-   * Mark this wrapper as voice-ready: flip the grammarReady flag and,
-   * if its badge is currently visible (with the bk-pending class), tell
-   * the badge to clear the class and transition to full opacity.
-   *
-   * Two call sites: label-sync.syncNow's batch ACK loop (IO claim path)
-   * and content.ts:processScanBatch (scan path). Both need both effects;
-   * extracting the helper keeps them from drifting apart.
-   */
-  markGrammarReady(): void {
-    this.grammarReady = true;
-    this.tGrammarReady ??= performance.now();
-    if (this.hint?.isVisible) this.hint.clearPending();
   }
 
   get category(): Category {

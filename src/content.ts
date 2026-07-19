@@ -12,7 +12,7 @@ import {
   DEFERRED_REPOSITION_DEBOUNCE_MS,
   REVEAL_REPAIR_FAST_ARM,
 } from './lifecycle/settle-engine';
-import { initConnectionMirror, isBranchKitConnected } from './plugin/connection-mirror';
+import { initConnectionMirror } from './plugin/connection-mirror';
 import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters } from './scan/scanner';
 import { noteDisconnectedShadowAttach } from './scan/shadow-attach-signal';
 import { DiscoverySource, ElementWrapper } from './scan/element-wrapper';
@@ -449,7 +449,6 @@ const engine = new SettleEngine(
     isBadgesVisible: () => pageSession.badgesVisible,
     isTornDown: () => pageSession.isTornDown,
     displayMode: () => getDisplayMode(),
-    isPaintReady: (w) => isPaintReady(w),
   },
   {
     showBadges: () => showBadges(),
@@ -538,7 +537,6 @@ labelReservoir.onConfirmRejected((codewords) => {
     if (hasSent(cw)) queueDelete(cw);
     w.scanned.codeword = '';
     w.label = null;
-    w.grammarReady = false;
     if (w.hint) {
       w.hint.remove();
       w.hint = null;
@@ -855,8 +853,6 @@ if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
       rotateSession();
       for (const w of store.all) {
         if (!w.scanned.codeword) continue;
-        // Voice goes pending until the re-push ACKs the (re)translated codeword.
-        w.grammarReady = false;
         w.label = poolLabelToAssignment(w.scanned.codeword);
         w.hint?.updateLabel(w.label, getDisplayMode());
         queuePut(w);
@@ -881,20 +877,11 @@ if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
   });
 }
 
-// Host-connection mirror (paint only — never gates grammar transport; see
-// plugin/connection-mirror.ts). Disconnected badges paint at full opacity:
-// voice isn't coming, so bk-pending ("voice not ready YET") would be a
-// permanent lie, and the hint is fully functional by typing regardless. On a
-// live disconnect, flip the already-painted pending badges opaque in place.
-// No flip back on connect: the plugin's sse_connect reactivate re-Puts every
-// live wrapper and the ACKs solidify (or per-codeword-fail detach) within a
-// round-trip, so the opaque-but-unacked window self-heals.
-initConnectionMirror((nowConnected) => {
-  if (nowConnected) return;
-  for (const w of store.all) {
-    if (!w.grammarReady) w.hint?.clearPending();
-  }
-});
+// Host-connection mirror (never gates grammar transport; see
+// plugin/connection-mirror.ts). Arms the mirror state consumed by the mode
+// chip and help overlay; badges paint at full opacity regardless of
+// connection since display-grade demotion phase 2.
+initConnectionMirror(() => {});
 
 // Adopt the BranchKit voice alphabet (overlay) from chrome.storage.local on
 // script load, if BranchKit was already connected. Local (not sync) because the
@@ -1699,23 +1686,6 @@ function viewportSort(wrappers: ElementWrapper[]): ElementWrapper[] {
 
 
 /**
- * A hint is paint-ready (full opacity) once its voice command is live OR when
- * voice isn't in play at all. The `grammarReady` flag tracks the plugin's
- * grammar ACK, which only arrives when BranchKit is connected; standalone a
- * badge is functional (type / click) the moment it paints, so don't gate it.
- *
- * "Voice isn't in play" is two distinct states: no alphabet ever loaded
- * (fresh install, never connected) AND host currently disconnected. The
- * alphabet persists in chrome.storage.local across BranchKit sessions and is
- * never cleared, so without the connection-mirror term a machine that had
- * connected ONCE painted bk-pending translucent forever while the host was
- * closed — "not ready YET" for a voice that wasn't coming.
- */
-function isPaintReady(w: ElementWrapper): boolean {
-  return w.grammarReady || !isVoiceAlphabetLoaded() || !isBranchKitConnected();
-}
-
-/**
  * Pull-resolution live strict gate (ext notes/DESIGN_STATIC_PAIR_GRAMMAR.md
  * 0c): the sealed-alphabet match doesn't consult the `_strict` mirror, so
  * seen-is-clickable is enforced at dispatch, against live state — on-screen,
@@ -1965,7 +1935,7 @@ async function showBadges(): Promise<void> {
       // warm from cacheLayout above, so isVisible is cheap here.
       const cssVisible = isVisible(wrapper.element);
       if (cssVisible) {
-        wrapper.hint.show(isPaintReady(wrapper));
+        wrapper.hint.show();
         wrapper.tFirstShown ??= performance.now();
       } else {
         wrapper.hint.hide();
@@ -2385,9 +2355,8 @@ async function processScanBatch(
   // hit. See rememberClaimedCodewords / codeword-recall.
   if (candidates.length > 0) rememberClaimedCodewords(candidates);
 
-  // Paint immediately, translucent (grammarReady is still false, so the
-  // badge carries bk-pending). Gated by pageSession.badgesVisible so
-  // manual-mode batches don't paint until "show".
+  // Paint immediately, at full opacity. Gated by pageSession.badgesVisible
+  // so manual-mode batches don't paint until "show".
   if (pageSession.badgesVisible && candidates.length > 0) {
     engine.reconcile();
   }
@@ -2449,11 +2418,8 @@ async function processScanBatch(
       if (stillMine && w.element.isConnected) {
         // Delta-sync: the plugin acknowledged this codeword, so it's live
         // on the plugin side. Mark it so future detaches know to send a
-        // Delete and future syncs skip re-Putting it — THEN flip the badge
-        // solid. markGrammarReady clears bk-pending on the visible badge
-        // in one shot, mirroring the IO/syncNow ACK site.
+        // Delete and future syncs skip re-Putting it.
         markSent(cw);
-        w.markGrammarReady();
       } else if (stillMine) {
         // Element disconnected during the round-trip. Plugin holds the
         // codeword; markSent first so detachWrapper's delta-sync queues
@@ -2472,10 +2438,16 @@ async function processScanBatch(
         }
       }
     } else if (stillMine) {
-      // Failed or unacknowledged: never live on the plugin side, and
-      // never marked sent, so detachWrapper unpaints and releases the
-      // label without queueing a Delete.
-      detachWrapper(w.element);
+      // Failed or unacknowledged: never live on the plugin side. Keep the
+      // badge painted — under sealed dispatch it is fully speakable without
+      // the plugin entry (display-grade demotion phase 2); the miss is a
+      // HUD-menu row. Queue a re-Put and let the next delta retry.
+      if (w.element.isConnected) {
+        queuePut(w);
+      } else {
+        // Disconnected during the round-trip; never sent, plain detach.
+        detachWrapper(w.element);
+      }
     }
   }
 }
@@ -3589,7 +3561,7 @@ function paintLatencyStats() {
   const deltas: Record<string, number[]> = {
     dom_seen_to_attached: [], attached_to_band: [], band_to_claimed: [],
     claimed_to_shown: [], attached_to_shown: [], dom_seen_to_shown: [],
-    shown_minus_ack: [], gated_to_shown: [],
+    gated_to_shown: [],
   };
   let count = 0;
   for (const w of store.all) {
@@ -3599,10 +3571,6 @@ function paintLatencyStats() {
       deltas.dom_seen_to_attached.push(w.tAttached - w.tDomSeen);
       deltas.dom_seen_to_shown.push(w.tFirstShown - w.tDomSeen);
     }
-    // Sequencing: negative = shown before voice ACK (designed order,
-    // visible translucent window); positive = show lagged the voice
-    // round-trip (zero translucency — the inversion).
-    if (w.tGrammarReady !== null) deltas.shown_minus_ack.push(w.tFirstShown - w.tGrammarReady);
     // Built-but-gated on an invisible target: how long the reveal path took.
     if (w.tBuildGated !== null) deltas.gated_to_shown.push(w.tFirstShown - w.tBuildGated);
     if (w.tInBand !== null) deltas.attached_to_band.push(w.tInBand - w.tAttached);
@@ -3619,7 +3587,6 @@ function paintLatencyStats() {
     claimed_to_shown: latencySummary(deltas.claimed_to_shown),
     attached_to_shown: latencySummary(deltas.attached_to_shown),
     dom_seen_to_shown: latencySummary(deltas.dom_seen_to_shown),
-    shown_minus_ack: latencySummary(deltas.shown_minus_ack),
     gated_to_shown: latencySummary(deltas.gated_to_shown),
   };
 }

@@ -148,11 +148,6 @@ interface WrapperRecord {
      * content that attached when scrolling made it eligible (benign). */
     in_viewport_at_attach: boolean;
   };
-  /** Plugin ACK'd the codeword (it reached the recognizer grammar). A
-   * strictly-painted badge with grammar_ready=false is painted but the
-   * extension->plugin sync hasn't confirmed it — a drift signal the Layer-2
-   * reconcile keys off. */
-  grammar_ready: boolean;
   lastSentStrictViewport: boolean | undefined;
 }
 
@@ -347,7 +342,6 @@ function captureWrapper(w: ElementWrapper): WrapperRecord {
       t_first_shown: w.tFirstShown === null ? null : Math.round(w.tFirstShown),
       in_viewport_at_attach: w.inViewportAtAttach,
     },
-    grammar_ready: w.grammarReady,
     // What was last pushed to the plugin for this wrapper. A divergence
     // between `scanned.in_strict_viewport` (current) and `lastSentStrictViewport`
     // means a reconcile re-push is pending or missed.

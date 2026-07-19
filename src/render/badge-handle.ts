@@ -72,7 +72,7 @@ export interface BadgeHandle {
   readonly badgeSize: { w: number; h: number };
   readonly diagnostics: BadgeDiagnostics;
 
-  show(grammarReady?: boolean): void;
+  show(): void;
   hide(): void;
   remove(): void;
   reattach(): void;
@@ -87,7 +87,6 @@ export interface BadgeHandle {
    *  signal; applies the visual and returns true when it flipped. */
   applyOcclusion(overlay: boolean | null, clipped: boolean): boolean;
   flash(): void;
-  clearPending(): void;
 
   updatePosition(candidate?: { x: number; y: number }): void;
   hideLeader(): void;

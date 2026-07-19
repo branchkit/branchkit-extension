@@ -185,7 +185,6 @@ function makeHarness(opts?: { badgesVisible?: boolean }) {
     isBadgesVisible: () => state.badgesVisible,
     isTornDown: () => state.tornDown,
     displayMode: () => 'letter' as BadgeDisplayMode,
-    isPaintReady: () => true,
   };
   const hooks: SettleEngineHooks & { showBadgesCalls: number; scrollSettleFlushes: number } = {
     showBadgesCalls: 0,

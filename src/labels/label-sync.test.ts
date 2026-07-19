@@ -106,14 +106,14 @@ describe('syncNow wholesale refusal (calibration_active)', () => {
 
     await runSync();
     expect(batchCalls()).toHaveLength(1);
-    expect(w.grammarReady).toBe(false);
+    expect(hasSent('arch')).toBe(false);
 
-    // Refusal retry (2s) → scheduleSync debounce (80ms) → second POST succeeds.
-    await vi.advanceTimersByTimeAsync(2200);
+    // Refusal retry (2s) → scheduleSync debounce (250ms) → second POST succeeds.
+    await vi.advanceTimersByTimeAsync(2400);
     expect(batchCalls()).toHaveLength(2);
     const second = batchCalls()[1][0].request;
     expect(second.elements.map((e: ScannedElement) => e.codeword)).toContain('arch');
-    expect(w.grammarReady).toBe(true);
+    expect(hasSent('arch')).toBe(true);
   });
 
   it('restores pending deletes refused by the pure-delete path', async () => {
@@ -126,7 +126,7 @@ describe('syncNow wholesale refusal (calibration_active)', () => {
     expect(hasPendingDeletes()).toBe(true);
     expect(hasSent('zinc')).toBe(true);
 
-    await vi.advanceTimersByTimeAsync(2200);
+    await vi.advanceTimersByTimeAsync(2400);
     expect(batchCalls()).toHaveLength(2);
     expect(hasPendingDeletes()).toBe(false);
     expect(hasSent('zinc')).toBe(false);
@@ -332,7 +332,6 @@ describe('syncNow transport failure keeps wrappers (BranchKit down)', () => {
     await runSync();
     expect(batchCalls()).toHaveLength(1);
     expect(detachWrapper).not.toHaveBeenCalled();
-    expect(w.grammarReady).toBe(false);
     expect(hasSent('arch')).toBe(false);
 
     // No retry timer for transport failures (it would hammer forever while
@@ -345,7 +344,6 @@ describe('syncNow transport failure keeps wrappers (BranchKit down)', () => {
     expect(batchCalls()).toHaveLength(2);
     const second = batchCalls()[1][0].request;
     expect(second.elements.map((e: ScannedElement) => e.codeword)).toContain('arch');
-    expect(w.grammarReady).toBe(true);
     expect(hasSent('arch')).toBe(true);
   });
 
@@ -356,10 +354,10 @@ describe('syncNow transport failure keeps wrappers (BranchKit down)', () => {
 
     await runSync();
     expect(detachWrapper).not.toHaveBeenCalled();
-    expect(w.grammarReady).toBe(false);
+    expect(hasSent('bake')).toBe(false);
 
     await runSync();
-    expect(w.grammarReady).toBe(true);
+    expect(hasSent('bake')).toBe(true);
   });
 
   it('a chunk-0 transport failure halts the pipeline and re-queues the undispatched chunks too', async () => {
@@ -383,7 +381,7 @@ describe('syncNow transport failure keeps wrappers (BranchKit down)', () => {
     const resent = batchCalls().slice(1).flatMap(
       (c) => c[0].request.elements.map((e: ScannedElement) => e.codeword));
     expect(new Set(resent)).toEqual(new Set(ALPHABET.slice(0, 16)));
-    for (const w of wrappers) expect(w.grammarReady).toBe(true);
+    for (const cw of ALPHABET.slice(0, 16)) expect(hasSent(cw)).toBe(true);
   });
 });
 
@@ -391,10 +389,10 @@ describe('syncNow transport failure keeps wrappers (BranchKit down)', () => {
 
 describe('scheduleSync debounce + max-wait deadline (round 22c)', () => {
   // A pure trailing debounce starves under sustained churn: during a fling,
-  // claims and strict deltas reset the 80ms timer continuously and the sync
+  // claims and strict deltas reset the debounce timer continuously and the sync
   // never fired for the whole scroll+swap window (sync_trace: a 5.5s hole,
   // then a 355-delete monster delta, session rotation, full republish —
-  // badges translucent 13s+). The deadline caps the stall at 400ms.
+  // never fired). The deadline caps the stall at BATCHED_SYNC_MAX_WAIT_MS.
   let store: WrapperStore;
   let sendMessage: ReturnType<typeof vi.fn>;
 
@@ -430,7 +428,7 @@ describe('scheduleSync debounce + max-wait deadline (round 22c)', () => {
     const w = makeWrapper('arch', store);
     queuePut(w);
     scheduleSync('quiet');
-    await vi.advanceTimersByTimeAsync(100); // trailing 80ms fires
+    await vi.advanceTimersByTimeAsync(300); // trailing 250ms fires
     expect(batchCalls()).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(1000); // past the deadline — cleared by the fire
     expect(batchCalls()).toHaveLength(1);
@@ -439,13 +437,13 @@ describe('scheduleSync debounce + max-wait deadline (round 22c)', () => {
   it('sustained sub-debounce churn ships via the deadline instead of starving', async () => {
     const w = makeWrapper('arch', store);
     queuePut(w);
-    // Storm: a scheduleSync every 50ms for 2s — the trailing 80ms debounce
+    // Storm: a scheduleSync every 200ms — the trailing 250ms debounce
     // alone would never fire.
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 6; i++) {
       scheduleSync('storm');
-      await vi.advanceTimersByTimeAsync(50);
+      await vi.advanceTimersByTimeAsync(200);
     }
-    // 400ms in: the non-extending deadline must have shipped the delta.
+    // 1200ms in: the non-extending deadline must have shipped the delta.
     expect(batchCalls().length).toBeGreaterThanOrEqual(1);
   });
 });

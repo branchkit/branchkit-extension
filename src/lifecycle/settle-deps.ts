@@ -163,9 +163,6 @@ export interface SettleDeps {
   /** Orphan/teardown gate — pageSession.isTornDown. */
   isTornDown(): boolean;
   displayMode(): BadgeDisplayMode;
-  /** Paint-readiness policy (grammar ACK vs standalone) — content.ts
-   *  `isPaintReady`; decides the badge's pending-vs-solid opacity at show. */
-  isPaintReady(w: ElementWrapper): boolean;
 }
 
 // --- Compile-time conformance: the real impls satisfy their seams. ---

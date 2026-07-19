@@ -504,39 +504,14 @@ describe('HintBadge bk-pending opacity indicator (voice-not-ready state)', () =>
     hostTracker.reset();
   });
 
-  it('show(false) adds bk-pending; clearPending removes it', async () => {
+  it('show() paints at full opacity — no bk-pending state (demotion phase 2)', async () => {
     const root = mount('<div id="c"><button id="btn">click</button></div>');
     const badge = new HintBadge(root.querySelector('#btn')!, label, 'button', 'word');
-    badge.show(false);
+    badge.show();
     // show() schedules the visible class via rAF; wait one frame.
     await new Promise(r => requestAnimationFrame(() => r(undefined)));
-    expect((badge as unknown as { inner: HTMLDivElement }).inner.classList.contains('bk-pending')).toBe(true);
-    expect((badge as unknown as { inner: HTMLDivElement }).inner.classList.contains('visible')).toBe(true);
-
-    badge.clearPending();
-    expect((badge as unknown as { inner: HTMLDivElement }).inner.classList.contains('bk-pending')).toBe(false);
-    // visible stays — clearPending only flips the pending state.
-    expect((badge as unknown as { inner: HTMLDivElement }).inner.classList.contains('visible')).toBe(true);
-    badge.remove();
-  });
-
-  it('show(true) skips bk-pending entirely (race: grammar ACK already landed)', async () => {
-    const root = mount('<div id="c"><button id="btn">click</button></div>');
-    const badge = new HintBadge(root.querySelector('#btn')!, label, 'button', 'word');
-    badge.show(true);
-    await new Promise(r => requestAnimationFrame(() => r(undefined)));
     expect((badge as unknown as { inner: HTMLDivElement }).inner.classList.contains('bk-pending')).toBe(false);
     expect((badge as unknown as { inner: HTMLDivElement }).inner.classList.contains('visible')).toBe(true);
-    badge.remove();
-  });
-
-  it('clearPending is idempotent', () => {
-    const root = mount('<div id="c"><button id="btn">click</button></div>');
-    const badge = new HintBadge(root.querySelector('#btn')!, label, 'button', 'word');
-    badge.show(false);
-    badge.clearPending();
-    expect(() => badge.clearPending()).not.toThrow();
-    expect((badge as unknown as { inner: HTMLDivElement }).inner.classList.contains('bk-pending')).toBe(false);
     badge.remove();
   });
 });

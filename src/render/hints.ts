@@ -244,17 +244,6 @@ const BADGE_CSS = `
     opacity: 1;
     transition: opacity 0.12s ease-out;
   }
-  /* Voice-pending: badge is painted but the native plugin hasn't yet
-   * acknowledged its codeword in the grammar. The translucent state
-   * communicates "visible, identifiable, but voice may not match this
-   * yet" — the keyboard layer can still operate on it. Removed when the
-   * grammar push ACK arrives (wrapper.markGrammarReady → clearPending),
-   * or when the host disconnects (voice isn't coming; the connection-
-   * mirror flip in content.ts clears it so badges sit at full opacity).
-   */
-  .bk-inner.visible.bk-pending {
-    opacity: 0.55;
-  }
   .bk-inner.filtered {
     display: none;
   }
@@ -881,19 +870,12 @@ export class HintBadge implements BadgeHandle {
   }
 
   /**
-   * Show the badge.
-   *
-   * @param grammarReady — is this badge paint-ready at full opacity?
-   *   True when the codeword has a confirmed place in the native
-   *   plugin's voice grammar — or when voice isn't in play at all
-   *   (standalone / host disconnected; see content.ts isPaintReady).
-   *   If false (typical first-paint case while connected), the badge
-   *   paints translucent (`bk-pending` class) so the user can tell the
-   *   visual is there but voice isn't ready yet; `clearPending()` (from
-   *   the grammar push ACK or the disconnect flip) transitions it to
-   *   full opacity.
+   * Show the badge, at full opacity. (The bk-pending translucent state —
+   * per-codeword grammar-ACK gating — retired with display-grade demotion
+   * phase 2: under sealed dispatch a painted badge is speakable the moment
+   * the hints tag is up, push or no push.)
    */
-  show(grammarReady = false): void {
+  show(): void {
     if (this._visible) return;
     // Dormant guard: a null label means clearLabel() ran (band-exit reuse, a
     // mid-flight codeword reclaim, or session/alphabet rotation) and the inner
@@ -932,10 +914,6 @@ export class HintBadge implements BadgeHandle {
     // it does not touch the host transform here.
     this.armScrollAccel();
     if (isScrollAccelEnabled()) this.repositionHostNow();
-    if (!grammarReady) {
-      this.inner.classList.add('bk-pending');
-      this.host.setAttribute('data-bk-pending', 'true');
-    }
     requestAnimationFrame(() => {
       this.inner.classList.add('visible');
       // Mirror the visibility state onto the light-DOM host so tools that
@@ -944,15 +922,6 @@ export class HintBadge implements BadgeHandle {
       // attribute tracker's reconcile.
       this.host.setAttribute('data-bk-shown', 'true');
     });
-  }
-
-  /** Clear the `bk-pending` translucency. Two callers: the grammar push
-   *  ACK (via ElementWrapper.markGrammarReady — voice will now match this
-   *  badge) and the connection-mirror disconnect flip (host gone, voice
-   *  isn't coming, so "not ready YET" would be a permanent lie). Idempotent. */
-  clearPending(): void {
-    this.inner.classList.remove('bk-pending');
-    this.host.removeAttribute('data-bk-pending');
   }
 
   get badgeSize(): { w: number; h: number } {
@@ -995,9 +964,7 @@ export class HintBadge implements BadgeHandle {
   hide(): void {
     this._visible = false;
     this.inner.classList.remove('visible');
-    this.inner.classList.remove('bk-pending');
     this.host.removeAttribute('data-bk-shown');
-    this.host.removeAttribute('data-bk-pending');
     // Park the host out of the layer tree entirely. opacity:0 alone leaves a
     // compositor-active element (the .visible opacity transition promotes
     // it), which kept invisible layers stacked over videos — the 2026-07-18

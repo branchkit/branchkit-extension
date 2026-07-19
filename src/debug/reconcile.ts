@@ -21,7 +21,6 @@ const HINTS_TAG = 'plugin.browser.hints';
 export interface ReconcileWrapper {
   scanned: { codeword: string; in_strict_viewport?: boolean };
   hint: { isVisible: boolean } | null;
-  grammar_ready?: boolean;
   lastSentStrictViewport?: boolean;
 }
 
@@ -35,7 +34,6 @@ export interface ReconcileReport {
   painted: number;
   scroll_ahead: number;
   strict_painted: number;
-  unacked: number;
   send_pending: number;
   hints_gate_active: boolean;
   hint_commands_eligible: boolean;
@@ -49,7 +47,6 @@ export function buildReconcileReport(
   let painted = 0;
   let scrollAhead = 0;
   let strictPainted = 0;
-  let unacked = 0;
   let sendPending = 0;
 
   for (const w of wrappers) {
@@ -57,7 +54,6 @@ export function buildReconcileReport(
     painted++;
     if (w.scanned.in_strict_viewport === true) {
       strictPainted++;
-      if (w.grammar_ready === false) unacked++;
     } else {
       scrollAhead++;
     }
@@ -81,13 +77,8 @@ export function buildReconcileReport(
     } else if (!hintCommandsEligible) {
       verdict.push('DRIFT: hints gate active but no hint command is eligible — codewords cannot resolve.');
     }
-    if (unacked > 0) {
-      verdict.push(
-        `DRIFT: ${unacked} strictly-painted badge(s) not ACK'd by the plugin (grammar_ready=false) — extension->plugin sync gap.`,
-      );
-    }
     if (verdict.length === 0) {
-      verdict.push(`OK: ${strictPainted} strictly-painted badge(s) — gate active, commands eligible, all ACK'd.`);
+      verdict.push(`OK: ${strictPainted} strictly-painted badge(s) — gate active, commands eligible.`);
     }
   }
   if (sendPending > 0) {
@@ -100,7 +91,6 @@ export function buildReconcileReport(
     painted,
     scroll_ahead: scrollAhead,
     strict_painted: strictPainted,
-    unacked,
     send_pending: sendPending,
     hints_gate_active: hintsGateActive,
     hint_commands_eligible: hintCommandsEligible,

@@ -1,9 +1,19 @@
 # Display-grade demotion follow-through — finish what the payoff started
 
-**Status:** accepted 2026-07-19 (user go). Follow-on to
-REVIEW_TRI_OWNER_SYNC_2026-07-19.md; the review's file:line evidence is not
-repeated here. Phase 0 lands with this note; Phases 1 and 2 ship separately,
-in order.
+**Status:** EXECUTED 2026-07-19, all three phases (user go; between-phase
+soak deliberately forfeited per the push-forward posture — escape hatch is
+per-phase git revert). Follow-on to REVIEW_TRI_OWNER_SYNC_2026-07-19.md.
+Phase 0 = dead epoch residue (with-note commit). Phase 1 = derived hints tag
+(plugin `focusedTabHasGrammarLocked` + active-tab derivation, plugin-side
+tab-switch deproject) + SW retirement of per-switch session_end/republish;
+the plugin keeps the session_end deproject branch as a no-op-compat path
+while pre-phase-1 SWs are live. Phase 2 = bk-pending/grammarReady machinery
+deleted end-to-end (badge paints solid; per-codeword ACK demoted to delta
+bookkeeping), failed-Put keeps painted + requeues, cadence 80/400 →
+250/1000ms, mass-claim fast path retired. Verification errand (f) remains
+OPEN (needs a live scroll burst); errand (g) reload test needs the user.
+LIVE-VERIFY PENDING: extension reload + tab-switch pass (badge arm without
+republish, chrome:// tab drops the tag).
 
 **One-line motivation:** the sealed pull-resolution payoff moved match truth
 and dispatch routing off the grammar push, but the machinery that defended

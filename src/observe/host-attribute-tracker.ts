@@ -41,17 +41,16 @@ function reconcile(host: HTMLElement, attributeName: string, expectedDisplay = '
     }
   } else if (
     attributeName === 'data-bk-shown' ||
-    attributeName === 'data-bk-pending' ||
     attributeName === 'data-bk-accel' ||
     attributeName === 'data-bk-accel-rearms' ||
     attributeName === 'data-bk-accel-builds' ||
     attributeName === 'data-bk-occluded'
   ) {
-    // Owned by HintBadge.show()/hide()/clearPending() and the inner-scroll
-    // accelerator arm/disarm; the tracker MO sees our own writes echo back, so
-    // it must allow them through. Tests + dev tools can query `[data-bk-shown]`,
-    // `[data-bk-pending]`, `[data-bk-accel]`, and `[data-bk-accel-rearms]` to
-    // inspect badge state without peeking into the closed shadow root.
+    // Owned by HintBadge.show()/hide() and the inner-scroll accelerator
+    // arm/disarm; the tracker MO sees our own writes echo back, so it must
+    // allow them through. Tests + dev tools can query `[data-bk-shown]`,
+    // `[data-bk-accel]`, and `[data-bk-accel-rearms]` to inspect badge state
+    // without peeking into the closed shadow root.
   } else if (attributeName === 'style') {
     if (host.style.display !== expectedDisplay) {
       host.style.display = expectedDisplay;

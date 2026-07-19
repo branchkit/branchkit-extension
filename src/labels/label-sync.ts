@@ -245,18 +245,20 @@ export async function postBatch(
 
 let batchedSyncTimer: ReturnType<typeof setTimeout> | null = null;
 let batchedSyncDeadline: ReturnType<typeof setTimeout> | null = null;
-const BATCHED_SYNC_DEBOUNCE_MS = 80;
+// The push is display-grade (HUD menus + narrowing data) since display-grade
+// demotion phase 2 — no badge opacity and no match truth ride it — so the
+// cadence is relaxed toward the settle cadence (was 80ms/400ms when every
+// paint waited translucent on the ACK).
+const BATCHED_SYNC_DEBOUNCE_MS = 250;
 // Max-wait deadline for the sync debounce (round 22b/22c): a pure trailing
 // debounce starves under sustained churn — during a fling, claims and strict
-// deltas reset the 80ms timer continuously and the sync NEVER fired for the
-// whole scroll+swap window (sync_trace: a 5.5s hole, then one monster delta
-// with 355 deletes at settle, then epoch divergence → session rotation → a
-// full ~25-batch republish; badges translucent 13s+). Same debounce+deadline
-// shape as the huge-mutation refresh (mutation-source.ts) and whenDOMSettles:
-// the deadline is armed by the FIRST schedule of a burst, NOT reset by later
+// deltas reset the timer continuously and the sync NEVER fired for the
+// whole scroll+swap window. Same debounce+deadline shape as the
+// huge-mutation refresh (mutation-source.ts) and whenDOMSettles: the
+// deadline is armed by the FIRST schedule of a burst, NOT reset by later
 // ones, and whichever timer fires first clears both — so a sustained storm
 // ships coalesced deltas at least every BATCHED_SYNC_MAX_WAIT_MS.
-const BATCHED_SYNC_MAX_WAIT_MS = 400;
+const BATCHED_SYNC_MAX_WAIT_MS = 1000;
 
 // Retry pacing for a wholesale plugin refusal (`calibration_active`): the
 // plugin received the batch but applied nothing, so the delta must be re-sent
@@ -278,8 +280,8 @@ function scheduleRefusalRetry(): void {
  * Wholesale refusal: the plugin answered but applied nothing — no per-codeword
  * verdicts (`calibration_active` is the only current case). The drained delta
  * must be restored or it silently vanishes: the wrappers keep their painted
- * (bk-pending) badges but their codewords never reach the grammar —
- * permanently unmatchable until an unrelated session rotation.
+ * badges but their codewords never reach the plugin's display collections —
+ * missing HUD rows until an unrelated session rotation.
  *
  * 'error' is excluded explicitly: that's the synthetic transport-failure
  * response, where postBatch has ALREADY restored the drained deletes and
@@ -299,29 +301,15 @@ function isWholesaleRefusal(resp: GrammarBatchResponse): boolean {
 // is display-grade and no longer needs correctness-grade convergence
 // machinery. History: DESIGN_GRAMMAR_EPOCH_HANDSHAKE.md.)
 
-// Mass-claim fast path (round 34b): a swap repaint claims ~100+ letters in
-// one burst, and every one of those badges renders bk-pending translucent
-// until the plugin ACK — the "settled" moment the eye actually waits for.
-// The 80ms debounce + 400ms deadline were tuned for cosmetic-mutation
-// coalescing; on a mass claim they just delay solidification. When the
-// pending-Put backlog crosses this threshold, fire on the next macrotask
-// (still coalescing the synchronous burst that's mid-flight) instead of
-// waiting out the debounce. Same threshold class as REVEAL_REPAIR_FAST_ARM.
-const MASS_CLAIM_FAST_SYNC = 25;
-
 /**
  * Debounced entry point for every grammar-relevant change (MO mutations,
  * IT codeword claims, finalize-sweep detaches, bfcache restore). Coalesces
- * dense bursts into one catchup flush.
+ * dense bursts into one catchup flush. (The round-34b mass-claim fast path
+ * retired with display-grade demotion phase 2 — it existed to shrink the
+ * bk-pending translucent window, which no longer exists.)
  */
 export function scheduleSync(reason: string): void {
   if (batchedSyncTimer) clearTimeout(batchedSyncTimer);
-  if (pendingPuts.size >= MASS_CLAIM_FAST_SYNC) {
-    // setTimeout(0), not the debounce: the current task's claim loop
-    // finishes queueing first, then one flush ships the whole burst.
-    batchedSyncTimer = setTimeout(() => fireBatchedSync(`${reason}:mass_claim`), 0);
-    return;
-  }
   batchedSyncTimer = setTimeout(() => fireBatchedSync(reason), BATCHED_SYNC_DEBOUNCE_MS);
   if (batchedSyncDeadline === null) {
     batchedSyncDeadline = setTimeout(() => fireBatchedSync(`${reason}:deadline`), BATCHED_SYNC_MAX_WAIT_MS);
@@ -448,8 +436,8 @@ async function doSyncNow(reason: string): Promise<void> {
   // small. PIPELINED (round 29c): mid-storm a single round-trip runs
   // ~430ms p50 (SW contention + the response continuation queueing behind
   // the page's storm tasks), and with letters reshuffling per swap a fling
-  // delta is ~40 chunks — sequential awaits summed to the 3-3.5s
-  // translucent window the user read as "not loaded". The plugin imposes
+  // delta is ~40 chunks — sequential awaits summed to a 3-3.5s HUD-staleness
+  // window. The plugin imposes
   // exactly two ordering constraints (batch.go admitGrammarBatch):
   // delete_codewords ride batch 0 and must apply before any Put that
   // reuses a freed letter, and is_final drives epoch finalization. So:
@@ -471,8 +459,8 @@ async function doSyncNow(reason: string): Promise<void> {
       // per-codeword `failed` list describes nothing the plugin decided —
       // detaching on it is what turned "BranchKit closed" into a
       // paint→detach→rediscover→repaint flash loop on every live page.
-      // Keep the wrappers painted (bk-pending carries voice-not-live;
-      // typing works regardless), re-queue their Puts, and stop dispatching
+      // Keep the wrappers painted (typing works regardless), re-queue
+      // their Puts, and stop dispatching
       // further chunks (they'd fail the same way). postBatch already
       // restored any deletes that rode this chunk. No retry timer:
       // convergence comes from the next churn-triggered sync, the liveness
@@ -500,28 +488,28 @@ async function doSyncNow(reason: string): Promise<void> {
     }
     if (resp.failed.length > 0) {
       const failedSet = new Set(resp.failed.map(f => f.codeword));
+      let requeued = 0;
       for (const w of chunk) {
         // Guard the empty string (round 30): a wrapper released while its
         // chunk was in flight has codeword '' — an ''-keyed failure would
-        // match EVERY such wrapper and mass-detach freshly painted badges
-        // (the production flash-then-gone: 605 plugin drops, all
-        // reason=empty_codeword, each one detaching a whole chunk's
-        // released wrappers).
+        // match EVERY such wrapper. A per-codeword plugin failure keeps the
+        // badge painted (display-grade demotion phase 2: it is fully
+        // speakable under sealed dispatch; the miss is a HUD-menu row) and
+        // re-queues the Put for the next delta.
         if (w.scanned.codeword && failedSet.has(w.scanned.codeword)) {
-          deps.detachWrapper(w.element);
+          if (w.element.isConnected) {
+            pendingPuts.add(w);
+            requeued++;
+          } else {
+            deps.detachWrapper(w.element);
+          }
         }
       }
+      if (requeued > 0) bkLog('BK_SYNC_PUT_FAILED_REQUEUED', { requeued });
     }
     const succeededSet = new Set(resp.succeeded);
     for (const cw of succeededSet) sentCodewords.add(cw);
     // (Deletes that rode this chunk were already settled by postBatch.)
-    // Voice-layer ACK: codewords the plugin just confirmed are live in the
-    // grammar. ElementWrapper.markGrammarReady flips the flag and, if the
-    // badge is visible with bk-pending, clears the class to transition to
-    // full opacity.
-    for (const w of chunk) {
-      if (succeededSet.has(w.scanned.codeword)) w.markGrammarReady();
-    }
     const succeededWrappers = chunk.filter(w => succeededSet.has(w.scanned.codeword));
     sweepDisconnectedAfterBatch(succeededWrappers, (el) => el.isConnected, pendingDeleteCodewords, deps.detachWrapper);
     // Reconcile on the final chunk only — intermediate responses
