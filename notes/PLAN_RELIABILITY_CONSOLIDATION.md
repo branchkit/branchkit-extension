@@ -228,21 +228,36 @@ from logs). The queue from here, in order:
    grammar-batch fragmentation + fling first-paint latency (observed-state
    arc, still open), verbs on the live strict gate. Per one-in-one-out, any
    fix that comes out of soak retires something.
-2. **Prefix-shadowed bare literals — runtime-CONFIRMED 2026-07-19.** The
-   user spoke bare "copy" with a selection in a browser: it did NOT
-   execute — the Discovery HUD opened offering the continuations
-   ("text"/"url"), with no way to fire the bare copy-selection action. So
-   this is a real matcher-level UX gap, not a preview artifact: an exact
-   literal match at utterance end is swallowed by completion mode whenever
-   longer eligible patterns share the prefix. Candidate design:
-   exact-match-wins-at-utterance-boundary (the utterance is complete by
-   definition at mic release, so an exact eligible literal is unambiguous
-   intent; completions remain for genuinely partial input). Actuator-level
-   and generic — needs its own small design note before code. Separately,
-   the smoke sweep should classify state-dependent shadowing instead of
-   failing red. (Side catch from the same test: prose subtitles overflowed
-   the Discovery HUD — FIXED same day, voice c5d606a, keycap vs
-   description-line split.)
+2. **Prefix-free vocabulary arc (reframed 2026-07-19, user decision —
+   Talon precedent).** History: runtime test confirmed bare "copy" never
+   executes in browser context (swallowed into completion mode by "copy
+   url"/"copy text ⟨pair⟩"). The first-draft fix
+   (exact-match-wins-at-utterance-boundary in the matcher) is DROPPED —
+   continuous mode is real (`lifecycle_mode continuous`, silero VAD
+   min-silence 0.10, plus `continuous_awake` open-mic), so the boundary is
+   VAD silence everywhere and an eager exact-match would fire bare "copy"
+   on a breath before "url". The conservative swallow STAYS as the
+   backstop; the fix is vocabulary shape plus a detector:
+   - **LANDED 2026-07-19:** clipboard family renamed per the Talon/knausj
+     precedent — "copy that" / "cut that" / "paste that"; bare "close"
+     alias dropped from the HUD-hide command ("cancel" / "close hud"
+     remain). voice-regress + smoke green (resolve-sweep 50/50).
+   - **OPEN — vocabulary pass** (one product call per word): a flat
+     registry scan found 10 more shadowed singles — full, mute, next,
+     pause, play, previous, speak, toggle, unmute, up (e.g. bare
+     "pause"/"play" vs the new "pause video"/"play video"). Some are false
+     positives: exclusive-mode words ("full" in snap mode) never coexist
+     with their shadowers. Decide per word AFTER the context-aware lint
+     lands so the list is trustworthy.
+   - **OPEN — prefix-collision lint:** promote the smoke sweep's
+     accidental detection into a named check. Requirements: TAG-CONTEXT
+     AWARE (a collision exists only if the short command and its extension
+     are reachable in the same tag context), and a "sealed single word"
+     concept for closed-class words (over, cancel, wake, ...) that the
+     lint guarantees stay unextended. Home: branchkit-cli dev smoke + an
+     inspector surface.
+   (Side catch from the same runtime test: prose subtitles overflowed the
+   Discovery HUD — FIXED same day, voice c5d606a.)
 3. **Ladder prune completion** — read the remaining rung counters
    (`rebind_key`, `rebind_coattail`, fingerprint, position) after a fresh
    trail window; delete what isn't earning its keep. Data decides.
