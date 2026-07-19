@@ -791,7 +791,11 @@ const TAB_ACTION_BY_ID: Readonly<Record<string, TabAction>> = {
 // via diffPrefixesToDelete.
 async function forwardHintsSessionEnd(reason: string, tabId: number, frameId?: number): Promise<void> {
   if (!(await ensureConnected())) return;
-  const body: { reason: string; tab_id: number; frame_id?: number } = { reason, tab_id: tabId };
+  // conn_id scopes the cleanup to THIS browser's frame sessions — tab ids
+  // are browser-local and can collide across connected browsers, and the
+  // plugin's session keys are conn-scoped (storm-arc last mile).
+  const body: { conn_id: string; reason: string; tab_id: number; frame_id?: number } =
+    { conn_id: connId, reason, tab_id: tabId };
   if (typeof frameId === 'number') body.frame_id = frameId;
   await postToPlugin('/hints/session_end', body);
 }
