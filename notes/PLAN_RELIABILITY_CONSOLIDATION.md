@@ -210,35 +210,46 @@ for a ledgered miss is out of scope unless its reopen condition fires.
    above the cadence, and dispatch re-reads at action time. Reopens if: the
    cadence lengthens materially or dispatch stops re-reading.
 
-## 6. Remaining work (post-execution, 2026-07-19)
+## 6. Remaining work — rewritten 2026-07-19 (post-demotion queue)
 
-In leverage order:
+Everything the original section listed is CLOSED: ledger + policy ratified,
+batch pushed CI-green, tri-owner audit done (REVIEW_TRI_OWNER_SYNC), the
+display-grade demotion arc executed and live-verified in both browsers
+(DESIGN_DISPLAY_GRADE_DEMOTION.md), the follow-up cleanup landed
+(tag-writer consolidation onto `applyDerivedHintsTag`, compat session_end
+branch deleted, vocab-commit question closed as KEEP — union changes are
+real during browser/tab churn and site attribution is not establishable
+from logs). The queue from here, in order:
 
-1. **Ratify the ledger + adopt the one-in-one-out policy** (Phase 2 —
-   zero code, unblocks closing several ambient open items).
-2. **Soak, `just voice-regress`, then push the batch.** Watch items: badge
-   doubling on 400-link grids, grammar-batch fragmentation during loads,
-   fling first-paint latency (observed-state arc); verbs on the live strict
-   gate, chopped-pair completing-tag scoping absent (pull-resolution).
-3. **Tri-owner codeword sync (CS ↔ SW ↔ plugin) — the last named bug factory
-   (section 1, item c) with no landed structural pass.** AUDIT READ DONE
-   2026-07-19 — REVIEW_TRI_OWNER_SYNC_2026-07-19.md. Key inversion of this
-   item's own hypothesis: the SW did not shrink, it became the single
-   dispatch-resolution authority; the PLUGIN is what shrank (display
-   projector + hints-tag gate + transport). The follow-on design note should
-   be scoped as "display-grade demotion follow-through": (a) decouple the
-   hints-tag arm from the tab-switch wipe/republish cycle, (b) demote the
-   bk-pending ACK/urgency layer (its speakability meaning is gone), plus two
-   verification errands (vocab-commit no-op check, deliberate reload test of
-   the stale-frame_id class, which the sealed path likely closed). Explicit
-   keeps listed in the review; pool machinery and the live strict gate are
-   out of scope.
-4. **Ladder prune completion** — read the remaining rung counters after a
-   trail window; delete what isn't earning its keep.
-5. **Display-grade mirror retirement (deferred).** Only worth it with a
-   design that replaces all three surfaces (match truth is already
-   independent; narrowing + HUD + reservoir latency remain). Smaller payoff
-   than originally estimated; do not start before 3.
+1. **Soak the demotion arc — the active work item is watching, not
+   building.** Watch: HUD-menu staleness during scroll churn (relaxed
+   cadence), the derived tag on unusual focus sequences (popup windows,
+   drag-a-tab-out, PWA windows), badge doubling on 400-link grids +
+   grammar-batch fragmentation + fling first-paint latency (observed-state
+   arc, still open), verbs on the live strict gate. Per one-in-one-out, any
+   fix that comes out of soak retires something.
+2. **Smoke prefix-shadow question** (found 2026-07-19; details in the
+   agent-primitives memory): bare "copy"/"close" don't preview-resolve
+   while a browser is focused — longer patterns shadow them as
+   continuations. First step is one deliberate runtime test (speak bare
+   "copy" with a selection while browsing). If it fails live, this is a
+   REAL matcher-level UX gap (prefix-blocking of bare literals) and
+   deserves its own design conversation; either way the smoke sweep should
+   learn to classify state-dependent shadowing instead of failing red.
+3. **Ladder prune completion** — read the remaining rung counters
+   (`rebind_key`, `rebind_coattail`, fingerprint, position) after a fresh
+   trail window; delete what isn't earning its keep. Data decides.
+   (Reminder from the first read: coattail was the TOP rung at 33.9% —
+   never delete it without fresh data.)
+4. **Display-grade mirror retirement — still DEFERRED, payoff shrunk
+   again.** After the demotion its only consumers are the two HUD menus
+   (prefix list + per-prefix strict); narrowing rides capture.progress and
+   gate-arming is derived. Don't start without a forcing need; a
+   relaxed-cadence HUD feed design would be the shape.
+5. **Orphan-CS paint half of the reload quirk** — the one surviving piece
+   of the June reload bug (dispatch half died with sealed resolution).
+   Lives in the one-layer-at-a-time teardown space; needs its own arc when
+   it earns one.
 
 ---
 

@@ -17,10 +17,17 @@ reload boundary; the derivation observed doing both halves
 `active_tab_no_grammar` drops on empty/fresh tabs); sealed dispatches
 activated correctly on post-reload fresh frames with zero `no_such_hint` —
 which also CLOSES errand (g): the stale-frame_id reload class is dead
-(memory note updated). Errand (f) remains OPEN: `vocabulary_update` injects
-do fire per debounced commit during browsing (lag zero, committed==desired);
-whether each is a union no-op needs a desired-union diff across one scroll
-burst before deleting the batch.go:964 schedule.
+(memory note updated). Errand (f) CLOSED as KEEP
+(2026-07-19): live logs show the union genuinely changes during browser/tab
+churn (a −353/+353 swap on a browser switch, ±1-word tab-title churn), and
+per-site attribution isn't establishable from logs — deleting the batch-site
+commit risks the vocab-lag class to save a debounced no-op; rationale
+comment at the batch.go schedule site. FOLLOW-UP LANDED same day (plugin):
+tag-writer consolidation — browser_focus / voice_session_reset /
+post_activate_re_put / active-tab all route through one
+`applyDerivedHintsTag` (fixing the refocus-onto-empty-tab arm window);
+rearmHintGate stays a pure arm edge (fires pre-commit, can't read the
+projection it creates); the pre-phase-1 compat session_end branch deleted.
 
 **One-line motivation:** the sealed pull-resolution payoff moved match truth
 and dispatch routing off the grammar push, but the machinery that defended
