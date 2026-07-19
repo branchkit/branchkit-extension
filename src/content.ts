@@ -13,6 +13,7 @@ import {
   REVEAL_REPAIR_FAST_ARM,
 } from './lifecycle/settle-engine';
 import { initConnectionMirror } from './plugin/connection-mirror';
+import { traceCw, cwTrace } from './debug/cw-trace';
 import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters } from './scan/scanner';
 import { noteDisconnectedShadowAttach } from './scan/shadow-attach-signal';
 import { DiscoverySource, ElementWrapper } from './scan/element-wrapper';
@@ -535,6 +536,7 @@ labelReservoir.onConfirmRejected((codewords) => {
     const w = store.byCodeword(cw);
     if (!w) continue;
     if (hasSent(cw)) queueDelete(cw);
+    traceCw('confirm_reject', '#' + w.scanned.id, cw);
     w.scanned.codeword = '';
     w.label = null;
     if (w.hint) {
@@ -2323,6 +2325,7 @@ async function processScanBatch(
   for (let i = 0; i < newRefs.length; i++) {
     const label = i < labels.length ? labels[i] : '';
     if (!label) continue;  // pool exhausted; element stays unaddressable
+    traceCw('scan_grant', '#' + newElements[i].id + '@' + newElements[i].label, label);
     newElements[i].codeword = label;
     claimCounters.scanPathClaimed++;
     const cw = new ElementWrapper(newRefs[i], newElements[i]);
@@ -3596,6 +3599,8 @@ function paintLatencyStats() {
  * send — see captureDebugSnapshot's extras param. */
 function snapshotExtras() {
   return {
+    // TEMPORARY (DESIGN_STORM_RESILIENCE track 2b): codeword-mutation ring.
+    cw_trace: cwTrace.slice(-5000),
     // Fling-wave pipeline health (notes/DESIGN_FLING_WAVE.md): cohort sizes
     // for the two geometry fast paths and the reservoir state they depend
     // on. reservoir.free pinned at ~0 during a fling = claims starving

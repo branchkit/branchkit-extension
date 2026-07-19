@@ -5,6 +5,7 @@
  * Tracks viewport intersection, category, and adapter source.
  */
 
+import { traceCw } from '../debug/cw-trace';
 import { Category, ScannedElement } from '../types';
 import { LabelAssignment } from '../labels/words';
 import type { BadgeHandle } from '../render/badge-handle';
@@ -197,6 +198,7 @@ export class ElementWrapper {
   releaseLabel(): void {
     const codeword = this.scanned.codeword;
     if (!codeword) return;
+    traceCw('release_label', this.scanned.label, codeword);
     this.scanned.codeword = '';
     this.label = null;
     labelReservoir.release([codeword]);
