@@ -1607,7 +1607,23 @@ dispatcher.register('scroll_to_element', (params) => {
 
 // Show the mode chip when the keyboard enters hint mode (letters now filter
 // hints) and hide it back in Normal. See notes/DESIGN_KEYBOARD_MODES.md.
-keyHandler.setModeChangeCallback((mode) => setModeChip(mode));
+// Keyboard-mode "armed" cue: when hint (click-by-keyboard) mode is active,
+// boost every badge's OWN border from the resting 30% alpha to fully opaque —
+// so it's obvious the extension is listening even in always-visible mode (where
+// badges don't otherwise change on F). No imposed color and no size change;
+// each badge just asserts its own hue harder. One write on the document root
+// arms every badge (custom props inherit through the badge shadow). The
+// per-badge color + the border rule live in the badge shadow CSS.
+function setKeyboardArmed(on: boolean): void {
+  const root = document.documentElement.style;
+  if (on) root.setProperty('--bk-kbd-b-alpha', '1');
+  else root.removeProperty('--bk-kbd-b-alpha');
+}
+
+keyHandler.setModeChangeCallback((mode) => {
+  setModeChip(mode);
+  setKeyboardArmed(mode === 'hint');
+});
 
 // Per-site keyboard policy — full exclusion (all keys to the page) and/or
 // granular passthrough (specific keys to the page, the rest of BranchKit's

@@ -236,13 +236,22 @@ const BADGE_CSS = `
     user-select: none;
     white-space: nowrap;
     text-align: center;
-    border-width: 1px;
     border-style: solid;
     opacity: 0;
+    /* Keyboard-mode "armed" cue: boost each badge's OWN border — normally the
+     * border is the badge color at 30% alpha (a faint outline); when hint mode
+     * is active we take it to full opacity, so every badge asserts its own color
+     * harder (no imposed hue, no size change, no animation). --bk-b-rgb is the
+     * border color's "R G B" (set per-badge in applyColors); --bk-kbd-b-alpha
+     * defaults to the resting 0.3 until document.documentElement sets it to 1
+     * (custom props inherit through the shadow boundary — one write arms every
+     * badge). */
+    border-width: 1px;
+    border-color: rgb(var(--bk-b-rgb, 0 0 0) / var(--bk-kbd-b-alpha, 0.3));
   }
   .bk-inner.visible {
     opacity: 1;
-    transition: opacity 0.12s ease-out;
+    transition: opacity 0.12s ease-out, border-color 0.1s ease-out;
   }
   .bk-inner.filtered {
     display: none;
@@ -958,7 +967,9 @@ export class HintBadge implements BadgeHandle {
     const colors = computeBadgeColors(this.target);
     this.inner.style.background = colors.bg;
     this.inner.style.color = colors.fg;
-    this.inner.style.borderColor = colors.border;
+    // Border color + opacity come from CSS (rgb(var(--bk-b-rgb) / alpha)) so
+    // keyboard mode can boost the resting 30% alpha to fully opaque per-badge.
+    this.inner.style.setProperty('--bk-b-rgb', colors.borderRgb);
   }
 
   hide(): void {

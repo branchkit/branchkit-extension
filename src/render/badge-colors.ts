@@ -234,6 +234,10 @@ export type BadgeColors = {
   bg: string;
   fg: string;
   border: string;
+  /** The border color's "R G B" components (no alpha), so the render layer can
+   *  vary the border's opacity — e.g. boost it to fully opaque in keyboard
+   *  mode — without recomputing the color. Same hue as `fg`/`border`. */
+  borderRgb: string;
 };
 
 function toCSS(c: RGB, alpha?: number): string {
@@ -310,6 +314,7 @@ export function computeBadgeColors(target: Element): BadgeColors {
     bg: toCSS(pageBg),
     fg: toCSS(adjustedFg),
     border: toCSS(adjustedFg, 0.3),
+    borderRgb: `${Math.round(adjustedFg.r)} ${Math.round(adjustedFg.g)} ${Math.round(adjustedFg.b)}`,
   };
 }
 
