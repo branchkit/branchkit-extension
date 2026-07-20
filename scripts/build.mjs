@@ -49,7 +49,11 @@ const outDir = resolve(root, 'dist', `.staging-${target}`);
 // Stamp every bundle with the build time. Surfaced in the debug snapshot
 // (`buildId`) so we can tell, from a captured snapshot, exactly which build
 // the running content script came from — and rule out a stale/orphaned CS.
-const buildId = new Date().toISOString();
+// Overridable via BK_BUILD_ID so a release build is byte-reproducible — an
+// AMO reviewer sets the same value to reproduce the submitted bundle exactly
+// (the timestamp is otherwise the only non-deterministic input). See
+// notes/PLAN_STORE_SUBMISSION.md P2 and SOURCE_BUILD.md.
+const buildId = process.env.BK_BUILD_ID ?? new Date().toISOString();
 
 if (existsSync(outDir)) rmSync(outDir, { recursive: true });
 mkdirSync(outDir, { recursive: true });

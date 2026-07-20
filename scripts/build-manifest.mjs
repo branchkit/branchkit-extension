@@ -46,6 +46,14 @@ if (target === 'chrome') {
   if (base.background?.scripts) {
     delete base.background.scripts;
   }
+  // Rotate the web-accessible-resource URL per session so an arbitrary page
+  // can't probe `chrome-extension://<id>/palette.html` to fingerprint the
+  // extension (the resource is exposed to <all_urls>). Chromium MV3 feature;
+  // Firefox's support is version-gated, so it stays Chrome-only for now.
+  // notes/PLAN_STORE_SUBMISSION.md P1 #4.
+  for (const war of base.web_accessible_resources ?? []) {
+    war.use_dynamic_url = true;
+  }
 } else if (target === 'firefox') {
   // Firefox doesn't recognize the `offscreen` permission; AMO's
   // validator flags it. Strip if present.

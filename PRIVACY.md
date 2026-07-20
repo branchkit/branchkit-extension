@@ -1,50 +1,68 @@
 # Privacy Policy — BranchKit Browser Extension
 
-**Last updated:** March 14, 2026
+**Last updated:** July 19, 2026
 
 ## What the extension does
 
-BranchKit Browser scans web pages to identify interactive elements (form fields, buttons, links, tabs) and displays voice-navigable hint badges on them. It works with the BranchKit desktop app to enable hands-free browser navigation.
+BranchKit Browser is a keyboard navigation tool. It scans web pages to identify
+interactive elements (links, buttons, form fields, tabs) and draws hint badges on
+them so you can click, type, and navigate without a mouse. It works entirely on
+your own device.
 
-## Data collected
+Voice control is an **optional** add-on: if you also install the BranchKit desktop
+app, the same badges become speakable. The extension is fully functional without
+the app — everything below distinguishes the two cases.
 
-The extension collects the following data from web pages you visit:
+## Data sent off your device
 
-- **Element labels** — the visible text of buttons, links, and form field labels
-- **Element selectors** — CSS selectors used to identify elements on the page (e.g., `button.submit`, `input[name="email"]`)
-- **Element types** — whether an element is an input, button, link, or other interactive control
+**None.** BranchKit Browser makes no outbound network requests to any external
+server, ever. There are no analytics, no telemetry, and no tracking of any kind.
 
-This data is used solely to generate voice command mappings so you can say a codeword to interact with a specific element.
+- **Without the desktop app:** all element scanning happens in the page and nothing
+  leaves the browser at all.
+- **With the optional desktop app connected:** element data (below) is sent only to
+  the BranchKit app running on **your own computer** (`http://127.0.0.1`,
+  localhost) — never to any remote server or third party.
 
-## Where data is sent
+## Data read from web pages
 
-All data is sent exclusively to **localhost** (`127.0.0.1`) — the BranchKit desktop app running on your own computer. Specifically:
+To draw hint badges and build voice command mappings, the extension reads, from
+pages you visit:
 
-- Element data is sent to the BranchKit browser plugin via HTTP on a random local port
-- No data is ever transmitted to external servers, cloud services, or third parties
-- No analytics, telemetry, or tracking of any kind
+- **Element labels** — the visible text of buttons, links, and form-field labels
+- **Element selectors** — CSS selectors used to locate elements (e.g., `button.submit`)
+- **Element types** — whether an element is an input, button, link, or other control
+
+This data is used solely to map a badge (or spoken codeword) to the element it
+points at. It is processed transiently, is not collected or stored by us, and —
+per the section above — never leaves your device except to the optional local app.
 
 ## Data storage
 
-- **Badge display preference** (word, letter, or both) is stored in `chrome.storage.sync` / `browser.storage.local`
-- No browsing history, URLs, page content, or personal information is stored
-- No cookies are set or read
+- **Preferences only** — your badge display mode (word / letter / both) and your
+  keymap are stored in the browser's extension storage (`storage.sync` /
+  `storage.local`).
+- No browsing history, URLs, page content, or personal information is stored.
+- No cookies are set or read.
 
 ## Permissions explained
 
 | Permission | Why it's needed |
 |---|---|
-| `<all_urls>` (host) | Scan interactive elements on any page for voice navigation |
-| `http://127.0.0.1/*` (host) | Communicate with BranchKit desktop app on localhost |
-| `tabs` | Route voice command results to the correct browser tab |
-| `activeTab` | Identify which tab is currently focused for voice commands |
-| `storage` | Persist badge display mode preference |
-| `alarms` | Periodically check connection to BranchKit desktop app |
-| `offscreen` (Chrome only) | Maintain persistent connection to desktop app |
+| `<all_urls>` (host) | Draw hint badges on / read interactive elements of any page for keyboard and voice navigation |
+| `http://127.0.0.1/*` (host) | *Optional* — communicate with the BranchKit desktop app on localhost (voice add-on only) |
+| `tabs` | Route a navigation action to the correct tab; propagate display-setting changes |
+| `storage` | Persist badge display mode and keymap preferences |
+| `scripting` | Inject the badge script into tabs that predate install |
+| `webNavigation` | Detect single-page-app route changes to re-scan hints |
+| `sessions` | Reopen the most-recently-closed tab (the "restore tab" command) |
+| `alarms` | Periodically check whether the optional desktop app is still connected |
+| `offscreen` (Chrome only) | Maintain the persistent connection to the optional desktop app |
 
 ## Open source
 
-The extension source code is available for inspection. The BranchKit desktop app is developed by BranchKit.
+The extension source code is available for inspection. The optional BranchKit
+desktop app is developed by BranchKit.
 
 ## Contact
 
