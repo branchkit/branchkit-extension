@@ -96,6 +96,7 @@ cpSync(resolve(root, 'offscreen.html'), resolve(outDir, 'offscreen.html'));
 cpSync(resolve(root, 'popup.html'),     resolve(outDir, 'popup.html'));
 cpSync(resolve(root, 'options.html'),   resolve(outDir, 'options.html'));
 cpSync(resolve(root, 'palette.html'),   resolve(outDir, 'palette.html'));
+cpSync(resolve(root, 'welcome.html'),   resolve(outDir, 'welcome.html'));
 cpSync(resolve(root, 'icons'),          resolve(outDir, 'icons'), { recursive: true });
 
 // Target-specific manifest patch. Delegated to keep that logic in one

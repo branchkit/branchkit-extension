@@ -248,6 +248,15 @@ built output; the Chrome build declares it. See "What's already good.")*
   web-ext lint still 0 errors. Vimium precedent (host, no activeTab).
 - Native messaging vs localhost HTTP for the companion — defer; localhost is
   acceptable to ship. Revisit if CWS pushes back.
-- Does the standalone keyboard path have a first-run hint/onboarding so a
-  reviewer (and a real user without the app) discovers the activation key
-  without reading docs? (UX gap to check — affects both approval and adoption.)
+- ~~Does the standalone keyboard path have a first-run hint/onboarding so a
+  reviewer (and a real user without the app) discovers the activation key?~~
+  **RESOLVED — welcome page added 2026-07-19.** Investigation: on fresh install
+  nothing opened (`onInstalled` only re-injected content scripts); the popup is a
+  config panel with a footer "? Help" button but no lead "press F" cue; the `?`
+  help overlay has the teaching line but you must know to open it. Fix: a
+  self-contained `welcome.html` (matches the popup palette, JS-free, standalone-
+  first — "press F", Vim cheats, voice as optional) opened via `onInstalled` only
+  on `reason === 'install'`. Directly answers the reviewer "installed it, nothing
+  happened" risk. Ships to both dists; lint clean. Possible follow-on (deferred):
+  a dismissible "New here? press F" banner atop the popup — lower priority since
+  the footer Help button + welcome page cover discovery.

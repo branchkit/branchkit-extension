@@ -119,6 +119,45 @@ bounded page-word snapshot per focus and refresh lazily. Either way this is a
 platform-vocabulary feature that crosses into the actuator/plugin — **not
 extension-local.**
 
+### Voice architecture — the option space (OPEN DECISION, prototype before choosing)
+
+The page-word index is only one of three ways to get the free-text target. All
+share one **correct-by-construction insight**: the target is *always* an element
+on the current page, so its text is always one of the scanned `accessibleName`s.
+"Constrain to the page's words" is therefore not a limitation — it's exactly right.
+
+- **A — Sherpa page-word union index.** Contribute on-page names to the global
+  union (`feeds_matching=as_named_entities`); "click <word:page_words>" matches
+  live. Cost: churns the always-on HLG → recompile per scan/nav. Live, single
+  engine, but the recompile is the objection.
+
+- **B — WhisperKit dictated argument.** Sherpa hears the verb "click" (fixed
+  union word), the target span routes to WhisperKit, the transcript feeds the
+  extension's fuzzy matcher (the Phase-1 keyboard matcher, reused). **Reuses the
+  existing `voice.speak` handoff** (Sherpa command → dictation pipeline, both
+  engines concurrent, stop-phrase via Sherpa-in-parallel). Best transcription
+  quality (WhisperKit has a real LM decoder → strong on proper nouns/names).
+  Cost: cross-engine audio-span routing + release-time latency; short 1–2 word
+  utterances are WhisperKit's weakest case (dictation models like context).
+
+- **C — Sherpa free-CTC decode of the span** (the "special-case Sherpa" idea).
+  Free/permissive CTC decode (no HLG) on just the target span — same engine, same
+  audio timeline (frame-aligned boundary is easy), low latency. Cost: a NeMo
+  *command* CTC model without a strong LM produces phonetic garbage on arbitrary
+  words. Mitigation collapses it toward the good middle: **bias/rescore the free
+  decode against the current page's candidate names** (a small per-utterance
+  lexicon, NOT a global-union mutation — so no always-on HLG recompile). Because
+  of the correct-by-construction insight, biasing to page words is right, not a
+  compromise. Open question: does the pipeline support a second span-scoped decode
+  against a transient grammar separate from the main HLG?
+
+**Leaning:** B for quality (and it reuses the most existing machinery), or C-biased
+if single-engine latency/simplicity wins and we can stand up a span-scoped decode.
+A is the fallback. **Decide by prototyping accuracy** — WhisperKit on 1–2 word
+targets vs Sherpa-free vs Sherpa-page-biased — on real pages. Not resolvable on
+paper. Cross-repo (actuator pipeline + voice plugin + extension), so it's the
+Phase-2 platform track regardless of which wins.
+
 ### Revised phasing (this finding changes it)
 
 - **Phase 1 — keyboard G1, extension-only.** Text-target mode + matcher +

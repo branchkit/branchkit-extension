@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Welcome to BranchKit Browser</title>
+  <style>
+    /* GitHub-dark palette, matched to popup.html / help-overlay so the whole
+       product reads as one surface. Self-contained (no JS, no external CSS). */
+    :root {
+      --bg: #0d1117; --surface: #161b22; --fg: #c9d1d9; --fg-bright: #f0f6fc;
+      --fg-muted: #8b949e; --border: #21262d; --border-strong: #30363d;
+      --accent: #58a6ff; --accent-btn: #1f6feb; --ok: #3fb950;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--fg);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.5; -webkit-font-smoothing: antialiased;
+      display: flex; justify-content: center; padding: 48px 24px;
+    }
+    main { width: 100%; max-width: 620px; }
+    h1 { color: var(--fg-bright); font-size: 26px; margin: 0 0 4px; }
+    .sub { color: var(--fg-muted); margin: 0 0 32px; font-size: 15px; }
+    .hero {
+      background: var(--surface); border: 1px solid var(--border-strong);
+      border-radius: 10px; padding: 24px; margin-bottom: 20px;
+    }
+    .hero h2 { margin: 0 0 12px; font-size: 17px; color: var(--fg-bright); }
+    .hero p { margin: 0; font-size: 15px; }
+    kbd {
+      display: inline-block; min-width: 20px; text-align: center;
+      background: #0d1117; border: 1px solid var(--border-strong);
+      border-bottom-width: 2px; border-radius: 5px; padding: 1px 7px;
+      font: 600 13px ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: var(--fg-bright); margin: 0 1px;
+    }
+    ol.steps { margin: 14px 0 0; padding-left: 20px; }
+    ol.steps li { margin: 6px 0; }
+    .cheats {
+      display: grid; grid-template-columns: auto 1fr; gap: 8px 16px;
+      margin: 0; padding: 0; font-size: 14px;
+    }
+    .cheats dt { text-align: right; }
+    .cheats dd { margin: 0; color: var(--fg-muted); }
+    .note { color: var(--fg-muted); font-size: 13.5px; margin: 20px 0 0; }
+    .voice {
+      border-left: 2px solid var(--accent); padding: 4px 0 4px 14px;
+      margin: 20px 0 0; color: var(--fg-muted); font-size: 14px;
+    }
+    .voice b { color: var(--fg); font-weight: 600; }
+    .actions { margin-top: 28px; display: flex; gap: 12px; align-items: center; }
+    a.btn {
+      background: var(--accent-btn); color: #fff; text-decoration: none;
+      padding: 8px 16px; border-radius: 6px; font-size: 14px; font-weight: 500;
+    }
+    a.btn:hover { filter: brightness(1.1); }
+    a.link { color: var(--accent); text-decoration: none; font-size: 14px; }
+    a.link:hover { text-decoration: underline; }
+    .brand { color: var(--ok); font-weight: 600; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>BranchKit Browser is ready</h1>
+    <p class="sub">Navigate any website without a mouse — keyboard first, voice optional.</p>
+
+    <div class="hero">
+      <h2>Start here</h2>
+      <p>On any web page, press <kbd>F</kbd>. A short badge appears on every link,
+        button, and field. Type the badge's letters to click it — that's the
+        whole idea.</p>
+      <ol class="steps">
+        <li>Press <kbd>F</kbd> &rarr; badges appear</li>
+        <li>Type a badge (e.g. <kbd>a</kbd><kbd>s</kbd>) &rarr; it activates</li>
+        <li>A <b style="color:var(--fg-bright)">Capital</b> opens it in a new tab; <kbd>Esc</kbd> exits</li>
+      </ol>
+    </div>
+
+    <div class="hero">
+      <h2>A few more (Vim-style)</h2>
+      <dl class="cheats">
+        <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>scroll down / up</dd>
+        <dt><kbd>/</kbd></dt><dd>find on page &nbsp;·&nbsp; <kbd>n</kbd> / <kbd>N</kbd> next / prev</dd>
+        <dt><kbd>H</kbd> <kbd>L</kbd></dt><dd>back / forward</dd>
+        <dt><kbd>y</kbd><kbd>y</kbd></dt><dd>copy the page URL</dd>
+        <dt><kbd>?</kbd></dt><dd>show every shortcut, anytime</dd>
+      </dl>
+    </div>
+
+    <p class="voice"><b>Optional — hands-free voice.</b> Install the BranchKit
+      desktop app and the same badges become speakable: say a badge's codeword to
+      click, type, or navigate. No keyboard needed. The extension works fully
+      without it.</p>
+
+    <p class="note">Works on any site, with no account. Nothing leaves your
+      browser — page data is used only to draw badges, and only reaches the
+      optional desktop app on your own machine.</p>
+
+    <div class="actions">
+      <a class="btn" href="options.html">Open settings &amp; shortcuts</a>
+      <a class="link" href="https://branchkit.dev">Learn more</a>
+    </div>
+  </main>
+</body>
+</html>

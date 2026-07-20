@@ -2124,6 +2124,13 @@ chrome.runtime.onInstalled.addListener((details) => {
   // the focused one (Option B), so a re-injected background tab can't clobber
   // the focused tab's codewords the way the old fail-open gate allowed.
   const reinject = details.reason === 'install' || details.reason === 'update';
+  // First-run onboarding: on a fresh install (not update/reload), open the
+  // welcome page so the user — and a store reviewer — discovers the core
+  // gesture (press F). Without this, a fresh install shows no cue that the
+  // whole product is behind a keypress. Update/browser_update/etc. stay silent.
+  if (details.reason === 'install') {
+    void chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') }).catch(() => {});
+  }
   // One-time cleanup: a 2026-06-05 experiment registered dynamic content
   // scripts under these IDs (bk-bootstrap, bk-content) with
   // persistAcrossSessions:true. The experiment was reverted but persisted
