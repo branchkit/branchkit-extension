@@ -106,7 +106,7 @@ HTML that gets injected.
 
 | Permission | Why BranchKit needs it |
 |---|---|
-| `<all_urls>` (host) | Show hint badges on / read interactive elements of any page (can't predict which sites the user visits), and re-inject the content script into tabs open from before install. Element data (visible labels, CSS selectors) is used only to build hint mappings; with no app it never leaves the browser, and with the app it goes only to localhost. |
+| `<all_urls>` (host) | Show hint badges on / read interactive elements of any page (can't predict which sites the user visits), and re-inject the content script into tabs open from before install. Element data (visible text, CSS selectors) is used only to build hint mappings; with no app it never leaves the browser, and with the app it goes only to localhost. |
 | `http://127.0.0.1/*` (host) | **Optional** — connect to the user's own BranchKit desktop app (the voice add-on) over localhost. No external servers. The extension is fully functional without it. |
 | `tabs` | Route an activated hint or voice action to the correct tab; propagate badge-display setting changes to open tabs; tab-navigation commands (next / previous / most-recently-used). |
 | `storage` | Persist badge display mode (word / letter / both) and the user's keymap. |

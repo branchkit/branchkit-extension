@@ -29,7 +29,7 @@ server, ever. There are no analytics, no telemetry, and no tracking of any kind.
 To draw hint badges and build voice command mappings, the extension reads, from
 pages you visit:
 
-- **Element labels** — the visible text of buttons, links, and form-field labels
+- **Element text** — the visible text of buttons, links, and form-field labels
 - **Element selectors** — CSS selectors used to locate elements (e.g., `button.submit`)
 - **Element types** — whether an element is an input, button, link, or other control
 
