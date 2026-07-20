@@ -18,6 +18,7 @@ import { COMMAND_CATALOG, type CommandMeta, type KeymapEntry } from '../command-
 import { comboDisplay } from '../activate/key-combo';
 import { letterToSpokenWord, isVoiceAlphabetLoaded } from '../labels/words';
 import { isBranchKitConnected } from '../plugin/connection-mirror';
+import { micGlyph } from './mic-glyph';
 import { effectiveVoice, type OverrideMap } from '../command-override';
 
 export interface HelpRow {
@@ -201,12 +202,6 @@ kbd {
 // Small mic glyph that precedes a spoken phrase, so voice rows are instantly
 // distinguishable from key rows. Inline SVG (static, no page input) — matches
 // the innerHTML already used for the usage note below.
-const MIC_SVG =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
-  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-  '<rect x="9" y="2" width="6" height="12" rx="3"/>' +
-  '<path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="22"/></svg>';
-
 function el(tag: string, cls?: string, text?: string): HTMLElement {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -279,7 +274,7 @@ function buildHelpOverlay(
       if (voiceAvailable) {
         const voice = el('div', 'voice');
         if (r.voice.length) {
-          voice.innerHTML = MIC_SVG;
+          voice.appendChild(micGlyph());
           voice.appendChild(el('span', undefined, r.voice.join('  /  ')));
         }
         row.appendChild(voice);
@@ -317,9 +312,11 @@ function buildHelpOverlay(
   panel.appendChild(body);
 
   const usage = el('div', 'usage');
-  usage.innerHTML =
-    'Press <b>f</b>, then a badge’s letters to click it — or a <b>capital</b> to open it ' +
-    'in a new tab (<b>Esc</b> exits). Every other bare key is a Normal-mode shortcut, listed above.';
+  usage.append(
+    'Press ', el('b', undefined, 'f'), ', then a badge’s letters to click it — or a ',
+    el('b', undefined, 'capital'), ' to open it in a new tab (', el('b', undefined, 'Esc'),
+    ' exits). Every other bare key is a Normal-mode shortcut, listed above.',
+  );
   panel.appendChild(usage);
 
   backdrop.appendChild(panel);

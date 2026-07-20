@@ -18,6 +18,7 @@ import {
   type ParamSchema,
   type VoicePattern,
 } from './command-catalog';
+import { micGlyph } from './render/mic-glyph';
 import { overrideKey, validateOverridePhrase, overridesFromList, type OverrideRecord } from './command-override';
 import {
   loadKeymap,
@@ -58,15 +59,6 @@ let keymapEl: HTMLDivElement;
 
 const MAPPABLE = COMMAND_CATALOG.filter((c) => c.mappable);
 const GROUPS = [...new Set(MAPPABLE.map((c) => c.group))];
-
-// Mic glyph preceding a voice phrase, matching the ? help overlay so the two
-// keyboard surfaces present spoken forms identically. Inline SVG (static, no
-// page input) — copied from render/help-overlay.ts's MIC_SVG.
-const MIC_SVG =
-  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
-  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-  '<rect x="9" y="2" width="6" height="12" rx="3"/>' +
-  '<path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="22"/></svg>';
 
 /** Deep-clone a keymap so the draft and baseline never share entry/param
  * objects (edits mutate entries in place). */
@@ -187,7 +179,7 @@ function renderVoiceRow(meta: CommandMeta): HTMLElement {
     row.classList.add('disconnected');
     row.title = 'Connect BranchKit to use voice commands.';
   }
-  row.innerHTML = MIC_SVG;
+  row.appendChild(micGlyph());
   const phrases = document.createElement('span');
   phrases.className = 'km-voice-phrases';
   // Each phrase is a self-contained chip (no "/" separators — those strand at

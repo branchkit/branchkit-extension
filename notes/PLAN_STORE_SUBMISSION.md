@@ -187,6 +187,17 @@ built output; the Chrome build declares it. See "What's already good.")*
    sanitized source (not page-derived strings). Action: audit those sites, and
    where the string is static/extension-controlled, switch to `textContent` /
    `replaceChildren` / a DOM builder to zero them out. Track before packaging.
+   **DONE 2026-07-19.** Audited: all 3 innerHTML sites were static extension
+   constants (2× `MIC_SVG`, 1 usage literal) — no page/user input. Converted to
+   DOM construction via a shared `render/mic-glyph.ts` helper (also dedupes the
+   `MIC_SVG` that was copy-pasted across help-overlay.ts + keymap-options.ts —
+   see [[feedback_no_dual_sync_coupling]]) + `el('b',…)` builders for the usage
+   note. Verified: **0 innerHTML in all bundles**, typecheck clean, tests green.
+   Remaining lint = **3 benign warnings**: guarded `chrome.offscreen.*`
+   ("not implemented by Firefox"), runtime-gated behind `!!chrome.offscreen`
+   (Firefox uses the direct-SSE path). Accepted — zeroing them would mean
+   splitting background.ts into per-browser modules; not worth it, and AMO does
+   not reject on guarded-degradation notices.
 
 ### P3 — Store-side disclosure hygiene (separate from PRIVACY.md)
 
