@@ -47,11 +47,6 @@
     .cheats dt { text-align: right; }
     .cheats dd { margin: 0; color: var(--fg-muted); }
     .note { color: var(--fg-muted); font-size: 13.5px; margin: 20px 0 0; }
-    .voice {
-      border-left: 2px solid var(--accent); padding: 4px 0 4px 14px;
-      margin: 20px 0 0; color: var(--fg-muted); font-size: 14px;
-    }
-    .voice b { color: var(--fg); font-weight: 600; }
     .actions { margin-top: 28px; display: flex; gap: 12px; align-items: center; }
     a.btn {
       background: var(--accent-btn); color: #fff; text-decoration: none;
@@ -97,10 +92,18 @@
         <b>Help</b> button in the toolbar popup.</p>
     </div>
 
-    <p class="voice"><b>Optional — hands-free voice.</b> Install the BranchKit
-      desktop app and the same badges become speakable: say a badge's codeword to
-      click, type, or navigate. No keyboard needed. The extension works fully
-      without it.</p>
+    <div class="hero">
+      <h2>Add voice — install BranchKit</h2>
+      <!-- TODO: link "BranchKit desktop app" to the download page once
+           branchkit.dev is live (no website yet — kept as plain text for now). -->
+      <p>Everything above is keyboard-only and needs nothing else. But install the
+        <b>BranchKit desktop app</b> — with its <b>Browser plugin</b> enabled — and
+        the extension connects to it automatically, which <b>activates voice
+        control</b>. Every badge becomes speakable: say its codeword to click,
+        type, or open a link, and drive scrolling, tabs, and the rest by voice —
+        no keyboard needed. The popup shows a <b>Voice</b> indicator once it's
+        connected.</p>
+    </div>
 
     <p class="note">Works on any site, with no account. Nothing leaves your
       browser — page data is used only to draw badges, and only reaches the
@@ -108,7 +111,8 @@
 
     <div class="actions">
       <a class="btn" href="options.html">Open settings &amp; shortcuts</a>
-      <a class="link" href="https://branchkit.dev">Learn more</a>
+      <!-- TODO: restore the "Learn more" link once branchkit.dev is live:
+      <a class="link" href="https://branchkit.dev">Learn more</a> -->
     </div>
   </main>
 </body>
