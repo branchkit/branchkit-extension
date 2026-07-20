@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Welcome to BranchKit Browser</title>
+  <title>Getting started · BranchKit Browser</title>
   <style>
     /* GitHub-dark palette, matched to popup.html / help-overlay so the whole
        product reads as one surface. Self-contained (no JS, no external CSS). */
@@ -28,6 +28,9 @@
     }
     .hero h2 { margin: 0 0 12px; font-size: 17px; color: var(--fg-bright); }
     .hero p { margin: 0; font-size: 15px; }
+    .hero.callout { border-color: var(--accent); background: #10203a; }
+    .hero.callout h2 { color: var(--accent); }
+    .hero.callout b { color: var(--fg-bright); font-weight: 600; }
     kbd {
       display: inline-block; min-width: 20px; text-align: center;
       background: #0d1117; border: 1px solid var(--border-strong);
@@ -62,16 +65,16 @@
 </head>
 <body>
   <main>
-    <h1>BranchKit Browser is ready</h1>
+    <h1>Getting started with BranchKit Browser</h1>
     <p class="sub">Navigate any website without a mouse — keyboard first, voice optional.</p>
 
     <div class="hero">
       <h2>Start here</h2>
-      <p>On any web page, press <kbd>F</kbd>. A short badge appears on every link,
-        button, and field. Type the badge's letters to click it — that's the
-        whole idea.</p>
+      <p>Every link, button, and field gets a short badge. Press <kbd>F</kbd> on
+        any page to start clicking by keyboard, then type a badge's letters to
+        activate it — that's the whole idea.</p>
       <ol class="steps">
-        <li>Press <kbd>F</kbd> &rarr; badges appear</li>
+        <li>Press <kbd>F</kbd> &rarr; ready for a badge (labels appear if you don't already keep them on)</li>
         <li>Type a badge (e.g. <kbd>a</kbd><kbd>s</kbd>) &rarr; it activates</li>
         <li>A <b style="color:var(--fg-bright)">Capital</b> opens it in a new tab; <kbd>Esc</kbd> exits</li>
       </ol>
@@ -84,8 +87,14 @@
         <dt><kbd>/</kbd></dt><dd>find on page &nbsp;·&nbsp; <kbd>n</kbd> / <kbd>N</kbd> next / prev</dd>
         <dt><kbd>H</kbd> <kbd>L</kbd></dt><dd>back / forward</dd>
         <dt><kbd>y</kbd><kbd>y</kbd></dt><dd>copy the page URL</dd>
-        <dt><kbd>?</kbd></dt><dd>show every shortcut, anytime</dd>
       </dl>
+    </div>
+
+    <div class="hero callout">
+      <h2>Forgot a shortcut? Press <kbd>?</kbd></h2>
+      <p>On any page, press <kbd>?</kbd> to open the full list of shortcuts and
+        voice phrases — it's always one key away. You can also reach it from the
+        <b>Help</b> button in the toolbar popup.</p>
     </div>
 
     <p class="voice"><b>Optional — hands-free voice.</b> Install the BranchKit

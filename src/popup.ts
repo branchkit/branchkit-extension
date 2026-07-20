@@ -308,6 +308,28 @@ function initOptionsLink(): void {
     });
   }
 
+  // Guide: open the getting-started page (welcome.html) in a new tab. Same page
+  // shown once on install, reachable anytime from here.
+  const guide = document.getElementById('open-guide');
+  guide?.addEventListener('click', () => {
+    void chrome.tabs.create({ url: chrome.runtime.getURL('welcome.html') }).catch(() => {});
+    window.close();
+  });
+
+  // Guide-button visibility: a reversible Show/Hide setting (default Show). The
+  // toggle persists via the shared segmented-bool binder; a storage listener
+  // applies show/hide live (including when this same popup flips it).
+  initSyncedSegmentedBool('guide-visibility', 'showGuideButton', true);
+  const applyGuideVisibility = (show: boolean) => {
+    if (guide) guide.style.display = show ? '' : 'none';
+  };
+  chrome.storage.sync.get('showGuideButton', (r) => applyGuideVisibility(r.showGuideButton !== false));
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'sync' && changes.showGuideButton) {
+      applyGuideVisibility(changes.showGuideButton.newValue !== false);
+    }
+  });
+
   // Help: open the shortcuts/help overlay on the active tab (same as ? / "help"),
   // then close the popup so the overlay is visible on the page.
   const help = document.getElementById('open-help');

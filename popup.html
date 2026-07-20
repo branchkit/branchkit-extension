@@ -479,6 +479,11 @@
       border-radius: 6px;
       padding: 5px 10px;
     }
+    .footer-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
     .footer-help {
       display: inline-flex;
       align-items: center;
@@ -601,11 +606,23 @@
     </div>
   </div>
 
+  <div class="setting" title="Show or hide the Guide button in this popup. The guide is always at chrome-extension pages and opens once on install.">
+    <label>Guide button</label>
+    <div class="segmented" id="guide-visibility" role="radiogroup" aria-label="Guide button">
+      <button class="seg active" data-value="on" role="radio">Show</button>
+      <button class="seg" data-value="off" role="radio">Hide</button>
+    </div>
+  </div>
+
   <div class="popup-footer">
-    <button id="open-help" class="footer-btn footer-help"
-            title="Press ? or say &quot;help&quot; to open this anytime">
-      <span class="footer-key">?</span> Help
-    </button>
+    <div class="footer-left">
+      <button id="open-guide" class="footer-btn footer-help"
+              title="Open the getting-started guide">Guide</button>
+      <button id="open-help" class="footer-btn footer-help"
+              title="Press ? or say &quot;help&quot; to open this anytime">
+        <span class="footer-key">?</span> Help
+      </button>
+    </div>
     <button id="open-options" class="footer-btn footer-settings">Settings</button>
   </div>
   <script src="popup.js"></script>
