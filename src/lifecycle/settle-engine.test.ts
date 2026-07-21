@@ -25,7 +25,7 @@ import { ScannedElement, BadgeDisplayMode, Category } from '../types';
 import type { BadgeHandle, BadgeDiagnostics } from '../render/badge-handle';
 import type { LabelAssignment } from '../labels/words';
 import type { SettleDeps } from './settle-deps';
-import { SettleEngine, REVEAL_REPAIR_FAST_ARM, type SettleEngineHooks } from './settle-engine';
+import { SettleEngine, REVEAL_REPAIR_FAST_ARM, CLAIM_BUDGET, type SettleEngineHooks } from './settle-engine';
 
 // --- Geometry scripting -----------------------------------------------------
 
@@ -34,6 +34,9 @@ const VH = 800;
 const ON_SCREEN = { top: 100, left: 100, width: 50, height: 20 };
 // RECONCILE_BAND_MARGIN_PX is 1000 — beyond-band needs top > VH + 1000.
 const OFF_BAND = { top: VH + 3000, left: 100, width: 50, height: 20 };
+// In the full 1000px band (overhang 500) but far from the strict viewport —
+// the first cohort dropped when the budget-aware margin tightens.
+const MID_BAND = { top: VH + 500, left: 100, width: 50, height: 20 };
 
 function rect(r: { top: number; left: number; width: number; height: number }): DOMRect {
   return {
@@ -414,6 +417,69 @@ describe('reconcile: build-up convergence', () => {
 
     expect(badge.calls).toContain('reattach');
     expect(badge.host.isConnected).toBe(true);
+  });
+});
+
+describe('reconcile: budget-aware claim band', () => {
+  // notes/DESIGN_BUDGET_AWARE_CLAIM_BAND.md — when the full 1000px band holds
+  // more hintable wrappers than the codeword pool can address, the effective
+  // margin tightens to the nearest CLAIM_BUDGET so scarce codewords land
+  // closest-to-viewport first instead of in arbitrary store order.
+
+  it('no pressure: a far in-band bare wrapper is still claimed (behavior unchanged)', () => {
+    const h = makeHarness();
+    const near = addWrapper(h.store, { codeword: '', rect: ON_SCREEN });
+    const far = addWrapper(h.store, { codeword: '', rect: MID_BAND });
+
+    h.engine.reconcile();
+
+    // Under budget the full band applies — both are queued.
+    const queued = h.tracker.queueClaims.mock.calls.flatMap(c => c[0] as ElementWrapper[]);
+    expect(queued).toContain(near);
+    expect(queued).toContain(far);
+  });
+
+  it('pressure: the on-screen cohort claims, the farther cohort is dropped', () => {
+    const h = makeHarness();
+    // Fill the budget with on-screen (overhang 0) bare wrappers.
+    const onScreen: ElementWrapper[] = [];
+    for (let i = 0; i < CLAIM_BUDGET; i++) {
+      onScreen.push(addWrapper(h.store, { codeword: '', rect: ON_SCREEN }));
+    }
+    // A few more in the full band but farther out (overhang 500).
+    const farther = [
+      addWrapper(h.store, { codeword: '', rect: MID_BAND }),
+      addWrapper(h.store, { codeword: '', rect: MID_BAND }),
+      addWrapper(h.store, { codeword: '', rect: MID_BAND }),
+    ];
+
+    h.engine.reconcile();
+
+    const queued = new Set(h.tracker.queueClaims.mock.calls.flatMap(c => c[0] as ElementWrapper[]));
+    // Every on-screen wrapper wins a claim; none of the farther ones do.
+    expect(queued.size).toBe(CLAIM_BUDGET);
+    for (const w of farther) expect(queued.has(w)).toBe(false);
+  });
+
+  it('pressure: a codeworded wrapper beyond the tightened margin releases (frees a codeword)', () => {
+    const h = makeHarness();
+    for (let i = 0; i < CLAIM_BUDGET; i++) {
+      addWrapper(h.store, { codeword: '', rect: ON_SCREEN });
+    }
+    const badge = new FakeBadge();
+    const far = addWrapper(h.store, {
+      codeword: 'a', rect: MID_BAND, hint: badge, hintVisible: true, lastSentStrict: false,
+    });
+
+    // Strike one — hysteresis holds the release.
+    h.engine.reconcile();
+    expect(h.tracker.queueRelease).not.toHaveBeenCalled();
+
+    // Strike two, >=50ms later — the far codeword is released back to the pool.
+    vi.spyOn(performance, 'now').mockReturnValue(performance.now() + 100);
+    h.engine.reconcile();
+    expect(h.tracker.queueRelease).toHaveBeenCalledWith(far);
+    vi.restoreAllMocks();
   });
 });
 

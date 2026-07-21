@@ -11,6 +11,12 @@
 import { LabelStack } from '../types';
 import { LETTERS_26 } from './words';
 
+// Total addressable codewords per tab — the single source of truth for the
+// pool cap. All hints are two-word pairs drawn from the 26-letter alphabet,
+// so the ceiling is 26² = 676. Consumers that must stay under the pool (the
+// budget-aware claim band in settle-engine.ts) derive from this, not a literal.
+export const POOL_SIZE = LETTERS_26.length * LETTERS_26.length;
+
 // Pool composition: 26×26 pairs = 676 codewords.
 //
 // All hints are uniform two-word pairs — no singles. This eliminates
