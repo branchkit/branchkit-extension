@@ -54,6 +54,64 @@ describe('CaretController — control flow', () => {
   });
 });
 
+describe('CaretController — remembers the caret position across exits', () => {
+  it('re-enters at the last anchor, not a fresh first-node anchor', () => {
+    // Stub Selection.modify (happy-dom lacks it; applyKind paints the 1-char
+    // caret with it). The remembered-position round-trip is the point.
+    const sel = window.getSelection()!;
+    const proto = Object.getPrototypeOf(sel) as { modify?: unknown };
+    const origModify = proto.modify;
+    proto.modify = () => {};
+    try {
+      document.body.innerHTML = '<p>the quick brown fox jumps over the lazy dog today</p>';
+      const p = document.querySelector('p')!.firstChild!;
+      // A caret-like selection well into the text (offset 20), not at the start.
+      const r = document.createRange();
+      r.setStart(p, 20);
+      r.setEnd(p, 21);
+      sel.removeAllRanges();
+      sel.addRange(r);
+
+      const c = new CaretController({ onModeChange: vi.fn() });
+      c.enterFromNormal();        // visual/caret over the spot at offset 20
+      c.exit();                   // remembers anchor = offset 20
+      expect(c.isActive()).toBe(false);
+
+      c.enter('caret');           // re-enter → should restore offset 20
+      expect(window.getSelection()!.anchorOffset).toBe(20);
+    } finally {
+      proto.modify = origModify;
+    }
+  });
+
+  it('does not restore a remembered node that has since detached (SPA churn)', () => {
+    const sel = window.getSelection()!;
+    const proto = Object.getPrototypeOf(sel) as { modify?: unknown };
+    const origModify = proto.modify;
+    proto.modify = () => {};
+    try {
+      document.body.innerHTML = '<p>the quick brown fox jumps over the lazy dog today</p>';
+      const stale = document.querySelector('p')!.firstChild!;
+      const r = document.createRange();
+      r.setStart(stale, 20);
+      r.setEnd(stale, 21);
+      sel.removeAllRanges();
+      sel.addRange(r);
+      const c = new CaretController({ onModeChange: vi.fn() });
+      c.enterFromNormal();
+      c.exit(); // remembers the <p> text node
+
+      // Replace the DOM — the remembered node detaches. Re-entry must not throw
+      // and must NOT seed the selection at the stale node.
+      document.body.innerHTML = '<p>a completely different replacement paragraph</p>';
+      expect(() => c.enter('caret')).not.toThrow();
+      expect(window.getSelection()!.anchorNode).not.toBe(stale);
+    } finally {
+      proto.modify = origModify;
+    }
+  });
+});
+
 describe('CaretController — inner/around text-object prefixes', () => {
   function enterVisualOnSelection(): CaretController {
     document.body.innerHTML = '<p>some selectable words here on the page</p>';

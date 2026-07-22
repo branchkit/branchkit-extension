@@ -124,7 +124,6 @@ export function getDefaultScrollTarget(axis: 'x' | 'y' = 'y'): HTMLElement {
 
 // --- Smooth scroll animator ---
 
-let activeToken: symbol | null = null;
 let keyHeldCounter = 0;
 
 let _prefersReducedMotion: MediaQueryList | null = null;
@@ -135,13 +134,39 @@ function prefersReducedMotion(): boolean {
   return _prefersReducedMotion?.matches ?? false;
 }
 
-function easeOutQuad(t: number): number {
-  return t * (2 - t);
+// A single moving target chased in ONE rAF loop — not a fresh fixed-duration ease
+// per call. Holding a scroll key fires an OS key-repeat storm; the old model
+// started an overlapping easeOutQuad for every repeat, and they cut each other
+// off mid-flight — a sawtooth velocity the user saw as jitter. Here each delta
+// accumulates into `target` (clamped to the scroll range) and the position glides
+// toward it at a steady per-frame fraction: smooth constant velocity while held,
+// easing to rest on release. A single press is the same loop with a still target.
+interface ScrollChase {
+  el: HTMLElement;
+  prop: 'scrollTop' | 'scrollLeft';
+  axis: 'x' | 'y';
+  target: number;
+  direction?: ScrollDirection;
+  raf: number;
+}
+let chase: ScrollChase | null = null;
+
+function scrollRange(el: HTMLElement, prop: 'scrollTop' | 'scrollLeft'): number {
+  return prop === 'scrollTop' ? el.scrollHeight - el.clientHeight : el.scrollWidth - el.clientWidth;
+}
+
+function stopChase(): void {
+  if (chase) {
+    cancelAnimationFrame(chase.raf);
+    chase = null;
+  }
 }
 
 /**
- * Animate a scroll on an element. Most-recent-wins cancellation.
- * Honors prefers-reduced-motion by skipping animation.
+ * Scroll an element toward a target that ACCUMULATES across calls. Same-lane
+ * deltas (same element + axis, same direction) extend the glide; a new element,
+ * axis, or a reversal restarts it from the live position. Honors
+ * prefers-reduced-motion / `immediate` by jumping straight there.
  */
 function animateScroll(
   el: HTMLElement,
@@ -150,7 +175,7 @@ function animateScroll(
   immediate = false,
   direction?: ScrollDirection,
 ): void {
-  const prop = axis === 'y' ? 'scrollTop' : 'scrollLeft';
+  const prop: 'scrollTop' | 'scrollLeft' = axis === 'y' ? 'scrollTop' : 'scrollLeft';
 
   if (immediate || prefersReducedMotion()) {
     el[prop] += delta;
@@ -158,34 +183,47 @@ function animateScroll(
     return;
   }
 
-  const token = Symbol();
-  activeToken = token;
-  const start = el[prop];
-  const absDelta = Math.abs(delta);
-  const baseDuration = Math.max(100, 20 * Math.log(absDelta || 1));
-  const duration = keyHeldCounter > 0 ? baseDuration * 0.6 : baseDuration;
-  const t0 = performance.now();
+  const max = scrollRange(el, prop);
+  const clamp = (v: number): number => Math.max(0, Math.min(max, v));
+  const sameLane = chase !== null && chase.el === el && chase.prop === prop;
+  const reversing =
+    sameLane && !!direction && !!chase!.direction && direction !== chase!.direction;
 
-  // Override site CSS scroll-behavior during animation
+  if (sameLane && !reversing) {
+    // Extend the existing glide — the key-repeat storm builds one smooth motion.
+    chase!.target = clamp(chase!.target + delta);
+    if (direction) chase!.direction = direction;
+  } else {
+    stopChase();
+    chase = { el, prop, axis, target: clamp(el[prop] + delta), direction, raf: 0 };
+  }
+
+  const c = chase!; // non-null after both branches
+  if (c.raf !== 0) return; // a loop is already chasing this (now updated) target
+
+  // Override site CSS scroll-behavior for the glide, restored when it settles.
   const prevBehavior = el.style.scrollBehavior;
   el.style.scrollBehavior = 'auto';
-
-  function step(now: number): void {
-    if (activeToken !== token) {
+  const step = (): void => {
+    if (chase !== c) { el.style.scrollBehavior = prevBehavior; return; } // superseded
+    const cur = c.el[c.prop];
+    const dist = c.target - cur;
+    // Snap the last ~1px so a single press settles crisply instead of crawling
+    // through the exponential tail.
+    if (Math.abs(dist) < 1) {
+      c.el[c.prop] = c.target;
       el.style.scrollBehavior = prevBehavior;
+      if (c.direction) checkBoundary(c.el, c.axis, c.direction);
+      stopChase();
       return;
     }
-    const t = Math.min(1, (now - t0) / duration);
-    const eased = easeOutQuad(t);
-    el[prop] = start + delta * eased;
-    if (t < 1) {
-      requestAnimationFrame(step);
-    } else {
-      el.style.scrollBehavior = prevBehavior;
-      if (direction) checkBoundary(el, axis, direction);
-    }
-  }
-  requestAnimationFrame(step);
+    // Fraction of the remaining gap closed each frame — a touch snappier while a
+    // key is held so the glide keeps pace with the repeat storm.
+    const k = keyHeldCounter > 0 ? 0.32 : 0.25;
+    c.el[c.prop] = cur + dist * k;
+    c.raf = requestAnimationFrame(step);
+  };
+  c.raf = requestAnimationFrame(step);
 }
 
 /** Signal that a scroll key is being held (for friction). */

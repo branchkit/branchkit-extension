@@ -240,6 +240,11 @@ export class CaretController {
    *  find input can drop/relocate the live document Selection, so the anchor for
    *  the find→select extend is taken from here, not `window.getSelection()`. */
   private savedAnchor: { node: Node; offset: number } | null = null;
+  /** The last page caret anchor, remembered ACROSS exits so re-entering caret
+   *  mode returns to where you were rather than a fresh first-text-node anchor.
+   *  Persists until the node disconnects (SPA nav / DOM churn) — validated on
+   *  restore, so a stale entry silently falls back to the initial anchor. */
+  private lastCaretPos: { node: Node; offset: number } | null = null;
 
   constructor(private opts: CaretOptions) {}
 
@@ -318,7 +323,9 @@ export class CaretController {
     const sel = window.getSelection();
     if (!sel) return;
     if (sel.rangeCount === 0 || sel.type === 'None') {
-      if (!establishInitialAnchor(sel)) {
+      // Prefer the remembered caret from the last session; fall back to the
+      // first-big-text-node heuristic only when there's nothing to restore.
+      if (!this.restoreLastCaret(sel) && !establishInitialAnchor(sel)) {
         flashToast('No text to select here');
         return;
       }
@@ -326,6 +333,24 @@ export class CaretController {
     this.movement = new Movement(kind === 'caret' ? 'move' : 'extend', sel);
     this.growthDir = 'forward';
     this.applyKind(kind);
+  }
+
+  /** Seed the selection at the remembered caret position, if it's still valid.
+   *  Returns false when there's nothing remembered or the node has since
+   *  detached / the offset no longer fits (→ caller uses the initial anchor). */
+  private restoreLastCaret(sel: Selection): boolean {
+    const pos = this.lastCaretPos;
+    if (!pos || !pos.node.isConnected) return false;
+    const range = document.createRange();
+    try {
+      range.setStart(pos.node, pos.offset);
+      range.setEnd(pos.node, pos.offset);
+    } catch {
+      return false; // offset out of range (text changed) — fall back
+    }
+    sel.removeAllRanges();
+    sel.addRange(range);
+    return true;
   }
 
   handleKey(e: KeyboardEvent): boolean {
@@ -468,6 +493,11 @@ export class CaretController {
       this.fieldEl.setSelectionRange(r.focus, r.focus);
       this.fieldEl = null;
     } else {
+      // Remember the caret's anchor so a later `v` returns here (see enter).
+      const sel = this.movement?.sel;
+      if (sel && sel.anchorNode) {
+        this.lastCaretPos = { node: sel.anchorNode, offset: sel.anchorOffset };
+      }
       this.movement?.sel.removeAllRanges();
     }
     this.movement = null;
