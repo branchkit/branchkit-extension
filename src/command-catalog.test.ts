@@ -24,7 +24,7 @@ const REGISTERED_ACTIONS = [
   'new_tab', 'close_tab', 'restore_tab', 'duplicate_tab', 'pin_tab', 'mute_tab',
   'move_tab_left', 'move_tab_right',
   'mark_set', 'mark_jump',
-  'caret_mode', 'visual_line_mode',
+  'caret_mode', 'visual_line_mode', 'select_to',
   'video_mode', 'media_play_pause', 'media_mute', 'media_speed', 'media_seek', 'media_restart',
   'toggle_help', 'toggle_palette', 'toggle_tab_palette',
 ] as const;
@@ -43,10 +43,16 @@ const VOICE_ONLY_BACKGROUND = [
 // Voice-only commands handled inline in content's BRANCHKIT_ACTION listener
 // (the activate family shares plain activate's resolution path there), with
 // no content-dispatcher registration: the target is a runtime spoken codeword.
-const VOICE_ONLY_CONTENT = ['activate_hint_newtab', 'activate_hint_background', 'caret_voice'] as const;
+const VOICE_ONLY_CONTENT = [
+  'activate_hint_newtab', 'activate_hint_background',
+  // Discrete voice-selection verbs — handled inline in BRANCHKIT_ACTION, gated
+  // on the caret mode; no keyboard bind (the movement keys are the keyboard form).
+  'select_extend', 'select_shrink', 'select_flip', 'select_copy', 'select_exit',
+] as const;
 
 const NOT_MAPPABLE = new Set([
   'activate_hint', 'find_immediate', 'scroll_to_element', 'scroll',
+  'select_to', // dictated-argument phrase, like find_immediate — not bindable
   ...VOICE_ONLY_BACKGROUND,
   ...VOICE_ONLY_CONTENT,
 ]);

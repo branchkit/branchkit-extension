@@ -63,7 +63,7 @@ import { flashToast } from './render/toast';
 import {
   PREV_POSITION_REGISTERS, isPrevPositionRegister, marksToHash, type StoredMark,
 } from './marks';
-import { CaretController, type CaretVoiceOp } from './activate/caret';
+import { CaretController, type SelectionCommand } from './activate/caret';
 import {
   CodewordSnapshot,
   takeSnapshot,
@@ -497,6 +497,11 @@ function onTrackerCodewordsChanged(claimed: ElementWrapper[], released: string[]
 setFindCallbacks({
   onActivate: () => { hideBadges(); },
   onDeactivate: () => { resetCycleTarget(); },
+  // When a search commits while caret/visual selection is active, extend the
+  // selection straight to the match — so "/ query Enter" is a find-and-select,
+  // no need to press `n` (which skips to the next match). `caret` is defined
+  // later but only called at runtime, well after module init.
+  onCommit: () => { if (caret.isActive()) caret.extendToCurrentMatch(); },
 });
 
 setScrollBoundaryCallback((boundary) => {
@@ -1514,8 +1519,42 @@ const caret = new CaretController({
 });
 keyHandler.setCaretKeyHandler((e) => caret.handleKey(e));
 // `v` extends an existing selection (visual) or drops to caret — Vimium parity.
-dispatcher.register('caret_mode', () => caret.enterFromNormal());
+// With no live document selection but an active find match, promote that match
+// to the selection so a find flows straight into grow/shrink (Vimium auto-
+// promotes caret→visual on a non-empty match). See DESIGN_VOICE_SELECTION_BOUNDS.md.
+dispatcher.register('caret_mode', () => {
+  const sel = window.getSelection();
+  const hasSelection = !!sel && sel.rangeCount > 0 && sel.type === 'Range' && !sel.isCollapsed;
+  if (!hasSelection && caret.enterFromFind()) return;
+  caret.enterFromNormal();
+});
 dispatcher.register('visual_line_mode', () => caret.enter('visual-line'));
+// "extend to <phrase>" — find the dictated phrase and extend the far bound to
+// it (find + extend in one utterance). Rides the platform dictated-argument
+// path (params.query), same plumbing as find_immediate's search.
+dispatcher.register('select_to', (params) => {
+  const query = params.query || '';
+  if (query) caret.extendToPhrase(query);
+});
+
+/** Build a structured SelectionCommand from a discrete select_* action + its
+ *  params (command-catalog.ts). Central so the voice dispatch stays a one-liner. */
+function parseSelectionCommand(action: string, params?: Record<string, string>): SelectionCommand {
+  type Gran = NonNullable<SelectionCommand['granularity']>;
+  const granularity = (params?.granularity as Gran) || 'word';
+  switch (action) {
+    case 'select_flip': return { op: 'flip' };
+    case 'select_copy': return { op: 'copy' };
+    case 'select_exit': return { op: 'exit' };
+    case 'select_shrink': return { op: 'shrink', granularity };
+    default: return {
+      op: 'extend',
+      granularity,
+      direction: params?.direction === 'backward' ? 'backward' : 'forward',
+      count: params?.count ? parseInt(params.count, 10) || 1 : 1,
+    };
+  }
+}
 // Pagination — follow the page's next/prev link (Vimium goNext/goPrevious).
 dispatcher.register('go_next', () => navigatePage('next'));
 dispatcher.register('go_previous', () => navigatePage('prev'));
@@ -2976,6 +3015,7 @@ const DISPATCH_PASSTHROUGH_ACTIONS = new Set([
   'scroll_full_down', 'scroll_full_up',
   'scroll_top', 'scroll_bottom', 'scroll_left', 'scroll_right',
   'find_open', 'find_close', 'find_next', 'find_previous', 'find_immediate',
+  'select_to', // voice "extend to <phrase>" — dictated-argument find + extend
   'focus_input',
   'toggle_palette', // voice "palette" — same handler as the Ctrl+K bind
   'toggle_tab_palette', // voice "tab" — opens the tabs-only palette (Ctrl+T twin)
@@ -3340,17 +3380,18 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
           fp: resolved.fp,
         });
       }
-    } else if (action === 'caret_voice') {
-      // Voice-driven caret/visual selection ("select word", "copy that", …).
-      // No-op unless caret mode is active — the CaretController guards it. See
-      // notes/DESIGN_HINT_ACTION_MODES.md (voice caret control).
-      const op = (params?.op || 'word') as CaretVoiceOp;
-      caret.applyVoice(op);
+    } else if (action === 'select_extend' || action === 'select_shrink'
+            || action === 'select_flip' || action === 'select_copy' || action === 'select_exit') {
+      // Voice-driven adjustable selection ("extend sentence", "shrink word",
+      // "flip", "copy that", "stop selecting"). No-op unless caret mode is active
+      // — the CaretController guards it. See notes/DESIGN_VOICE_SELECTION_BOUNDS.md.
+      const cmd = parseSelectionCommand(action, params);
+      caret.applyVoice(cmd);
       reportDispatchResult({
         action, codeword: '', resolution: 'none', elem_tag: '',
         taken: caret.isActive() ? 'click' : 'skipped', ok: caret.isActive(),
         frame: trimFrameUrl(window.location.href),
-        detail: caret.isActive() ? `caret ${op}` : 'caret mode not active',
+        detail: caret.isActive() ? `${action} ${cmd.granularity ?? ''}`.trim() : 'caret mode not active',
         fp: '',
       });
     } else if (action === 'noop') {

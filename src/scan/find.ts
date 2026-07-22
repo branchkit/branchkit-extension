@@ -19,6 +19,8 @@
  * only the visual highlight is absent.
  */
 
+import { bestPageMatch, normalizeFuzzy, fold1to1, lower1to1, flexiblePattern } from './fuzzy-find';
+
 export type FindState = {
   active: boolean;
   query: string;
@@ -38,10 +40,18 @@ let currentIndex = -1;
 
 let onActivate: (() => void) | null = null;
 let onDeactivate: (() => void) | null = null;
+// Fired when a search commits WITH matches (Enter or voice find). Caret mode
+// uses it to auto-extend the selection to the match. See caret.ts.
+let onCommit: (() => void) | null = null;
 
-export function setFindCallbacks(opts: { onActivate?: () => void; onDeactivate?: () => void }): void {
+export function setFindCallbacks(opts: {
+  onActivate?: () => void;
+  onDeactivate?: () => void;
+  onCommit?: () => void;
+}): void {
   onActivate = opts.onActivate ?? null;
   onDeactivate = opts.onDeactivate ?? null;
+  onCommit = opts.onCommit ?? null;
 }
 
 export function getFindState(): FindState {
@@ -74,10 +84,12 @@ function ensureHighlightStyle(): void {
   if (document.querySelector(`[${STYLE_ATTR}]`)) return;
   const style = document.createElement('style');
   style.setAttribute(STYLE_ATTR, '');
-  // Current match emphasized (orange) over the all-matches wash (yellow).
+  // Current match is a solid highlighter-yellow block (opaque, black text); the
+  // other matches are a much fainter wash of the same yellow, so the current one
+  // clearly stands out by vividness.
   style.textContent =
-    `::highlight(${HL_ALL}) { background-color: rgba(255, 213, 79, 0.45); color: inherit; }\n` +
-    `::highlight(${HL_CURRENT}) { background-color: #ff9800; color: #000; }`;
+    `::highlight(${HL_ALL}) { background-color: rgba(255, 235, 59, 0.22); color: inherit; }\n` +
+    `::highlight(${HL_CURRENT}) { background-color: #ffeb3b; color: #000; }`;
   (document.head || document.documentElement).appendChild(style);
 }
 
@@ -89,33 +101,147 @@ function ensureHighlightStyle(): void {
  * (not across element boundaries) covers the overwhelming majority of matches.
  * Pure aside from reading the DOM — unit-tested directly.
  */
+function acceptFindTextNode(node: Node): number {
+  if (!node.nodeValue) return NodeFilter.FILTER_REJECT;
+  const parent = (node as Text).parentElement;
+  if (!parent) return NodeFilter.FILTER_REJECT;
+  const tag = parent.tagName;
+  if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT') return NodeFilter.FILTER_REJECT;
+  if (parent.closest('[data-branchkit-find]') || parent.closest('[data-branchkit-hint]')) {
+    return NodeFilter.FILTER_REJECT;
+  }
+  return NodeFilter.FILTER_ACCEPT;
+}
+
+/**
+ * A flattened text index of the subtree: one string built by transforming each
+ * accepted text node (1:1 length-preserving) and concatenating, plus a mapper
+ * from a string offset back to a DOM (node, offset). This is the shared
+ * substrate for ALL matching — a match found in the flat string maps to a Range
+ * that can span multiple nodes, so phrases crossing element boundaries (bold
+ * title, link, parenthetical) match. `boundarySpace` inserts a synthetic space
+ * between adjacent nodes (for tolerant matching, so node boundaries read as word
+ * boundaries); exact matching omits it so the flat text equals Range.toString().
+ */
+interface FlatIndex {
+  text: string;
+  nodeAt: (pos: number) => { node: Text; offset: number } | null;
+  /** DOM (node, offset) → flat position. Only exact when the index was built
+   *  1:1 (identity transform, no boundary spaces) — buildBlockIndex's case. */
+  posOf: (node: Node, offset: number) => number | null;
+}
+function buildFlatIndex(
+  root: Node,
+  transform: (s: string) => string,
+  boundarySpace: boolean,
+): FlatIndex {
+  const doc = root.ownerDocument ?? (root as Document);
+  let text = '';
+  const segs: { node: Text; start: number }[] = [];
+  const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: acceptFindTextNode });
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (boundarySpace && text.length && !/\s$/.test(text)) text += ' ';
+    segs.push({ node: node as Text, start: text.length });
+    text += transform((node as Text).nodeValue!);
+  }
+  const nodeAt = (pos: number): { node: Text; offset: number } | null => {
+    for (let i = segs.length - 1; i >= 0; i--) {
+      if (segs[i].start <= pos) {
+        const offset = pos - segs[i].start;
+        return offset <= segs[i].node.nodeValue!.length ? { node: segs[i].node, offset } : null;
+      }
+    }
+    return null;
+  };
+  const posOf = (node: Node, offset: number): number | null => {
+    for (const s of segs) if (s.node === node) return s.start + offset;
+    return null;
+  };
+  return { text, nodeAt, posOf };
+}
+
+/**
+ * A caret-selection index over a block subtree: the block's flat (cross-node)
+ * text plus bidirectional offset mapping (DOM ⇄ flat) and a flat-span → Range
+ * builder. Built 1:1 (exact concat, no synthetic spaces) so flat offsets equal
+ * DOM offsets and `Range.toString()` equals the flat text. Powers the "select
+ * this word/sentence/paragraph" text objects (caret.ts) with cross-node correct,
+ * layout-free spans — no reliance on `Selection.modify`'s flaky sentence/
+ * paragraph granularities.
+ */
+export function buildBlockIndex(root: Node): {
+  text: string;
+  posOf: (node: Node, offset: number) => number | null;
+  rangeFor: (start: number, end: number) => Range | null;
+} {
+  const doc = root.ownerDocument ?? (root as Document);
+  const { text, nodeAt, posOf } = buildFlatIndex(root, (s) => s, false);
+  const rangeFor = (start: number, end: number): Range | null => {
+    if (end <= start) return null;
+    const a = nodeAt(start);
+    const b = nodeAt(end - 1);
+    if (!a || !b) return null;
+    const r = doc.createRange();
+    r.setStart(a.node, a.offset);
+    r.setEnd(b.node, b.offset + 1);
+    return r;
+  };
+  return { text, posOf, rangeFor };
+}
+
+/**
+ * Exact (case-insensitive, accent-sensitive) match, CROSS-NODE. Runs indexOf on
+ * a direct-concatenation flat index (no synthetic spaces), so the flat text
+ * equals the concatenated Range.toString() — a phrase spanning elements matches,
+ * and the text a voice search writes back into the box is re-matchable by typing.
+ */
 export function findMatchRanges(query: string, root: Node): Range[] {
   const ranges: Range[] = [];
-  if (!query) return ranges;
-  const needle = query.toLowerCase();
+  const needle = lower1to1(query);
+  if (!needle) return ranges;
   const doc = root.ownerDocument ?? (root as Document);
-  const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode(node: Node): number {
-      if (!node.nodeValue) return NodeFilter.FILTER_REJECT;
-      const parent = (node as Text).parentElement;
-      if (!parent) return NodeFilter.FILTER_REJECT;
-      const tag = parent.tagName;
-      if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'NOSCRIPT') return NodeFilter.FILTER_REJECT;
-      if (parent.closest('[data-branchkit-find]') || parent.closest('[data-branchkit-hint]')) {
-        return NodeFilter.FILTER_REJECT;
-      }
-      return NodeFilter.FILTER_ACCEPT;
-    },
-  });
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const hay = node.nodeValue!.toLowerCase();
-    let idx = hay.indexOf(needle);
-    while (idx !== -1) {
+  const { text, nodeAt } = buildFlatIndex(root, lower1to1, false);
+  let idx = text.indexOf(needle);
+  while (idx !== -1) {
+    const start = nodeAt(idx);
+    const end = nodeAt(idx + needle.length - 1);
+    if (start && end) {
       const range = doc.createRange();
-      range.setStart(node, idx);
-      range.setEnd(node, idx + needle.length);
+      range.setStart(start.node, start.offset);
+      range.setEnd(end.node, end.offset + 1);
       ranges.push(range);
-      idx = hay.indexOf(needle, idx + needle.length);
+    }
+    idx = text.indexOf(needle, idx + needle.length);
+  }
+  return ranges;
+}
+
+/**
+ * Punctuation/accent-tolerant CROSS-NODE match (voice path). Folds accents and
+ * allows any non-alphanumeric run between the query's words, over the same flat
+ * index (with synthetic node-boundary spaces), so "Lope Martin Marooned 21 July
+ * 1566" matches "**Lopo Martín** (marooned 21 July 1566)" across the boundaries.
+ */
+export function findRangesFlexible(query: string, root: Node): Range[] {
+  const ranges: Range[] = [];
+  const pattern = flexiblePattern(query);
+  if (!pattern) return ranges;
+  const doc = root.ownerDocument ?? (root as Document);
+  const { text, nodeAt } = buildFlatIndex(root, fold1to1, true);
+  const re = new RegExp(pattern, 'g');
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (m[0].length === 0) {
+      re.lastIndex++;
+      continue;
+    }
+    const start = nodeAt(m.index);
+    const end = nodeAt(m.index + m[0].length - 1);
+    if (start && end) {
+      const range = doc.createRange();
+      range.setStart(start.node, start.offset);
+      range.setEnd(end.node, end.offset + 1);
+      ranges.push(range);
     }
   }
   return ranges;
@@ -303,17 +429,12 @@ function isMatchVisible(range: Range): boolean {
   return style.visibility !== 'hidden' && style.visibility !== 'collapse' && style.opacity !== '0';
 }
 
-function performFind(query: string): void {
+/** Apply a resolved set of visible match ranges: update state, highlight, and
+ * scroll to the first. Shared by typed (exact) and voice (tolerant/fuzzy) find. */
+function applyFoundRanges(query: string, ranges: Range[]): void {
   state.query = query;
   clearHighlights();
-  if (query === '') {
-    state.matchIndex = 0;
-    state.matchCount = 0;
-    updateCountDisplay();
-    return;
-  }
-  matchRanges = findMatchRanges(query, document.body || document.documentElement)
-    .filter(isMatchVisible);
+  matchRanges = ranges;
   state.matchCount = matchRanges.length;
   if (matchRanges.length === 0) {
     currentIndex = -1;
@@ -326,6 +447,42 @@ function performFind(query: string): void {
   applyHighlights();
   scrollToCurrent();
   updateCountDisplay();
+}
+
+/** Typed find: exact substring, incremental as the user types. */
+function performFind(query: string): void {
+  if (query === '') {
+    state.query = query;
+    clearHighlights();
+    state.matchIndex = 0;
+    state.matchCount = 0;
+    updateCountDisplay();
+    return;
+  }
+  applyFoundRanges(
+    query,
+    findMatchRanges(query, document.body || document.documentElement).filter(isMatchVisible),
+  );
+}
+
+/** Voice find locator: exact first, then punctuation/accent-tolerant. */
+function locateVoice(query: string): Range[] {
+  const root = document.body || document.documentElement;
+  const exact = findMatchRanges(query, root).filter(isMatchVisible);
+  if (exact.length) return exact;
+  return findRangesFlexible(query, root).filter(isMatchVisible);
+}
+
+/**
+ * Locate a phrase on the page and return the first visible match Range (exact,
+ * then punctuation/accent-tolerant — the same layering as voice find, without
+ * touching the find bar/highlights). The substrate for caret mode's "extend to
+ * <phrase>" (notes/DESIGN_VOICE_SELECTION_BOUNDS.md). Null when nothing matches.
+ */
+export function findFirstRange(query: string): Range | null {
+  const trimmed = query.trim();
+  if (!trimmed) return null;
+  return locateVoice(trimmed)[0] ?? null;
 }
 
 function move(delta: number): void {
@@ -365,6 +522,7 @@ function commitFind(): void {
   }
   showCommittedPill();
   scrollToCurrent();
+  if (matchRanges.length > 0) onCommit?.();
 }
 
 // --- Public API ---
@@ -463,10 +621,44 @@ export function handleFindNavKey(e: KeyboardEvent): boolean {
  * the committed pill — highlights persist, n / Shift+n (or voice "next" /
  * "previous") navigate, Escape or voice "close find" dismisses. */
 export function findImmediate(query: string): void {
-  removeFindBar(); // a voice find while the bar is open supersedes it
   state.active = true;
   ensureHighlightStyle();
   onActivate?.();
-  performFind(query);
-  showCommittedPill();
+  // Voice find is tolerant (typed find stays exact/incremental). Layered:
+  //   1. exact substring, then
+  //   2. punctuation/accent-tolerant (handles "Martín", "(", odd spacing), then
+  //   3. phonetic-fuzzy correction to the closest page term (ASR sound errors
+  //      like "shek out" -> "checkout"), re-located tolerantly.
+  // Each layer only runs if the previous found nothing, and (3) falls back to
+  // the raw (no-match) query if nothing on the page is close — so it never
+  // forces a wrong match for text that genuinely isn't there.
+  applyFoundRanges(query, locateVoice(query));
+  if (matchRanges.length === 0) {
+    const corrected = bestPageMatch(query, document.body?.innerText ?? '');
+    if (corrected && normalizeFuzzy(corrected.term) !== normalizeFuzzy(query)) {
+      applyFoundRanges(corrected.term, locateVoice(corrected.term));
+    }
+  }
+  // Write the EXACT page text that was matched into the query (not the dictated,
+  // possibly-garbled words). So what's shown is a real page substring — search
+  // stays exact whether spoken or typed, and editing it by keyboard behaves the
+  // same. On a no-match, keep the spoken query so "No matches" reflects it.
+  if (matchRanges.length > 0) {
+    const exactText = (matchRanges[currentIndex] ?? matchRanges[0]).toString().trim();
+    if (exactText) {
+      state.query = exactText;
+      updateCountDisplay();
+    }
+  }
+  // Model B (hybrid): voice "search" opened the find box as its cue. If it's
+  // open, fill it with the resolved query and keep it open so the user can see +
+  // edit it by typing. Otherwise land on the read-only committed pill.
+  if (barElement && inputElement) {
+    inputElement.value = state.query;
+    inputElement.focus();
+    inputElement.select();
+  } else {
+    showCommittedPill();
+  }
+  if (matchRanges.length > 0) onCommit?.();
 }

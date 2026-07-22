@@ -355,34 +355,79 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // --- Selection (Vimium v / V — caret & visual mode) ---
   // A keyboard text caret over page content, ending in a yank (copy). The
   // movement keys (hjkl/w/b/e/0/$/gg/G) are owned by the caret handler, not the
-  // registry — they shadow the Normal-mode binds by design. Keyboard-only;
-  // coarse voice selection ("select word") is a deferred follow-up. See
-  // notes/DESIGN_MARKS_AND_CARET.md (Part 2).
+  // registry — they shadow the Normal-mode binds by design. The spoken twin (the
+  // select_* commands below) drives the same selection by voice. See
+  // notes/DESIGN_MARKS_AND_CARET.md (Part 2) + DESIGN_VOICE_SELECTION_BOUNDS.md.
   { id: 'caret_mode', label: 'Caret / visual mode', group: 'Selection', mappable: true, params: [],
     description: 'Place a text caret on the page — move with hjkl/w/b, press v to start selecting, y to copy the selection. Esc exits.' },
   { id: 'visual_line_mode', label: 'Visual line mode', group: 'Selection', mappable: true, params: [],
     description: 'Start a line-wise selection at the caret — j/k extend by whole lines, y copies. Esc exits.' },
-  // Voice-driven caret/visual selection — the spoken twin of the movement keys,
-  // so "voice for everything" covers selecting + copying by voice. Voice-only
-  // (movement keys are the keyboard form). Gated on the caret mode via
-  // voiceContext:'caret' — the plugin holds an exclusive caret tag while the
-  // extension's caret mode is active (POST /caret), so these are eligible ONLY
-  // while selecting, mirroring the keyboard's modal capture. See
-  // notes/DESIGN_HINT_ACTION_MODES.md.
-  { id: 'caret_voice', label: 'Voice caret control', group: 'Selection', mappable: false,
-    description: 'While the caret/visual selection is active, extend it by voice — "select word", "select line", "select to end" — then "copy that". "stop selecting" exits.',
-    params: [{ name: 'op', type: 'enum', options: ['word', 'line', 'sentence', 'end', 'start', 'copy', 'exit'], default: 'word' }],
+  // Voice-driven adjustable selection — the spoken twin of the movement keys, so
+  // "voice for everything" covers growing/shrinking/copying a span by voice.
+  // Discrete commands (one verb each) so every one gets its own `?`-palette row
+  // and label; all voice-only (movement keys are the keyboard form). Each is
+  // gated on the caret mode via voiceContext:'caret' — the plugin holds an
+  // exclusive caret tag while the extension's caret mode is active (POST /caret),
+  // so these are eligible ONLY while selecting, mirroring the keyboard's modal
+  // capture. One utterance = one Selection.modify (verb × granularity × direction
+  // × count). See notes/DESIGN_VOICE_SELECTION_BOUNDS.md.
+  { id: 'select_extend', label: 'Extend selection', group: 'Selection', mappable: false,
+    description: 'Grow the selection by a word, sentence, line, or paragraph (say a number to repeat, "back" to grow the other way, "to end/start" for the line edge). Keyboard: w/b/e, ( ), { }, 0/$.',
+    params: [
+      { name: 'granularity', type: 'enum', options: ['word', 'sentence', 'line', 'paragraph', 'lineboundary'], default: 'word' },
+      { name: 'direction', type: 'enum', options: ['forward', 'backward'], default: 'forward' },
+      { name: 'count', type: 'number', min: 1, default: '1' },
+    ],
     voiceContext: 'caret',
     voice: [
-      { pattern: 'select word', params: { op: 'word' } },
-      { pattern: 'select line', params: { op: 'line' } },
-      { pattern: 'select sentence', params: { op: 'sentence' } },
-      { pattern: 'select to end', params: { op: 'end' } },
-      { pattern: 'select to start', params: { op: 'start' } },
-      { pattern: 'copy selection', params: { op: 'copy' } },
-      { pattern: 'copy that', params: { op: 'copy' } },
-      { pattern: 'stop selecting', params: { op: 'exit' } },
+      { pattern: 'extend word', params: { granularity: 'word' } },
+      { pattern: 'extend sentence', params: { granularity: 'sentence' } },
+      { pattern: 'extend line', params: { granularity: 'line' } },
+      { pattern: 'extend paragraph', params: { granularity: 'paragraph' } },
+      { pattern: 'extend {number} words', params: { granularity: 'word', count: '{number}' } },
+      { pattern: 'extend {number} sentences', params: { granularity: 'sentence', count: '{number}' } },
+      { pattern: 'extend {number} lines', params: { granularity: 'line', count: '{number}' } },
+      { pattern: 'extend {number} paragraphs', params: { granularity: 'paragraph', count: '{number}' } },
+      { pattern: 'extend back word', params: { granularity: 'word', direction: 'backward' } },
+      { pattern: 'extend back sentence', params: { granularity: 'sentence', direction: 'backward' } },
+      { pattern: 'extend back line', params: { granularity: 'line', direction: 'backward' } },
+      { pattern: 'extend back paragraph', params: { granularity: 'paragraph', direction: 'backward' } },
+      { pattern: 'extend to end', params: { granularity: 'lineboundary', direction: 'forward' } },
+      { pattern: 'extend to start', params: { granularity: 'lineboundary', direction: 'backward' } },
     ] },
+  { id: 'select_shrink', label: 'Shrink selection', group: 'Selection', mappable: false,
+    description: 'Pull the selection back by a word, sentence, line, or paragraph — the moving end retreats toward where you started.',
+    params: [
+      { name: 'granularity', type: 'enum', options: ['word', 'sentence', 'line', 'paragraph'], default: 'word' },
+    ],
+    voiceContext: 'caret',
+    voice: [
+      { pattern: 'shrink word', params: { granularity: 'word' } },
+      { pattern: 'shrink sentence', params: { granularity: 'sentence' } },
+      { pattern: 'shrink line', params: { granularity: 'line' } },
+      { pattern: 'shrink paragraph', params: { granularity: 'paragraph' } },
+    ] },
+  { id: 'select_flip', label: 'Flip selection end', group: 'Selection', mappable: false, params: [],
+    description: 'Swap which end of the selection moves, so you can adjust the other bound after over-extending. Keyboard: o.',
+    voiceContext: 'caret',
+    voice: [{ pattern: 'flip' }, { pattern: 'other end' }] },
+  { id: 'select_copy', label: 'Copy selection', group: 'Selection', mappable: false, params: [],
+    description: 'Copy the current selection to the clipboard and exit selection mode. Keyboard: y.',
+    voiceContext: 'caret',
+    voice: [{ pattern: 'copy that' }, { pattern: 'copy selection' }] },
+  { id: 'select_exit', label: 'Stop selecting', group: 'Selection', mappable: false, params: [],
+    description: 'Leave selection mode without copying. Keyboard: Esc.',
+    voiceContext: 'caret',
+    voice: [{ pattern: 'stop selecting' }] },
+  // Find-and-extend in one utterance ("extend to <phrase>"): the far bound jumps
+  // to a phrase found on the page. Like find_immediate, the phrase can't be a
+  // Sherpa `{text}` capture (the closed grammar only hears union words) — it
+  // rides the platform's dictated-argument path (the same arm-then-dictate flow
+  // as "search"; notes/DESIGN_DICTATED_COMMAND_ARGUMENT.md), so there's no voice
+  // pattern here. The extension just consumes browser.select_to{query}.
+  { id: 'select_to', label: 'Extend to phrase', group: 'Selection', mappable: false,
+    description: 'Extend the selection to a phrase spoken aloud (find + extend in one step; runtime dictated text — not bindable).',
+    params: [{ name: 'query', type: 'string' }] },
 
   // --- Media (notes/DESIGN_VIDEO_MEDIA_COMMANDS.md) ---
   // Transport verbs on the HTML5 <video> element API — generic across every
