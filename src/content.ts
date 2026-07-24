@@ -1869,9 +1869,7 @@ function restoreFromBfcache(): void {
   // away, and we want fresh ids on the next push. doScan alone won't
   // re-register surviving wrappers because findWrapperFor short-circuits
   // for elements still in the store, so we have to walk the store and
-  // re-register each one ourselves. Codewords + pool claims survive
-  // bfcache (the pool is in chrome.storage.session), so re-registering
-  // in place avoids churning RELEASE_LABELS through the pool.
+  // re-register each one ourselves.
   idRegistry.clear();
   for (const w of [...store.all]) {
     if (!w.element.isConnected) {
@@ -1880,12 +1878,40 @@ function restoreFromBfcache(): void {
     }
     idRegistry.register(w);
   }
+  // Re-assert POOL ownership of the codewords our wrappers still hold. The
+  // long-standing comment here claimed "pool claims survive bfcache" — they
+  // do NOT: entering bfcache closed this document's liveness Port, and the
+  // SW's onDisconnect ran releaseFrame, freeing every label we held; the
+  // successor document in this tab may have claimed and re-freed them since.
+  // Under the old broadcast fallback the divergence was invisible; under
+  // sealed pull-resolution an unassigned label is unspeakable (the
+  // 2026-07-24 "go back then no_such_hint" field failure —
+  // notes/DESIGN_PRERENDER_POOL_POISONING.md section 6). The confirm
+  // exchange re-acquires from free / no-ops if still ours. Fired TWICE:
+  // the outgoing page's own port-disconnect release carries our same frame
+  // id (documents share frame 0 — the pool cannot tell document
+  // generations apart) and races this restore; a second idempotent
+  // reconfirm after that release has surely landed heals a lost race.
+  const heldAtRestore = store.all.map((w) => w.scanned.codeword).filter((cw) => cw !== '');
+  if (heldAtRestore.length > 0) {
+    labelReservoir.reconfirm(heldAtRestore);
+    pageSession.resources.timeout(() => {
+      const stillHeld = store.all.map((w) => w.scanned.codeword).filter((cw) => cw !== '');
+      if (stillHeld.length > 0) labelReservoir.reconfirm(stillHeld);
+    }, BFCACHE_RECONFIRM_RETRY_MS);
+  }
   doScan();
   // NOT schedulePushGrammar(): re-registering wrappers in place enqueues no
   // pending Puts, so the delta sync would skip as an empty delta while the
   // plugin holds the grammar it wiped on navigate-away. Force a full re-push.
   republishAllGrammar('bfcache_restore');
 }
+
+// Long enough that the outgoing document's port-disconnect release (fired at
+// nav commit, processed by the SW before or shortly after our restore) has
+// landed; short enough that the voice-dead window after a "go back" stays
+// imperceptible when the first reconfirm lost the race.
+const BFCACHE_RECONFIRM_RETRY_MS = 1500;
 
 // --- Frame liveness Port ---
 //

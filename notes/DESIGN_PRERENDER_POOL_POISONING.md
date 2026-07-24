@@ -97,7 +97,43 @@ poisoned frame instead of grinding through partial purges.
   the correctness layer; the fix is making labels' provenance sound, not
   softening routing.
 
-## 5. Verification
+## 5. Sibling hole, found hours later: bfcache restore never re-asserted the pool
+
+Field failure the same afternoon (post-fix): activate → "go back" → the
+restored page's pairs all `no_such_hint` while pre-navigation pairs clicked
+fine. Same disease class, different door:
+
+- Entering bfcache closes the document's liveness Port; the SW's
+  onDisconnect runs `releaseFrame`, freeing every label the page held.
+  `restoreFromBfcache`'s comment claimed "pool claims survive bfcache" —
+  written when the pool lived only in storage.session and before the
+  Port-disconnect release existed. False for a long time; broadcast
+  fallback hid it.
+- On restore, the grammar republish healed the plugin side but nothing
+  re-asserted the pool. `reconfirm` was wired only to the SW-restart resync
+  (and no Port disconnect is delivered to a restoring page, so that path
+  never fires here).
+
+**Fix:** `restoreFromBfcache` now reconfirms every held codeword — twice.
+The double-shot exists because the OUTGOING page's own port-disconnect
+release carries the same frame id (documents in a tab share frame 0; the
+pool cannot distinguish document generations) and races the restore: if its
+release lands after our first reconfirm, it wipes the re-assertion. A second
+idempotent reconfirm 1.5s later heals a lost race.
+
+**Acknowledged deeper issue (not fixed here):** pool ownership is keyed by
+(tab, frame) while lifetimes are per-DOCUMENT. Both this hole and the race
+above stem from that identity gap; the clean fix is port-scoped (document-
+generation) ownership. Deferred — the reconfirm exchange is self-correcting
+and the pull-model tolerates transient divergence; revisit if the soak
+shows residue.
+
+**Open question:** whether a bfcache-restored page's liveness Port is live
+CS-side (no disconnect was delivered at restore in the field logs). If it
+is silently dead, SW-restart resync is also broken post-restore. Needs a
+deliberate probe; tracked here rather than guessed at.
+
+## 6. Verification
 
 - Unit: pool spec — prerender-sender helper denies; TTL steal (fresh
   reservations safe, stale stolen, stamps migrate); reservoir spec —
