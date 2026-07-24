@@ -265,6 +265,24 @@ export class PageSession {
   pendingMutation = false;
 
   /**
+   * Lever 2 (visibility-defer): the single gate for ALL scan work. False for
+   * an ineligible frame (Lever 1 frame-skip) or a backgrounded tab whose
+   * activation is deferred. Mutated only by the machinery gate
+   * (activate/suspend/resume in content.ts); read by the scan orchestrator.
+   * Moved onto the session with the round-3 scan lift — the per-frame flag
+   * home (same story as pendingMutation).
+   */
+  hintMachineryEnabled = false;
+
+  /**
+   * Lever 3 (hidden-tab suspend): true while an enabled frame is backgrounded
+   * and its page MutationObserver has been disconnected. Reversible —
+   * wrappers/codewords/badges are preserved; resume re-attaches the MO and
+   * reconciles.
+   */
+  suspended = false;
+
+  /**
    * Construct the six observers and store the content.ts orchestration deps.
    * Called once from content.ts boot, before any listener/scan can fire.
    * Construction is side-effect-free (no element is observed until the

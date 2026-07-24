@@ -14,6 +14,9 @@
  */
 
 import type { Fingerprint } from '../scan/registry';
+import * as idRegistry from '../scan/registry';
+import type { ElementWrapper } from '../scan/element-wrapper';
+import type { Message } from '../types';
 import { fingerprintKey, type CodewordMemoryEntry, type Rect } from './codeword-memory';
 import { REBIND_DISTANCE_THRESHOLD_PX } from './rebind';
 
@@ -160,6 +163,39 @@ export function resolvePreferredCodeword(fp: Fingerprint, rect: Rect | null): st
   }
   if (!best || best.d > REBIND_DISTANCE_THRESHOLD_PX) return null;
   return best.codeword;
+}
+
+// Regime B (DESIGN_CODEWORD_STABILITY phase 2): persist fingerprint→codeword for
+// newly-claimed wrappers so a fresh content script after a full-document (Regime B)
+// reload can reclaim the same codeword. The fingerprint is already in the registry
+// (no recompute). REMEMBER_CODEWORDS is not a pool-mutating message, so it stays
+// clear of the reservoir's single-sender invariant. Fire-and-forget. Shared by
+// the tracker claim path (content.ts) and the scan path (scan-orchestrator).
+export function rememberClaimedCodewords(claimed: ElementWrapper[]): void {
+  const entries: CodewordMemoryEntry[] = [];
+  for (const w of claimed) {
+    const codeword = w.scanned.codeword;
+    if (!codeword || w.scanned.id <= 0) continue;
+    const fp = idRegistry.get(w.scanned.id)?.fingerprint;
+    if (!fp) continue;
+    const r = w.lastRect;
+    entries.push({
+      fp,
+      codeword,
+      rect: r ? { x: r.left, y: r.top, w: r.width, h: r.height } : null,
+    });
+  }
+  if (entries.length === 0) return;
+  // Live in-session index: lets a wrapper that re-attaches later this session
+  // (SPA re-mount outside the limbo-rebind window) reclaim its codeword by
+  // fingerprint. Synchronous + in-memory; the SW persist below is the across-
+  // reload counterpart.
+  rememberLive(entries);
+  try {
+    chrome.runtime.sendMessage({ type: 'REMEMBER_CODEWORDS', entries } as Message).catch(() => {});
+  } catch {
+    // Extension context invalidated (orphan post-reload) — best-effort.
+  }
 }
 
 /** Test-only: reset the loaded state. */

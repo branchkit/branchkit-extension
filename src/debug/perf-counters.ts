@@ -461,6 +461,15 @@ export interface LifecycleCounters {
   attachedBySource: Record<string, number>;
 }
 
+// Codeword-claim path split (scan-path upfront claims vs tracker-path
+// viewport claims). Moved here from content.ts when the scan orchestrator
+// extracted (round 3) — the June note's "move them only if a later
+// extraction needs them" condition.
+export const claimCounters = {
+  scanPathClaimed: 0,
+  trackerPathClaimed: 0,
+};
+
 export const lifecycleCounters: LifecycleCounters = {
   dropDisconnectedCalls: 0,
   dropDisconnectedFound: 0,

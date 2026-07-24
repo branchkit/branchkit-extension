@@ -48,6 +48,8 @@ import { mutationTouchesTracked } from './mutation-relevance';
 import { occlusionMemoNoteMutations } from './occlusion-memo';
 import { composedContains } from './occlusion';
 import { store } from '../core/store';
+import { isExcludedByRule } from '../rules/domain-rules';
+import { getExcludes } from '../rules/rule-apply';
 import { attachWrapper } from '../core/wrapper-lifecycle';
 import { pageSession } from '../lifecycle/page-session';
 
@@ -481,3 +483,26 @@ export const __testing = {
   recheckNow: recheckPendingVisibility,
   isPending: (el: Element): boolean => pendingVisibility.has(el),
 };
+
+
+// Route walk-reached-but-invisible candidates into the attention observer.
+// Under the viewport-scoped lifecycle they only join `pendingVisibility`
+// when they actually enter the attention region (handled by the session's
+// attentionObserver.onEnter). This bounds the recheck set by viewport
+// proximity instead of total document candidate count — YouTube comment
+// skeletons that scroll past stay registered with attention IO but are no
+// longer rechecked on every MO fire. Shared by the scan path
+// (scan-orchestrator) and the subtree-discovery paths (content.ts).
+export function observeInvisibleCandidates(candidates: Element[]): void {
+  for (const el of candidates) {
+    if (store.findWrapperFor(el) || !el.isConnected) continue;
+    if (isExcludedByRule(el, getExcludes())) continue;
+    lifecycleCounters.invisibleCandidatesObserved++;
+    pageSession.attentionObserver.observe(el);
+    // Round 34c: the reveal RO rides along from the moment of parking.
+    // The attention IO can't see 0×0 candidates (grid cells born empty,
+    // filled by late data), so without this their reveal is only caught
+    // at settle-sweep cadence — the 0.5-3s badge trickle on data grids.
+    observeRevealCandidate(el);
+  }
+}
