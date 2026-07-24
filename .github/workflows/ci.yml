@@ -16,5 +16,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx tsc --noEmit
+      - run: node scripts/check-ceilings.mjs
       - run: npm test
       - run: npm run build
