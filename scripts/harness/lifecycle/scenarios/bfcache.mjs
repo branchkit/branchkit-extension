@@ -9,7 +9,7 @@
  * passing vacuously (a fresh load would trivially satisfy the invariant).
  */
 
-import { waitForBadges, poolAudit, assertClean, settle, Skip } from '../driver.mjs';
+import { waitForBadges, poolAudit, assertClean, settle, Skip, bfcacheProbeReport } from '../driver.mjs';
 
 export async function run({ ctx, base, browser }) {
   const page = await ctx.newPage();
@@ -51,8 +51,10 @@ export async function run({ ctx, base, browser }) {
     }
 
     const badges = await waitForBadges(page);
-    await settle(3_000); // restore reconfirm + debounced syncs
-    return assertClean(await poolAudit(page), `bfcache restore (${badges} badges, persisted)`);
+    await settle(3_000); // restore reconfirm + debounced syncs (+ the probe's 2s settled sample)
+    const clean = assertClean(await poolAudit(page), `bfcache restore (${badges} badges, persisted)`);
+    // Layer-2 port-probe verdict rides the pass line — report-only.
+    return `${clean} | ${await bfcacheProbeReport(page)}`;
   } finally {
     await page.close();
   }

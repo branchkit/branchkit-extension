@@ -5,7 +5,7 @@
  * restore; every painted badge must route every time.
  */
 
-import { waitForBadges, poolAudit, assertClean, settle, Skip } from '../driver.mjs';
+import { waitForBadges, poolAudit, assertClean, settle, Skip, bfcacheProbeReport } from '../driver.mjs';
 
 async function expectRestored(page, label) {
   await page.waitForFunction(() => document.documentElement.dataset.persisted !== undefined);
@@ -37,7 +37,9 @@ export async function run({ ctx, base, browser }) {
     await page.goBack({ waitUntil: 'commit' });
     await expectRestored(page, 'back to A (2nd)');
     await settle(3_000);
-    return assertClean(await poolAudit(page), 'roundtrip complete, A restored (2nd)');
+    const clean = assertClean(await poolAudit(page), 'roundtrip complete, A restored (2nd)');
+    // A restored twice → up to 4 probe samples on this document (layer 2).
+    return `${clean} | ${await bfcacheProbeReport(page)}`;
   } finally {
     await page.close();
   }

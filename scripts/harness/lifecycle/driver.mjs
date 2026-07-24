@@ -119,6 +119,20 @@ export function assertClean(audit, label) {
   );
 }
 
+/** Read the layer-2 bfcache port-probe samples (debug/bfcache-probe.ts) and
+ * render a compact verdict for the runner line. Report-only: the probe's
+ * whole point is that the ground truth is unknown — never assert on it. */
+export async function bfcacheProbeReport(page) {
+  const raw = await page.evaluate(
+    () => document.documentElement.dataset.branchkitBfcacheProbe,
+  );
+  if (!raw) return 'probe: no samples';
+  const samples = JSON.parse(raw);
+  return 'probe: ' + samples
+    .map((s) => `${s.when}[ctx=${s.ctx_valid ? 'ok' : 'DEAD'} port=${s.port} sw=${s.sw_tracked}]`)
+    .join(' ');
+}
+
 /** Loud skip — a transition the browser declined to engage under automation. */
 export class Skip extends Error {
   constructor(reason) {

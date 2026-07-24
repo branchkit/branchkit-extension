@@ -1,7 +1,9 @@
 # Orphan-CS paint — the arc, the tripwire, the probe
 
 Date: 2026-07-24
-Status: Layer 1 (orphan-paint tripwire) implemented. Layers 2+ pending.
+Status: Layer 1 (orphan-paint tripwire) implemented. Layer 2 (bfcache-port
+probe) implemented — QUESTION ANSWERED, see "Layer 2 findings". Layer 3+
+pending.
 
 The dedicated orphan-CS teardown arc (kickoff brief in session memory;
 required reading: `DESIGN_ORPHAN_CS_TEARDOWN_RETROSPECTIVE.md`,
@@ -67,6 +69,59 @@ Report-only, same contract as the pool half:
 No new observer/timer/gate — rides the existing audit machinery (one-in-
 one-out satisfied). No self-healing: a healer would mask exactly what
 layers 2–3 need to see in the field.
+
+## Layer 2 findings (2026-07-24, harness-proven)
+
+The probe (`debug/bfcache-probe.ts` + `LIVENESS_QUERY` + the
+`probeLivenessPortState` export) samples the channel from both ends at
+restore and 2s later. First harness run, Chromium, reproduced on all three
+restores (bfcache scenario + both A-restores in the roundtrip):
+
+```
+restore[ctx=ok port=post_ok sw=false] settled[ctx=ok port=post_ok sw=false]
+```
+
+**The silently-dead port state is REAL and is the deterministic outcome of
+every bfcache restore:**
+
+- CS-side, the port object still believes the channel is open
+  (`postMessage` doesn't throw) — `onDisconnect` never fired and never
+  will. The disconnect happened while the page was frozen and Chrome does
+  not deliver it on restore.
+- SW-side, the port is long gone (its `onDisconnect` ran at bfcache entry —
+  established; it's why the restore reconfirm exists).
+- 2s later: unchanged. **No self-healing** — the reconnect ladder lives in
+  the CS's `onDisconnect` handler, which never runs.
+
+Confirmed consequences:
+
+1. **SW-restart resync is broken for every bfcache-restored page.** The
+   resync path is triggered by CS-side port `onDisconnect`; a restored
+   page's port is a zombie, so a later SW restart is invisible to it —
+   grammar and pool ownership die silently on that page.
+2. **The restored document's labels have no disconnect-driven release.**
+   The restore reconfirm re-acquires labels for a doc whose release
+   trigger (port disconnect) is already spent. When the restored doc
+   finally dies, nothing releases them until the dead-tab sweep — widens
+   the "dead frames in an open tab" v1 gap to every restored page.
+3. **The stale-paint mechanism is confirmed as designed-in, not
+   incidental**: an extension reload while a page sits in bfcache can't
+   reach that page (its channel is already dead), so `onOrphan` can never
+   fire → the page restores, repaints, and its badges are serviced by
+   nobody. `ctx_valid:false` in a restore sample is that exact event
+   (dataset-mirrored, since bkLog can't transmit from a dead context).
+
+Fix direction for Layer 3 (not implemented — findings first): on restore,
+drop the zombie port object and REOPEN the liveness Port (restore already
+owns the reconfirm+republish work, so the reopen must not double-fire
+onResync); if `chrome.runtime.id` is gone at restore, the page is an
+orphan — `pageSession.teardown('orphan')` instead of repaint. A
+reload-while-in-bfcache harness scenario would pin consequence 3.
+
+Field evidence channel: the probe logs `BK_BFCACHE_PORT_PROBE` on every
+real back/forward restore in dev builds — Firefox samples will come from
+normal field browsing (harness bfcache is chromium-only; Firefox loud-skips
+under automation).
 
 ## Layer sequence (proposed 2026-07-24)
 

@@ -732,6 +732,15 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'LIVENESS_QUERY') {
+    // Read-only: does the SW hold a LIVE liveness Port for this doc? Layer-2
+    // probe of the bfcache-port question (debug/bfcache-probe.ts, dev builds).
+    sendResponse({
+      tracked: typeof message.doc_id === 'string' && livePortDocs.has(message.doc_id),
+    });
+    return false;
+  }
+
   if (message.type === 'REMEMBER_CODEWORDS') {
     // Regime B (DESIGN_CODEWORD_STABILITY): persist this frame's
     // fingerprint→codeword pairs so a fresh content script after a
@@ -792,6 +801,14 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
 // still-open tab remain the accepted v1 gap.
 const LIVENESS_PORT_NAME = 'frame-liveness';
 
+// DocIds with a currently-live liveness Port, SW's-eye view. Probe surface
+// for the bfcache-port open question (notes/DESIGN_ORPHAN_PAINT.md layer 2):
+// a CS whose port object looks open while its doc is absent here is the
+// silently-dead channel. SW restart wipes it with the rest of module state —
+// correct: after a restart nothing is tracked until CSs reconnect. Read by
+// LIVENESS_QUERY only; ratify as fix input or remove with layer 3.
+const livePortDocs = new Set<string>();
+
 chrome.runtime.onConnect.addListener((port) => {
   if (!port.name.startsWith(`${LIVENESS_PORT_NAME}:`)) return;
   // The port name carries the document's pool-ownership identity
@@ -812,7 +829,9 @@ chrome.runtime.onConnect.addListener((port) => {
   } catch {
     // Port may already be closing; harmless.
   }
+  livePortDocs.add(docId);
   port.onDisconnect.addListener(() => {
+    livePortDocs.delete(docId);
     // Doc-scoped: this document frees only ITS labels — never a bfcache-
     // restored predecessor's re-assertions (they share frame 0; they do not
     // share a docId).

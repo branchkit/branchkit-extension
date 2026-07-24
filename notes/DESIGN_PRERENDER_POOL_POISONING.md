@@ -133,6 +133,12 @@ CS-side (no disconnect was delivered at restore in the field logs). If it
 is silently dead, SW-restart resync is also broken post-restore. Needs a
 deliberate probe; tracked here rather than guessed at.
 
+*Answered 2026-07-24 (orphan-paint arc layer 2): SILENTLY DEAD — the
+harness probe proved it deterministic on every restore (CS-side
+onDisconnect never fires, no self-heal), so SW-restart resync IS broken
+post-restore. Findings + fix direction: `DESIGN_ORPHAN_PAINT.md`
+"Layer 2 findings".*
+
 ## 6. Verification
 
 - Unit: pool spec — prerender-sender helper denies; TTL steal (fresh

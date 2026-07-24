@@ -66,6 +66,27 @@ export interface LivenessHandlers {
 
 let livenessPort: chrome.runtime.Port | null = null;
 
+/**
+ * Probe the CS-side state of the port OBJECT (orphan-paint arc layer 2,
+ * notes/DESIGN_ORPHAN_PAINT.md). The port protocol is lifetime-only — the
+ * SW registers no port.onMessage, so the probe message is dropped unread;
+ * postMessage is called purely for its throw-on-disconnected behavior.
+ *
+ *   'absent'     — onDisconnect fired at some point (nulled the ref)
+ *   'post_ok'    — the local object believes the channel is open
+ *   'post_threw' — channel severed but onDisconnect never fired (the
+ *                  silently-dead state the probe exists to detect)
+ */
+export function probeLivenessPortState(): 'absent' | 'post_ok' | 'post_threw' {
+  if (!livenessPort) return 'absent';
+  try {
+    livenessPort.postMessage({ type: 'LIVENESS_PROBE' });
+    return 'post_ok';
+  } catch {
+    return 'post_threw';
+  }
+}
+
 export function openLivenessPort(handlers: LivenessHandlers, isReconnect = false): void {
   let connected = false;
   try {

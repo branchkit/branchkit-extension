@@ -128,6 +128,7 @@ import {
 } from './activate/media';
 import { notePaintSamplerScroll, snapshotExtras } from './debug/perf-report';
 import { initPoolAudit } from './debug/pool-audit';
+import { probeBfcacheRestore } from './debug/bfcache-probe';
 import { loadConfig, getDisplayMode, getHintVisibility } from './config';
 import {
   initLabelSync,
@@ -1854,6 +1855,10 @@ function republishAllGrammar(reason: string): void {
 
 // The bfcache-restore body, owned by `PageSession.restore`.
 function restoreFromBfcache(): void {
+  // Layer-2 probe (report-only, dev builds): is the liveness Port alive,
+  // self-healing, or silently dead after this restore? See
+  // debug/bfcache-probe.ts + notes/DESIGN_ORPHAN_PAINT.md.
+  probeBfcacheRestore();
   // Finalize any limbo wrappers before the existing re-registration
   // sweep. Per the open question on bfcache in DESIGN_WRAPPER_IDENTITY_
   // STABILITY: lastRect snapshots from pre-bfcache aren't trustworthy
