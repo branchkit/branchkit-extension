@@ -449,7 +449,15 @@ function applyFoundRanges(query: string, ranges: Range[]): void {
   updateCountDisplay();
 }
 
-/** Typed find: exact substring, incremental as the user types. */
+/** Typed/dictated find-bar input: incremental, exact first, then
+ * punctuation/accent-tolerant. The bar used to be exact-only, which broke
+ * the repeat-query voice flow: after an armed "search" query the box stays
+ * focused, and the next dictation types into it WITH WhisperKit's prosody
+ * punctuation ("red, green"). Exact-first keeps every previously-matching
+ * typed query byte-identical in behavior; the flexible layer engages only
+ * at zero exact matches. The phonetic layer stays voice-armed-path-only —
+ * per-keystroke phonetic correction on partial typed words would misfire.
+ * See notes/DESIGN_DICTATED_COMMAND_ARGUMENT.md (2026-07-24 decision). */
 function performFind(query: string): void {
   if (query === '') {
     state.query = query;
@@ -459,14 +467,13 @@ function performFind(query: string): void {
     updateCountDisplay();
     return;
   }
-  applyFoundRanges(
-    query,
-    findMatchRanges(query, document.body || document.documentElement).filter(isMatchVisible),
-  );
+  applyFoundRanges(query, locateTolerant(query));
 }
 
-/** Voice find locator: exact first, then punctuation/accent-tolerant. */
-function locateVoice(query: string): Range[] {
+/** Shared find locator: exact first, then punctuation/accent-tolerant.
+ * Used by the find bar's incremental input, the armed voice find, and
+ * findFirstRange. */
+function locateTolerant(query: string): Range[] {
   const root = document.body || document.documentElement;
   const exact = findMatchRanges(query, root).filter(isMatchVisible);
   if (exact.length) return exact;
@@ -482,7 +489,7 @@ function locateVoice(query: string): Range[] {
 export function findFirstRange(query: string): Range | null {
   const trimmed = query.trim();
   if (!trimmed) return null;
-  return locateVoice(trimmed)[0] ?? null;
+  return locateTolerant(trimmed)[0] ?? null;
 }
 
 function move(delta: number): void {
@@ -632,11 +639,11 @@ export function findImmediate(query: string): void {
   // Each layer only runs if the previous found nothing, and (3) falls back to
   // the raw (no-match) query if nothing on the page is close — so it never
   // forces a wrong match for text that genuinely isn't there.
-  applyFoundRanges(query, locateVoice(query));
+  applyFoundRanges(query, locateTolerant(query));
   if (matchRanges.length === 0) {
     const corrected = bestPageMatch(query, document.body?.innerText ?? '');
     if (corrected && normalizeFuzzy(corrected.term) !== normalizeFuzzy(query)) {
-      applyFoundRanges(corrected.term, locateVoice(corrected.term));
+      applyFoundRanges(corrected.term, locateTolerant(corrected.term));
     }
   }
   // Write the EXACT page text that was matched into the query (not the dictated,
