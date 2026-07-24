@@ -123,6 +123,15 @@ export interface GrammarBatchResponse {
   result: 'ok' | 'error' | 'stored' | 'calibration_active';
   succeeded: string[];
   failed: GrammarBatchFailure[];
+  /**
+   * The plugin's post-commit codeword count for this frame's session.
+   * Input to the shadow-desync tripwire (label-sync checkShadowDesync):
+   * after a FINAL batch settles, this should equal sentCodewords.size —
+   * a mismatch means the plugin's grammar diverged from our shadow (e.g.
+   * wiped out from under us) and the delta-sync will never re-converge
+   * on its own. Absent on the synthetic 'error' response.
+   */
+  committed_codewords?: number;
 }
 
 // --- Messages ---

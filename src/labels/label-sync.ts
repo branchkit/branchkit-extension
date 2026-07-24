@@ -57,6 +57,13 @@ export interface LabelSyncDeps {
   /** Single level-triggered convergence pass (claim + build). */
   reconcile: () => void;
   isBadgesVisible: () => boolean;
+  /**
+   * Full grammar re-push (content.ts republishAllGrammar): rotate the
+   * session, re-queue every live wrapper. The shadow-desync tripwire's
+   * recovery arm — the same one the SW-restart resync and bfcache restore
+   * already use.
+   */
+  republishAll: (reason: string) => void;
 }
 
 let deps: LabelSyncDeps;
@@ -308,6 +315,45 @@ function isWholesaleRefusal(resp: GrammarBatchResponse): boolean {
 // is display-grade and no longer needs correctness-grade convergence
 // machinery. History: DESIGN_GRAMMAR_EPOCH_HANDSHAKE.md.)
 
+// --- Shadow-desync tripwire ---
+//
+// Deliberately NOT the epoch handshake reborn: one int on final batches,
+// one comparison, and the existing republishAllGrammar as the recovery —
+// no epochs, no ladder, no probes. What it detects is the one failure the
+// delta-sync design cannot self-heal: the plugin's per-frame grammar
+// diverging from our sentCodewords shadow (wiped out from under us, or
+// entries the plugin holds that we no longer know about). The shadow then
+// computes empty deltas forever — painted badges, voice-dead — until an
+// unrelated rotation. Three independent members of this family have now
+// occurred (tab_switch destructive cleanup 2026-06-12, SW-restart
+// confirmLabels wedge, the doc-mismatch session_end wipe of 2026-07-24);
+// this catches the members nobody has met yet. Sensing-freeze compliant:
+// it widens the existing batch reconcile, no new observer/timer/gate.
+//
+// Race honesty: the scan path and the catchup sync are independent
+// pipelines, so a final batch's count CAN transiently disagree with the
+// shadow while the other pipeline is mid-flight. The cooldown caps a
+// spurious fire at one republish (same cost as a bfcache restore), and
+// the log line makes any recurrence visible during soak.
+const SHADOW_DESYNC_REPUBLISH_COOLDOWN_MS = 10_000;
+let lastShadowDesyncRepublishAt = 0;
+
+export function checkShadowDesync(resp: GrammarBatchResponse, requestSessionId: string, context: string): void {
+  if (resp.result !== 'ok' && resp.result !== 'stored') return;
+  if (typeof resp.committed_codewords !== 'number') return;
+  // A rotation happened while this batch was in flight: the count
+  // describes a dead session and the shadow was just cleared — nothing
+  // meaningful to compare.
+  if (requestSessionId !== sessionId) return;
+  const shadow = sentCodewords.size;
+  if (resp.committed_codewords === shadow) return;
+  bkLog('BK_GRAMMAR_SHADOW_DESYNC', { committed: resp.committed_codewords, shadow, context });
+  const now = Date.now();
+  if (now - lastShadowDesyncRepublishAt < SHADOW_DESYNC_REPUBLISH_COOLDOWN_MS) return;
+  lastShadowDesyncRepublishAt = now;
+  deps.republishAll(`shadow_desync_${context}`);
+}
+
 /**
  * Debounced entry point for every grammar-relevant change (MO mutations,
  * IT codeword claims, finalize-sweep detaches, bfcache restore). Coalesces
@@ -421,9 +467,10 @@ async function doSyncNow(reason: string): Promise<void> {
     // Pure-delete push: one empty batch carrying the queued deletes.
     // postBatch settles them (shadow drop on apply, queue restore on
     // refusal or transport failure) — this path only paces the retry.
+    const sid = sessionId;
     const drainedDeletes = drainPendingDeletes();
     const resp = await postBatch({
-      session_id: sessionId,
+      session_id: sid,
       batch_index: 0,
       is_final: true,
       kind: 'incremental',
@@ -431,6 +478,7 @@ async function doSyncNow(reason: string): Promise<void> {
       elements: [],
     }, drainedDeletes);
     if (resp.result === 'ok' || resp.result === 'stored') {
+      checkShadowDesync(resp, sid, 'delete_flush');
     } else if (isWholesaleRefusal(resp)) {
       bkLog('BK_SYNC_REFUSED', { result: resp.result, deletes: drainedDeletes.length });
       scheduleRefusalRetry();
@@ -458,7 +506,7 @@ async function doSyncNow(reason: string): Promise<void> {
   }
   let halted = false;
 
-  const handleResponse = (chunk: ElementWrapper[], resp: GrammarBatchResponse, deletesRiding: string[], _isLast: boolean): void => {
+  const handleResponse = (chunk: ElementWrapper[], resp: GrammarBatchResponse, deletesRiding: string[], isLast: boolean, sid: string): void => {
     if (resp.result === 'error') {
       // Transport failure ('error' is synthetic — the SW's transportFailure
       // or a failed sendMessage; the plugin only answers ok/stored/
@@ -524,6 +572,9 @@ async function doSyncNow(reason: string): Promise<void> {
     if (deps.isBadgesVisible() && resp.succeeded.length > 0) {
       deps.reconcile();
     }
+    // Middle chunks describe a half-applied sync; only the final chunk's
+    // post-commit count is comparable against the settled shadow.
+    if (isLast) checkShadowDesync(resp, sid, 'sync_final');
   };
 
   const postChunk = async (index: number, isLast: boolean): Promise<void> => {
@@ -549,15 +600,16 @@ async function doSyncNow(reason: string): Promise<void> {
     const deletesRiding = index === 0 || isLast ? drainPendingDeletes() : [];
     if (chunk.length === 0 && deletesRiding.length === 0 && !isLast) return;
     stampStrictViewport(chunk);
+    const sid = sessionId;
     const resp = await postBatch({
-      session_id: sessionId,
+      session_id: sid,
       batch_index: index,
       is_final: isLast,
       kind: 'incremental',
       ...sessionMeta,
       elements: chunk.map(w => w.scanned),
     }, deletesRiding);
-    handleResponse(chunk, resp, deletesRiding, isLast);
+    handleResponse(chunk, resp, deletesRiding, isLast, sid);
   };
 
   // A halt (refusal or transport failure) leaves chunks that were never

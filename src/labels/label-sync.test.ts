@@ -80,6 +80,7 @@ describe('syncNow wholesale refusal (calibration_active)', () => {
       detachWrapper: vi.fn(),
       reconcile: vi.fn(),
       isBadgesVisible: () => false,
+      republishAll: vi.fn(),
     });
     // Clear module-level delta-sync state from prior tests.
     rotateSession();
@@ -197,6 +198,7 @@ describe('pipelined delete accounting (audit 2026-07-04)', () => {
       detachWrapper: vi.fn(),
       reconcile: vi.fn(),
       isBadgesVisible: () => false,
+      republishAll: vi.fn(),
     });
     rotateSession();
   });
@@ -306,6 +308,7 @@ describe('syncNow transport failure keeps wrappers (BranchKit down)', () => {
       detachWrapper,
       reconcile: vi.fn(),
       isBadgesVisible: () => false,
+      republishAll: vi.fn(),
     });
     rotateSession();
   });
@@ -413,6 +416,7 @@ describe('scheduleSync debounce + max-wait deadline (round 22c)', () => {
       detachWrapper: vi.fn(),
       reconcile: vi.fn(),
       isBadgesVisible: () => false,
+      republishAll: vi.fn(),
     });
     rotateSession();
   });
@@ -445,5 +449,82 @@ describe('scheduleSync debounce + max-wait deadline (round 22c)', () => {
     }
     // 1200ms in: the non-extending deadline must have shipped the delta.
     expect(batchCalls().length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// --- Shadow-desync tripwire ---
+
+describe('shadow-desync tripwire (committed_codewords vs sentCodewords)', () => {
+  let store: WrapperStore;
+  let sendMessage: ReturnType<typeof vi.fn>;
+  let republishAll: ReturnType<typeof vi.fn<(reason: string) => void>>;
+  let committed: number | undefined;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    setAlphabet(ALPHABET);
+    store = new WrapperStore();
+    committed = undefined;
+    sendMessage = vi.fn((msg: { type: string }) => {
+      if (msg.type !== 'GRAMMAR_BATCH') return Promise.resolve(undefined);
+      return Promise.resolve(
+        committed === undefined
+          ? { result: 'ok', succeeded: [], failed: [] }
+          : { result: 'ok', succeeded: [], failed: [], committed_codewords: committed },
+      );
+    });
+    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+    republishAll = vi.fn<(reason: string) => void>();
+    initLabelSync({
+      store,
+      detachWrapper: vi.fn(),
+      reconcile: vi.fn(),
+      isBadgesVisible: () => false,
+      republishAll,
+    });
+    rotateSession();
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = '';
+  });
+
+  // Drive a pure-delete final batch (the simplest is_final carrier): the
+  // delete settles out of the shadow before the check, so the shadow is 0
+  // and committed_codewords IS the divergence.
+  async function finalBatch(count: number | undefined): Promise<void> {
+    markSent('arch bake');
+    queueDelete('arch bake');
+    committed = count;
+    await syncNow('test');
+  }
+
+  it('republishes on divergence, once per cooldown, and again after it', async () => {
+    // Agreement: plugin count matches the settled shadow — silent.
+    await finalBatch(0);
+    expect(republishAll).not.toHaveBeenCalled();
+
+    // Divergence: the plugin holds codewords our shadow doesn't know (or
+    // vice versa — the wiped-under-intact-shadow family). Recovery fires.
+    await finalBatch(5);
+    expect(republishAll).toHaveBeenCalledTimes(1);
+    expect(republishAll.mock.calls[0][0]).toContain('shadow_desync');
+
+    // Still diverged inside the cooldown: logged, not re-fired.
+    await finalBatch(5);
+    expect(republishAll).toHaveBeenCalledTimes(1);
+
+    // A divergence persisting past the cooldown fires again.
+    await vi.advanceTimersByTimeAsync(11_000);
+    await finalBatch(5);
+    expect(republishAll).toHaveBeenCalledTimes(2);
+  });
+
+  it('a response without committed_codewords is ignored (synthetic shapes)', async () => {
+    await finalBatch(undefined);
+    expect(republishAll).not.toHaveBeenCalled();
   });
 });

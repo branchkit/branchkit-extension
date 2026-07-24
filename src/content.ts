@@ -474,6 +474,9 @@ initLabelSync({
   detachWrapper,
   reconcile: () => engine.reconcile(),
   isBadgesVisible: () => pageSession.badgesVisible,
+  // Shadow-desync recovery: same full re-push the SW-restart resync and
+  // bfcache restore use (hoisted declaration).
+  republishAll: (reason) => republishAllGrammar(reason),
 });
 
 // Confirm-rejection handler (epoch-handshake Phase 4, review bug #5): the SW

@@ -27,7 +27,7 @@ import { applyExclusions, collectInclusions } from '../rules/domain-rules';
 import { isRecallLoaded, resolvePreferredCodeword, rememberClaimedCodewords } from '../labels/codeword-recall';
 import {
   queuePut, queueDelete, markSent, hasPendingDeletes, drainPendingDeletes,
-  getSessionId, claimLabels, postBatch,
+  getSessionId, claimLabels, postBatch, checkShadowDesync,
 } from '../labels/label-sync';
 import { recordCpu, claimCounters } from '../debug/perf-counters';
 import { getHintVisibility } from '../config';
@@ -216,8 +216,9 @@ async function doScanBatched(source: DiscoverySource): Promise<void> {
   // path's one delete carrier. Reuses the same session_id so
   // plugin-side session tracking stays consistent.
   if (hasPendingDeletes()) {
-    await postBatch({
-      session_id: getSessionId(),
+    const sid = getSessionId();
+    const resp = await postBatch({
+      session_id: sid,
       batch_index: batchIndex,
       is_final: true,
       kind: 'scan',
@@ -227,6 +228,7 @@ async function doScanBatched(source: DiscoverySource): Promise<void> {
       table_id: sessionMeta.table_id,
       elements: [],
     }, drainPendingDeletes());
+    checkShadowDesync(resp, sid, 'scan_delete_flush');
   }
   recordCpu('doScanBatched', performance.now() - __cpuStart);
 }
@@ -425,5 +427,10 @@ async function processScanBatch(
       }
     }
   }
+
+  // Terminal batch, shadow fully settled for this scan (middles were
+  // awaited before this batch posted) — comparable against the plugin's
+  // post-commit count.
+  if (batch.isLast) checkShadowDesync(resp, sessionId, 'scan_final');
 }
 
