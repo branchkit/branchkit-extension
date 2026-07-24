@@ -319,6 +319,10 @@ export class PageSession {
 
     this.attentionObserver = new AttentionObserver({
       onEnter: (el) => {
+        // Brake (Phase-1 pattern): a torn-down session must not scan/attach.
+        // The registry disconnect below should make this unreachable; kept as
+        // defense-in-depth like the other resurrection-path guards.
+        if (this.toreDown) return;
         if (!el.isConnected) return;
         if (store.findWrapperFor(el)) return;
         const scanned = scanSingle(el);
@@ -346,6 +350,17 @@ export class PageSession {
         untrackPendingCandidate(el);
       },
     });
+
+    // Ownership-derived teardown (Lift 5, reduced scope — see
+    // DESIGN_TEARDOWN_OWNERSHIP.md "Layer 4"): the observers THIS session
+    // constructs register at the construction site, so creation ⇄ teardown
+    // cannot drift. Finding that vindicated the fold: attentionObserver had
+    // NEVER been in quiesceOrphan's hand-maintained list — an orphan's
+    // attention IO kept scanning and attaching wrappers after teardown,
+    // unguarded and invisible to the orphan-hits gauge (2026-07-24).
+    this.resources.track({ disconnect: () => this.tracker.disconnectAll() });
+    this.resources.track(this.resizeObserver);
+    this.resources.track(this.attentionObserver);
 
     constructVisibilityObservers();
     constructPageMutationObserver();

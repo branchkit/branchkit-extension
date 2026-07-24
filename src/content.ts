@@ -2031,19 +2031,34 @@ function recordOrphanHit(): void {
 // `PageSession.teardown`'s hook, which flips `toreDown` before invoking it, so
 // a second teardown is a no-op upstream. Each `try` block is independent so a
 // failure in one doesn't skip the others.
+// OWNERSHIP CONTRACT (teardown arc layer 4, DESIGN_TEARDOWN_OWNERSHIP.md):
+// three entry points, one owner, one body.
+//   - plugin/liveness.ts `onOrphan` DETECTS (context invalidated) and calls
+//     `pageSession.teardown('orphan')` — it owns discrimination, never
+//     teardown work.
+//   - `pageSession.teardown(reason)` OWNS the decision: flips `toreDown`
+//     exactly once (idempotence lives there, not here) and invokes this hook.
+//   - `quiesceOrphan` is the BODY. Session-lifetime resources are
+//     registry-owned and die in `teardownAll()`; what remains explicit here
+//     is (a) module-level machinery that suspend/resume RE-CREATES
+//     (mutation source, visibility tracker, reconcile loop) — its teardown
+//     functions operate on whatever generation is current, and its proper
+//     owner is the future machinery-gate module (round-3 lift, unblocked by
+//     this arc), not the one-shot registry — and (b) the final DOM acts
+//     (host sweep, guard release), which are not resources.
+// `preNavObserverTeardown` is NOT part of this contract: it is a nav-wedge
+// PREEMPT on the voice activate-click path (unobserve-before-swap), not a
+// session teardown — do not fold it in.
 function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
-  // Each module-scope observer that fires user-driven callbacks. Missing one
-  // means the orphan keeps reacting to DOM changes / viewport shifts and
-  // surfacing `Extension context invalidated` errors in the page console.
+  // Suspend/resume-cycled machinery (see contract above). Each call tears
+  // down the CURRENT generation; all are idempotent module functions.
   teardownMutationSource();
-  try { pageSession.tracker.disconnectAll(); } catch { /* same */ }
-  try { pageSession.resizeObserver.disconnect(); } catch { /* same */ }
+  teardownVisibilityTracker();
   // The discovery drain is a yield task now (not cancellable) — clear the
   // queue and reset the flag; drainDiscovery's isTornDown guard makes the
   // already-scheduled continuation inert.
   pageSession.discoveryScheduled = false;
   pageSession.pendingDiscoveryRoots.clear();
-  teardownVisibilityTracker();
   // Stop the reconcile scroll loop and drop every reconcile-mode badge from the
   // positioner registry. The host-removal sweep below removes hosts via raw DOM
   // (bypassing HintBadge.remove(), the only per-badge unregister site), so
@@ -2055,9 +2070,11 @@ function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
     drainReconcilePositioner();
     drainClipObservers();
   } catch { /* same */ }
-  // Stop every session-owned resource (Phase 2a, DESIGN_TEARDOWN_OWNERSHIP.md).
-  // No-op for resources not yet migrated to the registry — those still rely on
-  // the sendMessage throw as backpressure until they move here.
+  // Every session-owned resource: listeners, timers, rAFs, AND the
+  // session-constructed observers (tracker, resize, attention — registered
+  // at their construction site in pageSession.start, so this list cannot
+  // drift; the attention IO was leaking through the old hand-written list
+  // here until the layer-4 fold caught it).
   try { pageSession.resources.teardownAll(); } catch { /* same */ }
   // Remove badge hosts so the new content script's initial DOM-clear sweep
   // (content.ts ~line 2230) doesn't have to fight visible artifacts.

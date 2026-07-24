@@ -69,6 +69,45 @@ section 6.
 
 ---
 
+## Layer 4 (2026-07-24, orphan-paint arc) — the fold's first act caught a leak
+
+Executed as layer 4 of the teardown arc (`DESIGN_ORPHAN_PAINT.md`). Reduced
+Lift 5: the observers `pageSession.start` CONSTRUCTS (IntersectionTracker,
+ResizeObserver, AttentionObserver) now register in `SessionResources` at
+their construction site; `quiesceOrphan` drops those hand-written lines.
+
+**The fold immediately proved the thesis of section 3:** `attentionObserver`
+had NEVER been in `quiesceOrphan`'s list. An orphan's attention IO (200%
+rootMargin) survived teardown and kept firing on every scroll —
+`scanSingle` → `attachWrapper` → store mutation + grammar-sync attempts —
+with no `isTornDown` guard on the path, so the orphan-hits gauge never saw
+it (the gauge counts GUARDED handlers only; `soak:orphan`'s 50→0 measured
+the guarded surface). Enumeration drift, silent, exactly as predicted.
+Fixed by registry ownership + a defense-in-depth `toreDown` brake in
+`onEnter`.
+
+**Contract ratified** (doc-block above `quiesceOrphan`): liveness `onOrphan`
+detects; `pageSession.teardown` owns the decision + idempotence;
+`quiesceOrphan` is the body. Session-lifetime resources → registry.
+Machinery that suspend/resume RE-CREATES (mutation source, visibility
+tracker, reconcile loop) stays explicit: its teardown belongs to the future
+machinery-gate module (the round-3 lift this arc unblocks), which is a
+better owner than the one-shot registry — that boundary is now layer 5's
+design input, not a leftover. `preNavObserverTeardown` is a nav-wedge
+preempt, not teardown; excluded by name.
+
+**Lift 3b stays deferred-with-rationale** (unchanged from June, reaffirmed):
+the clear-reset debounces are safe-by-emptiness (reconcile registry drained
+at teardown), so a named-slot clearTimeout API would add registry machinery
+for tidiness alone — against the one-in-one-out spirit. Reopen only if a
+clear-reset timer ever acquires teardown-relevant work.
+
+`__branchkit__force_teardown` was already harness-gated by the hardening
+sweep (release builds strip it) — the SOAK_TEARDOWN "gate before shipping"
+item is closed.
+
+---
+
 ## 1. The complete inbound-surface inventory
 
 `quiesceOrphan` (`content.ts:2212-2260`) is the teardown body, invoked via
