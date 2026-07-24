@@ -41,7 +41,7 @@ import { VIEWPORT_MARGIN_PX } from './observe/intersection-tracker';
 import { setOcclusionMemoMode, occlusionMemoAllDirty, occlusionMemoNoteTarget, occlusionMemoNotePointer } from './observe/occlusion-memo';
 import { reconcileClipObservation, drainClipObservers, setClipObserverEnabled } from './observe/clip-observer';
 import { cacheLayout, cacheConstruction, clearLayoutCache, isRectOnScreen, geometryInBand } from './layout-cache';
-import { placeBadges, invalidateProbe, setRuleNudges } from './placement';
+import { placeBadges, invalidateProbe } from './placement';
 import { activateElement, dispatchHover, resolveNavTarget, type ActivationResult } from './activate/event-sequence';
 import {
   emitActivatePath,
@@ -103,18 +103,17 @@ import { focusFirstInput, handleFocusInputKey } from './activate/focus-input';
 import { saveReference, resolveReference, listReferences } from './scan/references';
 import {
   matchRules,
-  compileRules,
   applyExclusions,
   collectInclusions,
   isExcludedByRule,
-  injectRevealStyles,
-  type CompiledRule,
-  type DomainRule,
-  type RuleEntry,
 } from './rules/domain-rules';
 import { loadDomainRules, onDomainRulesChanged, rulesEqual } from './rules/domain-rules-storage';
+import {
+  getCompiledRule, getExcludes, applyMatchedRules,
+  setPreviewNudge, hasPreviewNudge, applyUserRuleToScan,
+} from './rules/rule-apply';
 import { loadBadgeSettings, onBadgeSettingsChanged } from './badge-settings-storage';
-import { setBadgeSizingFromSettings, setBadgeSizeOverridePx } from './render/hints';
+import { setBadgeSizingFromSettings } from './render/hints';
 import { setScrollAccelEnabled, setScrollAccelNestedEnabled, reconcileScrollAccel, reconcileScrollAccelForScroller, reconcileTransformTrigger } from './render/scroll-accel-glue';
 import { isScrollTimelineSupported } from './render/scroll-accel';
 import { setNudgesFromSettings } from './placement';
@@ -594,80 +593,7 @@ let phraseSnapshot: CodewordSnapshot | null = null;
 // Input element types — used by the "activate" action to decide click vs focus.
 const INPUT_TYPES = new Set(['input', 'textarea', 'select', 'contenteditable']);
 
-// --- Per-domain hint rules ---
-//
-// Loaded asynchronously from chrome.storage.sync at startup; the initial
-// doScan() at the bottom of this file runs BEFORE the storage read
-// returns, so the first frame may render without user rules applied —
-// the storage callback triggers a second doScan once the rule is known.
-// See notes/completed/DESIGN_PER_DOMAIN_HINT_RULES.md "Timing".
-let compiledRule: CompiledRule | null = null;
-
-function getExcludes(): readonly RuleEntry[] {
-  return compiledRule?.excludes ?? [];
-}
-
-function applyMatchedRules(matched: DomainRule[]): void {
-  // Sweep any prior reveal stylesheet — covers both our previous match
-  // and orphan nodes left by an earlier content-script generation
-  // (extension reload re-injects JS but leaves the DOM).
-  for (const old of document.querySelectorAll('style[data-branchkit-reveal]')) {
-    old.remove();
-  }
-  if (matched.length === 0) {
-    compiledRule = null;
-    applyRuleBadgeSize();
-    applyNudgeSet();
-    return;
-  }
-  compiledRule = compileRules(matched);
-  applyRuleBadgeSize();
-  applyNudgeSet();
-  const style = injectRevealStyles(compiledRule.reveals);
-  if (style && document.head) document.head.appendChild(style);
-}
-
-// The per-site badge-size override applied to this frame, resolved from
-// the compiled rule set. Tracked so a rule edit that changes the resolved
-// size takes the same rebuild path as a badge-appearance settings change:
-// size feeds badge dimensions/colors/placement caches, so a re-place
-// alone is insufficient — detach everything and let doScan rebuild.
-// Runs BEFORE applyNudgeSet in applyMatchedRules so a size change doesn't
-// waste a placement pass on wrappers about to be detached.
-let appliedRuleBadgeSizePx: number | null = null;
-
-function applyRuleBadgeSize(): void {
-  const next = compiledRule?.badgeSizePx ?? null;
-  if (next === appliedRuleBadgeSizePx) return;
-  appliedRuleBadgeSizePx = next;
-  setBadgeSizeOverridePx(next);
-  for (const w of [...store.all]) detachWrapper(w.element);
-  scheduleDoScan();
-}
-
-// Wrapper-cached nudge offsets are resolved against the compiled rule set;
-// a rule change invalidates every one of them. The subsequent doScan's
-// placement pass re-resolves lazily.
-function clearRuleNudgeCaches(): void {
-  for (const w of store.all) w.cachedRuleNudge = undefined;
-}
-
-// --- Nudge preview (popup authoring) ---
-//
-// While the popup's add form authors a nudge entry, the offset applies to
-// the page EPHEMERALLY so the user tunes against the live badge instead of
-// blind-typing values and clicking Add to see them. Nothing persists: the
-// preview entry is prepended to the compiled set (first-match-wins makes it
-// authoritative while present) and evaporates when the popup clears it,
-// switches kinds, or closes — the port's disconnect covers close/crash.
-let previewNudge: RuleEntry | null = null;
-
-function applyNudgeSet(): void {
-  const compiled = compiledRule?.nudges ?? [];
-  setRuleNudges(previewNudge ? [previewNudge, ...compiled] : compiled);
-  clearRuleNudgeCaches();
-  placeBadges([...store.all].filter((w) => w.hint));
-}
+// --- Per-domain hint rules: wiring (state + appliers live in rules/rule-apply.ts) ---
 
 if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
   chrome.runtime.onConnect.addListener((port) => {
@@ -675,19 +601,15 @@ if (typeof chrome !== 'undefined' && chrome.runtime?.onConnect) {
     if (pageSession.isTornDown) { recordOrphanHit(); port.disconnect(); return; }
     port.onMessage.addListener(
       (msg: { selector?: string; dx?: number; dy?: number; clear?: boolean }) => {
-        previewNudge = msg.clear || !msg.selector ? null : {
+        setPreviewNudge(msg.clear || !msg.selector ? null : {
           id: '_nudge_preview',
           kind: 'nudge',
           matcher: { type: 'css', selector: msg.selector },
           nudge: { dx: msg.dx ?? 0, dy: msg.dy ?? 0 },
-        };
-        applyNudgeSet();
+        });
       });
     port.onDisconnect.addListener(() => {
-      if (previewNudge) {
-        previewNudge = null;
-        applyNudgeSet();
-      }
+      if (hasPreviewNudge()) setPreviewNudge(null);
     });
   });
 }
@@ -707,11 +629,11 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
     // Skip if THIS frame's matched rule SET is unchanged — a user editing
     // *.github.com's rule shouldn't trigger a re-scan stampede on every
     // quickbase.com tab.
-    if (rulesEqual(nextMatched, compiledRule?.rules ?? [])) return;
+    if (rulesEqual(nextMatched, getCompiledRule()?.rules ?? [])) return;
     applyMatchedRules(nextMatched);
-    if (compiledRule) {
+    if (getCompiledRule()) {
       for (const w of [...store.all]) {
-        if (isExcludedByRule(w.element, compiledRule.excludes)) detachWrapper(w.element);
+        if (isExcludedByRule(w.element, getExcludes())) detachWrapper(w.element);
       }
     }
     // Badges already on screen were re-placed by applyMatchedRules →
@@ -1902,31 +1824,6 @@ function scheduleDoScan(): void {
   }, DO_SCAN_COALESCE_MS);
 }
 
-// Apply the current compiled rule's exclusions + inclusions to a scan
-// result. Mutates result in place. Used by both doScan (full document)
-// and discoverInSubtree (added subtree). Cheap no-op when no rule is
-// active — the only added cost is one branch.
-function applyUserRuleToScan(
-  result: { refs: Element[]; elements: ScannedElement[] },
-  root: ParentNode,
-): void {
-  const cr = compiledRule;
-  if (!cr) return;
-  if (cr.excludes.length > 0) applyExclusions(result.refs, result.elements, cr.excludes);
-  if (!cr.includeSelector) return;
-
-  // Subtree scans only need to dedupe within this scan — added subtrees
-  // don't overlap with existing wrappers (those are by definition NOT
-  // in the just-added subtree). Skip the O(store.all) walk for them.
-  const seen = new Set<Element>(result.refs);
-  if (root === document) {
-    for (const w of store.all) seen.add(w.element);
-  }
-  const extra = collectInclusions(seen, cr.includeSelector, root);
-  result.refs.push(...extra.refs);
-  result.elements.push(...extra.elements);
-}
-
 async function showBadges(): Promise<void> {
   // Wait one frame so any pending IntersectionObserver entries (queued
   // synchronously by observe(), delivered async) have a chance to fire,
@@ -2218,7 +2115,7 @@ async function doScanBatched(source: DiscoverySource): Promise<void> {
   const __cpuStart = performance.now();
 
   // Uses the LabelStage session id — see Problem 1 in the design doc.
-  const cr = compiledRule;
+  const cr = getCompiledRule();
   const adapter = getActiveAdapter(window.location.href);
 
   // Inclusions run ONCE per scan (item 15: per-batch inclusion would
@@ -2339,8 +2236,9 @@ async function processScanBatch(
   // but a single high value there doesn't imply a freeze. The sync
   // buckets here are the freeze attribution surface.
   const __syncAStart = performance.now();
-  if (compiledRule?.excludes.length) {
-    applyExclusions(batch.refs, batch.elements, compiledRule.excludes);
+  {
+    const cr = getCompiledRule();
+    if (cr?.excludes.length) applyExclusions(batch.refs, batch.elements, cr.excludes);
   }
 
   // Drop refs whose wrappers already exist in the store
@@ -3820,7 +3718,7 @@ async function discoverInSubtreeBatched(
   // Built once for the whole sliced walk (mirrors limboPool); consumed as
   // strong-key rebinds fire across batches. See DESIGN_CODEWORD_KEY_OWNERSHIP.md.
   const keyIndex = collectStrongKeyIndex();
-  const cr = compiledRule;
+  const cr = getCompiledRule();
   const isKnown = (el: Element) => store.findWrapperFor(el) !== undefined;
 
   // Inclusion-rule elements once, pre-marked so the walk doesn't re-emit
