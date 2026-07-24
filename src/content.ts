@@ -1862,6 +1862,23 @@ function restoreFromBfcache(): void {
   // it records the raw channel state; its 2s settled sample verifies the
   // repair took (sw_tracked flips true).
   probeBfcacheRestore();
+  // Layer-3 mechanism B — the stale-paint fix. If the extension was
+  // reloaded/updated while this page sat in bfcache, this context was
+  // orphaned with no way to hear about it (layer 2: no disconnect is ever
+  // delivered), and repainting would strand badges nobody can service.
+  // Tear down instead. Safe timing: this runs synchronously in the pageshow
+  // dispatch, before any successor CS from the new extension generation can
+  // have painted — quiesceOrphan's host sweep removes only our own paint.
+  let ctxValid = false;
+  try {
+    ctxValid = typeof chrome !== 'undefined' && !!chrome.runtime?.id;
+  } catch {
+    ctxValid = false;
+  }
+  if (!ctxValid) {
+    pageSession.teardown('orphan');
+    return;
+  }
   // Layer-3 mechanism A: reopen the silently-dead Port (SW-confirmed dead
   // only — see repairLivenessAfterBfcacheRestore). Restores SW-restart
   // resync + disconnect-driven label release for this page's future.

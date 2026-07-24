@@ -153,6 +153,29 @@ export async function assertChannelHealed(page, label) {
   return 'channel healed';
 }
 
+/** Drive the REAL extension-reload path: the chrome://extensions dev-mode
+ * reload button (chrome.runtime.reload() is inert for command-line-loaded
+ * extensions — probed 2026-07-24). Returns the reloaded extension's new
+ * service worker, or throws after 30s. */
+export async function devReloadExtension(ctx, oldSw) {
+  const extPage = await ctx.newPage();
+  try {
+    await extPage.goto('chrome://extensions');
+    const mgr = extPage.locator('extensions-manager');
+    try { await mgr.locator('#devMode').click({ timeout: 3_000 }); } catch { /* already on */ }
+    await mgr.locator('extensions-item #dev-reload-button').click();
+    const deadline = Date.now() + 30_000;
+    while (Date.now() < deadline) {
+      const newSw = ctx.serviceWorkers().find((w) => w !== oldSw) ?? null;
+      if (newSw) return newSw;
+      await new Promise((r) => setTimeout(r, 250));
+    }
+    throw new Error('no new service worker after chrome://extensions reload');
+  } finally {
+    await extPage.close().catch(() => {});
+  }
+}
+
 /** Loud skip — a transition the browser declined to engage under automation. */
 export class Skip extends Error {
   constructor(reason) {

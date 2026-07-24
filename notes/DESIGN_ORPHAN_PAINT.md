@@ -1,9 +1,9 @@
 # Orphan-CS paint — the arc, the tripwire, the probe
 
 Date: 2026-07-24
-Status: Layer 1 (orphan-paint tripwire) implemented. Layer 2 (bfcache-port
-probe) implemented — QUESTION ANSWERED, see "Layer 2 findings". Layer 3+
-pending.
+Status: Layers 1-3 implemented. Layer 2 answered the port question (see
+"Layer 2 findings"); Layer 3 shipped both mechanisms (see "Layer 3");
+soak owed before layers 4-5.
 
 The dedicated orphan-CS teardown arc (kickoff brief in session memory;
 required reading: `DESIGN_ORPHAN_CS_TEARDOWN_RETROSPECTIVE.md`,
@@ -122,6 +122,45 @@ Field evidence channel: the probe logs `BK_BFCACHE_PORT_PROBE` on every
 real back/forward restore in dev builds — Firefox samples will come from
 normal field browsing (harness bfcache is chromium-only; Firefox loud-skips
 under automation).
+
+## Layer 3 (2026-07-24) — both mechanisms shipped, one commit each
+
+**Mechanism A — repair the channel** (`repairLivenessAfterBfcacheRestore`,
+`plugin/liveness.ts`). On restore, reopen the Port — but only after the SW
+confirms it isn't tracking this doc (LIVENESS_QUERY): never sever a
+possibly-healthy channel, since a self-disconnect of a live port would fire
+our own releaseDocument and race the restore reconfirm (the race class
+doc-scoped ownership retired). Reopens with isReconnect=false — restore
+owns the reconfirm+republish; the reopen buys the FUTURE (working
+onDisconnect → next SW restart resyncs; labels regain disconnect-driven
+release). Harness pin `assertChannelHealed`: the settled probe sample must
+show port=post_ok sw=true — green on every restore, both scenarios.
+
+**Mechanism B — dead context tears down instead of repainting**
+(restoreFromBfcache, content.ts). If `chrome.runtime.id` is gone at
+restore, the elder was orphaned while frozen and can never be serviced:
+`pageSession.teardown('orphan')` and return. Timing is safe by
+construction — the check runs synchronously in the pageshow dispatch,
+before any successor CS could have painted, so the host sweep removes only
+the elder's paint.
+
+**Finding (CDP-named): Chrome flushes the bfcache on extension reload**
+(`CacheFlushed`). The canonical reload-during-bfcache window therefore
+CANNOT occur on Chromium — Back after a reload is a fresh load with a
+fresh CS. The `bfcache-reload` scenario stays in the matrix as a named
+permanent skip (re-engages if Chrome's behavior changes; validity-checked:
+it loud-skips rather than passing vacuously if the orphan condition isn't
+staged). Mechanism B stays as ~10 lines of defense-in-depth for the paths
+the flush does NOT cover: Firefox extension reload (not automatable —
+field evidence via the probe's ctx_valid:false samples + BK_STALE_PAINT),
+the build-while-loaded wedge (extension dies with NO reload → no flush),
+and crash/uninstall edges.
+
+Consequence for the arc: the PAINT half's canonical Chrome window is
+closed by the browser itself; residual exposure is Firefox + wedge paths,
+now guarded by mechanism B and watched by the layer-1 tripwire. The
+layer-2/3 substance on Chrome was the CHANNEL half (SW-restart resync +
+label release), now fixed and pinned.
 
 ## Layer sequence (proposed 2026-07-24)
 
