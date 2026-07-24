@@ -20,5 +20,9 @@
     <button>alpha</button> <button>beta</button> <button>gamma</button>
     <button>delta</button> <button>epsilon</button>
   </p>
+  <p>
+    <button id="add-iframe" onclick="const f = document.createElement('iframe'); f.id = 'child'; f.src = '/b.html'; f.style.cssText = 'width:600px;height:300px'; document.body.appendChild(f)">add iframe</button>
+    <button id="remove-iframe" onclick="document.getElementById('child')?.remove()">remove iframe</button>
+  </p>
 </body>
 </html>

@@ -14,10 +14,10 @@
 
 import { startFixtureServer, launchHarness, Skip } from './driver.mjs';
 
-const SCENARIOS = ['fresh-load', 'bfcache', 'prerender', 'reload'];
+const SCENARIOS = ['fresh-load', 'bfcache', 'bfcache-roundtrip', 'iframe', 'sw-restart', 'prerender', 'reload'];
 // Firefox: no CDP (prerender is Chrome-shaped anyway) and no automatable
 // about:debugging reload — the applicable subset only.
-const FIREFOX_SCENARIOS = ['fresh-load', 'bfcache'];
+const FIREFOX_SCENARIOS = ['fresh-load', 'bfcache', 'bfcache-roundtrip'];
 
 const browser = process.argv.includes('--browser=firefox') ? 'firefox' : 'chromium';
 const args = process.argv.slice(2).filter((a) => !a.startsWith('--browser='));

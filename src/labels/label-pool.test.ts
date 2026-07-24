@@ -665,4 +665,28 @@ describe('label-pool', () => {
       expect(await poolSnapshot(nextTabId())).toBeNull();
     });
   });
+  describe('confirm onto a wiped pool (SW-restart resync)', () => {
+    it('rebuilds the stack and re-homes the confirmed labels (free-acquire)', async () => {
+      const tab = nextTabId();
+      // No claim ever happened on this SW generation — the stack does not
+      // exist (post-clearAllStacks state). The resync reconfirm must
+      // re-home, not accept-blind.
+      const { rejected } = await confirmLabels(tab, 'docA', 0, [LP[0], LP[1]]);
+      expect(rejected).toEqual([]);
+      expect(await getFrameForLabel(tab, LP[0])).toBe(0);
+      expect(await getFrameForLabel(tab, LP[1])).toBe(0);
+    });
+
+    it('two documents reconfirming disjoint sets both re-home cleanly', async () => {
+      const tab = nextTabId();
+      await confirmLabels(tab, 'docA', 0, [LP[0]]);
+      const { rejected } = await confirmLabels(tab, 'docB', 5, [LP[1]]);
+      expect(rejected).toEqual([]);
+      expect(await getFrameForLabel(tab, LP[0])).toBe(0);
+      expect(await getFrameForLabel(tab, LP[1])).toBe(5);
+      // And the arbitration still defends the re-homed labels.
+      const clash = await confirmLabels(tab, 'docB', 5, [LP[0]]);
+      expect(clash.rejected).toEqual([LP[0]]);
+    });
+  });
 });

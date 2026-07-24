@@ -335,10 +335,19 @@ export async function confirmLabels(
   labels: string[],
 ): Promise<{ rejected: string[] }> {
   return withTabLock(tabId, async () => {
-    const stack = await loadStack(tabId);
-    // Pool not ready: nothing to arbitrate — treat as accepted (the document's
-    // codewords stay locally held; a later confirm re-arbitrates on a live
-    // pool). Rejecting here would nuke every wrapper on a transient miss.
+    // A missing stack is NOT "nothing to arbitrate" — it is the post-restart
+    // state (SW init ran clearAllStacks), and the confirm in hand is exactly
+    // the resync re-assertion that must re-home these labels. The old
+    // treat-as-accepted branch was safe under the broadcast fallback; under
+    // sealed dispatch it silently accepted ownership the pool never recorded,
+    // wedging every badge until tab reload (found by the sw-restart harness
+    // scenario BEFORE it shipped, 2026-07-24 — third member of the
+    // removed-fallback family). Rebuild the pool and let the per-label
+    // free-acquire path below re-home each confirm. getOrCreateStack still
+    // returns null when the alphabet isn't loadable — only then do we fall
+    // back to accept-blind (rejecting would nuke every wrapper on a
+    // transient miss, and no pool exists to diverge from).
+    const stack = await getOrCreateStack(tabId);
     if (!stack) return { rejected: [] };
     ensureReservedField(stack);
 
