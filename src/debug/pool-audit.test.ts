@@ -40,6 +40,14 @@ async function loadAudit(): Promise<PoolAudit> {
   return await import('./pool-audit');
 }
 
+function addHost(doc: string | null, hint = 'true'): HTMLElement {
+  const el = document.createElement('div');
+  el.setAttribute('data-branchkit-hint', hint);
+  if (doc !== null) el.setAttribute('data-branchkit-doc', doc);
+  document.body.appendChild(el);
+  return el;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   hooksEnabled = true;
@@ -47,6 +55,7 @@ beforeEach(() => {
   intervals.length = 0;
   listeners.length = 0;
   delete document.documentElement.dataset.branchkitPoolAudit;
+  for (const n of document.querySelectorAll('[data-branchkit-hint]')) n.remove();
   wrappers.length = 0;
   fakeSession.isTornDown = false;
   sendMessage.mockResolvedValue({ unroutable: [], foreign: [] });
@@ -140,5 +149,67 @@ describe('initPoolAudit', () => {
     expect(dirty).toMatchObject({ seq: 2, unroutable: ['a w'] });
     await flush();
     expect(bkLog).toHaveBeenCalledWith('BK_POOL_AUDIT_DIVERGENCE', expect.objectContaining({ trigger: 'on_demand' }));
+  });
+});
+
+describe('orphan-paint tripwire (stale badge hosts)', () => {
+  it('counts hosts stamped by another context; own and auxiliary hosts are clean', async () => {
+    const audit = await loadAudit();
+    addHost('doc-test'); // ours
+    addHost('doc-elder'); // stale paint
+    addHost('doc-elder'); // same elder, second host
+    addHost(null, ''); // auxiliary UI (toast/chip) — out of scope
+    const paint = audit.countForeignBadgeHosts();
+    expect(paint.count).toBe(2);
+    expect(paint.docs).toEqual(['doc-elder']);
+  });
+
+  it('an unstamped badge host reads as stale (pre-stamp painter)', async () => {
+    const audit = await loadAudit();
+    addHost(null);
+    expect(audit.countForeignBadgeHosts()).toEqual({ count: 1, docs: ['unstamped'] });
+  });
+
+  it('reports stale paint on the periodic sweep even with an empty store (no SW roundtrip)', async () => {
+    const audit = await loadAudit();
+    addHost('doc-elder');
+    audit.initPoolAudit();
+    intervals[0].fn();
+    await flush();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(bkLog).toHaveBeenCalledWith('BK_STALE_PAINT', expect.objectContaining({
+      trigger: 'interval', stale_hosts: 1, stale_docs: ['doc-elder'], live_doc: 'doc-test',
+    }), 'warn');
+  });
+
+  it('on-demand payload carries the stale fields; harness assertClean sees them', async () => {
+    const audit = await loadAudit();
+    addHost('doc-elder');
+    audit.initPoolAudit();
+    listeners.find((l) => l.ev === '__branchkit__pool_audit')!.fn();
+    await flush();
+    const payload = JSON.parse(document.documentElement.dataset.branchkitPoolAudit!);
+    expect(payload).toMatchObject({ held: 0, stale_hosts: 1, stale_docs: ['doc-elder'] });
+  });
+
+  it('still carries a real stale count when the SW is unreachable (held -1)', async () => {
+    const audit = await loadAudit();
+    wrappers.push({ scanned: { codeword: 'a w' } });
+    sendMessage.mockRejectedValue(new Error('SW asleep'));
+    addHost('doc-elder');
+    audit.initPoolAudit();
+    listeners.find((l) => l.ev === '__branchkit__pool_audit')!.fn();
+    await flush();
+    const payload = JSON.parse(document.documentElement.dataset.branchkitPoolAudit!);
+    expect(payload).toMatchObject({ held: -1, stale_hosts: 1 });
+  });
+
+  it('clean paint stays silent', async () => {
+    const audit = await loadAudit();
+    addHost('doc-test');
+    audit.initPoolAudit();
+    intervals[0].fn();
+    await flush();
+    expect(bkLog).not.toHaveBeenCalled();
   });
 });

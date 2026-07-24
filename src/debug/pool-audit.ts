@@ -17,6 +17,12 @@
  *
  * The POOL_AUDIT message is a pure READ — deliberately outside the
  * reservoir's single-sender invariant, which governs pool MUTATIONS.
+ *
+ * The same sweep also carries the ORPHAN-PAINT half (2026-07-24, orphan
+ * teardown arc layer 1): badge hosts stamped by a different content-script
+ * context are stale paint from a dead elder — POOL_AUDIT can't see them
+ * (they're not in the fresh store), so the DOM-side stamp comparison is the
+ * only detector. See notes/DESIGN_ORPHAN_PAINT.md.
  */
 
 import { store } from '../core/store';
@@ -35,12 +41,37 @@ interface AuditResult {
   held: number;
   unroutable: string[];
   foreign: string[];
+  /** Badge hosts in the DOM stamped by a DIFFERENT content-script context —
+   * stale paint from an orphaned elder that can no longer service them.
+   * `held: -1` (SW unreachable) still carries a real count: this half of the
+   * audit is a pure DOM read and needs no SW. */
+  stale_hosts: number;
+  stale_docs: string[];
+}
+
+/** Count badge hosts whose creator stamp isn't ours (see hints.ts). Auxiliary
+ * UI (toasts, mode chip, palette) uses `data-branchkit-hint=""` and is out of
+ * scope — only real badge hosts (`="true"`) are stale-paint candidates. An
+ * absent stamp reads as `unstamped` (a pre-stamp painter — also foreign). */
+export function countForeignBadgeHosts(): { count: number; docs: string[] } {
+  const docs = new Set<string>();
+  let count = 0;
+  for (const host of document.querySelectorAll('[data-branchkit-hint="true"]')) {
+    const doc = host.getAttribute('data-branchkit-doc') ?? 'unstamped';
+    if (doc !== documentInstanceId) {
+      count++;
+      docs.add(doc);
+    }
+  }
+  return { count, docs: [...docs] };
 }
 
 async function computeAudit(): Promise<AuditResult | null> {
   if (pageSession.isTornDown) return null;
+  const paint = countForeignBadgeHosts();
+  const stale = { stale_hosts: paint.count, stale_docs: paint.docs };
   const held = store.all.map((w) => w.scanned.codeword).filter((cw) => cw !== '');
-  if (held.length === 0) return { held: 0, unroutable: [], foreign: [] };
+  if (held.length === 0) return { held: 0, unroutable: [], foreign: [], ...stale };
   let resp: { unroutable?: string[]; foreign?: string[] } | undefined;
   try {
     resp = await chrome.runtime.sendMessage({
@@ -49,18 +80,33 @@ async function computeAudit(): Promise<AuditResult | null> {
       labels: held,
     });
   } catch {
-    return null; // SW asleep / orphan — next tick retries
+    // SW asleep / orphan — the pool half retries next tick, but the paint
+    // half is still authoritative (DOM-only).
+    return { held: -1, unroutable: [], foreign: [], ...stale };
   }
   return {
     held: held.length,
     unroutable: resp?.unroutable ?? [],
     foreign: resp?.foreign ?? [],
+    ...stale,
   };
 }
 
 async function auditOnce(trigger: string): Promise<void> {
   const result = await computeAudit();
-  if (!result || result.held === 0) return;
+  if (!result) return;
+  if (result.stale_hosts > 0) {
+    // Separate tag from the pool divergence: this is a PAINT gap (a dead
+    // elder's badges still visible), not a routing gap. The greppable spine
+    // of the orphan-paint arc — see notes/DESIGN_ORPHAN_PAINT.md.
+    bkLog('BK_STALE_PAINT', {
+      trigger,
+      stale_hosts: result.stale_hosts,
+      stale_docs: result.stale_docs,
+      live_doc: documentInstanceId,
+    }, 'warn');
+  }
+  if (result.held <= 0) return;
   if (result.unroutable.length === 0 && result.foreign.length === 0) return;
   bkLog('BK_POOL_AUDIT_DIVERGENCE', {
     trigger,
@@ -86,9 +132,9 @@ async function auditOnDemand(): Promise<void> {
   const result = await computeAudit();
   const payload = result
     ? { seq: ++auditSeq, ...result }
-    : { seq: ++auditSeq, held: -1, unroutable: [], foreign: [] }; // -1 = SW unreachable
+    : { seq: ++auditSeq, held: -1, unroutable: [], foreign: [], stale_hosts: 0, stale_docs: [] }; // torn down
   document.documentElement.dataset.branchkitPoolAudit = JSON.stringify(payload);
-  if (result && (result.unroutable.length > 0 || result.foreign.length > 0)) {
+  if (result && (result.unroutable.length > 0 || result.foreign.length > 0 || result.stale_hosts > 0)) {
     void auditOnce('on_demand');
   }
 }

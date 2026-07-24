@@ -104,14 +104,18 @@ export async function poolAudit(page, { timeout = 10_000 } = {}) {
   return audit;
 }
 
-/** Assert the invariant; returns a human line for the runner. */
+/** Assert the invariant; returns a human line for the runner. Covers both
+ * halves of the audit: pool (every held label routes here) and paint (no
+ * badge host stamped by a dead elder context — the orphan-paint tripwire). */
 export function assertClean(audit, label) {
-  if (audit.unroutable.length === 0 && audit.foreign.length === 0) {
-    return `${label}: ${audit.held} held, all routable`;
+  const staleHosts = audit.stale_hosts ?? 0;
+  if (audit.unroutable.length === 0 && audit.foreign.length === 0 && staleHosts === 0) {
+    return `${label}: ${audit.held} held, all routable, no stale paint`;
   }
   throw new Error(
     `${label}: INVARIANT BROKEN — held=${audit.held} ` +
-    `unroutable=[${audit.unroutable}] foreign=[${audit.foreign}]`,
+    `unroutable=[${audit.unroutable}] foreign=[${audit.foreign}] ` +
+    `stale_hosts=${staleHosts} stale_docs=[${audit.stale_docs ?? []}]`,
   );
 }
 

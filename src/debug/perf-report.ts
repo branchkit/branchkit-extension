@@ -15,6 +15,7 @@ import { pageSession } from '../lifecycle/page-session';
 import { labelReservoir } from '../labels/label-reservoir';
 import { lifecycleCounters } from './perf-counters';
 import { churnStats } from './churn-log';
+import { countForeignBadgeHosts } from './pool-audit';
 import { syncTraceStats } from './sync-trace';
 import { getObserverFirstAttachedAt } from '../observe/mutation-source';
 import { getHintVisibility } from '../config';
@@ -296,6 +297,9 @@ export function snapshotExtras() {
       // untracked/stale badge nodes in the DOM — i.e. visually doubled hints
       // that no wrapper owns (the cleanup-on-hide/scroll gap).
       dom_badge_hosts: document.querySelectorAll('[data-branchkit-hint]').length,
+      // Badge hosts stamped by a DIFFERENT content-script context — stale
+      // paint from an orphaned elder (orphan-paint tripwire, pool-audit.ts).
+      foreign_badge_hosts: countForeignBadgeHosts().count,
     },
   };
 }

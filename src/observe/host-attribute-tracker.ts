@@ -4,13 +4,16 @@
  * Some pages enumerate `body` and strip "unknown" attributes from
  * elements they don't recognize (Baidu, occasional Google products,
  * site-wide DOM sanitizers). Others apply global CSS that targets
- * inline style overrides. The badge host carries two attributes that
+ * inline style overrides. The badge host carries three attributes that
  * must survive:
  *
  *   - `data-branchkit-hint="true"` — the find-key the body-level
  *     reattach observer uses to identify our hosts. If the page strips
  *     this attribute, the badge survives in the DOM but becomes
  *     invisible to our recovery path.
+ *   - `data-branchkit-doc` — the creator-context stamp the orphan-paint
+ *     tripwire compares against (debug/pool-audit.ts). A stripped stamp
+ *     would false-positive as stale paint.
  *   - inline `style="display:contents"` — keeps the host out of layout
  *     so absolute positioning of the inner badge works correctly. If
  *     the page clears this, the host starts taking space and shifts
@@ -28,6 +31,8 @@
  * record because the attribute is already gone.
  */
 
+import { documentInstanceId } from '../labels/document-identity';
+
 const observers = new Map<Element, MutationObserver>();
 // Expected `display` per host. Firefox/nesting badges use `contents` (host
 // generates no box); the Chromium CSS-anchor fast-path needs a real box
@@ -38,6 +43,12 @@ function reconcile(host: HTMLElement, attributeName: string, expectedDisplay = '
   if (attributeName === 'data-branchkit-hint') {
     if (host.getAttribute('data-branchkit-hint') !== 'true') {
       host.setAttribute('data-branchkit-hint', 'true');
+    }
+  } else if (attributeName === 'data-branchkit-doc') {
+    // Creator stamp for the orphan-paint tripwire (debug/pool-audit.ts). Each
+    // context restores its OWN id — a stripped stamp would read as stale paint.
+    if (host.getAttribute('data-branchkit-doc') !== documentInstanceId) {
+      host.setAttribute('data-branchkit-doc', documentInstanceId);
     }
   } else if (
     attributeName === 'data-bk-shown' ||

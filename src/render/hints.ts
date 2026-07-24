@@ -12,6 +12,7 @@
 import { Category, BadgeDisplayMode } from '../types';
 import type { BadgeHandle, BadgeDiagnostics } from './badge-handle';
 import { LabelAssignment, labelToDisplay, letterToSpokenWord } from '../labels/words';
+import { documentInstanceId } from '../labels/document-identity';
 import { getCachedRect, getCachedStyle, isRectOnScreen } from '../layout-cache';
 import { calculateZIndex } from '../placement/stacking';
 import { computeBadgeColors } from './badge-colors';
@@ -462,6 +463,10 @@ export class HintBadge implements BadgeHandle {
 
     this.host = document.createElement('div');
     this.host.setAttribute('data-branchkit-hint', 'true');
+    // Creator stamp: which content-script context painted this host. A host
+    // stamped by a DIFFERENT context is stale paint from an orphaned elder —
+    // the pool-audit tripwire counts those (debug/pool-audit.ts).
+    this.host.setAttribute('data-branchkit-doc', documentInstanceId);
     this.host.style.cssText = 'display:contents;';
 
     this.shadow = this.host.attachShadow({ mode: SHADOW_MODE });

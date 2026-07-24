@@ -12,6 +12,7 @@ import { DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
 import { __testing as containerTracker } from '../observe/container-resize-tracker';
 import { __testing as targetTracker } from '../observe/target-mutation-tracker';
 import { __testing as hostTracker } from '../observe/host-attribute-tracker';
+import { documentInstanceId } from '../labels/document-identity';
 
 // happy-dom gives us real DOM APIs. getComputedStyle returns inline styles
 // (no CSS engine), so we set style properties directly to simulate layouts.
@@ -193,6 +194,8 @@ describe('HintBadge.retarget (reconcile mode)', () => {
     expect(badge.host.parentElement).toBe(document.body);
     expect(targetTracker.isTracked(oldBtn)).toBe(true);
     expect(hostTracker.isTracked(badge.host)).toBe(true);
+    // Creator stamp for the orphan-paint tripwire (debug/pool-audit.ts).
+    expect(badge.host.getAttribute('data-branchkit-doc')).toBe(documentInstanceId);
 
     badge.retarget(newBtn);
 

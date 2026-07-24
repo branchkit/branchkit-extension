@@ -4,6 +4,7 @@ import {
   untrackHostAttributes,
   __testing,
 } from './host-attribute-tracker';
+import { documentInstanceId } from '../labels/document-identity';
 
 beforeEach(() => {
   __testing.reset();
@@ -45,6 +46,17 @@ describe('reconcile', () => {
     host.setAttribute('data-page-added', 'foo');
     __testing.reconcile(host, 'data-page-added');
     expect(host.hasAttribute('data-page-added')).toBe(false);
+  });
+
+  it('restores the creator stamp when stripped or tampered (orphan-paint tripwire)', () => {
+    const host = mkHost();
+    host.setAttribute('data-branchkit-doc', documentInstanceId);
+    host.removeAttribute('data-branchkit-doc');
+    __testing.reconcile(host, 'data-branchkit-doc');
+    expect(host.getAttribute('data-branchkit-doc')).toBe(documentInstanceId);
+    host.setAttribute('data-branchkit-doc', 'doc-imposter');
+    __testing.reconcile(host, 'data-branchkit-doc');
+    expect(host.getAttribute('data-branchkit-doc')).toBe(documentInstanceId);
   });
 
   it('leaves data-branchkit-hint alone if already correct', () => {
