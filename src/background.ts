@@ -8,18 +8,16 @@
  * - Manage offscreen document lifecycle (Chrome only)
  */
 
-import { Message, ScannedElement, HintVisibility, TabAction, ZoomAction, PaletteVoiceEntry, PaletteVoiceRow } from './types';
-import type { PaletteDispatch } from './palette/model';
-import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearStack, clearAllStacks, sweepDeadStacks, alphabetsEqual } from './labels/label-pool';
+import { Message, ScannedElement, HintVisibility } from './types';
+import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearAllStacks, alphabetsEqual } from './labels/label-pool';
 import { setAlphabet } from './labels/words';
 import { buildCommandContributions } from './command-catalog';
 import { rememberCodewords, clearCodewordMemory, recallCodewords } from './labels/codeword-memory';
 import { discoverPlugin, ensureConnected, postToPlugin, getFromPlugin, getActuatorJson } from './plugin/actuator-client';
 import { buildReconcileReport, type ReconcileWrapper, type ReconcileReport, type MatchableView } from './debug/reconcile';
-import { cycleTabIndex } from './background/tab-nav';
 import { setLocalMark, getLocalMark, setGlobalMark, gotoGlobalMark } from './background/marks';
 import { baseUrl, type GlobalMark, type StoredMark } from './marks';
-import { loadMru, previousCandidates, recordTabActivated } from './background/tab-mru';
+import { recordTabActivated } from './background/tab-mru';
 import { scheduleTabPublish, resetTabPublishCache } from './background/tab-collection';
 import {
   getTabMarker, pushTabMarker, reapplyTabMarker as reapplyTabMarkerFor,
@@ -36,9 +34,20 @@ import {
 import {
   forwardDispatchResult, forwardDebugLog, forwardPerfReport, forwardPluginDebugLog,
   forwardHintsSessionEnd, forwardHintsSessionStart, postGrammarBatch, transportFailure,
-  postFocus, postActiveTab, assertFocusIfFocused,
+  postFocus, postActiveTab, assertFocusIfFocused, setCaretActive,
 } from './plugin/plugin-api';
 import { saveReferenceToCollection, pushReferenceNames, hydrateReferencesFromCollection } from './background/references';
+import { TAB_ACTION_BY_ID, ZOOM_ACTION_BY_ID, handleTabAction, handleZoomAction, switchToTabById } from './background/tab-actions';
+import {
+  publishPaletteVoice, clearPaletteVoice, handlePaletteAction,
+  handlePaletteVoiceSelect, handlePaletteVoiceDismiss, clearPaletteForClosedTab,
+} from './background/palette';
+import {
+  MEDIA_ACTIONS, syncMediaActive, setVideoPresence, clearTabMediaOnNav,
+  clearTabMediaOnClose, resolveMediaTargetTab, sendMediaActionToTab,
+  handleMediaAllAction, setBrowserWindowFocused, initMedia,
+} from './background/media';
+import { purgeTab, logTabSwitch, scheduleSpaRescan, cancelSpaRescan, startDeadTabSweep } from './background/tab-sessions';
 
 // --- State ---
 //
@@ -250,344 +259,6 @@ async function handleDebugSnapshot(
   await postToPlugin('/debug-snapshot/screenshot', body);
 }
 
-// Tab verbs (notes/DESIGN_TAB_NAVIGATION.md, "Tab verbs"). One handler for
-// both entry points: the content dispatcher's TAB_ACTION message (keyboard)
-// and the SSE action intercept (voice — handled here rather than in content
-// so the verbs work even when the active page has no content script, e.g. a
-// chrome:// page). `index` is goto's 1-based tab position.
-async function handleTabAction(action: TabAction, index?: number): Promise<void> {
-  if (action === 'new') {
-    await chrome.tabs.create({});
-    return;
-  }
-  if (action === 'restore') {
-    // Most recently closed tab or window (browser Cmd/Ctrl+Shift+T).
-    // Needs the `sessions` permission.
-    try { await chrome.sessions.restore(); } catch { /* nothing to restore */ }
-    return;
-  }
-  if (action === 'last_active') {
-    // Walk the MRU stack for the newest still-existing tab that isn't the
-    // current one; closed tabs stay in the stack, so skip the dead ids.
-    for (const id of previousCandidates(await loadMru(), bgState.cachedActiveTabId)) {
-      try {
-        const t = await chrome.tabs.get(id);
-        await chrome.windows.update(t.windowId, { focused: true });
-        await chrome.tabs.update(id, { active: true });
-        return;
-      } catch { /* tab gone — try the next candidate */ }
-    }
-    return;
-  }
-
-  const tabs = await chrome.tabs.query({ currentWindow: true });
-  const activeIdx = tabs.findIndex((t) => t.active);
-  const active = tabs[activeIdx];
-  if (activeIdx < 0 || active?.id == null) return;
-
-  switch (action) {
-    case 'next':
-    case 'previous': {
-      if (tabs.length < 2) return;
-      const target = tabs[cycleTabIndex(activeIdx, tabs.length, action)];
-      if (target?.id != null) await chrome.tabs.update(target.id, { active: true });
-      return;
-    }
-    case 'close':
-      await chrome.tabs.remove(active.id);
-      return;
-    case 'duplicate':
-      await chrome.tabs.duplicate(active.id);
-      return;
-    case 'pin':
-      await chrome.tabs.update(active.id, { pinned: !active.pinned });
-      return;
-    case 'mute':
-      await chrome.tabs.update(active.id, { muted: !active.mutedInfo?.muted });
-      return;
-    case 'first':
-    case 'last':
-    case 'goto': {
-      const pos = action === 'first' ? 1 : action === 'last' ? tabs.length : index ?? 1;
-      const target = tabs[Math.min(Math.max(pos, 1), tabs.length) - 1];
-      if (target?.id != null && !target.active) await chrome.tabs.update(target.id, { active: true });
-      return;
-    }
-    case 'move_left':
-    case 'move_right': {
-      const to = Math.min(Math.max(activeIdx + (action === 'move_right' ? 1 : -1), 0), tabs.length - 1);
-      if (to !== activeIdx) await chrome.tabs.move(active.id, { index: to });
-      return;
-    }
-  }
-}
-
-// Page zoom (Vimium zi/zo/z0). chrome.tabs.getZoom/setZoom act per-tab, so —
-// like the tab verbs — this runs in the background for both keyboard (ZOOM_ACTION
-// message) and voice (SSE intercept). Steps by 10% within Chrome's own 25%–500%
-// bounds; `reset` (setZoom 0) returns to the tab's default factor.
-const ZOOM_STEP = 0.1;
-const ZOOM_MIN = 0.25;
-const ZOOM_MAX = 5;
-
-async function handleZoomAction(action: ZoomAction): Promise<void> {
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (tab?.id == null) return;
-  try {
-    if (action === 'reset') {
-      await chrome.tabs.setZoom(tab.id, 0);
-      return;
-    }
-    const current = await chrome.tabs.getZoom(tab.id);
-    const next = action === 'in' ? current + ZOOM_STEP : current - ZOOM_STEP;
-    await chrome.tabs.setZoom(tab.id, Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, next)));
-  } catch {
-    // Zoom is disallowed on some pages (e.g. the New Tab Page, PDF viewer) —
-    // a silent no-op there matches Chrome's own behaviour.
-  }
-}
-
-// Voice → zoom verb intercept: catalog command id → ZoomAction, mirroring
-// TAB_ACTION_BY_ID. Lets the background claim these off the SSE stream.
-const ZOOM_ACTION_BY_ID: Readonly<Record<string, ZoomAction>> = {
-  zoom_in: 'in', zoom_out: 'out', zoom_reset: 'reset',
-};
-
-// --- Palette voice session (voice half of Layer 2) ---
-//
-// While the palette is open with badges, the plugin holds its EXCLUSIVE
-// palette tag and the `browser_palette` collection maps spoken codewords to
-// row ids. The row_id → dispatch map never leaves the extension — the plugin
-// round-trips only the opaque row id, and this background resolves it back
-// to the same close-then-execute path the keyboard uses.
-//
-// One session max: a palette only ever opens in the focused window's active
-// tab, and the plugin's projection is single-conn to match.
-interface PaletteVoiceSession {
-  tabId: number;
-  rows: Map<string, PaletteDispatch>;
-}
-let paletteVoice: PaletteVoiceSession | null = null;
-
-async function publishPaletteVoice(
-  tabId: number,
-  entries: PaletteVoiceEntry[],
-  rows: PaletteVoiceRow[],
-): Promise<void> {
-  paletteVoice = { tabId, rows: new Map(rows.map((r) => [r.row_id, r.dispatch])) };
-  if (!(await ensureConnected())) return;
-  await postToPlugin('/palette', { conn_id: connId, entries });
-}
-
-// Idempotent teardown — called from every close path (PALETTE_CLOSED from
-// content, dispatch, tab close). The empty POST drains the plugin's entries,
-// which Deletes the exclusive tag; a stuck tag would suppress every other
-// command system-wide, so this errs on firing redundantly.
-async function clearPaletteVoice(reason: string): Promise<void> {
-  if (!paletteVoice) return;
-  paletteVoice = null;
-  console.log(`[BranchKit BG] palette voice cleared (${reason})`);
-  await postToPlugin('/palette', { conn_id: connId, entries: [] });
-}
-
-// Caret voice mode: reflect the content script's caret/visual state to the
-// plugin so it holds the exclusive caret tag while active (gating the voice
-// selection commands). Boolean twin of the palette publish. See
-// notes/DESIGN_HINT_ACTION_MODES.md.
-async function setCaretActive(active: boolean): Promise<void> {
-  if (!(await ensureConnected())) return;
-  await postToPlugin('/caret', { conn_id: connId, active });
-}
-
-// Background media control (notes/DESIGN_VIDEO_MEDIA_COMMANDS.md,
-// background-media arc). Three signal sources compose into one
-// "controllable media exists" union, mirrored to the plugin's non-exclusive
-// media_active tag (the gate on the media voice commands and the spoken
-// "video" mode — deliberately NOT behind browser focus, so a background
-// video pauses from any app):
-//
-//   1. Frame presence reports (observe/video-presence.ts, visible tabs
-//      only): 2s change-only ticks; the SW ORs a tab's frames.
-//   2. The audible-tab registry: chrome.tabs.onUpdated's `audible` flag —
-//      the browser's own speaker-icon tracking. Hidden-tab-safe,
-//      throttle-proof, and it needs no content script.
-//   3. The resume memory: the last tab a media command controlled. A
-//      background-pause makes nothing audible; without this, "play" would
-//      go deaf. Held until that tab closes or full-navigates.
-//
-// Posts to the plugin are deliberately redundant on every relevant edge
-// (report, audible change, tab switch, window focus, reconnect) — the
-// plugin drops per-conn slots on disconnect, and redundant idempotent
-// posts are what make that safe (the palette-clear philosophy: err on
-// firing redundantly).
-const videoPresenceByTab = new Map<number, Map<number, boolean>>();
-// tabId → performance-agnostic activation stamp (monotonic counter — most
-// recently became audible wins the multi-playing routing tiebreak).
-const audibleTabs = new Map<number, number>();
-let audibleStamp = 0;
-let lastControlledTab: number | null = null;
-// Tracks chrome.windows.onFocusChanged so routing can prefer the focused
-// tab's media only when the browser actually has OS focus.
-let browserWindowFocused = true;
-
-function tabHasVideo(tabId: number | null): boolean {
-  if (tabId === null) return false;
-  const frames = videoPresenceByTab.get(tabId);
-  if (!frames) return false;
-  for (const present of frames.values()) if (present) return true;
-  return false;
-}
-
-function mediaControllable(): boolean {
-  return (
-    tabHasVideo(bgState.cachedActiveTabId) ||
-    audibleTabs.size > 0 ||
-    lastControlledTab !== null
-  );
-}
-
-async function syncMediaActive(): Promise<void> {
-  if (!(await ensureConnected())) return;
-  await postToPlugin('/media-active', {
-    conn_id: connId,
-    active: mediaControllable(),
-  });
-}
-
-// Seed the audible registry at SW start — tabs already making sound when
-// the worker wakes must count without waiting for an audible transition.
-void chrome.tabs.query({ audible: true }).then((tabs) => {
-  for (const t of tabs) {
-    if (t.id != null && !audibleTabs.has(t.id)) audibleTabs.set(t.id, ++audibleStamp);
-  }
-  if (tabs.length) void syncMediaActive();
-}).catch(() => {});
-
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-  if (typeof changeInfo.audible !== 'boolean') return;
-  if (changeInfo.audible) {
-    audibleTabs.set(tabId, ++audibleStamp);
-  } else {
-    audibleTabs.delete(tabId);
-  }
-  void syncMediaActive();
-});
-
-const MEDIA_ACTIONS = new Set([
-  'media_play_pause', 'media_mute', 'media_speed', 'media_seek', 'media_restart',
-]);
-
-/**
- * Which tab should a media verb drive? Fixed priority (design note):
- * (1) the focused tab's media when the browser is frontmost — control what
- * you see; (2) the most recently audible tab — else what you hear (the
- * single-audible case is this rule's n=1 form); (3) the resume memory, so
- * pause → work → "play" round-trips with nothing audible.
- */
-function resolveMediaTargetTab(): number | null {
-  if (browserWindowFocused && tabHasVideo(bgState.cachedActiveTabId)) {
-    return bgState.cachedActiveTabId;
-  }
-  let best: number | null = null;
-  let bestStamp = -1;
-  for (const [tabId, stamp] of audibleTabs) {
-    if (stamp > bestStamp) { best = tabId; bestStamp = stamp; }
-  }
-  if (best !== null) return best;
-  return lastControlledTab;
-}
-
-function sendMediaActionToTab(tabId: number, payload: any): void {
-  lastControlledTab = tabId;
-  // All frames — the per-frame no-op executor handles iframe embeds.
-  chrome.tabs.sendMessage(tabId, { type: 'BRANCHKIT_ACTION', payload }).catch((e: Error) => {
-    console.warn('[BranchKit BG] media dispatch failed:', e.message);
-  });
-  // The target may now be controllable only via resume memory — re-assert.
-  void syncMediaActive();
-}
-
-/** "pause everything" / "mute everything": fan the verb out to every
- *  audible tab — the shut-up intent. Deliberately audible-only (no
- *  paused-media sweep) and deliberately no "faster everything". */
-function handleMediaAllAction(action: string): void {
-  const op = action === 'media_pause_all'
-    ? { action: 'media_play_pause', params: { op: 'pause' } }
-    : { action: 'media_mute', params: { op: 'mute' } };
-  for (const tabId of audibleTabs.keys()) {
-    lastControlledTab = tabId;
-    chrome.tabs.sendMessage(tabId, {
-      type: 'BRANCHKIT_ACTION',
-      payload: { action: op.action, params: op.params },
-    }).catch(() => {/* tab may be closing */});
-  }
-  void syncMediaActive();
-}
-
-// Command palette selection (notes/DESIGN_TAB_NAVIGATION.md, Layer 2). Always
-// close the overlay in the origin tab FIRST — a tab switch moves focus away
-// and must not leave a dead palette behind, and a command dispatch (e.g.
-// focus_input) needs page focus restored before it runs. The close message
-// round-trips (content sendResponse) so ordering is real, not racy.
-async function handlePaletteAction(
-  action: PaletteDispatch | { kind: 'close' },
-  originTabId: number | undefined,
-): Promise<void> {
-  // Direct teardown besides the content-side PALETTE_CLOSED signal: if the
-  // content script is gone (catch below), the signal never fires, and the
-  // exclusive tag must not outlive the palette.
-  void clearPaletteVoice('palette_action');
-  if (typeof originTabId === 'number') {
-    try {
-      await chrome.tabs.sendMessage(originTabId, { type: 'PALETTE_CLOSE' }, { frameId: 0 });
-    } catch { /* content script gone — the iframe died with the page */ }
-  }
-  if (action.kind === 'switch_tab') {
-    // Same focus-window-then-activate dispatch as switchToTabById — cross-
-    // window by design. A stale id (tab closed while the palette was open)
-    // is a silent no-op.
-    try {
-      const t = await chrome.tabs.get(action.tabId);
-      await chrome.windows.update(t.windowId, { focused: true });
-      await chrome.tabs.update(action.tabId, { active: true });
-    } catch { /* tab gone */ }
-  } else if (action.kind === 'command' && typeof originTabId === 'number') {
-    // Through the content dispatcher in the top frame — the exact semantics
-    // of pressing the command's keybind (tab verbs bounce back here as
-    // TAB_ACTION, page commands run in place).
-    try {
-      await chrome.tabs.sendMessage(originTabId, {
-        type: 'PALETTE_COMMAND', action: action.command, params: action.params ?? {},
-      }, { frameId: 0 });
-    } catch { /* content script gone */ }
-  }
-}
-
-// Voice "tab <codeword>": the matched collection entry's tab_id arrives as an
-// action param (the browser_tabs collection's value_field). Same focus-window-
-// then-activate dispatch as handleTabAction's last_active branch — cross-window
-// by design. A stale id (tab closed since the last publish) just refreshes the
-// collection so the dead entry drops.
-async function switchToTabById(tabId: number): Promise<void> {
-  try {
-    const t = await chrome.tabs.get(tabId);
-    await chrome.windows.update(t.windowId, { focused: true });
-    await chrome.tabs.update(tabId, { active: true });
-  } catch {
-    scheduleTabPublish();
-  }
-}
-
-// Voice → tab verb intercept: catalog command id → TabAction. The ids are the
-// same ones the content dispatcher registers for the keyboard path; this map
-// is what lets the background claim them off the SSE stream first.
-const TAB_ACTION_BY_ID: Readonly<Record<string, TabAction>> = {
-  next_tab: 'next', previous_tab: 'previous', new_tab: 'new', close_tab: 'close',
-  restore_tab: 'restore', duplicate_tab: 'duplicate', pin_tab: 'pin', mute_tab: 'mute',
-  first_tab: 'first', last_tab: 'last', goto_tab: 'goto',
-  move_tab_left: 'move_left', move_tab_right: 'move_right', last_active_tab: 'last_active',
-};
-
 // --- SSE connect-time contribution ---
 
 // Contribute the extension's static command vocabulary (scroll/find/nav voice
@@ -661,15 +332,11 @@ function handleSSEEvent(data: any): void {
   // matcher already cleared the exclusive tag (ClearsTags at match time);
   // handlePaletteAction's clearPaletteVoice drains the entries to match.
   if (data.action === 'palette_select') {
-    const pv = paletteVoice;
-    if (pv) {
-      const dispatch = pv.rows.get(data.params?.row_id ?? '');
-      void handlePaletteAction(dispatch ?? { kind: 'close' }, pv.tabId);
-    }
+    handlePaletteVoiceSelect(data.params?.row_id);
     return;
   }
   if (data.action === 'palette_dismiss') {
-    if (paletteVoice) void handlePaletteAction({ kind: 'close' }, paletteVoice.tabId);
+    handlePaletteVoiceDismiss();
     return;
   }
 
@@ -745,19 +412,10 @@ async function phraseWriteError(resp: Response | null): Promise<string> {
 
 chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   if (message.type === 'VIDEO_PRESENCE') {
-    // A frame's large-video presence changed. Update the tab's frame map and
-    // re-mirror the active tab's OR to the plugin (cheap no-op post when the
-    // change is in a background tab).
     const tabId = _sender.tab?.id;
     const frameId = _sender.frameId;
     if (typeof tabId === 'number' && typeof frameId === 'number') {
-      let frames = videoPresenceByTab.get(tabId);
-      if (!frames) {
-        frames = new Map();
-        videoPresenceByTab.set(tabId, frames);
-      }
-      frames.set(frameId, message.present === true);
-      void syncMediaActive();
+      setVideoPresence(tabId, frameId, message.present === true);
     }
     return false;
   }
@@ -1169,20 +827,6 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   return false;
 });
 
-// Clear a tab's label pool when the tab is closed (the sole call site is
-// `chrome.tabs.onRemoved`). NOT called on navigation, and deliberately so:
-// cross-document nav reclaims per-frame via the liveness Port's onDisconnect,
-// and same-document (SPA) nav keeps the content script alive — it releases its
-// own codewords through limbo→finalize, so a purge here would race that local
-// ownership and corrupt the grammar. See notes/DESIGN_EXTENSION_RESTRUCTURE.md
-// §5 step 3 (dropped 2026-05-30).
-function purgeTab(tabId: number): void {
-  clearStack(tabId).catch(() => {});
-  // Codeword memory is meant to survive frame teardown (the point of Regime B),
-  // but not the tab's whole lifetime — drop it on tab close.
-  clearCodewordMemory(tabId).catch(() => {});
-}
-
 // Per-frame liveness via long-lived Port. Each content-script context opens
 // one Port at startup; when the context dies (iframe removed, navigation,
 // tab closed, bfcache evict) Chrome closes the Port and onDisconnect fires
@@ -1238,22 +882,6 @@ chrome.runtime.onConnect.addListener((port) => {
 // there is cosmetically free. (The per-switch session_end that used to live
 // here retired with display-grade demotion phase 1 — the plugin deprojects
 // and derives the hints tag from its own focus recompute.)
-
-// Log a tab switch to actuator.log so post-hoc debugging shows what the
-// user actually did, not just opaque tab IDs.
-async function logTabSwitch(reason: string, oldTabId: number | null, newTabId: number | null): Promise<void> {
-  const lookup = async (id: number | null): Promise<{ id: number | null; url: string; title: string }> => {
-    if (id == null) return { id: null, url: '', title: '' };
-    try {
-      const t = await chrome.tabs.get(id);
-      return { id, url: t.url ?? '', title: t.title ?? '' };
-    } catch {
-      return { id, url: '<gone>', title: '' };
-    }
-  };
-  const [from, to] = await Promise.all([lookup(oldTabId), lookup(newTabId)]);
-  forwardDebugLog('tab_switch', { reason, from, to });
-}
 
 chrome.tabs.onActivated.addListener((activeInfo) => {
   const oldTabId = bgState.cachedActiveTabId;
@@ -1356,12 +984,6 @@ chrome.tabs.onReplaced.addListener((addedTabId, removedTabId) => {
 // We can't detect this from the content script either: its History API
 // patch runs in the isolated world and never sees the page's main-world
 // pushState calls.
-const SPA_RESCAN_DEBOUNCE_MS = 150;
-const spaRescanTimers = new Map<number, ReturnType<typeof setTimeout>>();
-// Last spa_nav rescan actually dispatched per tab, for identical-URL dedup.
-const spaLastRescanDispatch = new Map<number, { url: string; at: number }>();
-const SPA_RESCAN_DEDUP_MS = 2000;
-
 function isHintableUrl(url: string): boolean {
   return /^https?:\/\//.test(url);
 }
@@ -1385,53 +1007,22 @@ chrome.webNavigation.onReferenceFragmentUpdated.addListener(onSameDocumentNav);
 // their entries stay valid.
 chrome.webNavigation.onCommitted.addListener((details) => {
   if (details.frameId !== 0) return;
-  const dropped = videoPresenceByTab.delete(details.tabId);
-  const wasResume = lastControlledTab === details.tabId;
-  if (wasResume) lastControlledTab = null;
-  if (dropped || wasResume) void syncMediaActive();
+  clearTabMediaOnNav(details.tabId);
 });
-
-// Coalesce bursts of same-document URL changes (SPAs often fire several
-// pushState/replaceState calls settling on one route) into a single
-// bounded rescan per tab. The 150ms debounce alone doesn't catch SPAs that
-// re-announce the SAME route wider apart (YouTube Shorts pushes /shorts/<id>
-// then canonicalizes it 200ms–1s later — each advance dispatched 2–4 full
-// rescan cycles, landing exactly while the new video primes its buffers), so
-// an identical-URL dispatch within SPA_RESCAN_DEDUP_MS is suppressed — the
-// CS already rescanned this route; residual DOM churn is the generic
-// mutation path's job. Suppressions are breadcrumbed, never silent.
-function scheduleSpaRescan(tabId: number, url: string): void {
-  const last = spaLastRescanDispatch.get(tabId);
-  if (last && last.url === url && Date.now() - last.at < SPA_RESCAN_DEDUP_MS) {
-    forwardDebugLog('pipeline.bg_rescan_deduped', { tab_id: tabId, source: 'spa_nav' });
-    return;
-  }
-  const existing = spaRescanTimers.get(tabId);
-  if (existing) clearTimeout(existing);
-  spaRescanTimers.set(tabId, setTimeout(() => {
-    spaRescanTimers.delete(tabId);
-    spaLastRescanDispatch.set(tabId, { url, at: Date.now() });
-    forwardDebugLog('pipeline.bg_rescan_dispatched', { tab_id: tabId, source: 'spa_nav' });
-    chrome.tabs.sendMessage(tabId, {
-      type: 'BRANCHKIT_ACTION',
-      payload: { action: 'rescan', params: { from_cache: 'true', reason: 'spa_nav' } },
-    } as Message).catch(() => {});
-  }, SPA_RESCAN_DEBOUNCE_MS));
-}
 
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
   // All browser windows lost OS focus (user switched to another app). Tell the
   // plugin this connection is no longer focused so its grammar gate and
   // dispatch scoping stop treating this browser as frontmost.
   if (windowId === chrome.windows.WINDOW_ID_NONE) {
-    browserWindowFocused = false;
+    setBrowserWindowFocused(false);
     void postFocus(false);
     // media_active survives unfocus by design (background control); re-post
     // so the plugin's mirror is asserted from THIS conn even while unfocused.
     void syncMediaActive();
     return;
   }
-  browserWindowFocused = true;
+  setBrowserWindowFocused(true);
   try {
     // Only follow focus into normal browser windows. Devtools / popups
     // / extension panels would otherwise blank the active-tab cache (they
@@ -1480,53 +1071,22 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     // but the plugin's hints tag still needs clearing).
     forwardHintsSessionEnd('tab_closed', tabId);
   }
-  videoPresenceByTab.delete(tabId);
-  audibleTabs.delete(tabId);
-  if (lastControlledTab === tabId) lastControlledTab = null;
-  void syncMediaActive();
-  const pendingSpaRescan = spaRescanTimers.get(tabId);
-  if (pendingSpaRescan) {
-    clearTimeout(pendingSpaRescan);
-    spaRescanTimers.delete(tabId);
-  }
-  spaLastRescanDispatch.delete(tabId);
+  clearTabMediaOnClose(tabId);
+  cancelSpaRescan(tabId);
   purgeTab(tabId);
   // Drop the closed tab's words from the voice collection.
   scheduleTabPublish();
   // Backstop: a palette whose host tab died can't send PALETTE_CLOSED.
-  if (paletteVoice?.tabId === tabId) void clearPaletteVoice('tab_removed');
+  clearPaletteForClosedTab(tabId);
   // Return the closed tab's marker to the free pool.
   void releaseTabMarker(tabId);
 });
 
-// Dead-tab label-stack sweep (long-session audit finding 6). tabs.onRemoved
-// and the liveness Port's onDisconnect both miss when this background is
-// asleep at the moment a tab dies. Chrome heals on the next SW recycle
-// (init → clearAllStacks), but the persistent Firefox background can run
-// for days — missed reclaims accumulate until the pool exhausts, claims
-// return empty, and badges silently stop painting ("restart fixes it").
-// Level-triggered reclaim: every 15 min, purge tracked stacks whose tab no
-// longer exists (mirrors purgeTab: stack + codeword memory). setInterval,
-// not chrome.alarms, on purpose — the leak only matters while THIS
-// background instance stays alive; a fresh instance heals in init.
-const DEAD_TAB_SWEEP_MS = 15 * 60_000;
-async function sweepDeadTabState(): Promise<void> {
-  try {
-    const swept = await sweepDeadStacks(async () => {
-      const tabs = await chrome.tabs.query({});
-      const alive = new Set<number>();
-      for (const t of tabs) if (typeof t.id === 'number') alive.add(t.id);
-      return alive;
-    });
-    for (const tabId of swept) clearCodewordMemory(tabId).catch(() => {});
-    if (swept.length > 0) {
-      console.info('[BranchKit] dead-tab sweep reclaimed label stacks for tabs:', swept.join(','));
-    }
-  } catch {
-    // tabs API unavailable (shutdown) — next tick or next init covers it.
-  }
-}
-setInterval(sweepDeadTabState, DEAD_TAB_SWEEP_MS);
+// Audible-tab registry + seed (background/media.ts) and the dead-tab
+// label-stack sweep (background/tab-sessions.ts) — explicit wiring per the
+// round-3 feature-module convention.
+initMedia();
+startDeadTabSweep();
 
 // --- Startup ---
 

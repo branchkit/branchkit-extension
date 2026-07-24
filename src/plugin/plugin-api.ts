@@ -169,6 +169,15 @@ export function transportFailure(
   };
 }
 
+// Caret voice mode: reflect the content script's caret/visual state to the
+// plugin so it holds the exclusive caret tag while active (gating the voice
+// selection commands). Boolean twin of the palette publish. See
+// notes/DESIGN_HINT_ACTION_MODES.md.
+export async function setCaretActive(active: boolean): Promise<void> {
+  if (!(await ensureConnected())) return;
+  await postToPlugin('/caret', { conn_id: connId, active });
+}
+
 // Tell the plugin this browser's connection just gained (or lost) OS focus.
 // The plugin binds connId to the OS-focused bundle on a focused:true claim;
 // identity comes from the OS, this only says "which connection is focused now."
