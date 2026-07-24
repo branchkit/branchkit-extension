@@ -335,29 +335,41 @@ export interface ConfirmLabelsResponse {
  * and voice routing landed there. See actuator.log 2026-06-05T17:18:37
  * for the QuickBase `fine jury` failure that motivated this split.
  */
+/**
+ * A label's owner (DESIGN_DOCUMENT_SCOPED_POOL_OWNERSHIP.md): `d` is the
+ * OWNERSHIP key — the CS-minted documentInstanceId, whose lifetime is the
+ * document's (stable across prerender activation and bfcache freeze/restore,
+ * fresh per navigation). `f` is ROUTING — the frameId chrome.tabs.sendMessage
+ * needs — refreshed on every confirm so a document that changed frame
+ * identity (prerender activation) routes correctly.
+ */
+export interface LabelOwner {
+  d: string;
+  f: number;
+}
+
 export interface LabelStack {
   /** Unclaimed codewords. Singles first, pairs at the end. */
   free: string[];
   /**
-   * Codewords held in a frame's reservoir but not yet claimed by a
-   * wrapper. The map's value is the holding frameId so `releaseFrame`
-   * can free them on frame disconnect, but the SW's `getFrameForLabel`
-   * routing intentionally does NOT consult this map — that's the whole
-   * point of the split. Confirmation via CONFIRM_LABELS promotes
-   * reserved → assigned.
+   * Codewords held in a document's reservoir but not yet claimed by a
+   * wrapper. Held so `releaseDocument` can free them on the liveness-Port
+   * disconnect, but the SW's `getFrameForLabel` routing intentionally does
+   * NOT consult this map — that's the whole point of the split.
+   * Confirmation via CONFIRM_LABELS promotes reserved → assigned.
    */
-  reserved: Record<string, number>;
+  reserved: Record<string, LabelOwner>;
   /**
    * When each reserved codeword was reserved (performance-independent epoch
    * ms). Claims may STEAL a reservation older than the staleness TTL —
    * notes/DESIGN_PRERENDER_POOL_POISONING.md L2: reservations stranded by a
-   * frame that never dies (prerender activation) or dies while the SW sleeps
-   * would otherwise leak until tab close. Lazily migrated: a stack persisted
-   * before this field grandfathers its reservations to load time.
+   * reservoir that died while the SW slept would otherwise leak until tab
+   * close. Lazily migrated: a stack persisted before this field grandfathers
+   * its reservations to load time.
    */
   reservedAt?: Record<string, number>;
-  /** Wrapper-confirmed codewords mapped to their owning frameId. */
-  assigned: Record<string, number>;
+  /** Wrapper-confirmed codewords mapped to their owner. */
+  assigned: Record<string, LabelOwner>;
 }
 
 // --- Grammar format matching browser plugin Go types ---

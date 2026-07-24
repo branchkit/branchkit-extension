@@ -63,6 +63,8 @@
  * and decide whether the invariant still holds. The default answer is no.
  */
 
+import { documentInstanceId } from './document-identity';
+
 const INITIAL_RESERVATION = 100;
 const REFILL_THRESHOLD = 30;
 const REFILL_AMOUNT = 60;
@@ -207,7 +209,7 @@ class LabelReservoir {
       this.free = [];
       for (const l of flushed) this.reserved.delete(l);
       try {
-        chrome.runtime.sendMessage({ type: 'RELEASE_LABELS', labels: flushed }).catch(() => {});
+        chrome.runtime.sendMessage({ type: 'RELEASE_LABELS', doc_id: documentInstanceId, labels: flushed }).catch(() => {});
       } catch { /* orphan post-reload — best-effort */ }
     }
     this.rejectionHandler?.(rejected);
@@ -330,7 +332,7 @@ class LabelReservoir {
       const grantedAt = performance.now();
       for (const l of claimed) this.outstanding.set(l, grantedAt);
       try {
-        chrome.runtime.sendMessage({ type: 'CONFIRM_LABELS', labels: claimed })
+        chrome.runtime.sendMessage({ type: 'CONFIRM_LABELS', doc_id: documentInstanceId, labels: claimed })
           .then((resp: { rejected?: unknown } | undefined) => this.handleConfirmResponse(resp))
           .catch(() => {
             // SW asleep / extension reload — best-effort.
@@ -362,7 +364,7 @@ class LabelReservoir {
     const now = performance.now();
     for (const l of valid) this.outstanding.set(l, now);
     try {
-      chrome.runtime.sendMessage({ type: 'CONFIRM_LABELS', labels: valid })
+      chrome.runtime.sendMessage({ type: 'CONFIRM_LABELS', doc_id: documentInstanceId, labels: valid })
         .then((resp: { rejected?: unknown } | undefined) => this.handleConfirmResponse(resp))
         .catch(() => {
           // SW asleep — the next claim burst's confirm re-arbitrates.
@@ -404,7 +406,7 @@ class LabelReservoir {
     }
     if (fresh.length > 0) this.free.unshift(...fresh);
     try {
-      chrome.runtime.sendMessage({ type: 'RELEASE_LABELS', labels: valid }).catch(() => {
+      chrome.runtime.sendMessage({ type: 'RELEASE_LABELS', doc_id: documentInstanceId, labels: valid }).catch(() => {
         // SW asleep / extension reload — codewords still effectively held
         // by this frame's reservation. They re-enter the pool via the
         // frame Port's onDisconnect on real teardown.
@@ -466,7 +468,7 @@ class LabelReservoir {
 
   private async refill(count: number, preferred?: string[]): Promise<void> {
     try {
-      const resp = await chrome.runtime.sendMessage({ type: 'CLAIM_LABELS', count, preferred });
+      const resp = await chrome.runtime.sendMessage({ type: 'CLAIM_LABELS', doc_id: documentInstanceId, count, preferred });
       if (Array.isArray(resp?.labels)) {
         // Dedup against `free ∪ outstanding`. The SW can re-issue a
         // codeword we already have outstanding on a wrapper while our

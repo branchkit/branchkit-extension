@@ -410,7 +410,7 @@ describe('IntersectionTracker.queueRelease', () => {
     expect(w.preferredCodeword).toBe('arch');
     const releaseCalls = sendMessageMock.mock.calls.filter(([m]) => m.type === 'RELEASE_LABELS');
     expect(releaseCalls).toHaveLength(1);
-    expect(releaseCalls[0][0]).toEqual({ type: 'RELEASE_LABELS', labels: ['arch'] });
+    expect(releaseCalls[0][0]).toEqual({ type: 'RELEASE_LABELS', doc_id: expect.any(String), labels: ['arch'] });
   });
 });
 

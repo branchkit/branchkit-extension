@@ -8,7 +8,7 @@
  * Design: notes/DESIGN_BROWSER_FRAMES_AND_OBSERVERS.md section 2.
  */
 
-import { LabelStack } from '../types';
+import { LabelStack, LabelOwner } from '../types';
 import { LETTERS_26 } from './words';
 
 // Total addressable codewords per tab — the single source of truth for the
@@ -67,10 +67,17 @@ export function buildPool(alphabet: string[]): string[] | null {
 
 const storageKey = (tabId: number) => `labelStack:${tabId}`;
 
-// In-memory mirror of each tab's assigned map. Avoids chrome.storage.session
-// IPC (~1-5ms) on the hot path — getFrameForLabel is called on every voice
-// action. Mutators (claim/release/clear/regenerate) keep this in sync.
+// In-memory mirror of each tab's assigned map, projected to label→frameId
+// (the routing view). Avoids chrome.storage.session IPC (~1-5ms) on the hot
+// path — getFrameForLabel is called on every voice action. Mutators
+// (claim/confirm/release/clear) keep this in sync via syncAssignedCache.
 const assignedCache = new Map<number, Record<string, number>>();
+
+function syncAssignedCache(tabId: number, stack: LabelStack): void {
+  const routing: Record<string, number> = {};
+  for (const [label, owner] of Object.entries(stack.assigned)) routing[label] = owner.f;
+  assignedCache.set(tabId, routing);
+}
 
 // In-memory mirror of each tab's full LabelStack. Avoids chrome.storage.session
 // reads + writes on every claim/release (each was ~5-15ms, the dominant chunk
@@ -98,7 +105,11 @@ async function loadStack(tabId: number): Promise<LabelStack | null> {
   if (cached) return cached;
   const key = storageKey(tabId);
   const result = await chrome.storage.session.get(key);
-  const stack = (result[key] as LabelStack | undefined) ?? null;
+  let stack = (result[key] as LabelStack | undefined) ?? null;
+  if (stack && !stackShapeCurrent(stack)) {
+    await chrome.storage.session.remove(key);
+    stack = null;
+  }
   if (stack) stackCache.set(tabId, stack);
   return stack;
 }
@@ -176,6 +187,17 @@ function ensureReservedField(stack: LabelStack): void {
   }
 }
 
+/** A stack persisted by a pre-document-keying build has numeric owners.
+ * Pre-launch, no back-compat: discard it wholesale — the next claim
+ * rebuilds a fresh pool and the level-triggered reconciler re-claims.
+ * (Normally unreachable: the new build arrives via extension reload,
+ * which restarts the SW, whose init clears every stack.) */
+function stackShapeCurrent(stack: LabelStack): boolean {
+  const anyOwner =
+    Object.values(stack.assigned ?? {})[0] ?? Object.values(stack.reserved ?? {})[0];
+  return anyOwner === undefined || typeof anyOwner === 'object';
+}
+
 /**
  * How long a reservation may sit unconfirmed before a claim can steal it
  * (L2 of DESIGN_PRERENDER_POOL_POISONING.md). Generous: a healthy reservoir
@@ -207,6 +229,7 @@ const RESERVATION_STALE_MS = 5 * 60_000;
  */
 export async function claimLabels(
   tabId: number,
+  docId: string,
   frameId: number,
   count: number,
   preferred: string[] = [],
@@ -220,14 +243,14 @@ export async function claimLabels(
     const granted = new Set<string>();
     const freeSet = new Set(stack.free);
 
-    // Pass 1 — sticky reclaim. Includes codewords this frame already has
+    // Pass 1 — sticky reclaim. Includes codewords this document already has
     // reserved (a reservoir-internal cycle) so a wrapper that came back
     // into viewport before a reservoir refill flushed gets the same letter.
     const needsFresh: number[] = [];
     for (let i = 0; i < count; i++) {
       const pref = preferred[i];
-      const stillReservedToThisFrame = pref && stack.reserved[pref] === frameId;
-      if (pref && (freeSet.has(pref) || stillReservedToThisFrame) && !granted.has(pref)) {
+      const stillReservedToThisDoc = pref && stack.reserved[pref]?.d === docId;
+      if (pref && (freeSet.has(pref) || stillReservedToThisDoc) && !granted.has(pref)) {
         granted.add(pref);
         result[i] = pref;
       } else {
@@ -256,7 +279,7 @@ export async function claimLabels(
         const now = Date.now();
         for (const [label, owner] of Object.entries(stack.reserved)) {
           if (k >= needsFresh.length) break;
-          if (granted.has(label) || owner === frameId) continue;
+          if (granted.has(label) || owner.d === docId) continue;
           const at = stack.reservedAt?.[label];
           if (at !== undefined && now - at < RESERVATION_STALE_MS) continue;
           delete stack.reserved[label];
@@ -271,7 +294,7 @@ export async function claimLabels(
     if (granted.size > 0) {
       const now = Date.now();
       for (const label of granted) {
-        stack.reserved[label] = frameId;
+        stack.reserved[label] = { d: docId, f: frameId };
         stack.reservedAt![label] = now;
       }
       stack.free = stack.free.filter(l => !granted.has(l));
@@ -304,35 +327,43 @@ export async function claimLabels(
  */
 export async function confirmLabels(
   tabId: number,
+  docId: string,
   frameId: number,
   labels: string[],
 ): Promise<{ rejected: string[] }> {
   return withTabLock(tabId, async () => {
     const stack = await loadStack(tabId);
-    // Pool not ready: nothing to arbitrate — treat as accepted (the frame's
-    // codewords stay locally held; routing falls back to broadcast until a
-    // later confirm lands on a live pool). Rejecting here would nuke every
-    // wrapper on a transient stack miss.
+    // Pool not ready: nothing to arbitrate — treat as accepted (the document's
+    // codewords stay locally held; a later confirm re-arbitrates on a live
+    // pool). Rejecting here would nuke every wrapper on a transient miss.
     if (!stack) return { rejected: [] };
     ensureReservedField(stack);
 
     const rejected: string[] = [];
     let changed = false;
     for (const label of labels) {
-      if (stack.reserved[label] === frameId) {
+      if (stack.reserved[label]?.d === docId) {
         delete stack.reserved[label];
         if (stack.reservedAt) delete stack.reservedAt[label];
-        stack.assigned[label] = frameId;
+        // Stamp the CURRENT frameId — the prerender heal: the same document
+        // confirming post-activation moves routing from the provisional
+        // frame id to the real one.
+        stack.assigned[label] = { d: docId, f: frameId };
         changed = true;
-      } else if (stack.assigned[label] === frameId) {
-        // already ours — idempotent re-confirm
+      } else if (stack.assigned[label]?.d === docId) {
+        // Already ours — idempotent re-confirm; refresh routing if this
+        // document's frame identity changed (prerender activation).
+        if (stack.assigned[label].f !== frameId) {
+          stack.assigned[label] = { d: docId, f: frameId };
+          changed = true;
+        }
       } else if (label in stack.reserved || label in stack.assigned) {
-        rejected.push(label); // another frame owns it
+        rejected.push(label); // another document owns it
       } else {
         const idx = stack.free.indexOf(label);
         if (idx !== -1) {
           stack.free.splice(idx, 1);
-          stack.assigned[label] = frameId;
+          stack.assigned[label] = { d: docId, f: frameId };
           changed = true;
         } else {
           rejected.push(label); // unknown to the pool (stale alphabet etc.)
@@ -341,7 +372,7 @@ export async function confirmLabels(
     }
     if (changed) {
       await saveStack(tabId, stack);
-      assignedCache.set(tabId, { ...stack.assigned });
+      syncAssignedCache(tabId, stack);
     }
     return { rejected };
   });
@@ -365,7 +396,7 @@ export async function confirmLabels(
  * so an immediate re-claim of the same count yields the same labels —
  * important for hint stability across rescans.
  */
-export async function releaseLabels(tabId: number, frameId: number, labels: string[]): Promise<void> {
+export async function releaseLabels(tabId: number, docId: string, labels: string[]): Promise<void> {
   return withTabLock(tabId, async () => {
     const stack = await loadStack(tabId);
     if (!stack) return;
@@ -375,10 +406,10 @@ export async function releaseLabels(tabId: number, frameId: number, labels: stri
     for (const label of labels) {
       // A label is in exactly one of assigned / reserved / free at a time;
       // check both owned states so release works pre- and post-confirm.
-      if (stack.assigned[label] === frameId) {
+      if (stack.assigned[label]?.d === docId) {
         delete stack.assigned[label];
         toReturn.push(label);
-      } else if (stack.reserved[label] === frameId) {
+      } else if (stack.reserved[label]?.d === docId) {
         delete stack.reserved[label];
         if (stack.reservedAt) delete stack.reservedAt[label];
         toReturn.push(label);
@@ -387,7 +418,7 @@ export async function releaseLabels(tabId: number, frameId: number, labels: stri
     if (toReturn.length === 0) return;
     stack.free.unshift(...toReturn);
     await saveStack(tabId, stack);
-    assignedCache.set(tabId, { ...stack.assigned });
+    syncAssignedCache(tabId, stack);
   });
 }
 
@@ -399,8 +430,8 @@ export async function getFrameForLabel(tabId: number, label: string): Promise<nu
   const cached = assignedCache.get(tabId);
   if (cached) return cached[label] ?? null;
   const stack = await loadStack(tabId);
-  if (stack) assignedCache.set(tabId, { ...stack.assigned });
-  return stack?.assigned[label] ?? null;
+  if (stack) syncAssignedCache(tabId, stack);
+  return stack?.assigned[label]?.f ?? null;
 }
 
 /**
@@ -413,7 +444,7 @@ export async function getFrameForLabel(tabId: number, label: string): Promise<nu
  * dies, `onDisconnect` may not fire until the SW next wakes, so the
  * reclaim is delayed (bounded by the 676-label pool capacity, not lost).
  */
-export async function releaseFrame(tabId: number, frameId: number): Promise<void> {
+export async function releaseDocument(tabId: number, docId: string): Promise<void> {
   return withTabLock(tabId, async () => {
     const stack = await loadStack(tabId);
     if (!stack) return;
@@ -421,16 +452,19 @@ export async function releaseFrame(tabId: number, frameId: number): Promise<void
 
     const toRelease: string[] = [];
     for (const [label, owner] of Object.entries(stack.assigned)) {
-      if (owner === frameId) toRelease.push(label);
+      if (owner.d === docId) toRelease.push(label);
     }
     for (const label of toRelease) {
       delete stack.assigned[label];
     }
-    // Reservoir-held labels for the dying frame must also come back — they
-    // were pre-allocated to this frame's reservoir, no wrapper ever
-    // confirmed, and now there's no frame left to confirm them.
+    // Reservoir-held labels for the dying document must also come back —
+    // they were pre-allocated to its reservoir, no wrapper ever confirmed,
+    // and now there's no document left to confirm them. Doc-scoped by
+    // construction: a dying document can never free a sibling's (or a
+    // bfcache-restored predecessor's) labels — the identity gap that used
+    // to wipe frame 0's labels on every navigation is unrepresentable.
     for (const [label, owner] of Object.entries(stack.reserved)) {
-      if (owner === frameId) toRelease.push(label);
+      if (owner.d === docId) toRelease.push(label);
     }
     for (const label of toRelease) {
       delete stack.reserved[label];
@@ -440,7 +474,7 @@ export async function releaseFrame(tabId: number, frameId: number): Promise<void
       stack.free.unshift(...toRelease);
     }
     await saveStack(tabId, stack);
-    assignedCache.set(tabId, { ...stack.assigned });
+    syncAssignedCache(tabId, stack);
   });
 }
 

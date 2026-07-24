@@ -9,7 +9,7 @@
  */
 
 import { Message, ScannedElement, HintVisibility } from './types';
-import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearAllStacks, alphabetsEqual, senderMayMutatePool } from './labels/label-pool';
+import { claimLabels, confirmLabels, releaseLabels, releaseDocument, clearAllStacks, alphabetsEqual, senderMayMutatePool } from './labels/label-pool';
 import { setAlphabet } from './labels/words';
 import { buildCommandContributions } from './command-catalog';
 import { rememberCodewords, clearCodewordMemory, recallCodewords } from './labels/codeword-memory';
@@ -744,7 +744,11 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
       sendResponse({ labels: [] });
       return false;
     }
-    claimLabels(tabId, frameId, message.count, message.preferred)
+    if (typeof message.doc_id !== 'string' || message.doc_id.length === 0) {
+      sendResponse({ labels: [] });
+      return false;
+    }
+    claimLabels(tabId, message.doc_id, frameId, message.count, message.preferred)
       .then(labels => sendResponse({ labels }))
       .catch(err => {
         console.warn('[BranchKit SW] CLAIM_LABELS error:', err);
@@ -759,9 +763,8 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     // a stale local copy of a codeword another frame won must not free the
     // winner's assignment. See releaseLabels.
     const tabId = _sender.tab?.id;
-    const frameId = _sender.frameId;
-    if (typeof tabId !== 'number' || typeof frameId !== 'number') return false;
-    releaseLabels(tabId, frameId, message.labels).catch(err => {
+    if (typeof tabId !== 'number' || typeof message.doc_id !== 'string') return false;
+    releaseLabels(tabId, message.doc_id, message.labels).catch(err => {
       console.warn('[BranchKit SW] RELEASE_LABELS error:', err);
     });
     return false;
@@ -791,7 +794,11 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
       sendResponse({ rejected: [] });
       return false;
     }
-    confirmLabels(tabId, frameId, message.labels)
+    if (typeof message.doc_id !== 'string' || message.doc_id.length === 0) {
+      sendResponse({ rejected: [] });
+      return false;
+    }
+    confirmLabels(tabId, message.doc_id, frameId, message.labels)
       .then(result => sendResponse(result))
       .catch(err => {
         console.warn('[BranchKit SW] CONFIRM_LABELS error:', err);
@@ -863,10 +870,15 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
 const LIVENESS_PORT_NAME = 'frame-liveness';
 
 chrome.runtime.onConnect.addListener((port) => {
-  if (port.name !== LIVENESS_PORT_NAME) return;
+  if (!port.name.startsWith(`${LIVENESS_PORT_NAME}:`)) return;
+  // The port name carries the document's pool-ownership identity
+  // (DESIGN_DOCUMENT_SCOPED_POOL_OWNERSHIP.md) — available atomically at
+  // connect, so the disconnect cleanup below can be document-scoped with no
+  // handshake race.
+  const docId = port.name.slice(LIVENESS_PORT_NAME.length + 1);
   const tabId = port.sender?.tab?.id;
   const frameId = port.sender?.frameId;
-  if (typeof tabId !== 'number' || typeof frameId !== 'number') return;
+  if (typeof tabId !== 'number' || typeof frameId !== 'number' || docId.length === 0) return;
   // Tell the content script its own frameId. Content has no API to
   // discover this on its own and uses it to detect misrouted activate
   // actions (id minted in frame A, dispatched into frame B by SW
@@ -878,7 +890,10 @@ chrome.runtime.onConnect.addListener((port) => {
     // Port may already be closing; harmless.
   }
   port.onDisconnect.addListener(() => {
-    releaseFrame(tabId, frameId).catch(() => {});
+    // Doc-scoped: this document frees only ITS labels — never a bfcache-
+    // restored predecessor's re-assertions (they share frame 0; they do not
+    // share a docId).
+    releaseDocument(tabId, docId).catch(() => {});
     forwardHintsSessionEnd('frame_liveness_disconnect', tabId, frameId).catch(() => {});
     // Evict this dead frame's fingerprint->codeword memory (chrome.storage.session).
     // The per-frame keys were previously only cleared on TAB close

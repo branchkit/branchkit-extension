@@ -141,7 +141,7 @@ describe('LabelReservoir.release', () => {
       ([m]) => m.type === 'RELEASE_LABELS',
     );
     expect(releaseCall).toBeDefined();
-    expect(releaseCall![0]).toEqual({ type: 'RELEASE_LABELS', labels: ['x', 'y'] });
+    expect(releaseCall![0]).toEqual({ type: 'RELEASE_LABELS', doc_id: expect.any(String), labels: ['x', 'y'] });
   });
 
   it('filters out empty / falsy labels from the release set', () => {
@@ -420,7 +420,7 @@ describe('LabelReservoir leak sweep (2026-06-29 review: outstanding never swept)
     expect(swept).toEqual(['a']);
     // Healed end-to-end: back in local free (re-claimable) + SW notified.
     expect(labelReservoir.claim(1)[0]).toBe('a');
-    expect(sendMessageMock).toHaveBeenCalledWith({ type: 'RELEASE_LABELS', labels: ['a'] });
+    expect(sendMessageMock).toHaveBeenCalledWith({ type: 'RELEASE_LABELS', doc_id: expect.any(String), labels: ['a'] });
   });
 
   it('never sweeps a codeword a live wrapper still holds', () => {
@@ -455,6 +455,7 @@ describe('LabelReservoir.reconfirm (SW-restart pool re-assertion)', () => {
     labelReservoir.reconfirm(['arch bake', 'cave dove']);
     expect(sendMessageMock).toHaveBeenCalledWith({
       type: 'CONFIRM_LABELS',
+      doc_id: expect.any(String),
       labels: ['arch bake', 'cave dove'],
     });
     expect(labelReservoir.stats().outstanding).toBe(2);

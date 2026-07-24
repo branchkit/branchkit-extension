@@ -14,7 +14,7 @@ import {
   claimLabels,
   confirmLabels,
   releaseLabels,
-  releaseFrame,
+  releaseDocument,
   getFrameForLabel,
   sweepDeadStacks,
   alphabetsEqual,
@@ -118,24 +118,24 @@ describe('label-pool', () => {
   describe('claim → release → claim', () => {
     it('returns the same labels on re-claim of the same count', async () => {
       const tabId = nextTabId();
-      const first = await claimLabels(tabId, 0, 4);
+      const first = await claimLabels(tabId, 'd0', 0, 4);
       expect(first).toEqual(LP.slice(0, 4));
 
-      await releaseLabels(tabId, 0, first);
+      await releaseLabels(tabId, 'd0', first);
 
-      const second = await claimLabels(tabId, 0, 4);
+      const second = await claimLabels(tabId, 'd0', 0, 4);
       expect(second).toEqual(LP.slice(0, 4));
     });
 
     it('release of partial set preserves order for unreleased labels', async () => {
       const tabId = nextTabId();
-      const first = await claimLabels(tabId, 0, 5);
+      const first = await claimLabels(tabId, 'd0', 0, 5);
       expect(first).toEqual(LP.slice(0, 5));
 
       // Release only the middle three; first and last stay claimed.
-      await releaseLabels(tabId, 0, [LP[1], LP[2], LP[3]]);
+      await releaseLabels(tabId, 'd0', [LP[1], LP[2], LP[3]]);
 
-      const next = await claimLabels(tabId, 0, 3);
+      const next = await claimLabels(tabId, 'd0', 0, 3);
       expect(next).toEqual([LP[1], LP[2], LP[3]]);
     });
   });
@@ -143,14 +143,14 @@ describe('label-pool', () => {
   describe('sticky reclaim (preferred)', () => {
     it('re-grants a preferred codeword that is still free', async () => {
       const tabId = nextTabId();
-      const first = await claimLabels(tabId, 0, 3);
+      const first = await claimLabels(tabId, 'd0', 0, 3);
       expect(first).toEqual(LP.slice(0, 3));
 
       // Element holding LP[2] scrolls out, releasing it.
-      await releaseLabels(tabId, 0, [LP[2]]);
+      await releaseLabels(tabId, 'd0', [LP[2]]);
 
       // Two slots re-claim: one prefers the freed LP[2], one is new.
-      const next = await claimLabels(tabId, 0, 2, [LP[2], '']);
+      const next = await claimLabels(tabId, 'd0', 0, 2, [LP[2], '']);
       // Slot 0 gets its preferred back regardless of pool order; slot 1 gets
       // the next fresh front-of-pool token (not LP[2]).
       expect(next[0]).toBe(LP[2]);
@@ -160,21 +160,21 @@ describe('label-pool', () => {
 
     it('falls back to fresh when the preferred codeword is taken', async () => {
       const tabId = nextTabId();
-      const a = await claimLabels(tabId, 0, 2); // ['arch arch', 'arch bake']
+      const a = await claimLabels(tabId, 'd0', 0, 2); // ['arch arch', 'arch bake']
       // Frame 1 prefers a codeword frame 0 still holds — not free, so fresh.
-      const b = await claimLabels(tabId, 1, 1, [a[0]]);
+      const b = await claimLabels(tabId, 'd1', 1, 1, [a[0]]);
       expect(b[0]).not.toBe(a[0]);
       expect(b[0].length).toBeGreaterThan(0);
     });
 
     it('index-aligns grants when a preferred slot precedes fresh ones', async () => {
       const tabId = nextTabId();
-      const first = await claimLabels(tabId, 0, 4);
-      await releaseLabels(tabId, 0, first); // all four back, front-of-pool
+      const first = await claimLabels(tabId, 'd0', 0, 4);
+      await releaseLabels(tabId, 'd0', first); // all four back, front-of-pool
 
       // Slot 1 prefers a specific freed token; the rest are fresh and must
       // fill the OTHER slots without clobbering slot 1's grant.
-      const next = await claimLabels(tabId, 0, 4, ['', LP[3], '', '']);
+      const next = await claimLabels(tabId, 'd0', 0, 4, ['', LP[3], '', '']);
       expect(next[1]).toBe(LP[3]);
       expect(new Set(next).size).toBe(4); // all distinct, none empty
       expect(next.every(l => l.length > 0)).toBe(true);
@@ -185,8 +185,8 @@ describe('label-pool', () => {
     it('two frames claiming the same tab in parallel get disjoint labels', async () => {
       const tabId = nextTabId();
       const [a, b] = await Promise.all([
-        claimLabels(tabId, 0, 5),
-        claimLabels(tabId, 1, 5),
+        claimLabels(tabId, 'd0', 0, 5),
+        claimLabels(tabId, 'd1', 1, 5),
       ]);
 
       expect(a.length).toBe(5);
@@ -202,8 +202,8 @@ describe('label-pool', () => {
 
     it('routing map reflects which frame owns each codeword (after confirm)', async () => {
       const tabId = nextTabId();
-      const a = await claimLabels(tabId, 0, 3);
-      const b = await claimLabels(tabId, 1, 3);
+      const a = await claimLabels(tabId, 'd0', 0, 3);
+      const b = await claimLabels(tabId, 'd1', 1, 3);
 
       // Pre-confirm: routing returns null — labels are reserved, not
       // yet wrapper-confirmed. This is the PR-6 invariant: unused
@@ -215,8 +215,8 @@ describe('label-pool', () => {
 
       // Confirm promotes reserved → assigned and routing locks to the
       // confirming frame.
-      await confirmLabels(tabId, 0, a);
-      await confirmLabels(tabId, 1, b);
+      await confirmLabels(tabId, 'd0', 0, a);
+      await confirmLabels(tabId, 'd1', 1, b);
 
       for (const label of a) {
         expect(await getFrameForLabel(tabId, label)).toBe(0);
@@ -231,10 +231,10 @@ describe('label-pool', () => {
       // for labels that are reserved to frame A must not steal ownership —
       // and (Phase 4) must REPORT the rejection so frame B drops them.
       const tabId = nextTabId();
-      const a = await claimLabels(tabId, 0, 3);
+      const a = await claimLabels(tabId, 'd0', 0, 3);
 
       // Frame 1 tries to confirm frame 0's reserved labels.
-      const { rejected } = await confirmLabels(tabId, 1, a);
+      const { rejected } = await confirmLabels(tabId, 'd1', 1, a);
       expect(rejected).toEqual(a);
 
       // Still nobody owns them — frame 0 hasn't confirmed.
@@ -243,7 +243,7 @@ describe('label-pool', () => {
       }
 
       // Frame 0's own confirm still works.
-      const ownConfirm = await confirmLabels(tabId, 0, a);
+      const ownConfirm = await confirmLabels(tabId, 'd0', 0, a);
       expect(ownConfirm.rejected).toEqual([]);
       for (const label of a) {
         expect(await getFrameForLabel(tabId, label)).toBe(0);
@@ -258,51 +258,51 @@ describe('label-pool', () => {
       // confirm was a silent no-op, leaving the codeword in free for another
       // frame to claim while frame 0's wrapper still held it.
       const tabId = nextTabId();
-      const [cw] = await claimLabels(tabId, 0, 1);
-      await confirmLabels(tabId, 0, [cw]);
-      await releaseLabels(tabId, 0, [cw]);
+      const [cw] = await claimLabels(tabId, 'd0', 0, 1);
+      await confirmLabels(tabId, 'd0', 0, [cw]);
+      await releaseLabels(tabId, 'd0', [cw]);
 
-      const { rejected } = await confirmLabels(tabId, 0, [cw]);
+      const { rejected } = await confirmLabels(tabId, 'd0', 0, [cw]);
       expect(rejected).toEqual([]);
       expect(await getFrameForLabel(tabId, cw)).toBe(0);
 
       // The pool can no longer hand it to another frame.
-      const b = await claimLabels(tabId, 1, 5);
+      const b = await claimLabels(tabId, 'd1', 1, 5);
       expect(b).not.toContain(cw);
     });
 
     it('rejects a codeword another frame won in the release-vs-confirm window', async () => {
       const tabId = nextTabId();
-      const [cw] = await claimLabels(tabId, 0, 1);
-      await confirmLabels(tabId, 0, [cw]);
-      await releaseLabels(tabId, 0, [cw]);
+      const [cw] = await claimLabels(tabId, 'd0', 0, 1);
+      await confirmLabels(tabId, 'd0', 0, [cw]);
+      await releaseLabels(tabId, 'd0', [cw]);
 
       // Frame 1's refill grabs it before frame 0's confirm lands (released
       // labels unshift to the front, so a 1-slot claim returns the same one).
-      const b = await claimLabels(tabId, 1, 1);
+      const b = await claimLabels(tabId, 'd1', 1, 1);
       expect(b[0]).toBe(cw);
 
       // Frame 0's late confirm loses the arbitration.
-      const { rejected } = await confirmLabels(tabId, 0, [cw]);
+      const { rejected } = await confirmLabels(tabId, 'd0', 0, [cw]);
       expect(rejected).toEqual([cw]);
 
       // Frame 1 confirms and owns routing — exactly one owner.
-      await confirmLabels(tabId, 1, [cw]);
+      await confirmLabels(tabId, 'd1', 1, [cw]);
       expect(await getFrameForLabel(tabId, cw)).toBe(1);
     });
 
     it('rejects codewords unknown to the pool', async () => {
       const tabId = nextTabId();
-      await claimLabels(tabId, 0, 1); // materialize the stack
-      const { rejected } = await confirmLabels(tabId, 0, ['bogus pair']);
+      await claimLabels(tabId, 'd0', 0, 1); // materialize the stack
+      const { rejected } = await confirmLabels(tabId, 'd0', 0, ['bogus pair']);
       expect(rejected).toEqual(['bogus pair']);
     });
 
     it('re-confirm of an already-assigned codeword is an accepted no-op', async () => {
       const tabId = nextTabId();
-      const [cw] = await claimLabels(tabId, 0, 1);
-      await confirmLabels(tabId, 0, [cw]);
-      const { rejected } = await confirmLabels(tabId, 0, [cw]);
+      const [cw] = await claimLabels(tabId, 'd0', 0, 1);
+      await confirmLabels(tabId, 'd0', 0, [cw]);
+      const { rejected } = await confirmLabels(tabId, 'd0', 0, [cw]);
       expect(rejected).toEqual([]);
       expect(await getFrameForLabel(tabId, cw)).toBe(0);
     });
@@ -315,30 +315,30 @@ describe('label-pool', () => {
       // string locally) releases it AGAIN. That second release must not free
       // frame 1's live assignment.
       const tabId = nextTabId();
-      const [cw] = await claimLabels(tabId, 0, 1);
-      await releaseLabels(tabId, 0, [cw]);          // owner release — freed
+      const [cw] = await claimLabels(tabId, 'd0', 0, 1);
+      await releaseLabels(tabId, 'd0', [cw]);          // owner release — freed
 
-      const b = await claimLabels(tabId, 1, 1);     // frame 1 wins it
+      const b = await claimLabels(tabId, 'd1', 1, 1);     // frame 1 wins it
       expect(b[0]).toBe(cw);
-      await confirmLabels(tabId, 1, [cw]);
+      await confirmLabels(tabId, 'd1', 1, [cw]);
 
-      await releaseLabels(tabId, 0, [cw]);          // stale re-release — ignored
+      await releaseLabels(tabId, 'd0', [cw]);          // stale re-release — ignored
 
       // Frame 1 still owns routing, and the pool can't re-issue the
       // codeword to a third frame.
       expect(await getFrameForLabel(tabId, cw)).toBe(1);
-      const c = await claimLabels(tabId, 2, 5);
+      const c = await claimLabels(tabId, 'd2', 2, 5);
       expect(c).not.toContain(cw);
     });
 
     it('ignores a non-owner release of a reserved (unconfirmed) label', async () => {
       const tabId = nextTabId();
-      const [cw] = await claimLabels(tabId, 0, 1);  // reserved to frame 0
+      const [cw] = await claimLabels(tabId, 'd0', 0, 1);  // reserved to frame 0
 
-      await releaseLabels(tabId, 1, [cw]);          // frame 1 never owned it
+      await releaseLabels(tabId, 'd1', [cw]);          // frame 1 never owned it
 
       // Frame 0's confirm still promotes its reservation.
-      const { rejected } = await confirmLabels(tabId, 0, [cw]);
+      const { rejected } = await confirmLabels(tabId, 'd0', 0, [cw]);
       expect(rejected).toEqual([]);
       expect(await getFrameForLabel(tabId, cw)).toBe(0);
     });
@@ -347,10 +347,10 @@ describe('label-pool', () => {
       // Pre-confirm owner release (wrapper left viewport before the confirm
       // round-trip): the reservation must come back to the pool.
       const tabId = nextTabId();
-      const [cw] = await claimLabels(tabId, 0, 1);  // reserved to frame 0
-      await releaseLabels(tabId, 0, [cw]);
+      const [cw] = await claimLabels(tabId, 'd0', 0, 1);  // reserved to frame 0
+      await releaseLabels(tabId, 'd0', [cw]);
 
-      const b = await claimLabels(tabId, 1, 1);     // front-of-pool again
+      const b = await claimLabels(tabId, 'd1', 1, 1);     // front-of-pool again
       expect(b[0]).toBe(cw);
     });
   });
@@ -358,14 +358,14 @@ describe('label-pool', () => {
   describe('releaseFrame', () => {
     it('releases every label held by one frame and leaves others intact', async () => {
       const tabId = nextTabId();
-      const frameAClaim = await claimLabels(tabId, 0, 3);
-      const frameBClaim = await claimLabels(tabId, 1, 3);
+      const frameAClaim = await claimLabels(tabId, 'd0', 0, 3);
+      const frameBClaim = await claimLabels(tabId, 'd1', 1, 3);
       // Confirm so getFrameForLabel routes (the assertion below depends
       // on frame 1's labels being routable post-release of frame 0).
-      await confirmLabels(tabId, 0, frameAClaim);
-      await confirmLabels(tabId, 1, frameBClaim);
+      await confirmLabels(tabId, 'd0', 0, frameAClaim);
+      await confirmLabels(tabId, 'd1', 1, frameBClaim);
 
-      await releaseFrame(tabId, 0);
+      await releaseDocument(tabId, 'd0');
 
       // Frame 0's labels are gone from the assigned map.
       for (const label of frameAClaim) {
@@ -378,7 +378,7 @@ describe('label-pool', () => {
 
       // Released labels are at the front of the pool — re-claim should
       // return them in their original order before reaching new ones.
-      const reclaimed = await claimLabels(tabId, 99, 3);
+      const reclaimed = await claimLabels(tabId, 'd99', 99, 3);
       expect(reclaimed).toEqual(frameAClaim);
     });
 
@@ -387,14 +387,14 @@ describe('label-pool', () => {
       // too — they were pre-allocated to the dying frame's reservoir and
       // no wrapper ever committed.
       const tabId = nextTabId();
-      const reserved = await claimLabels(tabId, 0, 3);
+      const reserved = await claimLabels(tabId, 'd0', 0, 3);
       // No confirm — labels stay in `reserved` state.
 
-      await releaseFrame(tabId, 0);
+      await releaseDocument(tabId, 'd0');
 
       // After release, re-claim from a different frame should return
       // the same labels (they're back at the front of free).
-      const reclaimed = await claimLabels(tabId, 1, 3);
+      const reclaimed = await claimLabels(tabId, 'd1', 1, 3);
       expect(reclaimed).toEqual(reserved);
     });
   });
@@ -402,7 +402,7 @@ describe('label-pool', () => {
   describe('pool overflow', () => {
     it('grants at most pool capacity when more is requested', async () => {
       const tabId = nextTabId();
-      const claimed = await claimLabels(tabId, 0, 800);
+      const claimed = await claimLabels(tabId, 'd0', 0, 800);
       // Result is index-aligned to the request (length 800); slots past the
       // pool's 676 capacity come back empty.
       expect(claimed.length).toBe(800);
@@ -417,7 +417,7 @@ describe('label-pool', () => {
       // having pushed an alphabet. Claims succeed with nothing in storage.
       installMockChrome(null);
       const tabId = nextTabId();
-      const claimed = await claimLabels(tabId, 0, 5);
+      const claimed = await claimLabels(tabId, 'd0', 0, 5);
       expect(claimed).toEqual(LP.slice(0, 5));
     });
   });
@@ -452,9 +452,9 @@ describe('label-pool', () => {
     it('clears stacks for dead tabs, leaves live tabs untouched', async () => {
       const liveTab = nextTabId();
       const deadTab = nextTabId();
-      const liveClaims = await claimLabels(liveTab, 0, 3);
-      await confirmLabels(liveTab, 0, liveClaims);
-      await claimLabels(deadTab, 0, 3);
+      const liveClaims = await claimLabels(liveTab, 'd0', 0, 3);
+      await confirmLabels(liveTab, 'd0', 0, liveClaims);
+      await claimLabels(deadTab, 'd0', 0, 3);
 
       const swept = await sweepDeadStacks(async () => new Set([liveTab]));
 
@@ -468,13 +468,13 @@ describe('label-pool', () => {
       }
       // Dead tab's stack is gone — a hypothetical re-claim starts from the
       // head of a fresh pool (nothing held by the swept assignments).
-      const reClaim = await claimLabels(deadTab, 0, 3);
+      const reClaim = await claimLabels(deadTab, 'd0', 0, 3);
       expect(reClaim).toEqual(LP.slice(0, 3));
     });
 
     it('snapshots tracked stacks before querying live tabs (mid-sweep tab creation is safe)', async () => {
       const oldDead = nextTabId();
-      await claimLabels(oldDead, 0, 2);
+      await claimLabels(oldDead, 'd0', 0, 2);
       let newTab = -1;
 
       const swept = await sweepDeadStacks(async () => {
@@ -482,19 +482,19 @@ describe('label-pool', () => {
         // its stack must not be reaped even though it's absent from the
         // alive set built below.
         newTab = nextTabId();
-        await claimLabels(newTab, 0, 2);
+        await claimLabels(newTab, 'd0', 0, 2);
         return new Set<number>();
       });
 
       expect(swept).toContain(oldDead);
       expect(swept).not.toContain(newTab);
-      const next = await claimLabels(newTab, 0, 1);
+      const next = await claimLabels(newTab, 'd0', 0, 1);
       expect(next).toEqual([LP[2]]); // pool continued — stack survived
     });
 
     it('does not sweep a tracked tab reported alive', async () => {
       const tab = nextTabId();
-      await claimLabels(tab, 0, 2);
+      await claimLabels(tab, 'd0', 0, 2);
       expect(await sweepDeadStacks(async () => new Set([tab]))).not.toContain(tab);
     });
   });
@@ -517,37 +517,37 @@ describe('label-pool', () => {
     it('a claim does NOT steal fresh reservations', async () => {
       const tab = nextTabId();
       // Phantom frame reserves the whole pool.
-      await claimLabels(tab, 4241, POOL_SIZE);
+      await claimLabels(tab, 'd4241', 4241, POOL_SIZE);
       // A fresh claim from frame 0 finds free exhausted and nothing stale.
-      const got = await claimLabels(tab, 0, 3);
+      const got = await claimLabels(tab, 'd0', 0, 3);
       expect(got).toEqual(['', '', '']);
     });
 
     it('a claim steals reservations older than the TTL, and the stolen labels confirm to the thief', async () => {
       vi.useFakeTimers({ now: 1_000_000 });
       const tab = nextTabId();
-      await claimLabels(tab, 4241, POOL_SIZE); // phantom holds everything
+      await claimLabels(tab, 'd4241', 4241, POOL_SIZE); // phantom holds everything
       vi.setSystemTime(1_000_000 + 6 * 60_000); // past RESERVATION_STALE_MS
-      const got = await claimLabels(tab, 0, 3);
+      const got = await claimLabels(tab, 'd0', 0, 3);
       expect(got.filter(Boolean)).toHaveLength(3);
       // The thief's confirm promotes normally.
-      const { rejected } = await confirmLabels(tab, 0, got);
+      const { rejected } = await confirmLabels(tab, 'd0', 0, got);
       expect(rejected).toEqual([]);
       expect(await getFrameForLabel(tab, got[0])).toBe(0);
       // The original holder's late confirm for a stolen label is rejected —
       // its strip-and-reclaim recovery owns the aftermath.
-      const late = await confirmLabels(tab, 4241, [got[0]]);
+      const late = await confirmLabels(tab, 'd4241', 4241, [got[0]]);
       expect(late.rejected).toEqual([got[0]]);
     });
 
-    it('never steals the claiming frame\'s own reservations via pass 2', async () => {
+    it('never steals the claiming document\'s own reservations via pass 2', async () => {
       vi.useFakeTimers({ now: 2_000_000 });
       const tab = nextTabId();
-      await claimLabels(tab, 0, POOL_SIZE); // frame 0's own reservoir cache
+      await claimLabels(tab, 'd0', 0, POOL_SIZE); // frame 0's own reservoir cache
       vi.setSystemTime(2_000_000 + 6 * 60_000);
       // Same frame claiming again: pass 2 must not cannibalize its own
       // reservations (that is pass 1's sticky-preferred domain).
-      const got = await claimLabels(tab, 0, 2);
+      const got = await claimLabels(tab, 'd0', 0, 2);
       expect(got).toEqual(['', '']);
     });
 
@@ -558,16 +558,69 @@ describe('label-pool', () => {
       const key = `labelStack:${tab}`;
       await chrome.storage.session.set({ [key]: {
         free: LP.slice(2),
-        reserved: { [LP[0]]: 4241, [LP[1]]: 4241 },
+        reserved: { [LP[0]]: { d: 'd4241', f: 4241 }, [LP[1]]: { d: 'd4241', f: 4241 } },
         assigned: {},
       } });
       // Exhaust free as frame 7 so pass 2 reaches the steal path.
-      await claimLabels(tab, 7, POOL_SIZE - 2);
+      await claimLabels(tab, 'd7', 7, POOL_SIZE - 2);
       // Immediately after load: grandfathered stamps = now, not stealable.
-      expect((await claimLabels(tab, 0, 1))[0]).toBe('');
+      expect((await claimLabels(tab, 'd0', 0, 1))[0]).toBe('');
       vi.setSystemTime(3_000_000 + 6 * 60_000);
-      const got = await claimLabels(tab, 0, 2);
+      const got = await claimLabels(tab, 'd0', 0, 2);
       expect(got.filter(Boolean).length).toBeGreaterThan(0);
+    });
+  });
+  describe('document-scoped ownership (DESIGN_DOCUMENT_SCOPED_POOL_OWNERSHIP.md)', () => {
+    it('prerender transition: a document confirming under a new frameId keeps its labels and re-routes', async () => {
+      const tab = nextTabId();
+      // Claimed while the document sat in the prerendered frame slot (4241)…
+      const got = await claimLabels(tab, 'docA', 4241, 2);
+      expect(got.filter(Boolean)).toHaveLength(2);
+      // …then activated into frame 0. Same document, same docId: the confirm
+      // is accepted (not rejected as another-owner) and routing follows the
+      // CURRENT frame — the exact transition that used to strand the block.
+      const { rejected } = await confirmLabels(tab, 'docA', 0, got);
+      expect(rejected).toEqual([]);
+      expect(await getFrameForLabel(tab, got[0])).toBe(0);
+    });
+
+    it('a confirm from the owning document refreshes routing on frame change', async () => {
+      const tab = nextTabId();
+      const [cw] = await claimLabels(tab, 'docA', 4241, 1);
+      await confirmLabels(tab, 'docA', 4241, [cw]);
+      expect(await getFrameForLabel(tab, cw)).toBe(4241);
+      await confirmLabels(tab, 'docA', 0, [cw]); // idempotent re-confirm, new frame
+      expect(await getFrameForLabel(tab, cw)).toBe(0);
+    });
+
+    it('bfcache shape: a dying document releases only ITS labels, never a same-frame sibling document', async () => {
+      const tab = nextTabId();
+      // Document A (restored page) holds labels in frame 0.
+      const a = await claimLabels(tab, 'docA', 0, 2);
+      await confirmLabels(tab, 'docA', 0, a);
+      // Document B (the outgoing page) also lived in frame 0.
+      const b = await claimLabels(tab, 'docB', 0, 2);
+      await confirmLabels(tab, 'docB', 0, b);
+      // B enters bfcache — its port disconnect releases ITS labels only.
+      await releaseDocument(tab, 'docB');
+      expect(await getFrameForLabel(tab, a[0])).toBe(0);  // A untouched
+      expect(await getFrameForLabel(tab, b[0])).toBeNull(); // B freed
+      // The freed labels are claimable again.
+      const again = await claimLabels(tab, 'docC', 0, 1);
+      expect(again[0]).not.toBe('');
+    });
+
+    it('discards a persisted stack with the pre-re-key numeric owner shape', async () => {
+      const tab = nextTabId();
+      await chrome.storage.session.set({ [`labelStack:${tab}`]: {
+        free: LP.slice(2),
+        reserved: { [LP[0]]: 4241 },
+        assigned: { [LP[1]]: 0 },
+      } });
+      // The old-shape stack is dropped wholesale; a fresh pool serves claims.
+      const got = await claimLabels(tab, 'docA', 0, 1);
+      expect(got[0]).toBe(LP[0]); // front-of-pool of a REBUILT stack
+      expect(await getFrameForLabel(tab, LP[1])).toBeNull();
     });
   });
 });

@@ -99,6 +99,7 @@ describe('WrapperStore', () => {
     store.removeWrapperByElement(el);
     expect(sendMessageMock).toHaveBeenCalledWith({
       type: 'RELEASE_LABELS',
+      doc_id: expect.any(String),
       labels: ['arch'],
     });
   });
@@ -165,8 +166,8 @@ describe('WrapperStore', () => {
 
     store.clear();
 
-    expect(sendMessageMock).toHaveBeenCalledWith({ type: 'RELEASE_LABELS', labels: ['arch'] });
-    expect(sendMessageMock).toHaveBeenCalledWith({ type: 'RELEASE_LABELS', labels: ['rain bake'] });
+    expect(sendMessageMock).toHaveBeenCalledWith({ type: 'RELEASE_LABELS', doc_id: expect.any(String), labels: ['arch'] });
+    expect(sendMessageMock).toHaveBeenCalledWith({ type: 'RELEASE_LABELS', doc_id: expect.any(String), labels: ['rain bake'] });
     // w3 had no codeword; releaseLabel is a no-op, no extra call.
     const releaseCalls = sendMessageMock.mock.calls.filter(([m]) => m.type === 'RELEASE_LABELS');
     expect(releaseCalls).toHaveLength(2);
@@ -294,6 +295,7 @@ describe('rescan stability under lazy load', () => {
     expect(store.findWrapperFor(e0)).toBeUndefined();
     expect(sendMessageMock).toHaveBeenCalledWith({
       type: 'RELEASE_LABELS',
+      doc_id: expect.any(String),
       labels: ['arch arch'],
     });
     // Other wrappers' codewords are untouched (no release for them).
@@ -421,6 +423,7 @@ describe('ElementWrapper.releaseLabel', () => {
 
     expect(sendMessageMock).toHaveBeenCalledWith({
       type: 'RELEASE_LABELS',
+      doc_id: expect.any(String),
       labels: ['rain bake'],
     });
     expect(w.scanned.codeword).toBe('');

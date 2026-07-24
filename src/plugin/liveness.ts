@@ -34,8 +34,12 @@
  */
 
 import { bkLog } from '../debug/bk-log';
+import { documentInstanceId } from '../labels/document-identity';
 
 const LIVENESS_PORT_NAME = 'frame-liveness';
+// The port NAME carries this document's pool-ownership identity so the SW
+// has it atomically at onConnect (no handshake race for disconnect cleanup).
+// See DESIGN_DOCUMENT_SCOPED_POOL_OWNERSHIP.md.
 
 export interface LivenessHandlers {
   /**
@@ -65,7 +69,7 @@ let livenessPort: chrome.runtime.Port | null = null;
 export function openLivenessPort(handlers: LivenessHandlers, isReconnect = false): void {
   let connected = false;
   try {
-    const port = chrome.runtime.connect({ name: LIVENESS_PORT_NAME });
+    const port = chrome.runtime.connect({ name: `${LIVENESS_PORT_NAME}:${documentInstanceId}` });
     livenessPort = port;
     port.onMessage.addListener((msg: unknown) => {
       if (typeof msg !== 'object' || msg === null) return;
