@@ -24,9 +24,28 @@ import { effectiveVoice, type OverrideMap } from '../command-override';
 export interface HelpRow {
   /** Display strings for every binding of this command (e.g. ["Shift+J"]). */
   keys: string[];
+  /** Space-split tokens of the command's mode-owned keyboard hint (caret-mode
+   *  `o`/`y`/`aw`…) — shown as key chips even though the command isn't bindable. */
+  keyHint: string[];
   /** Spoken phrases for this command (e.g. ["scroll down", "scroll down {number}"]). */
   voice: string[];
   label: string;
+  /** Hover-tooltip text for the ⓘ affordance: the mode a command needs to be in
+   *  (from voiceContext) plus its description. Empty for commands that work in
+   *  Normal mode (no ⓘ shown). */
+  info: string;
+}
+
+/** The "you must be in this mode" note for a voice-context, or '' for none.
+ *  Leads with the mode-entry key (v / w) — the "special mode" commands — since
+ *  that's the actionable part ("how do I make this work?"). */
+function modeNote(voiceContext: CommandMeta['voiceContext']): string {
+  switch (voiceContext) {
+    case 'caret': return 'Caret/visual mode — press v to enter (or “select” a badge), then this works.';
+    case 'video': return 'Video mode — press w for the keyboard layer. By voice, works whenever a video is on the page.';
+    case 'palette': return 'Command palette — open it with Ctrl+K (or say “palette”) first.';
+    default: return '';
+  }
 }
 export interface HelpGroup {
   group: string;
@@ -66,14 +85,19 @@ export function buildHelpModel(
     const voice = voiceConnected
       ? effectiveVoice(c.id, (c.voice ?? []).map((v) => v.pattern), overrides)
       : [];
-    if (keys.length === 0 && voice.length === 0) continue; // not reachable → skip
+    const keyHint = c.keyHint ? c.keyHint.split(/\s+/).filter(Boolean) : [];
+    if (keys.length === 0 && voice.length === 0 && keyHint.length === 0) continue; // not reachable → skip
     let gi = indexByGroup.get(c.group);
     if (gi === undefined) {
       gi = groups.length;
       groups.push({ group: c.group, rows: [] });
       indexByGroup.set(c.group, gi);
     }
-    groups[gi].rows.push({ keys, voice, label: c.label });
+    // Surface the mode requirement (+ description) via a hover ⓘ, but only for
+    // mode-gated commands — Normal-mode commands need no explanation.
+    const note = modeNote(c.voiceContext);
+    const info = note ? `${note}\n\n${c.description}` : '';
+    groups[gi].rows.push({ keys, keyHint, voice, label: c.label, info });
   }
   return groups;
 }
@@ -100,6 +124,23 @@ const HOST_DATA_ATTR = 'data-branchkit-help';
 // One below max signed int — above page content; same tier as the debug overlay.
 const Z_INDEX = 2_147_483_646;
 
+// Keys owned by a mode's own handler, NOT the command registry — so they never
+// appear in the command table above (which is built from COMMAND_CATALOG). This
+// static legend documents them. Entry keys shown are the shipping defaults.
+const MODAL_KEYS: readonly { mode: string; keys: string }[] = [
+  { mode: 'Caret / visual — v, V',
+    keys: 'hjkl move · w/b/e word · ( ) sentence · { } paragraph · 0 $ line ends · gg G document · '
+      + 'o swap ends · aw as ap select word/sentence/paragraph (iw is ip trims space) · '
+      + 'y copy · Y copy line · / then n N find-in-selection · c caret · Esc steps back / exits' },
+  { mode: 'Badges — f',
+    keys: "type a badge's letters to click it · a Capital letter opens it in a new tab · Esc exits" },
+  { mode: 'Marks — m, `',
+    keys: 'then a letter to set or jump (Shift+letter = global, works in any tab) · '
+      + '` twice returns to where you were before the last jump' },
+  { mode: 'Video — w',
+    keys: 'k / Space play-pause · j l seek 10s · ← → 5s · m mute · < > speed · 0 restart · w / Esc / q exits' },
+];
+
 const STYLE = `
 :host { all: initial; }
 .backdrop {
@@ -109,7 +150,11 @@ const STYLE = `
   font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 .panel {
-  width: min(1060px, 94vw); max-height: 90vh; overflow: auto;
+  width: min(1200px, 95vw); max-height: 90vh; overflow: auto;
+  /* Query container: the body/commands/alphabet reflow by the PANEL's width, not
+     the viewport — so the layout responds to its own space (and to large system
+     fonts), no viewport breakpoints. */
+  container-type: inline-size;
   background: #0d1117; color: #c9d1d9;
   border: 1px solid #30363d; border-radius: 10px;
   box-shadow: 0 16px 48px rgba(1, 4, 9, 0.6);
@@ -126,23 +171,19 @@ const STYLE = `
 .head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
 .title { font-size: 14px; font-weight: 650; color: #f0f6fc; }
 .hint { font-size: 11px; color: #8b949e; }
-/* Commands (left) beside the spoken alphabet (right) on wide screens. */
-.body { display: flex; gap: 30px; align-items: flex-start; }
+/* Commands (the bulk) beside the spoken alphabet (a reference sidebar). */
+.body { display: flex; gap: 28px; align-items: flex-start; }
 .commands-area { flex: 1 1 auto; min-width: 0; }
-.alpha-area { flex: 0 0 auto; order: 2; } /* right of the commands */
-/* Alphabet — a single a–z line when there's room; a second line only when the
-   screen is too short to show one without scrolling. Read DOWN (column-major). */
-.alpha { column-count: 1; column-gap: 20px; }
+.alpha-area { flex: 0 0 200px; }
+/* Alphabet packs into as many ~88px columns as its area allows — read DOWN. */
+.alpha { columns: 88px; column-gap: 14px; }
 .alpha .a { display: flex; gap: 6px; align-items: baseline; font-size: 12px;
   min-width: 0; break-inside: avoid; margin-bottom: 3px; }
-@media (max-height: 680px) { .alpha { column-count: 2; } }
-@media (max-height: 460px) { .alpha { column-count: 3; } }
-/* Not enough width for side-by-side (e.g. large font): stack, with the
-   alphabet on TOP (not pushed below the commands), spread full-width. */
-@media (max-width: 780px) {
+/* Narrow PANEL (small window or large font): stack, alphabet on top, full-width.
+   A container query, so it tracks the panel's real width — not the viewport. */
+@container (max-width: 820px) {
   .body { flex-direction: column; }
-  .alpha-area { order: -1; }
-  .alpha { column-count: 4; }
+  .alpha-area { flex-basis: auto; order: -1; }
 }
 .alpha .l { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-weight: 700;
   color: #e6edf3; width: 1.1em; flex: 0 0 auto; }
@@ -153,13 +194,16 @@ const STYLE = `
    Columns line up within each group (the row is display:contents, promoting
    its three cells into the group's grid) so the eye scans straight down
    instead of parsing a squished inline run. */
-.cmds { columns: 2; column-gap: 26px; }
-@media (max-width: 560px) { .cmds { columns: 1; } }
+/* As many ~320px group-columns as fit — reflows with the panel, no breakpoints. */
+.cmds { columns: 320px; column-gap: 28px; }
 .group {
   break-inside: avoid;
   margin-bottom: 13px;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  /* name | keys | voice. The voice column is bounded (minmax with a shrinkable
+     min) and wraps — a command with many spoken phrases (e.g. every extend
+     variant) must NOT expand it to full width and collapse the name column. */
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1.4fr);
   column-gap: 12px;
   row-gap: 5px;
   align-items: baseline;
@@ -176,9 +220,27 @@ const STYLE = `
   padding-bottom: 4px; border-bottom: 1px solid #21262d;
 }
 .row { display: contents; }
-.label {
+.label { display: flex; align-items: baseline; gap: 5px; min-width: 0; }
+.name {
   color: #e6edf3; font-size: 12px; min-width: 0;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* ⓘ hover affordance — the tooltip carries the mode requirement + description
+   for a mode-gated command. Opens to the RIGHT (the name column is on the left,
+   so there's horizontal room) to dodge the scroll panel's vertical clipping. */
+.info {
+  flex: 0 0 auto; cursor: help; position: relative;
+  color: #6e7681; font-size: 10.5px; font-style: normal; line-height: 1;
+}
+.info:hover { color: #58a6ff; }
+.info:hover::after {
+  content: attr(data-tip);
+  position: absolute; left: calc(100% + 8px); top: 50%; transform: translateY(-50%);
+  width: max-content; max-width: 240px;
+  background: #1c2128; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px;
+  padding: 6px 9px; font-size: 11px; font-style: normal; line-height: 1.45;
+  white-space: pre-line; box-shadow: 0 6px 20px rgba(1, 4, 9, 0.6);
+  z-index: 20; pointer-events: none;
 }
 .keys { display: inline-flex; gap: 3px; flex-wrap: wrap; }
 kbd {
@@ -189,12 +251,32 @@ kbd {
 /* Spoken phrase — mic glyph + italic text, set apart from the key chips so
    "say this" reads distinctly from "press this". Empty cell when a command
    has no voice form, which keeps the three columns aligned. */
-.voice {
-  display: inline-flex; align-items: baseline; gap: 4px;
-  color: #7d8590; font-size: 11px; font-style: italic; white-space: nowrap;
+/* Mode-owned key hint (caret-mode o/y/aw…): a key chip, dimmed + dashed so it
+   reads as "only inside the mode", distinct from a real global binding. */
+kbd.hint { opacity: 0.7; border-style: dashed; }
+/* A flex row: [mic] [phrases]. The phrases span wraps, and because it's its own
+   flex item its continuation lines stay aligned under the first line (not under
+   the mic). The mic is a fixed item pinned top-left, so it's always visible. */
+.voice { display: flex; align-items: baseline; gap: 5px; }
+.voice > span {
+  min-width: 0; overflow-wrap: anywhere;
+  color: #7d8590; font-size: 11px; font-style: italic; line-height: 1.5;
 }
-.voice svg { width: 11px; height: 11px; flex: 0 0 auto; align-self: center;
-  color: #58a6ff; opacity: 0.85; }
+.voice svg {
+  flex: 0 0 auto; align-self: flex-start; margin-top: 3px;
+  width: 12px; height: 12px; color: #58a6ff; opacity: 0.95;
+}
+/* Modal keys — a full-width legend below the command table for the keys a mode
+   owns (caret/hints/marks/video). name | keys, the keys wrapping freely. */
+.modal { margin-top: 4px; }
+.mrow {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.8fr) minmax(0, 2.6fr);
+  column-gap: 12px; row-gap: 3px; margin-bottom: 6px; align-items: baseline;
+  break-inside: avoid;
+}
+.mmode { color: #e6edf3; font-size: 11px; font-weight: 600; }
+.mkeys { color: #8b949e; font-size: 11px; line-height: 1.55; }
 .usage { margin-top: 10px; font-size: 11px; color: #8b949e; line-height: 1.45; }
 .usage b { color: #c9d1d9; font-weight: 600; }
 `;
@@ -261,12 +343,22 @@ function buildHelpOverlay(
       // stay column-aligned.
       const row = el('div', 'row');
 
-      // 1 — what it does: the anchor you scan by.
-      row.appendChild(el('span', 'label', r.label));
+      // 1 — what it does: the anchor you scan by, plus a hover ⓘ carrying the
+      // mode requirement for mode-gated commands.
+      const labelCell = el('div', 'label');
+      labelCell.appendChild(el('span', 'name', r.label));
+      if (r.info) {
+        const info = el('span', 'info', 'ⓘ');
+        info.setAttribute('data-tip', r.info);
+        labelCell.appendChild(info);
+      }
+      row.appendChild(labelCell);
 
-      // 2 — how to type it: aligned key chips.
+      // 2 — how to type it: aligned key chips. Real registry binds first, then
+      // any mode-owned hint keys (dimmed — they only work inside the mode).
       const keys = el('div', 'keys');
       for (const k of r.keys) keys.appendChild(el('kbd', undefined, k));
+      for (const k of r.keyHint) keys.appendChild(el('kbd', 'hint', k));
       row.appendChild(keys);
 
       // 3 — how to say it: mic glyph + phrase(s), set apart from the keys.
@@ -285,6 +377,20 @@ function buildHelpOverlay(
     cmds.appendChild(groupEl);
   }
   cmdArea.appendChild(cmds);
+
+  // Modal keys — the mode-owned keys (caret/hints/marks/video) that aren't
+  // registry commands, so they're absent from the table above. Always shown
+  // (they're keyboard, standalone-relevant), full-width below the commands.
+  const modal = el('div', 'modal');
+  modal.appendChild(el('div', 'sec-head', 'Inside a mode (typed keys)'));
+  for (const mk of MODAL_KEYS) {
+    const row = el('div', 'mrow');
+    row.appendChild(el('div', 'mmode', mk.mode));
+    row.appendChild(el('div', 'mkeys', mk.keys));
+    modal.appendChild(row);
+  }
+  cmdArea.appendChild(modal);
+
   body.appendChild(cmdArea);
 
   // Spoken alphabet — the right-hand reference column (single a–z line when it

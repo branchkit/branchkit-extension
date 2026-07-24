@@ -47,7 +47,8 @@ const VOICE_ONLY_CONTENT = [
   'activate_hint_newtab', 'activate_hint_background',
   // Discrete voice-selection verbs — handled inline in BRANCHKIT_ACTION, gated
   // on the caret mode; no keyboard bind (the movement keys are the keyboard form).
-  'select_extend', 'select_shrink', 'select_flip', 'select_copy', 'select_exit',
+  'extend_word', 'extend_sentence', 'extend_line', 'extend_paragraph', 'extend_edge',
+  'select_shrink', 'select_flip', 'select_copy', 'select_exit', 'select_whole',
 ] as const;
 
 const NOT_MAPPABLE = new Set([

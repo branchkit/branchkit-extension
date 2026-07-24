@@ -40,6 +40,21 @@ describe('buildHelpModel', () => {
     expect(model[0].rows[0].voice).toEqual(['find {text}', 'search {text}']);
   });
 
+  it('sets a mode-requirement ⓘ tooltip for mode-gated commands, empty otherwise', () => {
+    const gated: CommandMeta = {
+      id: 'sel', label: 'Copy selection', group: 'Selection', description: 'Copy it.',
+      mappable: false, params: [], voiceContext: 'caret', voice: [{ pattern: 'copy that' }],
+    };
+    const normal = cmd('scroll_down', 'Scroll', ['scroll down']);
+    const model = buildHelpModel([gated, normal], []);
+    const rows = model.flatMap((g) => g.rows);
+    const selRow = rows.find((r) => r.label === 'Copy selection')!;
+    const scrollRow = rows.find((r) => r.label === 'scroll_down')!;
+    expect(selRow.info).toContain('press v');
+    expect(selRow.info).toContain('Copy it.');
+    expect(scrollRow.info).toBe('');
+  });
+
   it('carries both keys and voice when a command has both', () => {
     const catalog = [cmd('scroll_down', 'Scroll', ['scroll down'])];
     const model = buildHelpModel(catalog, [{ keys: 'shift+KeyJ', command: 'scroll_down' }]);

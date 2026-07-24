@@ -88,6 +88,14 @@ export interface CommandMeta {
    * plugin-owned, same contract as retainsHints.
    */
   voiceContext?: 'palette' | 'caret' | 'video';
+  /**
+   * Display-only keyboard hint for keys OWNED BY A MODE HANDLER (not the command
+   * registry) — e.g. caret-mode `y`/`o`/`aw`. Shown in the `?` help's keys column
+   * so a modal command's keyboard twin is visible even though it's `mappable:false`
+   * (no registry bind to read). Space-separated tokens each render as a key chip.
+   * Not bindable and never read by the keymap — purely the cheat-sheet.
+   */
+  keyHint?: string;
 }
 
 export interface KeymapEntry {
@@ -371,29 +379,66 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // so these are eligible ONLY while selecting, mirroring the keyboard's modal
   // capture. One utterance = one Selection.modify (verb × granularity × direction
   // × count). See notes/DESIGN_VOICE_SELECTION_BOUNDS.md.
-  { id: 'select_extend', label: 'Extend selection', group: 'Selection', mappable: false,
-    description: 'Grow the selection by a word, sentence, line, or paragraph (say a number to repeat, "back" to grow the other way, "to end/start" for the line edge). Keyboard: w/b/e, ( ), { }, 0/$.',
+  // Extend the selection — ONE command per granularity, so each is a short,
+  // scannable row with its own keyboard twin (the visual-mode movement keys)
+  // instead of a 14-phrase wall. "back" grows the other end; a number repeats.
+  // The granularity is fixed by the command id (see parseSelectionCommand); the
+  // params are just direction + count.
+  { id: 'extend_word', label: 'Extend by word', group: 'Selection', mappable: false,
+    description: 'Grow the selection by a word — "back" for the other direction, a number to repeat. Keyboard: w / b.',
     params: [
-      { name: 'granularity', type: 'enum', options: ['word', 'sentence', 'line', 'paragraph', 'lineboundary'], default: 'word' },
       { name: 'direction', type: 'enum', options: ['forward', 'backward'], default: 'forward' },
       { name: 'count', type: 'number', min: 1, default: '1' },
     ],
-    voiceContext: 'caret',
+    voiceContext: 'caret', keyHint: 'w b',
     voice: [
-      { pattern: 'extend word', params: { granularity: 'word' } },
-      { pattern: 'extend sentence', params: { granularity: 'sentence' } },
-      { pattern: 'extend line', params: { granularity: 'line' } },
-      { pattern: 'extend paragraph', params: { granularity: 'paragraph' } },
-      { pattern: 'extend {number} words', params: { granularity: 'word', count: '{number}' } },
-      { pattern: 'extend {number} sentences', params: { granularity: 'sentence', count: '{number}' } },
-      { pattern: 'extend {number} lines', params: { granularity: 'line', count: '{number}' } },
-      { pattern: 'extend {number} paragraphs', params: { granularity: 'paragraph', count: '{number}' } },
-      { pattern: 'extend back word', params: { granularity: 'word', direction: 'backward' } },
-      { pattern: 'extend back sentence', params: { granularity: 'sentence', direction: 'backward' } },
-      { pattern: 'extend back line', params: { granularity: 'line', direction: 'backward' } },
-      { pattern: 'extend back paragraph', params: { granularity: 'paragraph', direction: 'backward' } },
-      { pattern: 'extend to end', params: { granularity: 'lineboundary', direction: 'forward' } },
-      { pattern: 'extend to start', params: { granularity: 'lineboundary', direction: 'backward' } },
+      { pattern: 'extend word' },
+      { pattern: 'extend {number} words', params: { count: '{number}' } },
+      { pattern: 'extend back word', params: { direction: 'backward' } },
+    ] },
+  { id: 'extend_sentence', label: 'Extend by sentence', group: 'Selection', mappable: false,
+    description: 'Grow the selection by a sentence — "back" for the other direction, a number to repeat. Keyboard: ( / ).',
+    params: [
+      { name: 'direction', type: 'enum', options: ['forward', 'backward'], default: 'forward' },
+      { name: 'count', type: 'number', min: 1, default: '1' },
+    ],
+    voiceContext: 'caret', keyHint: '( )',
+    voice: [
+      { pattern: 'extend sentence' },
+      { pattern: 'extend {number} sentences', params: { count: '{number}' } },
+      { pattern: 'extend back sentence', params: { direction: 'backward' } },
+    ] },
+  { id: 'extend_line', label: 'Extend by line', group: 'Selection', mappable: false,
+    description: 'Grow the selection by a line — "back" for the other direction, a number to repeat. Keyboard: j / k.',
+    params: [
+      { name: 'direction', type: 'enum', options: ['forward', 'backward'], default: 'forward' },
+      { name: 'count', type: 'number', min: 1, default: '1' },
+    ],
+    voiceContext: 'caret', keyHint: 'j k',
+    voice: [
+      { pattern: 'extend line' },
+      { pattern: 'extend {number} lines', params: { count: '{number}' } },
+      { pattern: 'extend back line', params: { direction: 'backward' } },
+    ] },
+  { id: 'extend_paragraph', label: 'Extend by paragraph', group: 'Selection', mappable: false,
+    description: 'Grow the selection by a paragraph — "back" for the other direction, a number to repeat. Keyboard: { / }.',
+    params: [
+      { name: 'direction', type: 'enum', options: ['forward', 'backward'], default: 'forward' },
+      { name: 'count', type: 'number', min: 1, default: '1' },
+    ],
+    voiceContext: 'caret', keyHint: '{ }',
+    voice: [
+      { pattern: 'extend paragraph' },
+      { pattern: 'extend {number} paragraphs', params: { count: '{number}' } },
+      { pattern: 'extend back paragraph', params: { direction: 'backward' } },
+    ] },
+  { id: 'extend_edge', label: 'Extend to line start/end', group: 'Selection', mappable: false,
+    description: 'Grow the selection to the start or end of the line. Keyboard: 0 / $.',
+    params: [{ name: 'direction', type: 'enum', options: ['forward', 'backward'], default: 'forward' }],
+    voiceContext: 'caret', keyHint: '0 $',
+    voice: [
+      { pattern: 'extend to end', params: { direction: 'forward' } },
+      { pattern: 'extend to start', params: { direction: 'backward' } },
     ] },
   { id: 'select_shrink', label: 'Shrink selection', group: 'Selection', mappable: false,
     description: 'Pull the selection back by a word, sentence, line, or paragraph — the moving end retreats toward where you started.',
@@ -409,16 +454,28 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     ] },
   { id: 'select_flip', label: 'Flip selection end', group: 'Selection', mappable: false, params: [],
     description: 'Swap which end of the selection moves, so you can adjust the other bound after over-extending. Keyboard: o.',
-    voiceContext: 'caret',
+    voiceContext: 'caret', keyHint: 'o',
     voice: [{ pattern: 'flip' }, { pattern: 'other end' }] },
   { id: 'select_copy', label: 'Copy selection', group: 'Selection', mappable: false, params: [],
     description: 'Copy the current selection to the clipboard and exit selection mode. Keyboard: y.',
-    voiceContext: 'caret',
+    voiceContext: 'caret', keyHint: 'y',
     voice: [{ pattern: 'copy that' }, { pattern: 'copy selection' }] },
   { id: 'select_exit', label: 'Stop selecting', group: 'Selection', mappable: false, params: [],
     description: 'Leave selection mode without copying. Keyboard: Esc.',
-    voiceContext: 'caret',
+    voiceContext: 'caret', keyHint: 'Esc',
     voice: [{ pattern: 'stop selecting' }] },
+  // Whole-entity grab around the caret — the voice twin of the keyboard aw/as/ap
+  // text objects. "select sentence" selects the entire sentence the caret sits
+  // in (inner-trimmed for a clean copy), regardless of where in it you are.
+  { id: 'select_whole', label: 'Select word/sentence/paragraph', group: 'Selection', mappable: false,
+    description: 'Select the whole word, sentence, or paragraph the caret is in — then "copy that". Keyboard: aw/as/ap (iw/is/ip trims whitespace).',
+    params: [{ name: 'granularity', type: 'enum', options: ['word', 'sentence', 'paragraph'], default: 'word' }],
+    voiceContext: 'caret', keyHint: 'aw as ap',
+    voice: [
+      { pattern: 'select word', params: { granularity: 'word' } },
+      { pattern: 'select sentence', params: { granularity: 'sentence' } },
+      { pattern: 'select paragraph', params: { granularity: 'paragraph' } },
+    ] },
   // Find-and-extend in one utterance ("extend to <phrase>"): the far bound jumps
   // to a phrase found on the page. Like find_immediate, the phrase can't be a
   // Sherpa `{text}` capture (the closed grammar only hears union words) — it

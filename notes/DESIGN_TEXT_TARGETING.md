@@ -119,7 +119,21 @@ bounded page-word snapshot per focus and refresh lazily. Either way this is a
 platform-vocabulary feature that crosses into the actuator/plugin — **not
 extension-local.**
 
-### Voice architecture — the option space (OPEN DECISION, prototype before choosing)
+### Voice architecture — the option space (DECIDED 2026-07-20: Option B)
+
+**Decision:** Option B (WhisperKit dictated argument) is chosen and is being built
+as a *generic platform primitive* — "dictated command arguments" — not a browser
+feature. Rationale: it reuses the existing `speak` Sherpa→WhisperKit handoff almost
+verbatim (generalize its one transcript sink), and it generalizes to any command
+with a free-text argument (find, click, "search google for …", "insert … to …"),
+which is the bigger win than click-target alone. It also does **not** reintroduce a
+Sherpa open-tail, so the 2026-07-01 zero-unbounded-tails / determinize work stands.
+The pilot is **find-on-page** (`find_immediate{query}` is a pure string sink — no
+matcher needed), which de-risks the one open question (WhisperKit accuracy on 1–2
+word targets) with minimal code before click-target's matcher is built. Option C
+(page-biased Sherpa free-CTC) stays the documented fallback if short-utterance
+accuracy is unacceptable. Full impl plan + seams:
+`branchkit/notes/DESIGN_DICTATED_COMMAND_ARGUMENT.md` (app repo).
 
 The page-word index is only one of three ways to get the free-text target. All
 share one **correct-by-construction insight**: the target is *always* an element

@@ -54,7 +54,7 @@ export type CaretEntry = CaretMode | 'visual-line';
  * notes/DESIGN_VOICE_SELECTION_BOUNDS.md.
  */
 export interface SelectionCommand {
-  op: 'extend' | 'shrink' | 'flip' | 'copy' | 'exit';
+  op: 'extend' | 'shrink' | 'flip' | 'copy' | 'exit' | 'select';
   granularity?: SelectGranularity;
   direction?: Dir;
   count?: number;
@@ -707,6 +707,15 @@ export class CaretController {
       case 'copy': this.yank(); return;
       case 'exit': this.exit(); return;
       case 'flip': this.flip(); return;
+      case 'select': {
+        // Whole-entity grab around the caret — the voice twin of aw/as/ap,
+        // inner-trimmed for a clean copy ("select sentence" = this whole sentence).
+        const g = cmd.granularity;
+        const entity: Entity = g === 'sentence' ? 'sentence' : g === 'paragraph' ? 'paragraph' : 'word';
+        if (this.fieldEl) this.selectFieldEntity(entity);
+        else this.selectLexicalEntity(entity, true);
+        return;
+      }
       case 'extend':
       case 'shrink': {
         this.ensureVisual();
@@ -768,6 +777,21 @@ export class CaretController {
     const el = this.fieldEl;
     if (!el) return;
     writeFieldRange(el, applyFieldModify(el.value ?? '', readFieldRange(el), plan));
+  }
+
+  /** Whole-entity select inside a field (voice "select word/sentence"): the
+   *  Segmenter span around the caret over the field value, inner-trimmed.
+   *  Paragraph in a single-line-ish field selects the whole value. */
+  private selectFieldEntity(entity: Entity): void {
+    const el = this.fieldEl;
+    if (!el) return;
+    const value = el.value ?? '';
+    const caret = el.selectionStart ?? 0;
+    const span = entity === 'paragraph'
+      ? { start: 0, end: value.length }
+      : entitySpan(value, entity, caret);
+    const { start, end } = trimSpan(value, span.start, span.end);
+    writeFieldRange(el, { anchor: start, focus: end });
   }
 
   /** Swap the anchor and focus ends ("flip" / "other end" / keyboard `o`), so

@@ -146,6 +146,43 @@ describe('CaretController — inner/around text-object prefixes', () => {
   });
 });
 
+describe('CaretController — voice whole-entity select (aw/as/ap twin)', () => {
+  it('"select sentence" grabs the whole sentence around the caret', () => {
+    document.body.innerHTML =
+      '<p>First one here. The quick brown fox jumps over. Third sentence.</p>';
+    const node = document.querySelector('p')!.firstChild!;
+    const mid = node.textContent!.indexOf('brown') + 2; // caret mid-sentence-2
+    const sel = window.getSelection()!;
+    const r = document.createRange();
+    r.setStart(node, mid);
+    r.setEnd(node, mid + 1);
+    sel.removeAllRanges();
+    sel.addRange(r);
+
+    const c = new CaretController({ onModeChange: vi.fn() });
+    c.enterFromNormal(); // visual — no Selection.modify
+    c.applyVoice({ op: 'select', granularity: 'sentence' });
+    expect(window.getSelection()!.toString().trim()).toBe('The quick brown fox jumps over.');
+  });
+
+  it('"select word" grabs just the word (inner-trimmed)', () => {
+    document.body.innerHTML = '<p>alpha bravo charlie delta echo</p>';
+    const node = document.querySelector('p')!.firstChild!;
+    const mid = node.textContent!.indexOf('charlie') + 3;
+    const sel = window.getSelection()!;
+    const r = document.createRange();
+    r.setStart(node, mid);
+    r.setEnd(node, mid + 1);
+    sel.removeAllRanges();
+    sel.addRange(r);
+
+    const c = new CaretController({ onModeChange: vi.fn() });
+    c.enterFromNormal();
+    c.applyVoice({ op: 'select', granularity: 'word' });
+    expect(window.getSelection()!.toString()).toBe('charlie');
+  });
+});
+
 describe('CaretController — extend to phrase (Phase B)', () => {
   it('selects the found phrase when there is no live anchor, entering visual', () => {
     document.body.innerHTML = '<p>the quick brown fox jumps over the lazy dog</p>';

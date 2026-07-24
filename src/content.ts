@@ -1537,19 +1537,32 @@ dispatcher.register('select_to', (params) => {
   if (query) caret.extendToPhrase(query);
 });
 
-/** Build a structured SelectionCommand from a discrete select_* action + its
+// The caret-mode voice-selection actions, handled inline (gated on caret mode).
+// The per-granularity extend_* ids carry their granularity in the id.
+type SelGran = NonNullable<SelectionCommand['granularity']>;
+const EXTEND_GRANULARITY: Record<string, SelGran> = {
+  extend_word: 'word', extend_sentence: 'sentence', extend_line: 'line',
+  extend_paragraph: 'paragraph', extend_edge: 'lineboundary',
+};
+const SELECTION_ACTIONS = new Set<string>([
+  ...Object.keys(EXTEND_GRANULARITY),
+  'select_shrink', 'select_whole', 'select_flip', 'select_copy', 'select_exit',
+]);
+
+/** Build a structured SelectionCommand from a discrete selection action + its
  *  params (command-catalog.ts). Central so the voice dispatch stays a one-liner. */
 function parseSelectionCommand(action: string, params?: Record<string, string>): SelectionCommand {
-  type Gran = NonNullable<SelectionCommand['granularity']>;
-  const granularity = (params?.granularity as Gran) || 'word';
+  const paramGran = (params?.granularity as SelGran) || 'word';
   switch (action) {
     case 'select_flip': return { op: 'flip' };
     case 'select_copy': return { op: 'copy' };
     case 'select_exit': return { op: 'exit' };
-    case 'select_shrink': return { op: 'shrink', granularity };
+    case 'select_whole': return { op: 'select', granularity: paramGran };
+    case 'select_shrink': return { op: 'shrink', granularity: paramGran };
     default: return {
+      // extend_word / extend_sentence / extend_line / extend_paragraph / extend_edge
       op: 'extend',
-      granularity,
+      granularity: EXTEND_GRANULARITY[action] ?? 'word',
       direction: params?.direction === 'backward' ? 'backward' : 'forward',
       count: params?.count ? parseInt(params.count, 10) || 1 : 1,
     };
@@ -3380,8 +3393,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
           fp: resolved.fp,
         });
       }
-    } else if (action === 'select_extend' || action === 'select_shrink'
-            || action === 'select_flip' || action === 'select_copy' || action === 'select_exit') {
+    } else if (SELECTION_ACTIONS.has(action)) {
       // Voice-driven adjustable selection ("extend sentence", "shrink word",
       // "flip", "copy that", "stop selecting"). No-op unless caret mode is active
       // — the CaretController guards it. See notes/DESIGN_VOICE_SELECTION_BOUNDS.md.

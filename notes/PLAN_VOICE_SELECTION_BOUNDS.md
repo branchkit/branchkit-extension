@@ -60,6 +60,30 @@ Phase-1 cross-node find (`src/scan/find.ts` `buildFlatIndex`).
   `closeFindMode()` in `exit()`. Fixes "Escape fully exits + caret moved on re-entry"
   and "I want to escape the search first, keeping the selection."
 
+### `?` help + voice parity (2026-07-22, third pass)
+
+- **Whole-entity voice select** `select_whole` — "select word / select sentence /
+  select paragraph" → `selectLexicalEntity` (inner-trimmed), the voice twin of the
+  keyboard `aw/as/ap`. Gated `voiceContext:'caret'`. This is the piece that was
+  dropped when the old `caret_voice` "select word" moved to `extend` semantics.
+  Field path (`selectFieldEntity`) covers input/textarea.
+- **`?` overlay fixes** (`render/help-overlay.ts`): (1) the group grid's voice
+  column was `nowrap`, so a command with many phrases (select_extend has 14)
+  expanded it to full width and collapsed the command-name column to zero — bounded
+  the column (`minmax(0, 1.4fr)`) and made phrases wrap. (2) Added a **"Inside a
+  mode (typed keys)"** legend (`MODAL_KEYS`) documenting the handler-owned keys
+  (caret/visual movement + text objects, hint letters, mark letters, video keys)
+  that aren't registry commands and so never appeared in the table.
+
+### Remaining voice work (mostly cross-repo)
+
+- **`select_to` "extend to <phrase>"** voice trigger — consumer built; needs the
+  voice-plugin arm-then-dictate flow (like "search"→find_immediate).
+- **Text targeting "click/follow <text>"** — needs the page-word grammar index
+  (DESIGN_TEXT_TARGETING.md); cross-repo, larger.
+- Marks by voice, and a bare voice "start selecting" (caret entry without a hint) —
+  deferred/minor.
+
 ### Remaining cross-repo wiring (NOT extension-local)
 
 `select_to`'s trigger ("extend to <phrase>" → dictated query → `browser.select_to
