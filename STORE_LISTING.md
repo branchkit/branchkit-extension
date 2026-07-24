@@ -102,6 +102,22 @@ desktop app, to that app on `http://127.0.0.1` (localhost) on the user's own
 machine. That channel carries structured action data only — never code, never
 HTML that gets injected.
 
+### The MAIN-world content script (`bootstrap.js`)
+
+One content script runs in the page's own JS context (`world: "MAIN"`,
+`document_start`, all frames). It is deliberately a single tiny file (~65 lines
+of commented source, under 1 KB built) so it can be audited in one read. Its
+entire job: wrap `Element.prototype.attachShadow` so the ISOLATED-world content
+script is notified when the page creates a shadow root — otherwise hint badges
+miss interactive elements inside lazily-mounted web components (GitHub review
+threads, Slack, etc.). It **reads no page data and carries none**: the
+notification is an empty `CustomEvent` (no `detail` payload), and everything
+else — scanning, badge painting, activation — happens in the ISOLATED world.
+It must be MAIN-world because prototype wrapping is invisible across worlds, and
+`document_start` because the wrap has to land before page scripts first call
+`attachShadow`. This is the same pattern the approved **Dark Reader** extension
+uses for page-level API interception.
+
 ### Per-permission justification
 
 | Permission | Why BranchKit needs it |
@@ -118,3 +134,41 @@ HTML that gets injected.
 
 Note: `activeTab` is intentionally **not** requested — `<all_urls>` host access
 already covers the active tab, so requesting `activeTab` would be redundant.
+
+## CWS privacy-practices form (dashboard answers — drafted, paste when submitting)
+
+The Chrome Web Store "Privacy practices" tab is a separate dashboard form; the
+answers below are drafted to be consistent with PRIVACY.md and with the Firefox
+build's manifest-level `data_collection_permissions: {required: ['none']}`.
+
+**Data types collected — check "Website content" only.** Every other category
+(personally identifiable info, health, financial, authentication, communications,
+location, web history, user activity) — **not collected**.
+
+Justification text for "Website content":
+
+> The extension reads the visible text and structure of interactive elements
+> (links, buttons, form fields) on the current page to build its hint badges.
+> This data is processed transiently in the browser. Without the optional
+> BranchKit desktop app it never leaves the browser. When the user has installed
+> and connected that app, element labels are sent to it over `http://127.0.0.1`
+> (the user's own machine, localhost only) so voice commands can name on-screen
+> elements. Nothing is ever transmitted to any external server, and the
+> developer has no access to it — there is no backend.
+
+**Certifications — affirm all three:** data is not sold to third parties; data
+is not used or transferred for purposes unrelated to the extension's single
+purpose; data is not used or transferred to determine creditworthiness or for
+lending purposes.
+
+**Privacy policy URL:** the hosted copy of PRIVACY.md (fill in the final URL at
+submission time).
+
+**Why this squares with Firefox's "none" declaration:** Mozilla's
+`data_collection_permissions` vocabulary covers data *collected by or
+transmitted to the developer* — of which there is none (localhost is the user's
+own device; we run no servers). CWS's "website content" checkbox is broader —
+it covers *reading page content at all*, which a hint-navigation tool
+necessarily does. Both declarations describe the same reality; listing copy
+should keep using the "never leaves your device (localhost only with the
+optional app)" phrasing so the two stores' claims read as consistent.

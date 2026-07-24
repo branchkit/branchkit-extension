@@ -149,6 +149,10 @@ built output; the Chrome build declares it. See "What's already good.")*
      it's the reviewer's first read.
    - Add a review note: why MAIN world, what it touches, and that it bridges to
      the ISOLATED content script rather than reading page data for exfiltration.
+   **DONE 2026-07-24.** "The MAIN-world content script" section added to
+   STORE_LISTING.md review notes: single sub-1KB file, wraps `attachShadow`,
+   empty CustomEvent (no detail — reads/carries no page data), Dark Reader
+   precedent cited.
 
 4. **`web_accessible_resources` (`palette.html`/`palette.js`) exposed to
    `<all_urls>`** — lets any site probe `chrome-extension://<id>/palette.html`
@@ -166,6 +170,10 @@ built output; the Chrome build declares it. See "What's already good.")*
    user's own on-device install. (Optional future: Chrome **native messaging** is
    the maximally-blessed companion channel and sidesteps the localhost-permission
    question — architecture change, not a launch requirement.)
+   **DONE (verified 2026-07-24):** already covered by the STORE_LISTING.md
+   "Network / remote code" review note from the P0 rewrite ("structured action
+   data only — never code, never HTML that gets injected"; localhost = user's
+   own machine).
 
 ### P2 — Firefox / AMO specifics
 
@@ -211,6 +219,11 @@ built output; the Chrome build declares it. See "What's already good.")*
      describe the same reality (element text is read transiently and sent only to
      localhost, never stored/collected by us), but the two stores use different
      vocabularies. Make sure the listing copy is consistent with both.
+   **DRAFTED 2026-07-24.** Full dashboard answers (data-type checkboxes,
+   "website content" justification text, three certifications, AMO-"none"
+   reconciliation) added as a "CWS privacy-practices form" section in
+   STORE_LISTING.md — paste at submission time. Remaining user step: fill the
+   actual dashboard + hosted PRIVACY.md URL.
 
 9. **Single-purpose statement** — frame hints + keyboard + palette + tab markers
    (+ optional voice) as the *one* purpose: keyboard/voice navigation of web
