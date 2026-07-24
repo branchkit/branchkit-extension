@@ -24,6 +24,14 @@
 
 declare const __HARNESS_HOOKS__: boolean;
 
+/** Module-level const so esbuild's cross-module constant folding can strip
+ * `if (HARNESS_HOOKS_ENABLED)` branches from release bundles entirely —
+ * the define alone only made harnessHooksEnabled() RETURN false at runtime,
+ * leaving every hook's code (and its fingerprintable strings) in the
+ * shipped bytes (release-gate finding, 2026-07-24). */
+export const HARNESS_HOOKS_ENABLED: boolean =
+  typeof __HARNESS_HOOKS__ === 'undefined' || __HARNESS_HOOKS__;
+
 export function harnessHooksEnabled(): boolean {
-  return typeof __HARNESS_HOOKS__ === 'undefined' || __HARNESS_HOOKS__;
+  return HARNESS_HOOKS_ENABLED;
 }

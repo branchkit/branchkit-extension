@@ -17,5 +17,6 @@ jobs:
       - run: npm ci
       - run: npx tsc --noEmit
       - run: node scripts/check-ceilings.mjs
+      - run: node scripts/check-release-gate.mjs
       - run: npm test
       - run: npm run build

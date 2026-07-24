@@ -316,14 +316,16 @@ class LabelReservoir {
     // Confirm to the SW that these codewords are now wrapper-held, not just
     // reservoir-reserved. The promotion from reserved → assigned makes them
     // routable for voice activations; without it, the SW's getFrameForLabel
-    // would return null and actions would fall through to the broadcast
-    // fallback. The confirm is an ARBITRATED EXCHANGE (review bug #5 /
-    // epoch-handshake Phase 4): the SW also acquires released-then-reclaimed
-    // codewords straight from its free list, and answers `rejected` for any
-    // codeword a different frame won in the release-vs-confirm window — we
-    // must drop those (see handleConfirmResponse). Transport failure stays
-    // best-effort: the next claim burst's confirm re-arbitrates, and the
-    // broadcast fallback handles activations in the interim.
+    // returns null and sealed dispatch REFUSES the pair (no_such_hint) —
+    // the old broadcast fallback is gone, so an unconfirmed label is a
+    // voice-dead badge, not a degraded route (receipts pass, 2026-07-24).
+    // The confirm is an ARBITRATED EXCHANGE (review bug #5 / epoch-handshake
+    // Phase 4): the SW also acquires released-then-reclaimed codewords
+    // straight from its free list, and answers `rejected` for any codeword a
+    // different document won in the release-vs-confirm window — we must drop
+    // those (see handleConfirmResponse). Transport failure stays best-effort
+    // because the next claim burst's confirm re-arbitrates AND the field
+    // tripwire (debug/pool-audit) surfaces any window where it didn't.
     const claimed = result.filter(l => l !== '');
     if (claimed.length > 0) {
       // Track outstanding grants so refill-dedup can reject SW-side re-issues
@@ -348,11 +350,11 @@ class LabelReservoir {
 
   /**
    * Re-assert pool ownership of codewords this frame's wrappers ALREADY
-   * hold. Used on the liveness resync after a transient SW restart: the SW's
-   * init runs clearAllStacks(), so the fresh pool no longer knows these
-   * codewords are ours — until a confirm lands, voice routing falls back to
-   * broadcast and a reloading sibling frame could be granted a codeword
-   * that is still painted here. The Phase 4 confirm exchange re-acquires
+   * hold. Used on the liveness resync after a transient SW restart AND the
+   * bfcache restore: the fresh/released pool no longer knows these codewords
+   * are ours — until a confirm lands, sealed dispatch REFUSES them
+   * (no_such_hint; no broadcast fallback exists), and a reloading sibling
+   * document could be granted a codeword that is still painted here. The Phase 4 confirm exchange re-acquires
    * them straight from the fresh pool's free list; a codeword genuinely
    * lost to another frame comes back through the rejection handler
    * (wrapper strips + re-claims fresh). Single-sender invariant: this is

@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   buildPool,
   auditLabels,
+  poolSnapshot,
   claimLabels,
   confirmLabels,
   releaseLabels,
@@ -641,6 +642,27 @@ describe('label-pool', () => {
       const { unroutable, foreign } = await auditLabels(nextTabId(), 'docA', ['a a', 'a b']);
       expect(unroutable).toEqual(['a a', 'a b']);
       expect(foreign).toEqual([]);
+    });
+  });
+  describe('poolSnapshot (debug-snapshot summary)', () => {
+    it('summarizes per-doc ownership and stale reservations', async () => {
+      vi.useFakeTimers({ now: 5_000_000 });
+      const tab = nextTabId();
+      const a = await claimLabels(tab, 'docA', 0, 3);
+      await confirmLabels(tab, 'docA', 0, a.slice(0, 2)); // 2 assigned, 1 still reserved
+      await claimLabels(tab, 'docB', 0, 4);               // 4 reserved to B
+      vi.setSystemTime(5_000_000 + 6 * 60_000);           // B's (and A's leftover) go stale
+      const snap = await poolSnapshot(tab);
+      expect(snap).not.toBeNull();
+      expect(snap!.assigned_by_doc).toEqual({ docA: 2 });
+      expect(snap!.reserved_by_doc).toEqual({ docA: 1, docB: 4 });
+      expect(snap!.stale_reservations).toBe(5);
+      expect(snap!.free).toBe(POOL_SIZE - 7);
+      vi.useRealTimers();
+    });
+
+    it('returns null for a tab with no stack', async () => {
+      expect(await poolSnapshot(nextTabId())).toBeNull();
     });
   });
 });

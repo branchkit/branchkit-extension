@@ -214,11 +214,14 @@ const RESERVATION_STALE_MS = 5 * 60_000;
  * index-aligned to the request: `result[i]` is the codeword for slot i, or ''
  * when the pool ran out before reaching it. Returns [] if the pool isn't ready.
  *
- * Reserved codewords are NOT routable yet — the frame's reservoir holds them
- * but no wrapper has committed. Voice activations for reserved-only codewords
- * fall through to the broadcast-to-all-frames fallback. A subsequent
- * CONFIRM_LABELS message promotes the entries from `reserved` to `assigned`,
- * at which point routing locks to the confirming frame.
+ * Reserved codewords are NOT routable yet — the document's reservoir holds
+ * them but no wrapper has committed. Under sealed pull-resolution a voice
+ * activation for a reserved-only codeword is REFUSED (no_such_hint) — there
+ * is no broadcast fallback anymore — so a lost/late confirm is a voice-dead
+ * badge, which is why confirms are arbitrated exchanges and why the
+ * rejection path flushes and re-homes (receipts pass, 2026-07-24). A
+ * CONFIRM_LABELS message promotes reserved → assigned, at which point
+ * routing locks to the confirming document.
  *
  * `preferred[i]` is the codeword slot i held before it left the viewport.
  * Pass 1 re-grants any preferred codeword still in the free list OR already
@@ -420,6 +423,41 @@ export async function releaseLabels(tabId: number, docId: string, labels: string
     await saveStack(tabId, stack);
     syncAssignedCache(tabId, stack);
   });
+}
+
+/**
+ * Read-only pool summary for the debug snapshot (Ctrl+Alt+A). Replaces the
+ * paste-a-console-snippet step that was the one human relay in the
+ * 2026-07-24 pool investigations: per-owner counts plus stale-reservation
+ * age, small enough to inline in snapshot.json but enough to diagnose the
+ * whole divergence class (who owns what, what leaked).
+ */
+export async function poolSnapshot(tabId: number): Promise<{
+  free: number;
+  assigned_by_doc: Record<string, number>;
+  reserved_by_doc: Record<string, number>;
+  stale_reservations: number;
+} | null> {
+  const stack = await loadStack(tabId);
+  if (!stack) return null;
+  ensureReservedField(stack);
+  const count = (m: Record<string, LabelOwner>) => {
+    const by: Record<string, number> = {};
+    for (const owner of Object.values(m)) by[owner.d] = (by[owner.d] ?? 0) + 1;
+    return by;
+  };
+  const now = Date.now();
+  let stale = 0;
+  for (const label of Object.keys(stack.reserved)) {
+    const at = stack.reservedAt?.[label];
+    if (at !== undefined && now - at >= RESERVATION_STALE_MS) stale++;
+  }
+  return {
+    free: stack.free.length,
+    assigned_by_doc: count(stack.assigned),
+    reserved_by_doc: count(stack.reserved),
+    stale_reservations: stale,
+  };
 }
 
 /**

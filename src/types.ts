@@ -317,17 +317,18 @@ export interface ConfirmLabelsResponse {
  * Per-tab pool of voice-recognizable codewords. Stored in
  * chrome.storage.session at key `labelStack:${tabId}`.
  *
- * Three states track a codeword's relationship to a frame:
- *   - `free` — available to any frame's next refill
- *   - `reserved` — a frame's reservoir has the codeword but no wrapper
- *     has actually committed to using it. NOT routable: voice
- *     activations for reserved codewords fall through to the
- *     broadcast-to-all-frames fallback so the frame that DOES have a
- *     matching wrapper (typically a different one — iframes routinely
- *     pre-fetch codewords they never use) gets the chance to handle it.
- *   - `assigned` — a wrapper in a specific frame has claimed the
- *     codeword and confirmed via CONFIRM_LABELS. The frame is the
- *     routable owner.
+ * Three states track a codeword's relationship to a document:
+ *   - `free` — available to any document's next refill
+ *   - `reserved` — a document's reservoir has the codeword but no wrapper
+ *     has actually committed to using it. NOT routable: under sealed
+ *     pull-resolution a voice activation for a reserved-only codeword is
+ *     REFUSED (no_such_hint) — the historical broadcast fallback was
+ *     removed 2026-07-18/19 — so iframe reservoirs pre-fetching codewords
+ *     they never use can neither capture nor degrade a sibling's
+ *     activation (receipts pass, 2026-07-24).
+ *   - `assigned` — a wrapper in a specific document has claimed the
+ *     codeword and confirmed via CONFIRM_LABELS. Its owner is the
+ *     routable target (`f` carries the frame to send to).
  *
  * Pre-PR-6 the reserved/assigned distinction didn't exist; refill
  * marked codewords assigned-to-frame immediately, so iframe reservoirs

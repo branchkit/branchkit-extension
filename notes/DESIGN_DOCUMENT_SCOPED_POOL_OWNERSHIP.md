@@ -89,3 +89,21 @@ numeric owner shape is discarded wholesale (pre-launch, no back-compat).
 - The plugin-side frame sessions (`/grammar/batch` frame_id) still key by
   frame; they are display-grade post-demotion, so the same gap there is
   cosmetic. Revisit only if the HUD menus show stale-frame residue.
+
+## 6. Frame-keyed state audit (2026-07-24, follow-up sweep)
+
+The pool was re-keyed; this sweep classified every OTHER frame-keyed
+structure for the same document to prove the class is closed, not just the
+instance. Verdict: nothing else is dispatch-critical; four cosmetic
+residues, none worth machinery today.
+
+| State | Keying | Prerender/bfcache behavior | Class |
+|---|---|---|---|
+| `videoPresenceByTab` (SW media) | (tab, frameId) | provisional-frame report goes stale until the next top-frame nav clears the tab's map; worst case a stale "controllable" flag no-ops a media verb | cosmetic, nav-healed |
+| codeword memory (SW) | `codewordMemory:tab:frame` | a prerendered document's remembered codewords land under the provisional frame; post-activation recall misses them (fresh labels issued) and the key idles until tab close (bounded: 200/frame cap) | cosmetic recall miss |
+| `pageSession.myFrameId` (CS) | FRAME_ID sent once at Port connect ("never changes" — false across prerender activation) | only gates the LEGACY id-based activate tiers and diagnostic strings; sealed dispatches carry no frame_id and codeword resolution is authoritative | cosmetic |
+| plugin FrameSessions (Go, `/grammar/batch` frame_id) | per frame | display-grade since the demotion arc — HUD menus only | cosmetic (already recorded) |
+
+Re-audit trigger: if any of these graduates from display/recall duty back
+into a dispatch or matching path, it inherits the pool's document-keying
+requirement at that moment.

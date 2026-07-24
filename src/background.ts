@@ -9,7 +9,7 @@
  */
 
 import { Message, ScannedElement, HintVisibility } from './types';
-import { claimLabels, confirmLabels, releaseLabels, releaseDocument, clearAllStacks, alphabetsEqual, senderMayMutatePool, auditLabels } from './labels/label-pool';
+import { claimLabels, confirmLabels, releaseLabels, releaseDocument, clearAllStacks, alphabetsEqual, senderMayMutatePool, auditLabels, poolSnapshot } from './labels/label-pool';
 import { setAlphabet } from './labels/words';
 import { buildCommandContributions } from './command-catalog';
 import { rememberCodewords, clearCodewordMemory, recallCodewords } from './labels/codeword-memory';
@@ -212,6 +212,18 @@ async function handleDebugSnapshot(
     console.log('[branchkit] painted/matchable reconcile:', report.verdict.join(' | '), report);
   } catch (e) {
     console.warn('[branchkit] reconcile failed (non-fatal):', e);
+  }
+
+  // Attach the SW pool's view for this tab — the routing truth the CS
+  // cannot see. Joined against the CS's painted set, this is the whole
+  // painted-vs-routable diagnosis in one file (no SW-console spelunking).
+  try {
+    const senderTab = sender.tab?.id;
+    if (typeof senderTab === 'number') {
+      (payload as { sw_pool?: unknown }).sw_pool = await poolSnapshot(senderTab);
+    }
+  } catch {
+    // diagnostic-only; never block the snapshot
   }
 
   // Step 1: structured-state POST.
@@ -775,12 +787,14 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     // codewords to wrappers. An arbitrated EXCHANGE (review bug #5): promotes
     // reserved → assigned, directly acquires from free (the released-then-
     // locally-reclaimed case the old fire-and-forget silently dropped), and
-    // answers `rejected` for codewords another frame won so the sender drops
-    // them. Unconfirmed reserved labels remain NOT routable — the SW falls
-    // back to broadcasting actions to all frames so iframe reservoirs holding
-    // unused codewords don't capture activations meant for a sibling
-    // frame's wrapper. See docs/completed/DESIGN_ELEMENT_IDENTITY_REGISTRY.md
-    // and the QuickBase `fine jury` failure 2026-06-05T17:18:37.
+    // answers `rejected` for codewords another document won so the sender
+    // drops them. Unconfirmed reserved labels remain NOT routable — under
+    // sealed pull-resolution that means REFUSED (no_such_hint), which is
+    // deliberate: it's what kept iframe reservoirs holding unused codewords
+    // from capturing activations meant for a sibling's wrapper (the
+    // QuickBase `fine jury` failure 2026-06-05T17:18:37), and the refusal
+    // now reports instead of misrouting. See
+    // docs/completed/DESIGN_ELEMENT_IDENTITY_REGISTRY.md.
     const tabId = _sender.tab?.id;
     const frameId = _sender.frameId;
     if (typeof tabId !== 'number' || typeof frameId !== 'number' || !Array.isArray(message.labels)) {
