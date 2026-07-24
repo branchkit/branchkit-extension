@@ -1,8 +1,11 @@
 # Restructure round 3 — re-extraction, the feature-module boundary, and the ratchet
 
-**Status:** proposal, drafted 2026-07-24. Follow-on to
+**Status:** EXECUTED 2026-07-24 (same day as the draft), all commits local,
+unit suite green (1,181 → 1,432 tests), builds clean. **One consolidated
+real-browser soak still owed before push** — see section 9. Two lifts were
+rejected-with-rationale during execution (section 8). Follow-on to
 notes/DESIGN_EXTENSION_RESTRUCTURE.md (the June arc, Tiers 0-3 landed) after
-its gains were erased a second time. No code has moved yet.
+its gains were erased a second time.
 
 **One-line motivation:** the June restructure took `content.ts` from 4,134 to
 ~3,000 lines and predicted that "a plan that doesn't change where fixes land
@@ -256,3 +259,87 @@ work.
 - `wireSettleSignals` fold: into `PageSession.start` directly, or a
   `lifecycle/settle-wiring.ts` it calls? Decide when lifting — whichever
   leaves `PageSession` readable.
+
+---
+
+## 8. Execution log (2026-07-24) — what landed, what changed, what was rejected
+
+Eight commits, each behavior-equivalent with a spec in the same commit:
+
+1. `plugin/sse-transport.ts` — stream lifecycle for both engines, retry
+   ladder, voice-pause intent, connection paint; behavior injected as four
+   hooks (onPreConnect / onConnectedEdge / onEvent / onAlphabet) wired in
+   background.ts. 16 tests. background.ts 2,273 → 1,978.
+2. `plugin/plugin-api.ts` + `background/references.ts`. **Refinement over
+   the section-1.4 sketch:** the typed endpoint wrappers did NOT consolidate
+   onto actuator-client — actuator-client stays pure transport (discovery,
+   creds, authed POST); plugin-api owns what the endpoints MEAN, including
+   postGrammarBatch's letter<->spoken translation. → 1,732.
+3. `background/tab-actions.ts`, `background/palette.ts`,
+   `background/media.ts`, `background/tab-sessions.ts` — explicit wiring
+   (initMedia / startDeadTabSweep); chrome listeners stay in background.ts
+   as routing. 30 tests. → 1,292.
+4. `debug/perf-report.ts` — paint sampler, discovery/latency stats,
+   snapshotExtras; the buildPerfSnapshot integrator stays per the June
+   decision. content.ts 4,641 → 4,354.
+5. `rules/rule-apply.ts` — compiled-rule state + appliers +
+   applyUserRuleToScan; wiring stays. **One reasoned seam change:**
+   applyRuleBadgeSize no longer calls scheduleDoScan (both call sites
+   already schedule on every size-changing path; the detach-all
+   invalidation stays). → 4,252.
+6. `scan/scan-orchestrator.ts` — doScan/scheduleDoScan/doScanBatched/
+   processScanBatch verbatim. Enabling moves to designated homes:
+   hintMachineryEnabled + suspended onto PageSession, claimCounters into
+   debug/perf-counters, rememberClaimedCodewords into labels/codeword-recall,
+   observeInvisibleCandidates into observe/visibility-tracker. → 3,792.
+7. `activate/selection-commands.ts` — the first Phase-1 feature module:
+   owns handlers AND registration (registerSelectionCommands from the
+   bootstrap's feature-manifest block; nothing registers at import time,
+   spec-pinned). → 3,625.
+8. Phase 3 ratchet: `monolith-ceilings.json` + `scripts/check-ceilings.mjs`
+   as a CI step (fails on exceed AND on >100 under). Ceilings:
+   content.ts 3700, background.ts 1350.
+
+**Rejected-with-rationale (do not re-attempt without new facts):**
+
+- **`lifecycle/machinery-gate.ts` (section 1.3's activate/suspend/resume
+  cluster).** Its resurrection guards call recordOrphanHit and its boot
+  wiring interleaves with kickInitialScan/showBadges — this is the one
+  content cluster where a "verbatim relocation" still reorders init timing
+  in exactly the class DESIGN_ORPHAN_CS_TEARDOWN_RETROSPECTIVE.md fences.
+  Per section 4.3: it shrinks or waits. It waits, until the orphan-CS paint
+  arc (PLAN_RELIABILITY_CONSOLIDATION section 6 item 5) gives it a proper
+  home.
+- **The wireSettleSignals fold.** It is already the single wiring site the
+  June settle-engine arc deliberately built (step 3); relocating it buys
+  line count but no boundary, at listener-registration-timing risk.
+
+End state vs the 1.3 target: content.ts 3,625 (target ~1,800 assumed the
+two rejected lifts plus the nav/teardown cluster; those stay by fence, not
+by omission). background.ts 1,292 — routing + wiring + init, its intended
+shape.
+
+## 9. The consolidated soak (owed before push)
+
+Per section 3, one real-browser soak gates the push of the whole batch.
+Chrome AND Firefox (the SSE engines differ). Watch list:
+
+- **SSE transport:** kill + restart the BranchKit app mid-session → badges
+  must become matchable again without a tab reload (host-restart healer on
+  the connect edge). Pause voice from the popup → no reconnect chatter in
+  the SW log; resume → reconnects. Leave the host down 2+ min → retry
+  ladder settles at its 30s cap, standalone hints/keyboard unaffected.
+- **Grammar path:** scroll churn on a heavy page (QuickBase report /
+  YouTube results) → badges paint at walk speed, voice matches them;
+  no over-/under-sync in the plugin log (postGrammarBatch moved modules).
+- **Feature re-registration:** marks set/jump (m/\`), caret + visual mode by
+  key and by voice ("select word", "copy that"), select_to, go_next/go_up,
+  copy-URL, tab verbs + zoom by key and voice, palette open → voice select,
+  "pause video" from another app (media routing), nudge-preview authoring
+  from the popup.
+- **Machinery gates (flags moved onto PageSession):** hide a tab 30s →
+  suspend breadcrumb; reshow → catch-up scan + badges converge; a tab
+  loaded in the background activates on first show.
+- **Reload survival (standing requirement for ANY background.ts change):**
+  reload at chrome://extensions → already-open heavy tabs recover without
+  close+reopen, no double-CS, no stuck palette tag.
