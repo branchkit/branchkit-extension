@@ -5,10 +5,13 @@
  * activated document's badges all route — under document-scoped ownership
  * the claims survive the transition regardless of when they were made.
  *
- * Prerender may be declined under automation (or the L1 economy deny may
- * defer all claiming until activation — both are fine); the fixture records
- * document.prerendering at parse. If the document was never prerendered at
- * all, SKIP loudly — a plain navigation proves nothing here.
+ * KNOWN PERMANENT SKIP under Playwright (2026-07-24 shakeout): Chrome's own
+ * verdict is PrerenderingDisabledByDevTools — ANY CDP-attached client
+ * disables Prerender2, and CDP attachment is Playwright's mechanism. The
+ * scenario stays wired so it self-reports the day Chrome lifts this (or a
+ * tab-target-mode driver appears); until then the prerender transition is
+ * covered by the field tripwire + the doc-scoped pool making the class
+ * structurally safe + the frame-transition unit tests.
  */
 
 import { waitForBadges, poolAudit, assertClean, settle, Skip } from '../driver.mjs';
@@ -16,6 +19,23 @@ import { waitForBadges, poolAudit, assertClean, settle, Skip } from '../driver.m
 export async function run({ ctx, base }) {
   const page = await ctx.newPage();
   try {
+    // Ask Chrome why (or whether) the prerender started: the Preload domain
+    // reports per-attempt status incl. the disallowing reason.
+    const cdp = await ctx.newCDPSession(page);
+    const preloadStatus = [];
+    try {
+      await cdp.send('Preload.enable');
+      cdp.on('Preload.prerenderStatusUpdated', (e) => {
+        preloadStatus.push(e.prerenderStatus ? `${e.status}:${e.prerenderStatus}` : e.status);
+      });
+      cdp.on('Preload.preloadEnabledStateUpdated', (e) => {
+        preloadStatus.push(`enabledState=${JSON.stringify(e)}`);
+      });
+      cdp.on('Preload.prerenderAttemptCompleted', (e) => {
+        preloadStatus.push(`final=${e.finalStatus}${e.disallowedApiMethod ? ':' + e.disallowedApiMethod : ''}`);
+      });
+    } catch { preloadStatus.push('Preload domain unavailable'); }
+
     await page.goto(`${base}/prerender-a.html`);
     await waitForBadges(page);
     // Give the speculation-rules prerender time to start and (with the L1
@@ -26,7 +46,8 @@ export async function run({ ctx, base }) {
     await page.waitForFunction(() => document.documentElement.dataset.bornPrerendering !== undefined);
     const born = await page.evaluate(() => document.documentElement.dataset.bornPrerendering);
     if (born !== 'true') {
-      throw new Skip('browser did not prerender B under automation (bornPrerendering=false)');
+      const why = preloadStatus.length ? ` — Preload domain: ${[...new Set(preloadStatus)].slice(0, 6).join(' | ')}` : '';
+      throw new Skip(`browser did not prerender B under automation (bornPrerendering=false)${why}`);
     }
 
     const badges = await waitForBadges(page);

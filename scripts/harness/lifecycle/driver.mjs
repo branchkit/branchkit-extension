@@ -39,7 +39,9 @@ export async function startFixtureServer() {
     res.writeHead(200, { 'content-type': MIME[extname(path)] ?? 'text/plain' });
     res.end(readFileSync(path));
   });
-  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  // Listen on all interfaces so both http://127.0.0.1 and http://localhost
+  // (the bfcache scenario's cross-origin pair) resolve to this server.
+  await new Promise((r) => server.listen(0, r));
   const { port } = server.address();
   return { server, base: `http://127.0.0.1:${port}` };
 }
@@ -53,6 +55,12 @@ export async function launchHarness(profileSuffix) {
       // declined (never assume the flag worked).
       '--enable-features=BackForwardCache,Prerender2',
     ],
+    contextOptions: {
+      // Chrome's own bfcache verdict named BackForwardCacheDisabledByCommandLine:
+      // Playwright passes --disable-back-forward-cache by default. Drop it —
+      // the bfcache scenario is meaningless with it in place.
+      ignoreDefaultArgs: ['--disable-back-forward-cache'],
+    },
   });
   // Badges paint automatically (the user's always-mode is the harness mode).
   await sw.evaluate(async () => {

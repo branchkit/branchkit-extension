@@ -14,19 +14,37 @@ import { waitForBadges, poolAudit, assertClean, settle, Skip } from '../driver.m
 export async function run({ ctx, base }) {
   const page = await ctx.newPage();
   try {
+    // Chrome will name its own bfcache objections: collect
+    // notRestoredExplanations so a skip is actionable, not a shrug.
+    const cdp = await ctx.newCDPSession(page);
+    await cdp.send('Page.enable');
+    const explanations = [];
+    cdp.on('Page.backForwardCacheNotUsed', (e) => {
+      for (const r of e.notRestoredExplanations ?? []) explanations.push(r.reason);
+    });
+
     await page.goto(`${base}/a.html`);
     await waitForBadges(page);
     await settle();
 
-    await page.goto(`${base}/b.html`);
+    // Cross-ORIGIN hop (127.0.0.1 → localhost, same server): Chrome's first
+    // shakeout verdict was BrowsingInstanceNotSwapped — same-origin A→B kept
+    // the browsing instance under automation, which disqualifies bfcache.
+    // A cross-origin navigation forces the swap.
+    const crossBase = base.replace('127.0.0.1', 'localhost');
+    await page.goto(`${crossBase}/b.html`);
     await waitForBadges(page);
     await settle();
 
-    await page.goBack();
+    // A bfcache restore fires pageshow, not load — Playwright's default
+    // goBack() waits for load and times out on a REAL restore. Commit-level
+    // wait, then our own pageshow marker is the completion signal.
+    await page.goBack({ waitUntil: 'commit' });
     await page.waitForFunction(() => document.documentElement.dataset.persisted !== undefined);
     const persisted = await page.evaluate(() => document.documentElement.dataset.persisted);
     if (persisted !== 'true') {
-      throw new Skip('browser did not engage bfcache under automation (persisted=false)');
+      const why = explanations.length ? ` — Chrome's reasons: ${[...new Set(explanations)].join(', ')}` : '';
+      throw new Skip(`browser did not engage bfcache under automation (persisted=false)${why}`);
     }
 
     const badges = await waitForBadges(page);

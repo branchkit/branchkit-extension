@@ -109,7 +109,33 @@ back/forward; reload → bfcache restore; SW kill mid-scroll → resync.
   a scenario isn't merged without being wired into the runner — the same
   "not extracted until it has a spec" discipline, applied to harnesses.
 
-## 7. Shakeout findings (2026-07-24) — engagement blockers
+## 7. Shakeout findings (2026-07-24) — engagement outcomes (RESOLVED same day)
+
+Final state after driving each blocker to ground with Chrome's own
+diagnostics (CDP Page.backForwardCacheNotUsed / Preload domain):
+
+- **bfcache: ENGAGED → PASS.** Two Playwright artifacts, both fixed in the
+  driver: Playwright passes `--disable-back-forward-cache` by default
+  (dropped via ignoreDefaultArgs — Chrome's verdict named
+  BackForwardCacheDisabledByCommandLine), and `page.goBack()` waits for a
+  `load` event a real restore never fires (commit-level wait + the
+  fixture's pageshow marker instead). Also requires the cross-origin hop
+  (127.0.0.1 → localhost): same-origin navigation kept the browsing
+  instance (BrowsingInstanceNotSwapped).
+- **reload: ENGAGED → PASS.** chrome.runtime.reload() is inert for
+  command-line-loaded extensions, but the chrome://extensions dev-mode
+  reload button exists and is clickable for them — the scenario drives the
+  real user path and asserts post-reinject recovery.
+- **prerender: PERMANENT LOUD SKIP.** Chrome's verdict:
+  PrerenderingDisabledByDevTools — any CDP-attached client disables
+  Prerender2, and CDP is Playwright's mechanism. The scenario stays wired
+  and self-reports if Chrome ever lifts this; coverage meanwhile = field
+  tripwire + doc-scoped pool structural safety + frame-transition unit
+  tests.
+
+Original blocker notes kept below for the archaeology.
+
+### Original blocker notes
 
 The skip design immediately earned its keep: three of four transitions are
 not engaged by default under Playwright/CDP, and each skip names why
