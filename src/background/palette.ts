@@ -16,6 +16,7 @@
 import { PaletteVoiceEntry, PaletteVoiceRow } from '../types';
 import type { PaletteDispatch } from '../palette/model';
 import { ensureConnected, postToPlugin } from '../plugin/actuator-client';
+import { focusWindowAndActivateTab } from './tab-actions';
 import { connId } from './state';
 
 interface PaletteVoiceSession {
@@ -64,14 +65,8 @@ export async function handlePaletteAction(
     } catch { /* content script gone — the iframe died with the page */ }
   }
   if (action.kind === 'switch_tab') {
-    // Same focus-window-then-activate dispatch as switchToTabById — cross-
-    // window by design. A stale id (tab closed while the palette was open)
-    // is a silent no-op.
-    try {
-      const t = await chrome.tabs.get(action.tabId);
-      await chrome.windows.update(t.windowId, { focused: true });
-      await chrome.tabs.update(action.tabId, { active: true });
-    } catch { /* tab gone */ }
+    // A stale id (tab closed while the palette was open) is a silent no-op.
+    await focusWindowAndActivateTab(action.tabId);
   } else if (action.kind === 'command' && typeof originTabId === 'number') {
     // Through the content dispatcher in the top frame — the exact semantics
     // of pressing the command's keybind (tab verbs bounce back here as

@@ -30,6 +30,23 @@ export const ZOOM_ACTION_BY_ID: Readonly<Record<string, ZoomAction>> = {
   zoom_in: 'in', zoom_out: 'out', zoom_reset: 'reset',
 };
 
+// The one cross-window tab jump: focus the tab's window, then activate the
+// tab. Shared by the last_active verb, "tab <codeword>" (switchToTabById),
+// and the palette's switch_tab dispatch — cross-window by design in all
+// three. Returns false instead of throwing on a stale/closed id so each
+// caller keeps its own miss policy (try the next MRU candidate, refresh the
+// tab collection, or silently no-op).
+export async function focusWindowAndActivateTab(tabId: number): Promise<boolean> {
+  try {
+    const t = await chrome.tabs.get(tabId);
+    await chrome.windows.update(t.windowId, { focused: true });
+    await chrome.tabs.update(tabId, { active: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Tab verbs (notes/DESIGN_TAB_NAVIGATION.md, "Tab verbs"). `index` is goto's
 // 1-based tab position.
 export async function handleTabAction(action: TabAction, index?: number): Promise<void> {
@@ -47,12 +64,8 @@ export async function handleTabAction(action: TabAction, index?: number): Promis
     // Walk the MRU stack for the newest still-existing tab that isn't the
     // current one; closed tabs stay in the stack, so skip the dead ids.
     for (const id of previousCandidates(await loadMru(), bgState.cachedActiveTabId)) {
-      try {
-        const t = await chrome.tabs.get(id);
-        await chrome.windows.update(t.windowId, { focused: true });
-        await chrome.tabs.update(id, { active: true });
-        return;
-      } catch { /* tab gone — try the next candidate */ }
+      if (await focusWindowAndActivateTab(id)) return;
+      // tab gone — try the next candidate
     }
     return;
   }
@@ -125,16 +138,11 @@ export async function handleZoomAction(action: ZoomAction): Promise<void> {
 }
 
 // Voice "tab <codeword>": the matched collection entry's tab_id arrives as an
-// action param (the browser_tabs collection's value_field). Same focus-window-
-// then-activate dispatch as handleTabAction's last_active branch — cross-window
-// by design. A stale id (tab closed since the last publish) just refreshes the
-// collection so the dead entry drops.
+// action param (the browser_tabs collection's value_field). A stale id (tab
+// closed since the last publish) just refreshes the collection so the dead
+// entry drops.
 export async function switchToTabById(tabId: number): Promise<void> {
-  try {
-    const t = await chrome.tabs.get(tabId);
-    await chrome.windows.update(t.windowId, { focused: true });
-    await chrome.tabs.update(tabId, { active: true });
-  } catch {
+  if (!(await focusWindowAndActivateTab(tabId))) {
     scheduleTabPublish();
   }
 }
