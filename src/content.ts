@@ -21,24 +21,24 @@ import type { CodewordMemoryEntry } from './labels/codeword-memory';
 import { loadRecall, recalledCodewords, rememberClaimedCodewords, resolvePreferredCodeword, isRecallLoaded } from './labels/codeword-recall';
 import { type RebindCounters } from './labels/rebind';
 import { resolveTarget } from './activate/activate-resolution';
-import { schedulePointerVisibilitySweep, setPointerRecheckScopeEnabled, connectVisibilityMO, teardownVisibilityTracker, observeInvisibleCandidates } from './observe/visibility-tracker';
-import { rebindCounters, LIMBO_DEADLINE_MS, collectLimboWrappers, collectStrongKeyIndex, dropDisconnectedWrappers, finalizeExpiredLimboWrappers } from './observe/limbo';
+import { schedulePointerVisibilitySweep, setPointerRecheckScopeEnabled, connectVisibilityMO, observeInvisibleCandidates } from './observe/visibility-tracker';
+import { rebindCounters, collectLimboWrappers, collectStrongKeyIndex, dropDisconnectedWrappers } from './observe/limbo';
 import { attachWrapper, detachWrapper, seedPreferredFromMemory, attachDiscovered } from './core/wrapper-lifecycle';
-import { attachPageMutationObserver, teardownMutationSource, getDomAddEpoch } from './observe/mutation-source';
+import { getDomAddEpoch } from './observe/mutation-source';
 import { setSweepGateEnabled } from './lifecycle/band-sweep-gate';
 import { firehoseStep } from './debug/firehose';
 import { bkLog } from './debug/bk-log';
 import { harnessHooksEnabled } from './debug/harness-hooks';
 import { store } from './core/store';
 import { HintBadge } from './render/hints';
-import { reconcilePass, drain as drainReconcilePositioner, reconcileRegistrySize, lastReconcileChangedWrites } from './render/reconcile-positioner';
+import { reconcilePass, reconcileRegistrySize, lastReconcileChangedWrites } from './render/reconcile-positioner';
 import { onContainerResize } from './observe/container-resize-tracker';
 import { onTransformAncestorMutation, setTransformTriggerEnabled } from './observe/transform-ancestor-tracker';
 import { onTargetMutation } from './observe/target-mutation-tracker';
 import { setOcclusionEnabled, isOccludedLive } from './observe/occlusion';
 import { VIEWPORT_MARGIN_PX } from './observe/intersection-tracker';
 import { setOcclusionMemoMode, occlusionMemoAllDirty, occlusionMemoNoteTarget, occlusionMemoNotePointer } from './observe/occlusion-memo';
-import { reconcileClipObservation, drainClipObservers, setClipObserverEnabled } from './observe/clip-observer';
+import { reconcileClipObservation, setClipObserverEnabled } from './observe/clip-observer';
 import { cacheLayout, cacheConstruction, clearLayoutCache, isRectOnScreen, geometryInBand } from './layout-cache';
 import { placeBadges, invalidateProbe } from './placement';
 import { activateElement, dispatchHover, resolveNavTarget, type ActivationResult } from './activate/event-sequence';
@@ -129,6 +129,7 @@ import {
 import { notePaintSamplerScroll, snapshotExtras } from './debug/perf-report';
 import { initPoolAudit } from './debug/pool-audit';
 import { probeBfcacheRestore } from './debug/bfcache-probe';
+import { registerMachineryGate, activateHintMachinery, teardownMachinery } from './lifecycle/machinery-gate';
 import { loadConfig, getDisplayMode, getHintVisibility } from './config';
 import {
   initLabelSync,
@@ -2050,26 +2051,9 @@ function recordOrphanHit(): void {
 // PREEMPT on the voice activate-click path (unobserve-before-swap), not a
 // session teardown — do not fold it in.
 function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
-  // Suspend/resume-cycled machinery (see contract above). Each call tears
-  // down the CURRENT generation; all are idempotent module functions.
-  teardownMutationSource();
-  teardownVisibilityTracker();
-  // The discovery drain is a yield task now (not cancellable) — clear the
-  // queue and reset the flag; drainDiscovery's isTornDown guard makes the
-  // already-scheduled continuation inert.
-  pageSession.discoveryScheduled = false;
-  pageSession.pendingDiscoveryRoots.clear();
-  // Stop the reconcile scroll loop and drop every reconcile-mode badge from the
-  // positioner registry. The host-removal sweep below removes hosts via raw DOM
-  // (bypassing HintBadge.remove(), the only per-badge unregister site), so
-  // without this the registry would retain dead badges and a stray settle/scroll
-  // pass could iterate and reflow detached frames. drain() is a no-op when the
-  // flag is off (empty registry).
-  try {
-    engine.stopScrollLoop();
-    drainReconcilePositioner();
-    drainClipObservers();
-  } catch { /* same */ }
+  // Suspend/resume-cycled machinery (see contract above) — owned by the
+  // machinery-gate module, which cycles it.
+  teardownMachinery();
   // Every session-owned resource: listeners, timers, rAFs, AND the
   // session-constructed observers (tracker, resize, attention — registered
   // at their construction site in pageSession.start, so this list cannot
@@ -3252,120 +3236,22 @@ function reevaluateAttribute(target: Element): boolean {
 // observer + the limbo sweeper. Idempotent. The 'resize' trigger means a
 // previously-ineligible frame grew, so it also kicks an initial scan (the
 // module-load alphabet callback already scans eligible-at-load frames).
-function activateHintMachinery(trigger: 'load' | 'resize'): void {
-  // Resurrection guard: a torn-down orphan (e.g. a visibilitychange after
-  // supersede) must not re-arm the MutationObserver + scan loop that teardown
-  // stopped. See notes/DESIGN_TEARDOWN_OWNERSHIP.md.
-  if (pageSession.isTornDown) { recordOrphanHit(); return; }
-  if (pageSession.hintMachineryEnabled) return;
-  pageSession.hintMachineryEnabled = true;
-  // Open the boot window: convergence backstops run hot while the page's
-  // app renders (late-reveal regions the MO pre-dates — the QuickBase
-  // tab-reopen trail). See BOOT_WINDOW_MS in settle-engine.ts.
-  engine.noteActivated();
-  attachPageMutationObserver();
-  // The limbo finalize sweep, registered exactly once per session (this
-  // function is guarded by pageSession.hintMachineryEnabled). A pausable: it stops while
-  // the tab is hidden — a 250ms whole-store walk was the second continuous
-  // hidden-tab cost after the MO (long-session-perf finding 7) — and
-  // teardownAll clears it instead of leaving an orphan sweeper running.
-  // onVisibilityChange drives pause/resume at the registry level.
-  pageSession.resources.pausableInterval(finalizeExpiredLimboWrappers, LIMBO_DEADLINE_MS);
-  if (trigger === 'resize') {
-    // Subframe that just grew past the eligibility threshold. The module-
-    // load reservoir warm-up was skipped (frame was too small / blank),
-    // so warm it now before the first scan so the IO claim path doesn't
-    // pay an IPC round-trip on its first batch.
-    if (typeof chrome !== 'undefined' && chrome.runtime) {
-      void labelReservoir.ensureReady();
-    }
-    pageSession.resources.timeout(() => doScan(), 0);
-  }
-}
-
-// Lever 3 (hidden-tab suspend): stop reacting to the page's DOM churn while the
-// tab is backgrounded. Disconnect ONLY the page MutationObserver (the lone
-// continuous cost in a hidden tab — the IO/resize observers are dormant without
-// scroll/relayout) and cancel the discovery rAF. Preserve wrappers, codewords,
-// pool claims, badges, registry: this is reversible, NOT teardown
-// (cf. quiesceOrphan). See notes/DESIGN_HIDDEN_TAB_SUSPEND.md.
-function suspendHintMachinery(): void {
-  if (pageSession.suspended || !pageSession.hintMachineryEnabled) return;
-  pageSession.suspended = true;
-  teardownMutationSource();
-  // The limbo finalize sweep pauses too, but at the registry level: the
-  // caller (onVisibilityChange) follows this with resources.pause(), which
-  // stops every pausable interval. Pausing it is safe: the mutation source
-  // is now down, so no new wrappers enter limbo while hidden; resume re-arms
-  // it and doScan reaps anything expired (long-session-perf finding 7).
-  // The discovery drain is a yield task (not cancellable): clearing the
-  // queue makes an already-scheduled continuation a no-op (empty-set
-  // return), and the reset flag lets resume re-schedule cleanly.
-  pageSession.discoveryScheduled = false;
-  pageSession.pendingDiscoveryRoots.clear();
-  bkLog('BK_SUSPEND', { url: trimFrameUrl(window.location.href), wrappers: store.all.length });
-}
-
-// Re-arm the page MutationObserver and catch up on whatever the page mutated
-// while we were suspended: doScan discovers new content + drops detached
-// wrappers, reconcile refreshes viewport claims. Mirrors the from_cache
-// reactivate path; doScan's scanChain serializes this against the background's
-// reactivate so there's no duplicate-codeword race.
-function resumeHintMachinery(): void {
-  // Resurrection guard (see activateHintMachinery): a torn-down orphan that
-  // goes visible must not resume the MutationObserver + scan loop.
-  if (pageSession.isTornDown) { recordOrphanHit(); return; }
-  if (!pageSession.suspended) return;
-  pageSession.suspended = false;
-  // Re-opening after a hidden-tab suspend has the same late-render shape as
-  // boot (the suspend window went unobserved) — run the backstops hot again.
-  engine.noteActivated();
-  attachPageMutationObserver();
-  void doScan().then(() => {
-    engine.reconcile();
-    void pageSession.tracker.flushNow();
-    if (pageSession.badgesVisible) showBadges();
-  });
-  bkLog('BK_RESUME', { url: trimFrameUrl(window.location.href), wrappers: store.all.length });
-}
-
-// One persistent visibilitychange handler driving the deferred/active/suspended
-// state machine for an eligible frame, plus the registry-level pause/resume of
-// every pausable interval (limbo sweep, top-frame watchdog + perf publishers).
-// A subframe inherits the top document's visibility, so the whole tab
-// transitions as a unit.
-//   - Lever 2 (lazy discovery): a tab that loaded hidden activates on first show.
-//   - Lever 3 (suspend): an active tab suspends when hidden, resumes when shown.
-function onVisibilityChange(): void {
-  if (document.visibilityState === 'visible') {
-    // Re-arm pausables BEFORE the eligibility gate and the machinery resume:
-    // pausables exist independently of hint machinery (the top-frame watchdog
-    // and perf publishers run even before activation), and resumeHintMachinery's
-    // doScan should run with a live limbo sweep.
-    pageSession.resources.resume();
-    if (!frameMayHoldHints()) return;
-    if (!pageSession.hintMachineryEnabled) {
-      // First show of a tab that loaded hidden. 'load' relies on the storage
-      // callback for the first scan, but that returned early while hidden —
-      // kick it here.
-      activateHintMachinery('load');
-      kickInitialScan();
-    } else if (pageSession.suspended) {
-      resumeHintMachinery();
-    }
-  } else {
-    if (frameMayHoldHints() && pageSession.hintMachineryEnabled && !pageSession.suspended) {
-      suspendHintMachinery();
-    }
-    pageSession.resources.pause();
-  }
-}
-pageSession.resources.listen(document, 'visibilitychange', onVisibilityChange);
-// Initial pausable state must match initial visibility: a tab loaded hidden
-// (background open, prerender) pays no pausable wakeups until first shown.
-// Module evaluation is synchronous, so intervals armed earlier in this file
-// (the top-frame watchdog) cannot tick before this pause lands.
-if (document.visibilityState !== 'visible') pageSession.resources.pause();
+// --- Machinery gate (lifecycle/machinery-gate.ts) ---
+//
+// activate/suspend/resume + the visibilitychange state machine moved to the
+// machinery-gate module (round-3 lift, landed by the teardown arc layer 5).
+// Registration happens HERE — the same point in module evaluation the inline
+// listener always occupied — so listener order and the initial-pause
+// guarantee ("intervals armed earlier in this file cannot tick before the
+// pause lands") are unchanged. See the module's timing contract.
+registerMachineryGate({
+  engine,
+  recordOrphanHit,
+  kickInitialScan,
+  showBadges,
+  frameMayHoldHints,
+  trimFrameUrl,
+});
 
 if (frameMayHoldHints()) {
   // Visible (foreground) tab: activate now (the storage callback kicks the
