@@ -14,7 +14,7 @@ import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearStack, cl
 import { setAlphabet, tokenToSpokenCodeword, spokenCodewordToToken } from './labels/words';
 import { buildCommandContributions } from './command-catalog';
 import { rememberCodewords, clearCodewordMemory, recallCodewords } from './labels/codeword-memory';
-import { discoverPlugin, ensureConnected, postToPlugin, getFromPlugin, getPluginPort, getPluginToken, getActuatorJson, setVoicePaused } from './plugin/actuator-client';
+import { discoverPlugin, ensureConnected, postToPlugin, getFromPlugin, getPluginPort, getPluginToken, getActuatorJson } from './plugin/actuator-client';
 import { buildReconcileReport, type ReconcileWrapper, type ReconcileReport, type MatchableView } from './debug/reconcile';
 import { cycleTabIndex } from './background/tab-nav';
 import { setLocalMark, getLocalMark, setGlobalMark, gotoGlobalMark } from './background/marks';
@@ -28,148 +28,64 @@ import {
 import { ensureContentScriptInjected } from './background/injection';
 import { bgState, connId } from './background/state';
 import { republishActiveTab, broadcastToAllTabs, resolveActiveContentTab, notifyActiveTab, resolveHintFromTab, setUnroutablePullReporter } from './background/frame-router';
-import { SSEBackoff } from './background/sse-backoff';
+import {
+  initSSETransport, connectSSE, ensureOffscreen, scheduleSSERetry,
+  onSSEConnected, onSSEDisconnected, pauseVoice, resumeVoice, isVoicePaused,
+  restoreVoicePaused, runConnectionCheck,
+} from './plugin/sse-transport';
 
 // --- State ---
 //
 // The shared connection/tab state (bgState + connId, imported above) lives in
 // background/state.ts so the extracted background modules share it — see
-// notes/DESIGN_EXTENSION_RESTRUCTURE.md (Tier 3).
+// notes/DESIGN_EXTENSION_RESTRUCTURE.md (Tier 3). The SSE stream lifecycle
+// (backoff ladder, voice-pause intent, offscreen/direct split) lives in
+// plugin/sse-transport.ts; the hooks wired below are what a connect/event
+// MEANS — the behavior half of that split.
 
 let hintVisibility: HintVisibility = 'always';
 
-// Firefox direct SSE (no offscreen document needed)
-let directSSE: EventSource | null = null;
-// URL of the EventSource `directSSE` currently points at — the
-// already-connecting guard in connectDirectSSE compares against it so a
-// redundant connect with unchanged creds keeps the in-flight socket.
-let directSSEUrl: string | null = null;
-
-// SSE reconnect backoff state. Shared by Chrome (offscreen→HEALTH_STATUS)
-// and Firefox (direct EventSource) paths. Policy (ladder + stable-connection
-// reset) lives in SSEBackoff; only the timer lives here.
-let sseRetryTimer: ReturnType<typeof setTimeout> | null = null;
-const sseBackoff = new SSEBackoff();
-
-// Voice-pause intent (notes/DESIGN_VOICE_PAUSE.md). A standing user choice to
-// stop the browser engaging voice while keeping hints + keyboard live —
-// persisted in chrome.storage.local (per-machine, like the alphabet + mirror),
-// sticky until explicitly un-paused. The SW's authoritative copy; loaded at
-// init() before any auto-connect decision. Every auto-connect entry point
-// (init, the connection-check alarm, permissions.onAdded) and the retry ladder
-// respect it; the actuator-client transport gate (setVoicePaused) enforces it
-// for outbound traffic. Distinct from the transient branchkitConnected: paused
-// is intent, connected is reality, and paused implies not-connected.
-const VOICE_PAUSED_KEY = 'voicePaused';
-let voicePaused = false;
-
-function clearSSERetryTimer(): void {
-  if (sseRetryTimer) {
-    clearTimeout(sseRetryTimer);
-    sseRetryTimer = null;
-  }
-}
-
-function scheduleSSERetry(): void {
-  // Never chase a reconnect the user paused — the single defensive choke for
-  // the retry ladder, so a stray disconnect event can't re-arm it.
-  if (voicePaused) return;
-  if (sseRetryTimer) return;
-  sseRetryTimer = setTimeout(async () => {
-    sseRetryTimer = null;
-    const found = await discoverPlugin();
-    if (found) {
-      // Discovery success is NOT connection success — the flag flips (and
-      // the connect-edge work runs) only on the stream's real `connected`
-      // signal via onSSEConnected. If the SSE never comes up, a
-      // HEALTH_STATUS(false) / onerror / alarm probe re-arms the retry.
-      connectSSE();
-    } else {
-      scheduleSSERetry();
+initSSETransport({
+  // The plugin's HTTP server is up once creds exist: contribute the command
+  // vocabulary so voice scroll/find/nav are live for this session, and
+  // re-assert the active tab's video presence — a plugin restart or SSE
+  // reconnect drained its mirror.
+  onPreConnect: () => {
+    void contributeCommands();
+    void syncMediaActive();
+  },
+  // The connect-edge heal. Runs on EVERY connected event (a `connected` means
+  // a NEW stream, so the host/plugin may have restarted). Reactivate is
+  // idempotent (same rotate+re-Put as every tab focus) and connects are rare.
+  onConnectedEdge: () => {
+    // Cold-start focus handshake: this browser may already be frontmost when
+    // its extension connects, so no onFocusChanged fires to claim focus.
+    void assertFocusIfFocused();
+    hydrateReferencesFromCollection().then(() => pushReferenceNames());
+    rescanActiveTab();
+    // Host (BranchKit app) restart healer. A host restart drops the SSE but
+    // does NOT kill the extension service worker, so the per-frame liveness
+    // Ports never drop and their onResync (the SW-restart healer) never fires.
+    // The restarted plugin lost every frame's grammar, and rescanActiveTab
+    // only re-scans the DOM — it does not re-emit codewords. Reactivate the
+    // active tab so its grammar is rebuilt into the fresh plugin (rotate
+    // session + re-Put). Other tabs heal on next focus via tab_activated.
+    // Without this, badges paint but aren't matchable after an app restart —
+    // which production hits on every update/crash.
+    // See notes/DESIGN_HOST_RESTART_RESYNC.md.
+    if (bgState.cachedActiveTabId != null) {
+      republishActiveTab(bgState.cachedActiveTabId, 'sse_reconnect');
     }
-  }, sseBackoff.nextDelayMs(Date.now()));
-}
-
-// Ambient connection state on the toolbar icon (piece A1 of
-// notes/DESIGN_EXTENSION_CONNECTION_HEALTH.md). State, not error: connected
-// shows a quiet dot; standalone shows NO badge at all — running without
-// BranchKit is a first-class mode, and the extension can't distinguish
-// "standalone by choice" from "host vanished" (the side that can — the
-// plugin — owns that nudge). Driven from the same transitions that flip
-// branchkitConnected, so there's no new state to maintain; the calls are
-// idempotent and the badge itself persists across SW idle-restarts.
-function updateConnectionBadge(connected: boolean): void {
-  try {
-    void chrome.action.setBadgeText({ text: connected ? '•' : '' });
-    if (connected) {
-      void chrome.action.setBadgeBackgroundColor({ color: '#2e7d32' });
-    }
-  } catch {
-    // chrome.action unavailable (shouldn't happen in MV3) — badge is cosmetic.
-  }
-}
-
-// The one honest connect signal: the SSE stream's `connected` event, via
-// Chrome's offscreen HEALTH_STATUS(true) or Firefox's direct EventSource.
-// Runs on EVERY connected event, not just flag edges — a `connected` means a
-// NEW stream was established, so the host/plugin may have restarted and the
-// grammar heal is warranted. Edge-gating on branchkitConnected is what masked
-// the b7399f5 healer: reconnect paths used to set the flag optimistically
-// before the stream was up, so the "edge" never fired. Reactivate is
-// idempotent (same rotate+re-Put as every tab focus) and connects are rare.
-// See notes/DESIGN_SSE_RESILIENCE.md (1).
-function onSSEConnected(): void {
-  // Paused wins over a stray connect. Pause tears the stream down and stops
-  // the retry ladder, but a superseded offscreen instance could still emit one
-  // late HEALTH_STATUS(true); honoring it would re-open voice the user paused.
-  if (voicePaused) return;
-  bgState.branchkitConnected = true;
-  updateConnectionBadge(true);
-  // Mirror for content scripts (UI chrome — see plugin/connection-mirror.ts).
-  void chrome.storage.local.set({ branchkitConnected: true });
-  sseBackoff.onConnected(Date.now());
-  clearSSERetryTimer();
-  // Cold-start focus handshake: this browser may already be frontmost when
-  // its extension connects, so no onFocusChanged fires to claim focus.
-  void assertFocusIfFocused();
-  hydrateReferencesFromCollection().then(() => pushReferenceNames());
-  rescanActiveTab();
-  // Host (BranchKit app) restart healer. A host restart drops the SSE but
-  // does NOT kill the extension service worker, so the per-frame liveness
-  // Ports never drop and their onResync (the SW-restart healer) never fires.
-  // The restarted plugin lost every frame's grammar, and rescanActiveTab
-  // only re-scans the DOM — it does not re-emit codewords. Reactivate the
-  // active tab so its grammar is rebuilt into the fresh plugin (rotate
-  // session + re-Put). Other tabs heal on next focus via tab_activated.
-  // Without this, badges paint but aren't matchable after an app restart —
-  // which production hits on every update/crash.
-  // See notes/DESIGN_HOST_RESTART_RESYNC.md.
-  if (bgState.cachedActiveTabId != null) {
-    republishActiveTab(bgState.cachedActiveTabId, 'sse_reconnect');
-  }
-  // Seed the open-tab voice collection ("tab <codeword>"). The publish cache
-  // is cleared first: a reconnected plugin may have restarted and lost its
-  // per-connection tab entries, so the unchanged-set guard must not suppress
-  // this re-seed.
-  resetTabPublishCache();
-  scheduleTabPublish();
-}
-
-function onSSEDisconnected(): void {
-  markConnectionDown();
-  scheduleSSERetry();
-}
-
-// The connected→down flip shared by the stream drop (onSSEDisconnected) and a
-// deliberate pause (pauseVoice). Flag + toolbar badge + the content-facing
-// paint mirror, kept together so the mirror write can't be forgotten on one
-// path. Does NOT arm the retry ladder — that's the caller's call (the drop
-// re-arms; pause must not).
-function markConnectionDown(): void {
-  bgState.branchkitConnected = false;
-  updateConnectionBadge(false);
-  void chrome.storage.local.set({ branchkitConnected: false });
-}
+    // Seed the open-tab voice collection ("tab <codeword>"). The publish cache
+    // is cleared first: a reconnected plugin may have restarted and lost its
+    // per-connection tab entries, so the unchanged-set guard must not suppress
+    // this re-seed.
+    resetTabPublishCache();
+    scheduleTabPublish();
+  },
+  onEvent: (data) => handleSSEEvent(data),
+  onAlphabet: (words) => { void storeAlphabet(words); },
+});
 
 function rescanActiveTab(): void {
   if (bgState.cachedActiveTabId == null) return;
@@ -179,10 +95,6 @@ function rescanActiveTab(): void {
     payload: { action: 'rescan' },
   }).catch(() => {});
 }
-
-// --- Feature Detection ---
-
-const hasOffscreenAPI = typeof chrome !== 'undefined' && !!chrome.offscreen;
 
 // --- Alphabet ---
 
@@ -922,9 +834,8 @@ async function assertFocusIfFocused(): Promise<void> {
   }
 }
 
-// --- SSE Connection (browser-adaptive) ---
+// --- SSE connect-time contribution ---
 
-/** Connect to the plugin's SSE stream using the best available method. */
 // Contribute the extension's static command vocabulary (scroll/find/nav voice
 // phrases from command-catalog.ts) to the browser plugin, which registers them
 // as a thin registrar. Fired on every (re)connect — the plugin REPLACE-stores
@@ -938,166 +849,6 @@ async function contributeCommands(): Promise<void> {
   }
 }
 
-function connectSSE(): void {
-  const port = getPluginPort();
-  const token = getPluginToken();
-  if (!port || !token) return;
-
-  // The plugin's HTTP server is up once we have a port+token; contribute the
-  // command vocabulary now so voice scroll/find/nav are live for this session.
-  void contributeCommands();
-  // And re-assert the active tab's video presence — a plugin restart or SSE
-  // reconnect drained its mirror.
-  void syncMediaActive();
-
-  if (hasOffscreenAPI) {
-    // Chrome: delegate to offscreen document
-    ensureOffscreen().then(() => notifyOffscreenConnect());
-  } else {
-    // Firefox: open EventSource directly in background script
-    connectDirectSSE(port, token);
-  }
-}
-
-// --- Chrome: Offscreen Document ---
-
-async function ensureOffscreen(): Promise<void> {
-  if (!hasOffscreenAPI) return;
-  try {
-    const exists = await chrome.offscreen.hasDocument();
-    if (!exists) {
-      await chrome.offscreen.createDocument({
-        url: 'offscreen.html',
-        reasons: [chrome.offscreen.Reason.BLOBS],
-        justification: 'Maintain SSE connection to BranchKit actuator',
-      });
-    }
-  } catch {
-    // May fail if already creating
-  }
-}
-
-// Tell offscreen doc to connect (or reconnect) with current plugin info
-function notifyOffscreenConnect(): void {
-  const port = getPluginPort();
-  const token = getPluginToken();
-  if (!port || !token) return;
-  chrome.runtime.sendMessage({
-    type: 'CONNECT_SSE',
-    port,
-    token,
-    connId,
-  }).catch(() => {});
-}
-
-// Close whichever SSE this engine holds. Chrome delegates to the offscreen
-// document (which owns the EventSource); Firefox holds it directly. Closing
-// via close() fires no onerror, so no HEALTH_STATUS(false) bounces back — the
-// caller (pauseVoice) flips the connection-down state itself.
-function teardownSSE(): void {
-  if (hasOffscreenAPI) {
-    chrome.runtime.sendMessage({ type: 'DISCONNECT_SSE' }).catch(() => {});
-  } else if (directSSE) {
-    directSSE.close();
-    directSSE = null;
-    directSSEUrl = null;
-  }
-}
-
-// --- Voice pause (notes/DESIGN_VOICE_PAUSE.md) ---
-
-// Enter the paused state: a standing choice to stop engaging voice. Tears the
-// stream down, gates outbound transport, flips the connection-down paint
-// mirror, and — crucially — does NOT arm the retry ladder. Sticky: persisted
-// so an SW restart (init) honors it instead of auto-connecting.
-async function pauseVoice(): Promise<void> {
-  voicePaused = true;
-  setVoicePaused(true);        // gate outbound transport + drop cached creds
-  clearSSERetryTimer();
-  teardownSSE();
-  markConnectionDown();        // flag + badge + mirror false (no retry)
-  await chrome.storage.local.set({ [VOICE_PAUSED_KEY]: true });
-}
-
-// Leave the paused state and resume the normal boot path: discover, and either
-// bring the stream up or arm the retry ladder if the host isn't there yet.
-async function resumeVoice(): Promise<void> {
-  voicePaused = false;
-  setVoicePaused(false);
-  await chrome.storage.local.set({ [VOICE_PAUSED_KEY]: false });
-  const found = await discoverPlugin();
-  if (found) connectSSE();
-  else scheduleSSERetry();
-}
-
-// --- Firefox: Direct SSE in background script ---
-
-function connectDirectSSE(port: number, token: string): void {
-  // conn_id identifies this connection; the plugin binds it to the OS-focused
-  // bundle via the focus handshake so dispatch/rescan target only the focused
-  // browser and a spoken command doesn't also fire in a background browser.
-  const url = `http://127.0.0.1:${port}/events?token=${token}&conn_id=${encodeURIComponent(connId)}`;
-
-  // Already-connecting guard (DESIGN_SSE_RESILIENCE.md's deliberately-open
-  // item, closed 2026-07-04). connectSSE() fires un-awaited from several
-  // sites (retry ladder, init, postGrammarBatch's fresh-creds path); this
-  // path used to close and reopen the EventSource unconditionally, so a
-  // burst landing while the prior socket was still CONNECTING churned
-  // connect/disconnect under one conn_id and could abort onSSEConnected's
-  // heal (rescan + grammar republish) mid-flight. Chrome is immune — the
-  // offscreen document serializes CONNECT_SSE. Keep the existing socket iff
-  // it targets the same creds and isn't CLOSED; changed creds (host restart
-  // minted a new port/token) still tear down and reconnect.
-  if (directSSE && directSSEUrl === url && directSSE.readyState !== EventSource.CLOSED) {
-    return;
-  }
-  if (directSSE) {
-    directSSE.close();
-    directSSE = null;
-  }
-
-  directSSEUrl = url;
-  directSSE = new EventSource(url);
-
-  directSSE.addEventListener('connected', () => {
-    console.log('[BranchKit BG] SSE connected (direct)');
-    // Same connect-edge work as Chrome's HEALTH_STATUS(true). Firefox
-    // previously did a partial inline version (focus + hydrate only), which
-    // meant no rescan, no host-restart grammar heal, and no backoff
-    // bookkeeping on this engine.
-    onSSEConnected();
-  });
-
-  directSSE.addEventListener('action', (e: MessageEvent) => {
-    try {
-      const data = JSON.parse(e.data);
-      handleSSEEvent(data);
-    } catch (err) {
-      console.error('[BranchKit BG] SSE parse error:', err);
-    }
-  });
-
-  directSSE.addEventListener('alphabet', (e: MessageEvent) => {
-    try {
-      const data = JSON.parse(e.data);
-      if (Array.isArray(data?.words)) {
-        storeAlphabet(data.words);
-      }
-    } catch (err) {
-      console.error('[BranchKit BG] alphabet parse error:', err);
-    }
-  });
-
-  directSSE.onerror = () => {
-    console.warn('[BranchKit BG] SSE disconnected (direct)');
-    if (directSSE) {
-      directSSE.close();
-      directSSE = null;
-    }
-    onSSEDisconnected();
-  };
-}
-
 // --- SSE Event Handling (shared by both paths) ---
 
 function handleSSEEvent(data: any): void {
@@ -1105,7 +856,7 @@ function handleSSEEvent(data: any): void {
   // surviving offscreen doc, an in-flight event mid-pause). Voice must not act
   // while the user has it paused. The stream is torn down on pause and on a
   // paused wake, so this is defense-in-depth for the race window.
-  if (voicePaused) return;
+  if (isVoicePaused()) return;
   // Tab verbs are handled here, not forwarded to content: they act on
   // chrome.tabs regardless of what page is focused (content scripts can't
   // reach the API, and the active page may not even have one).
@@ -1550,7 +1301,7 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     // Three states the popup renders distinctly: connected, paused-by-choice,
     // and not-detected. `paused` lets it show "Voice paused" instead of
     // inferring "not detected" while the host may well be running.
-    sendResponse({ branchkit: bgState.branchkitConnected, paused: voicePaused });
+    sendResponse({ branchkit: bgState.branchkitConnected, paused: isVoicePaused() });
     return false;
   }
 
@@ -1559,8 +1310,8 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     // state (the popup re-reads status right after).
     const fn = message.paused ? pauseVoice : resumeVoice;
     fn()
-      .then(() => sendResponse({ paused: voicePaused, branchkit: bgState.branchkitConnected }))
-      .catch(() => sendResponse({ paused: voicePaused, branchkit: bgState.branchkitConnected }));
+      .then(() => sendResponse({ paused: isVoicePaused(), branchkit: bgState.branchkitConnected }))
+      .catch(() => sendResponse({ paused: isVoicePaused(), branchkit: bgState.branchkitConnected }));
     return true; // async response
   }
 
@@ -2052,26 +1803,11 @@ async function init(): Promise<void> {
 
   // Voice-pause intent (sticky across SW restart). Load BEFORE any auto-connect
   // decision and honor it: a paused SW must not discover or connect on wake.
-  // Sync the transport gate and the content-facing mirror so a wake in the
-  // paused state presents identically to the pause action — opaque badges, no
-  // grammar traffic — without a flicker of connection.
-  const paused = await chrome.storage.local.get(VOICE_PAUSED_KEY);
-  voicePaused = paused[VOICE_PAUSED_KEY] === true;
-  setVoicePaused(voicePaused);
-  if (voicePaused) {
-    // Close any stream that survived a pre-restart connection into this wake
-    // (the offscreen document can outlive the SW). No-op if none exists — we
-    // don't spin up an offscreen doc just to tear nothing down.
-    teardownSSE();
-    markConnectionDown();
-    return;
-  }
+  if (await restoreVoicePaused()) return;
 
   const found = await discoverPlugin();
 
-  if (hasOffscreenAPI) {
-    await ensureOffscreen();
-  }
+  await ensureOffscreen();
 
   if (found) {
     // branchkitConnected stays false until the stream's real `connected`
@@ -2206,7 +1942,7 @@ chrome.alarms.create('connection-check', { periodInMinutes: 0.5 });
 // just-granted permission should feel instant. Chrome grants host
 // permissions at install, so this listener never fires there in practice.
 chrome.permissions?.onAdded?.addListener(async (added) => {
-  if (voicePaused) return; // a just-granted permission must not override a pause
+  if (isVoicePaused()) return; // a just-granted permission must not override a pause
   if (bgState.branchkitConnected) return;
   if (!added.origins?.length) return;
   const found = await discoverPlugin();
@@ -2214,40 +1950,9 @@ chrome.permissions?.onAdded?.addListener(async (added) => {
 });
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'connection-check') {
-    // Paused: the safety net's whole job is keeping a connection alive, so it
-    // has nothing to do. No probe, no retry.
-    if (voicePaused) return;
-    if (hasOffscreenAPI) {
-      await ensureOffscreen();
-      if (bgState.branchkitConnected && !(await probeOffscreenSSE())) {
-        onSSEDisconnected();
-      }
-    } else if (
-      bgState.branchkitConnected &&
-      (!directSSE || directSSE.readyState !== EventSource.OPEN)
-    ) {
-      onSSEDisconnected();
-    }
-
-    // Kick off retry loop if not connected and no retry is pending
-    if (!bgState.branchkitConnected) {
-      scheduleSSERetry();
-    }
+    await runConnectionCheck();
   }
 });
-
-// Ask the offscreen document whether its EventSource is actually OPEN.
-// No response (offscreen gone, message dropped) counts as dead. A probe can
-// catch a mid-reconnect stream in CONNECTING and trigger one redundant
-// retry cycle; that self-corrects and connects are rare.
-async function probeOffscreenSSE(): Promise<boolean> {
-  try {
-    const resp = await chrome.runtime.sendMessage({ type: 'SSE_STATUS' });
-    return resp?.connected === true;
-  } catch {
-    return false;
-  }
-}
 
 // Init immediately (service worker may be waking from alarm)
 init();
