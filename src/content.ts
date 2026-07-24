@@ -114,7 +114,7 @@ import { setNudgesFromSettings } from './placement';
 import { labelReservoir } from './labels/label-reservoir';
 import { doScan, scheduleDoScan } from './scan/scan-orchestrator';
 import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
-import { openLivenessPort } from './plugin/liveness';
+import { openLivenessPort, repairLivenessAfterBfcacheRestore } from './plugin/liveness';
 import { pageSession, scheduleYieldTask, yieldTask, TeardownReason } from './lifecycle/page-session';
 import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './debug/message-counters';
 import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, rearmCpuShareBaseline, rearmWatchdogBaseline, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, lifecycleCounters, resetLifecycleCounters, claimCounters } from './debug/perf-counters';
@@ -1857,8 +1857,17 @@ function republishAllGrammar(reason: string): void {
 function restoreFromBfcache(): void {
   // Layer-2 probe (report-only, dev builds): is the liveness Port alive,
   // self-healing, or silently dead after this restore? See
-  // debug/bfcache-probe.ts + notes/DESIGN_ORPHAN_PAINT.md.
+  // debug/bfcache-probe.ts + notes/DESIGN_ORPHAN_PAINT.md. Ordering: the
+  // probe's restore-instant sample runs before the repair below reopens, so
+  // it records the raw channel state; its 2s settled sample verifies the
+  // repair took (sw_tracked flips true).
   probeBfcacheRestore();
+  // Layer-3 mechanism A: reopen the silently-dead Port (SW-confirmed dead
+  // only — see repairLivenessAfterBfcacheRestore). Restores SW-restart
+  // resync + disconnect-driven label release for this page's future.
+  void repairLivenessAfterBfcacheRestore().then((outcome) => {
+    bkLog('BK_LIVENESS_RESTORE_REPAIR', { outcome });
+  });
   // Finalize any limbo wrappers before the existing re-registration
   // sweep. Per the open question on bfcache in DESIGN_WRAPPER_IDENTITY_
   // STABILITY: lastRect snapshots from pre-bfcache aren't trustworthy

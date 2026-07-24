@@ -5,7 +5,7 @@
  * restore; every painted badge must route every time.
  */
 
-import { waitForBadges, poolAudit, assertClean, settle, Skip, bfcacheProbeReport } from '../driver.mjs';
+import { waitForBadges, poolAudit, assertClean, settle, Skip, bfcacheProbeReport, assertChannelHealed } from '../driver.mjs';
 
 async function expectRestored(page, label) {
   await page.waitForFunction(() => document.documentElement.dataset.persisted !== undefined);
@@ -38,6 +38,9 @@ export async function run({ ctx, base, browser }) {
     await expectRestored(page, 'back to A (2nd)');
     await settle(3_000);
     const clean = assertClean(await poolAudit(page), 'roundtrip complete, A restored (2nd)');
+    // Mechanism-A pin on the LAST restore; earlier restores' settled samples
+    // are in the trail below.
+    await assertChannelHealed(page, 'roundtrip A (2nd)');
     // A restored twice → up to 4 probe samples on this document (layer 2).
     return `${clean} | ${await bfcacheProbeReport(page)}`;
   } finally {

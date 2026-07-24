@@ -133,6 +133,26 @@ export async function bfcacheProbeReport(page) {
     .join(' ');
 }
 
+/** Layer-3 mechanism-A pin: after the restore repair, the SETTLED probe
+ * sample must show a healthy end-to-end channel (port open CS-side AND
+ * tracked SW-side). The restore-instant sample legitimately still shows the
+ * raw dead state — only the settled sample is spec. */
+export async function assertChannelHealed(page, label) {
+  const raw = await page.evaluate(
+    () => document.documentElement.dataset.branchkitBfcacheProbe,
+  );
+  if (!raw) throw new Error(`${label}: no port-probe samples (probe not armed?)`);
+  const samples = JSON.parse(raw);
+  const settled = [...samples].reverse().find((s) => s.when === 'settled');
+  if (!settled) throw new Error(`${label}: no settled probe sample yet`);
+  if (settled.port !== 'post_ok' || settled.sw_tracked !== true) {
+    throw new Error(
+      `${label}: CHANNEL NOT HEALED — settled port=${settled.port} sw=${settled.sw_tracked}`,
+    );
+  }
+  return 'channel healed';
+}
+
 /** Loud skip — a transition the browser declined to engage under automation. */
 export class Skip extends Error {
   constructor(reason) {

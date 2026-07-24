@@ -65,6 +65,72 @@ export interface LivenessHandlers {
 }
 
 let livenessPort: chrome.runtime.Port | null = null;
+// Handlers from the first open, kept for the bfcache-restore repair below —
+// the repaired port must route to the same orchestration.
+let openedHandlers: LivenessHandlers | null = null;
+
+/**
+ * Bfcache-restore channel repair (orphan-paint arc layer 3, mechanism A —
+ * notes/DESIGN_ORPHAN_PAINT.md). Layer 2 proved every restore leaves the
+ * port SILENTLY DEAD: the SW-side disconnect happened while the page was
+ * frozen, CS-side onDisconnect is never delivered, so the reconnect ladder
+ * never runs — SW restarts become invisible to this page and its labels
+ * lose their disconnect-driven release.
+ *
+ * Repair = reopen the Port, but only after the SW CONFIRMS it isn't
+ * tracking this document. Never sever a channel that might be healthy:
+ * a self-disconnect of a live port would fire the SW's releaseDocument for
+ * OUR OWN doc and race the restore's reconfirm — the same class of race the
+ * document-scoped pool retired. The dead-channel case (today's reality) has
+ * no such race: the SW's disconnect cleanup already ran at freeze time, and
+ * disconnecting the zombie object is a local no-op.
+ *
+ * Reopens with isReconnect=false: restoreFromBfcache owns the reconfirm +
+ * grammar republish itself; firing onResync here would double that work.
+ * What the reopen buys is the FUTURE: the fresh port's onDisconnect works,
+ * so the next SW restart resyncs this page like any other.
+ */
+export async function repairLivenessAfterBfcacheRestore(): Promise<
+  'reopened' | 'healthy' | 'context_dead' | 'never_opened'
+> {
+  if (!openedHandlers) return 'never_opened';
+  let ctxValid = false;
+  try {
+    ctxValid = typeof chrome !== 'undefined' && !!chrome.runtime?.id;
+  } catch {
+    ctxValid = false;
+  }
+  // Dead context = orphan; repairing is impossible and teardown is the
+  // caller's job (mechanism B). Do nothing here.
+  if (!ctxValid) return 'context_dead';
+  let tracked = false;
+  try {
+    const resp: { tracked?: boolean } | undefined = await chrome.runtime.sendMessage({
+      type: 'LIVENESS_QUERY',
+      doc_id: documentInstanceId,
+    });
+    tracked = resp?.tracked === true;
+  } catch {
+    // SW was asleep and errored anyway — after its init it cannot be
+    // tracking us (no port survived), so treat as untracked and reopen.
+    tracked = false;
+  }
+  if (tracked) return 'healthy';
+  const zombie = livenessPort;
+  livenessPort = null;
+  if (zombie) {
+    // Local cleanup only. Self-disconnect never fires our own onDisconnect
+    // (Chrome fires it on the OTHER end), so this cannot trigger the
+    // reconnect ladder; on a severed channel it is a no-op.
+    try {
+      zombie.disconnect();
+    } catch {
+      /* channel already severed */
+    }
+  }
+  openLivenessPort(openedHandlers, false);
+  return 'reopened';
+}
 
 /**
  * Probe the CS-side state of the port OBJECT (orphan-paint arc layer 2,
@@ -88,6 +154,7 @@ export function probeLivenessPortState(): 'absent' | 'post_ok' | 'post_threw' {
 }
 
 export function openLivenessPort(handlers: LivenessHandlers, isReconnect = false): void {
+  openedHandlers = handlers;
   let connected = false;
   try {
     const port = chrome.runtime.connect({ name: `${LIVENESS_PORT_NAME}:${documentInstanceId}` });
