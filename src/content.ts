@@ -127,6 +127,7 @@ import {
   type PlayPauseOp, type MuteOp, type SpeedOp, type SeekDirection,
 } from './activate/media';
 import { notePaintSamplerScroll, snapshotExtras } from './debug/perf-report';
+import { initPoolAudit } from './debug/pool-audit';
 import { loadConfig, getDisplayMode, getHintVisibility } from './config';
 import {
   initLabelSync,
@@ -1934,6 +1935,11 @@ pageSession.start({
 store.subscribe((delta) => {
   if (delta.kind === 'attached' || delta.kind === 'detached') schedulePushGrammar();
 });
+
+// Painted-vs-routable field tripwire (dev builds only) — normal browsing
+// surfaces pool divergence as a WARN instead of waiting for a spoken pair
+// to refuse. Report-only; see debug/pool-audit.ts.
+initPoolAudit();
 
 // Content-script boot breadcrumb. Lets browser.log distinguish a fresh
 // re-injection (new V8 context, new session) from a same-context SW reconnect.

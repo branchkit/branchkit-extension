@@ -11,6 +11,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   buildPool,
+  auditLabels,
   claimLabels,
   confirmLabels,
   releaseLabels,
@@ -621,6 +622,25 @@ describe('label-pool', () => {
       const got = await claimLabels(tab, 'docA', 0, 1);
       expect(got[0]).toBe(LP[0]); // front-of-pool of a REBUILT stack
       expect(await getFrameForLabel(tab, LP[1])).toBeNull();
+    });
+  });
+  describe('auditLabels (painted-vs-routable tripwire read)', () => {
+    it('classifies held labels: routable / unroutable / foreign', async () => {
+      const tab = nextTabId();
+      const mine = await claimLabels(tab, 'docA', 0, 1);
+      await confirmLabels(tab, 'docA', 0, mine);
+      const theirs = await claimLabels(tab, 'docB', 0, 1);
+      await confirmLabels(tab, 'docB', 0, theirs);
+      const phantom = 'zz zz'; // held locally, never assigned
+      const { unroutable, foreign } = await auditLabels(tab, 'docA', [mine[0], theirs[0], phantom]);
+      expect(unroutable).toEqual([phantom]);
+      expect(foreign).toEqual([theirs[0]]);
+    });
+
+    it('reports everything unroutable when the tab has no stack', async () => {
+      const { unroutable, foreign } = await auditLabels(nextTabId(), 'docA', ['a a', 'a b']);
+      expect(unroutable).toEqual(['a a', 'a b']);
+      expect(foreign).toEqual([]);
     });
   });
 });

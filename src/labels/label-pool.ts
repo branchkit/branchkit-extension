@@ -423,6 +423,31 @@ export async function releaseLabels(tabId: number, docId: string, labels: string
 }
 
 /**
+ * Read-only pool audit (the painted-vs-routable tripwire —
+ * DESIGN_LIFECYCLE_HARNESS.md). Answers, for a document's locally-held
+ * codewords: which are UNROUTABLE (not assigned at all — a voice dispatch
+ * would refuse no_such_hint) and which are FOREIGN (assigned to a different
+ * document — routing would land elsewhere). Pure read; deliberately outside
+ * the reservoir's single-sender MUTATION invariant.
+ */
+export async function auditLabels(
+  tabId: number,
+  docId: string,
+  labels: string[],
+): Promise<{ unroutable: string[]; foreign: string[] }> {
+  const stack = await loadStack(tabId);
+  const unroutable: string[] = [];
+  const foreign: string[] = [];
+  if (!stack) return { unroutable: labels.slice(), foreign };
+  for (const label of labels) {
+    const owner = stack.assigned[label];
+    if (!owner) unroutable.push(label);
+    else if (owner.d !== docId) foreign.push(label);
+  }
+  return { unroutable, foreign };
+}
+
+/**
  * Look up which frame owns a codeword. Used to route voice/keyboard
  * actions to the correct frame.
  */

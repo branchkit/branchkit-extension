@@ -9,7 +9,7 @@
  */
 
 import { Message, ScannedElement, HintVisibility } from './types';
-import { claimLabels, confirmLabels, releaseLabels, releaseDocument, clearAllStacks, alphabetsEqual, senderMayMutatePool } from './labels/label-pool';
+import { claimLabels, confirmLabels, releaseLabels, releaseDocument, clearAllStacks, alphabetsEqual, senderMayMutatePool, auditLabels } from './labels/label-pool';
 import { setAlphabet } from './labels/words';
 import { buildCommandContributions } from './command-catalog';
 import { rememberCodewords, clearCodewordMemory, recallCodewords } from './labels/codeword-memory';
@@ -806,6 +806,21 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
         // codewords stay locally held and a later confirm re-arbitrates.
         sendResponse({ rejected: [] });
       });
+    return true;
+  }
+
+  if (message.type === 'POOL_AUDIT') {
+    // Read-only painted-vs-routable tripwire (debug/pool-audit.ts, dev
+    // builds). Pure read — outside the reservoir's single-sender MUTATION
+    // invariant.
+    const tabId = _sender.tab?.id;
+    if (typeof tabId !== 'number' || typeof message.doc_id !== 'string' || !Array.isArray(message.labels)) {
+      sendResponse({ unroutable: [], foreign: [] });
+      return false;
+    }
+    auditLabels(tabId, message.doc_id, message.labels)
+      .then(result => sendResponse(result))
+      .catch(() => sendResponse({ unroutable: [], foreign: [] }));
     return true;
   }
 
