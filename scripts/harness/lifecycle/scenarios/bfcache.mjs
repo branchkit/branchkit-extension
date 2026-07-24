@@ -11,17 +11,20 @@
 
 import { waitForBadges, poolAudit, assertClean, settle, Skip } from '../driver.mjs';
 
-export async function run({ ctx, base }) {
+export async function run({ ctx, base, browser }) {
   const page = await ctx.newPage();
   try {
     // Chrome will name its own bfcache objections: collect
     // notRestoredExplanations so a skip is actionable, not a shrug.
-    const cdp = await ctx.newCDPSession(page);
-    await cdp.send('Page.enable');
+    // (CDP is chromium-only; Firefox runs without the diagnostics.)
     const explanations = [];
-    cdp.on('Page.backForwardCacheNotUsed', (e) => {
-      for (const r of e.notRestoredExplanations ?? []) explanations.push(r.reason);
-    });
+    if (browser !== 'firefox') {
+      const cdp = await ctx.newCDPSession(page);
+      await cdp.send('Page.enable');
+      cdp.on('Page.backForwardCacheNotUsed', (e) => {
+        for (const r of e.notRestoredExplanations ?? []) explanations.push(r.reason);
+      });
+    }
 
     await page.goto(`${base}/a.html`);
     await waitForBadges(page);

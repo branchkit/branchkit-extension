@@ -15,11 +15,17 @@
 import { startFixtureServer, launchHarness, Skip } from './driver.mjs';
 
 const SCENARIOS = ['fresh-load', 'bfcache', 'prerender', 'reload'];
+// Firefox: no CDP (prerender is Chrome-shaped anyway) and no automatable
+// about:debugging reload — the applicable subset only.
+const FIREFOX_SCENARIOS = ['fresh-load', 'bfcache'];
 
-const requested = process.argv.slice(2).length ? process.argv.slice(2) : SCENARIOS;
-const unknown = requested.filter((s) => !SCENARIOS.includes(s));
+const browser = process.argv.includes('--browser=firefox') ? 'firefox' : 'chromium';
+const args = process.argv.slice(2).filter((a) => !a.startsWith('--browser='));
+const available = browser === 'firefox' ? FIREFOX_SCENARIOS : SCENARIOS;
+const requested = args.length ? args : available;
+const unknown = requested.filter((s) => !available.includes(s));
 if (unknown.length) {
-  console.error(`unknown scenario(s): ${unknown.join(', ')}\navailable: ${SCENARIOS.join(', ')}`);
+  console.error(`unknown scenario(s) for ${browser}: ${unknown.join(', ')}\navailable: ${available.join(', ')}`);
   process.exit(2);
 }
 
@@ -27,10 +33,10 @@ const { server, base } = await startFixtureServer();
 const results = [];
 
 for (const name of requested) {
-  const { ctx, sw } = await launchHarness(name);
+  const { ctx, sw } = await launchHarness(name, browser);
   try {
     const { run } = await import(`./scenarios/${name}.mjs`);
-    const detail = await run({ ctx, sw, base });
+    const detail = await run({ ctx, sw, base, browser });
     results.push({ name, status: 'PASS', detail });
   } catch (e) {
     results.push({
@@ -46,7 +52,7 @@ for (const name of requested) {
 server.close();
 
 let failed = 0;
-console.log('\n=== lifecycle harness ===');
+console.log(`\n=== lifecycle harness (${browser}) ===`);
 for (const r of results) {
   console.log(`${r.status.padEnd(5)} ${r.name.padEnd(12)} ${r.detail}`);
   if (r.status === 'FAIL') failed++;

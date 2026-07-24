@@ -21,7 +21,7 @@ import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { resolve, dirname, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchExtension } from '../../lib/launch.mjs';
+import { launchExtension, launchFirefoxExtension } from '../../lib/launch.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '../../..');
@@ -46,7 +46,16 @@ export async function startFixtureServer() {
   return { server, base: `http://127.0.0.1:${port}` };
 }
 
-export async function launchHarness(profileSuffix) {
+export async function launchHarness(profileSuffix, browser = 'chromium') {
+  if (browser === 'firefox') {
+    // Firefox: no SW handle (event-page background), no CDP, no default
+    // bfcache-disable flag to strip. hintVisibility defaults to 'always'
+    // in config.ts, so no seeding is needed.
+    const { ctx } = await launchFirefoxExtension({
+      profile: `/tmp/branchkit-lifecycle-ff-${profileSuffix}`,
+    });
+    return { ctx, sw: null, browser };
+  }
   const { ctx, sw } = await launchExtension({
     profile: `/tmp/branchkit-lifecycle-${profileSuffix}`,
     extraArgs: [
@@ -66,7 +75,7 @@ export async function launchHarness(profileSuffix) {
   await sw.evaluate(async () => {
     await chrome.storage.sync.set({ hintVisibility: 'always' });
   });
-  return { ctx, sw };
+  return { ctx, sw, browser: 'chromium' };
 }
 
 export async function waitForBadges(page, { min = 1, timeout = 15_000 } = {}) {
