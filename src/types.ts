@@ -347,6 +347,15 @@ export interface LabelStack {
    * reserved → assigned.
    */
   reserved: Record<string, number>;
+  /**
+   * When each reserved codeword was reserved (performance-independent epoch
+   * ms). Claims may STEAL a reservation older than the staleness TTL —
+   * notes/DESIGN_PRERENDER_POOL_POISONING.md L2: reservations stranded by a
+   * frame that never dies (prerender activation) or dies while the SW sleeps
+   * would otherwise leak until tab close. Lazily migrated: a stack persisted
+   * before this field grandfathers its reservations to load time.
+   */
+  reservedAt?: Record<string, number>;
   /** Wrapper-confirmed codewords mapped to their owning frameId. */
   assigned: Record<string, number>;
 }

@@ -127,6 +127,21 @@ async function getAlphabet(): Promise<string[] | null> {
 }
 
 /**
+ * L1 of notes/DESIGN_PRERENDER_POOL_POISONING.md: may this sender mutate the
+ * pool? A prerendered document's MessageSender carries a PROVISIONAL frameId
+ * that becomes 0 on activation — but the pool would record its claims under
+ * the provisional id forever (the context never dies, so no liveness
+ * disconnect ever reaps it). Field evidence 2026-07-24: whole reservation
+ * blocks stranded under phantom frame ids (4241 etc.), wedging voice on
+ * fresh omnibox-navigated tabs. Deny claims/confirms from prerender-state
+ * senders; the level-triggered claim machinery retries after activation
+ * with the real frame id.
+ */
+export function senderMayMutatePool(sender: { documentLifecycle?: string }): boolean {
+  return sender.documentLifecycle !== 'prerender';
+}
+
+/**
  * Get a tab's stack, creating it lazily on first access. Returns null if
  * the alphabet isn't loaded yet — callers treat that as "no labels
  * available right now"; content.ts already gates hint rendering on
@@ -150,10 +165,27 @@ async function getOrCreateStack(tabId: number): Promise<LabelStack | null> {
 
 /** Defensive: pre-PR-6 stacks loaded from chrome.storage.session have no
  * `reserved` field. Initialise it lazily on first access so the migration
- * is a no-op for users with persisted state. */
+ * is a no-op for users with persisted state. Same story for `reservedAt`
+ * (L2 of DESIGN_PRERENDER_POOL_POISONING.md): missing stamps grandfather
+ * to now, so pre-migration reservations become stealable one TTL later. */
 function ensureReservedField(stack: LabelStack): void {
   if (!stack.reserved) stack.reserved = {};
+  if (!stack.reservedAt) stack.reservedAt = {};
+  for (const label of Object.keys(stack.reserved)) {
+    if (!(label in stack.reservedAt)) stack.reservedAt[label] = Date.now();
+  }
 }
+
+/**
+ * How long a reservation may sit unconfirmed before a claim can steal it
+ * (L2 of DESIGN_PRERENDER_POOL_POISONING.md). Generous: a healthy reservoir
+ * confirms within milliseconds of handing a label to a wrapper, and an
+ * unconfirmed cache entry is only ever consumed by the SAME frame (whose
+ * sticky pass-1 reclaim beats the steal). Stealing is safe by construction:
+ * if the original holder ever confirms a stolen label, arbitration rejects
+ * it and the holder's strip-and-reclaim recovery replaces it.
+ */
+const RESERVATION_STALE_MS = 5 * 60_000;
 
 /**
  * Reserve `count` labels from a tab's pool for a specific frame. The result is
@@ -213,10 +245,35 @@ export async function claimLabels(
         result[needsFresh[k]] = label;
         k++;
       }
+      // L2 steal (DESIGN_PRERENDER_POOL_POISONING.md): free is exhausted —
+      // reservations older than the TTL are fair game. They were stranded by
+      // a frame that will never confirm them: a prerendered document whose
+      // provisional frame id activated away, or a reservoir that died while
+      // the SW slept. Own-frame reservations are excluded (pass 1's sticky
+      // domain); a late confirm from the original holder loses arbitration
+      // and recovers through its rejection handler.
+      if (k < needsFresh.length) {
+        const now = Date.now();
+        for (const [label, owner] of Object.entries(stack.reserved)) {
+          if (k >= needsFresh.length) break;
+          if (granted.has(label) || owner === frameId) continue;
+          const at = stack.reservedAt?.[label];
+          if (at !== undefined && now - at < RESERVATION_STALE_MS) continue;
+          delete stack.reserved[label];
+          if (stack.reservedAt) delete stack.reservedAt[label];
+          granted.add(label);
+          result[needsFresh[k]] = label;
+          k++;
+        }
+      }
     }
 
     if (granted.size > 0) {
-      for (const label of granted) stack.reserved[label] = frameId;
+      const now = Date.now();
+      for (const label of granted) {
+        stack.reserved[label] = frameId;
+        stack.reservedAt![label] = now;
+      }
       stack.free = stack.free.filter(l => !granted.has(l));
       await saveStack(tabId, stack);
       // assignedCache still mirrors `stack.assigned` only — reserved
@@ -264,6 +321,7 @@ export async function confirmLabels(
     for (const label of labels) {
       if (stack.reserved[label] === frameId) {
         delete stack.reserved[label];
+        if (stack.reservedAt) delete stack.reservedAt[label];
         stack.assigned[label] = frameId;
         changed = true;
       } else if (stack.assigned[label] === frameId) {
@@ -322,6 +380,7 @@ export async function releaseLabels(tabId: number, frameId: number, labels: stri
         toReturn.push(label);
       } else if (stack.reserved[label] === frameId) {
         delete stack.reserved[label];
+        if (stack.reservedAt) delete stack.reservedAt[label];
         toReturn.push(label);
       }
     }
@@ -375,6 +434,7 @@ export async function releaseFrame(tabId: number, frameId: number): Promise<void
     }
     for (const label of toRelease) {
       delete stack.reserved[label];
+      if (stack.reservedAt) delete stack.reservedAt[label];
     }
     if (toRelease.length > 0) {
       stack.free.unshift(...toRelease);

@@ -190,7 +190,28 @@ class LabelReservoir {
     // Defensive — a rejected codeword shouldn't sit in `free` (it was just
     // granted out), but a racing release could have returned it.
     this.free = this.free.filter(l => !rejectedSet.has(l));
+    // L3 (DESIGN_PRERENDER_POOL_POISONING.md): any rejection means this
+    // cache's provenance is suspect — the pool granted these strings to a
+    // different identity (a provisional prerender frame id, or a prior SW
+    // generation). Purging only the rejected strings leaves the rest of the
+    // poisoned block to be re-granted and re-rejected round after round —
+    // the non-converging 2026-07-24 wedge (33 painted-but-unroutable badges
+    // that never healed). Flush the ENTIRE unconfirmed cache back to the SW:
+    // RELEASE_LABELS is owner-scoped, so strings we never legitimately held
+    // are ignored while genuinely-ours return to the pool's free list. The
+    // refill then restocks fresh under our CURRENT sender identity. Wrapper-
+    // held codewords (`outstanding`) are not touched — their fate is decided
+    // by their own confirms and the rejection handler.
+    const flushed = this.free;
+    if (flushed.length > 0) {
+      this.free = [];
+      for (const l of flushed) this.reserved.delete(l);
+      try {
+        chrome.runtime.sendMessage({ type: 'RELEASE_LABELS', labels: flushed }).catch(() => {});
+      } catch { /* orphan post-reload — best-effort */ }
+    }
     this.rejectionHandler?.(rejected);
+    if (flushed.length > 0) this.maybeRefill();
   }
 
   /**

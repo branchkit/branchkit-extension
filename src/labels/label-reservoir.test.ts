@@ -481,3 +481,50 @@ describe('LabelReservoir.reconfirm (SW-restart pool re-assertion)', () => {
     );
   });
 });
+
+// --- L3: poisoned-cache flush on confirm rejection ---
+// DESIGN_PRERENDER_POOL_POISONING.md: purging only the rejected strings left
+// the rest of a poisoned cache block to be re-granted and re-rejected round
+// after round. A rejection now flushes the WHOLE unconfirmed cache back to
+// the SW (owner-scoped release) and refills fresh under the current identity.
+describe('confirm rejection flush (L3)', () => {
+  async function flushMicrotasks(): Promise<void> {
+    await new Promise((r) => setTimeout(r, 0));
+  }
+
+  it('flushes the entire unconfirmed cache, releases it, and refills', async () => {
+    labelReservoir._seedForTests(['a', 'b', 'c', 'd', 'e']);
+    const rejectionHandler = vi.fn();
+    labelReservoir.onConfirmRejected(rejectionHandler);
+    sendMessageMock.mockImplementation(async (msg: { type: string }) => {
+      if (msg.type === 'CONFIRM_LABELS') return { rejected: ['a'] };
+      if (msg.type === 'CLAIM_LABELS') return { labels: [] };
+      return {};
+    });
+
+    labelReservoir.claim(1); // grants 'a', sends the confirm
+    await flushMicrotasks();
+
+    // The whole remaining cache (b..e) was flushed, not just 'a' purged.
+    expect(labelReservoir.stats().free).toBe(0);
+    const released = sendMessageMock.mock.calls.find(([m]) => m.type === 'RELEASE_LABELS');
+    expect(released).toBeDefined();
+    expect(released![0].labels.sort()).toEqual(['b', 'c', 'd', 'e']);
+    // The content layer still gets the rejected strings to strip wrappers.
+    expect(rejectionHandler).toHaveBeenCalledWith(['a']);
+    // And a fresh refill was requested under the current identity.
+    expect(sendMessageMock.mock.calls.some(([m]) => m.type === 'CLAIM_LABELS')).toBe(true);
+  });
+
+  it('a clean confirm (no rejections) leaves the cache untouched', async () => {
+    labelReservoir._seedForTests(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j']);
+    sendMessageMock.mockImplementation(async (msg: { type: string }) => {
+      if (msg.type === 'CONFIRM_LABELS') return { rejected: [] };
+      return {};
+    });
+    labelReservoir.claim(1);
+    await flushMicrotasks();
+    expect(labelReservoir.stats().free).toBe(9);
+    expect(sendMessageMock.mock.calls.some(([m]) => m.type === 'RELEASE_LABELS')).toBe(false);
+  });
+});

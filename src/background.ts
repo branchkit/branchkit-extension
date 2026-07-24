@@ -9,7 +9,7 @@
  */
 
 import { Message, ScannedElement, HintVisibility } from './types';
-import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearAllStacks, alphabetsEqual } from './labels/label-pool';
+import { claimLabels, confirmLabels, releaseLabels, releaseFrame, clearAllStacks, alphabetsEqual, senderMayMutatePool } from './labels/label-pool';
 import { setAlphabet } from './labels/words';
 import { buildCommandContributions } from './command-catalog';
 import { rememberCodewords, clearCodewordMemory, recallCodewords } from './labels/codeword-memory';
@@ -736,6 +736,14 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
       sendResponse({ labels: [] });
       return false;
     }
+    // Prerender deny (DESIGN_PRERENDER_POOL_POISONING.md L1): a provisional
+    // frame id must never enter the pool. Empty grant; the CS's level-
+    // triggered claims retry after activation as the real frame 0.
+    if (!senderMayMutatePool(_sender)) {
+      void forwardDebugLog('pool.prerender_claim_denied', { tab_id: tabId, frame_id: frameId });
+      sendResponse({ labels: [] });
+      return false;
+    }
     claimLabels(tabId, frameId, message.count, message.preferred)
       .then(labels => sendResponse({ labels }))
       .catch(err => {
@@ -773,6 +781,13 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     const tabId = _sender.tab?.id;
     const frameId = _sender.frameId;
     if (typeof tabId !== 'number' || typeof frameId !== 'number' || !Array.isArray(message.labels)) {
+      sendResponse({ rejected: [] });
+      return false;
+    }
+    // Prerender deny (DESIGN_PRERENDER_POOL_POISONING.md L1): nothing to
+    // arbitrate — a prerender sender was never granted. Accept-nothing (an
+    // empty rejected list) rather than reject: rejecting strips wrappers.
+    if (!senderMayMutatePool(_sender)) {
       sendResponse({ rejected: [] });
       return false;
     }

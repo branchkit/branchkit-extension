@@ -8,7 +8,7 @@
  * Run: npm test
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   buildPool,
   claimLabels,
@@ -18,7 +18,10 @@ import {
   getFrameForLabel,
   sweepDeadStacks,
   alphabetsEqual,
+  senderMayMutatePool,
+  POOL_SIZE,
 } from './label-pool';
+import { vi } from 'vitest';
 import { LETTERS_26 } from './words';
 
 // The pool builds from the fixed extension-owned letter alphabet, so claim/
@@ -493,6 +496,78 @@ describe('label-pool', () => {
       const tab = nextTabId();
       await claimLabels(tab, 0, 2);
       expect(await sweepDeadStacks(async () => new Set([tab]))).not.toContain(tab);
+    });
+  });
+  // --- DESIGN_PRERENDER_POOL_POISONING.md ---
+
+  describe('senderMayMutatePool (L1)', () => {
+    it('denies prerender-lifecycle senders and allows everything else', () => {
+      expect(senderMayMutatePool({ documentLifecycle: 'prerender' })).toBe(false);
+      expect(senderMayMutatePool({ documentLifecycle: 'active' })).toBe(true);
+      // Older Chrome / Firefox senders without the field stay allowed.
+      expect(senderMayMutatePool({})).toBe(true);
+    });
+  });
+
+  describe('reservation TTL steal (L2)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('a claim does NOT steal fresh reservations', async () => {
+      const tab = nextTabId();
+      // Phantom frame reserves the whole pool.
+      await claimLabels(tab, 4241, POOL_SIZE);
+      // A fresh claim from frame 0 finds free exhausted and nothing stale.
+      const got = await claimLabels(tab, 0, 3);
+      expect(got).toEqual(['', '', '']);
+    });
+
+    it('a claim steals reservations older than the TTL, and the stolen labels confirm to the thief', async () => {
+      vi.useFakeTimers({ now: 1_000_000 });
+      const tab = nextTabId();
+      await claimLabels(tab, 4241, POOL_SIZE); // phantom holds everything
+      vi.setSystemTime(1_000_000 + 6 * 60_000); // past RESERVATION_STALE_MS
+      const got = await claimLabels(tab, 0, 3);
+      expect(got.filter(Boolean)).toHaveLength(3);
+      // The thief's confirm promotes normally.
+      const { rejected } = await confirmLabels(tab, 0, got);
+      expect(rejected).toEqual([]);
+      expect(await getFrameForLabel(tab, got[0])).toBe(0);
+      // The original holder's late confirm for a stolen label is rejected —
+      // its strip-and-reclaim recovery owns the aftermath.
+      const late = await confirmLabels(tab, 4241, [got[0]]);
+      expect(late.rejected).toEqual([got[0]]);
+    });
+
+    it('never steals the claiming frame\'s own reservations via pass 2', async () => {
+      vi.useFakeTimers({ now: 2_000_000 });
+      const tab = nextTabId();
+      await claimLabels(tab, 0, POOL_SIZE); // frame 0's own reservoir cache
+      vi.setSystemTime(2_000_000 + 6 * 60_000);
+      // Same frame claiming again: pass 2 must not cannibalize its own
+      // reservations (that is pass 1's sticky-preferred domain).
+      const got = await claimLabels(tab, 0, 2);
+      expect(got).toEqual(['', '']);
+    });
+
+    it('grandfathers stamp-less persisted stacks: stealable only after a TTL from load', async () => {
+      vi.useFakeTimers({ now: 3_000_000 });
+      const tab = nextTabId();
+      // Simulate a pre-migration persisted stack: reserved without reservedAt.
+      const key = `labelStack:${tab}`;
+      await chrome.storage.session.set({ [key]: {
+        free: LP.slice(2),
+        reserved: { [LP[0]]: 4241, [LP[1]]: 4241 },
+        assigned: {},
+      } });
+      // Exhaust free as frame 7 so pass 2 reaches the steal path.
+      await claimLabels(tab, 7, POOL_SIZE - 2);
+      // Immediately after load: grandfathered stamps = now, not stealable.
+      expect((await claimLabels(tab, 0, 1))[0]).toBe('');
+      vi.setSystemTime(3_000_000 + 6 * 60_000);
+      const got = await claimLabels(tab, 0, 2);
+      expect(got.filter(Boolean).length).toBeGreaterThan(0);
     });
   });
 });
