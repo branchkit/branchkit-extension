@@ -832,11 +832,17 @@ chrome.runtime.onConnect.addListener((port) => {
   livePortDocs.add(docId);
   port.onDisconnect.addListener(() => {
     livePortDocs.delete(docId);
-    // Doc-scoped: this document frees only ITS labels — never a bfcache-
-    // restored predecessor's re-assertions (they share frame 0; they do not
-    // share a docId).
+    // Doc-scoped, BOTH halves: this document frees only ITS labels and
+    // ends only ITS grammar session — never a successor's at the same
+    // (tab, frame) key (they share frame 0; they do not share a docId).
+    // The grammar half matters when this disconnect is delivered LATE
+    // (seen 4.5s after a Firefox navigation): by then the successor
+    // document's batches occupy the frame session, and an unfenced end
+    // destroyed 262 live codewords while the successor's delta-sync
+    // shadow still believed them committed — painted badges, voice-dead
+    // (the 2026-07-24 wikipedia ZY repro).
     releaseDocument(tabId, docId).catch(() => {});
-    forwardHintsSessionEnd('frame_liveness_disconnect', tabId, frameId).catch(() => {});
+    forwardHintsSessionEnd('frame_liveness_disconnect', tabId, frameId, docId).catch(() => {});
     // Evict this dead frame's fingerprint->codeword memory (chrome.storage.session).
     // The per-frame keys were previously only cleared on TAB close
     // (clearCodewordMemory(tabId)); the frame-scoped clear had no caller, so an

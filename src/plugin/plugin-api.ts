@@ -62,24 +62,31 @@ export async function forwardPluginDebugLog(
 //     codewords for this tab and clears the hints tag. Used on tab
 //     switch / tab close / navigation — the user can't be addressing
 //     a stale tab's hints anymore.
-//   - frame-scoped: pass `frameId`. Plugin Deletes only that frame's
-//     codewords; hints tag stays held if other frames in the tab are
-//     still live. Used on iframe removal / cross-document nav / bfcache
+//   - frame-scoped: pass `frameId` AND `docId`. Plugin Deletes only that
+//     frame's codewords; hints tag stays held if other frames in the tab
+//     are still live. Used on iframe removal / cross-document nav / bfcache
 //     evict via the frame-liveness Port's onDisconnect — siblings in
-//     the same tab may still be live.
+//     the same tab may still be live. docId names the DOCUMENT this end is
+//     about (read off the liveness port name): the plugin's doc-identity
+//     fence ignores an end whose doc_id doesn't match the session currently
+//     at (conn, tab, frame), so a navigation's late-delivered disconnect
+//     can't tear down the successor document's grammar (the painted-but-
+//     voice-dead class — same identity model as the document-scoped pool,
+//     DESIGN_DOCUMENT_SCOPED_POOL_OWNERSHIP.md).
 //
 // Both scopes are part of the Option B C7 cleanup story
 // (notes/DESIGN_HINT_PIPELINE_RESYNC.md). The tab-wide call replaces
 // the implicit "stop pushing" cleanup the old whole-grammar path did
 // via diffPrefixesToDelete.
-export async function forwardHintsSessionEnd(reason: string, tabId: number, frameId?: number): Promise<void> {
+export async function forwardHintsSessionEnd(reason: string, tabId: number, frameId?: number, docId?: string): Promise<void> {
   if (!(await ensureConnected())) return;
   // conn_id scopes the cleanup to THIS browser's frame sessions — tab ids
   // are browser-local and can collide across connected browsers, and the
   // plugin's session keys are conn-scoped (storm-arc last mile).
-  const body: { conn_id: string; reason: string; tab_id: number; frame_id?: number } =
+  const body: { conn_id: string; reason: string; tab_id: number; frame_id?: number; doc_id?: string } =
     { conn_id: connId, reason, tab_id: tabId };
   if (typeof frameId === 'number') body.frame_id = frameId;
+  if (docId) body.doc_id = docId;
   await postToPlugin('/hints/session_end', body);
 }
 

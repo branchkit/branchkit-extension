@@ -69,6 +69,17 @@ export interface GrammarBatchRequest {
   frame_id?: number;
   /** UUID per logical scan; groups all batches of one scan. */
   session_id: string;
+  /**
+   * This content script's document identity (labels/document-identity) —
+   * stable for the CS context's whole lifetime, unlike session_id, which
+   * rotates on rebuild idioms (alphabet swap, SW-restart resync, bfcache
+   * republish). Stamped centrally by postBatch, not by callers. The plugin
+   * stores it per frame session and fences frame-scoped session_end against
+   * it, so a predecessor document's late liveness disconnect can't tear
+   * down the successor's grammar at the same (tab, frame) key — the
+   * painted-but-voice-dead class (2026-07-24 Firefox ZY repro).
+   */
+  doc_id: string;
   /** 0-based monotonic batch index within the session. */
   batch_index: number;
   /** True on the last batch of this scan (or for an empty terminal batch). */

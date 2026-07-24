@@ -40,6 +40,7 @@ import { isVoiceAlphabetLoaded, tokenToSpokenCodeword } from './words';
 import { DEFAULT_SCAN_BATCH_SIZE } from '../scan/scanner';
 import { sweepDisconnectedAfterBatch } from '../scan/batch-sweep';
 import { getHintVisibility } from '../config';
+import { documentInstanceId } from './document-identity';
 import { labelReservoir } from './label-reservoir';
 import { bkLog } from '../debug/bk-log';
 import { firehoseStep } from '../debug/firehose';
@@ -176,7 +177,7 @@ export function drainPendingDeletes(): string[] {
 }
 
 export async function postBatch(
-  request: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'>,
+  request: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id' | 'doc_id'>,
   deletes: string[] = [],
 ): Promise<GrammarBatchResponse> {
   // Standalone (BranchKit absent): there is no plugin to receive the grammar.
@@ -201,8 +202,14 @@ export async function postBatch(
   // uniformly: applied (ok/stored — batch.go admits delete_codewords on any
   // batch) drops them from the shadow; anything else restores them for the
   // next attempt.
+  // doc_id is stamped here — the one choke point every grammar POST (scan
+  // path, catchup sync, pure-delete flush) flows through — so the plugin
+  // can bind this frame session to THIS document, not just to a reusable
+  // (tab, frame) slot. See GrammarBatchRequest.doc_id.
   const fullRequest: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'> =
-    deletes.length > 0 ? { ...request, delete_codewords: deletes } : request;
+    deletes.length > 0
+      ? { ...request, doc_id: documentInstanceId, delete_codewords: deletes }
+      : { ...request, doc_id: documentInstanceId };
   // Transport trace (round 22b): every outcome — including silently-caught
   // sendMessage failures and slow round-trips — lands in the snapshot's
   // sync_trace ring so a stalled post-swap sync names its mechanism.

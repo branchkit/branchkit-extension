@@ -69,12 +69,14 @@ describe('forwarders (connection gating)', () => {
 
   it('session_end scopes to one frame only when frameId is present', async () => {
     const api = await loadApi();
-    await api.forwardHintsSessionEnd('frame_liveness_disconnect', 3, 5);
+    await api.forwardHintsSessionEnd('frame_liveness_disconnect', 3, 5, 'doc-abc');
     const body = postToPlugin.mock.calls[0][1];
     expect(body.frame_id).toBe(5);
+    expect(body.doc_id).toBe('doc-abc'); // doc-identity fence input
     await api.forwardHintsSessionEnd('tab_closed', 3);
     const tabWide = postToPlugin.mock.calls[1][1];
     expect('frame_id' in tabWide).toBe(false);
+    expect('doc_id' in tabWide).toBe(false);
     expect(typeof tabWide.conn_id).toBe('string'); // conn-scoped cleanup
   });
 });
