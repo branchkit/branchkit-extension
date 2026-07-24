@@ -1,9 +1,14 @@
 # Orphan-CS paint — the arc, the tripwire, the probe
 
 Date: 2026-07-24
-Status: Layers 1-3 implemented. Layer 2 answered the port question (see
-"Layer 2 findings"); Layer 3 shipped both mechanisms (see "Layer 3");
-soak owed before layers 4-5.
+Status: ARC COMPLETE — all five layers landed same-day. Layer 2 answered
+the port question; layer 3 shipped both mechanisms + the CacheFlushed
+finding; layer 4 (observer fold) caught the attention-IO teardown leak;
+layer 5 landed the machinery-gate lift (content.ts 3576, ceiling 3620).
+Settle-fold: re-evaluated post-arc and REMAINS rejected — wireSettleSignals
+is already the deliberate single wiring site (June settle-engine arc);
+relocation buys line count, not a boundary. Remaining: extended real-world
+soak (layers 3-5 shipped same-day); Firefox field evidence via the probe.
 
 The dedicated orphan-CS teardown arc (kickoff brief in session memory;
 required reading: `DESIGN_ORPHAN_CS_TEARDOWN_RETROSPECTIVE.md`,
