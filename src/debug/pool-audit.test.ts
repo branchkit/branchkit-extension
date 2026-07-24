@@ -8,6 +8,8 @@
  * Run: npm test
  */
 
+// @vitest-environment happy-dom
+
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 type PoolAudit = typeof import('./pool-audit');
@@ -18,11 +20,13 @@ let hooksEnabled = true;
 const timeouts: Array<{ fn: () => void; ms: number }> = [];
 const intervals: Array<{ fn: () => void; ms: number }> = [];
 const wrappers: Array<{ scanned: { codeword: string } }> = [];
+const listeners: Array<{ ev: string; fn: () => void }> = [];
 const fakeSession = {
   isTornDown: false,
   resources: {
     timeout: (fn: () => void, ms: number) => { timeouts.push({ fn, ms }); return 1 as never; },
     pausableInterval: (fn: () => void, ms: number) => { intervals.push({ fn, ms }); },
+    listen: (_t: unknown, ev: string, fn: () => void) => { listeners.push({ ev, fn }); },
   },
 };
 
@@ -41,6 +45,8 @@ beforeEach(() => {
   hooksEnabled = true;
   timeouts.length = 0;
   intervals.length = 0;
+  listeners.length = 0;
+  delete document.documentElement.dataset.branchkitPoolAudit;
   wrappers.length = 0;
   fakeSession.isTornDown = false;
   sendMessage.mockResolvedValue({ unroutable: [], foreign: [] });
@@ -114,5 +120,25 @@ describe('initPoolAudit', () => {
     timeouts[0].fn();
     await flush();
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+  it('on-demand audit mirrors the FULL result (clean or not) to the dataset attribute', async () => {
+    const audit = await loadAudit();
+    wrappers.push({ scanned: { codeword: 'a w' } });
+    audit.initPoolAudit();
+    const hook = listeners.find((l) => l.ev === '__branchkit__pool_audit');
+    expect(hook).toBeDefined();
+    // Clean result still mirrors (the harness needs a positive signal).
+    hook!.fn();
+    await flush();
+    const clean = JSON.parse(document.documentElement.dataset.branchkitPoolAudit!);
+    expect(clean).toMatchObject({ seq: 1, held: 1, unroutable: [], foreign: [] });
+    // Divergent result mirrors AND breadcrumbs.
+    sendMessage.mockResolvedValue({ unroutable: ['a w'], foreign: [] });
+    hook!.fn();
+    await flush();
+    const dirty = JSON.parse(document.documentElement.dataset.branchkitPoolAudit!);
+    expect(dirty).toMatchObject({ seq: 2, unroutable: ['a w'] });
+    await flush();
+    expect(bkLog).toHaveBeenCalledWith('BK_POOL_AUDIT_DIVERGENCE', expect.objectContaining({ trigger: 'on_demand' }));
   });
 });

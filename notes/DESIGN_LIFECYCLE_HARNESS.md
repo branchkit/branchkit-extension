@@ -1,6 +1,11 @@
 # Lifecycle harness — automating the protocol half of soak
 
-**Status:** proposal, 2026-07-24. Motivated by the round-3 soak day: two
+**Status:** skeleton BUILT + shaken out same day (scripts/harness/lifecycle/,
+`npm run harness:lifecycle`). First run: fresh-load PASS (12 badges, all
+routable, end-to-end through the on-demand POOL_AUDIT surface); bfcache,
+prerender, and reload SKIP loudly — each has a named engagement blocker
+under automation (section 7). The invariant plumbing is proven; the
+remaining work is transition ENGAGEMENT, not assertion machinery. Motivated by the round-3 soak day: two
 months-old protocol bugs (prerender pool poisoning, bfcache non-reassert)
 were findable only by a human speaking hint pairs at the right moments.
 Both would have been caught mechanically by asserting ONE invariant across
@@ -103,3 +108,30 @@ back/forward; reload → bfcache restore; SW kill mid-scroll → resync.
 - Not a 53rd throwaway driver: scenarios share fixtures and the driver, and
   a scenario isn't merged without being wired into the runner — the same
   "not extracted until it has a spec" discipline, applied to harnesses.
+
+## 7. Shakeout findings (2026-07-24) — engagement blockers
+
+The skip design immediately earned its keep: three of four transitions are
+not engaged by default under Playwright/CDP, and each skip names why
+instead of passing vacuously.
+
+- **bfcache:** `pageshow.persisted=false` under automation. Modern Chrome
+  claims bfcache+DevTools coexistence, so something in the CDP session or
+  page state disqualifies it. Next step: subscribe to CDP
+  `Page.backForwardCacheNotUsed` and surface `notRestoredExplanations` in
+  the skip message — the browser will tell us the exact blocker.
+- **prerender:** speculation-rules prerender never started
+  (`document.prerendering=false` at B's parse). DevTools/CDP attach is a
+  documented PreloadingEligibility blocker in some Chrome versions. Next
+  step: CDP `Preload` domain to read the eligibility verdict; if
+  automation-blocked outright, this scenario stays a permanent loud skip
+  and the transition remains covered by the field tripwire.
+- **reload:** `chrome.runtime.reload()` is inert for command-line-loaded
+  extensions (no new SW appears; known Chromium quirk). Next step: drive
+  the chrome://extensions UI reload button (open shadow DOM) — the real
+  user path anyway.
+
+Until engagement lands, coverage for these three transitions comes from
+the field tripwire (debug/pool-audit.ts, always on in dev browsing) plus
+the manual checks — the harness's honest skips keep that visible instead
+of implying automation covers it.

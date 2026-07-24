@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Lifecycle fixture B</title>
+<script>
+  // Prerender detector: record whether this document was born prerendering
+  // and whether it activated — the scenario reads both.
+  document.documentElement.dataset.bornPrerendering = String(!!document.prerendering);
+  document.addEventListener('prerenderingchange', () => {
+    document.documentElement.dataset.activatedFromPrerender = 'true';
+  });
+  addEventListener('pageshow', (e) => {
+    document.documentElement.dataset.persisted = String(e.persisted);
+  });
+</script>
+</head>
+<body>
+  <h1>Fixture B</h1>
+  <p>
+    <a id="back-home" href="/a.html">back to A</a>
+    <a href="#p">pear</a> <a href="#q">quince</a> <a href="#r">rowan</a>
+    <a href="#s">sorb</a> <a href="#t">tayberry</a>
+  </p>
+  <p><button>uva</button> <button>vine</button> <button>wheat</button></p>
+</body>
+</html>

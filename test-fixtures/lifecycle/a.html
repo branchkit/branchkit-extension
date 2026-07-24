@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Lifecycle fixture A</title>
+<script>
+  // bfcache detector: pageshow.persisted tells the scenario whether the
+  // browser actually restored from bfcache (vs a fresh load).
+  addEventListener('pageshow', (e) => {
+    document.documentElement.dataset.persisted = String(e.persisted);
+  });
+</script>
+</head>
+<body>
+  <h1>Fixture A</h1>
+  <p>
+    <a id="to-b" href="/b.html">go to B</a>
+    <a href="#one">one</a> <a href="#two">two</a> <a href="#three">three</a>
+    <a href="#four">four</a> <a href="#five">five</a> <a href="#six">six</a>
+  </p>
+  <p>
+    <button>alpha</button> <button>beta</button> <button>gamma</button>
+    <button>delta</button> <button>epsilon</button>
+  </p>
+</body>
+</html>

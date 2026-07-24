@@ -31,10 +31,16 @@ import { bkLog } from './bk-log';
 const FIRST_AUDIT_MS = 7_000;
 const AUDIT_INTERVAL_MS = 60_000;
 
-async function auditOnce(trigger: string): Promise<void> {
-  if (pageSession.isTornDown) return;
+interface AuditResult {
+  held: number;
+  unroutable: string[];
+  foreign: string[];
+}
+
+async function computeAudit(): Promise<AuditResult | null> {
+  if (pageSession.isTornDown) return null;
   const held = store.all.map((w) => w.scanned.codeword).filter((cw) => cw !== '');
-  if (held.length === 0) return;
+  if (held.length === 0) return { held: 0, unroutable: [], foreign: [] };
   let resp: { unroutable?: string[]; foreign?: string[] } | undefined;
   try {
     resp = await chrome.runtime.sendMessage({
@@ -43,26 +49,57 @@ async function auditOnce(trigger: string): Promise<void> {
       labels: held,
     });
   } catch {
-    return; // SW asleep / orphan — next tick retries
+    return null; // SW asleep / orphan — next tick retries
   }
-  const unroutable = resp?.unroutable ?? [];
-  const foreign = resp?.foreign ?? [];
-  if (unroutable.length === 0 && foreign.length === 0) return;
+  return {
+    held: held.length,
+    unroutable: resp?.unroutable ?? [],
+    foreign: resp?.foreign ?? [],
+  };
+}
+
+async function auditOnce(trigger: string): Promise<void> {
+  const result = await computeAudit();
+  if (!result || result.held === 0) return;
+  if (result.unroutable.length === 0 && result.foreign.length === 0) return;
   bkLog('BK_POOL_AUDIT_DIVERGENCE', {
     trigger,
-    held: held.length,
-    unroutable: unroutable.length,
-    foreign: foreign.length,
+    held: result.held,
+    unroutable: result.unroutable.length,
+    foreign: result.foreign.length,
     // Full label lists so the report is actionable without a repro.
-    unroutable_labels: unroutable,
-    foreign_labels: foreign,
+    unroutable_labels: result.unroutable,
+    foreign_labels: result.foreign,
   });
 }
 
-/** Arm the tripwire. Called once from the content bootstrap; no-op in
- * release builds. */
+// On-demand audit for the lifecycle harness (DESIGN_LIFECYCLE_HARNESS.md):
+// a page-dispatched CustomEvent triggers the same audit and mirrors the FULL
+// result — clean or not — onto a dataset attribute the driver polls. Detail
+// objects don't cross MAIN→ISOLATED, so freshness rides a monotonic seq in
+// the payload; the driver clears the attribute before dispatching. Divergence
+// still breadcrumbs through auditOnce's log path so harness runs and field
+// runs report identically.
+let auditSeq = 0;
+
+async function auditOnDemand(): Promise<void> {
+  const result = await computeAudit();
+  const payload = result
+    ? { seq: ++auditSeq, ...result }
+    : { seq: ++auditSeq, held: -1, unroutable: [], foreign: [] }; // -1 = SW unreachable
+  document.documentElement.dataset.branchkitPoolAudit = JSON.stringify(payload);
+  if (result && (result.unroutable.length > 0 || result.foreign.length > 0)) {
+    void auditOnce('on_demand');
+  }
+}
+
+/** Arm the tripwire + the harness's on-demand surface. Called once from the
+ * content bootstrap; no-op in release builds. */
 export function initPoolAudit(): void {
   if (!harnessHooksEnabled()) return;
   pageSession.resources.timeout(() => { void auditOnce('boot'); }, FIRST_AUDIT_MS);
   pageSession.resources.pausableInterval(() => { void auditOnce('interval'); }, AUDIT_INTERVAL_MS);
+  pageSession.resources.listen(document, '__branchkit__pool_audit' as keyof DocumentEventMap, () => {
+    void auditOnDemand();
+  });
 }

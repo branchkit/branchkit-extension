@@ -1,0 +1,13 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Prerender fixture A</title>
+<script type="speculationrules">
+  { "prerender": [{ "urls": ["/b.html"] }] }
+</script>
+</head>
+<body>
+  <h1>Prerender launcher</h1>
+  <p><a id="to-b" href="/b.html">go to B (prerendered)</a></p>
+  <p><a href="#x">x</a> <a href="#y">y</a> <button>stay</button></p>
+</body>
+</html>
