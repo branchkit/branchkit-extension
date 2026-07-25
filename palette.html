@@ -77,7 +77,14 @@
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .meta { flex: 0 0 auto; display: flex; gap: 4px; align-items: baseline; margin-left: auto; }
-    .say { color: #8b949e; font-style: italic; font-size: 11px; white-space: nowrap; }
+    /* Voice phrase: mic glyph + phrase in the panel's accent blue (same family
+       as the section headers) — the spoken handle earns a quiet highlight over
+       the gray metadata. */
+    .say {
+      color: #58a6ff; font-style: italic; font-size: 11px; white-space: nowrap;
+      display: inline-flex; align-items: center; gap: 3px;
+    }
+    .say svg { width: 11px; height: 11px; flex: 0 0 auto; opacity: 0.9; }
     kbd {
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px;
       background: #21262d; color: #e6edf3; border: 1px solid #30363d;

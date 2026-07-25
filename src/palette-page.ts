@@ -23,6 +23,7 @@ import {
   type PaletteItem, type PaletteSection, type PaletteTab,
 } from './palette/model';
 import { assignCodewords, codewordDisplay, classifyMarkInput } from './palette/codewords';
+import { micGlyph } from './render/mic-glyph';
 import { markToSpokenWords, type MarkerMap } from './background/tab-markers';
 import { RELAY_HELLO, RELAY_REQ, RELAY_RESP, RELAY_DIAG, type BootstrapWire } from './palette/relay';
 
@@ -216,7 +217,12 @@ function render(sections: PaletteSection[]): void {
         row.appendChild(el('span', 'sub', item.subtitle));
       }
       const meta = el('div', 'meta');
-      if (item.voice.length) meta.appendChild(el('span', 'say', `“${item.voice[0]}”`));
+      if (item.voice.length) {
+        const say = el('span', 'say');
+        say.appendChild(micGlyph());
+        say.appendChild(document.createTextNode(`“${item.voice[0]}”`));
+        meta.appendChild(say);
+      }
       for (const k of item.keys) meta.appendChild(el('kbd', undefined, k));
       if (meta.childNodes.length) row.appendChild(meta);
       row.addEventListener('mousedown', (ev) => ev.preventDefault()); // keep input focus
