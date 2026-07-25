@@ -37,8 +37,9 @@ export interface PaletteItem {
   voice: string[];
   /** Lowercase haystack the query matches against. */
   words: string[];
-  /** Catalog group for command rows ("Scroll", "Palette", …) — drives the
-   *  browse-state section headers. Absent for tabs. */
+  /** Browse-state section header: catalog group for command rows ("Scroll",
+   *  "Palette", …), folder path for bookmark rows ("Bookmarks Bar / Work").
+   *  Absent for tabs. */
   group?: string;
   dispatch: PaletteDispatch;
 }
@@ -121,12 +122,24 @@ export function buildTabItems(
 }
 
 /**
- * Bookmark items in tree order (the user's own organization is the empty-state
- * order). Subtitle shows host + folder path; both are searchable, so "work
- * github" finds the GitHub bookmark in the Work folder.
+ * Bookmark items in tree order, with each folder's leaves gathered together
+ * (the DFS walk interleaves a parent's trailing leaves after its subfolders;
+ * a folder's section must not split around that). Folder order = first
+ * appearance in tree order, so the user's own organization is still the
+ * empty-state order. Array order is both the browse render order and the
+ * codeword assignment order, so voice badges read consecutively within a
+ * folder section. Subtitle shows host + folder path; both are searchable, so
+ * "work github" finds the GitHub bookmark in the Work folder.
  */
 export function buildBookmarkItems(bookmarks: readonly PaletteBookmark[]): PaletteItem[] {
-  return bookmarks.map((b, i) => {
+  const folderRank = new Map<string, number>();
+  for (const b of bookmarks) {
+    if (!folderRank.has(b.path)) folderRank.set(b.path, folderRank.size);
+  }
+  const ordered = [...bookmarks].sort(
+    (a, b) => folderRank.get(a.path)! - folderRank.get(b.path)!,
+  );
+  return ordered.map((b, i) => {
     const host = hostOf(b.url);
     return {
       source: 'bookmarks' as const,
@@ -136,6 +149,7 @@ export function buildBookmarkItems(bookmarks: readonly PaletteBookmark[]): Palet
       keys: [],
       voice: [],
       words: [...searchWords(b.title), ...searchWords(host), ...searchWords(b.path)],
+      group: b.path || undefined,
       dispatch: { kind: 'open_bookmark' as const, url: b.url },
     };
   });
@@ -221,10 +235,22 @@ export function scoreItem(item: PaletteItem, queryWords: readonly string[]): num
   return total;
 }
 
+/** Distinct `group` labels in first-appearance order, `fallback` for ungrouped. */
+function groupLabels(items: readonly PaletteItem[], fallback: string): string[] {
+  const groups: string[] = [];
+  for (const item of items) {
+    const g = item.group ?? fallback;
+    if (!groups.includes(g)) groups.push(g);
+  }
+  return groups;
+}
+
 /**
  * Filter both sources for a query and shape the sectioned result.
  *
- * Empty query = browse mode: tabs first (MRU order), then the commands. With
+ * Empty query = browse mode: tabs first (MRU order), then bookmarks, then the
+ * commands. Bookmarks split into one section per folder path (first-appearance
+ * = tree order) — the user's own organization is the browse structure. With
  * `groupedBrowse` (the commands-only palette — the "browse the catalog"
  * surface) the commands split into one section per catalog group, in catalog
  * order — the same headers as the `?` help overlay. The full palette keeps a
@@ -257,15 +283,15 @@ export function filterPalette(
     if (picked.length) sections.push({ source, label, items: picked });
   };
   build('tabs', 'Tabs', tabItems);
-  build('bookmarks', 'Bookmarks', bookmarkItems);
-  if (groupedBrowse && q.length === 0) {
-    // Grouped browse: group headers, first-appearance order (= catalog order).
-    const groups: string[] = [];
-    for (const item of commandItems) {
-      const g = item.group ?? 'Commands';
-      if (!groups.includes(g)) groups.push(g);
+  if (q.length === 0) {
+    for (const g of groupLabels(bookmarkItems, 'Bookmarks')) {
+      build('bookmarks', g, bookmarkItems.filter((i) => (i.group ?? 'Bookmarks') === g));
     }
-    for (const g of groups) {
+  } else {
+    build('bookmarks', 'Bookmarks', bookmarkItems);
+  }
+  if (groupedBrowse && q.length === 0) {
+    for (const g of groupLabels(commandItems, 'Commands')) {
       build('commands', g, commandItems.filter((i) => (i.group ?? 'Commands') === g));
     }
   } else {

@@ -157,10 +157,44 @@ describe('filterPalette', () => {
     expect(scoreItem(bms[0], ['work'])).toBeGreaterThan(0);   // folder path
     expect(scoreItem(bms[0], ['github'])).toBeGreaterThan(0); // host
     expect(bms[1].subtitle).toBe('cooking.example.com');
-    // Sectioned as their own source after tabs.
+  });
+
+  it('browse mode sections bookmarks by folder path, tree order', () => {
+    const bms = buildBookmarkItems([
+      { title: 'PRs', url: 'https://github.com/pulls', path: 'Bookmarks Bar / Work' },
+      { title: 'CI', url: 'https://ci.example.com/', path: 'Bookmarks Bar / Work' },
+      { title: 'Recipes', url: 'https://cooking.example.com/', path: 'Other Bookmarks' },
+      { title: 'Rootless', url: 'https://example.com/', path: '' },
+    ]);
     const sections = filterPalette([], [], '', false, bms);
-    expect(sections.map((s) => s.source)).toEqual(['bookmarks']);
-    expect(sections[0].items.length).toBe(2);
+    expect(sections.every((s) => s.source === 'bookmarks')).toBe(true);
+    expect(sections.map((s) => s.label)).toEqual(
+      ['Bookmarks Bar / Work', 'Other Bookmarks', 'Bookmarks']);
+    expect(sections[0].items.map((i) => i.title)).toEqual(['PRs', 'CI']);
+  });
+
+  it('gathers a folder split around a subfolder in the DFS walk', () => {
+    // Walk order: Work leaf, subfolder leaf, Work leaf again — the Work
+    // section must not split around the subfolder.
+    const bms = buildBookmarkItems([
+      { title: 'PRs', url: 'https://a.example.com/', path: 'Work' },
+      { title: 'Dash', url: 'https://b.example.com/', path: 'Work / Infra' },
+      { title: 'CI', url: 'https://c.example.com/', path: 'Work' },
+    ]);
+    expect(bms.map((i) => [i.group, i.title])).toEqual([
+      ['Work', 'PRs'], ['Work', 'CI'], ['Work / Infra', 'Dash'],
+    ]);
+  });
+
+  it('a typed query collapses bookmarks to one ranked section', () => {
+    const bms = buildBookmarkItems([
+      { title: 'PRs', url: 'https://github.com/pulls', path: 'Work' },
+      { title: 'Recipes', url: 'https://cooking.example.com/', path: 'Home' },
+    ]);
+    const sections = filterPalette([], [], 'prs', false, bms);
+    expect(sections.length).toBe(1);
+    expect(sections[0].label).toBe('Bookmarks');
+    expect(sections[0].items.map((i) => i.title)).toEqual(['PRs']);
   });
 
   it('a typed query collapses commands to one ranked section even under groupedBrowse', () => {
