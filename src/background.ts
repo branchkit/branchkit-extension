@@ -16,11 +16,11 @@ import { rememberCodewords, clearCodewordMemory, recallCodewords } from './label
 import { discoverPlugin, ensureConnected, postToPlugin, getFromPlugin, getActuatorJson } from './plugin/actuator-client';
 import { setLocalMark, getLocalMark, setGlobalMark, gotoGlobalMark } from './background/marks';
 import { baseUrl, type GlobalMark, type StoredMark } from './marks';
-import { recordTabActivated } from './background/tab-mru';
+import { recordTabActivated, loadMru } from './background/tab-mru';
 import { scheduleTabPublish, resetTabPublishCache } from './background/tab-collection';
 import {
   getTabMarker, pushTabMarker, reapplyTabMarker as reapplyTabMarkerFor,
-  releaseTabMarker, transferTabMarker, setTabMarkersEnabled,
+  releaseTabMarker, transferTabMarker, setTabMarkersEnabled, loadMarkerMap,
 } from './background/tab-markers';
 import { ensureContentScriptInjected } from './background/injection';
 import { bgState, connId } from './background/state';
@@ -525,6 +525,27 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   // The keymap editor can't reach the plugin directly; the SW forwards to the
   // browser plugin's passthrough, which relays to the actuator override layer.
   // See notes/DESIGN_COMMAND_PHRASE_OVERRIDES.md.
+
+  if (message.type === 'PALETTE_BOOTSTRAP') {
+    // Privileged palette data (see the Message type doc): tabs + MRU + marks
+    // fetched here because the Firefox palette iframe has content-script
+    // privileges only. activeTabId = the sender's tab — the palette can only
+    // be open in the tab that hosts it.
+    const activeTabId = _sender.tab?.id ?? null;
+    Promise.all([
+      chrome.tabs.query({}).catch(() => [] as chrome.tabs.Tab[]),
+      loadMru().catch(() => [] as number[]),
+      loadMarkerMap().catch(() => ({})),
+    ]).then(([tabs, mru, marks]) => {
+      sendResponse({
+        tabs: tabs
+          .filter((t) => typeof t.id === 'number')
+          .map((t) => ({ tabId: t.id, title: t.title ?? '', url: t.url ?? '' })),
+        mru, marks, activeTabId,
+      });
+    }).catch(() => sendResponse({ tabs: [], mru: [], marks: {}, activeTabId }));
+    return true; // async response
+  }
 
   if (message.type === 'GET_COMMAND_OVERRIDES') {
     ensureConnected()

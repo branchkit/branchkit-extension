@@ -289,7 +289,15 @@ export type Message =
   // background-driven PALETTE_CLOSE, local Ctrl+K toggle, blur). Background
   // drains the plugin's palette entries — which clears the exclusive tag —
   // and drops the dispatch map. Idempotent.
-  | { type: 'PALETTE_CLOSED' };
+  | { type: 'PALETTE_CLOSED' }
+  // Palette page → background: the privileged data the palette needs at
+  // open. The page CANNOT read these itself on Firefox — an extension iframe
+  // embedded in a web page runs with content-script privileges there
+  // (chrome.tabs undefined, storage.session untrusted), while Chrome grants
+  // such frames full API access. One background round-trip serves both.
+  // The hosting tab's id comes from the message sender, so tabs.getCurrent
+  // is unnecessary too.
+  | { type: 'PALETTE_BOOTSTRAP' };
 
 /** One spoken palette codeword → row binding, published to the plugin. */
 export interface PaletteVoiceEntry {

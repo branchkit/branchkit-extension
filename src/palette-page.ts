@@ -18,13 +18,12 @@
 import { COMMAND_CATALOG } from './command-catalog';
 import { loadKeymap } from './keymap-storage';
 import { overridesFromList, type OverrideRecord } from './command-override';
-import { loadMru } from './background/tab-mru';
 import {
   buildTabItems, buildCommandItems, filterPalette,
   type PaletteItem, type PaletteSection, type PaletteTab,
 } from './palette/model';
 import { assignCodewords, codewordDisplay, classifyMarkInput } from './palette/codewords';
-import { loadMarkerMap, markToSpokenWords, type MarkerMap } from './background/tab-markers';
+import { markToSpokenWords, type MarkerMap } from './background/tab-markers';
 import { stripTabMarker } from './tab-marker-format';
 import type { BadgeDisplayMode } from './types';
 import type { Message, PaletteVoiceEntry, PaletteVoiceRow } from './types';
@@ -83,19 +82,35 @@ function dispatchItem(item: PaletteItem | undefined): void {
   if (item) send(item.dispatch);
 }
 
-/** The tab hosting this palette. getCurrent works from an extension frame
- * embedded in a tab; the active-tab query is the fallback (the palette only
- * ever opens in the focused window's active tab). */
-async function currentTabId(): Promise<number | null> {
+/** The privileged data the palette needs at open, fetched from the
+ * background in one round-trip. NOT read directly: on Firefox this iframe
+ * runs with content-script privileges (chrome.tabs is undefined,
+ * storage.session untrusted) — the 2026-07-25 "Ctrl+K is just empty" field
+ * report. Chrome would allow direct reads, but one path serves both. */
+interface PaletteBootstrap {
+  tabs: PaletteTab[];
+  mru: number[];
+  marks: MarkerMap;
+  activeTabId: number | null;
+}
+
+async function loadBootstrap(): Promise<PaletteBootstrap> {
   try {
-    const t = await chrome.tabs.getCurrent();
-    if (t?.id != null) return t.id;
-  } catch { /* fall through */ }
-  try {
-    const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
-    return t?.id ?? null;
+    const resp = (await chrome.runtime.sendMessage({ type: 'PALETTE_BOOTSTRAP' } as Message)) as
+      | { tabs?: Array<{ tabId: number; title: string; url: string }>; mru?: number[]; marks?: MarkerMap; activeTabId?: number | null }
+      | undefined;
+    return {
+      tabs: (resp?.tabs ?? []).map((t) => ({
+        // Strip the marker decoration from titles — the mark shows as the
+        // row's badge, not baked into the title text.
+        tabId: t.tabId, title: stripTabMarker(t.title), url: t.url,
+      })),
+      mru: resp?.mru ?? [],
+      marks: resp?.marks ?? {},
+      activeTabId: resp?.activeTabId ?? null,
+    };
   } catch {
-    return null;
+    return { tabs: [], mru: [], marks: {}, activeTabId: null };
   }
 }
 
@@ -326,14 +341,11 @@ function assignAndPublish(alphabet: string[]): void {
 
 async function init(): Promise<void> {
   queryInput.focus();
-  const [tabs, mru, keymap, activeId, stored, sync, marks, overridesResp] = await Promise.all([
-    chrome.tabs.query({}).catch(() => [] as chrome.tabs.Tab[]),
-    loadMru().catch(() => [] as number[]),
+  const [boot, keymap, stored, sync, overridesResp] = await Promise.all([
+    loadBootstrap(),
     loadKeymap().catch(() => []),
-    currentTabId(),
     chrome.storage.local.get('alphabet').catch(() => ({} as Record<string, unknown>)),
     chrome.storage.sync.get('badgeDisplayMode').catch(() => ({} as Record<string, unknown>)),
-    loadMarkerMap().catch(() => ({} as MarkerMap)),
     chrome.runtime.sendMessage({ type: 'GET_COMMAND_OVERRIDES' }).catch(() => undefined),
   ]);
   const overrides = overridesFromList(
@@ -342,13 +354,8 @@ async function init(): Promise<void> {
   if (typeof sync.badgeDisplayMode === 'string') {
     displayMode = sync.badgeDisplayMode as BadgeDisplayMode;
   }
-  markMap = marks;
-  const open: PaletteTab[] = tabs
-    .filter((t): t is chrome.tabs.Tab & { id: number } => typeof t.id === 'number')
-    // Strip the marker decoration from titles — the mark shows as the row's
-    // badge, not baked into the title text.
-    .map((t) => ({ tabId: t.id, title: stripTabMarker(t.title ?? ''), url: t.url ?? '' }));
-  tabItems = buildTabItems(open, mru, activeId);
+  markMap = boot.marks;
+  tabItems = buildTabItems(boot.tabs, boot.mru, boot.activeTabId);
   // Tabs-only scope drops the command source entirely — same overlay, one
   // source (the Vomnibar "scoped by trigger key" pattern).
   commandItems = scope === 'tabs' ? [] : buildCommandItems(COMMAND_CATALOG, keymap, undefined, overrides);
