@@ -67,17 +67,26 @@ export function overridesFromList(list: readonly OverrideRecord[]): Map<string, 
 
 /**
  * The effective spoken forms for a command: each default pattern replaced by
- * the user's override when one exists. The single place display surfaces (help
- * overlay, palette, keymap editor) apply overrides, so what's shown always
- * matches what the actuator actually matches.
+ * the user's override when one exists, then the user's aliases (additive extra
+ * spoken forms — the "+ voice" free list) appended. The single place display
+ * surfaces (help overlay, palette, keymap editor) apply both, so what's shown
+ * always matches what the actuator actually matches.
  */
 export function effectiveVoice(
   commandId: string,
   patterns: readonly string[],
   overrides?: OverrideMap,
+  aliases?: readonly OverrideRecord[],
 ): string[] {
-  if (!overrides || overrides.size === 0) return [...patterns];
-  return patterns.map((p) => overrides.get(overrideKey(commandId, p)) ?? p);
+  const forms = !overrides || overrides.size === 0
+    ? [...patterns]
+    : patterns.map((p) => overrides.get(overrideKey(commandId, p)) ?? p);
+  if (aliases) {
+    for (const a of aliases) {
+      if (a.action === commandId && !forms.includes(a.new_pattern)) forms.push(a.new_pattern);
+    }
+  }
+  return forms;
 }
 
 /**

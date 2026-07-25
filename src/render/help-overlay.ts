@@ -19,7 +19,7 @@ import { comboDisplay } from '../activate/key-combo';
 import { letterToSpokenWord, isVoiceAlphabetLoaded } from '../labels/words';
 import { isBranchKitConnected } from '../plugin/connection-mirror';
 import { micGlyph } from './mic-glyph';
-import { effectiveVoice, type OverrideMap } from '../keymap/command-override';
+import { effectiveVoice, overridesFromList, type OverrideMap, type OverrideRecord } from '../keymap/command-override';
 
 export interface HelpRow {
   /** Display strings for every binding of this command (e.g. ["Shift+J"]). */
@@ -68,6 +68,7 @@ export function buildHelpModel(
   keymap: readonly KeymapEntry[],
   voiceConnected = true,
   overrides?: OverrideMap,
+  aliases?: readonly OverrideRecord[],
 ): HelpGroup[] {
   const keysByCommand = new Map<string, string[]>();
   for (const e of keymap) {
@@ -83,7 +84,7 @@ export function buildHelpModel(
     // and any command reachable ONLY by voice falls out via the skip below.
     // Overrides are applied so the overlay shows what actually works.
     const voice = voiceConnected
-      ? effectiveVoice(c.id, (c.voice ?? []).map((v) => v.pattern), overrides)
+      ? effectiveVoice(c.id, (c.voice ?? []).map((v) => v.pattern), overrides, aliases)
       : [];
     const keyHint = c.keyHint ? c.keyHint.split(/\s+/).filter(Boolean) : [];
     if (keys.length === 0 && voice.length === 0 && keyHint.length === 0) continue; // not reachable → skip
@@ -445,9 +446,30 @@ function close(): void {
   state.active = false;
 }
 
-/** Toggle the help overlay. Reads the effective keymap + phrase overrides each
- * open so custom binds and custom spoken phrases are reflected. */
-export function toggleHelpOverlay(keymap: readonly KeymapEntry[], overrides?: OverrideMap): void {
+/** Toggle with a fresh fetch of the user's spoken-form customizations (phrase
+ * overrides + additive aliases) via the SW → plugin. Best effort — empty lists
+ * (disconnected / none) just show catalog defaults. Close toggles immediately,
+ * no round trip. */
+export function toggleHelpOverlayWithSpokenForms(keymap: readonly KeymapEntry[]): void {
+  if (state.active) { close(); return; }
+  void Promise.all([
+    chrome.runtime.sendMessage({ type: 'GET_COMMAND_OVERRIDES' }).catch(() => undefined),
+    chrome.runtime.sendMessage({ type: 'GET_COMMAND_ALIASES' }).catch(() => undefined),
+  ]).then(([ov, al]) => {
+    const overrides = overridesFromList(
+      ((ov as { overrides?: OverrideRecord[] } | undefined)?.overrides) ?? []);
+    const aliases = ((al as { aliases?: OverrideRecord[] } | undefined)?.aliases) ?? [];
+    toggleHelpOverlay(keymap, overrides, aliases);
+  });
+}
+
+/** Toggle the help overlay. Reads the effective keymap + phrase overrides +
+ * aliases each open so custom binds and custom spoken phrases are reflected. */
+export function toggleHelpOverlay(
+  keymap: readonly KeymapEntry[],
+  overrides?: OverrideMap,
+  aliases?: readonly OverrideRecord[],
+): void {
   if (state.active) { close(); return; }
   // One availability signal drives both surfaces: no spoken phrases in the
   // command table and a connect prompt in the alphabet column unless voice is
@@ -456,7 +478,7 @@ export function toggleHelpOverlay(keymap: readonly KeymapEntry[], overrides?: Ov
   // says voice was seen once, not that speaking works today.
   const alphabet = buildAlphabetModel();
   const voiceAvailable = alphabet.loaded && isBranchKitConnected();
-  const model = buildHelpModel(COMMAND_CATALOG, keymap, voiceAvailable, overrides);
+  const model = buildHelpModel(COMMAND_CATALOG, keymap, voiceAvailable, overrides, aliases);
   const host = buildHelpOverlay(model, alphabet, voiceAvailable, close);
   document.documentElement.appendChild(host);
   // Capture-phase Escape so we close before the page (or the key handler) can

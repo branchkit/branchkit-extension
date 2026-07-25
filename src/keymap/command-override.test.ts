@@ -30,6 +30,18 @@ describe('overridesFromList + effectiveVoice', () => {
     // Same default pattern text under a different command id must not match.
     expect(effectiveVoice('other', ['toggle'], ov)).toEqual(['toggle']);
   });
+
+  it('appends aliases for the command, deduped, without crossing ids', () => {
+    const aliases = [
+      { action: 'scroll_half_up', default_pattern: 'page up', new_pattern: 'up' },
+      { action: 'scroll_half_down', default_pattern: 'page down', new_pattern: 'down' },
+      // An alias equal to an existing form must not duplicate.
+      { action: 'scroll_half_up', default_pattern: 'page up', new_pattern: 'page up' },
+    ];
+    expect(effectiveVoice('scroll_half_up', ['page up'], undefined, aliases))
+      .toEqual(['page up', 'up']);
+    expect(effectiveVoice('other', ['toggle'], undefined, aliases)).toEqual(['toggle']);
+  });
 });
 
 describe('captureTokens', () => {

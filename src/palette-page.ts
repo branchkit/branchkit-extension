@@ -409,16 +409,18 @@ function assignAndPublish(alphabet: string[]): void {
 
 async function init(): Promise<void> {
   queryInput.focus();
-  const [boot, keymap, stored, sync, overridesResp] = await Promise.all([
+  const [boot, keymap, stored, sync, overridesResp, aliasesResp] = await Promise.all([
     loadBootstrap(),
     loadKeymap().catch(() => []),
     chrome.storage.local.get('alphabet').catch(() => ({} as Record<string, unknown>)),
     chrome.storage.sync.get('badgeDisplayMode').catch(() => ({} as Record<string, unknown>)),
     chrome.runtime.sendMessage({ type: 'GET_COMMAND_OVERRIDES' }).catch(() => undefined),
+    chrome.runtime.sendMessage({ type: 'GET_COMMAND_ALIASES' }).catch(() => undefined),
   ]);
   const overrides = overridesFromList(
     ((overridesResp as { overrides?: OverrideRecord[] } | undefined)?.overrides) ?? [],
   );
+  const aliases = ((aliasesResp as { aliases?: OverrideRecord[] } | undefined)?.aliases) ?? [];
   if (typeof sync.badgeDisplayMode === 'string') {
     displayMode = sync.badgeDisplayMode as BadgeDisplayMode;
   }
@@ -426,7 +428,7 @@ async function init(): Promise<void> {
   // A scoped open drops the other source entirely — same overlay, one
   // source (the Vomnibar "scoped by trigger key" pattern).
   tabItems = scope === 'commands' ? [] : buildTabItems(boot.tabs, boot.mru, boot.activeTabId);
-  commandItems = scope === 'tabs' ? [] : buildCommandItems(COMMAND_CATALOG, keymap, undefined, overrides);
+  commandItems = scope === 'tabs' ? [] : buildCommandItems(COMMAND_CATALOG, keymap, undefined, overrides, aliases);
   const alphabet = Array.isArray(stored.alphabet) ? (stored.alphabet as string[]) : [];
   assignAndPublish(alphabet);
   // Tab palette opens in letter mode when marks exist (the fast path); with no
