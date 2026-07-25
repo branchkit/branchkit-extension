@@ -2966,6 +2966,12 @@ const heldKeys = new Set<string>();
 
 pageSession.resources.listen(document, 'keydown', (e: KeyboardEvent) => {
   if (pageSession.isTornDown) return;
+  // Not a keystroke: keyCode 229 is the platform's text-commit sentinel (IME,
+  // and any OS-level injection such as voice dictation). Its `key` is an
+  // artifact — BranchKit's dictation sink surfaces as `key: "s"` whatever was
+  // said — so letting it reach the hint filter or a binding acts on a keystroke
+  // the user never made. The committed text follows as an input event.
+  if (e.keyCode === 229 || e.isComposing) return;
   // While the find bar is open it owns the keyboard — its focused input handles
   // typing and its own keydown handles Enter/Escape. Returning here (without
   // preventDefault) lets the keystroke reach that input and keeps the hint key

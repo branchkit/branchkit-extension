@@ -420,6 +420,14 @@ queryInput.addEventListener('input', (ev) => {
 });
 
 window.addEventListener('keydown', (e) => {
+  // Not a keystroke: `keyCode 229` is the platform's "text is being committed"
+  // sentinel (IME, and any OS-level text injection). The `key` on such an event
+  // is an artifact — the dictation sink's CGEvent carries virtual keycode 0,
+  // which reaches the page as `key: "s", code: "KeyA"` regardless of what was
+  // said. Consuming it as a mark letter jumped to whichever tab was marked "s"
+  // (field report 2026-07-25). The real text follows as an insertion, which the
+  // input handler reads as a search query.
+  if (e.keyCode === 229 || e.isComposing) return;
   // Common navigation (both modes). Ctrl+K closes either palette (the full
   // palette's opener toggles it; a convenience for the tab palette). The tab
   // palette opens with bare `T`, which is a mark letter inside letter mode, so
