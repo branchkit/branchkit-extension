@@ -58,6 +58,7 @@ fdiag(`boot build=${typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : 'unknow
 let tabItems: PaletteItem[] = [];
 let commandItems: PaletteItem[] = [];
 let bookmarkItems: PaletteItem[] = [];
+let bookmarksError: string | undefined;
 /** Flat render order of the current sections — the selection index space. */
 let flat: PaletteItem[] = [];
 let selected = 0;
@@ -108,6 +109,7 @@ interface PaletteBootstrap {
   mru: number[];
   marks: MarkerMap;
   bookmarks: PaletteBookmark[];
+  bookmarksError?: string;
   activeTabId: number | null;
 }
 
@@ -184,6 +186,7 @@ async function loadBootstrap(): Promise<PaletteBootstrap> {
     mru: resp.mru ?? [],
     marks: resp.marks ?? {},
     bookmarks: resp.bookmarks ?? [],
+    bookmarksError: resp.bookmarksError,
     activeTabId: resp.activeTabId ?? null,
   };
 }
@@ -200,7 +203,14 @@ function render(sections: PaletteSection[]): void {
   if (selected >= flat.length) selected = Math.max(0, flat.length - 1);
   listEl.textContent = '';
   if (flat.length === 0) {
-    listEl.appendChild(el('div', 'empty', 'No matching tabs or commands.'));
+    // Scope-aware, and loud on a failed bookmarks fetch (a silent empty list
+    // reads as "you have no bookmarks" — the bootstrap rule).
+    const msg = scope === 'bookmarks'
+      ? (bookmarksError ? `Bookmarks unavailable: ${bookmarksError}` : 'No bookmarks in this browser.')
+      : scope === 'tabs' ? 'No matching tabs.'
+      : scope === 'commands' ? 'No matching commands.'
+      : 'No matching tabs or commands.';
+    listEl.appendChild(el('div', 'empty', msg));
     return;
   }
   let idx = 0;
@@ -445,6 +455,7 @@ async function init(): Promise<void> {
   commandItems = scope === 'tabs' || scope === 'bookmarks'
     ? [] : buildCommandItems(COMMAND_CATALOG, keymap, undefined, overrides, aliases);
   bookmarkItems = scope === 'bookmarks' ? buildBookmarkItems(boot.bookmarks) : [];
+  bookmarksError = boot.bookmarksError;
   const alphabet = Array.isArray(stored.alphabet) ? (stored.alphabet as string[]) : [];
   assignAndPublish(alphabet);
   // Tab palette opens in letter mode when marks exist (the fast path); with no
@@ -455,7 +466,7 @@ async function init(): Promise<void> {
   else if (scope === 'commands') { queryInput.placeholder = 'Search commands…'; }
   else if (scope === 'bookmarks') { queryInput.placeholder = 'Search bookmarks…'; }
   renderCurrent();
-  fdiag(`init ok tabs=${tabItems.length} commands=${commandItems.length} bookmarks=${bookmarkItems.length} marks=${codewords.size}`);
+  fdiag(`init ok tabs=${tabItems.length} commands=${commandItems.length} bookmarks=${bookmarkItems.length}${bookmarksError ? ` bookmarks_error=${bookmarksError}` : ''} marks=${codewords.size}`);
 }
 
 init().catch((err: unknown) => {

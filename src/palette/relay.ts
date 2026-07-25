@@ -36,5 +36,7 @@ export interface BootstrapWire {
   mru?: number[];
   marks?: Record<number, string>;
   bookmarks?: Array<{ title: string; url: string; path: string }>;
+  /** Set when the bookmarks fetch failed (permission missing) — loud, not empty. */
+  bookmarksError?: string;
   activeTabId?: number | null;
 }

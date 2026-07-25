@@ -27,7 +27,7 @@ import { loadMarkerMap } from './tab-markers';
  * Bookmarks" on Chrome; "Bookmarks Menu" etc. on Firefox) are kept in the
  * path — they disambiguate duplicates and cost nothing.
  */
-export async function loadBookmarks(): Promise<PaletteBookmark[]> {
+export async function loadBookmarks(): Promise<{ list: PaletteBookmark[]; error?: string }> {
   const out: PaletteBookmark[] = [];
   const walk = (nodes: chrome.bookmarks.BookmarkTreeNode[], path: string[]): void => {
     for (const n of nodes) {
@@ -35,10 +35,18 @@ export async function loadBookmarks(): Promise<PaletteBookmark[]> {
       else if (n.children) walk(n.children, n.title ? [...path, n.title] : path);
     }
   };
+  // Loud, not empty (the palette's bootstrap rule): a failure names itself in
+  // the response so the overlay + fdiag can show it — a silent [] reads as
+  // "you have no bookmarks" and costs a field round-trip. It did (2026-07-25).
+  if (!chrome.bookmarks?.getTree) {
+    return { list: [], error: 'bookmarks API unavailable — permission not granted? (re-toggle the extension)' };
+  }
   try {
     walk(await chrome.bookmarks.getTree(), []);
-  } catch { /* permission missing / API unavailable — empty list, palette shows none */ }
-  return out;
+  } catch (e) {
+    return { list: [], error: String(e) };
+  }
+  return { list: out };
 }
 
 /**
@@ -57,12 +65,12 @@ export function handlePaletteBootstrap(
     loadMru().catch(() => [] as number[]),
     loadMarkerMap().catch(() => ({})),
     loadBookmarks(),
-  ]).then(([tabs, mru, marks, bookmarks]) => {
+  ]).then(([tabs, mru, marks, bm]) => {
     sendResponse({
       tabs: tabs
         .filter((t) => typeof t.id === 'number')
         .map((t) => ({ tabId: t.id, title: t.title ?? '', url: t.url ?? '' })),
-      mru, marks, bookmarks, activeTabId,
+      mru, marks, bookmarks: bm.list, bookmarksError: bm.error, activeTabId,
     });
   }).catch(() => sendResponse({ tabs: [], mru: [], marks: {}, bookmarks: [], activeTabId }));
   return true;
