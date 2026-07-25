@@ -105,9 +105,11 @@ let relaySecret: string | null = null;
 let relaySecretReady: (() => void) | null = null;
 const relaySecretArrived = new Promise<void>((res) => { relaySecretReady = res; });
 let relayResolve: ((data: BootstrapWire | null) => void) | null = null;
+/** Error string the host's RESP carried, for the overlay diagnosis. */
+let relayError: string | null = null;
 
 window.addEventListener('message', (ev) => {
-  const d = ev.data as { type?: string; secret?: string; data?: BootstrapWire | null } | null;
+  const d = ev.data as { type?: string; secret?: string; data?: BootstrapWire | null; error?: string } | null;
   if (!d) return;
   if (d.type === RELAY_HELLO && typeof d.secret === 'string') {
     relaySecret = d.secret;
@@ -115,6 +117,7 @@ window.addEventListener('message', (ev) => {
     return;
   }
   if (d.type === RELAY_RESP && relaySecret !== null && d.secret === relaySecret) {
+    relayError = d.error ?? null;
     relayResolve?.(d.data ?? null);
     relayResolve = null;
   }
@@ -124,12 +127,18 @@ async function bootstrapViaRelay(): Promise<BootstrapWire | null> {
   // Wait for the host's HELLO (frame load) before asking, bounded — no host
   // relay (e.g. an old content script) must not hang the palette forever.
   await Promise.race([relaySecretArrived, new Promise((res) => setTimeout(res, 1500))]);
-  if (relaySecret === null) return null;
+  if (relaySecret === null) {
+    relayError = 'host content script never connected — refresh the tab (stale page script)';
+    return null;
+  }
   return new Promise((resolve) => {
     relayResolve = resolve;
     // The REQ crosses the page's window — it deliberately carries nothing.
     window.parent.postMessage({ type: RELAY_REQ }, '*');
-    setTimeout(() => { relayResolve?.(null); relayResolve = null; }, 2000);
+    setTimeout(() => {
+      if (relayResolve) relayError = 'host relay did not answer within 2s';
+      relayResolve?.(null); relayResolve = null;
+    }, 2000);
   });
 }
 
@@ -145,7 +154,9 @@ async function loadBootstrap(): Promise<PaletteBootstrap> {
   if (!resp) {
     resp = (await bootstrapViaRelay()) ?? undefined;
   }
-  if (!resp) throw new Error('PALETTE_BOOTSTRAP: no response directly or via the host relay');
+  if (!resp) {
+    throw new Error(`PALETTE_BOOTSTRAP: direct=no response; relay=${relayError ?? 'no response'}`);
+  }
   return {
     tabs: (resp.tabs ?? []).map((t) => ({
       // Strip the marker decoration from titles — the mark shows as the

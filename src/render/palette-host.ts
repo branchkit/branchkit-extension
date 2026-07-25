@@ -35,13 +35,22 @@ window.addEventListener('message', (ev) => {
   if (!frame || ev.source !== frame.contentWindow) return;
   const d = ev.data as { type?: string } | null;
   if (!d || d.type !== RELAY_REQ) return;
-  const respond = (data: unknown): void => {
+  const respond = (data: unknown, error?: string): void => {
     frame?.contentWindow?.postMessage(
-      { type: RELAY_RESP, secret: relaySecret, data }, FRAME_ORIGIN);
+      { type: RELAY_RESP, secret: relaySecret, data, error }, FRAME_ORIGIN);
   };
-  chrome.runtime.sendMessage({ type: 'PALETTE_BOOTSTRAP' })
-    .then(respond)
-    .catch(() => respond(null));
+  // Callback form deliberately: promise-form sendMessage is exactly what
+  // resolved undefined from the frame on Firefox — don't stack the relay on
+  // the same mechanism. lastError read to avoid the unchecked warning; its
+  // message rides back so the frame can render the real cause.
+  try {
+    chrome.runtime.sendMessage({ type: 'PALETTE_BOOTSTRAP' }, (resp) => {
+      const err = chrome.runtime.lastError?.message;
+      respond(resp ?? null, resp ? undefined : (err ?? 'background sent no data'));
+    });
+  } catch (e) {
+    respond(null, String(e));
+  }
 });
 
 export function isPaletteOpen(): boolean {
