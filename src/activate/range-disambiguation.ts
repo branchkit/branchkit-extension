@@ -125,7 +125,9 @@ export function filterRangePickChips(letter: string): boolean {
   for (const [cw, ui] of pending.chipUi) {
     const matches = letter !== '' && cw.replace(/\s/g, '').charAt(0) === letter;
     ui.host.style.opacity = letter === '' || matches ? '1' : '0.25';
-    if (ui.firstLetter) ui.firstLetter.style.color = matches ? '#ffffff' : '';
+    // White at rest; the matched first letter goes gold (user pref) — the
+    // inverse of the old gold-at-rest scheme.
+    if (ui.firstLetter) ui.firstLetter.style.color = matches ? '#ffd60a' : '';
   }
   return true;
 }
@@ -220,7 +222,7 @@ function paintChip(range: Range, codeword: string): ChipUi {
   const shadow = host.attachShadow({ mode: 'closed' });
   const chip = document.createElement('span');
   chip.style.cssText =
-    'display:inline-block;background:rgba(20,20,24,0.92);color:#ffd60a;' +
+    'display:inline-block;background:rgba(20,20,24,0.92);color:#ffffff;' +
     'font:600 11px/1.5 -apple-system,BlinkMacSystemFont,system-ui,sans-serif;' +
     'padding:0 5px;border-radius:4px;border:0.5px solid rgba(255,255,255,0.25);' +
     'box-shadow:0 1px 4px rgba(0,0,0,0.4);white-space:nowrap';
