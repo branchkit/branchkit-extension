@@ -30,9 +30,16 @@ export const MAX_RANGE_BADGES = 9;
  * pending pick must not swallow a codeword spoken minutes later. */
 const PICK_WINDOW_MS = 12_000;
 
+/** One chip's mutable visuals: the positioned host (dim target) and its
+ * first letter's span (mid-pair matched-char highlight). */
+interface ChipUi {
+  host: HTMLElement;
+  firstLetter: HTMLElement | null;
+}
+
 interface PendingPick {
   byCodeword: Map<string, Range>;
-  chips: HTMLElement[];
+  chipUi: Map<string, ChipUi>;
   timeout: number;
   onPick: (range: Range) => void;
   /** Regular badges were visible at pick start — restore them on teardown. */
@@ -105,6 +112,25 @@ export function refusePickWindowCodeword(action: string, codeword: string): bool
 }
 
 /**
+ * Mid-pair progress on the chips — the same feedback the badge hints give:
+ * after the first word of a pair, chips that can't complete dim and the
+ * matched first letter lights up on the rest. `letter` is the SW-translated
+ * prefix letter; '' resets (pair cancelled). Returns true iff a pick is
+ * live, so the caller (content's progress handler) routes progress HERE
+ * instead of the store hints — without this, speaking a chip's first word
+ * re-showed the very badges the pick window just hid.
+ */
+export function filterRangePickChips(letter: string): boolean {
+  if (!pending) return false;
+  for (const [cw, ui] of pending.chipUi) {
+    const matches = letter !== '' && cw.replace(/\s/g, '').charAt(0) === letter;
+    ui.host.style.opacity = letter === '' || matches ? '1' : '0.25';
+    if (ui.firstLetter) ui.firstLetter.style.color = matches ? '#ffffff' : '';
+  }
+  return true;
+}
+
+/**
  * Start a disambiguation pick over the given ranges: claim codewords, paint a
  * chip at each range, publish the codewords for matching, and wait for
  * resolveRangePick / timeout. Ranges beyond MAX_RANGE_BADGES are dropped with
@@ -124,11 +150,11 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
   }
 
   const byCodeword = new Map<string, Range>();
-  const chips: HTMLElement[] = [];
+  const chipUi = new Map<string, ChipUi>();
   const records: ScannedElement[] = [];
   for (let i = 0; i < picked.length && i < codewords.length; i++) {
     byCodeword.set(codewords[i], picked[i]);
-    chips.push(paintChip(picked[i], codewords[i]));
+    chipUi.set(codewords[i], paintChip(picked[i], codewords[i]));
     records.push({
       label: codewords[i],
       id: 0, // not in the element registry — codeword is the only address
@@ -142,7 +168,7 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
 
   const timeout = window.setTimeout(() => teardown('timeout'), PICK_WINDOW_MS);
   const restoreBadges = pickWindowHooks?.hideBadges() ?? false;
-  pending = { byCodeword, chips, timeout, onPick, restoreBadges };
+  pending = { byCodeword, chipUi, timeout, onPick, restoreBadges };
 
   void publishRecords(records).then((admitted) => {
     // Rejected codewords (pool race, plugin refusal) can never be spoken —
@@ -150,8 +176,8 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
     if (!pending || pending.byCodeword !== byCodeword) return;
     for (const [cw] of byCodeword) {
       if (!admitted.has(cw)) {
-        const idx = codewords.indexOf(cw);
-        if (idx >= 0) chips[idx]?.remove();
+        chipUi.get(cw)?.host.remove();
+        chipUi.delete(cw);
         byCodeword.delete(cw);
       }
     }
@@ -166,10 +192,10 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
 
 function teardown(reason: string): void {
   if (!pending) return;
-  const { byCodeword, chips, timeout, restoreBadges } = pending;
+  const { byCodeword, chipUi, timeout, restoreBadges } = pending;
   pending = null;
   window.clearTimeout(timeout);
-  for (const chip of chips) chip.remove();
+  for (const ui of chipUi.values()) ui.host.remove();
   if (restoreBadges) pickWindowHooks?.showBadges();
   const codewords = [...byCodeword.keys()];
   retireRecords(codewords);
@@ -184,7 +210,7 @@ function teardown(reason: string): void {
  * Styling mirrors the hint badges' look (dark chip, light text) but is
  * self-contained so hints.ts stays untouched.
  */
-function paintChip(range: Range, codeword: string): HTMLElement {
+function paintChip(range: Range, codeword: string): ChipUi {
   const rect = range.getBoundingClientRect();
   const host = document.createElement('div');
   host.setAttribute('data-branchkit-hint', ''); // page observers + our scanners skip our nodes
@@ -193,13 +219,21 @@ function paintChip(range: Range, codeword: string): HTMLElement {
     `left:${rect.left + window.scrollX}px;top:${rect.top + window.scrollY - 18}px`;
   const shadow = host.attachShadow({ mode: 'closed' });
   const chip = document.createElement('span');
-  chip.textContent = codeword;
   chip.style.cssText =
     'display:inline-block;background:rgba(20,20,24,0.92);color:#ffd60a;' +
     'font:600 11px/1.5 -apple-system,BlinkMacSystemFont,system-ui,sans-serif;' +
     'padding:0 5px;border-radius:4px;border:0.5px solid rgba(255,255,255,0.25);' +
     'box-shadow:0 1px 4px rgba(0,0,0,0.4);white-space:nowrap';
+  // Per-character spans so mid-pair progress can light the matched first
+  // letter, mirroring the badge hints' matched-char treatment.
+  let firstLetter: HTMLElement | null = null;
+  for (const ch of codeword) {
+    const s = document.createElement('span');
+    s.textContent = ch;
+    chip.appendChild(s);
+    if (!firstLetter && ch.trim() !== '') firstLetter = s;
+  }
   shadow.appendChild(chip);
   (document.body || document.documentElement).appendChild(host);
-  return host;
+  return { host, firstLetter };
 }

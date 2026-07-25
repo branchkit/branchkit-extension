@@ -58,7 +58,7 @@ import { getSiteKeyState, onSiteKeysChanged } from './keyboard-rules';
 import { copyText } from './clipboard';
 import { flashToast } from './render/toast';
 import { registerSelectionCommands, restorePosition, caret, SELECTION_ACTIONS, parseSelectionCommand } from './activate/selection-commands';
-import { resolveRangePick, refusePickWindowCodeword, setPickWindowHooks } from './activate/range-disambiguation';
+import { resolveRangePick, refusePickWindowCodeword, filterRangePickChips, setPickWindowHooks } from './activate/range-disambiguation';
 import { runEscapeCascade } from './activate/escape-cascade';
 import {
   CodewordSnapshot,
@@ -2500,8 +2500,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         });
         return;
       }
-      // Chips own the codewords while a pick is pending (guard lives in
-      // activate/range-disambiguation.ts).
+      // Chips own the codewords while a pick is pending (see the module).
       if (codeword && refusePickWindowCodeword(action, codeword)) return;
       const idParam = parseInt(params?.id ?? '0', 10);
       const frameIdParam = params?.frame_id != null ? parseInt(params.frame_id, 10) : -1;
@@ -2745,8 +2744,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         });
       }
     } else if (action === 'escape') {
-      // Voice "escape" / "over" — the Esc key's cascade, spoken. Peel logic
-      // lives in activate/escape-cascade.ts.
+      // Voice "escape"/"over" — the Esc cascade (activate/escape-cascade.ts).
       const peeled = runEscapeCascade();
       reportDispatchResult({
         action, codeword: '', resolution: 'none', elem_tag: '',
@@ -2772,6 +2770,8 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       // The SW translates the inbound spoken prefix word to its letter before
       // forwarding (see frame-router), so `prefix` is already a letter here.
       const letter = params?.prefix;
+      // Pick window: progress goes to the chips; hidden badges stay hidden.
+      if (filterRangePickChips(letter ?? '')) return;
       if (letter) {
         if (!pageSession.badgesVisible) showBadges();
         const matchSet = new Set(store.matchingLetterPrefix(letter));

@@ -33,9 +33,13 @@ vi.mock('../render/toast', () => ({
 }));
 vi.mock('../debug/bk-log', () => ({ bkLog: () => {} }));
 
+vi.mock('../plugin/resolve', () => ({
+  reportDispatchResult: () => {},
+}));
+
 import {
   startRangePick, resolveRangePick, cancelRangePick, isRangePickPending,
-  MAX_RANGE_BADGES,
+  filterRangePickChips, MAX_RANGE_BADGES,
 } from './range-disambiguation';
 
 function makeRange(text = 'x'): Range {
@@ -87,6 +91,24 @@ describe('range-disambiguation pick', () => {
     expect(isRangePickPending()).toBe(false);
     expect(retired.flat().sort()).toEqual(['alpha', 'bravo', 'charlie']);
     expect(released.flat().sort()).toEqual(['alpha', 'bravo', 'charlie']);
+  });
+
+  it('routes mid-pair progress to the chips: dims non-matching, resets on empty', () => {
+    nextClaim = ['air bam', 'cat dog'];
+    startRangePick([makeRange(), makeRange()], () => {});
+    const hosts = chipHosts() as HTMLElement[];
+    expect(hosts).toHaveLength(2);
+    // Prefix letter 'a': the 'air bam' chip stays lit, 'cat dog' dims.
+    expect(filterRangePickChips('a')).toBe(true);
+    expect(hosts[0].style.opacity).toBe('1');
+    expect(hosts[1].style.opacity).toBe('0.25');
+    // Empty letter = pair cancelled — everything resets.
+    filterRangePickChips('');
+    expect(hosts[0].style.opacity).toBe('1');
+    expect(hosts[1].style.opacity).toBe('1');
+    // No pick live → false, so content falls through to the store hints.
+    cancelRangePick('test');
+    expect(filterRangePickChips('a')).toBe(false);
   });
 
   it('ignores codewords that are not part of the pick', () => {
