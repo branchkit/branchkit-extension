@@ -186,7 +186,13 @@ async function loadBootstrap(): Promise<PaletteBootstrap> {
     mru: resp.mru ?? [],
     marks: resp.marks ?? {},
     bookmarks: resp.bookmarks ?? [],
-    bookmarksError: resp.bookmarksError,
+    // A response with NO bookmarks key (vs an empty list) means the answering
+    // background predates the feature — the Firefox stale-background class.
+    // Name it, or it masquerades as "you have no bookmarks".
+    bookmarksError: resp.bookmarksError
+      ?? (resp.bookmarks === undefined
+        ? 'stale extension background (no bookmarks in response) — reload the extension'
+        : undefined),
     activeTabId: resp.activeTabId ?? null,
   };
 }
