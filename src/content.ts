@@ -58,6 +58,7 @@ import { getSiteKeyState, onSiteKeysChanged } from './keyboard-rules';
 import { copyText } from './clipboard';
 import { flashToast } from './render/toast';
 import { registerSelectionCommands, restorePosition, caret, SELECTION_ACTIONS, parseSelectionCommand } from './activate/selection-commands';
+import { resolveRangePick } from './activate/range-disambiguation';
 import {
   CodewordSnapshot,
   takeSnapshot,
@@ -2473,6 +2474,20 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       // Three-tier resolution (see docs/completed/DESIGN_ELEMENT_IDENTITY_REGISTRY.md §6).
       // Algorithm lives in activate-resolution.ts so it's unit-testable.
       const codeword = params?.codeword ?? '';
+      // Range-disambiguation pick: if this frame is waiting on a codeword
+      // choice for "highlight"/"select to" (activate/range-disambiguation.ts),
+      // the spoken codeword names a text RANGE, not an element — consume it
+      // before element resolution. Frame routing already delivered it here
+      // (the pick claimed the codeword from this frame's reservoir).
+      if (codeword && resolveRangePick(codeword)) {
+        reportDispatchResult({
+          action, codeword, resolution: 'range_pick', elem_tag: '',
+          taken: 'click', ok: true,
+          frame: trimFrameUrl(window.location.href),
+          detail: 'range pick resolved', fp: '',
+        });
+        return;
+      }
       const idParam = parseInt(params?.id ?? '0', 10);
       const frameIdParam = params?.frame_id != null ? parseInt(params.frame_id, 10) : -1;
 

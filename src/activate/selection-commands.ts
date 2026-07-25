@@ -14,6 +14,8 @@
 
 import { dispatcher, keyHandler } from '../core/singletons';
 import { CaretController, type SelectionCommand } from './caret';
+import { findAllRanges } from '../scan/find';
+import { startRangePick, cancelRangePick } from './range-disambiguation';
 import {
   PREV_POSITION_REGISTERS, isPrevPositionRegister, marksToHash, type StoredMark,
 } from '../marks';
@@ -172,12 +174,32 @@ export function registerSelectionCommands(): void {
     caret.enterFromNormal();
   });
   dispatcher.register('visual_line_mode', () => caret.enter('visual-line'));
-  // "extend to <phrase>" — find the dictated phrase and extend the far bound to
-  // it (find + extend in one utterance). Rides the platform dictated-argument
-  // path (params.query), same plumbing as find_immediate's search.
+  // "highlight <phrase>" / "select to <phrase>" — locate the dictated phrase
+  // and select/extend to it. Rides the platform dictated-argument path
+  // (params.query). Multi-match and cross-frame rules (round 1, design in
+  // notes/DESIGN_TEXT_TARGETING.md "Range-match disambiguation"):
+  //   - top frame, exactly one match → act immediately (the common case);
+  //   - top frame with several matches, or ANY subframe with matches →
+  //     codeword pick badges (startRangePick), so at most one frame can
+  //     auto-select and every ambiguous case is an explicit choice. The old
+  //     behavior — every frame independently selecting its own first match —
+  //     is how a selection landed in a frame the user wasn't looking at
+  //     (field test 2026-07-24: "copy that" → "caret mode not active").
   dispatcher.register('select_to', (params) => {
-    const query = params.query || '';
-    if (query) caret.extendToPhrase(query);
+    const query = (params.query || '').trim();
+    if (!query) return;
+    const ranges = findAllRanges(query);
+    if (ranges.length === 0) {
+      cancelRangePick('requery');
+      if (isTopFrame) flashToast('Phrase not found');
+      return;
+    }
+    if (ranges.length === 1 && isTopFrame) {
+      cancelRangePick('resolved_direct');
+      caret.extendToRange(ranges[0]);
+      return;
+    }
+    startRangePick(ranges, (range) => caret.extendToRange(range));
   });
 
   dispatcher.register('go_next', () => navigatePage('next'));

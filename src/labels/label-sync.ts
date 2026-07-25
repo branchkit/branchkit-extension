@@ -35,7 +35,7 @@
 
 import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
 import { stampStrictViewport } from '../lifecycle/strict-viewport';
-import { GrammarBatchRequest, GrammarBatchResponse, Message } from '../types';
+import { GrammarBatchRequest, GrammarBatchResponse, Message, ScannedElement } from '../types';
 import { isVoiceAlphabetLoaded, tokenToSpokenCodeword } from './words';
 import { DEFAULT_SCAN_BATCH_SIZE } from '../scan/scanner';
 import { sweepDisconnectedAfterBatch } from '../scan/batch-sweep';
@@ -171,6 +171,55 @@ export async function claimLabels(count: number, preferred: string[] = []): Prom
   // its own letter rather than whatever sits front-of-pool. Without this the
   // scan path reused recalled codewords in pool order — i.e. mismatched.
   return labelReservoir.claim(count, preferred);
+}
+
+/**
+ * Publish pre-serialized grammar records that have no ElementWrapper — the
+ * range-disambiguation badges (activate/range-disambiguation.ts, design in
+ * notes/DESIGN_TEXT_TARGETING.md). One incremental single-batch POST through
+ * postBatch so doc_id stamping, shadow accounting (markSent), and the desync
+ * tripwire all see these codewords exactly like element puts. Returns the
+ * codewords the plugin admitted.
+ */
+export async function publishRecords(records: ScannedElement[]): Promise<Set<string>> {
+  const admitted = new Set<string>();
+  if (records.length === 0 || !isVoiceAlphabetLoaded()) return admitted;
+  const sid = sessionId;
+  const resp = await postBatch({
+    session_id: sid,
+    batch_index: 0,
+    is_final: true,
+    kind: 'incremental',
+    conn_id: '', // stamped by the background SW
+    hint_visibility: getHintVisibility(),
+    app_id: '',
+    table_id: '',
+    elements: records,
+  });
+  if (resp.result === 'ok' || resp.result === 'stored') {
+    const failed = new Set(resp.failed.map(f => f.codeword));
+    for (const r of records) {
+      if (!failed.has(r.codeword)) {
+        markSent(r.codeword);
+        admitted.add(r.codeword);
+      }
+    }
+    checkShadowDesync(resp, sid, 'range_records');
+  }
+  return admitted;
+}
+
+/** Retire published no-wrapper records: queue plugin-side deletes for the
+ * codewords the shadow holds and kick a sync so they don't linger matchable. */
+export function retireRecords(codewords: string[]): void {
+  let queued = 0;
+  for (const cw of codewords) {
+    if (sentCodewords.has(cw)) {
+      queueDelete(cw);
+      queued++;
+    }
+  }
+  if (queued > 0) scheduleSync('range_records_retire');
 }
 
 /** Drain the queued deletes for an outbound batch. Callers pass the drained

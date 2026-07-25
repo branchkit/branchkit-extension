@@ -63,6 +63,64 @@ When several candidates tie (three "Edit" buttons):
 This means G1 is not a parallel targeting stack — it's a **pre-filter that feeds
 the existing hint/dispatch pipeline** when ambiguous, and a fast-path when not.
 
+## Range-match disambiguation for highlight/select-to (DECIDED 2026-07-25, building)
+
+The first shipped consumer of the disambiguation idea above, but for TEXT
+RANGES, not elements: the dictated-argument verbs ("highlight <phrase>",
+"select to <phrase>", app notes/DESIGN_DICTATED_COMMAND_ARGUMENT.md) currently
+take `locateTolerant(query)[0]` — the first visible match — silently. Field
+test 2026-07-24: with duplicates the selection lands somewhere the user didn't
+mean, and because `select_to` broadcasts to ALL frames, it can even land in a
+frame they can't see (observed: "copy that" skipped with "caret mode not
+active" in the top frame while an unseen frame held the selection).
+
+Decisions (from the seam investigation, session 2026-07-25):
+
+- **Badges OUTSIDE the hints store** (mode-chip precedent), NOT a
+  RangeHintable union inside it: the store feeds occlusion, sweep, snapshot,
+  prefix-filter, display-grade — a foreign non-element type in there is a
+  huge contact surface for zero round-1 benefit. Instead: an imperative
+  `pendingRangeDisambiguation` singleton per frame holding
+  `{codeword → Range}`, its `RectBadge` chips, mode (highlight|extend), and
+  a timeout.
+- **RectBadge**: a pared-down chip reusing BADGE_CSS + the shadow-DOM host
+  pattern from `HintBadge`, positioned ONCE in document coordinates
+  (range.getBoundingClientRect() + scroll offsets, position:absolute) — NO
+  reconciler registration, no observers (the one-in-one-out sensing freeze
+  stays intact; a disambiguation window is seconds long, drift under SPA
+  mutation is acceptable).
+- **Codewords from the real deck** via `labelReservoir.claim(n)` — the
+  claim API is target-agnostic and the SW pool arbitrates cross-frame
+  uniqueness for free. Release on resolve/cancel; doc-scoped pool ownership
+  (the 2026-07-24 re-key) reclaims on doc death regardless.
+- **Grammar publish**: claimed range codewords must reach the plugin's
+  eligibility set. `queuePut` is ElementWrapper-coupled, so label-sync gains
+  a narrow `queuePutRecord(ScannedElement)` path — minimal record
+  (`label=codeword, id=0, category/type = range-disambiguation`), same
+  batch/delete/sent-tracking lifecycle. Deck words are already in the union
+  lexicon, so this is eligibility only — no HLG recompile.
+- **Dispatch intercept**: in content.ts BRANCHKIT_ACTION, before normal
+  codeword resolution — if a disambiguation is pending in this frame and
+  params.codeword is one of its, consume it (select/extend that range,
+  teardown). Frame routing comes free: the SW already routes a spoken
+  codeword to its claiming frame.
+- **Cross-frame round-1 rule** (no new cross-frame protocol): the TOP frame
+  with exactly one match acts immediately (today's behavior); the top frame
+  with N>1 badges; a SUBFRAME with any matches (even one) always badges.
+  At most one frame can auto-select, everything else is explicit —
+  deterministic without frames knowing each other's counts. Cost: a phrase
+  that exists once, only in an iframe, now takes one codeword — worth it.
+- **Bounds**: cap 9 badges (document order; toast "N matches — showing
+  first 9"), 12s auto-cancel, a new arm replaces a pending one. Escape-key
+  cancel is a follow-up (needs keyboard-mode wiring; timeout covers round 1).
+- **caret seam**: `extendToPhrase(phrase)` refactors to locate-then-
+  `extendToRange(range)`; the disambiguation resolve calls `extendToRange`
+  directly (highlight mode: select the range + enter mode; extend mode:
+  `sel.extend` to it).
+
+Find/"search" gets the same treatment later (jump-to-match by codeword);
+round 1 is select_to/highlight only.
+
 ## Companion: act-on-target verbs (G6/G7/G3 — "paste to target")
 
 Once "resolve text → element" exists, the *verb* is a parameter. The same

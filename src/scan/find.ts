@@ -487,9 +487,19 @@ function locateTolerant(query: string): Range[] {
  * <phrase>" (notes/DESIGN_VOICE_SELECTION_BOUNDS.md). Null when nothing matches.
  */
 export function findFirstRange(query: string): Range | null {
+  return findAllRanges(query)[0] ?? null;
+}
+
+/**
+ * All visible matches for a phrase (exact, then tolerant — same layering as
+ * findFirstRange). The substrate for range-match disambiguation: the caller
+ * decides whether one match acts immediately or several get pick badges
+ * (activate/range-disambiguation.ts).
+ */
+export function findAllRanges(query: string): Range[] {
   const trimmed = query.trim();
-  if (!trimmed) return null;
-  return locateTolerant(trimmed)[0] ?? null;
+  if (!trimmed) return [];
+  return locateTolerant(trimmed);
 }
 
 function move(delta: number): void {

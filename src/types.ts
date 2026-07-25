@@ -427,7 +427,7 @@ export interface TableLink {
 export interface DispatchResult {
   action: string;            // e.g. "activate", "scroll", "noop"
   codeword: string;          // e.g. "arch check" — empty for non-codeword actions
-  resolution: 'registry' | 'fingerprint' | 'snapshot' | 'live_store' | 'none';
+  resolution: 'registry' | 'fingerprint' | 'snapshot' | 'live_store' | 'range_pick' | 'none';
   elem_tag: string;          // actual tag of the resolved element, e.g. "input"
   taken: 'focus' | 'click' | 'skipped' | 'noop';
   ok: boolean;               // overall success

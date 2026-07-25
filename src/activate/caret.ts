@@ -871,6 +871,13 @@ export class CaretController {
   extendToPhrase(phrase: string): void {
     const range = findFirstRange(phrase);
     if (!range) { flashToast('Phrase not found'); return; }
+    this.extendToRange(range);
+  }
+
+  /** Range-direct half of extendToPhrase — the range-disambiguation pick
+   *  resolves straight to a Range (the phrase was already located and the
+   *  user chose which occurrence), so no re-find. */
+  extendToRange(range: Range): void {
     const sel = window.getSelection();
     if (!sel) return;
     this.fieldEl = null; // a page phrase targets the document, not a field

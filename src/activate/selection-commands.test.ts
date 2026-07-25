@@ -28,11 +28,14 @@ const keyHandler = {
 };
 const caretInstance = {
   enterFromFind: vi.fn(() => false), enterFromNormal: vi.fn(), enter: vi.fn(),
-  extendToPhrase: vi.fn(), handleKey: vi.fn(), isActive: vi.fn(() => false),
+  extendToPhrase: vi.fn(), extendToRange: vi.fn(), handleKey: vi.fn(), isActive: vi.fn(() => false),
 };
 const findPageLink = vi.fn();
 const flashToast = vi.fn();
 const copyText = vi.fn(async () => true);
+const findAllRanges = vi.fn((): Range[] => []);
+const startRangePick = vi.fn();
+const cancelRangePick = vi.fn();
 
 async function loadModule(): Promise<SelectionCommands> {
   vi.resetModules();
@@ -44,6 +47,8 @@ async function loadModule(): Promise<SelectionCommands> {
   vi.doMock('../pagination', () => ({ findPageLink }));
   vi.doMock('../url-nav', () => ({ urlUp: vi.fn(() => null), urlRoot: vi.fn(() => null) }));
   vi.doMock('../clipboard', () => ({ copyText }));
+  vi.doMock('../scan/find', () => ({ findAllRanges }));
+  vi.doMock('./range-disambiguation', () => ({ startRangePick, cancelRangePick }));
   return await import('./selection-commands');
 }
 
@@ -61,6 +66,8 @@ afterEach(() => {
   vi.doUnmock('../pagination');
   vi.doUnmock('../url-nav');
   vi.doUnmock('../clipboard');
+  vi.doUnmock('../scan/find');
+  vi.doUnmock('./range-disambiguation');
 });
 
 describe('parseSelectionCommand', () => {
@@ -120,14 +127,42 @@ describe('registration contract (Phase 1)', () => {
     expect(caretInstance.enterFromNormal).toHaveBeenCalledTimes(1);
   });
 
-  it('select_to forwards the dictated phrase, and drops an empty one', async () => {
+  it('select_to: single top-frame match acts immediately; empty query drops', async () => {
     const m = await loadModule();
     m.registerSelectionCommands();
+    const r = {} as Range;
+    findAllRanges.mockReturnValueOnce([r]);
     dispatcher.dispatch('select_to', { query: 'hello world' });
-    expect(caretInstance.extendToPhrase).toHaveBeenCalledWith('hello world');
-    caretInstance.extendToPhrase.mockClear();
+    expect(findAllRanges).toHaveBeenCalledWith('hello world');
+    expect(caretInstance.extendToRange).toHaveBeenCalledWith(r);
+    expect(startRangePick).not.toHaveBeenCalled();
+    caretInstance.extendToRange.mockClear();
     dispatcher.dispatch('select_to', {});
-    expect(caretInstance.extendToPhrase).not.toHaveBeenCalled();
+    expect(caretInstance.extendToRange).not.toHaveBeenCalled();
+  });
+
+  it('select_to: multiple matches start a range pick instead of selecting', async () => {
+    const m = await loadModule();
+    m.registerSelectionCommands();
+    const ranges = [{} as Range, {} as Range];
+    findAllRanges.mockReturnValueOnce(ranges);
+    dispatcher.dispatch('select_to', { query: 'dup' });
+    expect(caretInstance.extendToRange).not.toHaveBeenCalled();
+    expect(startRangePick).toHaveBeenCalledTimes(1);
+    expect(startRangePick.mock.calls[0][0]).toBe(ranges);
+    // The pick's callback extends to the chosen range.
+    (startRangePick.mock.calls[0][1] as (r: Range) => void)(ranges[1]);
+    expect(caretInstance.extendToRange).toHaveBeenCalledWith(ranges[1]);
+  });
+
+  it('select_to: no matches toasts and cancels any pending pick', async () => {
+    const m = await loadModule();
+    m.registerSelectionCommands();
+    findAllRanges.mockReturnValueOnce([]);
+    dispatcher.dispatch('select_to', { query: 'absent' });
+    expect(flashToast).toHaveBeenCalledWith('Phrase not found');
+    expect(cancelRangePick).toHaveBeenCalled();
+    expect(startRangePick).not.toHaveBeenCalled();
   });
 
   it('go_next follows the page link when found, toasts when absent', async () => {
