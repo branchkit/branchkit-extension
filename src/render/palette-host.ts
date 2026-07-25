@@ -13,7 +13,18 @@
  * through the background (PALETTE_OPEN → PALETTE_COMMAND at frame 0).
  */
 
-import { RELAY_HELLO, RELAY_REQ, RELAY_RESP } from '../palette/relay';
+import { RELAY_HELLO, RELAY_REQ, RELAY_RESP, RELAY_DIAG } from '../palette/relay';
+import { reportDispatchResult } from '../plugin/resolve';
+
+/** Palette lifecycle breadcrumbs → the plugin's dispatch-result log. The
+ * palette frame itself can't reach the plugin (no privileges on Firefox), so
+ * the host reports for both — grep actuator.log for `palette_diag`. */
+function paletteDiag(detail: string): void {
+  reportDispatchResult({
+    action: 'palette_diag', codeword: '', resolution: 'none', elem_tag: '',
+    taken: 'skipped', ok: true, frame: location.origin, detail, fp: '',
+  });
+}
 
 const HOST_ATTR = 'data-branchkit-palette';
 // One below max signed int — same tier as the help and debug overlays.
@@ -33,9 +44,16 @@ window.addEventListener('message', (ev) => {
   // Only OUR frame's requests; the page posting from its own window (even
   // via frame.contentWindow.postMessage) has a different event.source.
   if (!frame || ev.source !== frame.contentWindow) return;
-  const d = ev.data as { type?: string } | null;
-  if (!d || d.type !== RELAY_REQ) return;
+  const d = ev.data as { type?: string; msg?: string } | null;
+  if (!d) return;
+  if (d.type === RELAY_DIAG && typeof d.msg === 'string') {
+    paletteDiag('frame: ' + d.msg.slice(0, 200));
+    return;
+  }
+  if (d.type !== RELAY_REQ) return;
+  paletteDiag('relay req received');
   const respond = (data: unknown, error?: string): void => {
+    paletteDiag(`relay resp sent data=${data ? 'yes' : 'no'} err=${error ?? 'none'}`);
     frame?.contentWindow?.postMessage(
       { type: RELAY_RESP, secret: relaySecret, data, error }, FRAME_ORIGIN);
   };
@@ -63,6 +81,7 @@ export type PaletteScope = 'all' | 'tabs';
 
 export function openPalette(scope: PaletteScope = 'all'): void {
   if (frame) return;
+  paletteDiag(`open scope=${scope}`);
   prevFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const f = document.createElement('iframe');
   f.setAttribute(HOST_ATTR, '');
@@ -83,6 +102,7 @@ export function openPalette(scope: PaletteScope = 'all'): void {
     try { f.contentWindow?.focus(); } catch { f.focus(); }
     relaySecret = crypto.randomUUID();
     f.contentWindow?.postMessage({ type: RELAY_HELLO, secret: relaySecret }, FRAME_ORIGIN);
+    paletteDiag('frame load event — hello sent');
   });
   document.documentElement.appendChild(f);
   frame = f;

@@ -24,7 +24,15 @@ import {
 } from './palette/model';
 import { assignCodewords, codewordDisplay, classifyMarkInput } from './palette/codewords';
 import { markToSpokenWords, type MarkerMap } from './background/tab-markers';
-import { RELAY_HELLO, RELAY_REQ, RELAY_RESP, type BootstrapWire } from './palette/relay';
+import { RELAY_HELLO, RELAY_REQ, RELAY_RESP, RELAY_DIAG, type BootstrapWire } from './palette/relay';
+
+// Lifecycle breadcrumbs → host → plugin dispatch-result log (actuator.log,
+// action=palette_diag). The only way to see inside this frame on browsers no
+// harness drives (Firefox). Counts and error names only — never tab data.
+declare const __BUILD_ID__: string;
+function fdiag(msg: string): void {
+  try { window.parent.postMessage({ type: RELAY_DIAG, msg }, '*'); } catch { /* no parent */ }
+}
 import { stripTabMarker } from './tab-marker-format';
 import type { BadgeDisplayMode } from './types';
 import type { Message, PaletteVoiceEntry, PaletteVoiceRow } from './types';
@@ -40,6 +48,7 @@ document.getElementById('boot-probe')?.remove();
 // Scope from the host URL: 'tabs' shows only the open-tabs source (Ctrl+T /
 // voice "tab"); anything else is the full command station.
 const scope = new URLSearchParams(location.search).get('scope') === 'tabs' ? 'tabs' : 'all';
+fdiag(`boot build=${typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : 'unknown'} scope=${scope}`);
 
 let tabItems: PaletteItem[] = [];
 let commandItems: PaletteItem[] = [];
@@ -151,8 +160,10 @@ async function loadBootstrap(): Promise<PaletteBootstrap> {
   // reads as "you have no tabs" and cost a field round-trip.
   let resp = (await chrome.runtime.sendMessage({ type: 'PALETTE_BOOTSTRAP' } as Message)
     .catch(() => undefined)) as BootstrapWire | undefined;
+  fdiag(`bootstrap direct=${resp ? `ok tabs=${resp.tabs?.length ?? 0}` : 'no response'}`);
   if (!resp) {
     resp = (await bootstrapViaRelay()) ?? undefined;
+    fdiag(`bootstrap relay=${resp ? `ok tabs=${resp.tabs?.length ?? 0}` : (relayError ?? 'no response')}`);
   }
   if (!resp) {
     throw new Error(`PALETTE_BOOTSTRAP: direct=no response; relay=${relayError ?? 'no response'}`);
@@ -422,6 +433,7 @@ async function init(): Promise<void> {
   if (scope === 'tabs' && codewords.size > 0) enterLetterMode();
   else if (scope === 'tabs') { mode = 'fuzzy'; queryInput.placeholder = 'Search tabs…'; }
   renderCurrent();
+  fdiag(`init ok tabs=${tabItems.length} commands=${commandItems.length} marks=${codewords.size}`);
 }
 
 init().catch((err: unknown) => {
@@ -432,5 +444,6 @@ init().catch((err: unknown) => {
   listEl.textContent = '';
   const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
   listEl.appendChild(el('div', 'empty', `Palette failed to load — ${msg}`));
+  fdiag(`init FAILED: ${msg}`);
   console.error('[BranchKit palette] init failed:', err);
 });

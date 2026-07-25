@@ -24,6 +24,11 @@
 export const RELAY_HELLO = 'BK_PALETTE_RELAY_HELLO';
 export const RELAY_REQ = 'BK_PALETTE_BOOTSTRAP_REQ';
 export const RELAY_RESP = 'BK_PALETTE_BOOTSTRAP_RESP';
+/** Frame → host lifecycle breadcrumb; the host forwards it to the plugin's
+ * dispatch-result log, giving actuator.log an inside-the-frame trace on
+ * browsers no harness can drive (Firefox). Page-visible — carries counts and
+ * error names only, never tab data. */
+export const RELAY_DIAG = 'BK_PALETTE_DIAG';
 
 /** Wire shape of the bootstrap payload (mirrors PALETTE_BOOTSTRAP's response). */
 export interface BootstrapWire {
