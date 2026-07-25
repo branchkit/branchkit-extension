@@ -21,7 +21,7 @@ vi.mock('../labels/label-reservoir', () => ({
   },
 }));
 
-const publishedRecords: Array<{ codeword: string }> = [];
+const publishedRecords: Array<{ codeword: string; in_strict_viewport?: boolean }> = [];
 const retired: string[][] = [];
 let admitAll = true;
 vi.mock('../labels/label-sync', () => ({
@@ -120,6 +120,20 @@ function chipCount(): number {
 }
 
 describe('range-disambiguation pick', () => {
+  // happy-dom reports every rect as all-zeros, which the band planner correctly
+  // reads as "collapsed, nowhere to anchor a chip" — so without a default stub
+  // every test would silently exercise the nothing-in-band fallback instead of
+  // the pick. Give ranges a real on-screen box by default; the viewport tests
+  // below override this.
+  let restoreDefaultRects: (() => void) | null = null;
+  beforeEach(() => {
+    const original = Range.prototype.getBoundingClientRect;
+    Range.prototype.getBoundingClientRect = () =>
+      ({ top: 10, bottom: 30, left: 10, right: 60, width: 50, height: 20 }) as DOMRect;
+    restoreDefaultRects = () => { Range.prototype.getBoundingClientRect = original; };
+  });
+  afterEach(() => { restoreDefaultRects?.(); restoreDefaultRects = null; });
+
   beforeEach(() => {
     vi.useFakeTimers();
     claimed.length = 0;
@@ -244,13 +258,63 @@ describe('range-disambiguation pick', () => {
     } finally { restore(); }
   });
 
-  it('falls back to document order when nothing is in view', async () => {
+  it('acts on the first match when nothing is within a band of the viewport', async () => {
     const restore = withStubbedRects(() => false);
     try {
-      startRangePick([makeRange('a'), makeRange('b')], () => {});
+      const picks: Range[] = [];
+      const ranges = [makeRange('a'), makeRange('b')];
+      startRangePick(ranges, (r) => picks.push(r));
       await Promise.resolve();
-      expect(chipCount()).toBe(2);
+      // Badging by document order here would arm a question made of chips the
+      // user can't see and (correctly, per the strict cut) can't speak — a
+      // wedge dressed as a UI. Acting scrolls the match into view instead.
+      expect(chipCount()).toBe(0);
+      expect(isRangePickPending()).toBe(false);
+      expect(picks).toEqual([ranges[0]]);
     } finally { restore(); }
+  });
+
+  it('a chip past the fold is painted but NOT speakable until it is on screen', async () => {
+    // The two cuts the link badges have: the band decides who wears a chip,
+    // the strict viewport decides who voice will match (strict-viewport.ts).
+    const view = withScrollableRects(['near']);
+    try {
+      // 'far' sits outside the viewport but inside the band, so it pre-claims.
+      const original = Range.prototype.getBoundingClientRect;
+      Range.prototype.getBoundingClientRect = function (this: Range): DOMRect {
+        return (this.toString() === 'near'
+          ? { top: 10, bottom: 30, left: 10, right: 60, width: 50, height: 20 }
+          : { top: 900, bottom: 920, left: 10, right: 60, width: 50, height: 20 }
+        ) as DOMRect;
+      };
+      startRangePick([makeRange('near'), makeRange('far')], () => {});
+      await Promise.resolve();
+      Range.prototype.getBoundingClientRect = original;
+
+      expect(chipCount()).toBe(2); // both painted — the scroll-ahead cue
+      const strict = new Map(publishedRecords.map(r => [r.codeword, r.in_strict_viewport]));
+      expect(strict.get('alpha')).toBe(true);   // on screen -> speakable
+      expect(strict.get('bravo')).toBe(false);  // past the fold -> a no-op
+    } finally { view.restore(); }
+  });
+
+  it('a pre-claimed chip becomes speakable when it scrolls in, without changing codeword', async () => {
+    const view = withScrollableRects(['near']);
+    try {
+      startRangePick([makeRange('near'), makeRange('far')], () => {});
+      await Promise.resolve();
+      const before = publishedRecords.length;
+
+      view.scrollTo(['near', 'far']); // 'far' is now on screen
+      reconcileRangePickChips();
+      await Promise.resolve();
+
+      // Only the eligibility flag is re-sent; the codeword is untouched.
+      const republished = publishedRecords.slice(before);
+      expect(republished.map(r => r.codeword)).toEqual(['bravo']);
+      expect(republished[0].in_strict_viewport).toBe(true);
+      expect(isRangePickPending('bravo')).toBe(true);
+    } finally { view.restore(); }
   });
 
   // --- Rolling viewport window (reconcileRangePickChips) --------------------

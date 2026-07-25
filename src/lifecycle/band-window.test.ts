@@ -81,6 +81,31 @@ describe('planBandWindow', () => {
     expect(plan.toClaim).toEqual(['r1a', 'r1b', 'r1c']);
   });
 
+  it('without hardCap the budget is a geometric target, not a ceiling', () => {
+    // The link badges' contract: tightening keeps the cutoff row whole and the
+    // codeword pool absorbs any excess. Twelve members tied at overhang 0 give
+    // tightening nothing to separate them by, so all twelve are claimed.
+    const flat = Array.from({ length: 12 }, (_, i) => c(`m${i}`, 0));
+    expect(planBandWindow(flat, 9, 1000).toClaim).toHaveLength(12);
+  });
+
+  it('with hardCap the budget is a ceiling, ties resolved in document order', () => {
+    // The chips' contract: MAX_RANGE_BADGES is what the overflow toast
+    // promises, and a tenth chip is a codeword spent outside the question.
+    const flat = Array.from({ length: 12 }, (_, i) => c(`m${i}`, 0));
+    const plan = planBandWindow(flat, 9, 1000, { hardCap: true });
+    expect(plan.toClaim).toHaveLength(9);
+    expect(plan.toClaim[0]).toBe('m0');
+  });
+
+  it('hardCap counts already-held members against the budget', () => {
+    const plan = planBandWindow(
+      [c('held1', 0, true), c('held2', 0, true), c('new1', 0), c('new2', 0)],
+      3, 1000, { hardCap: true });
+    expect(plan.toKeep).toEqual(['held1', 'held2']);
+    expect(plan.toClaim).toEqual(['new1']); // only one slot left
+  });
+
   it('an empty candidate set plans nothing', () => {
     const plan = planBandWindow<string>([], 9, 1000);
     expect(plan).toEqual({ toClaim: [], toKeep: [], toDrop: [], margin: 1000 });

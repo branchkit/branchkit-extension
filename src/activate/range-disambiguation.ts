@@ -70,6 +70,10 @@ interface Chip {
   range: Range;
   badge: HintBadge;
   label: LabelAssignment;
+  /** The `in_strict_viewport` value last published for this codeword. Mirrors
+   *  ElementWrapper.lastSentStrictViewport: the window re-publishes only when
+   *  a chip crosses the screen edge, not on every scroll. */
+  strict: boolean;
 }
 
 /**
@@ -141,6 +145,48 @@ function bandCandidates(ranges: Range[], held: (r: Range) => boolean): BandCandi
     out.push({ item: r, overhang: bandOverhang(rect, vw, vh), held: held(r) });
   }
   return out;
+}
+
+/**
+ * Plan the window AND keep the overhangs, because match-eligibility needs them
+ * separately from membership.
+ *
+ * Two cuts, exactly as the link badges have them (lifecycle/strict-viewport.ts):
+ * the BAND decides who wears a chip (pre-claiming past the fold is what makes a
+ * chip already painted when you scroll to it), and the STRICT viewport
+ * (overhang 0 — the rect actually intersects the screen) decides who is
+ * speakable. A chip you can't see is a scroll-ahead cue, not an answer to the
+ * question; saying its codeword must be a no-op, not a pick of something
+ * off-screen.
+ */
+function planChipWindow(ranges: Range[], held: Set<Range>): {
+  plan: ReturnType<typeof planBandWindow<Range>>;
+  isStrict: (r: Range) => boolean;
+} {
+  const candidates = bandCandidates(ranges, (r) => held.has(r));
+  const overhang = new Map(candidates.map((c) => [c.item, c.overhang]));
+  return {
+    // hardCap: MAX_RANGE_BADGES is what the overflow toast promises, and the
+    // usual case is a dozen matches all on screen at overhang 0 — where
+    // tightening has nothing to separate a ninth from a tenth by.
+    plan: planBandWindow(candidates, MAX_RANGE_BADGES, VIEWPORT_MARGIN_PX, { hardCap: true }),
+    isStrict: (r) => overhang.get(r) === 0,
+  };
+}
+
+/** The grammar record for one chip. `strict` is the match-eligibility cut —
+ *  false means painted-but-not-speakable, the same contract element hints
+ *  publish for band-but-not-strict wrappers. */
+function chipRecord(codeword: string, strict: boolean): ScannedElement {
+  return {
+    label: codeword,
+    id: 0, // not in the element registry — codeword is the only address
+    category: 'view',
+    type: 'range_disambiguation',
+    adapter: null,
+    codeword,
+    in_strict_viewport: strict,
+  };
 }
 
 /** Which ranges currently wear a chip — the planner's `held` input. */
@@ -232,16 +278,24 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
   // rule the link badges claim by, so chips and hints agree on which
   // viewport-ranked things are worth a scarce codeword.
   //
-  // Fallback when the band is empty (a background frame, every match far away):
-  // badge by document order rather than dead-ending a command just spoken.
-  const plan = planBandWindow(bandCandidates(ranges, () => false), MAX_RANGE_BADGES, VIEWPORT_MARGIN_PX);
-  const picked = plan.toClaim.length > 0 ? plan.toClaim : ranges.slice(0, MAX_RANGE_BADGES);
-  if (picked.length === 0) return;
+  const { plan, isStrict } = planChipWindow(ranges, new Set());
+  const picked = plan.toClaim;
+  if (picked.length === 0) {
+    // Nothing within a band of the viewport — every match is far away, or this
+    // is a background frame. Badging by document order here would arm a
+    // question made of chips the user can't see, and (correctly) can't speak:
+    // a wedge dressed as a UI. Act on the first match instead, which scrolls it
+    // into view — the same thing the single-match case does. If it's the wrong
+    // one, saying "highlight" again now has matches in view and gets chips.
+    bkLog('BK_RANGE_PICK_NONE_IN_BAND', { matches: ranges.length });
+    onPick(ranges[0]);
+    return;
+  }
 
   // `pending` is set before the chips exist so addChips has somewhere to write;
   // the badge-hiding hook runs only once at least one chip is real.
   pending = { ranges, chips: new Map(), onPick, restoreBadges: false };
-  const added = addChips(picked);
+  const added = addChips(picked, isStrict);
   if (added === 0) {
     // Pool dry or alphabet not loaded — fall back to today's behavior.
     pending = null;
@@ -283,45 +337,71 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
  */
 export function reconcileRangePickChips(): void {
   if (!pending) return;
-  const held = chippedRanges();
-  const plan = planBandWindow(
-    bandCandidates(pending.ranges, (r) => held.has(r)), MAX_RANGE_BADGES, VIEWPORT_MARGIN_PX);
-  if (plan.toClaim.length === 0 && plan.toDrop.length === 0) return;
-  // Nothing would remain: keep what's painted. Going to zero leaves a pick
-  // that swallows every codeword (refusePickWindowCodeword) with nothing on
-  // screen to explain why — the exact wedge the no-timer decision rests on NOT
-  // being silent. Scrolling back restores the chips anyway.
-  if (plan.toKeep.length === 0 && plan.toClaim.length === 0) return;
-
-  // Release first so the arrivals can reclaim the very codewords that just
-  // left (the reservoir returns them to the front).
-  if (plan.toDrop.length > 0) {
-    const dropped = new Set(plan.toDrop);
-    const gone: string[] = [];
-    for (const [cw, chip] of [...pending.chips]) {
-      if (!dropped.has(chip.range)) continue;
-      chip.badge.remove();
-      pending.chips.delete(cw);
-      gone.push(cw);
+  const { plan, isStrict } = planChipWindow(pending.ranges, chippedRanges());
+  // Nothing would remain in band: keep what's painted rather than going to
+  // zero, which leaves a pick that swallows every codeword
+  // (refusePickWindowCodeword) with nothing on screen to explain why — the
+  // exact wedge the no-timer decision rests on NOT being silent. Scrolling
+  // back restores the chips anyway.
+  const wouldEmpty = plan.toKeep.length === 0 && plan.toClaim.length === 0;
+  if ((plan.toClaim.length > 0 || plan.toDrop.length > 0) && !wouldEmpty) {
+    // Release first so the arrivals can reclaim the very codewords that just
+    // left (the reservoir returns them to the front).
+    if (plan.toDrop.length > 0) {
+      const dropped = new Set(plan.toDrop);
+      const gone: string[] = [];
+      for (const [cw, chip] of [...pending.chips]) {
+        if (!dropped.has(chip.range)) continue;
+        chip.badge.remove();
+        pending.chips.delete(cw);
+        gone.push(cw);
+      }
+      retireRecords(gone);
+      labelReservoir.release(gone);
     }
-    retireRecords(gone);
-    labelReservoir.release(gone);
-  }
-  const added = addChips(plan.toClaim);
+    const added = addChips(plan.toClaim, isStrict);
 
-  if (pending.chips.size === 0) {
-    // Everything left the band and nothing could be claimed to replace it.
-    // Fail loud rather than leaving a live pick with no chips.
-    flashToast('Lost the highlighted matches — say "highlight" again');
-    teardown('reconcile_empty');
-    return;
+    if (pending.chips.size === 0) {
+      // Everything left the band and nothing could be claimed to replace it.
+      // Fail loud rather than leaving a live pick with no chips.
+      flashToast('Lost the highlighted matches — say "highlight" again');
+      teardown('reconcile_empty');
+      return;
+    }
+    bkLog('BK_RANGE_PICK_RECONCILE', {
+      dropped: plan.toDrop.length, added, live: pending.chips.size, margin: plan.margin,
+    });
+    // An add republishes the narrow once its records land (addChips); a pure
+    // departure has no publish to ride, so shrink the narrow now.
+    if (added === 0) publishPickWindow([...pending.chips.keys()]);
   }
-  bkLog('BK_RANGE_PICK_RECONCILE', {
-    dropped: plan.toDrop.length, added, live: pending.chips.size, margin: plan.margin,
-  });
-  // An add republishes the narrow once its records land (addChips); a pure
-  // departure has no publish to ride, so shrink the narrow now.
-  if (added === 0) publishPickWindow([...pending.chips.keys()]);
+
+  // LAST, and unconditionally: match-eligibility moves independently of
+  // membership — a chip that merely crossed the screen edge keeps its codeword
+  // and flips speakable, which happens on scrolls that change nothing else.
+  // After the mutations, so chips that were just dropped aren't re-sent on
+  // their way out.
+  republishStrictFlags(isStrict);
+}
+
+/**
+ * Re-publish the match-eligibility flag for chips that crossed the screen edge
+ * — a scroll-ahead chip becoming speakable as it arrives, or a chip that slid
+ * off becoming a no-op while it keeps its codeword. Delta only: unchanged
+ * chips are not re-sent, mirroring the wrapper path's lastSentStrictViewport.
+ */
+function republishStrictFlags(isStrict: (r: Range) => boolean): void {
+  if (!pending) return;
+  const records: ScannedElement[] = [];
+  for (const [cw, chip] of pending.chips) {
+    const strict = isStrict(chip.range);
+    if (strict === chip.strict) continue;
+    chip.strict = strict;
+    records.push(chipRecord(cw, strict));
+  }
+  if (records.length === 0) return;
+  bkLog('BK_RANGE_PICK_STRICT', { changed: records.map((r) => r.codeword) });
+  void publishRecords(records);
 }
 
 /**
@@ -330,7 +410,7 @@ export function reconcileRangePickChips(): void {
  * how many chips were painted. Shared by the arm and the rolling window so
  * there is one claim/paint/publish path, not two that must agree.
  */
-function addChips(ranges: Range[]): number {
+function addChips(ranges: Range[], isStrict: (r: Range) => boolean): number {
   if (!pending || ranges.length === 0) return 0;
   const codewords = labelReservoir.claim(ranges.length).filter((cw) => cw !== '');
   if (codewords.length === 0) return 0;
@@ -339,17 +419,10 @@ function addChips(ranges: Range[]): number {
   const records: ScannedElement[] = [];
   const minted: string[] = [];
   for (let i = 0; i < ranges.length && i < codewords.length; i++) {
-    chips.set(codewords[i], paintChip(ranges[i], codewords[i]));
+    const strict = isStrict(ranges[i]);
+    chips.set(codewords[i], { ...paintChip(ranges[i], codewords[i]), strict });
     minted.push(codewords[i]);
-    records.push({
-      label: codewords[i],
-      id: 0, // not in the element registry — codeword is the only address
-      category: 'view',
-      type: 'range_disambiguation',
-      adapter: null,
-      codeword: codewords[i],
-      in_strict_viewport: true, // matchability gate — these must be eligible
-    });
+    records.push(chipRecord(codewords[i], strict));
   }
 
   void publishRecords(records).then((admitted) => {
@@ -410,5 +483,5 @@ function paintChip(range: Range, token: string): Chip {
   const badge = new HintBadge(target, label, getDisplayMode(), RANGE_PICK_VARIANT);
   badge.show();
   placeBadgeAtRect(badge, target.element, target.rect());
-  return { range, badge, label };
+  return { range, badge, label, strict: false };
 }

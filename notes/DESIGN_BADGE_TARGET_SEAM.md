@@ -346,12 +346,47 @@ What sharing bought, beyond the obvious:
   rather than arriving ~100ms after the scroll stops. This was the gap I had
   told the user to live with; reuse closed it for free.
 
-The visible consequence, worth watching: a chip may be painted (and speakable)
-up to `VIEWPORT_MARGIN_PX` outside the viewport, so a pick can hold options the
-user can't see yet. Under budget pressure the tightening pulls the set back
-toward the viewport, so this is bounded to a couple of chips in practice —
-measured at 7 on screen + 2 below on a 24-match page. If it reads badly in use,
-the knob is the chips' margin, not the engine.
+### Two cuts, not one
+
+Sharing the band exposed a bug the chips had been carrying: their grammar
+records hard-coded `in_strict_viewport: true`, with the comment "matchability
+gate — these must be eligible". That was accurate while chips only existed for
+strict-viewport ranges. Against a band it is a lie, and it diverges from the
+link badges in the way that matters most.
+
+The element path has always had TWO cuts (lifecycle/strict-viewport.ts): the
+BAND decides who wears a badge — pre-claiming past the fold is the scroll-ahead
+cue — and the STRICT viewport decides who voice will match. A band-but-not-strict
+wrapper is painted and speaking its codeword does nothing, deliberately: "saying
+'gust harp' when harp is below the fold is a no-op, not a click on something the
+user can't see."
+
+Chips now publish the same two cuts, stamped from the real overhang rather than
+asserted. `Chip.strict` mirrors `ElementWrapper.lastSentStrictViewport`, so the
+window re-publishes eligibility only when a chip crosses the screen edge — not
+on every scroll — and a chip that scrolls in flips speakable while keeping its
+codeword. Measured in real Chrome: 7 on-screen chips published eligible, 2
+pre-claimed past the fold published ineligible, and both flipped on scroll
+without being renamed.
+
+This also resolves what would otherwise be the worst consequence of the band —
+a pick holding options the user can't see. They are painted as a cue and are not
+answers until they arrive.
+
+The budget's meaning differs between the two callers, so `hardCap` names it
+rather than hiding it. For link badges the budget is a geometric target:
+tightening's `+1` keeps the cutoff row whole (grid cells in a row share an
+overhang; a half-badged row looks broken) and the pool absorbs the excess. For
+chips it is a promise — `MAX_RANGE_BADGES` is what the overflow toast states,
+and the common case is a dozen matches all on screen at overhang 0, where
+tightening has nothing to separate a ninth from a tenth by.
+
+And with a strict cut in place, the old "nothing in view" fallback (badge the
+first nine in document order) became indefensible: those chips are off-screen,
+so they're correctly unspeakable, which is a wedge dressed as a UI. When nothing
+is within a band of the viewport the pick now acts on the first match, scrolling
+it into view — the same thing the single-match case does, and a re-ask then has
+matches in view.
 
 ## What was measured
 

@@ -48,6 +48,24 @@ export interface BandPlan<T> {
   margin: number;
 }
 
+export interface BandOptions {
+  /**
+   * Trim claims to the budget even when tightening can't separate ties.
+   *
+   * Off (the link badges): the budget is a GEOMETRIC target. Tightening's +1
+   * deliberately keeps the cutoff row whole — grid cells in one row share an
+   * overhang, and a half-badged row looks broken — so the claim set may run a
+   * little over; the codeword pool absorbs the excess by handing out nothing.
+   *
+   * On (the range-pick chips): the budget is a PROMISE. MAX_RANGE_BADGES is
+   * what the overflow toast tells the user, and a tenth chip would be a
+   * codeword spent outside the nine the question offers. Needed because the
+   * common chip case is a dozen matches all fully on screen at overhang 0,
+   * where tightening has nothing to separate them by.
+   */
+  hardCap?: boolean;
+}
+
 /**
  * Partition `candidates` into claim/keep/drop against a codeword budget.
  *
@@ -59,6 +77,7 @@ export function planBandWindow<T>(
   candidates: readonly BandCandidate<T>[],
   budget: number,
   fullMargin: number,
+  opts: BandOptions = {},
 ): BandPlan<T> {
   let inFullBand = 0;
   for (const c of candidates) if (c.overhang < fullMargin) inFullBand++;
@@ -86,5 +105,13 @@ export function planBandWindow<T>(
       toDrop.push(c.item);
     }
   }
-  return { toClaim, toKeep, toDrop, margin };
+  // Ties resolve in candidate order (document order for both callers), which is
+  // stable across passes. See BandOptions.hardCap for why this is opt-in.
+  const room = Math.max(0, budget - toKeep.length);
+  return {
+    toClaim: opts.hardCap ? toClaim.slice(0, room) : toClaim,
+    toKeep,
+    toDrop,
+    margin,
+  };
 }
