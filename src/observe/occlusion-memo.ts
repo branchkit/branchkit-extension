@@ -53,7 +53,7 @@
 
 import type { ElementWrapper } from '../scan/element-wrapper';
 import { SAMPLE_FRACTIONS } from './occlusion';
-import { peekCachedRect } from '../layout-cache';
+import { peekCachedRect } from '../core/layout-cache';
 import { lifecycleCounters, recordCpu } from '../debug/perf-counters';
 import { firehoseStep } from '../debug/firehose';
 

@@ -26,7 +26,7 @@
 
 import { ElementWrapper } from '../scan/element-wrapper';
 import { isVisible } from '../scan/scanner';
-import { cacheVisibility, clearLayoutCache, peekCachedRect } from '../layout-cache';
+import { cacheVisibility, clearLayoutCache, peekCachedRect } from '../core/layout-cache';
 import { isAncestorChainInVisibleViewport } from './strict-viewport';
 import { isOccluded, isOccludedBox, isOcclusionEnabled, visualBoxFor, drainElementFromPointCalls } from '../observe/occlusion';
 import {

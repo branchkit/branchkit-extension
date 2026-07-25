@@ -43,8 +43,8 @@ import {
   saveBadgeSettings,
   onBadgeSettingsChanged,
 } from './badge-settings-storage';
-import { initKeymapEditor } from './keymap-options';
-import { loadKeyboardRules, saveKeyboardRules, type KeyboardRule } from './keyboard-rules';
+import { initKeymapEditor } from './keymap/keymap-options';
+import { loadKeyboardRules, saveKeyboardRules, type KeyboardRule } from './keymap/keyboard-rules';
 
 // --- State ---
 

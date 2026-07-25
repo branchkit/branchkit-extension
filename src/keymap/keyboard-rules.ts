@@ -14,7 +14,7 @@
  * page (full, per-pattern). See notes/DESIGN_PASS_THROUGH.md.
  */
 
-import { urlMatchesPattern } from './rules/domain-rules';
+import { urlMatchesPattern } from '../rules/domain-rules';
 
 export interface KeyboardRule {
   pattern: string;

@@ -23,7 +23,7 @@ import { getOrComputeProbe, invalidateProbe, probeAnchor } from './position';
 // the cache misses. JSDOM's text-walking is enough for the once-through
 // path, but for stable assertions on the offset math we stub the element
 // rect and seed the probe directly.
-vi.mock('../layout-cache', () => ({
+vi.mock('../core/layout-cache', () => ({
   getCachedRect: (el: Element) =>
     (el as unknown as { __rect: DOMRect }).__rect ??
     new DOMRect(0, 0, 100, 20),

@@ -17,7 +17,7 @@
  */
 
 import { DEFAULT_KEYMAP, COMMAND_BY_ID, type KeymapEntry } from './command-catalog';
-import { canonicalizeKeys } from './activate/key-combo';
+import { canonicalizeKeys } from '../activate/key-combo';
 
 const STORAGE_KEY = 'keymap';
 

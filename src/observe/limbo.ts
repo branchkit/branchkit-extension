@@ -21,7 +21,7 @@ import { ElementWrapper, enterLimbo, isLimboExpired } from '../scan/element-wrap
 import * as idRegistry from '../scan/registry';
 import { computeFingerprint, fingerprintsEqual, computeStrongKey } from '../scan/registry';
 import { bumpRebindCounter, findLimboMatch, newRebindCounters, REBIND_DISTANCE_THRESHOLD_PX, type RebindCounters } from '../labels/rebind';
-import { peekCachedRect } from '../layout-cache';
+import { peekCachedRect } from '../core/layout-cache';
 import { lifecycleCounters, recordCpu } from '../debug/perf-counters';
 import { store } from '../core/store';
 import { detachWrapper } from '../core/wrapper-lifecycle';

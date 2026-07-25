@@ -13,7 +13,7 @@
  * (rare and platform-messy — better to say nothing than guess wrong).
  */
 
-import { parseCombo } from './activate/key-combo';
+import { parseCombo } from '../activate/key-combo';
 
 export type OS = 'mac' | 'other';
 export type Browser = 'chrome' | 'firefox';

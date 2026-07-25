@@ -24,7 +24,7 @@
 
 import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
 import { labelReservoir } from '../labels/label-reservoir';
-import { geometryInBand } from '../layout-cache';
+import { geometryInBand } from '../core/layout-cache';
 
 // Wide rootMargin to match Rango's lazy-construction model: catch elements
 // while they're still ~5 viewport-line-rows away, so the per-badge work

@@ -23,7 +23,7 @@ import { isRecallLoaded, resolvePreferredCodeword } from '../labels/codeword-rec
 import { dropPendingPut, hasSent, queueDelete, queuePut, scheduleSync } from '../labels/label-sync';
 import { tryRebindFromLimbo, tryRebindByStrongKey, tryRebindByCoattail, isRecentlyOrphaned } from '../observe/limbo';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
-import { geometryInBand, getCachedRect, isRectOnScreen } from '../layout-cache';
+import { geometryInBand, getCachedRect, isRectOnScreen } from './layout-cache';
 import { lifecycleCounters } from '../debug/perf-counters';
 import { recordShownDetach } from '../debug/churn-log';
 import { store } from './store';

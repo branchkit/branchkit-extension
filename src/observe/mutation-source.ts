@@ -23,7 +23,7 @@ import { markDomSeen } from './dom-seen';
 import { dropDisconnectedWrappers } from './limbo';
 import { subtreeMaybeHintable, setShadowRootSightingHook } from '../scan/scanner';
 import { consumeShadowAttachSignal } from '../scan/shadow-attach-signal';
-import { cacheVisibility, clearLayoutCache } from '../layout-cache';
+import { cacheVisibility, clearLayoutCache } from '../core/layout-cache';
 import { getHintVisibility } from '../config';
 import { harnessHooksEnabled } from '../debug/harness-hooks';
 import { recordCpu, lifecycleCounters } from '../debug/perf-counters';

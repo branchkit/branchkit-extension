@@ -5,7 +5,7 @@
  * keymap-options.ts so it can be unit-tested.
  */
 
-import { comboDisplay } from './activate/key-combo';
+import { comboDisplay } from '../activate/key-combo';
 import type { KeymapEntry } from './command-catalog';
 
 /** Sequence-aware human label: "shift+KeyH" → "Shift+H", "KeyG KeyG" → "G G". */

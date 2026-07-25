@@ -14,7 +14,7 @@
  */
 
 import { APCAcontrast, sRGBtoY } from 'apca-w3';
-import { getCachedStyle, getCachedRect } from '../layout-cache';
+import { getCachedStyle, getCachedRect } from '../core/layout-cache';
 
 // --- RGB type and parsing ---
 

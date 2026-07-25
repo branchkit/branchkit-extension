@@ -3,8 +3,8 @@ import {
   searchWords, buildTabItems, buildCommandItems, scoreItem, filterPalette,
   type PaletteTab, type PaletteItem,
 } from './model';
-import type { CommandMeta, KeymapEntry } from '../command-catalog';
-import { COMMAND_CATALOG, DEFAULT_KEYMAP } from '../command-catalog';
+import type { CommandMeta, KeymapEntry } from '../keymap/command-catalog';
+import { COMMAND_CATALOG, DEFAULT_KEYMAP } from '../keymap/command-catalog';
 
 const TABS: PaletteTab[] = [
   { tabId: 1, title: 'GitHub — pull requests', url: 'https://github.com/branchkit/app/pulls' },

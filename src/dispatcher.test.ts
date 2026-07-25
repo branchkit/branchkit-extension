@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ActionDispatcher, CommandRegistry } from './dispatcher';
-import { DEFAULT_KEYMAP } from './command-catalog';
+import { DEFAULT_KEYMAP } from './keymap/command-catalog';
 
 describe('CommandRegistry.replaceAll', () => {
   it('replaces the binding set wholesale', () => {

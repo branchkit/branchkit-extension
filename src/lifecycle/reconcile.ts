@@ -21,7 +21,7 @@ import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { wantsShown, wantsStrict } from './desired-state';
 import { targetOverVideo } from '../render/video-overlay';
 import { isVisible } from '../scan/scanner';
-import { geometryInBand, isRectOnScreen } from '../layout-cache';
+import { geometryInBand, isRectOnScreen } from '../core/layout-cache';
 import { recordCpu } from '../debug/perf-counters';
 import { harnessHooksEnabled } from '../debug/harness-hooks';
 import { lastStrictProbe } from './strict-probe';

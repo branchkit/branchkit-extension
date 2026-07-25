@@ -20,9 +20,9 @@ import {
   PREV_POSITION_REGISTERS, isPrevPositionRegister, marksToHash, type StoredMark,
 } from '../marks';
 import { flashToast } from '../render/toast';
-import { findPageLink, type Rel } from '../pagination';
-import { urlUp, urlRoot } from '../url-nav';
-import { copyText } from '../clipboard';
+import { findPageLink, type Rel } from './pagination';
+import { urlUp, urlRoot } from './url-nav';
+import { copyText } from './clipboard';
 import type { Message } from '../types';
 
 const isTopFrame = window === window.top;

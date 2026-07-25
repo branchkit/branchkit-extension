@@ -1,5 +1,5 @@
 import { ElementWrapper } from '../scan/element-wrapper';
-import { getCachedRect, getCachedStyle } from '../layout-cache';
+import { getCachedRect, getCachedStyle } from '../core/layout-cache';
 import { computePlacement, Nudge } from './compute';
 import { type BadgeSettings, DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
 import { type RuleEntry, resolveNudgeOffset } from '../rules/domain-rules';

@@ -27,7 +27,7 @@
  */
 
 import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
-import { geometryInBand } from '../layout-cache';
+import { geometryInBand } from '../core/layout-cache';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 
 // Band membership derived live for the snapshot's diagnostic fields (no

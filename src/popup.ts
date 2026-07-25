@@ -18,7 +18,7 @@ import {
 } from './rules/domain-rules';
 import { loadDomainRules, saveDomainRules } from './rules/domain-rules-storage';
 import { loadBadgeSettings, DEFAULT_BADGE_SETTINGS } from './badge-settings-storage';
-import { getRuleForPattern, setRuleOff, setRulePassKeys } from './keyboard-rules';
+import { getRuleForPattern, setRuleOff, setRulePassKeys } from './keymap/keyboard-rules';
 import { migrateDisplayMode } from './labels/words';
 import { suggestPattern, isValidSelector } from './rules/options-helpers';
 import {

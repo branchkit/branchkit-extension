@@ -40,7 +40,7 @@
 
 import { ElementWrapper } from '../scan/element-wrapper';
 import { scanSingle } from '../scan/scanner';
-import { cacheVisibility, clearLayoutCache } from '../layout-cache';
+import { cacheVisibility, clearLayoutCache } from '../core/layout-cache';
 import { lifecycleCounters, recordCpu } from '../debug/perf-counters';
 import { firehoseStep, describeMutation } from '../debug/firehose';
 import { harnessHooksEnabled } from '../debug/harness-hooks';

@@ -18,7 +18,7 @@ import {
   type ParamSchema,
   type VoicePattern,
 } from './command-catalog';
-import { micGlyph } from './render/mic-glyph';
+import { micGlyph } from '../render/mic-glyph';
 import { overrideKey, validateOverridePhrase, overridesFromList, type OverrideRecord } from './command-override';
 import {
   loadKeymap,
@@ -26,7 +26,7 @@ import {
   onKeymapChanged,
   keymapsEqual,
 } from './keymap-storage';
-import { comboFromEvent, serializeCombo } from './activate/key-combo';
+import { comboFromEvent, serializeCombo } from '../activate/key-combo';
 import { displayKeys, duplicateKeys } from './keymap-edit-helpers';
 import { nativeOverride, detectOS, detectBrowser } from './browser-shortcuts';
 

@@ -12,7 +12,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { computeBadgeColors, clearContrastCache } from './badge-colors';
-import { clearLayoutCache } from '../layout-cache';
+import { clearLayoutCache } from '../core/layout-cache';
 
 function rgb(css: string): { r: number; g: number; b: number } {
   const m = css.match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)/)!;

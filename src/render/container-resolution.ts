@@ -11,7 +11,7 @@
  * before resolving in a loop.
  */
 
-import { getCachedRect, getCachedStyle, getCachedDims, isClipAncestor } from '../layout-cache';
+import { getCachedRect, getCachedStyle, getCachedDims, isClipAncestor } from '../core/layout-cache';
 
 // Walk ancestors (piercing shadow boundaries) for a position:fixed or sticky
 // element. Such a target holds a constant viewport position as the window

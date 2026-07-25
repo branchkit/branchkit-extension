@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { buildHelpModel, buildAlphabetModel, toggleHelpOverlay, _resetHelpForTesting } from './help-overlay';
-import type { CommandMeta, KeymapEntry } from '../command-catalog';
+import type { CommandMeta, KeymapEntry } from '../keymap/command-catalog';
 import { setAlphabet, clearAlphabet } from '../labels/words';
 import { initConnectionMirror, resetConnectionMirrorForTest } from '../plugin/connection-mirror';
 

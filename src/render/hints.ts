@@ -13,7 +13,7 @@ import { Category, BadgeDisplayMode } from '../types';
 import type { BadgeHandle, BadgeDiagnostics } from './badge-handle';
 import { LabelAssignment, labelToDisplay, letterToSpokenWord } from '../labels/words';
 import { documentInstanceId } from '../labels/document-identity';
-import { getCachedRect, getCachedStyle, isRectOnScreen } from '../layout-cache';
+import { getCachedRect, getCachedStyle, isRectOnScreen } from '../core/layout-cache';
 import { calculateZIndex } from '../placement/stacking';
 import { computeBadgeColors } from './badge-colors';
 import { type BadgeSettings, DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';

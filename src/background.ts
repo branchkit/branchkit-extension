@@ -11,7 +11,7 @@
 import { Message, ScannedElement, HintVisibility } from './types';
 import { claimLabels, confirmLabels, releaseLabels, releaseDocument, clearAllStacks, alphabetsEqual, senderMayMutatePool, auditLabels } from './labels/label-pool';
 import { setAlphabet } from './labels/words';
-import { buildCommandContributions } from './command-catalog';
+import { buildCommandContributions } from './keymap/command-catalog';
 import { rememberCodewords, clearCodewordMemory, recallCodewords } from './labels/codeword-memory';
 import { discoverPlugin, ensureConnected, postToPlugin, getFromPlugin, getActuatorJson } from './plugin/actuator-client';
 import { setLocalMark, getLocalMark, setGlobalMark, gotoGlobalMark } from './background/marks';

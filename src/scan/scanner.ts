@@ -7,7 +7,7 @@
 
 import { Category, ScannedElement } from '../types';
 import { accessibleName } from './accessible-name';
-import { peekCachedRect, peekCachedStyle, cacheVisibility, clearLayoutCache } from '../layout-cache';
+import { peekCachedRect, peekCachedStyle, cacheVisibility, clearLayoutCache } from '../core/layout-cache';
 
 // Core selectors — always scanned
 const HINTABLE = [

@@ -14,12 +14,12 @@
  * content the page's CSS must not distort.
  */
 
-import { COMMAND_CATALOG, type CommandMeta, type KeymapEntry } from '../command-catalog';
+import { COMMAND_CATALOG, type CommandMeta, type KeymapEntry } from '../keymap/command-catalog';
 import { comboDisplay } from '../activate/key-combo';
 import { letterToSpokenWord, isVoiceAlphabetLoaded } from '../labels/words';
 import { isBranchKitConnected } from '../plugin/connection-mirror';
 import { micGlyph } from './mic-glyph';
-import { effectiveVoice, type OverrideMap } from '../command-override';
+import { effectiveVoice, type OverrideMap } from '../keymap/command-override';
 
 export interface HelpRow {
   /** Display strings for every binding of this command (e.g. ["Shift+J"]). */

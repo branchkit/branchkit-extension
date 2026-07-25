@@ -15,9 +15,9 @@
  * The list model (sources, ranking) is pure and lives in palette/model.ts.
  */
 
-import { COMMAND_CATALOG } from './command-catalog';
-import { loadKeymap } from './keymap-storage';
-import { overridesFromList, type OverrideRecord } from './command-override';
+import { COMMAND_CATALOG } from './keymap/command-catalog';
+import { loadKeymap } from './keymap/keymap-storage';
+import { overridesFromList, type OverrideRecord } from './keymap/command-override';
 import {
   buildTabItems, buildCommandItems, filterPalette,
   type PaletteItem, type PaletteSection, type PaletteTab,

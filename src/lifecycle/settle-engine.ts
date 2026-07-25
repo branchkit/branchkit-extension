@@ -32,7 +32,7 @@ import { runBuildPass, createSingleFlight, WAVE_BUILD_BUDGET_MS } from './build-
 import {
   cacheLayout, cacheConstruction, clearLayoutCache, getCachedRect, isRectOnScreen,
   geometryInBand,
-} from '../layout-cache';
+} from '../core/layout-cache';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { POOL_SIZE } from '../labels/label-pool';
 import { isVisible } from '../scan/scanner';

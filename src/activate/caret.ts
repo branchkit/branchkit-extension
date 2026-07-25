@@ -19,7 +19,7 @@
  * the shared command registry.
  */
 
-import { copyText } from '../clipboard';
+import { copyText } from './clipboard';
 import { flashToast } from '../render/toast';
 import {
   openFindMode, closeFindMode, isFindActive, hasActiveMatches, findNavigate,

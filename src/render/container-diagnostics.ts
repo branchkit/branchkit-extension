@@ -5,7 +5,7 @@
  * decomposed from a snapshot without reproducing live.
  */
 
-import { getCachedRect, getCachedStyle, isClipAncestor } from '../layout-cache';
+import { getCachedRect, getCachedStyle, isClipAncestor } from '../core/layout-cache';
 import {
   findBadgeContainer,
   findLimitParent,

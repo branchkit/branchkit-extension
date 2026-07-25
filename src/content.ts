@@ -39,7 +39,7 @@ import { setOcclusionEnabled, isOccludedLive } from './observe/occlusion';
 import { VIEWPORT_MARGIN_PX } from './observe/intersection-tracker';
 import { setOcclusionMemoMode, occlusionMemoAllDirty, occlusionMemoNoteTarget, occlusionMemoNotePointer } from './observe/occlusion-memo';
 import { reconcileClipObservation, setClipObserverEnabled } from './observe/clip-observer';
-import { cacheLayout, cacheConstruction, clearLayoutCache, isRectOnScreen, geometryInBand } from './layout-cache';
+import { cacheLayout, cacheConstruction, clearLayoutCache, isRectOnScreen, geometryInBand } from './core/layout-cache';
 import { placeBadges, invalidateProbe } from './placement';
 import { activateElement, dispatchHover, resolveNavTarget, type ActivationResult } from './activate/event-sequence';
 import {
@@ -50,12 +50,12 @@ import {
 import { captureDebugSnapshot } from './debug/debug-snapshot';
 import { toggleOverlay } from './render/debug-overlay';
 import { toggleHelpOverlay, isHelpOverlayActive } from './render/help-overlay';
-import { overridesFromList, type OverrideRecord } from './command-override';
+import { overridesFromList, type OverrideRecord } from './keymap/command-override';
 import { togglePalette, closePalette } from './render/palette-host';
 import { setTabMarker, reapplyTabMarker, refreshTabMarker } from './render/tab-title';
 import { setModeChip } from './render/mode-chip';
-import { getSiteKeyState, onSiteKeysChanged } from './keyboard-rules';
-import { copyText } from './clipboard';
+import { getSiteKeyState, onSiteKeysChanged } from './keymap/keyboard-rules';
+import { copyText } from './activate/clipboard';
 import { flashToast } from './render/toast';
 import { registerSelectionCommands, restorePosition, caret, SELECTION_ACTIONS, parseSelectionCommand } from './activate/selection-commands';
 import { resolveRangePick, refusePickWindowCodeword, filterRangePickChips, setPickWindowHooks } from './activate/range-disambiguation';
@@ -67,8 +67,8 @@ import {
   resolveFromSnapshot,
 } from './activate/snapshot';
 import { dispatcher, registry, keyHandler } from './core/singletons';
-import { DEFAULT_KEYMAP, type KeymapEntry } from './command-catalog';
-import { loadKeymap, onKeymapChanged } from './keymap-storage';
+import { DEFAULT_KEYMAP, type KeymapEntry } from './keymap/command-catalog';
+import { loadKeymap, onKeymapChanged } from './keymap/keymap-storage';
 import { scanWithAdapter } from './adapters';
 import {
   scroll,
@@ -124,7 +124,7 @@ import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuSh
 import { startVideoStallProbe } from './debug/video-stall-probe';
 import { startVideoPresenceReporter } from './observe/video-presence';
 import { setVideoOverlayGateEnabled } from './render/video-overlay';
-import { detectBrowser } from './browser-shortcuts';
+import { detectBrowser } from './keymap/browser-shortcuts';
 import {
   mediaPlayPause, mediaMute, mediaSpeed, mediaSeek, mediaRestart, resolveVideoModeKey,
   type PlayPauseOp, type MuteOp, type SpeedOp, type SeekDirection,

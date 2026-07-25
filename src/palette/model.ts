@@ -12,9 +12,9 @@
  * become source #3 by adding one more builder with the same item shape.
  */
 
-import type { CommandMeta, KeymapEntry } from '../command-catalog';
+import type { CommandMeta, KeymapEntry } from '../keymap/command-catalog';
 import { comboDisplay } from '../activate/key-combo';
-import { effectiveVoice, type OverrideMap } from '../command-override';
+import { effectiveVoice, type OverrideMap } from '../keymap/command-override';
 
 export type PaletteSourceId = 'tabs' | 'commands';
 
