@@ -35,5 +35,6 @@ export interface BootstrapWire {
   tabs?: Array<{ tabId: number; title: string; url: string }>;
   mru?: number[];
   marks?: Record<number, string>;
+  bookmarks?: Array<{ title: string; url: string; path: string }>;
   activeTabId?: number | null;
 }

@@ -16,10 +16,11 @@ import type { CommandMeta, KeymapEntry } from '../keymap/command-catalog';
 import { comboDisplay } from '../activate/key-combo';
 import { effectiveVoice, type OverrideMap, type OverrideRecord } from '../keymap/command-override';
 
-export type PaletteSourceId = 'tabs' | 'commands';
+export type PaletteSourceId = 'tabs' | 'commands' | 'bookmarks';
 
 export type PaletteDispatch =
   | { kind: 'switch_tab'; tabId: number }
+  | { kind: 'open_bookmark'; url: string }
   | { kind: 'command'; command: string; params?: Record<string, string> };
 
 export interface PaletteItem {
@@ -53,6 +54,14 @@ export interface PaletteTab {
   tabId: number;
   title: string;
   url: string;
+}
+
+/** One flattened bookmark (background/palette.ts loadBookmarks): a leaf with
+ *  its folder chain ("Bookmarks Bar / Work"). */
+export interface PaletteBookmark {
+  title: string;
+  url: string;
+  path: string;
 }
 
 /** Lowercase searchable words from free text: alphanumeric runs, deduped. */
@@ -107,6 +116,27 @@ export function buildTabItems(
       voice: [],
       words: [...searchWords(title), ...searchWords(host)],
       dispatch: { kind: 'switch_tab' as const, tabId: t.tabId },
+    };
+  });
+}
+
+/**
+ * Bookmark items in tree order (the user's own organization is the empty-state
+ * order). Subtitle shows host + folder path; both are searchable, so "work
+ * github" finds the GitHub bookmark in the Work folder.
+ */
+export function buildBookmarkItems(bookmarks: readonly PaletteBookmark[]): PaletteItem[] {
+  return bookmarks.map((b, i) => {
+    const host = hostOf(b.url);
+    return {
+      source: 'bookmarks' as const,
+      id: `bm:${i}`,
+      title: b.title,
+      subtitle: b.path ? `${host} — ${b.path}` : host,
+      keys: [],
+      voice: [],
+      words: [...searchWords(b.title), ...searchWords(host), ...searchWords(b.path)],
+      dispatch: { kind: 'open_bookmark' as const, url: b.url },
     };
   });
 }
@@ -209,6 +239,7 @@ export function filterPalette(
   commandItems: readonly PaletteItem[],
   query: string,
   groupedBrowse = false,
+  bookmarkItems: readonly PaletteItem[] = [],
 ): PaletteSection[] {
   const sections: PaletteSection[] = [];
   const q = searchWords(query);
@@ -226,6 +257,7 @@ export function filterPalette(
     if (picked.length) sections.push({ source, label, items: picked });
   };
   build('tabs', 'Tabs', tabItems);
+  build('bookmarks', 'Bookmarks', bookmarkItems);
   if (groupedBrowse && q.length === 0) {
     // Grouped browse: group headers, first-appearance order (= catalog order).
     const groups: string[] = [];

@@ -16,11 +16,11 @@ import { rememberCodewords, clearCodewordMemory, recallCodewords } from './label
 import { discoverPlugin, ensureConnected, postToPlugin, getFromPlugin, getActuatorJson } from './plugin/actuator-client';
 import { setLocalMark, getLocalMark, setGlobalMark, gotoGlobalMark } from './background/marks';
 import { baseUrl, type GlobalMark, type StoredMark } from './marks';
-import { recordTabActivated, loadMru } from './background/tab-mru';
+import { recordTabActivated } from './background/tab-mru';
 import { scheduleTabPublish, resetTabPublishCache } from './background/tab-collection';
 import {
   getTabMarker, pushTabMarker, reapplyTabMarker as reapplyTabMarkerFor,
-  releaseTabMarker, transferTabMarker, setTabMarkersEnabled, loadMarkerMap,
+  releaseTabMarker, transferTabMarker, setTabMarkersEnabled,
 } from './background/tab-markers';
 import { ensureContentScriptInjected } from './background/injection';
 import { bgState, connId } from './background/state';
@@ -39,7 +39,7 @@ import { saveReferenceToCollection, pushReferenceNames, hydrateReferencesFromCol
 import { handleDebugSnapshot } from './background/debug-snapshot';
 import { TAB_ACTION_BY_ID, ZOOM_ACTION_BY_ID, handleTabAction, handleZoomAction, switchToTabById } from './background/tab-actions';
 import {
-  publishPaletteVoice, clearPaletteVoice, handlePaletteAction,
+  publishPaletteVoice, clearPaletteVoice, handlePaletteAction, handlePaletteBootstrap,
   handlePaletteVoiceSelect, handlePaletteVoiceDismiss, clearPaletteForClosedTab,
 } from './background/palette';
 import {
@@ -531,24 +531,9 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   }
 
   if (message.type === 'PALETTE_BOOTSTRAP') {
-    // Privileged palette data (see the Message type doc): tabs + MRU + marks
-    // fetched here because the Firefox palette iframe has content-script
-    // privileges only. activeTabId = the sender's tab — the palette can only
-    // be open in the tab that hosts it.
-    const activeTabId = _sender.tab?.id ?? null;
-    Promise.all([
-      chrome.tabs.query({}).catch(() => [] as chrome.tabs.Tab[]),
-      loadMru().catch(() => [] as number[]),
-      loadMarkerMap().catch(() => ({})),
-    ]).then(([tabs, mru, marks]) => {
-      sendResponse({
-        tabs: tabs
-          .filter((t) => typeof t.id === 'number')
-          .map((t) => ({ tabId: t.id, title: t.title ?? '', url: t.url ?? '' })),
-        mru, marks, activeTabId,
-      });
-    }).catch(() => sendResponse({ tabs: [], mru: [], marks: {}, activeTabId }));
-    return true; // async response
+    // Privileged palette data (tabs + MRU + marks + bookmarks) — the fetch
+    // lives with the palette session logic (background/palette.ts).
+    return handlePaletteBootstrap(_sender, sendResponse);
   }
 
   if (message.type === 'GET_COMMAND_OVERRIDES') {

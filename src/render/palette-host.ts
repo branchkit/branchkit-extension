@@ -80,7 +80,7 @@ export function isPaletteOpen(): boolean {
 /** Palette scope: the full command station, or a single source (Ctrl+T /
  *  voice "palette tabs" / "palette commands"). Scoped opens reuse the same
  *  overlay + voice-half, just fewer sources. */
-export type PaletteScope = 'all' | 'tabs' | 'commands';
+export type PaletteScope = 'all' | 'tabs' | 'commands' | 'bookmarks';
 
 export function openPalette(scope: PaletteScope = 'all'): void {
   if (frame) return;
@@ -138,11 +138,13 @@ export function togglePalette(scope: PaletteScope = 'all'): void {
 // voice family). The overlay iframe always lives in the top frame; a command
 // fired inside a subframe relays up through the background
 // (PALETTE_OPEN → PALETTE_COMMAND at frame 0).
-type PaletteCommand = 'toggle_palette' | 'toggle_tab_palette' | 'toggle_command_palette';
+type PaletteCommand =
+  'toggle_palette' | 'toggle_tab_palette' | 'toggle_command_palette' | 'toggle_bookmark_palette';
 const PALETTE_COMMAND_SCOPE: Record<PaletteCommand, PaletteScope> = {
   toggle_palette: 'all',
   toggle_tab_palette: 'tabs',
   toggle_command_palette: 'commands',
+  toggle_bookmark_palette: 'bookmarks',
 };
 
 function openPaletteFromCommand(command: PaletteCommand): void {

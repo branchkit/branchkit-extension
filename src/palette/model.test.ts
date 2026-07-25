@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  searchWords, buildTabItems, buildCommandItems, scoreItem, filterPalette,
+  searchWords, buildTabItems, buildCommandItems, buildBookmarkItems, scoreItem, filterPalette,
   type PaletteTab, type PaletteItem,
 } from './model';
 import type { CommandMeta, KeymapEntry } from '../keymap/command-catalog';
@@ -145,6 +145,22 @@ describe('filterPalette', () => {
     for (const s of cmdSections) {
       expect(s.items.every((i) => i.group === s.label)).toBe(true);
     }
+  });
+
+  it('bookmark items search by title, host, and folder path; dispatch opens the url', () => {
+    const bms = buildBookmarkItems([
+      { title: 'Pull requests', url: 'https://github.com/branchkit/app/pulls', path: 'Bookmarks Bar / Work' },
+      { title: 'Recipes', url: 'https://cooking.example.com/', path: '' },
+    ]);
+    expect(bms[0].dispatch).toEqual({ kind: 'open_bookmark', url: 'https://github.com/branchkit/app/pulls' });
+    expect(bms[0].subtitle).toBe('github.com — Bookmarks Bar / Work');
+    expect(scoreItem(bms[0], ['work'])).toBeGreaterThan(0);   // folder path
+    expect(scoreItem(bms[0], ['github'])).toBeGreaterThan(0); // host
+    expect(bms[1].subtitle).toBe('cooking.example.com');
+    // Sectioned as their own source after tabs.
+    const sections = filterPalette([], [], '', false, bms);
+    expect(sections.map((s) => s.source)).toEqual(['bookmarks']);
+    expect(sections[0].items.length).toBe(2);
   });
 
   it('a typed query collapses commands to one ranked section even under groupedBrowse', () => {

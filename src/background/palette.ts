@@ -14,10 +14,59 @@
  */
 
 import { PaletteVoiceEntry, PaletteVoiceRow } from '../types';
-import type { PaletteDispatch } from '../palette/model';
+import type { PaletteDispatch, PaletteBookmark } from '../palette/model';
 import { ensureConnected, postToPlugin } from '../plugin/actuator-client';
 import { focusWindowAndActivateTab } from './tab-actions';
 import { connId } from './state';
+import { loadMru } from './tab-mru';
+import { loadMarkerMap } from './tab-markers';
+
+/**
+ * Flatten the bookmark tree to leaf bookmarks with their folder path (for the
+ * subtitle + search haystack). Root containers ("Bookmarks Bar", "Other
+ * Bookmarks" on Chrome; "Bookmarks Menu" etc. on Firefox) are kept in the
+ * path — they disambiguate duplicates and cost nothing.
+ */
+export async function loadBookmarks(): Promise<PaletteBookmark[]> {
+  const out: PaletteBookmark[] = [];
+  const walk = (nodes: chrome.bookmarks.BookmarkTreeNode[], path: string[]): void => {
+    for (const n of nodes) {
+      if (n.url) out.push({ title: n.title || n.url, url: n.url, path: path.join(' / ') });
+      else if (n.children) walk(n.children, n.title ? [...path, n.title] : path);
+    }
+  };
+  try {
+    walk(await chrome.bookmarks.getTree(), []);
+  } catch { /* permission missing / API unavailable — empty list, palette shows none */ }
+  return out;
+}
+
+/**
+ * PALETTE_BOOTSTRAP: privileged palette data, fetched here because the
+ * Firefox palette iframe has content-script privileges only (relay doc in
+ * palette/relay.ts). activeTabId = the sender's tab — the palette can only be
+ * open in the tab that hosts it. Returns true (async sendResponse).
+ */
+export function handlePaletteBootstrap(
+  sender: chrome.runtime.MessageSender,
+  sendResponse: (r: unknown) => void,
+): boolean {
+  const activeTabId = sender.tab?.id ?? null;
+  Promise.all([
+    chrome.tabs.query({}).catch(() => [] as chrome.tabs.Tab[]),
+    loadMru().catch(() => [] as number[]),
+    loadMarkerMap().catch(() => ({})),
+    loadBookmarks(),
+  ]).then(([tabs, mru, marks, bookmarks]) => {
+    sendResponse({
+      tabs: tabs
+        .filter((t) => typeof t.id === 'number')
+        .map((t) => ({ tabId: t.id, title: t.title ?? '', url: t.url ?? '' })),
+      mru, marks, bookmarks, activeTabId,
+    });
+  }).catch(() => sendResponse({ tabs: [], mru: [], marks: {}, bookmarks: [], activeTabId }));
+  return true;
+}
 
 interface PaletteVoiceSession {
   tabId: number;
@@ -67,6 +116,11 @@ export async function handlePaletteAction(
   if (action.kind === 'switch_tab') {
     // A stale id (tab closed while the palette was open) is a silent no-op.
     await focusWindowAndActivateTab(action.tabId);
+  } else if (action.kind === 'open_bookmark') {
+    // New focused tab: picking a bookmark should never eat the page you were
+    // on (and the palette can't open on the browser's native new-tab page —
+    // no content script there — so "open in place" has no natural home).
+    await chrome.tabs.create({ url: action.url, active: true }).catch(() => {});
   } else if (action.kind === 'command' && typeof originTabId === 'number') {
     // Through the content dispatcher in the top frame — the exact semantics
     // of pressing the command's keybind (tab verbs bounce back here as

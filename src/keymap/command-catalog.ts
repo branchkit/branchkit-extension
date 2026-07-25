@@ -674,6 +674,13 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   { id: 'toggle_command_palette', label: 'Command palette', group: 'Palette', mappable: true, params: [],
     description: 'Browse and search every command in the palette overlay.',
     voice: [{ pattern: 'palette commands' }] },
+  // The bookmark source alone (scope-only: bookmarks would bloat the full
+  // launcher). Selection opens in a new focused tab — the palette can't open
+  // on the browser's native new-tab page (no content script), so "in place"
+  // has no natural home, and a pick should never eat the page you were on.
+  { id: 'toggle_bookmark_palette', label: 'Bookmark palette', group: 'Palette', mappable: true, params: [],
+    description: 'Open a bookmark — search by title, site, or folder; opens in a new tab.',
+    voice: [{ pattern: 'palette bookmarks' }] },
   // Palette voice selection (voice half of Layer 2): every palette row shows
   // an alphabet codeword badge; the spoken codeword resolves to the row_id
   // through the browser_palette collection (as_named_entities, value=row_id),
@@ -831,6 +838,7 @@ export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   { keys: 'ctrl+KeyK', command: 'toggle_palette' },   // Ctrl+K — full palette (works everywhere)
   { keys: 'ctrl+shift+KeyK', command: 'toggle_command_palette' }, // Ctrl+Shift+K — command palette (Ctrl+K's sibling)
   { keys: 'shift+KeyT', command: 'toggle_tab_palette' }, // T — tab palette (Vimium-C's tab-search key)
+  { keys: 'shift+KeyB', command: 'toggle_bookmark_palette' }, // B — bookmark palette (Vimium's Vomnibar-bookmarks key)
   // Help
   { keys: 'shift+Slash', command: 'toggle_help' },    // ?
 ];

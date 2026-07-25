@@ -261,7 +261,7 @@ export type Message =
   // can't host the overlay; background relays it to the top frame as a
   // PALETTE_COMMAND so the palette always opens over the whole page. `command`
   // is which palette (full vs single-source); defaults to toggle_palette.
-  | { type: 'PALETTE_OPEN'; command?: 'toggle_palette' | 'toggle_tab_palette' | 'toggle_command_palette' }
+  | { type: 'PALETTE_OPEN'; command?: 'toggle_palette' | 'toggle_tab_palette' | 'toggle_command_palette' | 'toggle_bookmark_palette' }
   // Palette page (extension iframe) → background. A selection or an explicit
   // close. Background closes the overlay in the sender's tab first, then
   // executes: switch_tab directly, command via PALETTE_COMMAND to the tab.

@@ -3,7 +3,7 @@
   "name": "BranchKit Browser",
   "version": "0.1.0",
   "description": "Voice-navigable hint badges for any website. Works standalone or with BranchKit.",
-  "permissions": ["tabs", "storage", "alarms", "scripting", "webNavigation", "sessions", "clipboardWrite"],
+  "permissions": ["tabs", "storage", "alarms", "scripting", "webNavigation", "sessions", "clipboardWrite", "bookmarks"],
   "browser_specific_settings": {
     "gecko": {
       "id": "branchkit-browser@branchkit.dev"

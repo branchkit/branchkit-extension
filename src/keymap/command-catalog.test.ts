@@ -27,6 +27,7 @@ const REGISTERED_ACTIONS = [
   'caret_mode', 'visual_line_mode', 'select_to',
   'video_mode', 'media_play_pause', 'media_mute', 'media_speed', 'media_seek', 'media_restart',
   'toggle_help', 'toggle_palette', 'toggle_tab_palette', 'toggle_command_palette',
+  'toggle_bookmark_palette',
 ] as const;
 
 // Voice-only commands dispatched entirely in the background (SSE intercept),
@@ -237,6 +238,7 @@ describe('default keymap', () => {
       { keys: 'ctrl+KeyK', command: 'toggle_palette' },
       { keys: 'ctrl+shift+KeyK', command: 'toggle_command_palette' },
       { keys: 'shift+KeyT', command: 'toggle_tab_palette' },
+      { keys: 'shift+KeyB', command: 'toggle_bookmark_palette' },
       { keys: 'shift+Slash', command: 'toggle_help' },
     ]);
   });

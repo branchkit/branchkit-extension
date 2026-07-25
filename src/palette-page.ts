@@ -19,8 +19,8 @@ import { COMMAND_CATALOG } from './keymap/command-catalog';
 import { loadKeymap } from './keymap/keymap-storage';
 import { overridesFromList, type OverrideRecord } from './keymap/command-override';
 import {
-  buildTabItems, buildCommandItems, filterPalette,
-  type PaletteItem, type PaletteSection, type PaletteTab,
+  buildTabItems, buildCommandItems, buildBookmarkItems, filterPalette,
+  type PaletteItem, type PaletteSection, type PaletteTab, type PaletteBookmark,
 } from './palette/model';
 import { assignCodewords, codewordDisplay, classifyMarkInput } from './palette/codewords';
 import { micGlyph } from './render/mic-glyph';
@@ -48,13 +48,16 @@ document.getElementById('boot-probe')?.remove();
 
 // Scope from the host URL: 'tabs' shows only the open-tabs source (Ctrl+T /
 // voice "palette tabs"), 'commands' only the catalog source (voice "palette
-// commands"); anything else is the full command station.
+// commands"), 'bookmarks' only the bookmark source (voice "palette
+// bookmarks"); anything else is the full command station.
 const scopeParam = new URLSearchParams(location.search).get('scope');
-const scope = scopeParam === 'tabs' || scopeParam === 'commands' ? scopeParam : 'all';
+const scope = scopeParam === 'tabs' || scopeParam === 'commands' || scopeParam === 'bookmarks'
+  ? scopeParam : 'all';
 fdiag(`boot build=${typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : 'unknown'} scope=${scope}`);
 
 let tabItems: PaletteItem[] = [];
 let commandItems: PaletteItem[] = [];
+let bookmarkItems: PaletteItem[] = [];
 /** Flat render order of the current sections — the selection index space. */
 let flat: PaletteItem[] = [];
 let selected = 0;
@@ -104,6 +107,7 @@ interface PaletteBootstrap {
   tabs: PaletteTab[];
   mru: number[];
   marks: MarkerMap;
+  bookmarks: PaletteBookmark[];
   activeTabId: number | null;
 }
 
@@ -179,6 +183,7 @@ async function loadBootstrap(): Promise<PaletteBootstrap> {
     })),
     mru: resp.mru ?? [],
     marks: resp.marks ?? {},
+    bookmarks: resp.bookmarks ?? [],
     activeTabId: resp.activeTabId ?? null,
   };
 }
@@ -242,7 +247,7 @@ function renderCurrent(): void {
       : tabItems.filter((it) => (codewords.get(it.id) ?? '').startsWith(markPrefix));
     render([{ source: 'tabs', label: 'Tabs', items }]);
   } else {
-    render(filterPalette(tabItems, commandItems, queryInput.value, scope === 'commands'));
+    render(filterPalette(tabItems, commandItems, queryInput.value, scope === 'commands', bookmarkItems));
   }
 }
 
@@ -431,10 +436,15 @@ async function init(): Promise<void> {
     displayMode = sync.badgeDisplayMode as BadgeDisplayMode;
   }
   markMap = boot.marks;
-  // A scoped open drops the other source entirely — same overlay, one
-  // source (the Vomnibar "scoped by trigger key" pattern).
-  tabItems = scope === 'commands' ? [] : buildTabItems(boot.tabs, boot.mru, boot.activeTabId);
-  commandItems = scope === 'tabs' ? [] : buildCommandItems(COMMAND_CATALOG, keymap, undefined, overrides, aliases);
+  // A scoped open drops the other sources entirely — same overlay, one
+  // source (the Vomnibar "scoped by trigger key" pattern). Bookmarks are
+  // scope-only: they'd bloat the full launcher, and "palette bookmarks" /
+  // Shift+B is the deliberate way in.
+  tabItems = scope === 'commands' || scope === 'bookmarks'
+    ? [] : buildTabItems(boot.tabs, boot.mru, boot.activeTabId);
+  commandItems = scope === 'tabs' || scope === 'bookmarks'
+    ? [] : buildCommandItems(COMMAND_CATALOG, keymap, undefined, overrides, aliases);
+  bookmarkItems = scope === 'bookmarks' ? buildBookmarkItems(boot.bookmarks) : [];
   const alphabet = Array.isArray(stored.alphabet) ? (stored.alphabet as string[]) : [];
   assignAndPublish(alphabet);
   // Tab palette opens in letter mode when marks exist (the fast path); with no
@@ -443,8 +453,9 @@ async function init(): Promise<void> {
   if (scope === 'tabs' && codewords.size > 0) enterLetterMode();
   else if (scope === 'tabs') { mode = 'fuzzy'; queryInput.placeholder = 'Search tabs…'; }
   else if (scope === 'commands') { queryInput.placeholder = 'Search commands…'; }
+  else if (scope === 'bookmarks') { queryInput.placeholder = 'Search bookmarks…'; }
   renderCurrent();
-  fdiag(`init ok tabs=${tabItems.length} commands=${commandItems.length} marks=${codewords.size}`);
+  fdiag(`init ok tabs=${tabItems.length} commands=${commandItems.length} bookmarks=${bookmarkItems.length} marks=${codewords.size}`);
 }
 
 init().catch((err: unknown) => {
