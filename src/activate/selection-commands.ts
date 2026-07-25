@@ -64,6 +64,26 @@ export const caret = new CaretController({
   },
 });
 
+// Re-assert caret-active when the window regains focus. The plugin DRAINS the
+// exclusive caret tag when the browser loses OS focus (correct: a held
+// exclusive tag would suppress every voice command system-wide while the user
+// works in another app), but the page's selection deliberately survives the
+// round trip — so without this, coming back leaves the page visibly selecting
+// while every caret voice command is gated off, and no spoken exit works
+// (2026-07-25 field finding). Unconditional send, not edge-deduped: the drain
+// happened plugin-side, so caretActivePushed is stale by design here. The
+// small delay lets the SW's focus claim land first (the plugin accepts
+// {active:true} only from the focused conn, fail-open when unknown); the
+// re-send is idempotent plugin-side either way.
+window.addEventListener('focus', () => {
+  if (!isTopFrame || !caret.isActive()) return;
+  setTimeout(() => {
+    if (!caret.isActive()) return;
+    caretActivePushed = true;
+    chrome.runtime.sendMessage({ type: 'CARET_ACTIVE', active: true } as Message).catch(() => {});
+  }, 300);
+});
+
 // The caret-mode voice-selection actions, handled inline (gated on caret mode).
 // The per-granularity extend_* ids carry their granularity in the id.
 type SelGran = NonNullable<SelectionCommand['granularity']>;
