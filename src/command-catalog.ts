@@ -246,7 +246,7 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // --- Find ---
   { id: 'find_open', label: 'Open find', group: 'Find', mappable: true, params: [],
     description: 'Open the in-page find bar.' },
-  { id: 'find_close', label: 'Close find', group: 'Find', mappable: true, params: [],
+  { id: 'find_close', label: 'Close find', group: 'Find', mappable: true, params: [], keyHint: 'Esc',
     description: 'Close find and clear the match highlights.',
     voice: [{ pattern: 'close find' }] },
   { id: 'find_next', label: 'Find next', group: 'Find', mappable: true, params: [],
@@ -569,7 +569,11 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // any site. Seek phrases avoid bare "back"/"next" (history/find own them).
   { id: 'video_mode', label: 'Video control mode', group: 'Media', mappable: true, params: [],
     description: 'Toggle the video key layer — k/Space play-pause, j/l seek 10s, arrows 5s, m mute, < > speed, 0 restart. YouTube\'s keys, working on any site\'s video. w again, Esc, or q exits.' },
-  { id: 'media_play_pause', label: 'Play / pause video', group: 'Media', mappable: true,
+  // keyHints on the transport verbs: their keys are OWNED BY THE VIDEO LAYER
+  // (`w` — video_mode's handler remaps YouTube's own keys onto any site), not
+  // the command registry, so without the hints the help palette showed these
+  // as voice-only (2026-07-25 user report).
+  { id: 'media_play_pause', label: 'Play / pause video', group: 'Media', mappable: true, keyHint: 'k Space',
     description: 'Pause or resume the page\'s video — the largest one playing (any site, works while player controls are hidden).',
     params: [{ name: 'op', type: 'enum', options: ['toggle', 'play', 'pause'], default: 'toggle' }],
     voice: [
@@ -583,7 +587,7 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
       { pattern: 'play video', params: { op: 'play' } },
     ],
     voiceContext: 'video' },
-  { id: 'media_mute', label: 'Mute video', group: 'Media', mappable: true,
+  { id: 'media_mute', label: 'Mute video', group: 'Media', mappable: true, keyHint: 'm',
     description: 'Mute or unmute the page\'s video (the video itself, not the tab).',
     params: [{ name: 'op', type: 'enum', options: ['toggle', 'mute', 'unmute'], default: 'toggle' }],
     voice: [
@@ -591,7 +595,7 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
       { pattern: 'unmute', params: { op: 'unmute' } },
     ],
     voiceContext: 'video' },
-  { id: 'media_speed', label: 'Video speed', group: 'Media', mappable: true,
+  { id: 'media_speed', label: 'Video speed', group: 'Media', mappable: true, keyHint: '< >',
     description: 'Change playback speed in 0.25× steps (works even on sites without a speed control).',
     params: [{ name: 'op', type: 'enum', options: ['faster', 'slower', 'normal'], default: 'faster' }],
     voice: [
@@ -600,7 +604,7 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
       { pattern: 'normal speed', params: { op: 'normal' } },
     ],
     voiceContext: 'video' },
-  { id: 'media_seek', label: 'Skip in video', group: 'Media', mappable: true,
+  { id: 'media_seek', label: 'Skip in video', group: 'Media', mappable: true, keyHint: 'j l ← →',
     description: 'Jump ahead or back in the playing video; say a number for exact seconds ("skip back 30").',
     params: [
       { name: 'direction', type: 'enum', options: ['ahead', 'back'], default: 'ahead' },
@@ -613,7 +617,7 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
       { pattern: 'skip back {number}', params: { direction: 'back', seconds: '{number}' } },
     ],
     voiceContext: 'video' },
-  { id: 'media_restart', label: 'Restart video', group: 'Media', mappable: true, params: [],
+  { id: 'media_restart', label: 'Restart video', group: 'Media', mappable: true, params: [], keyHint: '0',
     description: 'Jump the playing video back to the beginning.',
     voice: [{ pattern: 'restart video' }],
     voiceContext: 'video' },
