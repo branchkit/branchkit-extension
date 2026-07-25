@@ -526,6 +526,10 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   // browser plugin's passthrough, which relays to the actuator override layer.
   // See notes/DESIGN_COMMAND_PHRASE_OVERRIDES.md.
 
+  if (message.type === 'DEV_PING') {
+    return false; // dev keepalive — the WAKE is the point (dev-keepalive.ts)
+  }
+
   if (message.type === 'PALETTE_BOOTSTRAP') {
     // Privileged palette data (see the Message type doc): tabs + MRU + marks
     // fetched here because the Firefox palette iframe has content-script

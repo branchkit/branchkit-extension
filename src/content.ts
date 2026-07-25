@@ -60,6 +60,7 @@ import { flashToast } from './render/toast';
 import { registerSelectionCommands, restorePosition, caret, SELECTION_ACTIONS, parseSelectionCommand } from './activate/selection-commands';
 import { resolveRangePick, refusePickWindowCodeword, filterRangePickChips, setPickWindowHooks } from './activate/range-disambiguation';
 import { runEscapeCascade } from './activate/escape-cascade';
+import './debug/dev-keepalive';
 import {
   CodewordSnapshot,
   takeSnapshot,
@@ -1081,8 +1082,7 @@ function setBadgesVisible(visible: boolean): boolean {
 
 dispatcher.register('toggle_hints', () => { toggleHints(); });
 
-// Range-pick chip window: badges hide while chips are up (policy + restore
-// live in activate/range-disambiguation.ts; injected — visibility is ours).
+// Range-pick chip window: badges hide while chips are up (see activate/range-disambiguation.ts).
 setPickWindowHooks({
   hideBadges: () => {
     const showing = pageSession.badgesVisible || store.all.some((w) => w.hint?.isVisible);
