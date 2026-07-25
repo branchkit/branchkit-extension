@@ -236,7 +236,7 @@ function renderCurrent(): void {
       : tabItems.filter((it) => (codewords.get(it.id) ?? '').startsWith(markPrefix));
     render([{ source: 'tabs', label: 'Tabs', items }]);
   } else {
-    render(filterPalette(tabItems, commandItems, queryInput.value));
+    render(filterPalette(tabItems, commandItems, queryInput.value, scope === 'commands'));
   }
 }
 

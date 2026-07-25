@@ -647,10 +647,7 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     voice: [{ pattern: 'silence everything' }],
     voiceContext: 'video' },
 
-  // --- Help ---
-  { id: 'toggle_help', label: 'Keyboard help', group: 'Help', mappable: true, params: [],
-    description: 'Show or hide this keyboard command reference.',
-    voice: [{ pattern: 'help' }] },
+  // --- Palette ---
   // Layer 2 of notes/DESIGN_TAB_NAVIGATION.md: an extension-served iframe
   // overlay searching pluggable sources (open tabs MRU-first, this catalog).
   // A real-modifier chord by design — it must open in every mode, mid-hint
@@ -663,7 +660,7 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // previously opened the tab palette, which made "tab {browser_tabs}"
   // unreachable under emit-on-partial (terminal-command rule) and preempted
   // the codeword discovery view.
-  { id: 'toggle_palette', label: 'Command palette', group: 'Palette', mappable: true, params: [],
+  { id: 'toggle_palette', label: 'Palette', group: 'Palette', mappable: true, params: [],
     description: 'Search open tabs and every command in one overlay.',
     voice: [{ pattern: 'palette all' }] },
   // The same overlay scoped to open tabs — the keyboard + voice way to switch
@@ -672,10 +669,10 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   { id: 'toggle_tab_palette', label: 'Tab palette', group: 'Palette', mappable: true, params: [],
     description: 'Switch tabs — search by title or codeword in the palette overlay.',
     voice: [{ pattern: 'palette tabs' }] },
-  // The commands source alone — the voice twin of the catalog half of the
-  // full palette. No default keybind (Ctrl+K covers keyboard users).
-  { id: 'toggle_command_palette', label: 'Command-only palette', group: 'Palette', mappable: true, params: [],
-    description: 'Search every command in the palette overlay.',
+  // The commands source alone — the browsable catalog surface (grouped by
+  // section on open, unlike the full palette's flat launcher list).
+  { id: 'toggle_command_palette', label: 'Command palette', group: 'Palette', mappable: true, params: [],
+    description: 'Browse and search every command in the palette overlay.',
     voice: [{ pattern: 'palette commands' }] },
   // Palette voice selection (voice half of Layer 2): every palette row shows
   // an alphabet codeword badge; the spoken codeword resolves to the row_id
@@ -694,6 +691,13 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     description: 'Close the command palette without selecting.',
     voice: [{ pattern: 'hide' }],
     voiceContext: 'palette' },
+
+  // --- Help --- (last on purpose: catalog order drives the section order in
+  // the help overlay and the command palette's grouped browse, and Help
+  // belongs at the bottom.)
+  { id: 'toggle_help', label: 'Keyboard help', group: 'Help', mappable: true, params: [],
+    description: 'Show or hide this keyboard command reference.',
+    voice: [{ pattern: 'help' }] },
 ];
 
 export const COMMAND_BY_ID: ReadonlyMap<string, CommandMeta> = new Map(
@@ -825,6 +829,7 @@ export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   { keys: 'KeyW', command: 'video_mode' },            // w — "watch": video key layer
   // Palette / tab palette
   { keys: 'ctrl+KeyK', command: 'toggle_palette' },   // Ctrl+K — full palette (works everywhere)
+  { keys: 'ctrl+shift+KeyK', command: 'toggle_command_palette' }, // Ctrl+Shift+K — command palette (Ctrl+K's sibling)
   { keys: 'shift+KeyT', command: 'toggle_tab_palette' }, // T — tab palette (Vimium-C's tab-search key)
   // Help
   { keys: 'shift+Slash', command: 'toggle_help' },    // ?

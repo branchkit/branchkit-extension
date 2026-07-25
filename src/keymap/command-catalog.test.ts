@@ -235,6 +235,7 @@ describe('default keymap', () => {
       { keys: 'shift+KeyV', command: 'visual_line_mode' },
       { keys: 'KeyW', command: 'video_mode' },
       { keys: 'ctrl+KeyK', command: 'toggle_palette' },
+      { keys: 'ctrl+shift+KeyK', command: 'toggle_command_palette' },
       { keys: 'shift+KeyT', command: 'toggle_tab_palette' },
       { keys: 'shift+Slash', command: 'toggle_help' },
     ]);

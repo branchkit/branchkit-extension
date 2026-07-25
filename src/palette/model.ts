@@ -194,17 +194,21 @@ export function scoreItem(item: PaletteItem, queryWords: readonly string[]): num
 /**
  * Filter both sources for a query and shape the sectioned result.
  *
- * Empty query = browse mode: tabs first (MRU order), then the commands split
- * into one section per catalog group, in catalog order — the same headers as
- * the `?` help overlay, one taxonomy everywhere. With a query = search mode:
- * one ranked section per SOURCE (per-group sections would fragment relevance
- * ordering — the best match must be first, not under the third header).
- * Sections that match nothing are dropped.
+ * Empty query = browse mode: tabs first (MRU order), then the commands. With
+ * `groupedBrowse` (the commands-only palette — the "browse the catalog"
+ * surface) the commands split into one section per catalog group, in catalog
+ * order — the same headers as the `?` help overlay. The full palette keeps a
+ * single flat Commands section: it is a launcher, and group headers would
+ * push the recent tabs down. With a query = search mode: always one ranked
+ * section per SOURCE (per-group sections would fragment relevance ordering —
+ * the best match must be first, not under the third header). Sections that
+ * match nothing are dropped.
  */
 export function filterPalette(
   tabItems: readonly PaletteItem[],
   commandItems: readonly PaletteItem[],
   query: string,
+  groupedBrowse = false,
 ): PaletteSection[] {
   const sections: PaletteSection[] = [];
   const q = searchWords(query);
@@ -222,8 +226,8 @@ export function filterPalette(
     if (picked.length) sections.push({ source, label, items: picked });
   };
   build('tabs', 'Tabs', tabItems);
-  if (q.length === 0) {
-    // Browse mode: group headers, first-appearance order (= catalog order).
+  if (groupedBrowse && q.length === 0) {
+    // Grouped browse: group headers, first-appearance order (= catalog order).
     const groups: string[] = [];
     for (const item of commandItems) {
       const g = item.group ?? 'Commands';
