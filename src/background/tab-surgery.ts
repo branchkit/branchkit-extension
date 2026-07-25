@@ -29,6 +29,12 @@ interface SurgeryWindowReport {
   height: number;
   state: string;
   active_tab_title: string;
+  // True for the window containing the browser's active tab — the tab any
+  // surgery would move. Never a valid merge target: frames don't
+  // discriminate it (the pop path creates windows at the source frame, and
+  // CG titles are empty without Screen Recording permission), and moving a
+  // tab into its own window is a silent no-op that reads as success.
+  is_source: boolean;
 }
 
 // Actions this module claims off the SSE stream.
@@ -38,7 +44,7 @@ export const SURGERY_ACTIONS: ReadonlySet<string> = new Set([
   'pop_active_tab',
 ]);
 
-function reportWindow(w: chrome.windows.Window): SurgeryWindowReport {
+function reportWindow(w: chrome.windows.Window, sourceWindowId?: number): SurgeryWindowReport {
   const activeTab = w.tabs?.find((t) => t.active);
   return {
     window_id: w.id ?? -1,
@@ -48,6 +54,7 @@ function reportWindow(w: chrome.windows.Window): SurgeryWindowReport {
     height: w.height ?? 0,
     state: w.state ?? 'normal',
     active_tab_title: activeTab?.title ?? '',
+    is_source: w.id != null && w.id === sourceWindowId,
   };
 }
 
@@ -57,8 +64,11 @@ async function activeTab(): Promise<chrome.tabs.Tab | undefined> {
 }
 
 async function queryWindows(requestId: string): Promise<void> {
+  const source = await activeTab();
   const wins = await chrome.windows.getAll({ populate: true });
-  const windows = wins.filter((w) => w.type === 'normal').map(reportWindow);
+  const windows = wins
+    .filter((w) => w.type === 'normal')
+    .map((w) => reportWindow(w, source?.windowId));
   await postSurgeryResult({ request_id: requestId, ok: true, windows });
 }
 
