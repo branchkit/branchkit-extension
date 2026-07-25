@@ -63,8 +63,11 @@
        the kbd family, just no longer faint. */
     .cw {
       flex: 0 0 auto;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
-      font-weight: 700;
+      /* Semibold, not bold: at chip size, bold mono fills the counters and
+         "m" reads as a blob (user screenshot). Legibility comes from the
+         bright field + 12px + a little tracking instead. */
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+      font-weight: 600; letter-spacing: 0.03em;
       background: rgba(240, 246, 252, 0.16); color: #f0f6fc;
       border: 1px solid #4b535c;
       border-radius: 3px; padding: 0 4px; white-space: nowrap;
