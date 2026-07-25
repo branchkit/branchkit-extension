@@ -51,7 +51,7 @@ import { captureDebugSnapshot } from './debug/debug-snapshot';
 import { toggleOverlay } from './render/debug-overlay';
 import { toggleHelpOverlay, isHelpOverlayActive } from './render/help-overlay';
 import { overridesFromList, type OverrideRecord } from './keymap/command-override';
-import { togglePalette, closePalette } from './render/palette-host';
+import { registerPaletteCommands, closePalette } from './render/palette-host';
 import { setTabMarker, reapplyTabMarker, refreshTabMarker } from './render/tab-title';
 import { setModeChip } from './render/mode-chip';
 import { getSiteKeyState, onSiteKeysChanged } from './keymap/keyboard-rules';
@@ -1203,20 +1203,9 @@ async function fetchOverridesForDisplay(): Promise<Map<string, string>> {
   return overridesFromList(r?.overrides ?? []);
 }
 
-// Command palette (notes/DESIGN_TAB_NAVIGATION.md, Layer 2). The overlay
-// iframe always lives in the top frame; a bind fired inside a subframe relays
-// up through the background (PALETTE_OPEN → PALETTE_COMMAND at frame 0).
-// `toggle_tab_palette` is the same overlay scoped to open tabs (Ctrl+T /
-// voice "tab").
-function openPaletteFromCommand(command: 'toggle_palette' | 'toggle_tab_palette'): void {
-  if (window !== window.top) {
-    chrome.runtime.sendMessage({ type: 'PALETTE_OPEN', command } as Message).catch(() => {});
-    return;
-  }
-  togglePalette(command === 'toggle_tab_palette' ? 'tabs' : 'all');
-}
-dispatcher.register('toggle_palette', () => openPaletteFromCommand('toggle_palette'));
-dispatcher.register('toggle_tab_palette', () => openPaletteFromCommand('toggle_tab_palette'));
+// Command palette (notes/DESIGN_TAB_NAVIGATION.md, Layer 2): the open
+// commands live with the overlay host (render/palette-host.ts).
+registerPaletteCommands();
 
 // Tab verbs — forward to the background SW's handleTabAction (content scripts
 // can't touch chrome.tabs). These registrations serve the keyboard path only;
@@ -2364,8 +2353,9 @@ const DISPATCH_PASSTHROUGH_ACTIONS = new Set([
   'find_open', 'find_close', 'find_next', 'find_previous', 'find_immediate',
   'select_to', // voice "extend to <phrase>" — dictated-argument find + extend
   'focus_input',
-  'toggle_palette', // voice "palette" — same handler as the Ctrl+K bind
-  'toggle_tab_palette', // voice "tab" — opens the tabs-only palette (Ctrl+T twin)
+  'toggle_palette', // voice "palette all" — same handler as the Ctrl+K bind
+  'toggle_tab_palette', // voice "palette tabs" — the tabs-only palette (Ctrl+T twin)
+  'toggle_command_palette', // voice "palette commands" — the catalog source alone
   'toggle_help', // voice "help" — same handler as the ? bind
   'go_next', 'go_previous', // voice "next/previous page"
   'copy_url', // voice "copy url"

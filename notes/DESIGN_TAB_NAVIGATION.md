@@ -148,7 +148,12 @@ exist in background browsers, so it's single-conn, not per-conn):
 - Voice close: contributed "hide" with `context: "palette"` →
   `palette_dismiss` (same word as hint-hide, disambiguated by context —
   while the palette is open the hint "hide" is suppressed by exclusivity,
-  and vice versa when closed). Voice open: "palette" on `toggle_palette`.
+  and vice versa when closed). Voice open (2026-07-25, prefix-free family):
+  "palette all" on `toggle_palette`, "palette tabs" on `toggle_tab_palette`,
+  "palette commands" on `toggle_command_palette`. Bare "palette"/"tab" are
+  deliberately not commands — spoken alone they partial-match and the
+  Discovery HUD shows the continuations (the old bare-"tab" open shadowed
+  "tab {browser_tabs}" per the terminal-command rule).
 
 **Stuck-tag safety** (an orphaned exclusive tag would suppress everything):
 - Palette page closes itself on window blur (OS focus leaves the browser),

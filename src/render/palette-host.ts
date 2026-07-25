@@ -15,6 +15,8 @@
 
 import { RELAY_HELLO, RELAY_REQ, RELAY_RESP, RELAY_DIAG } from '../palette/relay';
 import { reportDispatchResult } from '../plugin/resolve';
+import { dispatcher } from '../core/singletons';
+import type { Message } from '../types';
 
 /** Palette lifecycle breadcrumbs → the plugin's dispatch-result log. The
  * palette frame itself can't reach the plugin (no privileges on Firefox), so
@@ -75,9 +77,10 @@ export function isPaletteOpen(): boolean {
   return frame !== null;
 }
 
-/** Palette scope: the full command station, or tabs only (Ctrl+T / voice
- *  "tab"). Tabs-only reuses the same overlay + voice-half, just one source. */
-export type PaletteScope = 'all' | 'tabs';
+/** Palette scope: the full command station, or a single source (Ctrl+T /
+ *  voice "palette tabs" / "palette commands"). Scoped opens reuse the same
+ *  overlay + voice-half, just fewer sources. */
+export type PaletteScope = 'all' | 'tabs' | 'commands';
 
 export function openPalette(scope: PaletteScope = 'all'): void {
   if (frame) return;
@@ -89,7 +92,7 @@ export function openPalette(scope: PaletteScope = 'all'): void {
   f.setAttribute('data-branchkit-hint', '');
   f.setAttribute('allowtransparency', 'true');
   // Scope rides the URL so palette-page.ts can read it before first paint.
-  f.src = chrome.runtime.getURL(`palette.html${scope === 'tabs' ? '?scope=tabs' : ''}`);
+  f.src = chrome.runtime.getURL(`palette.html${scope === 'all' ? '' : `?scope=${scope}`}`);
   f.style.cssText =
     `position: fixed; inset: 0; width: 100vw; height: 100vh; border: 0; ` +
     `margin: 0; padding: 0; z-index: ${Z_INDEX}; background: transparent; ` +
@@ -129,4 +132,31 @@ export function closePalette(): void {
 export function togglePalette(scope: PaletteScope = 'all'): void {
   if (frame) closePalette();
   else openPalette(scope);
+}
+
+// The three palette-open commands (keyboard binds + the "palette <scope>"
+// voice family). The overlay iframe always lives in the top frame; a command
+// fired inside a subframe relays up through the background
+// (PALETTE_OPEN → PALETTE_COMMAND at frame 0).
+type PaletteCommand = 'toggle_palette' | 'toggle_tab_palette' | 'toggle_command_palette';
+const PALETTE_COMMAND_SCOPE: Record<PaletteCommand, PaletteScope> = {
+  toggle_palette: 'all',
+  toggle_tab_palette: 'tabs',
+  toggle_command_palette: 'commands',
+};
+
+function openPaletteFromCommand(command: PaletteCommand): void {
+  if (window !== window.top) {
+    chrome.runtime.sendMessage({ type: 'PALETTE_OPEN', command } as Message).catch(() => {});
+    return;
+  }
+  togglePalette(PALETTE_COMMAND_SCOPE[command]);
+}
+
+/** Register the palette-open commands on the shared dispatcher (called from
+ * content bootstrap — nothing registers at import). */
+export function registerPaletteCommands(): void {
+  for (const command of Object.keys(PALETTE_COMMAND_SCOPE) as PaletteCommand[]) {
+    dispatcher.register(command, () => openPaletteFromCommand(command));
+  }
 }

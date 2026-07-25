@@ -46,8 +46,10 @@ const backdrop = document.getElementById('backdrop') as HTMLDivElement;
 document.getElementById('boot-probe')?.remove();
 
 // Scope from the host URL: 'tabs' shows only the open-tabs source (Ctrl+T /
-// voice "tab"); anything else is the full command station.
-const scope = new URLSearchParams(location.search).get('scope') === 'tabs' ? 'tabs' : 'all';
+// voice "palette tabs"), 'commands' only the catalog source (voice "palette
+// commands"); anything else is the full command station.
+const scopeParam = new URLSearchParams(location.search).get('scope');
+const scope = scopeParam === 'tabs' || scopeParam === 'commands' ? scopeParam : 'all';
 fdiag(`boot build=${typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : 'unknown'} scope=${scope}`);
 
 let tabItems: PaletteItem[] = [];
@@ -421,9 +423,9 @@ async function init(): Promise<void> {
     displayMode = sync.badgeDisplayMode as BadgeDisplayMode;
   }
   markMap = boot.marks;
-  tabItems = buildTabItems(boot.tabs, boot.mru, boot.activeTabId);
-  // Tabs-only scope drops the command source entirely — same overlay, one
+  // A scoped open drops the other source entirely — same overlay, one
   // source (the Vomnibar "scoped by trigger key" pattern).
+  tabItems = scope === 'commands' ? [] : buildTabItems(boot.tabs, boot.mru, boot.activeTabId);
   commandItems = scope === 'tabs' ? [] : buildCommandItems(COMMAND_CATALOG, keymap, undefined, overrides);
   const alphabet = Array.isArray(stored.alphabet) ? (stored.alphabet as string[]) : [];
   assignAndPublish(alphabet);
@@ -432,6 +434,7 @@ async function init(): Promise<void> {
   // usable. Full palette is always fuzzy.
   if (scope === 'tabs' && codewords.size > 0) enterLetterMode();
   else if (scope === 'tabs') { mode = 'fuzzy'; queryInput.placeholder = 'Search tabs…'; }
+  else if (scope === 'commands') { queryInput.placeholder = 'Search commands…'; }
   renderCurrent();
   fdiag(`init ok tabs=${tabItems.length} commands=${commandItems.length} marks=${codewords.size}`);
 }

@@ -31,8 +31,10 @@ session's history; the short version:
   (the exclusive tag is set out-of-band via the extension's publish), so the
   palette and HUD coexist without doubling up.
 
-**Landed (increment 1, ext):** palette `scope` param (`all` | `tabs`);
-`toggle_tab_palette` command (Ctrl+T + voice "tab") opens the tabs-only
+**Landed (increment 1, ext):** palette `scope` param (`all` | `tabs`, later
+`commands`); `toggle_tab_palette` command (Ctrl+T + voice "palette tabs" —
+originally bare "tab", renamed 2026-07-25 so bare "tab" is a pure prefix of
+"tab {browser_tabs}" and discovery shows the codewords) opens the tabs-only
 overlay; `goto_tab`'s "tab {number}" voice retired (kept keyboard-mappable)
 so voice tab-addressing is one language.
 

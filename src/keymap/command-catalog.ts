@@ -377,8 +377,8 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     description: 'Switch to the rightmost tab in the current window.',
     voice: [{ pattern: 'last tab' }] },
   // Positional "tab {number}" voice was retired 2026-07-05: voice tab-
-  // addressing is markers-only (one language — see DESIGN_TAB_MARKERS.md),
-  // and "tab" is now the tab-palette trigger. Kept keyboard-mappable.
+  // addressing is markers-only (one language — see DESIGN_TAB_MARKERS.md).
+  // Kept keyboard-mappable.
   { id: 'goto_tab', label: 'Go to tab N', group: 'Tabs', mappable: true,
     description: 'Switch to the Nth tab in the current window (1-based, clamped).',
     params: [{ name: 'index', type: 'number', min: 1, default: '1' }] },
@@ -397,7 +397,9 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // tab_id through the matcher, no overlay. Not keyboard-bindable: the value
   // is a runtime spoken word (the palette is the keyboard analog, Layer 2).
   // "tab <codeword>" — the flat, always-live path, so it resolves in one breath
-  // (the tab palette, bare "tab", is the paused/browse path). {browser_tabs}
+  // (the tab palette, "palette tabs", is the paused/browse path; bare "tab" is
+  // a pure prefix, so speaking it alone surfaces the codewords in the
+  // Discovery HUD). {browser_tabs}
   // matches both the stable mark shown on the strip AND a distinctive title/
   // site word, so "tab huge" and "tab github" both work. ("switch to <tab>" was
   // dropped 2026-07-05 — one verb for tabs.)
@@ -642,15 +644,28 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // overlay searching pluggable sources (open tabs MRU-first, this catalog).
   // A real-modifier chord by design — it must open in every mode, mid-hint
   // and inside text fields (the Ctrl+K/Ctrl+T-fire-in-fields path).
+  //
+  // Voice is a prefix-free "palette <scope>" family (2026-07-25): bare
+  // "palette" and bare "tab" are deliberately NOT commands, so speaking either
+  // word alone is a partial match and the Discovery HUD shows the
+  // continuations ("all"/"tabs"/"commands", or the tab codewords). Bare "tab"
+  // previously opened the tab palette, which made "tab {browser_tabs}"
+  // unreachable under emit-on-partial (terminal-command rule) and preempted
+  // the codeword discovery view.
   { id: 'toggle_palette', label: 'Command palette', group: 'Help', mappable: true, params: [],
     description: 'Search open tabs and every command in one overlay.',
-    voice: [{ pattern: 'palette' }] },
+    voice: [{ pattern: 'palette all' }] },
   // The same overlay scoped to open tabs — the keyboard + voice way to switch
   // tabs by codeword or fuzzy title (see notes/DESIGN_TAB_MARKERS.md). Bare
-  // `T` in Normal mode (Vimium-C's tab-search key); voice "tab".
+  // `T` in Normal mode (Vimium-C's tab-search key).
   { id: 'toggle_tab_palette', label: 'Tab palette', group: 'Tabs', mappable: true, params: [],
     description: 'Switch tabs — search by title or codeword in the palette overlay.',
-    voice: [{ pattern: 'tab' }] },
+    voice: [{ pattern: 'palette tabs' }] },
+  // The commands source alone — the voice twin of the catalog half of the
+  // full palette. No default keybind (Ctrl+K covers keyboard users).
+  { id: 'toggle_command_palette', label: 'Command-only palette', group: 'Help', mappable: true, params: [],
+    description: 'Search every command in the palette overlay.',
+    voice: [{ pattern: 'palette commands' }] },
   // Palette voice selection (voice half of Layer 2): every palette row shows
   // an alphabet codeword badge; the spoken codeword resolves to the row_id
   // through the browser_palette collection (as_named_entities, value=row_id),

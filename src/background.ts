@@ -471,7 +471,7 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     // frame. Route it there as a PALETTE_COMMAND through the dispatcher.
     const tabId = _sender.tab?.id;
     if (typeof tabId === 'number') {
-      const action = message.command === 'toggle_tab_palette' ? 'toggle_tab_palette' : 'toggle_palette';
+      const action = message.command ?? 'toggle_palette';
       chrome.tabs.sendMessage(tabId, { type: 'PALETTE_COMMAND', action }, { frameId: 0 })
         .catch(() => {});
     }
