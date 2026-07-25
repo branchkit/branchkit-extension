@@ -163,7 +163,7 @@ describe('range-disambiguation pick', () => {
     expect(isRangePickPending('bravo')).toBe(true);
     expect(isRangePickPending('zulu')).toBe(false);
 
-    expect(resolveRangePick('bravo')).toBe(true);
+    expect(resolveRangePick('bravo')).toBe('picked');
     expect(picks).toHaveLength(1);
     expect(picks[0]).toBe(ranges[1]);
     // Teardown: chips gone, codewords retired + released.
@@ -219,7 +219,7 @@ describe('range-disambiguation pick', () => {
 
   it('ignores codewords that are not part of the pick', () => {
     startRangePick([makeRange(), makeRange()], () => {});
-    expect(resolveRangePick('zulu')).toBe(false);
+    expect(resolveRangePick('zulu')).toBe('not_mine');
     expect(isRangePickPending()).toBe(true);
   });
 
@@ -277,19 +277,11 @@ describe('range-disambiguation pick', () => {
   it('a chip past the fold is painted but NOT speakable until it is on screen', async () => {
     // The two cuts the link badges have: the band decides who wears a chip,
     // the strict viewport decides who voice will match (strict-viewport.ts).
-    const view = withScrollableRects(['near']);
+    // 'far' sits outside the viewport but inside the band, so it pre-claims.
+    const view = withScrollableRects(['near'], ['far']);
     try {
-      // 'far' sits outside the viewport but inside the band, so it pre-claims.
-      const original = Range.prototype.getBoundingClientRect;
-      Range.prototype.getBoundingClientRect = function (this: Range): DOMRect {
-        return (this.toString() === 'near'
-          ? { top: 10, bottom: 30, left: 10, right: 60, width: 50, height: 20 }
-          : { top: 900, bottom: 920, left: 10, right: 60, width: 50, height: 20 }
-        ) as DOMRect;
-      };
       startRangePick([makeRange('near'), makeRange('far')], () => {});
       await Promise.resolve();
-      Range.prototype.getBoundingClientRect = original;
 
       expect(chipCount()).toBe(2); // both painted — the scroll-ahead cue
       const strict = new Map(publishedRecords.map(r => [r.codeword, r.in_strict_viewport]));
@@ -298,22 +290,68 @@ describe('range-disambiguation pick', () => {
     } finally { view.restore(); }
   });
 
-  it('a pre-claimed chip becomes speakable when it scrolls in, without changing codeword', async () => {
-    const view = withScrollableRects(['near']);
+  it('refuses to pick a chip whose match is off screen, and keeps the pick live', async () => {
+    // Seen-is-pickable, the chips' twin of the element path's sealed strict
+    // gate. The band paints chips past the fold as a scroll-ahead cue, so a
+    // chip can hold a codeword the user has never read — acting on it would be
+    // acting on something they can't see.
+    const view = withScrollableRects(['near'], ['far']);
+    try {
+      const picks: Range[] = [];
+      startRangePick([makeRange('near'), makeRange('far')], (r) => picks.push(r));
+      await Promise.resolve();
+
+      expect(resolveRangePick('bravo')).toBe('off_screen'); // 'far'
+      expect(picks).toEqual([]);
+      expect(isRangePickPending()).toBe(true);   // still live — scroll and retry
+      expect(isRangePickPending('bravo')).toBe(true); // codeword kept
+      expect(toasts.some(t => t.includes('off screen'))).toBe(true);
+
+      // Scroll to it and the same codeword now works.
+      view.scrollTo(['near', 'far']);
+      reconcileRangePickChips();
+      await Promise.resolve();
+      expect(resolveRangePick('bravo')).toBe('picked');
+      expect(picks.map(String)).toEqual(['far']);
+    } finally { view.restore(); }
+  });
+
+  it('reads geometry live, not the flag published at the last scroll settle', async () => {
+    // A dispatch can land mid-scroll, after the chip moved but before the
+    // settle re-published its eligibility. The gate must not trust the flag.
+    const view = withScrollableRects(['near', 'far']);
     try {
       startRangePick([makeRange('near'), makeRange('far')], () => {});
       await Promise.resolve();
+      expect(isRangePickPending('bravo')).toBe(true);
+
+      // 'far' slides past the fold with NO reconcile — Chip.strict still true.
+      view.scrollTo(['near'], ['far']);
+      expect(resolveRangePick('bravo')).toBe('off_screen');
+    } finally { view.restore(); }
+  });
+
+  it('a pre-claimed chip becomes speakable when it scrolls in, without changing codeword', async () => {
+    // 'far' pre-claims at arm (in band, past the fold) so this exercises the
+    // eligibility FLIP, not a new chip arriving.
+    const view = withScrollableRects(['near'], ['far']);
+    try {
+      startRangePick([makeRange('near'), makeRange('far')], () => {});
+      await Promise.resolve();
+      expect(chipCount()).toBe(2);
       const before = publishedRecords.length;
 
       view.scrollTo(['near', 'far']); // 'far' is now on screen
       reconcileRangePickChips();
       await Promise.resolve();
 
-      // Only the eligibility flag is re-sent; the codeword is untouched.
+      // No membership change — only the eligibility flag is re-sent, and the
+      // codeword is untouched.
       const republished = publishedRecords.slice(before);
       expect(republished.map(r => r.codeword)).toEqual(['bravo']);
       expect(republished[0].in_strict_viewport).toBe(true);
       expect(isRangePickPending('bravo')).toBe(true);
+      expect(chipCount()).toBe(2);
     } finally { view.restore(); }
   });
 
@@ -322,19 +360,32 @@ describe('range-disambiguation pick', () => {
   // but a match below the fold at arm time had no codeword at all, so scrolling
   // to it showed nothing. `visibleTexts` is the viewport — reassigning it is a
   // scroll.
-  function withScrollableRects(initial: string[]): {
-    scrollTo(texts: string[]): void; restore(): void;
+  // Three positions, because the band and the strict cut are different lines:
+  // ON SCREEN (overhang 0, pickable), JUST PAST THE FOLD (off screen but inside
+  // VIEWPORT_MARGIN_PX — pre-claims a chip, not pickable), and FAR (outside the
+  // band entirely — no chip at all).
+  function withScrollableRects(initial: string[], nearbyInit: string[] = []): {
+    scrollTo(texts: string[], nearby?: string[]): void; restore(): void;
   } {
     let visibleTexts = new Set(initial);
+    let nearbyTexts = new Set(nearbyInit);
     const original = Range.prototype.getBoundingClientRect;
     Range.prototype.getBoundingClientRect = function (this: Range): DOMRect {
-      return (visibleTexts.has(this.toString())
-        ? { top: 10, bottom: 30, left: 10, right: 60, width: 50, height: 20 }
-        : { top: -4000, bottom: -3980, left: 10, right: 60, width: 50, height: 20 }
-      ) as DOMRect;
+      const t = this.toString();
+      if (visibleTexts.has(t)) {
+        return { top: 10, bottom: 30, left: 10, right: 60, width: 50, height: 20 } as DOMRect;
+      }
+      if (nearbyTexts.has(t)) {
+        const y = window.innerHeight + 120; // past the fold, inside the band
+        return { top: y, bottom: y + 20, left: 10, right: 60, width: 50, height: 20 } as DOMRect;
+      }
+      return { top: -4000, bottom: -3980, left: 10, right: 60, width: 50, height: 20 } as DOMRect;
     };
     return {
-      scrollTo: (texts) => { visibleTexts = new Set(texts); },
+      scrollTo: (texts, nearby = []) => {
+        visibleTexts = new Set(texts);
+        nearbyTexts = new Set(nearby);
+      },
       restore: () => { Range.prototype.getBoundingClientRect = original; },
     };
   }
@@ -360,7 +411,7 @@ describe('range-disambiguation pick', () => {
       expect(released.flat().sort()).toEqual(['alpha', 'bravo']);
       expect(publishedRecords.map(r => r.codeword)).toEqual(
         ['alpha', 'bravo', 'alpha', 'bravo']);
-      expect(resolveRangePick('alpha')).toBe(true);
+      expect(resolveRangePick('alpha')).toBe('picked');
       expect(picks[0].toString()).toBe('three');
     } finally { view.restore(); }
   });

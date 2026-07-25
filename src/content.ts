@@ -2488,12 +2488,17 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       // the spoken codeword names a text RANGE, not an element — consume it
       // before element resolution. Frame routing already delivered it here
       // (the pick claimed the codeword from this frame's reservoir).
-      if (codeword && resolveRangePick(codeword)) {
+      const pickOutcome = codeword ? resolveRangePick(codeword) : 'not_mine';
+      if (pickOutcome !== 'not_mine') {
+        // 'off_screen' is the chips' twin of the element path's sealed strict
+        // gate: the band paints chips past the fold, and one the user hasn't
+        // read could only be spoken by accident. Refused, pick stays live.
+        const picked = pickOutcome === 'picked';
         reportDispatchResult({
           action, codeword, resolution: 'range_pick', elem_tag: '',
-          taken: 'click', ok: true,
+          taken: picked ? 'click' : 'skipped', ok: picked,
           frame: trimFrameUrl(window.location.href),
-          detail: 'range pick resolved', fp: '',
+          detail: picked ? 'range pick resolved' : 'chip off screen', fp: '',
         });
         return;
       }

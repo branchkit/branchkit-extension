@@ -201,17 +201,57 @@ export function isRangePickPending(codeword?: string): boolean {
 }
 
 /**
- * Consume a spoken codeword if it belongs to the pending pick. Returns true
- * when consumed (the caller must NOT fall through to element activation).
+ * Is this range on screen right now? The seen-is-pickable predicate, read live
+ * rather than from `Chip.strict` — that flag only refreshes at scroll settle,
+ * and a dispatch can land mid-scroll. `bandOverhang === 0` is the same strict
+ * cut `isRectOnScreen` applies to elements, so chips and hints can't disagree
+ * about "on screen".
  */
-export function resolveRangePick(codeword: string): boolean {
-  if (!pending) return false;
+function isRangeOnScreen(range: Range): boolean {
+  if (!isAncestorChainInVisibleViewport(window)) return false;
+  let rect: DOMRect;
+  try { rect = range.getBoundingClientRect(); } catch { return false; }
+  if (rect.width === 0 && rect.height === 0) return false;
+  return bandOverhang(rect, window.innerWidth, window.innerHeight) === 0;
+}
+
+export type RangePickOutcome =
+  /** The codeword named a chip the user can see; the pick fired. */
+  | 'picked'
+  /** The codeword is this pick's, but its match is off screen — refused. */
+  | 'off_screen'
+  /** Not a chip codeword; the caller continues to element resolution. */
+  | 'not_mine';
+
+/**
+ * Consume a spoken codeword if it belongs to the pending pick.
+ *
+ * Seen-is-pickable, enforced live at dispatch — the same rule the element path
+ * applies in content's `sealedDispatchSeen`, for the same reason. The band
+ * paints chips past the fold as a scroll-ahead cue, so a chip can hold a
+ * codeword the user has never read; acting on it would be acting on something
+ * they can't see, which they could only have said by accident. Refusing keeps
+ * the pick live — scroll to the match and the same codeword works.
+ *
+ * Narrower than the element gate on purpose: geometry only, no occlusion or
+ * CSS-visibility check. Chips are deliberately occlusion-free (a text range
+ * under a sticky header is still a reasonable thing to be asked to pick — see
+ * `bandCandidates`), so a chip hidden by an overlay is still pickable. That's
+ * a known gap, not parity.
+ */
+export function resolveRangePick(codeword: string): RangePickOutcome {
+  if (!pending) return 'not_mine';
   const range = pending.chips.get(codeword)?.range;
-  if (!range) return false;
+  if (!range) return 'not_mine';
+  if (!isRangeOnScreen(range)) {
+    flashToast('That match is off screen — scroll to it first');
+    bkLog('BK_RANGE_PICK_OFF_SCREEN', { codeword });
+    return 'off_screen';
+  }
   const onPick = pending.onPick;
   teardown('picked');
   onPick(range);
-  return true;
+  return 'picked';
 }
 
 /** Cancel any pending pick (new arm replaces old, escape, requery). */
