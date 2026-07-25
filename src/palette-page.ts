@@ -19,7 +19,7 @@ import { COMMAND_CATALOG } from './keymap/command-catalog';
 import { loadKeymap } from './keymap/keymap-storage';
 import { overridesFromList, type OverrideRecord } from './keymap/command-override';
 import {
-  buildTabItems, buildCommandItems, buildBookmarkItems, filterPalette,
+  buildTabItems, buildCommandItems, buildBookmarkItems, filterPalette, resolvePaletteQuery,
   type PaletteItem, type PaletteSection, type PaletteTab, type PaletteBookmark,
 } from './palette/model';
 import { assignCodewords, codewordDisplay, classifyMarkInput } from './palette/codewords';
@@ -86,6 +86,26 @@ type PaletteMode = 'letter' | 'fuzzy';
 let mode: PaletteMode = 'fuzzy';
 /** The mark letters typed so far in letter mode ("i" waiting for a pair). */
 let markPrefix = '';
+/**
+ * What the most recent dictation hold typed into the box. Dictation needs no
+ * palette-side plumbing: the platform's sink types the transcript into whatever
+ * field has focus, and while the palette is open that field is this one.
+ *
+ * The sink emits one OS event per 20-character chunk, so one transcript can
+ * arrive as several insertions — they accumulate here. Two SEPARATE holds also
+ * land as consecutive insertions, and telling those apart is what makes
+ * re-querying work (see `resolvePaletteQuery`). The only local signal is the
+ * gap: chunks of one transcript are milliseconds apart, two holds are seconds
+ * apart — three orders of magnitude, so a coarse boundary is enough. Any
+ * single-character (keyboard) edit resets it: typing always owns the box.
+ */
+let dictatedRun = '';
+/** `input` timestamp that extended `dictatedRun`, for the utterance boundary. */
+let dictatedAt = 0;
+/** Insertions further apart than this belong to different holds. */
+const UTTERANCE_GAP_MS = 400;
+/** Note shown above the rows when the effective query isn't the box text. */
+let queryNote = '';
 
 function send(action: Extract<Message, { type: 'PALETTE_ACTION' }>['action']): void {
   chrome.runtime.sendMessage({ type: 'PALETTE_ACTION', action } as Message).catch(() => {});
@@ -219,6 +239,10 @@ function render(sections: PaletteSection[]): void {
     listEl.appendChild(el('div', 'empty', msg));
     return;
   }
+  // The query actually used, when it isn't the text in the box (a misheard
+  // dictation corrected against the palette's own words). Never silent — a
+  // filtered list the query doesn't explain reads as a broken palette.
+  if (queryNote) listEl.appendChild(el('div', 'overflow', queryNote));
   let idx = 0;
   for (const s of sections) {
     listEl.appendChild(el('div', 'sec', s.label));
@@ -274,10 +298,25 @@ function renderCurrent(): void {
     const items = markPrefix === ''
       ? tabItems
       : tabItems.filter((it) => (codewords.get(it.id) ?? '').startsWith(markPrefix));
+    queryNote = '';
     render([{ source: 'tabs', label: 'Tabs', items }]);
-  } else {
-    render(filterPalette(tabItems, commandItems, queryInput.value, scope === 'commands', bookmarkItems));
+    return;
   }
+  const resolved = resolvePaletteQuery(
+    queryInput.value, dictatedRun, [...tabItems, ...commandItems, ...bookmarkItems],
+  );
+  if (resolved.reason === 'dictated_retry') {
+    // Two utterances ran together in the box (the sink types at the caret, so
+    // a second dictation appends to the first) and the newest one is the real
+    // query. Own it in the box rather than noting it: the box would otherwise
+    // show text that matches nothing, and the next edit would build on garbage.
+    queryInput.value = resolved.query;
+    dictatedRun = resolved.query;
+  }
+  queryNote = resolved.reason === 'phonetic' ? `Showing results for “${resolved.query}”` : '';
+  render(filterPalette(
+    tabItems, commandItems, resolved.query, scope === 'commands', bookmarkItems,
+  ));
 }
 
 function moveSelection(delta: number): void {
@@ -315,12 +354,32 @@ function backspaceMark(): void {
   renderCurrent();
 }
 
-function enterFuzzyMode(): void {
+/** Whether voice is live for this palette — set once the spoken entries are
+ *  published. Gates the dictation affordances: with no voice half connected,
+ *  advertising "speak to search" would promise a channel nothing is listening
+ *  on (the extension runs standalone). */
+let voiceLive = false;
+
+/** Placeholder for the current mode — the keyboard truth, plus the spoken one
+ *  when voice is connected. The exact hold key lives in the footer. */
+function placeholderFor(m: PaletteMode): string {
+  if (scope === 'tabs' && m === 'letter') {
+    return voiceLive
+      ? 'Type a tab’s letter — / or speak to search'
+      : 'Type a tab’s letter — or / to search';
+  }
+  const what = scope === 'commands' ? 'commands'
+    : scope === 'bookmarks' ? 'bookmarks'
+    : scope === 'tabs' ? 'tabs' : 'tabs and commands';
+  return voiceLive ? `Search ${what} — type or speak…` : `Search ${what}…`;
+}
+
+function enterFuzzyMode(seed = ''): void {
   mode = 'fuzzy';
   markPrefix = '';
-  queryInput.readOnly = false;
-  queryInput.value = '';
-  queryInput.placeholder = 'Search tabs…';
+  queryInput.value = seed;
+  queryInput.placeholder = placeholderFor('fuzzy');
+  queryInput.classList.remove('letter-mode');
   queryInput.focus();
   selected = 0;
   renderCurrent();
@@ -329,17 +388,33 @@ function enterFuzzyMode(): void {
 function enterLetterMode(): void {
   mode = 'letter';
   markPrefix = '';
-  queryInput.readOnly = true;
+  dictatedRun = '';
   queryInput.value = '';
-  queryInput.placeholder = 'Type a tab’s letter — or / to search';
+  queryInput.placeholder = placeholderFor('letter');
+  queryInput.classList.add('letter-mode');
   selected = 0;
   renderCurrent();
 }
 
-// Fuzzy typing only — letter mode captures keys in the keydown handler and the
-// input is readonly there, so this fires only in fuzzy mode.
-queryInput.addEventListener('input', () => {
-  if (scope === 'tabs' && mode === 'letter') return;
+// Fires for typed characters in fuzzy mode, and — in either mode — for text
+// that arrives as an INSERTION rather than a keystroke: a dictation burst or a
+// paste. Letter mode consumes every single-key press in the keydown handler, so
+// anything reaching the value there came in whole, and a whole phrase is a
+// search query, not a mark.
+queryInput.addEventListener('input', (ev) => {
+  const inserted = (ev as InputEvent).data;
+  if (inserted != null && inserted.length > 1) {
+    const continues = ev.timeStamp - dictatedAt <= UTTERANCE_GAP_MS;
+    dictatedRun = continues ? dictatedRun + inserted : inserted;
+    dictatedAt = ev.timeStamp;
+  } else {
+    dictatedRun = '';
+    dictatedAt = 0;
+  }
+  if (scope === 'tabs' && mode === 'letter') {
+    enterFuzzyMode(queryInput.value.slice(markPrefix.length));
+    return;
+  }
   selected = 0;
   renderCurrent();
 });
@@ -379,8 +454,16 @@ window.addEventListener('keydown', (e) => {
     }
     if (e.key === '/') { e.preventDefault(); enterFuzzyMode(); return; }
     if (e.key === 'Backspace') { e.preventDefault(); backspaceMark(); return; }
-    if (/^[a-z]$/i.test(e.key) && !e.ctrlKey && !e.metaKey && !e.altKey) {
-      e.preventDefault(); typeMarkLetter(e.key.toLowerCase()); return;
+    // Consume EVERY single-character press (letters pick a mark, anything else
+    // is a no-op) so no keystroke can reach the input's value. What remains —
+    // multi-character insertions from the dictation sink or a paste — falls
+    // through to the input handler as a search query. The input is
+    // deliberately not `readonly`: readonly would drop dictated text silently,
+    // which is exactly how the tab palette read as "voice can't search".
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      if (/^[a-z]$/i.test(e.key)) typeMarkLetter(e.key.toLowerCase());
+      return;
     }
     return; // swallow anything else in letter mode
   }
@@ -444,7 +527,35 @@ function assignAndPublish(alphabet: string[]): void {
   }
   // No spoken entries (voice off) → don't open a voice session / exclusive tag.
   if (entries.length === 0) return;
+  voiceLive = true;
   chrome.runtime.sendMessage({ type: 'PALETTE_PUBLISH', entries, rows } as Message).catch(() => {});
+}
+
+/** One footer chip: the mic glyph + a spoken phrase, then what it does. */
+function spokenChip(phrase: string, what: string): HTMLElement {
+  const wrap = el('span');
+  const say = el('span', 'say');
+  say.appendChild(micGlyph());
+  say.appendChild(document.createTextNode(phrase));
+  wrap.appendChild(say);
+  wrap.appendChild(document.createTextNode(` ${what}`));
+  return wrap;
+}
+
+/**
+ * Footer line teaching the dictated search: hold the dictation key with the
+ * palette open and the transcript lands in the query box — no verb, no mode.
+ * Nothing routes it there; the platform's dictation sink types into the focused
+ * field, and that's this box. Voice-gated (the extension runs standalone), and
+ * key-agnostic: the extension can't read the platform's keybinds, and the
+ * hold is rebindable — same wording the catalog's dictated-argument commands
+ * use ("hold the dictation key").
+ */
+function showVoiceSearchHint(): void {
+  const footer = document.getElementById('footer');
+  if (!footer) return;
+  footer.appendChild(spokenChip('hold the dictation key', 'and speak to search'));
+  footer.hidden = false;
 }
 
 /**
@@ -457,19 +568,10 @@ function assignAndPublish(alphabet: string[]): void {
 function showBookmarkFooter(): void {
   const footer = document.getElementById('footer');
   if (!footer) return;
-  const spoken = (phrase: string, what: string): HTMLElement => {
-    const wrap = el('span');
-    const say = el('span', 'say');
-    say.appendChild(micGlyph());
-    say.appendChild(document.createTextNode(`“${phrase}”`));
-    wrap.appendChild(say);
-    wrap.appendChild(document.createTextNode(` ${what}`));
-    return wrap;
-  };
   footer.append(
-    spoken('⟨badge⟩', 'opens here'),
-    spoken('blank ⟨badge⟩', 'new tab'),
-    spoken('stash ⟨badge⟩', 'background tab'),
+    spokenChip('“⟨badge⟩”', 'opens here'),
+    spokenChip('“blank ⟨badge⟩”', 'new tab'),
+    spokenChip('“stash ⟨badge⟩”', 'background tab'),
   );
   footer.hidden = false;
 }
@@ -505,13 +607,14 @@ async function init(): Promise<void> {
   const alphabet = Array.isArray(stored.alphabet) ? (stored.alphabet as string[]) : [];
   assignAndPublish(alphabet);
   if (scope === 'bookmarks' && codewords.size > 0) showBookmarkFooter();
+  // Dictated search works in every scope, so the hint is unconditional on
+  // scope — only on voice being live.
+  if (voiceLive) showVoiceSearchHint();
   // Tab palette opens in letter mode when marks exist (the fast path); with no
   // marks (feature off / pool empty) fall back to fuzzy so the palette is still
   // usable. Full palette is always fuzzy.
   if (scope === 'tabs' && codewords.size > 0) enterLetterMode();
-  else if (scope === 'tabs') { mode = 'fuzzy'; queryInput.placeholder = 'Search tabs…'; }
-  else if (scope === 'commands') { queryInput.placeholder = 'Search commands…'; }
-  else if (scope === 'bookmarks') { queryInput.placeholder = 'Search bookmarks…'; }
+  else queryInput.placeholder = placeholderFor('fuzzy');
   renderCurrent();
   fdiag(`init ok tabs=${tabItems.length} commands=${commandItems.length} bookmarks=${bookmarkItems.length}${bookmarksError ? ` bookmarks_error=${bookmarksError}` : ''} marks=${codewords.size}`);
 }

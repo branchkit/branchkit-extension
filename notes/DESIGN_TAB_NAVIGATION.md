@@ -171,6 +171,53 @@ entry words are alphabet words already in the engine union (grammar seed
 `browser_palette: alphabet` declares it), so opening the palette costs no
 HLG recompile — only the exclusive narrow does, at a boundary.
 
+### Searching the palette by voice — dictation, no verb (2026-07-25)
+
+Codewords pick a row you can already see; searching needed the keyboard (`/`
+in the tab palette, typing anywhere else) — so a voice-only user could browse
+the palette but not narrow it. The fix routes nothing: **the platform's
+dictation sink types the transcript into whatever field has OS focus, and
+while the palette is open that field is the query box.** Hold the dictation
+key, say a word or phrase, and the palette filters. No arm, no verb, no
+cross-plugin state — and it works with any dictation source, not just
+BranchKit's.
+
+The full/commands/bookmarks palettes always accepted it (the box is a plain
+editable input). The gap was the TAB palette: it opens in letter mode with the
+input `readonly` so keystrokes pick marks, and a readonly field drops inserted
+text silently — dictation looked like it did nothing. Now the input is never
+readonly; the keydown handler consumes every single-character press instead
+(letters pick a mark, anything else is a no-op), so nothing a KEY produces can
+reach the value. Text that arrives as an INSERTION therefore can't be a mark —
+it's a dictation burst or a paste — and the palette reads it as a search query
+and switches to fuzzy mode carrying it. Insertion is the right discriminator on
+both engines: a multi-character OS text event commits through the IME/insertText
+path, never as per-character keydowns (Blink caps a key event's text at 4
+chars). Verified in both engines with a local palette-dictation harness
+(`scripts/_test-palette-dictation.mjs`, untracked like its siblings): letter
+mode → inserted phrase → fuzzy mode carrying it.
+
+Two consequences of typing-not-routing, both handled in `resolvePaletteQuery`
+(pure, unit-tested):
+
+- **A second hold appends** — the sink types at the caret, so re-querying
+  leaves "gmailgithub" in the box. When the box text matches nothing but the
+  last utterance alone matches, that utterance is the query. Chunks of ONE
+  transcript arrive as consecutive insertions too (one OS event per 20
+  characters), so the utterance boundary is the gap: chunks are milliseconds
+  apart, holds are seconds apart.
+- **The recognizer mishears** — fall back to the same phonetic correction the
+  find bar uses (`bestPageMatch`), with the palette's own words as the
+  candidate set. Shown as a "Showing results for X" note; never silent.
+
+Exact-first throughout, so typing behaves exactly as it did. The affordance is
+taught in the footer ("hold the dictation key and speak to search") and in the
+placeholder, both gated on the voice half actually being live — the extension
+runs standalone and must not advertise a channel nothing listens on. The key is
+named generically because the hold is rebindable and the extension can't read
+the platform's keybinds (same wording as the catalog's dictated-argument
+commands).
+
 ## Tab verbs (Vimium parity) — shipped 2026-07-01
 
 The mechanical verbs that need no palette. Every verb has both a keyboard

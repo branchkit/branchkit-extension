@@ -15,6 +15,7 @@
 import type { CommandMeta, KeymapEntry } from '../keymap/command-catalog';
 import { comboDisplay } from '../activate/key-combo';
 import { effectiveVoice, type OverrideMap, type OverrideRecord } from '../keymap/command-override';
+import { bestPageMatch } from '../scan/fuzzy-find';
 
 export type PaletteSourceId = 'tabs' | 'commands' | 'bookmarks';
 
@@ -233,6 +234,65 @@ export function scoreItem(item: PaletteItem, queryWords: readonly string[]): num
     total += best;
   }
   return total;
+}
+
+/** Why the effective query differs from the text in the box. */
+export type QueryFallback = 'dictated_retry' | 'phonetic';
+
+export interface ResolvedQuery {
+  /** The query to filter with. */
+  query: string;
+  /** Null when the box text was used verbatim. */
+  reason: QueryFallback | null;
+}
+
+/**
+ * Resolve the query to filter with, given the box text and the text the most
+ * recent dictation burst inserted.
+ *
+ * Dictation reaches the palette the same way it reaches any focused field —
+ * the platform's sink types the transcript at the caret (CGEvent unicode
+ * injection), so the palette needs no voice plumbing to be dictatable. Two
+ * consequences are handled here:
+ *
+ * - **A second utterance appends.** "gmail" then "github" leaves "gmailgithub"
+ *   in the box, which matches nothing. When the literal box text finds nothing
+ *   but the last utterance alone does, that utterance is the query — the user
+ *   is re-querying, not extending. Purely result-driven (no timers, no
+ *   utterance-boundary signal): it can only fire where it strictly improves
+ *   the result set, so a long transcript arriving as several chunks — which
+ *   also lands as consecutive insertions — is unaffected (a mid-word tail
+ *   matches nothing on its own).
+ * - **The recognizer mishears.** Falling back to the phonetic correction the
+ *   find bar uses (`bestPageMatch`), against the palette's own words as the
+ *   candidate set — the same "match against what's actually there" move that
+ *   turns a recognition problem into a matching problem.
+ *
+ * Exact-first throughout: a query that matches literally is never rewritten,
+ * so typing behaves exactly as before.
+ */
+export function resolvePaletteQuery(
+  raw: string,
+  dictated: string,
+  items: readonly PaletteItem[],
+): ResolvedQuery {
+  const hits = (q: string): boolean => {
+    const words = searchWords(q);
+    return words.length > 0 && items.some((it) => scoreItem(it, words) > 0);
+  };
+  const box = raw.trim();
+  if (box === '' || hits(box)) return { query: raw, reason: null };
+  const utterance = dictated.trim();
+  if (utterance !== '' && utterance !== box && hits(utterance)) {
+    return { query: utterance, reason: 'dictated_retry' };
+  }
+  const corpus = [...new Set(items.flatMap((it) => it.words))].join(' ');
+  for (const candidate of [box, utterance]) {
+    if (candidate === '') continue;
+    const match = bestPageMatch(candidate, corpus);
+    if (match && hits(match.term)) return { query: match.term, reason: 'phonetic' };
+  }
+  return { query: raw, reason: null };
 }
 
 /** Distinct `group` labels in first-appearance order, `fallback` for ungrouped. */

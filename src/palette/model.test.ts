@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   searchWords, buildTabItems, buildCommandItems, buildBookmarkItems, scoreItem, filterPalette,
+  resolvePaletteQuery,
   type PaletteTab, type PaletteItem,
 } from './model';
 import type { CommandMeta, KeymapEntry } from '../keymap/command-catalog';
@@ -235,5 +236,47 @@ describe('filterPalette', () => {
   it('ranks a title-prefix tab above a mention elsewhere', () => {
     const sections = filterPalette(tabs, commands, 'github');
     expect(sections[0].items[0].id).toBe('tab:1');
+  });
+});
+
+describe('resolvePaletteQuery', () => {
+  const items = buildTabItems(TABS, [], null);
+
+  it('uses the box text verbatim when it matches', () => {
+    expect(resolvePaletteQuery('github', '', items)).toEqual({ query: 'github', reason: null });
+  });
+
+  it('leaves an empty box alone', () => {
+    expect(resolvePaletteQuery('', '', items)).toEqual({ query: '', reason: null });
+  });
+
+  it('drops the earlier utterance when a second dictation ran into it', () => {
+    // The dictation sink types at the caret, so re-querying appends:
+    // "gmail" + "github" = a query matching nothing, with the real one last.
+    expect(resolvePaletteQuery('gmailgithub', 'github', items))
+      .toEqual({ query: 'github', reason: 'dictated_retry' });
+  });
+
+  it('keeps a chunked transcript whole rather than adopting its tail', () => {
+    // A long transcript arrives as consecutive insertions too — the retry only
+    // fires when the tail alone beats the whole, which a mid-phrase tail can't.
+    expect(resolvePaletteQuery('rust book', 'rust book', items))
+      .toEqual({ query: 'rust book', reason: null });
+  });
+
+  it('phonetically corrects a misheard query against the palette words', () => {
+    // Vowels are the axis ASR errors move along: "rest book" → "rust book".
+    const r = resolvePaletteQuery('rest book', '', items);
+    expect(r.reason).toBe('phonetic');
+    expect(r.query).toBe('rust book');
+  });
+
+  it('leaves a query that matches nothing alone (empty state, not a wrong row)', () => {
+    expect(resolvePaletteQuery('zzzqqq', '', items)).toEqual({ query: 'zzzqqq', reason: null });
+  });
+
+  it('does not rewrite a typed query the user is still building', () => {
+    // "gith" prefix-matches, so no fallback runs even though it is incomplete.
+    expect(resolvePaletteQuery('gith', '', items)).toEqual({ query: 'gith', reason: null });
   });
 });
