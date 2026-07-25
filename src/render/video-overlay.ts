@@ -75,12 +75,16 @@ export function _resetVideoOverlayCacheForTests(): void {
   cache = null;
 }
 
-/** Is this element's rect mostly inside an actively-playing large video? */
-export function targetOverVideo(el: Element): boolean {
+/** Is this rect mostly inside an actively-playing large video?
+ *
+ *  Takes the rect, not the element: the gate never wanted anything else, and a
+ *  badge's rect isn't always its element's (a range-pick chip points at a text
+ *  Range inside a container — see render/badge-target.ts). Callers holding an
+ *  element pass `el.getBoundingClientRect()`. */
+export function rectOverVideo(r: DOMRect): boolean {
   if (!enabled) return false;
   const vids = playingVideoRects();
   if (vids.length === 0) return false;
-  const r = el.getBoundingClientRect();
   const area = r.width * r.height;
   if (area <= 0) return false;
   for (const v of vids) {

@@ -468,7 +468,7 @@ export class SettleEngine {
     // skips shadow DOM creation, observer wire-up, anchorParent walk, z-index
     // walk, and APCA color recomputation.
     if (!w.hint) {
-      w.hint = this.deps.badges.create(w.element, label, w.category, this.deps.displayMode());
+      w.hint = this.deps.badges.create(w.element, label, this.deps.displayMode());
     }
     // Direct paint (round 13 — the Rango-parity cut): the badge appears the
     // moment it is built, at full opacity (display-grade demotion phase 2 —

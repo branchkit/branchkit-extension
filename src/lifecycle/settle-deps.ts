@@ -22,7 +22,7 @@
 import type { ElementWrapper, DiscoverySource } from '../scan/element-wrapper';
 import type { BadgeHandle } from '../render/badge-handle';
 import type { LabelAssignment } from '../labels/words';
-import type { Category, BadgeDisplayMode } from '../types';
+import type { BadgeDisplayMode } from '../types';
 import type { ObservableWrapperStore } from '../core/store';
 
 /** Compile-time "A satisfies B" — used by the SeamCheck aliases below. */
@@ -54,10 +54,12 @@ export interface SyncOps {
 /** Badge construction — the one place the engine creates render objects.
  *  Everything else goes through the BadgeHandle already on the wrapper. */
 export interface BadgeOps {
+  /** Element-typed: the engine only ever builds badges for store wrappers.
+   *  Range-anchored badges (the range-pick chips) construct their own — see
+   *  render/badge-target.ts. */
   create(
     target: Element,
     label: LabelAssignment,
-    category: Category,
     displayMode: BadgeDisplayMode,
   ): BadgeHandle;
 }
@@ -182,10 +184,19 @@ export type SyncSeamCheck = Satisfies<
   SyncOps
 >;
 
+// The engine's `create` is an ELEMENT-taking adapter over the HintBadge
+// constructor — content.ts wraps the element with `elementTarget` (the
+// constructor itself takes a BadgeTarget so range-anchored chips can share it).
+// So the seam mirrors the constructor with its first parameter swapped, and
+// still catches drift in the rest.
+type HintBadgeCtorArgs = ConstructorParameters<typeof import('../render/hints').HintBadge>;
+
 export type BadgeSeamCheck = Satisfies<
   {
     create: (
-      ...args: ConstructorParameters<typeof import('../render/hints').HintBadge>
+      target: Element,
+      label: HintBadgeCtorArgs[1],
+      displayMode: HintBadgeCtorArgs[2],
     ) => InstanceType<typeof import('../render/hints').HintBadge>;
   },
   BadgeOps

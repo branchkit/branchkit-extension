@@ -31,6 +31,7 @@ import { bkLog } from './debug/bk-log';
 import { harnessHooksEnabled } from './debug/harness-hooks';
 import { store } from './core/store';
 import { HintBadge } from './render/hints';
+import { elementTarget } from './render/badge-target';
 import { reconcilePass, reconcileRegistrySize, lastReconcileChangedWrites } from './render/reconcile-positioner';
 import { onContainerResize } from './observe/container-resize-tracker';
 import { onTransformAncestorMutation, setTransformTriggerEnabled } from './observe/transform-ancestor-tracker';
@@ -57,7 +58,7 @@ import { getSiteKeyState, onSiteKeysChanged } from './keymap/keyboard-rules';
 import { copyText } from './activate/clipboard';
 import { flashToast } from './render/toast';
 import { registerSelectionCommands, restorePosition, caret, SELECTION_ACTIONS, parseSelectionCommand } from './activate/selection-commands';
-import { resolveRangePick, refusePickWindowCodeword, filterRangePickChips, setPickWindowHooks } from './activate/range-disambiguation';
+import { resolveRangePick, refusePickWindowCodeword, filterRangePickChips, setPickWindowHooks, cancelRangePick } from './activate/range-disambiguation';
 import { runEscapeCascade } from './activate/escape-cascade';
 import './debug/dev-keepalive';
 import {
@@ -359,8 +360,8 @@ const engine = new SettleEngine(
     },
     sync: { queuePut, queueDelete, hasSent, scheduleSync, syncNow },
     badges: {
-      create: (target, label, category, displayMode) =>
-        new HintBadge(target, label, category, displayMode),
+      create: (target, label, displayMode) =>
+        new HintBadge(elementTarget(target), label, displayMode),
     },
     positioner: { reconcilePass, reconcileRegistrySize, lastReconcileChangedWrites },
     occlusion: { occlusionMemoAllDirty, occlusionMemoNoteTarget },
@@ -1562,9 +1563,8 @@ async function showBadges(): Promise<void> {
 
       if (!wrapper.hint) {
         wrapper.hint = new HintBadge(
-          wrapper.element,
+          elementTarget(wrapper.element),
           label,
-          wrapper.category,
           getDisplayMode(),
         );
       } else {
@@ -2051,6 +2051,11 @@ function recordOrphanHit(): void {
 // PREEMPT on the voice activate-click path (unobserve-before-swap), not a
 // session teardown — do not fold it in.
 function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
+  // A pending chip pick holds a plugin-side narrow on this tab's hint
+  // projection (range_pick.go). The chip hosts get swept with every other
+  // [data-branchkit-hint] node below, but the narrow needs an explicit release
+  // or the successor content script's hints stay out of the Discovery HUD.
+  cancelRangePick(`teardown_${reason}`);
   // Suspend/resume-cycled machinery (see contract above) — owned by the
   // machinery-gate module, which cycles it.
   teardownMachinery();

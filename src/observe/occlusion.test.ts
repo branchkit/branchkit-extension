@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { isHitOccluding, isOccluded, setOcclusionEnabled } from './occlusion';
 import { HintBadge, __refineScheduler } from '../render/hints';
+import { elementTarget } from '../render/badge-target';
 
 // The two-input occlusion fold lives on the badge (paint-decision state —
 // DESIGN_OBSERVED_STATE_READ_TIME phase 2). Real HintBadge, real class/attr
@@ -13,9 +14,9 @@ function makeBadge(): HintBadge {
   document.body.appendChild(root);
   mounted.push(root);
   return new HintBadge(
-    root.querySelector('button')!,
+    elementTarget(root.querySelector('button')!),
     { letter: 'a', words: ['arch'], isSingle: true },
-    'button', 'word',
+    'word',
   );
 }
 function isOccludedApplied(b: HintBadge): boolean {

@@ -19,7 +19,7 @@
 import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { wantsShown, wantsStrict } from './desired-state';
-import { targetOverVideo } from '../render/video-overlay';
+import { rectOverVideo } from '../render/video-overlay';
 import { isVisible } from '../scan/scanner';
 import { geometryInBand, isRectOnScreen } from '../core/layout-cache';
 import { recordCpu } from '../debug/perf-counters';
@@ -185,7 +185,10 @@ export function computeReconcilePlanLists(
     if (hasBadgeAtRecheck && flag && w.element.isConnected) {
       const showingAtRecheck = showingAtPlan || builtAndShown;
       const visible = w.hint
-        ? wantsShown(w, { flagInBand: flag, cssVisible: cssVisible(), overVideo: targetOverVideo(w.element) })
+        ? wantsShown(w, {
+            flagInBand: flag, cssVisible: cssVisible(),
+            overVideo: rectOverVideo(w.element.getBoundingClientRect()),
+          })
         : cssVisible(); // freshly-constructed badge: shown-ness core
       if (visible && !showingAtRecheck) lists.toShow.push(w);
       else if (!visible && showingAtRecheck) lists.toHide.push(w);

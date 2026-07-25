@@ -8,6 +8,7 @@ import {
   setBadgeSizeOverridePx,
   setBadgeSizingFromSettings,
 } from './hints';
+import { elementTarget } from './badge-target';
 import { DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
 import { __testing as containerTracker } from '../observe/container-resize-tracker';
 import { __testing as targetTracker } from '../observe/target-mutation-tracker';
@@ -189,7 +190,7 @@ describe('HintBadge.retarget (reconcile mode)', () => {
     const oldBtn = root.querySelector('#oldBtn')!;
     const newBtn = root.querySelector('#newBtn')!;
 
-    const badge = new HintBadge(oldBtn, label, 'button', 'word');
+    const badge = new HintBadge(elementTarget(oldBtn), label, 'word');
     // Reconcile host is body-mounted, never nested in the target's container.
     expect(badge.host.parentElement).toBe(document.body);
     expect(targetTracker.isTracked(oldBtn)).toBe(true);
@@ -215,7 +216,7 @@ describe('HintBadge.retarget (reconcile mode)', () => {
     const oldBtn = root.querySelector('#oldBtn')!;
     const newBtn = root.querySelector('#newBtn')!;
 
-    const badge = new HintBadge(oldBtn, label, 'button', 'word');
+    const badge = new HintBadge(elementTarget(oldBtn), label, 'word');
     badge.retarget(newBtn);
     badge.remove();
 
@@ -244,13 +245,13 @@ describe('container-resize refcount guard (2026-07 audit finding 8)', () => {
     const container = resolveContainer(b1);
     expect(resolveContainer(b2)).toBe(container); // same anchorParent
 
-    const refined = new HintBadge(b1, label, 'button', 'word'); // refines inline
+    const refined = new HintBadge(elementTarget(b1), label, 'word'); // refines inline
     expect(containerTracker.getRefCount(container)).toBe(1);
 
     // Leave immediate mode OFF for the rest of the test — flipping it back
     // on drains the queue and refines the badge we need unrefined.
     __refineScheduler.setImmediate(false);
-    const unrefined = new HintBadge(b2, label, 'button', 'word');
+    const unrefined = new HintBadge(elementTarget(b2), label, 'word');
     expect(containerTracker.getRefCount(container)).toBe(1); // never tracked
 
     unrefined.remove(); // pre-fix: underflowed to 0 and unobserved the container
@@ -271,9 +272,9 @@ describe('container-resize refcount guard (2026-07 audit finding 8)', () => {
     const c1 = resolveContainer(b1);
     const c2 = resolveContainer(b3);
 
-    const refined = new HintBadge(b1, label, 'button', 'word');
+    const refined = new HintBadge(elementTarget(b1), label, 'word');
     __refineScheduler.setImmediate(false); // stays off — see sibling test
-    const unrefined = new HintBadge(b2, label, 'button', 'word');
+    const unrefined = new HintBadge(elementTarget(b2), label, 'word');
     expect(containerTracker.getRefCount(c1)).toBe(1);
 
     unrefined.retarget(b3); // pre-fix: drained c1's count on the way out
@@ -322,7 +323,7 @@ describe('HintBadge.reconcileRead (positioning math)', () => {
     setScroll(0, 0);
     btn.getBoundingClientRect = () => rectStub(100, 200);
 
-    const badge = new HintBadge(btn, label, 'button', 'word');
+    const badge = new HintBadge(elementTarget(btn), label, 'word');
     badge.show();
     badge.updatePosition({ x: 90, y: 190 }); // badge nudged up-left of the target
 
@@ -344,7 +345,7 @@ describe('HintBadge.reconcileRead (positioning math)', () => {
     setScroll(0, 0);
     btn.getBoundingClientRect = () => rectStub(40, 60);
 
-    const badge = new HintBadge(btn, label, 'button', 'word');
+    const badge = new HintBadge(elementTarget(btn), label, 'word');
     badge.show();
     badge.updatePosition({ x: 30, y: 50 });
     expect(badge.reconcileRead()).toMatchObject({ x: 30, y: 50 });
@@ -361,7 +362,7 @@ describe('HintBadge.reconcileRead (positioning math)', () => {
     const root = mount('<div><button id="btn">x</button></div>');
     const btn = root.querySelector('#btn')! as HTMLElement;
     btn.getBoundingClientRect = () => rectStub(10, 10);
-    const badge = new HintBadge(btn, label, 'button', 'word');
+    const badge = new HintBadge(elementTarget(btn), label, 'word');
     badge.updatePosition({ x: 5, y: 5 }); // baked, but never shown
     expect(badge.reconcileRead()).toBeNull();
     badge.remove();
@@ -371,7 +372,7 @@ describe('HintBadge.reconcileRead (positioning math)', () => {
     const root = mount('<div><button id="btn">x</button></div>');
     const btn = root.querySelector('#btn')! as HTMLElement;
     btn.getBoundingClientRect = () => rectStub(10, 10);
-    const badge = new HintBadge(btn, label, 'button', 'word');
+    const badge = new HintBadge(elementTarget(btn), label, 'word');
     badge.show();
     badge.updatePosition({ x: 5, y: 5 });
     expect(badge.reconcileRead()).not.toBeNull();
@@ -385,7 +386,7 @@ describe('HintBadge.reconcileRead (positioning math)', () => {
     const root = mount('<div><button id="btn">x</button></div>');
     const btn = root.querySelector('#btn')! as HTMLElement;
     btn.getBoundingClientRect = () => rectStub(10, 10);
-    const badge = new HintBadge(btn, label, 'button', 'word');
+    const badge = new HintBadge(elementTarget(btn), label, 'word');
     badge.show(); // visible + connected, but no baked offset
     expect(badge.reconcileRead()).toBeNull();
     badge.remove();
@@ -408,7 +409,7 @@ describe('HintBadge reuse contract (setLabel + clearLabel)', () => {
 
   it('setLabel swaps inner text + invalidates badge size cache', () => {
     const root = mount('<div id="c"><button id="btn">click</button></div>');
-    const badge = new HintBadge(root.querySelector('#btn')!, label1, 'button', 'word');
+    const badge = new HintBadge(elementTarget(root.querySelector('#btn')!), label1, 'word');
     // Touch badgeSize so a _size value gets cached.
     void badge.badgeSize;
     expect((badge as unknown as { inner: HTMLDivElement }).inner.textContent).toBe('arch');
@@ -425,7 +426,7 @@ describe('HintBadge reuse contract (setLabel + clearLabel)', () => {
 
   it('clearLabel empties text + nulls the internal label without tearing down', () => {
     const root = mount('<div id="c"><button id="btn">click</button></div>');
-    const badge = new HintBadge(root.querySelector('#btn')!, label1, 'button', 'word');
+    const badge = new HintBadge(elementTarget(root.querySelector('#btn')!), label1, 'word');
     expect((badge as unknown as { inner: HTMLDivElement }).inner.textContent).toBe('arch');
 
     badge.clearLabel();
@@ -443,7 +444,7 @@ describe('HintBadge reuse contract (setLabel + clearLabel)', () => {
 
   it('setMatchedChars after clearLabel is a no-op (guards against label=null)', () => {
     const root = mount('<div id="c"><button id="btn">click</button></div>');
-    const badge = new HintBadge(root.querySelector('#btn')!, label1, 'button', 'word');
+    const badge = new HintBadge(elementTarget(root.querySelector('#btn')!), label1, 'word');
     badge.clearLabel();
     // Race: text-search filter fires while the wrapper is dormant. With
     // label cleared, setMatchedChars must short-circuit instead of
@@ -454,7 +455,7 @@ describe('HintBadge reuse contract (setLabel + clearLabel)', () => {
 
   it('show() on a dormant (cleared-label) badge stays hidden — no empty box', () => {
     const root = mount('<div id="c"><button id="btn">click</button></div>');
-    const badge = new HintBadge(root.querySelector('#btn')!, label1, 'button', 'word');
+    const badge = new HintBadge(elementTarget(root.querySelector('#btn')!), label1, 'word');
     badge.clearLabel();
     // The recheck / pointerover show path can race ahead of the setLabel the
     // claim pipeline issues (a hover-revealed sidebar item mid-reclaim). A
@@ -477,7 +478,7 @@ describe('HintBadge reuse contract (setLabel + clearLabel)', () => {
     __refineScheduler.setImmediate(false);
     try {
       const root = mount('<div id="c"><button id="btn">click</button></div>');
-      const badge = new HintBadge(root.querySelector('#btn')!, label1, 'button', 'word');
+      const badge = new HintBadge(elementTarget(root.querySelector('#btn')!), label1, 'word');
       // refine is queued, not yet run; remove before it can fire.
       badge.remove();
       // Draining the scheduler now must not crash and must not register
@@ -509,7 +510,7 @@ describe('HintBadge bk-pending opacity indicator (voice-not-ready state)', () =>
 
   it('show() paints at full opacity — no bk-pending state (demotion phase 2)', async () => {
     const root = mount('<div id="c"><button id="btn">click</button></div>');
-    const badge = new HintBadge(root.querySelector('#btn')!, label, 'button', 'word');
+    const badge = new HintBadge(elementTarget(root.querySelector('#btn')!), label, 'word');
     badge.show();
     // show() schedules the visible class via rAF; wait one frame.
     await new Promise(r => requestAnimationFrame(() => r(undefined)));

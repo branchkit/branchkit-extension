@@ -9,11 +9,12 @@
  * scroll-accel-glue.ts; container diagnostics in container-diagnostics.ts.
  */
 
-import { Category, BadgeDisplayMode } from '../types';
+import { BadgeDisplayMode } from '../types';
 import type { BadgeHandle, BadgeDiagnostics } from './badge-handle';
+import { type BadgeTarget, elementTarget } from './badge-target';
 import { LabelAssignment, labelToDisplay, letterToSpokenWord } from '../labels/words';
 import { documentInstanceId } from '../labels/document-identity';
-import { getCachedRect, getCachedStyle, isRectOnScreen } from '../core/layout-cache';
+import { getCachedStyle, isRectOnScreen } from '../core/layout-cache';
 import { calculateZIndex } from '../placement/stacking';
 import { computeBadgeColors } from './badge-colors';
 import { type BadgeSettings, DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
@@ -30,7 +31,7 @@ import { trackHostAttributes, untrackHostAttributes } from '../observe/host-attr
 import { clipRootOf } from '../observe/clip-observer';
 import { register as registerReconcile, unregister as unregisterReconcile, type ReconcileWrite } from './reconcile-positioner';
 import { hasViewportPinnedAncestor, resolveContainer } from './container-resolution';
-import { targetOverVideo } from './video-overlay';
+import { rectOverVideo } from './video-overlay';
 import {
   isScrollAccelEnabled,
   isScrollAccelNestedEnabled,
@@ -385,8 +386,11 @@ export class HintBadge implements BadgeHandle {
   private outer: HTMLDivElement;
   private inner: HTMLDivElement;
   private leaderLine: HTMLDivElement | null = null;
-  private target: Element;
-  private category: Category;
+  // What this badge is pinned to: a rect to point at plus the element every
+  // other concern (style, colours, stacking, scrollers, identity) reads from.
+  // Both are the same element for a link hint; a range-pick chip supplies a
+  // Range's rect with the range's container as the element (badge-target.ts).
+  private target: BadgeTarget;
   private _visible: boolean = false;
   // Occlusion paint-decision state (applyOcclusion): the last overlay
   // hit-test verdict this badge was given, and the applied OR-fold. Decision
@@ -454,12 +458,11 @@ export class HintBadge implements BadgeHandle {
   // anim id stays constant — the proof the page-scroll layer is never torn down.
   private _scrollAccelAnimBuilds = 0;
 
-  constructor(target: Element, label: LabelAssignment, category: Category, displayMode: BadgeDisplayMode) {
+  constructor(target: BadgeTarget, label: LabelAssignment, displayMode: BadgeDisplayMode) {
     this.target = target;
-    this.category = category;
     this.label = label;
     this.displayMode = displayMode;
-    this.fontSize = computeBadgeFontSize(target);
+    this.fontSize = computeBadgeFontSize(target.element);
 
     this.host = document.createElement('div');
     this.host.setAttribute('data-branchkit-hint', 'true');
@@ -491,8 +494,13 @@ export class HintBadge implements BadgeHandle {
     // Viewport-pinned (fixed/sticky) targets get a viewport-anchored host so it
     // doesn't ride the page scroll away from them; flow targets get a
     // document-anchored host that rides the scroll with them.
-    this._viewportFixed = hasViewportPinnedAncestor(target);
-    this.anchorParent = resolveContainer(target);
+    this._viewportFixed = hasViewportPinnedAncestor(target.element);
+    // Container resolution measures the ELEMENT's rect, not the badge target's
+    // (a range's container answers for the whole block). It only picks which
+    // ancestor the container-resize tracker watches — hosts are body-mounted —
+    // so a coarser answer costs nothing, and range-anchored badges don't take
+    // that tracker at all.
+    this.anchorParent = resolveContainer(target.element);
     this.setupReconcileHost();
     registerReconcile(this);
     registerScrollAccelBadge(this);
@@ -527,13 +535,13 @@ export class HintBadge implements BadgeHandle {
     this._refined = true;
     trackContainerResize(this.anchorParent);
     this._containerTracked = true;
-    trackTargetMutations(this.target);
+    trackTargetMutations(this.target.element);
     // Stacking: place the badge in its target's natural stacking context so
     // modals/dropdowns with a higher-z context still cover it. Deferred here
     // (not the constructor) because the walk reads live computed styles;
     // cached per anchorParent. Written before the host-attribute defender
     // starts so the write isn't observed as page tampering.
-    this.host.style.zIndex = String(zIndexFor(this.target, this.host, this.anchorParent));
+    this.host.style.zIndex = String(zIndexFor(this.target.element, this.host, this.anchorParent));
     // Start the host-attribute defender AFTER all setup is done — the
     // observer fires on real mutations only, but starting it earlier
     // would treat our own setAttribute/style writes as page tampering.
@@ -552,7 +560,7 @@ export class HintBadge implements BadgeHandle {
   // and retarget() (target swap → possibly a different ancestor).
   private armTransformTracker(): void {
     if (!isTransformTriggerEnabled() || this._transformAncestors.length) return;
-    const ancestors = findTransformedAncestors(this.target);
+    const ancestors = findTransformedAncestors(this.target.element);
     if (!ancestors.length) return;
     this._transformAncestors = ancestors;
     for (const a of ancestors) trackTransformAncestor(a);
@@ -600,8 +608,8 @@ export class HintBadge implements BadgeHandle {
   // reconciler can batch all reads before any composited writes. Null when the
   // badge shouldn't be placed this pass (hidden / disconnected / not yet baked).
   reconcileRead(): ReconcileWrite | null {
-    if (!this._reconcileOffset || !this._visible || !this.target.isConnected) return null;
-    const r = this.target.getBoundingClientRect();
+    if (!this._reconcileOffset || !this._visible || !this.target.element.isConnected) return null;
+    const r = this.target.rect();
     // Coords match the host's anchoring (see setupReconcileHost): document coords
     // (rect + page scroll) for a flow target so it rides window scroll; viewport
     // coords (rect only) for a viewport-pinned target so it stays with it. Both
@@ -612,7 +620,7 @@ export class HintBadge implements BadgeHandle {
     let y = r.top + sy + this._reconcileOffset.y;
     // Inner-scroll accelerator, evaluated every pass (level-triggered).
     if (this._scrollAccel) {
-      if (!scrollAccelHealthy(this._scrollAccel, this.target)) {
+      if (!scrollAccelHealthy(this._scrollAccel, this.target.element)) {
         // Chain went stale THIS pass — most often a hover-activated inner scroller
         // dropping out because an OUTER scroll slid the pane out from under the
         // cursor, flipping its :hover off (QuickBase report grids flip
@@ -664,7 +672,7 @@ export class HintBadge implements BadgeHandle {
     // target's own top, so it stays inside its target's footprint —
     // unambiguous, no neighbor collisions.
     else {
-      const clipRoot = clipRootOf(this.target);
+      const clipRoot = clipRootOf(this.target.element);
       if (clipRoot) {
         const by = r.top + this._reconcileOffset.y;
         const rootTop = clipRoot.getBoundingClientRect().top;
@@ -694,7 +702,7 @@ export class HintBadge implements BadgeHandle {
   // Called from `updatePosition` (offset baked) and `show`.
   private armScrollAccel(): void {
     if (!isScrollAccelEnabled() || this._scrollAccel) return;
-    this._scrollAccel = createScrollAccel(this.target, this.outer, this.inner, isScrollAccelNestedEnabled());
+    this._scrollAccel = createScrollAccel(this.target.element, this.outer, this.inner, isScrollAccelNestedEnabled());
     // Diagnostic mirror on the light-DOM host: a badge that found an inner
     // scroller and armed carries `data-bk-accel="<layerCount>"`, so the accelerated
     // set is countable from the page console
@@ -732,7 +740,7 @@ export class HintBadge implements BadgeHandle {
   // walk entirely. See `reconcileScrollAccelForScroller`.
   syncScrollAccelInside(scroller: Element): void {
     if (!isScrollAccelEnabled() || !this._visible) return;
-    if (!scroller.contains(this.target)) return;
+    if (!scroller.contains(this.target.element)) return;
     this.syncScrollAccel();
   }
 
@@ -745,8 +753,8 @@ export class HintBadge implements BadgeHandle {
   // when nothing is scrollable now (→ chase base, graceful degradation).
   private syncScrollAccelChain(): boolean {
     const desired = isScrollAccelNestedEnabled()
-      ? findScrollableAncestors(this.target)
-      : ((s) => (s ? [s] : []))(findScrollableAncestor(this.target));
+      ? findScrollableAncestors(this.target.element)
+      : ((s) => (s ? [s] : []))(findScrollableAncestor(this.target.element));
     const current = this._scrollAccel ? this._scrollAccel.layers.map((l) => l.scroller) : [];
     if (sameElements(current, desired)) return false;
     this.bumpRearm();
@@ -790,7 +798,7 @@ export class HintBadge implements BadgeHandle {
     // the reconciler applies it against the live target rect each pass. A
     // candidate-less call is the reposition path — the reconciler owns it.
     if (!candidate) return;
-    const tr = getCachedRect(this.target);
+    const tr = this.target.placementRect();
     this._reconcileOffset = { x: candidate.x - tr.left, y: candidate.y - tr.top };
     // Offset is baked — arm the inner-scroll accelerator (no-op when the flag is
     // off or the target has no inner scroller). Must precede the paint so it uses
@@ -818,6 +826,11 @@ export class HintBadge implements BadgeHandle {
    * during a rebind would add a layout/style read for a marginal
    * appearance match. Future tuning can revisit if rebound badges
    * routinely mis-paint.
+   *
+   * Element-typed on purpose (and so is BadgeHandle's declaration): rebinding
+   * is a WRAPPER IDENTITY operation — a re-render swapped the DOM node behind
+   * a logical element. Range-anchored badges have no such identity; a stale
+   * pick is torn down and re-armed, never rebound.
    */
   retarget(newEl: Element): void {
     // Only release a container refcount this badge actually holds. The
@@ -827,7 +840,7 @@ export class HintBadge implements BadgeHandle {
     // surviving badges still depend on — silently killing their resize
     // tracking (2026-07 long-session audit, finding 8).
     if (this._containerTracked) untrackContainerResize(this.anchorParent);
-    untrackTargetMutations(this.target);
+    untrackTargetMutations(this.target.element);
     // The accelerator is bound to the OLD target's scroller; drop it before the
     // swap and re-detect for the new node below.
     this.disarmScrollAccel();
@@ -839,7 +852,7 @@ export class HintBadge implements BadgeHandle {
     // target. The baked offset is target-relative, so it stays valid for a
     // same-fingerprint replacement; the reconciler follows the new target on
     // its next pass.
-    this.target = newEl;
+    this.target = elementTarget(newEl);
     this.anchorParent = resolveContainer(newEl);
     // Re-evaluate viewport-pinning for the new target; flip the host's anchoring
     // mode if it changed (e.g. rebind from a flow node to a fixed one).
@@ -851,12 +864,12 @@ export class HintBadge implements BadgeHandle {
 
     trackContainerResize(this.anchorParent);
     this._containerTracked = true;
-    trackTargetMutations(this.target);
+    trackTargetMutations(this.target.element);
     this.armTransformTracker();
     // Recompute stacking for the new target's container (cached per
     // anchorParent). The host-attribute defender allows style writes that
     // keep display intact, so this is safe with the tracker live.
-    this.host.style.zIndex = String(zIndexFor(this.target, this.host, this.anchorParent));
+    this.host.style.zIndex = String(zIndexFor(this.target.element, this.host, this.anchorParent));
     // host-attribute tracker is keyed on the host (unchanged); no swap.
     // Re-detect the accelerator for the new node (no-op when flag off / no
     // inner scroller). Disarm above + this re-arm flip `outer`'s animation, so
@@ -908,7 +921,7 @@ export class HintBadge implements BadgeHandle {
     // Park the host as well — a declined show would otherwise leave the
     // freshly-built host at display:block, the exact residue layer this
     // gate exists to remove.
-    if (targetOverVideo(this.target)) {
+    if (rectOverVideo(this.target.rect())) {
       this.host.style.display = 'none';
       return;
     }
@@ -969,7 +982,7 @@ export class HintBadge implements BadgeHandle {
    *  (see DESIGN_HINT_REUSE.md / phase 3 of the two-pass paint refactor).
    *  Rango does the same — synchronous APCA at construction, no flash. */
   private applyColors(): void {
-    const colors = computeBadgeColors(this.target);
+    const colors = computeBadgeColors(this.target.element);
     this.inner.style.background = colors.bg;
     this.inner.style.color = colors.fg;
     // Border color + opacity come from CSS (rgb(var(--bk-b-rgb) / alpha)) so
@@ -1142,7 +1155,7 @@ export class HintBadge implements BadgeHandle {
       untrackContainerResize(this.anchorParent);
       this._containerTracked = false;
     }
-    untrackTargetMutations(this.target);
+    untrackTargetMutations(this.target.element);
     untrackHostAttributes(this.host);
     unregisterReconcile(this);
     unregisterScrollAccelBadge(this);
@@ -1196,7 +1209,7 @@ export class HintBadge implements BadgeHandle {
       anchorParentTag: ap.tagName.toLowerCase(),
       anchorParentClasses: ap.className?.toString().slice(0, 200) ?? '',
       displayedAs: this.inner.textContent ?? '',
-      targetTag: this.target.tagName.toLowerCase(),
+      targetTag: this.target.element.tagName.toLowerCase(),
       reconcileOffset: this._reconcileOffset
         ? { x: Math.round(this._reconcileOffset.x), y: Math.round(this._reconcileOffset.y) }
         : null,
