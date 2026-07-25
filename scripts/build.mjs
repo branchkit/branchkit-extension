@@ -83,6 +83,14 @@ await Promise.all(entries.map((e) =>
     define: {
       __BUILD_ID__: JSON.stringify(buildId),
       __HARNESS_HOOKS__: release ? 'false' : 'true',
+      // Dev builds keep the auto-reload WS client (background.ts) so a
+      // loaded extension reloads itself whenever dev.mjs's server pings —
+      // including the external-build ping THIS script sends on finish.
+      // Without this, the first plain build overwrites the loaded
+      // extension with a deaf one and the reload loop silently dies.
+      // Release builds strip it (a localhost socket has no place in a
+      // store submission).
+      __DEV_RELOAD__: release ? 'false' : 'true',
     },
     ...(e.swallowGuardBail ? {
       banner: { js: 'try {' },

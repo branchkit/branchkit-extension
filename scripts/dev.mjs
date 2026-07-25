@@ -100,7 +100,14 @@ const contexts = await Promise.all(
       outfile: resolve(outDir, e.out),
       bundle: true,
       format: e.format,
-      define: { __DEV_RELOAD__: 'true' },
+      // Same define set as build.mjs's non-release path, so a watch build
+      // behaves identically to `npm run build` (harness hooks on; the
+      // typeof-guarded fallbacks would cover us, but identical is simpler).
+      define: {
+        __DEV_RELOAD__: 'true',
+        __HARNESS_HOOKS__: 'true',
+        __BUILD_ID__: JSON.stringify('dev-watch'),
+      },
       plugins: [reloadPlugin],
     })
   )

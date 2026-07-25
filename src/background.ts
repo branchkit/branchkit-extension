@@ -1250,8 +1250,12 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 init();
 
 // --- Dev auto-reload (stripped from production builds by esbuild) ---
+// Direct guard, not typeof: every build path defines __DEV_RELOAD__
+// (dev.mjs true, build.mjs true/--release false), and a literal `if (false)`
+// is the form esbuild's dead-branch elimination actually removes — the
+// typeof chain left the socket URL in release output.
 declare const __DEV_RELOAD__: boolean;
-if (typeof __DEV_RELOAD__ !== 'undefined' && __DEV_RELOAD__) {
+if (__DEV_RELOAD__) {
   const DEV_WS_URL = 'ws://localhost:35729';
   function devConnect() {
     try {
