@@ -448,10 +448,11 @@ function assignAndPublish(alphabet: string[]): void {
 }
 
 /**
- * Sticky footer for the bookmarks palette: teaches the open dispositions
- * (Enter/badge navigates this tab; "blank"/"stash" + badge = new focused /
- * background tab — the hint verbs). Voice-gated: the verbs are spoken
- * commands, so a voiceless palette would advertise phrases nothing hears.
+ * Sticky footer for the bookmarks palette: teaches the three spoken open
+ * dispositions — the bare badge navigates this tab (Enter's voice twin);
+ * "blank"/"stash" + badge = new focused / background tab (the hint verbs).
+ * Voice-gated: the phrases are spoken commands, so a voiceless palette
+ * would advertise phrases nothing hears.
  */
 function showBookmarkFooter(): void {
   const footer = document.getElementById('footer');
@@ -465,11 +466,8 @@ function showBookmarkFooter(): void {
     wrap.appendChild(document.createTextNode(` ${what}`));
     return wrap;
   };
-  const enter = el('span');
-  enter.appendChild(el('kbd', undefined, '⏎'));
-  enter.appendChild(document.createTextNode(' opens here'));
   footer.append(
-    enter,
+    spoken('⟨badge⟩', 'opens here'),
     spoken('blank ⟨badge⟩', 'new tab'),
     spoken('stash ⟨badge⟩', 'background tab'),
   );
