@@ -314,9 +314,12 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   { id: 'copy_url', label: 'Copy page URL', group: 'Navigation', mappable: true, params: [],
     description: 'Copy this page’s address to the clipboard.',
     voice: [{ pattern: 'copy url' }, { pattern: 'copy page url' }, { pattern: 'copy address' }] },
+  // "up level" alias dropped 2026-07-25: it made the user's bare "up" scroll
+  // alias a fluid prefix of a distinct command (terminal-command rule) and had
+  // zero recorded use. Verb-first "go up" matches the family (go back/forward).
   { id: 'go_up', label: 'URL up one level', group: 'Navigation', mappable: true, params: [],
     description: 'Climb one level in the address — drop the #anchor, then the ?query, then the last path segment.',
-    voice: [{ pattern: 'go up' }, { pattern: 'up level' }] },
+    voice: [{ pattern: 'go up' }] },
   { id: 'go_root', label: 'URL to site root', group: 'Navigation', mappable: true, params: [],
     description: 'Jump to the site root (the domain’s home).',
     voice: [{ pattern: 'site root' }, { pattern: 'go to root' }] },
