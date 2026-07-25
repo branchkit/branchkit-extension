@@ -68,8 +68,12 @@
       border: 1px solid #3d444d;
       border-radius: 3px; padding: 0 4px; white-space: nowrap;
     }
+    /* Leftover-space-only (flex-basis 0): a long description must never
+       squeeze the title or push the voice/kbd chips off the edge — those are
+       the row's essentials; the description ellipsizes into whatever room is
+       left. Full descriptions live in the ? help overlay. */
     .sub {
-      color: #8b949e; font-size: 11px; flex: 1 1 auto; min-width: 0;
+      color: #8b949e; font-size: 11px; flex: 1 1 0; min-width: 0;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
     .meta { flex: 0 0 auto; display: flex; gap: 4px; align-items: baseline; margin-left: auto; }
