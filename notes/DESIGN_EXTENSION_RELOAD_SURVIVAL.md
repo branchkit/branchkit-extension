@@ -317,6 +317,33 @@ reproduce. One Chrome trial on a `/results` page; symptom 2 has been intermitten
 before, so treat as a positive data point, not a closure. Not yet tested on Firefox
 (where declarative re-injection is flakier) or a second consecutive F5.
 
+## Symptom 2 CLOSED — pinned by a permanent harness scenario (2026-07-25)
+
+The F5-after-reload no-CS trap no longer reproduces, and the healthy behavior
+is now PINNED so a regression gets caught instead of re-becoming folklore:
+
+- New lifecycle-harness scenario **`reload-f5`** (chromium): fresh load →
+  chrome://extensions dev-reload (the real button) → reinject recovery →
+  **F5 → pool audit clean → F5 again → pool audit clean** (the second
+  consecutive F5 had never been tested anywhere). 4/4 runs green on the
+  first day, full matrix stays 7 PASS / 2 known skips.
+- Evidence stack: this scenario (automation, with the usual
+  [[playwright-not-authoritative]] caveat) + the 2026-06-06 real-Chrome
+  trial (F5 healed via the tabs.onUpdated backstop) + the 2026-07-25 field
+  test on Firefox (reload + plain F5, no close+reopen, hints and voice
+  fine). The bug was real in early June; Layer 1 (ping-first reinject +
+  onUpdated backstop, 2026-06-06) plus the July orphan/pool arcs fixed it
+  as a side effect, and the close+reopen ritual survived only as stale
+  guidance.
+- **The close+reopen ritual is RETIRED for both browsers.** Dev loop is now:
+  rebuild → reload extension → F5 (or nothing — reinject heals open tabs).
+  If hints are ever missing after a reload+F5, that's this scenario's
+  regression: check `pipeline.bg_reinject_*` → `cs_rescan_received`
+  breadcrumbs and re-run `npm run harness:lifecycle reload-f5` before
+  reaching for the ritual.
+- Phase 0 (auto-update vs dev-only) is moot for the dev loop; the packed-CRX
+  auto-update repro remains a pre-launch nice-to-have for symptom 1 only.
+
 ## Open questions
 
 - **(OPEN — gates the risky layers)** Phase 0 outcome: auto-update-real or
