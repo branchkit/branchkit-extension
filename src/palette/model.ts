@@ -36,6 +36,9 @@ export interface PaletteItem {
   voice: string[];
   /** Lowercase haystack the query matches against. */
   words: string[];
+  /** Catalog group for command rows ("Scroll", "Palette", …) — drives the
+   *  browse-state section headers. Absent for tabs. */
+  group?: string;
   dispatch: PaletteDispatch;
 }
 
@@ -150,6 +153,7 @@ export function buildCommandItems(
       subtitle: c.description,
       keys,
       voice,
+      group: c.group,
       words: [
         ...searchWords(c.label),
         ...searchWords(c.group),
@@ -188,11 +192,14 @@ export function scoreItem(item: PaletteItem, queryWords: readonly string[]): num
 }
 
 /**
- * Filter both sources for a query and shape the sectioned result. Empty query
- * = each source's empty-state order untouched (tabs MRU-first, commands in
- * catalog order). With a query, each section ranks by score, ties broken by
- * the source's own order (recency for tabs, catalog for commands). Sections
- * that match nothing are dropped.
+ * Filter both sources for a query and shape the sectioned result.
+ *
+ * Empty query = browse mode: tabs first (MRU order), then the commands split
+ * into one section per catalog group, in catalog order — the same headers as
+ * the `?` help overlay, one taxonomy everywhere. With a query = search mode:
+ * one ranked section per SOURCE (per-group sections would fragment relevance
+ * ordering — the best match must be first, not under the third header).
+ * Sections that match nothing are dropped.
  */
 export function filterPalette(
   tabItems: readonly PaletteItem[],
@@ -215,6 +222,18 @@ export function filterPalette(
     if (picked.length) sections.push({ source, label, items: picked });
   };
   build('tabs', 'Tabs', tabItems);
-  build('commands', 'Commands', commandItems);
+  if (q.length === 0) {
+    // Browse mode: group headers, first-appearance order (= catalog order).
+    const groups: string[] = [];
+    for (const item of commandItems) {
+      const g = item.group ?? 'Commands';
+      if (!groups.includes(g)) groups.push(g);
+    }
+    for (const g of groups) {
+      build('commands', g, commandItems.filter((i) => (i.group ?? 'Commands') === g));
+    }
+  } else {
+    build('commands', 'Commands', commandItems);
+  }
   return sections;
 }

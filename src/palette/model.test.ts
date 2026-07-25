@@ -125,11 +125,27 @@ describe('filterPalette', () => {
   const tabs = buildTabItems(TABS, [3, 1], 3);
   const commands = buildCommandItems(COMMAND_CATALOG, DEFAULT_KEYMAP as KeymapEntry[]);
 
-  it('empty query keeps empty-state order and both sections', () => {
+  it('empty query keeps empty-state order: tabs, then per-group command sections', () => {
     const sections = filterPalette(tabs, commands, '');
-    expect(sections.map((s) => s.source)).toEqual(['tabs', 'commands']);
+    expect(sections[0].source).toBe('tabs');
     expect(sections[0].items[0].dispatch).toEqual({ kind: 'switch_tab', tabId: 1 });
-    expect(sections[1].items.length).toBe(commands.length);
+    // Browse mode splits commands by catalog group (same headers as the help
+    // overlay), first-appearance order, covering every command exactly once.
+    const cmdSections = sections.slice(1);
+    expect(cmdSections.every((s) => s.source === 'commands')).toBe(true);
+    expect(cmdSections.map((s) => s.label)).toEqual(
+      [...new Set(commands.map((c) => c.group))]);
+    expect(cmdSections.reduce((n, s) => n + s.items.length, 0)).toBe(commands.length);
+    for (const s of cmdSections) {
+      expect(s.items.every((i) => i.group === s.label)).toBe(true);
+    }
+  });
+
+  it('a typed query collapses commands to one ranked section', () => {
+    const sections = filterPalette(tabs, commands, 'tab');
+    const cmdSections = sections.filter((s) => s.source === 'commands');
+    expect(cmdSections.length).toBe(1);
+    expect(cmdSections[0].label).toBe('Commands');
   });
 
   it('query filters both sections and drops empty ones', () => {

@@ -663,18 +663,18 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // previously opened the tab palette, which made "tab {browser_tabs}"
   // unreachable under emit-on-partial (terminal-command rule) and preempted
   // the codeword discovery view.
-  { id: 'toggle_palette', label: 'Command palette', group: 'Help', mappable: true, params: [],
+  { id: 'toggle_palette', label: 'Command palette', group: 'Palette', mappable: true, params: [],
     description: 'Search open tabs and every command in one overlay.',
     voice: [{ pattern: 'palette all' }] },
   // The same overlay scoped to open tabs — the keyboard + voice way to switch
   // tabs by codeword or fuzzy title (see notes/DESIGN_TAB_MARKERS.md). Bare
   // `T` in Normal mode (Vimium-C's tab-search key).
-  { id: 'toggle_tab_palette', label: 'Tab palette', group: 'Tabs', mappable: true, params: [],
+  { id: 'toggle_tab_palette', label: 'Tab palette', group: 'Palette', mappable: true, params: [],
     description: 'Switch tabs — search by title or codeword in the palette overlay.',
     voice: [{ pattern: 'palette tabs' }] },
   // The commands source alone — the voice twin of the catalog half of the
   // full palette. No default keybind (Ctrl+K covers keyboard users).
-  { id: 'toggle_command_palette', label: 'Command-only palette', group: 'Help', mappable: true, params: [],
+  { id: 'toggle_command_palette', label: 'Command-only palette', group: 'Palette', mappable: true, params: [],
     description: 'Search every command in the palette overlay.',
     voice: [{ pattern: 'palette commands' }] },
   // Palette voice selection (voice half of Layer 2): every palette row shows
@@ -684,13 +684,13 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // plugin's exclusive palette tag via voiceContext — while the palette is
   // open, page-hint captures are suppressed, so these badges can reuse the
   // hint alphabet without ambiguity.
-  { id: 'palette_select', label: 'Select palette row', group: 'Help', mappable: false, params: [],
+  { id: 'palette_select', label: 'Select palette row', group: 'Palette', mappable: false, params: [],
     description: 'Activate a palette row by speaking its codeword badge.',
     voice: [{ pattern: '{browser_palette}', params: { row_id: '{browser_palette}' } }],
     voiceContext: 'palette' },
   // Same word as hint-hide, disambiguated by context: palette open = only
   // this one is eligible (exclusive tag); palette closed = only the hint one.
-  { id: 'palette_dismiss', label: 'Dismiss palette', group: 'Help', mappable: false, params: [],
+  { id: 'palette_dismiss', label: 'Dismiss palette', group: 'Palette', mappable: false, params: [],
     description: 'Close the command palette without selecting.',
     voice: [{ pattern: 'hide' }],
     voiceContext: 'palette' },
