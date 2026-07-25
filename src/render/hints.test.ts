@@ -9,6 +9,7 @@ import {
   setBadgeSizingFromSettings,
 } from './hints';
 import { elementTarget } from './badge-target';
+import { RANGE_PICK_VARIANT } from './badge-variant';
 import { DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
 import { __testing as containerTracker } from '../observe/container-resize-tracker';
 import { __testing as targetTracker } from '../observe/target-mutation-tracker';
@@ -517,6 +518,83 @@ describe('HintBadge bk-pending opacity indicator (voice-not-ready state)', () =>
     expect((badge as unknown as { inner: HTMLDivElement }).inner.classList.contains('bk-pending')).toBe(false);
     expect((badge as unknown as { inner: HTMLDivElement }).inner.classList.contains('visible')).toBe(true);
     badge.remove();
+  });
+});
+
+describe('BadgeVariant', () => {
+  // One badge implementation, two kinds (render/badge-variant.ts). The hint
+  // variant is the default and must be byte-identical to pre-variant behaviour;
+  // the range-pick variant dims rather than hides, accents rather than fades,
+  // and carries no page-defence observers.
+  const label = { letter: 'as', words: ['a', 's'], isSingle: false };
+
+  function inner(b: HintBadge): HTMLDivElement {
+    return (b as unknown as { inner: HTMLDivElement }).inner;
+  }
+
+  afterEach(() => {
+    containerTracker.reset();
+    targetTracker.reset();
+    hostTracker.reset();
+  });
+
+  it('hint variant hides non-candidates and fades the spoken prefix', () => {
+    const root = mount('<div id="c"><button id="btn">click</button></div>');
+    const badge = new HintBadge(elementTarget(root.querySelector('#btn')!), label, 'letter');
+    badge.setFiltered(true);
+    expect(inner(badge).classList.contains('filtered')).toBe(true);
+    expect(inner(badge).classList.contains('bk-dimmed')).toBe(false);
+    expect(inner(badge).classList.contains('bk-accent')).toBe(false);
+    badge.remove();
+  });
+
+  it('range-pick variant dims non-candidates in place and accents the prefix', () => {
+    const root = mount('<div id="c"><button id="btn">click</button></div>');
+    const badge = new HintBadge(
+      elementTarget(root.querySelector('#btn')!), label, 'letter', RANGE_PICK_VARIANT,
+    );
+    // The spatial arrangement IS the question — a non-candidate stays on screen.
+    badge.setFiltered(true);
+    expect(inner(badge).classList.contains('bk-dimmed')).toBe(true);
+    expect(inner(badge).classList.contains('filtered')).toBe(false);
+    // Positive marker on the matched prefix, gold from the variant.
+    expect(inner(badge).classList.contains('bk-accent')).toBe(true);
+    expect(inner(badge).style.getPropertyValue('--bk-accent')).toBe('#ffd60a');
+    badge.setMatchedChars(1);
+    const matched = inner(badge).querySelector('.bk-matched')!;
+    expect(matched.textContent).toBe('a');
+    expect(inner(badge).textContent).toBe('as'); // remainder still rendered
+    badge.remove();
+  });
+
+  it('range-pick variant registers no page-defence observers, but still stacks', () => {
+    const root = mount('<div id="c"><button id="btn">click</button></div>');
+    const el = root.querySelector('#btn')!;
+    const container = resolveContainer(el);
+    const badge = new HintBadge(elementTarget(el), label, 'letter', RANGE_PICK_VARIANT);
+    expect(targetTracker.isTracked(el)).toBe(false);
+    expect(hostTracker.isTracked(badge.host)).toBe(false);
+    expect(containerTracker.getRefCount(container)).toBe(0);
+    // Stacking is NOT optional — a host at z-index:auto slides under page chrome.
+    expect(badge.host.style.zIndex).not.toBe('');
+    badge.remove();
+  });
+
+  it('a chip\'s remove() does not steal a hint badge\'s target-mutation observer', () => {
+    // "highlight <link text>": the chip's element is the range's container,
+    // which is a hinted element with a badge of its own. The tracker is keyed
+    // 1:1 per element with an unconditional untrack.
+    const root = mount('<div id="c"><a id="link">some phrase here</a></div>');
+    const link = root.querySelector('#link')!;
+    const hint = new HintBadge(elementTarget(link), label, 'letter');
+    expect(targetTracker.isTracked(link)).toBe(true);
+
+    const chip = new HintBadge(elementTarget(link), label, 'letter', RANGE_PICK_VARIANT);
+    chip.remove();
+    expect(targetTracker.isTracked(link)).toBe(true);
+
+    hint.remove();
+    expect(targetTracker.isTracked(link)).toBe(false);
   });
 });
 

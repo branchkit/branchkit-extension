@@ -12,6 +12,7 @@
 import { BadgeDisplayMode } from '../types';
 import type { BadgeHandle, BadgeDiagnostics } from './badge-handle';
 import { type BadgeTarget, elementTarget } from './badge-target';
+import { type BadgeVariant, HINT_VARIANT } from './badge-variant';
 import { LabelAssignment, labelToDisplay, letterToSpokenWord } from '../labels/words';
 import { documentInstanceId } from '../labels/document-identity';
 import { getCachedStyle, isRectOnScreen } from '../core/layout-cache';
@@ -258,14 +259,30 @@ const BADGE_CSS = `
   .bk-inner.filtered {
     display: none;
   }
+  /* The 'dim' non-candidate treatment (BadgeVariant.nonCandidate): keep the
+   * badge in place at low opacity instead of removing it. Declared AFTER
+   * .visible deliberately — equal specificity, so source order decides, and
+   * dimming must win over the shown state. */
+  .bk-inner.bk-dimmed {
+    opacity: 0.25;
+  }
   /* Occlusion: the target is covered by another element (hit-test), so the
    * badge would float on top of whatever hides it. Hidden entirely —
    * orthogonal to .filtered (codeword filter) and the .visible opacity gate. */
   .bk-inner.bk-occluded {
     display: none;
   }
+  /* The already-spoken prefix. 'fade' subtracts (hints, where the
+   * non-candidates are gone and only the remainder matters); 'accent' adds
+   * (chips, where the non-candidates are still on screen dimmed, so the live
+   * one needs a positive marker). --bk-accent is set per badge from the
+   * variant. */
   .bk-matched {
     opacity: 0.35;
+  }
+  .bk-inner.bk-accent .bk-matched {
+    opacity: 1;
+    color: var(--bk-accent, #ffd60a);
   }
   @keyframes bk-flash {
     /* No !important here — the CSS spec specifies that !important inside
@@ -427,6 +444,10 @@ export class HintBadge implements BadgeHandle {
   // and `hide()` has been called.
   private label: LabelAssignment | null;
   private displayMode: BadgeDisplayMode;
+  // Which KIND of badge this is (render/badge-variant.ts): how the set narrows
+  // mid-codeword, and how much page-defence machinery it carries. Immutable —
+  // a badge never changes kind.
+  private readonly variant: BadgeVariant;
   private fontSize: number;
 
   // The reconcile positioning model (notes/completed/DESIGN_HINT_POSITIONING_REARCH.md):
@@ -458,10 +479,16 @@ export class HintBadge implements BadgeHandle {
   // anim id stays constant — the proof the page-scroll layer is never torn down.
   private _scrollAccelAnimBuilds = 0;
 
-  constructor(target: BadgeTarget, label: LabelAssignment, displayMode: BadgeDisplayMode) {
+  constructor(
+    target: BadgeTarget,
+    label: LabelAssignment,
+    displayMode: BadgeDisplayMode,
+    variant: BadgeVariant = HINT_VARIANT,
+  ) {
     this.target = target;
     this.label = label;
     this.displayMode = displayMode;
+    this.variant = variant;
     this.fontSize = computeBadgeFontSize(target.element);
 
     this.host = document.createElement('div');
@@ -480,6 +507,11 @@ export class HintBadge implements BadgeHandle {
     this.inner = document.createElement('div');
     this.inner.className = 'bk-inner';
     this.inner.style.fontSize = `${this.fontSize}px`;
+
+    if (variant.matchedPrefix === 'accent') {
+      this.inner.classList.add('bk-accent');
+      if (variant.accent) this.inner.style.setProperty('--bk-accent', variant.accent);
+    }
 
     const text = labelToDisplay(label, displayMode);
     this.inner.textContent = text;
@@ -511,7 +543,13 @@ export class HintBadge implements BadgeHandle {
     // generic placement; refine() upgrades it within a few frames. Tests
     // can flip `refineImmediately` to force sync behavior so they can
     // assert observer state right after construction.
-    if (refineImmediately) this.refine();
+    //
+    // A variant that takes no observers refines INLINE: deferral exists solely
+    // to amortise the observer dance, so without it there is nothing to defer —
+    // and the stacking half of refine() is not optional (a host left at
+    // z-index:auto slides under any positioned page chrome), so a transient
+    // badge wants it on the first frame, not a few frames in.
+    if (refineImmediately || !variant.observePage) this.refine();
     else scheduleRefine(this);
   }
 
@@ -533,15 +571,20 @@ export class HintBadge implements BadgeHandle {
   refine(): void {
     if (this._refined || this._removed) return;
     this._refined = true;
-    trackContainerResize(this.anchorParent);
-    this._containerTracked = true;
-    trackTargetMutations(this.target.element);
     // Stacking: place the badge in its target's natural stacking context so
     // modals/dropdowns with a higher-z context still cover it. Deferred here
     // (not the constructor) because the walk reads live computed styles;
-    // cached per anchorParent. Written before the host-attribute defender
-    // starts so the write isn't observed as page tampering.
+    // cached per anchorParent. NOT variant-gated — every badge needs it, and
+    // written before the host-attribute defender starts so the write isn't
+    // observed as page tampering.
     this.host.style.zIndex = String(zIndexFor(this.target.element, this.host, this.anchorParent));
+    // The page-mutation defence proper. A transient badge skips it — see
+    // BadgeVariant.observePage for why this is a correctness constraint and
+    // not just a cost one (the target-mutation tracker is keyed 1:1).
+    if (!this.variant.observePage) return;
+    trackContainerResize(this.anchorParent);
+    this._containerTracked = true;
+    trackTargetMutations(this.target.element);
     // Start the host-attribute defender AFTER all setup is done — the
     // observer fires on real mutations only, but starting it earlier
     // would treat our own setAttribute/style writes as page tampering.
@@ -921,14 +964,15 @@ export class HintBadge implements BadgeHandle {
     // Park the host as well — a declined show would otherwise leave the
     // freshly-built host at display:block, the exact residue layer this
     // gate exists to remove.
-    if (rectOverVideo(this.target.rect())) {
+    if (this.variant.suppressOverVideo && rectOverVideo(this.target.rect())) {
       this.host.style.display = 'none';
       return;
     }
     this._visible = true;
     // Un-park the host from the display:none hide() leaves it in.
     this.host.style.display = 'block';
-    this.inner.classList.remove('filtered');
+    // Clear whichever non-candidate mark this variant uses (setFiltered).
+    this.inner.classList.remove('filtered', 'bk-dimmed');
     this.applyColors();
     this._size = null;
     // Arm the accelerator on show too (idempotent): a badge reused via the
@@ -1005,12 +1049,12 @@ export class HintBadge implements BadgeHandle {
     this.disarmScrollAccel();
   }
 
+  /** Mark this badge as unable to complete the current codeword prefix. The
+   *  variant decides whether that means gone or dimmed in place — see
+   *  BadgeVariant.nonCandidate. */
   setFiltered(filtered: boolean): void {
-    if (filtered) {
-      this.inner.classList.add('filtered');
-    } else {
-      this.inner.classList.remove('filtered');
-    }
+    const cls = this.variant.nonCandidate === 'hide' ? 'filtered' : 'bk-dimmed';
+    this.inner.classList.toggle(cls, filtered);
   }
 
   // Visually hide a badge whose target is covered by another element (the
@@ -1155,7 +1199,13 @@ export class HintBadge implements BadgeHandle {
       untrackContainerResize(this.anchorParent);
       this._containerTracked = false;
     }
-    untrackTargetMutations(this.target.element);
+    // Gated on the variant, not on "is it tracked": the target-mutation
+    // tracker is keyed 1:1 per ELEMENT with an unconditional delete, and a
+    // range-anchored badge's element is the range's container — which can be a
+    // hinted element with a badge of its own ("highlight <link text>").
+    // Untracking here would silently disconnect THAT badge's observer.
+    if (this.variant.observePage) untrackTargetMutations(this.target.element);
+    // Keyed on the host, which is unique per badge — safe unconditionally.
     untrackHostAttributes(this.host);
     unregisterReconcile(this);
     unregisterScrollAccelBadge(this);
