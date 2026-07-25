@@ -56,16 +56,17 @@
     .row.sel { background: #1f6feb33; }
     .row:hover:not(.sel) { background: #161b22; }
     .title { color: #e6edf3; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    /* Spoken codeword badge — the voice handle for the row. Neutral chip
-       (off-white on a faint gray field), same family as the kbd chips so the
-       row's metadata reads as one quiet system; the badge earns attention by
-       position, not hue. */
+    /* Spoken codeword badge — the voice handle for the row. Same legibility
+       standard as the on-page hint badges (bold, 11px — they get APCA-adjusted
+       contrast; the fixed dark panel gets the static equivalent): the codeword
+       must be readable at a glance, it is what you SAY. Still a neutral chip in
+       the kbd family, just no longer faint. */
     .cw {
       flex: 0 0 auto;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px;
-      font-weight: 600;
-      background: rgba(240, 246, 252, 0.08); color: #e6edf3;
-      border: 1px solid #3d444d;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+      font-weight: 700;
+      background: rgba(240, 246, 252, 0.16); color: #f0f6fc;
+      border: 1px solid #4b535c;
       border-radius: 3px; padding: 0 4px; white-space: nowrap;
     }
     /* Leftover-space-only (flex-basis 0): a long description must never
