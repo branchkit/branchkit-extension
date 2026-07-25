@@ -59,6 +59,7 @@ import { copyText } from './clipboard';
 import { flashToast } from './render/toast';
 import { registerSelectionCommands, restorePosition, caret, SELECTION_ACTIONS, parseSelectionCommand } from './activate/selection-commands';
 import { resolveRangePick } from './activate/range-disambiguation';
+import { runEscapeCascade } from './activate/escape-cascade';
 import {
   CodewordSnapshot,
   takeSnapshot,
@@ -2729,6 +2730,17 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
           fp: resolved.fp,
         });
       }
+    } else if (action === 'escape') {
+      // Voice "escape" / "over" — the Esc key's cascade, spoken. Peel logic
+      // lives in activate/escape-cascade.ts.
+      const peeled = runEscapeCascade();
+      reportDispatchResult({
+        action, codeword: '', resolution: 'none', elem_tag: '',
+        taken: peeled ? 'click' : 'skipped', ok: peeled !== '',
+        frame: trimFrameUrl(window.location.href),
+        detail: peeled ? `escape: ${peeled}` : 'nothing to close',
+        fp: '',
+      });
     } else if (SELECTION_ACTIONS.has(action)) {
       // Voice-driven adjustable selection ("extend sentence", "shrink word",
       // "flip", "copy that", "stop selecting"). No-op unless caret mode is active

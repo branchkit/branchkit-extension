@@ -49,6 +49,9 @@ const VOICE_ONLY_CONTENT = [
   // on the caret mode; no keyboard bind (the movement keys are the keyboard form).
   'extend_word', 'extend_sentence', 'extend_line', 'extend_paragraph', 'extend_edge',
   'select_shrink', 'select_flip', 'select_copy', 'select_exit', 'select_whole',
+  // The Esc cascade, spoken — inline in BRANCHKIT_ACTION; the key itself is
+  // owned by the mode handlers, not the registry.
+  'escape',
 ] as const;
 
 const NOT_MAPPABLE = new Set([

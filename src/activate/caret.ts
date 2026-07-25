@@ -459,8 +459,10 @@ export class CaretController {
    *   3. Caret: exit to Normal.
    *  Search always sits above visual (a committed find can only extend an
    *  existing/created selection), so this fixed order matches the entry order for
-   *  every real flow. Field selection has no layers — Escape exits. */
-  private escape(): void {
+   *  every real flow. Field selection has no layers — Escape exits.
+   *  Public: the spoken "escape"/"over" cascade (content.ts) runs the same
+   *  peel so voice and the key stay behavior-identical. */
+  escape(): void {
     const m = this.movement;
     if (!m || this.fieldEl) { this.exit(); return; }
     if (isFindActive()) { closeFindMode(); return; }

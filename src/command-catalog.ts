@@ -280,6 +280,21 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   { id: 'focus_input', label: 'Focus first input', group: 'Navigation', mappable: true, params: [],
     description: 'Focus the first text field on the page; Tab / Shift+Tab then cycle between fields.',
     voice: [{ pattern: 'focus input' }, { pattern: 'focus first input' }] },
+  // The Esc key's cascade, spoken: peel one layer — a pending badge pick,
+  // then the selection stack (find-over-selection → visual → caret), then
+  // the find bar. Contributed twice: the default app-active gate for normal
+  // browsing plus a caret-context twin (the exclusive caret tag suppresses
+  // app-gated commands mid-selection; the two are never co-eligible). The
+  // browser plugin maps spoken "over" to the same action plugin-side
+  // (collections.go) so both words work; voice's global "over" handles the
+  // tagged modes via the plugin's tag-clear reconciliation.
+  { id: 'escape', label: 'Escape (close / back out)', group: 'Navigation', mappable: false, params: [],
+    keyHint: 'Esc',
+    description: 'Close what’s open — the find bar, a badge pick, or one selection layer — like pressing Escape.',
+    voice: [
+      { pattern: 'escape' },
+      { pattern: 'escape', context: 'caret' },
+    ] },
   // Pass-through: hand the keyboard to the site so its own shortcuts work.
   // Keyboard-only (voice is unaffected by keyboard modes), so no `voice`.
   { id: 'insert_mode', label: 'Pass keys to the page', group: 'Navigation', mappable: true, params: [],
