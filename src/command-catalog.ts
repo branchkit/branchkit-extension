@@ -46,6 +46,40 @@ export interface VoicePattern {
    * ("{number}" / "{text}"). Omitted = the command's bare action.
    */
   params?: Record<string, string>;
+  /**
+   * Per-pattern override of the command's voiceContext, for one command whose
+   * spoken forms live in different contexts (select_to: caret-gated
+   * "select to" extends, default-gated "highlight" enters). Same semantics
+   * as CommandMeta.voiceContext.
+   */
+  context?: 'palette' | 'caret' | 'video';
+  /**
+   * Per-pattern override of the command's description — the HUD subtitle /
+   * calibration text for THIS spoken form when one command's phrases mean
+   * meaningfully different things.
+   */
+  description?: string;
+  /**
+   * Dictated-argument descriptor (the platform's `dictated_param`): speaking
+   * this pattern doesn't dispatch — it ARMS, and the user's next dictation
+   * hold fills `param` on the action, which then dispatches. Free text can't
+   * live in the closed command grammar, so the argument rides the open-
+   * vocabulary dictation engine instead. Action ids are bare (the plugin
+   * prefixes them); `{key}` in cueBody becomes the live dictation-hold key.
+   * See app notes/DESIGN_DICTATED_COMMAND_ARGUMENT.md.
+   */
+  dictated?: {
+    /** Action param the dictated transcript fills. */
+    param: string;
+    /** Bare action id dispatched at arm time (find's box-open cue). */
+    armAction?: string;
+    /** Bare action id dispatched if the arm expires unconsumed. */
+    disarmAction?: string;
+    /** Armed-state cue card title (discovery overlay). */
+    cueTitle?: string;
+    /** Armed-state cue card body; `{key}` = live dictation-hold combo. */
+    cueBody?: string;
+  };
 }
 
 export interface CommandMeta {
@@ -221,11 +255,17 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   { id: 'find_previous', label: 'Find previous', group: 'Find', mappable: true, params: [],
     description: 'Jump to the previous find match.',
     voice: [{ pattern: 'previous' }] },
+  // "search" rides the platform's dictated-argument path (the closed command
+  // engine can only hear union words, so "find {text}" never did real
+  // find-in-page): the verb arms + opens the find box as the cue, the next
+  // dictation hold's transcript arrives here as the query. The box then stays
+  // open — typing or dictating into it is the supported repeat-query path
+  // (the bar's matching is tolerant). See notes/DESIGN_TEXT_TARGETING.md and
+  // app notes/DESIGN_DICTATED_COMMAND_ARGUMENT.md.
   { id: 'find_immediate', label: 'Find immediately', group: 'Find', mappable: false, params: [],
-    // No voice pattern: the closed command engine can only hear words already
-    // in its union, so "find {text}" never did real find-in-page. A future
-    // page-word index ("find <word:page_words>") would re-target this action.
-    description: 'Run a find for a given query (runtime query — not bindable).' },
+    description: 'Find on the page by voice — say "search", then hold the dictation key and dictate your query.',
+    voice: [{ pattern: 'search',
+      dictated: { param: 'query', armAction: 'find_open', disarmAction: 'find_close' } }] },
 
   // --- Navigation ---
   { id: 'history_back', label: 'Go back', group: 'Navigation', mappable: true, params: [],
@@ -476,15 +516,33 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
       { pattern: 'select sentence', params: { granularity: 'sentence' } },
       { pattern: 'select paragraph', params: { granularity: 'paragraph' } },
     ] },
-  // Find-and-extend in one utterance ("extend to <phrase>"): the far bound jumps
-  // to a phrase found on the page. Like find_immediate, the phrase can't be a
-  // Sherpa `{text}` capture (the closed grammar only hears union words) — it
-  // rides the platform's dictated-argument path (the same arm-then-dictate flow
-  // as "search"; notes/DESIGN_DICTATED_COMMAND_ARGUMENT.md), so there's no voice
-  // pattern here. The extension just consumes browser.select_to{query}.
+  // Phrase selection via the platform's dictated-argument path (the same
+  // arm-then-dictate flow as "search"; app notes/DESIGN_DICTATED_COMMAND_
+  // ARGUMENT.md): the phrase can't be a Sherpa `{text}` capture (the closed
+  // grammar only hears union words), so the verb arms and the next dictation
+  // hold carries it. One action, two spoken forms split by the `mode` param:
+  //  - "highlight" (default app-active gate) — no live selection, so the
+  //    dictated phrase itself is selected and caret mode opens there: the
+  //    voice ENTRY into selection. (Bare "select" is blocked by the
+  //    prefix-free vocabulary — it would shadow "select all"/"select {hint}".)
+  //  - "select to" (caret context — the exclusive caret tag, so it stays
+  //    matchable mid-selection) — extends the live selection to the phrase.
+  // The arm's cue card text rides the descriptor per form; {key} becomes the
+  // live dictation-hold combo. One-shot by design — no find-box-style
+  // repeat-query path here (see the design note's disambiguation section).
   { id: 'select_to', label: 'Extend to phrase', group: 'Selection', mappable: false,
     description: 'Extend the selection to a phrase spoken aloud (find + extend in one step; runtime dictated text — not bindable).',
-    params: [{ name: 'query', type: 'string' }] },
+    params: [{ name: 'query', type: 'string' }],
+    voice: [
+      { pattern: 'highlight', params: { mode: 'highlight' },
+        description: 'Select a phrase by voice — hold the dictation key and dictate it; the phrase is selected and selection mode opens there.',
+        dictated: { param: 'query', cueTitle: 'Highlight',
+          cueBody: 'Hold {key} and say the phrase — it becomes the selection.' } },
+      { pattern: 'select to', params: { mode: 'extend' }, context: 'caret',
+        description: 'Extend the selection to a phrase — then hold the dictation key and dictate the phrase.',
+        dictated: { param: 'query', cueTitle: 'Select to',
+          cueBody: 'Hold {key} and say the phrase — the selection extends to it.' } },
+    ] },
 
   // --- Media (notes/DESIGN_VIDEO_MEDIA_COMMANDS.md) ---
   // Transport verbs on the HTML5 <video> element API — generic across every
@@ -614,9 +672,20 @@ export interface CommandContribution {
   description: string;
   /** CommandMeta.retainsHints, forwarded for `{hint}` patterns. */
   retains_hints?: boolean;
-  /** CommandMeta.voiceContext — the registrar swaps the app-active gate for
-   * the named context's tag (and clears it at match time). */
+  /** CommandMeta.voiceContext (or the pattern's own override) — the registrar
+   * swaps the app-active gate for the named context's tag (and clears it at
+   * match time). */
   context?: string;
+  /** VoicePattern.dictated, in the plugin's wire shape: this phrase arms a
+   * dictated argument instead of dispatching. Action ids stay bare — the
+   * registrar prefixes them, same contract as `action`. */
+  dictated_param?: {
+    param: string;
+    arm_action?: string;
+    disarm_action?: string;
+    cue_title?: string;
+    cue_body?: string;
+  };
 }
 
 /** Flatten the catalog's voice patterns into the plugin contribution payload. */
@@ -627,8 +696,15 @@ export function buildCommandContributions(): CommandContribution[] {
     for (const v of c.voice) {
       out.push({
         action: c.id, pattern: v.pattern, params: v.params, category: c.group,
-        description: c.description, retains_hints: c.retainsHints,
-        context: c.voiceContext,
+        description: v.description ?? c.description, retains_hints: c.retainsHints,
+        context: v.context ?? c.voiceContext,
+        dictated_param: v.dictated && {
+          param: v.dictated.param,
+          arm_action: v.dictated.armAction,
+          disarm_action: v.dictated.disarmAction,
+          cue_title: v.dictated.cueTitle,
+          cue_body: v.dictated.cueBody,
+        },
       });
     }
   }
