@@ -308,6 +308,51 @@ internally (`this.target = elementTarget(newEl)`) and the seam stops there.
 
 Step 3 is the only one that can regress link hints, so it lands with 1 and 2 green.
 
+## Membership: one engine, not two
+
+Positioning and membership are separate questions. The seam above answers the
+first — a chip follows its phrase. The second is "which matches wear a chip
+right now", and the first cut answered it with a hand-rolled pass: filter to the
+strict viewport, take the first nine in document order. That is a second
+convergence engine sitting next to `SettleEngine.bandConverge`, which answers
+the identical question for link badges. Two artifacts kept in agreement by hand
+is the coupling this repo doesn't allow, and they had already drifted — on band
+reach (strict vs `VIEWPORT_MARGIN_PX`) and on which nine win (document order vs
+nearest-to-viewport).
+
+The blocker I initially assumed was the store: `ElementWrapper` is an Element
+registry, its consumers hit-test and click elements, and a Range is not an
+Element. That is a real barrier to putting chips *in the store* — and no barrier
+at all to sharing the derivation, which is what actually matters. Read against
+the code, `bandConverge`'s only element-specific line is the rect read, which
+`BadgeTarget` already generalised for rendering.
+
+So `planBandWindow` (lifecycle/band-window.ts) is extracted as pure arithmetic:
+given members with `{overhang, held}` and a codeword budget, return
+claim/keep/drop. Both callers feed it and keep their own sinks, because a claim
+genuinely means different things — a wrapper writes its codeword and queues a
+grammar delta through the tracker's two-strike exit ledger; a chip paints a
+badge and publishes a record. **Exit hysteresis stays in the wrapper sink: the
+planner names a release candidate, the sink decides whether it goes.**
+
+What sharing bought, beyond the obvious:
+
+- **Nearest-first instead of document-first.** The budget-tightening rule
+  shrinks the margin to the budget-th nearest overhang, so scarce codewords land
+  closest to the viewport. The hand-rolled version badged whatever appeared
+  earliest in the DOM, which on a long page is not what the user is looking at.
+- **The scroll lag disappears.** Chips now claim against the same band the link
+  badges do, so a match just past the fold is already painted when you reach it
+  rather than arriving ~100ms after the scroll stops. This was the gap I had
+  told the user to live with; reuse closed it for free.
+
+The visible consequence, worth watching: a chip may be painted (and speakable)
+up to `VIEWPORT_MARGIN_PX` outside the viewport, so a pick can hold options the
+user can't see yet. Under budget pressure the tightening pulls the set back
+toward the viewport, so this is bounded to a couple of chips in practice —
+measured at 7 on screen + 2 below on a 24-match page. If it reads badly in use,
+the knob is the chips' margin, not the engine.
+
 ## What was measured
 
 A throwaway Playwright driver (written, used, deleted — `scripts/README.md`'s rule

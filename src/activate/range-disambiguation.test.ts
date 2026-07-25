@@ -212,14 +212,18 @@ describe('range-disambiguation pick', () => {
   // jsdom gives every rect zeros, so the viewport filter finds nothing and the
   // fallback keeps prior behavior — which is why the other tests still pass
   // unchanged. These two stub geometry to exercise the filter itself.
+  // "Off-screen" has to mean BEYOND THE BAND, not merely past the fold: chips
+  // claim against the same VIEWPORT_MARGIN_PX band the link badges do, so a
+  // match 60px above the fold is still a claim candidate (that pre-claim is
+  // what makes a chip already painted when you scroll to it).
+  const FAR = 4000;
   function withStubbedRects(onScreen: (text: string) => boolean): () => void {
     const original = Range.prototype.getBoundingClientRect;
     Range.prototype.getBoundingClientRect = function (this: Range): DOMRect {
       const visible = onScreen(this.toString());
-      // Off-screen = above the fold (negative bottom); on-screen = a real box.
       return (visible
         ? { top: 10, bottom: 30, left: 10, right: 60, width: 50, height: 20 }
-        : { top: -80, bottom: -60, left: 10, right: 60, width: 50, height: 20 }
+        : { top: -FAR, bottom: -FAR + 20, left: 10, right: 60, width: 50, height: 20 }
       ) as DOMRect;
     };
     return () => { Range.prototype.getBoundingClientRect = original; };
@@ -262,7 +266,7 @@ describe('range-disambiguation pick', () => {
     Range.prototype.getBoundingClientRect = function (this: Range): DOMRect {
       return (visibleTexts.has(this.toString())
         ? { top: 10, bottom: 30, left: 10, right: 60, width: 50, height: 20 }
-        : { top: -80, bottom: -60, left: 10, right: 60, width: 50, height: 20 }
+        : { top: -4000, bottom: -3980, left: 10, right: 60, width: 50, height: 20 }
       ) as DOMRect;
     };
     return {

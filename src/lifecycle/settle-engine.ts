@@ -25,6 +25,7 @@
 import type { ElementWrapper, DiscoverySource } from '../scan/element-wrapper';
 import type { SettleDeps } from './settle-deps';
 import { shouldRunBandSweep } from './band-sweep-gate';
+import { type BandCandidate, bandOverhang, planBandWindow } from './band-window';
 import { gatherSettleReads, type SettleGather } from './gather';
 import { computeReconcilePlanLists, type ReconcilePlanLists } from './reconcile';
 import { drainStampDisagree } from './strict-viewport';
@@ -291,8 +292,7 @@ export class SettleEngine {
     // (0 = intersects the strict viewport). geometryInBand(r,vw,vh,m) is
     // exactly `overhang < m`. lastRect is refreshed here (the fingerprint
     // rebind tier's position tiebreak needs a fresh rect at disconnect time).
-    const live: { w: ElementWrapper; overhang: number; codeworded: boolean }[] = [];
-    let inFullBand = 0;
+    const live: BandCandidate<ElementWrapper>[] = [];
     for (const w of this.deps.store.all) {
       if (w.disconnectedAt !== null) continue;
       if (!w.element.isConnected) continue;
@@ -303,55 +303,40 @@ export class SettleEngine {
       // band membership; a later layout gives it one and re-enters here.
       if (r.width === 0 && r.height === 0 && r.top === 0 && r.left === 0) continue;
       w.lastRect = r;
-      const overhang = Math.max(0, -r.bottom, r.top - vh, -r.right, r.left - vw);
-      if (overhang < VIEWPORT_MARGIN_PX) inFullBand++;
-      live.push({ w, overhang, codeworded: w.scanned.codeword.length > 0 });
+      live.push({
+        item: w,
+        overhang: bandOverhang(r, vw, vh),
+        held: w.scanned.codeword.length > 0,
+      });
     }
 
-    // Budget-aware band tightening (notes/DESIGN_BUDGET_AWARE_CLAIM_BAND.md).
-    // Under no pressure the effective margin is the full VIEWPORT_MARGIN_PX and
-    // the claim/release decision below is byte-for-byte the old behavior. When
-    // the full band holds more hintable wrappers than the codeword pool can
-    // address, shrink the margin to the CLAIM_BUDGET-th nearest overhang so the
-    // scarce codewords land closest-to-viewport first (the strict viewport,
-    // overhang 0, is always included). The margin is a function of geometry
-    // only — independent of which wrappers currently hold codewords — so the
-    // near/far partition is stable across passes and cannot oscillate.
-    let effectiveMargin = VIEWPORT_MARGIN_PX;
-    if (inFullBand > CLAIM_BUDGET) {
-      const overhangs = live
-        .filter(e => e.overhang < VIEWPORT_MARGIN_PX)
-        .map(e => e.overhang)
-        .sort((a, b) => a - b);
-      // +1 so the cutoff row is included (grid cells in one row share an
-      // overhang) and the check below stays a strict `<`. Capped at the full
-      // margin so this only ever tightens, never widens.
-      effectiveMargin = Math.min(VIEWPORT_MARGIN_PX, overhangs[CLAIM_BUDGET - 1] + 1);
-    }
+    // Budget-aware band tightening (notes/DESIGN_BUDGET_AWARE_CLAIM_BAND.md)
+    // now lives in the shared planner (lifecycle/band-window.ts), which the
+    // range-pick chips use too — one derivation of "which viewport-ranked
+    // things hold codewords", not two that drift.
+    const plan = planBandWindow(live, CLAIM_BUDGET, VIEWPORT_MARGIN_PX);
 
-    // Pass 2: apply claim/release from the collected overhangs — pure
-    // arithmetic, no further layout reads.
-    const toClaim: ElementWrapper[] = [];
+    // Pass 2: apply the plan. Claim/keep/drop are geometry; the two-strike
+    // exit ledger below is EXIT POLICY and stays here — the planner names a
+    // release candidate, this decides whether it actually goes.
     let releases = 0;
-    for (const e of live) {
-      const { w, overhang, codeworded } = e;
-      if (overhang < effectiveMargin) {
-        this.deps.tracker.clearExitStrike(w);
-        if (!codeworded) {
-          w.tInBand ??= __t0;
-          toClaim.push(w);
-        }
-      } else if (codeworded && this.deps.tracker.strikeOut(w, __t0)) {
-        // Same path as the old IO exit branch: cancels any pending claim,
-        // stashes preferredCodeword for sticky reclaim, drops the badge to
-        // dormant. Beyond the effective margin the wrapper is off-screen
-        // (overhang > 0 ⇒ outside the strict viewport), so the hide is
-        // imperceptible; under budget pressure it frees a codeword for a
-        // nearer wrapper.
-        this.deps.tracker.queueRelease(w);
-        releases++;
-      }
+    for (const w of plan.toKeep) this.deps.tracker.clearExitStrike(w);
+    for (const w of plan.toClaim) {
+      this.deps.tracker.clearExitStrike(w);
+      w.tInBand ??= __t0;
     }
+    for (const w of plan.toDrop) {
+      // Same path as the old IO exit branch: cancels any pending claim,
+      // stashes preferredCodeword for sticky reclaim, drops the badge to
+      // dormant. Beyond the effective margin the wrapper is off-screen
+      // (overhang > 0 ⇒ outside the strict viewport), so the hide is
+      // imperceptible; under budget pressure it frees a codeword for a
+      // nearer wrapper.
+      if (!this.deps.tracker.strikeOut(w, __t0)) continue;
+      this.deps.tracker.queueRelease(w);
+      releases++;
+    }
+    const toClaim = plan.toClaim;
     if (toClaim.length > 0) this.deps.tracker.queueClaims(toClaim);
     if (toClaim.length > 0 || releases > 0) {
       lifecycleCounters.bandConvergeClaims += toClaim.length;

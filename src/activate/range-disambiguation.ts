@@ -23,6 +23,8 @@
  */
 
 import { isAncestorChainInVisibleViewport } from '../lifecycle/strict-viewport';
+import { type BandCandidate, bandOverhang, planBandWindow } from '../lifecycle/band-window';
+import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { labelReservoir } from '../labels/label-reservoir';
 import { poolLabelToAssignment, type LabelAssignment } from '../labels/words';
 import { publishRecords, retireRecords } from '../labels/label-sync';
@@ -112,28 +114,38 @@ export function setPickWindowHooks(h: PickWindowHooks): void {
 }
 
 /**
- * The subset of `ranges` currently on screen in this frame. Mirrors the
- * geometry cut in stampStrictViewport (lifecycle/strict-viewport.ts) — including
- * its ancestor-chain check, so a range inside an iframe that is itself scrolled
- * out of view counts as off-screen — but reads Range rects rather than element
- * rects, which is why it can't call that helper directly.
+ * Rank every match by how far outside the viewport it sits, for the shared
+ * band planner (lifecycle/band-window.ts) — the same derivation the link
+ * badges use to decide which wrappers hold codewords. Chips differ only in
+ * budget (nine, not the pool) and in what a claim means.
+ *
+ * The frame-level check comes first, so a range inside an iframe that is
+ * itself scrolled out of view counts as out. Reads Range rects rather than
+ * element rects, which is why this can't call stampStrictViewport's helper.
  *
  * Deliberately geometry-only: no occlusion hit-test or CSS-visibility read. A
  * text range under a sticky header is still something the user can reasonably
  * be asked to pick, and the per-member cost those checks carry is meant for
  * hundreds of hint wrappers, not nine chips.
  */
-function rangesInViewport(ranges: Range[]): Range[] {
+function bandCandidates(ranges: Range[], held: (r: Range) => boolean): BandCandidate<Range>[] {
   if (!isAncestorChainInVisibleViewport(window)) return [];
   const vh = window.innerHeight;
   const vw = window.innerWidth;
-  return ranges.filter((r) => {
+  const out: BandCandidate<Range>[] = [];
+  for (const r of ranges) {
     let rect: DOMRect;
-    try { rect = r.getBoundingClientRect(); } catch { return false; }
+    try { rect = r.getBoundingClientRect(); } catch { continue; }
     // A fully collapsed rect has nowhere to anchor a chip.
-    if (rect.width === 0 && rect.height === 0) return false;
-    return rect.bottom > 0 && rect.top < vh && rect.right > 0 && rect.left < vw;
-  });
+    if (rect.width === 0 && rect.height === 0) continue;
+    out.push({ item: r, overhang: bandOverhang(rect, vw, vh), held: held(r) });
+  }
+  return out;
+}
+
+/** Which ranges currently wear a chip — the planner's `held` input. */
+function chippedRanges(): Set<Range> {
+  return new Set([...(pending?.chips.values() ?? [])].map((c) => c.range));
 }
 
 /** True when a pick is live (optionally: for this specific codeword). */
@@ -213,17 +225,17 @@ export function filterRangePickChips(prefix: string): boolean {
 export function startRangePick(ranges: Range[], onPick: (range: Range) => void): void {
   cancelRangePick('replaced');
 
-  // Badge what the user can actually see. Document order alone put the 9 chips
-  // wherever the phrase happened to appear first, so on a long page they landed
-  // below the fold and the user had to scroll to find the question being asked
-  // (field report 2026-07-25). Same on-screen predicate the strict-viewport
-  // stamp uses for hint badges, so chips and hints agree on "visible".
+  // Badge what the user can actually see, nearest first. Document order alone
+  // put the 9 chips wherever the phrase happened to appear, so on a long page
+  // they landed below the fold and the user had to scroll to find the question
+  // being asked (field report 2026-07-25). The shared band planner is the same
+  // rule the link badges claim by, so chips and hints agree on which
+  // viewport-ranked things are worth a scarce codeword.
   //
-  // Fallback when nothing is in view: badge by document order as before, rather
-  // than dead-ending a command the user just spoke.
-  const visible = rangesInViewport(ranges);
-  const pool = visible.length > 0 ? visible : ranges;
-  const picked = pool.slice(0, MAX_RANGE_BADGES);
+  // Fallback when the band is empty (a background frame, every match far away):
+  // badge by document order rather than dead-ending a command just spoken.
+  const plan = planBandWindow(bandCandidates(ranges, () => false), MAX_RANGE_BADGES, VIEWPORT_MARGIN_PX);
+  const picked = plan.toClaim.length > 0 ? plan.toClaim : ranges.slice(0, MAX_RANGE_BADGES);
   if (picked.length === 0) return;
 
   // `pending` is set before the chips exist so addChips has somewhere to write;
@@ -240,14 +252,13 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
   pending.restoreBadges = pickWindowHooks?.hideBadges() ?? false;
 
   bkLog('BK_RANGE_PICK_START', {
-    matches: ranges.length, inView: visible.length, badged: added,
+    matches: ranges.length, inBand: plan.toClaim.length, badged: added, margin: plan.margin,
   });
-  if (pool.length > MAX_RANGE_BADGES) {
+  if (ranges.length > added) {
     // Name the scope so "9 of 105" doesn't read as an arbitrary truncation:
-    // the rest are off-screen, and scrolling brings them their own chips.
-    flashToast(visible.length > 0
-      ? `${pool.length} matches in view of ${ranges.length} — showing ${MAX_RANGE_BADGES}, scroll for the rest`
-      : `${ranges.length} matches, none in view — showing first ${MAX_RANGE_BADGES}`);
+    // the rest are further from the viewport, and scrolling brings them their
+    // own chips.
+    flashToast(`${ranges.length} matches — showing the ${added} nearest, scroll for the rest`);
   }
 }
 
@@ -272,43 +283,41 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
  */
 export function reconcileRangePickChips(): void {
   if (!pending) return;
-  const inView = rangesInViewport(pending.ranges);
-  // Nothing in view: keep what's painted. Going to zero would leave a pick
+  const held = chippedRanges();
+  const plan = planBandWindow(
+    bandCandidates(pending.ranges, (r) => held.has(r)), MAX_RANGE_BADGES, VIEWPORT_MARGIN_PX);
+  if (plan.toClaim.length === 0 && plan.toDrop.length === 0) return;
+  // Nothing would remain: keep what's painted. Going to zero leaves a pick
   // that swallows every codeword (refusePickWindowCodeword) with nothing on
   // screen to explain why — the exact wedge the no-timer decision rests on NOT
   // being silent. Scrolling back restores the chips anyway.
-  if (inView.length === 0) return;
-
-  const inViewSet = new Set(inView);
-  const leaving = [...pending.chips].filter(([, c]) => !inViewSet.has(c.range));
-  const stayed = new Set([...pending.chips.values()]
-    .filter((c) => inViewSet.has(c.range)).map((c) => c.range));
-  const budget = MAX_RANGE_BADGES - (pending.chips.size - leaving.length);
-  const arriving = inView.filter((r) => !stayed.has(r)).slice(0, budget);
-  if (leaving.length === 0 && arriving.length === 0) return;
+  if (plan.toKeep.length === 0 && plan.toClaim.length === 0) return;
 
   // Release first so the arrivals can reclaim the very codewords that just
   // left (the reservoir returns them to the front).
-  if (leaving.length > 0) {
-    const gone = leaving.map(([cw]) => cw);
-    for (const [cw, chip] of leaving) {
+  if (plan.toDrop.length > 0) {
+    const dropped = new Set(plan.toDrop);
+    const gone: string[] = [];
+    for (const [cw, chip] of [...pending.chips]) {
+      if (!dropped.has(chip.range)) continue;
       chip.badge.remove();
       pending.chips.delete(cw);
+      gone.push(cw);
     }
     retireRecords(gone);
     labelReservoir.release(gone);
   }
-  const added = addChips(arriving);
+  const added = addChips(plan.toClaim);
 
   if (pending.chips.size === 0) {
-    // Everything left the viewport and nothing could be claimed to replace it.
+    // Everything left the band and nothing could be claimed to replace it.
     // Fail loud rather than leaving a live pick with no chips.
     flashToast('Lost the highlighted matches — say "highlight" again');
     teardown('reconcile_empty');
     return;
   }
   bkLog('BK_RANGE_PICK_RECONCILE', {
-    inView: inView.length, left: leaving.length, added, live: pending.chips.size,
+    dropped: plan.toDrop.length, added, live: pending.chips.size, margin: plan.margin,
   });
   // An add republishes the narrow once its records land (addChips); a pure
   // departure has no publish to ride, so shrink the narrow now.
