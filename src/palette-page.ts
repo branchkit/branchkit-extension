@@ -24,6 +24,7 @@ import {
 } from './palette/model';
 import { assignCodewords, codewordDisplay, classifyMarkInput } from './palette/codewords';
 import { markToSpokenWords, type MarkerMap } from './background/tab-markers';
+import { RELAY_HELLO, RELAY_REQ, RELAY_RESP, type BootstrapWire } from './palette/relay';
 import { stripTabMarker } from './tab-marker-format';
 import type { BadgeDisplayMode } from './types';
 import type { Message, PaletteVoiceEntry, PaletteVoiceRow } from './types';
@@ -94,16 +95,57 @@ interface PaletteBootstrap {
   activeTabId: number | null;
 }
 
+// --- Bootstrap relay (Firefox fallback; protocol doc in palette/relay.ts) ---
+// The host content script HELLOs us a secret on frame load (page-invisible);
+// a relayed RESP must echo it, so the page — which shares this window's
+// message traffic and could forge a RESP via our contentWindow — can only
+// forge blind. The secret may arrive after init starts (HELLO rides the
+// frame's load event), hence the small promise dance.
+let relaySecret: string | null = null;
+let relaySecretReady: (() => void) | null = null;
+const relaySecretArrived = new Promise<void>((res) => { relaySecretReady = res; });
+let relayResolve: ((data: BootstrapWire | null) => void) | null = null;
+
+window.addEventListener('message', (ev) => {
+  const d = ev.data as { type?: string; secret?: string; data?: BootstrapWire | null } | null;
+  if (!d) return;
+  if (d.type === RELAY_HELLO && typeof d.secret === 'string') {
+    relaySecret = d.secret;
+    relaySecretReady?.();
+    return;
+  }
+  if (d.type === RELAY_RESP && relaySecret !== null && d.secret === relaySecret) {
+    relayResolve?.(d.data ?? null);
+    relayResolve = null;
+  }
+});
+
+async function bootstrapViaRelay(): Promise<BootstrapWire | null> {
+  // Wait for the host's HELLO (frame load) before asking, bounded — no host
+  // relay (e.g. an old content script) must not hang the palette forever.
+  await Promise.race([relaySecretArrived, new Promise((res) => setTimeout(res, 1500))]);
+  if (relaySecret === null) return null;
+  return new Promise((resolve) => {
+    relayResolve = resolve;
+    // The REQ crosses the page's window — it deliberately carries nothing.
+    window.parent.postMessage({ type: RELAY_REQ }, '*');
+    setTimeout(() => { relayResolve?.(null); relayResolve = null; }, 2000);
+  });
+}
+
 async function loadBootstrap(): Promise<PaletteBootstrap> {
-  // Failures propagate to init's catch and render in the overlay — a
-  // swallowed error here looks identical to "you have no tabs", which cost
-  // a field round-trip (Firefox, 2026-07-25). No response at all = the
-  // background didn't answer (dead SW, or messaging can't cross this
-  // boundary) — name it rather than degrade silently.
-  const resp = (await chrome.runtime.sendMessage({ type: 'PALETTE_BOOTSTRAP' } as Message)) as
-    | { tabs?: Array<{ tabId: number; title: string; url: string }>; mru?: number[]; marks?: MarkerMap; activeTabId?: number | null }
-    | undefined;
-  if (!resp) throw new Error('PALETTE_BOOTSTRAP got no response from the background');
+  // Direct first (Chrome: this frame is fully privileged); relay through the
+  // host content script when the background doesn't answer (Firefox gives
+  // this frame content-script privileges, and its direct round-trip resolves
+  // undefined — 2026-07-25 field diagnosis). Failures propagate to init's
+  // catch and render in the overlay; silent degradation to an empty tab list
+  // reads as "you have no tabs" and cost a field round-trip.
+  let resp = (await chrome.runtime.sendMessage({ type: 'PALETTE_BOOTSTRAP' } as Message)
+    .catch(() => undefined)) as BootstrapWire | undefined;
+  if (!resp) {
+    resp = (await bootstrapViaRelay()) ?? undefined;
+  }
+  if (!resp) throw new Error('PALETTE_BOOTSTRAP: no response directly or via the host relay');
   return {
     tabs: (resp.tabs ?? []).map((t) => ({
       // Strip the marker decoration from titles — the mark shows as the

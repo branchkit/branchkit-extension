@@ -13,12 +13,36 @@
  * through the background (PALETTE_OPEN → PALETTE_COMMAND at frame 0).
  */
 
+import { RELAY_HELLO, RELAY_REQ, RELAY_RESP } from '../palette/relay';
+
 const HOST_ATTR = 'data-branchkit-palette';
 // One below max signed int — same tier as the help and debug overlays.
 const Z_INDEX = 2_147_483_646;
 
 let frame: HTMLIFrameElement | null = null;
 let prevFocus: HTMLElement | null = null;
+
+// Bootstrap relay (see palette/relay.ts): the frame's own background
+// round-trip doesn't work on Firefox, so the frame asks US to fetch its
+// privileged data. The extension origin doubles as the postMessage
+// targetOrigin — page-invisible in the host→frame direction.
+const FRAME_ORIGIN = new URL(chrome.runtime.getURL('')).origin;
+let relaySecret: string | null = null;
+
+window.addEventListener('message', (ev) => {
+  // Only OUR frame's requests; the page posting from its own window (even
+  // via frame.contentWindow.postMessage) has a different event.source.
+  if (!frame || ev.source !== frame.contentWindow) return;
+  const d = ev.data as { type?: string } | null;
+  if (!d || d.type !== RELAY_REQ) return;
+  const respond = (data: unknown): void => {
+    frame?.contentWindow?.postMessage(
+      { type: RELAY_RESP, secret: relaySecret, data }, FRAME_ORIGIN);
+  };
+  chrome.runtime.sendMessage({ type: 'PALETTE_BOOTSTRAP' })
+    .then(respond)
+    .catch(() => respond(null));
+});
 
 export function isPaletteOpen(): boolean {
   return frame !== null;
@@ -43,9 +67,13 @@ export function openPalette(scope: PaletteScope = 'all'): void {
     `margin: 0; padding: 0; z-index: ${Z_INDEX}; background: transparent; ` +
     `color-scheme: normal; display: block;`;
   // Focus the frame once loaded so its query input receives keystrokes
-  // immediately (the page inside focuses the input on init).
+  // immediately (the page inside focuses the input on init). Same moment:
+  // hand the frame the relay secret (page-invisible — cross-origin
+  // targetOrigin), so a later relay RESP can prove it came from us.
   f.addEventListener('load', () => {
     try { f.contentWindow?.focus(); } catch { f.focus(); }
+    relaySecret = crypto.randomUUID();
+    f.contentWindow?.postMessage({ type: RELAY_HELLO, secret: relaySecret }, FRAME_ORIGIN);
   });
   document.documentElement.appendChild(f);
   frame = f;
