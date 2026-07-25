@@ -186,15 +186,30 @@ describe('filterPalette', () => {
     ]);
   });
 
-  it('a typed query collapses bookmarks to one ranked section', () => {
+  it('a typed query keeps bookmark folder headers, best-hit folder first', () => {
     const bms = buildBookmarkItems([
-      { title: 'PRs', url: 'https://github.com/pulls', path: 'Work' },
       { title: 'Recipes', url: 'https://cooking.example.com/', path: 'Home' },
+      { title: 'Open prs list', url: 'https://dash.example.com/', path: 'Home' },
+      { title: 'PRs', url: 'https://github.com/pulls', path: 'Work' },
     ]);
+    // First-word hit in Work outranks the mid-title hit in Home: the Work
+    // section leads even though Home comes first in tree order, and neither
+    // header degrades to a generic "Bookmarks".
     const sections = filterPalette([], [], 'prs', false, bms);
-    expect(sections.length).toBe(1);
-    expect(sections[0].label).toBe('Bookmarks');
+    expect(sections.map((s) => s.label)).toEqual(['Work', 'Home']);
     expect(sections[0].items.map((i) => i.title)).toEqual(['PRs']);
+    expect(sections[1].items.map((i) => i.title)).toEqual(['Open prs list']);
+  });
+
+  it('searching a folder name surfaces that folder as a named section', () => {
+    const bms = buildBookmarkItems([
+      { title: 'Recipes', url: 'https://cooking.example.com/', path: 'Home' },
+      { title: 'PRs', url: 'https://github.com/pulls', path: 'Work' },
+      { title: 'CI', url: 'https://ci.example.com/', path: 'Work' },
+    ]);
+    const sections = filterPalette([], [], 'work', false, bms);
+    expect(sections.map((s) => s.label)).toEqual(['Work']);
+    expect(sections[0].items.map((i) => i.title)).toEqual(['PRs', 'CI']);
   });
 
   it('a typed query collapses commands to one ranked section even under groupedBrowse', () => {

@@ -255,10 +255,17 @@ function groupLabels(items: readonly PaletteItem[], fallback: string): string[] 
  * surface) the commands split into one section per catalog group, in catalog
  * order — the same headers as the `?` help overlay. The full palette keeps a
  * single flat Commands section: it is a launcher, and group headers would
- * push the recent tabs down. With a query = search mode: always one ranked
- * section per SOURCE (per-group sections would fragment relevance ordering —
- * the best match must be first, not under the third header). Sections that
- * match nothing are dropped.
+ * push the recent tabs down.
+ *
+ * With a query = search mode: tabs and commands collapse to one ranked
+ * section per source (per-group sections would fragment relevance ordering —
+ * the best match must be first, not under the third header). Bookmarks are
+ * the exception: their headers are the user's OWN folder names, and a header
+ * that flips to a generic "Bookmarks" the moment you type reads as the folder
+ * being renamed (field report 2026-07-25). Ranked bookmark results regroup
+ * under their real folder, sections ordered by each folder's best hit — the
+ * global best match is still the first row. Sections that match nothing are
+ * dropped.
  */
 export function filterPalette(
   tabItems: readonly PaletteItem[],
@@ -269,17 +276,13 @@ export function filterPalette(
 ): PaletteSection[] {
   const sections: PaletteSection[] = [];
   const q = searchWords(query);
+  const rank = (items: readonly PaletteItem[]): PaletteItem[] => items
+    .map((item, i) => ({ item, i, score: scoreItem(item, q) }))
+    .filter((r) => r.score > 0)
+    .sort((a, b) => b.score - a.score || a.i - b.i)
+    .map((r) => r.item);
   const build = (source: PaletteSourceId, label: string, items: readonly PaletteItem[]): void => {
-    let picked: PaletteItem[];
-    if (q.length === 0) {
-      picked = [...items];
-    } else {
-      picked = items
-        .map((item, i) => ({ item, i, score: scoreItem(item, q) }))
-        .filter((r) => r.score > 0)
-        .sort((a, b) => b.score - a.score || a.i - b.i)
-        .map((r) => r.item);
-    }
+    const picked = q.length === 0 ? [...items] : rank(items);
     if (picked.length) sections.push({ source, label, items: picked });
   };
   build('tabs', 'Tabs', tabItems);
@@ -288,7 +291,19 @@ export function filterPalette(
       build('bookmarks', g, bookmarkItems.filter((i) => (i.group ?? 'Bookmarks') === g));
     }
   } else {
-    build('bookmarks', 'Bookmarks', bookmarkItems);
+    // Regroup the ranked hits under their folder: insertion order of the
+    // groups follows each folder's best-ranked item, so the first section
+    // opens with the global best match.
+    const byFolder = new Map<string, PaletteItem[]>();
+    for (const item of rank(bookmarkItems)) {
+      const g = item.group ?? 'Bookmarks';
+      const arr = byFolder.get(g) ?? [];
+      arr.push(item);
+      byFolder.set(g, arr);
+    }
+    for (const [label, items] of byFolder) {
+      sections.push({ source: 'bookmarks', label, items });
+    }
   }
   if (groupedBrowse && q.length === 0) {
     for (const g of groupLabels(commandItems, 'Commands')) {
