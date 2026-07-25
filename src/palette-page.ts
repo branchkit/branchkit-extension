@@ -405,7 +405,7 @@ const tabIdOf = (rowId: string): number | null =>
  */
 function assignAndPublish(alphabet: string[]): void {
   voiceAlphabet = alphabet;
-  const all = [...tabItems, ...commandItems];
+  const all = [...tabItems, ...commandItems, ...bookmarkItems];
   if (scope === 'tabs') {
     codewords = new Map();
     for (const item of tabItems) {
