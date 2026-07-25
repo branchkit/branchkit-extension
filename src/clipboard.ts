@@ -1,8 +1,11 @@
 /**
  * Copy text to the clipboard from a content script. Tries the async Clipboard
- * API (works under a keydown user gesture without a manifest permission), then
- * falls back to a hidden-textarea `execCommand('copy')`. Best-effort for
- * voice-triggered copies (no gesture): returns false if both paths fail.
+ * API, then falls back to a hidden-textarea `execCommand('copy')`. The
+ * `clipboardWrite` manifest permission makes both paths work WITHOUT a user
+ * gesture — required for voice-triggered copies ("copy that", "copy url"),
+ * which arrive over SSE with no transient activation: Firefox gates gestureless
+ * `writeText` on it, Chrome gates gestureless `execCommand('copy')` on it.
+ * Returns false if both paths fail.
  */
 export async function copyText(text: string): Promise<boolean> {
   try {

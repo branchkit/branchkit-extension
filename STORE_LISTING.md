@@ -130,6 +130,7 @@ uses for page-level API interception.
 | `webNavigation` | Detect single-page-app route changes (`onHistoryStateUpdated` / `onReferenceFragmentUpdated`) so hints re-scan after client-side navigation. |
 | `sessions` | The "reopen last-closed tab" command (the Ctrl/Cmd+Shift+T equivalent). |
 | `alarms` | A periodic (30s) heartbeat that checks whether the optional desktop app is still connected. |
+| `clipboardWrite` | Copy commands the user invokes ("copy selection", "copy URL", copy a link/badge's text) — voice-invoked copies carry no user gesture, so gestureless clipboard write needs the permission. Write-only; the extension never reads the clipboard. |
 | `offscreen` (Chrome only) | Hold a persistent connection to the optional desktop app in an offscreen document — an MV3 service worker cannot keep a long-lived connection open. Not present in the Firefox build. |
 
 Note: `activeTab` is intentionally **not** requested — `<all_urls>` host access
