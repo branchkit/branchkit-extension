@@ -6,33 +6,67 @@
  * in empty-state row order, once per palette open. Pure and deterministic —
  * stable row order in = stable badges; refiltering never reassigns.
  *
- * Badges are UNIFORM two-word pairs. Uniform length is the chop-safety
- * property: every key is exactly two words, so a partial utterance ("ocean" …
- * pause) is never a complete key — it matches nothing rather than
- * mis-selecting another row. (Page hints solve the same chop with the matcher
- * bridge; the palette has no bridge, so it removes the ambiguity
- * structurally.) The same argument rules out mixing in triples: a chopped
- * triple's first two words WOULD be a valid pair key. Pairs over the full
- * alphabet give 26×25 = 650 badges — beyond any realistic tabs+commands
- * list, so escalation never comes up.
+ * Badges are UNIFORM length within an open, chosen from the row count at
+ * assignment time (the full list is in hand — no estimation): singles cover
+ * 26 rows, pairs 650 (26×25), triples 15,600 (26×25×24). Uniform length is
+ * the chop-safety property: every key is exactly N words, so a partial
+ * utterance ("ocean" … pause) is never a complete key — it matches nothing
+ * rather than mis-selecting another row. (Page hints solve the same chop with
+ * the matcher bridge; the palette has no bridge, so it removes the ambiguity
+ * structurally.) The same argument prohibits MIXING lengths within a session
+ * — a chopped triple's first two words WOULD be a valid pair key — but not
+ * choosing per open: no cross-length keys ever coexist. Cross-open
+ * inconsistency (a 30-row palette speaks pairs where yesterday's 20-row one
+ * spoke singles) is the accepted cost of not paying two words on a small
+ * palette.
  *
  * No label-pool claim: the palette runs under the plugin's EXCLUSIVE palette
  * tag, which suppresses page-hint captures while open — reusing the same
  * alphabet words as painted hints is safe by context, not by partition.
  */
 
-// One-word badges for the first N rows (from the alphabet head; pairs then
-// draw only from the tail — the disjoint split that keeps a chopped pair
-// from matching a single). 0 — pairs-only — is the shipped default: uniform
-// badges and a 650-row ceiling beat a one-word fast path that caps badging
-// at 146 rows for heavy-tab sessions. Raising this buys back one-word badges
-// on the head rows if lived use ever wants them.
-const SINGLES = 0;
+/**
+ * Uniform badge length for a palette of `rowCount` rows — the smallest tier
+ * that covers the whole list.
+ */
+export function codewordLength(rowCount: number): 1 | 2 | 3 {
+  if (rowCount <= 26) return 1;
+  if (rowCount <= 26 * 25) return 2;
+  return 3;
+}
 
-/** Maximum rows that can carry a voice badge. */
+/** Maximum rows that can carry a voice badge (the triple tier's capacity). */
 export function maxVoiceRows(): number {
-  const pairPool = 26 - SINGLES;
-  return SINGLES + pairPool * (pairPool - 1);
+  return 26 * 25 * 24;
+}
+
+/**
+ * The `index`-th codeword of `length` distinct alphabet words: unranks the
+ * index into the ordered no-repeat word sequences, leading word varying
+ * slowest (row 0 starts at the alphabet head). Null past the tier's capacity.
+ */
+function codewordAt(
+  alphabet: readonly string[],
+  index: number,
+  length: number,
+): string | null {
+  let capacity = 1;
+  for (let k = 0; k < length; k++) capacity *= alphabet.length - k;
+  if (index >= capacity) return null;
+  const pool = [...alphabet];
+  const words: string[] = [];
+  let rem = index;
+  let block = capacity;
+  for (let k = 0; k < length; k++) {
+    // Sequences sharing the word chosen at this position (exact integer:
+    // capacity is the running product of these divisors).
+    block /= alphabet.length - k;
+    const i = Math.floor(rem / block);
+    rem %= block;
+    words.push(pool[i]);
+    pool.splice(i, 1);
+  }
+  return words.join(' ');
 }
 
 /**
@@ -59,7 +93,7 @@ export function codewordDisplay(
     case 'word':
       return words.join(' ');
     case 'expand':
-      return words.length === 1 ? words[0] : `${words[0]} ${letters[1]}`;
+      return words.length === 1 ? words[0] : `${words[0]} ${letters.slice(1).join('')}`;
   }
 }
 
@@ -93,22 +127,12 @@ export function assignCodewords(
   if (alphabet.length !== 26 || alphabet.some((w) => typeof w !== 'string' || w.length === 0)) {
     return out;
   }
-  const singles = alphabet.slice(0, SINGLES);
-  const pairPool = alphabet.slice(SINGLES);
+  const length = codewordLength(rowIds.length);
   let i = 0;
   for (const id of rowIds) {
-    if (i < SINGLES) {
-      out.set(id, singles[i]);
-    } else {
-      const p = i - SINGLES;
-      const first = Math.floor(p / (pairPool.length - 1));
-      if (first >= pairPool.length) break; // beyond maxVoiceRows — unbadged
-      // Skip the doubled pair (first === second): j indexes the pool with
-      // the first word removed.
-      const j = p % (pairPool.length - 1);
-      const second = j < first ? j : j + 1;
-      out.set(id, `${pairPool[first]} ${pairPool[second]}`);
-    }
+    const cw = codewordAt(alphabet, i, length);
+    if (cw === null) break; // beyond the triple tier — unbadged
+    out.set(id, cw);
     i++;
   }
   return out;

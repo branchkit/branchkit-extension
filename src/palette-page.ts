@@ -251,6 +251,19 @@ function render(sections: PaletteSection[]): void {
       listEl.appendChild(row);
     }
   }
+  // Rows past the voice-badge tier (assignCodewords stops at maxVoiceRows)
+  // must not fail silently. Counted over the VISIBLE set so the note retires
+  // itself as narrowing pulls the badge-less tail out of play. codewords
+  // empty = voice off entirely — every row is badge-less by design, no note.
+  if (scope !== 'tabs' && codewords.size > 0) {
+    const unbadged = flat.filter((it) => !codewords.has(it.id)).length;
+    if (unbadged > 0) {
+      listEl.appendChild(el(
+        'div', 'overflow',
+        `${unbadged} row${unbadged === 1 ? '' : 's'} without a voice badge — type to narrow`,
+      ));
+    }
+  }
   listEl.querySelector('.sel')?.scrollIntoView({ block: 'nearest' });
 }
 

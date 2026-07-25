@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { assignCodewords, codewordDisplay, classifyMarkInput, maxVoiceRows } from './codewords';
+import {
+  assignCodewords, codewordDisplay, codewordLength, classifyMarkInput, maxVoiceRows,
+} from './codewords';
 
 // A–Z order, as BranchKit pushes it.
 const ALPHABET = [
@@ -10,34 +12,71 @@ const ALPHABET = [
 
 const ids = (n: number): string[] => Array.from({ length: n }, (_, i) => `row:${i}`);
 
+/** Every badge in the map is `len` distinct alphabet words; all unique. */
+function expectUniform(m: Map<string, string>, len: number): void {
+  expect(new Set(m.values()).size).toBe(m.size);
+  for (const cw of m.values()) {
+    const words = cw.split(' ');
+    expect(words.length).toBe(len);
+    for (const w of words) expect(ALPHABET).toContain(w);
+    expect(new Set(words).size).toBe(words.length); // no repeated word in a key
+  }
+}
+
+describe('codewordLength (tier per row count)', () => {
+  it('picks the smallest tier that covers the whole list', () => {
+    expect(codewordLength(1)).toBe(1);
+    expect(codewordLength(26)).toBe(1);
+    expect(codewordLength(27)).toBe(2);
+    expect(codewordLength(650)).toBe(2);
+    expect(codewordLength(651)).toBe(3);
+    expect(codewordLength(20000)).toBe(3);
+  });
+});
+
 describe('assignCodewords', () => {
-  it('badges every row with a two-word pair (uniform length = chop safety)', () => {
+  it('26 rows or fewer → uniform singles (no multi-word keys, chop impossible)', () => {
+    const m = assignCodewords(ids(26), ALPHABET);
+    expect(m.size).toBe(26);
+    expectUniform(m, 1);
+    expect(m.get('row:0')).toBe('arch');
+    expect(m.get('row:25')).toBe('zone');
+  });
+
+  it('27–650 rows → uniform pairs', () => {
     const m = assignCodewords(ids(40), ALPHABET);
     expect(m.size).toBe(40);
-    for (const cw of m.values()) {
-      const words = cw.split(' ');
-      expect(words.length).toBe(2);
-      expect(ALPHABET).toContain(words[0]);
-      expect(ALPHABET).toContain(words[1]);
-      expect(words[0]).not.toBe(words[1]); // no doubled pairs
-    }
+    expectUniform(m, 2);
     expect(m.get('row:0')).toBe('arch bolt');
   });
 
-  it('no key is a prefix of another (a chopped pair matches nothing)', () => {
-    const m = assignCodewords(ids(maxVoiceRows()), ALPHABET);
-    const keys = new Set(m.values());
-    for (const cw of keys) {
-      const [first] = cw.split(' ');
-      expect(keys.has(first), `bare "${first}" must not be a key`).toBe(false);
+  it('above 650 rows → uniform triples', () => {
+    const m = assignCodewords(ids(700), ALPHABET);
+    expect(m.size).toBe(700);
+    expectUniform(m, 3);
+    expect(m.get('row:0')).toBe('arch bolt crane');
+  });
+
+  it('no key is a prefix of another (uniform length in every tier = chop safety)', () => {
+    for (const n of [26, 650, 800]) {
+      const keys = [...assignCodewords(ids(n), ALPHABET).values()];
+      const keySet = new Set(keys);
+      for (const cw of keys) {
+        const words = cw.split(' ');
+        for (let cut = 1; cut < words.length; cut++) {
+          const chopped = words.slice(0, cut).join(' ');
+          expect(keySet.has(chopped), `chopped "${chopped}" of "${cw}" must not be a key`).toBe(false);
+        }
+      }
     }
   });
 
-  it('caps at 650 pairs (26×25) — no triples ever needed', () => {
-    expect(maxVoiceRows()).toBe(650);
+  it('caps at 15600 triples (26×25×24) — the rest go unbadged', () => {
+    expect(maxVoiceRows()).toBe(15600);
     const m = assignCodewords(ids(maxVoiceRows() + 10), ALPHABET);
     expect(m.size).toBe(maxVoiceRows());
     expect(new Set(m.values()).size).toBe(m.size); // all unique
+    expect(m.has(`row:${maxVoiceRows()}`)).toBe(false);
   });
 
   it('is deterministic for a given row order', () => {
@@ -81,6 +120,7 @@ describe('codewordDisplay', () => {
   it('letter mode shows the letter(s)', () => {
     expect(codewordDisplay('arch', ALPHABET, 'letter')).toBe('a');
     expect(codewordDisplay('ocean pearl', ALPHABET, 'letter')).toBe('op');
+    expect(codewordDisplay('ocean pearl quill', ALPHABET, 'letter')).toBe('opq');
   });
 
   it('word mode shows the spoken form', () => {
@@ -88,8 +128,9 @@ describe('codewordDisplay', () => {
     expect(codewordDisplay('ocean pearl', ALPHABET, 'word')).toBe('ocean pearl');
   });
 
-  it('expand mode shows word for singles, word+letter for pairs', () => {
+  it('expand mode shows word for singles, word + tail letters otherwise', () => {
     expect(codewordDisplay('arch', ALPHABET, 'expand')).toBe('arch');
     expect(codewordDisplay('ocean pearl', ALPHABET, 'expand')).toBe('ocean p');
+    expect(codewordDisplay('ocean pearl quill', ALPHABET, 'expand')).toBe('ocean pq');
   });
 });
