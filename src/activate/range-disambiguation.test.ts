@@ -4,15 +4,20 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const claimed: string[][] = [];
 const released: string[][] = [];
 let nextClaim: string[] = [];
+// `nextClaim` IS the pool: claim consumes from the front, release returns to
+// the front (the real reservoir's sticky-reclaim semantics). Modelling that
+// rather than handing out the same codewords forever is what lets the rolling
+// viewport-window tests assert that scrolling RECYCLES codewords instead of
+// draining the pool.
 vi.mock('../labels/label-reservoir', () => ({
   labelReservoir: {
     claim: (count: number) => {
-      const grant = nextClaim.slice(0, count);
+      const grant = nextClaim.splice(0, count);
       while (grant.length < count) grant.push('');
       claimed.push(grant.filter(l => l !== ''));
       return grant;
     },
-    release: (labels: string[]) => { released.push(labels); },
+    release: (labels: string[]) => { released.push(labels); nextClaim.unshift(...labels); },
   },
 }));
 
@@ -97,7 +102,7 @@ const pickWindowPosts: string[][] = [];
 import { RANGE_PICK_VARIANT } from '../render/badge-variant';
 import {
   startRangePick, resolveRangePick, cancelRangePick, isRangePickPending,
-  filterRangePickChips, MAX_RANGE_BADGES,
+  filterRangePickChips, reconcileRangePickChips, MAX_RANGE_BADGES,
 } from './range-disambiguation';
 
 function makeRange(text = 'x'): Range {
@@ -242,6 +247,114 @@ describe('range-disambiguation pick', () => {
       await Promise.resolve();
       expect(chipCount()).toBe(2);
     } finally { restore(); }
+  });
+
+  // --- Rolling viewport window (reconcileRangePickChips) --------------------
+  // Membership, not positioning: the badge seam made a chip FOLLOW its phrase,
+  // but a match below the fold at arm time had no codeword at all, so scrolling
+  // to it showed nothing. `visibleTexts` is the viewport — reassigning it is a
+  // scroll.
+  function withScrollableRects(initial: string[]): {
+    scrollTo(texts: string[]): void; restore(): void;
+  } {
+    let visibleTexts = new Set(initial);
+    const original = Range.prototype.getBoundingClientRect;
+    Range.prototype.getBoundingClientRect = function (this: Range): DOMRect {
+      return (visibleTexts.has(this.toString())
+        ? { top: 10, bottom: 30, left: 10, right: 60, width: 50, height: 20 }
+        : { top: -80, bottom: -60, left: 10, right: 60, width: 50, height: 20 }
+      ) as DOMRect;
+    };
+    return {
+      scrollTo: (texts) => { visibleTexts = new Set(texts); },
+      restore: () => { Range.prototype.getBoundingClientRect = original; },
+    };
+  }
+
+  it('scrolling gives the newly-visible matches their own chips', async () => {
+    const view = withScrollableRects(['one', 'two']);
+    try {
+      const picks: Range[] = [];
+      const ranges = ['one', 'two', 'three', 'four'].map(makeRange);
+      startRangePick(ranges, (r) => picks.push(r));
+      await Promise.resolve();
+      expect(chipCount()).toBe(2);
+      expect(isRangePickPending('alpha')).toBe(true);
+
+      view.scrollTo(['three', 'four']);
+      reconcileRangePickChips();
+      await Promise.resolve();
+
+      // Two chips again — for the matches now on screen, not the old ones.
+      expect(chipCount()).toBe(2);
+      // The departed codewords were RECYCLED onto the arrivals rather than
+      // drawn fresh, so 'alpha' still resolves — but to the new range.
+      expect(released.flat().sort()).toEqual(['alpha', 'bravo']);
+      expect(publishedRecords.map(r => r.codeword)).toEqual(
+        ['alpha', 'bravo', 'alpha', 'bravo']);
+      expect(resolveRangePick('alpha')).toBe(true);
+      expect(picks[0].toString()).toBe('three');
+    } finally { view.restore(); }
+  });
+
+  it('a match that stays in view keeps its codeword', async () => {
+    const view = withScrollableRects(['one', 'two']);
+    try {
+      startRangePick(['one', 'two', 'three'].map(makeRange), () => {});
+      await Promise.resolve();
+      // 'two' is bravo; it stays on screen across the scroll.
+      expect(isRangePickPending('bravo')).toBe(true);
+
+      view.scrollTo(['two', 'three']);
+      reconcileRangePickChips();
+      await Promise.resolve();
+
+      // Renaming a chip the user is mid-way through reading is the thing to
+      // avoid — 'two' keeps bravo, and only the departed 'one' was released.
+      expect(isRangePickPending('bravo')).toBe(true);
+      expect(released.flat()).toEqual(['alpha']);
+      expect(chipCount()).toBe(2);
+    } finally { view.restore(); }
+  });
+
+  it('scrolling past every match keeps the chips rather than emptying the pick', async () => {
+    const view = withScrollableRects(['one', 'two']);
+    try {
+      startRangePick(['one', 'two'].map(makeRange), () => {});
+      await Promise.resolve();
+
+      view.scrollTo([]); // nothing on screen
+      reconcileRangePickChips();
+      await Promise.resolve();
+
+      // Going to zero would leave a live pick that swallows every codeword with
+      // nothing on screen to say why. Scrolling back restores them anyway.
+      expect(chipCount()).toBe(2);
+      expect(isRangePickPending('alpha')).toBe(true);
+      expect(released.flat()).toEqual([]);
+    } finally { view.restore(); }
+  });
+
+  it('a settled scroll that changes nothing is a no-op', async () => {
+    const view = withScrollableRects(['one', 'two']);
+    try {
+      startRangePick(['one', 'two'].map(makeRange), () => {});
+      await Promise.resolve();
+      const postsAtArm = pickWindowPosts.length;
+      const publishedAtArm = publishedRecords.length;
+
+      reconcileRangePickChips();
+      await Promise.resolve();
+
+      expect(pickWindowPosts).toHaveLength(postsAtArm);
+      expect(publishedRecords).toHaveLength(publishedAtArm);
+      expect(chipCount()).toBe(2);
+    } finally { view.restore(); }
+  });
+
+  it('reconciling with no pick pending does nothing', () => {
+    expect(() => reconcileRangePickChips()).not.toThrow();
+    expect(chipCount()).toBe(0);
   });
 
   it('arms the projection narrow with the admitted set, and releases on teardown', async () => {

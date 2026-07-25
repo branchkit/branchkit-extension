@@ -60,10 +60,12 @@ function publishPickWindow(codewords: string[]): void {
  * by eye anyway; the toast tells the user to say more words. */
 export const MAX_RANGE_BADGES = 9;
 
-/** One chip: its badge, plus the label assignment the prefix filter tests
- *  against (kept rather than re-derived from the token on every progress
- *  event). */
+/** One chip: the range it answers for, its badge, and the label assignment the
+ *  prefix filter tests against (kept rather than re-derived from the token on
+ *  every progress event). Keyed by codeword in `PendingPick.chips` — one map,
+ *  not a codeword→range map beside a codeword→ui map. */
 interface Chip {
+  range: Range;
   badge: HintBadge;
   label: LabelAssignment;
 }
@@ -79,7 +81,10 @@ interface Chip {
  * and the refusal toast names the exit.
  */
 interface PendingPick {
-  byCodeword: Map<string, Range>;
+  /** EVERY match the query found, not just the badged ones. Membership is a
+   *  rolling viewport window over this list (reconcileRangePickChips), so the
+   *  full set has to outlive the arm. */
+  ranges: Range[];
   chips: Map<string, Chip>;
   onPick: (range: Range) => void;
   /** Regular badges were visible at pick start — restore them on teardown. */
@@ -134,7 +139,7 @@ function rangesInViewport(ranges: Range[]): Range[] {
 /** True when a pick is live (optionally: for this specific codeword). */
 export function isRangePickPending(codeword?: string): boolean {
   if (!pending) return false;
-  return codeword === undefined || pending.byCodeword.has(codeword);
+  return codeword === undefined || pending.chips.has(codeword);
 }
 
 /**
@@ -143,7 +148,7 @@ export function isRangePickPending(codeword?: string): boolean {
  */
 export function resolveRangePick(codeword: string): boolean {
   if (!pending) return false;
-  const range = pending.byCodeword.get(codeword);
+  const range = pending.chips.get(codeword)?.range;
   if (!range) return false;
   const onPick = pending.onPick;
   teardown('picked');
@@ -165,7 +170,7 @@ export function cancelRangePick(reason: string): void {
  * back.
  */
 export function refusePickWindowCodeword(action: string, codeword: string): boolean {
-  if (!pending || pending.byCodeword.has(codeword)) return false;
+  if (!pending || pending.chips.has(codeword)) return false;
   flashToast('Pick a highlighted match — or say "escape"');
   reportDispatchResult({
     action, codeword, resolution: 'range_pick', elem_tag: '',
@@ -218,22 +223,115 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
   // than dead-ending a command the user just spoke.
   const visible = rangesInViewport(ranges);
   const pool = visible.length > 0 ? visible : ranges;
-  const overflow = pool.length - MAX_RANGE_BADGES;
   const picked = pool.slice(0, MAX_RANGE_BADGES);
-  const codewords = labelReservoir.claim(picked.length).filter(cw => cw !== '');
-  if (codewords.length === 0) {
+  if (picked.length === 0) return;
+
+  // `pending` is set before the chips exist so addChips has somewhere to write;
+  // the badge-hiding hook runs only once at least one chip is real.
+  pending = { ranges, chips: new Map(), onPick, restoreBadges: false };
+  const added = addChips(picked);
+  if (added === 0) {
     // Pool dry or alphabet not loaded — fall back to today's behavior.
+    pending = null;
     bkLog('BK_RANGE_PICK_NO_LABELS', { ranges: picked.length });
     onPick(picked[0]);
     return;
   }
+  pending.restoreBadges = pickWindowHooks?.hideBadges() ?? false;
 
-  const byCodeword = new Map<string, Range>();
-  const chips = new Map<string, Chip>();
+  bkLog('BK_RANGE_PICK_START', {
+    matches: ranges.length, inView: visible.length, badged: added,
+  });
+  if (pool.length > MAX_RANGE_BADGES) {
+    // Name the scope so "9 of 105" doesn't read as an arbitrary truncation:
+    // the rest are off-screen, and scrolling brings them their own chips.
+    flashToast(visible.length > 0
+      ? `${pool.length} matches in view of ${ranges.length} — showing ${MAX_RANGE_BADGES}, scroll for the rest`
+      : `${ranges.length} matches, none in view — showing first ${MAX_RANGE_BADGES}`);
+  }
+}
+
+/**
+ * Re-derive WHICH matches wear a chip, as a rolling window over the viewport.
+ *
+ * Membership and positioning are separate questions and this is the membership
+ * half: the badge seam made a chip follow its phrase, but a match that was
+ * below the fold at arm time still had no codeword, so scrolling to it showed
+ * nothing (field report 2026-07-25, round 2). This is the same answer the hint
+ * badges give — band membership converges on the viewport — scaled down to
+ * nine chips and one imperative pass.
+ *
+ * Driven by the settle engine's existing `afterScrollSettle` hook (content.ts),
+ * so it adds no observer, timer or listener: it consumes a signal that already
+ * fires when a scroll storm ends.
+ *
+ * Codewords are STABLE for a match that stays in view — a chip you were reading
+ * doesn't get renamed under you. Departing codewords are released BEFORE the
+ * arrivals claim, so scrolling a long page recycles the same nine rather than
+ * draining the pool.
+ */
+export function reconcileRangePickChips(): void {
+  if (!pending) return;
+  const inView = rangesInViewport(pending.ranges);
+  // Nothing in view: keep what's painted. Going to zero would leave a pick
+  // that swallows every codeword (refusePickWindowCodeword) with nothing on
+  // screen to explain why — the exact wedge the no-timer decision rests on NOT
+  // being silent. Scrolling back restores the chips anyway.
+  if (inView.length === 0) return;
+
+  const inViewSet = new Set(inView);
+  const leaving = [...pending.chips].filter(([, c]) => !inViewSet.has(c.range));
+  const stayed = new Set([...pending.chips.values()]
+    .filter((c) => inViewSet.has(c.range)).map((c) => c.range));
+  const budget = MAX_RANGE_BADGES - (pending.chips.size - leaving.length);
+  const arriving = inView.filter((r) => !stayed.has(r)).slice(0, budget);
+  if (leaving.length === 0 && arriving.length === 0) return;
+
+  // Release first so the arrivals can reclaim the very codewords that just
+  // left (the reservoir returns them to the front).
+  if (leaving.length > 0) {
+    const gone = leaving.map(([cw]) => cw);
+    for (const [cw, chip] of leaving) {
+      chip.badge.remove();
+      pending.chips.delete(cw);
+    }
+    retireRecords(gone);
+    labelReservoir.release(gone);
+  }
+  const added = addChips(arriving);
+
+  if (pending.chips.size === 0) {
+    // Everything left the viewport and nothing could be claimed to replace it.
+    // Fail loud rather than leaving a live pick with no chips.
+    flashToast('Lost the highlighted matches — say "highlight" again');
+    teardown('reconcile_empty');
+    return;
+  }
+  bkLog('BK_RANGE_PICK_RECONCILE', {
+    inView: inView.length, left: leaving.length, added, live: pending.chips.size,
+  });
+  // An add republishes the narrow once its records land (addChips); a pure
+  // departure has no publish to ride, so shrink the narrow now.
+  if (added === 0) publishPickWindow([...pending.chips.keys()]);
+}
+
+/**
+ * Claim codewords for `ranges`, paint a chip on each, publish them for
+ * matching, and re-arm the projection narrow over the full live set. Returns
+ * how many chips were painted. Shared by the arm and the rolling window so
+ * there is one claim/paint/publish path, not two that must agree.
+ */
+function addChips(ranges: Range[]): number {
+  if (!pending || ranges.length === 0) return 0;
+  const codewords = labelReservoir.claim(ranges.length).filter((cw) => cw !== '');
+  if (codewords.length === 0) return 0;
+
+  const chips = pending.chips;
   const records: ScannedElement[] = [];
-  for (let i = 0; i < picked.length && i < codewords.length; i++) {
-    byCodeword.set(codewords[i], picked[i]);
-    chips.set(codewords[i], paintChip(picked[i], codewords[i]));
+  const minted: string[] = [];
+  for (let i = 0; i < ranges.length && i < codewords.length; i++) {
+    chips.set(codewords[i], paintChip(ranges[i], codewords[i]));
+    minted.push(codewords[i]);
     records.push({
       label: codewords[i],
       id: 0, // not in the element registry — codeword is the only address
@@ -245,45 +343,32 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
     });
   }
 
-  const restoreBadges = pickWindowHooks?.hideBadges() ?? false;
-  pending = { byCodeword, chips, onPick, restoreBadges };
-
   void publishRecords(records).then((admitted) => {
     // Rejected codewords (pool race, plugin refusal) can never be spoken —
     // drop their chips so a painted badge always implies a working pick.
-    if (!pending || pending.byCodeword !== byCodeword) return;
-    for (const [cw] of byCodeword) {
+    if (!pending || pending.chips !== chips) return;
+    for (const cw of minted) {
       if (!admitted.has(cw)) {
         chips.get(cw)?.badge.remove();
         chips.delete(cw);
-        byCodeword.delete(cw);
       }
     }
-    if (byCodeword.size === 0) {
+    if (chips.size === 0) {
       teardown('nothing_admitted');
       return;
     }
     // Arm the projection narrow only now, with the ADMITTED set: arming before
     // the publish lands would filter the chips out of the projection too (the
     // plugin hasn't stored them yet), blanking the HUD instead of narrowing it.
-    publishPickWindow([...byCodeword.keys()]);
+    publishPickWindow([...chips.keys()]);
   });
 
-  bkLog('BK_RANGE_PICK_START', {
-    matches: ranges.length, inView: visible.length, badged: byCodeword.size,
-  });
-  if (overflow > 0) {
-    // Name the scope so "9 of 105" doesn't read as an arbitrary truncation:
-    // the rest are off-screen, and scrolling then re-asking reaches them.
-    flashToast(visible.length > 0
-      ? `${pool.length} matches in view of ${ranges.length} — showing first ${MAX_RANGE_BADGES}, say more words to narrow`
-      : `${ranges.length} matches, none in view — showing first ${MAX_RANGE_BADGES}`);
-  }
+  return minted.length;
 }
 
 function teardown(reason: string): void {
   if (!pending) return;
-  const { byCodeword, chips, restoreBadges } = pending;
+  const { chips, restoreBadges } = pending;
   pending = null;
   for (const { badge } of chips.values()) badge.remove();
   if (restoreBadges) pickWindowHooks?.showBadges();
@@ -291,7 +376,7 @@ function teardown(reason: string): void {
   // debounced, so releasing first means the page's own hints are back in the
   // HUD immediately rather than after the next sync.
   publishPickWindow([]);
-  const codewords = [...byCodeword.keys()];
+  const codewords = [...chips.keys()];
   retireRecords(codewords);
   labelReservoir.release(codewords);
   bkLog('BK_RANGE_PICK_END', { reason, released: codewords.length });
@@ -316,5 +401,5 @@ function paintChip(range: Range, token: string): Chip {
   const badge = new HintBadge(target, label, getDisplayMode(), RANGE_PICK_VARIANT);
   badge.show();
   placeBadgeAtRect(badge, target.element, target.rect());
-  return { badge, label };
+  return { range, badge, label };
 }

@@ -58,7 +58,7 @@ import { getSiteKeyState, onSiteKeysChanged } from './keymap/keyboard-rules';
 import { copyText } from './activate/clipboard';
 import { flashToast } from './render/toast';
 import { registerSelectionCommands, restorePosition, caret, SELECTION_ACTIONS, parseSelectionCommand } from './activate/selection-commands';
-import { resolveRangePick, refusePickWindowCodeword, filterRangePickChips, setPickWindowHooks, cancelRangePick } from './activate/range-disambiguation';
+import { resolveRangePick, refusePickWindowCodeword, filterRangePickChips, setPickWindowHooks, cancelRangePick, reconcileRangePickChips } from './activate/range-disambiguation';
 import { runEscapeCascade } from './activate/escape-cascade';
 import './debug/dev-keepalive';
 import {
@@ -405,7 +405,13 @@ const engine = new SettleEngine(
   {
     showBadges: () => showBadges(),
     notePaintSamplerScroll: () => notePaintSamplerScroll(),
-    afterScrollSettle: () => flushDeferredNavRescan(),
+    afterScrollSettle: () => {
+      flushDeferredNavRescan();
+      // Roll the range-pick chips onto whatever the scroll brought into view.
+      // Riding this hook rather than a scroll listener of its own keeps the
+      // sensing freeze intact — no-op when no pick is live.
+      reconcileRangePickChips();
+    },
   },
 );
 // Source modules (mutation-source, visibility-tracker) reach settle
