@@ -33,7 +33,7 @@ import {
 import {
   forwardDispatchResult, forwardDebugLog, forwardPerfReport, forwardPluginDebugLog,
   forwardHintsSessionEnd, forwardHintsSessionStart, postGrammarBatch, transportFailure,
-  postFocus, postActiveTab, assertFocusIfFocused, setCaretActive, setFindActive,
+  postFocus, postActiveTab, assertFocusIfFocused, setCaretActive, setFindActive, setRangePick,
 } from './plugin/plugin-api';
 import { saveReferenceToCollection, pushReferenceNames, hydrateReferencesFromCollection } from './background/references';
 import { handleDebugSnapshot } from './background/debug-snapshot';
@@ -473,6 +473,19 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
 
   if (message.type === 'CARET_ACTIVE' || message.type === 'FIND_ACTIVE') {
     void (message.type === 'CARET_ACTIVE' ? setCaretActive : setFindActive)(message.active);
+    return false;
+  }
+
+  if (message.type === 'RANGE_PICK') {
+    // Content scripts don't know their own tab id — only the SW does — and the
+    // plugin scopes the hint-projection narrow to (conn, tab) so a background
+    // tab keeps projecting its full hint set. A release (empty codewords) with
+    // no tab id is still worth sending: the plugin honors releases from any
+    // source, and the tab id is only read on arm.
+    const tabId = _sender.tab?.id;
+    if (typeof tabId === 'number' || message.codewords.length === 0) {
+      void setRangePick(tabId ?? 0, message.codewords);
+    }
     return false;
   }
 

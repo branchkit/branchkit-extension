@@ -188,7 +188,14 @@ export async function publishRecords(records: ScannedElement[]): Promise<Set<str
   const resp = await postBatch({
     session_id: sid,
     batch_index: 0,
-    is_final: true,
+    // NOT final: is_final closes a session rotation's inheritance window
+    // plugin-side (batch.go commitBatchElements), dropping every codeword the
+    // rebuild hasn't re-confirmed yet. A chip publish is an incremental add to
+    // a session it didn't rotate, so claiming finality over it would settle
+    // someone else's rebuild early and delete the page's live hints. The
+    // rotating scan path owns that flag; the stale-session TTL sweep remains
+    // the backstop for a rotation whose real final batch never arrives.
+    is_final: false,
     kind: 'incremental',
     conn_id: '', // stamped by the background SW
     hint_visibility: getHintVisibility(),

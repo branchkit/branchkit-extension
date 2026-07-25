@@ -245,6 +245,12 @@ export type Message =
   // background POSTs /caret so the plugin holds the exclusive caret tag while
   // active, gating the voice selection commands. See DESIGN_HINT_ACTION_MODES.md.
   | { type: 'CARET_ACTIVE'; active: boolean }
+  // Content → background: a "highlight" disambiguation pick armed (codewords
+  // non-empty) or released (empty). The background stamps tab_id and POSTs
+  // /range-pick so the plugin narrows the hint projection to exactly these
+  // chips — otherwise the Discovery HUD keeps advertising the whole page's
+  // codewords while the content script refuses every one of them.
+  | { type: 'RANGE_PICK'; codewords: string[] }
   // Content → background. Find-session state (bar open OR committed
   // highlights); background POSTs /find so the plugin holds the non-exclusive
   // find tag, gating voice "next"/"previous" to live find sessions.

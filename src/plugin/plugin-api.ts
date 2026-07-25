@@ -185,6 +185,25 @@ export async function setCaretActive(active: boolean): Promise<void> {
   await postToPlugin('/caret', { conn_id: connId, active });
 }
 
+// Range-pick chip window: reflect the pending disambiguation pick so the plugin
+// projects ONLY these codewords into this tab's hint collections. An empty list
+// releases. Best-effort — the plugin's drains (SSE disconnect, tab close) cover
+// a release that never lands. See activate/range-disambiguation.ts.
+//
+// Same outbound overlay translation as the grammar batch above, and for the same
+// reason: the content script arms in letter tokens ("f s") but the plugin's hint
+// collections are keyed by spoken codewords ("look echo"). Untranslated, the
+// plugin's membership check compared the two alphabets and never matched, so the
+// narrow silently did nothing (field bug 2026-07-25).
+export async function setRangePick(tabId: number, codewords: string[]): Promise<void> {
+  if (!(await ensureConnected())) return;
+  await postToPlugin('/range-pick', {
+    conn_id: connId,
+    tab_id: tabId,
+    codewords: codewords.map(tokenToSpokenCodeword),
+  });
+}
+
 // Find voice gating: reflect the content script's find session (bar open OR
 // committed highlights — it outlives the bar and survives blur) so the plugin
 // holds the non-exclusive find tag, gating voice "next"/"previous" to live

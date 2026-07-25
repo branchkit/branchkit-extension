@@ -123,6 +123,34 @@ describe('postGrammarBatch', () => {
     expect(resp.succeeded).toEqual(['c']);
   });
 
+  // Field bug 2026-07-25: the chip window armed in letter tokens while the
+  // plugin's hint collections are keyed by spoken codewords, so the plugin's
+  // membership check compared two alphabets and the narrow silently never
+  // applied. The arm must cross the same translation boundary as the grammar.
+  it('translates range-pick codewords to spoken form at the plugin boundary', async () => {
+    // Seed AFTER loadApi: it calls vi.resetModules(), so the alphabet has to be
+    // set on the same module instance plugin-api resolved.
+    const api = await loadApi();
+    const { setAlphabet } = await import('../labels/words');
+    const letters = 'abcdefghijklmnopqrstuvwxyz'.split('');
+    setAlphabet(letters.map(l => `${l}word`));
+
+    await api.setRangePick(42, ['f s', 'h h']);
+
+    const [endpoint, body] = postToPlugin.mock.calls[0];
+    expect(endpoint).toBe('/range-pick');
+    expect(body.tab_id).toBe(42);
+    expect(body.codewords).toEqual(['fword sword', 'hword hword']);
+  });
+
+  it('sends the range-pick release through unchanged', async () => {
+    const api = await loadApi();
+    await api.setRangePick(42, []);
+    const [endpoint, body] = postToPlugin.mock.calls[0];
+    expect(endpoint).toBe('/range-pick');
+    expect(body.codewords).toEqual([]);
+  });
+
   it('maps an unparseable response to the transport-failure shape', async () => {
     postToPlugin.mockResolvedValue({ ok: true, json: async () => { throw new Error('bad'); } });
     const api = await loadApi();
