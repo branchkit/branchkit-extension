@@ -95,23 +95,25 @@ interface PaletteBootstrap {
 }
 
 async function loadBootstrap(): Promise<PaletteBootstrap> {
-  try {
-    const resp = (await chrome.runtime.sendMessage({ type: 'PALETTE_BOOTSTRAP' } as Message)) as
-      | { tabs?: Array<{ tabId: number; title: string; url: string }>; mru?: number[]; marks?: MarkerMap; activeTabId?: number | null }
-      | undefined;
-    return {
-      tabs: (resp?.tabs ?? []).map((t) => ({
-        // Strip the marker decoration from titles — the mark shows as the
-        // row's badge, not baked into the title text.
-        tabId: t.tabId, title: stripTabMarker(t.title), url: t.url,
-      })),
-      mru: resp?.mru ?? [],
-      marks: resp?.marks ?? {},
-      activeTabId: resp?.activeTabId ?? null,
-    };
-  } catch {
-    return { tabs: [], mru: [], marks: {}, activeTabId: null };
-  }
+  // Failures propagate to init's catch and render in the overlay — a
+  // swallowed error here looks identical to "you have no tabs", which cost
+  // a field round-trip (Firefox, 2026-07-25). No response at all = the
+  // background didn't answer (dead SW, or messaging can't cross this
+  // boundary) — name it rather than degrade silently.
+  const resp = (await chrome.runtime.sendMessage({ type: 'PALETTE_BOOTSTRAP' } as Message)) as
+    | { tabs?: Array<{ tabId: number; title: string; url: string }>; mru?: number[]; marks?: MarkerMap; activeTabId?: number | null }
+    | undefined;
+  if (!resp) throw new Error('PALETTE_BOOTSTRAP got no response from the background');
+  return {
+    tabs: (resp.tabs ?? []).map((t) => ({
+      // Strip the marker decoration from titles — the mark shows as the
+      // row's badge, not baked into the title text.
+      tabId: t.tabId, title: stripTabMarker(t.title), url: t.url,
+    })),
+    mru: resp.mru ?? [],
+    marks: resp.marks ?? {},
+    activeTabId: resp.activeTabId ?? null,
+  };
 }
 
 function el(tag: string, cls?: string, text?: string): HTMLElement {
