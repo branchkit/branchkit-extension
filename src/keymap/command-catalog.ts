@@ -52,7 +52,7 @@ export interface VoicePattern {
    * "select to" extends, default-gated "highlight" enters). Same semantics
    * as CommandMeta.voiceContext.
    */
-  context?: 'palette' | 'caret' | 'video';
+  context?: 'palette' | 'caret' | 'video' | 'find';
   /**
    * Per-pattern override of the command's description — the HUD subtitle /
    * calibration text for THIS spoken form when one command's phrases mean
@@ -121,7 +121,7 @@ export interface CommandMeta {
    * plugin's default app-active gate. A semantic, not a tag name — tags stay
    * plugin-owned, same contract as retainsHints.
    */
-  voiceContext?: 'palette' | 'caret' | 'video';
+  voiceContext?: 'palette' | 'caret' | 'video' | 'find';
   /**
    * Display-only keyboard hint for keys OWNED BY A MODE HANDLER (not the command
    * registry) — e.g. caret-mode `y`/`o`/`aw`. Shown in the `?` help's keys column
@@ -249,12 +249,16 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   { id: 'find_close', label: 'Close find', group: 'Find', mappable: true, params: [], keyHint: 'Esc',
     description: 'Close find and clear the match highlights.',
     voice: [{ pattern: 'close find' }] },
+  // Gated on the find session (bar open OR committed highlights): bare
+  // "next"/"previous" are only meaningful mid-find, and ungated they were a
+  // mishear magnet and a fluid prefix of "next tab"/"next page"
+  // (terminal-command rule). Keyboard n/N unaffected.
   { id: 'find_next', label: 'Find next', group: 'Find', mappable: true, params: [],
     description: 'Jump to the next find match.',
-    voice: [{ pattern: 'next' }] },
+    voice: [{ pattern: 'next' }], voiceContext: 'find' },
   { id: 'find_previous', label: 'Find previous', group: 'Find', mappable: true, params: [],
     description: 'Jump to the previous find match.',
-    voice: [{ pattern: 'previous' }] },
+    voice: [{ pattern: 'previous' }], voiceContext: 'find' },
   // "search" rides the platform's dictated-argument path (the closed command
   // engine can only hear union words, so "find {text}" never did real
   // find-in-page): the verb arms + opens the find box as the cue, the next
@@ -626,14 +630,18 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // The *_all forms fan out to every AUDIBLE tab from the service worker
   // (no content-dispatcher registration — like switch_to_tab). Asymmetric
   // on purpose: pause/mute have a "shut up, all of it" intent; there is no
-  // "faster everything".
-  { id: 'media_pause_all', label: 'Pause everything', group: 'Media', mappable: false, params: [],
+  // "faster everything". Spoken forms deliberately do NOT start with
+  // "pause"/"mute" (was "pause everything"/"mute everything", renamed
+  // 2026-07-25): those made the single-video verbs fluid prefixes of a
+  // distinct behavior (terminal-command rule), and "stop"/"silence" are just
+  // as TV-guessable.
+  { id: 'media_pause_all', label: 'Stop everything', group: 'Media', mappable: false, params: [],
     description: 'Pause every tab that\'s currently making sound.',
-    voice: [{ pattern: 'pause everything' }],
+    voice: [{ pattern: 'stop everything' }],
     voiceContext: 'video' },
-  { id: 'media_mute_all', label: 'Mute everything', group: 'Media', mappable: false, params: [],
+  { id: 'media_mute_all', label: 'Silence everything', group: 'Media', mappable: false, params: [],
     description: 'Mute every tab that\'s currently making sound.',
-    voice: [{ pattern: 'mute everything' }],
+    voice: [{ pattern: 'silence everything' }],
     voiceContext: 'video' },
 
   // --- Help ---

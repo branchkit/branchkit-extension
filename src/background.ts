@@ -33,7 +33,7 @@ import {
 import {
   forwardDispatchResult, forwardDebugLog, forwardPerfReport, forwardPluginDebugLog,
   forwardHintsSessionEnd, forwardHintsSessionStart, postGrammarBatch, transportFailure,
-  postFocus, postActiveTab, assertFocusIfFocused, setCaretActive,
+  postFocus, postActiveTab, assertFocusIfFocused, setCaretActive, setFindActive,
 } from './plugin/plugin-api';
 import { saveReferenceToCollection, pushReferenceNames, hydrateReferencesFromCollection } from './background/references';
 import { handleDebugSnapshot } from './background/debug-snapshot';
@@ -461,8 +461,8 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     return true; // async sendResponse
   }
 
-  if (message.type === 'CARET_ACTIVE') {
-    void setCaretActive(message.active);
+  if (message.type === 'CARET_ACTIVE' || message.type === 'FIND_ACTIVE') {
+    void (message.type === 'CARET_ACTIVE' ? setCaretActive : setFindActive)(message.active);
     return false;
   }
 

@@ -245,6 +245,10 @@ export type Message =
   // background POSTs /caret so the plugin holds the exclusive caret tag while
   // active, gating the voice selection commands. See DESIGN_HINT_ACTION_MODES.md.
   | { type: 'CARET_ACTIVE'; active: boolean }
+  // Content → background. Find-session state (bar open OR committed
+  // highlights); background POSTs /find so the plugin holds the non-exclusive
+  // find tag, gating voice "next"/"previous" to live find sessions.
+  | { type: 'FIND_ACTIVE'; active: boolean }
   // Options → background. The keymap editor renders voice phrases from its own
   // catalog now; it only asks whether BranchKit is connected so it can show the
   // not-connected note. Response: { connected: boolean }.

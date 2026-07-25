@@ -185,6 +185,15 @@ export async function setCaretActive(active: boolean): Promise<void> {
   await postToPlugin('/caret', { conn_id: connId, active });
 }
 
+// Find voice gating: reflect the content script's find session (bar open OR
+// committed highlights — it outlives the bar and survives blur) so the plugin
+// holds the non-exclusive find tag, gating voice "next"/"previous" to live
+// find sessions. Idempotent plugin-side; redundant posts are harmless.
+export async function setFindActive(active: boolean): Promise<void> {
+  if (!(await ensureConnected())) return;
+  await postToPlugin('/find', { conn_id: connId, active });
+}
+
 // Tell the plugin this browser's connection just gained (or lost) OS focus.
 // The plugin binds connId to the OS-focused bundle on a focused:true claim;
 // identity comes from the OS, this only says "which connection is focused now."

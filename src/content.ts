@@ -447,8 +447,17 @@ function onTrackerCodewordsChanged(claimed: ElementWrapper[], released: string[]
 // than total observation overhead.)
 
 setFindCallbacks({
-  onActivate: () => { hideBadges(); },
-  onDeactivate: () => { resetCycleTarget(); },
+  // FIND_ACTIVE mirrors the session to the plugin's find tag (voice
+  // "next"/"previous" gate). Fires on every activate call — redundant posts
+  // are idempotent plugin-side.
+  onActivate: () => {
+    hideBadges();
+    chrome.runtime.sendMessage({ type: 'FIND_ACTIVE', active: true } as Message).catch(() => {});
+  },
+  onDeactivate: () => {
+    resetCycleTarget();
+    chrome.runtime.sendMessage({ type: 'FIND_ACTIVE', active: false } as Message).catch(() => {});
+  },
   // When a search commits while caret/visual selection is active, extend the
   // selection straight to the match — so "/ query Enter" is a find-and-select,
   // no need to press `n` (which skips to the next match). `caret` is defined
