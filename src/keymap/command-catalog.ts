@@ -675,11 +675,11 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     description: 'Browse and search every command in the palette overlay.',
     voice: [{ pattern: 'palette commands' }] },
   // The bookmark source alone (scope-only: bookmarks would bloat the full
-  // launcher). Selection opens in a new focused tab — the palette can't open
-  // on the browser's native new-tab page (no content script), so "in place"
-  // has no natural home, and a pick should never eat the page you were on.
+  // launcher). Selection navigates the current tab — a bookmark picker is a
+  // "go there" surface, like typing in the address bar; the blank/stash
+  // variants below are the deliberate ways to keep the page you were on.
   { id: 'toggle_bookmark_palette', label: 'Bookmark palette', group: 'Palette', mappable: true, params: [],
-    description: 'Open a bookmark — search by title, site, or folder; opens in a new tab.',
+    description: 'Open a bookmark in this tab — search by title, site, or folder. “blank”/“stash” + badge opens a new tab instead.',
     voice: [{ pattern: 'palette bookmarks' }] },
   // Palette voice selection (voice half of Layer 2): every palette row shows
   // an alphabet codeword badge; the spoken codeword resolves to the row_id
@@ -691,6 +691,19 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   { id: 'palette_select', label: 'Select palette row', group: 'Palette', mappable: false, params: [],
     description: 'Activate a palette row by speaking its codeword badge.',
     voice: [{ pattern: '{browser_palette}', params: { row_id: '{browser_palette}' } }],
+    voiceContext: 'palette' },
+  // blank / stash + badge — the same verbs as the hint twins
+  // (activate_hint_newtab/_background), for palette rows: bare selection
+  // navigates the current tab, these open a new focused / background tab
+  // instead. Rows that aren't links (tabs, commands) ignore the modifier
+  // and dispatch normally.
+  { id: 'palette_select_newtab', label: 'Open palette row in new tab', group: 'Palette', mappable: false, params: [],
+    description: 'Open a palette bookmark in a new focused tab (“blank” + its badge).',
+    voice: [{ pattern: 'blank {browser_palette}', params: { row_id: '{browser_palette}' } }],
+    voiceContext: 'palette' },
+  { id: 'palette_select_background', label: 'Open palette row in background tab', group: 'Palette', mappable: false, params: [],
+    description: 'Open a palette bookmark in a background tab — the page you are on keeps focus (“stash” + its badge).',
+    voice: [{ pattern: 'stash {browser_palette}', params: { row_id: '{browser_palette}' } }],
     voiceContext: 'palette' },
   // Same word as hint-hide, disambiguated by context: palette open = only
   // this one is eligible (exclusive tag); palette closed = only the hint one.

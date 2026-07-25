@@ -99,6 +99,14 @@
     .empty { color: #8b949e; font-size: 12px; padding: 14px; }
     /* Voice-badge overflow note (rows past the codeword tier's capacity). */
     .overflow { color: #8b949e; font-size: 11px; font-style: italic; padding: 6px 14px 2px; }
+    /* Sticky helper footer (bookmarks scope): sits below the scrolling #list,
+       so it needs no position tricks — the panel column keeps it pinned. */
+    #footer {
+      display: flex; gap: 14px; align-items: baseline;
+      border-top: 1px solid #30363d;
+      padding: 6px 14px; font-size: 11px; color: #8b949e; white-space: nowrap;
+    }
+    #footer[hidden] { display: none; }
   </style>
 </head>
 <body>
@@ -110,6 +118,7 @@
            script never executed (blocked/failed load) — distinct from an
            init() error, which renders its own message here. -->
       <div id="list"><div class="empty" id="boot-probe">Palette script did not run — reload the extension, or check the palette frame console.</div></div>
+      <div id="footer" hidden></div>
     </div>
   </div>
   <script src="palette.js"></script>

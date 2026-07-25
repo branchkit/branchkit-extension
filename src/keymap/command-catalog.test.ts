@@ -36,6 +36,8 @@ const REGISTERED_ACTIONS = [
 // itself is the keyboard form).
 const VOICE_ONLY_BACKGROUND = [
   'switch_to_tab', 'palette_select', 'palette_dismiss',
+  // blank/stash + badge — bookmark rows land in a new focused/background tab.
+  'palette_select_newtab', 'palette_select_background',
   // Media fan-out verbs — the SW iterates audible tabs; no single-tab
   // content dispatch exists.
   'media_pause_all', 'media_mute_all',

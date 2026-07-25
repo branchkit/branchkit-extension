@@ -447,6 +447,35 @@ function assignAndPublish(alphabet: string[]): void {
   chrome.runtime.sendMessage({ type: 'PALETTE_PUBLISH', entries, rows } as Message).catch(() => {});
 }
 
+/**
+ * Sticky footer for the bookmarks palette: teaches the open dispositions
+ * (Enter/badge navigates this tab; "blank"/"stash" + badge = new focused /
+ * background tab — the hint verbs). Voice-gated: the verbs are spoken
+ * commands, so a voiceless palette would advertise phrases nothing hears.
+ */
+function showBookmarkFooter(): void {
+  const footer = document.getElementById('footer');
+  if (!footer) return;
+  const spoken = (phrase: string, what: string): HTMLElement => {
+    const wrap = el('span');
+    const say = el('span', 'say');
+    say.appendChild(micGlyph());
+    say.appendChild(document.createTextNode(`“${phrase}”`));
+    wrap.appendChild(say);
+    wrap.appendChild(document.createTextNode(` ${what}`));
+    return wrap;
+  };
+  const enter = el('span');
+  enter.appendChild(el('kbd', undefined, '⏎'));
+  enter.appendChild(document.createTextNode(' opens here'));
+  footer.append(
+    enter,
+    spoken('blank ⟨badge⟩', 'new tab'),
+    spoken('stash ⟨badge⟩', 'background tab'),
+  );
+  footer.hidden = false;
+}
+
 async function init(): Promise<void> {
   queryInput.focus();
   const [boot, keymap, stored, sync, overridesResp, aliasesResp] = await Promise.all([
@@ -477,6 +506,7 @@ async function init(): Promise<void> {
   bookmarksError = boot.bookmarksError;
   const alphabet = Array.isArray(stored.alphabet) ? (stored.alphabet as string[]) : [];
   assignAndPublish(alphabet);
+  if (scope === 'bookmarks' && codewords.size > 0) showBookmarkFooter();
   // Tab palette opens in letter mode when marks exist (the fast path); with no
   // marks (feature off / pool empty) fall back to fuzzy so the palette is still
   // usable. Full palette is always fuzzy.

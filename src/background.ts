@@ -241,6 +241,16 @@ function handleSSEEvent(data: any): void {
     handlePaletteVoiceSelect(data.params?.row_id);
     return;
   }
+  // "blank"/"stash" + badge: same resolution, different landing spot for
+  // bookmark rows (new focused / background tab instead of the origin tab).
+  if (data.action === 'palette_select_newtab') {
+    handlePaletteVoiceSelect(data.params?.row_id, 'blank');
+    return;
+  }
+  if (data.action === 'palette_select_background') {
+    handlePaletteVoiceSelect(data.params?.row_id, 'stash');
+    return;
+  }
   if (data.action === 'palette_dismiss') {
     handlePaletteVoiceDismiss();
     return;

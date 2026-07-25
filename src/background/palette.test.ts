@@ -33,6 +33,7 @@ beforeEach(() => {
       sendMessage: vi.fn(async (tabId: number, msg: { type: string }) => { sentMessages.push({ tabId, msg }); }),
       get: vi.fn(async (id: number) => ({ id, windowId: 10 })),
       update: vi.fn(async () => ({})),
+      create: vi.fn(async () => ({})),
     },
     windows: { update: vi.fn(async () => ({})) },
   });
@@ -50,6 +51,7 @@ async function flush(): Promise<void> {
 const rows = [
   { row_id: 'r1', dispatch: { kind: 'command', command: 'scroll_down' } },
   { row_id: 'r2', dispatch: { kind: 'switch_tab', tabId: 42 } },
+  { row_id: 'bm1', dispatch: { kind: 'open_bookmark', url: 'https://example.com/' } },
 ] as never[];
 
 describe('voice select', () => {
@@ -77,6 +79,43 @@ describe('voice select', () => {
     palette.handlePaletteVoiceDismiss();
     await flush();
     expect(sentMessages).toHaveLength(0);
+  });
+});
+
+describe('open_bookmark dispositions', () => {
+  it('default navigates the origin tab in place', async () => {
+    const palette = await loadPalette();
+    await palette.publishPaletteVoice(5, [], rows);
+    palette.handlePaletteVoiceSelect('bm1');
+    await flush();
+    expect(chrome.tabs.update).toHaveBeenCalledWith(5, { url: 'https://example.com/' });
+    expect(chrome.tabs.create).not.toHaveBeenCalled();
+  });
+
+  it('"blank" opens a new focused tab', async () => {
+    const palette = await loadPalette();
+    await palette.publishPaletteVoice(5, [], rows);
+    palette.handlePaletteVoiceSelect('bm1', 'blank');
+    await flush();
+    expect(chrome.tabs.create).toHaveBeenCalledWith({ url: 'https://example.com/', active: true });
+    expect(chrome.tabs.update).not.toHaveBeenCalled();
+  });
+
+  it('"stash" opens a background tab', async () => {
+    const palette = await loadPalette();
+    await palette.publishPaletteVoice(5, [], rows);
+    palette.handlePaletteVoiceSelect('bm1', 'stash');
+    await flush();
+    expect(chrome.tabs.create).toHaveBeenCalledWith({ url: 'https://example.com/', active: false });
+  });
+
+  it('falls back to a new tab when the origin tab is gone', async () => {
+    const palette = await loadPalette();
+    await palette.handlePaletteAction(
+      { kind: 'open_bookmark', url: 'https://example.com/' }, undefined,
+    );
+    expect(chrome.tabs.create).toHaveBeenCalledWith({ url: 'https://example.com/', active: true });
+    expect(chrome.tabs.update).not.toHaveBeenCalled();
   });
 });
 

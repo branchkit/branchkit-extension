@@ -103,6 +103,11 @@ export async function clearPaletteVoice(reason: string): Promise<void> {
   await postToPlugin('/palette', { conn_id: connId, entries: [] });
 }
 
+/** Where an open_bookmark dispatch lands: the origin tab itself (default),
+ *  a new focused tab ("blank"), or a new background tab ("stash") — the same
+ *  verbs as the hint twins. Non-bookmark rows ignore it. */
+export type OpenWhere = 'here' | 'blank' | 'stash';
+
 // Command palette selection (Layer 2). Always close the overlay in the origin
 // tab FIRST — a tab switch moves focus away and must not leave a dead palette
 // behind, and a command dispatch (e.g. focus_input) needs page focus restored
@@ -111,6 +116,7 @@ export async function clearPaletteVoice(reason: string): Promise<void> {
 export async function handlePaletteAction(
   action: PaletteDispatch | { kind: 'close' },
   originTabId: number | undefined,
+  where: OpenWhere = 'here',
 ): Promise<void> {
   // Direct teardown besides the content-side PALETTE_CLOSED signal: if the
   // content script is gone (catch below), the signal never fires, and the
@@ -125,10 +131,16 @@ export async function handlePaletteAction(
     // A stale id (tab closed while the palette was open) is a silent no-op.
     await focusWindowAndActivateTab(action.tabId);
   } else if (action.kind === 'open_bookmark') {
-    // New focused tab: picking a bookmark should never eat the page you were
-    // on (and the palette can't open on the browser's native new-tab page —
-    // no content script there — so "open in place" has no natural home).
-    await chrome.tabs.create({ url: action.url, active: true }).catch(() => {});
+    // In place by default: a bookmark picker is a "go there" surface, like
+    // typing in the address bar — the origin tab navigates. "blank"/"stash"
+    // open a new focused / background tab instead (spoken verbs; footer in
+    // the bookmarks palette teaches them). Origin gone (tab died mid-pick)
+    // falls back to a new tab rather than dropping the pick.
+    if (where === 'here' && typeof originTabId === 'number') {
+      await chrome.tabs.update(originTabId, { url: action.url }).catch(() => {});
+    } else {
+      await chrome.tabs.create({ url: action.url, active: where !== 'stash' }).catch(() => {});
+    }
   } else if (action.kind === 'command' && typeof originTabId === 'number') {
     // Through the content dispatcher in the top frame — the exact semantics
     // of pressing the command's keybind (tab verbs bounce back here as
@@ -147,11 +159,11 @@ export async function handlePaletteAction(
 // unknown row id (stale utterance racing a re-open) just closes the palette.
 // The matcher already cleared the exclusive tag (ClearsTags at match time);
 // handlePaletteAction's clearPaletteVoice drains the entries to match.
-export function handlePaletteVoiceSelect(rowId: string | undefined): void {
+export function handlePaletteVoiceSelect(rowId: string | undefined, where: OpenWhere = 'here'): void {
   const pv = paletteVoice;
   if (!pv) return;
   const dispatch = pv.rows.get(rowId ?? '');
-  void handlePaletteAction(dispatch ?? { kind: 'close' }, pv.tabId);
+  void handlePaletteAction(dispatch ?? { kind: 'close' }, pv.tabId, where);
 }
 
 export function handlePaletteVoiceDismiss(): void {
