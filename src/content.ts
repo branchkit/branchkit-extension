@@ -58,7 +58,7 @@ import { getSiteKeyState, onSiteKeysChanged } from './keyboard-rules';
 import { copyText } from './clipboard';
 import { flashToast } from './render/toast';
 import { registerSelectionCommands, restorePosition, caret, SELECTION_ACTIONS, parseSelectionCommand } from './activate/selection-commands';
-import { resolveRangePick } from './activate/range-disambiguation';
+import { resolveRangePick, refusePickWindowCodeword, setPickWindowHooks } from './activate/range-disambiguation';
 import { runEscapeCascade } from './activate/escape-cascade';
 import {
   CodewordSnapshot,
@@ -1080,6 +1080,17 @@ function setBadgesVisible(visible: boolean): boolean {
 }
 
 dispatcher.register('toggle_hints', () => { toggleHints(); });
+
+// Range-pick chip window: badges hide while chips are up (policy + restore
+// live in activate/range-disambiguation.ts; injected — visibility is ours).
+setPickWindowHooks({
+  hideBadges: () => {
+    const showing = pageSession.badgesVisible || store.all.some((w) => w.hint?.isVisible);
+    if (showing) hideBadges();
+    return showing;
+  },
+  showBadges: () => { void showBadges(); },
+});
 
 dispatcher.register('activate_hint', (params) => {
   const codeword = params.word2 ? `${params.word} ${params.word2}` : params.word;
@@ -2489,6 +2500,9 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         });
         return;
       }
+      // Chips own the codewords while a pick is pending (guard lives in
+      // activate/range-disambiguation.ts).
+      if (codeword && refusePickWindowCodeword(action, codeword)) return;
       const idParam = parseInt(params?.id ?? '0', 10);
       const frameIdParam = params?.frame_id != null ? parseInt(params.frame_id, 10) : -1;
 

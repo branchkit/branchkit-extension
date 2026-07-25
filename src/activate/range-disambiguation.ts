@@ -19,6 +19,7 @@ import { labelReservoir } from '../labels/label-reservoir';
 import { publishRecords, retireRecords } from '../labels/label-sync';
 import { flashToast } from '../render/toast';
 import { bkLog } from '../debug/bk-log';
+import { reportDispatchResult } from '../plugin/resolve';
 import type { ScannedElement } from '../types';
 
 /** Most matches we'll badge — beyond this the phrase is too generic to pick
@@ -34,9 +35,29 @@ interface PendingPick {
   chips: HTMLElement[];
   timeout: number;
   onPick: (range: Range) => void;
+  /** Regular badges were visible at pick start — restore them on teardown. */
+  restoreBadges: boolean;
 }
 
 let pending: PendingPick | null = null;
+
+/**
+ * Pick-window badge hooks, injected by content.ts (badge visibility lives in
+ * the content monolith — injection avoids the import cycle). While chips are
+ * up they OWN the codewords, so the regular badges hide for the window and
+ * the screen shows exactly what's speakable (user decision 2026-07-25);
+ * restored on teardown only if they were visible at start. Purely visual —
+ * grammar publication is untouched, per-frame like the pick itself.
+ */
+interface PickWindowHooks {
+  /** Hide regular badges; returns whether they were visible (for restore). */
+  hideBadges: () => boolean;
+  showBadges: () => void;
+}
+let pickWindowHooks: PickWindowHooks | null = null;
+export function setPickWindowHooks(h: PickWindowHooks): void {
+  pickWindowHooks = h;
+}
 
 /** True when a pick is live (optionally: for this specific codeword). */
 export function isRangePickPending(codeword?: string): boolean {
@@ -61,6 +82,26 @@ export function resolveRangePick(codeword: string): boolean {
 /** Cancel any pending pick (new arm replaces old, timeout, explicit). */
 export function cancelRangePick(reason: string): void {
   if (pending) teardown(reason);
+}
+
+/**
+ * Pick-window codeword guard: while chips are up they OWN the codewords — a
+ * stray badge codeword must not click a link out from under the question the
+ * chips are asking. Returns true when the codeword was swallowed (the caller
+ * stops); flashes guidance and reports the refusal. The pick stays live —
+ * "escape" or the timeout ends it, then the badges and their codewords come
+ * back.
+ */
+export function refusePickWindowCodeword(action: string, codeword: string): boolean {
+  if (!pending || pending.byCodeword.has(codeword)) return false;
+  flashToast('Pick a highlighted match — or say "escape"');
+  reportDispatchResult({
+    action, codeword, resolution: 'range_pick', elem_tag: '',
+    taken: 'skipped', ok: false,
+    frame: `${location.origin}${location.pathname}`.slice(0, 200),
+    detail: 'pick pending — codeword is not a chip', fp: '',
+  });
+  return true;
 }
 
 /**
@@ -100,7 +141,8 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
   }
 
   const timeout = window.setTimeout(() => teardown('timeout'), PICK_WINDOW_MS);
-  pending = { byCodeword, chips, timeout, onPick };
+  const restoreBadges = pickWindowHooks?.hideBadges() ?? false;
+  pending = { byCodeword, chips, timeout, onPick, restoreBadges };
 
   void publishRecords(records).then((admitted) => {
     // Rejected codewords (pool race, plugin refusal) can never be spoken —
@@ -124,10 +166,11 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
 
 function teardown(reason: string): void {
   if (!pending) return;
-  const { byCodeword, chips, timeout } = pending;
+  const { byCodeword, chips, timeout, restoreBadges } = pending;
   pending = null;
   window.clearTimeout(timeout);
   for (const chip of chips) chip.remove();
+  if (restoreBadges) pickWindowHooks?.showBadges();
   const codewords = [...byCodeword.keys()];
   retireRecords(codewords);
   labelReservoir.release(codewords);
