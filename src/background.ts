@@ -1288,7 +1288,13 @@ if (__DEV_RELOAD__) {
       };
       ws.onclose = () => setTimeout(devConnect, 2000);
       ws.onerror = () => ws.close();
-    } catch { /* dev server not running */ }
+    } catch {
+      // Constructor threw (server down in a way that throws synchronously).
+      // MUST reschedule — a bare swallow here permanently killed the reload
+      // chain for the background's lifetime (Firefox stale-background,
+      // 2026-07-25 "stash air" field report).
+      setTimeout(devConnect, 2000);
+    }
   }
   devConnect();
 }
