@@ -209,9 +209,12 @@ export interface BadgeVariant {
   readonly matchedPrefix: 'fade' | 'accent';
   /** Accent colour for 'accent'. */
   readonly accent?: string;
-  /** Register the page-mutation-defence observers? (container resize, target
-   *  mutation, host-attribute defender) */
-  readonly observePage: boolean;
+  /** Track the anchor container's size — the only trigger that catches a
+   *  layout shift that is neither a scroll nor a window resize. */
+  readonly trackContainer: boolean;
+  /** The per-element page-tampering defences: target-mutation tracking and
+   *  the host-attribute defender. */
+  readonly defendAgainstPage: boolean;
   /** Suppress paint when the anchor sits mostly over a playing video? */
   readonly suppressOverVideo: boolean;
 }
@@ -228,8 +231,9 @@ rendering behind an indirection with two implementations forever. The one thing 
 justifies grouping them in a single object rather than five constructor params is
 that they all derive from ONE fact — persistent ambient badge vs transient
 authoritative chip — so they must move together. That is the anti-dual-sync
-argument, and it's why lifecycle posture (`observePage`, `suppressOverVideo`) lives
-in the same object as the visual axes rather than in a parallel options bag.
+argument, and it's why lifecycle posture (`trackContainer`, `defendAgainstPage`,
+`suppressOverVideo`) lives in the same object as the visual axes rather than in a
+parallel options bag.
 
 ## What chips inherit, and what they opt out of
 
@@ -240,13 +244,26 @@ placement nudge model, the reconcile registry, the inner-scroll accelerator, `fl
 
 **Opt out, with reasons:**
 
-- **`refine()`'s observers — out.** Decisive reason is the 1:1 keyring collision in
-  claim 2, not cost. Secondary: the sensing freeze forbids adding observers, and a
-  seconds-long badge outlives nothing. Note the *z-index* half of `refine()` is NOT
-  optional — without it the host has `z-index:auto` and a sticky header covers the
-  chips. So `refine()` splits: stacking always, observers behind `observePage`. And
-  because deferral exists solely to amortise the observer dance, an observer-less
-  variant refines inline — one line, and the chip has its stacking on the first frame.
+- **`refine()`'s page-tampering defences — out.** Decisive reason is the 1:1
+  keyring collision in claim 2, not cost. Secondary: the sensing freeze, and a
+  seconds-long badge has little to defend.
+- **`refine()`'s container-resize tracking — IN, corrected by measurement.** The
+  first cut of this design took all four observers away together, on the "transient
+  badges shouldn't carry page-defence machinery" argument. A Playwright run then
+  caught the chips stranding when a block was inserted above their phrase — the
+  exact defect claim 5 named and this whole seam exists to fix. Scroll and window
+  resize both repositioned fine; a pure content shift did not, because the only
+  trigger that sees it is the container ResizeObserver. It is shared and refcounted
+  with an idempotent `observe`, so registering ≤9 more containers consumes an
+  existing signal rather than adding sensing. The lesson is narrow and worth
+  keeping: "transient badge, drop the observers" was one argument doing duty for
+  four different observers, and one of them was load-bearing.
+- **`refine()`'s z-index half — always.** Without it the host has `z-index:auto`
+  and any positioned page chrome covers the chips. So `refine()` splits three
+  ways: stacking unconditional, container tracking behind `trackContainer`,
+  defences behind `defendAgainstPage`. A variant with no defences refines INLINE —
+  deferral existed to amortise that observer dance, and what remains is both cheap
+  and wanted on the first frame.
 - **Occlusion filtering — out, for free.** `applyOcclusion` is only ever called by
   the settle applier over store wrappers and by the clip IO. Chips are in neither, so
   they receive nothing; no code required. They *should* be out: hiding a chip because
@@ -291,11 +308,35 @@ internally (`this.target = elementTarget(newEl)`) and the seam stops there.
 
 Step 3 is the only one that can regress link hints, so it lands with 1 and 2 green.
 
+## What was measured
+
+A throwaway Playwright driver (written, used, deleted — `scripts/README.md`'s rule
+for one-shot repro drivers) loaded the built extension in real Chrome against a
+dark-background fixture with three copies of a phrase and one link, armed a pick,
+and measured the PAINTED badge boxes through the harness-gated open shadow roots.
+
+- Three chips, one per match, each 12px left and 13px above its phrase — the
+  shared nudge posture, not the retired hardcoded `-18px`.
+- Colours resolved to `bg rgb(17,17,17) / fg rgb(238,238,238)` on the `#111` page:
+  the APCA path adapts, which is the whole reason the fixed black/white palette was
+  dropped. A near-black chip would have been invisible here.
+- Narrowing on the first letter: the candidate stayed full-strength with its
+  matched letter gold, the other two dimmed **in place and stayed painted** — the
+  set of options survives the narrowing, which is the behaviour the `dim` variant
+  exists for.
+- Follows its phrase through scroll, window resize, and (after the
+  `trackContainer` correction above) a pure content shift with no scroll at all.
+- The page's own hints are correctly suppressed for the pick window.
+
+One probe artifact worth recording, because it cost a detour: a hidden badge is
+`opacity: 0` but still laid out, so measuring `getBoundingClientRect()` alone
+reports it as painted. Any future harness reading badge state must read opacity.
+
 ## Risks
 
 - **Cost per chip rises** from ~0 to a badge construction (shadow root, APCA walk,
-  stacking walk). Bounded at 9, one-shot, off the input path — the pick already
-  paid a `publishRecords` round trip.
+  stacking walk) plus one shared-RO registration. Bounded at 9, one-shot, off the
+  input path — the pick already paid a `publishRecords` round trip.
 - **`calculateZIndex` walks `target.querySelectorAll('*')`.** For a multi-block
   range whose container is a large article, that's a wide walk. Bounded by 9 chips
   and cached per anchorParent, so co-located chips pay it once.

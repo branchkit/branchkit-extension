@@ -567,17 +567,21 @@ describe('BadgeVariant', () => {
     badge.remove();
   });
 
-  it('range-pick variant registers no page-defence observers, but still stacks', () => {
+  it('range-pick variant: no page defences, but it stacks AND tracks its container', () => {
     const root = mount('<div id="c"><button id="btn">click</button></div>');
     const el = root.querySelector('#btn')!;
     const container = resolveContainer(el);
     const badge = new HintBadge(elementTarget(el), label, 'letter', RANGE_PICK_VARIANT);
     expect(targetTracker.isTracked(el)).toBe(false);
     expect(hostTracker.isTracked(badge.host)).toBe(false);
-    expect(containerTracker.getRefCount(container)).toBe(0);
     // Stacking is NOT optional — a host at z-index:auto slides under page chrome.
     expect(badge.host.style.zIndex).not.toBe('');
+    // Nor is container-resize: it's the only trigger that catches a layout
+    // shift which is neither a scroll nor a window resize, and dropping it is
+    // what stranded chips when a block landed above their phrase.
+    expect(containerTracker.getRefCount(container)).toBe(1);
     badge.remove();
+    expect(containerTracker.getRefCount(container)).toBe(0);
   });
 
   it('a chip\'s remove() does not steal a hint badge\'s target-mutation observer', () => {

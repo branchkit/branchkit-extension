@@ -37,6 +37,64 @@ vi.mock('../plugin/resolve', () => ({
   reportDispatchResult: () => {},
 }));
 
+// Chips are real HintBadges now (render/badge-variant.ts RANGE_PICK_VARIANT).
+// Substituting a recording fake is what BadgeHandle exists for — it asserts
+// the calls the module actually makes, instead of poking at DOM the badge owns
+// (whose shadow root is closed in production anyway).
+interface FakeBadge {
+  label: { letter: string };
+  displayMode: string;
+  variant: unknown;
+  shown: boolean;
+  removed: boolean;
+  filtered: boolean;
+  matchedChars: number;
+  positioned: { x: number; y: number } | null;
+}
+const badges: FakeBadge[] = [];
+vi.mock('../render/hints', () => ({
+  HintBadge: class {
+    label: { letter: string };
+    displayMode: string;
+    variant: unknown;
+    shown = false;
+    removed = false;
+    filtered = false;
+    matchedChars = 0;
+    positioned: { x: number; y: number } | null = null;
+    badgeSize = { w: 20, h: 14 };
+    constructor(_target: unknown, label: { letter: string }, displayMode: string, variant: unknown) {
+      this.label = label;
+      this.displayMode = displayMode;
+      this.variant = variant;
+      badges.push(this as unknown as FakeBadge);
+    }
+    show(): void { this.shown = true; }
+    remove(): void { this.removed = true; }
+    setFiltered(f: boolean): void { this.filtered = f; }
+    setMatchedChars(n: number): void { this.matchedChars = n; }
+    updatePosition(c: { x: number; y: number }): void { this.positioned = c; }
+  },
+}));
+vi.mock('../config', () => ({ getDisplayMode: () => 'letter' }));
+
+/** Chips still up: constructed, shown, not torn down. */
+function liveBadges(): FakeBadge[] {
+  return badges.filter(b => !b.removed);
+}
+
+// The pick arms/releases the plugin-side hint-projection narrow through the SW.
+const pickWindowPosts: string[][] = [];
+(globalThis as unknown as { chrome: unknown }).chrome = {
+  runtime: {
+    sendMessage: (m: { type: string; codewords: string[] }) => {
+      if (m.type === 'RANGE_PICK') pickWindowPosts.push(m.codewords);
+      return Promise.resolve();
+    },
+  },
+};
+
+import { RANGE_PICK_VARIANT } from '../render/badge-variant';
 import {
   startRangePick, resolveRangePick, cancelRangePick, isRangePickPending,
   filterRangePickChips, MAX_RANGE_BADGES,
@@ -51,8 +109,9 @@ function makeRange(text = 'x'): Range {
   return r;
 }
 
-function chipHosts(): Element[] {
-  return [...document.querySelectorAll('[data-branchkit-hint]')];
+/** Chip count, by live badge — the module owns no DOM of its own now. */
+function chipCount(): number {
+  return liveBadges().length;
 }
 
 describe('range-disambiguation pick', () => {
@@ -62,9 +121,11 @@ describe('range-disambiguation pick', () => {
     released.length = 0;
     publishedRecords.length = 0;
     retired.length = 0;
+    pickWindowPosts.length = 0;
     toasts.length = 0;
     nextClaim = ['alpha', 'bravo', 'charlie', 'delta'];
     admitAll = true;
+    badges.length = 0;
     document.body.innerHTML = '';
   });
   afterEach(() => {
@@ -77,7 +138,7 @@ describe('range-disambiguation pick', () => {
     const ranges = [makeRange('a'), makeRange('b'), makeRange('c')];
     startRangePick(ranges, (r) => picks.push(r));
     await Promise.resolve(); // let the publish settle
-    expect(chipHosts()).toHaveLength(3);
+    expect(chipCount()).toBe(3);
     expect(publishedRecords.map(r => r.codeword)).toEqual(['alpha', 'bravo', 'charlie']);
     expect(isRangePickPending()).toBe(true);
     expect(isRangePickPending('bravo')).toBe(true);
@@ -87,28 +148,54 @@ describe('range-disambiguation pick', () => {
     expect(picks).toHaveLength(1);
     expect(picks[0]).toBe(ranges[1]);
     // Teardown: chips gone, codewords retired + released.
-    expect(chipHosts()).toHaveLength(0);
+    expect(chipCount()).toBe(0);
     expect(isRangePickPending()).toBe(false);
     expect(retired.flat().sort()).toEqual(['alpha', 'bravo', 'charlie']);
     expect(released.flat().sort()).toEqual(['alpha', 'bravo', 'charlie']);
   });
 
-  it('routes mid-pair progress to the chips: dims non-matching, resets on empty', () => {
-    nextClaim = ['air bam', 'cat dog'];
+  it('routes mid-pair progress to the chips: narrows non-matching, resets on empty', () => {
+    nextClaim = ['a b', 'c d'];
     startRangePick([makeRange(), makeRange()], () => {});
-    const hosts = chipHosts() as HTMLElement[];
-    expect(hosts).toHaveLength(2);
-    // Prefix letter 'a': the 'air bam' chip stays lit, 'cat dog' dims.
+    const [ab, cd] = liveBadges();
+    expect(liveBadges()).toHaveLength(2);
+    // Prefix 'a': the 'a b' chip stays live with its prefix marked, 'c d'
+    // is marked non-candidate (which the range-pick variant renders as a dim
+    // in place, not a hide — see render/badge-variant.ts).
     expect(filterRangePickChips('a')).toBe(true);
-    expect(hosts[0].style.opacity).toBe('1');
-    expect(hosts[1].style.opacity).toBe('0.25');
-    // Empty letter = pair cancelled — everything resets.
+    expect(ab.filtered).toBe(false);
+    expect(ab.matchedChars).toBe(1);
+    expect(cd.filtered).toBe(true);
+    // Empty prefix = pair cancelled — everything resets.
     filterRangePickChips('');
-    expect(hosts[0].style.opacity).toBe('1');
-    expect(hosts[1].style.opacity).toBe('1');
+    expect(ab.filtered).toBe(false);
+    expect(ab.matchedChars).toBe(0);
+    expect(cd.filtered).toBe(false);
     // No pick live → false, so content falls through to the store hints.
     cancelRangePick('test');
     expect(filterRangePickChips('a')).toBe(false);
+  });
+
+  it('chips are ordinary badges: range-pick variant, shown, and placed', () => {
+    nextClaim = ['a b'];
+    startRangePick([makeRange('phrase')], () => {});
+    const [chip] = liveBadges();
+    expect(chip.variant).toBe(RANGE_PICK_VARIANT);
+    expect(chip.displayMode).toBe('letter'); // the user's badge setting, inherited
+    expect(chip.label.letter).toBe('ab');
+    expect(chip.shown).toBe(true);
+    // Placed through the shared nudge model rather than a hardcoded -18px.
+    expect(chip.positioned).not.toBeNull();
+  });
+
+  it('a multi-letter prefix narrows without a charAt(0) special case', () => {
+    nextClaim = ['a b', 'a c'];
+    startRangePick([makeRange(), makeRange()], () => {});
+    const [ab, ac] = liveBadges();
+    filterRangePickChips('ab');
+    expect(ab.filtered).toBe(false);
+    expect(ab.matchedChars).toBe(2);
+    expect(ac.filtered).toBe(true);
   });
 
   it('ignores codewords that are not part of the pick', () => {
@@ -117,13 +204,80 @@ describe('range-disambiguation pick', () => {
     expect(isRangePickPending()).toBe(true);
   });
 
-  it('auto-cancels after the pick window', () => {
+  // jsdom gives every rect zeros, so the viewport filter finds nothing and the
+  // fallback keeps prior behavior — which is why the other tests still pass
+  // unchanged. These two stub geometry to exercise the filter itself.
+  function withStubbedRects(onScreen: (text: string) => boolean): () => void {
+    const original = Range.prototype.getBoundingClientRect;
+    Range.prototype.getBoundingClientRect = function (this: Range): DOMRect {
+      const visible = onScreen(this.toString());
+      // Off-screen = above the fold (negative bottom); on-screen = a real box.
+      return (visible
+        ? { top: 10, bottom: 30, left: 10, right: 60, width: 50, height: 20 }
+        : { top: -80, bottom: -60, left: 10, right: 60, width: 50, height: 20 }
+      ) as DOMRect;
+    };
+    return () => { Range.prototype.getBoundingClientRect = original; };
+  }
+
+  it('badges only the matches currently in the viewport', async () => {
+    const restore = withStubbedRects(text => text === 'seen');
+    try {
+      const ranges = [makeRange('gone'), makeRange('seen'), makeRange('gone'), makeRange('seen')];
+      startRangePick(ranges, () => {});
+      await Promise.resolve();
+      // Two on-screen matches → two chips, and they claim the first two
+      // codewords rather than the ones document order would have given.
+      expect(chipCount()).toBe(2);
+      expect(publishedRecords.map(r => r.codeword)).toEqual(['alpha', 'bravo']);
+      // The pick resolves to an on-screen range, not the document-first one.
+      expect(isRangePickPending('alpha')).toBe(true);
+    } finally { restore(); }
+  });
+
+  it('falls back to document order when nothing is in view', async () => {
+    const restore = withStubbedRects(() => false);
+    try {
+      startRangePick([makeRange('a'), makeRange('b')], () => {});
+      await Promise.resolve();
+      expect(chipCount()).toBe(2);
+    } finally { restore(); }
+  });
+
+  it('arms the projection narrow with the admitted set, and releases on teardown', async () => {
+    const ranges = [makeRange('a'), makeRange('b')];
+    startRangePick(ranges, () => {});
+    // Not armed before the publish lands — arming early would filter the chips
+    // out of the projection too, blanking the HUD instead of narrowing it.
+    expect(pickWindowPosts).toEqual([]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(pickWindowPosts).toEqual([['alpha', 'bravo']]);
+
+    resolveRangePick('alpha');
+    expect(pickWindowPosts).toEqual([['alpha', 'bravo'], []]);
+  });
+
+  it('releases the narrow when nothing was admitted', async () => {
+    admitAll = false;
+    startRangePick([makeRange(), makeRange()], () => {});
+    await Promise.resolve();
+    await Promise.resolve();
+    // Teardown's release, and no arm — the chips never became speakable.
+    expect(pickWindowPosts).toEqual([[]]);
+  });
+
+  it('never expires on wall clock — only an answer or an explicit exit ends it', () => {
     const picks: Range[] = [];
     startRangePick([makeRange(), makeRange()], (r) => picks.push(r));
-    vi.advanceTimersByTime(13_000);
-    expect(isRangePickPending()).toBe(false);
-    expect(chipHosts()).toHaveLength(0);
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(isRangePickPending()).toBe(true);
+    expect(chipCount()).toBe(2);
     expect(picks).toHaveLength(0);
+
+    cancelRangePick('voice_escape');
+    expect(isRangePickPending()).toBe(false);
+    expect(chipCount()).toBe(0);
     expect(released.flat()).toHaveLength(2);
   });
 
@@ -132,14 +286,14 @@ describe('range-disambiguation pick', () => {
     const firstReleased = released.length;
     startRangePick([makeRange(), makeRange()], () => {});
     expect(released.length).toBeGreaterThan(firstReleased);
-    expect(chipHosts()).toHaveLength(2); // only the second pick's chips
+    expect(chipCount()).toBe(2); // only the second pick's chips
   });
 
   it('caps badges at MAX_RANGE_BADGES with a visible toast (no silent truncation)', () => {
     nextClaim = Array.from({ length: 20 }, (_, i) => `cw${i}`);
     const ranges = Array.from({ length: 14 }, () => makeRange());
     startRangePick(ranges, () => {});
-    expect(chipHosts()).toHaveLength(MAX_RANGE_BADGES);
+    expect(chipCount()).toBe(MAX_RANGE_BADGES);
     expect(toasts.some(t => t.includes('14 matches'))).toBe(true);
   });
 
@@ -150,7 +304,7 @@ describe('range-disambiguation pick', () => {
     startRangePick(ranges, (r) => picks.push(r));
     expect(picks).toEqual([ranges[0]]);
     expect(isRangePickPending()).toBe(false);
-    expect(chipHosts()).toHaveLength(0);
+    expect(chipCount()).toBe(0);
   });
 
   it('drops chips for codewords the plugin refused', async () => {
@@ -159,6 +313,6 @@ describe('range-disambiguation pick', () => {
     await Promise.resolve(); // let the publish settle
     await Promise.resolve();
     expect(isRangePickPending()).toBe(false);
-    expect(chipHosts()).toHaveLength(0);
+    expect(chipCount()).toBe(0);
   });
 });

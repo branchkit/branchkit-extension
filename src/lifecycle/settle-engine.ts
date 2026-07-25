@@ -756,7 +756,21 @@ export class SettleEngine {
   // box overhanging the viewport edge) is solved by the write-time clamp
   // inside reconcileRead (hints.ts).
   scheduleReposition(): void {
-    if (!this.deps.isBadgesVisible()) return;
+    // Gate on the REGISTRY, not on the badges-visible mode flag — the same
+    // predicate noteReconcileScroll already uses, so the two paths agree.
+    //
+    // The mode gate stranded the range-pick chips: they are registered badges
+    // shown precisely WHILE the page's hints are hidden (the pick window hides
+    // them, so the screen shows exactly what's speakable), so a badgesVisible
+    // gate turned off the settle-driven pass for the only visible badges on
+    // screen. A lazy image loading above a chip left it pointing at where the
+    // phrase used to be. The scroll path was never gated, so scrolling looked
+    // fine and layout shift didn't — the confusing half of the bug.
+    //
+    // Costs nothing when badges are down: `reconcileRead` short-circuits on
+    // `_visible` before any getBoundingClientRect, so the pass is one property
+    // check per badge and zero writes.
+    if (this.deps.positioner.reconcileRegistrySize() === 0) return;
     if (this.repositionRafPending) return;
     this.repositionRafPending = true;
     this.deps.scheduler.raf(() => {

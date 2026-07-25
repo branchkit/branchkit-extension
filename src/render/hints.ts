@@ -544,12 +544,12 @@ export class HintBadge implements BadgeHandle {
     // can flip `refineImmediately` to force sync behavior so they can
     // assert observer state right after construction.
     //
-    // A variant that takes no observers refines INLINE: deferral exists solely
-    // to amortise the observer dance, so without it there is nothing to defer —
-    // and the stacking half of refine() is not optional (a host left at
-    // z-index:auto slides under any positioned page chrome), so a transient
-    // badge wants it on the first frame, not a few frames in.
-    if (refineImmediately || !variant.observePage) this.refine();
+    // A variant that takes no page defences refines INLINE: deferral exists to
+    // amortise that observer dance, and what's left (the stacking walk + one
+    // shared refcounted RO registration) is both cheap and wanted on the first
+    // frame — a host left at z-index:auto slides under any positioned page
+    // chrome, which is a visible defect for a badge that lives seconds.
+    if (refineImmediately || !variant.defendAgainstPage) this.refine();
     else scheduleRefine(this);
   }
 
@@ -578,12 +578,19 @@ export class HintBadge implements BadgeHandle {
     // written before the host-attribute defender starts so the write isn't
     // observed as page tampering.
     this.host.style.zIndex = String(zIndexFor(this.target.element, this.host, this.anchorParent));
-    // The page-mutation defence proper. A transient badge skips it — see
-    // BadgeVariant.observePage for why this is a correctness constraint and
-    // not just a cost one (the target-mutation tracker is keyed 1:1).
-    if (!this.variant.observePage) return;
-    trackContainerResize(this.anchorParent);
-    this._containerTracked = true;
+    // Container-resize tracking: every variant takes it. It is the only
+    // trigger that catches a layout shift which is neither a scroll nor a
+    // window resize (a block landing above the target), and it's a shared
+    // refcounted observation, so it composes with whatever else watches this
+    // container.
+    if (this.variant.trackContainer) {
+      trackContainerResize(this.anchorParent);
+      this._containerTracked = true;
+    }
+    // The page-tampering defences proper. A transient badge skips them — see
+    // BadgeVariant.defendAgainstPage for why this is a correctness constraint
+    // and not just a cost one (the target-mutation tracker is keyed 1:1).
+    if (!this.variant.defendAgainstPage) return;
     trackTargetMutations(this.target.element);
     // Start the host-attribute defender AFTER all setup is done — the
     // observer fires on real mutations only, but starting it earlier
@@ -1204,7 +1211,7 @@ export class HintBadge implements BadgeHandle {
     // range-anchored badge's element is the range's container — which can be a
     // hinted element with a badge of its own ("highlight <link text>").
     // Untracking here would silently disconnect THAT badge's observer.
-    if (this.variant.observePage) untrackTargetMutations(this.target.element);
+    if (this.variant.defendAgainstPage) untrackTargetMutations(this.target.element);
     // Keyed on the host, which is unique per badge — safe unconditionally.
     untrackHostAttributes(this.host);
     unregisterReconcile(this);

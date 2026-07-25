@@ -652,15 +652,29 @@ describe('boot-window pacing (late-render backstops run hot)', () => {
 const BOOT_WINDOW_TEST_MS = 10_000;
 
 describe('settle: gates', () => {
-  it('with badges hidden, settle skips the pass (and reposition no-ops)', () => {
+  it('with badges hidden, settle skips the pass', () => {
     const h = makeHarness({ badgesVisible: false });
     addWrapper(h.store, { codeword: 'a', rect: ON_SCREEN });
 
     h.engine.settle('store');
 
     expect(h.engine.applied.passes).toBe(0);
-    expect(h.positioner.reconcilePass).not.toHaveBeenCalled();
     expect(h.discovery.discoverInSubtreeBatched).not.toHaveBeenCalled();
+    // Nothing registered → no reposition either.
+    expect(h.positioner.reconcilePass).not.toHaveBeenCalled();
+  });
+
+  it('reposition follows the REGISTRY, not the badges-visible mode flag', () => {
+    // The range-pick chips are registered badges shown precisely while the
+    // page's hints are hidden (the pick window hides them). A badgesVisible
+    // gate here stranded them on any layout shift that wasn't a scroll —
+    // see SettleEngine.scheduleReposition.
+    const h = makeHarness({ badgesVisible: false });
+    h.positioner.reconcileRegistrySize.mockReturnValue(1);
+
+    h.engine.settle('store'); // FakeScheduler.raf runs the callback inline
+
+    expect(h.positioner.reconcilePass).toHaveBeenCalled();
   });
 
   it('band discovery is single-flight: a mid-sweep request coalesces, no double walk', async () => {

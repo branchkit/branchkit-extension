@@ -5,42 +5,82 @@
  * by voice, instead of silently taking the first match.
  * Design: notes/DESIGN_TEXT_TARGETING.md ("Range-match disambiguation").
  *
- * Deliberately OUTSIDE the hints store (mode-chip precedent): the store feeds
- * occlusion, sweep, snapshot, and prefix-filter machinery that must not see a
- * non-element type. This module is an imperative per-frame singleton — one
- * pending pick at a time, chips positioned ONCE in document coordinates (no
- * reconciler, no observers; the window is seconds long and bounded by a
- * timeout), codewords claimed from the real deck via the reservoir (SW pool
+ * Deliberately OUTSIDE the hints store: the store feeds occlusion, sweep,
+ * snapshot, and prefix-filter machinery that must not see a non-element type.
+ * This module is an imperative per-frame singleton — one pending pick at a
+ * time, codewords claimed from the real deck via the reservoir (SW pool
  * arbitrates cross-frame uniqueness) and published through label-sync so the
  * shadow accounting stays truthful.
+ *
+ * The chips themselves are ordinary `HintBadge`es anchored to a Range instead
+ * of an element (render/badge-target.ts) and wearing the range-pick variant
+ * (render/badge-variant.ts): same stylesheet, APCA colours, size settings,
+ * display mode, placement nudges, and reconciler as every link hint. Out of
+ * the store, they receive no occlusion verdict and no strict-viewport stamp —
+ * which is what we want (a chip hidden under a sticky header would delete an
+ * option from a question already asked), and matches rangesInViewport's own
+ * geometry-only cut.
  */
 
+import { isAncestorChainInVisibleViewport } from '../lifecycle/strict-viewport';
 import { labelReservoir } from '../labels/label-reservoir';
+import { poolLabelToAssignment, type LabelAssignment } from '../labels/words';
 import { publishRecords, retireRecords } from '../labels/label-sync';
+import { HintBadge } from '../render/hints';
+import { rangeTarget } from '../render/badge-target';
+import { RANGE_PICK_VARIANT } from '../render/badge-variant';
+import { placeBadgeAtRect } from '../placement/position';
+import { getDisplayMode } from '../config';
 import { flashToast } from '../render/toast';
 import { bkLog } from '../debug/bk-log';
 import { reportDispatchResult } from '../plugin/resolve';
-import type { ScannedElement } from '../types';
+import type { Message, ScannedElement } from '../types';
+
+/**
+ * Tell the plugin which codewords the chips own, so the hint projection (and
+ * with it the Discovery HUD) narrows to exactly them for the pick's duration.
+ * Empty = release. Without this the HUD keeps listing the whole page's hints —
+ * second words that refusePickWindowCodeword is about to swallow.
+ *
+ * Fully defensive: teardown runs on the orphan path (quiesceOrphan), where an
+ * invalidated context makes sendMessage throw SYNCHRONOUSLY — a bare .catch()
+ * would let that escape and abort the rest of the teardown. The plugin's own
+ * drains cover a release that never leaves.
+ */
+function publishPickWindow(codewords: string[]): void {
+  // Breadcrumb on the content-script side of the hop: paired with the plugin's
+  // ARMED/RELEASE/REFUSED lines, this says which end dropped the narrow.
+  bkLog('BK_RANGE_PICK_WINDOW', { codewords });
+  try {
+    chrome.runtime.sendMessage({ type: 'RANGE_PICK', codewords } as Message).catch(() => {});
+  } catch { /* context invalidated — the plugin's drains release it */ }
+}
 
 /** Most matches we'll badge — beyond this the phrase is too generic to pick
  * by eye anyway; the toast tells the user to say more words. */
 export const MAX_RANGE_BADGES = 9;
 
-/** Auto-cancel window. Mirrors the platform arm-window philosophy: a stale
- * pending pick must not swallow a codeword spoken minutes later. */
-const PICK_WINDOW_MS = 12_000;
-
-/** One chip's mutable visuals: the positioned host (dim target) and its
- * first letter's span (mid-pair matched-char highlight). */
-interface ChipUi {
-  host: HTMLElement;
-  firstLetter: HTMLElement | null;
+/** One chip: its badge, plus the label assignment the prefix filter tests
+ *  against (kept rather than re-derived from the token on every progress
+ *  event). */
+interface Chip {
+  badge: HintBadge;
+  label: LabelAssignment;
 }
 
+/**
+ * A pick has NO wall-clock expiry: chips stay up until the question they ask is
+ * answered (a chip codeword) or the user exits (escape cascade, a replacing
+ * pick, a requery that finds nothing). This matches the extension's other modes
+ * — caret and palette are explicit-exit mirrors with no timer — and the earlier
+ * 12s auto-cancel killed picks mid-hold and mid-codeword. The wedge a timer
+ * used to guard (a forgotten pick swallowing every non-chip codeword via
+ * refusePickWindowCodeword) is not silent: badges are hidden, chips are painted,
+ * and the refusal toast names the exit.
+ */
 interface PendingPick {
   byCodeword: Map<string, Range>;
-  chipUi: Map<string, ChipUi>;
-  timeout: number;
+  chips: Map<string, Chip>;
   onPick: (range: Range) => void;
   /** Regular badges were visible at pick start — restore them on teardown. */
   restoreBadges: boolean;
@@ -66,6 +106,31 @@ export function setPickWindowHooks(h: PickWindowHooks): void {
   pickWindowHooks = h;
 }
 
+/**
+ * The subset of `ranges` currently on screen in this frame. Mirrors the
+ * geometry cut in stampStrictViewport (lifecycle/strict-viewport.ts) — including
+ * its ancestor-chain check, so a range inside an iframe that is itself scrolled
+ * out of view counts as off-screen — but reads Range rects rather than element
+ * rects, which is why it can't call that helper directly.
+ *
+ * Deliberately geometry-only: no occlusion hit-test or CSS-visibility read. A
+ * text range under a sticky header is still something the user can reasonably
+ * be asked to pick, and the per-member cost those checks carry is meant for
+ * hundreds of hint wrappers, not nine chips.
+ */
+function rangesInViewport(ranges: Range[]): Range[] {
+  if (!isAncestorChainInVisibleViewport(window)) return [];
+  const vh = window.innerHeight;
+  const vw = window.innerWidth;
+  return ranges.filter((r) => {
+    let rect: DOMRect;
+    try { rect = r.getBoundingClientRect(); } catch { return false; }
+    // A fully collapsed rect has nowhere to anchor a chip.
+    if (rect.width === 0 && rect.height === 0) return false;
+    return rect.bottom > 0 && rect.top < vh && rect.right > 0 && rect.left < vw;
+  });
+}
+
 /** True when a pick is live (optionally: for this specific codeword). */
 export function isRangePickPending(codeword?: string): boolean {
   if (!pending) return false;
@@ -86,7 +151,7 @@ export function resolveRangePick(codeword: string): boolean {
   return true;
 }
 
-/** Cancel any pending pick (new arm replaces old, timeout, explicit). */
+/** Cancel any pending pick (new arm replaces old, escape, requery). */
 export function cancelRangePick(reason: string): void {
   if (pending) teardown(reason);
 }
@@ -112,22 +177,24 @@ export function refusePickWindowCodeword(action: string, codeword: string): bool
 }
 
 /**
- * Mid-pair progress on the chips — the same feedback the badge hints give:
- * after the first word of a pair, chips that can't complete dim and the
- * matched first letter lights up on the rest. `letter` is the SW-translated
- * prefix letter; '' resets (pair cancelled). Returns true iff a pick is
- * live, so the caller (content's progress handler) routes progress HERE
- * instead of the store hints — without this, speaking a chip's first word
- * re-showed the very badges the pick window just hid.
+ * Mid-pair progress on the chips — literally the same two calls the store
+ * hints get (`setFiltered` / `setMatchedChars`); the range-pick variant is
+ * what makes them read differently: non-candidates dim in place instead of
+ * disappearing, and the spoken prefix goes gold instead of fading. `prefix` is
+ * the SW-translated letter form; '' resets (pair cancelled).
+ *
+ * Returns true iff a pick is live, so the caller (content's progress handler)
+ * routes progress HERE instead of the store hints — without this, speaking a
+ * chip's first word re-showed the very badges the pick window just hid.
  */
-export function filterRangePickChips(letter: string): boolean {
+export function filterRangePickChips(prefix: string): boolean {
   if (!pending) return false;
-  for (const [cw, ui] of pending.chipUi) {
-    const matches = letter !== '' && cw.replace(/\s/g, '').charAt(0) === letter;
-    ui.host.style.opacity = letter === '' || matches ? '1' : '0.25';
-    // White at rest; the matched first letter goes gold (user pref) — the
-    // inverse of the old gold-at-rest scheme.
-    if (ui.firstLetter) ui.firstLetter.style.color = matches ? '#ffd60a' : '';
+  for (const { badge, label } of pending.chips.values()) {
+    const matches = prefix !== '' && label.letter.startsWith(prefix);
+    badge.setFiltered(prefix !== '' && !matches);
+    // Arbitrary prefix lengths and every display mode, inherited — no
+    // charAt(0) special case for exactly two words.
+    badge.setMatchedChars(matches ? prefix.length : 0);
   }
   return true;
 }
@@ -135,14 +202,24 @@ export function filterRangePickChips(letter: string): boolean {
 /**
  * Start a disambiguation pick over the given ranges: claim codewords, paint a
  * chip at each range, publish the codewords for matching, and wait for
- * resolveRangePick / timeout. Ranges beyond MAX_RANGE_BADGES are dropped with
- * a visible toast (no silent truncation).
+ * resolveRangePick / an explicit cancel. Ranges beyond MAX_RANGE_BADGES are
+ * dropped with a visible toast (no silent truncation).
  */
 export function startRangePick(ranges: Range[], onPick: (range: Range) => void): void {
   cancelRangePick('replaced');
 
-  const overflow = ranges.length - MAX_RANGE_BADGES;
-  const picked = ranges.slice(0, MAX_RANGE_BADGES);
+  // Badge what the user can actually see. Document order alone put the 9 chips
+  // wherever the phrase happened to appear first, so on a long page they landed
+  // below the fold and the user had to scroll to find the question being asked
+  // (field report 2026-07-25). Same on-screen predicate the strict-viewport
+  // stamp uses for hint badges, so chips and hints agree on "visible".
+  //
+  // Fallback when nothing is in view: badge by document order as before, rather
+  // than dead-ending a command the user just spoke.
+  const visible = rangesInViewport(ranges);
+  const pool = visible.length > 0 ? visible : ranges;
+  const overflow = pool.length - MAX_RANGE_BADGES;
+  const picked = pool.slice(0, MAX_RANGE_BADGES);
   const codewords = labelReservoir.claim(picked.length).filter(cw => cw !== '');
   if (codewords.length === 0) {
     // Pool dry or alphabet not loaded — fall back to today's behavior.
@@ -152,11 +229,11 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
   }
 
   const byCodeword = new Map<string, Range>();
-  const chipUi = new Map<string, ChipUi>();
+  const chips = new Map<string, Chip>();
   const records: ScannedElement[] = [];
   for (let i = 0; i < picked.length && i < codewords.length; i++) {
     byCodeword.set(codewords[i], picked[i]);
-    chipUi.set(codewords[i], paintChip(picked[i], codewords[i]));
+    chips.set(codewords[i], paintChip(picked[i], codewords[i]));
     records.push({
       label: codewords[i],
       id: 0, // not in the element registry — codeword is the only address
@@ -168,9 +245,8 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
     });
   }
 
-  const timeout = window.setTimeout(() => teardown('timeout'), PICK_WINDOW_MS);
   const restoreBadges = pickWindowHooks?.hideBadges() ?? false;
-  pending = { byCodeword, chipUi, timeout, onPick, restoreBadges };
+  pending = { byCodeword, chips, onPick, restoreBadges };
 
   void publishRecords(records).then((admitted) => {
     // Rejected codewords (pool race, plugin refusal) can never be spoken —
@@ -178,27 +254,43 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
     if (!pending || pending.byCodeword !== byCodeword) return;
     for (const [cw] of byCodeword) {
       if (!admitted.has(cw)) {
-        chipUi.get(cw)?.host.remove();
-        chipUi.delete(cw);
+        chips.get(cw)?.badge.remove();
+        chips.delete(cw);
         byCodeword.delete(cw);
       }
     }
-    if (byCodeword.size === 0) teardown('nothing_admitted');
+    if (byCodeword.size === 0) {
+      teardown('nothing_admitted');
+      return;
+    }
+    // Arm the projection narrow only now, with the ADMITTED set: arming before
+    // the publish lands would filter the chips out of the projection too (the
+    // plugin hasn't stored them yet), blanking the HUD instead of narrowing it.
+    publishPickWindow([...byCodeword.keys()]);
   });
 
-  bkLog('BK_RANGE_PICK_START', { matches: ranges.length, badged: byCodeword.size });
+  bkLog('BK_RANGE_PICK_START', {
+    matches: ranges.length, inView: visible.length, badged: byCodeword.size,
+  });
   if (overflow > 0) {
-    flashToast(`${ranges.length} matches — showing first ${MAX_RANGE_BADGES}, say more words to narrow`);
+    // Name the scope so "9 of 105" doesn't read as an arbitrary truncation:
+    // the rest are off-screen, and scrolling then re-asking reaches them.
+    flashToast(visible.length > 0
+      ? `${pool.length} matches in view of ${ranges.length} — showing first ${MAX_RANGE_BADGES}, say more words to narrow`
+      : `${ranges.length} matches, none in view — showing first ${MAX_RANGE_BADGES}`);
   }
 }
 
 function teardown(reason: string): void {
   if (!pending) return;
-  const { byCodeword, chipUi, timeout, restoreBadges } = pending;
+  const { byCodeword, chips, restoreBadges } = pending;
   pending = null;
-  window.clearTimeout(timeout);
-  for (const ui of chipUi.values()) ui.host.remove();
+  for (const { badge } of chips.values()) badge.remove();
   if (restoreBadges) pickWindowHooks?.showBadges();
+  // Release the projection narrow before retiring the codewords: the retire is
+  // debounced, so releasing first means the page's own hints are back in the
+  // HUD immediately rather than after the next sync.
+  publishPickWindow([]);
   const codewords = [...byCodeword.keys()];
   retireRecords(codewords);
   labelReservoir.release(codewords);
@@ -206,36 +298,23 @@ function teardown(reason: string): void {
 }
 
 /**
- * One codeword chip anchored at a range, positioned once in document
- * coordinates. Static by design: a pick lives seconds, so no reconciler or
- * observers — scrolling works because the chip is absolute in the flow.
- * Styling mirrors the hint badges' look (dark chip, light text) but is
- * self-contained so hints.ts stays untouched.
+ * One codeword chip: an ordinary badge anchored to the range.
+ *
+ * Order matters — construct, show (which renders the text, so the box has a
+ * measurable size), then place against the range's rect. Same order
+ * showBadges + placeBadges use for element hints, and the same reason.
+ *
+ * Registration with the batched reconciler comes free with the badge, so a
+ * chip follows its phrase through scroll and layout shift instead of stranding
+ * where the text used to be. The one thing that took a fix elsewhere: the
+ * settle-driven reposition pass used to gate on `badgesVisible`, which a pick
+ * deliberately turns off — see SettleEngine.scheduleReposition.
  */
-function paintChip(range: Range, codeword: string): ChipUi {
-  const rect = range.getBoundingClientRect();
-  const host = document.createElement('div');
-  host.setAttribute('data-branchkit-hint', ''); // page observers + our scanners skip our nodes
-  host.style.cssText =
-    'position:absolute;z-index:2147483646;pointer-events:none;' +
-    `left:${rect.left + window.scrollX}px;top:${rect.top + window.scrollY - 18}px`;
-  const shadow = host.attachShadow({ mode: 'closed' });
-  const chip = document.createElement('span');
-  chip.style.cssText =
-    'display:inline-block;background:rgba(20,20,24,0.92);color:#ffffff;' +
-    'font:600 11px/1.5 -apple-system,BlinkMacSystemFont,system-ui,sans-serif;' +
-    'padding:0 5px;border-radius:4px;border:0.5px solid rgba(255,255,255,0.25);' +
-    'box-shadow:0 1px 4px rgba(0,0,0,0.4);white-space:nowrap';
-  // Per-character spans so mid-pair progress can light the matched first
-  // letter, mirroring the badge hints' matched-char treatment.
-  let firstLetter: HTMLElement | null = null;
-  for (const ch of codeword) {
-    const s = document.createElement('span');
-    s.textContent = ch;
-    chip.appendChild(s);
-    if (!firstLetter && ch.trim() !== '') firstLetter = s;
-  }
-  shadow.appendChild(chip);
-  (document.body || document.documentElement).appendChild(host);
-  return { host, firstLetter };
+function paintChip(range: Range, token: string): Chip {
+  const label = poolLabelToAssignment(token);
+  const target = rangeTarget(range);
+  const badge = new HintBadge(target, label, getDisplayMode(), RANGE_PICK_VARIANT);
+  badge.show();
+  placeBadgeAtRect(badge, target.element, target.rect());
+  return { badge, label };
 }

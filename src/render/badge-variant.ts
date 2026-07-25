@@ -38,15 +38,28 @@ export interface BadgeVariant {
   /** Accent colour for `matchedPrefix: 'accent'`. */
   readonly accent?: string;
   /**
-   * Register the page-mutation-defence observers (container resize, target
-   * mutation, host-attribute defender)?
+   * Track the anchor container's size, so a layout shift that is neither a
+   * scroll nor a window resize still repositions this badge.
+   *
+   * ON for both, which a first cut of this design got wrong: the chips were
+   * given no observers at all, and a Playwright run then caught them
+   * stranding when a block was inserted above their phrase — the very defect
+   * the badge seam existed to fix. It is one shared, refcounted
+   * ResizeObserver with an idempotent observe, so registering ≤9 more
+   * containers is consuming an existing signal rather than adding sensing.
+   */
+  readonly trackContainer: boolean;
+  /**
+   * The per-element page-tampering defences: target-mutation tracking and the
+   * host-attribute defender.
    *
    * Off for chips, and NOT merely to save work: `trackTargetMutations` is
    * keyed 1:1 per element with an unconditional untrack, so a chip whose
    * container is also a hinted element ("highlight <link text>") would
-   * disconnect that link badge's observer on teardown.
+   * disconnect that link badge's observer on teardown. A badge that lives
+   * seconds also has little to defend.
    */
-  readonly observePage: boolean;
+  readonly defendAgainstPage: boolean;
   /**
    * Suppress paint when the anchor sits mostly over an actively-playing video?
    *
@@ -62,7 +75,8 @@ export interface BadgeVariant {
 export const HINT_VARIANT: BadgeVariant = {
   nonCandidate: 'hide',
   matchedPrefix: 'fade',
-  observePage: true,
+  trackContainer: true,
+  defendAgainstPage: true,
   suppressOverVideo: true,
 };
 
@@ -72,6 +86,7 @@ export const RANGE_PICK_VARIANT: BadgeVariant = {
   // Gold on the matched letter — an explicit user preference, and the inverse
   // of the retired gold-at-rest scheme.
   accent: '#ffd60a',
-  observePage: false,
+  trackContainer: true,
+  defendAgainstPage: false,
   suppressOverVideo: false,
 };

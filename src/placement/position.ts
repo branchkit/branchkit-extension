@@ -1,4 +1,5 @@
 import { ElementWrapper } from '../scan/element-wrapper';
+import type { BadgeHandle } from '../render/badge-handle';
 import { getCachedRect, getCachedStyle } from '../core/layout-cache';
 import { computePlacement, Nudge } from './compute';
 import { type BadgeSettings, DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
@@ -226,6 +227,30 @@ function getNudge(
   if (fontSize < 15) return { x: nudgeXSmall, y: nudgeYSmall };
   if (fontSize < 20) return { x: nudgeXMed, y: nudgeYMed };
   return { x: nudgeXLarge, y: nudgeYLarge };
+}
+
+/**
+ * Place a badge against an arbitrary anchor rect rather than a wrapper's
+ * element — the range-pick chips' path (activate/range-disambiguation.ts),
+ * where the anchor is a text Range.
+ *
+ * Same nudge buckets and the same `computePlacement` as element badges, so a
+ * chip sits on its phrase exactly as a hint sits on a link's first character.
+ * `styleRef` supplies the font size the bucket is chosen from (the range's
+ * container). Deliberately NOT applying the per-domain nudge rules: those are
+ * authored against element selectors, and a text range has none.
+ */
+export function placeBadgeAtRect(
+  hint: Pick<BadgeHandle, 'badgeSize' | 'updatePosition'>,
+  styleRef: Element,
+  anchorRect: DOMRect,
+): void {
+  const result = computePlacement({
+    targetRect: anchorRect,
+    badgeSize: hint.badgeSize,
+    nudge: getNudge(styleRef, 'text'),
+  });
+  hint.updatePosition(result);
 }
 
 export function placeBadges(wrappers: ElementWrapper[]): void {
