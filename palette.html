@@ -63,10 +63,12 @@
        the kbd family, just no longer faint. */
     .cw {
       flex: 0 0 auto;
-      /* Semibold, not bold: at chip size, bold mono fills the counters and
-         "m" reads as a blob (user screenshot). Legibility comes from the
-         bright field + 12px + a little tracking instead. */
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+      /* Same typography as the on-page hint badges (hints.ts BADGE_CSS):
+         system-ui, not mono — SF Mono smudges at chip size at any weight
+         ("am" blob, user screenshots), while SF Pro's counters stay open.
+         The badge should read like the page badges anyway: one visual
+         language for "speak this". */
+      font-family: system-ui, -apple-system, sans-serif; font-size: 12px;
       font-weight: 600; letter-spacing: 0.03em;
       background: rgba(240, 246, 252, 0.16); color: #f0f6fc;
       border: 1px solid #4b535c;
