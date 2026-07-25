@@ -24,6 +24,16 @@ export async function forwardDispatchResult(result: DispatchResult): Promise<voi
   await postToPlugin('/dispatch-result', result);
 }
 
+// Correlated reply for the tab-surgery request/response pattern
+// (query_windows / move_active_tab_to_window / pop_active_tab). The plugin
+// parks a waiter on request_id; unlike the fire-and-forget result posts
+// above, a lost reply leaves that waiter to its timeout — still best-effort,
+// but worth the ensureConnected retry.
+export async function postSurgeryResult(body: Record<string, unknown>): Promise<void> {
+  if (!(await ensureConnected())) return;
+  await postToPlugin('/surgery/result', body);
+}
+
 export async function forwardDebugLog(tag: string, data: unknown): Promise<void> {
   if (!(await ensureConnected())) return;
   await postToPlugin('/debug-log', { tag, data });

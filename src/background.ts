@@ -38,6 +38,7 @@ import {
 import { saveReferenceToCollection, pushReferenceNames, hydrateReferencesFromCollection } from './background/references';
 import { handleDebugSnapshot } from './background/debug-snapshot';
 import { TAB_ACTION_BY_ID, ZOOM_ACTION_BY_ID, handleTabAction, handleZoomAction, switchToTabById } from './background/tab-actions';
+import { SURGERY_ACTIONS, handleSurgeryAction } from './background/tab-surgery';
 import {
   publishPaletteVoice, clearPaletteVoice, handlePaletteAction, handlePaletteBootstrap,
   handlePaletteVoiceSelect, handlePaletteVoiceDismiss, clearPaletteForClosedTab,
@@ -195,6 +196,14 @@ function handleSSEEvent(data: any): void {
   if (tabAction) {
     const n = parseInt(data.params?.index ?? '', 10);
     void handleTabAction(tabAction, Number.isFinite(n) ? n : undefined);
+    return;
+  }
+
+  // Tab-surgery request/response (plugin tab-to-desk orchestration) — like
+  // the tab verbs, background-only chrome.windows/tabs work; each request is
+  // answered on POST /surgery/result. See background/tab-surgery.ts.
+  if (SURGERY_ACTIONS.has(data.action)) {
+    handleSurgeryAction(data.action, data.params);
     return;
   }
 
