@@ -87,7 +87,10 @@
     <div id="panel">
       <input id="query" type="text" placeholder="Search tabs and commands…"
              autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
-      <div id="list"></div>
+      <!-- Probe row: removed by palette.js at boot. Still visible = the
+           script never executed (blocked/failed load) — distinct from an
+           init() error, which renders its own message here. -->
+      <div id="list"><div class="empty" id="boot-probe">Palette script did not run — reload the extension, or check the palette frame console.</div></div>
     </div>
   </div>
   <script src="palette.js"></script>

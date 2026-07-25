@@ -33,6 +33,10 @@ const queryInput = document.getElementById('query') as HTMLInputElement;
 const listEl = document.getElementById('list') as HTMLDivElement;
 const backdrop = document.getElementById('backdrop') as HTMLDivElement;
 
+// The script ran — clear the static "script did not run" probe row so what
+// remains in #list is always the truth of how far boot got (see palette.html).
+document.getElementById('boot-probe')?.remove();
+
 // Scope from the host URL: 'tabs' shows only the open-tabs source (Ctrl+T /
 // voice "tab"); anything else is the full command station.
 const scope = new URLSearchParams(location.search).get('scope') === 'tabs' ? 'tabs' : 'all';
@@ -358,4 +362,13 @@ async function init(): Promise<void> {
   renderCurrent();
 }
 
-void init();
+init().catch((err: unknown) => {
+  // An empty palette means init died before its first render — surface the
+  // failure IN the overlay so a field report can name it instead of "it's
+  // just empty" (Firefox, 2026-07-25). The static panel renders without JS,
+  // so without this the failure mode is indistinguishable from no data.
+  listEl.textContent = '';
+  const msg = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  listEl.appendChild(el('div', 'empty', `Palette failed to load — ${msg}`));
+  console.error('[BranchKit palette] init failed:', err);
+});
