@@ -176,7 +176,15 @@ setUnroutablePullReporter((codeword, action) => {
 // a failure self-heals on the next connect. See notes/DESIGN_COMMAND_CONTRIBUTION.md.
 async function contributeCommands(): Promise<void> {
   try {
-    await postToPlugin('/commands/contribute', { commands: buildCommandContributions() });
+    // conn_id scopes the contribution to THIS browser. The plugin used to keep
+    // one global set replaced wholesale, so a second browser — or this one
+    // reconnecting mid-boot — with a partially-assembled catalog deleted the
+    // other's commands, silently: a missing command just stops being speakable
+    // and its words leave the engine grammar, so a mishear takes its place.
+    await postToPlugin('/commands/contribute', {
+      conn_id: connId,
+      commands: buildCommandContributions(),
+    });
   } catch {
     // Plugin unreachable — retried on the next connect.
   }
