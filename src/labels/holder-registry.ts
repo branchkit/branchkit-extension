@@ -154,6 +154,15 @@ export type CodewordOutcome =
   | { kind: 'swallowed'; holder: string }
   | { kind: 'none' };
 
+/** The three ranks of the design's ordering contract — exclusive overlays
+ *  outrank additive ones, which outrank ambient. Declared here because the
+ *  ranks are the REGISTRY's language: a holder picks its role by registering
+ *  at one of these, and `resolveCodewordAboveAmbient` cuts at the ambient
+ *  rank, so none of them is a magic number in an owner module. */
+export const EXCLUSIVE_OVERLAY_PRIORITY = 200; // the range pick
+export const ADDITIVE_OVERLAY_PRIORITY = 100;  // search badges
+export const AMBIENT_PRIORITY = 0;             // the wrapper store
+
 // Registration order is preserved as the tiebreak for equal priorities, so
 // the sort below is deterministic without holders having to know about each
 // other. An array, not a Set: the registry is passive data plus fan-out —
@@ -189,6 +198,32 @@ export function holdersByPriority(): readonly CodewordHolder[] {
  */
 export function resolveCodeword(codeword: string): CodewordOutcome {
   for (const h of holdersByPriority()) {
+    const out = h.resolve(codeword);
+    if (out !== 'not_mine') return { kind: out, holder: h.id };
+    if (h.claim === 'exclusive') return { kind: 'swallowed', holder: h.id };
+  }
+  return { kind: 'none' };
+}
+
+/**
+ * Act on a whole codeword among the holders ABOVE the ambient tier,
+ * exclusivity included. 'none' means no overlay holder claimed it and nothing
+ * exclusive is live — the caller owns what happens next.
+ *
+ * Exists for the input whose downstream is RICHER than the ambient holder's
+ * resolve: the spoken activate path resolves elements snapshot-first (the
+ * wrapper the user SAW at hint-show, surviving SPA churn during the spoken
+ * word — activate/activate-resolution.ts), gates on the sealed strict
+ * viewport, and carries per-dispatch reporting and the tab-target variants,
+ * none of which a `(codeword) -> outcome` hook can carry. The typed path has
+ * no snapshot and no dispatch params, so its store leg IS the ambient
+ * holder's resolve and it calls `resolveCodeword` above. The order ABOVE the
+ * ambient tier is what the two inputs share, and this is that order; the cut
+ * is the declared ambient rank, not a named module.
+ */
+export function resolveCodewordAboveAmbient(codeword: string): CodewordOutcome {
+  for (const h of holdersByPriority()) {
+    if (h.priority <= AMBIENT_PRIORITY) break;
     const out = h.resolve(codeword);
     if (out !== 'not_mine') return { kind: out, holder: h.id };
     if (h.claim === 'exclusive') return { kind: 'swallowed', holder: h.id };
@@ -273,6 +308,13 @@ export function rejectAll(codeword: string): void {
  *  (the discriminated hook; see SETTLE_KINDS). */
 export function reconcileAll(settle: SettleKind): void {
   for (const h of holders) h.reconcile(settle);
+}
+
+/** The alphabet or display mode changed — every holder re-renders its badge
+ *  text. The store-only loop this replaces left chips and search badges
+ *  wearing the old alphabet's words after a swap. */
+export function relabelAll(): void {
+  for (const h of holders) h.relabel();
 }
 
 /** Does anyone hold this codeword? The leak sweep's one question, answered

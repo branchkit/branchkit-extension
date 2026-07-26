@@ -43,10 +43,14 @@
 import type { WrapperStore, ElementWrapper } from '../scan/element-wrapper';
 import {
   CodewordHolder, HolderOutcome, SettleKind, prefixClaimedByOther,
+  AMBIENT_PRIORITY,
 } from './holder-registry';
 
-/** Ambient — the default the additive holders fall through to. */
-export const STORE_HOLDER_PRIORITY = 0;
+/** Ambient — the default the additive holders fall through to, and the rank
+ *  the spoken path's `resolveCodewordAboveAmbient` cuts at (the spoken
+ *  element leg resolves snapshot-first with dispatch context this interface
+ *  cannot carry). */
+export const STORE_HOLDER_PRIORITY = AMBIENT_PRIORITY;
 
 /**
  * The store behaviors content.ts owns today, injected at wiring time.
@@ -55,14 +59,24 @@ export const STORE_HOLDER_PRIORITY = 0;
  * the call site each one came from.
  */
 export interface StoreHolderDelegates {
-  /** Paint the prefix onto the hints ('' resets) and decide the reveal.
-   *  `claimedElsewhere` is the registry's answer to "can any OTHER holder
-   *  finish this prefix" — hidden hints reveal only when it is false and the
-   *  store itself matches, which is the rule whose two drifted copies
-   *  re-painted hints find had hidden (activate/codeword-routing.ts). */
+  /** Paint the prefix onto the hints ('' resets). The reveal DECISION is not
+   *  the delegate's — `StoreHolder.narrow` owns the rule and calls `reveal`
+   *  below; `claimedElsewhere` is passed through for the delegate's own
+   *  narrowing display. */
   narrow(prefix: string, claimedElsewhere: boolean): void;
-  /** Activate a resolved wrapper (content's activateWrapper: dispatch
-   *  bookkeeping, pendingHintAction, the works). */
+  /** Paint the page's hints if they are currently hidden. The store's hints
+   *  can be HIDDEN while their codewords stay published (find's onActivate
+   *  hides them; manual mode starts hidden), so a prefix can arrive for a
+   *  badge nobody can see — revealing is the only way it can be finished by
+   *  eye. WHEN to reveal is the holder's rule (see narrow); a no-op when the
+   *  badges are already up is the delegate's own guard. */
+  reveal(): void;
+  /** Activate a resolved wrapper (content's activateWrapper) plus the TYPED
+   *  path's sole-completion bookkeeping (new-tab arming, badge hide / hint
+   *  mode exit). Only the typed path reaches this — the spoken path resolves
+   *  elements itself, snapshot-first, with its dispatch params (see
+   *  resolveCodewordAboveAmbient) — so v1 keyboard parity, not the spoken
+   *  path's sealed strict gate, is the contract here. */
   activate(wrapper: ElementWrapper): void;
   /** Re-Put every wrapper's grammar record into the current session. */
   republish(): void;
@@ -125,10 +139,15 @@ export class StoreHolder implements CodewordHolder {
 
   narrow(prefix: string): void {
     if (this.disposed) return;
-    this.delegates.narrow(
-      prefix,
-      prefix !== '' && prefixClaimedByOther(this, prefix),
-    );
+    const claimedElsewhere = prefix !== '' && prefixClaimedByOther(this, prefix);
+    // The reveal rule, in its ONE tested home: hidden hints reveal only when
+    // the store itself can finish the prefix and no other holder claims it —
+    // revealing on a search badge's prefix is the drifted copy that re-painted
+    // every link hint find had just hidden (2026-07-26).
+    if (prefix !== '' && !claimedElsewhere && this.matchesPrefix(prefix)) {
+      this.delegates.reveal();
+    }
+    this.delegates.narrow(prefix, claimedElsewhere);
   }
 
   resolve(codeword: string): HolderOutcome {
@@ -137,8 +156,10 @@ export class StoreHolder implements CodewordHolder {
     // wrapper to activate.
     if (this.disposed || codeword === '') return 'not_mine';
     // Claim-level lookup, NOT store.byCodeword — see the header. Off-screen
-    // refusal is deliberately not this holder's: the element path has its own
-    // sealed strict gate at dispatch, and the activate delegate carries it.
+    // refusal is deliberately not this holder's: only the typed path reaches
+    // this resolve, and it keeps v1 keyboard parity (see the activate
+    // delegate's doc); the spoken path's sealed strict gate stays with the
+    // spoken path's own element resolution.
     const w = this.store.all.find((lw) => lw.scanned.codeword === codeword);
     if (!w) return 'not_mine';
     this.delegates.activate(w);

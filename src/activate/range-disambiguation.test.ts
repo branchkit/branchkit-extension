@@ -54,22 +54,9 @@ vi.mock('../plugin/resolve', () => ({
   reportDispatchResult: () => {},
 }));
 
-// The chips are the first non-element codeword holder; capture the registration
-// so the tests can drive the two sweeps that would otherwise never see them.
-// `vi.hoisted` because the module registers at import time, which runs before a
-// plain `let` in this file is initialized.
-type Holder = {
-  held: () => Iterable<string>;
-  republish: () => void;
-  onCodewordRejected: (codeword: string) => void;
-};
-const captured = vi.hoisted(() => ({ holder: null as Holder | null }));
-vi.mock('../labels/codeword-holders', () => ({
-  registerCodewordHolder: (h: Holder) => {
-    captured.holder = h;
-    return () => { captured.holder = null; };
-  },
-}));
+// The chips register in the REAL holder registry (no mock — synthetic
+// participants over module replacement, per the design's testing strategy);
+// the sweeps drive the registry's own fan-outs.
 
 // Chips are real HintBadges now (render/badge-variant.ts RANGE_PICK_VARIANT).
 // Substituting a recording fake is what BadgeHandle exists for — it asserts
@@ -130,11 +117,15 @@ const pickWindowPosts: string[][] = [];
 
 import { RANGE_PICK_VARIANT } from '../render/badge-variant';
 import {
-  startRangePick, resolveRangePick, cancelRangePick, isRangePickPending,
-  filterRangePickChips, reconcileRangePickChips, MAX_RANGE_BADGES,
-  rangePickPrefixMatch, rangePickSoleMatch, setPickWindowHooks,
+  startRangePick, cancelRangePick, isRangePickPending,
+  MAX_RANGE_BADGES, setPickWindowHooks,
   type PickEntryState,
 } from './range-disambiguation';
+import {
+  __resetHolderRegistry, resolveCodeword, anyHolderMatchesPrefix,
+  narrowByPrefix, soleHolderMatch, republishAll, rejectAll, reconcileAll,
+  allHeld,
+} from '../labels/holder-registry';
 
 function makeRange(text = 'x'): Range {
   const el = document.createElement('p');
@@ -167,6 +158,7 @@ describe('range-disambiguation pick', () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    __resetHolderRegistry();
     claimed.length = 0;
     released.length = 0;
     publishedRecords.length = 0;
@@ -195,7 +187,7 @@ describe('range-disambiguation pick', () => {
     expect(isRangePickPending('bravo')).toBe(true);
     expect(isRangePickPending('zulu')).toBe(false);
 
-    expect(resolveRangePick('bravo')).toBe('picked');
+    expect(resolveCodeword('bravo')).toEqual({ kind: 'acted', holder: 'pick' });
     expect(picks).toHaveLength(1);
     expect(picks[0]).toBe(ranges[1]);
     // Teardown: chips gone, codewords retired + released.
@@ -210,21 +202,23 @@ describe('range-disambiguation pick', () => {
     startRangePick([makeRange(), makeRange()], () => {});
     const [ab, cd] = liveBadges();
     expect(liveBadges()).toHaveLength(2);
-    // Prefix 'a': the 'a b' chip stays live with its prefix marked, 'c d'
-    // is marked non-candidate (which the range-pick variant renders as a dim
-    // in place, not a hide — see render/badge-variant.ts).
-    expect(filterRangePickChips('a')).toBe(true);
+    // Prefix 'a' through the registry: the exclusive chips take the progress;
+    // the 'a b' chip stays live with its prefix marked, 'c d' is marked
+    // non-candidate (which the range-pick variant renders as a dim in place,
+    // not a hide — see render/badge-variant.ts).
+    narrowByPrefix('a');
     expect(ab.filtered).toBe(false);
     expect(ab.matchedChars).toBe(1);
     expect(cd.filtered).toBe(true);
     // Empty prefix = pair cancelled — everything resets.
-    filterRangePickChips('');
+    narrowByPrefix('');
     expect(ab.filtered).toBe(false);
     expect(ab.matchedChars).toBe(0);
     expect(cd.filtered).toBe(false);
-    // No pick live → false, so content falls through to the store hints.
+    // No pick live → the holder is unregistered, so the keyboard's accept
+    // gate no longer answers for chips and progress falls through.
     cancelRangePick('test');
-    expect(filterRangePickChips('a')).toBe(false);
+    expect(anyHolderMatchesPrefix('a')).toBe(false);
   });
 
   it('chips are ordinary badges: range-pick variant, shown, and placed', () => {
@@ -243,15 +237,18 @@ describe('range-disambiguation pick', () => {
     nextClaim = ['a b', 'a c'];
     startRangePick([makeRange(), makeRange()], () => {});
     const [ab, ac] = liveBadges();
-    filterRangePickChips('ab');
+    narrowByPrefix('ab');
     expect(ab.filtered).toBe(false);
     expect(ab.matchedChars).toBe(2);
     expect(ac.filtered).toBe(true);
   });
 
-  it('ignores codewords that are not part of the pick', () => {
+  it('SWALLOWS codewords that are not part of the pick — the exclusive claim', () => {
     startRangePick([makeRange(), makeRange()], () => {});
-    expect(resolveRangePick('zulu')).toBe('not_mine');
+    // Not 'none': while the question is up, a stray badge codeword must not
+    // fall through and click a link out from under it. The caller owns the
+    // refusal guidance, keyed on the named holder.
+    expect(resolveCodeword('zulu')).toEqual({ kind: 'swallowed', holder: 'pick' });
     expect(isRangePickPending()).toBe(true);
   });
 
@@ -333,7 +330,7 @@ describe('range-disambiguation pick', () => {
       startRangePick([makeRange('near'), makeRange('far')], (r) => picks.push(r));
       await Promise.resolve();
 
-      expect(resolveRangePick('bravo')).toBe('off_screen'); // 'far'
+      expect(resolveCodeword('bravo')).toEqual({ kind: 'off_screen', holder: 'pick' }); // 'far'
       expect(picks).toEqual([]);
       expect(isRangePickPending()).toBe(true);   // still live — scroll and retry
       expect(isRangePickPending('bravo')).toBe(true); // codeword kept
@@ -341,9 +338,9 @@ describe('range-disambiguation pick', () => {
 
       // Scroll to it and the same codeword now works.
       view.scrollTo(['near', 'far']);
-      reconcileRangePickChips();
+      reconcileAll('general');
       await Promise.resolve();
-      expect(resolveRangePick('bravo')).toBe('picked');
+      expect(resolveCodeword('bravo')).toEqual({ kind: 'acted', holder: 'pick' });
       expect(picks.map(String)).toEqual(['far']);
     } finally { view.restore(); }
   });
@@ -359,7 +356,7 @@ describe('range-disambiguation pick', () => {
 
       // 'far' slides past the fold with NO reconcile — Chip.strict still true.
       view.scrollTo(['near'], ['far']);
-      expect(resolveRangePick('bravo')).toBe('off_screen');
+      expect(resolveCodeword('bravo')).toEqual({ kind: 'off_screen', holder: 'pick' });
     } finally { view.restore(); }
   });
 
@@ -374,7 +371,7 @@ describe('range-disambiguation pick', () => {
       const before = publishedRecords.length;
 
       view.scrollTo(['near', 'far']); // 'far' is now on screen
-      reconcileRangePickChips();
+      reconcileAll('general');
       await Promise.resolve();
 
       // No membership change — only the eligibility flag is re-sent, and the
@@ -433,7 +430,7 @@ describe('range-disambiguation pick', () => {
       expect(isRangePickPending('alpha')).toBe(true);
 
       view.scrollTo(['three', 'four']);
-      reconcileRangePickChips();
+      reconcileAll('general');
       await Promise.resolve();
 
       // Two chips again — for the matches now on screen, not the old ones.
@@ -443,7 +440,7 @@ describe('range-disambiguation pick', () => {
       expect(released.flat().sort()).toEqual(['alpha', 'bravo']);
       expect(publishedRecords.map(r => r.codeword)).toEqual(
         ['alpha', 'bravo', 'alpha', 'bravo']);
-      expect(resolveRangePick('alpha')).toBe('picked');
+      expect(resolveCodeword('alpha')).toEqual({ kind: 'acted', holder: 'pick' });
       expect(picks[0].toString()).toBe('three');
     } finally { view.restore(); }
   });
@@ -461,7 +458,7 @@ describe('range-disambiguation pick', () => {
       const atArm = deleteCancels.length; // arm-time calls are harmless no-ops
 
       view.scrollTo(['three', 'four']);
-      reconcileRangePickChips();
+      reconcileAll('general');
       await Promise.resolve();
 
       // The reservoir hands the released pair straight back (sticky reclaim),
@@ -480,7 +477,7 @@ describe('range-disambiguation pick', () => {
       expect(isRangePickPending('bravo')).toBe(true);
 
       view.scrollTo(['two', 'three']);
-      reconcileRangePickChips();
+      reconcileAll('general');
       await Promise.resolve();
 
       // Renaming a chip the user is mid-way through reading is the thing to
@@ -498,7 +495,7 @@ describe('range-disambiguation pick', () => {
       await Promise.resolve();
 
       view.scrollTo([]); // nothing on screen
-      reconcileRangePickChips();
+      reconcileAll('general');
       await Promise.resolve();
 
       // Going to zero would leave a live pick that swallows every codeword with
@@ -517,7 +514,7 @@ describe('range-disambiguation pick', () => {
       const postsAtArm = pickWindowPosts.length;
       const publishedAtArm = publishedRecords.length;
 
-      reconcileRangePickChips();
+      reconcileAll('general');
       await Promise.resolve();
 
       expect(pickWindowPosts).toHaveLength(postsAtArm);
@@ -532,11 +529,11 @@ describe('range-disambiguation pick', () => {
     // — a live pick dying on a wall clock the module says it doesn't have.
     startRangePick([makeRange('a'), makeRange('b')], () => {});
     await Promise.resolve();
-    expect([...(captured.holder?.held() ?? [])].sort()).toEqual(['alpha', 'bravo']);
+    expect(allHeld().sort()).toEqual(['alpha', 'bravo']);
 
     // And stops declaring them the moment the pick ends, or the fix becomes a leak.
     cancelRangePick('test');
-    expect([...(captured.holder?.held() ?? [])]).toEqual([]);
+    expect(allHeld()).toEqual([]);
   });
 
   it('re-publishes its records on a session rotation', async () => {
@@ -547,7 +544,7 @@ describe('range-disambiguation pick', () => {
     await Promise.resolve();
     const before = publishedRecords.length;
 
-    captured.holder?.republish();
+    republishAll();
     await Promise.resolve();
 
     const republished = publishedRecords.slice(before);
@@ -560,7 +557,7 @@ describe('range-disambiguation pick', () => {
     startRangePick([makeRange('a'), makeRange('b')], () => {});
     await Promise.resolve();
 
-    captured.holder?.onCodewordRejected('alpha');
+    rejectAll('alpha');
 
     expect(isRangePickPending('alpha')).toBe(false);
     expect(isRangePickPending('bravo')).toBe(true);
@@ -571,8 +568,8 @@ describe('range-disambiguation pick', () => {
     startRangePick([makeRange('a'), makeRange('b')], () => {});
     await Promise.resolve();
 
-    captured.holder?.onCodewordRejected('alpha');
-    captured.holder?.onCodewordRejected('bravo');
+    rejectAll('alpha');
+    rejectAll('bravo');
 
     expect(isRangePickPending()).toBe(false);
     expect(chipCount()).toBe(0);
@@ -587,7 +584,7 @@ describe('range-disambiguation pick', () => {
 
     // The page re-renders 'a' away. A Range never rebinds.
     (a.commonAncestorContainer.parentElement as HTMLElement).remove();
-    reconcileRangePickChips();
+    reconcileAll('general');
     await Promise.resolve();
 
     expect(chipCount()).toBe(1);
@@ -598,7 +595,7 @@ describe('range-disambiguation pick', () => {
     // Now the rest goes too — the pick must not survive as a codeword-swallower
     // with nothing on screen to explain itself.
     (b.commonAncestorContainer.parentElement as HTMLElement).remove();
-    reconcileRangePickChips();
+    reconcileAll('general');
     await Promise.resolve();
 
     expect(isRangePickPending()).toBe(false);
@@ -614,7 +611,7 @@ describe('range-disambiguation pick', () => {
       startRangePick([makeRange('a'), makeRange('b')], () => {});
       await Promise.resolve();
       const before = chipCount();
-      reconcileRangePickChips();
+      reconcileAll('general');
       await Promise.resolve();
       expect(chipCount()).toBe(before);
       expect(released.flat()).toEqual([]);
@@ -623,12 +620,12 @@ describe('range-disambiguation pick', () => {
 
   it('republish is a no-op with no pick live', () => {
     const before = publishedRecords.length;
-    captured.holder?.republish();
+    republishAll();
     expect(publishedRecords).toHaveLength(before);
   });
 
   it('reconciling with no pick pending does nothing', () => {
-    expect(() => reconcileRangePickChips()).not.toThrow();
+    expect(() => reconcileAll('general')).not.toThrow();
     expect(chipCount()).toBe(0);
   });
 
@@ -642,7 +639,7 @@ describe('range-disambiguation pick', () => {
     await Promise.resolve();
     expect(pickWindowPosts).toEqual([['alpha', 'bravo']]);
 
-    resolveRangePick('alpha');
+    resolveCodeword('alpha');
     expect(pickWindowPosts).toEqual([['alpha', 'bravo'], []]);
   });
 
@@ -759,7 +756,7 @@ describe('range-disambiguation pick', () => {
       expect(entered).toBe(1);
       expect(restored).toEqual([]);
 
-      resolveRangePick('alpha');
+      resolveCodeword('alpha');
       expect(restored).toEqual([{ badgesVisible: true, hintMode: true }]);
     });
 
@@ -787,7 +784,7 @@ describe('range-disambiguation pick', () => {
       await Promise.resolve();
       (a.commonAncestorContainer.parentElement as HTMLElement).remove();
       (b.commonAncestorContainer.parentElement as HTMLElement).remove();
-      reconcileRangePickChips();
+      reconcileAll('general');
       await Promise.resolve();
 
       expect(isRangePickPending()).toBe(false);
@@ -808,16 +805,18 @@ describe('range-disambiguation pick', () => {
     nextClaim = ['a b', 'c d'];
     startRangePick([makeRange(), makeRange()], () => {});
     expect(chipCount()).toBe(2);
-    expect(rangePickPrefixMatch('a')).toBe(true);
-    expect(rangePickPrefixMatch('z')).toBe(false);
+    expect(anyHolderMatchesPrefix('a')).toBe(true);
+    // Exclusive: the chips answer ALONE — a letter no chip can complete is
+    // refused rather than falling through to anything underneath.
+    expect(anyHolderMatchesPrefix('z')).toBe(false);
     // Narrowed to exactly one: what lets typing fire where speaking a whole
     // codeword would.
-    expect(rangePickSoleMatch('a')).toBe('a b');
-    expect(rangePickSoleMatch('')).toBe(null);
+    expect(soleHolderMatch('a')).toBe('a b');
+    expect(soleHolderMatch('')).toBe(null);
 
+    // No pick up: the holder is gone from the registry, so the fall-through
+    // to whatever else is registered happens by construction.
     cancelRangePick('test');
-    // No pick up: null, not false — "nobody is asking" differs from "no match",
-    // and the keyboard needs to tell them apart to fall through to the hints.
-    expect(rangePickPrefixMatch('a')).toBe(null);
+    expect(anyHolderMatchesPrefix('a')).toBe(false);
   });
 });

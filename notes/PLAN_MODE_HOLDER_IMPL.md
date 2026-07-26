@@ -4,7 +4,18 @@
 **Status:** Wave 1 LANDED + committed 2026-07-26 (ext `3b37642`, browser
 `64f55cc`, app `90d3bbb`; not pushed). Wave 2 design pass done 2026-07-26 —
 the design doc's three open questions are resolved and it now carries the
-testing strategy this plan's Wave 2 builds against.
+testing strategy this plan's Wave 2 builds against. Wave 2 LANDED 2026-07-26
+(`40c946f`..`171163d`). Wave 3 C1 LANDED 2026-07-26: every sweep is
+registry-derived, `codeword-routing.ts` + `codeword-holders.ts` (v1) deleted,
+`StoreCodewordHooks` retired per the wave checkpoint; C1b (teardown fan-out
+on the orphan path) is the next, separate commit. One C1 deviation from the
+design's sketch: the spoken activate path consults
+`resolveCodewordAboveAmbient` — the registry loop cut at the declared ambient
+rank — instead of the full `resolveCodeword`, because its element leg
+(snapshot-first resolution, sealed strict gate, tab-target variants,
+dispatch reporting) is the ambient store's answer for that input and cannot
+ride a `(codeword) -> outcome` hook; the typed path uses the full loop, with
+the store's sole-completion bookkeeping folded into its activate delegate.
 **Repos touched:** `branchkit-extension` (bulk), `plugins/browser` (tag mirror),
 `app` (pin bumps only).
 

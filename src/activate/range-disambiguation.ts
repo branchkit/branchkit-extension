@@ -9,18 +9,20 @@
  * This module is POLICY. The badges themselves — claiming from the pool,
  * converging on the viewport, following their text, reaping dead ranges,
  * registering as a CodewordHolder — are a `RangeBadgeSet`
- * (render/range-badge-set.ts), which search-match badges will share. What lives
+ * (render/range-badge-set.ts), which search-match badges share. What lives
  * here is what makes a pick a QUESTION rather than an overlay:
  *
  *   - it is modal: the page's own badges hide for the duration, so the screen
  *     shows exactly what's speakable;
- *   - it OWNS the codewords: a stray badge codeword must not click a link out
- *     from under the question (refusePickWindowCodeword), and the plugin-side
- *     projection narrows to the chips so the HUD advertises only them;
+ *   - it OWNS the codewords: `claim: 'exclusive'` in the holder registry
+ *     (labels/holder-registry.ts) — while the chips are up, the registry
+ *     swallows every non-chip codeword so a stray badge codeword cannot click
+ *     a link out from under the question, and the plugin-side projection
+ *     narrows to the chips so the HUD advertises only them;
  *   - it is singular: one pending question at a time, answered or exited.
  *
- * Search will want none of those — it should ADD badges alongside link hints —
- * which is exactly why they are here and not in the set.
+ * Search wants none of those — it ADDS badges alongside link hints — which is
+ * exactly why they are here and not in the set.
  */
 
 import { RangeBadgeSet } from '../render/range-badge-set';
@@ -28,7 +30,7 @@ import { RANGE_PICK_VARIANT } from '../render/badge-variant';
 import { flashToast } from '../render/toast';
 import { clearFindPaint } from '../scan/find';
 import { bkLog } from '../debug/bk-log';
-import { reportDispatchResult } from '../plugin/resolve';
+import { EXCLUSIVE_OVERLAY_PRIORITY, type HolderOutcome } from '../labels/holder-registry';
 import type { Message } from '../types';
 
 /**
@@ -128,16 +130,9 @@ export function isRangePickPending(codeword?: string): boolean {
   return codeword === undefined || pending.chips.has(codeword);
 }
 
-export type RangePickOutcome =
-  /** The codeword named a chip the user can see; the pick fired. */
-  | 'picked'
-  /** The codeword is this pick's, but its match is off screen — refused. */
-  | 'off_screen'
-  /** Not a chip codeword; the caller continues to element resolution. */
-  | 'not_mine';
-
 /**
- * Consume a spoken codeword if it belongs to the pending pick.
+ * The pick's resolve policy (RangeHolderSpec.resolve — the registry routes
+ * both input paths here through the holder the set registers).
  *
  * Seen-is-pickable, enforced live at dispatch — the same rule the element path
  * applies in content's `sealedDispatchSeen`, for the same reason. The band
@@ -150,7 +145,7 @@ export type RangePickOutcome =
  * CSS-visibility check (see RangeBadgeSet's band candidates), so a chip hidden
  * by an overlay is still pickable. That's a known gap, not parity.
  */
-export function resolveRangePick(codeword: string): RangePickOutcome {
+function resolvePickCodeword(codeword: string): HolderOutcome {
   if (!pending) return 'not_mine';
   const range = pending.chips.rangeFor(codeword);
   if (!range) return 'not_mine';
@@ -162,7 +157,7 @@ export function resolveRangePick(codeword: string): RangePickOutcome {
   const onPick = pending.onPick;
   teardown('picked');
   onPick(range);
-  return 'picked';
+  return 'acted';
 }
 
 /** Cancel any pending pick (new arm replaces old, escape, requery, nav). */
@@ -171,55 +166,16 @@ export function cancelRangePick(reason: string): void {
 }
 
 /**
- * Pick-window codeword guard: while chips are up they OWN the codewords — a
- * stray badge codeword must not click a link out from under the question the
- * chips are asking. Returns true when the codeword was swallowed (the caller
- * stops); flashes guidance and reports the refusal. The pick stays live —
- * "escape" (voice or the Escape key) ends it, then the badges and their
- * codewords come back.
- */
-export function refusePickWindowCodeword(action: string, codeword: string): boolean {
-  if (!pending || pending.chips.has(codeword)) return false;
-  flashToast('Pick a highlighted match — or say "escape"');
-  reportDispatchResult({
-    action, codeword, resolution: 'range_pick', elem_tag: '',
-    taken: 'skipped', ok: false,
-    frame: `${location.origin}${location.pathname}`.slice(0, 200),
-    detail: 'pick pending — codeword is not a chip', fp: '',
-  });
-  return true;
-}
-
-/**
- * Mid-pair progress on the chips — literally the same calls the store hints
- * get; the range-pick variant is what makes them read differently. `prefix` is
- * the SW-translated letter form; '' resets (pair cancelled).
- *
- * Returns true iff a pick is live, so the caller (content's progress handler)
- * routes progress HERE instead of the store hints — without this, speaking a
- * chip's first word re-showed the very badges the pick window just hid.
- */
-/** Can any live chip complete `prefix`? Null when no pick is up. */
-export function rangePickPrefixMatch(prefix: string): boolean | null {
-  if (!pending) return null;
-  return pending.chips.matchesPrefix(prefix);
-}
-
-/** The one chip `prefix` still leaves, if exactly one — the typed-completion
- *  counterpart of speaking a whole codeword. */
-export function rangePickSoleMatch(prefix: string): string | null {
-  return pending ? pending.chips.soleMatch(prefix) : null;
-}
-
-export function filterRangePickChips(prefix: string): boolean {
-  if (!pending) return false;
-  pending.chips.filterByPrefix(prefix);
-  return true;
-}
-
-/**
  * Start a disambiguation pick over the given ranges. Ranges beyond
  * MAX_RANGE_BADGES are dropped with a visible toast (no silent truncation).
+ *
+ * The set registers as an EXCLUSIVE CodewordHolder for the chips' lifetime,
+ * which is what makes the pick a question: mid-pair progress routes to the
+ * chips alone, the keyboard's accept gate answers for them alone, and a
+ * codeword nothing holds is SWALLOWED by the registry rather than falling
+ * through to hints the window hid (the callers own the refusal toast). The
+ * prefix/sole/narrow surface that used to be exported from here is the
+ * holder's now — one order, derived, both inputs.
  */
 export function startRangePick(ranges: Range[], onPick: (range: Range) => void): void {
   cancelRangePick('replaced');
@@ -229,6 +185,12 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
     variant: RANGE_PICK_VARIANT,
     budget: MAX_RANGE_BADGES,
     logTag: 'BK_RANGE_PICK',
+    holder: {
+      id: 'pick',
+      priority: EXCLUSIVE_OVERLAY_PRIORITY,
+      claim: 'exclusive',
+      resolve: (cw) => resolvePickCodeword(cw),
+    },
     // Arm the plugin-side narrow with whatever is live, whenever that changes.
     onMembershipChanged: (codewords) => publishPickWindow(codewords),
     onEmpty: () => {
@@ -272,15 +234,8 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
 // Null means "never entered the window" — nothing to give back.
 let entryOnEmpty: PickEntryState | null = null;
 
-/**
- * Re-derive which matches wear a chip, as a rolling window over the viewport.
- * Driven by the settle engine's existing `afterSettle` hook (content.ts) — EVERY
- * settle kind, because a chip's text reflows without a scroll — so it adds no
- * observer, timer or listener.
- */
-export function reconcileRangePickChips(): void {
-  pending?.chips.reconcile();
-}
+// (Settle-driven chip reconciliation is the registered holder's now — the
+// registry's reconcileAll fan-out reaches the set directly, every kind.)
 
 function teardown(reason: string): void {
   if (!pending) return;

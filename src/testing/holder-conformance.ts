@@ -16,10 +16,18 @@
  *
  * THE FACTORY CONTRACT: each call must
  *   - reset the holder registry (__resetHolderRegistry),
- *   - construct a FRESH holder holding nothing,
- *   - register it (registration is liveness — the suite checks it),
- *   - return it with a grant() that makes it hold codewords, end to end:
- *     after grant(['ab']), held() yields 'ab' and resolve('ab') acts.
+ *   - return a harness whose grant() makes the holder hold codewords, end to
+ *     end: after grant(['ab']), held() yields 'ab' and resolve('ab') acts.
+ *
+ * Two LIVENESS MODELS, declared per participant (the suite's third arg):
+ *   - 'ambient' (default): the holder exists and is registered EMPTY at
+ *     factory return — the store's shape.
+ *   - 'armed': registration IS liveness — the holder is born holding (a
+ *     RangeBadgeSet registers when created with ranges and unregisters when
+ *     it empties or disposes), so `harness.holder` exists only after the
+ *     first grant, grant() arms (the suite grants at most once per test),
+ *     and the suite additionally checks that dispose UNREGISTERS — the
+ *     property that makes an exclusive holder in the list a live question.
  *
  * Codewords are word-form pool tokens; their letter form is the codeword
  * with spaces stripped (labels/words.ts), and prefixes are letter-form.
@@ -119,27 +127,46 @@ export function makeSyntheticHolder(opts: {
   };
 }
 
+export interface ConformanceOpts {
+  /** See the factory contract above. Default 'ambient'. */
+  liveness?: 'ambient' | 'armed';
+}
+
 /**
  * The shared suite. Invariants every holder must pass, whatever it badges —
  * see the design doc's Testing strategy for the list this implements.
  */
-export function describeCodewordHolderConformance(name: string, factory: HolderFactory): void {
+export function describeCodewordHolderConformance(
+  name: string, factory: HolderFactory, opts: ConformanceOpts = {},
+): void {
+  const armed = opts.liveness === 'armed';
   describe(`CodewordHolder conformance: ${name}`, () => {
-    it('the factory registers the holder (registration is liveness)', () => {
-      const h = factory();
-      expect(holdersByPriority()).toContain(h.holder);
-    });
+    if (armed) {
+      it('registration IS liveness: grant registers, dispose unregisters', () => {
+        const h = factory();
+        expect(holdersByPriority()).toHaveLength(0);
+        h.grant(['ab']);
+        expect(holdersByPriority()).toContain(h.holder);
+        h.holder.dispose('conformance');
+        expect(holdersByPriority()).not.toContain(h.holder);
+      });
+    } else {
+      it('the factory registers the holder (registration is liveness)', () => {
+        const h = factory();
+        expect(holdersByPriority()).toContain(h.holder);
+      });
+    }
 
     it('held() reflects grants, at the holder\'s own bookkeeping', () => {
       const h = factory();
-      expect(heldSet(h.holder).size).toBe(0);
+      if (!armed) expect(heldSet(h.holder).size).toBe(0);
       h.grant(['ab', 'ad']);
       expect(heldSet(h.holder)).toEqual(new Set(['ab', 'ad']));
     });
 
     it('resolve answers not_mine for a codeword it does not hold', () => {
       const h = factory();
-      expect(h.holder.resolve('zz')).toBe('not_mine');
+      if (!armed) expect(h.holder.resolve('zz')).toBe('not_mine');
       h.grant(['ab']);
       expect(h.holder.resolve('zz')).toBe('not_mine');
     });
@@ -215,6 +242,12 @@ export function describeCodewordHolderConformance(name: string, factory: HolderF
       // discriminated hook (design doc, resolved question 3): every holder
       // receives every kind, so a new kind surfaces here, in the holder's
       // own conformance run, instead of as a silently unwired subscription.
+      // For an armed holder "nothing is live" is the post-dispose state — the
+      // sweeps still fan out to whatever they saw registered.
+      if (armed) {
+        h.grant(['ab']);
+        h.holder.dispose('conformance');
+      }
       for (const kind of SETTLE_KINDS) {
         h.holder.reconcile(kind);
         expect(heldSet(h.holder).size).toBe(0);
@@ -237,6 +270,7 @@ export function describeCodewordHolderConformance(name: string, factory: HolderF
 
     it('honours its claim contract against a lower-priority holder', () => {
       const h = factory();
+      h.grant(['qq']); // live either way (an armed holder must exist to swallow)
       // A synthetic probe UNDER the participant that would act on 'zz'.
       const probe = makeSyntheticHolder({
         id: '__conformance_probe',

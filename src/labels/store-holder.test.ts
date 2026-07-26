@@ -47,16 +47,18 @@ function claimedWrapper(codeword: string): ElementWrapper {
 interface Recorded {
   calls: string[];
   narrows: Array<{ prefix: string; claimedElsewhere: boolean }>;
+  reveals: number;
   activated: ElementWrapper[];
 }
 
 function makeDelegates(store: ObservableWrapperStore): { delegates: StoreHolderDelegates; rec: Recorded } {
-  const rec: Recorded = { calls: [], narrows: [], activated: [] };
+  const rec: Recorded = { calls: [], narrows: [], reveals: 0, activated: [] };
   const delegates: StoreHolderDelegates = {
     narrow: (prefix, claimedElsewhere) => {
       rec.calls.push(`narrow:${prefix}`);
       rec.narrows.push({ prefix, claimedElsewhere });
     },
+    reveal: () => { rec.calls.push('reveal'); rec.reveals++; },
     activate: (w) => { rec.calls.push('activate'); rec.activated.push(w); },
     republish: () => { rec.calls.push('republish'); },
     onCodewordRejected: (cw) => {
@@ -144,24 +146,31 @@ describe('StoreHolder answers at CLAIM time, never through paint', () => {
 describe('StoreHolder delegate seams', () => {
   beforeEach(() => { __resetHolderRegistry(); });
 
-  it('narrow passes the registry\'s claimed-elsewhere answer for the reveal decision', () => {
+  it('narrow owns the reveal rule: reveal only when the store matches and nothing else claims', () => {
     const h = makeHarness();
     h.grant(['ab']);
-    // Alone in the registry: nothing else can finish 'a'.
+    // Alone in the registry and the store matches: the hidden hints reveal.
     h.holder.narrow('a');
     expect(h.rec.narrows).toEqual([{ prefix: 'a', claimedElsewhere: false }]);
+    expect(h.rec.reveals).toBe(1);
 
-    // A search-shaped holder that can finish 'a' — now revealing the page's
+    // A search-shaped holder that can finish 'a' — revealing the page's
     // hidden hints for this prefix would be the 2026-07-26 live failure.
     const other = makeSyntheticHolder({ id: 'search', priority: 100, claim: 'additive' });
     other.grant(['ax']);
     registerHolder(other.holder);
     h.holder.narrow('a');
     expect(h.rec.narrows[1]).toEqual({ prefix: 'a', claimedElsewhere: true });
+    expect(h.rec.reveals).toBe(1);
 
-    // A reset is never a reveal question.
+    // A prefix the store cannot finish is not a reveal question either.
+    h.holder.narrow('z');
+    expect(h.rec.reveals).toBe(1);
+
+    // Nor is a reset.
     h.holder.narrow('');
-    expect(h.rec.narrows[2]).toEqual({ prefix: '', claimedElsewhere: false });
+    expect(h.rec.narrows[3]).toEqual({ prefix: '', claimedElsewhere: false });
+    expect(h.rec.reveals).toBe(1);
   });
 
   it('pool, geometry, and lifecycle hooks route to their delegates', () => {

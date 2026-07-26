@@ -59,12 +59,14 @@ import { copyText } from './activate/clipboard';
 import { flashToast } from './render/toast';
 import { registerSelectionCommands, restorePosition, caret, resolveSelectTo, SELECTION_ACTIONS, parseSelectionCommand } from './activate/selection-commands';
 import { startQueryFieldReporting } from './plugin/query-field';
-import { refusePickWindowCodeword, setPickWindowHooks, cancelRangePick, reconcileRangePickChips, rangePickPrefixMatch } from './activate/range-disambiguation';
-import { armSearchBadges, clearSearchBadges, reconcileSearchBadges, searchBadgePrefixMatch } from './activate/search-badges';
+import { setPickWindowHooks, cancelRangePick } from './activate/range-disambiguation';
+import { armSearchBadges, clearSearchBadges } from './activate/search-badges';
 import {
-  setStoreCodewordHooks, anyHolderMatchesPrefix, narrowByPrefix, resolveCodeword,
-  soleHolderMatch, resolveHolderCodeword, type HolderOutcome,
-} from './activate/codeword-routing';
+  registerHolder, anyHolderMatchesPrefix, narrowByPrefix, resolveCodeword,
+  resolveCodewordAboveAmbient, soleHolderMatch, heldAnywhere, allHeld,
+  rejectAll, reconcileAll, relabelAll, type CodewordOutcome,
+} from './labels/holder-registry';
+import { StoreHolder } from './labels/store-holder';
 import { runEscapeCascade } from './activate/escape-cascade';
 import { preemptsPageKeys } from './activate/key-preamble';
 import './debug/dev-keepalive';
@@ -121,7 +123,6 @@ import { setScrollAccelEnabled, setScrollAccelNestedEnabled, reconcileScrollAcce
 import { isScrollTimelineSupported } from './render/scroll-accel';
 import { setNudgesFromSettings } from './placement';
 import { labelReservoir } from './labels/label-reservoir';
-import { heldOutsideStore, allHeldOutsideStore, rejectHeldOutsideStore } from './labels/codeword-holders';
 import { doScan, scheduleDoScan } from './scan/scan-orchestrator';
 import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
 import { openLivenessPort, repairLivenessAfterBfcacheRestore } from './plugin/liveness';
@@ -412,19 +413,20 @@ const engine = new SettleEngine(
   {
     showBadges: () => showBadges(),
     notePaintSamplerScroll: () => notePaintSamplerScroll(),
+    // Settle fan-out to every registered CodewordHolder — the discriminated
+    // hook (labels/holder-registry.ts SETTLE_KINDS): every holder receives
+    // every kind the engine distinguishes and self-selects, so a missed
+    // wiring site cannot silently starve one holder (the old
+    // afterScrollSettle-only chip wiring left chips at stale rects on
+    // mutation-driven settles). 'general' fires at the tail of EVERY settle
+    // pass; 'scroll' is the supplemental scroll-settle signal that follows
+    // it. All no-ops when nothing is live.
     afterScrollSettle: () => {
       flushDeferredNavRescan();
+      reconcileAll('scroll');
     },
-    // Roll the Range-anchored badge sets onto whatever moved. Every settle
-    // kind, not just the scroll one: text reflows without a scroll (a
-    // mutation-, resize- or attention-driven settle), and riding scroll alone
-    // left chips at stale rects, dead ranges unreaped, and `in_strict_viewport`
-    // unpublished — a badge that had left the screen stayed speakable. Riding
-    // the settle engine's existing hook rather than sensing of their own keeps
-    // the freeze intact; both are no-ops when nothing is live.
     afterSettle: () => {
-      reconcileRangePickChips();
-      reconcileSearchBadges();
+      reconcileAll('general');
     },
   },
 );
@@ -548,33 +550,13 @@ initLabelSync({
 // Confirm-rejection handler (epoch-handshake Phase 4, review bug #5): the SW
 // pool arbitrated these codewords AWAY from this frame — another frame won
 // the release-vs-confirm race, or the pool no longer knows the string (stale
-// alphabet). The holding wrapper must drop the codeword WITHOUT releaseLabel:
-// a RELEASE_LABELS here would free the WINNER's assignment out from under it.
-// Retract our grammar entry, strip the wrapper back to unhinted, and let the
-// level-triggered reconcile claim it a fresh codeword.
+// alphabet). Fanned to EVERY holder through the registry: chips and search
+// badges drop the losing badge, and the store's delegate (the StoreHolder
+// wiring below) strips the wrapper back to unhinted WITHOUT releaseLabel — a
+// RELEASE_LABELS here would free the WINNER's assignment out from under it.
 labelReservoir.onConfirmRejected((codewords) => {
-  let dropped = 0;
-  for (const cw of codewords) {
-    // Holders outside the store get the same news: a rejected codeword now
-    // addresses another document, so a badge still painted for it here would
-    // act over there.
-    rejectHeldOutsideStore(cw);
-    const w = store.byCodeword(cw);
-    if (!w) continue;
-    if (hasSent(cw)) queueDelete(cw);
-    w.scanned.codeword = '';
-    w.label = null;
-    if (w.hint) {
-      w.hint.remove();
-      w.hint = null;
-    }
-    dropped++;
-  }
-  bkLog('BK_CONFIRM_REJECTED', { codewords: codewords.length, dropped });
-  if (dropped > 0) {
-    engine.reconcile();
-    scheduleSync('confirm_rejected');
-  }
+  for (const cw of codewords) rejectAll(cw);
+  bkLog('BK_CONFIRM_REJECTED', { codewords: codewords.length });
 });
 
 // Reservoir leak sweep (2026-06-29 review): an outstanding codeword no live
@@ -582,31 +564,15 @@ labelReservoir.onConfirmRejected((codewords) => {
 // release-skipping teardown path; the reservoir releases it back to the
 // pool, and we clear the plugin-side grammar entry it may still occupy.
 labelReservoir.installLeakSweep(
-  // The store is not the only thing that holds codewords: the range-pick chips
-  // (and, next, search-match badges) hold them outside it by design. Without
-  // the second clause the sweep reclaimed a LIVE pick's codewords after the
-  // 30s grace — releasing them back to the pool AND deleting them plugin-side
-  // while the chips stayed painted, so the pick silently stopped working and
-  // the freed letters could be re-granted to a hint. See
-  // labels/codeword-holders.ts.
-  //
-  // The store half asks about the CLAIM, not the paint. It used to ask
-  // `store.byCodeword(cw)`, which resolves through `w.label` — written at PAINT
-  // time (settle-engine `prepareBadge`) — whereas `w.scanned.codeword` is
-  // written at CLAIM time (observe/intersection-tracker, on viewport entry). A
-  // wrapper between the two answered "nobody holds this", so past the 30s grace
-  // the sweep reclaimed a LIVE wrapper's codeword: re-grantable to a second
-  // hint while the first still believed it owned the letters, and deleted
-  // plugin-side so speaking it did nothing. Under manual hint visibility — or
-  // any window where badges are hidden (a find session, a momentary Shift+F) —
-  // paint never arrives and the gap is indefinite, not a race.
-  //
-  // The claim-level read SUBSUMES the paint-level one (`label` is derived from
-  // `scanned.codeword` at every writer), so this is strictly wider, not an
-  // alternative to keep in sync. Same complexity too: `byCodeword` was already
-  // a linear `.find()` over the same array. Tests: scan/element-wrapper.test.ts
-  // "claimed-vs-painted".
-  (cw) => store.all.some((lw) => lw.scanned.codeword === cw) || heldOutsideStore(cw),
+  // "Does anyone still hold this codeword?" — the registry's question, each
+  // holder answering about its own bookkeeping (labels/holder-registry.ts).
+  // The chips and search badges answer for themselves; the store answers at
+  // CLAIM level through the StoreHolder (labels/store-holder.ts — `label` is
+  // only assigned at paint time, and the sweep's old paint-level byCodeword
+  // read reclaimed a LIVE claimed-but-unpainted wrapper's codeword; tests in
+  // scan/element-wrapper.test.ts "claimed-vs-painted"). This is the form that
+  // cannot drift when the store's shape changes.
+  (cw) => heldAnywhere(cw),
   (leaked) => {
     let deletesQueued = 0;
     for (const cw of leaked) {
@@ -825,12 +791,11 @@ if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
     if (changes.alphabet?.newValue) {
       setAlphabet(changes.alphabet.newValue);
       rotateSession();
-      for (const w of store.all) {
-        if (!w.scanned.codeword) continue;
-        w.label = poolLabelToAssignment(w.scanned.codeword);
-        w.hint?.updateLabel(w.label, getDisplayMode());
-        queuePut(w);
-      }
+      // Every holder re-renders its badge text — the store's delegate also
+      // queues the re-Puts (see the StoreHolder wiring). The store-only loop
+      // this replaces left chips and search badges wearing the old
+      // alphabet's words.
+      relabelAll();
       // Word/expand-mode tab markers show spoken words, so a new alphabet
       // changes them too (no-op in letter mode / unmarked frames).
       refreshTabMarker();
@@ -1526,27 +1491,66 @@ keyHandler.setHintEscapeCallback(() => {
   if (getHintVisibility() !== 'always') hideBadges();
 });
 
-// Reject a codeword keystroke that no painted badge starts with, so a stray
-// key doesn't filter every hint off the screen. Only consults codeword
-// prefixes (not the `/` text filter, which accepts anything).
-// The keyboard asks the SAME question the spoken path asks — who owns this
-// codeword — instead of a store-only subset of it. Chips and search badges hold
-// codewords outside the store, and a keyboard that only knew the store rejected
-// their first letter as a stray key. See activate/codeword-routing.ts.
-setStoreCodewordHooks({
-  matchesPrefix: (prefix) => store.matchingLetterPrefix(prefix).length > 0,
+// The element wrapper store as holder #0 — the ambient CodewordHolder every
+// registry sweep and both input paths consult. The QUESTIONS (who holds, what
+// matches) are the adapter's, at claim level (labels/store-holder.ts, which
+// also documents each delegate's contract); WHAT THE STORE DOES about them is
+// these delegates — each a former content.ts call site moved behind a name.
+const storeHolder = new StoreHolder(store, {
   narrow: (prefix) => narrowStoreHints(prefix),
-  // Hidden badges keep publishing their codewords, so a prefix can arrive for
-  // hints nobody can see (manual mode; a find session that hid them). The
-  // router decides WHEN this is right to call — see narrowByPrefix.
   reveal: () => { if (!pageSession.badgesVisible) void showBadges(); },
-  resolve: (codeword) => {
-    const w = store.byCodeword(codeword);
-    if (!w) return false;
+  // Typed sole-completion, its bookkeeping folded in from the old filter
+  // callback: the "aA" affordance (capital mid-codeword = open in new tab)
+  // unless an explicit verb (yf then a capital) keeps precedence, then the
+  // same hide-after-activate the store branch did.
+  activate: (w) => {
+    if (keyHandler.isNewTabArmed() && pendingHintAction === 'activate') pendingHintAction = 'newtab';
     activateWrapper(w);
-    return true;
+    hideBadges();
   },
+  // DELIBERATE no-op: every registry-level republish fires from label-sync's
+  // is_final hook — the tail of a finalizing store rebuild that just re-Put
+  // every wrapper — so a real re-push here would finalize again and retrigger
+  // that hook unboundedly. The store's rotation re-push is
+  // republishAllGrammar, driven by its own recovery paths.
+  republish: () => {},
+  // Confirm-rejection recovery, store half: strip the loser back to unhinted
+  // WITHOUT releaseLabel and let the level-triggered reconcile re-claim.
+  // Claim-level find — a claimed-but-unpainted loser has no `label` yet but
+  // still wears the codeword another document now owns.
+  onCodewordRejected: (cw) => {
+    const w = store.all.find((lw) => lw.scanned.codeword === cw);
+    if (!w) return;
+    if (hasSent(cw)) queueDelete(cw);
+    w.scanned.codeword = '';
+    w.label = null;
+    if (w.hint) {
+      w.hint.remove();
+      w.hint = null;
+    }
+    engine.scheduleReconcile();
+    scheduleSync('confirm_rejected');
+  },
+  reposition: () => placeBadges([...store.all].filter((w) => w.hint !== null)),
+  // Alphabet-swap re-render (driven by relabelAll below): identities are
+  // unchanged, only the spoken overlay moved — re-render and re-Put, no
+  // re-claim.
+  relabel: () => {
+    for (const w of store.all) {
+      if (!w.scanned.codeword) continue;
+      w.label = poolLabelToAssignment(w.scanned.codeword);
+      w.hint?.updateLabel(w.label, getDisplayMode());
+      queuePut(w);
+    }
+  },
+  // No-op: the settle engine IS the store's reconciler; the registry fan-out
+  // fires from the engine's own after-settle hooks.
+  reconcile: () => {},
+  // No-op in C1: the store's frame teardown is quiesceOrphan's; the registry
+  // dispose fan-out lands there in C1b (orphan-CS moves one layer at a time).
+  dispose: () => {},
 });
+registerHolder(storeHolder);
 
 /** Filter the painted link hints to `prefix` (`''` resets). */
 function narrowStoreHints(prefix: string): void {
@@ -1565,11 +1569,19 @@ function narrowStoreHints(prefix: string): void {
   }
 }
 
+// The keyboard's accept gate asks the registry the SAME question the spoken
+// path asks — who owns this codeword — instead of a store-only subset of it.
+// Chips and search badges hold codewords outside the store, and a keyboard
+// that only knew the store rejected their first letter as a stray key.
 keyHandler.setMatchPredicate((prefix) => anyHolderMatchesPrefix(prefix));
 
+// Mid-codeword progress and typed completion, through the ONE registry order
+// (labels/holder-registry.ts). A sole match fires at the same moment speaking
+// the whole codeword would — chip, search badge or link hint alike; the
+// store's completion bookkeeping lives in its activate delegate above. When
+// nothing completes, every eligible holder narrows in the same breath ('' —
+// the pair cancelled — resets them all).
 keyHandler.setFilterCallback((prefix: string) => {
-  // A pick or search badge owns its own painting and is up whether or not the
-  // page's badges are — the `badgesVisible` guard is about the store's hints.
   const sole = soleHolderMatch(prefix);
   if (sole) {
     const outcome = resolveCodeword(sole);
@@ -1577,35 +1589,10 @@ keyHandler.setFilterCallback((prefix: string) => {
       flashToast('That match is off screen — scroll to it first');
       return;
     }
-    keyHandler.exitHintMode();
+    if (outcome.kind === 'acted') keyHandler.exitHintMode();
     return;
   }
-  if (rangePickPrefixMatch(prefix) !== null || searchBadgePrefixMatch(prefix) !== null) {
-    narrowByPrefix(prefix);
-    return;
-  }
-
-  if (!pageSession.badgesVisible) return;
-
-  if (prefix === '') {
-    narrowStoreHints('');
-    return;
-  }
-
-  const matchSet = new Set(store.matchingLetterPrefix(prefix));
-  narrowStoreHints(prefix);
-
-  if (matchSet.size === 1) {
-    const first = matchSet.values().next().value!;
-    // "aA" affordance: a capital typed mid-codeword opens this pick in a new
-    // tab. `activateWrapper` reads `pendingHintAction` and resets it. Don't
-    // override an explicit verb (e.g. yf then a capital keeps yank precedence,
-    // matching the old yankHintArmed-checked-first behavior).
-    if (keyHandler.isNewTabArmed() && pendingHintAction === 'activate') pendingHintAction = 'newtab';
-    activateWrapper(first);
-    hideBadges();
-    keyHandler.exitHintMode();
-  }
+  narrowByPrefix(prefix);
 });
 
 // --- Core Functions ---
@@ -2083,13 +2070,11 @@ function restoreFromBfcache(): void {
   // (DESIGN_DOCUMENT_SCOPED_POOL_OWNERSHIP.md), so the outgoing page's own
   // disconnect release can no longer race this re-assertion away — the
   // +1.5s second shot that patched that race is retired.
-  const heldAtRestore = [
-    ...store.all.map((w) => w.scanned.codeword).filter((cw) => cw !== ''),
-    // Chips/search badges hold pool codewords outside the store; leaving them
-    // out of the re-assertion lets a sibling frame be granted a codeword still
-    // painted here, and leaves this frame unroutable for its own.
-    ...allHeldOutsideStore(),
-  ];
+  // Every holder's codewords through the registry — the store's at claim
+  // level, plus chips/search badges; leaving any out of the re-assertion lets
+  // a sibling frame be granted a codeword still painted here, and leaves this
+  // frame unroutable for its own.
+  const heldAtRestore = allHeld();
   if (heldAtRestore.length > 0) labelReservoir.reconfirm(heldAtRestore);
   doScan();
   // NOT schedulePushGrammar(): re-registering wrappers in place enqueues no
@@ -2160,10 +2145,7 @@ openLivenessPort({
     // reloading sibling frame could be granted a codeword still painted
     // here (a cross-frame duplicate). The confirm exchange re-acquires
     // them from the fresh pool's free list.
-    const held = [
-      ...store.all.map((w) => w.scanned.codeword).filter((cw) => cw !== ''),
-      ...allHeldOutsideStore(), // chips/search badges — same cross-frame duplicate risk
-    ];
+    const held = allHeld(); // every holder — chips/search badges carry the same cross-frame duplicate risk
     if (held.length > 0) labelReservoir.reconfirm(held);
     republishAllGrammar('sw_restart_resync');
   },
@@ -2678,35 +2660,44 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       const codeword = params?.codeword ?? '';
       // A spoken codeword may name a text RANGE rather than an element — a
       // range-pick chip answering "highlight"/"select to", or a search-match
-      // badge. Both are consumed before element resolution, in the ONE declared
-      // order (activate/codeword-routing.ts), which the keyboard shares: a pick
-      // owns every codeword while live, whereas search badges coexist with link
-      // hints and claim only their own. Frame routing already delivered the
-      // codeword here (the holder claimed it from this frame's reservoir).
-      // Only the dispatch REPORTING is call-site work, so only it stays here.
-      const held: HolderOutcome = codeword ? resolveHolderCodeword(codeword) : { kind: 'not_mine' };
-      if (held.kind !== 'not_mine') {
+      // badge. Both are consumed before element resolution, through the ONE
+      // registry order the keyboard shares (labels/holder-registry.ts): an
+      // exclusive pick owns every codeword while live (the registry SWALLOWS
+      // strangers for it), whereas search badges coexist with link hints and
+      // claim only their own. The consult stops ABOVE the ambient store —
+      // the element leg below IS the store's answer for this input, richer
+      // than a holder resolve can be (snapshot-first, sealed strict gate,
+      // tab-target variants). Only the dispatch REPORTING is call-site work,
+      // so only it stays here.
+      const held: CodewordOutcome = codeword
+        ? resolveCodewordAboveAmbient(codeword) : { kind: 'none' };
+      if (held.kind !== 'none') {
         // 'off_screen' is the holders' twin of the element path's sealed strict
         // gate: the band paints past the fold, and a badge the user hasn't read
         // could only be spoken by accident. Refused; the holder stays live.
-        const search = held.kind === 'jumped' || (held.kind === 'off_screen' && held.holder === 'search');
-        const ok = held.kind === 'jumped' || held.kind === 'picked';
+        // 'swallowed' is the exclusive refusal: a pick is a question, and a
+        // stray badge codeword must not click a link out from under it.
+        const search = held.holder === 'search';
+        const ok = held.kind === 'acted';
         reportDispatchResult({
           action, codeword, resolution: search ? 'search_badge' : 'range_pick', elem_tag: '',
           taken: ok ? 'click' : 'skipped', ok,
           frame: trimFrameUrl(window.location.href),
-          detail: search
-            ? (ok ? 'jumped to search match' : 'match off screen')
-            : (ok ? 'range pick resolved' : 'chip off screen'),
+          detail:
+            held.kind === 'swallowed' ? 'pick pending — codeword is not a chip' :
+            search
+              ? (ok ? 'jumped to search match' : 'match off screen')
+              : (ok ? 'range pick resolved' : 'chip off screen'),
           fp: '',
         });
-        // The pick flashes its own refusal toast (it owns the exit guidance);
-        // search's is here because search has no modal state to explain.
-        if (!ok && search) flashToast('That match is off screen — scroll to it first');
+        // Refusal guidance, keyed on what refused: the swallowing pick names
+        // its exit; an off-screen SEARCH match explains itself here because
+        // search has no modal state to explain (the pick's own off-screen
+        // refusal flashes inside its resolve policy).
+        if (held.kind === 'swallowed') flashToast('Pick a highlighted match — or say "escape"');
+        else if (!ok && search) flashToast('That match is off screen — scroll to it first');
         return;
       }
-      // Chips own the codewords while a pick is pending (see the module).
-      if (codeword && refusePickWindowCodeword(action, codeword)) return;
       const idParam = parseInt(params?.id ?? '0', 10);
       const frameIdParam = params?.frame_id != null ? parseInt(params.frame_id, 10) : -1;
 
@@ -2975,11 +2966,12 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       // Mid-codeword progress. The SW translates the inbound spoken prefix word
       // to its letter before forwarding (see frame-router), so `prefix` is
       // already a letter here — the same shape the keyboard's filter callback
-      // passes, which is why both now go through the one router. `''` resets
-      // (pair cancelled). This used to be an inline copy of the router's
-      // ordering that had drifted twice: it hardcoded setMatchedChars(1) where
-      // the keyboard uses the full prefix length, and it re-painted every link
-      // hint on any prefix, including one a search badge already answered.
+      // passes, which is why both go through the registry's one fan-out
+      // (labels/holder-registry.ts narrowByPrefix). `''` resets (pair
+      // cancelled). This used to be an inline copy of the ordering that had
+      // drifted twice: it hardcoded setMatchedChars(1) where the keyboard uses
+      // the full prefix length, and it re-painted every link hint on any
+      // prefix, including one a search badge already answered.
       narrowByPrefix(params?.prefix ?? '');
     } else if (action === 'name_reference') {
       const refName = params?.name?.toLowerCase().trim();

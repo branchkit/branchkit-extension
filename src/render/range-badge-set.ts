@@ -22,8 +22,19 @@
  *   - codeword stability across the window — a badge you are mid-way through
  *     saying does not get renamed — via release-before-claim;
  *   - liveness: a Range never rebinds, so a set reaps its own dead;
- *   - CodewordHolder registration, without which nine store-scoped lifecycle
- *     sweeps treat these codewords as garbage (labels/codeword-holders.ts).
+ *   - CodewordHolder registration (labels/holder-registry.ts), without which
+ *     the registry-driven lifecycle sweeps treat these codewords as garbage
+ *     and the two input paths cannot reach them.
+ *
+ * The registered holder is the set's mechanism plus the owner's POLICY,
+ * declared in `options.holder`: id/priority/claim name the holder's rank in
+ * the registry's order (a pick is exclusive and swallows, search is additive
+ * and falls through), `resolve` is what acting on a member MEANS (answer the
+ * pick vs jump to the match), and `reconcile` may wrap the set's own settle
+ * sweep with owner liveness (search clears itself when the find session died
+ * without a deactivate). Registration is liveness: the holder registers when
+ * the set is born holding and unregisters when it empties or disposes, which
+ * is what makes an exclusive holder in the list a live question.
  *
  * Multiple sets can be live at once; nothing here is a singleton. Each owns its
  * codewords and its holder registration, and `dispose()` gives both back.
@@ -39,7 +50,9 @@ import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { labelReservoir } from '../labels/label-reservoir';
 import { poolLabelToAssignment, isVoiceAlphabetLoaded, type LabelAssignment } from '../labels/words';
 import { publishRecords, retireRecords, cancelPendingDelete } from '../labels/label-sync';
-import { registerCodewordHolder } from '../labels/codeword-holders';
+import {
+  registerHolder, type CodewordHolder, type HolderOutcome, type SettleKind,
+} from '../labels/holder-registry';
 import { getDisplayMode } from '../config';
 import { bkLog } from '../debug/bk-log';
 import type { ScannedElement } from '../types';
@@ -64,11 +77,34 @@ interface Member {
   published: boolean;
 }
 
+/** The owner's half of the registered holder — see the module header. */
+export interface RangeHolderSpec {
+  /** Names the holder in outcomes and dispatch reporting ('pick', 'search'). */
+  id: string;
+  /** Rank in the registry's order. Above AMBIENT_PRIORITY, or the input
+   *  paths' above-ambient consult can't reach the set. */
+  priority: number;
+  /** 'exclusive' swallows every codeword while the set is live (the pick);
+   *  'additive' claims only its own and falls through (search). */
+  claim: 'exclusive' | 'additive';
+  /** What acting on a codeword MEANS. Called for every offer the registry
+   *  routes here, held or not — the owner's policy already answers
+   *  'not_mine' for strangers, and may drop-and-decline a stale member
+   *  (dropping it from held() in the same call, per the holder contract). */
+  resolve(codeword: string): HolderOutcome;
+  /** Owner wrapper around the set's settle sweep. Default: reconcile on
+   *  'general' only — every settle lands a 'general' from the same pass, and
+   *  the supplemental 'scroll' that follows it would be pure rework. */
+  reconcile?(settle: SettleKind): void;
+}
+
 export interface RangeBadgeSetOptions {
   /** EVERY match, not just the badged ones — membership is a rolling window
    *  over this list, so the full set has to outlive the initial claim. */
   ranges: Range[];
   variant: BadgeVariant;
+  /** The owner's holder policy; registration itself is the set's. */
+  holder: RangeHolderSpec;
   /** Most badges to hold at once. A promise, not a target: the planner is
    *  asked to hard-cap, because the common case is a dozen matches all on
    *  screen at overhang 0, where band-tightening has nothing to separate them
@@ -87,6 +123,9 @@ export class RangeBadgeSet {
   private readonly members = new Map<string, Member>();
   private readonly opts: RangeBadgeSetOptions;
   private readonly unregisterHolder: () => void;
+  /** The registered CodewordHolder this set answers as (mechanism here,
+   *  policy from opts.holder). Exposed for the conformance harness. */
+  readonly holder: CodewordHolder;
   private disposed = false;
 
   /**
@@ -115,15 +154,35 @@ export class RangeBadgeSet {
 
   private constructor(opts: RangeBadgeSetOptions) {
     this.opts = opts;
-    // Without this the codewords are invisible to every store-scoped sweep:
-    // the reservoir's leak sweep reclaims them after 30s, session rotation
-    // drops them plugin-side, and a pool rejection is ignored. See
-    // labels/codeword-holders.ts.
-    this.unregisterHolder = registerCodewordHolder({
+    // Without this the codewords are invisible to every registry-driven
+    // sweep: the reservoir's leak sweep reclaims them after 30s, session
+    // rotation drops them plugin-side, a pool rejection is ignored — and
+    // neither input path can act on them. Mechanism is the set's, policy is
+    // the owner's (see RangeHolderSpec).
+    const spec = opts.holder;
+    this.holder = {
+      id: spec.id,
+      priority: spec.priority,
+      claim: spec.claim,
       held: () => this.members.keys(),
       republish: () => this.republishAll(),
       onCodewordRejected: (cw) => this.onRejected(cw),
-    });
+      matchesPrefix: (prefix) => this.matchesPrefix(prefix),
+      narrow: (prefix) => this.filterByPrefix(prefix),
+      resolve: (cw) => spec.resolve(cw),
+      soleMatch: (prefix) => this.soleMatch(prefix),
+      reposition: () => this.reposition(),
+      relabel: () => this.relabel(),
+      reconcile: (settle) => {
+        if (spec.reconcile) spec.reconcile(settle);
+        // Default self-selection: 'general' fires at the tail of EVERY settle
+        // pass; the 'scroll' kind arrives immediately after a 'general' from
+        // the same pass, so reconciling on it too would be pure rework.
+        else if (settle === 'general') this.reconcile();
+      },
+      dispose: (reason) => this.dispose(reason),
+    };
+    this.unregisterHolder = registerHolder(this.holder);
   }
 
   private get tag(): string {
@@ -200,6 +259,29 @@ export class RangeBadgeSet {
       // Arbitrary prefix lengths and every display mode, inherited — no
       // charAt(0) special case for exactly two words.
       badge.setMatchedChars(matches ? prefix.length : 0);
+    }
+  }
+
+  /** Re-place every badge against its range's live rect (the holder
+   *  geometry hook; the settle-driven positioner pass handles steady-state,
+   *  so this is the explicit re-place for sweeps that ask for one). */
+  reposition(): void {
+    if (this.disposed) return;
+    for (const m of this.members.values()) {
+      const target = rangeTarget(m.range);
+      placeBadgeAtRect(m.badge, target.element, target.rect());
+    }
+  }
+
+  /** Re-render badge text after an alphabet or display-mode change. Letters
+   *  (and so prefix matching) are unchanged — the alphabet maps letters to
+   *  spoken words, so only word/expand-mode text moves. The store-only loop
+   *  this bridges left chips wearing the old alphabet's words after a swap. */
+  relabel(): void {
+    if (this.disposed) return;
+    for (const [cw, m] of this.members) {
+      m.label = poolLabelToAssignment(cw);
+      m.badge.updateLabel(m.label, getDisplayMode());
     }
   }
 

@@ -15,21 +15,69 @@
  * cannot skip the suite by not writing a test file".
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+// The armed participants below construct real RangeBadgeSets, whose transport
+// and paint collaborators are faked the same way render/range-badge-set.test.ts
+// fakes them — the REGISTRY and the sets' holder mechanism stay real.
+const pool: string[] = [];
+vi.mock('./label-reservoir', () => ({
+  labelReservoir: {
+    claim: (n: number) => {
+      const grant = pool.splice(0, n);
+      while (grant.length < n) grant.push('');
+      return grant;
+    },
+    release: () => {},
+  },
+}));
+vi.mock('./label-sync', () => ({
+  publishRecords: async (r: Array<{ codeword: string }>) => new Set(r.map((x) => x.codeword)),
+  retireRecords: () => {},
+  cancelPendingDelete: () => {},
+}));
+vi.mock('../render/hints', () => ({
+  HintBadge: class {
+    badgeSize = { w: 20, h: 14 };
+    show(): void {}
+    remove(): void {}
+    setFiltered(): void {}
+    setMatchedChars(): void {}
+    updatePosition(): void {}
+    updateLabel(): void {}
+  },
+}));
+vi.mock('../config', () => ({ getDisplayMode: () => 'letter' }));
+vi.mock('../debug/bk-log', () => ({ bkLog: () => {} }));
+
 import {
   __resetHolderRegistry, registerHolder, unregisterHolder, holdersByPriority,
-  resolveCodeword, anyHolderMatchesPrefix, narrowByPrefix, soleHolderMatch,
+  resolveCodeword, resolveCodewordAboveAmbient, anyHolderMatchesPrefix,
+  narrowByPrefix, soleHolderMatch,
   republishAll, rejectAll, reconcileAll, heldAnywhere, allHeld,
   prefixClaimedByOther, SETTLE_KINDS,
+  EXCLUSIVE_OVERLAY_PRIORITY, ADDITIVE_OVERLAY_PRIORITY,
 } from './holder-registry';
 import {
   describeCodewordHolderConformance, makeSyntheticHolder,
   HolderFactory, HolderHarness, SyntheticHolder,
 } from '../testing/holder-conformance';
 import { StoreHolder } from './store-holder';
+import { RangeBadgeSet } from '../render/range-badge-set';
+import { RANGE_PICK_VARIANT, SEARCH_VARIANT } from '../render/badge-variant';
+import type { BadgeVariant } from '../render/badge-variant';
 import { ObservableWrapperStore } from '../core/store';
 import { ElementWrapper } from '../scan/element-wrapper';
 import type { ScannedElement } from '../types';
+
+// happy-dom reports all-zero rects, which the band planner reads as
+// "collapsed" — give every Range a real on-screen box so armed sets can claim.
+beforeEach(() => {
+  const original = Range.prototype.getBoundingClientRect;
+  Range.prototype.getBoundingClientRect = () =>
+    ({ top: 10, bottom: 30, left: 10, right: 60, width: 50, height: 20 }) as DOMRect;
+  return () => { Range.prototype.getBoundingClientRect = original; };
+});
 
 // --- The three-holder synthetic registry ----------------------------------
 // The shape the design doc names: an exclusive pick above an additive search
@@ -256,6 +304,7 @@ function makeStoreHarness(): HolderHarness {
   const store = new ObservableWrapperStore();
   const holder = new StoreHolder(store, {
     narrow: () => {},
+    reveal: () => {},
     activate: () => {},
     republish: () => {},
     // The real delegate strips the losing wrapper back to unhinted; the fake
@@ -281,12 +330,57 @@ function makeStoreHarness(): HolderHarness {
   };
 }
 
-const participants: Array<{ name: string; make: HolderFactory }> = [
+/**
+ * An ARMED participant: a real RangeBadgeSet registered under the production
+ * id/priority/claim, with the owner's resolve policy in its real shape
+ * (membership then on-screen gate then act). Registration is liveness — the
+ * set registers when grant() arms it and unregisters on dispose — which is
+ * the model the conformance suite's 'armed' branch checks.
+ */
+function makeRangeSetHarness(spec: {
+  id: string; priority: number; claim: 'exclusive' | 'additive'; variant: BadgeVariant;
+}): HolderHarness {
+  __resetHolderRegistry();
+  let set: RangeBadgeSet | null = null;
+  return {
+    get holder() { return set!.holder; },
+    grant: (cws) => {
+      pool.length = 0;
+      pool.push(...cws);
+      set = RangeBadgeSet.create({
+        ranges: cws.map((cw) => {
+          const p = document.createElement('p');
+          p.textContent = cw;
+          document.body.appendChild(p);
+          const r = document.createRange();
+          r.selectNodeContents(p.firstChild!);
+          return r;
+        }),
+        variant: spec.variant,
+        budget: cws.length,
+        holder: {
+          id: spec.id,
+          priority: spec.priority,
+          claim: spec.claim,
+          resolve: (cw) => {
+            if (!set || !set.has(cw)) return 'not_mine';
+            if (!set.isOnScreen(cw)) return 'off_screen';
+            return 'acted';
+          },
+        },
+      });
+    },
+  };
+}
+
+const participants: Array<{ name: string; make: HolderFactory; liveness?: 'armed' }> = [
   {
     name: 'synthetic exclusive (pick-shaped)',
     make: () => {
       __resetHolderRegistry();
-      const s = makeSyntheticHolder({ id: 'pick', priority: 200, claim: 'exclusive' });
+      const s = makeSyntheticHolder({
+        id: 'pick', priority: EXCLUSIVE_OVERLAY_PRIORITY, claim: 'exclusive',
+      });
       registerHolder(s.holder);
       return s;
     },
@@ -295,15 +389,37 @@ const participants: Array<{ name: string; make: HolderFactory }> = [
     name: 'synthetic additive (search-shaped)',
     make: () => {
       __resetHolderRegistry();
-      const s = makeSyntheticHolder({ id: 'search', priority: 100, claim: 'additive' });
+      const s = makeSyntheticHolder({
+        id: 'search', priority: ADDITIVE_OVERLAY_PRIORITY, claim: 'additive',
+      });
       registerHolder(s.holder);
       return s;
     },
   },
   { name: 'StoreHolder over ObservableWrapperStore (fake delegates)', make: makeStoreHarness },
+  // The real registrations (Wave 3 C1): the pick's exclusive RangeBadgeSet
+  // and search's additive one, as their owners construct them.
+  {
+    name: 'range pick chips (RangeBadgeSet, exclusive)',
+    liveness: 'armed',
+    make: () => makeRangeSetHarness({
+      id: 'pick', priority: EXCLUSIVE_OVERLAY_PRIORITY, claim: 'exclusive',
+      variant: RANGE_PICK_VARIANT,
+    }),
+  },
+  {
+    name: 'search badges (RangeBadgeSet, additive)',
+    liveness: 'armed',
+    make: () => makeRangeSetHarness({
+      id: 'search', priority: ADDITIVE_OVERLAY_PRIORITY, claim: 'additive',
+      variant: SEARCH_VARIANT,
+    }),
+  },
 ];
 
-for (const p of participants) describeCodewordHolderConformance(p.name, p.make);
+for (const p of participants) {
+  describeCodewordHolderConformance(p.name, p.make, { liveness: p.liveness });
+}
 
 describe('registration meta-test', () => {
   it('every id the factories register is covered by a conformance participant', () => {
@@ -311,11 +427,39 @@ describe('registration meta-test', () => {
     const registered = new Set<string>();
     for (const p of participants) {
       const h = p.make();
+      h.grant(['zq']); // arms the liveness-registered participants
       covered.add(h.holder.id);
       for (const r of holdersByPriority()) registered.add(r.id);
     }
     for (const id of registered) {
       expect(covered, `registered holder '${id}' has no conformance participant`).toContain(id);
     }
+  });
+});
+
+describe('the spoken path\'s above-ambient consult', () => {
+  it('overlays act, exclusivity swallows, and the ambient tier is never consulted', () => {
+    __resetHolderRegistry();
+    const search = makeSyntheticHolder({
+      id: 'search', priority: ADDITIVE_OVERLAY_PRIORITY, claim: 'additive',
+    });
+    const ambient = makeSyntheticHolder({ id: 'store', priority: 0, claim: 'additive' });
+    registerHolder(search.holder);
+    registerHolder(ambient.holder);
+    search.grant(['ab']);
+    ambient.grant(['cd']);
+
+    expect(resolveCodewordAboveAmbient('ab')).toEqual({ kind: 'acted', holder: 'search' });
+    // The ambient holder OWNS 'cd', but this consult must not act on it — the
+    // spoken path's element leg (snapshot-first, sealed gate, dispatch
+    // reporting) is the ambient answer for that input.
+    expect(resolveCodewordAboveAmbient('cd')).toEqual({ kind: 'none' });
+    expect(ambient.log).not.toContain('acted:cd');
+
+    const pick = makeSyntheticHolder({
+      id: 'pick', priority: EXCLUSIVE_OVERLAY_PRIORITY, claim: 'exclusive',
+    });
+    registerHolder(pick.holder);
+    expect(resolveCodewordAboveAmbient('cd')).toEqual({ kind: 'swallowed', holder: 'pick' });
   });
 });

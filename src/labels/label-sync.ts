@@ -51,7 +51,7 @@ import { DEFAULT_SCAN_BATCH_SIZE } from '../scan/scanner';
 import { sweepDisconnectedAfterBatch } from '../scan/batch-sweep';
 import { getHintVisibility } from '../config';
 import { documentInstanceId } from './document-identity';
-import { republishHeldOutsideStore } from './codeword-holders';
+import { republishAll } from './holder-registry';
 import { labelReservoir } from './label-reservoir';
 import { bkLog } from '../debug/bk-log';
 import { firehoseStep } from '../debug/firehose';
@@ -331,8 +331,12 @@ export async function postBatch(
       // orchestrator's chunked push, syncNow, republishAllGrammar,
       // republishForActivation, the alphabet swap). Patching call sites left
       // the common one — a plain rescan — uncovered. Re-entrancy is bounded:
-      // holders publish with is_final:false, so this cannot retrigger itself.
-      if (request.is_final) republishHeldOutsideStore();
+      // range holders publish with is_final:false, and the store holder's
+      // republish delegate is a DELIBERATE no-op — its records ARE the
+      // rebuild whose final batch fires this hook, and a real re-push here
+      // would finalize again and retrigger unboundedly (see the StoreHolder
+      // wiring in content.ts). So this cannot retrigger itself.
+      if (request.is_final) republishAll();
     } else if (deletes.length > 0) {
       // Refusal (calibration_active) or plugin-side error: nothing applied.
       pendingDeleteCodewords.push(...deletes);

@@ -26,7 +26,19 @@ import {
   syncNow,
   postBatch,
 } from './label-sync';
-import { registerCodewordHolder, __resetCodewordHolders } from './codeword-holders';
+import { registerHolder, __resetHolderRegistry, type CodewordHolder } from './holder-registry';
+
+/** A minimal registered holder whose republish is counted — the v2 registry's
+ *  stand-in for the old three-hook registration. */
+function countingHolder(onRepublish: () => void): CodewordHolder {
+  return {
+    id: 'counting', priority: 100, claim: 'additive',
+    held: () => [], republish: onRepublish, onCodewordRejected: () => {},
+    matchesPrefix: () => false, narrow: () => {}, resolve: () => 'not_mine',
+    soleMatch: () => null, reposition: () => {}, relabel: () => {},
+    reconcile: () => {}, dispose: () => {},
+  };
+}
 
 const ALPHABET = [
   'arch', 'bake', 'cave', 'dove', 'echo', 'fern', 'gulf', 'harp', 'iris',
@@ -211,20 +223,18 @@ describe('is_final re-publishes codeword holders outside the store (2026-07-26)'
 
   beforeEach(() => {
     setAlphabet(ALPHABET);
-    __resetCodewordHolders();
+    __resetHolderRegistry();
     sendMessage = vi.fn((msg: { type: string; request?: { elements: ScannedElement[] } }) => {
       if (msg.type !== 'GRAMMAR_BATCH') return Promise.resolve(undefined);
       return Promise.resolve(ok(msg.request!.elements.map((e) => e.codeword)));
     });
     vi.stubGlobal('chrome', { runtime: { sendMessage } });
   });
-  afterEach(() => __resetCodewordHolders());
+  afterEach(() => __resetHolderRegistry());
 
   it('fires on a finalizing batch', async () => {
     let republished = 0;
-    registerCodewordHolder({
-      held: () => [], republish: () => { republished++; }, onCodewordRejected: () => {},
-    });
+    registerHolder(countingHolder(() => { republished++; }));
     await postBatch({
       session_id: 's', batch_index: 0, is_final: true, kind: 'incremental',
       conn_id: '', hint_visibility: 'always', app_id: '', table_id: '', elements: [],
@@ -234,9 +244,7 @@ describe('is_final re-publishes codeword holders outside the store (2026-07-26)'
 
   it('does NOT fire on a non-final batch — holders publish with is_final:false, so this cannot recurse', async () => {
     let republished = 0;
-    registerCodewordHolder({
-      held: () => [], republish: () => { republished++; }, onCodewordRejected: () => {},
-    });
+    registerHolder(countingHolder(() => { republished++; }));
     await postBatch({
       session_id: 's', batch_index: 0, is_final: false, kind: 'incremental',
       conn_id: '', hint_visibility: 'always', app_id: '', table_id: '', elements: [],

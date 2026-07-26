@@ -4,11 +4,11 @@
   "src/palette-page.ts": 0,
   "src/activate/keyboard.ts": 200,
   "src/activate/caret.ts": 233,
-  "src/activate/codeword-routing.ts": 24,
+  "src/activate/codeword-routing.ts": 0,
   "src/activate/escape-cascade.ts": 15,
-  "src/activate/range-disambiguation.ts": 55,
+  "src/activate/range-disambiguation.ts": 49,
   "src/activate/selection-commands.ts": 59,
-  "src/activate/search-badges.ts": 30,
+  "src/activate/search-badges.ts": 33,
   "src/scan/find.ts": 332,
-  "src/labels/codeword-holders.ts": 12
+  "src/labels/codeword-holders.ts": 0
 }

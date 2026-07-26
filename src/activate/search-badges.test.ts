@@ -38,9 +38,6 @@ vi.mock('../labels/label-sync', () => ({
   retireRecords: () => {},
   cancelPendingDelete: () => {},
 }));
-vi.mock('../labels/codeword-holders', () => ({
-  registerCodewordHolder: () => () => {},
-}));
 const badgeInstances: Array<{ removed: boolean; variant: unknown; filtered: boolean }> = [];
 vi.mock('../render/hints', () => ({
   HintBadge: class {
@@ -61,10 +58,13 @@ vi.mock('../config', () => ({ getDisplayMode: () => 'letter' }));
 vi.mock('../debug/bk-log', () => ({ bkLog: () => {} }));
 
 import {
-  armSearchBadges, clearSearchBadges, reconcileSearchBadges,
-  resolveSearchBadge, filterSearchBadges, isSearchBadgePending,
+  armSearchBadges, clearSearchBadges, isSearchBadgePending,
 } from './search-badges';
 import { SEARCH_VARIANT } from '../render/badge-variant';
+import {
+  __resetHolderRegistry, resolveCodeword, narrowByPrefix,
+  anyHolderMatchesPrefix, reconcileAll, rejectAll,
+} from '../labels/holder-registry';
 
 function makeRange(text: string): Range {
   const p = document.createElement('p');
@@ -78,6 +78,7 @@ function makeRange(text: string): Range {
 describe('search badges', () => {
   let restoreRects: () => void;
   beforeEach(() => {
+    __resetHolderRegistry();
     pool = ['a a', 'b b', 'c c', 'd d'];
     released.length = 0;
     wentTo.length = 0;
@@ -113,7 +114,7 @@ describe('search badges', () => {
     armSearchBadges();
     await Promise.resolve();
 
-    expect(resolveSearchBadge('a a')).toBe('jumped');
+    expect(resolveCodeword('a a')).toEqual({ kind: 'acted', holder: 'search' });
     expect(wentTo).toEqual(['one']);
     // And the session stays live — this is navigation, not an answer.
     expect(isSearchBadgePending()).toBe(true);
@@ -124,7 +125,9 @@ describe('search badges', () => {
     matchRanges = [makeRange('one')];
     armSearchBadges();
     await Promise.resolve();
-    expect(resolveSearchBadge('z z')).toBe('not_mine');
+    // Additive: the registry falls through past the badges, and with nothing
+    // else registered the answer is 'none' — never a swallow.
+    expect(resolveCodeword('z z')).toEqual({ kind: 'none' });
     expect(wentTo).toEqual([]);
   });
 
@@ -138,7 +141,7 @@ describe('search badges', () => {
         ? { top: -4000, bottom: -3980, left: 10, right: 60, width: 50, height: 20 }
         : { top: 10, bottom: 30, left: 10, right: 60, width: 50, height: 20 }) as DOMRect;
     };
-    expect(resolveSearchBadge('b b')).toBe('off_screen');
+    expect(resolveCodeword('b b')).toEqual({ kind: 'off_screen', holder: 'search' });
     expect(wentTo).toEqual([]);
     expect(isSearchBadgePending()).toBe(true);
   });
@@ -162,22 +165,56 @@ describe('search badges', () => {
     armSearchBadges();
     await Promise.resolve();
     active = false;
-    reconcileSearchBadges();
+    reconcileAll('general');
     expect(isSearchBadgePending()).toBe(false);
     expect(released.flat()).toEqual(['a a']);
+  });
+
+  it('reconcile with the find session live rolls the set, keeping it armed', async () => {
+    matchRanges = [makeRange('one')];
+    armSearchBadges();
+    await Promise.resolve();
+    // Every settle kind reaches the holder (the discriminated hook); it
+    // self-selects 'general' and stays live either way.
+    reconcileAll('general');
+    reconcileAll('scroll');
+    expect(isSearchBadgePending()).toBe(true);
+    expect(released.flat()).toEqual([]);
+  });
+
+  it('drops a stale set when the match list moved between paint and speech', async () => {
+    matchRanges = [makeRange('one')];
+    armSearchBadges();
+    await Promise.resolve();
+    // A requery replaced the matches under the badges: findGoToRange refuses
+    // the stale range, and the set drops rather than pretend — the codeword
+    // leaves held() in the same call, so declining it is legal.
+    matchRanges = [makeRange('other')];
+    expect(resolveCodeword('a a')).toEqual({ kind: 'none' });
+    expect(wentTo).toEqual([]);
+    expect(isSearchBadgePending()).toBe(false);
+  });
+
+  it('empties itself when the pool arbitrates every codeword away', async () => {
+    matchRanges = [makeRange('one')];
+    armSearchBadges();
+    await Promise.resolve();
+    rejectAll('a a');
+    expect(isSearchBadgePending()).toBe(false);
   });
 
   it('mid-codeword progress dims the badges that cannot complete', async () => {
     matchRanges = [makeRange('one'), makeRange('two')];
     armSearchBadges();
     await Promise.resolve();
-    expect(filterSearchBadges('a')).toBe(true);
+    narrowByPrefix('a');
     const [first, second] = badgeInstances;
     expect(first.filtered).toBe(false);  // 'a a' can still complete
     expect(second.filtered).toBe(true);  // 'b b' cannot
   });
 
-  it('filter reports false with nothing armed, so the caller falls through', () => {
-    expect(filterSearchBadges('a')).toBe(false);
+  it('with nothing armed the accept gate refuses, so the caller falls through', () => {
+    expect(anyHolderMatchesPrefix('a')).toBe(false);
+    expect(() => narrowByPrefix('a')).not.toThrow();
   });
 });

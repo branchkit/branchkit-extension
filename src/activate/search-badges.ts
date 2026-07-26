@@ -39,6 +39,9 @@ import { SEARCH_VARIANT } from '../render/badge-variant';
 import { getMatchRanges, findGoToRange, isFindActive } from '../scan/find';
 import { bkLog } from '../debug/bk-log';
 import { labelReservoir } from '../labels/label-reservoir';
+import {
+  ADDITIVE_OVERLAY_PRIORITY, type HolderOutcome, type SettleKind,
+} from '../labels/holder-registry';
 import type { Message } from '../types';
 
 /**
@@ -84,6 +87,13 @@ export function armSearchBadges(): void {
     // any other and deliberately do NOT narrow the projection, because link
     // hints stay speakable alongside them.
     onEmpty: () => { badges = null; },
+    holder: {
+      id: 'search',
+      priority: ADDITIVE_OVERLAY_PRIORITY,
+      claim: 'additive',
+      resolve: (cw) => resolveSearchCodeword(cw),
+      reconcile: (settle) => reconcileSearchHolder(settle),
+    },
   });
   const pool = labelReservoir.stats();
   bkLog('BK_SEARCH_BADGES_ARM', { matches: ranges.length, badged: badges?.size ?? 0 });
@@ -117,27 +127,28 @@ export function clearSearchBadges(reason: string): void {
 }
 
 /**
- * Re-derive which matches wear a badge as the viewport moves. Rides the settle
- * engine's existing `afterSettle` hook — every settle kind, the same signal the
- * pick chips use — so no new observer, timer or listener.
+ * The search holder's settle policy (RangeHolderSpec.reconcile): the set's
+ * own sweep, wrapped in an owner liveness check — a find session that ended
+ * without a deactivate would leave badges whose codewords point at nothing
+ * (defensive; every ordinary exit clears explicitly).
  */
-export function reconcileSearchBadges(): void {
-  // A find session that ended without a deactivate (defensive: the badges
-  // outliving their matches would be a set of codewords pointing at nothing).
+function reconcileSearchHolder(settle: SettleKind): void {
   if (badges && !isFindActive()) {
     clearSearchBadges('find_inactive');
     return;
   }
-  badges?.reconcile();
+  // Same self-selection as the set's default: every settle pass lands a
+  // 'general'; the trailing 'scroll' would be rework.
+  if (settle === 'general') badges?.reconcile();
 }
 
 /**
- * Consume a spoken codeword if it names a search match: make it current and
- * scroll to it, exactly as `n` would.
+ * The search resolve policy (RangeHolderSpec.resolve — both input paths reach
+ * it through the registry): a codeword naming a search match makes it current
+ * and scrolls to it, exactly as `n` would.
  *
- * Returns 'not_mine' when the codeword isn't a search badge, so the caller
- * falls through to ordinary hint activation — search badges COEXIST with link
- * hints and must not swallow their codewords.
+ * 'not_mine' lets the caller fall through — search badges COEXIST with link
+ * hints and must not swallow their codewords (`claim: 'additive'`).
  *
  * Off-screen badges refuse for the same reason the pick chips do: the band
  * paints past the fold as a scroll-ahead cue, so a badge can hold a codeword
@@ -145,37 +156,18 @@ export function reconcileSearchBadges(): void {
  * cannot see. Unlike a pick this is a soft no — the session stays live and the
  * codeword works once it's on screen.
  */
-export type SearchBadgeOutcome = 'jumped' | 'off_screen' | 'not_mine';
-
-export function resolveSearchBadge(codeword: string): SearchBadgeOutcome {
+function resolveSearchCodeword(codeword: string): HolderOutcome {
   if (!badges) return 'not_mine';
   const range = badges.rangeFor(codeword);
   if (!range) return 'not_mine';
   if (!badges.isOnScreen(codeword)) return 'off_screen';
   if (!findGoToRange(range)) {
     // The match list moved under us (a requery between paint and speech). Drop
-    // the stale set rather than pretend.
+    // the stale set rather than pretend — and with it this codeword leaves
+    // held(), which is what makes decline-after-drop legal holder behaviour.
     clearSearchBadges('stale_range');
     return 'not_mine';
   }
   bkLog('BK_SEARCH_BADGE_JUMP', { codeword });
-  return 'jumped';
-}
-
-/** Can any live search badge complete `prefix`? Null when none are armed. */
-export function searchBadgePrefixMatch(prefix: string): boolean | null {
-  if (!badges) return null;
-  return badges.matchesPrefix(prefix);
-}
-
-/** The one search badge `prefix` still leaves, if exactly one. */
-export function searchBadgeSoleMatch(prefix: string): string | null {
-  return badges ? badges.soleMatch(prefix) : null;
-}
-
-/** Mid-codeword progress: dim the badges that can't complete the prefix. */
-export function filterSearchBadges(prefix: string): boolean {
-  if (!badges) return false;
-  badges.filterByPrefix(prefix);
-  return true;
+  return 'acted';
 }

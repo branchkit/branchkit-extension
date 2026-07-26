@@ -82,8 +82,8 @@ async function loadOrchestrator(): Promise<Orchestrator> {
  * loadOrchestrator: vi.resetModules() runs in there, so importing before it
  * would hand back a different registry instance than the one under test.
  */
-async function loadCodewordHolders(): Promise<typeof import('../labels/codeword-holders')> {
-  return await import('../labels/codeword-holders');
+async function loadHolderRegistry(): Promise<typeof import('../labels/holder-registry')> {
+  return await import('../labels/holder-registry');
 }
 
 function batchOf(els: Element[], isLast = true) {
@@ -196,7 +196,7 @@ describe('batch processing', () => {
   // The mid-flight branch: the wrapper left the store between the POST and its
   // ACK, so the plugin holds a codeword no wrapper does. Whether that codeword
   // is garbage depends on who picked it up in the meantime — and the store is
-  // not the only thing that can (labels/codeword-holders.ts).
+  // not the only thing that can (labels/holder-registry.ts).
   describe('a codeword whose wrapper detached mid-flight', () => {
     async function detachDuringPost(): Promise<Orchestrator> {
       const o = await loadOrchestrator();
@@ -220,17 +220,26 @@ describe('batch processing', () => {
 
     it('is NOT queued for delete when a non-store holder reclaimed it', async () => {
       const o = await detachDuringPost();
-      const holders = await loadCodewordHolders();
+      const reg = await loadHolderRegistry();
       // Stand-in for a RangeBadgeSet (pick chips / search badges): the
       // reservoir's sticky reclaim hands a just-released codeword back from the
       // FRONT of the queue, so this is the codeword it lands on. Deleting it
       // here retires the grammar record of a live, painted chip — speakable
       // nowhere, and an empty Discovery HUD suffix menu.
-      holders.__resetCodewordHolders();
-      const unregister = holders.registerCodewordHolder({
+      reg.__resetHolderRegistry();
+      const unregister = reg.registerHolder({
+        id: 'reclaimer', priority: 100, claim: 'additive',
         held: () => ['a'],
         republish: () => {},
         onCodewordRejected: () => {},
+        matchesPrefix: () => false,
+        narrow: () => {},
+        resolve: () => 'not_mine',
+        soleMatch: () => null,
+        reposition: () => {},
+        relabel: () => {},
+        reconcile: () => {},
+        dispose: () => {},
       });
       await o.doScan();
       expect(queueDelete).not.toHaveBeenCalled();

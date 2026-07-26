@@ -39,14 +39,6 @@ vi.mock('../labels/words', async (importOriginal) => ({
   isVoiceAlphabetLoaded: () => voice.loaded,
 }));
 
-type Holder = { held: () => Iterable<string>; republish: () => void; onCodewordRejected: (c: string) => void };
-const holders = vi.hoisted(() => ({ list: [] as Holder[] }));
-vi.mock('../labels/codeword-holders', () => ({
-  registerCodewordHolder: (h: Holder) => {
-    holders.list.push(h);
-    return () => { holders.list = holders.list.filter(x => x !== h); };
-  },
-}));
 
 const badges: Array<{ removed: boolean; variant: unknown }> = [];
 vi.mock('./hints', () => ({
@@ -68,8 +60,23 @@ vi.mock('./hints', () => ({
 vi.mock('../config', () => ({ getDisplayMode: () => 'letter' }));
 vi.mock('../debug/bk-log', () => ({ bkLog: () => {} }));
 
-import { RangeBadgeSet } from './range-badge-set';
+import { RangeBadgeSet, RangeHolderSpec } from './range-badge-set';
 import { HINT_VARIANT, RANGE_PICK_VARIANT } from './badge-variant';
+import {
+  __resetHolderRegistry, holdersByPriority, rejectAll,
+} from '../labels/holder-registry';
+
+// The sets register in the REAL registry; the holder spec is the owner's
+// policy half, faked minimally here (mechanism is what this file tests).
+let nextHolderId = 0;
+function testHolder(claim: 'exclusive' | 'additive' = 'additive'): RangeHolderSpec {
+  return {
+    id: `set_${nextHolderId++}`,
+    priority: 100,
+    claim,
+    resolve: () => 'not_mine',
+  };
+}
 
 function makeRange(text: string): Range {
   const p = document.createElement('p');
@@ -89,7 +96,8 @@ describe('RangeBadgeSet', () => {
     badges.length = 0;
     refused.clear();
     voice.loaded = false;
-    holders.list = [];
+    __resetHolderRegistry();
+    nextHolderId = 0;
     document.body.innerHTML = '';
     const original = Range.prototype.getBoundingClientRect;
     Range.prototype.getBoundingClientRect = () =>
@@ -101,11 +109,11 @@ describe('RangeBadgeSet', () => {
   it('two sets coexist, each owning its own codewords and holder', async () => {
     const first = RangeBadgeSet.create({
       ranges: [makeRange('one'), makeRange('two')],
-      variant: RANGE_PICK_VARIANT, budget: 2,
+      variant: RANGE_PICK_VARIANT, budget: 2, holder: testHolder(),
     })!;
     const second = RangeBadgeSet.create({
       ranges: [makeRange('three')],
-      variant: HINT_VARIANT, budget: 1,
+      variant: HINT_VARIANT, budget: 1, holder: testHolder(),
     })!;
     await Promise.resolve();
 
@@ -114,17 +122,18 @@ describe('RangeBadgeSet', () => {
     // Disjoint codewords — they draw from one pool without colliding.
     const overlap = first.codewords.filter(cw => second.has(cw));
     expect(overlap).toEqual([]);
-    // Two holder registrations, so both are visible to the store-scoped sweeps.
-    expect(holders.list).toHaveLength(2);
+    // Two holder registrations, so both are visible to the registry sweeps.
+    expect(holdersByPriority()).toHaveLength(2);
   });
 
   it('disposing one set leaves the other intact', async () => {
     const first = RangeBadgeSet.create({
       ranges: [makeRange('one'), makeRange('two')],
-      variant: RANGE_PICK_VARIANT, budget: 2,
+      variant: RANGE_PICK_VARIANT, budget: 2, holder: testHolder(),
     })!;
     const second = RangeBadgeSet.create({
       ranges: [makeRange('three')], variant: HINT_VARIANT, budget: 1,
+      holder: testHolder(),
     })!;
     await Promise.resolve();
     const survivor = second.codewords[0];
@@ -134,7 +143,7 @@ describe('RangeBadgeSet', () => {
     expect(first.size).toBe(0);
     expect(second.size).toBe(1);
     expect(second.has(survivor)).toBe(true);
-    expect(holders.list).toHaveLength(1); // only the survivor's
+    expect(holdersByPriority()).toHaveLength(1); // only the survivor's
     // The disposed set gave its codewords back; the survivor kept its own.
     expect(released.flat()).not.toContain(survivor);
   });
@@ -142,9 +151,11 @@ describe('RangeBadgeSet', () => {
   it('each set carries its own variant to its badges', async () => {
     RangeBadgeSet.create({
       ranges: [makeRange('one')], variant: RANGE_PICK_VARIANT, budget: 1,
+      holder: testHolder(),
     });
     RangeBadgeSet.create({
       ranges: [makeRange('two')], variant: HINT_VARIANT, budget: 1,
+      holder: testHolder(),
     });
     await Promise.resolve();
     expect(badges.map(b => b.variant)).toEqual([RANGE_PICK_VARIANT, HINT_VARIANT]);
@@ -154,21 +165,23 @@ describe('RangeBadgeSet', () => {
     pool = [];
     const set = RangeBadgeSet.create({
       ranges: [makeRange('one')], variant: RANGE_PICK_VARIANT, budget: 9,
+      holder: testHolder(),
     });
     expect(set).toBeNull();
     // And it must not leave a holder registered for a set that never existed.
-    expect(holders.list).toEqual([]);
+    expect(holdersByPriority()).toEqual([]);
   });
 
   it('dispose is idempotent and releases exactly once', async () => {
     const set = RangeBadgeSet.create({
       ranges: [makeRange('one')], variant: RANGE_PICK_VARIANT, budget: 1,
+      holder: testHolder(),
     })!;
     await Promise.resolve();
     set.dispose('first');
     set.dispose('second');
     expect(released.flat()).toHaveLength(1);
-    expect(holders.list).toEqual([]);
+    expect(holdersByPriority()).toEqual([]);
   });
 
   // Admission governs SPEECH, and only speech. A badge the plugin didn't take
@@ -180,7 +193,7 @@ describe('RangeBadgeSet', () => {
       refused.add('a a');
       const set = RangeBadgeSet.create({
         ranges: [makeRange('one'), makeRange('two')],
-        variant: RANGE_PICK_VARIANT, budget: 2,
+        variant: RANGE_PICK_VARIANT, budget: 2, holder: testHolder(),
       })!;
       await Promise.resolve();
       await Promise.resolve();
@@ -212,7 +225,7 @@ describe('RangeBadgeSet', () => {
       const emptied: string[] = [];
       const set = RangeBadgeSet.create({
         ranges: [makeRange('one')], variant: RANGE_PICK_VARIANT, budget: 1,
-        onEmpty: (r) => emptied.push(r),
+        onEmpty: (r) => emptied.push(r), holder: testHolder(),
       })!;
       await Promise.resolve();
       await Promise.resolve();
@@ -229,12 +242,12 @@ describe('RangeBadgeSet', () => {
       voice.loaded = true;
       const set = RangeBadgeSet.create({
         ranges: [makeRange('one'), makeRange('two')],
-        variant: RANGE_PICK_VARIANT, budget: 2,
+        variant: RANGE_PICK_VARIANT, budget: 2, holder: testHolder(),
       })!;
       await Promise.resolve();
       await Promise.resolve();
 
-      holders.list[0].onCodewordRejected('a a');
+      rejectAll('a a');
       expect(set.has('a a')).toBe(false);
       expect(set.size).toBe(1);
     });
@@ -242,6 +255,7 @@ describe('RangeBadgeSet', () => {
     it('with no voice alphabet, badges stay and reconcile keeps retrying', async () => {
       const set = RangeBadgeSet.create({
         ranges: [makeRange('one')], variant: RANGE_PICK_VARIANT, budget: 1,
+        holder: testHolder(),
       })!;
       await Promise.resolve();
       expect(set.size).toBe(1);
@@ -259,7 +273,7 @@ describe('RangeBadgeSet', () => {
     const set = RangeBadgeSet.create({
       ranges: [makeRange('one'), makeRange('two')],
       variant: RANGE_PICK_VARIANT, budget: 2,
-      onMembershipChanged: (cws) => changes.push(cws),
+      onMembershipChanged: (cws) => changes.push(cws), holder: testHolder(),
     })!;
     await Promise.resolve();
     expect(changes).toHaveLength(1);
