@@ -41,6 +41,7 @@ import { DEFAULT_SCAN_BATCH_SIZE } from '../scan/scanner';
 import { sweepDisconnectedAfterBatch } from '../scan/batch-sweep';
 import { getHintVisibility } from '../config';
 import { documentInstanceId } from './document-identity';
+import { republishHeldOutsideStore } from './codeword-holders';
 import { labelReservoir } from './label-reservoir';
 import { bkLog } from '../debug/bk-log';
 import { firehoseStep } from '../debug/firehose';
@@ -309,6 +310,19 @@ export async function postBatch(
       await chrome.runtime.sendMessage({ type: 'GRAMMAR_BATCH', request: fullRequest } as Message);
     if (resp.result === 'ok' || resp.result === 'stored') {
       for (const cw of deletes) sentCodewords.delete(cw);
+      // An is_final batch closes the session's inheritance window: the plugin
+      // drops every codeword the rebuild did not re-confirm. Rebuilds are
+      // assembled from `store.all`, so a codeword held OUTSIDE the store is
+      // never in one and is dropped every time — badges painted, matching
+      // nothing.
+      //
+      // Hooked HERE rather than at the rotation call sites because finalizing
+      // is the thing that drops them, and it has four+ entry points (the scan
+      // orchestrator's chunked push, syncNow, republishAllGrammar,
+      // republishForActivation, the alphabet swap). Patching call sites left
+      // the common one — a plain rescan — uncovered. Re-entrancy is bounded:
+      // holders publish with is_final:false, so this cannot retrigger itself.
+      if (request.is_final) republishHeldOutsideStore();
     } else if (deletes.length > 0) {
       // Refusal (calibration_active) or plugin-side error: nothing applied.
       pendingDeleteCodewords.push(...deletes);

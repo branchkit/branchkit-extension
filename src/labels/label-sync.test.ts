@@ -24,7 +24,9 @@ import {
   rotateSession,
   scheduleSync,
   syncNow,
+  postBatch,
 } from './label-sync';
+import { registerCodewordHolder, __resetCodewordHolders } from './codeword-holders';
 
 const ALPHABET = [
   'arch', 'bake', 'cave', 'dove', 'echo', 'fern', 'gulf', 'harp', 'iris',
@@ -195,6 +197,51 @@ describe('cancelPendingDelete (recycled codeword, 2026-07-25)', () => {
   it('is a no-op for a codeword that was never queued', () => {
     expect(() => cancelPendingDelete('never queued')).not.toThrow();
     expect(hasPendingDeletes()).toBe(false);
+  });
+});
+
+describe('is_final re-publishes codeword holders outside the store (2026-07-26)', () => {
+  // An is_final batch closes the session's inheritance window: the plugin drops
+  // every codeword the rebuild didn't re-confirm. Rebuilds are assembled from
+  // store.all, so a holder outside the store is dropped by EVERY finalizing
+  // push — including a plain rescan, which is the common one. Patching the
+  // explicit rotation call sites missed it; the field log showed the plugin
+  // logging `range pick filter MISS` right after a chunked scan push.
+  let sendMessage: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    setAlphabet(ALPHABET);
+    __resetCodewordHolders();
+    sendMessage = vi.fn((msg: { type: string; request?: { elements: ScannedElement[] } }) => {
+      if (msg.type !== 'GRAMMAR_BATCH') return Promise.resolve(undefined);
+      return Promise.resolve(ok(msg.request!.elements.map((e) => e.codeword)));
+    });
+    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+  });
+  afterEach(() => __resetCodewordHolders());
+
+  it('fires on a finalizing batch', async () => {
+    let republished = 0;
+    registerCodewordHolder({
+      held: () => [], republish: () => { republished++; }, onCodewordRejected: () => {},
+    });
+    await postBatch({
+      session_id: 's', batch_index: 0, is_final: true, kind: 'incremental',
+      conn_id: '', hint_visibility: 'always', app_id: '', table_id: '', elements: [],
+    });
+    expect(republished).toBe(1);
+  });
+
+  it('does NOT fire on a non-final batch — holders publish with is_final:false, so this cannot recurse', async () => {
+    let republished = 0;
+    registerCodewordHolder({
+      held: () => [], republish: () => { republished++; }, onCodewordRejected: () => {},
+    });
+    await postBatch({
+      session_id: 's', batch_index: 0, is_final: false, kind: 'incremental',
+      conn_id: '', hint_visibility: 'always', app_id: '', table_id: '', elements: [],
+    });
+    expect(republished).toBe(0);
   });
 });
 

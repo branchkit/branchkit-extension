@@ -116,7 +116,7 @@ import { setScrollAccelEnabled, setScrollAccelNestedEnabled, reconcileScrollAcce
 import { isScrollTimelineSupported } from './render/scroll-accel';
 import { setNudgesFromSettings } from './placement';
 import { labelReservoir } from './labels/label-reservoir';
-import { heldOutsideStore, allHeldOutsideStore, republishHeldOutsideStore, rejectHeldOutsideStore } from './labels/codeword-holders';
+import { heldOutsideStore, allHeldOutsideStore, rejectHeldOutsideStore } from './labels/codeword-holders';
 import { doScan, scheduleDoScan } from './scan/scan-orchestrator';
 import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
 import { openLivenessPort, repairLivenessAfterBfcacheRestore } from './plugin/liveness';
@@ -1878,12 +1878,9 @@ function republishAllGrammar(reason: string): void {
       requeued++;
     }
   }
-  // Codeword holders outside the store re-Put themselves: this loop is the
-  // rotation's whole recovery, and it enumerates wrappers. A range-pick chip
-  // (next: a search-match badge) would otherwise be inherited plugin-side as
-  // unconfirmed and dropped by the rotation's is_final batch ~250ms later,
-  // leaving badges painted and armed but matching nothing.
-  republishHeldOutsideStore();
+  // Holders outside the store are NOT re-queued here: they re-publish off the
+  // is_final chokepoint in postBatch, which covers this path AND the ones this
+  // function never touches — notably a plain rescan, which is the common case.
   bkLog('BK_GRAMMAR_REPUBLISH', { reason, requeued, wrappers: store.all.length });
   scheduleSync(reason);
 }
@@ -2374,11 +2371,7 @@ function republishForActivation(reason: string): void {
     for (const w of store.all) {
       if (w.scanned.codeword) queuePut(w);
     }
-    // Same reason as republishAllGrammar: this loop is the rotation's recovery
-    // and it only knows about wrappers. Before the sync, so a holder's
-    // immediate POST lands ahead of the is_final batch that would drop it.
-    republishHeldOutsideStore();
-    await syncNow(reason);
+    await syncNow(reason); // holders re-publish off its is_final (see postBatch)
     // Reconciliation walk: pick up anything that changed while backgrounded.
     // The re-push above already restored the known grammar (so matchability is
     // never at risk here), making this scan best-effort — coalesce it across a
