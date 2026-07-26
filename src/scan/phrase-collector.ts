@@ -123,6 +123,7 @@ export interface PhraseTextPort {
 export interface PhraseInputEventLike {
   readonly inputType?: string;
   readonly data?: string | null;
+  readonly isComposing?: boolean;
 }
 
 /** Structural subset of `KeyboardEvent` — feed the real event or a literal. */
@@ -198,12 +199,30 @@ export interface PhraseSession {
 
 /**
  * Did this insert arrive from dictation rather than the keyboard? The
- * signature is the length of a single `insertText`: the sink posts one
- * CGEvent per 20-character chunk via `CGEventKeyboardSetUnicodeString`,
- * so a whole chunk lands in one event's `data`; typing is one character per
- * event, always. `insertReplacementText` (macOS autocorrect, spell-check
- * accepts) and `insertFromPaste` are multi-character and deliberately NOT
- * dictation — both mean the user is still editing. See the header.
+ * signature is the length of a single insert: the sink posts one CGEvent
+ * per 20-character chunk via `CGEventKeyboardSetUnicodeString`, so a whole
+ * chunk lands in one event's `data`; typing is one character per event,
+ * always. `insertReplacementText` (macOS autocorrect, spell-check accepts)
+ * and `insertFromPaste` are multi-character and deliberately NOT dictation —
+ * both mean the user is still editing. See the header.
+ *
+ * Two inputTypes carry the injected chunk, one per engine:
+ * - Chromium delivers it as a plain `insertText`.
+ * - Gecko routes ALL native multi-character text insertion through its
+ *   composition pipeline: a one-shot compositionstart → compositionend burst
+ *   whose `input` event is `insertCompositionText` fired AFTER the
+ *   compositionend, so `isComposing` is false (captured from the real box,
+ *   2026-07-26 — the field failure this branch fixes read the whole
+ *   dictation as a keyboard edit, so the phrase box never committed on
+ *   Firefox). A LIVE composition's updates — a user actually typing through
+ *   an IME — arrive with `isComposing: true` and multi-character data as the
+ *   candidate grows, which is why the flag and not the inputType is the
+ *   discriminator: mid-composition means mid-edit, never a finished phrase.
+ *   Known accepted edge: Gecko also orders a real IME COMMIT after its
+ *   compositionend, so a ≥2-char IME commit on Firefox reads as dictation
+ *   and auto-commits 400 ms later. That is the same "phrase finished"
+ *   reading dictation gets — wrong only for a user IME-composing a longer
+ *   query in several commits; revisit against a field report.
  *
  * Known edge, inherited from both sources on purpose: a transcript whose
  * length is 1 mod 20 ends in a single-character chunk, which this predicate
@@ -214,7 +233,9 @@ export interface PhraseSession {
  * the edge it repairs. Revisit only against a field report.
  */
 export function isDictatedInsert(ev: PhraseInputEventLike): boolean {
-  return ev.inputType === 'insertText' && (ev.data?.length ?? 0) > 1;
+  if ((ev.data?.length ?? 0) <= 1) return false;
+  if (ev.inputType === 'insertText') return true;
+  return ev.inputType === 'insertCompositionText' && ev.isComposing === false;
 }
 
 /** Is this keydown the platform's text-commit sentinel rather than a

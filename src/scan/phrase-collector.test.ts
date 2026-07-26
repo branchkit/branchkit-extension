@@ -273,6 +273,55 @@ describe('phrase collector: autocorrect does not commit', () => {
   });
 });
 
+describe('phrase collector: Gecko delivers the injected chunk as a composition', () => {
+  // Firefox routes native multi-character insertion through its composition
+  // pipeline: compositionstart → compositionend, then ONE input event of
+  // inputType insertCompositionText with isComposing FALSE (fired after the
+  // compositionend). Event sequence captured from the real phrase box on
+  // Firefox, 2026-07-26 — the field regression: the whole dictation read as
+  // a keyboard edit, so the box never committed and the pick chips never
+  // armed ("I said album ... I see no hints").
+  it('a post-composition insertCompositionText commits like any dictated insert', () => {
+    const h = makeHarness();
+    h.port.sinkType('Album');
+    h.session.handleInput({ inputType: 'insertCompositionText', data: 'Album', isComposing: false });
+    expect(h.commits).toHaveLength(0); // not before the boundary
+    h.settle();
+    expect(h.commits).toEqual([{ query: 'Album', source: 'dictation' }]);
+  });
+
+  it('a LIVE composition update (isComposing true) is a keyboard edit, not dictation', () => {
+    // A user actually typing through an IME: the growing candidate arrives as
+    // multi-character insertCompositionText updates while the composition is
+    // open. Mid-composition means mid-edit — it must cancel a pending
+    // dictated commit, never schedule one.
+    const h = makeHarness();
+    h.dictate('alpha');
+    h.port.replace('かん');
+    h.session.handleInput({ inputType: 'insertCompositionText', data: 'かん', isComposing: true });
+    h.settle();
+    expect(h.commits).toHaveLength(0);
+  });
+
+  it('a single-character composition insert stays a keystroke', () => {
+    const h = makeHarness();
+    h.port.sinkType('a');
+    h.session.handleInput({ inputType: 'insertCompositionText', data: 'a', isComposing: false });
+    h.settle();
+    expect(h.commits).toHaveLength(0);
+  });
+
+  it('isDictatedInsert: the discriminator is the isComposing flag, not the inputType', () => {
+    expect(isDictatedInsert({ inputType: 'insertCompositionText', data: 'Album', isComposing: false })).toBe(true);
+    expect(isDictatedInsert({ inputType: 'insertCompositionText', data: 'Album', isComposing: true })).toBe(false);
+    // The InputEvent constructor's default (real events always carry the
+    // flag; a hand-built literal that omits it must NOT read as dictation —
+    // absence of evidence of a closed composition is not evidence).
+    expect(isDictatedInsert({ inputType: 'insertCompositionText', data: 'Album' })).toBe(false);
+    expect(isDictatedInsert({ inputType: 'insertText', data: 'Album' })).toBe(true);
+  });
+});
+
 describe('phrase collector: re-dictation replaces rather than appends', () => {
   it('a second utterance replaces the first — the sink appended, the collector undoes it', () => {
     // The sink types at the caret, so "gmail" then "github" leaves
