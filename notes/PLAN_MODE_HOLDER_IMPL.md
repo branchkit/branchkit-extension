@@ -1,0 +1,250 @@
+# Plan: mode stack + holder registry implementation
+
+**Design:** `notes/DESIGN_MODE_STACK_AND_CODEWORD_HOLDERS.md`
+**Status:** Not started. Written 2026-07-26.
+**Repos touched:** `branchkit-extension` (bulk), `plugins/browser` (tag mirror),
+`app` (pin bumps only).
+
+## Sequencing principle
+
+**File contention, not logical dependency, is the binding constraint.** The
+findings are mostly independent of each other but `src/content.ts` is touched by
+half of them, and `src/activate/escape-cascade.ts` and `src/scan/find.ts` are
+each touched by two. Parallelism therefore has to be organised by *file
+ownership*, not by finding.
+
+Each parallel agent gets a **git worktree** and an exclusive file list. An
+integrator merges. Where two findings share a file, they are given to the same
+agent rather than split.
+
+## Wave ordering, and why bugs come before primitives
+
+Wave 1 fixes the ranked bugs against the current architecture. That looks
+backwards — the primitives delete most of this code — but:
+
+1. The bugs are live now and the refactor is not a weekend.
+2. **Each fix's test is the regression gate the refactor must keep passing.**
+   The tests survive even where the code doesn't. Landing them first converts
+   "did the refactor preserve behaviour" from a judgement call into a red/green.
+3. The Wave 1 work is where the remaining uncertainty is. Several findings were
+   read, not run. A wave that has to reproduce each one is the cheapest way to
+   find out which are wrong.
+
+---
+
+## Wave 1 — the ranked bugs (6 agents, parallel, worktrees)
+
+Each agent: reproduce → fix → regression test → `just test` + targeted vitest
+green. No agent commits; the integrator does, after the merge.
+
+### A1 — plugin-side tags (`plugins/browser`, own repo, zero extension overlap)
+
+Files: `src/caret.go`, `src/find.go`, `src/palette.go`, `src/video.go`,
+`src/collections.go`, `src/*_test.go`.
+
+- Issue the tag `Delete` **before** clearing local `TagSet` bookkeeping, in all
+  four sync functions. `hint_gate.go:96-104` is the model and carries the
+  rationale; copy the reasoning, not just the shape.
+- Add the video mode tag to `reconcileExternalTagClears` so the platform's
+  global "over" forwards an exit imperative. Needs a corresponding extension
+  action (coordinate with A2 on the action name — propose `video_exit`).
+- Accept a caret `{active:true}` claim from any frame of the focused connection,
+  not just the top frame (pairs with A6). Keep the "exit is honoured from any
+  connection" rule.
+
+Acceptance: a table test asserting that a failing Delete leaves `TagSet` true so
+the next drain retries; a test that an external clear of `video_mode` forwards.
+
+### A2 — escape ordering (`escape-cascade.ts`, `keyboard.ts`, and the ~15-line keydown preamble in `content.ts`)
+
+Files: `src/activate/escape-cascade.ts`, `src/activate/keyboard.ts`,
+`src/activate/escape-cascade.test.ts`, `src/activate/keyboard.test.ts`, and
+**only** `content.ts` lines ~3117-3140 (declared region — A6 owns the rest).
+
+- Add the video layer to the cascade; wire `keyHandler.exitVideoMode` behind it.
+- Switch the find layer's predicate from `isFindBarOpen()` to `isFindActive()`
+  so a committed pill is peelable by voice.
+- Move the committed-find Escape out of `handleFindNavKey` and into the cascade,
+  so the key stops peeling find ahead of hint mode. `n`/`N` stay where they are.
+
+Acceptance: **a test that drives the real key path** — construct a
+`KeyboardEvent`, dispatch it at the listener content installs, and assert the
+peeled layer. The existing `escape-cascade.test.ts` calls `runEscapeCascade`
+directly and therefore cannot observe the divergence its own header claims to
+guard. This test is the point of the agent; the fixes are secondary.
+
+### A3 — caret exit (`caret.ts`)
+
+Files: `src/activate/caret.ts`, `src/activate/caret.test.ts`.
+
+- `exit()` must not `closeFindMode()` on a find session it did not create.
+  Record a find floor at entry (interim; the stack deletes it in Wave 3).
+- `escape()`'s "search always sits above visual" assumption is false for the
+  `enterFromFind` flow. Peel by which layer is newer, not by a fixed rank.
+
+Acceptance: `/quick` Enter → `v` → `y` leaves the find session intact (pill,
+highlights, `FIND_ACTIVE`). Regression test asserts the tag post is not emitted.
+
+### A4 — the find box (`find.ts`)
+
+Files: `src/scan/find.ts`, `src/scan/find.test.ts`.
+
+- `findImmediate` sets `state.mode = 'find'`; `endSession` resets it.
+- `findImmediate` fires `onCommit` only in `find` mode.
+- 229 / `isComposing` guard in `handleFindBarKey`.
+- `autocorrect`/`autocapitalize`/`spellcheck` off on the input, and re-examine
+  whether `insertReplacementText` should still count as dictation once
+  autocorrect is disabled.
+- Close on blur, matching the palette's load-bearing behaviour.
+
+Acceptance: a test that a `highlight` session followed by a voice find paints
+`HL_ALL`/`HL_CURRENT`, not `HL_PHRASE`. A test that an autocorrect-shaped
+`insertReplacementText` does not auto-commit.
+
+### A5 — pool accounting (`scan-orchestrator.ts`, `range-badge-set.ts`)
+
+Files: `src/scan/scan-orchestrator.ts`, `src/render/range-badge-set.ts`,
+their tests.
+
+- The delete guard at `scan-orchestrator.ts:413` asks `store.all.some(...)`;
+  it must ask the same compound question `content.ts:564` asks —
+  `store.byCodeword(cw) !== undefined || heldOutsideStore(cw)`.
+- Resolve the speakable-vs-usable contradiction in `RangeBadgeSet.add`: the
+  no-alphabet branch keeps badges on the grounds that admission only governs
+  speech, and fifteen lines later a per-codeword rejection removes the badge.
+  Decide which is right per rejection *reason* (cross-document collision →
+  remove; local pool race → keep, retry) and make the comment match.
+
+Acceptance: a test that a codeword recycled from a `RangeBadgeSet` release into
+a fresh claim is not queued for delete.
+
+### A6 — content wiring (`content.ts` and the two modules it injects into)
+
+Files: `src/content.ts` (except A2's declared region),
+`src/activate/selection-commands.ts`, `src/activate/range-disambiguation.ts`,
+`src/activate/search-badges.ts`.
+
+- Drop the `isTopFrame` guard on the `CARET_ACTIVE` post so a subframe caret
+  session sets the tag (pairs with A1). Keep the edge dedupe per frame.
+- Record and restore the keyboard mode across a pick window, alongside the
+  existing `restoreBadges` (interim; the stack deletes it in Wave 3).
+- Call `clearSearchBadges` wherever `cancelRangePick` is called —
+  `content.ts:2159` (orphan teardown) and `:2296` (SPA nav).
+- Drive `reconcileRangePickChips` / `reconcileSearchBadges` from every settle
+  kind, not only `afterScrollSettle`.
+- Route the spoken codeword path (`content.ts:2602`) and the spoken prefix path
+  (`:2899`) through `codeword-routing.ts`. Keep the dispatch reporting at the
+  call site; move only the ordering. The `showBadges()` divergence goes away as
+  a consequence — confirm that is wanted before removing it.
+
+Acceptance: a test that speaking a search-badge prefix during a find session
+does not re-show the page's link hints.
+
+### Integration
+
+One integrator agent merges the six worktrees in the order A1, A5, A3, A4, A2,
+A6 (least-contended first), runs `just build --full`, `just test`,
+`cd plugins && go test ./browser/src/...`, and the full vitest suite. Commits
+per repo, narrow paths, `git diff --cached` checked before each — the checkout
+is shared with other sessions. **No pushes.**
+
+### Wave 1 verification (not optional, not a subagent)
+
+- `just smoke` — clean.
+- `just voice-regress` — no pass→fail transitions.
+- Manual, in a real browser (Playwright is not authoritative here): video mode
+  entered by "video" and exited by "over"; subframe "highlight <phrase>" then
+  "copy that"; `/quick` Enter → `v` → `y`; committed find + hint mode + Escape
+  vs "over".
+- HUD-visible states via `ingest_transcript` + `/v1/native/screenshot` for the
+  pick chips and the video mode HUD.
+
+---
+
+## Wave 2 — primitives (3 agents, parallel, new files only)
+
+Zero contention: each agent creates files nothing imports yet, plus unit tests
+against the primitive in isolation. No call sites are migrated.
+
+- **B1 — `src/labels/holder-registry.ts`.** The v2 `CodewordHolder` interface,
+  priority ordering, `claim` mode, and the derived `resolveCodeword` /
+  `matchesPrefix` / `narrow` / `soleMatch`. Plus a `StoreHolder` adapter that
+  makes `ObservableWrapperStore` a registered holder. Tests: a synthetic
+  three-holder registry proves exclusivity, fall-through, and priority.
+- **B2 — `src/core/mode-stack.ts`.** The `ModeSpec` table, push/pop/peelTop,
+  floor recording, and the derived mirror payload. No wiring. Tests: interleaved
+  push/pop restores floors; peelTop is the stack order; a mode with a `mirror`
+  produces exactly one transition per edge.
+- **B3 — `src/scan/phrase-collector.ts`.** Input semantics only, no DOM.
+  Tests: chunked dictated insert commits once after the last chunk; a keystroke
+  cancels a pending commit; 229 and `isComposing` are not keystrokes; a
+  re-dictation replaces rather than appends.
+
+Wave 2 can start as soon as the design is accepted — it does not depend on
+Wave 1 landing, only on not colliding with it, which is guaranteed by the
+new-files-only rule.
+
+---
+
+## Wave 3 — migration (serial, one agent at a time, in this order)
+
+Each step deletes call sites across `content.ts`, so these cannot be parallel.
+Each step is one commit that leaves the tree green.
+
+- **C1 — holders.** Every sweep in the design's inventory iterates the registry.
+  `codeword-routing.ts` collapses to the sort. `StoreCodewordHooks` and the
+  inline voice ordering are deleted. **Teardown wiring is deferred to C1b** and
+  landed separately — orphan-CS teardown is the high-blast-radius area and gets
+  its own commit and its own soak.
+- **C2 — modes, driving the existing flags.** Every entry/exit goes through
+  push/pop; push/pop set today's `KeyHandler` fields and controller state. The
+  escape cascade becomes `peelTop`. Behaviour identical; Wave 1's tests are the
+  proof.
+- **C3 — delete the flags.** `entryFloor`, `restoreBadges`, `pickWindowHooks`,
+  `keyboard.ts`'s four mode fields, `caret.escape()`'s internal order. This is
+  the commit the design's "clean end state" promises.
+- **C4 — the mirror moves to the SW.** Frames post their stack top;
+  `plugin/plugin-api.ts` computes the tag set; `caretActivePushed`, the
+  `isTopFrame` guards, the 300 ms focus re-assert, and
+  `reconcileExternalTagClears`' hardcoded pair all go.
+- **C5 — the collector.** `find.ts` and `palette-page.ts` both consume it.
+  `FindMode`, `MODE_UI`, and the duplicated dictation predicates go.
+
+Verification after **each** step, not at the end: `just smoke`,
+`just voice-regress`, the Wave 1 manual list.
+
+---
+
+## Wave 4 — gates (2 agents, parallel)
+
+- **D1 — a real-input test harness.** The gap that let all of this through is
+  that every mode/escape test calls the module directly. One harness that
+  dispatches real `KeyboardEvent`s and real `ingest_transcript`-shaped actions
+  into a jsdom content script, so "key and voice do the same thing" is an
+  assertion rather than a comment. Wave 1's A2 test is the seed; this
+  generalises it.
+- **D2 — exhaustiveness lint.** Every `ModeSpec` has a mirror decision (or an
+  explicit `null` with a reason); every registered holder declares a priority;
+  no `store.all` iteration outside the store module. Wire into CI the way
+  `just check-gen` is wired.
+
+---
+
+## Scale, honestly
+
+Wave 1 is the only part I'd commit to a shape for: six agents, each a
+day-scale change, plus integration and a real-browser pass. Waves 2–4 are a
+multi-week arc and the estimate is not worth much until Wave 1 tells us how many
+of the ten findings were real.
+
+## Recommendation
+
+**Land Wave 1 and stop.** Then decide on the primitives with the regression
+tests in hand and with a count of how many findings reproduced. The design is
+worth writing down now — it is what makes Wave 1's fixes interim rather than
+permanent — but committing to Waves 2–4 before Wave 1 reports is deciding
+without the evidence the wave exists to produce.
+
+If Wave 1 reproduces most findings, the primitives are justified and the order
+above holds. If it reproduces two or three, the right answer is probably B1 and
+B2 only, and the phrase collector stays a duplication we live with.
