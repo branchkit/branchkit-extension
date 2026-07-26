@@ -12,6 +12,7 @@ const calls: string[] = [];
 vi.mock('../plugin/plugin-api', () => ({
   setCaretActive: async (active: boolean) => { calls.push(`caret:${active}`); },
   setFindActive: async (active: boolean) => { calls.push(`find:${active}`); },
+  setVideoMode: async (active: boolean) => { calls.push(`video:${active}`); },
 }));
 
 import {
@@ -64,8 +65,15 @@ describe('SW mode mirror (Wave 3 C4a)', () => {
     expect(calls).toEqual(['caret:true', 'caret:false', 'find:true']);
   });
 
-  it('mirrored modes without a C4a forwarder (palette, video) are ignored here', () => {
-    frameStackPosted(1, 'doc', ['palette', 'video']);
+  it('video rides the mirror (C4b) — one lifetime, `w` or spoken entry alike', () => {
+    frameStackPosted(1, 'doc', ['video']);
+    expect(calls).toEqual(['video:true']);
+    frameStackPosted(1, 'doc', []);
+    expect(calls).toEqual(['video:true', 'video:false']);
+  });
+
+  it('palette stays on its own transport — the one mirrored mode without a forwarder', () => {
+    frameStackPosted(1, 'doc', ['palette']);
     expect(calls).toEqual([]);
   });
 

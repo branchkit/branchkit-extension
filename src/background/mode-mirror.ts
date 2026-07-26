@@ -18,10 +18,10 @@
  * class of the 2026-07-24 ZY grammar wipe. The stale doc's late post cannot
  * resurrect either: its key is dead, its stack replaces nothing.
  *
- * C4a scope: caret and find — the two tags the per-frame posts carried.
- * Palette (SW-side already, via PALETTE_CLOSED) and video (matcher-written,
- * hold-scoped lifecycle) join the derivation at C4b with the plugin-side
- * forwarder-table work.
+ * Scope: caret, find and (since C4b) video — video's tag became a pure
+ * mirror of the extension's one video-layer lifetime, its matcher-written
+ * hold-scoped form deleted plugin-side. Palette stays on its own path (rows
+ * + tag publish atomically via PALETTE_CLOSED); see FORWARDERS.
  *
  * Failure model: the plugin POSTs are best-effort, same as the posts they
  * replace — the plugin drains its tags on SSE disconnect and OS focus loss,
@@ -32,13 +32,17 @@
 
 import { deriveMirror, diffMirror, type TagAssertion, type FrameId } from '../core/derive-mirror';
 import { MODE_SPECS, type ModeId } from '../core/mode-stack';
-import { setCaretActive, setFindActive } from '../plugin/plugin-api';
+import { setCaretActive, setFindActive, setVideoMode } from '../plugin/plugin-api';
 
-// The forwarders this slice derives. Keyed by tag — the spec table names the
-// tags, this names the transport for each.
+// The derived forwarders. Keyed by tag — the spec table names the tags, this
+// names the transport for each. Palette is deliberately absent: its plugin
+// state is rows + tag published atomically by its own host path
+// (background/palette.ts) — the spec's mirror entry records the decision, the
+// transport stays where the rows are.
 const FORWARDERS: Record<string, (active: boolean) => Promise<void>> = {
   'plugin.browser.caret': setCaretActive,
   'plugin.browser.find': setFindActive,
+  'plugin.browser.video_mode': setVideoMode,
 };
 
 /** Live frames' stacks, keyed `tabId:docId` (see header). */

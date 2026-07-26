@@ -1320,6 +1320,7 @@ dispatcher.register('pass_next_key', () => {
 // tab-wide voice broadcast acts only in the frame that has one (embeds work
 // for free). The layer routes bare keys here via the injected handler.
 dispatcher.register('video_mode', () => keyHandler.enterVideoMode());
+dispatcher.register('video_exit', () => keyHandler.exitVideoMode()); // the plugin's mode-mirror forwarder (external tag clear)
 dispatcher.register('media_play_pause', (params) => {
   mediaPlayPause((params.op as PlayPauseOp) || 'toggle');
 });

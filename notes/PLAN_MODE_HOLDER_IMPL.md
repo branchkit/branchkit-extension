@@ -85,10 +85,20 @@ SW's own connect and focus edges (the same signals the plugin's drains ride).
 The per-frame liveness Port block moved verbatim to
 background/frame-liveness.ts (background.ts had zero headroom; now
 1279/1336), with the disconnect additionally dropping the doc's mode-stack
-contribution. **C4b (next)** — palette + video join the derivation; plugin
-side: reconcileExternalTagClears derives from a mirror table, video's tag
-drops its hold-scoped clear_on_event lifecycle (the mirror becomes writer of
-record). **C5** — the collector.
+contribution. **C4b (LANDED 2026-07-26, cross-repo)** — video is ONE lifetime and its tag
+rides the mirror: plugin-side (plugins/browser `1ddd85f`) the tag became
+caret's shape (introducer-written pure mirror; hold-scoped clear_on_event +
+clear_on_unrelated_command deleted; POST /video-mode with the
+Delete-first-retryable sync; drains beside caret's), the spoken "video"
+entry became an action command driving the same extension entry as `w` (no
+sets_tags — the media words' presence-gated variants keep "video pause"
+one-breath decodable), and video joined modeMirrors with a video_exit
+forwarder, so the global "over" reaches the key layer. Extension-side:
+setVideoMode joins the mirror's FORWARDERS, content registers video_exit.
+Palette deliberately stays on its own transport (rows + tag publish
+atomically via PALETTE_CLOSED; the spec's mirror entry records the
+decision). C4 is complete. **C5 (next)** — the collector: find.ts +
+palette-page.ts consume PhraseCollector; FindMode/MODE_UI die.
 **Repos touched:** `branchkit-extension` (bulk), `plugins/browser` (tag mirror),
 `app` (pin bumps only).
 

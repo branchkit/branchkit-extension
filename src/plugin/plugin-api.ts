@@ -214,6 +214,15 @@ export async function setRangePick(tabId: number, codewords: string[]): Promise<
   });
 }
 
+// Video voice mode: reflect the extension's video key layer (one lifetime —
+// `w` or spoken "video" in, Escape/q/w/"over" out) so the plugin holds the
+// exclusive video_mode tag while it is live. Caret's boolean-mirror shape;
+// the writer is the SW-derived mode mirror (background/mode-mirror.ts).
+export async function setVideoMode(active: boolean): Promise<void> {
+  if (!(await ensureConnected())) return;
+  await postToPlugin('/video-mode', { conn_id: connId, active });
+}
+
 // Find voice gating: reflect the content script's find session (bar open OR
 // committed highlights — it outlives the bar and survives blur) so the plugin
 // holds the non-exclusive find tag, gating voice "next"/"previous" to live
