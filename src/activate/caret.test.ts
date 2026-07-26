@@ -220,6 +220,71 @@ describe('CaretController — extend to phrase (Phase B)', () => {
     expect(c.isActive()).toBe(false);
     expect(onModeChange).not.toHaveBeenCalled();
   });
+
+  // Escape undoes the ACTION, not one internal layer of it. A phrase command
+  // creates the caret and the selection together from nothing, and peeling them
+  // one at a time parked the user in a caret mode they never entered and had no
+  // prior position in (field report 2026-07-26).
+  it('a phrase-created selection leaves in ONE escape', () => {
+    document.body.innerHTML = '<p>the quick brown fox jumps over the lazy dog</p>';
+    const c = new CaretController({ onModeChange: vi.fn() });
+    c.extendToPhrase('brown fox');
+    expect(c.getMode()).toBe('visual');
+
+    c.escape();
+    expect(c.isActive()).toBe(false);
+  });
+
+  // ...but a session the USER built still peels: the caret they were sitting on
+  // is a real place to go back to, so the first escape collapses to it.
+  // collapseToCaret goes through Selection.modify, which happy-dom lacks.
+  function withModifyStub(body: () => void): void {
+    const proto = Object.getPrototypeOf(window.getSelection()!) as { modify?: unknown };
+    const orig = proto.modify;
+    proto.modify = () => {};
+    try { body(); } finally { proto.modify = orig; }
+  }
+
+  function userSelection(): CaretController {
+    const p = document.querySelector('p')!.firstChild!;
+    const sel = window.getSelection()!;
+    const range = document.createRange();
+    range.setStart(p, 4);
+    range.setEnd(p, 9);
+    sel.removeAllRanges();
+    sel.addRange(range);
+    const c = new CaretController({ onModeChange: vi.fn() });
+    c.enterFromNormal();          // the user chose this
+    c.extendToPhrase('lazy');     // extending THEIR session
+    return c;
+  }
+
+  it('a user-entered selection still collapses to its caret first', () => {
+    document.body.innerHTML = '<p>the quick brown fox jumps over the lazy dog</p>';
+    withModifyStub(() => {
+      const c = userSelection();
+      c.escape();
+      expect(c.isActive()).toBe(true);   // collapsed to the caret, still in
+      c.escape();
+      expect(c.isActive()).toBe(false);  // and out
+    });
+  });
+
+  // The floor is per-session, not sticky: after a phrase session exits, a
+  // session the user opens next behaves like their own again.
+  it('the escape floor resets when the session ends', () => {
+    document.body.innerHTML = '<p>the quick brown fox jumps over the lazy dog</p>';
+    withModifyStub(() => {
+      const c = new CaretController({ onModeChange: vi.fn() });
+      c.extendToPhrase('brown fox');
+      c.escape();                   // one-shot exit, floor was 'normal'
+      expect(c.isActive()).toBe(false);
+
+      const same = userSelection();
+      same.escape();
+      expect(same.isActive()).toBe(true);  // theirs again — collapses, not exits
+    });
+  });
 });
 
 describe('CaretController — find → selection handoff (Phase B)', () => {

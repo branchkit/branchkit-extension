@@ -224,6 +224,22 @@ export interface CaretOptions {
 export class CaretController {
   private movement: Movement | null = null;
   private mode: CaretMode | null = null;
+  /**
+   * The state this session was entered FROM — what a full escape should return
+   * to.
+   *
+   * Escape peels one layer, and for a session the user built themselves that
+   * layer is the selection: `v`, move, Escape collapses back to the caret they
+   * were sitting on, and a second Escape leaves. But a phrase command
+   * ("highlight <phrase>", gs) creates the caret AND the selection from nothing
+   * in one action, and unwinding it a layer at a time dropped the user into a
+   * caret mode they never asked for and had no prior position in (field report
+   * 2026-07-26). Escape should undo the ACTION, not one internal layer of it.
+   *
+   * 'caret' is the default because every other entry point is the user choosing
+   * caret mode; only the implicit creation below sets 'normal'.
+   */
+  private entryFloor: 'normal' | 'caret' = 'caret';
   private lineWise = false;
   private pendingG = false;
   private pendingA = false; // `a` prefix for the aw/as/ap text objects (around)
@@ -466,7 +482,14 @@ export class CaretController {
     const m = this.movement;
     if (!m || this.fieldEl) { this.exit(); return; }
     if (isFindActive()) { closeFindMode(); return; }
-    if (this.mode === 'visual' && !m.sel.isCollapsed) { this.collapseToCaret(); return; }
+    // Collapsing a selection back to its caret is a step BACK only if there was
+    // a caret to go back to. A session a phrase command conjured has no such
+    // floor, so it leaves in one Escape rather than parking the user in a mode
+    // they never entered.
+    if (this.mode === 'visual' && !m.sel.isCollapsed && this.entryFloor === 'caret') {
+      this.collapseToCaret();
+      return;
+    }
     this.exit();
   }
 
@@ -504,6 +527,9 @@ export class CaretController {
     }
     this.movement = null;
     this.mode = null;
+    // Back to the default: the next session is the user's until something
+    // creates one on their behalf again.
+    this.entryFloor = 'caret';
     this.lineWise = false;
     this.pendingG = false;
     this.pendingA = false;
@@ -884,6 +910,11 @@ export class CaretController {
     if (!sel) return;
     this.fieldEl = null; // a page phrase targets the document, not a field
     const haveAnchor = this.isActive() && sel.rangeCount > 0 && !sel.isCollapsed;
+    // Entering from nothing: this whole session is the phrase command's doing,
+    // so escaping it should land back where the user actually was. Extending an
+    // EXISTING selection ("select to" mid-session) leaves the floor alone —
+    // that session is still theirs.
+    if (!this.isActive()) this.entryFloor = 'normal';
     if (!haveAnchor) {
       const r = document.createRange();
       r.setStart(range.startContainer, range.startOffset);
