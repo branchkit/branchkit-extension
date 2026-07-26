@@ -56,6 +56,15 @@ export class KeyHandler {
   // Notified whenever the mode changes (normal ↔ hint), so the mode indicator
   // chip can reflect it. Set by content.ts.
   private onModeChange: ((mode: KeyMode) => void) | null = null;
+  // The last mode the chip was told about — seeded 'normal', the keyboard's
+  // (and the chip's) starting state, so a defensive exit from Normal is no
+  // edge. Notifications fire on the EDGE of getMode()'s answer, not on the
+  // caller's guess about whether it changed — the C3 regression this
+  // replaces: the cascade pops the stack and then runs the mode's exit as a
+  // finisher, whose own pop no-ops, and a notification gated behind that pop
+  // never fired, leaving the chip lying ("video" after Escape had already
+  // peeled it).
+  private lastNotifiedMode: KeyMode = 'normal';
   // Fired when the user presses Escape (no typed prefix) to leave hint mode.
   // Content decides whether to also hide the badges: manual visibility
   // dismisses them, always-visible keeps them. Set by content.ts.
@@ -109,6 +118,17 @@ export class KeyHandler {
     this.onModeChange = cb;
   }
 
+  /** Tell the chip when — and only when — the displayed mode actually moved.
+   *  Safe to call from any path, however defensively: the dedupe is on
+   *  getMode()'s answer, which derives from the stack + transients, so a
+   *  finisher running after the stack already popped still notifies. */
+  private notifyMode(): void {
+    const m = this.getMode();
+    if (m === this.lastNotifiedMode) return;
+    this.lastNotifiedMode = m;
+    this.onModeChange?.(m);
+  }
+
   setHintEscapeCallback(cb: () => void): void {
     this.onHintEscape = cb;
   }
@@ -132,19 +152,19 @@ export class KeyHandler {
   /** Arm mark-set: the next printable key names a new mark. */
   armMarkSet(): void {
     this.markArm = 'set';
-    this.onModeChange?.(this.getMode());
+    this.notifyMode();
   }
 
   /** Arm mark-jump: the next printable key names the mark to jump to. */
   armMarkJump(): void {
     this.markArm = 'jump';
-    this.onModeChange?.(this.getMode());
+    this.notifyMode();
   }
 
   private clearMarkArm(): void {
     if (this.markArm == null) return;
     this.markArm = null;
-    this.onModeChange?.(this.getMode());
+    this.notifyMode();
   }
 
   /** Inject the caret-mode key handler (the CaretController). Called by content. */
@@ -157,17 +177,15 @@ export class KeyHandler {
    *  controller — this is the caret lifetime's one keyboard-side entry, the
    *  same shape as enterHintMode/enterVideoMode. */
   enterCaretMode(sub: 'caret' | 'visual'): void {
-    if (this.caretSub === sub && modes.has('caret')) return;
     this.caretSub = sub;
     modes.push('caret'); // dedupes — caret↔visual is one lifetime
-    this.onModeChange?.(this.getMode());
+    this.notifyMode();
   }
 
   exitCaretMode(): void {
-    if (this.caretSub == null && !modes.has('caret')) return;
     this.caretSub = null;
-    modes.pop('caret');
-    this.onModeChange?.(this.getMode());
+    modes.pop('caret'); // no-op when the cascade already popped it
+    this.notifyMode();
   }
 
   /** Inject the video-layer key handler. Called by content. */
@@ -177,13 +195,13 @@ export class KeyHandler {
 
   /** Enter the video layer (the `video_mode` command, default `w`). */
   enterVideoMode(): void {
-    if (!modes.push('video')) return; // already live — one lifetime
-    this.onModeChange?.(this.getMode());
+    modes.push('video'); // dedupes — one lifetime
+    this.notifyMode();
   }
 
   exitVideoMode(): void {
-    if (modes.pop('video') === null) return;
-    this.onModeChange?.(this.getMode());
+    modes.pop('video'); // no-op when the cascade already popped it
+    this.notifyMode();
   }
 
   /** True while an explicit modal capture owns the keyboard (hint, caret/
@@ -237,14 +255,14 @@ export class KeyHandler {
   enterInsertMode(): void {
     if (this.forcedInsert) return;
     this.forcedInsert = true;
-    this.onModeChange?.(this.getMode());
+    this.notifyMode();
   }
 
   /** Leave explicit pass-through mode. */
   exitInsertMode(): void {
     if (!this.forcedInsert) return;
     this.forcedInsert = false;
-    this.onModeChange?.(this.getMode());
+    this.notifyMode();
   }
 
   /** Toggle explicit pass-through mode. */
@@ -264,7 +282,7 @@ export class KeyHandler {
   setExcluded(v: boolean): void {
     if (this.excluded === v) return;
     this.excluded = v;
-    this.onModeChange?.(this.getMode());
+    this.notifyMode();
   }
 
   isExcluded(): boolean {
@@ -281,15 +299,15 @@ export class KeyHandler {
     this.filterText = '';
     this.newTabArmed = false;
     modes.push('hint'); // dedupes itself — re-entry joins the one lifetime
-    this.onModeChange?.(this.getMode());
+    this.notifyMode();
   }
 
   exitHintMode(): void {
     this.filterText = '';
     this.sequence = '';
     this.newTabArmed = false;
-    const was = modes.pop('hint') !== null;
-    if (was) this.onModeChange?.(this.getMode());
+    modes.pop('hint'); // no-op when the cascade already popped it
+    this.notifyMode();
   }
 
   /** True when a capital was typed mid-codeword — the current pick should open
@@ -302,7 +320,7 @@ export class KeyHandler {
     // passNextKey: hand exactly the next keystroke to the page, then resume.
     if (this.passNextArmed) {
       this.passNextArmed = false;
-      this.onModeChange?.(this.getMode());
+      this.notifyMode();
       return false;
     }
 

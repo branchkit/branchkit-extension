@@ -711,3 +711,45 @@ describe('the mode stack rides the keyboard lifetimes (Wave 3 C2)', () => {
     expect(handler.peelHintPrefix()).toBe(null);
   });
 });
+
+describe('the chip hears cascade-order exits (video Escape regression, 2026-07-26)', () => {
+  // The cascade pops the stack FIRST and then runs the mode's exit as a
+  // finisher, whose own pop no-ops. A notification gated behind that pop
+  // never fired: keys returned to normal (routing derives from the stack)
+  // while the chip kept saying "video" — indistinguishable, from the user's
+  // seat, from being stuck in the mode. Notifications now ride getMode()'s
+  // EDGE, so any caller order reaches the chip.
+  beforeEach(() => modes.reset());
+
+  it('video: pop-then-finisher still notifies normal', () => {
+    const modeCb = vi.fn();
+    handler.setModeChangeCallback(modeCb);
+    handler.enterVideoMode();
+    expect(modeCb).toHaveBeenLastCalledWith('video');
+
+    expect(modes.peelTop('key_escape')).toMatchObject({ peeled: 'mode', id: 'video' });
+    handler.exitVideoMode(); // the cascade's finisher — stack already popped
+    expect(modeCb).toHaveBeenLastCalledWith('normal');
+    expect(handler.getMode()).toBe('normal');
+  });
+
+  it('hint: pop-then-finisher still notifies normal', () => {
+    const modeCb = vi.fn();
+    handler.setModeChangeCallback(modeCb);
+    handler.enterHintMode();
+    expect(modeCb).toHaveBeenLastCalledWith('hint');
+
+    expect(modes.peelTop('key_escape')).toMatchObject({ peeled: 'mode', id: 'hint' });
+    handler.escapeHintMode();
+    expect(modeCb).toHaveBeenLastCalledWith('normal');
+  });
+
+  it('defensive exits stay quiet: no edge, no callback', () => {
+    const modeCb = vi.fn();
+    handler.setModeChangeCallback(modeCb);
+    handler.exitHintMode();
+    handler.exitVideoMode();
+    handler.exitCaretMode();
+    expect(modeCb).not.toHaveBeenCalled();
+  });
+});
