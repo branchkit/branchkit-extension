@@ -3,6 +3,10 @@ dist/
 *.zip
 .DS_Store
 
+# Vitest coverage output (the committed artifact is scripts/coverage-baseline.json,
+# regenerated from this — see scripts/coverage-baseline.mjs).
+coverage/
+
 # Chrome extension build outputs and signing key. The .crx is a packed
 # extension archive (rebuilt from `dist/` on every package step); the
 # .pem is the private signing key that authenticates extension updates
