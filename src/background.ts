@@ -31,13 +31,14 @@ import {
   restoreVoicePaused, runConnectionCheck,
 } from './plugin/sse-transport';
 import {
-  forwardDispatchResult, forwardDebugLog, forwardPerfReport, forwardPluginDebugLog,
+  forwardDispatchResult, forwardDebugLog, forwardPerfReport,
   forwardHintsSessionEnd, forwardHintsSessionStart, postGrammarBatch, transportFailure,
   postFocus, postActiveTab, assertFocusIfFocused, setCaretActive, setFindActive, setRangePick,
   setQueryFieldActive,
 } from './plugin/plugin-api';
 import { saveReferenceToCollection, pushReferenceNames, hydrateReferencesFromCollection } from './background/references';
 import { handleDebugSnapshot } from './background/debug-snapshot';
+import { forwardCoalesced } from './background/log-coalesce';
 import { TAB_ACTION_BY_ID, ZOOM_ACTION_BY_ID, handleTabAction, handleZoomAction, switchToTabById } from './background/tab-actions';
 import { SURGERY_ACTIONS, handleSurgeryAction } from './background/tab-surgery';
 import {
@@ -444,7 +445,9 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
 
   if (message.type === 'PLUGIN_DEBUG_LOG' && typeof message.tag === 'string') {
     const level = typeof message.level === 'string' ? message.level : 'debug';
-    forwardPluginDebugLog(message.tag, message.data, level);
+    // Through the coalescer, not forwardPluginDebugLog directly: BK_CS_BOOT
+    // bursts (one line per frame boot) collapse to first-line + summary.
+    forwardCoalesced(message.tag, message.data, level);
     return false;
   }
 
