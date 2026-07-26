@@ -529,9 +529,9 @@ function applyFoundRanges(query: string, ranges: Range[]): void {
  * focused, and the next dictation types into it WITH WhisperKit's prosody
  * punctuation ("red, green"). Exact-first keeps every previously-matching
  * typed query byte-identical in behavior; the flexible layer engages only
- * at zero exact matches. The phonetic layer stays voice-armed-path-only —
+ * at zero exact matches. The phonetic layer stays dictation-only —
  * per-keystroke phonetic correction on partial typed words would misfire.
- * See notes/DESIGN_DICTATED_COMMAND_ARGUMENT.md (2026-07-24 decision). */
+ * (2026-07-24 decision.) */
 function performFind(query: string): void {
   if (query === '') {
     state.query = query;

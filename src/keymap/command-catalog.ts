@@ -59,27 +59,6 @@ export interface VoicePattern {
    * meaningfully different things.
    */
   description?: string;
-  /**
-   * Dictated-argument descriptor (the platform's `dictated_param`): speaking
-   * this pattern doesn't dispatch — it ARMS, and the user's next dictation
-   * hold fills `param` on the action, which then dispatches. Free text can't
-   * live in the closed command grammar, so the argument rides the open-
-   * vocabulary dictation engine instead. Action ids are bare (the plugin
-   * prefixes them); `{key}` in cueBody becomes the live dictation-hold key.
-   * See app notes/DESIGN_DICTATED_COMMAND_ARGUMENT.md.
-   */
-  dictated?: {
-    /** Action param the dictated transcript fills. */
-    param: string;
-    /** Bare action id dispatched at arm time (find's box-open cue). */
-    armAction?: string;
-    /** Bare action id dispatched if the arm expires unconsumed. */
-    disarmAction?: string;
-    /** Armed-state cue card title (discovery overlay). */
-    cueTitle?: string;
-    /** Armed-state cue card body; `{key}` = live dictation-hold combo. */
-    cueBody?: string;
-  };
 }
 
 export interface CommandMeta {
@@ -267,16 +246,12 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   { id: 'find_previous', label: 'Find previous', group: 'Find', mappable: true, params: [],
     description: 'Jump to the previous find match.',
     voice: [{ pattern: 'previous' }], voiceContext: 'find' },
-  // "search" rides the platform's dictated-argument path (the closed command
-  // engine can only hear union words, so "find {text}" never did real
-  // find-in-page): the verb arms + opens the find box as the cue, the next
-  // dictation hold's transcript arrives here as the query. The box then stays
-  // open — typing or dictating into it is the supported repeat-query path
-  // (the bar's matching is tolerant). See notes/DESIGN_TEXT_TARGETING.md and
-  // app notes/DESIGN_DICTATED_COMMAND_ARGUMENT.md.
-  // No voice pattern: "search" now opens the box (find_open) and the query
-  // arrives by typing or dictating into it. Kept as an action because the
-  // palette and programmatic callers dispatch it directly with a query.
+  // No voice pattern: "search" opens the box (find_open) and the query arrives
+  // by typing or dictating into it. The closed command engine can only hear
+  // union words, so "find {text}" never did real find-in-page — the query has
+  // to come from somewhere other than the command grammar, and the box is that
+  // somewhere. Kept as an action because the palette and programmatic callers
+  // dispatch it directly with a query. See notes/DESIGN_TEXT_TARGETING.md.
   { id: 'find_immediate', label: 'Find immediately', group: 'Find', mappable: false,
     params: [{ name: 'query', type: 'string' }],
     description: 'Find a given query on the page without opening the bar.' },
@@ -756,16 +731,6 @@ export interface CommandContribution {
    * swaps the app-active gate for the named context's tag (and clears it at
    * match time). */
   context?: string;
-  /** VoicePattern.dictated, in the plugin's wire shape: this phrase arms a
-   * dictated argument instead of dispatching. Action ids stay bare — the
-   * registrar prefixes them, same contract as `action`. */
-  dictated_param?: {
-    param: string;
-    arm_action?: string;
-    disarm_action?: string;
-    cue_title?: string;
-    cue_body?: string;
-  };
 }
 
 /** Flatten the catalog's voice patterns into the plugin contribution payload. */
@@ -778,13 +743,6 @@ export function buildCommandContributions(): CommandContribution[] {
         action: c.id, pattern: v.pattern, params: v.params, category: c.group,
         description: v.description ?? c.description, retains_hints: c.retainsHints,
         context: v.context ?? c.voiceContext,
-        dictated_param: v.dictated && {
-          param: v.dictated.param,
-          arm_action: v.dictated.armAction,
-          disarm_action: v.dictated.disarmAction,
-          cue_title: v.dictated.cueTitle,
-          cue_body: v.dictated.cueBody,
-        },
       });
     }
   }
