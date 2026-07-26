@@ -1,7 +1,10 @@
 # Plan: mode stack + holder registry implementation
 
 **Design:** `notes/DESIGN_MODE_STACK_AND_CODEWORD_HOLDERS.md`
-**Status:** Not started. Written 2026-07-26.
+**Status:** Wave 1 LANDED + committed 2026-07-26 (ext `3b37642`, browser
+`64f55cc`, app `90d3bbb`; not pushed). Wave 2 design pass done 2026-07-26 —
+the design doc's three open questions are resolved and it now carries the
+testing strategy this plan's Wave 2 builds against.
 **Repos touched:** `branchkit-extension` (bulk), `plugins/browser` (tag mirror),
 `app` (pin bumps only).
 
@@ -164,17 +167,28 @@ is shared with other sessions. **No pushes.**
 ## Wave 2 — primitives (3 agents, parallel, new files only)
 
 Zero contention: each agent creates files nothing imports yet, plus unit tests
-against the primitive in isolation. No call sites are migrated.
+against the primitive in isolation. No call sites are migrated. Each primitive
+ships WITH its conformance suite (design doc, "Testing strategy") — the suite
+is part of the primitive, not a follow-up.
 
-- **B1 — `src/labels/holder-registry.ts`.** The v2 `CodewordHolder` interface,
-  priority ordering, `claim` mode, and the derived `resolveCodeword` /
-  `matchesPrefix` / `narrow` / `soleMatch`. Plus a `StoreHolder` adapter that
-  makes `ObservableWrapperStore` a registered holder. Tests: a synthetic
-  three-holder registry proves exclusivity, fall-through, and priority.
-- **B2 — `src/core/mode-stack.ts`.** The `ModeSpec` table, push/pop/peelTop,
-  floor recording, and the derived mirror payload. No wiring. Tests: interleaved
-  push/pop restores floors; peelTop is the stack order; a mode with a `mirror`
-  produces exactly one transition per edge.
+- **B1 — `src/labels/holder-registry.ts` + `src/testing/holder-conformance.ts`.**
+  The v2 `CodewordHolder` interface, priority ordering, `claim` mode, the
+  discriminated `reconcile(settle: SettleKind)` hook, and the derived
+  `resolveCodeword` / `matchesPrefix` / `narrow` / `soleMatch`. Plus a
+  `StoreHolder` adapter that makes `ObservableWrapperStore` a registered
+  holder. Tests: the conformance suite run over synthetic holders AND the
+  `StoreHolder` adapter; a three-holder registry proves exclusivity,
+  fall-through, and priority; the registration meta-test (every registered
+  holder gets the suite).
+- **B2 — `src/core/mode-stack.ts` + `src/core/derive-mirror.ts` +
+  `src/testing/modespec-conformance.ts`.** The `ModeSpec` table (with
+  `peelInner`), push/pop/peelTop, floor recording, and `deriveMirror` as a pure
+  function with its edge-transition diff. No wiring, no `chrome` imports.
+  Tests: the ModeSpec conformance suite over the real table; the fast-check
+  properties (reverse-order peel, floor restore, one-transition-per-edge,
+  no-exclusive-tag-with-empty-stack — including mirror-RPC-failure ops);
+  `deriveMirror` table tests (subframe caret, two-frame find, empty map).
+  Adds `fast-check` as a devDependency.
 - **B3 — `src/scan/phrase-collector.ts`.** Input semantics only, no DOM.
   Tests: chunked dictated insert commits once after the last chunk; a keystroke
   cancels a pending commit; 229 and `isComposing` are not keystrokes; a
@@ -183,6 +197,13 @@ against the primitive in isolation. No call sites are migrated.
 Wave 2 can start as soon as the design is accepted — it does not depend on
 Wave 1 landing, only on not colliding with it, which is guaranteed by the
 new-files-only rule.
+
+**Wave 2 exit criteria** (before any C-step): all three primitives + suites
+green; `@vitest/coverage-v8` installed and the coverage baseline for the
+blast-radius list recorded and committed; the ceiling-honesty commit landed
+(raise to actuals 3814/1335, reason recorded — design doc, "The monolith
+ceiling"). Sensing-freeze delta for the wave: zero adds, zero retirements —
+the retirements land at C1/C3/C4 per the design doc's wave checkpoints.
 
 ---
 

@@ -207,10 +207,21 @@ interface ModeSpec {
   id: ModeId;
   /** Bare-key ownership while this is the top of the stack. */
   capture: 'none' | 'bare-keys';
-  /** How the plugin sees it. null = extension-only (forced insert, passKeys). */
+  /** How the plugin sees it. null = extension-only, and null is a DECISION
+   *  with a recorded reason (the D2 lint checks the field exists, not that it
+   *  is non-null): forced insert and hint mode are null because their tags —
+   *  none, and the grammar-owned hints gate — are not projections of user
+   *  mode. See resolved question 2. */
   mirror: { tag: string; exclusive: boolean; speaker: 'any-frame' } | null;
   /** Peeled by escape? Badge visibility deliberately is not — see below. */
   peelable: boolean;
+  /** Peel an INTRA-mode transient without popping: hint mode's typed prefix,
+   *  the caret session's visual→caret stage. peelTop asks the top entry this
+   *  first; a non-null return consumed the escape and the entry stays. This is
+   *  how the cascade's "hint prefix outranks hint mode" and caret's staged
+   *  unwind survive without making a keystroke a mode. Never pops — popping is
+   *  the stack's, so the floor bookkeeping cannot be bypassed. */
+  peelInner?(): string | null;
 }
 ```
 
@@ -401,15 +412,218 @@ sticks and suppresses every command system-wide. Mitigation: the Delete-first
 ordering fix (Wave 1) lands before the arbitration change, so a stuck tag is
 recoverable by the existing drains.
 
-## Open questions
+## Resolved questions (design pass, 2026-07-26)
 
-1. Does the range pick want to be a stack entry, or is it a holder that happens
-   to capture keys? It is a question awaiting an answer, not a mode the user
-   chose. Leaning: stack entry with `capture: 'bare-keys'`, because its escape
-   ordering has to be declared somewhere and the stack is that somewhere.
-2. `plugin.browser.hints` is grammar-owned, with its own state machine
-   (`hint_gate.go`). Does it join the mirror table or stay outside it? Leaning:
-   stays outside — it mirrors grammar liveness, not user mode.
-3. Should `reconcile(settle: SettleKind)` be a discriminated hook or should
-   holders subscribe to settle kinds they care about? The second is more
-   registry-shaped; the first is smaller. Undecided.
+### 1. The range pick is both — and the either/or was the bundling, not the pick
+
+The question dissolves once the two primitives exist, because the current
+module bundles two concerns that belong to different registries:
+
+- **Its chips are a `CodewordHolder`** — they already are, via `RangeBadgeSet`'s
+  registration. Under the v2 interface they carry `claim: 'exclusive'`, which is
+  where `refusePickWindowCodeword`'s swallow-everything rule stops being an
+  `if (!isRangePickPending())` written twice and becomes a declared field.
+- **Its modality is a stack entry**: `{ id: 'range_pick', capture: 'bare-keys',
+  mirror: null, peelable: true }`. The plugin-side projection narrow (the
+  `RANGE_PICK` message) is not a tag and does not become one — it stays an
+  entry/exit effect of the mode's payload, not a mirror.
+- **`PickEntryState` is the stack's floor.** `badgesVisible` + `hintMode` is
+  exactly what push records and pop restores, for every mode instead of this
+  one. `pickWindowHooks` and `PickEntryState` die on the C3 schedule.
+
+On escape ordering: under the stack the order is **temporal** — last pushed,
+first peeled — and the cascade's fixed "a pick outranks everything" was an
+approximation of that. A pending pick is always the newest layer *by
+construction*: it captures bare keys (no key-driven mode entry underneath it)
+and its exclusive holder swallows codewords (no codeword-driven entry). A voice
+command that genuinely opens a new layer over a pending pick lands above it and
+peels first, which is correct — Wave 1's A3 fix ("peel whichever layer is
+newer, not a fixed rank") already conceded that fixed rank is wrong wherever
+the difference is observable.
+
+The hint **prefix** does not become a stack entry. It is an intra-mode
+transient, handled by hint mode's `peelInner` (see the interface) — same
+mechanism that keeps the caret session's visual→caret staging inside the caret
+entry. That preserves the cascade's observed order (prefix before mode, pick
+before both) without making a keystroke a mode.
+
+### 2. `plugin.browser.hints` stays outside the mirror table
+
+The mirror table is for tags that assert *the user is in a mode*. The hints tag
+asserts *these codewords are decodable* — `hint_gate.go` sets it when a scan's
+first grammar batch lands and clears it at session end. The two lifetimes are
+demonstrably different: under always-on hint visibility (the shipped default
+posture for this user), the tag is held for the whole page session while the
+keyboard's hint mode toggles freely. That is the same lifetime-mismatch class
+that keeps video out of the plugin's `modeMirrors` table today — except here
+the mismatch is *correct and permanent*, not a defect the stack unifies.
+
+Two further reasons not to move it:
+
+- `hint_gate.go` is the one tag machine the review found **correct** (the
+  no-early-out invariant). Driving its tag from a stack-derived mirror adds a
+  second writer to the only tag that has exactly one good one.
+- The anchoring rule is structural role, not plugin identity: mode-shaped tags
+  are stack-derived, grammar-shaped tags are grammar-derived. This is the
+  extension-side twin of the platform's "engine narrowing reacts only to
+  exclusive gates via the shared predicate — never per-tag awareness."
+
+Hint mode's `ModeSpec` therefore has `mirror: null` with the grammar-owned
+reason recorded, and the D2 lint accepts a null mirror that carries a reason.
+
+### 3. `reconcile(settle: SettleKind)` is a discriminated hook, not a subscription
+
+Discriminated hook. The deciding argument is the failure mode this arc exists
+to kill: a subscription model recreates "participant missed the Nth wiring
+site" — forgetting to subscribe to a kind is precisely the
+`afterScrollSettle`-only bug, silent again. A discriminated hook delivers every
+kind to every holder; a holder ignoring a kind is a visible branch in its own
+code, and its conformance suite calls `reconcile` with **every** member of the
+closed enum, so "new kind, holder unhandled" surfaces in the holder's own
+tests (and, with an exhaustive `switch`, at compile time).
+
+Secondary reasons: scale (two kinds, ≤4 holders — subscription bookkeeping
+would outweigh the fan-out it manages) and the sensing freeze (a subscription
+registry is a new memo-shaped structure; the discriminated hook is a pure
+fan-out of the settle engine's existing `afterSettle`/`afterScrollSettle`
+signals, no new state). `SettleKind` starts as exactly the discriminants the
+engine already distinguishes — `'scroll' | 'general'` — and grows only when the
+engine does. Closed enum, structural not content: adding a kind is one visible
+type edit, not a per-holder wiring hunt.
+
+---
+
+## Testing strategy
+
+The gap that let all ten findings through is that every mode/escape test called
+the module under test directly, with its collaborators mocked. The strategy has
+five parts; the first three exist to make that shape impossible for the
+primitives, the last two to make the migration's safety checkable.
+
+### Conformance suites (the sdk-test pattern, in vitest)
+
+The workspace already runs this shape: `sdk-test` is a harness that owns the
+invariants and takes the participant as input, so a new SDK's failure mode is
+"implement these handlers," not a silent wire drift. The extension-side
+counterparts:
+
+- **`src/testing/holder-conformance.ts`** exports
+  `describeCodewordHolderConformance(name, factory)` — a shared describe-block
+  generator each holder's test file invokes with a factory that produces a
+  registered holder plus a way to make it hold codewords. Invariants every
+  holder must pass: `held()` agrees with `resolve()` (an additive holder never
+  resolves a codeword it doesn't hold); `republish()` is idempotent;
+  `onCodewordRejected` removes from `held()`; `matchesPrefix`/`soleMatch`/
+  `narrow` are mutually consistent; `reconcile` is a safe no-op for **every**
+  `SettleKind` when nothing is live; `dispose` is idempotent and empties
+  `held()`; an `'exclusive'` holder's swallow contract.
+- **`src/testing/modespec-conformance.ts`** — for every entry in the ModeSpec
+  table: the mirror field is present (null allowed, with reason); push then pop
+  restores the previous top, capture state, and floor; a mirrored spec emits
+  **exactly one transition per edge** into a synthetic mirror sink; a peelable
+  spec peels via `peelTop`; `peelInner`, when present, never pops.
+- **Registration is the trigger.** A meta-test iterates the real registry / the
+  real ModeSpec table and runs the suite over every participant found there. A
+  fourth holder cannot skip the suite by not writing a test file — which is the
+  "failure mode is implement-these-methods" property the design claims,
+  enforced rather than hoped.
+
+### Property-based invariants (add fast-check)
+
+No property-testing library is in the repo today; **add `fast-check`** as a
+devDependency (dev-only, no runtime footprint, first-class vitest integration —
+and shrinking is what makes a 40-op counterexample readable, which a
+hand-rolled seeded walk does not give us). Model-based sequences over
+`{push, pop, peelTop, mirror-rpc-fails}` × the ModeSpec table, checked against
+a trivially-correct model (a plain array):
+
+- `peelTop` pops in reverse push order;
+- `pop` restores the recorded floor — top, capture, and mirror set all match
+  the model after every op;
+- a mirrored mode emits exactly one transition per edge (count sink calls
+  against model edge count — the dedupe-vs-drop failure both directions);
+- **no sequence leaves an exclusive tag set with the stack empty.** This is the
+  "stuck exclusive tag suppresses every command system-wide" failure stated as
+  a property, and the op alphabet includes *mirror RPC failure*: the invariant
+  under failure is the Wave 1 correction's clear-signal-survives form — a
+  failed transition leaves the derivation re-emittable, never silently
+  swallowed.
+
+### Synthetic participants instead of `vi.mock`
+
+The mock leaderboard for the modules these primitives replace:
+`range-disambiguation` ×3, `codeword-holders` ×3, `selection-commands` ×2,
+`find` ×2 — plus `escape-key-path.test.ts`'s own header apologizing for two of
+them (mocked because they touch `chrome.*` at module scope). Once participants
+register, tests **register synthetic ones** instead of replacing modules:
+`escape-key-path.test.ts`'s mocks become synthetic stack entries driven through
+the real `peelTop`, and the file's stated residual gap shrinks accordingly.
+Migration rule: a Wave 3 step that migrates a module converts the tests that
+mock it in the same step; the `vi.mock` count for these four modules is the
+tracked metric, expected to reach zero at C5.
+
+`escape-key-path.test.ts` itself is **the gate, not a migration casualty**: its
+assertions are untouchable through the whole arc. Through C2 it must stay green
+unmodified; C3 may mechanically update its `reset()` helper (the flags it
+resets stop existing) but any change to an assertion is a design regression to
+stop on, not a test to update.
+
+### The mirror derivation is a pure function
+
+`deriveMirror(frameStacks: ReadonlyMap<FrameId, readonly ModeId[]>, specs):
+TagAssertion[]` lives in its own module with zero `chrome` imports; the SW
+calls it, tests table-test it — the extension-side counterpart to A1's Go table
+test. Cases from the review's own findings: a subframe caret stack sets the
+tag; two frames in find yield one claim; popping one frame while another is
+still in-mode keeps the tag; the empty map yields the empty set. The
+edge-transition diff (previous assertion set → next) is a second pure function,
+table-tested the same way, so the SW's own job reduces to transport.
+
+### Coverage as a migration safety net
+
+None is configured today (no coverage config, no provider installed). Add
+`@vitest/coverage-v8` and a `test:coverage` script. Protocol:
+
+- **Before C1**: record a baseline (per-file covered-line counts for the
+  blast-radius list — the deletion inventory plus `content.ts`, `keyboard.ts`,
+  `find.ts`, `palette-page.ts`) and commit it with the Wave 2 close.
+- **After each C-step**: `scripts/compare-coverage.mjs` diffs against the
+  baseline and fails when a surviving file's covered-line **count** drops
+  (counts, not percentages — deleting well-covered code raises the percentage
+  while losing the tests). A deleted file's tests must be either deleted with
+  the code or migrated, and the commit message lists which.
+- This checks "the migration lost no coverage," not semantic equivalence — the
+  Wave 1 regression tests are the semantic gate. It is a migration tool, not a
+  permanent CI gate, and it is removed at C5 close (no legacy debt).
+
+---
+
+## The monolith ceiling: fixed by Wave 3, made honest now
+
+The ratchet (`scripts/check-ceilings.mjs`) is RED and has stopped gating:
+`content.ts` 3814 vs ceiling 3620, `background.ts` 1335 vs 1300. Decision:
+
+- **This arc fixes `content.ts`'s ceiling, in Wave 3, not Wave 2.** Wave 2 is
+  new files only and moves neither monolith. C1 deletes the inline voice
+  codeword paths and the `StoreCodewordHooks` injection; C3 deletes the floors
+  and hooks; C4 deletes the mirror guards and the focus re-assert timer —
+  comfortably more than the 194-line overrun, and every Wave 2/3 addition lands
+  in modules, so the monoliths only shrink.
+- **Until then, raise the ceilings to the current actuals (3814 / 1335) in one
+  visible commit whose message records this paragraph.** A check that is always
+  red is not a guardrail — for this session or for the other sessions sharing
+  main. Raising to actuals restores the check's actual function (the *next*
+  line of growth fails), and the script's own RATCHET-DOWN arm then forces each
+  Wave 3 deletion to lock in its win. This is the raise said out loud, not the
+  silent one.
+
+## Wave checkpoints for the freeze and the retirements
+
+The sensing-freeze accounting above (add zero; retire `caretActivePushed`,
+`restoreBadges`, `entryFloor`, `pickWindowHooks`, `StoreCodewordHooks`, and the
+300 ms focus re-assert timer) settles at specific steps, so it can be checked
+rather than trusted: **Wave 2 is neutral** — new files, nothing imported,
+nothing added, nothing yet retired. C1 retires `StoreCodewordHooks`; C3 retires
+`entryFloor`, `restoreBadges`, `pickWindowHooks`; C4 retires
+`caretActivePushed` and the timer. A wave that ends without its scheduled
+retirements is the arc failing its own accounting.
