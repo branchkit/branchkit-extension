@@ -9,6 +9,6 @@
   "src/activate/range-disambiguation.ts": 54,
   "src/activate/selection-commands.ts": 54,
   "src/activate/search-badges.ts": 34,
-  "src/scan/find.ts": 335,
+  "src/scan/find.ts": 319,
   "src/labels/codeword-holders.ts": 0
 }

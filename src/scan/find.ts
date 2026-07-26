@@ -21,6 +21,7 @@
 
 import { bestPageMatch, normalizeFuzzy, fold1to1, lower1to1, flexiblePattern } from './fuzzy-find';
 import { modes } from '../core/modes';
+import { openPhraseSession, type PhraseSession } from './phrase-collector';
 
 /**
  * What the box is collecting a phrase FOR.
@@ -62,6 +63,10 @@ const STYLE_ATTR = 'data-branchkit-find-style';
 let state: FindState = { active: false, mode: 'find', query: '', matchIndex: 0, matchCount: 0 };
 let barElement: HTMLElement | null = null;
 let inputElement: HTMLInputElement | null = null;
+/** The bar's input semantics — 229 sentinel, dictation wire, commit/cancel —
+ *  live in the shared PhraseCollector (Wave 3 C5); this module owns only what
+ *  a commit MEANS. One session per open bar. */
+let phrase: PhraseSession | null = null;
 let matchRanges: Range[] = [];
 let currentIndex = -1;
 
@@ -371,26 +376,39 @@ function createFindBar(): void {
     border-radius: 4px; padding: 4px 8px; color: #fff; font-size: 13px; outline: none;
     font-family: inherit;
   `;
-  inputElement.addEventListener('input', (e) => {
-    if (!inputElement) return;
-    performFind(inputElement.value);
-    // Dictation ends the query the way Enter does for typing — so a dictated
-    // insert commits, and typed characters wait.
-    if (isDictatedInsert(e)) scheduleDictatedCommit();
-    else cancelDictatedCommit();  // a keystroke means they're still editing
+  // The input semantics — the 229 sentinel, the dictation wire and its
+  // utterance boundary, commit vs cancel, the blur close — are the shared
+  // collector's (scan/phrase-collector.ts, which carries every rationale
+  // this block used to). This module supplies the element and what a commit
+  // MEANS. Re-entrancy needs no listener unhooking: the session closes
+  // before its cancel callback fires, so a teardown-induced blur finds it
+  // inert.
+  const input = inputElement;
+  phrase = openPhraseSession(
+    {
+      read: () => input.value,
+      replace: (text) => {
+        input.value = text;
+        input.setSelectionRange(text.length, text.length);
+      },
+    },
+    {
+      onQueryChanged: (query) => performFind(query),
+      onCommit: () => commitFind(),
+      onCancel: () => closeFindMode(),
+    },
+  );
+  inputElement.addEventListener('input', (e) => phrase?.handleInput(e as InputEvent));
+  inputElement.addEventListener('keydown', (e) => {
+    const verdict = phrase?.handleKeydown(e) ?? 'pass';
+    if (verdict === 'commit' || verdict === 'cancel') {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+    // 'sentinel': fully inert — the composition's own default must survive.
+    // 'pass': an ordinary key, the input takes it.
   });
-  inputElement.addEventListener('keydown', handleFindBarKey);
-  // Focus leaving the box closes it. Same rationale as the palette's window
-  // blur close (palette-page.ts) one layer down: a modal that keeps its claim
-  // on input after it has stopped being the thing you are typing into is a
-  // state the user cannot see and cannot escape. Here the claim is the page
-  // keydown gate, which yields to a focused bar — so an unfocused bar left
-  // standing was a keyboard black hole. Closing on blur means the state is
-  // transient rather than somewhere you can park.
-  //
-  // removeFindBar unhooks this BEFORE dropping the element, so a teardown-
-  // induced blur cannot re-enter closeFindMode mid-commit.
-  inputElement.addEventListener('blur', handleFindBarBlur);
+  inputElement.addEventListener('blur', () => phrase?.handleBlur());
   barElement.appendChild(inputElement);
 
   const countSpan = document.createElement('span');
@@ -403,14 +421,12 @@ function createFindBar(): void {
 }
 
 function removeFindBar(): void {
-  // Before dropping the input: a pending dictated commit outliving its bar
-  // would fire against a torn-down session.
-  cancelDictatedCommit();
-  // Unhook the blur close first. Every teardown path runs through here —
-  // including commitFind, which removes a FOCUSED input — and a blur fired by
-  // the removal would otherwise re-enter closeFindMode and end the session the
-  // commit was in the middle of keeping alive.
-  inputElement?.removeEventListener('blur', handleFindBarBlur);
+  // Close the phrase session FIRST: a closed session ignores every event, so
+  // the blur this removal fires (commitFind removes a FOCUSED input) cannot
+  // re-enter closeFindMode, and no pending dictated commit can outlive the
+  // bar. The collector's ordering is the whole mechanism.
+  phrase?.close();
+  phrase = null;
   barElement?.remove();
   barElement = null;
   inputElement = null;
@@ -664,116 +680,13 @@ function move(delta: number): void {
 }
 
 // --- Keyboard handling (find bar input) ---
-
-/**
- * Did this insert arrive from dictation rather than from the keyboard?
- *
- * The signature is the LENGTH of a single insert. BranchKit dictation types
- * through `input.type_text` → enigo `fast_text`, which posts one CGEvent per
- * 20-character chunk with `CGEventKeyboardSetUnicodeString` — so "album"
- * arrives as ONE `input` event carrying all five characters. A human keyboard
- * cannot do that: typing is one character per event, always.
- *
- * A deliberate earlier cut tested for `insertFromPaste`, on the belief that
- * dictation arrives as a synthesised Cmd+V via shell-macos `PasteManager`.
- * PasteManager is real and does drive dictation-at-the-cursor, but the profile
- * path the find box sits on calls `input.type_text`, which synthesises
- * KEYSTROKES. The test that covered it fabricated an `insertFromPaste` event
- * this path never emits, so it passed against a browser that never behaves this
- * way — the search silently never committed in the field.
- *
- * `insertReplacementText` used to count too, described as "the autocorrect/
- * dictation-replacement path some engines use". It is gone, and the same lesson
- * is why: nothing on BranchKit's dictation path can emit it. `fast_text` posts
- * CGEvents with `CGEventKeyboardSetUnicodeString`, which reach the page as
- * `insertText` — the branch above — never as a replacement. Its one real
- * producer is the OS swapping a word the user typed (macOS autocorrect, a
- * spell-check accept), which is the OPPOSITE signal: the user is mid-edit, and
- * committing there tore the box down and sprayed the rest at the page. The
- * input now sets `autocorrect`/`spellcheck` off (createFindBar), so the event
- * should be rare; the predicate no longer relies on that holding, since browser
- * support for the attribute is uneven and other replacement sources exist.
- * Re-add it only against a field report of a real BranchKit dictation arriving
- * as `insertReplacementText` — not on the theory that some engine might.
- *
- * A real hand-typed paste no longer commits, which is the better behaviour
- * anyway: a pasted phrase is often something you then edit, and live highlights
- * already show while you decide. Enter commits it. An autocorrect now behaves
- * the same way, for the same reason.
- */
-function isDictatedInsert(e: Event): boolean {
-  const ev = e as InputEvent;
-  return ev.inputType === 'insertText' && (ev.data?.length ?? 0) > 1;
-}
-
-/**
- * Commit shortly after the last dictated chunk, not on the first.
- *
- * A phrase over 20 characters crosses the wire as several chunk events
- * back-to-back; committing on the first would tear down the bar mid-insert and
- * spray the remainder at the page. Each chunk pushes the deadline out, so the
- * commit lands once the insert has actually finished. A one-shot per insert,
- * not a standing timer.
- */
-let dictatedCommitTimer: number | null = null;
-const DICTATED_COMMIT_MS = 80;
-
-function scheduleDictatedCommit(): void {
-  cancelDictatedCommit();
-  dictatedCommitTimer = window.setTimeout(() => {
-    dictatedCommitTimer = null;
-    if (inputElement && inputElement.value.trim() !== '') commitFind();
-  }, DICTATED_COMMIT_MS);
-}
-
-function cancelDictatedCommit(): void {
-  if (dictatedCommitTimer === null) return;
-  clearTimeout(dictatedCommitTimer);
-  dictatedCommitTimer = null;
-}
-
-/** Focus left the query box — see the listener registration in createFindBar. */
-function handleFindBarBlur(): void {
-  if (!barElement) return;
-  closeFindMode();
-}
-
-function handleFindBarKey(e: KeyboardEvent): void {
-  if (e.key === 'Escape') {
-    // Same sentinel guard, same reasoning as the Enter branch below — an
-    // Escape wearing keyCode 229 or isComposing is the IME cancelling a
-    // COMPOSITION, not the user leaving the search. Closing the session on it
-    // threw away the whole query because a half-typed candidate was abandoned.
-    // The two branches have to agree: this listener is the only one that can
-    // refuse the event (the page-level guard only returns).
-    if (e.keyCode === 229 || e.isComposing) return;
-    e.preventDefault();
-    e.stopPropagation();
-    closeFindMode();
-  } else if (e.key === 'Enter') {
-    // Not a keystroke: `keyCode 229` is the platform's "text is being committed"
-    // sentinel (IME, and any OS-level text injection), and `isComposing` says a
-    // composition is still open. The `key` on such an event is an artifact of
-    // whatever the sink posted, so an Enter wearing either flag is not the user
-    // pressing Enter — committing on it tears the box down mid-composition and
-    // drops the text that was about to arrive.
-    //
-    // The page-level handler carries the same guard (content.ts) and actually
-    // runs FIRST — it is a capture-phase listener on `document`, so it sees the
-    // event before it reaches this input. It still cannot cover this one,
-    // because it only `return`s: no preventDefault, no stopPropagation, so the
-    // event carries on to the target and lands here unguarded. (While the bar
-    // holds focus it returns even earlier, at the isFindBarFocused check — and
-    // that gate is the reason this listener sees a focused-input event at all.)
-    // Two listeners, one event, and only the one that acts on it can refuse it.
-    // Same guard, same reasoning as palette-page.ts's: the box and the palette
-    // are the two inputs text reaches without a keyboard.
-    if (e.keyCode === 229 || e.isComposing) return;
-    e.preventDefault();
-    e.stopPropagation();
-    commitFind();
-  }
-}
+//
+// Gone (Wave 3 C5): the dictated-insert predicate, the 80 ms commit debounce,
+// the 229/isComposing sentinel branches and the blur close all live in the
+// shared PhraseCollector now (scan/phrase-collector.ts), which carries every
+// rationale — including why `insertReplacementText` is not dictation and why
+// the utterance boundary is 400 ms. createFindBar wires the session; this
+// module keeps only what a commit MEANS (commitFind below).
 
 /** Commit the search (Vimium-style): close the input bar but keep the highlights
  * and the current match. The page regains the keyboard; n / Shift+n then cycle

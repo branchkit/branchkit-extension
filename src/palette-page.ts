@@ -35,10 +35,34 @@ function fdiag(msg: string): void {
   try { window.parent.postMessage({ type: RELAY_DIAG, msg }, '*'); } catch { /* no parent */ }
 }
 import { stripTabMarker } from './tab-marker-format';
+import { openPhraseSession, isSentinelKey } from './scan/phrase-collector';
 import type { BadgeDisplayMode } from './types';
 import type { Message, PaletteVoiceEntry, PaletteVoiceRow } from './types';
 
 const queryInput = document.getElementById('query') as HTMLInputElement;
+
+/**
+ * The box's dictation wire — chunk accumulation, the 400 ms utterance
+ * boundary, replace-on-re-dictation — is the shared PhraseCollector's
+ * (./scan/phrase-collector.ts, Wave 3 C5), which retired this file's
+ * hand-rolled dictatedRun/dictatedAt/UTTERANCE_GAP_MS copy. The palette
+ * filters live and the user picks a row, so dictation never auto-commits
+ * (`autoCommitOnDictation: false`) and Enter/Escape stay this file's own
+ * (Enter dispatches the SELECTED ROW — it is not a text commit). The
+ * palette page lives exactly as long as its iframe, so one session spans
+ * the module; blur/close teardown is the host's (window blur → close()).
+ */
+const phrase = openPhraseSession(
+  {
+    read: () => queryInput.value,
+    replace: (text) => {
+      queryInput.value = text;
+      queryInput.setSelectionRange(text.length, text.length);
+    },
+  },
+  { onCommit: () => {}, onCancel: () => {} },
+  { autoCommitOnDictation: false },
+);
 const listEl = document.getElementById('list') as HTMLDivElement;
 const backdrop = document.getElementById('backdrop') as HTMLDivElement;
 
@@ -86,24 +110,6 @@ type PaletteMode = 'letter' | 'fuzzy';
 let mode: PaletteMode = 'fuzzy';
 /** The mark letters typed so far in letter mode ("i" waiting for a pair). */
 let markPrefix = '';
-/**
- * What the most recent dictation hold typed into the box. Dictation needs no
- * palette-side plumbing: the platform's sink types the transcript into whatever
- * field has focus, and while the palette is open that field is this one.
- *
- * The sink emits one OS event per 20-character chunk, so one transcript can
- * arrive as several insertions — they accumulate here. Two SEPARATE holds also
- * land as consecutive insertions, and telling those apart is what makes
- * re-querying work (see `resolvePaletteQuery`). The only local signal is the
- * gap: chunks of one transcript are milliseconds apart, two holds are seconds
- * apart — three orders of magnitude, so a coarse boundary is enough. Any
- * single-character (keyboard) edit resets it: typing always owns the box.
- */
-let dictatedRun = '';
-/** `input` timestamp that extended `dictatedRun`, for the utterance boundary. */
-let dictatedAt = 0;
-/** Insertions further apart than this belong to different holds. */
-const UTTERANCE_GAP_MS = 400;
 /** Note shown above the rows when the effective query isn't the box text. */
 let queryNote = '';
 
@@ -303,15 +309,15 @@ function renderCurrent(): void {
     return;
   }
   const resolved = resolvePaletteQuery(
-    queryInput.value, dictatedRun, [...tabItems, ...commandItems, ...bookmarkItems],
+    queryInput.value, phrase.lastDictation(), [...tabItems, ...commandItems, ...bookmarkItems],
   );
   if (resolved.reason === 'dictated_retry') {
-    // Two utterances ran together in the box (the sink types at the caret, so
-    // a second dictation appends to the first) and the newest one is the real
-    // query. Own it in the box rather than noting it: the box would otherwise
-    // show text that matches nothing, and the next edit would build on garbage.
-    queryInput.value = resolved.query;
-    dictatedRun = resolved.query;
+    // Vestigial under the collector — its replace-on-new-utterance keeps the
+    // run-together box ("gmailgithub") from forming at all — kept as the net
+    // for a boundary the gap timer missed: own the newest utterance in the
+    // box (seed also resets dictation ownership, so the next edit builds on
+    // clean state).
+    phrase.seed(resolved.query);
   }
   queryNote = resolved.reason === 'phonetic' ? `Showing results for “${resolved.query}”` : '';
   render(filterPalette(
@@ -388,8 +394,7 @@ function enterFuzzyMode(seed = ''): void {
 function enterLetterMode(): void {
   mode = 'letter';
   markPrefix = '';
-  dictatedRun = '';
-  queryInput.value = '';
+  phrase.seed(''); // clears the box and dictation ownership together
   queryInput.placeholder = placeholderFor('letter');
   queryInput.classList.add('letter-mode');
   selected = 0;
@@ -402,15 +407,7 @@ function enterLetterMode(): void {
 // anything reaching the value there came in whole, and a whole phrase is a
 // search query, not a mark.
 queryInput.addEventListener('input', (ev) => {
-  const inserted = (ev as InputEvent).data;
-  if (inserted != null && inserted.length > 1) {
-    const continues = ev.timeStamp - dictatedAt <= UTTERANCE_GAP_MS;
-    dictatedRun = continues ? dictatedRun + inserted : inserted;
-    dictatedAt = ev.timeStamp;
-  } else {
-    dictatedRun = '';
-    dictatedAt = 0;
-  }
+  phrase.handleInput(ev as InputEvent);
   if (scope === 'tabs' && mode === 'letter') {
     enterFuzzyMode(queryInput.value.slice(markPrefix.length));
     return;
@@ -420,14 +417,11 @@ queryInput.addEventListener('input', (ev) => {
 });
 
 window.addEventListener('keydown', (e) => {
-  // Not a keystroke: `keyCode 229` is the platform's "text is being committed"
-  // sentinel (IME, and any OS-level text injection). The `key` on such an event
-  // is an artifact — the dictation sink's CGEvent carries virtual keycode 0,
-  // which reaches the page as `key: "s", code: "KeyA"` regardless of what was
-  // said. Consuming it as a mark letter jumped to whichever tab was marked "s"
-  // (field report 2026-07-25). The real text follows as an insertion, which the
-  // input handler reads as a search query.
-  if (e.keyCode === 229 || e.isComposing) return;
+  // Sentinel events are not keystrokes (the shared predicate carries the
+  // 2026-07-25 field report: a 229 keydown's `key` is an artifact, and
+  // consuming it as a mark letter jumped tabs). The real text follows as an
+  // insertion, which the input handler reads as a search query.
+  if (isSentinelKey(e)) return;
   // Common navigation (both modes). Ctrl+K closes either palette (the full
   // palette's opener toggles it; a convenience for the tab palette). The tab
   // palette opens with bare `T`, which is a mark letter inside letter mode, so

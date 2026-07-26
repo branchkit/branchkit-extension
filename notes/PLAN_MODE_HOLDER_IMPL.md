@@ -97,8 +97,28 @@ forwarder, so the global "over" reaches the key layer. Extension-side:
 setVideoMode joins the mirror's FORWARDERS, content registers video_exit.
 Palette deliberately stays on its own transport (rows + tag publish
 atomically via PALETTE_CLOSED; the spec's mirror entry records the
-decision). C4 is complete. **C5 (next)** — the collector: find.ts +
-palette-page.ts consume PhraseCollector; FindMode/MODE_UI die.
+decision). C4 is complete (one field fix after landing: video_mode/video_exit had to
+join content's DISPATCH_PASSTHROUGH_ACTIONS — the spoken entry's action id
+had never arrived over SSE before, so the set predated it; ext `955765e`).
+D2-lint candidate recorded by that fix: the plugin forwarder table's action
+ids and the content passthrough/handler set should be checked against each
+other — a forwarded action with no content route drops silently. **C5a (LANDED 2026-07-26)** — both surfaces consume the
+PhraseCollector: find.ts opens a session per bar (port over the input;
+onQueryChanged = performFind, onCommit = commitFind, onCancel =
+closeFindMode; keydown routes by verdict; removeFindBar closes the session
+FIRST so a teardown blur is inert — the listener-unhook ordering dance is
+gone) and deletes its dictated-insert predicate, 80 ms commit debounce,
+sentinel branches and blur handler; palette-page.ts opens one module-long
+session (autoCommitOnDictation: false — Enter dispatches the selected ROW,
+never a text commit) and deletes dictatedRun/dictatedAt/UTTERANCE_GAP_MS,
+reading lastDictation() and seeding on the (now-vestigial, kept-as-net)
+dictated_retry branch; both sentinel guards are the shared isSentinelKey.
+Behavior deltas ratified by B3: the find commit debounce is the 400 ms
+utterance boundary; re-dictation REPLACES in both surfaces. find.ts pct
+rose to 89% with the moved lines at 100% in the primitive. **C5b (next)** —
+FindMode/MODE_UI die: find/highlight/extend become callers with their own
+commit meaning. Then the arc tail: D1 harness, D2 lints (incl. the
+forwarder↔passthrough check), coverage-baseline tool removal.
 **Repos touched:** `branchkit-extension` (bulk), `plugins/browser` (tag mirror),
 `app` (pin bumps only).
 
