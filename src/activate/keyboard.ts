@@ -42,7 +42,6 @@ function isInsertMode(): boolean {
 }
 
 export class KeyHandler {
-  private mode: KeyMode = 'normal';
   private sequence: string = '';
   private timeout: ReturnType<typeof setTimeout> | null = null;
   private filterText: string = '';
@@ -82,15 +81,14 @@ export class KeyHandler {
   // one-shot like passNextArmed. See notes/DESIGN_MARKS_AND_CARET.md.
   private markArm: MarkArm | null = null;
   private onMark: ((op: MarkArm, letter: string, global: boolean) => void) | null = null;
-  // Caret/visual mode (Vimium v / V). While set, bare keys route to the injected
-  // caret handler (a self-contained modal handler, like hint mode). The value is
-  // the chip-facing sub-mode; the controller owns the movement/selection logic.
-  private caretMode: 'caret' | 'visual' | null = null;
+  // The chip-facing caret SUB-mode (caret vs visual) — display detail only.
+  // The caret LIFETIME (like hint's and video's) is the mode stack's; nothing
+  // routes or gates on this field (Wave 3 C3c deleted the mode flags).
+  private caretSub: 'caret' | 'visual' | null = null;
   private onCaretKey: ((e: KeyboardEvent) => boolean) | null = null;
   // Video layer (media controls on YouTube's mnemonics). A modal capture like
   // caret: bare keys route to the injected handler until Escape/q exits. See
   // notes/DESIGN_VIDEO_MEDIA_COMMANDS.md.
-  private videoMode = false;
   private onVideoKey: ((e: KeyboardEvent) => boolean) | null = null;
   // Granular per-site pass-through: specific keys (matched against `event.key`,
   // e.g. "j", "#") reach the page while the REST of BranchKit's binds keep
@@ -155,16 +153,20 @@ export class KeyHandler {
   }
 
   /** Enter/switch caret capture. Driven by the CaretController's onModeChange
-   *  so the KeyHandler mode + chip stay in lockstep with the controller. */
+   *  so the stack entry, the chip and the sub-mode stay in lockstep with the
+   *  controller — this is the caret lifetime's one keyboard-side entry, the
+   *  same shape as enterHintMode/enterVideoMode. */
   enterCaretMode(sub: 'caret' | 'visual'): void {
-    if (this.caretMode === sub) return;
-    this.caretMode = sub;
+    if (this.caretSub === sub && modes.has('caret')) return;
+    this.caretSub = sub;
+    modes.push('caret'); // dedupes — caret↔visual is one lifetime
     this.onModeChange?.(this.getMode());
   }
 
   exitCaretMode(): void {
-    if (this.caretMode == null) return;
-    this.caretMode = null;
+    if (this.caretSub == null && !modes.has('caret')) return;
+    this.caretSub = null;
+    modes.pop('caret');
     this.onModeChange?.(this.getMode());
   }
 
@@ -175,32 +177,32 @@ export class KeyHandler {
 
   /** Enter the video layer (the `video_mode` command, default `w`). */
   enterVideoMode(): void {
-    if (this.videoMode) return;
-    this.videoMode = true;
-    modes.push('video'); // the stack rides the flag's one lifetime (Wave 3 C2)
+    if (!modes.push('video')) return; // already live — one lifetime
     this.onModeChange?.(this.getMode());
   }
 
   exitVideoMode(): void {
-    if (!this.videoMode) return;
-    this.videoMode = false;
-    modes.pop('video');
+    if (modes.pop('video') === null) return;
     this.onModeChange?.(this.getMode());
   }
 
-  /** True while an explicit modal capture owns the keyboard (hint or caret/
-   *  visual): the field-yield / pass-through / passKeys short-circuits are
-   *  suspended so the mode fully owns bare keys. */
+  /** True while an explicit modal capture owns the keyboard (hint, caret/
+   *  visual or video — read off the stack): the field-yield / pass-through /
+   *  passKeys short-circuits are suspended so the mode fully owns bare keys. */
   private isModalCapture(): boolean {
-    return this.mode === 'hint' || this.caretMode !== null || this.videoMode;
+    return modes.has('hint') || modes.has('caret') || modes.has('video');
   }
 
+  /** Which single mode the chip should name. Derived from the mode stack —
+   *  the precedence ladder over private flags is gone (Wave 3 C3c); only the
+   *  keyboard transients (mark arm, forced insert / exclusion) and the caret
+   *  display sub-mode are the keyboard's own. */
   getMode(): KeyMode {
     if (this.markArm === 'set') return 'mark-set';
     if (this.markArm === 'jump') return 'mark-jump';
-    if (this.caretMode) return this.caretMode;
-    if (this.videoMode) return 'video';
-    if (this.mode === 'hint') return 'hint';
+    if (modes.has('caret')) return this.caretSub ?? 'caret';
+    if (modes.has('video')) return 'video';
+    if (modes.has('hint')) return 'hint';
     return (this.forcedInsert || this.excluded) ? 'insert' : 'normal';
   }
 
@@ -223,11 +225,11 @@ export class KeyHandler {
    * carry until then.
    */
   isHintMode(): boolean {
-    return this.mode === 'hint';
+    return modes.has('hint');
   }
 
   isVideoMode(): boolean {
-    return this.videoMode;
+    return modes.has('video');
   }
 
   /** Enter explicit pass-through (insert) mode — every key reaches the page
@@ -276,21 +278,18 @@ export class KeyHandler {
   }
 
   enterHintMode(): void {
-    this.mode = 'hint';
     this.filterText = '';
     this.newTabArmed = false;
     modes.push('hint'); // dedupes itself — re-entry joins the one lifetime
-    this.onModeChange?.('hint');
+    this.onModeChange?.(this.getMode());
   }
 
   exitHintMode(): void {
-    const was = this.mode;
-    this.mode = 'normal';
     this.filterText = '';
     this.sequence = '';
     this.newTabArmed = false;
-    modes.pop('hint'); // no-op when the mode was never entered
-    if (was !== 'normal') this.onModeChange?.('normal');
+    const was = modes.pop('hint') !== null;
+    if (was) this.onModeChange?.(this.getMode());
   }
 
   /** True when a capital was typed mid-codeword — the current pick should open
@@ -407,27 +406,24 @@ export class KeyHandler {
       return false;
     }
 
-    // Caret/visual mode (entered via `v`/`V`): the injected controller owns the
-    // Vim movement alphabet + yank/exit. Like hint mode, it fully captures bare
-    // keys; real-modifier chords already took the fast path above (so Ctrl+C
-    // still copies the visual selection). See notes/DESIGN_MARKS_AND_CARET.md.
-    if (this.caretMode) {
-      return this.onCaretKey ? this.onCaretKey(e) : false;
-    }
-
-    // Video layer (entered via `w`): media keys on YouTube's mnemonics drive
-    // the frame's <video> via the element API. Full modal capture like caret;
-    // real-modifier chords already took the fast path above.
-    if (this.videoMode) {
-      return this.onVideoKey ? this.onVideoKey(e) : false;
-    }
-
-    // Hint mode ONLY (entered via `f`): letters filter/activate the painted
-    // hints. Hints stay always-VISIBLE for voice, but they're only TYPEABLE
-    // here — everywhere else the alphabet belongs to Normal-mode keybinds.
-    // See notes/DESIGN_KEYBOARD_MODES.md.
-    if (this.mode === 'hint') {
-      return this.handleHintKey(e);
+    // Modal capture routes by the STACK, newest first: the topmost bare-keys
+    // entry owns the letters (a capture:'none' entry — a committed find, the
+    // palette — sitting above does not take them, so the walk steps past it).
+    // Caret/visual owns the Vim movement alphabet + yank (DESIGN_MARKS_AND_
+    // CARET.md); video the media keys (DESIGN_VIDEO_MEDIA_COMMANDS.md); hint
+    // mode the letters-filter (DESIGN_KEYBOARD_MODES.md) — and a range pick
+    // types through the hint machinery it entered with, which sits directly
+    // beneath it by construction. Real-modifier chords already took the fast
+    // path above (so Ctrl+C still copies the visual selection).
+    const ids = modes.ids();
+    for (let i = ids.length - 1; i >= 0; i--) {
+      switch (ids[i]) {
+        case 'caret': return this.onCaretKey ? this.onCaretKey(e) : false;
+        case 'video': return this.onVideoKey ? this.onVideoKey(e) : false;
+        case 'range_pick':
+        case 'hint': return this.handleHintKey(e);
+        default: continue; // find / palette — capture: none
+      }
     }
 
     // Normal mode (the default, even with hints painted): bare letters and
@@ -451,7 +447,7 @@ export class KeyHandler {
    * for voice regardless of keyboard mode).
    */
   escapeHintLayer(): 'hint_prefix' | 'hint_mode' | null {
-    if (this.mode !== 'hint') return null;
+    if (!modes.has('hint')) return null;
     const prefix = this.peelHintPrefix();
     if (prefix) return prefix;
     this.escapeHintMode();
@@ -473,7 +469,7 @@ export class KeyHandler {
    *  escapeHintLayer above stays its other caller, so the peel has one
    *  implementation. Null when no prefix is typed (or hint mode is off). */
   peelHintPrefix(): 'hint_prefix' | null {
-    if (this.mode !== 'hint' || this.filterText.length === 0) return null;
+    if (!modes.has('hint') || this.filterText.length === 0) return null;
     this.filterText = '';
     this.newTabArmed = false;
     this.onFilterChange?.('');

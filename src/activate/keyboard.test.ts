@@ -33,6 +33,7 @@ let handler: KeyHandler;
 let dispatchSpy: any;
 
 beforeEach(() => {
+  modes.reset(); // the stack is a singleton; each test starts from Normal
   registry = new CommandRegistry();
   dispatcher = new ActionDispatcher();
   dispatchSpy = vi.fn();

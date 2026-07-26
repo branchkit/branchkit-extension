@@ -12,6 +12,7 @@
 // @vitest-environment happy-dom
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { modes } from '../core/modes';
 
 type SelectionCommands = typeof import('./selection-commands');
 type Handler = (params: Record<string, string>) => void;
@@ -24,7 +25,11 @@ const dispatcher = {
 const keyHandler = {
   armMarkSet: vi.fn(), armMarkJump: vi.fn(),
   setMarkCallback: vi.fn(), setCaretKeyHandler: vi.fn(),
-  enterCaretMode: vi.fn(), exitCaretMode: vi.fn(),
+  // The caret LIFETIME rides the stack inside these (as the real KeyHandler
+  // does since Wave 3 C3c) — the fakes uphold that half of the contract so
+  // the stack-edge test below observes the production wiring shape.
+  enterCaretMode: vi.fn(() => { modes.push('caret'); }),
+  exitCaretMode: vi.fn(() => { modes.pop('caret'); }),
 };
 const caretInstance = {
   enterFromFind: vi.fn(() => false), enterFromNormal: vi.fn(), enter: vi.fn(),
@@ -251,13 +256,11 @@ describe('registration contract (Phase 1)', () => {
     expect(flashToast).toHaveBeenCalledWith('No next page');
   });
 
-  // Wave 3 C2: the caret's active edge drives the mode stack in the same
-  // onModeChange that drives the flag and the mirror, so the three cannot
-  // drift. The fresh-graph import matters: loadModule reset the module
-  // registry, so the module's `modes` instance is the post-reset one.
+  // The caret's active edge drives the mode stack through
+  // enterCaretMode/exitCaretMode in the same onModeChange that drives the
+  // mirror, so the three cannot drift.
   it('the mode stack rides the caret active edge', async () => {
     await loadModule();
-    const { modes } = await import('../core/modes');
     modes.reset();
 
     caretOpts!.onModeChange('caret');

@@ -13,7 +13,6 @@
  */
 
 import { dispatcher, keyHandler } from '../core/singletons';
-import { modes } from '../core/modes';
 import { setInnerTransientProbe } from '../core/mode-stack';
 import { CaretController, type SelectionCommand } from './caret';
 import { findAllRanges, openFindMode, clearFindPaint } from '../scan/find';
@@ -53,10 +52,9 @@ export function restorePosition(mark: StoredMark): void {
 let caretActivePushed = false;
 export const caret = new CaretController({
   onModeChange: (mode) => {
-    // The stack rides the same active edge the flag and the mirror do (Wave 3
-    // C2): caret↔visual is one lifetime (push dedupes), null is the exit.
-    if (mode) modes.push('caret');
-    else modes.pop('caret');
+    // The caret lifetime rides the stack inside enterCaretMode/exitCaretMode
+    // (the one keyboard-side entry/exit, same shape as hint and video) —
+    // caret↔visual is one lifetime, null is the exit.
     if (mode) keyHandler.enterCaretMode(mode);
     else keyHandler.exitCaretMode();
     // Reflect caret-active to the plugin (via background) so the exclusive caret

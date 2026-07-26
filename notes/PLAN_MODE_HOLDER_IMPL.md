@@ -51,10 +51,27 @@ exit is the plugin's external tag clear, C4's mirror). One reporting delta,
 deliberate: a find opened DURING a caret session is its own entry above
 caret, so escape now peels and reports it as 'find' (same thing closed;
 caret's staged 'caret_find' peelInner stage is unreachable from peelTop and
-dies in C3b). **C3b (next)** — delete findFloor + caret.escape(), retire
-PickEntryState/pickWindowHooks/restoreBadges onto the stack's floor payload.
-**C3c** — delete keyboard.ts's mode fields; getMode()/routing derive from
-the stack.
+dies in C3b). **C3b (LANDED 2026-07-26)** — findFloor replaced by
+sessionOwnsFind (stack-order derivation: a find entry above caret was opened
+mid-session, so exit still closes the session's own find and leaves the
+user's); caret.escape() deleted (the cascade owns the composition; tests use
+escapeStep = peelInner-else-exit with production-shaped push/pop
+controllers); PickEntryState/pickWindowHooks/entryOnEmpty retired — the
+screen borrow/restore lives in range-disambiguation, its snapshot riding the
+range_pick entry's floor payload, reaching the badge layer through
+pageSession.deps (hideBadges joined showBadges) and the keyboard through the
+singleton; the snapshot uses isHintMode(), closing the getMode()-ranked
+known gap. **C3c (LANDED 2026-07-26)** — keyboard.ts's `mode`/`caretMode`/`videoMode`
+fields are gone: routing walks the stack newest-first to the topmost
+bare-keys entry (a capture:'none' find or palette above is stepped past; a
+range pick routes to the hint machinery it entered with), getMode()'s
+precedence ladder derives from the stack (mark arm and forced-insert/
+exclusion stay keyboard transients), isModalCapture/isHintMode/isVideoMode
+are stack reads, and the caret lifetime pushes/pops inside
+enterCaretMode/exitCaretMode — the one keyboard-side entry per mode, uniform
+with hint and video, with `caretSub` kept as the chip's display detail only
+(nothing routes or gates on it). The gate file needed NO edits for this
+slice. C3 is complete; C4 (SW mirror) and C5 (collector) remain.
 **Repos touched:** `branchkit-extension` (bulk), `plugins/browser` (tag mirror),
 `app` (pin bumps only).
 
