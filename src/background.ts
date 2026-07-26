@@ -38,6 +38,7 @@ import {
 import { saveReferenceToCollection, pushReferenceNames, hydrateReferencesFromCollection } from './background/references';
 import { handleDebugSnapshot } from './background/debug-snapshot';
 import { forwardCoalesced } from './background/log-coalesce';
+import { installUncaughtCapture } from './debug/uncaught';
 import { TAB_ACTION_BY_ID, ZOOM_ACTION_BY_ID, handleTabAction, handleZoomAction, switchToTabById } from './background/tab-actions';
 import { SURGERY_ACTIONS, handleSurgeryAction } from './background/tab-surgery';
 import {
@@ -61,6 +62,11 @@ import { purgeTab, logTabSwitch, scheduleSpaRescan, cancelSpaRescan, startDeadTa
 // MEANS — the behavior half of that split.
 
 let hintVisibility: HintVisibility = 'always';
+
+// SW crashes used to die in a console nobody reads; land them in
+// browser.log as BK_UNCAUGHT (routed through the coalescer so a pending
+// boot summary flushes first — order stays truthful).
+installUncaughtCapture((tag, data, level) => forwardCoalesced(tag, data, level), 'sw');
 
 initSSETransport({
   // The plugin's HTTP server is up once creds exist: contribute the command

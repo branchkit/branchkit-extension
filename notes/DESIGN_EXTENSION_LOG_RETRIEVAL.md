@@ -52,11 +52,11 @@ Cost: one handler in the actuator's dev HTTP surface + a CLI verb. Deliberately 
 
 `tr_` is the system's one cross-stream join, and agents lean on it hard — but `browser.log` lines don't carry it, so correlated chains dead-end at the plugin and agents write show-all fallbacks preemptively. `activate-path-log.ts` already proves the pattern: the dispatch arrives over SSE with the actuator's correlation id and the event embeds it.
 
-Generalize, minimally:
+Generalize, minimally *(revised at implementation, 2026-07-26)*:
 
-- **Dispatch-scoped context.** The dispatcher (`dispatcher.ts`) sets a module-level "current correlation id" on dispatch entry and clears it on exit (dispatches are synchronous on the CS main thread up to the first await; for async continuations, pass it explicitly — do not build async-context machinery for this).
-- `bkLog` reads that context and attaches `correlationId` when present; explicit param overrides.
-- **Plugin-side format:** when a forwarded line carries a correlation id, `bridge.go`'s writer stamps it in the actuator's greppable form — `{tr_XXXXXXXXXXX}` — into the line prefix. `grep tr_a3K9zPqR4m` then spans actuator.log, show-all, firehose, *and* browser.log in one sweep.
+- **Dispatch-scoped context.** The `BRANCHKIT_ACTION` handler in content.ts calls `setLogCorrelation(correlationId)` on dispatch entry; the context **self-clears at the next microtask boundary**, which is exactly the extent of the synchronous dispatch body — no try/finally sprawl in the contested handler chain. Async continuations lose it by design; pass `correlationId` explicitly there (the activate path already does).
+- `bkLog` attaches `correlationId` into the JSON payload when the context is live; an explicit `correlationId` in the data wins.
+- **No prefix stamp.** The originally-sketched `{tr_…}` line-prefix stamp in `bridge.go` was dropped: the line is formatted by the ACTUATOR's `PluginLogRegistry::format_line`, not the plugin, so a prefix stamp means widening the SDK debug wire across five repos. Embedding in the payload gets the same `grep tr_XXX` join for free — the id lands in the line's JSON column verbatim.
 
 Explicit non-goal: putting plugin log lines on the bus. The unified-logging design keeps plugin trace/debug/info off the bus by decision, and `plugin_callers` already marks chains with plugin-side detail. This piece only makes the existing pointer followable; `events.query` integration can come later if the grep proves insufficient.
 

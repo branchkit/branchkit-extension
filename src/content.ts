@@ -27,7 +27,7 @@ import { attachWrapper, detachWrapper, seedPreferredFromMemory, attachDiscovered
 import { getDomAddEpoch } from './observe/mutation-source';
 import { setSweepGateEnabled } from './lifecycle/band-sweep-gate';
 import { firehoseStep } from './debug/firehose';
-import { bkLog } from './debug/bk-log';
+import { bkLog, setLogCorrelation } from './debug/bk-log';
 import { harnessHooksEnabled } from './debug/harness-hooks';
 import { store } from './core/store';
 import { HintBadge } from './render/hints';
@@ -155,6 +155,7 @@ import {
   scheduleSync,
   syncNow,
 } from './labels/label-sync';
+import { installUncaughtCapture } from './debug/uncaught';
 
 // --- Idempotency guard ---
 //
@@ -205,6 +206,13 @@ if (guardOwner !== null) {
   throw new Error('[BranchKit] content script duplicate injection — bailing');
 }
 document.documentElement.setAttribute(CS_GUARD_ATTR, BK_CS_ID);
+
+// Uncaught-error capture (BK_UNCAUGHT → browser.log), installed the moment
+// this instance wins the guard: after it so a duplicate's deliberate
+// guard-throw doesn't self-report or strand listeners, before the boot side
+// effects below so a throw during our own boot is still captured.
+// Page-script errors are filtered out inside (extension-origin check).
+installUncaughtCapture((tag, data, level) => bkLog(tag, data, level), 'cs');
 
 // Reference-identity check (safe cross-origin — reads no properties). The perf
 // trail + live dataset + standing watchdog/longtask observers are diagnostic
@@ -2595,6 +2603,10 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
 
   if (message.type === 'BRANCHKIT_ACTION') {
     const { action, params, correlation_id: correlationId } = message.payload;
+    // Scope the actuator's tr_ to this dispatch's synchronous body so every
+    // bkLog call in it lands in browser.log grep-joinable with the matcher
+    // chain. Self-clears on the next microtask (see bk-log.ts).
+    setLogCorrelation(correlationId);
     if (action === 'toggle_hints') {
       // Voice "toggle" — the same handler as Shift+F. Snapshot on the show
       // direction so a codeword spoken in the same phrase resolves against the
