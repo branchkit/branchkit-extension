@@ -127,6 +127,7 @@ import {
   isFindBarOpen,
   getFindState,
   setFindCallbacks,
+  clearFindPaint,
 } from './find';
 
 const pill = () =>
@@ -363,20 +364,50 @@ describe('find bar: phrase-targeting modes', () => {
     }
   };
 
-  // jsdom gives every Range zero client rects, so find's visibility filter drops
-  // every match and the box would look match-less no matter the query. These
-  // cases turn on whether a match was FOUND, so the filter has to see a real box.
-  let restoreRects: () => void;
+  // Two things jsdom lacks that these cases depend on:
+  //
+  //   - every Range reports zero client rects, so find's visibility filter drops
+  //     every match and the box looks match-less whatever the query;
+  //   - there is no CSS Custom Highlight API, so highlightApi() returns null and
+  //     painting is a silent no-op. Guarding on `CSS.highlights` instead of
+  //     stubbing it makes every paint assertion below vacuously pass — which is
+  //     how a test proves nothing while looking green.
+  //
+  // Both are stubbed so the assertions are real.
+  let restoreEnv: () => void;
+  const highlights = () =>
+    (globalThis as unknown as { CSS: { highlights: Map<string, unknown> } }).CSS.highlights;
+
   beforeEach(() => {
     vi.useFakeTimers();
     phrases.length = 0;
     document.body.innerHTML = '<p>alpha beta alpha</p>';
-    const original = Range.prototype.getClientRects;
+
+    const originalRects = Range.prototype.getClientRects;
     Range.prototype.getClientRects = () => [{}] as unknown as DOMRectList;
-    restoreRects = () => { Range.prototype.getClientRects = original; };
+
+    const g = globalThis as unknown as {
+      CSS: { highlights?: Map<string, unknown> };
+      Highlight?: unknown;
+    };
+    const priorReg = g.CSS?.highlights;
+    const priorCtor = g.Highlight;
+    class FakeHighlight {
+      priority = 0;
+      ranges: Range[];
+      constructor(...ranges: Range[]) { this.ranges = ranges; }
+    }
+    g.CSS = { ...(g.CSS ?? {}), highlights: new Map() };
+    g.Highlight = FakeHighlight;
+
+    restoreEnv = () => {
+      Range.prototype.getClientRects = originalRects;
+      g.CSS.highlights = priorReg;
+      g.Highlight = priorCtor;
+    };
     setFindCallbacks({ onPhrase: (mode, query) => phrases.push([mode, query]) });
   });
-  afterEach(() => { closeFindMode(); setFindCallbacks({}); restoreRects(); vi.useRealTimers(); });
+  afterEach(() => { closeFindMode(); setFindCallbacks({}); restoreEnv(); vi.useRealTimers(); });
 
   it('labels the box for what the phrase is for', () => {
     openFindMode('highlight');
@@ -417,6 +448,39 @@ describe('find bar: phrase-targeting modes', () => {
     const el = barInput();
     expect(el.selectionStart).toBe(0);
     expect(el.selectionEnd).toBe('nonexistent'.length);
+  });
+
+  it('the match paint SURVIVES the commit — the consumer owns it from there', () => {
+    // Clearing it at commit put the pick chips over unmarked text and flashed a
+    // single-match selection from highlighted to bare. The matches ARE the
+    // candidates; whoever answers the question calls clearFindPaint.
+    openFindMode('highlight');
+    dictate('alpha');
+    vi.runAllTimers();
+    expect(phrases).toHaveLength(1);
+    expect(highlights().has('branchkit-find')).toBe(true);
+
+    clearFindPaint();
+    expect(highlights().has('branchkit-find')).toBe(false);
+  });
+
+  it('a search commit keeps its own paint too, and still marks the current match', () => {
+    setFindCallbacks({});
+    openFindMode('find');
+    dictate('alpha');
+    vi.runAllTimers();
+    expect(highlights().has('branchkit-find')).toBe(true);
+    // `current` is a find concept — n/N navigation — so it exists here...
+    expect(highlights().has('branchkit-find-current')).toBe(true);
+  });
+
+  it('phrase-targeting modes do NOT emphasise a current match', () => {
+    // ...and not here: every candidate is equally pickable until you choose,
+    // and a brighter one reads as already chosen once the chips are up.
+    openFindMode('highlight');
+    dictate('alph');   // matches, but don't commit — paint is live while typing
+    expect(highlights().has('branchkit-find')).toBe(true);
+    expect(highlights().has('branchkit-find-current')).toBe(false);
   });
 
   it('reopening in a different mode replaces the session rather than inheriting it', () => {

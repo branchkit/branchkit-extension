@@ -425,6 +425,12 @@ function applyHighlights(): void {
   api.reg.delete(HL_CURRENT);
   if (matchRanges.length === 0) return;
   api.reg.set(HL_ALL, new api.Ctor(...matchRanges));
+  // No "current" match when the phrase is being collected FOR something: every
+  // candidate is equally pickable until you choose, and emphasising one would
+  // claim an ordering that doesn't exist — worse once the pick chips are up,
+  // where a brighter match reads as already chosen. `current` is a find
+  // concept, owned by n/N navigation.
+  if (state.mode !== 'find') return;
   if (currentIndex >= 0 && currentIndex < matchRanges.length) {
     const cur = new api.Ctor(matchRanges[currentIndex]);
     cur.priority = 1; // paint the current match over the all-matches wash
@@ -675,11 +681,11 @@ function commitFind(): void {
       inputElement?.select();
       return;
     }
-    // End the session before handing off: the consumer owns the page from here
-    // (a selection, or codeword chips over the candidates), and leaving find's
-    // yellow paint underneath it would read as two overlapping answers.
+    // End the session but KEEP the paint: the matches are the candidates, and
+    // the consumer (a selection, or codeword chips over those candidates) is
+    // what finally answers the question. It calls clearFindPaint when it does.
     removeFindBar();
-    closeFindMode();
+    endSession(true);
     onPhrase?.(mode, query);
     return;
   }
@@ -722,12 +728,39 @@ export function openFindMode(mode: FindMode = 'find'): void {
 }
 
 export function closeFindMode(): void {
+  endSession(false);
+}
+
+/**
+ * End the find session. `keepPaint` hands the match highlighting to whatever
+ * comes next instead of erasing it.
+ *
+ * A phrase-targeting commit needs that: the matches ARE the candidates, and
+ * clearing them at commit meant the pick chips appeared over text with no
+ * marking left on it — the chips pointed at nothing, and a single-match
+ * selection flashed from highlighted to bare before the selection landed. The
+ * paint now lives until the phrase is actually resolved, and whoever answers
+ * the question calls clearFindPaint.
+ */
+function endSession(keepPaint: boolean): void {
   if (!state.active) return;
   state.active = false;
-  clearHighlights();
+  if (!keepPaint) clearHighlights();
   removeFindBar();
   removeCommittedPill();
   onDeactivate?.();
+}
+
+/**
+ * Drop match highlighting handed over by a phrase-targeting commit.
+ *
+ * Called by the consumer when the phrase resolves — a selection made, a pick
+ * answered or abandoned. Safe to call at any time; find paint outliving its
+ * question is the "undismissable ghost" failure the committed pill was
+ * invented to avoid.
+ */
+export function clearFindPaint(): void {
+  clearHighlights();
 }
 
 export function findNext(): void {

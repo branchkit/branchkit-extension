@@ -14,7 +14,7 @@
 
 import { dispatcher, keyHandler } from '../core/singletons';
 import { CaretController, type SelectionCommand } from './caret';
-import { findAllRanges, openFindMode } from '../scan/find';
+import { findAllRanges, openFindMode, clearFindPaint } from '../scan/find';
 import { startRangePick, cancelRangePick } from './range-disambiguation';
 import {
   PREV_POSITION_REGISTERS, isPrevPositionRegister, marksToHash, type StoredMark,
@@ -146,14 +146,20 @@ export function resolveSelectTo(query: string): void {
   const ranges = findAllRanges(trimmed);
   if (ranges.length === 0) {
     cancelRangePick('requery');
+    clearFindPaint();
     if (isTopFrame) flashToast('Phrase not found');
     return;
   }
   if (ranges.length === 1 && isTopFrame) {
     cancelRangePick('resolved_direct');
+    // Hand off: the selection replaces the match marking, so drop the paint
+    // rather than leaving yellow under a blue selection.
+    clearFindPaint();
     caret.extendToRange(ranges[0]);
     return;
   }
+  // Several candidates — the paint STAYS while the chips ask which one. The
+  // pick's teardown clears it on every exit, picked or abandoned.
   startRangePick(ranges, (range) => caret.extendToRange(range));
 }
 

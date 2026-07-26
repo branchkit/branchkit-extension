@@ -26,6 +26,7 @@
 import { RangeBadgeSet } from '../render/range-badge-set';
 import { RANGE_PICK_VARIANT } from '../render/badge-variant';
 import { flashToast } from '../render/toast';
+import { clearFindPaint } from '../scan/find';
 import { bkLog } from '../debug/bk-log';
 import { reportDispatchResult } from '../plugin/resolve';
 import type { Message } from '../types';
@@ -199,6 +200,7 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
       // The set gave everything back (ranges died, or nothing was admitted).
       // Fail loud rather than leaving a live pick with no chips.
       pending = null;
+      clearFindPaint();
       publishPickWindow([]);
       if (restoreOnEmpty) pickWindowHooks?.showBadges();
       flashToast('Lost the highlighted matches — say "highlight" again');
@@ -247,6 +249,11 @@ function teardown(reason: string): void {
   const { chips, restoreBadges } = pending;
   pending = null;
   chips.dispose(reason);
+  // The candidates were painted by the phrase box and handed over for the
+  // pick's lifetime — the question is now answered (or abandoned), so the
+  // marking goes with it. Every exit routes through here, which is why paint
+  // ownership can safely cross the module boundary at all.
+  clearFindPaint();
   if (restoreBadges) pickWindowHooks?.showBadges();
   // Release the projection narrow AFTER the set gave its codewords back, so the
   // page's own hints are what the HUD falls back to.

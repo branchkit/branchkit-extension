@@ -35,6 +35,7 @@ const flashToast = vi.fn();
 const copyText = vi.fn(async () => true);
 const findAllRanges = vi.fn((): Range[] => []);
 const openFindMode = vi.fn();
+const clearFindPaint = vi.fn();
 const startRangePick = vi.fn();
 const cancelRangePick = vi.fn();
 
@@ -48,7 +49,7 @@ async function loadModule(): Promise<SelectionCommands> {
   vi.doMock('../pagination', () => ({ findPageLink }));
   vi.doMock('../url-nav', () => ({ urlUp: vi.fn(() => null), urlRoot: vi.fn(() => null) }));
   vi.doMock('../clipboard', () => ({ copyText }));
-  vi.doMock('../scan/find', () => ({ findAllRanges, openFindMode }));
+  vi.doMock('../scan/find', () => ({ findAllRanges, openFindMode, clearFindPaint }));
   vi.doMock('./range-disambiguation', () => ({ startRangePick, cancelRangePick }));
   return await import('./selection-commands');
 }
@@ -138,6 +139,20 @@ describe('registration contract (Phase 1)', () => {
     expect(caretInstance.extendToRange).toHaveBeenCalledWith(r);
     expect(startRangePick).not.toHaveBeenCalled();
     expect(openFindMode).not.toHaveBeenCalled();
+    // The selection replaces the match marking handed over by the box.
+    expect(clearFindPaint).toHaveBeenCalled();
+  });
+
+  // With several candidates the marking STAYS: the chips point at the painted
+  // matches, and clearing at commit left them pointing at unmarked text. The
+  // pick's teardown owns the paint from here.
+  it('select_to: a multi-match pick keeps the match paint for the chips', async () => {
+    const m = await loadModule();
+    m.registerSelectionCommands();
+    findAllRanges.mockReturnValueOnce([{} as Range, {} as Range]);
+    dispatcher.dispatch('select_to', { query: 'dup' });
+    expect(startRangePick).toHaveBeenCalledTimes(1);
+    expect(clearFindPaint).not.toHaveBeenCalled();
   });
 
   // The phrase box replaced the dictated-argument cue card: dispatched without
@@ -189,6 +204,8 @@ describe('registration contract (Phase 1)', () => {
     expect(flashToast).toHaveBeenCalledWith('Phrase not found');
     expect(cancelRangePick).toHaveBeenCalled();
     expect(startRangePick).not.toHaveBeenCalled();
+    // Nothing to hand the paint to — it must not outlive the question.
+    expect(clearFindPaint).toHaveBeenCalled();
   });
 
   it('go_next follows the page link when found, toasts when absent', async () => {
