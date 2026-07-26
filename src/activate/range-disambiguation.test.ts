@@ -44,6 +44,19 @@ vi.mock('../plugin/resolve', () => ({
   reportDispatchResult: () => {},
 }));
 
+// The chips are the first non-element codeword holder; capture the registration
+// so the tests can drive the two sweeps that would otherwise never see them.
+// `vi.hoisted` because the module registers at import time, which runs before a
+// plain `let` in this file is initialized.
+type Holder = { held: () => Iterable<string>; republish: () => void };
+const captured = vi.hoisted(() => ({ holder: null as Holder | null }));
+vi.mock('../labels/codeword-holders', () => ({
+  registerCodewordHolder: (h: Holder) => {
+    captured.holder = h;
+    return () => { captured.holder = null; };
+  },
+}));
+
 // Chips are real HintBadges now (render/badge-variant.ts RANGE_PICK_VARIANT).
 // Substituting a recording fake is what BadgeHandle exists for — it asserts
 // the calls the module actually makes, instead of poking at DOM the badge owns
@@ -495,6 +508,42 @@ describe('range-disambiguation pick', () => {
       expect(publishedRecords).toHaveLength(publishedAtArm);
       expect(chipCount()).toBe(2);
     } finally { view.restore(); }
+  });
+
+  it('declares its codewords to the reservoir leak sweep while a pick is live', async () => {
+    // Without this the sweep sees grants no store wrapper holds, calls them
+    // leaked after 30s, releases them to the pool AND deletes them plugin-side
+    // — a live pick dying on a wall clock the module says it doesn't have.
+    startRangePick([makeRange('a'), makeRange('b')], () => {});
+    await Promise.resolve();
+    expect([...(captured.holder?.held() ?? [])].sort()).toEqual(['alpha', 'bravo']);
+
+    // And stops declaring them the moment the pick ends, or the fix becomes a leak.
+    cancelRangePick('test');
+    expect([...(captured.holder?.held() ?? [])]).toEqual([]);
+  });
+
+  it('re-publishes its records on a session rotation', async () => {
+    // Every rotation path enumerates store.all; chips aren't there, so the
+    // plugin drops them at the rotation's is_final batch. The holder's
+    // republish is the chips' seat at that table.
+    startRangePick([makeRange('a'), makeRange('b')], () => {});
+    await Promise.resolve();
+    const before = publishedRecords.length;
+
+    captured.holder?.republish();
+    await Promise.resolve();
+
+    const republished = publishedRecords.slice(before);
+    expect(republished.map(r => r.codeword).sort()).toEqual(['alpha', 'bravo']);
+    // Re-armed with the live set so the plugin's projection narrow follows.
+    expect(pickWindowPosts[pickWindowPosts.length - 1].sort()).toEqual(['alpha', 'bravo']);
+  });
+
+  it('republish is a no-op with no pick live', () => {
+    const before = publishedRecords.length;
+    captured.holder?.republish();
+    expect(publishedRecords).toHaveLength(before);
   });
 
   it('reconciling with no pick pending does nothing', () => {

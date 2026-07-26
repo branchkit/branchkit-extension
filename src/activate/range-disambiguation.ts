@@ -28,6 +28,7 @@ import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { labelReservoir } from '../labels/label-reservoir';
 import { poolLabelToAssignment, type LabelAssignment } from '../labels/words';
 import { publishRecords, retireRecords, cancelPendingDelete } from '../labels/label-sync';
+import { registerCodewordHolder } from '../labels/codeword-holders';
 import { HintBadge } from '../render/hints';
 import { rangeTarget } from '../render/badge-target';
 import { RANGE_PICK_VARIANT } from '../render/badge-variant';
@@ -98,6 +99,29 @@ interface PendingPick {
 }
 
 let pending: PendingPick | null = null;
+
+/**
+ * Chips hold pool codewords while staying out of the wrapper store, which
+ * makes them invisible to every store-scoped lifecycle sweep. Registering here
+ * is what stops the reservoir's leak sweep from reclaiming a live pick's
+ * codewords after 30s (labels/codeword-holders.ts explains the rest).
+ */
+registerCodewordHolder({
+  held: () => pending?.chips.keys() ?? [],
+  republish: () => {
+    if (!pending || pending.chips.size === 0) return;
+    // A rotation cleared the extension-side shadow and the plugin will drop
+    // whatever the rebuild doesn't re-confirm. Re-Put every live chip with its
+    // current eligibility so the pick survives a tab switch / bfcache restore /
+    // SW resync instead of going painted-but-unspeakable.
+    const records = [...pending.chips].map(([cw, chip]) => chipRecord(cw, chip.strict));
+    bkLog('BK_RANGE_PICK_REPUBLISH', { codewords: records.length });
+    void publishRecords(records).then(() => {
+      if (!pending) return;
+      publishPickWindow([...pending.chips.keys()]);
+    });
+  },
+});
 
 /**
  * Pick-window badge hooks, injected by content.ts (badge visibility lives in

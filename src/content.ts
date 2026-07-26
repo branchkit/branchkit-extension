@@ -115,6 +115,7 @@ import { setScrollAccelEnabled, setScrollAccelNestedEnabled, reconcileScrollAcce
 import { isScrollTimelineSupported } from './render/scroll-accel';
 import { setNudgesFromSettings } from './placement';
 import { labelReservoir } from './labels/label-reservoir';
+import { heldOutsideStore, allHeldOutsideStore, republishHeldOutsideStore } from './labels/codeword-holders';
 import { doScan, scheduleDoScan } from './scan/scan-orchestrator';
 import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
 import { openLivenessPort, repairLivenessAfterBfcacheRestore } from './plugin/liveness';
@@ -530,7 +531,14 @@ labelReservoir.onConfirmRejected((codewords) => {
 // release-skipping teardown path; the reservoir releases it back to the
 // pool, and we clear the plugin-side grammar entry it may still occupy.
 labelReservoir.installLeakSweep(
-  (cw) => store.byCodeword(cw) !== undefined,
+  // The store is not the only thing that holds codewords: the range-pick chips
+  // (and, next, search-match badges) hold them outside it by design. Without
+  // the second clause the sweep reclaimed a LIVE pick's codewords after the
+  // 30s grace — releasing them back to the pool AND deleting them plugin-side
+  // while the chips stayed painted, so the pick silently stopped working and
+  // the freed letters could be re-granted to a hint. See
+  // labels/codeword-holders.ts.
+  (cw) => store.byCodeword(cw) !== undefined || heldOutsideStore(cw),
   (leaked) => {
     let deletesQueued = 0;
     for (const cw of leaked) {
@@ -1856,6 +1864,12 @@ function republishAllGrammar(reason: string): void {
       requeued++;
     }
   }
+  // Codeword holders outside the store re-Put themselves: this loop is the
+  // rotation's whole recovery, and it enumerates wrappers. A range-pick chip
+  // (next: a search-match badge) would otherwise be inherited plugin-side as
+  // unconfirmed and dropped by the rotation's is_final batch ~250ms later,
+  // leaving badges painted and armed but matching nothing.
+  republishHeldOutsideStore();
   bkLog('BK_GRAMMAR_REPUBLISH', { reason, requeued, wrappers: store.all.length });
   scheduleSync(reason);
 }
@@ -1926,7 +1940,13 @@ function restoreFromBfcache(): void {
   // (DESIGN_DOCUMENT_SCOPED_POOL_OWNERSHIP.md), so the outgoing page's own
   // disconnect release can no longer race this re-assertion away — the
   // +1.5s second shot that patched that race is retired.
-  const heldAtRestore = store.all.map((w) => w.scanned.codeword).filter((cw) => cw !== '');
+  const heldAtRestore = [
+    ...store.all.map((w) => w.scanned.codeword).filter((cw) => cw !== ''),
+    // Chips/search badges hold pool codewords outside the store; leaving them
+    // out of the re-assertion lets a sibling frame be granted a codeword still
+    // painted here, and leaves this frame unroutable for its own.
+    ...allHeldOutsideStore(),
+  ];
   if (heldAtRestore.length > 0) labelReservoir.reconfirm(heldAtRestore);
   doScan();
   // NOT schedulePushGrammar(): re-registering wrappers in place enqueues no
@@ -1997,7 +2017,10 @@ openLivenessPort({
     // reloading sibling frame could be granted a codeword still painted
     // here (a cross-frame duplicate). The confirm exchange re-acquires
     // them from the fresh pool's free list.
-    const held = store.all.map((w) => w.scanned.codeword).filter((cw) => cw !== '');
+    const held = [
+      ...store.all.map((w) => w.scanned.codeword).filter((cw) => cw !== ''),
+      ...allHeldOutsideStore(), // chips/search badges — same cross-frame duplicate risk
+    ];
     if (held.length > 0) labelReservoir.reconfirm(held);
     republishAllGrammar('sw_restart_resync');
   },
@@ -2329,6 +2352,10 @@ function republishForActivation(reason: string): void {
     for (const w of store.all) {
       if (w.scanned.codeword) queuePut(w);
     }
+    // Same reason as republishAllGrammar: this loop is the rotation's recovery
+    // and it only knows about wrappers. Before the sync, so a holder's
+    // immediate POST lands ahead of the is_final batch that would drop it.
+    republishHeldOutsideStore();
     await syncNow(reason);
     // Reconciliation walk: pick up anything that changed while backgrounded.
     // The re-push above already restored the known grammar (so matchability is
