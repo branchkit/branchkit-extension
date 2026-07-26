@@ -20,6 +20,7 @@
  */
 
 import { bestPageMatch, normalizeFuzzy, fold1to1, lower1to1, flexiblePattern } from './fuzzy-find';
+import { modes } from '../core/modes';
 
 /**
  * What the box is collecting a phrase FOR.
@@ -834,6 +835,7 @@ export function openFindMode(mode: FindMode = 'find'): void {
     return;
   }
   state.active = true;
+  modes.push('find'); // the stack rides the session's one lifetime (Wave 3 C2)
   state.mode = mode;
   state.query = '';
   state.matchIndex = 0;
@@ -860,6 +862,7 @@ export function closeFindMode(): void {
 function endSession(keepPaint: boolean): void {
   if (!state.active) return;
   state.active = false;
+  modes.pop('find');
   // The mode belongs to the SESSION, so it dies with it. Leaving it set made
   // module state say "this is a highlight box" with no box on screen, and any
   // entry point that forgot to declare its own mode picked that up (findImmediate
@@ -982,6 +985,7 @@ export function findImmediate(query: string): void {
   const intoOpenBox = barElement !== null && inputElement !== null;
   if (!intoOpenBox) state.mode = 'find';
   state.active = true;
+  modes.push('find'); // dedupes: an immediate find into a live session joins it
   ensureHighlightStyle();
   onActivate?.();
   // Voice find is tolerant (typed find stays exact/incremental). Layered:

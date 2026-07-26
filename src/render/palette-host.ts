@@ -16,6 +16,7 @@
 import { RELAY_HELLO, RELAY_REQ, RELAY_RESP, RELAY_DIAG } from '../palette/relay';
 import { reportDispatchResult } from '../plugin/resolve';
 import { dispatcher } from '../core/singletons';
+import { modes } from '../core/modes';
 import type { Message } from '../types';
 
 /** Palette lifecycle breadcrumbs → the plugin's dispatch-result log. The
@@ -109,12 +110,14 @@ export function openPalette(scope: PaletteScope = 'all'): void {
   });
   document.documentElement.appendChild(f);
   frame = f;
+  modes.push('palette'); // the stack rides the overlay's one lifetime (Wave 3 C2)
 }
 
 export function closePalette(): void {
   if (!frame) return;
   frame.remove();
   frame = null;
+  modes.pop('palette');
   // Every close path funnels here, so this is THE teardown signal for the
   // palette's voice session: background drains the plugin's palette entries,
   // which clears the exclusive tag. Idempotent on the background side.

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { KeyHandler } from './keyboard';
 import { ActionDispatcher, CommandRegistry } from '../dispatcher';
 
@@ -650,5 +650,63 @@ describe('unranked mode reads', () => {
 
     handler.exitVideoMode();
     expect(handler.isVideoMode()).toBe(false);
+  });
+});
+
+// --- Wave 3 C2: the mode stack rides the keyboard's mode lifetimes ---------
+//
+// The KeyHandler's flags stay the readers' truth through C2; the stack is the
+// writer-side spine, pushed/popped inside the SAME enter/exit implementations
+// so the two cannot drift. peelTop becomes the escape decider at C3 — the
+// inner-transient case is proven here against real keyboard state.
+
+import { modes } from '../core/modes';
+import { clearInnerTransientProbes, setInnerTransientProbe } from '../core/mode-stack';
+
+describe('the mode stack rides the keyboard lifetimes (Wave 3 C2)', () => {
+  beforeEach(() => modes.reset());
+  afterEach(() => clearInnerTransientProbes());
+
+  it('hint mode pushes on enter and pops on exit, one lifetime', () => {
+    handler.enterHintMode();
+    expect(modes.has('hint')).toBe(true);
+    handler.enterHintMode(); // re-entry joins, never nests
+    expect(modes.depth()).toBe(1);
+    handler.exitHintMode();
+    expect(modes.has('hint')).toBe(false);
+    handler.exitHintMode(); // exit when never entered is a no-op
+    expect(modes.depth()).toBe(0);
+  });
+
+  it('video mode pushes on enter and pops on exit', () => {
+    handler.enterVideoMode();
+    expect(modes.has('video')).toBe(true);
+    handler.exitVideoMode();
+    expect(modes.has('video')).toBe(false);
+  });
+
+  it('the typed prefix is hint\'s inner transient: peelTop clears it without popping', () => {
+    setInnerTransientProbe('hint', () => handler.peelHintPrefix());
+    handler.setMatchPredicate(() => true);
+    handler.enterHintMode();
+    handler.handleKeyDown(makeKey('a'));
+
+    // First escape: the letters go, the mode stays — nothing pops.
+    expect(modes.peelTop('test')).toEqual({ peeled: 'inner', name: 'hint_prefix', reason: 'test' });
+    expect(handler.getMode()).toBe('hint');
+    expect(modes.has('hint')).toBe(true);
+
+    // Second escape: the mode itself. C2 boundary, on purpose: peelTop pops
+    // the ENTRY but does not yet drive the flag — the exit effects wire in at
+    // C3, when the cascade's decider flips here.
+    expect(modes.peelTop('test')).toEqual({ peeled: 'mode', id: 'hint', reason: 'test' });
+    expect(modes.has('hint')).toBe(false);
+  });
+
+  it('peelHintPrefix answers null with no prefix (the probe reads as no-transient)', () => {
+    handler.enterHintMode();
+    expect(handler.peelHintPrefix()).toBe(null);
+    handler.exitHintMode();
+    expect(handler.peelHintPrefix()).toBe(null);
   });
 });

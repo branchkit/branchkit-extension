@@ -8,6 +8,7 @@
 
 import { ActionDispatcher, CommandRegistry } from '../dispatcher';
 import { comboFromEvent, serializeCombo } from './key-combo';
+import { modes } from '../core/modes';
 
 import { isMarkChar, isPrevPositionRegister } from '../marks';
 
@@ -176,12 +177,14 @@ export class KeyHandler {
   enterVideoMode(): void {
     if (this.videoMode) return;
     this.videoMode = true;
+    modes.push('video'); // the stack rides the flag's one lifetime (Wave 3 C2)
     this.onModeChange?.(this.getMode());
   }
 
   exitVideoMode(): void {
     if (!this.videoMode) return;
     this.videoMode = false;
+    modes.pop('video');
     this.onModeChange?.(this.getMode());
   }
 
@@ -276,6 +279,7 @@ export class KeyHandler {
     this.mode = 'hint';
     this.filterText = '';
     this.newTabArmed = false;
+    modes.push('hint'); // dedupes itself — re-entry joins the one lifetime
     this.onModeChange?.('hint');
   }
 
@@ -285,6 +289,7 @@ export class KeyHandler {
     this.filterText = '';
     this.sequence = '';
     this.newTabArmed = false;
+    modes.pop('hint'); // no-op when the mode was never entered
     if (was !== 'normal') this.onModeChange?.('normal');
   }
 
@@ -447,15 +452,24 @@ export class KeyHandler {
    */
   escapeHintLayer(): 'hint_prefix' | 'hint_mode' | null {
     if (this.mode !== 'hint') return null;
-    if (this.filterText.length > 0) {
-      this.filterText = '';
-      this.newTabArmed = false;
-      this.onFilterChange?.('');
-      return 'hint_prefix';
-    }
+    const prefix = this.peelHintPrefix();
+    if (prefix) return prefix;
     this.exitHintMode();
     this.onHintEscape?.();
     return 'hint_mode';
+  }
+
+  /** Peel the typed hint prefix WITHOUT leaving hint mode — the first escape
+   *  abandons the letters, not the mode. This is hint's intra-mode transient:
+   *  the mode stack's peelInner probe (installed by content.ts) calls it, and
+   *  escapeHintLayer above stays its other caller, so the peel has one
+   *  implementation. Null when no prefix is typed (or hint mode is off). */
+  peelHintPrefix(): 'hint_prefix' | null {
+    if (this.mode !== 'hint' || this.filterText.length === 0) return null;
+    this.filterText = '';
+    this.newTabArmed = false;
+    this.onFilterChange?.('');
+    return 'hint_prefix';
   }
 
   private handleHintKey(e: KeyboardEvent): boolean {

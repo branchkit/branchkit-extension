@@ -69,6 +69,7 @@ import {
 } from './labels/holder-registry';
 import { StoreHolder } from './labels/store-holder';
 import { runEscapeCascade } from './activate/escape-cascade';
+import { setInnerTransientProbe } from './core/mode-stack';
 import { preemptsPageKeys } from './activate/key-preamble';
 import './debug/dev-keepalive';
 import {
@@ -1486,6 +1487,11 @@ onSiteKeysChanged(applySiteKeys);
 // The Escape key runs the SAME cascade the spoken "escape"/"over" runs, so the
 // two inputs unwind through one declared order rather than two that drift.
 keyHandler.setEscapeHook(() => runEscapeCascade('key_escape'));
+
+// Hint's intra-mode transient probe (core/mode-stack.ts): the typed prefix
+// peels before the mode does. One implementation — escapeHintLayer and the
+// stack's peelTop both route through peelHintPrefix.
+setInnerTransientProbe('hint', () => keyHandler.peelHintPrefix());
 
 keyHandler.setHintEscapeCallback(() => {
   pendingHintAction = 'activate'; // an abandoned verb (yf/hover/… then Esc) must not leak to the next hint

@@ -31,6 +31,7 @@ import { flashToast } from '../render/toast';
 import { clearFindPaint } from '../scan/find';
 import { bkLog } from '../debug/bk-log';
 import { EXCLUSIVE_OVERLAY_PRIORITY, type HolderOutcome } from '../labels/holder-registry';
+import { modes } from '../core/modes';
 import type { Message } from '../types';
 
 /**
@@ -202,6 +203,7 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
       // The set gave everything back (ranges died, or nothing was admitted).
       // Fail loud rather than leaving a live pick with no chips.
       pending = null;
+      modes.pop('range_pick');
       clearFindPaint();
       publishPickWindow([]);
       if (entryOnEmpty) pickWindowHooks?.restore(entryOnEmpty);
@@ -225,6 +227,10 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
   const entry = pickWindowHooks?.enter() ?? { badgesVisible: false, hintMode: false };
   entryOnEmpty = entry;
   pending = { chips, onPick, entry };
+  // The stack rides the question's one lifetime (Wave 3 C2). AFTER the entry
+  // snapshot: hiding the badges exits hint mode, so the hooks must read state
+  // first — and the pick lands above whatever the user was in, temporally.
+  modes.push('range_pick');
 
   if (ranges.length > chips.size) {
     // Name the scope so "9 of 105" doesn't read as an arbitrary truncation:
@@ -247,6 +253,7 @@ function teardown(reason: string): void {
   const { chips, entry } = pending;
   pending = null;
   entryOnEmpty = null;
+  modes.pop('range_pick');
   chips.dispose(reason);
   // The candidates were painted by the phrase box and handed over for the
   // pick's lifetime — the question is now answered (or abandoned), so the

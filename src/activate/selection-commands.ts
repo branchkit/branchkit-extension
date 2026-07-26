@@ -13,6 +13,8 @@
  */
 
 import { dispatcher, keyHandler } from '../core/singletons';
+import { modes } from '../core/modes';
+import { setInnerTransientProbe } from '../core/mode-stack';
 import { CaretController, type SelectionCommand } from './caret';
 import { findAllRanges, openFindMode, clearFindPaint } from '../scan/find';
 import { startRangePick, cancelRangePick } from './range-disambiguation';
@@ -51,6 +53,10 @@ export function restorePosition(mark: StoredMark): void {
 let caretActivePushed = false;
 export const caret = new CaretController({
   onModeChange: (mode) => {
+    // The stack rides the same active edge the flag and the mirror do (Wave 3
+    // C2): caret↔visual is one lifetime (push dedupes), null is the exit.
+    if (mode) modes.push('caret');
+    else modes.pop('caret');
     if (mode) keyHandler.enterCaretMode(mode);
     else keyHandler.exitCaretMode();
     // Reflect caret-active to the plugin (via background) so the exclusive caret
@@ -72,6 +78,11 @@ export const caret = new CaretController({
     }
   },
 });
+// The caret spec's intra-mode transient probe (mode-stack.ts): the staged
+// unwind — a session-owned find, then visual collapsing to its caret — has
+// its one implementation in CaretController.peelInner; escape() and the
+// stack's peelTop both route through it.
+setInnerTransientProbe('caret', () => caret.peelInner());
 
 // Re-assert caret-active when the window regains focus. The plugin DRAINS the
 // exclusive caret tag when the browser loses OS focus (correct: a held

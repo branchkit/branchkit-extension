@@ -126,6 +126,7 @@ import {
   narrowByPrefix, soleHolderMatch, republishAll, rejectAll, reconcileAll,
   allHeld, disposeAllHolders,
 } from '../labels/holder-registry';
+import { modes } from '../core/modes';
 
 function makeRange(text = 'x'): Range {
   const el = document.createElement('p');
@@ -159,6 +160,7 @@ describe('range-disambiguation pick', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     __resetHolderRegistry();
+    modes.reset();
     claimed.length = 0;
     released.length = 0;
     publishedRecords.length = 0;
@@ -837,5 +839,38 @@ describe('range-disambiguation pick', () => {
     // to whatever else is registered happens by construction.
     cancelRangePick('test');
     expect(anyHolderMatchesPrefix('a')).toBe(false);
+  });
+
+  // --- Wave 3 C2: the mode stack rides the pick's lifetime ------------------
+
+  it('arming pushes the mode; every exit pops it', async () => {
+    startRangePick([makeRange('a'), makeRange('b')], () => {});
+    expect(modes.has('range_pick')).toBe(true);
+    expect(modes.top()).toBe('range_pick');
+
+    resolveCodeword('alpha'); // answered
+    expect(modes.has('range_pick')).toBe(false);
+
+    startRangePick([makeRange('c'), makeRange('d')], () => {});
+    cancelRangePick('escape'); // abandoned
+    expect(modes.has('range_pick')).toBe(false);
+  });
+
+  it('the not-armed fallback never enters the mode', () => {
+    nextClaim = []; // dry pool: acts on the first match instead of arming
+    startRangePick([makeRange('a'), makeRange('b')], () => {});
+    expect(modes.has('range_pick')).toBe(false);
+  });
+
+  it('the set emptying itself pops the mode with everything else', async () => {
+    const a = makeRange('a'), b = makeRange('b');
+    startRangePick([a, b], () => {});
+    await Promise.resolve();
+    (a.commonAncestorContainer.parentElement as HTMLElement).remove();
+    (b.commonAncestorContainer.parentElement as HTMLElement).remove();
+    reconcileAll('general');
+    await Promise.resolve();
+    expect(isRangePickPending()).toBe(false);
+    expect(modes.has('range_pick')).toBe(false);
   });
 });

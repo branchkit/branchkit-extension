@@ -16,6 +16,23 @@ rank — instead of the full `resolveCodeword`, because its element leg
 dispatch reporting) is the ambient store's answer for that input and cannot
 ride a `(codeword) -> outcome` hook; the typed path uses the full loop, with
 the store's sole-completion bookkeeping folded into its activate delegate.
+Wave 3 C2 LANDED 2026-07-26, with one deliberate resequencing forced by the
+gate itself: escape-key-path.test.ts must stay green UNMODIFIED through C2,
+and its harness mocks range-disambiguation + selection-commands at module
+level — so the cascade's DECIDER cannot consult the stack until C3 converts
+that harness (which the gate rule permits only mechanically, at C3). C2
+therefore lands the stack as the writer-side spine: every mode's one
+entry/exit implementation pushes/pops the production singleton
+(core/modes.ts) in lockstep with the flag it still sets — hint/video in
+KeyHandler, caret on the selection-commands active edge, find at session
+begin/end, range_pick at arm/teardown/onEmpty, palette at open/close — the
+real peelInner probes are installed (hint's typed prefix via
+KeyHandler.peelHintPrefix; caret's staged unwind via CaretController.
+peelInner, which escape() now routes through, one implementation), and
+peelTop's behavior — inner-before-mode, temporal order on the reachable
+find-then-video stacking — is proven by new tests against real module state.
+The cascade flips to peelTop in C3, when the flags die and the gate's
+harness converts.
 **Repos touched:** `branchkit-extension` (bulk), `plugins/browser` (tag mirror),
 `app` (pin bumps only).
 

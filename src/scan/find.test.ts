@@ -790,3 +790,58 @@ describe('purgeOrphanedFindPaint', () => {
     expect(() => purgeOrphanedFindPaint()).not.toThrow();
   });
 });
+
+// --- Wave 3 C2: the mode stack rides the find session's lifetime -----------
+
+import { modes } from '../core/modes';
+
+describe('the mode stack rides the find session (Wave 3 C2)', () => {
+  beforeEach(() => {
+    modes.reset();
+    closeFindMode();
+    document.body.innerHTML = '<p>a needle in a needle stack</p>';
+  });
+  afterEach(() => closeFindMode());
+
+  it('opening the bar pushes; ending the session pops', () => {
+    openFindMode();
+    expect(modes.has('find')).toBe(true);
+    closeFindMode();
+    expect(modes.has('find')).toBe(false);
+  });
+
+  it('a committed voice find is the same one session', () => {
+    findImmediate('needle');
+    expect(modes.has('find')).toBe(true);
+    expect(modes.depth()).toBe(1);
+    // Refining it (`/` reopens the bar seeded) joins the session, never nests.
+    openFindMode();
+    expect(modes.depth()).toBe(1);
+    closeFindMode();
+    expect(modes.has('find')).toBe(false);
+  });
+
+  it('replacing the session (different intent) lands back at one entry', () => {
+    openFindMode('find');
+    openFindMode('highlight'); // close-then-reopen under the hood
+    expect(modes.depth()).toBe(1);
+    expect(modes.has('find')).toBe(true);
+  });
+
+  it('the reachable stacking (find, then video) peels temporally — the cascade\'s order, derived', async () => {
+    // Commit a search, press `w`: the one stacking genuinely reachable by
+    // keyboard. The cascade's declared order peels video first; the stack
+    // reaches the same answer from temporal order alone, which is what lets
+    // C3 make peelTop the decider.
+    const { keyHandler } = await import('../core/singletons');
+    findImmediate('needle');
+    keyHandler.enterVideoMode();
+    expect(modes.ids()).toEqual(['find', 'video']);
+
+    expect(modes.peelTop('t')).toMatchObject({ peeled: 'mode', id: 'video' });
+    expect(modes.peelTop('t')).toMatchObject({ peeled: 'mode', id: 'find' });
+
+    // C2 boundary: peelTop popped entries, not flags — unwind them here.
+    keyHandler.exitVideoMode();
+  });
+});

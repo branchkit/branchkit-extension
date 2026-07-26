@@ -250,4 +250,23 @@ describe('registration contract (Phase 1)', () => {
     dispatcher.dispatch('go_next');
     expect(flashToast).toHaveBeenCalledWith('No next page');
   });
+
+  // Wave 3 C2: the caret's active edge drives the mode stack in the same
+  // onModeChange that drives the flag and the mirror, so the three cannot
+  // drift. The fresh-graph import matters: loadModule reset the module
+  // registry, so the module's `modes` instance is the post-reset one.
+  it('the mode stack rides the caret active edge', async () => {
+    await loadModule();
+    const { modes } = await import('../core/modes');
+    modes.reset();
+
+    caretOpts!.onModeChange('caret');
+    expect(modes.has('caret')).toBe(true);
+    // caret↔visual is one lifetime — no re-push, no nest.
+    caretOpts!.onModeChange('visual');
+    expect(modes.depth()).toBe(1);
+
+    caretOpts!.onModeChange(null);
+    expect(modes.has('caret')).toBe(false);
+  });
 });

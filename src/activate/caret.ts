@@ -512,18 +512,34 @@ export class CaretController {
    *  Public: the spoken "escape"/"over" cascade (content.ts) runs the same
    *  peel so voice and the key stay behavior-identical. */
   escape(): void {
+    if (this.peelInner() !== null) return;
+    this.exit();
+  }
+
+  /**
+   * One staged step of the escape, WITHOUT exiting — the session's intra-mode
+   * transients, which is exactly what the mode stack's peelInner contract
+   * asks for (the probe installed in selection-commands.ts delegates here, so
+   * the staged unwind has one implementation for escape() and the stack
+   * alike). Returns the name of what it peeled, or null when only the exit
+   * remains: a field session has no stages, a session-owned find (findFloor
+   * 'none') peels before the selection, and collapsing visual back to its
+   * caret is a step BACK only if there was a caret to go back to — a session
+   * a phrase command conjured has no such floor, so it leaves in one Escape
+   * rather than parking the user in a mode they never entered.
+   */
+  peelInner(): 'caret_find' | 'visual' | null {
     const m = this.movement;
-    if (!m || this.fieldEl) { this.exit(); return; }
-    if (isFindActive() && this.findFloor === 'none') { closeFindMode(); return; }
-    // Collapsing a selection back to its caret is a step BACK only if there was
-    // a caret to go back to. A session a phrase command conjured has no such
-    // floor, so it leaves in one Escape rather than parking the user in a mode
-    // they never entered.
+    if (!m || this.fieldEl) return null;
+    if (isFindActive() && this.findFloor === 'none') {
+      closeFindMode();
+      return 'caret_find';
+    }
     if (this.mode === 'visual' && !m.sel.isCollapsed && this.entryFloor === 'caret') {
       this.collapseToCaret();
-      return;
+      return 'visual';
     }
-    this.exit();
+    return null;
   }
 
   /** Collapse the selection to its anchor and re-enter caret mode there. The
