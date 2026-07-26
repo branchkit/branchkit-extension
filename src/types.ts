@@ -245,6 +245,11 @@ export type Message =
   // background POSTs /caret so the plugin holds the exclusive caret tag while
   // active, gating the voice selection commands. See DESIGN_HINT_ACTION_MODES.md.
   | { type: 'CARET_ACTIVE'; active: boolean }
+  // Content → background. Focus entered or left a single-line text input, so
+  // the plugin can hold the gate that declares dictation there is a QUERY
+  // (app notes/DESIGN_DICTATION_PROFILES.md). Edge-triggered and deduped by
+  // the reporter (plugin/query-field.ts).
+  | { type: 'QUERY_FIELD_ACTIVE'; active: boolean }
   // Content → background: a "highlight" disambiguation pick armed (codewords
   // non-empty) or released (empty). The background stamps tab_id and POSTs
   // /range-pick so the plugin narrows the hint projection to exactly these

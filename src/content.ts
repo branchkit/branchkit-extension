@@ -58,6 +58,7 @@ import { getSiteKeyState, onSiteKeysChanged } from './keymap/keyboard-rules';
 import { copyText } from './activate/clipboard';
 import { flashToast } from './render/toast';
 import { registerSelectionCommands, restorePosition, caret, SELECTION_ACTIONS, parseSelectionCommand } from './activate/selection-commands';
+import { startQueryFieldReporting } from './plugin/query-field';
 import { resolveRangePick, refusePickWindowCodeword, filterRangePickChips, setPickWindowHooks, cancelRangePick, reconcileRangePickChips, isRangePickPending } from './activate/range-disambiguation';
 import { runEscapeCascade } from './activate/escape-cascade';
 import './debug/dev-keepalive';
@@ -2944,6 +2945,10 @@ function wireSettleSignals(): void {
   pageSession.resources.listen(document, 'focusout', (e: Event) => engine.scheduleDeferredReposition(e), { passive: true });
   pageSession.resources.listen(document, 'transitionend', (e: Event) => engine.scheduleDeferredReposition(e), { passive: true });
   pageSession.resources.listen(document, 'animationend', (e: Event) => engine.scheduleDeferredReposition(e), { passive: true });
+
+  // Mirror "focus is in a single-line input" to the plugin — the gate that
+  // makes a dictation there a query instead of prose (plugin/query-field.ts).
+  startQueryFieldReporting(pageSession.resources.listen.bind(pageSession.resources));
 
   // Window resize covers genuine viewport changes (drag corner, device
   // rotation, DevTools open/close) AND browser zoom (Cmd+= reflows the

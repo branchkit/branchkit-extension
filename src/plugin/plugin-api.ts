@@ -223,6 +223,15 @@ export async function setFindActive(active: boolean): Promise<void> {
   await postToPlugin('/find', { conn_id: connId, active });
 }
 
+// Query-field state: reflect "focus is in a single-line text input" so the
+// plugin holds the gate declaring dictation there is a query, not prose. Same
+// boolean-mirror shape as caret/find; the gate is NON-exclusive, so unlike
+// those a stale one costs a period, not the command set.
+export async function setQueryFieldActive(active: boolean): Promise<void> {
+  if (!(await ensureConnected())) return;
+  await postToPlugin('/query-field', { conn_id: connId, active });
+}
+
 // Tell the plugin this browser's connection just gained (or lost) OS focus.
 // The plugin binds connId to the OS-focused bundle on a focused:true claim;
 // identity comes from the OS, this only says "which connection is focused now."
