@@ -48,7 +48,11 @@ vi.mock('../plugin/resolve', () => ({
 // so the tests can drive the two sweeps that would otherwise never see them.
 // `vi.hoisted` because the module registers at import time, which runs before a
 // plain `let` in this file is initialized.
-type Holder = { held: () => Iterable<string>; republish: () => void };
+type Holder = {
+  held: () => Iterable<string>;
+  republish: () => void;
+  onCodewordRejected: (codeword: string) => void;
+};
 const captured = vi.hoisted(() => ({ holder: null as Holder | null }));
 vi.mock('../labels/codeword-holders', () => ({
   registerCodewordHolder: (h: Holder) => {
@@ -538,6 +542,71 @@ describe('range-disambiguation pick', () => {
     expect(republished.map(r => r.codeword).sort()).toEqual(['alpha', 'bravo']);
     // Re-armed with the live set so the plugin's projection narrow follows.
     expect(pickWindowPosts[pickWindowPosts.length - 1].sort()).toEqual(['alpha', 'bravo']);
+  });
+
+  it('drops a chip whose codeword another document won', async () => {
+    startRangePick([makeRange('a'), makeRange('b')], () => {});
+    await Promise.resolve();
+
+    captured.holder?.onCodewordRejected('alpha');
+
+    expect(isRangePickPending('alpha')).toBe(false);
+    expect(isRangePickPending('bravo')).toBe(true);
+    expect(chipCount()).toBe(1); // the loser's badge is gone, not just muted
+  });
+
+  it('ends the pick when every codeword is rejected', async () => {
+    startRangePick([makeRange('a'), makeRange('b')], () => {});
+    await Promise.resolve();
+
+    captured.holder?.onCodewordRejected('alpha');
+    captured.holder?.onCodewordRejected('bravo');
+
+    expect(isRangePickPending()).toBe(false);
+    expect(chipCount()).toBe(0);
+    expect(toasts.some(t => t.includes('Lost the highlighted matches'))).toBe(true);
+  });
+
+  it('reaps a chip whose range left the DOM, and ends the pick if that empties it', async () => {
+    const a = makeRange('a'), b = makeRange('b');
+    startRangePick([a, b], () => {});
+    await Promise.resolve();
+    expect(chipCount()).toBe(2);
+
+    // The page re-renders 'a' away. A Range never rebinds.
+    (a.commonAncestorContainer.parentElement as HTMLElement).remove();
+    reconcileRangePickChips();
+    await Promise.resolve();
+
+    expect(chipCount()).toBe(1);
+    expect(isRangePickPending('alpha')).toBe(false);
+    expect(released.flat()).toEqual(['alpha']); // codeword returned to the pool
+    expect(isRangePickPending()).toBe(true);
+
+    // Now the rest goes too — the pick must not survive as a codeword-swallower
+    // with nothing on screen to explain itself.
+    (b.commonAncestorContainer.parentElement as HTMLElement).remove();
+    reconcileRangePickChips();
+    await Promise.resolve();
+
+    expect(isRangePickPending()).toBe(false);
+    expect(chipCount()).toBe(0);
+    expect(toasts.some(t => t.includes('Lost the highlighted matches'))).toBe(true);
+  });
+
+  it('keeps a chip whose range is merely collapsed but still connected', async () => {
+    // A hidden accordion collapses the rect without killing the range; that
+    // must not drop the chip, or a reveal loses its codeword for no reason.
+    const restore = withStubbedRects(() => false); // every rect collapses
+    try {
+      startRangePick([makeRange('a'), makeRange('b')], () => {});
+      await Promise.resolve();
+      const before = chipCount();
+      reconcileRangePickChips();
+      await Promise.resolve();
+      expect(chipCount()).toBe(before);
+      expect(released.flat()).toEqual([]);
+    } finally { restore(); }
   });
 
   it('republish is a no-op with no pick live', () => {

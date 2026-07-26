@@ -60,6 +60,8 @@ export class KeyHandler {
   // Content decides whether to also hide the badges: manual visibility
   // dismisses them, always-visible keeps them. Set by content.ts.
   private onHintEscape: (() => void) | null = null;
+  // Escape peel for a modeless layer (range-pick chips); see setEscapeHook.
+  private onEscape: (() => boolean) | null = null;
   // Whether at least one codeword starts with a given prefix. Used to reject a
   // codeword keystroke that matches nothing — otherwise the filter hides every
   // badge until Escape. Set by content.ts; null means accept any char.
@@ -110,6 +112,12 @@ export class KeyHandler {
 
   setHintEscapeCallback(cb: () => void): void {
     this.onHintEscape = cb;
+  }
+
+  /** Peel a modeless layer on Escape. Return true if one was peeled (the key
+   *  is then consumed); false to let Escape route normally. */
+  setEscapeHook(cb: () => boolean): void {
+    this.onEscape = cb;
   }
 
   setMatchPredicate(fn: (prefix: string) => boolean): void {
@@ -266,6 +274,19 @@ export class KeyHandler {
       this.passNextArmed = false;
       this.onModeChange?.(this.getMode());
       return false;
+    }
+
+    // Escape hook: a modeless layer that owns the screen without owning a
+    // KeyMode — today the range-pick chips. Runs before every route because
+    // such a layer can be up in ANY mode, and it is the only keyboard exit
+    // from one; the voice "escape" cascade is otherwise the sole way out, which
+    // strands the user exactly when voice is the thing misbehaving. Consumes
+    // the key only when it actually peeled a layer, so plain Escape is
+    // unaffected the rest of the time.
+    if (e.key === 'Escape' && this.onEscape?.()) {
+      e.preventDefault();
+      e.stopPropagation();
+      return true;
     }
 
     // Mark capture (Vimium m / `): the next printable key names the mark. Runs

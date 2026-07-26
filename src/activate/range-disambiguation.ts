@@ -121,6 +121,21 @@ registerCodewordHolder({
       publishPickWindow([...pending.chips.keys()]);
     });
   },
+  onCodewordRejected: (codeword) => {
+    const chip = pending?.chips.get(codeword);
+    if (!pending || !chip) return;
+    // Another document won this codeword. Drop the chip rather than leave it
+    // painted for something that now activates over there.
+    chip.badge.remove();
+    pending.chips.delete(codeword);
+    bkLog('BK_RANGE_PICK_REJECTED', { codeword, remaining: pending.chips.size });
+    if (pending.chips.size === 0) {
+      flashToast('Lost the highlighted matches — say "highlight" again');
+      teardown('all_rejected');
+      return;
+    }
+    publishPickWindow([...pending.chips.keys()]);
+  },
 });
 
 /**
@@ -162,6 +177,12 @@ function bandCandidates(ranges: Range[], held: (r: Range) => boolean): BandCandi
   const vw = window.innerWidth;
   const out: BandCandidate<Range>[] = [];
   for (const r of ranges) {
+    // Liveness before geometry. A dead range usually reports a collapsed rect
+    // and would fall out below anyway — but relying on that means the reap
+    // above can be undone in the same pass: the range is still in
+    // `pending.ranges`, so anything that admits it as a candidate re-claims a
+    // codeword for text that no longer exists.
+    if (isRangeDead(r)) continue;
     let rect: DOMRect;
     try { rect = r.getBoundingClientRect(); } catch { continue; }
     // A fully collapsed rect has nowhere to anchor a chip.
@@ -211,6 +232,56 @@ function chipRecord(codeword: string, strict: boolean): ScannedElement {
     codeword,
     in_strict_viewport: strict,
   };
+}
+
+/**
+ * Is this range's text still in the document?
+ *
+ * A Range does not rebind: once its nodes are removed the range collapses and
+ * nothing brings it back. Distinct from a merely COLLAPSED rect, which a
+ * connected range can report transiently (a hidden accordion) and which should
+ * NOT drop a chip.
+ */
+function isRangeDead(range: Range): boolean {
+  // Element-derived the same way rangeTarget does, so "dead" and "what the
+  // badge is anchored to" can't disagree — and because Node.isConnected on a
+  // text node is not dependable across engines.
+  const node = range.commonAncestorContainer;
+  const el = node instanceof Element ? node : node.parentElement;
+  return el === null || !el.isConnected;
+}
+
+/**
+ * Remove chips whose range died, and end the pick if that empties it.
+ *
+ * The band planner can't do this: `bandCandidates` skips a collapsed rect, so a
+ * dead range becomes neither a keep nor a drop, and when EVERY range dies the
+ * `wouldEmpty` guard skips the mutation block too — so the "Lost the
+ * highlighted matches" teardown was unreachable for exactly the case it names.
+ * Left alone, the badge freezes at its last position (its element is
+ * disconnected, so the reconciler stops writing) while the pick keeps swallowing
+ * every other codeword. Returns true when the pick was torn down.
+ */
+function reapDeadChips(): boolean {
+  if (!pending) return false;
+  const dead: string[] = [];
+  for (const [cw, chip] of pending.chips) {
+    if (!isRangeDead(chip.range)) continue;
+    chip.badge.remove();
+    pending.chips.delete(cw);
+    dead.push(cw);
+  }
+  if (dead.length === 0) return false;
+  retireRecords(dead);
+  labelReservoir.release(dead);
+  bkLog('BK_RANGE_PICK_REAP', { dead: dead.length, remaining: pending.chips.size });
+  if (pending.chips.size === 0) {
+    flashToast('Lost the highlighted matches — say "highlight" again');
+    teardown('ranges_died');
+    return true;
+  }
+  publishPickWindow([...pending.chips.keys()]);
+  return false;
 }
 
 /** Which ranges currently wear a chip — the planner's `held` input. */
@@ -401,6 +472,7 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
  */
 export function reconcileRangePickChips(): void {
   if (!pending) return;
+  if (reapDeadChips()) return; // teardown already ran
   const { plan, isStrict } = planChipWindow(pending.ranges, chippedRanges());
   // Nothing would remain in band: keep what's painted rather than going to
   // zero, which leaves a pick that swallows every codeword

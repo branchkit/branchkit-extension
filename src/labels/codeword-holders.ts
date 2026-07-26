@@ -17,8 +17,8 @@
  * compile-time "implement these two methods" rather than a silent 30-second
  * codeword theft.
  *
- * Deliberately tiny: two questions, both of which the store answers for
- * wrappers. Anything richer belongs to the holder.
+ * Deliberately tiny: three questions, each one a store-scoped sweep that would
+ * otherwise skip the holder entirely. Anything richer belongs to the holder.
  */
 
 export interface CodewordHolder {
@@ -36,6 +36,16 @@ export interface CodewordHolder {
    * `is_final` batch, leaving badges painted but unspeakable.
    */
   republish(): void;
+  /**
+   * The SW pool refused this codeword — another document won it.
+   *
+   * The wrapper path strips the loser back to unhinted and re-claims
+   * (content's `onConfirmRejected`), but it looks the holder up in the store
+   * and skips anything it can't find. An unhandled rejection leaves a badge
+   * painted for a codeword that now addresses a DIFFERENT document, so saying
+   * it acts over there.
+   */
+  onCodewordRejected(codeword: string): void;
 }
 
 const holders = new Set<CodewordHolder>();
@@ -64,6 +74,11 @@ export function allHeldOutsideStore(): string[] {
 /** Re-publish every non-element holder's records after a session rotation. */
 export function republishHeldOutsideStore(): void {
   for (const h of holders) h.republish();
+}
+
+/** Tell every non-element holder that a codeword was refused by the pool. */
+export function rejectHeldOutsideStore(codeword: string): void {
+  for (const h of holders) h.onCodewordRejected(codeword);
 }
 
 /** Test-only reset. */

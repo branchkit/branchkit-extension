@@ -58,7 +58,7 @@ import { getSiteKeyState, onSiteKeysChanged } from './keymap/keyboard-rules';
 import { copyText } from './activate/clipboard';
 import { flashToast } from './render/toast';
 import { registerSelectionCommands, restorePosition, caret, SELECTION_ACTIONS, parseSelectionCommand } from './activate/selection-commands';
-import { resolveRangePick, refusePickWindowCodeword, filterRangePickChips, setPickWindowHooks, cancelRangePick, reconcileRangePickChips } from './activate/range-disambiguation';
+import { resolveRangePick, refusePickWindowCodeword, filterRangePickChips, setPickWindowHooks, cancelRangePick, reconcileRangePickChips, isRangePickPending } from './activate/range-disambiguation';
 import { runEscapeCascade } from './activate/escape-cascade';
 import './debug/dev-keepalive';
 import {
@@ -115,7 +115,7 @@ import { setScrollAccelEnabled, setScrollAccelNestedEnabled, reconcileScrollAcce
 import { isScrollTimelineSupported } from './render/scroll-accel';
 import { setNudgesFromSettings } from './placement';
 import { labelReservoir } from './labels/label-reservoir';
-import { heldOutsideStore, allHeldOutsideStore, republishHeldOutsideStore } from './labels/codeword-holders';
+import { heldOutsideStore, allHeldOutsideStore, republishHeldOutsideStore, rejectHeldOutsideStore } from './labels/codeword-holders';
 import { doScan, scheduleDoScan } from './scan/scan-orchestrator';
 import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
 import { openLivenessPort, repairLivenessAfterBfcacheRestore } from './plugin/liveness';
@@ -508,6 +508,10 @@ initLabelSync({
 labelReservoir.onConfirmRejected((codewords) => {
   let dropped = 0;
   for (const cw of codewords) {
+    // Holders outside the store get the same news: a rejected codeword now
+    // addresses another document, so a badge still painted for it here would
+    // act over there.
+    rejectHeldOutsideStore(cw);
     const w = store.byCodeword(cw);
     if (!w) continue;
     if (hasSent(cw)) queueDelete(cw);
@@ -1419,6 +1423,15 @@ onSiteKeysChanged(applySiteKeys);
 // (they're for voice — Escape just leaves keyboard typing mode); in MANUAL
 // mode Escape dismisses the summoned hints, the Vimium behavior. The mode
 // exit itself already happened in the KeyHandler.
+// Physical Escape peels a pending range pick. Without this the only exit is
+// the voice "escape" cascade — no help when a pick is stuck because voice is
+// degraded, which is exactly when one is most likely to be stuck.
+keyHandler.setEscapeHook(() => {
+  if (!isRangePickPending()) return false;
+  cancelRangePick('key_escape');
+  return true;
+});
+
 keyHandler.setHintEscapeCallback(() => {
   pendingHintAction = 'activate'; // an abandoned verb (yf/hover/… then Esc) must not leak to the next hint
   if (getHintVisibility() !== 'always') hideBadges();
@@ -2209,6 +2222,14 @@ function rescanForNav(fromCache: boolean, reason: string): void {
     return;
   }
   chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag: 'pipeline.cs_rescan_received', data: { url: window.location.href, from_cache: fromCache, reason } } as Message).catch(() => {});
+
+  // A route swap invalidates the question a pick is asking: its Ranges point
+  // into DOM the nav just replaced, and a Range never rebinds. Left alone the
+  // chips stay painted over the new page's content while the pick swallows
+  // every other codeword — recoverable only by voice "escape". The badge
+  // machinery survives a nav by rebinding wrappers; the pick can only be
+  // re-asked.
+  if (reason === 'spa_nav') cancelRangePick('spa_nav');
 
   // A same-document nav is a new page: in manual mode (or always-mode with an
   // active F-hide) it should start hidden. The SPA nav keeps this content
