@@ -1,7 +1,7 @@
 {
   "name": "branchkit-browser",
   "version": "0.1.0",
-  "description": "BranchKit Browser \u2014 voice-navigable hint badges",
+  "description": "BranchKit Browser — voice-navigable hint badges",
   "license": "SEE LICENSE IN LICENSE",
   "scripts": {
     "build": "npm run build:chrome && npm run build:firefox",
@@ -30,7 +30,9 @@
   },
   "devDependencies": {
     "@types/chrome": "^0.0.268",
+    "@vitest/coverage-v8": "^4.1.10",
     "esbuild": "^0.27.2",
+    "fast-check": "^4.9.0",
     "happy-dom": "^20.9.0",
     "playwright": "^1.60.0",
     "playwright-webextext": "^0.0.5",
