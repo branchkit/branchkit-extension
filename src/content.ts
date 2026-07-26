@@ -1472,9 +1472,8 @@ keyHandler.setEscapeHook(() => runEscapeCascade('key_escape'));
 setInnerTransientProbe('hint', () => keyHandler.peelHintPrefix());
 
 // The mode-mirror transport (Wave 3 C4a): every mirrored-mode edge posts this
-// frame's stack; the SW derives the tag set across frames
-// (background/mode-mirror.ts, which carries the failure model). A sync throw
-// (dead context) reports the edge unposted so the stack retries.
+// frame's stack; the SW derives the tag set (background/mode-mirror.ts, which
+// carries the failure model). A sync throw reports the edge unposted → retry.
 setModeMirrorSink({
   post: (edge) => {
     try {
@@ -2549,6 +2548,7 @@ const DISPATCH_PASSTHROUGH_ACTIONS = new Set([
   // voice "pause"/"mute"/"faster"/"skip ahead"/"restart video" — the media
   // executors (activate/media.ts); each no-ops in a frame with no large video
   'media_play_pause', 'media_mute', 'media_speed', 'media_seek', 'media_restart',
+  'video_mode', 'video_exit', // "video" = the `w` layer's entry; exit = the mirror forwarder (C4b)
 ]);
 
 chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {
