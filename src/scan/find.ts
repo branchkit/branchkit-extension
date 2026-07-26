@@ -140,10 +140,17 @@ function ensureHighlightStyle(): void {
   // theme, so it can't be relied on to read as anything in particular — and
   // the real selection colour arrives on its own the moment the phrase
   // resolves, which is the handoff this preview is building toward.
+  //
+  // The phrase wash sits at a much LOWER alpha than find's, and matching the
+  // numbers would be the wrong way to match the look: highlighter yellow is
+  // nearly as light as white, so 22% of it barely tints, while #007AFF is a
+  // dark hue whose 22% reads as a solid block. Equal weight on the page needs
+  // unequal alpha. Both are washes — a phrase has no "current" match to
+  // out-vivid, so this is the only level it needs.
   style.textContent =
     `::highlight(${HL_ALL}) { background-color: rgba(255, 235, 59, 0.22); color: inherit; }\n` +
     `::highlight(${HL_CURRENT}) { background-color: ${FIND_HIGHLIGHT}; color: #000; }\n` +
-    `::highlight(${HL_PHRASE}) { background-color: rgba(0, 122, 255, 0.20); color: inherit; }`;
+    `::highlight(${HL_PHRASE}) { background-color: rgba(0, 122, 255, 0.12); color: inherit; }`;
   (document.head || document.documentElement).appendChild(style);
 }
 
