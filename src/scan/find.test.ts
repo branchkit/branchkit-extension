@@ -120,6 +120,7 @@ describe('buildBlockIndex — caret text-object substrate (word/sentence/paragra
 import { afterEach, vi } from 'vitest';
 import {
   findImmediate,
+  openPhraseBox,
   closeFindMode,
   purgeOrphanedFindPaint,
   openFindMode,
@@ -406,20 +407,30 @@ describe('find bar: phrase-targeting modes', () => {
       g.CSS.highlights = priorReg;
       g.Highlight = priorCtor;
     };
-    setFindCallbacks({ onPhrase: (mode, query) => phrases.push([mode, query]) });
+  });
+
+  // The caller brings its own box copy and its own commit meaning now
+  // (PhraseTarget, Wave 3 C5b) — these are the callers, in miniature.
+  const openHighlightBox = () => openPhraseBox({
+    glyph: '✦', placeholder: 'Highlight phrase...',
+    onPhrase: (q) => phrases.push(['highlight', q]),
+  });
+  const openExtendBox = () => openPhraseBox({
+    glyph: '⇥', placeholder: 'Extend selection to...',
+    onPhrase: (q) => phrases.push(['extend', q]),
   });
   afterEach(() => { closeFindMode(); setFindCallbacks({}); restoreEnv(); vi.useRealTimers(); });
 
   it('labels the box for what the phrase is for', () => {
-    openFindMode('highlight');
+    openHighlightBox();
     expect(barInput().placeholder).toBe('Highlight phrase...');
     closeFindMode();
-    openFindMode('extend');
+    openExtendBox();
     expect(barInput().placeholder).toBe('Extend selection to...');
   });
 
   it('hands the phrase over and ends the session — no pill, no highlights left', () => {
-    openFindMode('highlight');
+    openHighlightBox();
     dictate('alpha');
     vi.runAllTimers();
     expect(phrases).toEqual([['highlight', 'alpha']]);
@@ -430,8 +441,8 @@ describe('find bar: phrase-targeting modes', () => {
 
   it('a search commit does NOT fire onPhrase, and vice versa', () => {
     let commits = 0;
-    setFindCallbacks({ onCommit: () => { commits++; }, onPhrase: (m, q) => phrases.push([m, q]) });
-    openFindMode('find');
+    setFindCallbacks({ onCommit: () => { commits++; } });
+    openFindMode();
     dictate('alpha');
     vi.runAllTimers();
     expect(commits).toBe(1);
@@ -441,7 +452,7 @@ describe('find bar: phrase-targeting modes', () => {
   it('with no match the box STAYS OPEN with its text selected, so the retry replaces it', () => {
     // Dictation types at the cursor: without selecting, a second attempt would
     // append to the failed one rather than replace it.
-    openFindMode('highlight');
+    openHighlightBox();
     dictate('nonexistent');
     vi.runAllTimers();
     expect(phrases).toEqual([]);
@@ -455,7 +466,7 @@ describe('find bar: phrase-targeting modes', () => {
     // Clearing it at commit put the pick chips over unmarked text and flashed a
     // single-match selection from highlighted to bare. The matches ARE the
     // candidates; whoever answers the question calls clearFindPaint.
-    openFindMode('highlight');
+    openHighlightBox();
     dictate('alpha');
     vi.runAllTimers();
     expect(phrases).toHaveLength(1);
@@ -467,7 +478,7 @@ describe('find bar: phrase-targeting modes', () => {
 
   it('a search commit keeps its own paint too, and still marks the current match', () => {
     setFindCallbacks({});
-    openFindMode('find');
+    openFindMode();
     dictate('alpha');
     vi.runAllTimers();
     expect(highlights().has('branchkit-find')).toBe(true);
@@ -480,7 +491,7 @@ describe('find bar: phrase-targeting modes', () => {
     // these are about to become a selection. No current match either — every
     // candidate is equally pickable until you choose, and a brighter one reads
     // as already chosen once the chips are up.
-    openFindMode('highlight');
+    openHighlightBox();
     dictate('alph');   // matches, but don't commit — paint is live while typing
     expect(highlights().has('branchkit-phrase')).toBe(true);
     expect(highlights().has('branchkit-find')).toBe(false);
@@ -488,22 +499,22 @@ describe('find bar: phrase-targeting modes', () => {
   });
 
   it('switching find -> highlight does not leave the find paint behind', () => {
-    openFindMode('find');
+    openFindMode();
     dictate('alpha');
     vi.runAllTimers();
     expect(highlights().has('branchkit-find')).toBe(true);
-    openFindMode('highlight');
+    openHighlightBox();
     dictate('alph');
     expect(highlights().has('branchkit-find')).toBe(false);
     expect(highlights().has('branchkit-phrase')).toBe(true);
   });
 
   it('reopening in a different mode replaces the session rather than inheriting it', () => {
-    openFindMode('find');
+    openFindMode();
     dictate('alpha');
     vi.runAllTimers();               // committed find: pill up, query retained
-    openFindMode('highlight');
-    expect(getFindState().mode).toBe('highlight');
+    openHighlightBox();
+    expect(getFindState().phrase).toBe(true);
     expect(getFindState().query).toBe('');
     expect(barInput().value).toBe('');
   });
@@ -560,25 +571,27 @@ describe('voice find declares its own mode', () => {
       g.CSS.highlights = priorReg;
       g.Highlight = priorCtor;
     };
-    setFindCallbacks({
-      onCommit: () => commits.push(1),
-      onPhrase: (mode, query) => phrases.push([mode, query]),
-    });
+    setFindCallbacks({ onCommit: () => commits.push(1) });
   });
   afterEach(() => { closeFindMode(); setFindCallbacks({}); restoreEnv(); vi.useRealTimers(); });
+
+  const openHighlightBox = () => openPhraseBox({
+    glyph: '✦', placeholder: 'Highlight phrase...',
+    onPhrase: (q) => phrases.push(['highlight', q]),
+  });
 
   it('a voice find AFTER a highlight session paints find yellow, not the phrase wash', () => {
     // The highlight session ends without resetting the mode, so the next voice
     // find inherited `highlight`: blue wash, no current match — while the pill
     // still showed "/" and n/N navigated an unmarked "current".
-    openFindMode('highlight');
+    openHighlightBox();
     dictate('alpha');
     vi.runAllTimers();
     expect(phrases).toHaveLength(1);
     expect(isFindActive()).toBe(false);
 
     findImmediate('beta');
-    expect(getFindState().mode).toBe('find');
+    expect(getFindState().phrase).toBe(false);
     expect(highlights().has('branchkit-find')).toBe(true);
     expect(highlights().has('branchkit-find-current')).toBe(true);
     expect(highlights().has('branchkit-phrase')).toBe(false);
@@ -589,12 +602,12 @@ describe('voice find declares its own mode', () => {
     // The box is still collecting a phrase for a selection command — a codeword
     // there means "select this one" (the range pick owns it), so the search-badge
     // arming that hangs off onCommit must not fire.
-    openFindMode('highlight');
+    openHighlightBox();
     findImmediate('alpha');
     expect(commits).toEqual([]);
     expect(phrases).toEqual([]);
     // The box keeps its own mode: still a phrase box, still painted as one.
-    expect(getFindState().mode).toBe('highlight');
+    expect(getFindState().phrase).toBe(true);
     expect(highlights().has('branchkit-phrase')).toBe(true);
     expect(highlights().has('branchkit-find')).toBe(false);
     expect(isFindBarOpen()).toBe(true);
@@ -604,7 +617,7 @@ describe('voice find declares its own mode', () => {
   it('a plain voice find still arms search badges', () => {
     findImmediate('alpha');
     expect(commits).toEqual([1]);
-    expect(getFindState().mode).toBe('find');
+    expect(getFindState().phrase).toBe(false);
   });
 });
 
@@ -822,8 +835,9 @@ describe('the mode stack rides the find session (Wave 3 C2)', () => {
   });
 
   it('replacing the session (different intent) lands back at one entry', () => {
-    openFindMode('find');
-    openFindMode('highlight'); // close-then-reopen under the hood
+    openFindMode();
+    // A phrase box over a live search: close-then-reopen under the hood.
+    openPhraseBox({ glyph: '✦', placeholder: 'Highlight phrase...', onPhrase: () => {} });
     expect(modes.depth()).toBe(1);
     expect(modes.has('find')).toBe(true);
   });

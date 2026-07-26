@@ -115,10 +115,21 @@ reading lastDictation() and seeding on the (now-vestigial, kept-as-net)
 dictated_retry branch; both sentinel guards are the shared isSentinelKey.
 Behavior deltas ratified by B3: the find commit debounce is the 400 ms
 utterance boundary; re-dictation REPLACES in both surfaces. find.ts pct
-rose to 89% with the moved lines at 100% in the primitive. **C5b (next)** —
-FindMode/MODE_UI die: find/highlight/extend become callers with their own
-commit meaning. Then the arc tail: D1 harness, D2 lints (incl. the
-forwarder↔passthrough check), coverage-baseline tool removal.
+rose to 89% with the moved lines at 100% in the primitive. **C5b (LANDED
+2026-07-26) — WAVE 3 COMPLETE.** FindMode/MODE_UI/onPhrase die: a
+phrase-targeting box opens with its consumer attached — openPhraseBox(
+{glyph, placeholder, onPhrase}) — so the caller that asks for a phrase is
+the one that receives it (selection-commands passes resolveSelectTo
+directly; content's onPhrase relay and the mode enum threaded through three
+modules are gone). find.ts keeps ONE behavior split, search vs phrase
+(phraseTarget null or not): the paint name, the commit meaning, the
+no-match keep-open, the Model B hybrid and the stale-target reset all
+derive from it; FindState.mode became the derived `phrase` boolean. The
+coverage-baseline migration tool retired with the wave, per its own charter
+("removed at C5 close"). Remaining arc tail (Wave 4): D1 real-input
+harness, D2 exhaustiveness lints (ModeSpec mirror decisions; holder
+priorities; no store.all iteration outside the store; the
+forwarder↔passthrough action check from the C4b field bug).
 **Repos touched:** `branchkit-extension` (bulk), `plugins/browser` (tag mirror),
 `app` (pin bumps only).
 

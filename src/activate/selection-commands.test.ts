@@ -39,7 +39,7 @@ const findPageLink = vi.fn();
 const flashToast = vi.fn();
 const copyText = vi.fn(async () => true);
 const findAllRanges = vi.fn((): Range[] => []);
-const openFindMode = vi.fn();
+const openPhraseBox = vi.fn();
 const clearFindPaint = vi.fn();
 const startRangePick = vi.fn();
 const cancelRangePick = vi.fn();
@@ -61,7 +61,7 @@ async function loadModule(): Promise<SelectionCommands> {
   vi.doMock('../pagination', () => ({ findPageLink }));
   vi.doMock('../url-nav', () => ({ urlUp: vi.fn(() => null), urlRoot: vi.fn(() => null) }));
   vi.doMock('../clipboard', () => ({ copyText }));
-  vi.doMock('../scan/find', () => ({ findAllRanges, openFindMode, clearFindPaint }));
+  vi.doMock('../scan/find', () => ({ findAllRanges, openPhraseBox, clearFindPaint }));
   vi.doMock('./range-disambiguation', () => ({ startRangePick, cancelRangePick }));
   return await import('./selection-commands');
 }
@@ -151,7 +151,7 @@ describe('registration contract (Phase 1)', () => {
     expect(findAllRanges).toHaveBeenCalledWith('hello world');
     expect(caretInstance.extendToRange).toHaveBeenCalledWith(r);
     expect(startRangePick).not.toHaveBeenCalled();
-    expect(openFindMode).not.toHaveBeenCalled();
+    expect(openPhraseBox).not.toHaveBeenCalled();
     // The selection replaces the match marking handed over by the box.
     expect(clearFindPaint).toHaveBeenCalled();
   });
@@ -175,7 +175,9 @@ describe('registration contract (Phase 1)', () => {
     const m = await loadModule();
     m.registerSelectionCommands();
     dispatcher.dispatch('select_to', {});
-    expect(openFindMode).toHaveBeenCalledWith('highlight');
+    expect(openPhraseBox).toHaveBeenCalledWith(expect.objectContaining({
+      placeholder: 'Highlight phrase...', onPhrase: expect.any(Function),
+    }));
     expect(findAllRanges).not.toHaveBeenCalled();
     expect(caretInstance.extendToRange).not.toHaveBeenCalled();
   });
@@ -184,14 +186,18 @@ describe('registration contract (Phase 1)', () => {
     const m = await loadModule();
     m.registerSelectionCommands();
     dispatcher.dispatch('select_to', { mode: 'extend' });
-    expect(openFindMode).toHaveBeenCalledWith('extend');
+    expect(openPhraseBox).toHaveBeenCalledWith(expect.objectContaining({
+      placeholder: 'Extend selection to...', onPhrase: expect.any(Function),
+    }));
   });
 
   it('select_to: a blank query is still no query — it opens the box', async () => {
     const m = await loadModule();
     m.registerSelectionCommands();
     dispatcher.dispatch('select_to', { query: '   ' });
-    expect(openFindMode).toHaveBeenCalledWith('highlight');
+    expect(openPhraseBox).toHaveBeenCalledWith(expect.objectContaining({
+      placeholder: 'Highlight phrase...', onPhrase: expect.any(Function),
+    }));
     expect(findAllRanges).not.toHaveBeenCalled();
   });
 

@@ -36,22 +36,33 @@ import { openPhraseSession, type PhraseSession } from './phrase-collector';
  * saying "hold the key and say the phrase" against a timer, the box IS the
  * input, visible until answered, editable, and identical for keyboard and voice.
  */
-export type FindMode = 'find' | 'highlight' | 'extend';
-
 export type FindState = {
   active: boolean;
-  mode: FindMode;
+  /** A phrase-targeting box is open or its session is live (vs a search). */
+  phrase: boolean;
   query: string;
   matchIndex: number;
   matchCount: number;
 };
 
-/** Leading glyph + placeholder, per mode. */
-const MODE_UI: Record<FindMode, { glyph: string; placeholder: string }> = {
-  find: { glyph: '/', placeholder: 'Find in page...' },
-  highlight: { glyph: '✦', placeholder: 'Highlight phrase...' },
-  extend: { glyph: '⇥', placeholder: 'Extend selection to...' },
-};
+/**
+ * A phrase-targeting consumer — what `FindMode` was reaching for (Wave 3
+ * C5b). The old enum was never polymorphism: `highlight` and `extend` were
+ * byte-identical in here and the consumer discarded the distinction. Each
+ * caller now brings its own box copy and its own commit meaning; this module
+ * keeps one behavior split — search (result set, pill, n/N) vs phrase (hand
+ * the query over, paint stays with the consumer).
+ */
+export interface PhraseTarget {
+  glyph: string;
+  placeholder: string;
+  /** The phrase is finished WITH matches painted — hand it over. The paint
+   *  survives; the consumer calls clearFindPaint when it answers. */
+  onPhrase(query: string): void;
+}
+
+/** The search box's own copy. */
+const FIND_UI = { glyph: '/', placeholder: 'Find in page...' };
 
 const HL_ALL = 'branchkit-find';
 const HL_CURRENT = 'branchkit-find-current';
@@ -60,7 +71,9 @@ const HL_CURRENT = 'branchkit-find-current';
 const HL_PHRASE = 'branchkit-phrase';
 const STYLE_ATTR = 'data-branchkit-find-style';
 
-let state: FindState = { active: false, mode: 'find', query: '', matchIndex: 0, matchCount: 0 };
+let state = { active: false, query: '', matchIndex: 0, matchCount: 0 };
+/** Non-null while a phrase-targeting session is live; null = search. */
+let phraseTarget: PhraseTarget | null = null;
 let barElement: HTMLElement | null = null;
 let inputElement: HTMLInputElement | null = null;
 /** The bar's input semantics — 229 sentinel, dictation wire, commit/cancel —
@@ -75,26 +88,23 @@ let onDeactivate: (() => void) | null = null;
 // Fired when a search commits WITH matches (Enter or voice find). Caret mode
 // uses it to auto-extend the selection to the match. See caret.ts.
 let onCommit: (() => void) | null = null;
-// Fired when a PHRASE-TARGETING box commits — the box was an input for some
-// other command, and this hands it the phrase. Deliberately separate from
-// onCommit: that one means "a search now has a result set you move around in",
-// which is what search badges hang off, and a highlight is not that.
-let onPhrase: ((mode: FindMode, query: string) => void) | null = null;
+// (The onPhrase callback died with FindMode: a phrase-targeting box's commit
+// handler arrives WITH the open — openPhraseBox(target) — so the caller that
+// asks for a phrase is the one that receives it, with no mode enum relayed
+// through a third module.)
 
 export function setFindCallbacks(opts: {
   onActivate?: () => void;
   onDeactivate?: () => void;
   onCommit?: () => void;
-  onPhrase?: (mode: FindMode, query: string) => void;
 }): void {
   onActivate = opts.onActivate ?? null;
   onDeactivate = opts.onDeactivate ?? null;
   onCommit = opts.onCommit ?? null;
-  onPhrase = opts.onPhrase ?? null;
 }
 
 export function getFindState(): FindState {
-  return { ...state };
+  return { ...state, phrase: phraseTarget !== null };
 }
 
 export function isFindActive(): boolean {
@@ -353,7 +363,7 @@ function createFindBar(): void {
     font-size: 13px; color: #fff;
   `;
 
-  const ui = MODE_UI[state.mode];
+  const ui = phraseTarget ?? FIND_UI;
   const label = document.createElement('span');
   label.textContent = ui.glyph;
   label.style.cssText = 'color: #007AFF; font-weight: 600; font-size: 14px;';
@@ -512,7 +522,7 @@ function applyHighlights(): void {
   // would claim an ordering that doesn't exist — worse once the pick chips are
   // up, where a brighter match reads as already chosen. `current` is a find
   // concept, owned by n/N navigation.
-  if (state.mode !== 'find') {
+  if (phraseTarget !== null) {
     api.reg.set(HL_PHRASE, new api.Ctor(...matchRanges));
     return;
   }
@@ -700,8 +710,9 @@ function commitFind(): void {
     closeFindMode();
     return;
   }
-  const { mode, query } = state;
-  if (mode !== 'find') {
+  const { query } = state;
+  const target = phraseTarget;
+  if (target !== null) {
     // A phrase-targeting box exists to feed a command that needs something to
     // act on. With no match there is nothing to hand over, so keep the box open
     // and select its text — the next dictation then REPLACES the query instead
@@ -713,9 +724,10 @@ function commitFind(): void {
     // End the session but KEEP the paint: the matches are the candidates, and
     // the consumer (a selection, or codeword chips over those candidates) is
     // what finally answers the question. It calls clearFindPaint when it does.
+    // (The target is grabbed above: endSession nulls it.)
     removeFindBar();
     endSession(true);
-    onPhrase?.(mode, query);
+    target.onPhrase(query);
     return;
   }
   removeFindBar();
@@ -726,11 +738,28 @@ function commitFind(): void {
 
 // --- Public API ---
 
-export function openFindMode(mode: FindMode = 'find'): void {
-  // A different intent replaces the session rather than inheriting it: reopening
-  // as `highlight` over a live find would otherwise keep the old query, the old
-  // pill and the old mode's meaning of Enter.
-  if (state.active && state.mode !== mode) closeFindMode();
+/**
+ * Open a phrase-targeting box. Always a FRESH session — each ask for a phrase
+ * is its own question, so a live search (or a previous phrase box) is closed
+ * rather than inherited: its query, pill and meaning of Enter belong to the
+ * old intent.
+ */
+export function openPhraseBox(target: PhraseTarget): void {
+  if (state.active) closeFindMode();
+  phraseTarget = target;
+  state.active = true;
+  modes.push('find'); // one session lifetime, search or phrase alike
+  state.query = '';
+  state.matchIndex = 0;
+  state.matchCount = 0;
+  createFindBar();
+  onActivate?.();
+}
+
+export function openFindMode(): void {
+  // A live PHRASE session is a different intent — replace it rather than
+  // inherit its query and its meaning of Enter. A live SEARCH refines.
+  if (state.active && phraseTarget !== null) closeFindMode();
   if (state.active) {
     if (barElement) {
       inputElement?.focus();
@@ -749,7 +778,6 @@ export function openFindMode(mode: FindMode = 'find'): void {
   }
   state.active = true;
   modes.push('find'); // the stack rides the session's one lifetime (Wave 3 C2)
-  state.mode = mode;
   state.query = '';
   state.matchIndex = 0;
   state.matchCount = 0;
@@ -776,12 +804,11 @@ function endSession(keepPaint: boolean): void {
   if (!state.active) return;
   state.active = false;
   modes.pop('find');
-  // The mode belongs to the SESSION, so it dies with it. Leaving it set made
-  // module state say "this is a highlight box" with no box on screen, and any
-  // entry point that forgot to declare its own mode picked that up (findImmediate
-  // did, for every voice find after a highlight). Declaring it at entry fixes the
-  // one caller; clearing it at exit is what makes the next one unable to inherit.
-  state.mode = 'find';
+  // The target belongs to the SESSION, so it dies with it. Leaving it set
+  // made module state say "this is a highlight box" with no box on screen,
+  // and any entry point that forgot to clear it picked that up (findImmediate
+  // did, for every voice find after a highlight).
+  phraseTarget = null;
   if (!keepPaint) clearHighlights();
   removeFindBar();
   removeCommittedPill();
@@ -885,18 +912,15 @@ export function handleFindNavKey(e: KeyboardEvent): boolean {
  * the committed pill — highlights persist, n / Shift+n (or voice "next" /
  * "previous") navigate, Escape or voice "close find" dismisses. */
 export function findImmediate(query: string): void {
-  // Voice find is a find SESSION and has to say so. `openFindMode` used to be
-  // the only writer of `state.mode`, so a phrase session that had already ended
-  // left `highlight` sitting in module state and the next voice find inherited
-  // it: painted the phrase wash with no current match, while showCommittedPill
-  // still drew "/" and n/N navigated a match nothing marked.
-  //
-  // The one exception is the Model B hybrid below — landing in a box that is
-  // ALREADY open. That box's mode belongs to the command that opened it (say
+  // Voice find is a find SESSION and has to say so — a stale phrase target
+  // left in module state painted the phrase wash with no current match while
+  // the pill drew "/" (the bug endSession's clear now prevents). The one
+  // exception is the Model B hybrid below — landing in a box that is ALREADY
+  // open. That box's TARGET belongs to the command that opened it (say
   // "highlight", then "search <phrase>" to fill it), and repurposing it here
   // would leave its glyph and placeholder lying about what Enter now does.
   const intoOpenBox = barElement !== null && inputElement !== null;
-  if (!intoOpenBox) state.mode = 'find';
+  if (!intoOpenBox) phraseTarget = null;
   state.active = true;
   modes.push('find'); // dedupes: an immediate find into a live session joins it
   ensureHighlightStyle();
@@ -942,5 +966,5 @@ export function findImmediate(query: string): void {
   // hang off; a phrase box filled by voice is still collecting an argument, and
   // in that mode a codeword means "select this one" — the range pick's job, not
   // a search badge's. commitFind draws the same line for the typed path.
-  if (state.mode === 'find' && matchRanges.length > 0) onCommit?.();
+  if (phraseTarget === null && matchRanges.length > 0) onCommit?.();
 }

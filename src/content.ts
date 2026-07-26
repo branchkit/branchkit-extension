@@ -57,7 +57,7 @@ import { setModeChip } from './render/mode-chip';
 import { getSiteKeyState, onSiteKeysChanged } from './keymap/keyboard-rules';
 import { copyText } from './activate/clipboard';
 import { flashToast } from './render/toast';
-import { registerSelectionCommands, restorePosition, caret, resolveSelectTo, SELECTION_ACTIONS, parseSelectionCommand } from './activate/selection-commands';
+import { registerSelectionCommands, restorePosition, caret, SELECTION_ACTIONS, parseSelectionCommand } from './activate/selection-commands';
 import { startQueryFieldReporting } from './plugin/query-field';
 import { cancelRangePick } from './activate/range-disambiguation';
 import { armSearchBadges, clearSearchBadges } from './activate/search-badges';
@@ -526,10 +526,9 @@ setFindCallbacks({
     if (caret.isActive()) caret.extendToCurrentMatch();
     armSearchBadges();
   },
-  // The box was collecting a phrase for a selection command rather than running
-  // a search: hand it over. Deliberately no search badges — in these modes a
-  // codeword means "select this one", which the range pick owns.
-  onPhrase: (_mode, query) => resolveSelectTo(query),
+  // (The onPhrase relay died with FindMode, Wave 3 C5b: the phrase box's
+  // commit handler now arrives with the open — selection-commands passes
+  // resolveSelectTo to openPhraseBox itself.)
 });
 
 setScrollBoundaryCallback((boundary) => {

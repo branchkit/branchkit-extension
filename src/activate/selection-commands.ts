@@ -15,7 +15,7 @@
 import { dispatcher, keyHandler } from '../core/singletons';
 import { setInnerTransientProbe } from '../core/mode-stack';
 import { CaretController, type SelectionCommand } from './caret';
-import { findAllRanges, openFindMode, clearFindPaint } from '../scan/find';
+import { findAllRanges, openPhraseBox, clearFindPaint } from '../scan/find';
 import { startRangePick, cancelRangePick } from './range-disambiguation';
 import {
   PREV_POSITION_REGISTERS, isPrevPositionRegister, marksToHash, type StoredMark,
@@ -239,7 +239,16 @@ export function registerSelectionCommands(): void {
     if (!query) {
       // Top frame only. The box is one page-level affordance, and every subframe
       // opening its own would put several boxes on screen competing for focus.
-      if (isTopFrame) openFindMode(params.mode === 'extend' ? 'extend' : 'highlight');
+      if (isTopFrame) {
+        // The caller brings its own box copy and its own commit meaning
+        // (find.ts PhraseTarget, Wave 3 C5b) — the extend/highlight
+        // distinction is UI copy here and nothing else; both hand the phrase
+        // to resolveSelectTo, which decides select-vs-extend from the live
+        // selection.
+        openPhraseBox(params.mode === 'extend'
+          ? { glyph: '⇥', placeholder: 'Extend selection to...', onPhrase: resolveSelectTo }
+          : { glyph: '✦', placeholder: 'Highlight phrase...', onPhrase: resolveSelectTo });
+      }
       return;
     }
     resolveSelectTo(query);
