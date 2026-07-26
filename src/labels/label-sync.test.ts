@@ -17,6 +17,7 @@ import {
   initLabelSync,
   queuePut,
   queueDelete,
+  cancelPendingDelete,
   markSent,
   hasSent,
   hasPendingDeletes,
@@ -166,6 +167,34 @@ describe('syncNow wholesale refusal (calibration_active)', () => {
     expect(batchCalls()).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(5000);
     expect(batchCalls()).toHaveLength(1);
+  });
+});
+
+describe('cancelPendingDelete (recycled codeword, 2026-07-25)', () => {
+  // The chip path publishes Puts immediately but retires ride the debounced
+  // batch, so a codeword released and re-claimed in one turn would be deleted
+  // moments after being re-published — painted and armed, but stripped from
+  // the hint collections and therefore missing from the HUD's suffix menu.
+  it('un-queues a delete so a recycled codeword survives the batch', () => {
+    queueDelete('wave is');
+    expect(hasPendingDeletes()).toBe(true);
+    cancelPendingDelete('wave is');
+    expect(hasPendingDeletes()).toBe(false);
+  });
+
+  it('cancels every queued copy, and leaves other codewords queued', () => {
+    queueDelete('wave is');
+    queueDelete('king is');
+    queueDelete('wave is'); // a second retire before the flush
+    cancelPendingDelete('wave is');
+    expect(hasPendingDeletes()).toBe(true); // 'king is' still queued
+    cancelPendingDelete('king is');
+    expect(hasPendingDeletes()).toBe(false);
+  });
+
+  it('is a no-op for a codeword that was never queued', () => {
+    expect(() => cancelPendingDelete('never queued')).not.toThrow();
+    expect(hasPendingDeletes()).toBe(false);
   });
 });
 

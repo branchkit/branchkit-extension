@@ -93,6 +93,25 @@ export function queueDelete(codeword: string): void {
   pendingDeleteCodewords.push(codeword);
 }
 
+/**
+ * Un-queue a delete for a codeword that came BACK before the batch flushed.
+ *
+ * The element path never needs this: its Puts and Deletes ride the same
+ * debounced batch, so the plugin applies them together in a defined order.
+ * `publishRecords` (the range-pick chips) POSTs immediately while retires wait
+ * for the debounce — so a codeword released and re-claimed in one turn is Put
+ * now and Deleted a quarter-second later, leaving a chip that is painted and
+ * armed but absent from the hint collections, and therefore missing from the
+ * Discovery HUD's suffix menu. Recycling codewords is deliberate (a chip the
+ * user is mid-way through saying must not be renamed), so the retire has to
+ * yield instead.
+ */
+export function cancelPendingDelete(codeword: string): void {
+  for (let i = pendingDeleteCodewords.length - 1; i >= 0; i--) {
+    if (pendingDeleteCodewords[i] === codeword) pendingDeleteCodewords.splice(i, 1);
+  }
+}
+
 /** Mark a codeword as live on the plugin side (acknowledged in a POST). */
 export function markSent(codeword: string): void {
   sentCodewords.add(codeword);

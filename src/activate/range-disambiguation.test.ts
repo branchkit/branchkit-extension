@@ -23,6 +23,7 @@ vi.mock('../labels/label-reservoir', () => ({
 
 const publishedRecords: Array<{ codeword: string; in_strict_viewport?: boolean }> = [];
 const retired: string[][] = [];
+const deleteCancels: string[] = [];
 let admitAll = true;
 vi.mock('../labels/label-sync', () => ({
   publishRecords: async (records: Array<{ codeword: string }>) => {
@@ -30,6 +31,7 @@ vi.mock('../labels/label-sync', () => ({
     return new Set(admitAll ? records.map(r => r.codeword) : []);
   },
   retireRecords: (codewords: string[]) => { retired.push(codewords); },
+  cancelPendingDelete: (codeword: string) => { deleteCancels.push(codeword); },
 }));
 
 const toasts: string[] = [];
@@ -140,6 +142,7 @@ describe('range-disambiguation pick', () => {
     released.length = 0;
     publishedRecords.length = 0;
     retired.length = 0;
+    deleteCancels.length = 0;
     pickWindowPosts.length = 0;
     toasts.length = 0;
     nextClaim = ['alpha', 'bravo', 'charlie', 'delta'];
@@ -413,6 +416,29 @@ describe('range-disambiguation pick', () => {
         ['alpha', 'bravo', 'alpha', 'bravo']);
       expect(resolveRangePick('alpha')).toBe('picked');
       expect(picks[0].toString()).toBe('three');
+    } finally { view.restore(); }
+  });
+
+  it('a recycled codeword un-queues its own pending delete', async () => {
+    // Field bug 2026-07-25: the window releases before it claims so codewords
+    // recycle, but the retire rides the DEBOUNCED batch while the re-publish
+    // goes out immediately — so the delete landed after the put and stripped a
+    // live chip from the hint collections. Painted, armed, and missing from the
+    // HUD's suffix menu: say the prefix, get an empty second-word list.
+    const view = withScrollableRects(['one', 'two']);
+    try {
+      startRangePick(['one', 'two', 'three', 'four'].map(makeRange), () => {});
+      await Promise.resolve();
+      const atArm = deleteCancels.length; // arm-time calls are harmless no-ops
+
+      view.scrollTo(['three', 'four']);
+      reconcileRangePickChips();
+      await Promise.resolve();
+
+      // The reservoir hands the released pair straight back (sticky reclaim),
+      // so both retired codewords are re-minted — and both retires cancelled.
+      expect(retired.flat().sort()).toEqual(['alpha', 'bravo']);
+      expect(deleteCancels.slice(atArm).sort()).toEqual(['alpha', 'bravo']);
     } finally { view.restore(); }
   });
 

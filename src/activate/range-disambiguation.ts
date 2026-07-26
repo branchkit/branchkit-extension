@@ -27,7 +27,7 @@ import { type BandCandidate, bandOverhang, planBandWindow } from '../lifecycle/b
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { labelReservoir } from '../labels/label-reservoir';
 import { poolLabelToAssignment, type LabelAssignment } from '../labels/words';
-import { publishRecords, retireRecords } from '../labels/label-sync';
+import { publishRecords, retireRecords, cancelPendingDelete } from '../labels/label-sync';
 import { HintBadge } from '../render/hints';
 import { rangeTarget } from '../render/badge-target';
 import { RANGE_PICK_VARIANT } from '../render/badge-variant';
@@ -460,6 +460,13 @@ function addChips(ranges: Range[], isStrict: (r: Range) => boolean): number {
   const minted: string[] = [];
   for (let i = 0; i < ranges.length && i < codewords.length; i++) {
     const strict = isStrict(ranges[i]);
+    // This codeword may have been released moments ago by the drop half of the
+    // window (or by a replaced pick's teardown) and handed straight back by the
+    // reservoir's sticky reclaim. That retire is queued for the DEBOUNCED
+    // batch while the publish below goes out immediately — so without this the
+    // delete lands after the put and strips a live chip from the hint
+    // collections, leaving its Discovery HUD suffix menu empty.
+    cancelPendingDelete(codewords[i]);
     chips.set(codewords[i], { ...paintChip(ranges[i], codewords[i]), strict });
     minted.push(codewords[i]);
     records.push(chipRecord(codewords[i], strict));
