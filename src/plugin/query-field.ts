@@ -64,6 +64,17 @@ export function startQueryFieldReporting(listen: Listen): void {
   listen(document, 'focusout',
     (e) => send(isQueryField((e as FocusEvent).relatedTarget)), { passive: true });
 
+  // Re-assert on window focus. The plugin refuses a claim from a browser that
+  // doesn't hold OS focus — a background tab must not shape dictation aimed at
+  // another app — so a claim made while in the background was DROPPED, and an
+  // edge-triggered reporter would never mention it again. Clearing `reported`
+  // makes the next evaluation post, and posts nothing when there is nothing to
+  // assert.
+  listen(window, 'focus', () => {
+    reported = false;
+    send(isQueryField(document.activeElement));
+  }, { passive: true });
+
   // A page can load with an input already focused (autofocus, or a restored
   // session), which fires no focus event.
   send(isQueryField(document.activeElement));

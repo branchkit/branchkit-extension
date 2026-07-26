@@ -98,3 +98,26 @@ describe('startQueryFieldReporting', () => {
     expect(sent).toEqual([]);
   });
 });
+
+describe('re-assert on window focus', () => {
+  it('re-posts after the plugin refused a background claim', () => {
+    const handlers = new Map<string, (e: Event) => void>();
+    const sent: boolean[] = [];
+    const listen = (_t: EventTarget, type: string, h: (e: Event) => void) => { handlers.set(type, h); };
+    (globalThis as unknown as { chrome: unknown }).chrome = {
+      runtime: { sendMessage: (m: { active: boolean }) => { sent.push(m.active); return Promise.resolve(); } },
+    };
+    const field = input('search');
+    document.body.appendChild(field);
+    field.focus();
+
+    startQueryFieldReporting(listen);
+    expect(sent).toEqual([true]); // claimed at boot — the plugin may refuse it
+
+    // Browser comes to the foreground: the claim must be made again, because
+    // the plugin dropped the first one and focus never changed.
+    handlers.get('focus')!(new Event('focus'));
+    expect(sent).toEqual([true, true]);
+    field.remove();
+  });
+});
