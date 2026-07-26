@@ -19,16 +19,14 @@ import { baseUrl, type GlobalMark, type StoredMark } from './marks';
 import { recordTabActivated } from './background/tab-mru';
 import { scheduleTabPublish, resetTabPublishCache } from './background/tab-collection';
 import {
-  getTabMarker, pushTabMarker, reapplyTabMarker as reapplyTabMarkerFor,
-  releaseTabMarker, transferTabMarker, setTabMarkersEnabled,
+  getTabMarker, pushTabMarker, reapplyTabMarker as reapplyTabMarkerFor, releaseTabMarker, transferTabMarker, setTabMarkersEnabled,
 } from './background/tab-markers';
 import { ensureContentScriptInjected } from './background/injection';
 import { bgState, connId } from './background/state';
 import { republishActiveTab, broadcastToAllTabs, resolveActiveContentTab, notifyActiveTab, resolveHintFromTab, setUnroutablePullReporter } from './background/frame-router';
 import {
-  initSSETransport, connectSSE, ensureOffscreen, scheduleSSERetry,
-  onSSEConnected, onSSEDisconnected, pauseVoice, resumeVoice, isVoicePaused,
-  restoreVoicePaused, runConnectionCheck,
+  initSSETransport, connectSSE, ensureOffscreen, scheduleSSERetry, onSSEConnected,
+  onSSEDisconnected, pauseVoice, resumeVoice, isVoicePaused, restoreVoicePaused, runConnectionCheck,
 } from './plugin/sse-transport';
 import {
   forwardDispatchResult, forwardDebugLog, forwardPerfReport, forwardHintsSessionEnd,
@@ -43,12 +41,10 @@ import { TAB_ACTION_BY_ID, ZOOM_ACTION_BY_ID, handleTabAction, handleZoomAction,
 import { SURGERY_ACTIONS, handleSurgeryAction } from './background/tab-surgery';
 import {
   publishPaletteVoice, clearPaletteVoice, handlePaletteAction, handlePaletteBootstrap,
-  handlePaletteVoiceSelect, handlePaletteVoiceDismiss, clearPaletteForClosedTab,
-} from './background/palette';
+  handlePaletteVoiceSelect, handlePaletteVoiceDismiss, clearPaletteForClosedTab } from './background/palette';
 import {
-  MEDIA_ACTIONS, syncMediaActive, setVideoPresence, clearTabMediaOnNav,
-  clearTabMediaOnClose, resolveMediaTargetTab, sendMediaActionToTab,
-  handleMediaAllAction, setBrowserWindowFocused, initMedia,
+  MEDIA_ACTIONS, syncMediaActive, setVideoPresence, clearTabMediaOnNav, clearTabMediaOnClose,
+  resolveMediaTargetTab, sendMediaActionToTab, handleMediaAllAction, setBrowserWindowFocused, initMedia,
 } from './background/media';
 import { purgeTab, logTabSwitch, scheduleSpaRescan, cancelSpaRescan, startDeadTabSweep } from './background/tab-sessions';
 
@@ -63,9 +59,7 @@ import { purgeTab, logTabSwitch, scheduleSpaRescan, cancelSpaRescan, startDeadTa
 
 let hintVisibility: HintVisibility = 'always';
 
-// SW crashes used to die in a console nobody reads; land them in
-// browser.log as BK_UNCAUGHT (routed through the coalescer so a pending
-// boot summary flushes first — order stays truthful).
+// SW crashes land in browser.log as BK_UNCAUGHT — via the coalescer so a pending boot summary flushes first.
 installUncaughtCapture((tag, data, level) => forwardCoalesced(tag, data, level), 'sw');
 
 initSSETransport({
