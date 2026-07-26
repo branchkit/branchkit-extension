@@ -244,8 +244,16 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     voice: [{ pattern: 'reset zoom' }, { pattern: 'actual size' }] },
 
   // --- Find ---
+  // "search" opens the box and stops there. The box IS the input: dictation
+  // pastes into it (shell-macos inserts via Cmd+V), which both shows the user
+  // what was heard and commits, because a paste is how a dictation ends. The
+  // previous shape armed a dictated PARAM instead — the box opened but stayed
+  // empty while the transcript was intercepted before it could reach the page,
+  // and a floating cue card carried the instruction. A labelled box with your
+  // words in it needs no cue and cannot be about the wrong command.
   { id: 'find_open', label: 'Open find', group: 'Find', mappable: true, params: [],
-    description: 'Open the in-page find bar.' },
+    description: 'Open the in-page find bar, then type or dictate the query.',
+    voice: [{ pattern: 'search' }] },
   { id: 'find_close', label: 'Close find', group: 'Find', mappable: true, params: [], keyHint: 'Esc',
     description: 'Close find and clear the match highlights.',
     voice: [{ pattern: 'close find' }] },
@@ -266,10 +274,12 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // open — typing or dictating into it is the supported repeat-query path
   // (the bar's matching is tolerant). See notes/DESIGN_TEXT_TARGETING.md and
   // app notes/DESIGN_DICTATED_COMMAND_ARGUMENT.md.
-  { id: 'find_immediate', label: 'Find immediately', group: 'Find', mappable: false, params: [],
-    description: 'Find on the page by voice — say "search", then hold the dictation key and dictate your query.',
-    voice: [{ pattern: 'search',
-      dictated: { param: 'query', armAction: 'find_open', disarmAction: 'find_close' } }] },
+  // No voice pattern: "search" now opens the box (find_open) and the query
+  // arrives by typing or dictating into it. Kept as an action because the
+  // palette and programmatic callers dispatch it directly with a query.
+  { id: 'find_immediate', label: 'Find immediately', group: 'Find', mappable: false,
+    params: [{ name: 'query', type: 'string' }],
+    description: 'Find a given query on the page without opening the bar.' },
 
   // --- Navigation ---
   { id: 'history_back', label: 'Go back', group: 'Navigation', mappable: true, params: [],

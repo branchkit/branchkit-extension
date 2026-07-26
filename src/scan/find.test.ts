@@ -251,3 +251,45 @@ describe('findMatchRanges (exact, now cross-node)', () => {
     expect(findMatchRanges('Martín', root)).toHaveLength(1);
   });
 });
+
+// Box-as-input (2026-07-26): dictation ends the query the way Enter does for
+// typing. The discriminator is InputEvent.inputType — BranchKit dictation
+// inserts by synthesising Cmd+V (shell-macos PasteManager), so it arrives as
+// insertFromPaste while typing arrives as insertText. No debounce to tune.
+describe('find bar: a paste commits, typing waits for Enter', () => {
+  function barInput(): HTMLInputElement {
+    const el = document.querySelector('input[placeholder="Find in page..."]');
+    if (!(el instanceof HTMLInputElement)) throw new Error('find bar input not found');
+    return el;
+  }
+  function insert(value: string, inputType: string): void {
+    const el = barInput();
+    el.value = value;
+    el.dispatchEvent(new InputEvent('input', { inputType, bubbles: true }));
+  }
+  /** Commit swaps the bar for the pill — the bar input going away IS the tell. */
+  const committed = () => document.querySelector('input[placeholder="Find in page..."]') === null;
+
+  beforeEach(() => { document.body.innerHTML = '<p>alpha beta alpha</p>'; });
+  afterEach(() => closeFindMode());
+
+  it('typing does not commit', () => {
+    openFindMode();
+    insert('alpha', 'insertText');
+    expect(committed()).toBe(false);
+  });
+
+  it('a dictated (pasted) insert commits', () => {
+    openFindMode();
+    insert('alpha', 'insertFromPaste');
+    expect(committed()).toBe(true);
+  });
+
+  it('an empty paste does not commit', () => {
+    // A dictation that produced nothing must leave the box open, not commit an
+    // empty query and drop the user into a pill with no matches.
+    openFindMode();
+    insert('   ', 'insertFromPaste');
+    expect(committed()).toBe(false);
+  });
+});

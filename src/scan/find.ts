@@ -290,7 +290,19 @@ function createFindBar(): void {
     border-radius: 4px; padding: 4px 8px; color: #fff; font-size: 13px; outline: none;
     font-family: inherit;
   `;
-  inputElement.addEventListener('input', () => { if (inputElement) performFind(inputElement.value); });
+  inputElement.addEventListener('input', (e) => {
+    if (!inputElement) return;
+    performFind(inputElement.value);
+    // Dictation ends the query the way Enter does for typing — so a dictated
+    // insert commits, and typed characters wait.
+    //
+    // The discriminator is free rather than heuristic: BranchKit dictation
+    // inserts by synthesising Cmd+V (shell-macos PasteManager), so it arrives
+    // as `insertFromPaste` while typing arrives as `insertText`. No debounce,
+    // no timer, and nothing to tune. A hand-typed Cmd+V commits too, which is
+    // the right behaviour for pasting a search term anyway.
+    if (isPastedInsert(e) && inputElement.value.trim() !== '') commitFind();
+  });
   inputElement.addEventListener('keydown', handleFindBarKey);
   barElement.appendChild(inputElement);
 
@@ -522,6 +534,19 @@ function move(delta: number): void {
 }
 
 // --- Keyboard handling (find bar input) ---
+
+/**
+ * Did this insert arrive as a paste rather than as typing?
+ *
+ * `InputEvent.inputType` is standard and exact here; `insertReplacementText`
+ * covers the dictation/autocorrect replacement path some engines use. Anything
+ * else — `insertText`, deletions, composition — is the user still forming the
+ * query.
+ */
+function isPastedInsert(e: Event): boolean {
+  const t = (e as InputEvent).inputType;
+  return t === 'insertFromPaste' || t === 'insertReplacementText';
+}
 
 function handleFindBarKey(e: KeyboardEvent): void {
   if (e.key === 'Escape') {
