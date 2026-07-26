@@ -244,6 +244,25 @@ export function isSentinelKey(ev: PhraseKeyEventLike): boolean {
   return ev.keyCode === 229 || ev.isComposing === true;
 }
 
+/**
+ * Is this keydown an OS text injection announcing itself? On Firefox a
+ * CGEvent carrying a unicode string arrives as ONE keydown whose `key` IS
+ * the whole string ("Album", keyCode of the first letter, no 229), followed
+ * by one `insertText` input event PER CHARACTER — captured live 2026-07-26.
+ * Those per-char inserts are byte-identical to typing, so no insert-shape
+ * predicate can ever classify them; the multi-character `key` is the one
+ * unforgeable signal (a human key's `.key` is a single character or a named
+ * value like "Enter" — never free text).
+ *
+ * Named-key safety needs no exhaustive list: Enter/Escape are consumed
+ * before this check, the 229/isComposing sentinel before that, and any
+ * OTHER multi-char named key ("ArrowLeft", "Dead", media keys) fires no
+ * insertText — arming on one is inert, and the very next keydown disarms.
+ */
+export function isInjectedTextKeydown(ev: PhraseKeyEventLike): boolean {
+  return ev.key.length > 1;
+}
+
 const defaultTimers: PhraseTimers = {
   set: (fn, ms) => setTimeout(fn, ms),
   clear: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
@@ -267,6 +286,12 @@ export function openPhraseSession(
    *  utterance boundary (and, when enabled, the dictated commit). This is
    *  the single timer both sources' patterns unify into. */
   let gapTimer: unknown = null;
+  /** Characters still expected from an announced injection (Gecko's
+   *  keydown-then-per-char delivery — see isInjectedTextKeydown). While
+   *  positive, insertText events are dictated chunks regardless of length;
+   *  at zero the next keystroke is a keystroke again. Any human keydown
+   *  disarms: the injection's inserts arrive with no keydowns between. */
+  let injectedRemaining = 0;
 
   function clearGapTimer(): void {
     if (gapTimer === null) return;
@@ -302,7 +327,9 @@ export function openPhraseSession(
   return {
     handleInput(ev: PhraseInputEventLike): void {
       if (!open) return;
-      if (isDictatedInsert(ev)) {
+      const injected = injectedRemaining > 0 && ev.inputType === 'insertText';
+      if (injected) injectedRemaining -= ev.data?.length ?? 0;
+      if (injected || isDictatedInsert(ev)) {
         const chunk = ev.data ?? '';
         if (gapTimer !== null) {
           // Another chunk of the open utterance: extend it, push the
@@ -313,6 +340,9 @@ export function openPhraseSession(
           // A NEW utterance. If dictation still owns the box, the sink just
           // appended this to the old query ("gmailgithub") — the re-dictation
           // is a retry, so the new utterance replaces the whole text.
+          // (The announced-injection path replaces at the KEYDOWN instead —
+          // before any character lands — so this branch never sees settled
+          // text there.)
           if (settled !== '') port.replace(chunk);
           settled = '';
           burst = chunk;
@@ -322,7 +352,10 @@ export function openPhraseSession(
       } else {
         // A keyboard edit (typed character, backspace, paste, autocorrect's
         // insertReplacementText): the user is editing, so a pending dictated
-        // commit dies and typing owns the box from here.
+        // commit dies and typing owns the box from here. A non-insert input
+        // also disarms an announced injection — its delivery is insertText
+        // only, so anything else means the user got there first.
+        injectedRemaining = 0;
         clearGapTimer();
         burst = '';
         settled = '';
@@ -336,6 +369,11 @@ export function openPhraseSession(
       // insertions, so treating one as a keystroke would cancel the very
       // commit the insertion schedules.
       if (isSentinelKey(ev)) return 'sentinel';
+      // A human keydown between an announcement and its inserts is
+      // impossible (the injection is one uninterrupted delivery), so any
+      // keydown reaching here disarms a stale expectation — including a
+      // multi-char NAMED key that armed one and inserted nothing.
+      injectedRemaining = 0;
       if (ev.key === 'Enter') {
         // Enter supersedes a pending dictated commit — one phrase, one
         // commit. An open burst settles here the same as at the boundary.
@@ -347,6 +385,25 @@ export function openPhraseSession(
       if (ev.key === 'Escape') {
         cancel('escape');
         return 'cancel';
+      }
+      if (isInjectedTextKeydown(ev)) {
+        // The Gecko delivery: this keydown's `key` IS the dictated text, and
+        // its per-character inserts follow with no further keydowns. Expect
+        // exactly that many characters as dictated chunks. Re-dictation
+        // replaces HERE — before any character lands — because the announced
+        // text names the whole new utterance up front; a continuation chunk
+        // (gap timer still armed) extends instead, same as the insert path.
+        if (gapTimer === null && settled !== '') {
+          port.replace('');
+          settled = '';
+        }
+        injectedRemaining += ev.key.length;
+        // 'pass', not 'sentinel': arming is a side effect, and the verdict
+        // keeps its meaning — this is not the collector's key, and the
+        // consumer must leave the default alone (it is what types the text).
+        // A multi-char NAMED key ("ArrowDown") takes this branch too, on
+        // purpose: it inserts nothing, so the arm is inert, and the consumer
+        // still routes it normally off the same 'pass'.
       }
       return 'pass';
     },
@@ -363,6 +420,7 @@ export function openPhraseSession(
     seed(text: string): void {
       if (!open) return;
       clearGapTimer();
+      injectedRemaining = 0;
       burst = '';
       settled = '';
       port.replace(text);

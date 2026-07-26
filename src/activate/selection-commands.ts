@@ -21,6 +21,7 @@ import {
   PREV_POSITION_REGISTERS, isPrevPositionRegister, marksToHash, type StoredMark,
 } from '../marks';
 import { flashToast } from '../render/toast';
+import { bkLog } from '../debug/bk-log';
 import { findPageLink, type Rel } from './pagination';
 import { urlUp, urlRoot } from './url-nav';
 import { copyText } from './clipboard';
@@ -136,6 +137,9 @@ export function resolveSelectTo(query: string): void {
   const trimmed = query.trim();
   if (!trimmed) return;
   const ranges = findAllRanges(trimmed);
+  // Which branch answered the phrase (none/direct/pick) — the middle of the
+  // BK_PHRASE_COMMIT → BK_RANGE_PICK_WINDOW chain.
+  bkLog('BK_SELECT_TO_RESOLVE', { len: trimmed.length, matches: ranges.length, top: isTopFrame });
   if (ranges.length === 0) {
     cancelRangePick('requery');
     clearFindPaint();

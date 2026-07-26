@@ -1255,9 +1255,25 @@ init();
 declare const __DEV_RELOAD__: boolean;
 if (__DEV_RELOAD__) {
   const DEV_WS_URL = 'ws://localhost:35729';
+  // When THIS build generation started running. Sent on every (re)connect so
+  // the server can heal a client that slept through a reload broadcast —
+  // Firefox event pages miss fire-and-forget signals whenever they're
+  // suspended at broadcast time, and a missed one meant a stale build until
+  // someone noticed by hand (2026-07-26). storage.session, not a top-level
+  // Date.now(): event-page WAKE re-runs this whole script, and a wake-time
+  // stamp would launder a stale build as fresh. Session storage survives
+  // suspends and clears on the extension (re)load — the generation boundary.
+  const devGeneration: Promise<number> = (async () => {
+    const got = await chrome.storage.session.get('devLoadedAt');
+    if (typeof got.devLoadedAt === 'number') return got.devLoadedAt;
+    const now = Date.now();
+    await chrome.storage.session.set({ devLoadedAt: now });
+    return now;
+  })();
   function devConnect() {
     try {
       const ws = new WebSocket(DEV_WS_URL);
+      ws.onopen = () => { void devGeneration.then((t) => ws.send(`hello ${t}`)); };
       ws.onmessage = (e) => {
         if (e.data === 'reload') {
           console.log('[BranchKit Dev] reloading extension...');

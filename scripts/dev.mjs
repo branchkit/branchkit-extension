@@ -43,12 +43,23 @@ const clients = new Set();
 
 wss.on('connection', (ws) => {
   clients.add(ws);
-  // Out-of-band build notification: a bare `npm run build` (build.mjs)
-  // connects, sends this, and disconnects — we broadcast the reload so no
-  // loaded extension keeps running a prior generation against the freshly
-  // swapped dist/. Extensions themselves never send messages.
   ws.on('message', (m) => {
-    if (m.toString() === 'external-build') notifyReload();
+    const msg = m.toString();
+    // Out-of-band build notification: a bare `npm run build` (build.mjs)
+    // connects, sends this, and disconnects — we broadcast the reload so no
+    // loaded extension keeps running a prior generation against the freshly
+    // swapped dist/.
+    if (msg === 'external-build') notifyReload();
+    // Stale-client heal: the broadcast is fire-and-forget, so a background
+    // asleep at broadcast time (Firefox event pages especially) missed it
+    // FOREVER and ran a stale build while dist/ looked current — three field
+    // retries burned on exactly this, 2026-07-26. The client sends the epoch
+    // ms its build loaded; if the dist changed after that, this connection is
+    // stale by construction and gets a direct reload, no broadcast needed.
+    else if (msg.startsWith('hello ')) {
+      const loadedAt = Number(msg.slice(6));
+      if (Number.isFinite(loadedAt) && lastBuildAt > loadedAt) ws.send('reload');
+    }
   });
   ws.on('close', () => clients.delete(ws));
 });
@@ -58,10 +69,12 @@ wss.on('connection', (ws) => {
 // would fire a dozen runtime.reload() calls, and a reload mid-reload is how a
 // browser ends up on a half-swapped dist.
 let notifyTimer = null;
+let lastBuildAt = 0; // epoch ms of the newest build generation (see the hello heal)
 function notifyReload() {
   if (notifyTimer) clearTimeout(notifyTimer);
   notifyTimer = setTimeout(() => {
     notifyTimer = null;
+    lastBuildAt = Date.now();
     for (const ws of clients) ws.send('reload');
   }, 150);
 }

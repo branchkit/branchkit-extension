@@ -422,6 +422,19 @@ window.addEventListener('keydown', (e) => {
   // consuming it as a mark letter jumped tabs). The real text follows as an
   // insertion, which the input handler reads as a search query.
   if (isSentinelKey(e)) return;
+  // Gecko announces an OS text injection as one keydown whose `key` is the
+  // whole dictated string, then inserts per character (collector header,
+  // 2026-07-26). Hand those to the session so it reads the coming per-char
+  // inserts as one dictation. The named keys the palette routes itself are
+  // excluded; other named keys arm harmlessly (they insert nothing and the
+  // next keydown disarms).
+  if (
+    e.key.length > 1 && !e.ctrlKey && !e.metaKey &&
+    !['Enter', 'Escape', 'Tab', 'Backspace', 'ArrowDown', 'ArrowUp'].includes(e.key)
+  ) {
+    phrase.handleKeydown(e);
+    return;
+  }
   // Common navigation (both modes). Ctrl+K closes either palette (the full
   // palette's opener toggles it; a convenience for the tab palette). The tab
   // palette opens with bare `T`, which is a mark letter inside letter mode, so

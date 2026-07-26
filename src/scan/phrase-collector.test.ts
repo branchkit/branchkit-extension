@@ -322,6 +322,68 @@ describe('phrase collector: Gecko delivers the injected chunk as a composition',
   });
 });
 
+describe('phrase collector: Gecko announces the injection on the keydown', () => {
+  // The REAL Firefox delivery, captured live from the phrase box 2026-07-26:
+  // ONE keydown whose `key` is the whole dictated string ("Album", keyCode of
+  // its first letter, NOT the 229 sentinel), then one insertText input event
+  // PER CHARACTER, 25–80 ms apart. The per-char inserts are byte-identical
+  // to typing — the multi-character `key` is the only unforgeable signal.
+  function dictateGecko(h: Harness, text: string): void {
+    // 'pass' by contract: the keydown's default action is what types the
+    // text, so the consumer must not consume it — arming is a side effect.
+    expect(h.session.handleKeydown({ key: text, keyCode: text.charCodeAt(0) })).toBe('pass');
+    for (const ch of text) {
+      h.port.sinkType(ch);
+      h.session.handleInput({ inputType: 'insertText', data: ch });
+    }
+  }
+
+  it('the announced per-char delivery commits once, after the boundary', () => {
+    const h = makeHarness();
+    dictateGecko(h, 'Album');
+    expect(h.commits).toHaveLength(0); // not before the boundary
+    h.settle();
+    expect(h.commits).toEqual([{ query: 'Album', source: 'dictation' }]);
+    expect(h.queries[h.queries.length - 1]).toBe('Album'); // live feedback saw every character
+  });
+
+  it('re-dictation replaces at the keydown — before any character lands', () => {
+    const h = makeHarness();
+    dictateGecko(h, 'album');
+    h.settle();
+    dictateGecko(h, 'beatles');
+    h.settle();
+    expect(h.port.read()).toBe('beatles');
+    expect(h.commits.map((c) => c.query)).toEqual(['album', 'beatles']);
+  });
+
+  it('typing after the injection is consumed cancels the pending commit', () => {
+    const h = makeHarness();
+    dictateGecko(h, 'Album');
+    h.type('x'); // human keystroke inside the gap — still editing
+    h.settle();
+    expect(h.commits).toHaveLength(0);
+  });
+
+  it('a chunked transcript (several announcements) is one utterance', () => {
+    const h = makeHarness();
+    dictateGecko(h, 'twenty characters aa');
+    dictateGecko(h, 'nd the tail');
+    h.settle();
+    expect(h.commits).toEqual([{ query: 'twenty characters aand the tail', source: 'dictation' }]);
+  });
+
+  it('a multi-char NAMED key arms nothing that a keystroke cannot undo', () => {
+    const h = makeHarness();
+    // "ArrowLeft" inserts no text; the next real keystroke must be a
+    // keystroke, not a dictated chunk.
+    h.session.handleKeydown({ key: 'ArrowLeft' });
+    h.type('q');
+    h.settle();
+    expect(h.commits).toHaveLength(0);
+  });
+});
+
 describe('phrase collector: re-dictation replaces rather than appends', () => {
   it('a second utterance replaces the first — the sink appended, the collector undoes it', () => {
     // The sink types at the caret, so "gmail" then "github" leaves

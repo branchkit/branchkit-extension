@@ -21,7 +21,8 @@
 
 import { bestPageMatch, normalizeFuzzy, fold1to1, lower1to1, flexiblePattern } from './fuzzy-find';
 import { modes } from '../core/modes';
-import { openPhraseSession, type PhraseSession } from './phrase-collector';
+import { bkLog } from '../debug/bk-log';
+import { openPhraseSession, isDictatedInsert, type PhraseSession } from './phrase-collector';
 
 /**
  * What the box is collecting a phrase FOR.
@@ -408,8 +409,24 @@ function createFindBar(): void {
       onCancel: () => closeFindMode(),
     },
   );
-  inputElement.addEventListener('input', (e) => phrase?.handleInput(e as InputEvent));
+  // Diagnostic tap (2026-07-26, Firefox dictated-commit hunt): the box's
+  // event shape has now field-failed in a way NO current predicate explains —
+  // capture the raw stream, capped per bar so a typed query can't flood the
+  // log. A phrase session is seconds long; this is the whole cost.
+  let tapBudget = 16;
+  const tap = (kind: string, detail: Record<string, unknown>): void => {
+    if (tapBudget-- > 0) bkLog('BK_PHRASE_EVENT', { kind, ...detail });
+  };
+  inputElement.addEventListener('input', (e) => {
+    const ie = e as InputEvent;
+    tap('input', {
+      inputType: ie.inputType, len: ie.data?.length ?? 0,
+      isComposing: ie.isComposing, dictated: isDictatedInsert(ie),
+    });
+    phrase?.handleInput(ie);
+  });
   inputElement.addEventListener('keydown', (e) => {
+    tap('keydown', { key: e.key, keyCode: e.keyCode, isComposing: e.isComposing });
     const verdict = phrase?.handleKeydown(e) ?? 'pass';
     if (verdict === 'commit' || verdict === 'cancel') {
       e.preventDefault();
@@ -712,6 +729,10 @@ function commitFind(): void {
   }
   const { query } = state;
   const target = phraseTarget;
+  // Breadcrumb for the phrase-commit chain (paired with BK_SELECT_TO_RESOLVE
+  // and BK_RANGE_PICK_WINDOW): its absence after a dictation says the commit
+  // itself never fired, its presence localizes the failure downstream.
+  bkLog('BK_PHRASE_COMMIT', { len: query.length, matches: matchRanges.length, phrase: target !== null });
   if (target !== null) {
     // A phrase-targeting box exists to feed a command that needs something to
     // act on. With no match there is nothing to hand over, so keep the box open
