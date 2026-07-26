@@ -32,6 +32,9 @@ import { clearFindPaint } from '../scan/find';
 import { bkLog } from '../debug/bk-log';
 import { EXCLUSIVE_OVERLAY_PRIORITY, type HolderOutcome } from '../labels/holder-registry';
 import { modes } from '../core/modes';
+import { pageSession } from '../lifecycle/page-session';
+import { store } from '../core/store';
+import { keyHandler } from '../core/singletons';
 import type { Message } from '../types';
 
 /**
@@ -78,51 +81,51 @@ export const MAX_RANGE_BADGES = 9;
 interface PendingPick {
   chips: RangeBadgeSet;
   onPick: (range: Range) => void;
-  /** What the pick took over and owes back on teardown. */
-  entry: PickEntryState;
 }
 
 let pending: PendingPick | null = null;
 
 /**
- * The page state a pick borrows: which badges were up AND which keyboard mode
- * was live. Opaque to this module — content.ts reads and restores it.
+ * The page state a pick borrows and owes back: which badges were up AND
+ * whether hint mode was live. Recorded as the range_pick entry's FLOOR
+ * PAYLOAD — `modes.push('range_pick', entry)` records it, the pop at teardown
+ * hands it back — instead of the hand-kept `PickEntryState`/`pickWindowHooks`
+ * pair this retires (Wave 3 C3b; the stack records a floor for every mode
+ * rather than for the one that grew its own).
  *
- * It used to be a lone `restoreBadges` boolean, which captured the visual half
- * of the entry state and not the keyboard half: the pick always released the
- * keys to 'normal', so answering a pick that started from hint mode handed back
- * a page with the badges REPAINTED and the keyboard no longer listening for
- * them — the next badge letter fired a keybind instead (2026-07-26).
- *
- * INTERIM. The mode stack records a floor for every mode rather than for two of
- * them (notes/DESIGN_MODE_STACK_AND_CODEWORD_HOLDERS.md); its Wave-3 step
- * deletes this and `pickWindowHooks` together.
+ * While chips are up they OWN the codewords, so the regular badges hide for
+ * the window and the screen shows exactly what's speakable (user decision
+ * 2026-07-25), and the keyboard captures codeword keys — a question asked in
+ * codewords has to be answerable in them, by either input. The borrow reaches
+ * content's badge layer through `pageSession.deps` (the sanctioned reach-back
+ * the source modules use) and the keyboard through the singleton; the
+ * snapshot MUST be read before the badges are hidden — hiding them also exits
+ * hint mode. `isHintMode()` is the honest unranked read, so a pick armed from
+ * hint mode while caret was also live restores hint correctly (the old
+ * getMode()-ranked snapshot's known gap).
  */
-export interface PickEntryState {
+interface PickEntry {
   badgesVisible: boolean;
   hintMode: boolean;
 }
 
-/**
- * Pick-window hooks, injected by content.ts (badge visibility and the key
- * handler live in the content monolith — injection avoids the import cycle).
- * While chips are up they OWN the codewords, so the regular badges hide for the
- * window and the screen shows exactly what's speakable (user decision
- * 2026-07-25), and the keyboard captures codeword keys — a question asked in
- * codewords has to be answerable in them, by either input. Purely local:
- * grammar publication is untouched, per-frame like the pick itself.
- */
-interface PickWindowHooks {
-  /** Snapshot what the pick is about to take over, then take it. The snapshot
-   *  MUST be read before the badges are hidden — hiding them also exits hint
-   *  mode, so a read afterwards always reports 'normal'. */
-  enter: () => PickEntryState;
-  /** Give both halves back. */
-  restore: (entry: PickEntryState) => void;
+function borrowScreen(): PickEntry {
+  const entry: PickEntry = {
+    badgesVisible: pageSession.badgesVisible || store.all.some((w) => w.hint?.isVisible),
+    hintMode: keyHandler.isHintMode(),
+  };
+  if (entry.badgesVisible) pageSession.deps.hideBadges();
+  keyHandler.enterHintMode();
+  return entry;
 }
-let pickWindowHooks: PickWindowHooks | null = null;
-export function setPickWindowHooks(h: PickWindowHooks): void {
-  pickWindowHooks = h;
+
+function restoreScreen(entry: PickEntry): void {
+  if (entry.badgesVisible) pageSession.deps.showBadges();
+  // enterHintMode clears the codeword filter, which is right on both edges:
+  // the badges the pick hid are repainted unfiltered, so a prefix typed
+  // before the pick no longer names anything on screen.
+  if (entry.hintMode) keyHandler.enterHintMode();
+  else keyHandler.exitHintMode();
 }
 
 /** True when a pick is live (optionally: for this specific codeword). */
@@ -201,13 +204,15 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
     onMembershipChanged: (codewords) => publishPickWindow(codewords),
     onEmpty: () => {
       // The set gave everything back (ranges died, or nothing was admitted).
-      // Fail loud rather than leaving a live pick with no chips.
+      // Fail loud rather than leaving a live pick with no chips. The floor
+      // rides the stack entry, so this exit path cannot hold its own copy —
+      // the pop hands back whatever push recorded, even when onEmpty fires
+      // from inside create (the entry is pushed before the set can empty).
       pending = null;
-      modes.pop('range_pick');
+      const floor = modes.pop('range_pick');
       clearFindPaint();
       publishPickWindow([]);
-      if (entryOnEmpty) pickWindowHooks?.restore(entryOnEmpty);
-      entryOnEmpty = null;
+      if (floor) restoreScreen(floor.payload as PickEntry);
       flashToast('Lost the highlighted matches — try again');
     },
   });
@@ -224,13 +229,13 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
     return;
   }
 
-  const entry = pickWindowHooks?.enter() ?? { badgesVisible: false, hintMode: false };
-  entryOnEmpty = entry;
-  pending = { chips, onPick, entry };
-  // The stack rides the question's one lifetime (Wave 3 C2). AFTER the entry
-  // snapshot: hiding the badges exits hint mode, so the hooks must read state
-  // first — and the pick lands above whatever the user was in, temporally.
-  modes.push('range_pick');
+  // Borrow the screen (snapshot, hide, capture the keyboard), then push with
+  // the snapshot as the entry's FLOOR — the pop at whichever exit runs hands
+  // it back. Hiding the badges exits hint mode, so the borrow reads first;
+  // the pick lands above whatever the user was in, temporally.
+  const entry = borrowScreen();
+  pending = { chips, onPick };
+  modes.push('range_pick', entry);
 
   if (ranges.length > chips.size) {
     // Name the scope so "9 of 105" doesn't read as an arbitrary truncation:
@@ -240,28 +245,23 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
   }
 }
 
-// `onEmpty` can fire from inside RangeBadgeSet.create, before `pending` exists,
-// so the entry state it needs is held here rather than read off `pending`.
-// Null means "never entered the window" — nothing to give back.
-let entryOnEmpty: PickEntryState | null = null;
-
 // (Settle-driven chip reconciliation is the registered holder's now — the
 // registry's reconcileAll fan-out reaches the set directly, every kind.)
 
 function teardown(reason: string): void {
   if (!pending) return;
-  const { chips, entry } = pending;
+  const { chips } = pending;
   pending = null;
-  entryOnEmpty = null;
-  modes.pop('range_pick');
+  const floor = modes.pop('range_pick');
   chips.dispose(reason);
   // The candidates were painted by the phrase box and handed over for the
   // pick's lifetime — the question is now answered (or abandoned), so the
   // marking goes with it. Every exit routes through here, which is why paint
   // ownership can safely cross the module boundary at all.
   clearFindPaint();
-  // Badges and keyboard together: whatever the pick borrowed, it gives back.
-  pickWindowHooks?.restore(entry);
+  // Badges and keyboard together: whatever the pick borrowed, the recorded
+  // floor gives back.
+  if (floor) restoreScreen(floor.payload as PickEntry);
   // Release the projection narrow AFTER the set gave its codewords back, so the
   // page's own hints are what the HUD falls back to.
   publishPickWindow([]);

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { modes } from '../core/modes';
 import { CaretController } from './caret';
 import { findImmediate, closeFindMode, isFindActive, setFindCallbacks } from '../scan/find';
 
@@ -11,11 +12,31 @@ import { findImmediate, closeFindMode, isFindActive, setFindCallbacks } from '..
 // find match; stub checkVisibility (the preferred path) so the phrase locator
 // resolves. Restored after each test.
 const origCheckVis = (Element.prototype as { checkVisibility?: () => boolean }).checkVisibility;
-beforeEach(() => { (Element.prototype as { checkVisibility?: () => boolean }).checkVisibility = () => true; });
+beforeEach(() => {
+  (Element.prototype as { checkVisibility?: () => boolean }).checkVisibility = () => true;
+  modes.reset();
+});
 afterEach(() => {
   (Element.prototype as { checkVisibility?: () => boolean }).checkVisibility = origCheckVis;
   document.body.innerHTML = '';
 });
+
+/** The escape as production derives it (Wave 3 C3): the stack asks peelInner
+ *  first and pops (exit) when no stage remains. caret.escape() is gone -- the
+ *  cascade owns the composition -- so tests state it explicitly. */
+function escapeStep(c: CaretController): void {
+  if (c.peelInner() === null) c.exit();
+}
+
+/** A controller wired the way production wires it (selection-commands): the
+ *  active edge pushes/pops the caret entry, so stack-order questions
+ *  (sessionOwnsFind) answer the way they do live. findImmediate/openFindMode
+ *  push the find entry themselves (find.ts, Wave 3 C2). */
+function makeStackedController(): CaretController {
+  return new CaretController({
+    onModeChange: (m) => { if (m) modes.push('caret'); else modes.pop('caret'); },
+  });
+}
 
 describe('CaretController — control flow', () => {
   it('is inactive until entered, and swallows nothing while inactive', () => {
@@ -231,7 +252,7 @@ describe('CaretController — extend to phrase (Phase B)', () => {
     c.extendToPhrase('brown fox');
     expect(c.getMode()).toBe('visual');
 
-    c.escape();
+    escapeStep(c);
     expect(c.isActive()).toBe(false);
   });
 
@@ -263,9 +284,9 @@ describe('CaretController — extend to phrase (Phase B)', () => {
     document.body.innerHTML = '<p>the quick brown fox jumps over the lazy dog</p>';
     withModifyStub(() => {
       const c = userSelection();
-      c.escape();
+      escapeStep(c);
       expect(c.isActive()).toBe(true);   // collapsed to the caret, still in
-      c.escape();
+      escapeStep(c);
       expect(c.isActive()).toBe(false);  // and out
     });
   });
@@ -277,11 +298,11 @@ describe('CaretController — extend to phrase (Phase B)', () => {
     withModifyStub(() => {
       const c = new CaretController({ onModeChange: vi.fn() });
       c.extendToPhrase('brown fox');
-      c.escape();                   // one-shot exit, floor was 'normal'
+      escapeStep(c);                   // one-shot exit, floor was 'normal'
       expect(c.isActive()).toBe(false);
 
       const same = userSelection();
-      same.escape();
+      escapeStep(same);
       expect(same.isActive()).toBe(true);  // theirs again — collapses, not exits
     });
   });
@@ -328,9 +349,9 @@ describe('CaretController — find → selection handoff (Phase B)', () => {
     r.setEnd(p, 5);
     sel.removeAllRanges();
     sel.addRange(r);
-    const c = new CaretController({ onModeChange: vi.fn() });
+    const c = makeStackedController();
     c.enterFromNormal(); // visual — no Selection.modify
-    findImmediate('gamma');
+    findImmediate('gamma'); // pushed ABOVE the caret entry: the session's own
     expect(isFindActive()).toBe(true);
     c.exit();
     expect(isFindActive()).toBe(false);
@@ -353,29 +374,29 @@ describe('CaretController — find → selection handoff (Phase B)', () => {
       r.setEnd(p, 5); // a visual selection "alpha"
       sel.removeAllRanges();
       sel.addRange(r);
-      const c = new CaretController({ onModeChange: vi.fn() });
+      const c = makeStackedController();
       c.enterFromNormal(); // visual layer
-      findImmediate('gamma'); // search layer on top
+      findImmediate('gamma'); // search layer on top — its OWN stack entry
       expect(isFindActive()).toBe(true);
+      expect(modes.ids()).toEqual(['caret', 'find']);
 
-      // escape() rather than handleKey('Escape'): the escape cascade owns the
-      // key now and calls straight in here, so this is the real entry point for
-      // BOTH the Escape key and the spoken "escape"/"over". A case in
-      // handleKey would be a second path (activate/escape-cascade.ts).
-
-      // 1st Escape: peel SEARCH — find cleared, but the selection + visual stay.
-      c.escape();
+      // The order is the STACK's now (Wave 3 C3): the first escape peels the
+      // newer find entry — the cascade's find exit effect, stated here as the
+      // effect it maps to — and the selection + visual stay.
+      expect(modes.top()).toBe('find');
+      closeFindMode();
       expect(isFindActive()).toBe(false);
       expect(c.getMode()).toBe('visual');
       expect(sel.isCollapsed).toBe(false);
 
-      // 2nd Escape: peel VISUAL — collapse back to the caret.
-      c.escape();
+      // 2nd Escape: caret is top — its peelInner collapses visual to caret.
+      expect(modes.top()).toBe('caret');
+      escapeStep(c);
       expect(c.getMode()).toBe('caret');
       expect(c.isActive()).toBe(true);
 
       // 3rd Escape: peel CARET — exit to Normal.
-      c.escape();
+      escapeStep(c);
       expect(c.isActive()).toBe(false);
     } finally {
       proto.modify = origModify;
@@ -386,7 +407,9 @@ describe('CaretController — find → selection handoff (Phase B)', () => {
 // The find the caret session was entered FROM is the user's, not the session's.
 // Field report 2026-07-26: `/quick` Enter, `v`, `y` — the yank's exit tore down
 // a find that pre-dated the selection entirely (pill, highlights, n/N, the
-// FIND_ACTIVE mirror), because exit() closed find unconditionally.
+// FIND_ACTIVE mirror), because exit() closed find unconditionally. Which find
+// is the session's own is now DERIVED from stack order (sessionOwnsFind): a
+// find entry above the caret entry was opened mid-session.
 describe('CaretController — a find that pre-dates the session survives it', () => {
   afterEach(() => { closeFindMode(); setFindCallbacks({}); });
   const key = (k: string) => ({ key: k, preventDefault: vi.fn(), stopPropagation: vi.fn() } as unknown as KeyboardEvent);
@@ -402,7 +425,7 @@ describe('CaretController — a find that pre-dates the session survives it', ()
 
   it('yanking out of a promoted find match leaves the find session intact', () => {
     const counts = committedFind();
-    const c = new CaretController({ onModeChange: vi.fn() });
+    const c = makeStackedController();
     expect(c.enterFromFind()).toBe(true); // `v` with no live selection
     c.handleKey(key('y'));                // yank → exit
     expect(c.isActive()).toBe(false);
@@ -413,7 +436,7 @@ describe('CaretController — a find that pre-dates the session survives it', ()
 
   it('exit() from a session entered over a find leaves it alone', () => {
     const counts = committedFind();
-    const c = new CaretController({ onModeChange: vi.fn() });
+    const c = makeStackedController();
     c.enterFromFind();
     c.exit();
     expect(isFindActive()).toBe(true);
@@ -428,15 +451,15 @@ describe('CaretController — a find that pre-dates the session survives it', ()
     proto.modify = () => {};
     try {
       const counts = committedFind();
-      const c = new CaretController({ onModeChange: vi.fn() });
+      const c = makeStackedController();
       c.enterFromFind();
       expect(c.getMode()).toBe('visual');
 
-      c.escape();                        // visual → caret; find untouched
+      escapeStep(c);                        // visual → caret; find untouched
       expect(isFindActive()).toBe(true);
       expect(c.getMode()).toBe('caret');
 
-      c.escape();                        // caret → Normal; find STILL untouched
+      escapeStep(c);                        // caret → Normal; find STILL untouched
       expect(c.isActive()).toBe(false);
       expect(isFindActive()).toBe(true);
       expect(counts.deactivations).toBe(0);
@@ -456,19 +479,19 @@ describe('CaretController — a find that pre-dates the session survives it', ()
     r.setEnd(p, 5);
     sel.removeAllRanges();
     sel.addRange(r);
-    const c = new CaretController({ onModeChange: vi.fn() });
+    const c = makeStackedController();
     c.enterFromNormal();  // no find underneath
-    findImmediate('gamma');
+    findImmediate('gamma'); // pushed above: the session's own
     c.exit();
     expect(isFindActive()).toBe(false);
   });
 
   // The floor is per-session like entryFloor: a session opened after the
   // find-entered one behaves like its own again.
-  it('the find floor resets when the session ends', () => {
+  it('ownership is per-session: the next session closes only its own find', () => {
     committedFind();
-    const c = new CaretController({ onModeChange: vi.fn() });
-    c.enterFromFind();
+    const c = makeStackedController();
+    c.enterFromFind(); // caret pushed ABOVE the pre-existing find
     c.exit();
     expect(isFindActive()).toBe(true);
 

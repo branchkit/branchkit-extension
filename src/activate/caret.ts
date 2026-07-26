@@ -22,9 +22,10 @@
 import { copyText } from './clipboard';
 import { flashToast } from '../render/toast';
 import {
-  openFindMode, closeFindMode, isFindActive, hasActiveMatches, findNavigate,
+  openFindMode, closeFindMode, hasActiveMatches, findNavigate,
   findFirstRange, getCurrentMatchRange, buildBlockIndex,
 } from '../scan/find';
+import { modes } from '../core/modes';
 import {
   planModify, nextGrowthDir, opposite,
   type Direction as Dir, type SelectGranularity, type ModifyPlan,
@@ -240,25 +241,6 @@ export class CaretController {
    * caret mode; only the implicit creation below sets 'normal'.
    */
   private entryFloor: 'normal' | 'caret' = 'caret';
-  /**
-   * Whether a find session was ALREADY running when this caret session started
-   * — the layer underneath, which this session does not own.
-   *
-   * `exit()` used to close find unconditionally, on the grounds that a search
-   * committed *while* selecting shouldn't leave a stray pill. But nothing told
-   * that search apart from one the user was already in: `/quick` Enter, then
-   * `v` (which promotes the current match via enterFromFind), then `y` tore
-   * down the find the user had entered caret mode FROM — pill, highlights, n/N
-   * and the FIND_ACTIVE mirror all gone (field report 2026-07-26). Same reason
-   * `escape()`'s old "search always sits above visual" claim is wrong for that
-   * flow: there, find is the OLDER layer, so the selection peels first.
-   *
-   * This is entryFloor's twin one layer down, and deliberately as small: the
-   * mode stack (notes/DESIGN_MODE_STACK_AND_CODEWORD_HOLDERS.md) replaces both
-   * floors with real stack entries, at which point exit() pops only its own
-   * layer and neither field exists.
-   */
-  private findFloor: 'none' | 'find' = 'none';
   private lineWise = false;
   private pendingG = false;
   private pendingA = false; // `a` prefix for the aw/as/ap text objects (around)
@@ -291,11 +273,21 @@ export class CaretController {
     return this.mode;
   }
 
-  /** Record the find layer a STARTING session sits on (see findFloor). A no-op
-   *  once active: re-entry paths (`select {hint}` mid-session) must not re-date
-   *  a find this session opened for itself. */
-  private noteFindFloor(): void {
-    if (!this.isActive()) this.findFloor = isFindActive() ? 'find' : 'none';
+  /**
+   * Does a find session sit ABOVE this session in the mode stack — i.e. was
+   * it opened DURING the session? The temporal fact `findFloor` used to
+   * hand-record, derived from the stack instead (Wave 3 C3b): a find the
+   * session was entered FROM sits below the caret entry and is the user's
+   * (`/quick` Enter, `v`, `y` must not tear it down — field report
+   * 2026-07-26); one opened mid-session (`/` from caret mode) sits above and
+   * is the session's to close on a full exit, so a yank doesn't leave a
+   * stray pill. Escape never needs this: the stack peels the newer find
+   * entry first on its own.
+   */
+  private sessionOwnsFind(): boolean {
+    const ids = modes.ids();
+    const caretAt = ids.indexOf('caret');
+    return caretAt >= 0 && ids.indexOf('find') > caretAt;
   }
 
   /** Normal-mode `v`: extend a pre-existing selection in visual mode, else drop
@@ -336,7 +328,6 @@ export class CaretController {
     }
     sel.removeAllRanges();
     sel.addRange(range);
-    this.noteFindFloor();
     this.movement = new Movement('move', sel);
     this.growthDir = 'forward';
     this.applyKind('caret');
@@ -347,7 +338,6 @@ export class CaretController {
    *  seeded as the word at the caret; movement runs through the Segmenter field
    *  helpers. Reachable via `select {hint}` on a text field. */
   private enterField(el: FieldEl): void {
-    this.noteFindFloor();
     el.focus();
     const value = el.value ?? '';
     const caret = el.selectionStart ?? 0;
@@ -375,7 +365,6 @@ export class CaretController {
       }
     }
     // Covers enterFromNormal too — its whole body is a call to here.
-    this.noteFindFloor();
     this.movement = new Movement(kind === 'caret' ? 'move' : 'extend', sel);
     this.growthDir = 'forward';
     this.applyKind(kind);
@@ -495,46 +484,19 @@ export class CaretController {
     }
   }
 
-  /** Staged Escape — peel the layers in the reverse order they were ADDED:
-   *  **search → visual → caret → Normal** when the search came last, which is
-   *  the common flow (`v`, move, `/` query Enter). Each Escape undoes exactly
-   *  the last thing:
-   *   1. Search on top (a find committed DURING this session): clear the find
-   *      highlight + pill, but KEEP the visual selection.
-   *   2. Visual: collapse the selection back to the caret at its anchor (the spot
-   *      it started from), staying in caret mode.
-   *   3. Caret: exit to Normal.
-   *  The order is reverse-entry, not a fixed rank: a session entered FROM a find
-   *  (`/query` Enter, then `v`) has find as the OLDER layer, so the selection
-   *  peels first and the find is left to the escape cascade's own find layer.
-   *  findFloor is what tells the two apart. Field selection has no layers —
-   *  Escape exits.
-   *  Public: the spoken "escape"/"over" cascade (content.ts) runs the same
-   *  peel so voice and the key stay behavior-identical. */
-  escape(): void {
-    if (this.peelInner() !== null) return;
-    this.exit();
-  }
-
   /**
-   * One staged step of the escape, WITHOUT exiting — the session's intra-mode
-   * transients, which is exactly what the mode stack's peelInner contract
-   * asks for (the probe installed in selection-commands.ts delegates here, so
-   * the staged unwind has one implementation for escape() and the stack
-   * alike). Returns the name of what it peeled, or null when only the exit
-   * remains: a field session has no stages, a session-owned find (findFloor
-   * 'none') peels before the selection, and collapsing visual back to its
-   * caret is a step BACK only if there was a caret to go back to — a session
-   * a phrase command conjured has no such floor, so it leaves in one Escape
-   * rather than parking the user in a mode they never entered.
+   * The session's intra-mode transient — the mode stack's peelInner (the
+   * probe installed in selection-commands.ts delegates here). One stage:
+   * collapsing visual back to its caret, which is a step BACK only if there
+   * was a caret to go back to — a session a phrase command conjured has no
+   * such floor, so it leaves in one escape rather than parking the user in a
+   * mode they never entered. A field session has no stages. A find opened
+   * mid-session is NOT a stage of this mode: it is its own stack entry above
+   * this one, and the stack peels it first before this probe is ever asked.
    */
-  peelInner(): 'caret_find' | 'visual' | null {
+  peelInner(): 'visual' | null {
     const m = this.movement;
     if (!m || this.fieldEl) return null;
-    if (isFindActive() && this.findFloor === 'none') {
-      closeFindMode();
-      return 'caret_find';
-    }
     if (this.mode === 'visual' && !m.sel.isCollapsed && this.entryFloor === 'caret') {
       this.collapseToCaret();
       return 'visual';
@@ -555,13 +517,12 @@ export class CaretController {
 
   exit(): void {
     if (!this.mode) return;
-    // A full exit (yank, "stop selecting", or the final Escape) clears a find
+    // A full exit (yank, "stop selecting", or the final escape) clears a find
     // committed while selecting so its pill/highlights don't linger — but only
-    // that one. A find that was already running when the session started is the
-    // layer underneath, and tearing it down took the user's search with the
-    // yank (see findFloor). Staged Escape peels a session-owned find first (see
-    // escape); this covers the other exits.
-    if (this.findFloor === 'none') closeFindMode();
+    // that one. Which one that is comes from the STACK's order now
+    // (sessionOwnsFind): a find below the caret entry is the layer underneath,
+    // and tearing it down took the user's search with the yank.
+    if (this.sessionOwnsFind()) closeFindMode();
     if (this.fieldEl) {
       // Collapse to the focus so no highlighted block lingers; leave the field
       // focused so the user can resume typing.
@@ -582,7 +543,6 @@ export class CaretController {
     // creates one on their behalf again, and it stands on nothing until its own
     // entry says otherwise.
     this.entryFloor = 'caret';
-    this.findFloor = 'none';
     this.lineWise = false;
     this.pendingG = false;
     this.pendingA = false;
@@ -898,8 +858,8 @@ export class CaretController {
     const el = this.fieldEl;
     if (!el) return false;
     switch (e.key) {
-      // 'Escape' likewise belongs to the cascade — it reaches escape(), which
-      // routes a field session straight to exit().
+      // 'Escape' likewise belongs to the cascade — the stack pops this mode
+      // (a field session has no peelInner stage) and its exit effect runs.
       case 'y': this.yank(); return suppress(e);
       case 'C': this.yank(false); return suppress(e);
       case 'o': this.flip(); return suppress(e);
@@ -933,7 +893,6 @@ export class CaretController {
     // underneath and not ours to close. (A phrase-targeting commit hands over
     // its matches with the session already ended — then there's no find to
     // preserve, and the floor correctly reads 'none'.)
-    this.noteFindFloor();
     this.fieldEl = null;
     const r = document.createRange();
     r.setStart(match.startContainer, match.startOffset);
@@ -974,7 +933,6 @@ export class CaretController {
     // EXISTING selection ("select to" mid-session) leaves the floor alone —
     // that session is still theirs.
     if (!this.isActive()) this.entryFloor = 'normal';
-    this.noteFindFloor(); // same "only when a session starts" rule
     if (!haveAnchor) {
       const r = document.createRange();
       r.setStart(range.startContainer, range.startOffset);

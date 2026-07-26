@@ -59,7 +59,7 @@ import { copyText } from './activate/clipboard';
 import { flashToast } from './render/toast';
 import { registerSelectionCommands, restorePosition, caret, resolveSelectTo, SELECTION_ACTIONS, parseSelectionCommand } from './activate/selection-commands';
 import { startQueryFieldReporting } from './plugin/query-field';
-import { setPickWindowHooks, cancelRangePick } from './activate/range-disambiguation';
+import { cancelRangePick } from './activate/range-disambiguation';
 import { armSearchBadges, clearSearchBadges } from './activate/search-badges';
 import {
   registerHolder, anyHolderMatchesPrefix, narrowByPrefix, resolveCodeword,
@@ -1140,42 +1140,10 @@ function setBadgesVisible(visible: boolean): boolean {
 
 dispatcher.register('toggle_hints', () => { toggleHints(); });
 
-// Range-pick chip window: badges hide and the keyboard captures codeword keys
-// while chips are up (see activate/range-disambiguation.ts). Both halves of the
-// entry state are snapshotted here and handed back on teardown.
-setPickWindowHooks({
-  enter: () => {
-    // Read BEFORE hiding: hideBadges() runs clearHintFilter(), which exits hint
-    // mode — so a keyboard read taken afterwards always says 'normal', which is
-    // how a pick came to hand back repainted badges with the keyboard no longer
-    // listening for them.
-    //
-    // getMode() is the only public read of the keyboard's mode and it ranks
-    // caret/visual/video/mark ABOVE hint, so a pick armed from hint mode while
-    // caret is also active still restores to normal. A known gap, strictly
-    // better than the unconditional exit it replaces; the mode stack
-    // (notes/DESIGN_MODE_STACK_AND_CODEWORD_HOLDERS.md) removes the ranking
-    // question rather than answering it here.
-    const entry = {
-      badgesVisible: pageSession.badgesVisible || store.all.some((w) => w.hint?.isVisible),
-      hintMode: keyHandler.getMode() === 'hint',
-    };
-    if (entry.badgesVisible) hideBadges();
-    // A pick asks a question in codewords, so the keyboard has to be listening
-    // for them — without this the chips were speak-only, and `gs` opened a phrase
-    // box whose answer the keyboard that opened it could not give.
-    keyHandler.enterHintMode();
-    return entry;
-  },
-  restore: (entry) => {
-    if (entry.badgesVisible) void showBadges();
-    // enterHintMode clears the codeword filter, which is right on both edges:
-    // the badges the pick hid are repainted unfiltered, so a prefix typed
-    // before the pick no longer names anything on screen.
-    if (entry.hintMode) keyHandler.enterHintMode();
-    else keyHandler.exitHintMode();
-  },
-});
+// (The range pick's screen borrow/restore lives in
+// activate/range-disambiguation.ts now, riding the stack entry's floor
+// payload and reaching the badge layer through pageSession.deps — Wave 3
+// C3b retired the pickWindowHooks injection.)
 
 dispatcher.register('activate_hint', (params) => {
   const codeword = params.word2 ? `${params.word} ${params.word2}` : params.word;
@@ -2116,6 +2084,7 @@ pageSession.start({
   restore: () => restoreFromBfcache(),
   onCodewordsChanged: onTrackerCodewordsChanged,
   showBadges,
+  hideBadges,
   discoverInSubtree,
   discoverInSubtreeBatched,
   reevaluateAttribute,

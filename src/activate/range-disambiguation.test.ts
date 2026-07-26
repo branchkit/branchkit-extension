@@ -118,9 +118,10 @@ const pickWindowPosts: string[][] = [];
 import { RANGE_PICK_VARIANT } from '../render/badge-variant';
 import {
   startRangePick, cancelRangePick, isRangePickPending,
-  MAX_RANGE_BADGES, setPickWindowHooks,
-  type PickEntryState,
+  MAX_RANGE_BADGES,
 } from './range-disambiguation';
+import { pageSession } from '../lifecycle/page-session';
+import { keyHandler } from '../core/singletons';
 import {
   __resetHolderRegistry, resolveCodeword, anyHolderMatchesPrefix,
   narrowByPrefix, soleHolderMatch, republishAll, rejectAll, reconcileAll,
@@ -732,55 +733,61 @@ describe('range-disambiguation pick', () => {
   // the keyboard. It used to record only the first, and always released the
   // keys to 'normal' — so answering a pick armed from hint mode handed back a
   // repainted page whose badge letters fired keybinds instead (2026-07-26).
-  describe('entry state', () => {
-    let entered: number;
-    let restored: PickEntryState[];
-    function installHooks(at: PickEntryState): void {
-      entered = 0;
-      restored = [];
-      setPickWindowHooks({
-        enter: () => { entered++; return at; },
-        restore: (e) => { restored.push(e); },
-      });
+  describe('entry state (the stack floor payload — Wave 3 C3b)', () => {
+    // The borrow reaches content's badge layer through pageSession.deps and
+    // the keyboard through the singleton; the floor rides the range_pick
+    // entry, so what push recorded is what whichever exit runs gives back.
+    let shown: number;
+    let hidden: number;
+    function arrangeScreen(at: { badgesVisible: boolean; hintMode: boolean }): void {
+      shown = 0;
+      hidden = 0;
+      pageSession.deps = {
+        showBadges: () => { shown++; },
+        hideBadges: () => { hidden++; },
+      } as unknown as typeof pageSession.deps;
+      pageSession.badgesVisible = at.badgesVisible;
+      if (at.hintMode) keyHandler.enterHintMode();
+      else keyHandler.exitHintMode();
     }
-    // The hooks are a module singleton; hand them back as no-ops so the cases
-    // outside this block keep running against "no pick window installed".
     afterEach(() => {
-      setPickWindowHooks({
-        enter: () => ({ badgesVisible: false, hintMode: false }),
-        restore: () => {},
-      });
+      keyHandler.exitHintMode();
+      pageSession.badgesVisible = false;
     });
 
     it('gives back BOTH halves of what it took — badges and keyboard mode', () => {
-      installHooks({ badgesVisible: true, hintMode: true });
+      arrangeScreen({ badgesVisible: true, hintMode: true });
       startRangePick([makeRange('a'), makeRange('b')], () => {});
-      expect(entered).toBe(1);
-      expect(restored).toEqual([]);
+      expect(hidden).toBe(1);
+      expect(keyHandler.isHintMode()).toBe(true); // capturing codeword keys
+      expect(shown).toBe(0);
 
       resolveCodeword('alpha');
-      expect(restored).toEqual([{ badgesVisible: true, hintMode: true }]);
+      expect(shown).toBe(1);                      // badges back
+      expect(keyHandler.isHintMode()).toBe(true); // hint mode back
     });
 
     it('restores the state it actually found, not a fixed one', () => {
-      installHooks({ badgesVisible: false, hintMode: false });
+      arrangeScreen({ badgesVisible: false, hintMode: false });
       startRangePick([makeRange('a'), makeRange('b')], () => {});
+      expect(hidden).toBe(0); // nothing was up, nothing to hide
       cancelRangePick('escape');
-      expect(restored).toEqual([{ badgesVisible: false, hintMode: false }]);
+      expect(shown).toBe(0);
+      expect(keyHandler.isHintMode()).toBe(false);
     });
 
     it('restores once, on whichever exit runs first', () => {
-      installHooks({ badgesVisible: true, hintMode: false });
+      arrangeScreen({ badgesVisible: true, hintMode: false });
       startRangePick([makeRange('a'), makeRange('b')], () => {});
       cancelRangePick('escape');
       cancelRangePick('escape_again');
-      expect(restored).toHaveLength(1);
+      expect(shown).toBe(1);
     });
 
     it('restores when the set empties itself rather than being answered', async () => {
-      // onEmpty is the exit that does not go through teardown, and the one
-      // that used to hold its own half-copy of the restore rule.
-      installHooks({ badgesVisible: true, hintMode: true });
+      // onEmpty is the exit that does not go through teardown — under the
+      // floor payload it cannot hold its own half-copy of the restore rule.
+      arrangeScreen({ badgesVisible: true, hintMode: true });
       const a = makeRange('a'), b = makeRange('b');
       startRangePick([a, b], () => {});
       await Promise.resolve();
@@ -790,15 +797,16 @@ describe('range-disambiguation pick', () => {
       await Promise.resolve();
 
       expect(isRangePickPending()).toBe(false);
-      expect(restored).toEqual([{ badgesVisible: true, hintMode: true }]);
+      expect(shown).toBe(1);
+      expect(keyHandler.isHintMode()).toBe(true);
     });
 
     it('the registry dispose fan-out ends the whole question (orphan teardown)', async () => {
       // quiesceOrphan calls disposeAllHolders instead of naming this module:
       // the holder's dispose must route through the full cancel — pending
-      // cleared, plugin-side projection narrow released, entry state given
-      // back — not just the set's badge teardown.
-      installHooks({ badgesVisible: true, hintMode: true });
+      // cleared, plugin-side projection narrow released, floor given back —
+      // not just the set's badge teardown.
+      arrangeScreen({ badgesVisible: true, hintMode: true });
       startRangePick([makeRange('a'), makeRange('b')], () => {});
       await Promise.resolve();
       await Promise.resolve();
@@ -808,17 +816,18 @@ describe('range-disambiguation pick', () => {
       expect(isRangePickPending()).toBe(false);
       expect(chipCount()).toBe(0);
       expect(pickWindowPosts[pickWindowPosts.length - 1]).toEqual([]);
-      expect(restored).toEqual([{ badgesVisible: true, hintMode: true }]);
+      expect(shown).toBe(1);
       expect(allHeld()).toEqual([]);
     });
 
     it('never entered the window means nothing to give back', () => {
       // The pool is dry, so the pick acts on the first match instead of arming.
       nextClaim = [];
-      installHooks({ badgesVisible: true, hintMode: true });
+      arrangeScreen({ badgesVisible: true, hintMode: true });
       startRangePick([makeRange('a'), makeRange('b')], () => {});
-      expect(entered).toBe(0);
-      expect(restored).toEqual([]);
+      expect(hidden).toBe(0);
+      expect(shown).toBe(0);
+      expect(modes.has('range_pick')).toBe(false);
     });
   });
 

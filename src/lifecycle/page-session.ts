@@ -86,8 +86,14 @@ export interface PageSessionDeps {
 
   // --- visibility-tracker collaborators ---
 
-  /** Paint badges after a visibility promotion attached new wrappers. */
+  /** Paint badges after a visibility promotion attached new wrappers. Also
+   *  the reach-back the range pick's screen borrow/restore uses
+   *  (activate/range-disambiguation.ts, Wave 3 C3b). */
   showBadges: () => void;
+
+  /** Hide the badge layer (clears the hint filter, exiting hint mode with
+   *  it). The other half of the pick's screen borrow. */
+  hideBadges: () => void;
 
   // --- mutation-source collaborators ---
 
