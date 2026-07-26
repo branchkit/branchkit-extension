@@ -295,13 +295,8 @@ function createFindBar(): void {
     performFind(inputElement.value);
     // Dictation ends the query the way Enter does for typing — so a dictated
     // insert commits, and typed characters wait.
-    //
-    // The discriminator is free rather than heuristic: BranchKit dictation
-    // inserts by synthesising Cmd+V (shell-macos PasteManager), so it arrives
-    // as `insertFromPaste` while typing arrives as `insertText`. No debounce,
-    // no timer, and nothing to tune. A hand-typed Cmd+V commits too, which is
-    // the right behaviour for pasting a search term anyway.
-    if (isPastedInsert(e) && inputElement.value.trim() !== '') commitFind();
+    if (isDictatedInsert(e)) scheduleDictatedCommit();
+    else cancelDictatedCommit();  // a keystroke means they're still editing
   });
   inputElement.addEventListener('keydown', handleFindBarKey);
   barElement.appendChild(inputElement);
@@ -316,6 +311,9 @@ function createFindBar(): void {
 }
 
 function removeFindBar(): void {
+  // Before dropping the input: a pending dictated commit outliving its bar
+  // would fire against a torn-down session.
+  cancelDictatedCommit();
   barElement?.remove();
   barElement = null;
   inputElement = null;
@@ -559,16 +557,57 @@ function move(delta: number): void {
 // --- Keyboard handling (find bar input) ---
 
 /**
- * Did this insert arrive as a paste rather than as typing?
+ * Did this insert arrive from dictation rather than from the keyboard?
  *
- * `InputEvent.inputType` is standard and exact here; `insertReplacementText`
- * covers the dictation/autocorrect replacement path some engines use. Anything
- * else — `insertText`, deletions, composition — is the user still forming the
- * query.
+ * The signature is the LENGTH of a single insert. BranchKit dictation types
+ * through `input.type_text` → enigo `fast_text`, which posts one CGEvent per
+ * 20-character chunk with `CGEventKeyboardSetUnicodeString` — so "album"
+ * arrives as ONE `input` event carrying all five characters. A human keyboard
+ * cannot do that: typing is one character per event, always. `insertReplacement
+ * Text` covers the autocorrect/dictation-replacement path some engines use.
+ *
+ * A deliberate earlier cut tested for `insertFromPaste`, on the belief that
+ * dictation arrives as a synthesised Cmd+V via shell-macos `PasteManager`.
+ * PasteManager is real and does drive dictation-at-the-cursor, but the profile
+ * path the find box sits on calls `input.type_text`, which synthesises
+ * KEYSTROKES. The test that covered it fabricated an `insertFromPaste` event
+ * this path never emits, so it passed against a browser that never behaves this
+ * way — the search silently never committed in the field.
+ *
+ * A real hand-typed paste no longer commits, which is the better behaviour
+ * anyway: a pasted phrase is often something you then edit, and live highlights
+ * already show while you decide. Enter commits it.
  */
-function isPastedInsert(e: Event): boolean {
-  const t = (e as InputEvent).inputType;
-  return t === 'insertFromPaste' || t === 'insertReplacementText';
+function isDictatedInsert(e: Event): boolean {
+  const ev = e as InputEvent;
+  if (ev.inputType === 'insertReplacementText') return true;
+  return ev.inputType === 'insertText' && (ev.data?.length ?? 0) > 1;
+}
+
+/**
+ * Commit shortly after the last dictated chunk, not on the first.
+ *
+ * A phrase over 20 characters crosses the wire as several chunk events
+ * back-to-back; committing on the first would tear down the bar mid-insert and
+ * spray the remainder at the page. Each chunk pushes the deadline out, so the
+ * commit lands once the insert has actually finished. A one-shot per insert,
+ * not a standing timer.
+ */
+let dictatedCommitTimer: number | null = null;
+const DICTATED_COMMIT_MS = 80;
+
+function scheduleDictatedCommit(): void {
+  cancelDictatedCommit();
+  dictatedCommitTimer = window.setTimeout(() => {
+    dictatedCommitTimer = null;
+    if (inputElement && inputElement.value.trim() !== '') commitFind();
+  }, DICTATED_COMMIT_MS);
+}
+
+function cancelDictatedCommit(): void {
+  if (dictatedCommitTimer === null) return;
+  clearTimeout(dictatedCommitTimer);
+  dictatedCommitTimer = null;
 }
 
 function handleFindBarKey(e: KeyboardEvent): void {

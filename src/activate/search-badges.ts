@@ -68,6 +68,11 @@ export function isSearchBadgePending(codeword?: string): boolean {
 export function armSearchBadges(): void {
   clearSearchBadges('recommitted');
   const ranges = getMatchRanges();
+  // Logged at ENTRY, before any early return: the first cut logged only after
+  // the set was built, so "armSearchBadges never ran" and "it ran and found no
+  // ranges" produced the same silence — which is exactly the ambiguity the
+  // breadcrumb existed to remove.
+  debugLog('search_badges.arm_enter', { matches: ranges.length });
   if (ranges.length === 0) return;
 
   badges = RangeBadgeSet.create({
@@ -82,23 +87,25 @@ export function armSearchBadges(): void {
   });
   const pool = labelReservoir.stats();
   bkLog('BK_SEARCH_BADGES_ARM', { matches: ranges.length, badged: badges?.size ?? 0 });
-  // Also on the actuator log, where bkLog breadcrumbs do NOT reach. Arming is
-  // the one step with three independent ways to silently produce nothing —
-  // no match near the viewport, an empty codeword pool, or a publish the
-  // plugin refused — and telling them apart from the outside is otherwise
-  // guesswork.
+  debugLog('search_badges.armed', {
+    matches: ranges.length,
+    badged: badges?.size ?? 0,
+    pool_free: pool.free,
+    pool_outstanding: pool.outstanding,
+    refilling: pool.refillInFlight,
+  });
+}
+
+/**
+ * Breadcrumb on the channel that reaches actuator.log — bkLog does not.
+ *
+ * Arming has three independent ways to produce nothing (no match near the
+ * viewport, an empty codeword pool, a refused publish) and from the outside all
+ * three look identical: highlights appear, badges don't.
+ */
+function debugLog(tag: string, data: Record<string, unknown>): void {
   try {
-    chrome.runtime.sendMessage({
-      type: 'DEBUG_LOG',
-      tag: 'search_badges.arm',
-      data: {
-        matches: ranges.length,
-        badged: badges?.size ?? 0,
-        pool_free: pool.free,
-        pool_outstanding: pool.outstanding,
-        refilling: pool.refillInFlight,
-      },
-    } as Message).catch(() => {});
+    chrome.runtime.sendMessage({ type: 'DEBUG_LOG', tag, data } as Message).catch(() => {});
   } catch { /* context invalidated */ }
 }
 

@@ -117,7 +117,7 @@ describe('buildBlockIndex — caret text-object substrate (word/sentence/paragra
 // happy-dom note: match VISIBILITY (isMatchVisible) is engine-dependent here,
 // so these assert pill lifecycle + state, not match counts.
 
-import { afterEach } from 'vitest';
+import { afterEach, vi } from 'vitest';
 import {
   findImmediate,
   closeFindMode,
@@ -254,44 +254,92 @@ describe('findMatchRanges (exact, now cross-node)', () => {
 });
 
 // Box-as-input (2026-07-26): dictation ends the query the way Enter does for
-// typing. The discriminator is InputEvent.inputType — BranchKit dictation
-// inserts by synthesising Cmd+V (shell-macos PasteManager), so it arrives as
-// insertFromPaste while typing arrives as insertText. No debounce to tune.
-describe('find bar: a paste commits, typing waits for Enter', () => {
+// typing.
+//
+// These drive the input the way the REAL wire does, because the first cut of
+// this suite did not and that is precisely how the bug shipped: it fabricated
+// an `insertFromPaste` event on the belief that dictation arrives as a
+// synthesised Cmd+V, and the search then silently never committed in the field.
+// Dictation reaches the box via `input.type_text` → enigo `fast_text`, which
+// posts ONE CGEvent per 20-character chunk — so the browser fires a single
+// `input` event carrying the whole chunk in `data`. Typing is one character per
+// event and can never do that. Both are modelled literally below.
+describe('find bar: dictation commits, typing waits for Enter', () => {
   function barInput(): HTMLInputElement {
     const el = document.querySelector('input[placeholder="Find in page..."]');
     if (!(el instanceof HTMLInputElement)) throw new Error('find bar input not found');
     return el;
   }
-  function insert(value: string, inputType: string): void {
+  /** One insert event carrying `data`, as the browser emits it. */
+  function insert(data: string, inputType = 'insertText'): void {
     const el = barInput();
-    el.value = value;
-    el.dispatchEvent(new InputEvent('input', { inputType, bubbles: true }));
+    el.value += data;
+    el.dispatchEvent(new InputEvent('input', { inputType, data, bubbles: true }));
   }
+  /** A human at the keyboard: one character per event. */
+  const type = (text: string) => { for (const ch of text) insert(ch); };
+  /** enigo chunks at 20 chars; each chunk is one event. */
+  const dictate = (text: string) => {
+    for (let i = 0; i < text.length; i += 20) insert(text.slice(i, i + 20));
+  };
   /** Commit swaps the bar for the pill — the bar input going away IS the tell. */
   const committed = () => document.querySelector('input[placeholder="Find in page..."]') === null;
 
-  beforeEach(() => { document.body.innerHTML = '<p>alpha beta alpha</p>'; });
-  afterEach(() => closeFindMode());
+  beforeEach(() => {
+    vi.useFakeTimers();
+    document.body.innerHTML = '<p>alpha beta alpha</p>';
+  });
+  afterEach(() => { closeFindMode(); vi.useRealTimers(); });
 
   it('typing does not commit', () => {
     openFindMode();
-    insert('alpha', 'insertText');
+    type('alpha');
+    vi.runAllTimers();
     expect(committed()).toBe(false);
   });
 
-  it('a dictated (pasted) insert commits', () => {
+  it('a dictated insert commits', () => {
     openFindMode();
-    insert('alpha', 'insertFromPaste');
+    dictate('alpha');
+    vi.runAllTimers();
     expect(committed()).toBe(true);
   });
 
-  it('an empty paste does not commit', () => {
+  it('a dictated phrase longer than one chunk commits ONCE, after the last chunk', () => {
+    // The failure this guards: committing on the first chunk tears the bar down
+    // mid-insert, and the rest of the phrase is typed at the page instead.
+    openFindMode();
+    const phrase = 'the quick brown fox jumps over it';  // 33 chars → 2 chunks
+    dictate(phrase);
+    expect(committed()).toBe(false);   // still open between chunks
+    vi.runAllTimers();
+    expect(committed()).toBe(true);
+    expect(getFindState().query).toBe(phrase);
+  });
+
+  it('typing after a dictated insert cancels the commit — the user is still editing', () => {
+    openFindMode();
+    dictate('alpha');
+    type('x');
+    vi.runAllTimers();
+    expect(committed()).toBe(false);
+  });
+
+  it('an empty dictation does not commit', () => {
     // A dictation that produced nothing must leave the box open, not commit an
     // empty query and drop the user into a pill with no matches.
     openFindMode();
-    insert('   ', 'insertFromPaste');
+    insert('   ');
+    vi.runAllTimers();
     expect(committed()).toBe(false);
+  });
+
+  it('closing the bar drops a pending dictated commit', () => {
+    openFindMode();
+    dictate('alpha');
+    closeFindMode();
+    expect(() => vi.runAllTimers()).not.toThrow();
+    expect(isFindActive()).toBe(false);
   });
 });
 
