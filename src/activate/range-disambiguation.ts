@@ -93,6 +93,11 @@ interface PickWindowHooks {
   /** Hide regular badges; returns whether they were visible (for restore). */
   hideBadges: () => boolean;
   showBadges: () => void;
+  /** Put the keyboard in codeword-capturing mode for the pick's lifetime. A
+   *  question asked in codewords has to be answerable in them, by either input;
+   *  without this the chips were speak-only. */
+  captureKeys: () => void;
+  releaseKeys: () => void;
 }
 let pickWindowHooks: PickWindowHooks | null = null;
 export function setPickWindowHooks(h: PickWindowHooks): void {
@@ -176,6 +181,18 @@ export function refusePickWindowCodeword(action: string, codeword: string): bool
  * routes progress HERE instead of the store hints — without this, speaking a
  * chip's first word re-showed the very badges the pick window just hid.
  */
+/** Can any live chip complete `prefix`? Null when no pick is up. */
+export function rangePickPrefixMatch(prefix: string): boolean | null {
+  if (!pending) return null;
+  return pending.chips.matchesPrefix(prefix);
+}
+
+/** The one chip `prefix` still leaves, if exactly one — the typed-completion
+ *  counterpart of speaking a whole codeword. */
+export function rangePickSoleMatch(prefix: string): string | null {
+  return pending ? pending.chips.soleMatch(prefix) : null;
+}
+
 export function filterRangePickChips(prefix: string): boolean {
   if (!pending) return false;
   pending.chips.filterByPrefix(prefix);
@@ -202,8 +219,9 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
       pending = null;
       clearFindPaint();
       publishPickWindow([]);
+      pickWindowHooks?.releaseKeys();
       if (restoreOnEmpty) pickWindowHooks?.showBadges();
-      flashToast('Lost the highlighted matches — say "highlight" again');
+      flashToast('Lost the highlighted matches — try again');
     },
   });
 
@@ -222,6 +240,7 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
   const restoreBadges = pickWindowHooks?.hideBadges() ?? false;
   restoreOnEmpty = restoreBadges;
   pending = { chips, onPick, restoreBadges };
+  pickWindowHooks?.captureKeys();
 
   if (ranges.length > chips.size) {
     // Name the scope so "9 of 105" doesn't read as an arbitrary truncation:
@@ -249,6 +268,7 @@ function teardown(reason: string): void {
   const { chips, restoreBadges } = pending;
   pending = null;
   chips.dispose(reason);
+  pickWindowHooks?.releaseKeys();
   // The candidates were painted by the phrase box and handed over for the
   // pick's lifetime — the question is now answered (or abandoned), so the
   // marking goes with it. Every exit routes through here, which is why paint

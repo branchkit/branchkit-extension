@@ -59,8 +59,12 @@ import { copyText } from './activate/clipboard';
 import { flashToast } from './render/toast';
 import { registerSelectionCommands, restorePosition, caret, resolveSelectTo, SELECTION_ACTIONS, parseSelectionCommand } from './activate/selection-commands';
 import { startQueryFieldReporting } from './plugin/query-field';
-import { resolveRangePick, refusePickWindowCodeword, filterRangePickChips, setPickWindowHooks, cancelRangePick, reconcileRangePickChips, isRangePickPending } from './activate/range-disambiguation';
-import { armSearchBadges, clearSearchBadges, reconcileSearchBadges, resolveSearchBadge, filterSearchBadges } from './activate/search-badges';
+import { resolveRangePick, refusePickWindowCodeword, filterRangePickChips, setPickWindowHooks, cancelRangePick, reconcileRangePickChips, isRangePickPending, rangePickPrefixMatch } from './activate/range-disambiguation';
+import { armSearchBadges, clearSearchBadges, reconcileSearchBadges, resolveSearchBadge, filterSearchBadges, searchBadgePrefixMatch } from './activate/search-badges';
+import {
+  setStoreCodewordHooks, anyHolderMatchesPrefix, narrowByPrefix, resolveCodeword,
+  soleHolderMatch,
+} from './activate/codeword-routing';
 import { runEscapeCascade } from './activate/escape-cascade';
 import './debug/dev-keepalive';
 import {
@@ -1132,6 +1136,11 @@ setPickWindowHooks({
     return showing;
   },
   showBadges: () => { void showBadges(); },
+  // A pick asks a question in codewords, so the keyboard has to be listening
+  // for them — without this the chips were speak-only, and `gs` opened a phrase
+  // box whose answer the keyboard that opened it could not give.
+  captureKeys: () => keyHandler.enterHintMode(),
+  releaseKeys: () => keyHandler.exitHintMode(),
 });
 
 dispatcher.register('activate_hint', (params) => {
@@ -1455,11 +1464,23 @@ keyHandler.setHintEscapeCallback(() => {
 // Reject a codeword keystroke that no painted badge starts with, so a stray
 // key doesn't filter every hint off the screen. Only consults codeword
 // prefixes (not the `/` text filter, which accepts anything).
-keyHandler.setMatchPredicate((prefix) => store.matchingLetterPrefix(prefix).length > 0);
+// The keyboard asks the SAME question the spoken path asks — who owns this
+// codeword — instead of a store-only subset of it. Chips and search badges hold
+// codewords outside the store, and a keyboard that only knew the store rejected
+// their first letter as a stray key. See activate/codeword-routing.ts.
+setStoreCodewordHooks({
+  matchesPrefix: (prefix) => store.matchingLetterPrefix(prefix).length > 0,
+  narrow: (prefix) => narrowStoreHints(prefix),
+  resolve: (codeword) => {
+    const w = store.byCodeword(codeword);
+    if (!w) return false;
+    activateWrapper(w);
+    return true;
+  },
+});
 
-keyHandler.setFilterCallback((prefix: string) => {
-  if (!pageSession.badgesVisible) return;
-
+/** Filter the painted link hints to `prefix` (`''` resets). */
+function narrowStoreHints(prefix: string): void {
   if (prefix === '') {
     for (const w of store.all) {
       w.hint?.setFiltered(false);
@@ -1467,15 +1488,43 @@ keyHandler.setFilterCallback((prefix: string) => {
     }
     return;
   }
-
   const matchSet = new Set(store.matchingLetterPrefix(prefix));
   for (const w of store.all) {
     const isMatch = matchSet.has(w);
     w.hint?.setFiltered(!isMatch);
-    if (isMatch) {
-      w.hint?.setMatchedChars(prefix.length);
-    }
+    if (isMatch) w.hint?.setMatchedChars(prefix.length);
   }
+}
+
+keyHandler.setMatchPredicate((prefix) => anyHolderMatchesPrefix(prefix));
+
+keyHandler.setFilterCallback((prefix: string) => {
+  // A pick or search badge owns its own painting and is up whether or not the
+  // page's badges are — the `badgesVisible` guard is about the store's hints.
+  const sole = soleHolderMatch(prefix);
+  if (sole) {
+    const outcome = resolveCodeword(sole);
+    if (outcome.kind === 'off_screen') {
+      flashToast('That match is off screen — scroll to it first');
+      return;
+    }
+    keyHandler.exitHintMode();
+    return;
+  }
+  if (rangePickPrefixMatch(prefix) !== null || searchBadgePrefixMatch(prefix) !== null) {
+    narrowByPrefix(prefix);
+    return;
+  }
+
+  if (!pageSession.badgesVisible) return;
+
+  if (prefix === '') {
+    narrowStoreHints('');
+    return;
+  }
+
+  const matchSet = new Set(store.matchingLetterPrefix(prefix));
+  narrowStoreHints(prefix);
 
   if (matchSet.size === 1) {
     const first = matchSet.values().next().value!;

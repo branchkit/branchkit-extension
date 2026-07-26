@@ -1,5 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+// Is a voice alphabet loaded — i.e. is there a platform that could admit these
+// codewords for SPEECH? Chips must work either way: with no platform nothing is
+// admitted, but the codewords are still typeable. Default true so the existing
+// cases exercise the admission path; flipped per-test for the standalone case.
+let voiceAlphabetLoaded = true;
+vi.mock('../labels/words', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../labels/words')>()),
+  isVoiceAlphabetLoaded: () => voiceAlphabetLoaded,
+}));
+
 // Mock the collaborators before importing the module under test.
 const claimed: string[][] = [];
 const released: string[][] = [];
@@ -122,6 +132,7 @@ import { RANGE_PICK_VARIANT } from '../render/badge-variant';
 import {
   startRangePick, resolveRangePick, cancelRangePick, isRangePickPending,
   filterRangePickChips, reconcileRangePickChips, MAX_RANGE_BADGES,
+  rangePickPrefixMatch, rangePickSoleMatch,
 } from './range-disambiguation';
 
 function makeRange(text = 'x'): Range {
@@ -690,5 +701,42 @@ describe('range-disambiguation pick', () => {
     await Promise.resolve();
     expect(isRangePickPending()).toBe(false);
     expect(chipCount()).toBe(0);
+  });
+
+  // Speakable and USABLE are different properties, and conflating them broke
+  // the keyboard entry: with no platform there is nothing to admit, so every
+  // chip was dropped and the pick gave up with "Lost the highlighted matches"
+  // on a page where the codewords were perfectly typeable (2026-07-26).
+  it('KEEPS its chips when there is no platform to admit them', async () => {
+    voiceAlphabetLoaded = false;
+    admitAll = false;   // would drop everything if admission were consulted
+    try {
+      startRangePick([makeRange(), makeRange()], () => {});
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(isRangePickPending()).toBe(true);
+      expect(chipCount()).toBe(2);
+    } finally {
+      voiceAlphabetLoaded = true;
+    }
+  });
+
+  // ...and the codewords are reachable by PREFIX, which is what the keyboard
+  // needs to accept the first keystroke at all.
+  it('answers prefix queries so the keyboard can address a chip', () => {
+    nextClaim = ['a b', 'c d'];
+    startRangePick([makeRange(), makeRange()], () => {});
+    expect(chipCount()).toBe(2);
+    expect(rangePickPrefixMatch('a')).toBe(true);
+    expect(rangePickPrefixMatch('z')).toBe(false);
+    // Narrowed to exactly one: what lets typing fire where speaking a whole
+    // codeword would.
+    expect(rangePickSoleMatch('a')).toBe('a b');
+    expect(rangePickSoleMatch('')).toBe(null);
+
+    cancelRangePick('test');
+    // No pick up: null, not false — "nobody is asking" differs from "no match",
+    // and the keyboard needs to tell them apart to fall through to the hints.
+    expect(rangePickPrefixMatch('a')).toBe(null);
   });
 });

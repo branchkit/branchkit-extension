@@ -162,6 +162,17 @@ export function resolveSearchBadge(codeword: string): SearchBadgeOutcome {
   return 'jumped';
 }
 
+/** Can any live search badge complete `prefix`? Null when none are armed. */
+export function searchBadgePrefixMatch(prefix: string): boolean | null {
+  if (!badges) return null;
+  return badges.matchesPrefix(prefix);
+}
+
+/** The one search badge `prefix` still leaves, if exactly one. */
+export function searchBadgeSoleMatch(prefix: string): string | null {
+  return badges ? badges.soleMatch(prefix) : null;
+}
+
 /** Mid-codeword progress: dim the badges that can't complete the prefix. */
 export function filterSearchBadges(prefix: string): boolean {
   if (!badges) return false;

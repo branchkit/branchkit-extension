@@ -37,7 +37,7 @@ import { isAncestorChainInVisibleViewport } from '../lifecycle/strict-viewport';
 import { type BandCandidate, bandOverhang, planBandWindow } from '../lifecycle/band-window';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { labelReservoir } from '../labels/label-reservoir';
-import { poolLabelToAssignment, type LabelAssignment } from '../labels/words';
+import { poolLabelToAssignment, isVoiceAlphabetLoaded, type LabelAssignment } from '../labels/words';
 import { publishRecords, retireRecords, cancelPendingDelete } from '../labels/label-sync';
 import { registerCodewordHolder } from '../labels/codeword-holders';
 import { getDisplayMode } from '../config';
@@ -158,6 +158,33 @@ export class RangeBadgeSet {
    * non-candidates, the rest show their spoken prefix. The variant decides how
    * each reads. `''` resets.
    */
+  /**
+   * Does any member's codeword start with `prefix`?
+   *
+   * The keyboard asks before accepting a keystroke: a letter no painted badge
+   * can complete is a stray key, not the start of a codeword. The wrapper store
+   * answers this for link hints; holders outside it must answer for themselves
+   * or they stay invisible to the keyboard.
+   */
+  matchesPrefix(prefix: string): boolean {
+    if (prefix === '') return this.members.size > 0;
+    for (const { label } of this.members.values()) {
+      if (label.letter.startsWith(prefix)) return true;
+    }
+    return false;
+  }
+
+  /** The one codeword `prefix` can still complete, if exactly one remains. */
+  soleMatch(prefix: string): string | null {
+    let found: string | null = null;
+    for (const [codeword, { label }] of this.members) {
+      if (!label.letter.startsWith(prefix)) continue;
+      if (found) return null;
+      found = codeword;
+    }
+    return found;
+  }
+
   filterByPrefix(prefix: string): void {
     for (const { badge, label } of this.members.values()) {
       const matches = prefix !== '' && label.letter.startsWith(prefix);
@@ -304,6 +331,17 @@ export class RangeBadgeSet {
       this.members.set(codewords[i], { ...this.paint(ranges[i], codewords[i]), strict });
       minted.push(codewords[i]);
       records.push(this.record(codewords[i], strict));
+    }
+
+    // Speakable and USABLE are not the same property. With no voice alphabet
+    // loaded there is no platform to admit anything, so publishRecords returns
+    // an empty set — but the codewords are still perfectly typeable, and
+    // dropping the badges here left a keyboard user staring at "Lost the
+    // highlighted matches" on a page where the pick was fine (2026-07-26).
+    // Admission only decides whether a codeword can be SPOKEN.
+    if (!isVoiceAlphabetLoaded()) {
+      this.opts.onMembershipChanged?.(this.codewords);
+      return minted.length;
     }
 
     void publishRecords(records).then((admitted) => {
