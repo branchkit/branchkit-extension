@@ -1450,11 +1450,9 @@ onSiteKeysChanged(applySiteKeys);
 // Physical Escape peels a pending range pick. Without this the only exit is
 // the voice "escape" cascade — no help when a pick is stuck because voice is
 // degraded, which is exactly when one is most likely to be stuck.
-keyHandler.setEscapeHook(() => {
-  if (!isRangePickPending()) return false;
-  cancelRangePick('key_escape');
-  return true;
-});
+// The Escape key runs the SAME cascade the spoken "escape"/"over" runs, so the
+// two inputs unwind through one declared order rather than two that drift.
+keyHandler.setEscapeHook(() => runEscapeCascade('key_escape'));
 
 keyHandler.setHintEscapeCallback(() => {
   pendingHintAction = 'activate'; // an abandoned verb (yf/hover/… then Esc) must not leak to the next hint
@@ -2874,7 +2872,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       }
     } else if (action === 'escape') {
       // Voice "escape"/"over" — the Esc cascade (activate/escape-cascade.ts).
-      const peeled = runEscapeCascade();
+      const peeled = runEscapeCascade('voice_escape');
       reportDispatchResult({
         action, codeword: '', resolution: 'none', elem_tag: '',
         taken: peeled ? 'click' : 'skipped', ok: peeled !== '',

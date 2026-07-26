@@ -38,6 +38,12 @@ beforeEach(() => {
   dispatchSpy = vi.fn();
   (dispatcher as any).dispatch = dispatchSpy;
   handler = new KeyHandler(registry, dispatcher);
+  // Escape is no longer handled inside KeyHandler: it delegates to the shared
+  // escape cascade so the key and the spoken "escape"/"over" unwind through one
+  // declared order (activate/escape-cascade.ts). Production installs the real
+  // cascade; here we install the slice of it that touches this unit — the hint
+  // layers — which is what these cases exercise.
+  handler.setEscapeHook(() => handler.escapeHintLayer() ?? '');
 });
 
 // The keyboard is Normal by default (notes/DESIGN_KEYBOARD_MODES.md). Hints

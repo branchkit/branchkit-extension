@@ -404,10 +404,10 @@ export class CaretController {
       // Not a text object — fall through.
     }
 
+    // No 'Escape' case: the escape cascade peels the selection layer before the
+    // keyboard reaches modal capture, so both inputs unwind through one order
+    // (activate/escape-cascade.ts). A case here would be a second path.
     switch (e.key) {
-      case 'Escape':
-        this.escape();
-        return suppress(e);
       case 'g':
         this.pendingG = true;
         return suppress(e);
@@ -845,7 +845,8 @@ export class CaretController {
     const el = this.fieldEl;
     if (!el) return false;
     switch (e.key) {
-      case 'Escape': this.exit(); return suppress(e);
+      // 'Escape' likewise belongs to the cascade — it reaches escape(), which
+      // routes a field session straight to exit().
       case 'y': this.yank(); return suppress(e);
       case 'C': this.yank(false); return suppress(e);
       case 'o': this.flip(); return suppress(e);

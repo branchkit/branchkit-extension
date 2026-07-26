@@ -358,19 +358,24 @@ describe('CaretController — find → selection handoff (Phase B)', () => {
       findImmediate('gamma'); // search layer on top
       expect(isFindActive()).toBe(true);
 
+      // escape() rather than handleKey('Escape'): the escape cascade owns the
+      // key now and calls straight in here, so this is the real entry point for
+      // BOTH the Escape key and the spoken "escape"/"over". A case in
+      // handleKey would be a second path (activate/escape-cascade.ts).
+
       // 1st Escape: peel SEARCH — find cleared, but the selection + visual stay.
-      c.handleKey(key('Escape'));
+      c.escape();
       expect(isFindActive()).toBe(false);
       expect(c.getMode()).toBe('visual');
       expect(sel.isCollapsed).toBe(false);
 
       // 2nd Escape: peel VISUAL — collapse back to the caret.
-      c.handleKey(key('Escape'));
+      c.escape();
       expect(c.getMode()).toBe('caret');
       expect(c.isActive()).toBe(true);
 
       // 3rd Escape: peel CARET — exit to Normal.
-      c.handleKey(key('Escape'));
+      c.escape();
       expect(c.isActive()).toBe(false);
     } finally {
       proto.modify = origModify;

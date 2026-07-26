@@ -61,7 +61,7 @@ export class KeyHandler {
   // dismisses them, always-visible keeps them. Set by content.ts.
   private onHintEscape: (() => void) | null = null;
   // Escape peel for a modeless layer (range-pick chips); see setEscapeHook.
-  private onEscape: (() => boolean) | null = null;
+  private onEscape: (() => string) | null = null;
   // Whether at least one codeword starts with a given prefix. Used to reject a
   // codeword keystroke that matches nothing — otherwise the filter hides every
   // badge until Escape. Set by content.ts; null means accept any char.
@@ -114,9 +114,9 @@ export class KeyHandler {
     this.onHintEscape = cb;
   }
 
-  /** Peel a modeless layer on Escape. Return true if one was peeled (the key
-   *  is then consumed); false to let Escape route normally. */
-  setEscapeHook(cb: () => boolean): void {
+  /** Install the shared escape cascade. Returns the layer peeled, or '' when
+   *  nothing was open (the key then routes normally). */
+  setEscapeHook(cb: () => string): void {
     this.onEscape = cb;
   }
 
@@ -276,13 +276,16 @@ export class KeyHandler {
       return false;
     }
 
-    // Escape hook: a modeless layer that owns the screen without owning a
-    // KeyMode — today the range-pick chips. Runs before every route because
-    // such a layer can be up in ANY mode, and it is the only keyboard exit
-    // from one; the voice "escape" cascade is otherwise the sole way out, which
-    // strands the user exactly when voice is the thing misbehaving. Consumes
-    // the key only when it actually peeled a layer, so plain Escape is
-    // unaffected the rest of the time.
+    // The escape cascade — the SAME one the spoken "escape"/"over" runs, so the
+    // two inputs can't drift (activate/escape-cascade.ts owns the layer order).
+    // Runs before every route because a layer can be up in ANY mode. Consumes
+    // the key only when it actually peeled something, so plain Escape still
+    // reaches the page the rest of the time.
+    //
+    // Deliberately ahead of the modal-capture routes: caret is a LAYER, and
+    // letting the cascade own it is what keeps the order in one place. The
+    // keyboard-only transients below (mark arm, forced insert) are not layers —
+    // voice cannot be in them — so they stay here.
     if (e.key === 'Escape' && this.onEscape?.()) {
       e.preventDefault();
       e.stopPropagation();
@@ -401,34 +404,35 @@ export class KeyHandler {
     return this.handleNormalKey(e);
   }
 
-  private handleHintKey(e: KeyboardEvent): boolean {
-    if (e.key === 'Escape') {
-      // Two-stage Escape. If hint letters have been typed, Escape cancels just
-      // the typed prefix — back to no-prefix — so a mistyped hint can be
-      // abandoned and a different one started, without hiding the (always-
-      // visible) hints or exiting hint mode. Keeps the current filter sub-mode
-      // (codeword vs text). This is the first stage, regardless of mode.
-      if (this.filterText.length > 0) {
-        e.preventDefault();
-        e.stopPropagation();
-        this.filterText = '';
-        this.newTabArmed = false;
-        this.onFilterChange?.('');
-        return true;
-      }
-      // No typed prefix → leave hint mode. Whether the badges also HIDE is a
-      // visibility decision, made in content via onHintEscape: manual
-      // visibility dismisses the summoned hints; always-visible keeps them
-      // painted (they exist for voice regardless of keyboard mode). handleHintKey
-      // only runs in hint mode now, so this always exits it — no `hide_hints`
-      // dispatch here.
-      e.preventDefault();
-      e.stopPropagation();
-      this.exitHintMode();
-      this.onHintEscape?.();
-      return true;
+  /**
+   * Peel a hint layer, if one is open. Called BY the escape cascade
+   * (activate/escape-cascade.ts), which owns the order — this owns only what
+   * the hint layers are and how they unwind.
+   *
+   * Two stages. With hint letters typed, the first Escape cancels just the
+   * typed prefix — back to no-prefix — so a mistyped hint can be abandoned and
+   * a different one started without hiding the (always-visible) hints or
+   * leaving hint mode. Keeps the current filter sub-mode (codeword vs text).
+   *
+   * With no typed prefix, it leaves hint mode. Whether the badges also HIDE is
+   * a visibility decision made in content via onHintEscape: manual visibility
+   * dismisses the summoned hints, always-visible keeps them painted (they exist
+   * for voice regardless of keyboard mode).
+   */
+  escapeHintLayer(): 'hint_prefix' | 'hint_mode' | null {
+    if (this.mode !== 'hint') return null;
+    if (this.filterText.length > 0) {
+      this.filterText = '';
+      this.newTabArmed = false;
+      this.onFilterChange?.('');
+      return 'hint_prefix';
     }
+    this.exitHintMode();
+    this.onHintEscape?.();
+    return 'hint_mode';
+  }
 
+  private handleHintKey(e: KeyboardEvent): boolean {
     if (e.key === 'Backspace') {
       e.preventDefault();
       e.stopPropagation();
