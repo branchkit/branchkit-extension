@@ -34,6 +34,7 @@ const findPageLink = vi.fn();
 const flashToast = vi.fn();
 const copyText = vi.fn(async () => true);
 const findAllRanges = vi.fn((): Range[] => []);
+const openFindMode = vi.fn();
 const startRangePick = vi.fn();
 const cancelRangePick = vi.fn();
 
@@ -47,7 +48,7 @@ async function loadModule(): Promise<SelectionCommands> {
   vi.doMock('../pagination', () => ({ findPageLink }));
   vi.doMock('../url-nav', () => ({ urlUp: vi.fn(() => null), urlRoot: vi.fn(() => null) }));
   vi.doMock('../clipboard', () => ({ copyText }));
-  vi.doMock('../scan/find', () => ({ findAllRanges }));
+  vi.doMock('../scan/find', () => ({ findAllRanges, openFindMode }));
   vi.doMock('./range-disambiguation', () => ({ startRangePick, cancelRangePick }));
   return await import('./selection-commands');
 }
@@ -127,7 +128,7 @@ describe('registration contract (Phase 1)', () => {
     expect(caretInstance.enterFromNormal).toHaveBeenCalledTimes(1);
   });
 
-  it('select_to: single top-frame match acts immediately; empty query drops', async () => {
+  it('select_to: single top-frame match acts immediately', async () => {
     const m = await loadModule();
     m.registerSelectionCommands();
     const r = {} as Range;
@@ -136,9 +137,34 @@ describe('registration contract (Phase 1)', () => {
     expect(findAllRanges).toHaveBeenCalledWith('hello world');
     expect(caretInstance.extendToRange).toHaveBeenCalledWith(r);
     expect(startRangePick).not.toHaveBeenCalled();
-    caretInstance.extendToRange.mockClear();
+    expect(openFindMode).not.toHaveBeenCalled();
+  });
+
+  // The phrase box replaced the dictated-argument cue card: dispatched without
+  // a query, the command COLLECTS one rather than dropping. This is the voice
+  // ("highlight") and keybind (gs) entry — both arrive with no phrase in hand.
+  it('select_to: no query opens the phrase box instead of dropping', async () => {
+    const m = await loadModule();
+    m.registerSelectionCommands();
     dispatcher.dispatch('select_to', {});
+    expect(openFindMode).toHaveBeenCalledWith('highlight');
+    expect(findAllRanges).not.toHaveBeenCalled();
     expect(caretInstance.extendToRange).not.toHaveBeenCalled();
+  });
+
+  it('select_to: mode=extend opens the box in extend mode', async () => {
+    const m = await loadModule();
+    m.registerSelectionCommands();
+    dispatcher.dispatch('select_to', { mode: 'extend' });
+    expect(openFindMode).toHaveBeenCalledWith('extend');
+  });
+
+  it('select_to: a blank query is still no query — it opens the box', async () => {
+    const m = await loadModule();
+    m.registerSelectionCommands();
+    dispatcher.dispatch('select_to', { query: '   ' });
+    expect(openFindMode).toHaveBeenCalledWith('highlight');
+    expect(findAllRanges).not.toHaveBeenCalled();
   });
 
   it('select_to: multiple matches start a range pick instead of selecting', async () => {

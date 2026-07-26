@@ -57,9 +57,11 @@ const VOICE_ONLY_CONTENT = [
   'escape',
 ] as const;
 
+// select_to is deliberately ABSENT: its phrase used to be a runtime dictated
+// argument, but it now opens the phrase box when dispatched without one, so a
+// key can bind it like any other command (gs).
 const NOT_MAPPABLE = new Set([
   'activate_hint', 'find_immediate', 'scroll_to_element', 'scroll',
-  'select_to', // dictated-argument phrase, like find_immediate — not bindable
   ...VOICE_ONLY_BACKGROUND,
   ...VOICE_ONLY_CONTENT,
 ]);
@@ -200,6 +202,7 @@ describe('default keymap', () => {
       { keys: 'Slash', command: 'find_open' },
       { keys: 'KeyN', command: 'find_next' },
       { keys: 'shift+KeyN', command: 'find_previous' },
+      { keys: 'KeyG KeyS', command: 'select_to' },
       { keys: 'KeyZ KeyI', command: 'zoom_in' },
       { keys: 'KeyZ KeyO', command: 'zoom_out' },
       { keys: 'KeyZ Digit0', command: 'zoom_reset' },

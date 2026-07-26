@@ -14,7 +14,7 @@
 
 import { dispatcher, keyHandler } from '../core/singletons';
 import { CaretController, type SelectionCommand } from './caret';
-import { findAllRanges } from '../scan/find';
+import { findAllRanges, openFindMode } from '../scan/find';
 import { startRangePick, cancelRangePick } from './range-disambiguation';
 import {
   PREV_POSITION_REGISTERS, isPrevPositionRegister, marksToHash, type StoredMark,
@@ -123,6 +123,40 @@ function navigatePage(rel: Rel): void {
   else flashToast(rel === 'next' ? 'No next page' : 'No previous page');
 }
 
+/**
+ * Act on a collected phrase: select it, or extend the selection to it.
+ *
+ * Shared by every way a phrase can arrive — the find box committing (voice or
+ * keyboard), the palette, or another frame being handed the answer — so the
+ * multi-match and cross-frame rules are decided in exactly one place.
+ *
+ * Multi-match and cross-frame rules (notes/DESIGN_TEXT_TARGETING.md,
+ * "Range-match disambiguation"):
+ *   - top frame, exactly one match → act immediately (the common case);
+ *   - top frame with several matches, or ANY subframe with matches → codeword
+ *     pick badges (startRangePick), so at most one frame can auto-select and
+ *     every ambiguous case is an explicit choice. The old behavior — every
+ *     frame independently selecting its own first match — is how a selection
+ *     landed in a frame the user wasn't looking at (field test 2026-07-24:
+ *     "copy that" → "caret mode not active").
+ */
+export function resolveSelectTo(query: string): void {
+  const trimmed = query.trim();
+  if (!trimmed) return;
+  const ranges = findAllRanges(trimmed);
+  if (ranges.length === 0) {
+    cancelRangePick('requery');
+    if (isTopFrame) flashToast('Phrase not found');
+    return;
+  }
+  if (ranges.length === 1 && isTopFrame) {
+    cancelRangePick('resolved_direct');
+    caret.extendToRange(ranges[0]);
+    return;
+  }
+  startRangePick(ranges, (range) => caret.extendToRange(range));
+}
+
 /** Register the selection/caret/marks/page-nav handlers on the shared
  * dispatcher + key handler. Called once from the content bootstrap. */
 export function registerSelectionCommands(): void {
@@ -194,32 +228,23 @@ export function registerSelectionCommands(): void {
     caret.enterFromNormal();
   });
   dispatcher.register('visual_line_mode', () => caret.enter('visual-line'));
-  // "highlight <phrase>" / "select to <phrase>" — locate the dictated phrase
-  // and select/extend to it. Rides the platform dictated-argument path
-  // (params.query). Multi-match and cross-frame rules (round 1, design in
-  // notes/DESIGN_TEXT_TARGETING.md "Range-match disambiguation"):
-  //   - top frame, exactly one match → act immediately (the common case);
-  //   - top frame with several matches, or ANY subframe with matches →
-  //     codeword pick badges (startRangePick), so at most one frame can
-  //     auto-select and every ambiguous case is an explicit choice. The old
-  //     behavior — every frame independently selecting its own first match —
-  //     is how a selection landed in a frame the user wasn't looking at
-  //     (field test 2026-07-24: "copy that" → "caret mode not active").
+  // "highlight" / "select to" — collect a phrase, then select or extend to it.
+  // Resolution lives in resolveSelectTo; this only decides whether the phrase is
+  // already in hand.
   dispatcher.register('select_to', (params) => {
     const query = (params.query || '').trim();
-    if (!query) return;
-    const ranges = findAllRanges(query);
-    if (ranges.length === 0) {
-      cancelRangePick('requery');
-      if (isTopFrame) flashToast('Phrase not found');
+    // No query means the phrase hasn't been collected yet: open the box in the
+    // matching mode and let it do the collecting. This is the voice and keybind
+    // entry (say "highlight", press gs) — the query arrives on commit, via
+    // onPhrase. Callers that already HAVE a phrase (the palette, other frames
+    // being told the answer) pass it and resolve straight away.
+    if (!query) {
+      // Top frame only. The box is one page-level affordance, and every subframe
+      // opening its own would put several boxes on screen competing for focus.
+      if (isTopFrame) openFindMode(params.mode === 'extend' ? 'extend' : 'highlight');
       return;
     }
-    if (ranges.length === 1 && isTopFrame) {
-      cancelRangePick('resolved_direct');
-      caret.extendToRange(ranges[0]);
-      return;
-    }
-    startRangePick(ranges, (range) => caret.extendToRange(range));
+    resolveSelectTo(query);
   });
 
   dispatcher.register('go_next', () => navigatePage('next'));

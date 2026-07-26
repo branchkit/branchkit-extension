@@ -126,6 +126,7 @@ import {
   isFindActive,
   isFindBarOpen,
   getFindState,
+  setFindCallbacks,
 } from './find';
 
 const pill = () =>
@@ -340,6 +341,92 @@ describe('find bar: dictation commits, typing waits for Enter', () => {
     closeFindMode();
     expect(() => vi.runAllTimers()).not.toThrow();
     expect(isFindActive()).toBe(false);
+  });
+});
+
+// The box collects a phrase for whatever the caller means to do with it. In
+// `find` that phrase becomes a result set you move around in; in the
+// phrase-targeting modes it is handed to a command and the session ends.
+describe('find bar: phrase-targeting modes', () => {
+  const phrases: Array<[string, string]> = [];
+  function barInput(): HTMLInputElement {
+    const el = document.querySelector('input[placeholder$="..."]');
+    if (!(el instanceof HTMLInputElement)) throw new Error('box input not found');
+    return el;
+  }
+  const dictate = (text: string) => {
+    const el = barInput();
+    for (let i = 0; i < text.length; i += 20) {
+      const chunk = text.slice(i, i + 20);
+      el.value += chunk;
+      el.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: chunk, bubbles: true }));
+    }
+  };
+
+  // jsdom gives every Range zero client rects, so find's visibility filter drops
+  // every match and the box would look match-less no matter the query. These
+  // cases turn on whether a match was FOUND, so the filter has to see a real box.
+  let restoreRects: () => void;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    phrases.length = 0;
+    document.body.innerHTML = '<p>alpha beta alpha</p>';
+    const original = Range.prototype.getClientRects;
+    Range.prototype.getClientRects = () => [{}] as unknown as DOMRectList;
+    restoreRects = () => { Range.prototype.getClientRects = original; };
+    setFindCallbacks({ onPhrase: (mode, query) => phrases.push([mode, query]) });
+  });
+  afterEach(() => { closeFindMode(); setFindCallbacks({}); restoreRects(); vi.useRealTimers(); });
+
+  it('labels the box for what the phrase is for', () => {
+    openFindMode('highlight');
+    expect(barInput().placeholder).toBe('Highlight phrase...');
+    closeFindMode();
+    openFindMode('extend');
+    expect(barInput().placeholder).toBe('Extend selection to...');
+  });
+
+  it('hands the phrase over and ends the session — no pill, no highlights left', () => {
+    openFindMode('highlight');
+    dictate('alpha');
+    vi.runAllTimers();
+    expect(phrases).toEqual([['highlight', 'alpha']]);
+    // The consumer owns the page from here; find's own paint must not sit under it.
+    expect(isFindActive()).toBe(false);
+    expect(document.querySelector('[data-branchkit-find]')).toBeNull();
+  });
+
+  it('a search commit does NOT fire onPhrase, and vice versa', () => {
+    let commits = 0;
+    setFindCallbacks({ onCommit: () => { commits++; }, onPhrase: (m, q) => phrases.push([m, q]) });
+    openFindMode('find');
+    dictate('alpha');
+    vi.runAllTimers();
+    expect(commits).toBe(1);
+    expect(phrases).toEqual([]);
+  });
+
+  it('with no match the box STAYS OPEN with its text selected, so the retry replaces it', () => {
+    // Dictation types at the cursor: without selecting, a second attempt would
+    // append to the failed one rather than replace it.
+    openFindMode('highlight');
+    dictate('nonexistent');
+    vi.runAllTimers();
+    expect(phrases).toEqual([]);
+    expect(isFindActive()).toBe(true);
+    const el = barInput();
+    expect(el.selectionStart).toBe(0);
+    expect(el.selectionEnd).toBe('nonexistent'.length);
+  });
+
+  it('reopening in a different mode replaces the session rather than inheriting it', () => {
+    openFindMode('find');
+    dictate('alpha');
+    vi.runAllTimers();               // committed find: pill up, query retained
+    openFindMode('highlight');
+    expect(getFindState().mode).toBe('highlight');
+    expect(getFindState().query).toBe('');
+    expect(barInput().value).toBe('');
   });
 });
 

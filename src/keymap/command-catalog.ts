@@ -550,32 +550,33 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
       { pattern: 'select sentence', params: { granularity: 'sentence' } },
       { pattern: 'select paragraph', params: { granularity: 'paragraph' } },
     ] },
-  // Phrase selection via the platform's dictated-argument path (the same
-  // arm-then-dictate flow as "search"; app notes/DESIGN_DICTATED_COMMAND_
-  // ARGUMENT.md): the phrase can't be a Sherpa `{text}` capture (the closed
-  // grammar only hears union words), so the verb arms and the next dictation
-  // hold carries it. One action, two spoken forms split by the `mode` param:
-  //  - "highlight" (default app-active gate) — no live selection, so the
-  //    dictated phrase itself is selected and caret mode opens there: the
-  //    voice ENTRY into selection. (Bare "select" is blocked by the
-  //    prefix-free vocabulary — it would shadow "select all"/"select {hint}".)
+  // Phrase selection. The phrase can't be a Sherpa `{text}` capture (the closed
+  // grammar only hears union words), so it is collected by the phrase box —
+  // the same box find uses, opened in a mode that says what the phrase is for.
+  // Dispatched WITHOUT a query it opens the box; `query` stays a param for
+  // callers that already hold a phrase (the palette, frames handed the answer).
+  //
+  // One action, two spoken forms split by the `mode` param:
+  //  - "highlight" (default app-active gate) — no live selection, so the phrase
+  //    itself is selected and caret mode opens there: the voice ENTRY into
+  //    selection. (Bare "select" is blocked by the prefix-free vocabulary — it
+  //    would shadow "select all"/"select {hint}".)
   //  - "select to" (caret context — the exclusive caret tag, so it stays
   //    matchable mid-selection) — extends the live selection to the phrase.
-  // The arm's cue card text rides the descriptor per form; {key} becomes the
-  // live dictation-hold combo. One-shot by design — no find-box-style
-  // repeat-query path here (see the design note's disambiguation section).
-  { id: 'select_to', label: 'Extend to phrase', group: 'Selection', mappable: false,
-    description: 'Extend the selection to a phrase spoken aloud (find + extend in one step; runtime dictated text — not bindable).',
-    params: [{ name: 'query', type: 'string' }],
+  //
+  // This replaced the platform dictated-argument arm (app notes/DESIGN_DICTATED_
+  // COMMAND_ARGUMENT.md), whose cue card lived on a timer and accepted exactly
+  // one hold. The box is visible until answered, editable, retryable, and takes
+  // typing and dictation through one path — which is also why the command is
+  // now bindable: nothing about it is dictation-only any more.
+  { id: 'select_to', label: 'Highlight phrase', group: 'Selection', mappable: true,
+    description: 'Open a box for a phrase, then select it on the page. Type it or dictate it; when the phrase appears more than once, codeword badges pick which one.',
+    params: [{ name: 'query', type: 'string' }, { name: 'mode', type: 'string' }],
     voice: [
       { pattern: 'highlight', params: { mode: 'highlight' },
-        description: 'Select a phrase by voice — hold the dictation key and dictate it; the phrase is selected and selection mode opens there.',
-        dictated: { param: 'query', cueTitle: 'Highlight',
-          cueBody: 'Hold {key} and say the phrase — it becomes the selection.' } },
+        description: 'Open the highlight box, then say or type a phrase — it becomes the selection.' },
       { pattern: 'select to', params: { mode: 'extend' }, context: 'caret',
-        description: 'Extend the selection to a phrase — then hold the dictation key and dictate the phrase.',
-        dictated: { param: 'query', cueTitle: 'Select to',
-          cueBody: 'Hold {key} and say the phrase — the selection extends to it.' } },
+        description: 'Open the extend box, then say or type a phrase — the selection extends to it.' },
     ] },
 
   // --- Media (notes/DESIGN_VIDEO_MEDIA_COMMANDS.md) ---
@@ -814,6 +815,11 @@ export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   { keys: 'Slash', command: 'find_open' },       // /
   { keys: 'KeyN', command: 'find_next' },         // n
   { keys: 'shift+KeyN', command: 'find_previous' }, // N
+  // gs — the same phrase box `/` opens, in select-the-phrase mode. Sits in the
+  // g-prefix family with the other "go somewhere specific" binds (gg, gi, gu).
+  // No `mode` param: absent means highlight, and `extend` is only meaningful
+  // with a live selection, which is caret mode's own keys rather than a bind.
+  { keys: 'KeyG KeyS', command: 'select_to' }, // gs
   // Zoom (Vimium zi/zo/z0)
   { keys: 'KeyZ KeyI', command: 'zoom_in' },      // zi
   { keys: 'KeyZ KeyO', command: 'zoom_out' },     // zo

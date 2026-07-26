@@ -21,18 +21,41 @@
 
 import { bestPageMatch, normalizeFuzzy, fold1to1, lower1to1, flexiblePattern } from './fuzzy-find';
 
+/**
+ * What the box is collecting a phrase FOR.
+ *
+ * The box started as find-in-page and is now the one place a phrase gets
+ * dictated or typed, whatever the caller means to do with it. `find` keeps the
+ * results and moves around in them; the phrase-targeting modes hand the phrase
+ * to a command and end the session. Live highlighting is shared by all three —
+ * seeing what you'd act on is as useful when selecting as when searching.
+ *
+ * This replaces the dictated-argument cue card: rather than a transient overlay
+ * saying "hold the key and say the phrase" against a timer, the box IS the
+ * input, visible until answered, editable, and identical for keyboard and voice.
+ */
+export type FindMode = 'find' | 'highlight' | 'extend';
+
 export type FindState = {
   active: boolean;
+  mode: FindMode;
   query: string;
   matchIndex: number;
   matchCount: number;
+};
+
+/** Leading glyph + placeholder, per mode. */
+const MODE_UI: Record<FindMode, { glyph: string; placeholder: string }> = {
+  find: { glyph: '/', placeholder: 'Find in page...' },
+  highlight: { glyph: '✦', placeholder: 'Highlight phrase...' },
+  extend: { glyph: '⇥', placeholder: 'Extend selection to...' },
 };
 
 const HL_ALL = 'branchkit-find';
 const HL_CURRENT = 'branchkit-find-current';
 const STYLE_ATTR = 'data-branchkit-find-style';
 
-let state: FindState = { active: false, query: '', matchIndex: 0, matchCount: 0 };
+let state: FindState = { active: false, mode: 'find', query: '', matchIndex: 0, matchCount: 0 };
 let barElement: HTMLElement | null = null;
 let inputElement: HTMLInputElement | null = null;
 let matchRanges: Range[] = [];
@@ -43,15 +66,22 @@ let onDeactivate: (() => void) | null = null;
 // Fired when a search commits WITH matches (Enter or voice find). Caret mode
 // uses it to auto-extend the selection to the match. See caret.ts.
 let onCommit: (() => void) | null = null;
+// Fired when a PHRASE-TARGETING box commits — the box was an input for some
+// other command, and this hands it the phrase. Deliberately separate from
+// onCommit: that one means "a search now has a result set you move around in",
+// which is what search badges hang off, and a highlight is not that.
+let onPhrase: ((mode: FindMode, query: string) => void) | null = null;
 
 export function setFindCallbacks(opts: {
   onActivate?: () => void;
   onDeactivate?: () => void;
   onCommit?: () => void;
+  onPhrase?: (mode: FindMode, query: string) => void;
 }): void {
   onActivate = opts.onActivate ?? null;
   onDeactivate = opts.onDeactivate ?? null;
   onCommit = opts.onCommit ?? null;
+  onPhrase = opts.onPhrase ?? null;
 }
 
 export function getFindState(): FindState {
@@ -277,14 +307,15 @@ function createFindBar(): void {
     font-size: 13px; color: #fff;
   `;
 
+  const ui = MODE_UI[state.mode];
   const label = document.createElement('span');
-  label.textContent = '/';
+  label.textContent = ui.glyph;
   label.style.cssText = 'color: #007AFF; font-weight: 600; font-size: 14px;';
   barElement.appendChild(label);
 
   inputElement = document.createElement('input');
   inputElement.type = 'text';
-  inputElement.placeholder = 'Find in page...';
+  inputElement.placeholder = ui.placeholder;
   inputElement.style.cssText = `
     flex: 1; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15);
     border-radius: 4px; padding: 4px 8px; color: #fff; font-size: 13px; outline: none;
@@ -629,11 +660,30 @@ function handleFindBarKey(e: KeyboardEvent): void {
  * closes find, like Vimium. */
 function commitFind(): void {
   if (!state.active || !barElement) return;
-  removeFindBar();
   if (state.query === '') {
+    removeFindBar();
     closeFindMode();
     return;
   }
+  const { mode, query } = state;
+  if (mode !== 'find') {
+    // A phrase-targeting box exists to feed a command that needs something to
+    // act on. With no match there is nothing to hand over, so keep the box open
+    // and select its text — the next dictation then REPLACES the query instead
+    // of appending to it, since dictation types at the cursor.
+    if (matchRanges.length === 0) {
+      inputElement?.select();
+      return;
+    }
+    // End the session before handing off: the consumer owns the page from here
+    // (a selection, or codeword chips over the candidates), and leaving find's
+    // yellow paint underneath it would read as two overlapping answers.
+    removeFindBar();
+    closeFindMode();
+    onPhrase?.(mode, query);
+    return;
+  }
+  removeFindBar();
   showCommittedPill();
   scrollToCurrent();
   if (matchRanges.length > 0) onCommit?.();
@@ -641,7 +691,11 @@ function commitFind(): void {
 
 // --- Public API ---
 
-export function openFindMode(): void {
+export function openFindMode(mode: FindMode = 'find'): void {
+  // A different intent replaces the session rather than inheriting it: reopening
+  // as `highlight` over a live find would otherwise keep the old query, the old
+  // pill and the old mode's meaning of Enter.
+  if (state.active && state.mode !== mode) closeFindMode();
   if (state.active) {
     if (barElement) {
       inputElement?.focus();
@@ -659,6 +713,7 @@ export function openFindMode(): void {
     return;
   }
   state.active = true;
+  state.mode = mode;
   state.query = '';
   state.matchIndex = 0;
   state.matchCount = 0;
