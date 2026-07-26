@@ -12,6 +12,13 @@
  *   pop_active_tab             → windows.create({tabId}) at given bounds
  *                                (the "new window" case; the plugin then
  *                                sends that window to the target desktop)
+ *   resize_window              → windows.update({width}) — the reverse
+ *                                identity probe's actuator. Browser window
+ *                                APIs work regardless of which macOS space
+ *                                the window is on, unlike AX writes, so the
+ *                                plugin nudges here and observes the change
+ *                                in the CG world model to pin ext↔CG
+ *                                identity for off-screen windows.
  *
  * Every action carries a request_id and gets exactly one POST /surgery/result
  * reply — the first plugin→extension request/response on this transport.
@@ -42,6 +49,7 @@ export const SURGERY_ACTIONS: ReadonlySet<string> = new Set([
   'query_windows',
   'move_active_tab_to_window',
   'pop_active_tab',
+  'resize_window',
 ]);
 
 function reportWindow(w: chrome.windows.Window, sourceWindowId?: number): SurgeryWindowReport {
@@ -89,6 +97,11 @@ async function moveActiveTabToWindow(requestId: string, windowId: number, activa
   await postSurgeryResult({ request_id: requestId, ok: true });
 }
 
+async function resizeWindow(requestId: string, windowId: number, width: number): Promise<void> {
+  await chrome.windows.update(windowId, { width });
+  await postSurgeryResult({ request_id: requestId, ok: true });
+}
+
 async function popActiveTab(
   requestId: string,
   bounds: { left?: number; top?: number; width?: number; height?: number },
@@ -127,6 +140,11 @@ export function handleSurgeryAction(action: string, params: Record<string, strin
         await popActiveTab(requestId, {
           left: num('left'), top: num('top'), width: num('width'), height: num('height'),
         });
+      } else if (action === 'resize_window') {
+        const windowId = num('window_id');
+        const width = num('width');
+        if (windowId === undefined || width === undefined) throw new Error('missing window_id/width');
+        await resizeWindow(requestId, windowId, width);
       }
     } catch (e) {
       console.warn('[BranchKit BG] surgery action failed:', action, e);
