@@ -42,17 +42,12 @@ export interface BadgeVariant {
    * has already been asked.
    */
   readonly nonCandidate: 'hide' | 'dim';
-  /**
-   * The already-spoken prefix on a badge that CAN complete.
-   *
-   * 'fade' (hints): dim what's been said so the remaining letters carry the
-   * eye — redundant with hiding the non-candidates, but free.
-   * 'accent' (chips): the non-candidates are still on screen, so the match
-   * needs a positive marker, not a subtractive one.
-   */
-  readonly matchedPrefix: 'fade' | 'accent';
-  /** Accent colour for `matchedPrefix: 'accent'`. */
-  readonly accent?: string;
+  // The already-spoken prefix is FADED on every badge kind — dim what's been
+  // said so the remaining letters carry the eye. There is deliberately no
+  // per-kind choice here: mid-codeword progress means the same thing wherever
+  // you see it, and a badge that marked it differently would read as a
+  // different KIND of progress. Chips and search badges used a gold accent
+  // instead until 2026-07-26; consistency with the link hints won.
   /**
    * Track the anchor container's size, so a layout shift that is neither a
    * scroll nor a window resize still repositions this badge.
@@ -91,7 +86,6 @@ export interface BadgeVariant {
 export const HINT_VARIANT: BadgeVariant = {
   fill: 'page',
   nonCandidate: 'hide',
-  matchedPrefix: 'fade',
   trackContainer: true,
   defendAgainstPage: true,
   suppressOverVideo: true,
@@ -103,10 +97,6 @@ export const RANGE_PICK_VARIANT: BadgeVariant = {
   // confused with. Colour is not doing work here.
   fill: 'page',
   nonCandidate: 'dim',
-  matchedPrefix: 'accent',
-  // Gold on the matched letter — an explicit user preference, and the inverse
-  // of the retired gold-at-rest scheme.
-  accent: '#ffd60a',
   trackContainer: true,
   defendAgainstPage: false,
   suppressOverVideo: false,
@@ -130,8 +120,6 @@ export const SEARCH_VARIANT: BadgeVariant = {
   // Non-candidates dim rather than vanish: the spread of matches down the page
   // is information — it's how you see there are more below.
   nonCandidate: 'dim',
-  matchedPrefix: 'accent',
-  accent: '#ffd60a',
   trackContainer: true,
   defendAgainstPage: true,
   suppressOverVideo: true,

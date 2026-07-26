@@ -9,7 +9,7 @@ import {
   setBadgeSizingFromSettings,
 } from './hints';
 import { elementTarget } from './badge-target';
-import { RANGE_PICK_VARIANT } from './badge-variant';
+import { RANGE_PICK_VARIANT, SEARCH_VARIANT } from './badge-variant';
 import { DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
 import { __testing as containerTracker } from '../observe/container-resize-tracker';
 import { __testing as targetTracker } from '../observe/target-mutation-tracker';
@@ -538,17 +538,16 @@ describe('BadgeVariant', () => {
     hostTracker.reset();
   });
 
-  it('hint variant hides non-candidates and fades the spoken prefix', () => {
+  it('hint variant hides non-candidates', () => {
     const root = mount('<div id="c"><button id="btn">click</button></div>');
     const badge = new HintBadge(elementTarget(root.querySelector('#btn')!), label, 'letter');
     badge.setFiltered(true);
     expect(inner(badge).classList.contains('filtered')).toBe(true);
     expect(inner(badge).classList.contains('bk-dimmed')).toBe(false);
-    expect(inner(badge).classList.contains('bk-accent')).toBe(false);
     badge.remove();
   });
 
-  it('range-pick variant dims non-candidates in place and accents the prefix', () => {
+  it('range-pick variant dims non-candidates in place', () => {
     const root = mount('<div id="c"><button id="btn">click</button></div>');
     const badge = new HintBadge(
       elementTarget(root.querySelector('#btn')!), label, 'letter', RANGE_PICK_VARIANT,
@@ -557,14 +556,29 @@ describe('BadgeVariant', () => {
     badge.setFiltered(true);
     expect(inner(badge).classList.contains('bk-dimmed')).toBe(true);
     expect(inner(badge).classList.contains('filtered')).toBe(false);
-    // Positive marker on the matched prefix, gold from the variant.
-    expect(inner(badge).classList.contains('bk-accent')).toBe(true);
-    expect(inner(badge).style.getPropertyValue('--bk-accent')).toBe('#ffd60a');
     badge.setMatchedChars(1);
     const matched = inner(badge).querySelector('.bk-matched')!;
     expect(matched.textContent).toBe('a');
     expect(inner(badge).textContent).toBe('as'); // remainder still rendered
     badge.remove();
+  });
+
+  // The spoken prefix is marked the SAME way on every badge kind — faded, never
+  // a coloured accent. Chips and search badges wore gold until 2026-07-26;
+  // mid-codeword progress means one thing, so it should look like one thing.
+  it('every variant marks the spoken prefix identically', () => {
+    const root = mount('<div id="c"><button id="btn">click</button></div>');
+    for (const variant of [undefined, RANGE_PICK_VARIANT, SEARCH_VARIANT]) {
+      const badge = new HintBadge(
+        elementTarget(root.querySelector('#btn')!), label, 'letter', variant,
+      );
+      badge.setMatchedChars(1);
+      const el = inner(badge);
+      expect(el.classList.contains('bk-accent')).toBe(false);
+      expect(el.style.getPropertyValue('--bk-accent')).toBe('');
+      expect(el.querySelector('.bk-matched')!.textContent).toBe('a');
+      badge.remove();
+    }
   });
 
   it('range-pick variant: no page defences, but it stacks AND tracks its container', () => {

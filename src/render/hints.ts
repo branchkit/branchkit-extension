@@ -272,17 +272,12 @@ const BADGE_CSS = `
   .bk-inner.bk-occluded {
     display: none;
   }
-  /* The already-spoken prefix. 'fade' subtracts (hints, where the
-   * non-candidates are gone and only the remainder matters); 'accent' adds
-   * (chips, where the non-candidates are still on screen dimmed, so the live
-   * one needs a positive marker). --bk-accent is set per badge from the
-   * variant. */
+  /* The already-spoken prefix, faded on every badge kind so the remaining
+   * letters carry the eye. Subtractive rather than a coloured marker: what's
+   * been said is DONE, and the same treatment everywhere means mid-codeword
+   * progress reads identically on a hint, a chip and a search match. */
   .bk-matched {
     opacity: 0.35;
-  }
-  .bk-inner.bk-accent .bk-matched {
-    opacity: 1;
-    color: var(--bk-accent, #ffd60a);
   }
   @keyframes bk-flash {
     /* No !important here — the CSS spec specifies that !important inside
@@ -507,11 +502,6 @@ export class HintBadge implements BadgeHandle {
     this.inner = document.createElement('div');
     this.inner.className = 'bk-inner';
     this.inner.style.fontSize = `${this.fontSize}px`;
-
-    if (variant.matchedPrefix === 'accent') {
-      this.inner.classList.add('bk-accent');
-      if (variant.accent) this.inner.style.setProperty('--bk-accent', variant.accent);
-    }
 
     const text = labelToDisplay(label, displayMode);
     this.inner.textContent = text;

@@ -458,10 +458,10 @@ describe('find bar: phrase-targeting modes', () => {
     dictate('alpha');
     vi.runAllTimers();
     expect(phrases).toHaveLength(1);
-    expect(highlights().has('branchkit-find')).toBe(true);
+    expect(highlights().has('branchkit-phrase')).toBe(true);
 
     clearFindPaint();
-    expect(highlights().has('branchkit-find')).toBe(false);
+    expect(highlights().has('branchkit-phrase')).toBe(false);
   });
 
   it('a search commit keeps its own paint too, and still marks the current match', () => {
@@ -474,13 +474,27 @@ describe('find bar: phrase-targeting modes', () => {
     expect(highlights().has('branchkit-find-current')).toBe(true);
   });
 
-  it('phrase-targeting modes do NOT emphasise a current match', () => {
-    // ...and not here: every candidate is equally pickable until you choose,
-    // and a brighter one reads as already chosen once the chips are up.
+  it('phrase targeting paints under its OWN name, with no current match', () => {
+    // Separate registry name, separate colour: yellow means "search match", and
+    // these are about to become a selection. No current match either — every
+    // candidate is equally pickable until you choose, and a brighter one reads
+    // as already chosen once the chips are up.
     openFindMode('highlight');
     dictate('alph');   // matches, but don't commit — paint is live while typing
-    expect(highlights().has('branchkit-find')).toBe(true);
+    expect(highlights().has('branchkit-phrase')).toBe(true);
+    expect(highlights().has('branchkit-find')).toBe(false);
     expect(highlights().has('branchkit-find-current')).toBe(false);
+  });
+
+  it('switching find -> highlight does not leave the find paint behind', () => {
+    openFindMode('find');
+    dictate('alpha');
+    vi.runAllTimers();
+    expect(highlights().has('branchkit-find')).toBe(true);
+    openFindMode('highlight');
+    dictate('alph');
+    expect(highlights().has('branchkit-find')).toBe(false);
+    expect(highlights().has('branchkit-phrase')).toBe(true);
   });
 
   it('reopening in a different mode replaces the session rather than inheriting it', () => {

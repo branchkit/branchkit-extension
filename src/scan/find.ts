@@ -53,6 +53,9 @@ const MODE_UI: Record<FindMode, { glyph: string; placeholder: string }> = {
 
 const HL_ALL = 'branchkit-find';
 const HL_CURRENT = 'branchkit-find-current';
+// Phrase-targeting modes paint under their own name so the two meanings can be
+// coloured separately from one static stylesheet — no restyling on mode change.
+const HL_PHRASE = 'branchkit-phrase';
 const STYLE_ATTR = 'data-branchkit-find-style';
 
 let state: FindState = { active: false, mode: 'find', query: '', matchIndex: 0, matchCount: 0 };
@@ -124,12 +127,23 @@ function ensureHighlightStyle(): void {
   if (document.querySelector(`[${STYLE_ATTR}]`)) return;
   const style = document.createElement('style');
   style.setAttribute(STYLE_ATTR, '');
-  // Current match is a solid highlighter-yellow block (opaque, black text); the
-  // other matches are a much fainter wash of the same yellow, so the current one
-  // clearly stands out by vividness.
+  // FIND: current match is a solid highlighter-yellow block (opaque, black
+  // text); the others are a much fainter wash of the same yellow, so the
+  // current one stands out by vividness.
+  //
+  // PHRASE TARGETING: not yellow. Yellow means "search match" — it's the
+  // find convention, and these aren't search results, they're about to become
+  // a SELECTION. A restrained wash of the extension's own accent says that
+  // without borrowing search's meaning.
+  //
+  // Deliberately not native ::selection: its colour varies by browser, OS and
+  // theme, so it can't be relied on to read as anything in particular — and
+  // the real selection colour arrives on its own the moment the phrase
+  // resolves, which is the handoff this preview is building toward.
   style.textContent =
     `::highlight(${HL_ALL}) { background-color: rgba(255, 235, 59, 0.22); color: inherit; }\n` +
-    `::highlight(${HL_CURRENT}) { background-color: ${FIND_HIGHLIGHT}; color: #000; }`;
+    `::highlight(${HL_CURRENT}) { background-color: ${FIND_HIGHLIGHT}; color: #000; }\n` +
+    `::highlight(${HL_PHRASE}) { background-color: rgba(0, 122, 255, 0.20); color: inherit; }`;
   (document.head || document.documentElement).appendChild(style);
 }
 
@@ -423,14 +437,18 @@ function applyHighlights(): void {
   if (!api) return;
   api.reg.delete(HL_ALL);
   api.reg.delete(HL_CURRENT);
+  api.reg.delete(HL_PHRASE);
   if (matchRanges.length === 0) return;
-  api.reg.set(HL_ALL, new api.Ctor(...matchRanges));
-  // No "current" match when the phrase is being collected FOR something: every
-  // candidate is equally pickable until you choose, and emphasising one would
-  // claim an ordering that doesn't exist — worse once the pick chips are up,
-  // where a brighter match reads as already chosen. `current` is a find
+  // Phrase targeting paints under its own name, and has no "current" match:
+  // every candidate is equally pickable until you choose, and emphasising one
+  // would claim an ordering that doesn't exist — worse once the pick chips are
+  // up, where a brighter match reads as already chosen. `current` is a find
   // concept, owned by n/N navigation.
-  if (state.mode !== 'find') return;
+  if (state.mode !== 'find') {
+    api.reg.set(HL_PHRASE, new api.Ctor(...matchRanges));
+    return;
+  }
+  api.reg.set(HL_ALL, new api.Ctor(...matchRanges));
   if (currentIndex >= 0 && currentIndex < matchRanges.length) {
     const cur = new api.Ctor(matchRanges[currentIndex]);
     cur.priority = 1; // paint the current match over the all-matches wash
@@ -457,6 +475,7 @@ export function purgeOrphanedFindPaint(): void {
   const api = highlightApi();
   api?.reg.delete(HL_ALL);
   api?.reg.delete(HL_CURRENT);
+  api?.reg.delete(HL_PHRASE);
   for (const el of document.querySelectorAll('[data-branchkit-find]')) el.remove();
   document.querySelector(`[${STYLE_ATTR}]`)?.remove();
 }
@@ -465,6 +484,7 @@ function clearHighlights(): void {
   const api = highlightApi();
   api?.reg.delete(HL_ALL);
   api?.reg.delete(HL_CURRENT);
+  api?.reg.delete(HL_PHRASE);
   matchRanges = [];
   currentIndex = -1;
 }
