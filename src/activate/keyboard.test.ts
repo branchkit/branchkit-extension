@@ -614,3 +614,41 @@ describe('video mode routing', () => {
     expect(dispatchSpy).toHaveBeenCalledWith('toggle_palette', {});
   });
 });
+
+// getMode() resolves ONE mode through a precedence chain, which is the right
+// answer for the chip and the wrong one for "is this layer up". The modes are
+// not mutually exclusive, so the ranked read reports a live layer as absent —
+// and two callers acted on that: the escape cascade (which must peel a layer
+// that is live whether or not it ranks top) and the pick window's entry-state
+// snapshot (which restored to normal instead of hint for exactly this reason).
+describe('unranked mode reads', () => {
+  it('isHintMode is true whenever the hint layer is up, outranked or not', () => {
+    handler.enterHintMode();
+    expect(handler.isHintMode()).toBe(true);
+    expect(handler.getMode()).toBe('hint');
+
+    // Caret outranks hint in getMode(); the hint layer is still up and still
+    // holding its codewords.
+    handler.enterCaretMode('caret');
+    expect(handler.getMode()).toBe('caret');
+    expect(handler.isHintMode()).toBe(true);
+
+    handler.exitHintMode();
+    expect(handler.isHintMode()).toBe(false);
+  });
+
+  it('isVideoMode is true whenever the video layer is up, outranked or not', () => {
+    handler.enterVideoMode();
+    expect(handler.isVideoMode()).toBe(true);
+    expect(handler.getMode()).toBe('video');
+
+    // Caret outranks video too — and a video layer the cascade could not see
+    // is the state where being stuck is worst, because bare keys are gone.
+    handler.enterCaretMode('visual');
+    expect(handler.getMode()).toBe('visual');
+    expect(handler.isVideoMode()).toBe(true);
+
+    handler.exitVideoMode();
+    expect(handler.isVideoMode()).toBe(false);
+  });
+});

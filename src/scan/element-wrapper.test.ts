@@ -485,3 +485,63 @@ describe('scoreTextMatch', () => {
     expect(scoreTextMatch('Settings and setup', 'set')).toBe(6);
   });
 });
+
+// The reservoir's leak sweep asks one question — "does anyone still hold this
+// codeword?" — and reclaims the codeword when the answer is no: released back
+// to the pool AND deleted plugin-side. Asking it through `byCodeword` answers
+// about PAINT, not about the claim, and the two are not the same moment.
+//
+// `scanned.codeword` is written at CLAIM time (observe/intersection-tracker.ts,
+// on viewport entry); `label` is written at PAINT time (lifecycle/settle-
+// engine.ts `prepareBadge`). Between them the wrapper holds a codeword that
+// `byCodeword` cannot see — and under manual hint visibility, or any window
+// where badges are hidden (a find session, a momentary Shift+F), paint never
+// arrives and the gap is indefinite. Past the sweep's 30s grace the codeword is
+// then reclaimed out from under a LIVE wrapper: the letters can be re-granted
+// to a second hint while the first still believes it owns them, and the
+// plugin-side grammar entry is deleted so speaking it does nothing.
+describe('WrapperStore: claimed-vs-painted (reservoir leak-sweep predicate)', () => {
+  it('byCodeword cannot see a wrapper that has claimed but not painted', () => {
+    const store = new WrapperStore();
+    const el = fakeElement();
+    const w = new ElementWrapper(el, fakeScanned({ codeword: 'arch' }));
+    store.addWrapper(w);
+
+    expect(w.label).toBeNull();          // never painted
+    expect(w.scanned.codeword).toBe('arch');  // ...but the claim is real
+
+    // The predicate the sweep used: answers "nobody holds it" — wrongly.
+    expect(store.byCodeword('arch')).toBeUndefined();
+    // The claim-level predicate: answers correctly.
+    expect(store.all.some((lw) => lw.scanned.codeword === 'arch')).toBe(true);
+  });
+
+  it('the two predicates agree once the wrapper paints', () => {
+    const store = new WrapperStore();
+    const el = fakeElement();
+    const w = new ElementWrapper(el, fakeScanned({ codeword: 'arch' }));
+    store.addWrapper(w);
+    // What prepareBadge does at paint time.
+    w.label = { words: ['arch'], letter: 'arch', isSingle: true };
+
+    expect(store.byCodeword('arch')).toBe(w);
+    expect(store.all.some((lw) => lw.scanned.codeword === 'arch')).toBe(true);
+  });
+
+  it('holds for two-word codewords too', () => {
+    const store = new WrapperStore();
+    const w = new ElementWrapper(fakeElement(), fakeScanned({ codeword: 'arch bake' }));
+    store.addWrapper(w);
+
+    expect(store.byCodeword('arch bake')).toBeUndefined();
+    expect(store.all.some((lw) => lw.scanned.codeword === 'arch bake')).toBe(true);
+  });
+
+  it('neither predicate claims a codeword nobody holds', () => {
+    const store = new WrapperStore();
+    store.addWrapper(new ElementWrapper(fakeElement(), fakeScanned({ codeword: 'arch' })));
+
+    expect(store.byCodeword('zinc')).toBeUndefined();
+    expect(store.all.some((lw) => lw.scanned.codeword === 'zinc')).toBe(false);
+  });
+});

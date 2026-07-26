@@ -132,7 +132,8 @@ import { RANGE_PICK_VARIANT } from '../render/badge-variant';
 import {
   startRangePick, resolveRangePick, cancelRangePick, isRangePickPending,
   filterRangePickChips, reconcileRangePickChips, MAX_RANGE_BADGES,
-  rangePickPrefixMatch, rangePickSoleMatch,
+  rangePickPrefixMatch, rangePickSoleMatch, setPickWindowHooks,
+  type PickEntryState,
 } from './range-disambiguation';
 
 function makeRange(text = 'x'): Range {
@@ -645,13 +646,26 @@ describe('range-disambiguation pick', () => {
     expect(pickWindowPosts).toEqual([['alpha', 'bravo'], []]);
   });
 
-  it('releases the narrow when nothing was admitted', async () => {
+  it('keeps the pick armed when the publish is refused, and stays narrowed', async () => {
+    // A refused publish is always LOCAL: no voice alphabet, a transport failure
+    // (BranchKit not running), or a plugin-side validation refusal. None of them
+    // means the codeword now belongs to somewhere else, so the chips stay
+    // painted — they are still typeable — and RangeBadgeSet retries the publish
+    // on the next reconcile, which makes them speakable the moment voice
+    // arrives. Dropping them here instead put "Lost the highlighted matches" on
+    // screen every time the app happened to be closed (2026-07-26).
+    //
+    // The one refusal that DOES drop a chip is a cross-document collision, and
+    // it arrives by a different route entirely (onCodewordRejected, covered
+    // above) — which is what makes the two distinguishable without parsing a
+    // reason string.
     admitAll = false;
     startRangePick([makeRange(), makeRange()], () => {});
     await Promise.resolve();
     await Promise.resolve();
-    // Teardown's release, and no arm — the chips never became speakable.
-    expect(pickWindowPosts).toEqual([[]]);
+    expect(isRangePickPending()).toBe(true);
+    expect(chipCount()).toBe(2);
+    expect(pickWindowPosts).toEqual([['alpha', 'bravo']]);
   });
 
   it('never expires on wall clock — only an answer or an explicit exit ends it', () => {
@@ -694,15 +708,6 @@ describe('range-disambiguation pick', () => {
     expect(chipCount()).toBe(0);
   });
 
-  it('drops chips for codewords the plugin refused', async () => {
-    admitAll = false;
-    startRangePick([makeRange(), makeRange()], () => {});
-    await Promise.resolve(); // let the publish settle
-    await Promise.resolve();
-    expect(isRangePickPending()).toBe(false);
-    expect(chipCount()).toBe(0);
-  });
-
   // Speakable and USABLE are different properties, and conflating them broke
   // the keyboard entry: with no platform there is nothing to admit, so every
   // chip was dropped and the pick gave up with "Lost the highlighted matches"
@@ -723,6 +728,82 @@ describe('range-disambiguation pick', () => {
 
   // ...and the codewords are reachable by PREFIX, which is what the keyboard
   // needs to accept the first keystroke at all.
+  // --- Entry state (what the pick borrows and owes back) --------------------
+  // A pick is modal in two ways at once: it hides the page's badges AND takes
+  // the keyboard. It used to record only the first, and always released the
+  // keys to 'normal' — so answering a pick armed from hint mode handed back a
+  // repainted page whose badge letters fired keybinds instead (2026-07-26).
+  describe('entry state', () => {
+    let entered: number;
+    let restored: PickEntryState[];
+    function installHooks(at: PickEntryState): void {
+      entered = 0;
+      restored = [];
+      setPickWindowHooks({
+        enter: () => { entered++; return at; },
+        restore: (e) => { restored.push(e); },
+      });
+    }
+    // The hooks are a module singleton; hand them back as no-ops so the cases
+    // outside this block keep running against "no pick window installed".
+    afterEach(() => {
+      setPickWindowHooks({
+        enter: () => ({ badgesVisible: false, hintMode: false }),
+        restore: () => {},
+      });
+    });
+
+    it('gives back BOTH halves of what it took — badges and keyboard mode', () => {
+      installHooks({ badgesVisible: true, hintMode: true });
+      startRangePick([makeRange('a'), makeRange('b')], () => {});
+      expect(entered).toBe(1);
+      expect(restored).toEqual([]);
+
+      resolveRangePick('alpha');
+      expect(restored).toEqual([{ badgesVisible: true, hintMode: true }]);
+    });
+
+    it('restores the state it actually found, not a fixed one', () => {
+      installHooks({ badgesVisible: false, hintMode: false });
+      startRangePick([makeRange('a'), makeRange('b')], () => {});
+      cancelRangePick('escape');
+      expect(restored).toEqual([{ badgesVisible: false, hintMode: false }]);
+    });
+
+    it('restores once, on whichever exit runs first', () => {
+      installHooks({ badgesVisible: true, hintMode: false });
+      startRangePick([makeRange('a'), makeRange('b')], () => {});
+      cancelRangePick('escape');
+      cancelRangePick('escape_again');
+      expect(restored).toHaveLength(1);
+    });
+
+    it('restores when the set empties itself rather than being answered', async () => {
+      // onEmpty is the exit that does not go through teardown, and the one
+      // that used to hold its own half-copy of the restore rule.
+      installHooks({ badgesVisible: true, hintMode: true });
+      const a = makeRange('a'), b = makeRange('b');
+      startRangePick([a, b], () => {});
+      await Promise.resolve();
+      (a.commonAncestorContainer.parentElement as HTMLElement).remove();
+      (b.commonAncestorContainer.parentElement as HTMLElement).remove();
+      reconcileRangePickChips();
+      await Promise.resolve();
+
+      expect(isRangePickPending()).toBe(false);
+      expect(restored).toEqual([{ badgesVisible: true, hintMode: true }]);
+    });
+
+    it('never entered the window means nothing to give back', () => {
+      // The pool is dry, so the pick acts on the first match instead of arming.
+      nextClaim = [];
+      installHooks({ badgesVisible: true, hintMode: true });
+      startRangePick([makeRange('a'), makeRange('b')], () => {});
+      expect(entered).toBe(0);
+      expect(restored).toEqual([]);
+    });
+  });
+
   it('answers prefix queries so the keyboard can address a chip', () => {
     nextClaim = ['a b', 'c d'];
     startRangePick([makeRange(), makeRange()], () => {});

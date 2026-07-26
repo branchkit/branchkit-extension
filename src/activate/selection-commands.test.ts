@@ -39,11 +39,18 @@ const clearFindPaint = vi.fn();
 const startRangePick = vi.fn();
 const cancelRangePick = vi.fn();
 
+// The options the module hands the CaretController — `onModeChange` is the
+// caret→plugin mirror, and driving it is the only way to observe the post.
+let caretOpts: { onModeChange: (mode: string | null) => void } | null = null;
+
 async function loadModule(): Promise<SelectionCommands> {
   vi.resetModules();
   vi.doMock('../core/singletons', () => ({ dispatcher, keyHandler }));
   vi.doMock('./caret', () => ({
-    CaretController: vi.fn(function CaretController() { return caretInstance; }),
+    CaretController: vi.fn(function CaretController(opts: typeof caretOpts) {
+      caretOpts = opts;
+      return caretInstance;
+    }),
   }));
   vi.doMock('../render/toast', () => ({ flashToast }));
   vi.doMock('../pagination', () => ({ findPageLink }));
@@ -57,6 +64,7 @@ async function loadModule(): Promise<SelectionCommands> {
 beforeEach(() => {
   vi.clearAllMocks();
   registered.clear();
+  caretOpts = null;
   vi.stubGlobal('chrome', { runtime: { sendMessage: vi.fn().mockResolvedValue(undefined) } });
 });
 
@@ -206,6 +214,33 @@ describe('registration contract (Phase 1)', () => {
     expect(startRangePick).not.toHaveBeenCalled();
     // Nothing to hand the paint to — it must not outlive the question.
     expect(clearFindPaint).toHaveBeenCalled();
+  });
+
+  // The caret tag gates every voice selection command ("copy that", "select
+  // word", "stop selecting"). A CaretController is per-frame and a SUBFRAME
+  // caret session is a DESIGNED path — resolveSelectTo routes "any subframe
+  // with matches" through the chip pick, whose onPick extends the selection in
+  // that subframe. Under the old top-frame-only mirror the selection was
+  // painted while the tag was never set, so every one of those commands
+  // reported "caret mode not active" (field test 2026-07-24).
+  it('mirrors caret-active to the plugin from a SUBFRAME, not just the top frame', async () => {
+    vi.stubGlobal('top', {}); // window !== window.top: this frame is a subframe
+    const m = await loadModule();
+    m.registerSelectionCommands();
+    const send = (globalThis as unknown as { chrome: { runtime: { sendMessage: ReturnType<typeof vi.fn> } } })
+      .chrome.runtime.sendMessage;
+
+    caretOpts!.onModeChange('caret');
+    expect(send).toHaveBeenCalledWith({ type: 'CARET_ACTIVE', active: true });
+
+    // The dedupe is per frame and stays: caret↔visual are both active, so the
+    // transition must not re-POST — only the active/inactive EDGE does.
+    send.mockClear();
+    caretOpts!.onModeChange('visual');
+    expect(send).not.toHaveBeenCalled();
+
+    caretOpts!.onModeChange(null);
+    expect(send).toHaveBeenCalledWith({ type: 'CARET_ACTIVE', active: false });
   });
 
   it('go_next follows the page link when found, toasts when absent', async () => {

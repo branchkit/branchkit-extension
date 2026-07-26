@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { CaretController } from './caret';
-import { findImmediate, closeFindMode, isFindActive } from '../scan/find';
+import { findImmediate, closeFindMode, isFindActive, setFindCallbacks } from '../scan/find';
 
 // The Selection-movement path (Selection.modify) isn't implemented in happy-dom,
 // so grow/shrink granularity is verified in a real browser. Here we cover the
@@ -380,5 +380,111 @@ describe('CaretController — find → selection handoff (Phase B)', () => {
     } finally {
       proto.modify = origModify;
     }
+  });
+});
+
+// The find the caret session was entered FROM is the user's, not the session's.
+// Field report 2026-07-26: `/quick` Enter, `v`, `y` — the yank's exit tore down
+// a find that pre-dated the selection entirely (pill, highlights, n/N, the
+// FIND_ACTIVE mirror), because exit() closed find unconditionally.
+describe('CaretController — a find that pre-dates the session survives it', () => {
+  afterEach(() => { closeFindMode(); setFindCallbacks({}); });
+  const key = (k: string) => ({ key: k, preventDefault: vi.fn(), stopPropagation: vi.fn() } as unknown as KeyboardEvent);
+
+  function committedFind(): { deactivations: number } {
+    document.body.innerHTML = '<p>alpha beta gamma delta epsilon omega</p>';
+    const counts = { deactivations: 0 };
+    setFindCallbacks({ onDeactivate: () => { counts.deactivations += 1; } });
+    findImmediate('gamma');
+    expect(isFindActive()).toBe(true);
+    return counts;
+  }
+
+  it('yanking out of a promoted find match leaves the find session intact', () => {
+    const counts = committedFind();
+    const c = new CaretController({ onModeChange: vi.fn() });
+    expect(c.enterFromFind()).toBe(true); // `v` with no live selection
+    c.handleKey(key('y'));                // yank → exit
+    expect(c.isActive()).toBe(false);
+    expect(isFindActive()).toBe(true);
+    // The FIND_ACTIVE {active:false} post rides onDeactivate — it must not fire.
+    expect(counts.deactivations).toBe(0);
+  });
+
+  it('exit() from a session entered over a find leaves it alone', () => {
+    const counts = committedFind();
+    const c = new CaretController({ onModeChange: vi.fn() });
+    c.enterFromFind();
+    c.exit();
+    expect(isFindActive()).toBe(true);
+    expect(counts.deactivations).toBe(0);
+  });
+
+  // Peel by which layer is NEWER. Here find is the older layer, so the first
+  // escape takes the selection — the reverse of the search-on-top flow above.
+  it('escape peels the selection first when find is the older layer', () => {
+    const proto = Object.getPrototypeOf(window.getSelection()!) as { modify?: unknown };
+    const origModify = proto.modify;
+    proto.modify = () => {};
+    try {
+      const counts = committedFind();
+      const c = new CaretController({ onModeChange: vi.fn() });
+      c.enterFromFind();
+      expect(c.getMode()).toBe('visual');
+
+      c.escape();                        // visual → caret; find untouched
+      expect(isFindActive()).toBe(true);
+      expect(c.getMode()).toBe('caret');
+
+      c.escape();                        // caret → Normal; find STILL untouched
+      expect(c.isActive()).toBe(false);
+      expect(isFindActive()).toBe(true);
+      expect(counts.deactivations).toBe(0);
+    } finally {
+      proto.modify = origModify;
+    }
+  });
+
+  // A caret session that STARTED over a find, then started its own second find
+  // (`/`) — the newer one is the session's to close.
+  it('a find opened DURING the session is still closed by exit', () => {
+    document.body.innerHTML = '<p>alpha beta gamma delta epsilon omega</p>';
+    const p = document.querySelector('p')!.firstChild!;
+    const sel = window.getSelection()!;
+    const r = document.createRange();
+    r.setStart(p, 0);
+    r.setEnd(p, 5);
+    sel.removeAllRanges();
+    sel.addRange(r);
+    const c = new CaretController({ onModeChange: vi.fn() });
+    c.enterFromNormal();  // no find underneath
+    findImmediate('gamma');
+    c.exit();
+    expect(isFindActive()).toBe(false);
+  });
+
+  // The floor is per-session like entryFloor: a session opened after the
+  // find-entered one behaves like its own again.
+  it('the find floor resets when the session ends', () => {
+    committedFind();
+    const c = new CaretController({ onModeChange: vi.fn() });
+    c.enterFromFind();
+    c.exit();
+    expect(isFindActive()).toBe(true);
+
+    // Same controller, fresh session over the (still live) find's match — but
+    // now started by a second, session-owned find.
+    closeFindMode();
+    const p = document.querySelector('p')!.firstChild!;
+    const sel = window.getSelection()!;
+    const r = document.createRange();
+    r.setStart(p, 0);
+    r.setEnd(p, 5);
+    sel.removeAllRanges();
+    sel.addRange(r);
+    c.enterFromNormal();
+    findImmediate('delta');
+    c.exit();
+    expect(isFindActive()).toBe(false);
   });
 });

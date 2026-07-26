@@ -201,6 +201,32 @@ export class KeyHandler {
     return (this.forcedInsert || this.excluded) ? 'insert' : 'normal';
   }
 
+  /**
+   * The modal flags, UNRANKED — is this layer up, regardless of what else is.
+   *
+   * `getMode()` answers a different question: which single mode the chip should
+   * name, resolved through a precedence chain. That chain is wrong for anyone
+   * asking whether a specific layer is live, because the modes are not mutually
+   * exclusive — hint mode with caret also active reports 'caret', so a caller
+   * testing `getMode() === 'hint'` sees "no" while the hint layer is up and
+   * still holding its codewords. Two callers need the honest answer: the escape
+   * cascade, which must peel a layer that is live whether or not it is the
+   * top-ranked one, and the pick window's entry-state snapshot, which restored
+   * to normal instead of hint for exactly this reason.
+   *
+   * The ranking question does not get answered here — it gets removed by the
+   * mode stack (notes/DESIGN_MODE_STACK_AND_CODEWORD_HOLDERS.md), where a mode
+   * has one lifetime and a real stack position. These are the honest reads to
+   * carry until then.
+   */
+  isHintMode(): boolean {
+    return this.mode === 'hint';
+  }
+
+  isVideoMode(): boolean {
+    return this.videoMode;
+  }
+
   /** Enter explicit pass-through (insert) mode — every key reaches the page
    *  until Escape. Idempotent. */
   enterInsertMode(): void {

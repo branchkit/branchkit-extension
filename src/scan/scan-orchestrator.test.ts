@@ -76,6 +76,16 @@ async function loadOrchestrator(): Promise<Orchestrator> {
   return await import('./scan-orchestrator');
 }
 
+/**
+ * The REAL holder registry (not a mock), resolved from the same module graph
+ * the freshly-imported orchestrator got. Must be called after
+ * loadOrchestrator: vi.resetModules() runs in there, so importing before it
+ * would hand back a different registry instance than the one under test.
+ */
+async function loadCodewordHolders(): Promise<typeof import('../labels/codeword-holders')> {
+  return await import('../labels/codeword-holders');
+}
+
 function batchOf(els: Element[], isLast = true) {
   return {
     refs: els,
@@ -181,6 +191,51 @@ describe('batch processing', () => {
     await o.doScan();
     expect(detachWrapper).not.toHaveBeenCalled();
     expect(queuePut).toHaveBeenCalledTimes(1);
+  });
+
+  // The mid-flight branch: the wrapper left the store between the POST and its
+  // ACK, so the plugin holds a codeword no wrapper does. Whether that codeword
+  // is garbage depends on who picked it up in the meantime — and the store is
+  // not the only thing that can (labels/codeword-holders.ts).
+  describe('a codeword whose wrapper detached mid-flight', () => {
+    async function detachDuringPost(): Promise<Orchestrator> {
+      const o = await loadOrchestrator();
+      const el = document.createElement('a');
+      document.body.appendChild(el);
+      scanInBatches.mockImplementation(function* () { yield batchOf([el]); });
+      postBatch.mockImplementation(async () => {
+        // Detached mid-round-trip (MO removal / dedup by a later scan), which
+        // released its label back to the reservoir.
+        storeWrappers.clear();
+        return { result: 'ok', succeeded: ['a'], failed: [] };
+      });
+      return o;
+    }
+
+    it('is queued for delete when nothing holds it', async () => {
+      const o = await detachDuringPost();
+      await o.doScan();
+      expect(queueDelete).toHaveBeenCalledWith('a');
+    });
+
+    it('is NOT queued for delete when a non-store holder reclaimed it', async () => {
+      const o = await detachDuringPost();
+      const holders = await loadCodewordHolders();
+      // Stand-in for a RangeBadgeSet (pick chips / search badges): the
+      // reservoir's sticky reclaim hands a just-released codeword back from the
+      // FRONT of the queue, so this is the codeword it lands on. Deleting it
+      // here retires the grammar record of a live, painted chip — speakable
+      // nowhere, and an empty Discovery HUD suffix menu.
+      holders.__resetCodewordHolders();
+      const unregister = holders.registerCodewordHolder({
+        held: () => ['a'],
+        republish: () => {},
+        onCodewordRejected: () => {},
+      });
+      await o.doScan();
+      expect(queueDelete).not.toHaveBeenCalled();
+      unregister();
+    });
   });
 
   it('skips painting when badges are hidden (manual mode pre-show)', async () => {

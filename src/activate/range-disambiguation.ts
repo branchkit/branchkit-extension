@@ -75,29 +75,47 @@ export const MAX_RANGE_BADGES = 9;
 interface PendingPick {
   chips: RangeBadgeSet;
   onPick: (range: Range) => void;
-  /** Regular badges were visible at pick start — restore them on teardown. */
-  restoreBadges: boolean;
+  /** What the pick took over and owes back on teardown. */
+  entry: PickEntryState;
 }
 
 let pending: PendingPick | null = null;
 
 /**
- * Pick-window badge hooks, injected by content.ts (badge visibility lives in
- * the content monolith — injection avoids the import cycle). While chips are
- * up they OWN the codewords, so the regular badges hide for the window and
- * the screen shows exactly what's speakable (user decision 2026-07-25);
- * restored on teardown only if they were visible at start. Purely visual —
+ * The page state a pick borrows: which badges were up AND which keyboard mode
+ * was live. Opaque to this module — content.ts reads and restores it.
+ *
+ * It used to be a lone `restoreBadges` boolean, which captured the visual half
+ * of the entry state and not the keyboard half: the pick always released the
+ * keys to 'normal', so answering a pick that started from hint mode handed back
+ * a page with the badges REPAINTED and the keyboard no longer listening for
+ * them — the next badge letter fired a keybind instead (2026-07-26).
+ *
+ * INTERIM. The mode stack records a floor for every mode rather than for two of
+ * them (notes/DESIGN_MODE_STACK_AND_CODEWORD_HOLDERS.md); its Wave-3 step
+ * deletes this and `pickWindowHooks` together.
+ */
+export interface PickEntryState {
+  badgesVisible: boolean;
+  hintMode: boolean;
+}
+
+/**
+ * Pick-window hooks, injected by content.ts (badge visibility and the key
+ * handler live in the content monolith — injection avoids the import cycle).
+ * While chips are up they OWN the codewords, so the regular badges hide for the
+ * window and the screen shows exactly what's speakable (user decision
+ * 2026-07-25), and the keyboard captures codeword keys — a question asked in
+ * codewords has to be answerable in them, by either input. Purely local:
  * grammar publication is untouched, per-frame like the pick itself.
  */
 interface PickWindowHooks {
-  /** Hide regular badges; returns whether they were visible (for restore). */
-  hideBadges: () => boolean;
-  showBadges: () => void;
-  /** Put the keyboard in codeword-capturing mode for the pick's lifetime. A
-   *  question asked in codewords has to be answerable in them, by either input;
-   *  without this the chips were speak-only. */
-  captureKeys: () => void;
-  releaseKeys: () => void;
+  /** Snapshot what the pick is about to take over, then take it. The snapshot
+   *  MUST be read before the badges are hidden — hiding them also exits hint
+   *  mode, so a read afterwards always reports 'normal'. */
+  enter: () => PickEntryState;
+  /** Give both halves back. */
+  restore: (entry: PickEntryState) => void;
 }
 let pickWindowHooks: PickWindowHooks | null = null;
 export function setPickWindowHooks(h: PickWindowHooks): void {
@@ -219,8 +237,8 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
       pending = null;
       clearFindPaint();
       publishPickWindow([]);
-      pickWindowHooks?.releaseKeys();
-      if (restoreOnEmpty) pickWindowHooks?.showBadges();
+      if (entryOnEmpty) pickWindowHooks?.restore(entryOnEmpty);
+      entryOnEmpty = null;
       flashToast('Lost the highlighted matches — try again');
     },
   });
@@ -237,10 +255,9 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
     return;
   }
 
-  const restoreBadges = pickWindowHooks?.hideBadges() ?? false;
-  restoreOnEmpty = restoreBadges;
-  pending = { chips, onPick, restoreBadges };
-  pickWindowHooks?.captureKeys();
+  const entry = pickWindowHooks?.enter() ?? { badgesVisible: false, hintMode: false };
+  entryOnEmpty = entry;
+  pending = { chips, onPick, entry };
 
   if (ranges.length > chips.size) {
     // Name the scope so "9 of 105" doesn't read as an arbitrary truncation:
@@ -251,13 +268,15 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
 }
 
 // `onEmpty` can fire from inside RangeBadgeSet.create, before `pending` exists,
-// so the restore flag it needs is held here rather than read off `pending`.
-let restoreOnEmpty = false;
+// so the entry state it needs is held here rather than read off `pending`.
+// Null means "never entered the window" — nothing to give back.
+let entryOnEmpty: PickEntryState | null = null;
 
 /**
  * Re-derive which matches wear a chip, as a rolling window over the viewport.
- * Driven by the settle engine's existing `afterScrollSettle` hook (content.ts),
- * so it adds no observer, timer or listener.
+ * Driven by the settle engine's existing `afterSettle` hook (content.ts) — EVERY
+ * settle kind, because a chip's text reflows without a scroll — so it adds no
+ * observer, timer or listener.
  */
 export function reconcileRangePickChips(): void {
   pending?.chips.reconcile();
@@ -265,16 +284,17 @@ export function reconcileRangePickChips(): void {
 
 function teardown(reason: string): void {
   if (!pending) return;
-  const { chips, restoreBadges } = pending;
+  const { chips, entry } = pending;
   pending = null;
+  entryOnEmpty = null;
   chips.dispose(reason);
-  pickWindowHooks?.releaseKeys();
   // The candidates were painted by the phrase box and handed over for the
   // pick's lifetime — the question is now answered (or abandoned), so the
   // marking goes with it. Every exit routes through here, which is why paint
   // ownership can safely cross the module boundary at all.
   clearFindPaint();
-  if (restoreBadges) pickWindowHooks?.showBadges();
+  // Badges and keyboard together: whatever the pick borrowed, it gives back.
+  pickWindowHooks?.restore(entry);
   // Release the projection narrow AFTER the set gave its codewords back, so the
   // page's own hints are what the HUD falls back to.
   publishPickWindow([]);

@@ -54,6 +54,14 @@ interface Member {
    *  ElementWrapper.lastSentStrictViewport: eligibility is re-sent only when a
    *  badge crosses the screen edge, not on every scroll. */
   strict: boolean;
+  /** Is this record live plugin-side, or at least on its way? Set optimistically
+   *  when a publish goes out and cleared again if that publish didn't admit it,
+   *  so `false` is exactly the set that needs a retry — a badge painted and
+   *  typeable but with no grammar entry (no voice alphabet, transport failure,
+   *  plugin refusal). Reconcile retries those, the way the element path's
+   *  `queuePut` does. Optimism is what keeps a reconcile that re-mints a
+   *  codeword from publishing it twice in the same pass. */
+  published: boolean;
 }
 
 export interface RangeBadgeSetOptions {
@@ -237,7 +245,7 @@ export class RangeBadgeSet {
     // — a badge that merely crossed the screen edge keeps its codeword and
     // flips speakable, which happens on scrolls that change nothing else. After
     // the mutations, so badges just dropped aren't re-sent on their way out.
-    this.republishStrict(isStrict);
+    this.republishDelta(isStrict);
   }
 
   /** Give back every codeword and badge. Idempotent. */
@@ -328,57 +336,107 @@ export class RangeBadgeSet {
       // the delete lands after the put and strips a live badge from the hint
       // collections, leaving its Discovery HUD suffix menu empty.
       cancelPendingDelete(codewords[i]);
-      this.members.set(codewords[i], { ...this.paint(ranges[i], codewords[i]), strict });
+      this.members.set(codewords[i], {
+        ...this.paint(ranges[i], codewords[i]), strict, published: false,
+      });
       minted.push(codewords[i]);
       records.push(this.record(codewords[i], strict));
     }
 
-    // Speakable and USABLE are not the same property. With no voice alphabet
-    // loaded there is no platform to admit anything, so publishRecords returns
-    // an empty set — but the codewords are still perfectly typeable, and
-    // dropping the badges here left a keyboard user staring at "Lost the
-    // highlighted matches" on a page where the pick was fine (2026-07-26).
-    // Admission only decides whether a codeword can be SPOKEN.
+    // Speakable and USABLE are not the same property, and admission decides
+    // only the first. A badge whose record the plugin didn't take is still
+    // perfectly typeable — the keyboard path resolves it out of `members`
+    // without any grammar round-trip — so it STAYS PAINTED and gets retried on
+    // the next reconcile, exactly as the element path keeps an unacked wrapper
+    // painted and queues a re-Put (scan-orchestrator's ack partitioning).
+    //
+    // Non-admission here is never a cross-document collision: that arrives on
+    // its own path (the SW pool's confirm rejection → `onRejected` below),
+    // which does remove the badge, because a badge left painted for a codeword
+    // another document won would act over THERE. What lands here instead is
+    // "no platform to admit anything" (no voice alphabet — the case that left a
+    // keyboard user staring at "Lost the highlighted matches" on a page where
+    // the pick was fine, 2026-07-26), a transport failure, or a plugin-side
+    // refusal — all of them local, all of them recoverable, none of them a
+    // reason to take a working badge away.
     if (!isVoiceAlphabetLoaded()) {
       this.opts.onMembershipChanged?.(this.codewords);
       return minted.length;
     }
 
+    this.markPublishing(records);
     void publishRecords(records).then((admitted) => {
-      // Rejected codewords (pool race, plugin refusal) can never be spoken —
-      // drop their badges so a painted badge always implies a working codeword.
       if (this.disposed) return;
-      for (const cw of minted) {
-        if (admitted.has(cw)) continue;
-        this.members.get(cw)?.badge.remove();
-        this.members.delete(cw);
+      this.settlePublished(records, admitted);
+      const unspeakable = minted.filter((cw) => !admitted.has(cw));
+      if (unspeakable.length > 0) {
+        bkLog(`${this.tag}_UNADMITTED`, { codewords: unspeakable, kept: this.members.size });
       }
-      if (this.members.size === 0) {
-        this.empty('nothing_admitted');
-        return;
-      }
-      // Arm membership only now, with the ADMITTED set: arming before the
-      // publish lands would filter these out of the owner's projection too (the
-      // plugin hasn't stored them yet).
+      // Arm membership only now: arming before the publish lands would filter
+      // these out of the owner's projection too (the plugin hasn't stored them
+      // yet).
       this.opts.onMembershipChanged?.(this.codewords);
     });
 
     return minted.length;
   }
 
-  /** Re-publish eligibility for badges that crossed the screen edge. Delta
-   *  only, mirroring the wrapper path's lastSentStrictViewport. */
-  private republishStrict(isStrict: (r: Range) => boolean): void {
+  /**
+   * Mark records as needing no retry the moment they go out — optimistically,
+   * before the answer.
+   *
+   * On-resolve marking would double-POST: one reconcile both re-mints
+   * codewords (`add`, which publishes) and then sweeps for unpublished ones
+   * (`republishDelta`, synchronous, before that publish's promise resolves),
+   * so every window slide sent the same records twice.
+   */
+  private markPublishing(records: ScannedElement[]): void {
+    for (const r of records) {
+      const m = this.members.get(r.codeword);
+      if (m) m.published = true;
+    }
+  }
+
+  /** Take the optimism back for whatever the plugin didn't admit, putting it
+   *  on the next reconcile's retry list. */
+  private settlePublished(records: ScannedElement[], admitted: Set<string>): void {
+    for (const r of records) {
+      if (admitted.has(r.codeword)) continue;
+      const m = this.members.get(r.codeword);
+      if (m) m.published = false;
+    }
+  }
+
+  /**
+   * The reconcile-tail publish: eligibility deltas AND the retry.
+   *
+   * Two reasons a record needs to go out, one POST. Eligibility: a badge that
+   * crossed the screen edge keeps its codeword and flips speakable — delta
+   * only, mirroring the wrapper path's lastSentStrictViewport. Retry: a member
+   * `add` painted but the plugin never took (transport down, refusal, or an
+   * alphabet that hadn't arrived yet) is still unspeakable, and reconcile is
+   * where it gets another go — the settle signal the set already runs on, no
+   * timer of its own. When voice comes back, the next settle makes every
+   * painted badge speakable without repainting anything.
+   */
+  private republishDelta(isStrict: (r: Range) => boolean): void {
     const records: ScannedElement[] = [];
+    const retried: string[] = [];
     for (const [cw, m] of this.members) {
       const strict = isStrict(m.range);
-      if (strict === m.strict) continue;
+      const moved = strict !== m.strict;
       m.strict = strict;
+      if (!moved && m.published) continue;
+      if (!moved) retried.push(cw);
       records.push(this.record(cw, strict));
     }
     if (records.length === 0) return;
-    bkLog(`${this.tag}_STRICT`, { changed: records.map((r) => r.codeword) });
-    void publishRecords(records);
+    bkLog(`${this.tag}_STRICT`, { sent: records.map((r) => r.codeword), retried });
+    this.markPublishing(records);
+    void publishRecords(records).then((admitted) => {
+      if (this.disposed) return;
+      this.settlePublished(records, admitted);
+    });
   }
 
   /** Re-Put every live record into the CURRENT session — the CodewordHolder
@@ -388,8 +446,14 @@ export class RangeBadgeSet {
     if (this.disposed || this.members.size === 0) return;
     const records = [...this.members].map(([cw, m]) => this.record(cw, m.strict));
     bkLog(`${this.tag}_REPUBLISH`, { codewords: records.length });
-    void publishRecords(records).then(() => {
+    // The rotation invalidated the OLD session's admission (plugin-side these
+    // are inherited unconfirmed and dropped if the re-Put doesn't land), so
+    // this publish is what re-establishes it — and whatever it misses lands
+    // back on reconcile's retry list.
+    this.markPublishing(records);
+    void publishRecords(records).then((admitted) => {
       if (this.disposed) return;
+      this.settlePublished(records, admitted);
       this.opts.onMembershipChanged?.(this.codewords);
     });
   }
@@ -397,8 +461,11 @@ export class RangeBadgeSet {
   private onRejected(codeword: string): void {
     const m = this.members.get(codeword);
     if (this.disposed || !m) return;
-    // Another document won this codeword; a badge left painted for it would
-    // act over there.
+    // The ONE rejection that costs the badge. Another document won this
+    // codeword from the SW pool, so it no longer addresses anything here —
+    // saying or typing it would act over THERE. Distinct from a record the
+    // plugin merely didn't take (see `add`): that one is still ours and still
+    // typeable, so it keeps its badge and gets retried.
     m.badge.remove();
     this.members.delete(codeword);
     bkLog(`${this.tag}_REJECTED`, { codeword, remaining: this.members.size });
@@ -438,7 +505,7 @@ export class RangeBadgeSet {
     const badge = new HintBadge(target, label, getDisplayMode(), this.opts.variant);
     badge.show();
     placeBadgeAtRect(badge, target.element, target.rect());
-    return { range, badge, label, strict: false };
+    return { range, badge, label, strict: false, published: false };
   }
 }
 

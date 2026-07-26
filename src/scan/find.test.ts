@@ -125,6 +125,7 @@ import {
   openFindMode,
   isFindActive,
   isFindBarOpen,
+  isFindBarFocused,
   getFindState,
   setFindCallbacks,
   clearFindPaint,
@@ -505,6 +506,259 @@ describe('find bar: phrase-targeting modes', () => {
     expect(getFindState().mode).toBe('highlight');
     expect(getFindState().query).toBe('');
     expect(barInput().value).toBe('');
+  });
+});
+
+// Voice find (findImmediate) is the OTHER entry point into the box's state, and
+// it used to declare only `active`. The mode a previous session left behind then
+// decided how a voice find painted and what it fired — the two failures below.
+describe('voice find declares its own mode', () => {
+  const commits: number[] = [];
+  const phrases: Array<[string, string]> = [];
+  function barInput(): HTMLInputElement {
+    const el = document.querySelector('input[placeholder$="..."]');
+    if (!(el instanceof HTMLInputElement)) throw new Error('box input not found');
+    return el;
+  }
+  const dictate = (text: string) => {
+    const el = barInput();
+    for (let i = 0; i < text.length; i += 20) {
+      const chunk = text.slice(i, i + 20);
+      el.value += chunk;
+      el.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: chunk, bubbles: true }));
+    }
+  };
+  // Same two happy-dom gaps the phrase-targeting suite documents: no layout (so
+  // every match is filtered as invisible) and no CSS Custom Highlight API (so
+  // every paint assertion would pass vacuously). Both stubbed.
+  let restoreEnv: () => void;
+  const highlights = () =>
+    (globalThis as unknown as { CSS: { highlights: Map<string, unknown> } }).CSS.highlights;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    commits.length = 0;
+    phrases.length = 0;
+    document.body.innerHTML = '<p>alpha beta alpha</p>';
+    const originalRects = Range.prototype.getClientRects;
+    Range.prototype.getClientRects = () => [{}] as unknown as DOMRectList;
+    const g = globalThis as unknown as {
+      CSS: { highlights?: Map<string, unknown> };
+      Highlight?: unknown;
+    };
+    const priorReg = g.CSS?.highlights;
+    const priorCtor = g.Highlight;
+    class FakeHighlight {
+      priority = 0;
+      ranges: Range[];
+      constructor(...ranges: Range[]) { this.ranges = ranges; }
+    }
+    g.CSS = { ...(g.CSS ?? {}), highlights: new Map() };
+    g.Highlight = FakeHighlight;
+    restoreEnv = () => {
+      Range.prototype.getClientRects = originalRects;
+      g.CSS.highlights = priorReg;
+      g.Highlight = priorCtor;
+    };
+    setFindCallbacks({
+      onCommit: () => commits.push(1),
+      onPhrase: (mode, query) => phrases.push([mode, query]),
+    });
+  });
+  afterEach(() => { closeFindMode(); setFindCallbacks({}); restoreEnv(); vi.useRealTimers(); });
+
+  it('a voice find AFTER a highlight session paints find yellow, not the phrase wash', () => {
+    // The highlight session ends without resetting the mode, so the next voice
+    // find inherited `highlight`: blue wash, no current match — while the pill
+    // still showed "/" and n/N navigated an unmarked "current".
+    openFindMode('highlight');
+    dictate('alpha');
+    vi.runAllTimers();
+    expect(phrases).toHaveLength(1);
+    expect(isFindActive()).toBe(false);
+
+    findImmediate('beta');
+    expect(getFindState().mode).toBe('find');
+    expect(highlights().has('branchkit-find')).toBe(true);
+    expect(highlights().has('branchkit-find-current')).toBe(true);
+    expect(highlights().has('branchkit-phrase')).toBe(false);
+  });
+
+  it('a voice find landing in an OPEN phrase box does not arm search badges', () => {
+    // Model B hybrid: "highlight" opens the box, then "search <phrase>" fills it.
+    // The box is still collecting a phrase for a selection command — a codeword
+    // there means "select this one" (the range pick owns it), so the search-badge
+    // arming that hangs off onCommit must not fire.
+    openFindMode('highlight');
+    findImmediate('alpha');
+    expect(commits).toEqual([]);
+    expect(phrases).toEqual([]);
+    // The box keeps its own mode: still a phrase box, still painted as one.
+    expect(getFindState().mode).toBe('highlight');
+    expect(highlights().has('branchkit-phrase')).toBe(true);
+    expect(highlights().has('branchkit-find')).toBe(false);
+    expect(isFindBarOpen()).toBe(true);
+    expect(barInput().value).toBe('alpha');
+  });
+
+  it('a plain voice find still arms search badges', () => {
+    findImmediate('alpha');
+    expect(commits).toEqual([1]);
+    expect(getFindState().mode).toBe('find');
+  });
+});
+
+// The box's own keydown listener is fed DIRECTLY by the focused input:
+// content.ts returns early while the bar holds focus, so the page handler's
+// keyCode-229 filter never sees these events. Without its own guard the box
+// committed and tore itself down mid-composition.
+//
+// Escape needs the same guard for the same reason and did not have it: an IME
+// Escape means "cancel this composition", and closing the session on it threw
+// away the whole query because a half-typed candidate was abandoned.
+describe('find bar: text-commit sentinel (IME / OS text injection)', () => {
+  const barInput = () => document.querySelector('input[placeholder="Find in page..."]');
+  const committed = () => barInput() === null;
+  function press(init: KeyboardEventInit): void {
+    const el = barInput();
+    el?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, ...init }));
+  }
+  function setQuery(value: string): void {
+    const el = barInput() as HTMLInputElement;
+    el.value = value;
+    el.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: value, bubbles: true }));
+  }
+
+  beforeEach(() => { vi.useFakeTimers(); document.body.innerHTML = '<p>alpha beta</p>'; });
+  afterEach(() => { closeFindMode(); vi.useRealTimers(); });
+
+  it('an Enter carrying keyCode 229 does not commit', () => {
+    openFindMode();
+    const el = barInput() as HTMLInputElement;
+    el.value = 'alph';
+    press({ key: 'Enter', keyCode: 229 });
+    expect(committed()).toBe(false);
+  });
+
+  it('an Enter while composing does not commit', () => {
+    openFindMode();
+    const el = barInput() as HTMLInputElement;
+    el.value = 'alph';
+    press({ key: 'Enter', isComposing: true });
+    expect(committed()).toBe(false);
+  });
+
+  it('a real Enter still commits', () => {
+    openFindMode();
+    setQuery('alpha');
+    press({ key: 'Enter' });
+    expect(committed()).toBe(true);
+  });
+
+  it('an Escape carrying keyCode 229 cancels the composition, not the search', () => {
+    openFindMode();
+    setQuery('alpha');
+    press({ key: 'Escape', keyCode: 229 });
+    expect(isFindActive()).toBe(true);
+    expect(getFindState().query).toBe('alpha');
+  });
+
+  it('an Escape while composing does not close the box', () => {
+    openFindMode();
+    setQuery('alpha');
+    press({ key: 'Escape', isComposing: true });
+    expect(isFindActive()).toBe(true);
+  });
+
+  it('a real Escape still closes', () => {
+    openFindMode();
+    setQuery('alpha');
+    press({ key: 'Escape' });
+    expect(isFindActive()).toBe(false);
+  });
+});
+
+// A box that has stopped holding the keyboard has stopped having a claim on it.
+// The page keydown gate yields to a FOCUSED bar; when it yielded to a merely
+// PRESENT one, clicking the page with the bar open killed every BranchKit key
+// at once — hint mode, find navigation, the focus-input cycler, the snapshot
+// chord and Escape itself — with no visible cause and no key that recovered it.
+// Two halves: the bar closes when focus leaves, and the predicate the gate asks
+// is focus, so the window before/without a blur is inert rather than fatal.
+describe('find bar: focus is the claim on the keyboard', () => {
+  afterEach(() => { closeFindMode(); document.body.innerHTML = ''; });
+
+  it('the bar reports focused while it holds the keyboard', () => {
+    document.body.innerHTML = '<p>alpha</p>';
+    openFindMode();
+    expect(isFindBarOpen()).toBe(true);
+    expect(isFindBarFocused()).toBe(true);
+  });
+
+  it('focus leaving the box closes the session', () => {
+    document.body.innerHTML = '<p>alpha</p><input id="elsewhere">';
+    openFindMode();
+    document.querySelector<HTMLInputElement>('#elsewhere')!.focus();
+    expect(isFindBarOpen()).toBe(false);
+    expect(isFindActive()).toBe(false);
+  });
+
+  it('a present but unfocused bar reports unfocused', () => {
+    // createFindBar's focus() does not land when the document itself is not
+    // focused, and no blur follows a focus that never happened.
+    document.body.innerHTML = '<p>alpha</p>';
+    openFindMode();
+    (document.activeElement as HTMLElement).blur();
+    expect(isFindBarFocused()).toBe(false);
+  });
+
+  it('committing does not trip the blur close', () => {
+    // commitFind removes a FOCUSED input; if the blur close were still hooked
+    // at that moment it would end the session the commit exists to keep alive.
+    document.body.innerHTML = '<p>alpha beta alpha</p>';
+    openFindMode();
+    const el = document.querySelector('input[placeholder="Find in page..."]') as HTMLInputElement;
+    el.value = 'alpha';
+    el.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: 'alpha', bubbles: true }));
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(isFindBarOpen()).toBe(false);  // bar swapped for the pill
+    expect(isFindActive()).toBe(true);    // ...and the session survived
+  });
+});
+
+// macOS autocorrect replaces a word with `insertReplacementText` — an insert the
+// user never asked for, arriving mid-typing. It used to satisfy the dictation
+// predicate and commit the search out from under them.
+describe('find bar: autocorrect does not commit', () => {
+  const barInput = () => document.querySelector('input[placeholder="Find in page..."]') as HTMLInputElement | null;
+  const committed = () => barInput() === null;
+
+  beforeEach(() => { vi.useFakeTimers(); document.body.innerHTML = '<p>alpha beta</p>'; });
+  afterEach(() => { closeFindMode(); vi.useRealTimers(); });
+
+  it('the input opts out of autocorrect/autocapitalize/spellcheck', () => {
+    openFindMode();
+    const el = barInput()!;
+    expect(el.getAttribute('autocorrect')).toBe('off');
+    expect(el.getAttribute('autocapitalize')).toBe('off');
+    expect(el.getAttribute('spellcheck')).toBe('false');
+    expect(el.getAttribute('autocomplete')).toBe('off');
+  });
+
+  it('an autocorrect-shaped insertReplacementText does not auto-commit', () => {
+    openFindMode();
+    const el = barInput()!;
+    // Typing: one character per event, as a human keyboard emits.
+    for (const ch of 'alpga') {
+      el.value += ch;
+      el.dispatchEvent(new InputEvent('input', { inputType: 'insertText', data: ch, bubbles: true }));
+    }
+    // The OS swaps the word in one go.
+    el.value = 'alpha';
+    el.dispatchEvent(new InputEvent('input', { inputType: 'insertReplacementText', data: 'alpha', bubbles: true }));
+    vi.runAllTimers();
+    expect(committed()).toBe(false);
+    expect(barInput()!.value).toBe('alpha');
   });
 });
 

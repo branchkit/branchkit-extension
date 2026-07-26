@@ -20,13 +20,23 @@ vi.mock('../labels/label-reservoir', () => ({
 }));
 
 const published: string[] = [];
+// Codewords the "plugin" refuses. Everything else in a publish is admitted.
+const refused = new Set<string>();
 vi.mock('../labels/label-sync', () => ({
   publishRecords: async (r: Array<{ codeword: string }>) => {
     published.push(...r.map(x => x.codeword));
-    return new Set(r.map(x => x.codeword));
+    return new Set(r.map(x => x.codeword).filter(cw => !refused.has(cw)));
   },
   retireRecords: () => {},
   cancelPendingDelete: () => {},
+}));
+
+// The voice alphabet gate. Real by default (unloaded in a bare test env, which
+// is the keyboard-only case); flipped on for the admission tests.
+const voice = vi.hoisted(() => ({ loaded: false }));
+vi.mock('../labels/words', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../labels/words')>()),
+  isVoiceAlphabetLoaded: () => voice.loaded,
 }));
 
 type Holder = { held: () => Iterable<string>; republish: () => void; onCodewordRejected: (c: string) => void };
@@ -77,6 +87,8 @@ describe('RangeBadgeSet', () => {
     released.length = 0;
     published.length = 0;
     badges.length = 0;
+    refused.clear();
+    voice.loaded = false;
     holders.list = [];
     document.body.innerHTML = '';
     const original = Range.prototype.getBoundingClientRect;
@@ -157,6 +169,89 @@ describe('RangeBadgeSet', () => {
     set.dispose('second');
     expect(released.flat()).toHaveLength(1);
     expect(holders.list).toEqual([]);
+  });
+
+  // Admission governs SPEECH, and only speech. A badge the plugin didn't take
+  // is still typeable, so it stays — the one rejection that costs a badge is
+  // the pool's cross-document arbitration (onCodewordRejected).
+  describe('admission', () => {
+    it('keeps a badge the plugin refused, and retries it on reconcile', async () => {
+      voice.loaded = true;
+      refused.add('a a');
+      const set = RangeBadgeSet.create({
+        ranges: [makeRange('one'), makeRange('two')],
+        variant: RANGE_PICK_VARIANT, budget: 2,
+      })!;
+      await Promise.resolve();
+      await Promise.resolve();
+
+      // Painted and typeable, just not speakable yet.
+      expect(set.has('a a')).toBe(true);
+      expect(set.size).toBe(2);
+      expect(badges.some(b => b.removed)).toBe(false);
+      expect(set.matchesPrefix('a')).toBe(true);
+
+      // The refusal clears (voice came back / the plugin recovered): the next
+      // settle re-publishes it, without a repaint.
+      published.length = 0;
+      refused.clear();
+      set.reconcile();
+      await Promise.resolve();
+      expect(published).toContain('a a');
+
+      // ...and once admitted it stops being retried.
+      published.length = 0;
+      set.reconcile();
+      await Promise.resolve();
+      expect(published).toEqual([]);
+    });
+
+    it('does not empty the set when nothing is admitted', async () => {
+      voice.loaded = true;
+      refused.add('a a');
+      const emptied: string[] = [];
+      const set = RangeBadgeSet.create({
+        ranges: [makeRange('one')], variant: RANGE_PICK_VARIANT, budget: 1,
+        onEmpty: (r) => emptied.push(r),
+      })!;
+      await Promise.resolve();
+      await Promise.resolve();
+      // A whole-batch refusal is a transport failure or a plugin that isn't
+      // listening — both local and both recoverable. Tearing the pick down
+      // here is what put "Lost the highlighted matches" on a page where the
+      // pick was fine.
+      expect(emptied).toEqual([]);
+      expect(set.size).toBe(1);
+      expect(released.flat()).toEqual([]);
+    });
+
+    it('drops a badge the pool arbitrated to another document', async () => {
+      voice.loaded = true;
+      const set = RangeBadgeSet.create({
+        ranges: [makeRange('one'), makeRange('two')],
+        variant: RANGE_PICK_VARIANT, budget: 2,
+      })!;
+      await Promise.resolve();
+      await Promise.resolve();
+
+      holders.list[0].onCodewordRejected('a a');
+      expect(set.has('a a')).toBe(false);
+      expect(set.size).toBe(1);
+    });
+
+    it('with no voice alphabet, badges stay and reconcile keeps retrying', async () => {
+      const set = RangeBadgeSet.create({
+        ranges: [makeRange('one')], variant: RANGE_PICK_VARIANT, budget: 1,
+      })!;
+      await Promise.resolve();
+      expect(set.size).toBe(1);
+      expect(published).toEqual([]); // nothing to publish to
+
+      voice.loaded = true;
+      set.reconcile();
+      await Promise.resolve();
+      expect(published).toEqual(set.codewords);
+    });
   });
 
   it('reports membership changes so an owner can re-arm a projection', async () => {

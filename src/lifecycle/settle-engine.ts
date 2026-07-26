@@ -79,6 +79,13 @@ export interface SettleEngineHooks {
   /** Runs after the scroll settle completes — the nav path drains a
    *  mid-scroll-parked spa_nav rescan here (flushDeferredNavRescan). */
   afterScrollSettle(): void;
+  /** Runs at the end of EVERY settle, whatever armed it (scroll, deferred
+   *  layout signals, the passSoon backstop) and whether or not badges are
+   *  visible. The Range-anchored badge sets (pick chips, search badges) converge
+   *  here: they are live precisely when the page's own badges may be hidden, and
+   *  their text reflows without a scroll. Consumes an existing signal — no
+   *  observer, timer or listener (see the sensing freeze). */
+  afterSettle(): void;
 }
 
 /** Per-class applied counts (Phase E of notes/DESIGN_UNIFIED_RECONCILER.md,
@@ -726,6 +733,11 @@ export class SettleEngine {
         }
       }
     }
+    // Outside the badges-visible gate, for the reason scheduleReposition is
+    // (below): the Range-anchored sets are shown precisely while the page's own
+    // badges are hidden. Before the reposition pass, so anything this adds or
+    // reaps is positioned in the same settle.
+    this.hooks.afterSettle();
     this.scheduleReposition();
   }
 

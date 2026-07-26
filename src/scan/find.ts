@@ -95,11 +95,30 @@ export function isFindActive(): boolean {
   return state.active;
 }
 
-/** True while the find bar input is open and capturing keystrokes. After Enter
- * commits the search the bar closes but find stays active (highlights persist,
- * n / Shift+n navigate) — see handleFindNavKey. */
+/** True while the find bar input EXISTS. After Enter commits the search the bar
+ * closes but find stays active (highlights persist, n / Shift+n navigate) — see
+ * handleFindNavKey.
+ *
+ * Callers deciding who owns a keystroke want isFindBarFocused, not this: a bar
+ * on screen is not the same claim as a bar holding the keyboard. */
 export function isFindBarOpen(): boolean {
   return barElement !== null;
+}
+
+/** True while the find bar input actually HOLDS the keyboard.
+ *
+ * The page keydown gate asks this. Asking presence instead meant a bar that had
+ * lost focus still swallowed every BranchKit key — click the page with the bar
+ * open and hint mode, find navigation, the focus-input cycler, the Ctrl+Alt+A
+ * snapshot and Escape itself all died at once, with no visible cause and no key
+ * that could recover it. A box with no keyboard has no claim on it.
+ *
+ * The blur close below makes present-but-unfocused transient; this makes it
+ * harmless in the window where it exists anyway — `createFindBar`'s focus()
+ * does not land when the document itself is not focused (background tab,
+ * another frame), and no blur follows a focus that never happened. */
+export function isFindBarFocused(): boolean {
+  return inputElement !== null && document.activeElement === inputElement;
 }
 
 // --- CSS Custom Highlight API access (guarded; newish API) ---
@@ -337,6 +356,15 @@ function createFindBar(): void {
   inputElement = document.createElement('input');
   inputElement.type = 'text';
   inputElement.placeholder = ui.placeholder;
+  // A search query is not prose: capitalising it, correcting it, or offering a
+  // completion for it all change what gets matched without being asked. The
+  // palette's input opts out of the same four for the same reason. Autocorrect
+  // is the one with teeth here — its replacement arrives as an insert the user
+  // never typed, which is the shape this box reads as "the phrase is finished".
+  inputElement.setAttribute('autocomplete', 'off');
+  inputElement.setAttribute('autocorrect', 'off');
+  inputElement.setAttribute('autocapitalize', 'off');
+  inputElement.setAttribute('spellcheck', 'false');
   inputElement.style.cssText = `
     flex: 1; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.15);
     border-radius: 4px; padding: 4px 8px; color: #fff; font-size: 13px; outline: none;
@@ -351,6 +379,17 @@ function createFindBar(): void {
     else cancelDictatedCommit();  // a keystroke means they're still editing
   });
   inputElement.addEventListener('keydown', handleFindBarKey);
+  // Focus leaving the box closes it. Same rationale as the palette's window
+  // blur close (palette-page.ts) one layer down: a modal that keeps its claim
+  // on input after it has stopped being the thing you are typing into is a
+  // state the user cannot see and cannot escape. Here the claim is the page
+  // keydown gate, which yields to a focused bar — so an unfocused bar left
+  // standing was a keyboard black hole. Closing on blur means the state is
+  // transient rather than somewhere you can park.
+  //
+  // removeFindBar unhooks this BEFORE dropping the element, so a teardown-
+  // induced blur cannot re-enter closeFindMode mid-commit.
+  inputElement.addEventListener('blur', handleFindBarBlur);
   barElement.appendChild(inputElement);
 
   const countSpan = document.createElement('span');
@@ -366,6 +405,11 @@ function removeFindBar(): void {
   // Before dropping the input: a pending dictated commit outliving its bar
   // would fire against a torn-down session.
   cancelDictatedCommit();
+  // Unhook the blur close first. Every teardown path runs through here —
+  // including commitFind, which removes a FOCUSED input — and a blur fired by
+  // the removal would otherwise re-enter closeFindMode and end the session the
+  // commit was in the middle of keeping alive.
+  inputElement?.removeEventListener('blur', handleFindBarBlur);
   barElement?.remove();
   barElement = null;
   inputElement = null;
@@ -627,8 +671,7 @@ function move(delta: number): void {
  * through `input.type_text` → enigo `fast_text`, which posts one CGEvent per
  * 20-character chunk with `CGEventKeyboardSetUnicodeString` — so "album"
  * arrives as ONE `input` event carrying all five characters. A human keyboard
- * cannot do that: typing is one character per event, always. `insertReplacement
- * Text` covers the autocorrect/dictation-replacement path some engines use.
+ * cannot do that: typing is one character per event, always.
  *
  * A deliberate earlier cut tested for `insertFromPaste`, on the belief that
  * dictation arrives as a synthesised Cmd+V via shell-macos `PasteManager`.
@@ -638,13 +681,27 @@ function move(delta: number): void {
  * this path never emits, so it passed against a browser that never behaves this
  * way — the search silently never committed in the field.
  *
+ * `insertReplacementText` used to count too, described as "the autocorrect/
+ * dictation-replacement path some engines use". It is gone, and the same lesson
+ * is why: nothing on BranchKit's dictation path can emit it. `fast_text` posts
+ * CGEvents with `CGEventKeyboardSetUnicodeString`, which reach the page as
+ * `insertText` — the branch above — never as a replacement. Its one real
+ * producer is the OS swapping a word the user typed (macOS autocorrect, a
+ * spell-check accept), which is the OPPOSITE signal: the user is mid-edit, and
+ * committing there tore the box down and sprayed the rest at the page. The
+ * input now sets `autocorrect`/`spellcheck` off (createFindBar), so the event
+ * should be rare; the predicate no longer relies on that holding, since browser
+ * support for the attribute is uneven and other replacement sources exist.
+ * Re-add it only against a field report of a real BranchKit dictation arriving
+ * as `insertReplacementText` — not on the theory that some engine might.
+ *
  * A real hand-typed paste no longer commits, which is the better behaviour
  * anyway: a pasted phrase is often something you then edit, and live highlights
- * already show while you decide. Enter commits it.
+ * already show while you decide. Enter commits it. An autocorrect now behaves
+ * the same way, for the same reason.
  */
 function isDictatedInsert(e: Event): boolean {
   const ev = e as InputEvent;
-  if (ev.inputType === 'insertReplacementText') return true;
   return ev.inputType === 'insertText' && (ev.data?.length ?? 0) > 1;
 }
 
@@ -674,12 +731,43 @@ function cancelDictatedCommit(): void {
   dictatedCommitTimer = null;
 }
 
+/** Focus left the query box — see the listener registration in createFindBar. */
+function handleFindBarBlur(): void {
+  if (!barElement) return;
+  closeFindMode();
+}
+
 function handleFindBarKey(e: KeyboardEvent): void {
   if (e.key === 'Escape') {
+    // Same sentinel guard, same reasoning as the Enter branch below — an
+    // Escape wearing keyCode 229 or isComposing is the IME cancelling a
+    // COMPOSITION, not the user leaving the search. Closing the session on it
+    // threw away the whole query because a half-typed candidate was abandoned.
+    // The two branches have to agree: this listener is the only one that can
+    // refuse the event (the page-level guard only returns).
+    if (e.keyCode === 229 || e.isComposing) return;
     e.preventDefault();
     e.stopPropagation();
     closeFindMode();
   } else if (e.key === 'Enter') {
+    // Not a keystroke: `keyCode 229` is the platform's "text is being committed"
+    // sentinel (IME, and any OS-level text injection), and `isComposing` says a
+    // composition is still open. The `key` on such an event is an artifact of
+    // whatever the sink posted, so an Enter wearing either flag is not the user
+    // pressing Enter — committing on it tears the box down mid-composition and
+    // drops the text that was about to arrive.
+    //
+    // The page-level handler carries the same guard (content.ts) and actually
+    // runs FIRST — it is a capture-phase listener on `document`, so it sees the
+    // event before it reaches this input. It still cannot cover this one,
+    // because it only `return`s: no preventDefault, no stopPropagation, so the
+    // event carries on to the target and lands here unguarded. (While the bar
+    // holds focus it returns even earlier, at the isFindBarFocused check — and
+    // that gate is the reason this listener sees a focused-input event at all.)
+    // Two listeners, one event, and only the one that acts on it can refuse it.
+    // Same guard, same reasoning as palette-page.ts's: the box and the palette
+    // are the two inputs text reaches without a keyboard.
+    if (e.keyCode === 229 || e.isComposing) return;
     e.preventDefault();
     e.stopPropagation();
     commitFind();
@@ -772,6 +860,12 @@ export function closeFindMode(): void {
 function endSession(keepPaint: boolean): void {
   if (!state.active) return;
   state.active = false;
+  // The mode belongs to the SESSION, so it dies with it. Leaving it set made
+  // module state say "this is a highlight box" with no box on screen, and any
+  // entry point that forgot to declare its own mode picked that up (findImmediate
+  // did, for every voice find after a highlight). Declaring it at entry fixes the
+  // one caller; clearing it at exit is what makes the next one unable to inherit.
+  state.mode = 'find';
   if (!keepPaint) clearHighlights();
   removeFindBar();
   removeCommittedPill();
@@ -854,12 +948,14 @@ export function findNavigate(delta: number): Range | null {
 export function handleFindNavKey(e: KeyboardEvent): boolean {
   if (!state.active || barElement) return false; // only when committed (bar closed)
   if (e.ctrlKey || e.altKey || e.metaKey) return false;
-  if (e.key === 'Escape') {
-    e.preventDefault();
-    e.stopPropagation();
-    closeFindMode();
-    return true;
-  }
+  // Escape is deliberately NOT here. This runs in content.ts's keydown preamble,
+  // AHEAD of the escape cascade — so taking Escape here peeled the find before
+  // any layer above it, and a committed find under hint mode closed the FIND on
+  // the key while the spoken "over" left HINT MODE. Two inputs, opposite
+  // results, in the one place that promises one order. The find layer is in the
+  // cascade (rank 6) and the cascade is the only declaration of the order.
+  // n / N stay: they are find NAVIGATION, not an escape, and they have to beat
+  // the hint filter so a bare `n` isn't codeword input in always-mode.
   if (e.key === 'n' || e.key === 'N') {
     e.preventDefault();
     e.stopPropagation();
@@ -873,6 +969,18 @@ export function handleFindNavKey(e: KeyboardEvent): boolean {
  * the committed pill — highlights persist, n / Shift+n (or voice "next" /
  * "previous") navigate, Escape or voice "close find" dismisses. */
 export function findImmediate(query: string): void {
+  // Voice find is a find SESSION and has to say so. `openFindMode` used to be
+  // the only writer of `state.mode`, so a phrase session that had already ended
+  // left `highlight` sitting in module state and the next voice find inherited
+  // it: painted the phrase wash with no current match, while showCommittedPill
+  // still drew "/" and n/N navigated a match nothing marked.
+  //
+  // The one exception is the Model B hybrid below — landing in a box that is
+  // ALREADY open. That box's mode belongs to the command that opened it (say
+  // "highlight", then "search <phrase>" to fill it), and repurposing it here
+  // would leave its glyph and placeholder lying about what Enter now does.
+  const intoOpenBox = barElement !== null && inputElement !== null;
+  if (!intoOpenBox) state.mode = 'find';
   state.active = true;
   ensureHighlightStyle();
   onActivate?.();
@@ -912,5 +1020,10 @@ export function findImmediate(query: string): void {
   } else {
     showCommittedPill();
   }
-  if (matchRanges.length > 0) onCommit?.();
+  // Only a SEARCH has committed here. onCommit means "there is now a result set
+  // you move around in", which is what search badges and caret's extend-to-match
+  // hang off; a phrase box filled by voice is still collecting an argument, and
+  // in that mode a codeword means "select this one" — the range pick's job, not
+  // a search badge's. commitFind draws the same line for the typed path.
+  if (state.mode === 'find' && matchRanges.length > 0) onCommit?.();
 }

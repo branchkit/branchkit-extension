@@ -59,13 +59,14 @@ import { copyText } from './activate/clipboard';
 import { flashToast } from './render/toast';
 import { registerSelectionCommands, restorePosition, caret, resolveSelectTo, SELECTION_ACTIONS, parseSelectionCommand } from './activate/selection-commands';
 import { startQueryFieldReporting } from './plugin/query-field';
-import { resolveRangePick, refusePickWindowCodeword, filterRangePickChips, setPickWindowHooks, cancelRangePick, reconcileRangePickChips, isRangePickPending, rangePickPrefixMatch } from './activate/range-disambiguation';
-import { armSearchBadges, clearSearchBadges, reconcileSearchBadges, resolveSearchBadge, filterSearchBadges, searchBadgePrefixMatch } from './activate/search-badges';
+import { refusePickWindowCodeword, setPickWindowHooks, cancelRangePick, reconcileRangePickChips, rangePickPrefixMatch } from './activate/range-disambiguation';
+import { armSearchBadges, clearSearchBadges, reconcileSearchBadges, searchBadgePrefixMatch } from './activate/search-badges';
 import {
   setStoreCodewordHooks, anyHolderMatchesPrefix, narrowByPrefix, resolveCodeword,
-  soleHolderMatch,
+  soleHolderMatch, resolveHolderCodeword, type HolderOutcome,
 } from './activate/codeword-routing';
 import { runEscapeCascade } from './activate/escape-cascade';
+import { preemptsPageKeys } from './activate/key-preamble';
 import './debug/dev-keepalive';
 import {
   CodewordSnapshot,
@@ -99,8 +100,6 @@ import {
   findNext,
   findPrevious,
   findImmediate,
-  isFindBarOpen,
-  handleFindNavKey,
   setFindCallbacks,
 } from './scan/find';
 import { focusFirstInput, handleFocusInputKey } from './activate/focus-input';
@@ -415,9 +414,15 @@ const engine = new SettleEngine(
     notePaintSamplerScroll: () => notePaintSamplerScroll(),
     afterScrollSettle: () => {
       flushDeferredNavRescan();
-      // Roll the Range-anchored badge sets onto whatever the scroll brought
-      // into view. Riding this hook rather than a scroll listener of their own
-      // keeps the sensing freeze intact — both are no-ops when nothing is live.
+    },
+    // Roll the Range-anchored badge sets onto whatever moved. Every settle
+    // kind, not just the scroll one: text reflows without a scroll (a
+    // mutation-, resize- or attention-driven settle), and riding scroll alone
+    // left chips at stale rects, dead ranges unreaped, and `in_strict_viewport`
+    // unpublished — a badge that had left the screen stayed speakable. Riding
+    // the settle engine's existing hook rather than sensing of their own keeps
+    // the freeze intact; both are no-ops when nothing is live.
+    afterSettle: () => {
       reconcileRangePickChips();
       reconcileSearchBadges();
     },
@@ -461,15 +466,38 @@ function onTrackerCodewordsChanged(claimed: ElementWrapper[], released: string[]
 // call per scroll-end now, which makes per-call cost much less critical
 // than total observation overhead.)
 
+// Were the page's badges showing when this find session started? Find hides
+// them while it runs — the match highlights and the badge layer compete for the
+// same screen — and RESTORING them is the other half of that trade, which was
+// missing entirely. Every exit path (Escape, voice "over", the focus-loss close)
+// left an always-mode page with no badges and no indication why; the only way
+// back was to press `f`, which re-shows them as a side effect of entering hint
+// mode. Reported from the field 2026-07-26.
+//
+// Snapshotted rather than assumed, exactly as the pick window does it (see
+// setPickWindowHooks): under manual visibility the badges were already hidden
+// before find ran, and re-showing them on exit would be a state change the user
+// never asked for.
+//
+// Recorded once per SESSION, not per activate call — `findImmediate` re-fires
+// onActivate when a second voice find lands over a live one, and re-reading
+// there would snapshot the hidden state find itself had just caused, losing the
+// original answer. Same "no-op once active" shape as caret's findFloor.
+let findBadgeEntry: boolean | null = null;
+
 setFindCallbacks({
   // FIND_ACTIVE mirrors the session to the plugin's find tag (voice
   // "next"/"previous" gate). Fires on every activate call — redundant posts
   // are idempotent plugin-side.
   onActivate: () => {
-    hideBadges();
+    findBadgeEntry ??= pageSession.badgesVisible || store.all.some((w) => w.hint?.isVisible);
+    if (findBadgeEntry) hideBadges();
     chrome.runtime.sendMessage({ type: 'FIND_ACTIVE', active: true } as Message).catch(() => {});
   },
   onDeactivate: () => {
+    // Hand the screen back in the state find borrowed it in.
+    if (findBadgeEntry) void showBadges();
+    findBadgeEntry = null;
     resetCycleTarget();
     clearSearchBadges('find_deactivated');
     chrome.runtime.sendMessage({ type: 'FIND_ACTIVE', active: false } as Message).catch(() => {});
@@ -561,7 +589,24 @@ labelReservoir.installLeakSweep(
   // while the chips stayed painted, so the pick silently stopped working and
   // the freed letters could be re-granted to a hint. See
   // labels/codeword-holders.ts.
-  (cw) => store.byCodeword(cw) !== undefined || heldOutsideStore(cw),
+  //
+  // The store half asks about the CLAIM, not the paint. It used to ask
+  // `store.byCodeword(cw)`, which resolves through `w.label` — written at PAINT
+  // time (settle-engine `prepareBadge`) — whereas `w.scanned.codeword` is
+  // written at CLAIM time (observe/intersection-tracker, on viewport entry). A
+  // wrapper between the two answered "nobody holds this", so past the 30s grace
+  // the sweep reclaimed a LIVE wrapper's codeword: re-grantable to a second
+  // hint while the first still believed it owned the letters, and deleted
+  // plugin-side so speaking it did nothing. Under manual hint visibility — or
+  // any window where badges are hidden (a find session, a momentary Shift+F) —
+  // paint never arrives and the gap is indefinite, not a race.
+  //
+  // The claim-level read SUBSUMES the paint-level one (`label` is derived from
+  // `scanned.codeword` at every writer), so this is strictly wider, not an
+  // alternative to keep in sync. Same complexity too: `byCodeword` was already
+  // a linear `.find()` over the same array. Tests: scan/element-wrapper.test.ts
+  // "claimed-vs-painted".
+  (cw) => store.all.some((lw) => lw.scanned.codeword === cw) || heldOutsideStore(cw),
   (leaked) => {
     let deletesQueued = 0;
     for (const cw of leaked) {
@@ -1128,19 +1173,41 @@ function setBadgesVisible(visible: boolean): boolean {
 
 dispatcher.register('toggle_hints', () => { toggleHints(); });
 
-// Range-pick chip window: badges hide while chips are up (see activate/range-disambiguation.ts).
+// Range-pick chip window: badges hide and the keyboard captures codeword keys
+// while chips are up (see activate/range-disambiguation.ts). Both halves of the
+// entry state are snapshotted here and handed back on teardown.
 setPickWindowHooks({
-  hideBadges: () => {
-    const showing = pageSession.badgesVisible || store.all.some((w) => w.hint?.isVisible);
-    if (showing) hideBadges();
-    return showing;
+  enter: () => {
+    // Read BEFORE hiding: hideBadges() runs clearHintFilter(), which exits hint
+    // mode — so a keyboard read taken afterwards always says 'normal', which is
+    // how a pick came to hand back repainted badges with the keyboard no longer
+    // listening for them.
+    //
+    // getMode() is the only public read of the keyboard's mode and it ranks
+    // caret/visual/video/mark ABOVE hint, so a pick armed from hint mode while
+    // caret is also active still restores to normal. A known gap, strictly
+    // better than the unconditional exit it replaces; the mode stack
+    // (notes/DESIGN_MODE_STACK_AND_CODEWORD_HOLDERS.md) removes the ranking
+    // question rather than answering it here.
+    const entry = {
+      badgesVisible: pageSession.badgesVisible || store.all.some((w) => w.hint?.isVisible),
+      hintMode: keyHandler.getMode() === 'hint',
+    };
+    if (entry.badgesVisible) hideBadges();
+    // A pick asks a question in codewords, so the keyboard has to be listening
+    // for them — without this the chips were speak-only, and `gs` opened a phrase
+    // box whose answer the keyboard that opened it could not give.
+    keyHandler.enterHintMode();
+    return entry;
   },
-  showBadges: () => { void showBadges(); },
-  // A pick asks a question in codewords, so the keyboard has to be listening
-  // for them — without this the chips were speak-only, and `gs` opened a phrase
-  // box whose answer the keyboard that opened it could not give.
-  captureKeys: () => keyHandler.enterHintMode(),
-  releaseKeys: () => keyHandler.exitHintMode(),
+  restore: (entry) => {
+    if (entry.badgesVisible) void showBadges();
+    // enterHintMode clears the codeword filter, which is right on both edges:
+    // the badges the pick hid are repainted unfiltered, so a prefix typed
+    // before the pick no longer names anything on screen.
+    if (entry.hintMode) keyHandler.enterHintMode();
+    else keyHandler.exitHintMode();
+  },
 });
 
 dispatcher.register('activate_hint', (params) => {
@@ -1469,6 +1536,10 @@ keyHandler.setHintEscapeCallback(() => {
 setStoreCodewordHooks({
   matchesPrefix: (prefix) => store.matchingLetterPrefix(prefix).length > 0,
   narrow: (prefix) => narrowStoreHints(prefix),
+  // Hidden badges keep publishing their codewords, so a prefix can arrive for
+  // hints nobody can see (manual mode; a find session that hid them). The
+  // router decides WHEN this is right to call — see narrowByPrefix.
+  reveal: () => { if (!pageSession.badgesVisible) void showBadges(); },
   resolve: (codeword) => {
     const w = store.byCodeword(codeword);
     if (!w) return false;
@@ -2157,6 +2228,14 @@ function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
   // [data-branchkit-hint] node below, but the narrow needs an explicit release
   // or the successor content script's hints stay out of the Discovery HUD.
   cancelRangePick(`teardown_${reason}`);
+  // Search badges are the pick's sibling holder and need the same explicit
+  // exit. The badge hosts get swept with every other [data-branchkit-hint] node
+  // below, but that sweep is DOM only: without dispose() the codewords are
+  // never released to the reservoir, the records are never retired, and the set
+  // stays registered as a CodewordHolder — so the successor content script
+  // inherits a pool short by up to MAX_SEARCH_BADGES. Same position and same
+  // failure mode as the cancelRangePick above, so it goes in the same place.
+  clearSearchBadges(`teardown_${reason}`);
   // Suspend/resume-cycled machinery (see contract above) — owned by the
   // machinery-gate module, which cycles it.
   teardownMachinery();
@@ -2293,7 +2372,13 @@ function rescanForNav(fromCache: boolean, reason: string): void {
   // every other codeword — recoverable only by voice "escape". The badge
   // machinery survives a nav by rebinding wrappers; the pick can only be
   // re-asked.
-  if (reason === 'spa_nav') cancelRangePick('spa_nav');
+  if (reason === 'spa_nav') {
+    cancelRangePick('spa_nav');
+    // Same argument, same Ranges: a search badge points into DOM the nav just
+    // replaced. The set only notices on a reconcile, which rides settle — so
+    // left alone it survives to paint stale codewords over the new page.
+    clearSearchBadges('spa_nav');
+  }
 
   // A same-document nav is a new page: in manual mode (or always-mode with an
   // active F-hide) it should start hidden. The SPA nav keeps this content
@@ -2591,40 +2676,33 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       // Three-tier resolution (see docs/completed/DESIGN_ELEMENT_IDENTITY_REGISTRY.md §6).
       // Algorithm lives in activate-resolution.ts so it's unit-testable.
       const codeword = params?.codeword ?? '';
-      // Range-disambiguation pick: if this frame is waiting on a codeword
-      // choice for "highlight"/"select to" (activate/range-disambiguation.ts),
-      // the spoken codeword names a text RANGE, not an element — consume it
-      // before element resolution. Frame routing already delivered it here
-      // (the pick claimed the codeword from this frame's reservoir).
-      // Search badges resolve BEFORE element hints and AFTER the pick: a pick
-      // owns every codeword while live, whereas search badges coexist with
-      // link hints and must only claim their own.
-      if (codeword && !isRangePickPending()) {
-        const searchOutcome = resolveSearchBadge(codeword);
-        if (searchOutcome !== 'not_mine') {
-          const jumped = searchOutcome === 'jumped';
-          reportDispatchResult({
-            action, codeword, resolution: 'search_badge', elem_tag: '',
-            taken: jumped ? 'click' : 'skipped', ok: jumped,
-            frame: trimFrameUrl(window.location.href),
-            detail: jumped ? 'jumped to search match' : 'match off screen', fp: '',
-          });
-          if (!jumped) flashToast('That match is off screen — scroll to it first');
-          return;
-        }
-      }
-      const pickOutcome = codeword ? resolveRangePick(codeword) : 'not_mine';
-      if (pickOutcome !== 'not_mine') {
-        // 'off_screen' is the chips' twin of the element path's sealed strict
-        // gate: the band paints chips past the fold, and one the user hasn't
-        // read could only be spoken by accident. Refused, pick stays live.
-        const picked = pickOutcome === 'picked';
+      // A spoken codeword may name a text RANGE rather than an element — a
+      // range-pick chip answering "highlight"/"select to", or a search-match
+      // badge. Both are consumed before element resolution, in the ONE declared
+      // order (activate/codeword-routing.ts), which the keyboard shares: a pick
+      // owns every codeword while live, whereas search badges coexist with link
+      // hints and claim only their own. Frame routing already delivered the
+      // codeword here (the holder claimed it from this frame's reservoir).
+      // Only the dispatch REPORTING is call-site work, so only it stays here.
+      const held: HolderOutcome = codeword ? resolveHolderCodeword(codeword) : { kind: 'not_mine' };
+      if (held.kind !== 'not_mine') {
+        // 'off_screen' is the holders' twin of the element path's sealed strict
+        // gate: the band paints past the fold, and a badge the user hasn't read
+        // could only be spoken by accident. Refused; the holder stays live.
+        const search = held.kind === 'jumped' || (held.kind === 'off_screen' && held.holder === 'search');
+        const ok = held.kind === 'jumped' || held.kind === 'picked';
         reportDispatchResult({
-          action, codeword, resolution: 'range_pick', elem_tag: '',
-          taken: picked ? 'click' : 'skipped', ok: picked,
+          action, codeword, resolution: search ? 'search_badge' : 'range_pick', elem_tag: '',
+          taken: ok ? 'click' : 'skipped', ok,
           frame: trimFrameUrl(window.location.href),
-          detail: picked ? 'range pick resolved' : 'chip off screen', fp: '',
+          detail: search
+            ? (ok ? 'jumped to search match' : 'match off screen')
+            : (ok ? 'range pick resolved' : 'chip off screen'),
+          fp: '',
         });
+        // The pick flashes its own refusal toast (it owns the exit guidance);
+        // search's is here because search has no modal state to explain.
+        if (!ok && search) flashToast('That match is off screen — scroll to it first');
         return;
       }
       // Chips own the codewords while a pick is pending (see the module).
@@ -2894,31 +2972,15 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         fp: '',
       });
     } else if (action === 'noop') {
-      // The SW translates the inbound spoken prefix word to its letter before
-      // forwarding (see frame-router), so `prefix` is already a letter here.
-      const letter = params?.prefix;
-      // Pick window: progress goes to the chips; hidden badges stay hidden.
-      if (filterRangePickChips(letter ?? '')) return;
-      // Search badges take progress too, but do NOT return: they coexist with
-      // link hints, so the store's badges must narrow in the same breath.
-      filterSearchBadges(letter ?? '');
-      if (letter) {
-        if (!pageSession.badgesVisible) showBadges();
-        const matchSet = new Set(store.matchingLetterPrefix(letter));
-        for (const w of store.all) {
-          const isMatch = matchSet.has(w);
-          w.hint?.setFiltered(!isMatch);
-          if (isMatch) {
-            w.hint?.setMatchedChars(1);
-          }
-        }
-      } else {
-        // No prefix — reset all hints to default (cancel pair state)
-        for (const w of store.all) {
-          w.hint?.setFiltered(false);
-          w.hint?.setMatchedChars(0);
-        }
-      }
+      // Mid-codeword progress. The SW translates the inbound spoken prefix word
+      // to its letter before forwarding (see frame-router), so `prefix` is
+      // already a letter here — the same shape the keyboard's filter callback
+      // passes, which is why both now go through the one router. `''` resets
+      // (pair cancelled). This used to be an inline copy of the router's
+      // ordering that had drifted twice: it hardcoded setMatchedChars(1) where
+      // the keyboard uses the full prefix length, and it re-painted every link
+      // hint on any prefix, including one a search badge already answered.
+      narrowByPrefix(params?.prefix ?? '');
     } else if (action === 'name_reference') {
       const refName = params?.name?.toLowerCase().trim();
       if (!refName) return;
@@ -3114,24 +3176,13 @@ const heldKeys = new Set<string>();
 
 pageSession.resources.listen(document, 'keydown', (e: KeyboardEvent) => {
   if (pageSession.isTornDown) return;
-  // Not a keystroke: keyCode 229 is the platform's text-commit sentinel (IME,
-  // and any OS-level injection such as voice dictation). Its `key` is an
-  // artifact — BranchKit's dictation sink surfaces as `key: "s"` whatever was
-  // said — so letting it reach the hint filter or a binding acts on a keystroke
-  // the user never made. The committed text follows as an input event.
-  if (e.keyCode === 229 || e.isComposing) return;
-  // While the find bar is open it owns the keyboard — its focused input handles
-  // typing and its own keydown handles Enter/Escape. Returning here (without
-  // preventDefault) lets the keystroke reach that input and keeps the hint key
-  // handler from treating letters as codeword filtering.
-  if (isFindBarOpen()) return;
-  // After Enter commits the search the bar closes but highlights persist; n /
-  // Shift+n cycle matches and Escape clears. This runs before the hint key
-  // handler so bare n isn't swallowed as codeword input in always-mode.
-  // EXCEPT in caret/visual mode, which owns n/N/Escape to extend the selection
-  // to matches (findExtend) — let those keys fall through to the caret handler.
-  const inCaretMode = keyHandler.getMode() === 'caret' || keyHandler.getMode() === 'visual';
-  if (!inCaretMode && handleFindNavKey(e)) return;
+  // The guards that decide whether a key is BranchKit's to route at all —
+  // composition artifacts, the focused find bar, post-commit find navigation.
+  // They live in activate/key-preamble.ts because this listener IS the real key
+  // path, and a test can only run it if it is callable: every escape/mode test
+  // used to go around this and that is where the key's order silently diverged
+  // from the spoken one. Order inside is load-bearing; see the module.
+  if (preemptsPageKeys(e)) return;
   // Focus-input mode (Vimium gi): Tab/Shift+Tab cycle text fields. Runs before
   // the hint handler so Tab cycling isn't pre-empted, and in capture phase so it
   // beats the focused input's native Tab.

@@ -54,10 +54,19 @@ export const caret = new CaretController({
     if (mode) keyHandler.enterCaretMode(mode);
     else keyHandler.exitCaretMode();
     // Reflect caret-active to the plugin (via background) so the exclusive caret
-    // tag gates the voice selection commands. Top frame only — the tag is a
-    // single per-browser mode, and the mode chip is top-frame too.
+    // tag gates the voice selection commands. EVERY frame speaks, matching the
+    // FIND_ACTIVE post (content.ts) — a CaretController is per-frame, and a
+    // SUBFRAME caret session is a designed path, not an accident: resolveSelectTo
+    // deliberately routes "any subframe with matches" through the chip pick,
+    // whose onPick calls extendToRange in that subframe. Under the old top-frame
+    // guard the selection was painted while the tag was never set, so every
+    // caret-gated command was ineligible — the field report quoted in
+    // resolveSelectTo's own comment ("copy that" → "caret mode not active").
+    // The edge dedupe stays PER FRAME, so caret↔visual transitions don't re-POST.
+    // Arbitration between frames is the plugin's (A1) and, eventually, the
+    // service worker's — see notes/DESIGN_MODE_STACK_AND_CODEWORD_HOLDERS.md.
     const active = mode !== null;
-    if (isTopFrame && active !== caretActivePushed) {
+    if (active !== caretActivePushed) {
       caretActivePushed = active;
       chrome.runtime.sendMessage({ type: 'CARET_ACTIVE', active } as Message).catch(() => {});
     }
@@ -75,8 +84,11 @@ export const caret = new CaretController({
 // small delay lets the SW's focus claim land first (the plugin accepts
 // {active:true} only from the focused conn, fail-open when unknown); the
 // re-send is idempotent plugin-side either way.
+// Per-frame for the same reason the post above is: the frame that HOLDS the
+// caret session is the one that has to re-assert it, and that frame is often
+// not the top one.
 window.addEventListener('focus', () => {
-  if (!isTopFrame || !caret.isActive()) return;
+  if (!caret.isActive()) return;
   setTimeout(() => {
     if (!caret.isActive()) return;
     caretActivePushed = true;

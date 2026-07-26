@@ -118,8 +118,8 @@ export function clearSearchBadges(reason: string): void {
 
 /**
  * Re-derive which matches wear a badge as the viewport moves. Rides the settle
- * engine's existing afterScrollSettle hook, the same signal the pick chips use
- * — no new observer, timer or listener.
+ * engine's existing `afterSettle` hook — every settle kind, the same signal the
+ * pick chips use — so no new observer, timer or listener.
  */
 export function reconcileSearchBadges(): void {
   // A find session that ended without a deactivate (defensive: the badges

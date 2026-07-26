@@ -189,12 +189,16 @@ function makeHarness(opts?: { badgesVisible?: boolean }) {
     isTornDown: () => state.tornDown,
     displayMode: () => 'letter' as BadgeDisplayMode,
   };
-  const hooks: SettleEngineHooks & { showBadgesCalls: number; scrollSettleFlushes: number } = {
+  const hooks: SettleEngineHooks & {
+    showBadgesCalls: number; scrollSettleFlushes: number; settleFlushes: number;
+  } = {
     showBadgesCalls: 0,
     scrollSettleFlushes: 0,
+    settleFlushes: 0,
     showBadges() { this.showBadgesCalls++; return Promise.resolve(); },
     notePaintSamplerScroll() {},
     afterScrollSettle() { this.scrollSettleFlushes++; },
+    afterSettle() { this.settleFlushes++; },
   };
   const engine = new SettleEngine(deps, hooks);
   return {
@@ -365,6 +369,34 @@ describe('settle: timer discipline', () => {
 
     h.scheduler.flushTimers();
     expect(h.clip.reconcileClipObservation).toHaveBeenCalledTimes(1);
+  });
+
+  // The Range-anchored badge sets (pick chips, search badges) converge on
+  // afterSettle. They rode afterScrollSettle, which fires only on the SCROLL
+  // settle — so a mutation-, resize- or attention-driven settle converged the
+  // wrapper store and skipped them entirely: chips left at stale rects, dead
+  // ranges unreaped, and in_strict_viewport never re-published, which leaves a
+  // badge that has left the screen still speakable.
+  it('afterSettle fires on EVERY settle kind, not just the scroll one', () => {
+    const h = makeHarness();
+    h.engine.settle('store');
+    expect(h.hooks.settleFlushes).toBe(1);
+    expect(h.hooks.scrollSettleFlushes).toBe(0);
+
+    h.engine.scheduleScrollReposition();
+    h.scheduler.flushTimers();
+    expect(h.hooks.settleFlushes).toBe(2);
+    expect(h.hooks.scrollSettleFlushes).toBe(1);
+  });
+
+  it('afterSettle runs with badges hidden — the sets are live precisely then', () => {
+    // A pick hides the page's badges for its lifetime, so a badges-visible gate
+    // would turn the pass off for the only badges on screen.
+    const h = makeHarness();
+    h.state.badgesVisible = false;
+    h.engine.settle('store');
+    expect(h.clip.reconcileClipObservation).not.toHaveBeenCalled(); // gated, as designed
+    expect(h.hooks.settleFlushes).toBe(1);                          // this is not
   });
 });
 

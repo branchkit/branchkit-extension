@@ -25,6 +25,7 @@ import { getActiveAdapter } from '../adapters';
 import { getCompiledRule, applyUserRuleToScan } from '../rules/rule-apply';
 import { applyExclusions, collectInclusions } from '../rules/domain-rules';
 import { isRecallLoaded, resolvePreferredCodeword, rememberClaimedCodewords } from '../labels/codeword-recall';
+import { heldOutsideStore } from '../labels/codeword-holders';
 import {
   queuePut, queueDelete, markSent, hasPendingDeletes, drainPendingDeletes,
   getSessionId, claimLabels, postBatch, checkShadowDesync,
@@ -407,10 +408,26 @@ async function processScanBatch(
         // Already detached mid-flight (before markSent, so no Delete was
         // queued then). The plugin holds the codeword — queue the Delete
         // manually, UNLESS the released label was already reclaimed by a
-        // live wrapper, in which case the plugin entry now (or soon)
-        // belongs to that wrapper and deleting it would orphan a painted
+        // live holder, in which case the plugin entry now (or soon)
+        // belongs to THAT holder and deleting it would orphan a painted
         // badge.
-        if (!store.all.some((lw) => lw.scanned.codeword === cw)) {
+        //
+        // "Holder" is not "store wrapper": the range-pick chips and the
+        // search-match badges hold pool codewords while staying out of the
+        // store by design (labels/codeword-holders.ts). The reservoir's
+        // sticky reclaim returns a just-released codeword to the FRONT of the
+        // queue, so a RangeBadgeSet claiming during this round-trip lands on
+        // exactly this one — and a store-only test then retired the grammar
+        // record of a LIVE chip, leaving it painted, silently unspeakable,
+        // and absent from the Discovery HUD's suffix menu. RangeBadgeSet.add
+        // cancels a delete already QUEUED at claim time; it cannot cancel one
+        // queued afterwards from here, which is the order this guard covers.
+        // Same compound question the reservoir leak sweep asks (content.ts
+        // `isHeld`), minus the store half's byCodeword indirection: a wrapper
+        // holds its codeword from claim, but `label` is only assigned at paint
+        // time, so byCodeword under-reports an attached-but-unpainted wrapper
+        // (manual hint visibility) and would delete a live one.
+        if (!store.all.some((lw) => lw.scanned.codeword === cw) && !heldOutsideStore(cw)) {
           queueDelete(cw);
         }
       }
