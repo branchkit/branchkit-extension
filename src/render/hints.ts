@@ -17,7 +17,7 @@ import { LabelAssignment, labelToDisplay, letterToSpokenWord } from '../labels/w
 import { documentInstanceId } from '../labels/document-identity';
 import { getCachedStyle, isRectOnScreen } from '../core/layout-cache';
 import { calculateZIndex } from '../placement/stacking';
-import { computeBadgeColors } from './badge-colors';
+import { computeBadgeColors, computeAccentBadgeColors } from './badge-colors';
 import { type BadgeSettings, DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
 import { leaderLineGeometry } from '../placement/geometry';
 import { trackContainerResize, untrackContainerResize } from '../observe/container-resize-tracker';
@@ -1033,7 +1033,10 @@ export class HintBadge implements BadgeHandle {
    *  (see DESIGN_HINT_REUSE.md / phase 3 of the two-pass paint refactor).
    *  Rango does the same — synchronous APCA at construction, no flash. */
   private applyColors(): void {
-    const colors = computeBadgeColors(this.target.element);
+    const fill = this.variant.fill;
+    const colors = fill === 'page'
+      ? computeBadgeColors(this.target.element)
+      : computeAccentBadgeColors(this.target.element, fill.accent);
     this.inner.style.background = colors.bg;
     this.inner.style.color = colors.fg;
     // Border color + opacity come from CSS (rgb(var(--bk-b-rgb) / alpha)) so

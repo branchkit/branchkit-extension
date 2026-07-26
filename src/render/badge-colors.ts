@@ -318,6 +318,55 @@ export function computeBadgeColors(target: Element): BadgeColors {
   };
 }
 
+/**
+ * Adaptive badge colors for a badge that must be DISTINCT from the page rather
+ * than native to it — search-match badges, where several kinds of badge can be
+ * on screen at once and "which of these is a search hit" has to be answerable
+ * at a glance.
+ *
+ * A hint badge fills with the page's own background, so its shape comes only
+ * from a faint border and its text: deliberately ghosty, because it sits on
+ * everything. That trick can't distinguish anything. The obvious alternative —
+ * a fixed brand color — fails the way fixed colors always do here: a dark chip
+ * on a dark page, or an accent that happens to match the site's own palette,
+ * is invisible exactly when it matters.
+ *
+ * So the ACCENT HUE is fixed and its LIGHTNESS is solved per page. We hand the
+ * accent to the same APCA lightness search the foreground already uses
+ * (`adjustForContrast` keeps hue and chroma, moving only lightness until
+ * contrast clears threshold), measured against the resolved page background.
+ * On a white page that yields a deep accent; on a black page a bright one; on a
+ * page whose background IS the accent, it walks away until it separates. The
+ * hue — the thing that says "search" — survives all three.
+ *
+ * The label is then black or white by whichever reads better on the solved
+ * fill, contrast-adjusted against the fill rather than the page, because that
+ * is what it actually sits on.
+ */
+export function computeAccentBadgeColors(target: Element, accentHex: string): BadgeColors {
+  const pageBg = resolveBackgroundColor(target);
+  const fill = adjustForContrast(parseHexColor(accentHex), pageBg);
+  const ink = adjustForContrast(isLightBackground(fill) ? BLACK : WHITE, fill);
+
+  return {
+    bg: toCSS(fill),
+    fg: toCSS(ink),
+    // Border tracks the label, same as the hint path, so keyboard mode's
+    // border-alpha boost (--bk-b-rgb) behaves identically on both.
+    border: toCSS(ink, 0.3),
+    borderRgb: `${Math.round(ink.r)} ${Math.round(ink.g)} ${Math.round(ink.b)}`,
+  };
+}
+
 export function clearContrastCache(): void {
   contrastCache.clear();
+}
+
+/** Test seam: APCA contrast between two CSS rgb() strings, so tests can assert
+ *  legibility instead of pinning color values that any tuning would churn. */
+export function __apcaBetween(a: string, b: string): number {
+  const pa = parseColor(a);
+  const pb = parseColor(b);
+  if (!pa || !pb) return 0;
+  return Math.abs(apcaContrast(pa, pb));
 }

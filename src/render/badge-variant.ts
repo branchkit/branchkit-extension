@@ -17,6 +17,20 @@
 
 export interface BadgeVariant {
   /**
+   * How the badge fills.
+   *
+   * 'page' — the page's own resolved background, with the page's text colour
+   * on top. Deliberately ghosty: the badge reads as native to whatever it sits
+   * on, which is right when it sits on everything.
+   *
+   * {accent} — a fixed HUE whose lightness is solved per page against that
+   * same background (badge-colors.ts computeAccentBadgeColors). For badges
+   * that must be told apart from the ambient ones at a glance while several
+   * kinds are on screen. A fixed colour can't do this job: it disappears on
+   * the page that happens to share it.
+   */
+  readonly fill: 'page' | { accent: string };
+  /**
    * A badge that CAN'T complete the current codeword prefix.
    *
    * 'hide' (hints): hundreds are painted, so hiding the non-candidates
@@ -73,6 +87,7 @@ export interface BadgeVariant {
 }
 
 export const HINT_VARIANT: BadgeVariant = {
+  fill: 'page',
   nonCandidate: 'hide',
   matchedPrefix: 'fade',
   trackContainer: true,
@@ -81,6 +96,10 @@ export const HINT_VARIANT: BadgeVariant = {
 };
 
 export const RANGE_PICK_VARIANT: BadgeVariant = {
+  // Chips stay page-filled, identical to link hints: a pick HIDES the page's
+  // badges, so modality carries the meaning and there is nothing to be
+  // confused with. Colour is not doing work here.
+  fill: 'page',
   nonCandidate: 'dim',
   matchedPrefix: 'accent',
   // Gold on the matched letter — an explicit user preference, and the inverse
@@ -89,4 +108,26 @@ export const RANGE_PICK_VARIANT: BadgeVariant = {
   trackContainer: true,
   defendAgainstPage: false,
   suppressOverVideo: false,
+};
+
+/**
+ * Search-match badges: shown ALONGSIDE the page's link hints, so unlike the
+ * pick they have no mode to lean on and must be told apart by sight. The
+ * accent-filled badge is a saturated chip against the hints' page-coloured
+ * ghosts, and its lightness is solved per page so it can't vanish into a site
+ * that shares the hue.
+ *
+ * Long-lived (a find session lasts minutes, not seconds) so it takes the full
+ * page defences, unlike the chips.
+ */
+export const SEARCH_VARIANT: BadgeVariant = {
+  fill: { accent: '#7c5cff' },
+  // Non-candidates dim rather than vanish: the spread of matches down the page
+  // is information — it's how you see there are more below.
+  nonCandidate: 'dim',
+  matchedPrefix: 'accent',
+  accent: '#ffd60a',
+  trackContainer: true,
+  defendAgainstPage: true,
+  suppressOverVideo: true,
 };
