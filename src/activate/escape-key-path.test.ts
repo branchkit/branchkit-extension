@@ -52,16 +52,32 @@ vi.mock('./selection-commands', () => ({
   caret: {
     isActive: () => caretActive,
     escape: () => { caretEscapes.push('escape'); caretActive = false; },
+    exit: () => { caretEscapes.push('escape'); caretActive = false; },
   },
 }));
 
 import { keyHandler } from '../core/singletons';
 import { preemptsPageKeys } from './key-preamble';
 import { runEscapeCascade, type EscapeLayer } from './escape-cascade';
+import { modes } from '../core/modes';
 import {
   findImmediate, openFindMode, closeFindMode,
   isFindActive, isFindBarOpen, isFindBarFocused,
 } from '../scan/find';
+
+// The mocked modules' states as stack entries (C3: the cascade's decider is
+// peelTop, so an armed pick / active caret is an entry the way production
+// makes it — the mocks still record the exit-effect calls the cascade makes).
+// A production pick ENTERS hint mode as part of arming (the chips must be
+// typable) and then pushes itself, so it is the newest layer by construction.
+function armPick(): void {
+  pickPending = true;
+  modes.push('range_pick');
+}
+function armCaret(): void {
+  caretActive = true;
+  modes.push('caret');
+}
 
 // jsdom's hand-built KeyboardEvent carries no `code`; the registry matches on it.
 function codeFor(key: string): string {
@@ -99,6 +115,7 @@ function reset(): void {
   caretEscapes.length = 0;
   peeled = '';
   document.body.innerHTML = '';
+  modes.reset();
 }
 
 beforeEach(() => {
@@ -139,12 +156,14 @@ const SCENARIOS: Array<{ name: string; setup: () => void; expected: EscapeLayer 
   },
   {
     name: 'a range pick outranks everything',
-    setup: () => { pickPending = true; keyHandler.enterHintMode(); },
+    // Production order: arming a pick (re-)enters hint mode, THEN pushes
+    // itself — the pick is the newest layer by construction.
+    setup: () => { keyHandler.enterHintMode(); armPick(); },
     expected: 'range_pick',
   },
   {
     name: 'a caret selection',
-    setup: () => { caretActive = true; },
+    setup: () => { armCaret(); },
     expected: 'selection',
   },
   {
@@ -208,12 +227,12 @@ describe('the Escape key and the spoken escape peel the same layer', () => {
   });
 
   it('names the input to the layer that consumed it', () => {
-    pickPending = true;
+    armPick();
     press('Escape');
     expect(pickCancelled).toEqual(['key_escape']);
 
     reset();
-    pickPending = true;
+    armPick();
     runEscapeCascade('voice_escape');
     expect(pickCancelled).toEqual(['voice_escape']);
   });

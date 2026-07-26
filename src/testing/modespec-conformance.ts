@@ -152,6 +152,13 @@ export function describeModeSpecConformance(
             expect(r).toEqual({ peeled: 'mode', id: spec.id, reason: 'conformance' });
             expect(stack.has(spec.id)).toBe(false);
           });
+        } else {
+          it('is stepped over by peelTop, never popped (escape cannot reach it here)', () => {
+            stack.push(spec.id);
+            const r = stack.peelTop('conformance');
+            expect(r).toEqual({ peeled: 'none' });
+            expect(stack.has(spec.id)).toBe(true);
+          });
         }
 
         if (spec.peelInner) {

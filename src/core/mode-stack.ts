@@ -181,7 +181,15 @@ export const MODE_SPECS: readonly ModeSpec[] = [
     // input; the page content script is not capturing bare keys for it.
     capture: 'none',
     mirror: { tag: 'plugin.browser.palette', exclusive: true, speaker: 'any-frame' },
-    peelable: true,
+    // Not peelable FROM THIS STACK (decided at C3, when peelTop became the
+    // cascade's decider): while the palette is open its iframe owns focus, so
+    // the page-side Escape listener never sees the key — the palette's own
+    // document peels it, and losing focus closes it (the load-bearing blur
+    // rule). The spoken exit is plugin-side (the exclusive tag's external
+    // clear), which C4 routes through the mirror. A page-side peel here could
+    // only fire on a desynced stack and would pop an entry whose iframe it
+    // cannot reach.
+    peelable: false,
   },
   {
     id: 'video',

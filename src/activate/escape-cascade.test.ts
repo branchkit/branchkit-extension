@@ -1,95 +1,96 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// The cascade is the ONE declaration of what escape peels and in what order,
-// for both the Escape key and the spoken "escape"/"over". These assert the
-// order ITSELF, with every collaborator mocked and the cascade called directly.
+// The cascade derives the escape order from the mode stack — last pushed,
+// first peeled, intra-mode transients first (Wave 3 C3). These assert the
+// derivation and the per-mode exit effects with the effect modules mocked and
+// the cascade called directly, over the REAL stack singleton.
 //
-// They do NOT prove the two inputs run the same list — this file used to claim
-// that and it never could, because every case here calls runEscapeCascade() and
-// the key reaches it through content.ts's keydown listener. All four ways the
-// two had actually diverged lived in that gap and survived a commit that
-// claimed to have closed it. escape-key-path.test.ts drives the real key path
-// and is where the parity claim belongs; keep it that way.
+// They do NOT prove the two inputs run the same derivation — every case here
+// calls runEscapeCascade() and the key reaches it through content.ts's keydown
+// listener. escape-key-path.test.ts drives the real key path and is where the
+// parity claim belongs; keep it that way.
 
-let pickPending = false;
 const cancelled: string[] = [];
 vi.mock('./range-disambiguation', () => ({
-  isRangePickPending: () => pickPending,
-  cancelRangePick: (r: string) => { cancelled.push(r); pickPending = false; },
+  cancelRangePick: (r: string) => { cancelled.push(r); },
 }));
 
-let caretActive = false;
-const caretEscapes: number[] = [];
+const caretExits: number[] = [];
 vi.mock('./selection-commands', () => ({
   caret: {
-    isActive: () => caretActive,
-    escape: () => { caretEscapes.push(1); caretActive = false; },
+    exit: () => { caretExits.push(1); },
   },
 }));
 
-// The SESSION predicate, not the bar's presence: the cascade peels a committed
-// find (highlights + pill, bar already closed) exactly as it peels the box.
-let findActive = false;
 const findClosed: number[] = [];
 vi.mock('../scan/find', () => ({
-  isFindActive: () => findActive,
-  closeFindMode: () => { findClosed.push(1); findActive = false; },
+  closeFindMode: () => { findClosed.push(1); modes.pop('find'); },
 }));
 
-let hintLayer: 'hint_prefix' | 'hint_mode' | null = null;
-let videoMode = false;
 const hintPeels: string[] = [];
+const videoExits: number[] = [];
 vi.mock('../core/singletons', () => ({
   keyHandler: {
-    escapeHintLayer: () => {
-      if (!hintLayer) return null;
-      const peeled = hintLayer;
-      hintPeels.push(peeled);
-      // Mirror the real two-stage unwind: prefix first, then the mode.
-      hintLayer = peeled === 'hint_prefix' ? 'hint_mode' : null;
-      return peeled;
-    },
-    isVideoMode: () => videoMode,
-    exitVideoMode: () => { videoMode = false; },
+    escapeHintMode: () => { hintPeels.push('hint_mode'); },
+    exitVideoMode: () => { videoExits.push(1); },
   },
 }));
 
 import { runEscapeCascade } from './escape-cascade';
+import { modes } from '../core/modes';
+import { setInnerTransientProbe, clearInnerTransientProbes } from '../core/mode-stack';
+
+// Hint's typed prefix, as the probe models it: peels once, then the mode has
+// no transient left (production: KeyHandler.peelHintPrefix).
+let hintPrefix = false;
+function installHintProbe(): void {
+  setInnerTransientProbe('hint', () => {
+    if (!hintPrefix) return null;
+    hintPrefix = false;
+    hintPeels.push('hint_prefix');
+    return 'hint_prefix';
+  });
+}
 
 beforeEach(() => {
-  pickPending = false;
-  caretActive = false;
-  findActive = false;
-  hintLayer = null;
-  videoMode = false;
+  modes.reset();
+  clearInnerTransientProbes();
+  hintPrefix = false;
   cancelled.length = 0;
-  caretEscapes.length = 0;
+  caretExits.length = 0;
   findClosed.length = 0;
   hintPeels.length = 0;
+  videoExits.length = 0;
 });
 afterEach(() => vi.clearAllMocks());
 
-describe('escape cascade', () => {
+describe('escape cascade (derived from the mode stack)', () => {
   it('peels nothing and says so when nothing is open', () => {
     expect(runEscapeCascade('test')).toBe('');
   });
 
-  it('peels exactly ONE layer per invocation', () => {
-    pickPending = true;
-    caretActive = true;
-    findActive = true;
+  it('peels exactly ONE layer per invocation — the newest', () => {
+    modes.push('find');
+    modes.push('caret');
+    modes.push('range_pick');
 
     expect(runEscapeCascade('test')).toBe('range_pick');
-    expect(caretEscapes).toHaveLength(0);
+    expect(caretExits).toHaveLength(0);
     expect(findClosed).toHaveLength(0);
   });
 
-  it('runs the declared order: pick → hint prefix → hint mode → selection → video → find', () => {
-    pickPending = true;
-    hintLayer = 'hint_prefix';
-    caretActive = true;
-    videoMode = true;
-    findActive = true;
+  it('the full tower unwinds in reverse entry order, transients first', () => {
+    // Entered oldest to newest: a committed find, the video layer, a caret
+    // session, hint mode with a typed prefix, and a pick armed over it all
+    // (arming re-enters hint mode and pushes itself last, so this IS the
+    // production shape of "a pick outranks everything").
+    installHintProbe();
+    modes.push('find');
+    modes.push('video');
+    modes.push('caret');
+    modes.push('hint');
+    hintPrefix = true;
+    modes.push('range_pick');
 
     const peeled: string[] = [];
     for (let i = 0; i < 7; i++) peeled.push(runEscapeCascade('test'));
@@ -101,40 +102,73 @@ describe('escape cascade', () => {
   // The `w` layer is sticky and the plugin's video tag is hold-scoped, so no
   // plugin round trip can peel it — the cascade is the only thing that can.
   it('peels the video layer with nothing else open', () => {
-    videoMode = true;
+    modes.push('video');
     expect(runEscapeCascade('voice_escape')).toBe('video');
-    expect(videoMode).toBe(false);
+    expect(videoExits).toHaveLength(1);
+    expect(modes.has('video')).toBe(false);
   });
 
-  // The find layer asked isFindBarOpen() — false the moment Enter commits — so
-  // the spoken "over" could not dismiss a committed find at all.
   it('peels a committed find (no bar on screen, session still active)', () => {
-    findActive = true;
+    modes.push('find');
     expect(runEscapeCascade('voice_escape')).toBe('find');
     expect(findClosed).toHaveLength(1);
   });
 
-  it('a question awaiting an answer outranks a mode you are also in', () => {
-    // A pick captures the keyboard, so both are true at once. The pick wins:
-    // escaping the mode while its question stayed open would strand it.
-    pickPending = true;
-    hintLayer = 'hint_mode';
+  it('a question awaiting an answer outranks the mode it entered from', () => {
+    // Arming a pick enters hint mode and then pushes itself — newest by
+    // construction. Escaping the mode while its question stayed open would
+    // strand it; temporal order makes the pick peel first without a rank.
+    modes.push('hint');
+    modes.push('range_pick');
     expect(runEscapeCascade('test')).toBe('range_pick');
     expect(hintPeels).toHaveLength(0);
+    expect(modes.has('hint')).toBe(true);
+  });
+
+  it('a layer opened OVER a pending pick peels first — temporal, not ranked', () => {
+    // The one place the old fixed rank and temporal order disagree, decided
+    // by the design's resolved question 1: a voice command that genuinely
+    // opens a new layer over a pick lands above it and peels first.
+    modes.push('range_pick');
+    modes.push('hint');
+    expect(runEscapeCascade('test')).toBe('hint_mode');
+    expect(cancelled).toHaveLength(0);
+    expect(modes.has('range_pick')).toBe(true);
   });
 
   it('reports the reason to the layer that consumed it', () => {
-    pickPending = true;
+    modes.push('range_pick');
     runEscapeCascade('key_escape');
     expect(cancelled).toEqual(['key_escape']);
   });
 
-  // The regression that motivated single-sourcing: the key exited hint mode via
-  // its own handler while the spoken cascade peeled nothing, because hint mode
-  // was only ever in the key's list.
   it('peels hint mode — the layer the spoken path used to miss', () => {
-    hintLayer = 'hint_mode';
+    modes.push('hint');
     expect(runEscapeCascade('voice_escape')).toBe('hint_mode');
     expect(hintPeels).toEqual(['hint_mode']);
+  });
+
+  it('the typed prefix peels before the mode, and the entry stays put', () => {
+    installHintProbe();
+    modes.push('hint');
+    hintPrefix = true;
+    expect(runEscapeCascade('test')).toBe('hint_prefix');
+    expect(modes.has('hint')).toBe(true);
+    expect(runEscapeCascade('test')).toBe('hint_mode');
+    expect(modes.has('hint')).toBe(false);
+  });
+
+  it('caret\'s staged unwind reports as the selection layer', () => {
+    setInnerTransientProbe('caret', () => {
+      clearInnerTransientProbes(); // one stage, then only the exit remains
+      return 'visual';
+    });
+    modes.push('caret');
+    expect(runEscapeCascade('test')).toBe('selection'); // the collapse stage
+    expect(caretExits).toHaveLength(0);
+    expect(modes.has('caret')).toBe(true);
+    expect(runEscapeCascade('test')).toBe('selection'); // the exit
+    expect(caretExits).toHaveLength(1);
+    expect(modes.has('caret')).toBe(false);
   });
 });

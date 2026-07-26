@@ -33,6 +33,28 @@ peelTop's behavior — inner-before-mode, temporal order on the reachable
 find-then-video stacking — is proven by new tests against real module state.
 The cascade flips to peelTop in C3, when the flags die and the gate's
 harness converts.
+
+Wave 3 C3 is landing in three green commits, per the design's own risk note
+("land the stack driving the existing flags first, verify, then delete the
+flags in a separate commit"): **C3a (LANDED 2026-07-26)** — the cascade's
+decider IS peelTop: runEscapeCascade derives the order from the stack (last
+pushed first peeled, peelInner transients first) and keeps only the per-mode
+exit effects (cancelRangePick / escapeHintMode / caret.exit /
+exitVideoMode / closeFindMode — each one's internal pop of the entry peelTop
+already took is a no-op). The gate's harness converted mechanically
+(armPick/armCaret push the entries the way production arms them — a pick
+re-enters hint mode then pushes itself, so it is newest BY CONSTRUCTION and
+the "outranks everything" row holds under temporal order; assertions
+untouched). The palette spec became peelable:false for this page-side stack
+with the reason recorded (its iframe owns focus; blur closes it; the spoken
+exit is the plugin's external tag clear, C4's mirror). One reporting delta,
+deliberate: a find opened DURING a caret session is its own entry above
+caret, so escape now peels and reports it as 'find' (same thing closed;
+caret's staged 'caret_find' peelInner stage is unreachable from peelTop and
+dies in C3b). **C3b (next)** — delete findFloor + caret.escape(), retire
+PickEntryState/pickWindowHooks/restoreBadges onto the stack's floor payload.
+**C3c** — delete keyboard.ts's mode fields; getMode()/routing derive from
+the stack.
 **Repos touched:** `branchkit-extension` (bulk), `plugins/browser` (tag mirror),
 `app` (pin bumps only).
 

@@ -454,9 +454,17 @@ export class KeyHandler {
     if (this.mode !== 'hint') return null;
     const prefix = this.peelHintPrefix();
     if (prefix) return prefix;
+    this.escapeHintMode();
+    return 'hint_mode';
+  }
+
+  /** The hint MODE's escape exit: leave the mode and let content decide the
+   *  badge visibility half (onHintEscape). The cascade's exit effect for a
+   *  popped hint entry — the prefix stage is the peelInner probe's, so this
+   *  is unconditional. */
+  escapeHintMode(): void {
     this.exitHintMode();
     this.onHintEscape?.();
-    return 'hint_mode';
   }
 
   /** Peel the typed hint prefix WITHOUT leaving hint mode — the first escape

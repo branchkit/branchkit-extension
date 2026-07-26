@@ -89,10 +89,15 @@ class Model {
     return null;
   }
   peel(): ModeId | null {
-    // No probes installed and every real spec is peelable: peelTop pops the
-    // newest entry, full stop.
-    if (!this.arr.length) return null;
-    return this.pop(this.arr[this.arr.length - 1].id)!.id;
+    // No probes installed: peelTop pops the newest PEELABLE entry, stepping
+    // over non-peelable ones (the palette, whose escape lives in its own
+    // focused document — see MODE_SPECS).
+    for (let i = this.arr.length - 1; i >= 0; i--) {
+      const id = this.arr[i].id;
+      if (!specOf(id).peelable) continue;
+      return this.pop(id)!.id;
+    }
+    return null;
   }
   settled(): boolean {
     const d = this.desired();
@@ -188,7 +193,7 @@ function checkInvariants(w: World): void {
 }
 
 describe('ModeStack properties', () => {
-  it('peelTop pops in strict reverse push order', () => {
+  it('peelTop pops the PEELABLE entries in strict reverse push order', () => {
     fc.assert(
       fc.property(fc.uniqueArray(fc.constantFrom(...MODE_IDS)), (ids) => {
         const w = makeWorld();
@@ -199,8 +204,11 @@ describe('ModeStack properties', () => {
           if (r.peeled === 'none') break;
           if (r.peeled === 'mode') peeled.push(r.id);
         }
-        expect(peeled).toEqual([...ids].reverse());
-        expect(w.stack.depth()).toBe(0);
+        // Non-peelable specs (the palette) are stepped over, never popped —
+        // escape closes what escape may close; their own exit pops them.
+        const peelable = (id: ModeId) => specOf(id).peelable;
+        expect(peeled).toEqual([...ids].reverse().filter(peelable));
+        expect(w.stack.depth()).toBe(ids.filter((id) => !peelable(id)).length);
       }),
     );
   });
@@ -243,8 +251,15 @@ describe('ModeStack properties', () => {
         // flush runs (or any later stack activity — same drain). If ANY
         // exclusive tag survives this, every command system-wide is
         // suppressed by Layer 2 and the product is dead until restart.
-        while (w.stack.depth() > 0) {
+        // Escape drains only the PEELABLE entries; a non-peelable mode (the
+        // palette) exits by its own close, which is a pop.
+        for (;;) {
+          const before = w.stack.depth();
           step(w, { op: 'peel' });
+          if (w.stack.depth() === before) break; // nothing peelable remains
+        }
+        for (const id of [...w.stack.ids()].reverse()) {
+          step(w, { op: 'pop', id });
         }
         step(w, { op: 'sink', fails: false });
         step(w, { op: 'flush' });
