@@ -92,11 +92,28 @@ function legacyEffective(snapshot: readonly KeymapEntry[]): KeymapEntry[] {
   return out;
 }
 
-/** Same bindings per command, ignoring the flat array's ordering. */
+/**
+ * Same bindings per command, ignoring the flat array's ordering.
+ *
+ * Entries are normalised to a fixed key order before stringifying. JSON.stringify
+ * preserves insertion order, so `{keys, command, params}` and `{keys, params,
+ * command}` — identical data, built by two different code paths — compared as
+ * different. The first default binding to carry `params` failed this on nothing
+ * but field order (2026-07-26).
+ */
 function sameBindingsByCommand(a: readonly KeymapEntry[], b: readonly KeymapEntry[]): boolean {
+  const norm = (e: KeymapEntry): Record<string, unknown> => {
+    const out: Record<string, unknown> = { keys: e.keys, command: e.command };
+    if (e.params && Object.keys(e.params).length > 0) {
+      out.params = Object.fromEntries(
+        Object.entries(e.params).sort(([x], [y]) => x.localeCompare(y)),
+      );
+    }
+    return out;
+  };
   const group = (xs: readonly KeymapEntry[]): string => {
-    const m = new Map<string, KeymapEntry[]>();
-    for (const e of xs) m.set(e.command, [...(m.get(e.command) ?? []), e]);
+    const m = new Map<string, Record<string, unknown>[]>();
+    for (const e of xs) m.set(e.command, [...(m.get(e.command) ?? []), norm(e)]);
     return JSON.stringify([...m].sort(([x], [y]) => x.localeCompare(y)));
   };
   return group(a) === group(b);

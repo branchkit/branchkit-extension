@@ -775,9 +775,9 @@ export const DEFAULT_KEYMAP: readonly KeymapEntry[] = [
   { keys: 'shift+KeyN', command: 'find_previous' }, // N
   // gs — the same phrase box `/` opens, in select-the-phrase mode. Sits in the
   // g-prefix family with the other "go somewhere specific" binds (gg, gi, gu).
-  // No `mode` param: absent means highlight, and `extend` is only meaningful
-  // with a live selection, which is caret mode's own keys rather than a bind.
-  { keys: 'KeyG KeyS', command: 'select_to' }, // gs
+  // `mode` is explicit rather than relying on the handler's default, so the
+  // binding says what it does where the user reads it.
+  { keys: 'KeyG KeyS', command: 'select_to', params: { mode: 'highlight' } }, // gs
   // Zoom (Vimium zi/zo/z0)
   { keys: 'KeyZ KeyI', command: 'zoom_in' },      // zi
   { keys: 'KeyZ KeyO', command: 'zoom_out' },     // zo

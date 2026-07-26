@@ -202,7 +202,7 @@ describe('default keymap', () => {
       { keys: 'Slash', command: 'find_open' },
       { keys: 'KeyN', command: 'find_next' },
       { keys: 'shift+KeyN', command: 'find_previous' },
-      { keys: 'KeyG KeyS', command: 'select_to' },
+      { keys: 'KeyG KeyS', command: 'select_to', params: { mode: 'highlight' } },
       { keys: 'KeyZ KeyI', command: 'zoom_in' },
       { keys: 'KeyZ KeyO', command: 'zoom_out' },
       { keys: 'KeyZ Digit0', command: 'zoom_reset' },
