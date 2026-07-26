@@ -7,11 +7,15 @@
  * clients (the extension's background script) to trigger
  * chrome.runtime.reload().
  *
- * Usage: node scripts/dev.mjs <chrome|firefox>
+ * Usage: node scripts/dev.mjs [chrome|firefox ...]   (default: both)
  *
- * Pick whichever target matches the browser you've sideloaded. Both
- * target dirs can coexist on disk, so you can run two dev sessions
- * (one per browser) only if you bump the WS port for the second.
+ * BOTH TARGETS BY DEFAULT, from ONE server. Every loaded extension connects to
+ * the same hard-coded port (background.ts), so a single reload broadcast
+ * already reaches both browsers — but a server watching one target rebuilds
+ * only that dist, and the other browser then reloads a dist nobody rebuilt.
+ * That silently pinned Firefox to an old build for a whole session while its
+ * files on disk looked current (2026-07-26): the browser kept contributing a
+ * command catalog that no longer existed in source.
  */
 
 import * as esbuild from 'esbuild';
@@ -24,13 +28,14 @@ import { spawnSync } from 'node:child_process';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
 
-const target = process.argv[2];
-if (target !== 'chrome' && target !== 'firefox') {
-  console.error('usage: dev.mjs <chrome|firefox>');
-  process.exit(1);
+const VALID = ['chrome', 'firefox'];
+const targets = process.argv.length > 2 ? process.argv.slice(2) : VALID;
+for (const t of targets) {
+  if (!VALID.includes(t)) {
+    console.error(`usage: dev.mjs [${VALID.join('|')} ...]   (default: all)`);
+    process.exit(1);
+  }
 }
-
-const outDir = resolve(root, 'dist', target);
 
 const PORT = 35729;
 const wss = new WebSocketServer({ port: PORT });
@@ -48,10 +53,17 @@ wss.on('connection', (ws) => {
   ws.on('close', () => clients.delete(ws));
 });
 
+// One reload per burst. Each target runs a watch context per entry point, so a
+// single edit finishes a dozen builds within milliseconds; broadcasting on each
+// would fire a dozen runtime.reload() calls, and a reload mid-reload is how a
+// browser ends up on a half-swapped dist.
+let notifyTimer = null;
 function notifyReload() {
-  for (const ws of clients) {
-    ws.send('reload');
-  }
+  if (notifyTimer) clearTimeout(notifyTimer);
+  notifyTimer = setTimeout(() => {
+    notifyTimer = null;
+    for (const ws of clients) ws.send('reload');
+  }, 150);
 }
 
 const entries = [
@@ -63,56 +75,82 @@ const entries = [
   { in: 'src/options.ts',    out: 'options.js',    format: 'iife' },
 ];
 
-const reloadPlugin = {
-  name: 'reload-notify',
-  setup(build) {
-    build.onEnd((result) => {
-      if (result.errors.length === 0) {
-        notifyReload();
-      }
-    });
-  },
-};
+// A wedged watcher is worse than a failed build: the dist keeps its last good
+// output, the browser keeps running it, and every later "rebuilt, go test it"
+// is a lie. This server sat broken for hours on one stale import that scrolled
+// past in the log (2026-07-26), so failure and RECOVERY are both stated
+// loudly, and the server never claims to be watching while broken.
+const broken = new Set();
+function reportBuildState(target, errors) {
+  const key = target;
+  if (errors.length > 0) {
+    broken.add(key);
+    console.error(
+      `\n✘ [dev] ${target} BUILD FAILED — dist/${target}/ is STALE and the ` +
+      `browser is running an OLD build until this is fixed.`,
+    );
+    return false;
+  }
+  if (broken.delete(key)) {
+    console.log(`✓ [dev] ${target} build recovered — dist/${target}/ is current again.`);
+  }
+  return true;
+}
 
-if (existsSync(outDir)) rmSync(outDir, { recursive: true });
-mkdirSync(outDir, { recursive: true });
+for (const target of targets) {
+  const outDir = resolve(root, 'dist', target);
+  if (existsSync(outDir)) rmSync(outDir, { recursive: true });
+  mkdirSync(outDir, { recursive: true });
 
-// Static files copied once at startup. The manifest splitter writes
-// dist/<target>/manifest.json — re-run by hand if you edit it.
-cpSync(resolve(root, 'offscreen.html'), resolve(outDir, 'offscreen.html'));
-cpSync(resolve(root, 'popup.html'),     resolve(outDir, 'popup.html'));
-cpSync(resolve(root, 'options.html'),   resolve(outDir, 'options.html'));
-cpSync(resolve(root, 'icons'),          resolve(outDir, 'icons'), { recursive: true });
+  // Static files copied once at startup. The manifest splitter writes
+  // dist/<target>/manifest.json — re-run by hand if you edit it.
+  cpSync(resolve(root, 'offscreen.html'), resolve(outDir, 'offscreen.html'));
+  cpSync(resolve(root, 'popup.html'),     resolve(outDir, 'popup.html'));
+  cpSync(resolve(root, 'options.html'),   resolve(outDir, 'options.html'));
+  cpSync(resolve(root, 'icons'),          resolve(outDir, 'icons'), { recursive: true });
 
-const manifestResult = spawnSync(
-  process.execPath,
-  [resolve(__dirname, 'build-manifest.mjs'), target],
-  { stdio: 'inherit' },
+  const manifestResult = spawnSync(
+    process.execPath,
+    [resolve(__dirname, 'build-manifest.mjs'), target],
+    { stdio: 'inherit' },
+  );
+  if (manifestResult.status !== 0) process.exit(manifestResult.status ?? 1);
+
+  const reloadPlugin = {
+    name: 'reload-notify',
+    setup(build) {
+      build.onEnd((result) => {
+        if (reportBuildState(target, result.errors)) notifyReload();
+      });
+    },
+  };
+
+  // Start a watch context per entry point. Reloads are coalesced above, so all
+  // targets and entries settle into a single broadcast.
+  const contexts = await Promise.all(
+    entries.map((e) =>
+      esbuild.context({
+        entryPoints: [resolve(root, e.in)],
+        outfile: resolve(outDir, e.out),
+        bundle: true,
+        format: e.format,
+        // Same define set as build.mjs's non-release path, so a watch build
+        // behaves identically to `npm run build` (harness hooks on; the
+        // typeof-guarded fallbacks would cover us, but identical is simpler).
+        define: {
+          __DEV_RELOAD__: 'true',
+          __HARNESS_HOOKS__: 'true',
+          __BUILD_ID__: JSON.stringify('dev-watch'),
+        },
+        plugins: [reloadPlugin],
+      })
+    )
+  );
+
+  await Promise.all(contexts.map((ctx) => ctx.watch()));
+}
+
+console.log(
+  `[dev] watching ${targets.join(' + ')} → ${targets.map((t) => `dist/${t}/`).join(', ')}` +
+  `  (reload server ws://localhost:${PORT})`,
 );
-if (manifestResult.status !== 0) process.exit(manifestResult.status ?? 1);
-
-// Start a watch context per entry point. The last one to finish a rebuild
-// sends the reload signal (all rebuild nearly simultaneously).
-const contexts = await Promise.all(
-  entries.map((e) =>
-    esbuild.context({
-      entryPoints: [resolve(root, e.in)],
-      outfile: resolve(outDir, e.out),
-      bundle: true,
-      format: e.format,
-      // Same define set as build.mjs's non-release path, so a watch build
-      // behaves identically to `npm run build` (harness hooks on; the
-      // typeof-guarded fallbacks would cover us, but identical is simpler).
-      define: {
-        __DEV_RELOAD__: 'true',
-        __HARNESS_HOOKS__: 'true',
-        __BUILD_ID__: JSON.stringify('dev-watch'),
-      },
-      plugins: [reloadPlugin],
-    })
-  )
-);
-
-await Promise.all(contexts.map((ctx) => ctx.watch()));
-
-console.log(`[dev] watching ${target} → dist/${target}/  (reload server ws://localhost:${PORT})`);
