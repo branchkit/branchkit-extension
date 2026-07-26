@@ -60,6 +60,7 @@ import { flashToast } from './render/toast';
 import { registerSelectionCommands, restorePosition, caret, SELECTION_ACTIONS, parseSelectionCommand } from './activate/selection-commands';
 import { startQueryFieldReporting } from './plugin/query-field';
 import { resolveRangePick, refusePickWindowCodeword, filterRangePickChips, setPickWindowHooks, cancelRangePick, reconcileRangePickChips, isRangePickPending } from './activate/range-disambiguation';
+import { armSearchBadges, clearSearchBadges, reconcileSearchBadges, resolveSearchBadge, filterSearchBadges } from './activate/search-badges';
 import { runEscapeCascade } from './activate/escape-cascade';
 import './debug/dev-keepalive';
 import {
@@ -409,10 +410,11 @@ const engine = new SettleEngine(
     notePaintSamplerScroll: () => notePaintSamplerScroll(),
     afterScrollSettle: () => {
       flushDeferredNavRescan();
-      // Roll the range-pick chips onto whatever the scroll brought into view.
-      // Riding this hook rather than a scroll listener of its own keeps the
-      // sensing freeze intact — no-op when no pick is live.
+      // Roll the Range-anchored badge sets onto whatever the scroll brought
+      // into view. Riding this hook rather than a scroll listener of their own
+      // keeps the sensing freeze intact — both are no-ops when nothing is live.
       reconcileRangePickChips();
+      reconcileSearchBadges();
     },
   },
 );
@@ -464,13 +466,20 @@ setFindCallbacks({
   },
   onDeactivate: () => {
     resetCycleTarget();
+    clearSearchBadges('find_deactivated');
     chrome.runtime.sendMessage({ type: 'FIND_ACTIVE', active: false } as Message).catch(() => {});
   },
   // When a search commits while caret/visual selection is active, extend the
   // selection straight to the match — so "/ query Enter" is a find-and-select,
   // no need to press `n` (which skips to the next match). `caret` is defined
   // later but only called at runtime, well after module init.
-  onCommit: () => { if (caret.isActive()) caret.extendToCurrentMatch(); },
+  // Commit is also when the results become a SET you move around in — n/N goes
+  // live here — so it's when each match gets a codeword. Arming per keystroke
+  // would churn codewords on every character typed.
+  onCommit: () => {
+    if (caret.isActive()) caret.extendToCurrentMatch();
+    armSearchBadges();
+  },
 });
 
 setScrollBoundaryCallback((boundary) => {
@@ -2530,6 +2539,23 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       // the spoken codeword names a text RANGE, not an element — consume it
       // before element resolution. Frame routing already delivered it here
       // (the pick claimed the codeword from this frame's reservoir).
+      // Search badges resolve BEFORE element hints and AFTER the pick: a pick
+      // owns every codeword while live, whereas search badges coexist with
+      // link hints and must only claim their own.
+      if (codeword && !isRangePickPending()) {
+        const searchOutcome = resolveSearchBadge(codeword);
+        if (searchOutcome !== 'not_mine') {
+          const jumped = searchOutcome === 'jumped';
+          reportDispatchResult({
+            action, codeword, resolution: 'search_badge', elem_tag: '',
+            taken: jumped ? 'click' : 'skipped', ok: jumped,
+            frame: trimFrameUrl(window.location.href),
+            detail: jumped ? 'jumped to search match' : 'match off screen', fp: '',
+          });
+          if (!jumped) flashToast('That match is off screen — scroll to it first');
+          return;
+        }
+      }
       const pickOutcome = codeword ? resolveRangePick(codeword) : 'not_mine';
       if (pickOutcome !== 'not_mine') {
         // 'off_screen' is the chips' twin of the element path's sealed strict
@@ -2816,6 +2842,9 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
       const letter = params?.prefix;
       // Pick window: progress goes to the chips; hidden badges stay hidden.
       if (filterRangePickChips(letter ?? '')) return;
+      // Search badges take progress too, but do NOT return: they coexist with
+      // link hints, so the store's badges must narrow in the same breath.
+      filterSearchBadges(letter ?? '');
       if (letter) {
         if (!pageSession.badgesVisible) showBadges();
         const matchSet = new Set(store.matchingLetterPrefix(letter));

@@ -610,6 +610,29 @@ export function getCurrentMatchRange(): Range | null {
   return currentIndex >= 0 && currentIndex < matchRanges.length ? matchRanges[currentIndex] : null;
 }
 
+/** Every committed match, in document order. The live array is module state
+ *  that `move`/`applyHighlights` mutate, so this hands out a copy. */
+export function getMatchRanges(): Range[] {
+  return matchRanges.slice();
+}
+
+/**
+ * Jump straight to a specific match — the codeword path's twin of `n`/`N`.
+ * Same effect as navigating there: it becomes current, gets the solid
+ * highlight, scrolls into view, and the n/N counter follows. Returns false if
+ * the range isn't one of the live matches (a stale codeword after a requery).
+ */
+export function findGoToRange(range: Range): boolean {
+  const i = matchRanges.indexOf(range);
+  if (i < 0) return false;
+  currentIndex = i;
+  state.matchIndex = currentIndex + 1;
+  applyHighlights();
+  scrollToCurrent();
+  updateCountDisplay();
+  return true;
+}
+
 /** Advance the current match by `delta` (also updates the highlight + count),
  *  returning the new current Range — for caret mode to extend its selection to
  *  the next/previous match. Null when there are no matches. */

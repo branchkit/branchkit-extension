@@ -450,7 +450,11 @@ export interface TableLink {
 export interface DispatchResult {
   action: string;            // e.g. "activate", "scroll", "noop"
   codeword: string;          // e.g. "arch check" — empty for non-codeword actions
-  resolution: 'registry' | 'fingerprint' | 'snapshot' | 'live_store' | 'range_pick' | 'none';
+  // Range-anchored codeword sets resolve to a Range, not an element:
+  // `range_pick` is a disambiguation chip, `search_badge` jumps to a search
+  // match rather than activating anything.
+  resolution: 'registry' | 'fingerprint' | 'snapshot' | 'live_store'
+    | 'range_pick' | 'search_badge' | 'none';
   elem_tag: string;          // actual tag of the resolved element, e.g. "input"
   taken: 'focus' | 'click' | 'skipped' | 'noop';
   ok: boolean;               // overall success
