@@ -38,6 +38,8 @@ import { RangeBadgeSet } from '../render/range-badge-set';
 import { SEARCH_VARIANT } from '../render/badge-variant';
 import { getMatchRanges, findGoToRange, isFindActive } from '../scan/find';
 import { bkLog } from '../debug/bk-log';
+import { labelReservoir } from '../labels/label-reservoir';
+import type { Message } from '../types';
 
 /**
  * How many matches wear a codeword at once.
@@ -78,7 +80,26 @@ export function armSearchBadges(): void {
     // hints stay speakable alongside them.
     onEmpty: () => { badges = null; },
   });
+  const pool = labelReservoir.stats();
   bkLog('BK_SEARCH_BADGES_ARM', { matches: ranges.length, badged: badges?.size ?? 0 });
+  // Also on the actuator log, where bkLog breadcrumbs do NOT reach. Arming is
+  // the one step with three independent ways to silently produce nothing —
+  // no match near the viewport, an empty codeword pool, or a publish the
+  // plugin refused — and telling them apart from the outside is otherwise
+  // guesswork.
+  try {
+    chrome.runtime.sendMessage({
+      type: 'DEBUG_LOG',
+      tag: 'search_badges.arm',
+      data: {
+        matches: ranges.length,
+        badged: badges?.size ?? 0,
+        pool_free: pool.free,
+        pool_outstanding: pool.outstanding,
+        refilling: pool.refillInFlight,
+      },
+    } as Message).catch(() => {});
+  } catch { /* context invalidated */ }
 }
 
 /** Drop every search badge (find session ended, or a requery replaced them). */

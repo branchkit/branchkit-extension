@@ -30,6 +30,7 @@ vi.mock('../labels/label-reservoir', () => ({
       return g;
     },
     release: (l: string[]) => { released.push(l); pool.unshift(...l); },
+    stats: () => ({ free: pool.length, refillInFlight: false, outstanding: 0 }),
   },
 }));
 vi.mock('../labels/label-sync', () => ({
