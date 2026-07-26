@@ -47,33 +47,20 @@ export function restorePosition(mark: StoredMark): void {
 // Caret / visual mode (Vimium v / V). The controller owns the Selection-API
 // movement + yank; it reports its mode so the KeyHandler capture state and the
 // mode chip stay in lockstep. See notes/DESIGN_MARKS_AND_CARET.md (Part 2).
-// Tracks the caret-active state last pushed to the background, so caret↔visual
-// transitions (both non-null) don't re-POST; only the active/inactive edge does.
-let caretActivePushed = false;
 export const caret = new CaretController({
   onModeChange: (mode) => {
     // The caret lifetime rides the stack inside enterCaretMode/exitCaretMode
     // (the one keyboard-side entry/exit, same shape as hint and video) —
-    // caret↔visual is one lifetime, null is the exit.
+    // caret↔visual is one lifetime, null is the exit. The plugin's exclusive
+    // caret tag is DERIVED from that stack edge by the service worker
+    // (background/mode-mirror.ts, Wave 3 C4a): every frame's stack counts, so
+    // a SUBFRAME caret session — a designed path, resolveSelectTo routes
+    // subframe matches through the chip pick — asserts the tag by
+    // construction, and the per-frame edge dedupe (`caretActivePushed`) and
+    // per-frame CARET_ACTIVE post this replaces are gone with the ranking
+    // question they existed to answer.
     if (mode) keyHandler.enterCaretMode(mode);
     else keyHandler.exitCaretMode();
-    // Reflect caret-active to the plugin (via background) so the exclusive caret
-    // tag gates the voice selection commands. EVERY frame speaks, matching the
-    // FIND_ACTIVE post (content.ts) — a CaretController is per-frame, and a
-    // SUBFRAME caret session is a designed path, not an accident: resolveSelectTo
-    // deliberately routes "any subframe with matches" through the chip pick,
-    // whose onPick calls extendToRange in that subframe. Under the old top-frame
-    // guard the selection was painted while the tag was never set, so every
-    // caret-gated command was ineligible — the field report quoted in
-    // resolveSelectTo's own comment ("copy that" → "caret mode not active").
-    // The edge dedupe stays PER FRAME, so caret↔visual transitions don't re-POST.
-    // Arbitration between frames is the plugin's (A1) and, eventually, the
-    // service worker's — see notes/DESIGN_MODE_STACK_AND_CODEWORD_HOLDERS.md.
-    const active = mode !== null;
-    if (active !== caretActivePushed) {
-      caretActivePushed = active;
-      chrome.runtime.sendMessage({ type: 'CARET_ACTIVE', active } as Message).catch(() => {});
-    }
   },
 });
 // The caret spec's intra-mode transient probe (mode-stack.ts): the staged
@@ -82,28 +69,12 @@ export const caret = new CaretController({
 // stack's peelTop both route through it.
 setInnerTransientProbe('caret', () => caret.peelInner());
 
-// Re-assert caret-active when the window regains focus. The plugin DRAINS the
-// exclusive caret tag when the browser loses OS focus (correct: a held
-// exclusive tag would suppress every voice command system-wide while the user
-// works in another app), but the page's selection deliberately survives the
-// round trip — so without this, coming back leaves the page visibly selecting
-// while every caret voice command is gated off, and no spoken exit works
-// (2026-07-25 field finding). Unconditional send, not edge-deduped: the drain
-// happened plugin-side, so caretActivePushed is stale by design here. The
-// small delay lets the SW's focus claim land first (the plugin accepts
-// {active:true} only from the focused conn, fail-open when unknown); the
-// re-send is idempotent plugin-side either way.
-// Per-frame for the same reason the post above is: the frame that HOLDS the
-// caret session is the one that has to re-assert it, and that frame is often
-// not the top one.
-window.addEventListener('focus', () => {
-  if (!caret.isActive()) return;
-  setTimeout(() => {
-    if (!caret.isActive()) return;
-    caretActivePushed = true;
-    chrome.runtime.sendMessage({ type: 'CARET_ACTIVE', active: true } as Message).catch(() => {});
-  }, 300);
-});
+// (The window-focus caret re-assert timer is retired: the plugin still drains
+// the exclusive caret tag on OS focus loss, and the SW now replays the
+// CURRENT derivation on its own focus/connect edges — reassertMirror in
+// background/mode-mirror.ts — so the heal rides the same signal the drain
+// does instead of a per-frame 300 ms race. The 2026-07-25 field finding this
+// timer fixed is covered by that replay.)
 
 // The caret-mode voice-selection actions, handled inline (gated on caret mode).
 // The per-granularity extend_* ids carry their granularity in the id.

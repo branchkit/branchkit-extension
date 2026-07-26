@@ -241,10 +241,12 @@ export type Message =
   // Background → content (target tab of a global jump / freshly-opened tab):
   // restore this saved position.
   | { type: 'MARK_RESTORE'; scrollX: number; scrollY: number; hash: string }
-  // Content → background: caret/visual mode entered (active) or exited. The
-  // background POSTs /caret so the plugin holds the exclusive caret tag while
-  // active, gating the voice selection commands. See DESIGN_HINT_ACTION_MODES.md.
-  | { type: 'CARET_ACTIVE'; active: boolean }
+  // Content → background: this frame's mode stack, posted on every
+  // mirrored-mode edge (core/modes.ts sink). The background arbitrates across
+  // frames (background/mode-mirror.ts): a plugin tag is held iff any live
+  // frame's stack contains the mode that mirrors it. docId scopes the entry
+  // so a late liveness disconnect can't clear a successor document's modes.
+  | { type: 'MODE_STACK'; docId: string; stack: string[] }
   // Content → background. Focus entered or left a single-line text input, so
   // the plugin can hold the gate that declares dictation there is a QUERY
   // (app notes/DESIGN_DICTATION_PROFILES.md). Edge-triggered and deduped by
@@ -256,10 +258,6 @@ export type Message =
   // chips — otherwise the Discovery HUD keeps advertising the whole page's
   // codewords while the content script refuses every one of them.
   | { type: 'RANGE_PICK'; codewords: string[] }
-  // Content → background. Find-session state (bar open OR committed
-  // highlights); background POSTs /find so the plugin holds the non-exclusive
-  // find tag, gating voice "next"/"previous" to live find sessions.
-  | { type: 'FIND_ACTIVE'; active: boolean }
   // Options → background. The keymap editor renders voice phrases from its own
   // catalog now; it only asks whether BranchKit is connected so it can show the
   // not-connected note. Response: { connected: boolean }.

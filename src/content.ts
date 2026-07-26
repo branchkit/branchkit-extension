@@ -70,6 +70,8 @@ import {
 import { StoreHolder } from './labels/store-holder';
 import { runEscapeCascade } from './activate/escape-cascade';
 import { setInnerTransientProbe } from './core/mode-stack';
+import { setModeMirrorSink } from './core/modes';
+import { documentInstanceId } from './labels/document-identity';
 import { preemptsPageKeys } from './activate/key-preamble';
 import './debug/dev-keepalive';
 import {
@@ -498,13 +500,13 @@ function onTrackerCodewordsChanged(claimed: ElementWrapper[], released: string[]
 let findBadgeEntry: boolean | null = null;
 
 setFindCallbacks({
-  // FIND_ACTIVE mirrors the session to the plugin's find tag (voice
-  // "next"/"previous" gate). Fires on every activate call — redundant posts
-  // are idempotent plugin-side.
+  // The plugin's find tag rides the mode stack's mirror (the session's push
+  // in find.ts); these callbacks own only the badge borrow/restore.
   onActivate: () => {
     findBadgeEntry ??= pageSession.badgesVisible || store.all.some((w) => w.hint?.isVisible);
     if (findBadgeEntry) hideBadges();
-    chrome.runtime.sendMessage({ type: 'FIND_ACTIVE', active: true } as Message).catch(() => {});
+    // The plugin's find tag rides the mode stack's mirror now — the session's
+    // push in find.ts is the one signal (Wave 3 C4a).
   },
   onDeactivate: () => {
     // Hand the screen back in the state find borrowed it in.
@@ -512,7 +514,6 @@ setFindCallbacks({
     findBadgeEntry = null;
     resetCycleTarget();
     clearSearchBadges('find_deactivated');
-    chrome.runtime.sendMessage({ type: 'FIND_ACTIVE', active: false } as Message).catch(() => {});
   },
   // When a search commits while caret/visual selection is active, extend the
   // selection straight to the match — so "/ query Enter" is a find-and-select,
@@ -1468,6 +1469,23 @@ keyHandler.setEscapeHook(() => runEscapeCascade('key_escape'));
 // peels before the mode does. One implementation — escapeHintLayer and the
 // stack's peelTop both route through peelHintPrefix.
 setInnerTransientProbe('hint', () => keyHandler.peelHintPrefix());
+
+// The mode-mirror transport (Wave 3 C4a): every mirrored-mode edge posts this
+// frame's stack; the SW derives the tag set across frames
+// (background/mode-mirror.ts, which carries the failure model). A sync throw
+// (dead context) reports the edge unposted so the stack retries.
+setModeMirrorSink({
+  post: (edge) => {
+    try {
+      chrome.runtime.sendMessage({
+        type: 'MODE_STACK', docId: documentInstanceId, stack: [...edge.stack],
+      } as Message).catch(() => {});
+      return true;
+    } catch {
+      return false;
+    }
+  },
+});
 
 keyHandler.setHintEscapeCallback(() => {
   pendingHintAction = 'activate'; // an abandoned verb (yf/hover/… then Esc) must not leak to the next hint

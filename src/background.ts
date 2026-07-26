@@ -9,10 +9,10 @@
  */
 
 import { Message, ScannedElement, HintVisibility } from './types';
-import { claimLabels, confirmLabels, releaseLabels, releaseDocument, clearAllStacks, alphabetsEqual, senderMayMutatePool, auditLabels } from './labels/label-pool';
+import { claimLabels, confirmLabels, releaseLabels, clearAllStacks, alphabetsEqual, senderMayMutatePool, auditLabels } from './labels/label-pool';
 import { setAlphabet } from './labels/words';
 import { buildCommandContributions } from './keymap/command-catalog';
-import { rememberCodewords, clearCodewordMemory, recallCodewords } from './labels/codeword-memory';
+import { rememberCodewords, recallCodewords } from './labels/codeword-memory';
 import { discoverPlugin, ensureConnected, postToPlugin, getFromPlugin, getActuatorJson } from './plugin/actuator-client';
 import { setLocalMark, getLocalMark, setGlobalMark, gotoGlobalMark } from './background/marks';
 import { baseUrl, type GlobalMark, type StoredMark } from './marks';
@@ -31,8 +31,11 @@ import {
 import {
   forwardDispatchResult, forwardDebugLog, forwardPerfReport, forwardHintsSessionEnd,
   forwardHintsSessionStart, postGrammarBatch, transportFailure, postFocus, postActiveTab,
-  assertFocusIfFocused, setCaretActive, setFindActive, setRangePick, setQueryFieldActive,
+  assertFocusIfFocused, setRangePick, setQueryFieldActive,
 } from './plugin/plugin-api';
+import { frameStackPosted, reassertMirror } from './background/mode-mirror';
+import { initFrameLiveness, isDocPortLive } from './background/frame-liveness';
+import type { ModeId } from './core/mode-stack';
 import { saveReferenceToCollection, pushReferenceNames, hydrateReferencesFromCollection } from './background/references';
 import { handleDebugSnapshot } from './background/debug-snapshot';
 import { forwardCoalesced } from './background/log-coalesce';
@@ -78,6 +81,7 @@ initSSETransport({
     // Cold-start focus handshake: this browser may already be frontmost when
     // its extension connects, so no onFocusChanged fires to claim focus.
     void assertFocusIfFocused();
+    reassertMirror(); // a fresh stream may be a restarted plugin — replay the tag derivation
     hydrateReferencesFromCollection().then(() => pushReferenceNames());
     rescanActiveTab();
     // Host (BranchKit app) restart healer. A host restart drops the SSE but
@@ -489,12 +493,16 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     return true; // async sendResponse
   }
 
-  if (message.type === 'CARET_ACTIVE' || message.type === 'FIND_ACTIVE'
-      || message.type === 'QUERY_FIELD_ACTIVE') {
-    const mirror = message.type === 'CARET_ACTIVE' ? setCaretActive
-      : message.type === 'FIND_ACTIVE' ? setFindActive
-      : setQueryFieldActive;
-    void mirror(message.active);
+  if (message.type === 'QUERY_FIELD_ACTIVE') {
+    void setQueryFieldActive(message.active);
+    return false;
+  }
+
+  // A frame's mode-stack edge; the caret/find tags are DERIVED across all
+  // live frames in background/mode-mirror.ts (replaced CARET_ACTIVE/FIND_ACTIVE).
+  if (message.type === 'MODE_STACK') {
+    const tabId = _sender.tab?.id;
+    if (typeof tabId === 'number') frameStackPosted(tabId, message.docId, message.stack as ModeId[]);
     return false;
   }
 
@@ -791,7 +799,7 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     // Read-only: does the SW hold a LIVE liveness Port for this doc? Layer-2
     // probe of the bfcache-port question (debug/bfcache-probe.ts, dev builds).
     sendResponse({
-      tracked: typeof message.doc_id === 'string' && livePortDocs.has(message.doc_id),
+      tracked: typeof message.doc_id === 'string' && isDocPortLive(message.doc_id),
     });
     return false;
   }
@@ -836,77 +844,9 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   return false;
 });
 
-// Per-frame liveness via long-lived Port. Each content-script context opens
-// one Port at startup; when the context dies (iframe removed, navigation,
-// tab closed, bfcache evict) Chrome closes the Port and onDisconnect fires
-// here. Three cleanups run on disconnect: the per-tab label pool
-// (`releaseFrame`), the browser plugin's per-frame hint session
-// (`forwardHintsSessionEnd`), and the frame's fingerprint->codeword memory
-// (`clearCodewordMemory`). Without them, dead frames' state leaks — label
-// codewords until the next tab close, hint-session per-prefix contributions
-// until the plugin's 30s TTL backstop fires, codeword-memory keys forever.
-// See docs/completed/DESIGN_BROWSER_FRAME_POOL_EXHAUSTION.md for the
-// label-pool half.
-//
-// The Port carries no messages — its lifetime IS the signal. Service worker
-// idle-termination is a known small leak window (frames that die while the
-// SW is asleep don't get cleaned by either path); the browser plugin's TTL
-// backstop catches its share. The label pool's dead-TAB share is reclaimed
-// by the periodic sweep below (sweepDeadTabState); dead FRAMES inside a
-// still-open tab remain the accepted v1 gap.
-const LIVENESS_PORT_NAME = 'frame-liveness';
-
-// DocIds with a currently-live liveness Port, SW's-eye view. Probe surface
-// for the bfcache-port open question (notes/DESIGN_ORPHAN_PAINT.md layer 2):
-// a CS whose port object looks open while its doc is absent here is the
-// silently-dead channel. SW restart wipes it with the rest of module state —
-// correct: after a restart nothing is tracked until CSs reconnect. Read by
-// LIVENESS_QUERY only; ratify as fix input or remove with layer 3.
-const livePortDocs = new Set<string>();
-
-chrome.runtime.onConnect.addListener((port) => {
-  if (!port.name.startsWith(`${LIVENESS_PORT_NAME}:`)) return;
-  // The port name carries the document's pool-ownership identity
-  // (DESIGN_DOCUMENT_SCOPED_POOL_OWNERSHIP.md) — available atomically at
-  // connect, so the disconnect cleanup below can be document-scoped with no
-  // handshake race.
-  const docId = port.name.slice(LIVENESS_PORT_NAME.length + 1);
-  const tabId = port.sender?.tab?.id;
-  const frameId = port.sender?.frameId;
-  if (typeof tabId !== 'number' || typeof frameId !== 'number' || docId.length === 0) return;
-  // Tell the content script its own frameId. Content has no API to
-  // discover this on its own and uses it to detect misrouted activate
-  // actions (id minted in frame A, dispatched into frame B by SW
-  // routing drift). Sent on connect because it never changes for the
-  // lifetime of this Port.
-  try {
-    port.postMessage({ type: 'FRAME_ID', frameId });
-  } catch {
-    // Port may already be closing; harmless.
-  }
-  livePortDocs.add(docId);
-  port.onDisconnect.addListener(() => {
-    livePortDocs.delete(docId);
-    // Doc-scoped, BOTH halves: this document frees only ITS labels and
-    // ends only ITS grammar session — never a successor's at the same
-    // (tab, frame) key (they share frame 0; they do not share a docId).
-    // The grammar half matters when this disconnect is delivered LATE
-    // (seen 4.5s after a Firefox navigation): by then the successor
-    // document's batches occupy the frame session, and an unfenced end
-    // destroyed 262 live codewords while the successor's delta-sync
-    // shadow still believed them committed — painted badges, voice-dead
-    // (the 2026-07-24 wikipedia ZY repro).
-    releaseDocument(tabId, docId).catch(() => {});
-    forwardHintsSessionEnd('frame_liveness_disconnect', tabId, frameId, docId).catch(() => {});
-    // Evict this dead frame's fingerprint->codeword memory (chrome.storage.session).
-    // The per-frame keys were previously only cleared on TAB close
-    // (clearCodewordMemory(tabId)); the frame-scoped clear had no caller, so an
-    // iframe-churny long-lived tab accumulated dead-frame keys indefinitely
-    // (long-session-perf: codewordMemory accumulator). Frame death is the
-    // eviction point — siblings' memory is untouched (frame-scoped key).
-    clearCodewordMemory(tabId, frameId).catch(() => {});
-  });
-});
+// (Per-frame liveness Ports moved to background/frame-liveness.ts — the
+// lifetime signal every doc-scoped cleanup keys off.)
+initFrameLiveness();
 
 // Note on switch-away badges: in always-mode hint badges are a persistent
 // visual property of every browser tab — never hide them on switch-away
@@ -1069,6 +1009,9 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
     // connection to whatever bundle the OS reports as frontmost — the
     // browser never names itself (see DESIGN_BROWSER_IDENTITY_FOCUS_HANDSHAKE).
     void postFocus(true);
+    // Replay drained tags after the focus claim — replaces the content-side
+    // 300 ms caret re-assert timer (background/mode-mirror.ts).
+    reassertMirror();
 
     const tabs = await chrome.tabs.query({ active: true, windowId });
     const newActive = tabs[0]?.id ?? null;

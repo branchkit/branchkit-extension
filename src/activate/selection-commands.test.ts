@@ -221,31 +221,27 @@ describe('registration contract (Phase 1)', () => {
     expect(clearFindPaint).toHaveBeenCalled();
   });
 
-  // The caret tag gates every voice selection command ("copy that", "select
-  // word", "stop selecting"). A CaretController is per-frame and a SUBFRAME
-  // caret session is a DESIGNED path — resolveSelectTo routes "any subframe
-  // with matches" through the chip pick, whose onPick extends the selection in
-  // that subframe. Under the old top-frame-only mirror the selection was
-  // painted while the tag was never set, so every one of those commands
-  // reported "caret mode not active" (field test 2026-07-24).
-  it('mirrors caret-active to the plugin from a SUBFRAME, not just the top frame', async () => {
+  // The caret tag gates every voice selection command, and a SUBFRAME caret
+  // session is a DESIGNED path (resolveSelectTo routes subframe matches
+  // through the chip pick). The per-frame CARET_ACTIVE post this test used to
+  // pin is gone (Wave 3 C4a): the frame's contribution is its STACK EDGE, and
+  // the subframe half of the invariant — any frame's stack asserts the tag —
+  // is pinned where the derivation lives, background/mode-mirror.test.ts.
+  it('a subframe caret edge speaks through the stack, never a direct plugin post', async () => {
     vi.stubGlobal('top', {}); // window !== window.top: this frame is a subframe
     const m = await loadModule();
     m.registerSelectionCommands();
     const send = (globalThis as unknown as { chrome: { runtime: { sendMessage: ReturnType<typeof vi.fn> } } })
       .chrome.runtime.sendMessage;
+    modes.reset();
 
     caretOpts!.onModeChange('caret');
-    expect(send).toHaveBeenCalledWith({ type: 'CARET_ACTIVE', active: true });
-
-    // The dedupe is per frame and stays: caret↔visual are both active, so the
-    // transition must not re-POST — only the active/inactive EDGE does.
-    send.mockClear();
-    caretOpts!.onModeChange('visual');
-    expect(send).not.toHaveBeenCalled();
+    expect(modes.has('caret')).toBe(true);   // the edge the SW derives from
+    expect(send).not.toHaveBeenCalled();     // no per-frame tag post remains
 
     caretOpts!.onModeChange(null);
-    expect(send).toHaveBeenCalledWith({ type: 'CARET_ACTIVE', active: false });
+    expect(modes.has('caret')).toBe(false);
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('go_next follows the page link when found, toasts when absent', async () => {

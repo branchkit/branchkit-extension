@@ -71,7 +71,24 @@ are stack reads, and the caret lifetime pushes/pops inside
 enterCaretMode/exitCaretMode — the one keyboard-side entry per mode, uniform
 with hint and video, with `caretSub` kept as the chip's display detail only
 (nothing routes or gates on it). The gate file needed NO edits for this
-slice. C3 is complete; C4 (SW mirror) and C5 (collector) remain.
+slice. C3 is complete. **C4a (LANDED 2026-07-26)** — the caret and find tags
+are SW-DERIVED: frames post their stack snapshot on every mirrored-mode edge
+(the ModeStack sink in content.ts), and background/mode-mirror.ts unions the
+live frames' stacks through core/derive-mirror.ts and forwards the diff via
+the existing /caret and /find posts. Frame identity is doc-scoped
+(`tabId:docId`), so a late liveness disconnect cannot clear a successor's
+modes (the ZY-wipe fencing class). Retired: the per-frame
+CARET_ACTIVE/FIND_ACTIVE messages and their background branch,
+`caretActivePushed`, and the content-side 300 ms window-focus caret
+re-assert — re-assertion is now `reassertMirror`, a derivation replay on the
+SW's own connect and focus edges (the same signals the plugin's drains ride).
+The per-frame liveness Port block moved verbatim to
+background/frame-liveness.ts (background.ts had zero headroom; now
+1279/1336), with the disconnect additionally dropping the doc's mode-stack
+contribution. **C4b (next)** — palette + video join the derivation; plugin
+side: reconcileExternalTagClears derives from a mirror table, video's tag
+drops its hold-scoped clear_on_event lifecycle (the mirror becomes writer of
+record). **C5** — the collector.
 **Repos touched:** `branchkit-extension` (bulk), `plugins/browser` (tag mirror),
 `app` (pin bumps only).
 
