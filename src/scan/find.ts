@@ -403,6 +403,29 @@ function applyHighlights(): void {
   }
 }
 
+/**
+ * Erase find paint left by a PREDECESSOR content script.
+ *
+ * The badge hosts are DOM nodes, so the boot sweep can find and remove them.
+ * Highlights are not: `CSS.highlights` is a document-scoped registry, so
+ * entries registered by a script that has since been torn down keep painting
+ * with nobody owning them — an extension reload mid-session leaves yellow on
+ * the page until the tab is reloaded, and the fresh script has no state that
+ * says so. Same for the bar/pill, which are ours but carry a different
+ * attribute than the badge sweep looks for.
+ *
+ * Safe with no session: it only deletes, and the registry entries are
+ * name-keyed rather than instance-keyed, so this reaches the previous script's
+ * paint precisely because the names are shared.
+ */
+export function purgeOrphanedFindPaint(): void {
+  const api = highlightApi();
+  api?.reg.delete(HL_ALL);
+  api?.reg.delete(HL_CURRENT);
+  for (const el of document.querySelectorAll('[data-branchkit-find]')) el.remove();
+  document.querySelector(`[${STYLE_ATTR}]`)?.remove();
+}
+
 function clearHighlights(): void {
   const api = highlightApi();
   api?.reg.delete(HL_ALL);

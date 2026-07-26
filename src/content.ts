@@ -91,6 +91,7 @@ import {
 import {
   openFindMode,
   closeFindMode,
+  purgeOrphanedFindPaint,
   findNext,
   findPrevious,
   findImmediate,
@@ -2120,6 +2121,11 @@ function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
     for (const node of document.querySelectorAll('[data-branchkit-hint]')) {
       node.remove();
     }
+    // Highlights aren't nodes — they're entries in the document-scoped
+    // CSS.highlights registry — so the sweep above cannot reach them. Clear
+    // ours on the way out rather than leaving yellow on the page for a
+    // successor to inherit.
+    purgeOrphanedFindPaint();
   } catch { /* document gone */ }
   // Release the idempotency guard so a subsequent injection (e.g. the lazy
   // inject on tab activation after an extension reload) can re-initialize this
@@ -3484,6 +3490,10 @@ function watchUndefinedCustomElements(root: Element | Document): void {
 // Remove orphaned badge hosts from a prior content script (extension reload
 // re-injects JS but leaves the old script's DOM nodes behind).
 for (const old of document.querySelectorAll('[data-branchkit-hint]')) old.remove();
+// Find paint needs its own sweep: highlights live in the document-scoped
+// CSS.highlights registry, not the DOM, so a predecessor's yellow survives
+// both the reload and the node sweep above (find.ts).
+purgeOrphanedFindPaint();
 
 // Scan on load to push initial grammar
 doScan();

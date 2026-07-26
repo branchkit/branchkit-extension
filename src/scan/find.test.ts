@@ -121,6 +121,7 @@ import { afterEach } from 'vitest';
 import {
   findImmediate,
   closeFindMode,
+  purgeOrphanedFindPaint,
   openFindMode,
   isFindActive,
   isFindBarOpen,
@@ -291,5 +292,34 @@ describe('find bar: a paste commits, typing waits for Enter', () => {
     openFindMode();
     insert('   ', 'insertFromPaste');
     expect(committed()).toBe(false);
+  });
+});
+
+// Highlights live in the document-scoped CSS.highlights registry, not the DOM,
+// so a torn-down content script's yellow keeps painting with nobody owning it —
+// an extension reload mid-session left stale highlights on the page until the
+// tab was reloaded (field report 2026-07-26). The badge-host sweep can't reach
+// them; this can.
+describe('purgeOrphanedFindPaint', () => {
+  beforeEach(() => { document.body.innerHTML = '<p>alpha beta alpha</p>'; });
+
+  it('clears a predecessor\'s highlights, bar and injected style', () => {
+    openFindMode();
+    findImmediate('alpha');
+    // Simulate the reload: the module keeps no memory across a real one, so
+    // purge must work from the document alone.
+    purgeOrphanedFindPaint();
+
+    const reg = (globalThis as { CSS?: { highlights?: Map<string, unknown> } }).CSS?.highlights;
+    if (reg) {
+      expect(reg.has('branchkit-find')).toBe(false);
+      expect(reg.has('branchkit-find-current')).toBe(false);
+    }
+    expect(document.querySelector('[data-branchkit-find]')).toBeNull();
+    expect(document.querySelector('[data-branchkit-find-style]')).toBeNull();
+  });
+
+  it('is safe with no session at all — it runs at every content-script boot', () => {
+    expect(() => purgeOrphanedFindPaint()).not.toThrow();
   });
 });
