@@ -319,42 +319,55 @@ export function computeBadgeColors(target: Element): BadgeColors {
 }
 
 /**
- * Adaptive badge colors for a badge that must be DISTINCT from the page rather
- * than native to it — search-match badges, where several kinds of badge can be
- * on screen at once and "which of these is a search hit" has to be answerable
- * at a glance.
+ * Colors for a badge that wears a MEANING — a search-match badge tinted with
+ * the same highlighter yellow its match is painted in. Shown alongside the
+ * page's link hints, it has no mode to lean on, so the colour is the only
+ * thing saying "this one is a search hit".
  *
- * A hint badge fills with the page's own background, so its shape comes only
- * from a faint border and its text: deliberately ghosty, because it sits on
- * everything. That trick can't distinguish anything. The obvious alternative —
- * a fixed brand color — fails the way fixed colors always do here: a dark chip
- * on a dark page, or an accent that happens to match the site's own palette,
- * is invisible exactly when it matters.
+ * The hint path can't do this job by construction: it fills with the page's own
+ * background, which is exactly what makes it read as native to everything.
  *
- * So the ACCENT HUE is fixed and its LIGHTNESS is solved per page. We hand the
- * accent to the same APCA lightness search the foreground already uses
- * (`adjustForContrast` keeps hue and chroma, moving only lightness until
- * contrast clears threshold), measured against the resolved page background.
- * On a white page that yields a deep accent; on a black page a bright one; on a
- * page whose background IS the accent, it walks away until it separates. The
- * hue — the thing that says "search" — survives all three.
+ * The obvious fix — a fixed colour — is what the user pushed back on, rightly:
+ * a chip that happens to match the site's palette is invisible precisely when
+ * it matters. The obvious fix to THAT — solve the tint's lightness per page,
+ * as an earlier cut did — is wrong for a semantic colour. Yellow only reads as
+ * yellow in a narrow lightness band; darkened enough to contrast with white
+ * paper it becomes olive, and an olive badge no longer says "highlighter".
+ * Solving lightness preserves the hue angle while destroying the identity.
  *
- * The label is then black or white by whichever reads better on the solved
- * fill, contrast-adjusted against the fill rather than the page, because that
- * is what it actually sits on.
+ * So this works the way a physical highlighter does. The FILL is the tint,
+ * unconditionally — that is the thing being recognised, and highlighters do not
+ * change colour with the paper. Legibility is carried by the two channels where
+ * adaptation costs nothing:
+ *
+ *   - the INK is black or white by whichever reads on the tint, then
+ *     contrast-adjusted against the FILL (what it actually sits on, not the
+ *     page);
+ *   - the RIM is the tint's own hue, lightness-solved against the PAGE. On
+ *     white paper a yellow chip has almost no edge, so the rim becomes deep
+ *     amber and draws it; on a dark page the fill already shouts and the rim
+ *     quietly agrees. On a page that shares the tint, the rim is the only thing
+ *     separating them, which is exactly what it is there for.
+ *
+ * Net: the badge is the same colour everywhere (learnable), always readable,
+ * and always has an edge.
  */
-export function computeAccentBadgeColors(target: Element, accentHex: string): BadgeColors {
+export function computeTintedBadgeColors(target: Element, tintHex: string): BadgeColors {
   const pageBg = resolveBackgroundColor(target);
-  const fill = adjustForContrast(parseHexColor(accentHex), pageBg);
+  const fill = parseHexColor(tintHex);
   const ink = adjustForContrast(isLightBackground(fill) ? BLACK : WHITE, fill);
+  // Same hue as the fill, moved in lightness until it separates from the page.
+  const rim = adjustForContrast(fill, pageBg);
 
   return {
     bg: toCSS(fill),
     fg: toCSS(ink),
-    // Border tracks the label, same as the hint path, so keyboard mode's
-    // border-alpha boost (--bk-b-rgb) behaves identically on both.
-    border: toCSS(ink, 0.3),
-    borderRgb: `${Math.round(ink.r)} ${Math.round(ink.g)} ${Math.round(ink.b)}`,
+    border: toCSS(rim),
+    // Full-strength rim: unlike a hint badge, whose faint border is a category
+    // cue on a page-coloured fill, this one is load-bearing — it is what gives
+    // the chip an edge on paper that shares its colour. Keyboard mode's alpha
+    // boost still rides --bk-b-rgb and simply has nothing left to boost.
+    borderRgb: `${Math.round(rim.r)} ${Math.round(rim.g)} ${Math.round(rim.b)}`,
   };
 }
 

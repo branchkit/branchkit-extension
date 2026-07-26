@@ -15,6 +15,8 @@
  * See notes/DESIGN_BADGE_TARGET_SEAM.md.
  */
 
+import { FIND_HIGHLIGHT } from '../scan/find';
+
 export interface BadgeVariant {
   /**
    * How the badge fills.
@@ -23,13 +25,13 @@ export interface BadgeVariant {
    * on top. Deliberately ghosty: the badge reads as native to whatever it sits
    * on, which is right when it sits on everything.
    *
-   * {accent} — a fixed HUE whose lightness is solved per page against that
-   * same background (badge-colors.ts computeAccentBadgeColors). For badges
-   * that must be told apart from the ambient ones at a glance while several
-   * kinds are on screen. A fixed colour can't do this job: it disappears on
-   * the page that happens to share it.
+   * {tint} — the badge wears a MEANING (search-match yellow), so the fill is
+   * that colour everywhere and legibility is carried by the ink and a rim
+   * solved against the page (badge-colors.ts computeTintedBadgeColors). For
+   * badges shown alongside the ambient ones, where colour is the only thing
+   * saying which is which.
    */
-  readonly fill: 'page' | { accent: string };
+  readonly fill: 'page' | { tint: string };
   /**
    * A badge that CAN'T complete the current codeword prefix.
    *
@@ -121,7 +123,10 @@ export const RANGE_PICK_VARIANT: BadgeVariant = {
  * page defences, unlike the chips.
  */
 export const SEARCH_VARIANT: BadgeVariant = {
-  fill: { accent: '#7c5cff' },
+  // The same highlighter yellow the match itself is painted in — the badge and
+  // the thing it points at are one object, and retheming the highlight
+  // retints the badge with it. Learnable by association, not by convention.
+  fill: { tint: FIND_HIGHLIGHT },
   // Non-candidates dim rather than vanish: the spread of matches down the page
   // is information — it's how you see there are more below.
   nonCandidate: 'dim',

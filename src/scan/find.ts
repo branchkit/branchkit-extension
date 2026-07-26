@@ -80,6 +80,16 @@ function highlightApi(): { reg: Map<string, HighlightLike>; Ctor: HighlightCtor 
   return reg && Ctor ? { reg, Ctor } : null;
 }
 
+/**
+ * Highlighter yellow — the colour a found match wears.
+ *
+ * Exported because anything that has to READ as "this is a search match" must
+ * wear the same colour, and a second copy of the hex is a thing that drifts.
+ * Search-match badges tint themselves from this (render/badge-variant.ts), so
+ * retheming the highlight retints the badges with it.
+ */
+export const FIND_HIGHLIGHT = '#ffeb3b';
+
 function ensureHighlightStyle(): void {
   if (document.querySelector(`[${STYLE_ATTR}]`)) return;
   const style = document.createElement('style');
@@ -89,7 +99,7 @@ function ensureHighlightStyle(): void {
   // clearly stands out by vividness.
   style.textContent =
     `::highlight(${HL_ALL}) { background-color: rgba(255, 235, 59, 0.22); color: inherit; }\n` +
-    `::highlight(${HL_CURRENT}) { background-color: #ffeb3b; color: #000; }`;
+    `::highlight(${HL_CURRENT}) { background-color: ${FIND_HIGHLIGHT}; color: #000; }`;
   (document.head || document.documentElement).appendChild(style);
 }
 

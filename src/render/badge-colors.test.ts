@@ -12,7 +12,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
-  computeBadgeColors, computeAccentBadgeColors, clearContrastCache, __apcaBetween,
+  computeBadgeColors, computeTintedBadgeColors, clearContrastCache, __apcaBetween,
 } from './badge-colors';
 import { clearLayoutCache } from '../core/layout-cache';
 
@@ -73,56 +73,54 @@ describe('computeBadgeColors — color reference resolution', () => {
   });
 });
 
-describe('computeAccentBadgeColors — distinct AND legible on any page', () => {
-  // A fixed brand color fails exactly when it matters: a dark chip on a dark
-  // page, or an accent matching the site's own palette, is invisible. The hue
-  // is fixed; the lightness is solved per page. These assert LEGIBILITY (APCA
-  // contrast), not color values, so tuning the accent doesn't churn the tests.
-  const ACCENT = '#7c5cff';
-  // The same floor computeBadgeColors' own adjustment targets.
+describe('computeTintedBadgeColors — a highlighter, not a brand colour', () => {
+  // The tint is a MEANING (search-match yellow), so it must not shift with the
+  // page: solving its lightness the way the foreground is solved would keep the
+  // hue angle and destroy the identity — yellow darkened enough to contrast
+  // with white paper is olive. Legibility rides the ink and the rim instead.
+  // Assertions are APCA contrast, not colour values, so retinting doesn't churn.
+  const TINT = '#ffeb3b';
   const MIN_CONTRAST = 55;
+  const EDGE_CONTRAST = 15; // a rim only has to be SEEN, not read
 
   function badgeOn(pageBg: string) {
     document.body.innerHTML = `<div style="background-color: ${pageBg}"><a id="t">link</a></div>`;
     const el = document.getElementById('t')!;
-    return computeAccentBadgeColors(el, ACCENT);
+    return computeTintedBadgeColors(el, TINT);
   }
 
-  it('separates from a black page', () => {
-    const c = badgeOn('rgb(0, 0, 0)');
-    expect(__apcaBetween(c.bg, 'rgb(0,0,0)')).toBeGreaterThan(MIN_CONTRAST);
-    expect(__apcaBetween(c.fg, c.bg)).toBeGreaterThan(MIN_CONTRAST);
-  });
-
-  it('separates from a white page', () => {
-    const c = badgeOn('rgb(255, 255, 255)');
-    expect(__apcaBetween(c.bg, 'rgb(255,255,255)')).toBeGreaterThan(MIN_CONTRAST);
-    expect(__apcaBetween(c.fg, c.bg)).toBeGreaterThan(MIN_CONTRAST);
-  });
-
-  it('separates from a page whose background IS the accent', () => {
-    // The case a fixed color cannot survive.
-    const c = badgeOn('rgb(124, 92, 255)');
-    expect(__apcaBetween(c.bg, 'rgb(124,92,255)')).toBeGreaterThan(MIN_CONTRAST);
-    expect(__apcaBetween(c.fg, c.bg)).toBeGreaterThan(MIN_CONTRAST);
-  });
-
-  it('keeps the accent hue rather than collapsing to grey', () => {
-    // The hue is what says "search"; a solve that flattened it to black/white
-    // would be legible and useless.
-    for (const page of ['rgb(0,0,0)', 'rgb(255,255,255)', 'rgb(20,20,24)']) {
-      const { r, g, b } = rgb(badgeOn(page).bg);
-      const spread = Math.max(r, g, b) - Math.min(r, g, b);
-      expect(spread).toBeGreaterThan(20);
+  it('wears the tint unchanged on every page — that is the identity', () => {
+    for (const page of ['rgb(0,0,0)', 'rgb(255,255,255)', 'rgb(17,17,17)', 'rgb(253,246,227)']) {
+      expect(rgb(badgeOn(page).bg)).toEqual({ r: 255, g: 235, b: 59 });
     }
   });
 
-  it('is visually distinct from a hint badge on the same page', () => {
-    // Hints fill with the page background; an accent badge must not.
-    document.body.innerHTML = '<div style="background-color: rgb(17,17,17)"><a id="t">link</a></div>';
-    const el = document.getElementById('t')!;
-    const hint = computeBadgeColors(el);
-    const search = computeAccentBadgeColors(el, ACCENT);
-    expect(__apcaBetween(search.bg, hint.bg)).toBeGreaterThan(MIN_CONTRAST);
+  it('keeps its label readable on the tint', () => {
+    for (const page of ['rgb(0,0,0)', 'rgb(255,255,255)', 'rgb(17,17,17)']) {
+      const c = badgeOn(page);
+      expect(__apcaBetween(c.fg, c.bg)).toBeGreaterThan(MIN_CONTRAST);
+    }
+  });
+
+  it('draws an edge on white paper, where the fill alone has none', () => {
+    const c = badgeOn('rgb(255,255,255)');
+    // The whole point: yellow on white is nearly edgeless, so the rim carries it.
+    expect(__apcaBetween(c.bg, 'rgb(255,255,255)')).toBeLessThan(EDGE_CONTRAST);
+    expect(__apcaBetween(c.border, 'rgb(255,255,255)')).toBeGreaterThan(MIN_CONTRAST);
+  });
+
+  it('draws an edge on a page that shares the tint', () => {
+    // The case a fixed colour cannot survive on its own.
+    const c = badgeOn('rgb(255,235,59)');
+    expect(__apcaBetween(c.border, 'rgb(255,235,59)')).toBeGreaterThan(EDGE_CONTRAST);
+  });
+
+  it('is distinguishable from a hint badge on the same page', () => {
+    // Hints fill with the page background; a tinted badge never does.
+    for (const page of ['rgb(17,17,17)', 'rgb(255,255,255)']) {
+      document.body.innerHTML = `<div style="background-color: ${page}"><a id="t">link</a></div>`;
+      const el = document.getElementById('t')!;
+      expect(rgb(computeBadgeColors(el).bg)).not.toEqual(rgb(computeTintedBadgeColors(el, TINT).bg));
+    }
   });
 });

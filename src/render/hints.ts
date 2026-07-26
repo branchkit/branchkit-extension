@@ -17,7 +17,7 @@ import { LabelAssignment, labelToDisplay, letterToSpokenWord } from '../labels/w
 import { documentInstanceId } from '../labels/document-identity';
 import { getCachedStyle, isRectOnScreen } from '../core/layout-cache';
 import { calculateZIndex } from '../placement/stacking';
-import { computeBadgeColors, computeAccentBadgeColors } from './badge-colors';
+import { computeBadgeColors, computeTintedBadgeColors } from './badge-colors';
 import { type BadgeSettings, DEFAULT_BADGE_SETTINGS } from '../badge-settings-storage';
 import { leaderLineGeometry } from '../placement/geometry';
 import { trackContainerResize, untrackContainerResize } from '../observe/container-resize-tracker';
@@ -1036,7 +1036,14 @@ export class HintBadge implements BadgeHandle {
     const fill = this.variant.fill;
     const colors = fill === 'page'
       ? computeBadgeColors(this.target.element)
-      : computeAccentBadgeColors(this.target.element, fill.accent);
+      : computeTintedBadgeColors(this.target.element, fill.tint);
+    if (fill !== 'page') {
+      // A tinted badge's rim is load-bearing — on paper that shares the tint it
+      // is the only thing giving the chip an edge — so it renders solid rather
+      // than at the hint badge's resting 30%. Keyboard mode's boost then has
+      // nothing left to raise, which is correct: it is already asserting.
+      this.inner.style.setProperty('--bk-kbd-b-alpha', '1');
+    }
     this.inner.style.background = colors.bg;
     this.inner.style.color = colors.fg;
     // Border color + opacity come from CSS (rgb(var(--bk-b-rgb) / alpha)) so
