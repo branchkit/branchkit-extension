@@ -16,10 +16,16 @@
  * of an element (render/badge-target.ts) and wearing the range-pick variant
  * (render/badge-variant.ts): same stylesheet, APCA colours, size settings,
  * display mode, placement nudges, and reconciler as every link hint. Out of
- * the store, they receive no occlusion verdict and no strict-viewport stamp —
- * which is what we want (a chip hidden under a sticky header would delete an
- * option from a question already asked), and matches rangesInViewport's own
- * geometry-only cut.
+ * the store, they receive no occlusion verdict — which is what we want (a chip
+ * hidden under a sticky header would delete an option from a question already
+ * asked). They DO carry a strict-viewport flag, stamped here from geometry
+ * rather than by the store's stamper.
+ *
+ * Because they hold pool codewords while staying out of the store, they
+ * register as a CodewordHolder (labels/codeword-holders.ts) — the store is the
+ * membership list nine lifecycle sweeps iterate, and that registration is what
+ * keeps the leak sweep, session rotation, and pool rejection from treating a
+ * live pick as garbage.
  */
 
 import { isAncestorChainInVisibleViewport } from '../lifecycle/strict-viewport';
@@ -79,13 +85,24 @@ interface Chip {
 
 /**
  * A pick has NO wall-clock expiry: chips stay up until the question they ask is
- * answered (a chip codeword) or the user exits (escape cascade, a replacing
- * pick, a requery that finds nothing). This matches the extension's other modes
- * — caret and palette are explicit-exit mirrors with no timer — and the earlier
- * 12s auto-cancel killed picks mid-hold and mid-codeword. The wedge a timer
- * used to guard (a forgotten pick swallowing every non-chip codeword via
- * refusePickWindowCodeword) is not silent: badges are hidden, chips are painted,
- * and the refusal toast names the exit.
+ * answered (a chip codeword) or the user exits — voice "escape", the Escape
+ * key, a replacing pick, a requery that finds nothing, or an SPA nav. This
+ * matches the extension's other modes (caret and palette are explicit-exit
+ * mirrors with no timer) and the earlier 12s auto-cancel killed picks mid-hold
+ * and mid-codeword.
+ *
+ * The wedge a timer used to guard is a forgotten pick swallowing every non-chip
+ * codeword via refusePickWindowCodeword. What makes that survivable is that it
+ * is never SILENT — and every way it could have gone silent is now closed
+ * rather than assumed:
+ *   - chips whose ranges died are reaped (reapDeadChips), so a pick can't
+ *     outlive its own premises invisibly;
+ *   - an SPA nav cancels, so it can't outlive the page;
+ *   - the reservoir leak sweep no longer reclaims a live pick's codewords
+ *     after 30s (labels/codeword-holders.ts) — that WAS a wall clock, and the
+ *     claim above was false while it stood.
+ * With those closed: badges are hidden, chips are painted, the refusal toast
+ * names the exit, and Escape works even if voice doesn't.
  */
 interface PendingPick {
   /** EVERY match the query found, not just the badged ones. Membership is a
@@ -359,7 +376,7 @@ export function cancelRangePick(reason: string): void {
  * stray badge codeword must not click a link out from under the question the
  * chips are asking. Returns true when the codeword was swallowed (the caller
  * stops); flashes guidance and reports the refusal. The pick stays live —
- * "escape" or the timeout ends it, then the badges and their codewords come
+ * "escape" (voice or the Escape key) ends it, then the badges and their codewords come
  * back.
  */
 export function refusePickWindowCodeword(action: string, codeword: string): boolean {

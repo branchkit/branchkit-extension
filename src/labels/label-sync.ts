@@ -9,8 +9,18 @@
  *   sentCodewords: codewords currently live on the plugin side. Lets us
  *     distinguish "real delete" (was Put, now gone — send Delete) from
  *     "never sent" (claimed and released within one debounce window —
- *     don't send anything). Cleared on session_id rotation since the
- *     plugin clears its own session state on the same event.
+ *     don't send anything). Cleared on session_id rotation.
+ *
+ *     That clear used to be justified as "the plugin clears its own session
+ *     state on the same event". It does NOT — since the storm-resilience
+ *     change it INHERITS the prior session's codewords as unconfirmed and
+ *     drops whatever the rebuild fails to re-confirm when an is_final batch
+ *     lands. The difference matters: a codeword nobody re-Puts is deleted
+ *     plugin-side while this side has forgotten it ever existed, so neither
+ *     end reports anything. That is exactly how the range-pick chips were
+ *     being dropped on every rescan, and the old wording is why it took a
+ *     log trace to find. Holders outside the wrapper store re-publish off
+ *     the is_final chokepoint in postBatch for this reason.
  *
  *   pendingPuts: wrappers whose codeword exists locally but hasn't been
  *     Put to the plugin yet. Populated by IT.onCodewordsChanged

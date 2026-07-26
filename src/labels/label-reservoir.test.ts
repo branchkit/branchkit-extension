@@ -205,25 +205,10 @@ describe('LabelReservoir.ensureReady', () => {
   });
 });
 
-describe('LabelReservoir.clear', () => {
-  it('drops every queued codeword + resets refill state', () => {
-    labelReservoir._seedForTests(['a', 'b', 'c']);
-    labelReservoir.clear();
-    expect(labelReservoir.stats().free).toBe(0);
-    expect(labelReservoir.stats().refillInFlight).toBe(false);
-  });
-
-  it('allows a fresh ensureReady after clear (no cached promise)', async () => {
-    sendMessageMock.mockResolvedValue({ labels: ['fresh'] });
-    await labelReservoir.ensureReady(); // initial
-    labelReservoir.clear();
-    sendMessageMock.mockClear();
-    sendMessageMock.mockResolvedValue({ labels: ['fresh2'] });
-    await labelReservoir.ensureReady(); // post-clear — must fetch again
-    const claims = sendMessageMock.mock.calls.filter(([m]) => m.type === 'CLAIM_LABELS');
-    expect(claims.length).toBeGreaterThan(0);
-  });
-});
+// `clear()` deleted 2026-07-26: no production caller, and its doc claimed one
+// ("called when the alphabet changes") that never existed — the alphabet
+// handler deliberately rotates the session and re-Puts instead. These tests
+// exercised only the method itself, so they went with it.
 
 describe('LabelReservoir refill threshold', () => {
   it('triggers an async refill when claim drains the reservoir below threshold', async () => {

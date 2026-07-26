@@ -1,7 +1,18 @@
 # One badge, two anchors — the BadgeTarget seam and badge variants
 
-**Status:** DESIGN + IMPLEMENTED (staged), 2026-07-25. Supersedes the hand-rolled
-chip painter in `activate/range-disambiguation.ts`.
+**Status:** IMPLEMENTED + field-tested, 2026-07-25/26. Supersedes the
+hand-rolled chip painter in `activate/range-disambiguation.ts`.
+
+**If you are here to build search-match badges, read this first:**
+`range-disambiguation.ts` currently fuses two things — a set of Range-anchored
+codeword badges with a rolling viewport window (reusable, and what search
+wants) and a modal question that hides page badges, swallows every other
+codeword, and narrows the HUD to itself (pick-specific, and what search does
+not want; search should ADD badges alongside link hints). Split those before
+building on top, not after: retrofitting means unpicking the singleton
+`pending` with two consumers attached. Then register as a `CodewordHolder`
+(see "The store is a membership list") — that is not optional, and the failure
+mode if you skip it is silent.
 
 ## The problem
 
@@ -411,6 +422,83 @@ and measured the PAINTED badge boxes through the harness-gated open shadow roots
 One probe artifact worth recording, because it cost a detour: a hidden badge is
 `opacity: 0` but still laid out, so measuring `getBoundingClientRect()` alone
 reports it as painted. Any future harness reading badge state must read opacity.
+
+## The store is a membership list, not a container
+
+The single most useful thing learned here, and the root of every bug found
+after the seam landed.
+
+Chips stay out of the wrapper store for a good reason: a `Range` is not an
+`Element`, and the store's consumers hit-test and click. But `store.all` is not
+just where wrappers live — it is the membership list that NINE independent
+sweeps iterate:
+
+session-rotation republish · the visibility plan · the occlusion gather · clip
+observation · stripped-host reattach · confirm-rejection recovery · the
+reservoir leak sweep's `isHeld` · bfcache pool reconfirm · the typed hint
+picker.
+
+Opting out of the store opted chips out of nine invariants at once, silently,
+and no amount of reusing `HintBadge` / `planBandWindow` / the reconciler could
+have carried any of them along — none of those invariants live where the
+reusable machinery lives. A differential audit (enumerate what the hint path
+does, find each behaviour's ENFORCEMENT SITE, check whether a chip reaches it)
+found them; reading the shared code would not have.
+
+`labels/codeword-holders.ts` is the seam that closes the codeword half. A
+holder answers three questions the store answers for wrappers — what do you
+hold, re-publish yourself after a rotation, and a codeword of yours was
+refused — and the sweeps consult it. **Search-match badges will be the second
+holder; they should register rather than rediscover this.**
+
+### What that cost, concretely
+
+- **A pick died after 30 seconds.** `sweepOutstanding` reclaims grants older
+  than `OUTSTANDING_SWEEP_GRACE_MS` that `isHeld` (store-only) denies —
+  releasing a live pick's codewords to the pool AND deleting them plugin-side,
+  while the chips stayed painted. The module's "no wall-clock expiry" claim was
+  false the whole time.
+- **Chip records didn't survive a session rotation.** Rebuilds are assembled
+  from `store.all`, so nothing re-Put them, and the rotation's `is_final` batch
+  dropped them ~250 ms later. The projection then degraded to unfiltered, so
+  the HUD advertised page hints the pick was swallowing.
+- **A dead Range was never reaped.** `bandCandidates` skips a collapsed rect,
+  so a dead range is neither a keep nor a drop; with every range dead the
+  `wouldEmpty` guard skipped the mutation block too, making the "Lost the
+  highlighted matches" teardown unreachable for exactly the case it names.
+- **An SPA nav never cancelled a pick**, and **`onConfirmRejected` skipped
+  anything not in the store**, and **the only exit was voice** — no help when a
+  pick is stuck because voice is misbehaving.
+
+### Where the hook goes matters more than how many hooks
+
+The rotation fix was first written against `rotateSession()`'s call sites and
+was still wrong: rotation isn't what drops a holder, FINALIZING is, and the
+scan orchestrator finalizes on its own terminal batch without going through any
+of them — so a plain rescan, the common case, stayed broken. It now hangs off
+the `is_final` chokepoint in `postBatch`, which covers every finalizing path
+with one hook. Patch the thing they funnel through, not the paths you can see.
+
+## Comments are hypotheses, not contracts
+
+Three of this arc's wrong turns came from reading prose instead of tracing a
+call path, in a codebase whose comments are unusually good — which is precisely
+what makes them dangerous when the code moves underneath them.
+
+- `collections.go` described the dependent-capture `_strict` match surface,
+  sitting directly above the sealed-pair command that replaced it in July. It
+  reads as "off-screen codewords can't match." They can; `_strict` is a
+  DisplaySource, and seen-is-clickable is enforced content-side at dispatch.
+  That one cost an hour and produced a confidently wrong explanation to the
+  user.
+- `label-sync.ts` said the plugin "clears its own session state" on rotation.
+  It inherits and then drops-if-unconfirmed. The difference is the entire
+  chip-drop bug, and the comment is why it took a log trace to find.
+- Two stale comments in `range-disambiguation.ts` were written the same day by
+  the same author as the code they described.
+
+All four are corrected in place. The rule earned: when a comment and a call
+path disagree, the call path wins, and the comment is a bug.
 
 ## Risks
 

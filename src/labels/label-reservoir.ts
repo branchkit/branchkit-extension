@@ -418,19 +418,6 @@ class LabelReservoir {
     }
   }
 
-  /**
-   * Drop all reservation state. Called when the alphabet changes — the
-   * SW has wiped its pool server-side; our local cache is now stale
-   * strings that no longer route.
-   */
-  clear(): void {
-    this.free.length = 0;
-    this.outstanding.clear();
-    this.reserved.clear();
-    this.initialReady = null;
-    this.refillInFlight = null;
-  }
-
   /** Diagnostic: current reservoir depth + refill state for snapshots. */
   stats(): { free: number; refillInFlight: boolean; outstanding: number } {
     return {
