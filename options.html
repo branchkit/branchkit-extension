@@ -361,10 +361,18 @@
       modifier if you want a shortcut to fire even while typing in a field.
       Shortcuts sync across browsers. Keybinding changes are staged — click
       <strong>Save</strong> to apply or <strong>Cancel</strong> to revert. Voice
-      phrases can be customized below (each edit applies immediately).
+      phrases can be customized below (each edit applies immediately). Anything
+      you've changed from the shipped default is marked <span
+      class="km-changed-legend">•</span> and gets a <strong>↺</strong> to put it
+      back.
     </div>
+    <!-- Two resets, not one: keys are staged behind Save/Cancel while voice
+         phrases apply immediately, so a single button would leave Cancel able to
+         revert only half of what it undid. Each says exactly what it covers. -->
     <div class="toolbar">
-      <button id="km-reset">Reset to defaults</button>
+      <button id="km-reset">Reset all keys</button>
+      <button id="km-reset-voice" hidden>Reset all voice phrases</button>
+      <span id="km-reset-status" class="km-reset-status" hidden></span>
     </div>
     <div id="km-savebar" class="km-savebar" hidden>
       <span class="km-savebar-msg">You have unsaved shortcut changes</span>
@@ -460,6 +468,15 @@
       .km-voice-phrase.changed::after { content: '•'; margin-left: 4px; color: var(--accent); }
       .km-voice-reset { font-size: 12px; line-height: 1; color: var(--fg-muted); background: transparent; border: none; cursor: pointer; padding: 0 2px; }
       .km-voice-reset:hover { color: var(--accent); }
+      /* A changed key reads like a changed phrase — same accent + dot. */
+      .km-keycap.changed { color: var(--accent); }
+      .km-keycap.changed::after { content: '•'; margin-left: 4px; color: var(--accent); }
+      /* Per-command key reset; renders only on a customized command. */
+      .km-keys-reset { font-size: 12px; line-height: 1; color: var(--fg-muted); background: transparent; border: none; cursor: pointer; padding: 0 4px; }
+      .km-keys-reset:hover { color: var(--accent); }
+      .km-reset-status { font-size: 12px; color: var(--fg-muted); align-self: center; }
+      .km-reset-status.error { color: var(--danger); }
+      .km-changed-legend { color: var(--accent); font-weight: 700; }
       .km-voice-edit { display: inline-flex; align-items: center; gap: 6px; }
       .km-voice-input { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--accent); border-radius: 5px; padding: 1px 5px; min-width: 140px; }
       .km-voice-input.invalid { border-color: #d9534f; }

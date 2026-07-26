@@ -25,6 +25,9 @@ import {
   saveKeymap,
   onKeymapChanged,
   keymapsEqual,
+  isCommandCustomized,
+  resetCommandIn,
+  defaultBindingsFor,
 } from './keymap-storage';
 import { comboFromEvent, serializeCombo } from '../activate/key-combo';
 import { displayKeys, duplicateKeys } from './keymap-edit-helpers';
@@ -60,6 +63,14 @@ let keymapEl: HTMLDivElement;
 const MAPPABLE = COMMAND_CATALOG.filter((c) => c.mappable);
 const GROUPS = [...new Set(MAPPABLE.map((c) => c.group))];
 
+/** " (back to J)" / " (back to unbound)" — names the state a reset returns to,
+ *  so the control says what it will do rather than just that it undoes. */
+function defaultKeyHint(commandId: string): string {
+  const defaults = defaultBindingsFor(commandId);
+  if (defaults.length === 0) return ' (back to no shortcut)';
+  return ` (back to ${defaults.map((b) => displayKeys(b.keys)).join(', ')})`;
+}
+
 /** Deep-clone a keymap so the draft and baseline never share entry/param
  * objects (edits mutate entries in place). */
 export function cloneKeymap(k: readonly KeymapEntry[]): KeymapEntry[] {
@@ -87,6 +98,12 @@ function updateSaveBar(): void {
 
 function render(): void {
   keymapEl.replaceChildren();
+  // Voice reset only exists when there's a BranchKit to reset against (the
+  // overrides live in the actuator). Shown whenever connected — even with nothing
+  // customized — so the capability is discoverable rather than appearing only
+  // once you've already changed something.
+  const voiceResetBtn = document.getElementById('km-reset-voice');
+  if (voiceResetBtn) voiceResetBtn.hidden = !voiceConnected;
   if (voiceLoaded && !voiceConnected) {
     const note = document.createElement('div');
     note.className = 'km-voice-note';
@@ -158,6 +175,23 @@ function renderCommand(meta: CommandMeta, dupes: Set<string>): HTMLElement {
     });
   });
   keys.appendChild(add);
+
+  // Per-command reset — only when this command's keys differ from what ships, so
+  // its presence IS the "you changed this" signal and it's never a no-op click.
+  // Staged like every other key edit: Save applies, Cancel brings the edit back.
+  if (isCommandCustomized(keymap, meta.id)) {
+    const reset = document.createElement('button');
+    reset.type = 'button';
+    reset.className = 'km-keys-reset';
+    reset.textContent = '↺';
+    reset.title = `Reset “${meta.label}” to its default key${
+      defaultKeyHint(meta.id)}`;
+    reset.addEventListener('click', () => {
+      keymap = resetCommandIn(keymap, meta.id);
+      render();
+    });
+    keys.appendChild(reset);
+  }
   row.appendChild(keys);
 
   // Voice phrase on the same row — "or say this" beside "press this". Read-only
@@ -480,6 +514,76 @@ async function saveVoicePattern(meta: CommandMeta, vp: VoicePattern, newPattern:
   if (wrap) editVoicePattern(wrap, meta, vp, newPattern, r?.error || 'Could not save the phrase.');
 }
 
+/**
+ * Clear every voice customization: each phrase override back to its catalog
+ * default, each added phrase removed. Applies IMMEDIATELY (voice edits do), which
+ * is why it's a separate control from the staged key reset.
+ *
+ * N calls over the lists we already hold rather than a bulk op — reset-all is a
+ * rare click and a `commands.clear_overrides` op would be a cross-repo contract
+ * change. The tradeoff is that it isn't atomic, so a partial failure is REPORTED
+ * rather than leaving the page claiming success over surviving overrides.
+ */
+async function resetAllVoice(): Promise<void> {
+  const btn = document.getElementById('km-reset-voice') as HTMLButtonElement | null;
+  const total = overrides.size + aliases.length;
+  if (total === 0) {
+    showResetStatus('No voice customizations to reset.');
+    return;
+  }
+  if (btn) btn.disabled = true;
+  showResetStatus(`Resetting ${total}…`);
+
+  // Snapshot both lists first — the handlers below mutate them as they succeed.
+  const overrideKeys = [...overrides.keys()];
+  const addedPhrases = [...aliases];
+  let failed = 0;
+
+  for (const key of overrideKeys) {
+    const [action, defaultPattern] = key.split(String.fromCharCode(0));
+    const r = await chrome.runtime.sendMessage({
+      type: 'RESET_COMMAND_OVERRIDE', action, defaultPattern,
+    }).catch(() => ({ ok: false }));
+    if (r?.ok) overrides.delete(key);
+    else failed++;
+  }
+  for (const a of addedPhrases) {
+    const r = await chrome.runtime.sendMessage({
+      type: 'REMOVE_COMMAND_ALIAS',
+      action: a.action, defaultPattern: a.default_pattern, newPattern: a.new_pattern,
+    }).catch(() => ({ ok: false }));
+    if (r?.ok) {
+      aliases = aliases.filter((x) => !(
+        x.action === a.action && x.default_pattern === a.default_pattern
+        && x.new_pattern === a.new_pattern
+      ));
+    } else failed++;
+  }
+
+  if (btn) btn.disabled = false;
+  showResetStatus(
+    failed === 0
+      ? `Reset ${total} voice customization${total === 1 ? '' : 's'}.`
+      : `${total - failed} of ${total} reset — ${failed} failed. Is BranchKit still running?`,
+    failed > 0,
+  );
+  render();
+}
+
+/** Transient line beside the reset buttons. Errors persist; successes fade. */
+function showResetStatus(message: string, isError = false): void {
+  const el = document.getElementById('km-reset-status');
+  if (!el) return;
+  el.textContent = message;
+  el.classList.toggle('error', isError);
+  el.hidden = false;
+  if (resetStatusTimer !== null) clearTimeout(resetStatusTimer);
+  if (!isError) {
+    resetStatusTimer = self.setTimeout(() => { el.hidden = true; }, 4000);
+  }
+}
+let resetStatusTimer: number | null = null;
+
 async function resetVoicePattern(meta: CommandMeta, vp: VoicePattern): Promise<void> {
   const r = await chrome.runtime.sendMessage({
     type: 'RESET_COMMAND_OVERRIDE',
@@ -508,6 +612,10 @@ function renderBinding(entry: KeymapEntry, dupes: Set<string>): HTMLElement {
   const keyBtn = document.createElement('button');
   keyBtn.type = 'button';
   keyBtn.className = 'km-keycap';
+  // Mark keys that differ from what ships, matching the voice phrases' .changed
+  // treatment — "this isn't the default" must read the same on both halves of a
+  // row. Whole-command granularity, because that's the unit the delta stores.
+  if (isCommandCustomized(keymap, entry.command)) keyBtn.classList.add('changed');
   keyBtn.textContent = displayKeys(entry.keys);
   keyBtn.title = 'Click to rebind';
   keyBtn.addEventListener('click', () => {
@@ -679,12 +787,16 @@ export async function initKeymapEditor(): Promise<void> {
     })
     .catch(() => {});
 
-  // "Reset to defaults" now STAGES the defaults into the draft (revertible via
-  // Cancel) instead of persisting immediately — no confirm needed, Save applies.
+  // "Reset all keys" STAGES the defaults into the draft (revertible via Cancel)
+  // instead of persisting immediately — no confirm needed, Save applies.
   const resetBtn = document.getElementById('km-reset') as HTMLButtonElement | null;
   resetBtn?.addEventListener('click', () => {
     keymap = cloneKeymap(DEFAULT_KEYMAP);
     render();
+  });
+
+  document.getElementById('km-reset-voice')?.addEventListener('click', () => {
+    void resetAllVoice();
   });
 
   onKeymapChanged((incoming) => {
