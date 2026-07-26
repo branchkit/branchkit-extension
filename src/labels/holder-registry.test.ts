@@ -55,7 +55,7 @@ import {
   resolveCodeword, resolveCodewordAboveAmbient, anyHolderMatchesPrefix,
   narrowByPrefix, soleHolderMatch,
   republishAll, rejectAll, reconcileAll, heldAnywhere, allHeld,
-  prefixClaimedByOther, SETTLE_KINDS,
+  disposeAllHolders, prefixClaimedByOther, SETTLE_KINDS,
   EXCLUSIVE_OVERLAY_PRIORITY, ADDITIVE_OVERLAY_PRIORITY,
 } from './holder-registry';
 import {
@@ -260,6 +260,24 @@ describe('pool queries and fan-outs', () => {
       expect(s.log).toContain('reject:ab');
     }
     expect(heldAnywhere('ab')).toBe(false);
+  });
+
+  it('disposeAllHolders reaches every holder, surviving mid-sweep unregistration', () => {
+    registerAllThree();
+    pick.grant(['ab']);
+    search.grant(['cd']);
+    // An armed holder unregisters inside its own dispose (the RangeBadgeSet
+    // shape); the sweep must still reach everyone after it.
+    const origDispose = pick.holder.dispose;
+    (pick.holder as { dispose(reason: string): void }).dispose = (reason) => {
+      origDispose(reason);
+      unregisterHolder(pick.holder);
+    };
+    disposeAllHolders('teardown_orphan');
+    for (const s of [pick, search, ambient]) {
+      expect(s.log).toContain('dispose:teardown_orphan');
+    }
+    expect(allHeld()).toEqual([]);
   });
 
   it('reconcileAll delivers every settle kind to every holder', () => {

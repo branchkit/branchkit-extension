@@ -93,6 +93,9 @@ export function armSearchBadges(): void {
       claim: 'additive',
       resolve: (cw) => resolveSearchCodeword(cw),
       reconcile: (settle) => reconcileSearchHolder(settle),
+      // Registry dispose fan-out: clear through the owner so the module's
+      // `badges` binding nulls with the set.
+      dispose: (reason) => clearSearchBadges(reason),
     },
   });
   const pool = labelReservoir.stats();

@@ -124,7 +124,7 @@ import {
 import {
   __resetHolderRegistry, resolveCodeword, anyHolderMatchesPrefix,
   narrowByPrefix, soleHolderMatch, republishAll, rejectAll, reconcileAll,
-  allHeld,
+  allHeld, disposeAllHolders,
 } from '../labels/holder-registry';
 
 function makeRange(text = 'x'): Range {
@@ -789,6 +789,25 @@ describe('range-disambiguation pick', () => {
 
       expect(isRangePickPending()).toBe(false);
       expect(restored).toEqual([{ badgesVisible: true, hintMode: true }]);
+    });
+
+    it('the registry dispose fan-out ends the whole question (orphan teardown)', async () => {
+      // quiesceOrphan calls disposeAllHolders instead of naming this module:
+      // the holder's dispose must route through the full cancel — pending
+      // cleared, plugin-side projection narrow released, entry state given
+      // back — not just the set's badge teardown.
+      installHooks({ badgesVisible: true, hintMode: true });
+      startRangePick([makeRange('a'), makeRange('b')], () => {});
+      await Promise.resolve();
+      await Promise.resolve();
+
+      disposeAllHolders('teardown_orphan');
+
+      expect(isRangePickPending()).toBe(false);
+      expect(chipCount()).toBe(0);
+      expect(pickWindowPosts[pickWindowPosts.length - 1]).toEqual([]);
+      expect(restored).toEqual([{ badgesVisible: true, hintMode: true }]);
+      expect(allHeld()).toEqual([]);
     });
 
     it('never entered the window means nothing to give back', () => {

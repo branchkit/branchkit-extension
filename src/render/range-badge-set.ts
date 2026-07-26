@@ -96,6 +96,13 @@ export interface RangeHolderSpec {
    *  'general' only — every settle lands a 'general' from the same pass, and
    *  the supplemental 'scroll' that follows it would be pure rework. */
   reconcile?(settle: SettleKind): void;
+  /** Owner teardown policy for the registry's dispose fan-out (the orphan-CS
+   *  path). Default: the set's own dispose — right for an overlay with no
+   *  state beyond the set. An owner with module state around it (the pick's
+   *  pending question and plugin-side narrow, search's session binding)
+   *  routes its full cancel here so a registry dispose cannot leave a
+   *  zombie policy behind a disposed set. */
+  dispose?(reason: string): void;
 }
 
 export interface RangeBadgeSetOptions {
@@ -180,7 +187,10 @@ export class RangeBadgeSet {
         // the same pass, so reconciling on it too would be pure rework.
         else if (settle === 'general') this.reconcile();
       },
-      dispose: (reason) => this.dispose(reason),
+      dispose: (reason) => {
+        if (spec.dispose) spec.dispose(reason);
+        else this.dispose(reason);
+      },
     };
     this.unregisterHolder = registerHolder(this.holder);
   }

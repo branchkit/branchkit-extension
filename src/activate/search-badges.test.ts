@@ -63,7 +63,7 @@ import {
 import { SEARCH_VARIANT } from '../render/badge-variant';
 import {
   __resetHolderRegistry, resolveCodeword, narrowByPrefix,
-  anyHolderMatchesPrefix, reconcileAll, rejectAll,
+  anyHolderMatchesPrefix, reconcileAll, rejectAll, disposeAllHolders,
 } from '../labels/holder-registry';
 
 function makeRange(text: string): Range {
@@ -201,6 +201,15 @@ describe('search badges', () => {
     await Promise.resolve();
     rejectAll('a a');
     expect(isSearchBadgePending()).toBe(false);
+  });
+
+  it('the registry dispose fan-out clears the set (orphan teardown)', async () => {
+    matchRanges = [makeRange('one')];
+    armSearchBadges();
+    await Promise.resolve();
+    disposeAllHolders('teardown_orphan');
+    expect(isSearchBadgePending()).toBe(false);
+    expect(released.flat()).toEqual(['a a']);
   });
 
   it('mid-codeword progress dims the badges that cannot complete', async () => {

@@ -317,6 +317,15 @@ export function relabelAll(): void {
   for (const h of holders) h.relabel();
 }
 
+/** Tear every holder down — the orphan-CS path's fan-out, so a holder that
+ *  exists cannot be forgotten by the teardown that must release its
+ *  codewords (the seam it replaces named pick and search by import). Each
+ *  holder's dispose is its owner's policy and typically unregisters it, so
+ *  the iteration walks a copy. */
+export function disposeAllHolders(reason: string): void {
+  for (const h of [...holders]) h.dispose(reason);
+}
+
 /** Does anyone hold this codeword? The leak sweep's one question, answered
  *  by each holder about its own bookkeeping — the form that cannot drift. */
 export function heldAnywhere(codeword: string): boolean {

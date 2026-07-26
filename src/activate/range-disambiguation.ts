@@ -190,6 +190,11 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
       priority: EXCLUSIVE_OVERLAY_PRIORITY,
       claim: 'exclusive',
       resolve: (cw) => resolvePickCodeword(cw),
+      // The registry's dispose fan-out (orphan teardown) must end the whole
+      // QUESTION, not just the chips: release the plugin-side projection
+      // narrow, give back the entry state, clear the find paint. The set's
+      // own dispose would strand `pending` behind a dead set.
+      dispose: (reason) => cancelRangePick(reason),
     },
     // Arm the plugin-side narrow with whatever is live, whenever that changes.
     onMembershipChanged: (codewords) => publishPickWindow(codewords),

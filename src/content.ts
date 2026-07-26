@@ -64,7 +64,8 @@ import { armSearchBadges, clearSearchBadges } from './activate/search-badges';
 import {
   registerHolder, anyHolderMatchesPrefix, narrowByPrefix, resolveCodeword,
   resolveCodewordAboveAmbient, soleHolderMatch, heldAnywhere, allHeld,
-  rejectAll, reconcileAll, relabelAll, type CodewordOutcome,
+  rejectAll, reconcileAll, relabelAll, disposeAllHolders,
+  type CodewordOutcome,
 } from './labels/holder-registry';
 import { StoreHolder } from './labels/store-holder';
 import { runEscapeCascade } from './activate/escape-cascade';
@@ -1546,8 +1547,10 @@ const storeHolder = new StoreHolder(store, {
   // No-op: the settle engine IS the store's reconciler; the registry fan-out
   // fires from the engine's own after-settle hooks.
   reconcile: () => {},
-  // No-op in C1: the store's frame teardown is quiesceOrphan's; the registry
-  // dispose fan-out lands there in C1b (orphan-CS moves one layer at a time).
+  // No-op by design: quiesceOrphan calls disposeAllHolders as its FIRST act
+  // and then does the store's actual teardown itself (machinery, session
+  // resources, the badge-host DOM sweep) — a real dispose here would be a
+  // second copy of that sequence.
   dispose: () => {},
 });
 registerHolder(storeHolder);
@@ -2205,19 +2208,18 @@ function recordOrphanHit(): void {
 // PREEMPT on the voice activate-click path (unobserve-before-swap), not a
 // session teardown — do not fold it in.
 function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
-  // A pending chip pick holds a plugin-side narrow on this tab's hint
-  // projection (range_pick.go). The chip hosts get swept with every other
-  // [data-branchkit-hint] node below, but the narrow needs an explicit release
-  // or the successor content script's hints stay out of the Discovery HUD.
-  cancelRangePick(`teardown_${reason}`);
-  // Search badges are the pick's sibling holder and need the same explicit
-  // exit. The badge hosts get swept with every other [data-branchkit-hint] node
-  // below, but that sweep is DOM only: without dispose() the codewords are
-  // never released to the reservoir, the records are never retired, and the set
-  // stays registered as a CodewordHolder — so the successor content script
-  // inherits a pool short by up to MAX_SEARCH_BADGES. Same position and same
-  // failure mode as the cancelRangePick above, so it goes in the same place.
-  clearSearchBadges(`teardown_${reason}`);
+  // Every registered CodewordHolder tears down through its own dispose —
+  // derived, so a holder that exists cannot be forgotten by the teardown that
+  // must release its codewords (this used to name cancelRangePick and
+  // clearSearchBadges by hand, the missed-Nth-edit shape). The DOM sweep
+  // below only removes badge hosts; without the dispose the pick's
+  // plugin-side projection narrow is never released (the successor's hints
+  // stay out of the Discovery HUD), codewords are never returned to the
+  // reservoir, records are never retired, and dead holders stay registered —
+  // a successor inheriting a pool short by every badge on screen. The store
+  // holder's dispose delegate is a no-op by design: the REST of this
+  // function is the store's teardown.
+  disposeAllHolders(`teardown_${reason}`);
   // Suspend/resume-cycled machinery (see contract above) — owned by the
   // machinery-gate module, which cycles it.
   teardownMachinery();
