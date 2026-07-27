@@ -17,17 +17,17 @@ those rounds a fourth time will not touch it.
 
 ```
 $ node scripts/check-ceilings.mjs
-ok: src/content.ts 3620/3620
-ok: src/background.ts 1307/1336
+ok: src/content.ts 3611/3700
+ok: src/background.ts 1307/1350
 ```
 
-`content.ts` is **exactly at its ceiling**. The next line added to it fails CI.
-That is the ratchet working as designed, and it is also the reason this note
-exists now rather than after the next regrowth cycle.
+At the time this note was written `content.ts` sat at **exactly** its ceiling
+(3620/3620) and the next line added to it failed CI. That read as the ratchet
+working; §4.1 explains why it was the ratchet *mis*-set, and what replaced it.
 
 | | `content.ts` | `background.ts` |
 |---|---|---|
-| lines (ratchet count) | 3,620 / 3,620 | 1,307 / 1,336 |
+| lines (ratchet count) | 3,611 / 3,700 | 1,307 / 1,350 |
 | imports | 93 | 28 |
 | **exports** | **0** | **0** |
 | top-level side effects | ~66 | ~20 |
@@ -194,6 +194,45 @@ Do **not** raise the ceiling to buy room to work. The last raise
 (3620 → 3815, then back down) was correct because it made a real overrun
 visible; a raise to create working space would relaunch the exact cycle rounds
 1–3 lost three times.
+
+### 4.1 A ceiling is a band marker, not a measurement (2026-07-27)
+
+The rule above is right and was applied too literally in the other direction.
+`content.ts`'s ceiling had been tightened to *exactly* its line count, and a
+ceiling with zero headroom stops measuring what it was built to measure — it
+changes **what** you write rather than **how much**. Two worked examples from a
+single session: a refused-key pulse was wired as a direct render call instead of
+the house callback seam because the callback needed one line in `content.ts` and
+there was none (corrected in `4912f51`), and two comment blocks were trimmed
+purely to fit. The same session also over-applied the rule the other way,
+lowering 3620 → 3617 after an extraction when the ratchet only compels a lower
+at 100+ under. Both mistakes have one root: treating the ceiling as a target.
+
+The slack is **one-directional** and this is the easy misread:
+
+```js
+if (lines > ceiling)                        → fail   // grew a monolith
+else if (ceiling - lines > RATCHET_SLACK)   → fail   // bank the win
+```
+
+The 100 applies only *downward*. The design always intended the ceiling to sit
+up to 100 lines above the file; that band **is** the working room.
+
+This could not be fixed by writing the intent down — a ceiling pinned to the
+file size and a file grown up to its ceiling are the same two numbers, so no
+after-the-fact check can tell them apart. It is enforced by making the bad state
+**unexpressible**: `check-ceilings.mjs` requires every ceiling to be a multiple
+of `CEILING_GRANULARITY` (50), which is coarser than any single edit. 3620 is
+not a ceiling you can write. `background.ts` was normalised 1336 → 1350 to
+satisfy it — a one-time loosening of 14 lines, which is the price of the rule.
+
+Deleting the gate was the first instinct and is wrong: `content.ts` has regrown
+three times, and this plan uses `monolith-ceilings.json` as its running score,
+so deleting it would take the instrument away from the refactor meant to fix it.
+
+*(This decision was first recorded in `DESIGN_HINT_ENGINE.md` §6a, because JSON
+cannot hold a comment. It lives here now — this note owns the ratchet, and a
+reader of the rule above needs to meet its correction in the same place.)*
 
 The other standing guard is the D2 `store.all` per-file pins in
 `scripts/check-exhaustive.mjs`, which force any new sweep to be sanctioned

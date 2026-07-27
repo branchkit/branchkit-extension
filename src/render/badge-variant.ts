@@ -1,18 +1,30 @@
 /**
  * What KIND of badge this is.
  *
- * Two badges exist: the ambient link hint, and the range-pick chip that asks
- * "which of these text matches did you mean?" (activate/range-disambiguation.ts).
+ * THREE badges exist: the ambient link hint; the range-pick chip that asks
+ * "which of these text matches did you mean?" (activate/range-disambiguation.ts);
+ * and the search badge over a committed find (activate/search-badges.ts).
  * They share everything — shadow host, stylesheet, APCA colours, size settings,
- * placement, the reconciler — and differ only in how the set narrows while the
- * user is mid-codeword, plus how much page-defence machinery a seconds-long
- * badge should carry.
+ * placement, the reconciler, the codeword pool, the holder registry, and the
+ * typing rule — and differ only in how the set narrows while the user is
+ * mid-codeword, plus how much page-defence machinery a seconds-long badge
+ * should carry.
  *
  * Every field derives from ONE fact (persistent ambient badge vs transient
- * authoritative chip), which is why they live in one object rather than five
+ * authoritative overlay), which is why they live in one object rather than five
  * loose constructor flags: they must move together.
  *
- * See notes/DESIGN_BADGE_TARGET_SEAM.md.
+ * BEFORE YOU MAKE THE THREE VARIANTS MORE ALIKE, read
+ * notes/DESIGN_HINT_ENGINE.md §5.2. Eleven of the differences between hint
+ * types look like inconsistencies and are load-bearing, each with its reason
+ * recorded at its site; several were regressions once already (chips shipped
+ * with no observers and stranded; chips wore a gold prefix accent until
+ * consistency won). `defendAgainstPage: false` for chips in particular is a
+ * CORRECTNESS constraint, not a cost one — see its field doc. Flattening them
+ * re-opens closed bugs, which is the characteristic failure of a tidying pass
+ * through this file.
+ *
+ * See also notes/DESIGN_BADGE_TARGET_SEAM.md.
  */
 
 import { FIND_HIGHLIGHT } from '../scan/find';

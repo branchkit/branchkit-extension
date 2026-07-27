@@ -1,8 +1,11 @@
 # The hint engine — one piece, with declared boundaries between hint types
 
-**Status:** PROPOSAL, nothing executed. Written 2026-07-27 at the end of a
-session that fixed five field bugs in this area; the bugs are the evidence and
-are catalogued in §2.
+**Status:** step 1 **DONE** (`bc7e213`); step 2 (identity) is the live proposal;
+the `hints/` tree is **dropped** to a possible end state (§4.2). Written
+2026-07-27 at the end of a session that fixed five field bugs in this area; the
+bugs are the evidence and are catalogued in §2. Revised the same day after
+review — the review's verdict was that the thing missing is *a stated contract
+plus a map*, not a directory.
 
 **One-line thesis:** the badge substrate is already *shared* — the audit that
 went looking for duplicated engines did not find them — but it is not
@@ -118,6 +121,11 @@ constants in a registry two directories away.
 
 ## 4. Proposed structure
 
+> **Demoted 2026-07-27 — see §4.2.** The tree below is a *possible end state*,
+> not scheduled work. Read it as an illustration of where the boundaries would
+> fall if they were declared; the declaring (§4.1 step 2) is the actual
+> proposal, and it needs no file to move.
+
 A `hints/` module that contains the engine and *declares* the boundaries.
 Sketch, not a final layout:
 
@@ -154,23 +162,80 @@ Three properties matter more than the exact tree:
 
 Do it in the order that makes each step independently verifiable:
 
-1. **Finish the rule-consolidation already started.** `codeword-typing.ts`
-   took the firing rule; narrowing is still 3 hand-written implementations
-   (`store-holder.ts:163`, `range-badge-set.ts:250`, `:269`). Also: 5 sites
-   call `poolLabelToAssignment` to derive a label; `reposition` has two
-   implementations and zero production callers. Cheap, no structural risk.
-2. **Grow `BadgeVariant` to the identity/lifecycle axis** — a declared
-   `onChurn: 'rebind' | 'refind' | 'cancel'`, replacing knowledge currently
-   implicit in which class you instantiated. This is the step that would have
-   prevented bug #5.
-3. **Move files.** Last, mechanically, once the boundaries are declared.
+1. **Finish the rule-consolidation already started.** ✅ **DONE 2026-07-27**
+   (`bc7e213`). `codeword-typing.ts` took the firing rule; narrowing was still
+   3 hand-written implementations, and had drifted — the store's loop never
+   reset `setMatchedChars` on a badge that stopped matching, masked only
+   because link hints hide non-candidates rather than dimming them. Every
+   holder now projects its members once into `[codeword, letterForm]` and all
+   three moments — gate, narrow, fire — read that projection. Also landed:
+   `applyClaimLabel()` (three paint paths were deriving a wrapper's label
+   independently), and `CodewordHolder.reposition` deleted — declared beside
+   `relabel`, implemented twice, called by nothing, because badge *position*
+   is the reconcile positioner's registry, which both hint kinds already join.
+   Two dead store matchers went with it.
 
-Step 3 is the least valuable and the most disruptive; steps 1–2 deliver most
-of the comprehensibility win and are separately shippable.
+2. **Declare IDENTITY, and let recovery fall out of it.**
+
+   The earlier sketch here was a declared `onChurn: 'rebind' | 'refind' |
+   'cancel'`. That is a **taxonomy of mechanisms**, and §5.1 insists those
+   mechanisms are not interchangeable — so a field that invites you to pick one
+   of three verbs invites exactly the merge this note rules out.
+
+   The axis underneath is **identity**, and it is the thing that actually
+   differs:
+
+   | Hint type | Identity | Recovery, as a consequence |
+   |---|---|---|
+   | link hint | a **fingerprint** of the element | can rebind among limbo candidates |
+   | search badge | **(query, occurrence)** | can re-run the query |
+   | pick chip | **none** | cannot recover; cancel is the only option |
+
+   Declare the identity and recovery is derived, not chosen: no identity means
+   cancel is the *only possible* behaviour. That is algebra rather than
+   taxonomy, and it is why `BadgeVariant` already works — it declares policy,
+   not procedure.
+
+   It also makes open question 5 answerable. For a fourth hint type you ask
+   "what is this hint's identity?" — a question about the thing — instead of
+   "which of my three recovery verbs fits?", a question about the existing
+   implementation. Hints over a11y nodes or canvas regions are then a design
+   conversation rather than a vote among three verbs.
+
+   This is the step that would have prevented bug #5: a search badge whose
+   identity is *(query, occurrence)* obviously can be re-acquired, and nothing
+   was asking.
+
+3. ~~**Move files.**~~ **DROPPED** (2026-07-27) — see §4.2.
 
 ---
 
-## 5. Non-goals, and the load-bearing differences
+### 4.2 The `hints/` tree is demoted, not scheduled
+
+The tree in §4 above is kept as a **possible end state**, to be revisited once
+the axes are declared and we can see what actually clusters. It is not work.
+
+The comprehension problem in §1 is real, but it is a documentation and policy
+problem wearing a directory's clothes. The three properties §4 says matter more
+than the tree — one readable place, per-type policy as data, two lifecycles
+adjacent — are all obtainable without moving 29 files:
+
+- **"One directory you can read, including a README that states the four
+  axes"** — you can have the README without the directory. §5.2 below *is* that
+  README: eleven documented differences, each with its reason, several with
+  regression history. It is the highest-value artifact in this file and should
+  survive whatever else happens. A map (§1.1's tree plus the four-axis table)
+  gives the "meet the boundary before the code" property at zero structural
+  risk — and if it doesn't help, you throw away a markdown file instead of
+  unwinding 29 moves and their blame history.
+- **Per-type policy as data** — that is step 2, and it needs no file to move.
+- **Two lifecycles adjacent** — adjacency in a note is worth nearly as much as
+  adjacency on disk, and costs nothing.
+
+The tree also carries a real risk this note otherwise argues against: a
+cohesion refactor's characteristic failure is normalising away differences that
+look accidental, and a fresh `hints/types/*.ts` layout is an invitation to make
+the three files parallel. §5.2 exists because that has already happened twice.
 
 ### 5.1 Do not merge the element and range lifecycles
 
@@ -232,88 +297,57 @@ bug:
 1. **Does `BadgeVariant` become the single per-type object, or does a `HintType`
    descriptor own the variant plus lifecycle plus claim?** The second is more
    honest but touches registration order, which the exhaustiveness lint pins.
-2. **Where does `content.ts`'s hint wiring go?** The engine could own its own
-   registration (a `hints/install.ts`), which would remove ~17 seams from the
-   monolith. This is the one place this note certainly overlaps
-   `DESIGN_ENTRY_POINT_TOPOLOGY.md` — see §7.
+2. ~~**Where does `content.ts`'s hint wiring go?**~~ **ANSWERED** — nowhere, for
+   now. A `hints/install.ts` is a facade that bundles the injection; topology
+   Phase 2 removes it. Phase 2 sequences first and this is withdrawn (§7).
 3. **Is `store.all` still the right membership spine**, or does the element set
-   become a peer of `RangeBadgeSet` under `set/`? The exhaustiveness lint pins
-   81 `store.all` sites across 19 modules, which is a good measure of how much
-   would move.
+   become a peer of `RangeBadgeSet`? The exhaustiveness lint pins 76 `store.all`
+   sites across 19 modules (was 81), which is a good measure of how much would
+   move. Note this question survives the tree being dropped — it is about the
+   membership spine, not about directories.
 4. **Does the find session belong in the engine at all?** `refindCommitted`
    made search's recovery a find-module concern. Arguably right (the query
    lives there); arguably the engine should own "how a hint type recovers".
-5. **Does anything here apply to a fourth hint type?** The design should be
-   checked against one that does not exist yet — e.g. hints over a11y nodes,
-   or over a canvas — to see whether the four axes are actually the axes.
+   Step 2 sharpens this rather than settling it: if identity is *(query,
+   occurrence)*, the query's home and the recovery's home can legitimately
+   differ.
+5. ~~**Does anything here apply to a fourth hint type?**~~ **ANSWERED by the
+   step-2 reframe** — you ask what the new hint type's *identity* is, and
+   recovery follows. That is a question about the thing being hinted, which a
+   design that does not exist yet can still answer; "which of my three recovery
+   verbs fits?" was a question about the current implementation, which it
+   cannot.
 
 ---
 
-## 6a. DECISION 2026-07-27 — the `content.ts` ceiling gets its working band back
+## 7. Relationship to `DESIGN_ENTRY_POINT_TOPOLOGY.md` — RESOLVED
 
-**Set to 3700 against a 3622-line file.** This overrides
-`DESIGN_ENTRY_POINT_TOPOLOGY.md` §4 ("Do not raise the ceiling to buy room to
-work"), deliberately and with the owner's agreement. Recorded here because
-`monolith-ceilings.json` cannot hold a comment.
+Written independently and deliberately not shaped to avoid collision, so that a
+genuine one would be visible rather than designed around. It was, and it is
+**not** a false alarm: the two proposals want opposite things.
 
-**Why.** The ratchet's slack is one-directional, which is easy to misread:
+The overlap is **`content.ts`'s callback/init seams** (that note's Phase 2, ~17
+seams; this note's §6.2). But a `hints/install.ts` **bundles** those injection
+calls into one facade, while topology Phase 2 **removes** the injection by
+having modules acquire their own dependencies. The facade buys the line count
+without the structural fix — precisely the failure mode topology names. Worse,
+if the facade lands first it hides the symptom and makes Phase 2 look
+unnecessary.
 
-```js
-const RATCHET_SLACK = 100;
-if (lines > ceiling)                        → fail   // grew a monolith
-else if (ceiling - lines > RATCHET_SLACK)   → fail   // bank the win
-```
+**Resolution: topology Phase 2 sequences first.** Whatever seams genuinely
+cannot be inverted — the `keyHandler` ↔ holders cycle is the suspect — can then
+get a hint-owned surface, and that surface will be small and honest because it
+will contain only the residue. §6.2 is withdrawn as a standalone proposal.
 
-The 100 applies only DOWNWARD. The design intends the ceiling to sit up to 100
-lines above the file, and that band is the working room. Nothing in the ratchet
-asks for zero headroom — but the ceiling had been tightened to exactly the file
-size (3620/3620), where the next line added fails CI.
+Also worth noting: the session that produced this note ADDED one such seam
+(`setRefusedKeyCallback`, `4912f51`) as the correct fix to a two-writer bug,
+after the line ceiling had previously pushed it the wrong way. A small worked
+example of the tension — the right local fix grows the monolith's wiring.
 
-That is what distorted two decisions on 2026-07-27: the refused-key pulse was
-wired as a direct render call rather than the house callback seam because the
-callback needed one line in `content.ts` and there was none (corrected in
-`4912f51`), and two comment blocks were trimmed purely to fit. A constraint
-that changes WHAT you write rather than HOW MUCH has stopped measuring what it
-was built to measure.
-
-This session also over-applied the rule in the other direction — lowering
-3620 → 3617 after an extraction, when the ratchet only compels a lower at 100+
-under. Both mistakes have the same root: treating the ceiling as a target
-instead of a band.
-
-**Why not simply delete the gate**, which was the first instinct: `content.ts`
-has regrown three times (rounds 1–3), the topology plan uses
-`monolith-ceilings.json` as its running score with each phase banking headroom
-in the same PR, and deleting it would take that instrument away from the very
-refactor meant to fix this.
-
-**Why 3700 and not 3722** (`lines + 100`, the maximum the ratchet allows): at
-3722 the file could not lose a single line without failing RATCHET DOWN.
-3700 gives a working range of 3600–3700 — room to grow AND to shrink — so
-ordinary edits in either direction are silent and only a real extraction
-(70+ lines) trips the bank-the-win branch, which is exactly when it should.
-
-**What this does not change:** the gate still fails on unbounded growth, still
-forces a win to be banked, and the D2 `store.all` pins are untouched. A phase
-that wins real headroom should still lower this number in the same PR.
-
----
-
-## 7. Relationship to `DESIGN_ENTRY_POINT_TOPOLOGY.md`
-
-Written independently and deliberately not shaped to avoid collision — the
-author of this note read that note's thesis and phase list, and was asked not
-to let it constrain the proposal, so that a genuine collision would be visible
-rather than designed around.
-
-The known overlap is **`content.ts`'s callback/init seams** (that note's Phase
-2, ~17 seams; this note's §6.2). Both want to move them, for different reasons:
-topology wants the monolith to stop knowing every module exists; the engine
-wants its own wiring to live with it. Those may be the same move or opposite
-ones. Whoever sequences second should read the other first; this note does not
-try to resolve it.
-
-Also worth noting: this session ADDED one such seam (`setRefusedKeyCallback`,
-`4912f51`) as the correct fix to a two-writer bug, after the line ceiling had
-previously pushed it the wrong way. That is a small worked example of the
-tension — the right local fix grows the monolith's wiring.
+**The ceiling decision that was §6a now lives in
+`DESIGN_ENTRY_POINT_TOPOLOGY.md` §4.1**, which owns the ratchet, and its
+enforceable half is now in `check-ceilings.mjs` (ceilings must sit on a
+50-line grid, so a ceiling pinned to its own file size cannot be expressed).
+It was parked here only because `monolith-ceilings.json` cannot hold a comment,
+and a reader of topology's "do not raise the ceiling" rule had no way to learn
+it had been overruled.
