@@ -23,7 +23,9 @@ import { bestPageMatch, normalizeFuzzy, fold1to1, lower1to1, flexiblePattern } f
 import { modes } from '../core/modes';
 import { bkLog } from '../debug/bk-log';
 import { openPhraseSession, isDictatedInsert, type PhraseSession } from './phrase-collector';
-import { prefersReducedMotion } from '../activate/scroller';
+import { prefersReducedMotion, resetCycleTarget } from '../activate/scroller';
+import { assertBadgeScreenBorrow, returnBadgeScreenBorrow } from '../render/badge-visibility';
+import { FIND_HIGHLIGHT } from '../render/find-highlight';
 import { isRangeDead } from './range-liveness';
 
 /**
@@ -86,9 +88,13 @@ let phrase: PhraseSession | null = null;
 let matchRanges: Range[] = [];
 let currentIndex = -1;
 
-let onActivate: (() => void) | null = null;
+// The badge borrow is no longer relayed through content.ts. find and the badge
+// layer compete for the same screen, so find takes it on activate and gives it
+// back when the paint clears — and this module imports render/badge-visibility
+// to do it. That import was impossible until 2026-07-27: render reached back
+// here through ONE edge, badge-variant importing the FIND_HIGHLIGHT hex, which
+// is now a leaf of its own (render/find-highlight.ts). See that file.
 let onDeactivate: ((handoff: boolean) => void) | null = null;
-let onPaintCleared: (() => void) | null = null;
 // Fired when a search commits WITH matches (Enter or voice find). Caret mode
 // uses it to auto-extend the selection to the match. See caret.ts.
 let onCommit: (() => void) | null = null;
@@ -98,21 +104,13 @@ let onCommit: (() => void) | null = null;
 // through a third module.)
 
 export function setFindCallbacks(opts: {
-  onActivate?: () => void;
   /** `handoff` is endSession's keepPaint: true means the session ended by
-   *  HANDING its candidates to a consumer (a phrase commit), not by closing.
-   *  Whatever the consumer holds on find's behalf — the badge borrow — must
-   *  not be returned yet; `onPaintCleared` is the return point. */
+   *  HANDING its candidates to a consumer (a phrase commit), not by closing. */
   onDeactivate?: (handoff: boolean) => void;
   onCommit?: () => void;
-  /** The consumer answered (or abandoned) the handed-over question —
-   *  clearFindPaint fired. The moment borrowed screen state comes back. */
-  onPaintCleared?: () => void;
 }): void {
-  onActivate = opts.onActivate ?? null;
   onDeactivate = opts.onDeactivate ?? null;
   onCommit = opts.onCommit ?? null;
-  onPaintCleared = opts.onPaintCleared ?? null;
 }
 
 export function getFindState(): FindState {
@@ -159,16 +157,6 @@ function highlightApi(): { reg: Map<string, HighlightLike>; Ctor: HighlightCtor 
   const Ctor = (globalThis as unknown as { Highlight?: HighlightCtor }).Highlight;
   return reg && Ctor ? { reg, Ctor } : null;
 }
-
-/**
- * Highlighter yellow — the colour a found match wears.
- *
- * Exported because anything that has to READ as "this is a search match" must
- * wear the same colour, and a second copy of the hex is a thing that drifts.
- * Search-match badges tint themselves from this (render/badge-variant.ts), so
- * retheming the highlight retints the badges with it.
- */
-export const FIND_HIGHLIGHT = '#ffeb3b';
 
 function ensureHighlightStyle(): void {
   if (document.querySelector(`[${STYLE_ATTR}]`)) return;
@@ -867,7 +855,7 @@ export function openPhraseBox(target: PhraseTarget): void {
   state.matchIndex = 0;
   state.matchCount = 0;
   createFindBar();
-  onActivate?.();
+  assertBadgeScreenBorrow();
 }
 
 export function openFindMode(): void {
@@ -896,7 +884,7 @@ export function openFindMode(): void {
   state.matchIndex = 0;
   state.matchCount = 0;
   createFindBar();
-  onActivate?.();
+  assertBadgeScreenBorrow();
 }
 
 export function closeFindMode(): void {
@@ -926,9 +914,17 @@ function endSession(keepPaint: boolean): void {
   if (!keepPaint) clearHighlights();
   removeFindBar();
   removeCommittedPill();
+  // The find cycle target is scroller-owned bookkeeping about THIS session;
+  // it dies with the session. (scroller is a leaf this module already imported
+  // — it was never one of the seam's cycles, only sitting in the same body.)
+  resetCycleTarget();
   // keepPaint IS the handoff signal: the session ends but its candidates
   // (and whatever the callbacks hold on its behalf) pass to the consumer.
   onDeactivate?.(keepPaint);
+  // A plain close returns the screen here; a handoff leaves it borrowed for
+  // the consumer, who returns it via clearFindPaint. Ordered AFTER the
+  // callback so it lands where content.ts had it, last.
+  if (!keepPaint) returnBadgeScreenBorrow();
 }
 
 /**
@@ -941,9 +937,11 @@ function endSession(keepPaint: boolean): void {
  */
 export function clearFindPaint(): void {
   clearHighlights();
-  // The handed-over question is answered (or abandoned) — the return point
-  // for anything the consumer held on find's behalf (the badge borrow).
-  onPaintCleared?.();
+  // The handed-over question is answered (or abandoned) — the badge screen
+  // comes back here rather than at deactivate, because a HANDOFF end passes
+  // the borrow to the consumer along with the paint (field, 2026-07-26:
+  // restoring at deactivate re-showed every page badge around the pick chips).
+  returnBadgeScreenBorrow();
 }
 
 export function findNext(): void {
@@ -1073,7 +1071,7 @@ export function findImmediate(query: string): void {
   state.active = true;
   modes.push('find'); // dedupes: an immediate find into a live session joins it
   ensureHighlightStyle();
-  onActivate?.();
+  assertBadgeScreenBorrow();
   // Voice find is tolerant (typed find stays exact/incremental). Layered:
   //   1. exact substring, then
   //   2. punctuation/accent-tolerant (handles "Martín", "(", odd spacing), then

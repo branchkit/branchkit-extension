@@ -27,7 +27,7 @@
  * See also notes/DESIGN_BADGE_TARGET_SEAM.md.
  */
 
-import { FIND_HIGHLIGHT } from '../scan/find';
+import { FIND_HIGHLIGHT } from './find-highlight';
 
 export interface BadgeVariant {
   /**

@@ -119,6 +119,14 @@ vi.mock('../render/badge-visibility', () => ({
       },
     };
   },
+  // find's single-slot borrow, which it drives itself now (scan/find.ts) —
+  // these arrive here because teardown calls clearFindPaint. Deliberately inert
+  // and deliberately NOT wired to `screen`: no find borrow is ever live in this
+  // file, so a wired fake would be indistinguishable from this one, and the
+  // pick's borrow above is what these tests are about. find's own borrow is
+  // pinned in scan/find.test.ts ("every entry point takes the badge screen").
+  assertBadgeScreenBorrow: () => {},
+  returnBadgeScreenBorrow: () => {},
 }));
 
 /** Chips still up: constructed, shown, not torn down. */

@@ -17,7 +17,6 @@ vi.mock('../scan/find', () => ({
     wentTo.push(r.toString());
     return true;
   },
-  FIND_HIGHLIGHT: '#ffeb3b',
 }));
 
 let pool: string[] = [];

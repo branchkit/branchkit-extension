@@ -32,7 +32,7 @@ import { harnessHooksEnabled } from './debug/harness-hooks';
 import { store } from './core/store';
 import {
   anyBadgesShowing, showBadges, hideBadges, clearHintFilter,
-  toggleHints, setBadgesVisible, assertBadgeScreenBorrow, returnBadgeScreenBorrow,
+  toggleHints, setBadgesVisible,
 } from './render/badge-visibility';
 import { HintBadge } from './render/hints';
 import { elementTarget } from './render/badge-target';
@@ -90,7 +90,6 @@ import {
   snapToElement,
   cycleScrollTarget,
   getCycleTarget,
-  resetCycleTarget,
   scrollElement,
   scrollToPercent,
   setKeyHeld,
@@ -484,24 +483,16 @@ function onTrackerCodewordsChanged(claimed: ElementWrapper[], released: string[]
 // call per scroll-end now, which makes per-call cost much less critical
 // than total observation overhead.)
 
+// What is left of find's relay. The badge borrow went home to find itself —
+// it imports render/badge-visibility now, which the FIND_HIGHLIGHT relocation
+// made possible — and resetCycleTarget went with it (scroller was never one of
+// the cycles, just a passenger in the same callback body).
+//
+// These two remain because search-badges and selection-commands BOTH import
+// scan/find directly, so find importing either is a real 2-cycle, not a
+// one-hop constant.
 setFindCallbacks({
-  // These callbacks own only the badge borrow/restore — the plugin's find tag
-  // rides the mode stack's mirror (the session's push in find.ts, Wave 3 C4a).
-  // The borrow slot and its re-entrancy rule live in render/badge-visibility
-  // now; find.ts cannot import that module (a cycle through render/hints →
-  // render/badge-variant → scan/find), so these stay as the relay.
-  onActivate: () => assertBadgeScreenBorrow(),
-  // A HANDOFF end (phrase commit) passes the badge borrow to the consumer
-  // along with the paint: restoring at deactivate re-showed every page badge
-  // around the pick chips (field, 2026-07-26 — chips own the screen, ratified
-  // 2026-07-25). The borrow returns at onPaintCleared instead, which every
-  // consumer exit reaches via clearFindPaint; a plain close returns it here.
-  onDeactivate: (handoff) => {
-    resetCycleTarget();
-    clearSearchBadges('find_deactivated');
-    if (!handoff) returnBadgeScreenBorrow();
-  },
-  onPaintCleared: () => returnBadgeScreenBorrow(),
+  onDeactivate: () => clearSearchBadges('find_deactivated'),
   // When a search commits while caret/visual selection is active, extend the
   // selection straight to the match — so "/ query Enter" is a find-and-select,
   // no need to press `n` (which skips to the next match). `caret` is defined

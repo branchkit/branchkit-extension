@@ -1,4 +1,17 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+// find takes and returns the badge screen ITSELF now — it used to relay both
+// through content.ts, where nothing could test either. The real module reads
+// pageSession and the wrapper store to decide whether a borrow took anything,
+// so with an empty store every call is a silent no-op and a test could not tell
+// take-then-give from nothing-at-all. Recording the calls is what distinguishes
+// them; whether a borrow correctly hides badges is badge-visibility.test.ts's.
+const borrow: string[] = [];
+vi.mock('../render/badge-visibility', () => ({
+  assertBadgeScreenBorrow: () => { borrow.push('take'); },
+  returnBadgeScreenBorrow: () => { borrow.push('give'); },
+}));
+
 import { findMatchRanges, findRangesFlexible, findFirstRange, buildBlockIndex } from './find';
 import { entitySpan, trimSpan } from '../activate/segmenter';
 
@@ -117,7 +130,7 @@ describe('buildBlockIndex — caret text-object substrate (word/sentence/paragra
 // happy-dom note: match VISIBILITY (isMatchVisible) is engine-dependent here,
 // so these assert pill lifecycle + state, not match counts.
 
-import { afterEach, vi } from 'vitest';
+import { afterEach } from 'vitest';
 import {
   findImmediate,
   openPhraseBox,
@@ -466,27 +479,52 @@ describe('find bar: phrase-targeting modes', () => {
     expect(el.selectionEnd).toBe('nonexistent'.length);
   });
 
+  it('every entry point takes the badge screen, and a re-entry re-asserts it', () => {
+    // Three ways in — `/`, a phrase box, and voice — and find competes with the
+    // badge layer for the screen in all three. While this was a content.ts
+    // relay only the phrase-box path had a test; the other two were the
+    // untested wiring sec 6c item 6 names.
+    borrow.length = 0;
+    openFindMode();
+    expect(borrow).toEqual(['take']);
+    closeFindMode();
+
+    borrow.length = 0;
+    findImmediate('alpha');
+    expect(borrow).toEqual(['take']);
+    // Over a LIVE session it re-asserts rather than skipping. Re-BORROWING here
+    // would snapshot the hidden state the borrow itself caused, and the
+    // give-back would then conclude the badges had always been hidden and leave
+    // the page bare — the re-entrancy rule assertBadgeScreenBorrow exists for.
+    findImmediate('alpha');
+    expect(borrow).toEqual(['take', 'take']);
+  });
+
   it('a phrase commit deactivates as a HANDOFF; the borrow returns at clearFindPaint', () => {
-    // The badge borrow rides these two signals (content.ts): restoring at a
-    // handoff deactivate re-showed every page badge around the pick chips
-    // (field, 2026-07-26). handoff=true says "the consumer holds it now";
-    // onPaintCleared is the one return point every consumer exit reaches.
+    // Restoring the badge screen at a handoff deactivate re-showed every page
+    // badge around the pick chips (field, 2026-07-26). handoff=true says "the
+    // consumer holds it now"; clearFindPaint is the one return point every
+    // consumer exit reaches. Both halves are find's own now, so this asserts
+    // the borrow directly rather than a relay's callback order.
     const events: string[] = [];
-    setFindCallbacks({
-      onDeactivate: (handoff) => events.push(`deactivate:${handoff}`),
-      onPaintCleared: () => events.push('paint-cleared'),
-    });
+    setFindCallbacks({ onDeactivate: (handoff) => events.push(`deactivate:${handoff}`) });
+
+    borrow.length = 0;
     openHighlightBox();
     dictate('alpha');
     vi.runAllTimers();
     expect(events).toEqual(['deactivate:true']);
+    // The load-bearing assertion: NOT given back yet, though the session ended.
+    expect(borrow).toEqual(['take']);
     clearFindPaint(); // the pick (or selection) answered
-    expect(events).toEqual(['deactivate:true', 'paint-cleared']);
+    expect(borrow).toEqual(['take', 'give']);
 
     // A plain close is NOT a handoff — nothing is pending, restore at once.
+    borrow.length = 0;
     openHighlightBox();
     closeFindMode();
     expect(events[events.length - 1]).toBe('deactivate:false');
+    expect(borrow).toEqual(['take', 'give']);
   });
 
   it('the match paint SURVIVES the commit — the consumer owns it from there', () => {
