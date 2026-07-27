@@ -42,12 +42,16 @@
 
 import { HintBadge } from './hints';
 import { rangeTarget } from './badge-target';
-import type { BadgeVariant } from './badge-variant';
+import { isRangeDead } from '../scan/range-liveness';
+import { canRecover, type BadgeVariant } from './badge-variant';
 import { placeBadgeAtRect } from '../placement/position';
 import { isAncestorChainInVisibleViewport } from '../lifecycle/strict-viewport';
 import { type BandCandidate, bandOverhang, planBandWindow } from '../lifecycle/band-window';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { labelReservoir } from '../labels/label-reservoir';
+import {
+  exactCodewordMatch, anyCodewordMatchesPrefix, narrowBadge,
+} from '../labels/codeword-typing';
 import { poolLabelToAssignment, isVoiceAlphabetLoaded, type LabelAssignment } from '../labels/words';
 import { publishRecords, retireRecords, cancelPendingDelete } from '../labels/label-sync';
 import {
@@ -122,6 +126,20 @@ export interface RangeBadgeSetOptions {
   onMembershipChanged?: (codewords: string[]) => void;
   /** The set emptied itself and disposed. `reason` is for logs/toasts. */
   onEmpty?: (reason: string) => void;
+  /**
+   * Re-acquire this set's targets from scratch, because every range died.
+   *
+   * Required if and only if `variant.identity` says the targets have an
+   * identity to re-acquire BY (render/badge-variant.ts `canRecover`) — the
+   * constructor enforces both directions, so this cannot be silently forgotten
+   * (bug #5) or silently supplied for a hint type that has no identity.
+   *
+   * Called AFTER the set has disposed, so it re-arms a fresh set rather than
+   * repairing this one — a re-find yields new Ranges, not repaired ones.
+   * On a re-rendering app "every range died" is not "the results are gone":
+   * the text is still on the page and only our Ranges into it collapsed.
+   */
+  recover?: () => void;
   /** Tag for the bkLog breadcrumbs, so two live sets are distinguishable. */
   logTag?: string;
 }
@@ -142,6 +160,25 @@ export class RangeBadgeSet {
    * instead of arming a question the user can neither see nor say.
    */
   static create(opts: RangeBadgeSetOptions): RangeBadgeSet | null {
+    // Identity ⟺ recovery, checked at construction rather than trusted.
+    // Recovery used to be decided by whether the owner HAPPENED to pass a
+    // `reconcile` hook — a silent opt-in, and search shipped without one
+    // (bug #5: badges pointing at text that no longer existed). Now the
+    // variant declares what the target IS and this refuses the contradiction
+    // either way, so the omission is a construction-time failure in the first
+    // test that runs rather than a silent lie on a re-rendering page.
+    if (canRecover(opts.variant) && !opts.recover) {
+      throw new Error(
+        `RangeBadgeSet: variant identity '${opts.variant.identity}' can be re-acquired, ` +
+        'but no `recover` was supplied — the set would silently point at dead targets.',
+      );
+    }
+    if (!canRecover(opts.variant) && opts.recover) {
+      throw new Error(
+        'RangeBadgeSet: `recover` supplied for identity \'none\' — a hint with no ' +
+        'identity has nothing to re-acquire; cancelling is the only honest option.',
+      );
+    }
     const set = new RangeBadgeSet(opts);
     const { plan, isStrict } = set.plan(new Set());
     if (plan.toClaim.length === 0) {
@@ -178,7 +215,6 @@ export class RangeBadgeSet {
       narrow: (prefix) => this.filterByPrefix(prefix),
       resolve: (cw) => spec.resolve(cw),
       soleMatch: (prefix) => this.soleMatch(prefix),
-      reposition: () => this.reposition(),
       relabel: () => this.relabel(),
       reconcile: (settle) => {
         if (spec.reconcile) spec.reconcile(settle);
@@ -231,10 +267,17 @@ export class RangeBadgeSet {
   }
 
   /**
-   * Mid-codeword progress: badges that can't complete `prefix` are marked
-   * non-candidates, the rest show their spoken prefix. The variant decides how
-   * each reads. `''` resets.
+   * [codeword, letterForm] for every member — this holder's ONE projection,
+   * read by the gate (matchesPrefix) and the fire (soleMatch). Paint-level,
+   * because a range set's members ARE its painted badges; the element store
+   * has a claim/paint split and this does not.
    */
+  private *entries(): Generator<readonly [string, string]> {
+    for (const [codeword, { label }] of this.members) {
+      yield [codeword, label.letter] as const;
+    }
+  }
+
   /**
    * Does any member's codeword start with `prefix`?
    *
@@ -244,42 +287,28 @@ export class RangeBadgeSet {
    * or they stay invisible to the keyboard.
    */
   matchesPrefix(prefix: string): boolean {
-    if (prefix === '') return this.members.size > 0;
-    for (const { label } of this.members.values()) {
-      if (label.letter.startsWith(prefix)) return true;
-    }
-    return false;
+    return anyCodewordMatchesPrefix(this.entries(), prefix);
   }
 
-  /** The one codeword `prefix` can still complete, if exactly one remains. */
+  /** Fires on the WHOLE painted codeword — the one typing rule, shared with
+   *  the element store (labels/codeword-typing.ts). Narrowing is the same
+   *  module's other half (filterByPrefix), so the set still converges as you
+   *  type. */
   soleMatch(prefix: string): string | null {
-    let found: string | null = null;
-    for (const [codeword, { label }] of this.members) {
-      if (!label.letter.startsWith(prefix)) continue;
-      if (found) return null;
-      found = codeword;
-    }
-    return found;
+    return exactCodewordMatch(this.entries(), prefix);
   }
 
+  /**
+   * Mid-codeword progress: badges that can't complete `prefix` are marked
+   * non-candidates, the rest show their matched prefix. The variant decides how
+   * a non-candidate reads (hide vs dim). `''` resets.
+   *
+   * Arbitrary prefix lengths and every display mode, inherited from the shared
+   * rule — no charAt(0) special case for exactly two words.
+   */
   filterByPrefix(prefix: string): void {
     for (const { badge, label } of this.members.values()) {
-      const matches = prefix !== '' && label.letter.startsWith(prefix);
-      badge.setFiltered(prefix !== '' && !matches);
-      // Arbitrary prefix lengths and every display mode, inherited — no
-      // charAt(0) special case for exactly two words.
-      badge.setMatchedChars(matches ? prefix.length : 0);
-    }
-  }
-
-  /** Re-place every badge against its range's live rect (the holder
-   *  geometry hook; the settle-driven positioner pass handles steady-state,
-   *  so this is the explicit re-place for sweeps that ask for one). */
-  reposition(): void {
-    if (this.disposed) return;
-    for (const m of this.members.values()) {
-      const target = rangeTarget(m.range);
-      placeBadgeAtRect(m.badge, target.element, target.rect());
+      narrowBadge(badge, label.letter, prefix);
     }
   }
 
@@ -391,6 +420,11 @@ export class RangeBadgeSet {
     bkLog(`${this.tag}_REAP`, { dead: dead.length, remaining: this.members.size });
     if (this.members.size === 0) {
       this.empty('ranges_died');
+      // Every range died — the one case the identity axis exists for. A
+      // recoverable set re-acquires (a fresh set over fresh Ranges); one with
+      // no identity has already cancelled inside `empty`, and by contract has
+      // no `recover` to call.
+      this.opts.recover?.();
       return true;
     }
     this.opts.onMembershipChanged?.(this.codewords);
@@ -629,22 +663,6 @@ function bandCandidates(ranges: Range[], held: (r: Range) => boolean): BandCandi
     out.push({ item: r, overhang: bandOverhang(rect, vw, vh), held: held(r) });
   }
   return out;
-}
-
-/**
- * Is this range's text still in the document?
- *
- * A Range does not rebind: once its nodes are removed it collapses and nothing
- * brings it back. Distinct from a merely COLLAPSED rect, which a connected
- * range reports transiently (a hidden accordion) and which must NOT drop a
- * badge. Element-derived the same way `rangeTarget` derives the badge's anchor,
- * so "dead" and "what the badge is pinned to" can't disagree — and because
- * Node.isConnected on a text node is not dependable across engines.
- */
-function isRangeDead(range: Range): boolean {
-  const node = range.commonAncestorContainer;
-  const el = node instanceof Element ? node : node.parentElement;
-  return el === null || !el.isConnected;
 }
 
 /** The strict cut: `bandOverhang === 0` is exactly what `isRectOnScreen`

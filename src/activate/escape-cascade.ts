@@ -8,9 +8,12 @@
  * approximation of temporal order that had already drifted twice between the
  * two inputs; every ranking it got right, temporal order derives:
  *
- *   - a pending pick peels before the hint mode under it because arming a
- *     pick ENTERS hint mode (the chips must be typable) and then pushes
- *     itself — newest by construction, not by rank;
+ *   - a pending pick and the hint mode around it peel newest-first in
+ *     whichever order they were entered — a pick armed from hint mode sits
+ *     above it, while `f` pressed to type at chips lands above the pick. The
+ *     old fixed rank asserted one of those two orders as a law; temporal order
+ *     just reports what happened. (Arming no longer enters hint mode on the
+ *     user's behalf — see range-disambiguation.ts borrowScreen.)
  *   - the typed hint prefix peels before hint mode as hint's INTRA-mode
  *     transient (the peelInner probe — letters go, the mode stays);
  *   - a video layer entered over a committed find peels first, and a find
@@ -48,15 +51,19 @@ export type EscapeLayer =
   | 'range_pick' | 'hint_prefix' | 'hint_mode' | 'selection' | 'video' | 'find' | '';
 
 export function runEscapeCascade(reason: string): EscapeLayer {
-  const top = modes.top();
   const peeled = modes.peelTop(reason);
   if (peeled.peeled === 'none') return '';
   if (peeled.peeled === 'inner') {
     // An intra-mode transient consumed the escape; the entry stays. The
-    // probe's name maps into the cascade's reporting vocabulary: hint's one
-    // transient is the typed prefix; caret's staged unwind reports as the
-    // selection layer, exactly as its escape() always has.
-    return top === 'hint' ? 'hint_prefix' : 'selection';
+    // probe's NAME maps into the cascade's reporting vocabulary: hint's one
+    // transient is the typed prefix; caret's staged unwind ('visual') reports
+    // as the selection layer, exactly as its escape() always has.
+    //
+    // Keyed on what was peeled rather than on which entry was on top, because
+    // those stopped being the same thing: a range pick shares hint's typed
+    // prefix (MODE_SPECS), so a prefix peel can land with the PICK on top and
+    // would have reported itself as a selection unwind.
+    return peeled.name === 'hint_prefix' ? 'hint_prefix' : 'selection';
   }
   switch (peeled.id) {
     case 'range_pick':

@@ -6,7 +6,7 @@
  */
 
 import { HintVisibility, ScannedElement, Message, DispatchResult, TabAction, ZoomAction } from './types';
-import { LabelAssignment, isVoiceAlphabetLoaded, setAlphabet, poolLabelToAssignment } from './labels/words';
+import { LabelAssignment, isVoiceAlphabetLoaded, setAlphabet } from './labels/words';
 import {
   SettleEngine,
   DEFERRED_REPOSITION_DEBOUNCE_MS,
@@ -15,7 +15,7 @@ import {
 import { initConnectionMirror } from './plugin/connection-mirror';
 import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters } from './scan/scanner';
 import { noteDisconnectedShadowAttach } from './scan/shadow-attach-signal';
-import { DiscoverySource, ElementWrapper } from './scan/element-wrapper';
+import { DiscoverySource, ElementWrapper, applyClaimLabel } from './scan/element-wrapper';
 import * as idRegistry from './scan/registry';
 import type { CodewordMemoryEntry } from './labels/codeword-memory';
 import { loadRecall, recalledCodewords, rememberClaimedCodewords, resolvePreferredCodeword, isRecallLoaded } from './labels/codeword-recall';
@@ -57,7 +57,7 @@ import { toggleOverlay } from './render/debug-overlay';
 import { toggleHelpOverlayWithSpokenForms } from './render/help-overlay';
 import { registerPaletteCommands, closePalette } from './render/palette-host';
 import { setTabMarker, reapplyTabMarker, refreshTabMarker } from './render/tab-title';
-import { setModeChip } from './render/mode-chip';
+import { setModeChip, flashModeChipRefusal } from './render/mode-chip';
 import { getSiteKeyState, onSiteKeysChanged } from './keymap/keyboard-rules';
 import { copyText } from './activate/clipboard';
 import { flashToast } from './render/toast';
@@ -68,10 +68,11 @@ import { armSearchBadges, clearSearchBadges } from './activate/search-badges';
 import {
   registerHolder, anyHolderMatchesPrefix, narrowByPrefix, resolveCodeword,
   resolveCodewordAboveAmbient, soleHolderMatch, heldAnywhere, allHeld,
-  rejectAll, reconcileAll, relabelAll, disposeAllHolders,
+  rejectAll, reconcileAll, relabelAll, disposeAllHolders, overlayCodewordsLive,
   type CodewordOutcome,
 } from './labels/holder-registry';
 import { StoreHolder } from './labels/store-holder';
+import { narrowBadge } from './labels/codeword-typing';
 import { runEscapeCascade } from './activate/escape-cascade';
 import { setInnerTransientProbe } from './core/mode-stack';
 import { setModeMirrorSink } from './core/modes';
@@ -745,7 +746,12 @@ function shouldAutoShowBadges(): boolean {
 
 loadConfig({
   onDisplayModeChange: () => {
-    if (pageSession.badgesVisible) updateBadgeLabels();
+    // Through the registry, exactly as the alphabet swap below: a store-only
+    // loop left chips and search badges rendering the PREVIOUS display mode.
+    // The badgesVisible guard went with it — an overlay owns the screen while
+    // the store's own badges are hidden (find borrows them), which is the one
+    // state where the guard was guaranteed wrong.
+    relabelAll();
     // The tab-title marker follows the same setting — re-render it in place so
     // the tab prefix and the on-page hints for a letter stay in lockstep.
     refreshTabMarker();
@@ -1089,11 +1095,13 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
 // --- Register Action Handlers ---
 
 // `f` — the keyboard entry into hint mode (notes/DESIGN_KEYBOARD_MODES.md).
-// Hints stay always-visible for voice, but letters only filter them here. So
-// `f` ensures hints are painted and puts the keyboard in hint mode; the mode
-// chip then signals "type a codeword". Escape / activation returns to Normal.
+// Hints stay always-visible for voice, but letters only filter them here, so
+// `f` paints hints and enters hint mode; the chip signals "type a codeword".
+// That paint is the AMBIENT sweep, skipped when an overlay tier already holds
+// codewords — field 2026-07-26: `/ query Enter f`, to type a search badge,
+// repainted every link hint over the results just asked for.
 dispatcher.register('hint_mode', () => {
-  if (!pageSession.badgesVisible) { doScan(); showBadges(); }
+  if (!pageSession.badgesVisible && !overlayCodewordsLive()) { doScan(); showBadges(); }
   keyHandler.enterHintMode();
 });
 
@@ -1399,6 +1407,11 @@ keyHandler.setModeChangeCallback((mode) => {
   setKeyboardArmed(mode === 'hint');
 });
 
+// The chip has ONE writer, and it is this file. A refused keystroke pulses it;
+// the keyboard reports the refusal and does not know what a refusal looks like
+// (it briefly did, and that made the chip two-owner).
+keyHandler.setRefusedKeyCallback(() => flashModeChipRefusal());
+
 // Per-site keyboard policy — full exclusion (all keys to the page) and/or
 // granular passthrough (specific keys to the page, the rest of BranchKit's
 // binds still work). Applied on load and kept live as the popup edits it.
@@ -1489,15 +1502,13 @@ const storeHolder = new StoreHolder(store, {
     engine.scheduleReconcile();
     scheduleSync('confirm_rejected');
   },
-  reposition: () => placeBadges([...store.all].filter((w) => w.hint !== null)),
   // Alphabet-swap re-render (driven by relabelAll below): identities are
   // unchanged, only the spoken overlay moved — re-render and re-Put, no
   // re-claim.
   relabel: () => {
     for (const w of store.all) {
       if (!w.scanned.codeword) continue;
-      w.label = poolLabelToAssignment(w.scanned.codeword);
-      w.hint?.updateLabel(w.label, getDisplayMode());
+      w.hint?.updateLabel(applyClaimLabel(w), getDisplayMode());
       queuePut(w);
     }
   },
@@ -1512,21 +1523,11 @@ const storeHolder = new StoreHolder(store, {
 });
 registerHolder(storeHolder);
 
-/** Filter the painted link hints to `prefix` (`''` resets). */
+/** Filter the painted link hints to `prefix` (`''` resets) — the shared
+ *  narrowing rule (labels/codeword-typing.ts), read at PAINT level because
+ *  this paints: an unlabelled wrapper has nothing to show a prefix on. */
 function narrowStoreHints(prefix: string): void {
-  if (prefix === '') {
-    for (const w of store.all) {
-      w.hint?.setFiltered(false);
-      w.hint?.setMatchedChars(0);
-    }
-    return;
-  }
-  const matchSet = new Set(store.matchingLetterPrefix(prefix));
-  for (const w of store.all) {
-    const isMatch = matchSet.has(w);
-    w.hint?.setFiltered(!isMatch);
-    if (isMatch) w.hint?.setMatchedChars(prefix.length);
-  }
+  for (const w of store.all) narrowBadge(w.hint, w.label?.letter, prefix);
 }
 
 // The keyboard's accept gate asks the registry the SAME question the spoken
@@ -1648,14 +1649,6 @@ function runWhenIdle(cb: (deadline?: IdleDeadline) => void, timeoutMs: number): 
   else pageSession.resources.timeout(cb, 100);
 }
 
-
-function updateBadgeLabels(): void {
-  for (const w of store.all) {
-    if (w.hint && w.label) {
-      w.hint.updateLabel(w.label, getDisplayMode());
-    }
-  }
-}
 
 // Visibility handoff after a keyboard hint action. In always-mode we clear
 // narrowing/keyboard state and schedule a refresh; in manual-mode we fully hide

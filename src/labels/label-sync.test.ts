@@ -35,7 +35,7 @@ function countingHolder(onRepublish: () => void): CodewordHolder {
     id: 'counting', priority: 100, claim: 'additive',
     held: () => [], republish: onRepublish, onCodewordRejected: () => {},
     matchesPrefix: () => false, narrow: () => {}, resolve: () => 'not_mine',
-    soleMatch: () => null, reposition: () => {}, relabel: () => {},
+    soleMatch: () => null, relabel: () => {},
     reconcile: () => {}, dispose: () => {},
   };
 }

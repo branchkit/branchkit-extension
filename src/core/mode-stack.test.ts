@@ -132,11 +132,42 @@ describe('ModeStack', () => {
 
     it('a lower entry transient does not intercept the top layer escape', () => {
       // Only the TOP entry's peelInner is asked: a hint prefix must not eat
-      // the escape aimed at the pick riding above it.
+      // the escape aimed at a layer riding above it. Video is the example
+      // because it declares no transient of its own — the pick USED to be, and
+      // is now the deliberate exception (next test), since it types into the
+      // very prefix this probe peels.
       setInnerTransientProbe('hint', () => 'hint_prefix');
       stack.push('hint');
+      stack.push('video');
+      expect(stack.peelTop('over')).toEqual({ peeled: 'mode', id: 'video', reason: 'over' });
+    });
+
+    it('a pick peels the typed prefix before itself — it shares hint\'s', () => {
+      // Arming a pick enters hint mode so the chips are typable, so the letters
+      // typed at a chip ARE the pick's transient. First escape abandons the
+      // letters and the chips stay up (the user mistyped and wants another go);
+      // only a second escape cancels the pick. Both ids register the SAME peel,
+      // as production does (keyHandler.peelHintPrefix from two call sites) —
+      // one prefix, so whichever spec is asked, the letters go exactly once.
+      let prefix = 'a';
+      const peel = () => {
+        if (prefix.length === 0) return null;
+        prefix = '';
+        return 'hint_prefix';
+      };
+      setInnerTransientProbe('hint', peel);
+      setInnerTransientProbe('range_pick', peel);
+      stack.push('hint');
       stack.push('range_pick');
-      expect(stack.peelTop('over')).toEqual({ peeled: 'mode', id: 'range_pick', reason: 'over' });
+
+      expect(stack.peelTop('key_escape')).toEqual({
+        peeled: 'inner', name: 'hint_prefix', reason: 'key_escape',
+      });
+      expect(stack.top()).toBe('range_pick');   // the pick survived the undo
+      expect(stack.peelTop('key_escape')).toEqual({
+        peeled: 'mode', id: 'range_pick', reason: 'key_escape',
+      });
+      expect(stack.top()).toBe('hint');         // and hint mode is still under it
     });
   });
 

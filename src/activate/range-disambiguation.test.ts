@@ -783,6 +783,27 @@ describe('range-disambiguation pick', () => {
       expect(keyHandler.isHintMode()).toBe(true); // hint mode back
     });
 
+    it('takes the screen but NOT the keyboard — `f` still hands that over', () => {
+      // Arming used to call enterHintMode() so chips were instantly typable.
+      // That silently swapped the whole Normal keymap for codeword input, so
+      // j/k stopped scrolling exactly when a pick's off-screen matches made
+      // scrolling necessary (field, 2026-07-27). Visible and typable are
+      // separate states; a pick is not a reason to collapse them.
+      arrangeScreen({ badgesVisible: true, hintMode: false });
+      startRangePick([makeRange('a'), makeRange('b')], () => {});
+      expect(isRangePickPending()).toBe(true);      // chips are up
+      expect(keyHandler.isHintMode()).toBe(false);  // ...and keys are still commands
+    });
+
+    it('leaves an ALREADY-live hint mode alone when it arms', () => {
+      // The converse: entering a pick must not exit hint mode either. The user
+      // was typing at hints, said "highlight <phrase>", and the chips join the
+      // mode already in progress.
+      arrangeScreen({ badgesVisible: true, hintMode: true });
+      startRangePick([makeRange('a'), makeRange('b')], () => {});
+      expect(keyHandler.isHintMode()).toBe(true);
+    });
+
     it('restores the state it actually found, not a fixed one', () => {
       arrangeScreen({ badgesVisible: false, hintMode: false });
       startRangePick([makeRange('a'), makeRange('b')], () => {});
@@ -855,9 +876,14 @@ describe('range-disambiguation pick', () => {
     // Exclusive: the chips answer ALONE — a letter no chip can complete is
     // refused rather than falling through to anything underneath.
     expect(anyHolderMatchesPrefix('z')).toBe(false);
-    // Narrowed to exactly one: what lets typing fire where speaking a whole
-    // codeword would.
-    expect(soleHolderMatch('a')).toBe('a b');
+    // Firing takes the WHOLE codeword, matching what the chip paints. A bare
+    // 'a' narrows the set but resolves nothing, even though it leaves exactly
+    // one candidate: the chip reads "ab", and a chip that picks itself
+    // mid-word reads as the pick vanishing (field, 2026-07-27). This is where
+    // a badge SET differs from the ambient store, whose dense codewords make
+    // prefix-firing indistinguishable from typing the whole thing.
+    expect(soleHolderMatch('a')).toBe(null);
+    expect(soleHolderMatch('ab')).toBe('a b');
     expect(soleHolderMatch('')).toBe(null);
 
     // No pick up: the holder is gone from the registry, so the fall-through

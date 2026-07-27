@@ -130,6 +130,10 @@ import {
   getFindState,
   setFindCallbacks,
   clearFindPaint,
+  findNext,
+  getMatchRanges,
+  getCurrentMatchRange,
+  findGoToRange,
 } from './find';
 
 const pill = () =>
@@ -880,5 +884,241 @@ describe('the mode stack rides the find session (Wave 3 C2)', () => {
 
     // C2 boundary: peelTop popped entries, not flags — unwind them here.
     keyHandler.exitVideoMode();
+  });
+});
+
+describe('the comfort band: when a match jump moves the page', () => {
+  // happy-dom has no layout, so every geometry input is stubbed: the Range's
+  // rect IS the thing under test, and scrollIntoView is the observable.
+  const VIEW = 1000;
+  let scrolls: ScrollIntoViewOptions[] = [];
+  let rect = { top: 0, bottom: 0, height: 0 };
+
+  const origSIV = Element.prototype.scrollIntoView;
+  const origRangeRect = Range.prototype.getBoundingClientRect;
+  const origCheckVis = (Element.prototype as { checkVisibility?: () => boolean }).checkVisibility;
+
+  /** Place the current match at `top`, `h` tall, in a VIEW-tall viewport. */
+  function place(top: number, h = 20): void {
+    rect = { top, bottom: top + h, height: h };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    window.innerHeight = VIEW;
+    (Element.prototype as { checkVisibility?: () => boolean }).checkVisibility = () => true;
+    Element.prototype.scrollIntoView = function (arg?: boolean | ScrollIntoViewOptions) {
+      scrolls.push(typeof arg === 'object' && arg !== null ? arg : {});
+    };
+    Range.prototype.getBoundingClientRect = function () {
+      return { ...rect, left: 0, right: 10, width: 10, x: 0, y: rect.top, toJSON: () => ({}) } as DOMRect;
+    };
+    scrolls = [];
+    place(VIEW / 2);
+    document.body.innerHTML = '<p>alpha beta alpha beta alpha</p>';
+  });
+  afterEach(() => {
+    closeFindMode();
+    Element.prototype.scrollIntoView = origSIV;
+    Range.prototype.getBoundingClientRect = origRangeRect;
+    (Element.prototype as { checkVisibility?: () => boolean }).checkVisibility = origCheckVis;
+    vi.useRealTimers();
+    document.body.innerHTML = '';
+  });
+
+  /** A committed search, with the commit's own scroll discarded. */
+  function committedSearch(): void {
+    findImmediate('alpha');
+    scrolls = [];
+  }
+
+  it('leaves the page alone for a match comfortably mid-viewport', () => {
+    committedSearch();
+    place(VIEW / 2);
+    findNext();
+    expect(scrolls).toEqual([]);
+  });
+
+  it('nudges when the match sits in the top strip', () => {
+    committedSearch();
+    place(VIEW * 0.05); // inside the top 15%
+    findNext();
+    expect(scrolls).toHaveLength(1);
+  });
+
+  it('nudges when the match sits in the bottom strip', () => {
+    committedSearch();
+    place(VIEW * 0.92);
+    findNext();
+    expect(scrolls).toHaveLength(1);
+  });
+
+  it('nudges a match hidden behind the committed pill, not just an off-screen one', () => {
+    // The pill's footprint is reserved on top of the 15% edge, so a match in
+    // the last few pixels of the viewport still counts as too close.
+    committedSearch();
+    place(VIEW - 30, 20);
+    findNext();
+    expect(scrolls).toHaveLength(1);
+  });
+
+  it('nudges when the match is off-screen entirely', () => {
+    committedSearch();
+    place(-200);
+    findNext();
+    expect(scrolls).toHaveLength(1);
+  });
+
+  it('slides rather than teleports', () => {
+    committedSearch();
+    place(-200);
+    findNext();
+    expect(scrolls[0]).toMatchObject({ behavior: 'smooth', block: 'center' });
+  });
+
+  it('does not thrash on a match taller than the band — anchors on its top edge', () => {
+    // A long multi-line match can never fit between the margins; without the
+    // height carve-out every single step would re-scroll it.
+    committedSearch();
+    place(VIEW * 0.3, VIEW * 0.9);
+    findNext();
+    expect(scrolls).toEqual([]);
+  });
+
+  it('a codeword pick obeys the SAME rule as n/N — no yank for a visible match', () => {
+    // The regression this replaced: picks force-centred, so speaking a badge
+    // the user was looking straight at moved the page under them.
+    committedSearch();
+    place(VIEW / 2);
+    const ranges = getMatchRanges();
+    expect(ranges.length).toBeGreaterThan(1);
+    expect(findGoToRange(ranges[ranges.length - 1])).toBe(true);
+    expect(scrolls).toEqual([]);
+  });
+
+  it('a codeword pick near the edge still nudges', () => {
+    committedSearch();
+    place(VIEW * 0.03);
+    const ranges = getMatchRanges();
+    expect(findGoToRange(ranges[ranges.length - 1])).toBe(true);
+    expect(scrolls).toHaveLength(1);
+  });
+});
+
+/**
+ * The session's match list reaps its dead, like the badge set already did.
+ *
+ * On a re-rendering app the badges vanished correctly (RangeBadgeSet.reapDead)
+ * while this list kept its collapsed Ranges: the pill counted matches that no
+ * longer existed and `n` stepped onto them to scroll nowhere. Same predicate,
+ * one home now (scan/range-liveness.ts).
+ */
+describe('dead matches are swept at read time', () => {
+  let swept: unknown[] = [];
+  const origSIV2 = Element.prototype.scrollIntoView;
+  const origVis2 = (Element.prototype as { checkVisibility?: () => boolean }).checkVisibility;
+  beforeEach(() => {
+    swept = [];
+    Element.prototype.scrollIntoView = function () { swept.push(1); };
+    (Element.prototype as { checkVisibility?: () => boolean }).checkVisibility = () => true;
+  });
+  afterEach(() => {
+    Element.prototype.scrollIntoView = origSIV2;
+    (Element.prototype as { checkVisibility?: () => boolean }).checkVisibility = origVis2;
+    closeFindMode();
+    document.body.innerHTML = '';
+  });
+
+  /** Kill the Nth match's text the way a re-render does — remove the node the
+   *  range is in, which COLLAPSES the range onto a still-connected parent. */
+  function killMatch(nth: number): void {
+    const ps = [...document.querySelectorAll('p')];
+    ps[nth].remove();
+  }
+
+  it('drops a dead match from the count', () => {
+    dom('<p>alpha</p><p>alpha</p><p>alpha</p>');
+    findImmediate('alpha');
+    expect(getFindState().matchCount).toBe(3);
+
+    killMatch(1);
+    getMatchRanges();
+
+    expect(getFindState().matchCount).toBe(2);
+    expect(getMatchRanges()).toHaveLength(2);
+  });
+
+  it('n does not step onto a corpse', () => {
+    dom('<p>alpha</p><p>alpha</p><p>alpha</p>');
+    findImmediate('alpha');
+    killMatch(1);
+
+    // Three survivors would cycle 1→2→3; two should cycle 1→2→1.
+    findNext();
+    findNext();
+    expect(getFindState().matchIndex).toBe(1);
+    expect(getFindState().matchCount).toBe(2);
+    expect(getCurrentMatchRange()!.collapsed).toBe(false);
+  });
+
+  it('keeps you on the same match when an EARLIER one dies', () => {
+    dom('<p>alpha</p><p>alpha</p><p>alpha</p>');
+    findImmediate('alpha');
+    findNext();                                  // on match 2 of 3
+    const stayOn = getCurrentMatchRange();
+    expect(getFindState().matchIndex).toBe(2);
+
+    killMatch(0);                                // the one BEFORE us
+    getMatchRanges();
+
+    // Renumbered 2 → 1, but pointing at the very same text.
+    expect(getFindState().matchIndex).toBe(1);
+    expect(getCurrentMatchRange()).toBe(stayOn);
+  });
+
+  it('lands on the next survivor when the CURRENT match dies', () => {
+    dom('<p>alpha</p><p>alpha</p><p>alpha</p>');
+    findImmediate('alpha');
+    findNext();                                  // on match 2 of 3
+    const third = getMatchRanges()[2];
+
+    killMatch(1);                                // the one we are standing on
+    getMatchRanges();
+
+    expect(getFindState().matchCount).toBe(2);
+    expect(getCurrentMatchRange()).toBe(third);  // forward, never backward
+  });
+
+  it('clamps to the last survivor when everything after us dies', () => {
+    dom('<p>alpha</p><p>alpha</p><p>alpha</p>');
+    findImmediate('alpha');
+    findNext();
+    findNext();                                  // on match 3 of 3
+    killMatch(1);
+    killMatch(1);                                // removes what was the 3rd
+    getMatchRanges();
+
+    expect(getFindState().matchCount).toBe(1);
+    expect(getFindState().matchIndex).toBe(1);
+  });
+
+  it('a sweep never scrolls — it is bookkeeping, not navigation', () => {
+    dom('<p>alpha</p><p>alpha</p><p>alpha</p>');
+    findImmediate('alpha');
+    swept = [];
+    killMatch(0);
+    getMatchRanges();
+    expect(swept).toEqual([]);
+  });
+
+  it('survives every match dying without throwing', () => {
+    dom('<p>alpha</p><p>alpha</p>');
+    findImmediate('alpha');
+    killMatch(0);
+    killMatch(0);
+    expect(getMatchRanges()).toEqual([]);
+    expect(getFindState().matchCount).toBe(0);
+    expect(getCurrentMatchRange()).toBeNull();
+    findNext();   // must not throw or divide by zero
   });
 });

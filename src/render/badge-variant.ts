@@ -1,18 +1,30 @@
 /**
  * What KIND of badge this is.
  *
- * Two badges exist: the ambient link hint, and the range-pick chip that asks
- * "which of these text matches did you mean?" (activate/range-disambiguation.ts).
+ * THREE badges exist: the ambient link hint; the range-pick chip that asks
+ * "which of these text matches did you mean?" (activate/range-disambiguation.ts);
+ * and the search badge over a committed find (activate/search-badges.ts).
  * They share everything — shadow host, stylesheet, APCA colours, size settings,
- * placement, the reconciler — and differ only in how the set narrows while the
- * user is mid-codeword, plus how much page-defence machinery a seconds-long
- * badge should carry.
+ * placement, the reconciler, the codeword pool, the holder registry, and the
+ * typing rule — and differ only in how the set narrows while the user is
+ * mid-codeword, plus how much page-defence machinery a seconds-long badge
+ * should carry.
  *
  * Every field derives from ONE fact (persistent ambient badge vs transient
- * authoritative chip), which is why they live in one object rather than five
+ * authoritative overlay), which is why they live in one object rather than five
  * loose constructor flags: they must move together.
  *
- * See notes/DESIGN_BADGE_TARGET_SEAM.md.
+ * BEFORE YOU MAKE THE THREE VARIANTS MORE ALIKE, read
+ * notes/DESIGN_HINT_ENGINE.md §5.2. Eleven of the differences between hint
+ * types look like inconsistencies and are load-bearing, each with its reason
+ * recorded at its site; several were regressions once already (chips shipped
+ * with no observers and stranded; chips wore a gold prefix accent until
+ * consistency won). `defendAgainstPage: false` for chips in particular is a
+ * CORRECTNESS constraint, not a cost one — see its field doc. Flattening them
+ * re-opens closed bugs, which is the characteristic failure of a tidying pass
+ * through this file.
+ *
+ * See also notes/DESIGN_BADGE_TARGET_SEAM.md.
  */
 
 import { FIND_HIGHLIGHT } from '../scan/find';
@@ -81,6 +93,58 @@ export interface BadgeVariant {
    * asked to pick from options they can't see.
    */
   readonly suppressOverVideo: boolean;
+  /**
+   * What makes this badge's target THE SAME target after the page moves under
+   * it. See `HintIdentity`.
+   */
+  readonly identity: HintIdentity;
+}
+
+/**
+ * What a hint's target IS, such that you could find it again.
+ *
+ * This is deliberately a statement about IDENTITY, not a menu of recovery
+ * procedures. An earlier sketch of this axis was
+ * `onChurn: 'rebind' | 'refind' | 'cancel'` — but those name three mechanisms
+ * that are emphatically not interchangeable (notes/DESIGN_HINT_ENGINE.md §5.1
+ * forbids merging the element and range lifecycles), and a field offering a
+ * choice among them invites exactly that merge. Identity is the thing that
+ * actually differs; recovery is a CONSEQUENCE of it, never a separate choice:
+ *
+ *   'element-fingerprint'  a link hint is an element, recognisable by its
+ *                          fingerprint among limbo candidates
+ *                          (labels/rebind.ts, observe/limbo.ts).
+ *   'text-occurrence'      a search badge is (query, occurrence). A text range
+ *                          has no element identity to fingerprint, so it is
+ *                          re-acquired by re-running the query
+ *                          (scan/find.ts refindCommitted).
+ *   'none'                 a pick chip names one of several answers to a
+ *                          question asked seconds ago. It has no identity
+ *                          beyond that moment, so there is nothing to
+ *                          re-acquire and cancelling is the only honest
+ *                          option — not a policy choice, an entailment.
+ *
+ * The payoff is that a FOURTH hint type (over a11y nodes, over canvas regions)
+ * is designed by asking "what is this hint's identity?" — a question about the
+ * thing being hinted, which something that doesn't exist yet can still answer —
+ * instead of "which of my three recovery verbs fits?", a question about the
+ * current implementation, which it cannot.
+ */
+export type HintIdentity = 'element-fingerprint' | 'text-occurrence' | 'none';
+
+/**
+ * Can a hint of this kind be re-acquired at all? DERIVED, never declared
+ * beside identity — no identity means nothing to re-acquire.
+ *
+ * `RangeBadgeSet.create` enforces the two-way contract this implies: a
+ * recoverable identity must be given a way to recover, and 'none' must not be.
+ * That check is what would have caught bug #5 (notes/DESIGN_HINT_ENGINE.md §2)
+ * at construction — search badges shipped claiming a (query, occurrence)
+ * identity with nothing wired to re-run the query, and silently pointed at
+ * text that no longer existed.
+ */
+export function canRecover(variant: BadgeVariant): boolean {
+  return variant.identity !== 'none';
 }
 
 export const HINT_VARIANT: BadgeVariant = {
@@ -89,6 +153,8 @@ export const HINT_VARIANT: BadgeVariant = {
   trackContainer: true,
   defendAgainstPage: true,
   suppressOverVideo: true,
+  // An element, recognisable again by fingerprint after SPA churn.
+  identity: 'element-fingerprint',
 };
 
 export const RANGE_PICK_VARIANT: BadgeVariant = {
@@ -100,6 +166,10 @@ export const RANGE_PICK_VARIANT: BadgeVariant = {
   trackContainer: true,
   defendAgainstPage: false,
   suppressOverVideo: false,
+  // One of several answers to a question asked seconds ago. Nothing outlives
+  // the question, so there is nothing to re-acquire — the set cancels, and
+  // that is an entailment rather than a policy.
+  identity: 'none',
 };
 
 /**
@@ -123,4 +193,7 @@ export const SEARCH_VARIANT: BadgeVariant = {
   trackContainer: true,
   defendAgainstPage: true,
   suppressOverVideo: true,
+  // (query, occurrence) — a text range has no element identity to fingerprint,
+  // so it is re-acquired by re-running the retained query.
+  identity: 'text-occurrence',
 };

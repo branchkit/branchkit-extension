@@ -76,6 +76,18 @@ const pendingRefine = new Set<HintBadge>();
 let refineScheduled = false;
 const REFINE_BUDGET_MS = 4;
 
+/**
+ * Resting border alpha for a TINTED badge (search matches), against the
+ * page-filled badge's 0.3.
+ *
+ * Higher because a tinted rim is doing more work — on paper that shares the
+ * tint it is the only thing giving the badge an edge — and short of 1 because
+ * the gap to full IS the keyboard-armed cue. Half is the honest reading of
+ * both constraints: still an unambiguous edge at rest, and a doubling when
+ * `f` arms it, which is the same direction of travel the hints' 0.3 → 1 makes.
+ */
+const TINTED_BORDER_REST = '0.5';
+
 /** Sync-mode flag for tests: when true, the constructor calls `refine()`
  *  inline instead of enqueueing. Tests assert observer state immediately
  *  after construction, which is incompatible with deferred refinement.
@@ -241,16 +253,23 @@ const BADGE_CSS = `
     text-align: center;
     border-style: solid;
     opacity: 0;
-    /* Keyboard-mode "armed" cue: boost each badge's OWN border — normally the
-     * border is the badge color at 30% alpha (a faint outline); when hint mode
-     * is active we take it to full opacity, so every badge asserts its own color
-     * harder (no imposed hue, no size change, no animation). --bk-b-rgb is the
-     * border color's "R G B" (set per-badge in applyColors); --bk-kbd-b-alpha
-     * defaults to the resting 0.3 until document.documentElement sets it to 1
-     * (custom props inherit through the shadow boundary — one write arms every
-     * badge). */
+    /* Keyboard-mode "armed" cue: boost each badge's OWN border — at rest the
+     * border is the badge color at a fraction of full alpha (a faint outline);
+     * when hint mode is active we take it to full opacity, so every badge
+     * asserts its own color harder (no imposed hue, no size change, no
+     * animation). --bk-b-rgb is the border color's "R G B" (set per-badge in
+     * applyColors); --bk-kbd-b-alpha is UNSET until document.documentElement
+     * sets it to 1 (custom props inherit through the shadow boundary — one
+     * write arms every badge).
+     *
+     * The resting value is the FALLBACK, not a competing declaration, so a
+     * badge kind that needs a different rest (--bk-b-rest, tinted badges in
+     * applyColors) still yields to the armed write. Pinning the resting alpha
+     * per-badge inline is what it replaced, and inline beat the inherited
+     * arm — tinted search badges sat permanently solid, so pressing f moved
+     * nothing on them (field, 2026-07-27). */
     border-width: 1px;
-    border-color: rgb(var(--bk-b-rgb, 0 0 0) / var(--bk-kbd-b-alpha, 0.3));
+    border-color: rgb(var(--bk-b-rgb, 0 0 0) / var(--bk-kbd-b-alpha, var(--bk-b-rest, 0.3)));
   }
   .bk-inner.visible {
     opacity: 1;
@@ -1029,10 +1048,13 @@ export class HintBadge implements BadgeHandle {
       : computeTintedBadgeColors(this.target.element, fill.tint);
     if (fill !== 'page') {
       // A tinted badge's rim is load-bearing — on paper that shares the tint it
-      // is the only thing giving the chip an edge — so it renders solid rather
-      // than at the hint badge's resting 30%. Keyboard mode's boost then has
-      // nothing left to raise, which is correct: it is already asserting.
-      this.inner.style.setProperty('--bk-kbd-b-alpha', '1');
+      // is the only thing giving the badge an edge — so it rests HIGHER than
+      // the page-filled badge's 30%. It does not rest at full: pinning it there
+      // left keyboard mode with nothing to raise, and "already asserting" is
+      // indistinguishable from "not listening" when it never changes. The rest
+      // is set as --bk-b-rest (the fallback arm of the border rule), so the
+      // armed write still wins and the badge keeps a visible edge either way.
+      this.inner.style.setProperty('--bk-b-rest', TINTED_BORDER_REST);
     }
     this.inner.style.background = colors.bg;
     this.inner.style.color = colors.fg;

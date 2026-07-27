@@ -15,9 +15,13 @@
  *
  *   - Escape order is TEMPORAL — last pushed, first peeled (resolved question
  *     1). The cascade's fixed "a pick outranks everything" was an approximation
- *     of this: a pending pick is always the newest layer by construction (it
- *     captures bare keys and its exclusive holder swallows codewords, so
- *     nothing can be entered over it without landing above it).
+ *     of this, and the approximation has since been shown false rather than
+ *     merely imprecise: a pick captures no bare keys of its own (capture:
+ *     'none' — chips are visible, `f` is what makes them typable), so `f`
+ *     pressed to type at chips pushes hint mode ABOVE the pick, while a pick
+ *     armed from a live hint mode sits above it instead. Both orders are
+ *     reachable and neither is a rank — each is just what happened, in the
+ *     order it happened, which is the whole point of deriving from time.
  *   - A mode's floor is recorded at push and restored at pop, for EVERY mode —
  *     not for the two that grew hand-written floors (`entryFloor`,
  *     `restoreBadges`). The floor is the previous top plus whatever payload the
@@ -167,13 +171,31 @@ export const MODE_SPECS: readonly ModeSpec[] = [
   },
   {
     id: 'range_pick',
-    capture: 'bare-keys',
+    // Chips are VISIBLE, not typable — `f` hands the keyboard over, exactly as
+    // it does for link hints. Capturing bare keys here bought instant typing
+    // at the price of the entire Normal keymap, so j/k stopped scrolling while
+    // a pick was up (field, 2026-07-27). A pick armed from a live hint mode is
+    // still typable immediately: that entry does the capturing, underneath.
+    capture: 'none',
     // mirror: null is a DECISION (resolved question 1): the plugin-side
     // RANGE_PICK projection narrow is a payload effect of entry/exit, not a
     // tag, and it does not become one. The pick's chips are a CodewordHolder
     // (claim: exclusive) — that half lives in the holder registry, not here.
     mirror: null,
     peelable: true,
+    // The typed prefix is the pick's transient too: letters typed at a chip
+    // land in the one KeyHandler prefix, and range-disambiguation.ts registers
+    // this probe against that same peel. One peel, one implementation, reached
+    // from two specs.
+    //
+    // Needed because a pick can sit either side of hint mode — armed FROM hint
+    // mode it lands above, and `f` pressed to type at chips lands above IT —
+    // and peelTop only asks the top spec. Without this entry the first order
+    // lost the letters: a mistyped chip keystroke had no undo, because Escape
+    // skipped past it and cancelled the pick (field, 2026-07-27). Every OTHER
+    // lower-entry transient stays unreachable — that rule is intact, and the
+    // mode-stack test of that name still guards it.
+    peelInner: () => innerProbes.get('range_pick')?.() ?? null,
   },
   {
     id: 'palette',

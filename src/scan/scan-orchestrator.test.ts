@@ -236,7 +236,6 @@ describe('batch processing', () => {
         narrow: () => {},
         resolve: () => 'not_mine',
         soleMatch: () => null,
-        reposition: () => {},
         relabel: () => {},
         reconcile: () => {},
         dispose: () => {},

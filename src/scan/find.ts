@@ -23,6 +23,8 @@ import { bestPageMatch, normalizeFuzzy, fold1to1, lower1to1, flexiblePattern } f
 import { modes } from '../core/modes';
 import { bkLog } from '../debug/bk-log';
 import { openPhraseSession, isDictatedInsert, type PhraseSession } from './phrase-collector';
+import { prefersReducedMotion } from '../activate/scroller';
+import { isRangeDead } from './range-liveness';
 
 /**
  * What the box is collecting a phrase FOR.
@@ -605,13 +607,54 @@ function pickInitialIndex(): number {
 // Reserve the floating pill's footprint at the bottom so the current match is
 // never scrolled to behind it (pill height + bottom margin, with slack).
 const FIND_BAR_RESERVE_PX = 60;
+/**
+ * Fraction of the viewport at each edge that reads as "too close to the edge" —
+ * the match is visible but there is no context around it to read.
+ */
+const COMFORT_EDGE_RATIO = 0.15;
+
+/**
+ * Bring the current match into view — the comfort band.
+ *
+ * ONE rule for every path that makes a match current (n/N, a spoken codeword,
+ * a fresh commit), because two rules read as a bug: the page yanking for a
+ * badge pick while refusing to follow n/N was the same question answered two
+ * different ways.
+ *
+ * The rule: a match sitting in the middle of the viewport is left alone — we
+ * never move the page for something already comfortably in view. Only when it
+ * lands in the top or bottom strip (or off-screen) do we slide it back to a
+ * consistent spot. That matters for picks specifically, since search badges
+ * refuse off-screen codewords (`resolveSearchCodeword`) — a picked match is
+ * ALWAYS already visible, so centring it unconditionally moved the page for a
+ * target the user was looking straight at.
+ *
+ * The bottom margin also clears the committed pill's footprint, so a match is
+ * never nudged to a spot the pill covers.
+ */
 function scrollToCurrent(): void {
   const r = matchRanges[currentIndex];
   if (!r) return;
   const rect = r.getBoundingClientRect();
-  if (rect.top < 0 || rect.bottom > window.innerHeight - FIND_BAR_RESERVE_PX) {
-    r.startContainer.parentElement?.scrollIntoView({ block: 'center', inline: 'nearest' });
-  }
+  const view = window.innerHeight;
+  const edge = view * COMFORT_EDGE_RATIO;
+  const bandTop = edge;
+  const bandBottom = view - Math.max(edge, FIND_BAR_RESERVE_PX);
+
+  // A match taller than the band can never fit inside it — anchor such a match
+  // on its top edge rather than scrolling on every single step.
+  const comfortable =
+    rect.top >= bandTop &&
+    (rect.bottom <= bandBottom || rect.height > bandBottom - bandTop);
+  if (comfortable) return;
+
+  r.startContainer.parentElement?.scrollIntoView({
+    block: 'center',
+    inline: 'nearest',
+    // Slide rather than teleport: the jump is what made a nudge disorienting,
+    // because nothing connected where you were to where you ended up.
+    behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+  });
 }
 
 // --- Find logic ---
@@ -706,7 +749,48 @@ export function findAllRanges(query: string): Range[] {
   return locateTolerant(trimmed);
 }
 
+/**
+ * Drop matches whose Range has died, without moving the user.
+ *
+ * The badge set reaps its own dead ranges on every settle
+ * (render/range-badge-set.ts `reapDead`); this list never did, and it is the
+ * SAME ranges. So on a re-rendering app the badges correctly vanished while
+ * the session kept walking corpses: the pill counted matches that no longer
+ * existed, and `n` stepped onto them to scroll nowhere (`scrollToCurrent`
+ * calls `scrollIntoView` on a disconnected parent). Same shape as every bug in
+ * notes/DESIGN_HINT_ENGINE.md §2 — a rule one consumer had and the other
+ * lacked, so the predicate now has one home (scan/range-liveness.ts).
+ *
+ * READ-TIME, deliberately: no observer, no timer, no settle hook
+ * (notes/DESIGN_OBSERVED_STATE_READ_TIME.md, and the one-in-one-out sensing
+ * freeze). Death is derived where the list is consumed. A stale pill on a page
+ * nobody is interacting with is not a defect; a stale pill the moment you
+ * press `n` is, and that is exactly when this runs.
+ *
+ * `currentIndex` lands on the nearest SURVIVOR at or after where it was, so a
+ * sweep never scrolls and never silently renumbers you backwards past matches
+ * you had already stepped through. Trailing death clamps to the last survivor.
+ */
+function sweepDeadMatches(): void {
+  if (matchRanges.length === 0) return;
+  const live: Range[] = [];
+  let nextIndex = -1;
+  for (let i = 0; i < matchRanges.length; i++) {
+    if (isRangeDead(matchRanges[i])) continue;
+    if (nextIndex === -1 && i >= currentIndex) nextIndex = live.length;
+    live.push(matchRanges[i]);
+  }
+  if (live.length === matchRanges.length) return;
+  matchRanges = live;
+  state.matchCount = live.length;
+  currentIndex = live.length === 0 ? -1
+    : nextIndex === -1 ? live.length - 1
+      : nextIndex;
+  state.matchIndex = currentIndex + 1;
+}
+
 function move(delta: number): void {
+  sweepDeadMatches();
   if (matchRanges.length === 0) return;
   currentIndex = (currentIndex + delta + matchRanges.length) % matchRanges.length;
   state.matchIndex = currentIndex + 1;
@@ -881,13 +965,40 @@ export function hasActiveMatches(): boolean {
 
 /** The current match Range, or null when find is inactive / has no matches. */
 export function getCurrentMatchRange(): Range | null {
+  sweepDeadMatches();
   return currentIndex >= 0 && currentIndex < matchRanges.length ? matchRanges[currentIndex] : null;
 }
 
 /** Every committed match, in document order. The live array is module state
  *  that `move`/`applyHighlights` mutate, so this hands out a copy. */
 export function getMatchRanges(): Range[] {
+  sweepDeadMatches();
   return matchRanges.slice();
+}
+
+/**
+ * Re-run the committed query against the CURRENT DOM, and report whether the
+ * match set changed.
+ *
+ * A find session outlives the DOM it was run against. On an app that
+ * re-renders — a filter, a live update, infinite scroll — the matched subtree
+ * is replaced by identical text in new nodes, and every Range the session
+ * holds collapses onto its old parent (the spec's boundary-point fixup). The
+ * text is still on the page; only our handles on it are gone.
+ *
+ * This is the whole re-find: the query is retained, the matcher is the same
+ * one the commit used, and `applyFoundRanges` is the same apply. Nothing new
+ * is searched for — the session simply re-acquires what it already asked for.
+ *
+ * Returns false when nothing was re-found, so a caller can distinguish "the
+ * page changed under us" from "this query genuinely has no matches now".
+ */
+export function refindCommitted(): boolean {
+  if (!state.active || state.query === '') return false;
+  const found = locateTolerant(state.query);
+  if (found.length === 0) return false;
+  applyFoundRanges(state.query, found);
+  return true;
 }
 
 /**
@@ -895,6 +1006,9 @@ export function getMatchRanges(): Range[] {
  * Same effect as navigating there: it becomes current, gets the solid
  * highlight, scrolls into view, and the n/N counter follows. Returns false if
  * the range isn't one of the live matches (a stale codeword after a requery).
+ *
+ * Scrolls by the same comfort-band rule as n/N — a pick that is already
+ * comfortably in view does not move the page. See scrollToCurrent.
  */
 export function findGoToRange(range: Range): boolean {
   const i = matchRanges.indexOf(range);

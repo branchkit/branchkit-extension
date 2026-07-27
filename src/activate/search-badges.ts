@@ -36,7 +36,7 @@
 
 import { RangeBadgeSet } from '../render/range-badge-set';
 import { SEARCH_VARIANT } from '../render/badge-variant';
-import { getMatchRanges, findGoToRange, isFindActive } from '../scan/find';
+import { getMatchRanges, findGoToRange, isFindActive, refindCommitted } from '../scan/find';
 import { bkLog } from '../debug/bk-log';
 import { labelReservoir } from '../labels/label-reservoir';
 import {
@@ -87,6 +87,16 @@ export function armSearchBadges(): void {
     // any other and deliberately do NOT narrow the projection, because link
     // hints stay speakable alongside them.
     onEmpty: () => { badges = null; },
+    // The (query, occurrence) identity, made good: re-run the retained query
+    // and arm a fresh set. Required by RangeBadgeSet.create because
+    // SEARCH_VARIANT declares an identity — its absence is what bug #5 was.
+    // Bounded by construction: a re-find that finds nothing leaves `badges`
+    // null and nothing further happens until the next commit.
+    recover: () => {
+      if (!isFindActive() || !refindCommitted()) return;
+      bkLog('BK_SEARCH_BADGES_REFIND', { matches: getMatchRanges().length });
+      armSearchBadges();
+    },
     holder: {
       id: 'search',
       priority: ADDITIVE_OVERLAY_PRIORITY,
@@ -142,7 +152,19 @@ function reconcileSearchHolder(settle: SettleKind): void {
   }
   // Same self-selection as the set's default: every settle pass lands a
   // 'general'; the trailing 'scroll' would be rework.
-  if (settle === 'general') badges?.reconcile();
+  if (settle !== 'general') return;
+  // Re-acquisition is NOT polled from here any more. The set reaps its own
+  // dead ranges inside this call and, if every one died, calls the `recover`
+  // its declared identity obliges it to have (render/badge-variant.ts). This
+  // used to be an `if (!badges && …)` check afterwards, which inferred "the
+  // set reaped itself to nothing" from a module binding having been nulled by
+  // a callback — the recovery was real but the trigger was a coincidence of
+  // wiring rather than a consequence of what a search badge IS.
+  //
+  // Still rides the settle the holder is ALREADY given rather than observing
+  // mutations: re-finding is only worth doing once the DOM has stopped moving,
+  // which is what a settle means.
+  badges?.reconcile();
 }
 
 /**

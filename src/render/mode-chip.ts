@@ -34,6 +34,23 @@ const STYLE = `
 .chip .sub { color: #8b949e; font-weight: 500; letter-spacing: 0; }
 .chip .voice { color: #7d8590; font-weight: 500; letter-spacing: 0; font-style: italic; }
 .chip .voice .say { color: #58a6ff; font-style: normal; }
+/* A refused keystroke: no codeword starts with that letter, so the filter
+   deliberately does NOT take it (keyboard.ts handleHintKey — accepting it
+   would blank every hint). Silent refusal is what made that reasonable
+   behaviour read as a fault: the letter vanished, and the Escape aimed at
+   undoing it found no prefix to peel and left the mode instead (field,
+   2026-07-27). One pulse on the mode indicator, where "type a letter" is
+   already written — loud enough to say "not that one", quiet enough to sit
+   under a fast typist. */
+.chip.refused { animation: bk-chip-refused 260ms ease-out; }
+@keyframes bk-chip-refused {
+  0%   { border-color: #3d444d; }
+  25%  { border-color: #d97706; background: #2b2016; }
+  100% { border-color: #3d444d; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chip.refused { animation: none; border-color: #d97706; }
+}
 `;
 
 type ChipMode = 'hint' | 'insert' | 'mark-set' | 'mark-jump' | 'caret' | 'visual' | 'video';
@@ -111,6 +128,24 @@ export function setModeChip(mode: KeyMode): void {
     host = build(shown, isBranchKitConnected());
     document.documentElement.appendChild(host);
   }
+}
+
+/**
+ * Pulse the chip to say a keystroke was refused.
+ *
+ * No-op when no chip is up — a refusal outside a chip-showing mode has nothing
+ * to report against, and the caller should not have to know which modes those
+ * are. Restarting the animation needs the class off, a reflow read, then on:
+ * re-adding it while it is already applied does nothing, which would swallow
+ * the second of two quick refusals — exactly the case (typing several wrong
+ * letters in a row) where the feedback matters most.
+ */
+export function flashModeChipRefusal(): void {
+  const chip = host?.shadowRoot?.querySelector('.chip');
+  if (!(chip instanceof HTMLElement)) return;
+  chip.classList.remove('refused');
+  void chip.offsetWidth; // reflow: lets the same animation play twice
+  chip.classList.add('refused');
 }
 
 /** Test-only reset. */

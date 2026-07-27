@@ -108,7 +108,6 @@ export function makeSyntheticHolder(opts: {
       const matches = [...held].filter((cw) => letterForm(cw).startsWith(prefix));
       return matches.length === 1 ? matches[0] : null;
     },
-    reposition: () => { log.push('reposition'); },
     relabel: () => { log.push('relabel'); },
     reconcile: (settle) => { log.push(`reconcile:${settle}`); },
     dispose: (reason) => {

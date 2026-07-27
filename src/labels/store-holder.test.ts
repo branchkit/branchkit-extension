@@ -68,7 +68,6 @@ function makeDelegates(store: ObservableWrapperStore): { delegates: StoreHolderD
       const w = store.all.find((lw) => lw.scanned.codeword === cw);
       if (w) { w.scanned.codeword = ''; w.label = null; }
     },
-    reposition: () => { rec.calls.push('reposition'); },
     relabel: () => { rec.calls.push('relabel'); },
     reconcile: (settle) => { rec.calls.push(`reconcile:${settle}`); },
     dispose: (reason) => { rec.calls.push(`dispose:${reason}`); },
@@ -124,6 +123,20 @@ describe('StoreHolder answers at CLAIM time, never through paint', () => {
     expect(h.holder.resolve('a s')).toBe('acted');
   });
 
+  it('fires on the whole codeword, never on a prefix that narrows to one', () => {
+    // ONE typing rule, shared with the range sets (labels/codeword-typing.ts):
+    // the badge paints "as", so "as" is what fires it. A lone hint makes 'a'
+    // narrow to exactly one — and firing there would click a link before the
+    // user finished naming it. The store looks dense enough for that to be
+    // rare, which is why it survived here after being fixed for chips; rare is
+    // not different (field, 2026-07-27).
+    const h = makeHarness();
+    h.store.addWrapper(claimedWrapper('a s'));
+    expect(h.holder.matchesPrefix('a')).toBe(true);   // still narrows
+    expect(h.holder.soleMatch('a')).toBe(null);       // ...but does not fire
+    expect(h.holder.soleMatch('as')).toBe('a s');
+  });
+
   it('wrappers without a codeword are invisible to every query', () => {
     const h = makeHarness();
     h.store.addWrapper(claimedWrapper(''));     // pool never assigned one
@@ -173,16 +186,15 @@ describe('StoreHolder delegate seams', () => {
     expect(h.rec.reveals).toBe(1);
   });
 
-  it('pool, geometry, and lifecycle hooks route to their delegates', () => {
+  it('pool, paint, and lifecycle hooks route to their delegates', () => {
     const h = makeHarness();
     h.grant(['ab']);
     h.holder.republish();
-    h.holder.reposition();
     h.holder.relabel();
     for (const kind of SETTLE_KINDS) h.holder.reconcile(kind);
     h.holder.onCodewordRejected('ab');
     expect(h.rec.calls).toEqual([
-      'republish', 'reposition', 'relabel',
+      'republish', 'relabel',
       ...SETTLE_KINDS.map((k) => `reconcile:${k}`),
       'reject:ab',
     ]);
@@ -198,7 +210,6 @@ describe('StoreHolder delegate seams', () => {
 
     h.holder.republish();
     h.holder.narrow('a');
-    h.holder.reposition();
     h.holder.relabel();
     for (const kind of SETTLE_KINDS) h.holder.reconcile(kind);
     h.holder.onCodewordRejected('ab');

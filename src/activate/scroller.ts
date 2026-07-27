@@ -127,7 +127,9 @@ export function getDefaultScrollTarget(axis: 'x' | 'y' = 'y'): HTMLElement {
 let keyHeldCounter = 0;
 
 let _prefersReducedMotion: MediaQueryList | null = null;
-function prefersReducedMotion(): boolean {
+/** Exported so other animated-scroll callers (find's comfort band) honour the
+ *  same accessibility preference instead of re-deriving the media query. */
+export function prefersReducedMotion(): boolean {
   if (!_prefersReducedMotion && typeof window !== 'undefined') {
     _prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   }

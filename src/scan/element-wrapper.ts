@@ -6,7 +6,7 @@
  */
 
 import { Category, ScannedElement } from '../types';
-import { LabelAssignment } from '../labels/words';
+import { LabelAssignment, poolLabelToAssignment } from '../labels/words';
 import type { BadgeHandle } from '../render/badge-handle';
 import { labelReservoir } from '../labels/label-reservoir';
 
@@ -314,24 +314,26 @@ export class WrapperStore {
     return undefined;
   }
 
-  /** Find wrapper matching a prefix string (for keyboard filtering) */
-  matchingPrefix(prefix: string): ElementWrapper[] {
-    const lower = prefix.toLowerCase();
-    return this.wrappers.filter(w => {
-      if (!w.label) return false;
-      const firstWord = w.label.words[0];
-      return firstWord.startsWith(lower);
-    });
-  }
+}
 
-  /** Find wrapper by letter prefix (for keyboard filtering) */
-  matchingLetterPrefix(prefix: string): ElementWrapper[] {
-    const lower = prefix.toLowerCase();
-    return this.wrappers.filter(w => {
-      if (!w.label) return false;
-      return w.label.letter.toLowerCase().startsWith(lower);
-    });
-  }
+/**
+ * Give a wrapper the label its CLAIM implies, and return it.
+ *
+ * The claim (`scanned.codeword`, written when the intersection tracker claims
+ * from the pool) is the SINGLE source of a wrapper's label. Three paint paths
+ * derived it independently — first show (render/badge-visibility.ts), band-build
+ * prepare (lifecycle/settle-engine.ts) and the alphabet relabel (content.ts) —
+ * which is three chances for one of them to read a different field, and the
+ * claim/paint split on this wrapper is exactly the kind of pair that gets read
+ * wrong (the reservoir's leak sweep asked the paint-level question and reclaimed
+ * a live wrapper's codeword, 2026-07-26).
+ *
+ * Returns the label so a caller can hand it straight to the badge rather than
+ * re-reading `w.label` and re-introducing the question of which is authoritative.
+ */
+export function applyClaimLabel(w: ElementWrapper): LabelAssignment {
+  w.label = poolLabelToAssignment(w.scanned.codeword);
+  return w.label;
 }
 
 /**

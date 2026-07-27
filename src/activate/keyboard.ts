@@ -75,6 +75,10 @@ export class KeyHandler {
   // codeword keystroke that matches nothing — otherwise the filter hides every
   // badge until Escape. Set by content.ts; null means accept any char.
   private matchPredicate: ((prefix: string) => boolean) | null = null;
+  // A keystroke the matchPredicate refused. Reported, not acted on: WHAT a
+  // refusal looks like is content's to decide, the same way it decides what a
+  // mode change looks like. Set by content.ts; null means report nowhere.
+  private onRefusedKey: (() => void) | null = null;
   // Explicit "pass keys to the page" state (Vimium's insert mode): every key
   // reaches the page until Escape. Distinct from the automatic field-focus
   // insert (`isInsertMode`) so it works anywhere, e.g. sites with their own
@@ -141,6 +145,12 @@ export class KeyHandler {
 
   setMatchPredicate(fn: (prefix: string) => boolean): void {
     this.matchPredicate = fn;
+  }
+
+  /** Invoked when a codeword keystroke is refused (no codeword starts with it).
+   *  Pairs with setMatchPredicate: the predicate says no, this reports it. */
+  setRefusedKeyCallback(cb: () => void): void {
+    this.onRefusedKey = cb;
   }
 
   /** Invoked when the user completes a mark (`m`/`` ` `` then a letter). `global`
@@ -429,18 +439,24 @@ export class KeyHandler {
     // palette — sitting above does not take them, so the walk steps past it).
     // Caret/visual owns the Vim movement alphabet + yank (DESIGN_MARKS_AND_
     // CARET.md); video the media keys (DESIGN_VIDEO_MEDIA_COMMANDS.md); hint
-    // mode the letters-filter (DESIGN_KEYBOARD_MODES.md) — and a range pick
-    // types through the hint machinery it entered with, which sits directly
-    // beneath it by construction. Real-modifier chords already took the fast
-    // path above (so Ctrl+C still copies the visual selection).
+    // mode the letters-filter (DESIGN_KEYBOARD_MODES.md). Real-modifier chords
+    // already took the fast path above (so Ctrl+C still copies the visual
+    // selection).
+    //
+    // A range pick is deliberately NOT a capturing entry. It used to be, on
+    // the reasoning that chips exist to be typed at — but that swallowed the
+    // whole Normal keymap for as long as chips were up, so j/k stopped
+    // scrolling exactly when a pick's off-screen matches made scrolling
+    // necessary (field, 2026-07-27). The walk steps past it and `f` reaches
+    // the dispatcher like anywhere else. Chips typed at from an ALREADY-live
+    // hint mode still work: the walk finds that entry underneath.
     const ids = modes.ids();
     for (let i = ids.length - 1; i >= 0; i--) {
       switch (ids[i]) {
         case 'caret': return this.onCaretKey ? this.onCaretKey(e) : false;
         case 'video': return this.onVideoKey ? this.onVideoKey(e) : false;
-        case 'range_pick':
         case 'hint': return this.handleHintKey(e);
-        default: continue; // find / palette — capture: none
+        default: continue; // find / palette / range_pick — capture: none
       }
     }
 
@@ -529,7 +545,14 @@ export class KeyHandler {
       // matches nothing and every hint vanishes until Escape. A stray key while
       // hints are up should do nothing, not blank the screen. (No predicate set
       // → accept any char, preserving the old behavior for tests/manual mode.)
+      //
+      // Refusing SILENTLY is what confused people: the letter left no trace, so
+      // the next Escape — aimed at unsaying it — found no prefix and dropped
+      // the mode instead, reading as "a stray key kicked me out" (field,
+      // 2026-07-27). The keystroke is still swallowed, it just says so — and
+      // WHAT it says is content's, through the same seam mode changes use.
       if (this.matchPredicate && !this.matchPredicate(next)) {
+        this.onRefusedKey?.();
         return true;
       }
       this.filterText = next;

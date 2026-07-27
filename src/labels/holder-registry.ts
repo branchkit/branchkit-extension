@@ -24,7 +24,14 @@
  *   pool         held / republish / onCodewordRejected — v1's three, unchanged
  *   eligibility  matchesPrefix / narrow / resolve / soleMatch — replaces the
  *                routing seam's if-chains
- *   geometry     reposition / relabel — the sweeps unbridged today
+ *   paint        relabel — the sweep unbridged today. Deliberately NOT
+ *                geometry: badge POSITION is the reconcile positioner's
+ *                registry (render/reconcile-positioner.ts), which every
+ *                HintBadge joins on construction, so both hint kinds are
+ *                already covered by one pass driven from the settle engine.
+ *                A `reposition()` hook was declared here beside relabel and
+ *                implemented twice; no fan-out ever called it, because there
+ *                was nothing for it to do (deleted 2026-07-27).
  *   lifecycle    reconcile(settle) / dispose(reason) — ditto
  *
  * Exclusivity is a FIELD, not a guard written twice: an 'exclusive' holder
@@ -118,10 +125,8 @@ export interface CodewordHolder {
    *  can fire at the same moment speaking the whole codeword would. */
   soleMatch(prefix: string): string | null;
 
-  // -- geometry / paint (store-scoped sweeps unbridged in v1) --
+  // -- paint (store-scoped sweeps unbridged in v1) --
 
-  /** Badge positions may be stale (scroll, reflow) — re-place them. */
-  reposition(): void;
   /** The alphabet or display mode changed — re-render badge text. */
   relabel(): void;
 
@@ -232,6 +237,30 @@ export function resolveCodewordAboveAmbient(codeword: string): CodewordOutcome {
 }
 
 /**
+ * Is an overlay tier holding codewords right now — search badges after a find
+ * commit, the pick's chips?
+ *
+ * The keyboard's entry into hint mode asks this before it paints anything. An
+ * overlay owns the screen while it is up (find literally BORROWS the badge
+ * screen to get it), so those badges are the ones the user is reading, and a
+ * full ambient sweep would bury a handful of result codewords under every link
+ * on the page. Nothing needs painting in that case — hint mode alone is enough,
+ * because the typed-prefix path routes through this registry and already
+ * reaches every tier.
+ *
+ * Cut at the declared ambient rank rather than at any holder's identity: a
+ * future overlay inherits the behaviour by registering above ambient, which is
+ * the same contract `resolveCodewordAboveAmbient` reads.
+ */
+export function overlayCodewordsLive(): boolean {
+  for (const h of holders) {
+    if (h.priority <= AMBIENT_PRIORITY) continue;
+    for (const _cw of h.held()) return true;
+  }
+  return false;
+}
+
+/**
  * Would `prefix` start (or continue) some codeword on screen? The keyboard's
  * gate for accepting a keystroke at all. An exclusive holder answers ALONE —
  * a letter no chip can complete is refused rather than falling through to
@@ -294,34 +323,55 @@ export function prefixClaimedByOther(holder: CodewordHolder, prefix: string): bo
   return false;
 }
 
+/**
+ * EVERY fan-out below walks a SNAPSHOT of the list, not the list.
+ *
+ * A holder is allowed to unregister itself from inside the call it is
+ * handling, and two of them do: a range set that empties disposes, which
+ * unregisters (`empty` → `dispose` → the unregister returned by
+ * `registerHolder`). Reached from a settle (`reapDead`, every range died) and
+ * from a pool rejection (`onRejected`, the last codeword went). `unregisterHolder`
+ * SPLICES, so a live `for (const h of holders)` silently skips whichever holder
+ * sat immediately after the one that just left — the Nth-participant miss this
+ * registry exists to delete, reintroduced by the iteration itself. Search made
+ * it reachable in the ordinary case: its settle hook can dispose the old set and
+ * register a replacement in one call, so the holder after `search` lost that
+ * pass.
+ *
+ * Calling a holder that unregistered mid-pass is harmless in the other
+ * direction — every holder latches `disposed` and answers as a no-op — so the
+ * snapshot is safe both ways. `disposeAllHolders` already did this and said
+ * why; the rule is now uniform rather than one function's local knowledge.
+ */
+
 /** Re-publish every holder's records after a session rotation. */
 export function republishAll(): void {
-  for (const h of holders) h.republish();
+  for (const h of [...holders]) h.republish();
 }
 
 /** Tell every holder a codeword was refused by the pool. */
 export function rejectAll(codeword: string): void {
-  for (const h of holders) h.onCodewordRejected(codeword);
+  for (const h of [...holders]) h.onCodewordRejected(codeword);
 }
 
 /** Fan a settle out to every holder — every holder, every kind, always
  *  (the discriminated hook; see SETTLE_KINDS). */
 export function reconcileAll(settle: SettleKind): void {
-  for (const h of holders) h.reconcile(settle);
+  for (const h of [...holders]) h.reconcile(settle);
 }
 
 /** The alphabet or display mode changed — every holder re-renders its badge
  *  text. The store-only loop this replaces left chips and search badges
  *  wearing the old alphabet's words after a swap. */
 export function relabelAll(): void {
-  for (const h of holders) h.relabel();
+  for (const h of [...holders]) h.relabel();
 }
 
 /** Tear every holder down — the orphan-CS path's fan-out, so a holder that
  *  exists cannot be forgotten by the teardown that must release its
- *  codewords (the seam it replaces named pick and search by import). Each
- *  holder's dispose is its owner's policy and typically unregisters it, so
- *  the iteration walks a copy. */
+ *  codewords (the seam it replaces named pick and search by import). Walks a
+ *  snapshot for the reason above, which here is the common case rather than
+ *  the edge one: dispose is what unregisters. */
 export function disposeAllHolders(reason: string): void {
   for (const h of [...holders]) h.dispose(reason);
 }
