@@ -131,6 +131,9 @@ edits.
 *Expected: ~350–450 lines out of `background.ts`. Ratchet 1336 → ~900.*
 
 ### Phase 2 — invert the `content.ts` callback seams
+**DIRECT and STATEFUL groups executed 2026-07-27 — see §6a and §6b. CYCLE group
+(4 seams) outstanding.**
+
 
 The structural fix, and the one that changes the growth curve rather than the
 current number. For each of the 17 seams, remove the injection by making the
@@ -375,6 +378,70 @@ The 4 CYCLE cases are where a small hint-owned surface is legitimately
 warranted — this is the place the withdrawn `hints/install.ts` facade was
 reaching for, and it is the right size for it *after* the inversions, not
 instead of them.
+
+### 6b. STATEFUL group EXECUTED 2026-07-27
+
+All four landed, one seam per commit, `content.ts` 3514 → 3460, ceiling banked
+3600 → 3550. Tests 2097 → 2124. Every commit ran tsc, vitest, both ceiling
+gates, `npm run build`, and all three harnesses on both engines.
+
+The audit's classification was right about three and instructive about the
+fourth, and the recommended ordering — smallest and most independent first,
+the one needing a design call last — held.
+
+| seam | landed as | seam retired |
+|---|---|---|
+| `republishAllGrammar` | moved whole into `labels/label-sync.ts` | `LabelSyncDeps.republishAll` deleted |
+| `findBorrow` | `assert/returnBadgeScreenBorrow` in `render/badge-visibility.ts` | none (find's cycle is real — see below) |
+| `pendingHintAction` | a `KeyHandler` field | `initBadgeVisibility.resetHintAction`; half of `setHintEscapeCallback` |
+| SettleEngine ref | new leaf `lifecycle/settle-engine-ref.ts` | `LabelSyncDeps.reconcile`; `onRefillLanded` wiring |
+
+**`republishAllGrammar` was never stateful.** It is a hoisted function used at
+:551 and defined at :1696 — *hoisting*, not state, was what stopped an import
+from inverting it. Every collaborator it had already lived in label-sync, so it
+moved whole and its seam field was deleted rather than inverted.
+
+**`pageSession.engine` could not be the engine's home,** which the audit
+expected it to be. The recorded reason (the `getSessionId` edge) is real but
+not sufficient: page-session reaches label-sync a *second* way, through
+`core/wrapper-lifecycle`, which imports the put queue structurally. Confirmed
+by building the value-import graph and re-running reachability with each edge
+dropped. Hence the leaf module — with `pageSession.engine` demoted to an
+accessor over it, so there is still exactly one reference. A second copy
+assigned beside the first is the two-artifacts-in-sync shape, and 14 call sites
+already read the pageSession name.
+
+**Mutation-testing earned its keep three times,** and the pattern is worth
+naming: *a test that asserts the observable a bug also produces is not a test.*
+- The borrow slot's "takes again next session" test passed with the slot
+  never cleared, because a spent borrow still reports `took === true`, so the
+  re-assert hides either way. Only the second *give-back* distinguishes them.
+- `republishAllGrammar`'s `w.scanned.codeword` guard survived deletion, and
+  that is the truth rather than a coverage gap — `fireBatchedSync`'s drain
+  re-checks it, later, which is the check that matters. Recorded in the code;
+  not papered over with a test that would have had to reach into `pendingPuts`.
+- §6a's own warning about the reservoir's uncovered default was specific and
+  applied directly: `onRefillLanded` had one caller and zero tests. Its tests
+  were written and mutation-proven *before* the default existed. Both new
+  defaults are covered.
+
+**One real regression, caught by an existing test.** `hideBadges` used to fail
+loud on use-before-init only *incidentally* — reaching
+`requireHooks().resetHintAction()` was what proved the module was wired.
+Retiring that hook removed the guarantee, and the surviving `requireHooks` sits
+behind an `if (pendingMutation)`. `clearHintFilter` now asserts it outright.
+The general form: **when a hook is retired, check what its call was
+incidentally proving.**
+
+**What is left.** The 4 CYCLE seams, unchanged, plus the tail of the find seam.
+`setFindCallbacks` survives with `resetCycleTarget` / `clearSearchBadges` /
+`caret` / `armSearchBadges` — `scan/find.ts` cannot import `badge-visibility`,
+`search-badges`, or `selection-commands`. Two of those are hard structural
+edges; the badge-visibility one is not, and is worth recording: the whole cycle
+is a single hop, `render/badge-variant.ts:30` importing `FIND_HIGHLIGHT` from
+`scan/find` — **one hex colour string**. Relocating that constant to a leaf
+makes `badge-visibility → scan/find` unreachable outright. Cheapest available
+move on the CYCLE group and it was verified, not assumed.
 
 ---
 
