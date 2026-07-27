@@ -280,14 +280,53 @@ visibly. Neither guard should be weakened by this work.
    (`GET_PAGE_STATUS`, `TAB_MARKER`). Does that predicate live in the table as
    registration metadata, or stay inside each handler? Metadata is tidier and
    makes the gate greppable; per-handler is a smaller diff.
-3. **Seam inversion vs. import cycles.** Some of the 17 seams likely exist
-   precisely to break a cycle (`keyHandler` ↔ holders is the suspect). Those
-   may need a shared registry rather than a direct import. Worth auditing all
-   17 up front and splitting the list into "direct import" and "needs a
-   surface" before starting phase 2.
+3. ~~**Seam inversion vs. import cycles.**~~ **RESOLVED — audited 2026-07-27,
+   see §6a. The suspect was wrong and the real obstacle is a different one.**
 4. **Do the entry points get tests at the end?** Probably still no, and that is
    acceptable if they shrink to pure boot sequences. The goal was never to test
    `content.ts` — it was to make the code that *was* in `content.ts` testable.
+
+### 6a. Seam audit (2026-07-27) — phase 2 is two jobs, not one
+
+All 18 seams audited against the real import graph. (18, not 17: `4912f51`
+added `keyHandler.setRefusedKeyCallback` once the ceiling stopped forbidding
+the line.) They split three ways, and the middle group is the finding:
+
+| | count | seams |
+|---|---|---|
+| **DIRECT** — target imports the dependency, no cycle | 8 | scroll-boundary, onConfirmRejected, connection-mirror, video-key, mode-change, refused-key, site-keys, mode-mirror-sink, match-predicate, filter-callback |
+| **CYCLE** — needs a surface or an event | 4 | find-callbacks, leak-sweep, escape-hook, inner-transient-probe |
+| **STATEFUL** — closes over `content.ts`-local mutable state | 4 | badge-visibility, label-sync, onRefillLanded, hint-escape |
+
+**The named suspect was wrong.** `keyHandler` ↔ holders is *not* a cycle:
+`labels/holder-registry.ts` has **zero relative imports** — a true leaf — so
+`setMatchPredicate` and `setFilterCallback` inv­ert cleanly. `activate/keyboard.ts`
+is itself a near-leaf (four imports). `render/mode-chip.ts`'s back-edge to it is
+`import type { KeyMode }` only, erased at runtime.
+
+**The real cycle is one shape, stated once:** *anything that imports
+`core/singletons.ts` cannot be imported by `activate/keyboard.ts`*, because
+`singletons.ts` constructs `new KeyHandler(...)`. That set is `palette-host`,
+`badge-visibility`, `escape-cascade`, `selection-commands`, `key-preamble`,
+`range-disambiguation`. Singletons is the *pull* surface that lets a module
+reach `keyHandler` — it is not an escape from the cycle when `keyboard.ts` is
+the one that needs to reach out.
+
+**The obstacle the plan missed is STATEFUL, not CYCLE.** Four seams close over
+mutable state that lives in `content.ts`: the `SettleEngine` instance
+(`content.ts:376`), `pendingHintAction` (:1115), `republishAllGrammar` (:1793),
+and `findBorrow` (:503). No import can invert those — **the state has to move
+first**, which is ordinary extraction work and should be sequenced ahead of the
+inversions that depend on it. Phase 2 was scoped as one job; it is two.
+
+One free win: `initConnectionMirror(() => {})` (:847) passes an **empty
+callback**. The seam is dead and the parameter can go.
+
+Revised expectation: the 8 DIRECT inversions are unambiguous and land first.
+The 4 CYCLE cases are where a small hint-owned surface is legitimately
+warranted — this is the place the withdrawn `hints/install.ts` facade was
+reaching for, and it is the right size for it *after* the inversions, not
+instead of them.
 
 ---
 
