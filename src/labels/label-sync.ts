@@ -68,13 +68,6 @@ export interface LabelSyncDeps {
   /** Single level-triggered convergence pass (claim + build). */
   reconcile: () => void;
   isBadgesVisible: () => boolean;
-  /**
-   * Full grammar re-push (content.ts republishAllGrammar): rotate the
-   * session, re-queue every live wrapper. The shadow-desync tripwire's
-   * recovery arm — the same one the SW-restart resync and bfcache restore
-   * already use.
-   */
-  republishAll: (reason: string) => void;
 }
 
 let deps: LabelSyncDeps;
@@ -182,6 +175,50 @@ export function rotateSession(): void {
   pendingPuts.clear();
   pendingDeleteCodewords.length = 0;
   bkLog('BK_SESSION_ROTATE', { from, to: sessionId, clearedSent: sentCount });
+}
+
+/**
+ * Full grammar re-push: rotate the session, then re-queue every live,
+ * hintable wrapper. The recovery arm shared by three paths that all leave the
+ * plugin holding a grammar we can no longer describe with deltas —
+ *
+ *   - SW restart (the service worker's in-memory per-frame grammar went with
+ *     it, and it wiped ours before we reconnected),
+ *   - bfcache restore (navigate-away ran purgeTab + session_end, then the
+ *     frozen V8 context — shadow and all — was reactivated on back/forward),
+ *   - the shadow-desync tripwire above.
+ *
+ * `rotateSession` drops the stale shadow and hands the plugin a fresh
+ * session_id, so its `ensureFrameSession` clears stale per-prefix entries.
+ *
+ * This lived in content.ts purely because it was written before the module
+ * existed. Every collaborator it has is right here — the session, the put
+ * queue, the sync debounce — and the store it walks is already an injected
+ * dep, so the entry point was holding it for no one. Its `deps.republishAll`
+ * field is gone with it; the tripwire calls this directly.
+ */
+export function republishAllGrammar(reason: string): void {
+  rotateSession();
+  let requeued = 0;
+  for (const w of deps.store.all) {
+    // `disconnectedAt` is load-bearing and mutation-covered. The `codeword`
+    // half is NOT observable: the drain in fireBatchedSync re-checks it (and
+    // re-checks it later, which is the check that matters — a codeword can go
+    // away between queue and flush). Deleting it here passes every test, and
+    // that is the truth rather than a coverage gap. It stays because dropping
+    // it would let empty-codeword wrappers into pendingPuts, and this phase is
+    // behaviour-equivalent by construction; retire it with the drain's filter
+    // as one deliberate change if that redundancy is ever worth closing.
+    if (w.scanned.codeword && w.disconnectedAt === null) {
+      queuePut(w);
+      requeued++;
+    }
+  }
+  // Holders outside the store are NOT re-queued here: they re-publish off the
+  // is_final chokepoint in postBatch, which covers this path AND the ones this
+  // function never touches — notably a plain rescan, which is the common case.
+  bkLog('BK_GRAMMAR_REPUBLISH', { reason, requeued, wrappers: deps.store.all.length });
+  scheduleSync(reason);
 }
 
 // --- Transport ---
@@ -454,7 +491,7 @@ export function checkShadowDesync(resp: GrammarBatchResponse, requestSessionId: 
   const now = Date.now();
   if (now - lastShadowDesyncRepublishAt < SHADOW_DESYNC_REPUBLISH_COOLDOWN_MS) return;
   lastShadowDesyncRepublishAt = now;
-  deps.republishAll(`shadow_desync_${context}`);
+  republishAllGrammar(`shadow_desync_${context}`);
 }
 
 /**

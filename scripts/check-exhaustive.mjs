@@ -156,10 +156,21 @@ function srcFiles() {
     // 25 -> 24 (2026-07-27): the store holder's `reposition` delegate deleted
     // with the dead hook — badge POSITION is the reconcile positioner's
     // registry, which both hint kinds already join.
-    'src/content.ts': 24,
+    // 24 -> 22 (2026-07-27): republishAllGrammar moved to labels/label-sync.ts
+    // (entry-point seam inversion, phase 2 STATEFUL). The sweep did not grow or
+    // shrink — it changed file, so this lower and label-sync's raise below are
+    // one move and must be read together.
+    'src/content.ts': 22,
     'src/render/badge-visibility.ts': 4,
     'src/plugin/resolve.ts': 1,
-    'src/labels/label-sync.ts': 1,
+    // 1 -> 3 (2026-07-27): republishAllGrammar's full re-push arrived from
+    // content.ts — the loop over live wrappers plus the count it logs. Not a
+    // new membership question: it is the same sweep content.ts ran, now beside
+    // the session rotation and the put queue it exists to feed. It does NOT
+    // route through the holder registry deliberately — holders outside the
+    // store re-publish off the is_final chokepoint in postBatch instead, which
+    // also covers the plain-rescan path this function never reaches.
+    'src/labels/label-sync.ts': 3,
     // 6 → 7 (2026-07-27): StoreHolder.painted, a read of "is any of my paint on
     // screen". It is what stops the store answering "that prefix is mine" while
     // a find session or a pick owns the screen — the read that keeps one

@@ -22,6 +22,8 @@ import {
   hasSent,
   hasPendingDeletes,
   rotateSession,
+  republishAllGrammar,
+  getSessionId,
   scheduleSync,
   syncNow,
   postBatch,
@@ -95,7 +97,6 @@ describe('syncNow wholesale refusal (calibration_active)', () => {
       detachWrapper: vi.fn(),
       reconcile: vi.fn(),
       isBadgesVisible: () => false,
-      republishAll: vi.fn(),
     });
     // Clear module-level delta-sync state from prior tests.
     rotateSession();
@@ -282,7 +283,6 @@ describe('pipelined delete accounting (audit 2026-07-04)', () => {
       detachWrapper: vi.fn(),
       reconcile: vi.fn(),
       isBadgesVisible: () => false,
-      republishAll: vi.fn(),
     });
     rotateSession();
   });
@@ -392,7 +392,6 @@ describe('syncNow transport failure keeps wrappers (BranchKit down)', () => {
       detachWrapper,
       reconcile: vi.fn(),
       isBadgesVisible: () => false,
-      republishAll: vi.fn(),
     });
     rotateSession();
   });
@@ -500,7 +499,6 @@ describe('scheduleSync debounce + max-wait deadline (round 22c)', () => {
       detachWrapper: vi.fn(),
       reconcile: vi.fn(),
       isBadgesVisible: () => false,
-      republishAll: vi.fn(),
     });
     rotateSession();
   });
@@ -538,11 +536,94 @@ describe('scheduleSync debounce + max-wait deadline (round 22c)', () => {
 
 // --- Shadow-desync tripwire ---
 
+// The recovery arm the tripwire below fires, and the one the SW-restart resync
+// and bfcache restore call directly. It lived in content.ts, so these are its
+// first tests — the tripwire suite could only ever assert that a mock ran.
+describe('republishAllGrammar', () => {
+  let store: WrapperStore;
+  let sendMessage: ReturnType<typeof vi.fn>;
+
+  /** Codewords that actually went out on the wire, across every batch. */
+  const pushedCodewords = (): string[] =>
+    sendMessage.mock.calls
+      .filter((c) => c[0]?.type === 'GRAMMAR_BATCH')
+      .flatMap((c) => (c[0].request?.elements ?? [])
+        .map((e: ScannedElement) => e.codeword));
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    setAlphabet(ALPHABET);
+    store = new WrapperStore();
+    sendMessage = vi.fn((msg: { type: string }) =>
+      Promise.resolve(msg.type === 'GRAMMAR_BATCH'
+        ? { result: 'ok', succeeded: [], failed: [] }
+        : undefined));
+    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+    initLabelSync({
+      store, detachWrapper: vi.fn(), reconcile: vi.fn(), isBadgesVisible: () => false,
+    });
+    rotateSession();
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = '';
+  });
+
+  // Rotating is the half that makes the re-push land: without it the plugin's
+  // ensureFrameSession keeps the stale per-prefix entries the republish exists
+  // to clear, and our own shadow still claims the codewords are sent — so the
+  // re-queued puts settle to an empty delta and nothing transmits.
+  it('rotates the session', () => {
+    const before = getSessionId();
+    republishAllGrammar('test');
+    expect(getSessionId()).not.toBe(before);
+  });
+
+  it('re-queues every live codeworded wrapper and transmits them', async () => {
+    makeWrapper('arch bake', store);
+    makeWrapper('cave dove', store);
+    // Already sent under the OLD session — the rotation clears the shadow, so
+    // this must go out again rather than settle to an empty delta. This is the
+    // whole point of the function.
+    markSent('arch bake');
+
+    republishAllGrammar('test');
+    await vi.advanceTimersByTimeAsync(400);
+
+    expect(pushedCodewords().sort()).toEqual(['arch bake', 'cave dove']);
+  });
+
+  it('skips wrappers with no codeword and wrappers already disconnected', async () => {
+    makeWrapper('arch bake', store);
+    makeWrapper('', store);
+    const gone = makeWrapper('cave dove', store);
+    gone.disconnectedAt = 1;
+
+    republishAllGrammar('test');
+    await vi.advanceTimersByTimeAsync(400);
+
+    expect(pushedCodewords()).toEqual(['arch bake']);
+  });
+});
+
 describe('shadow-desync tripwire (committed_codewords vs sentCodewords)', () => {
   let store: WrapperStore;
   let sendMessage: ReturnType<typeof vi.fn>;
-  let republishAll: ReturnType<typeof vi.fn<(reason: string) => void>>;
   let committed: number | undefined;
+
+  // The republish is no longer an injected mock, so count the observable it
+  // leaves behind: a session rotation. Nothing else on this path rotates, and
+  // it is the effect the recovery actually depends on — a strictly stronger
+  // assertion than "the callback ran".
+  let sessionsSeen: string[];
+  const noteSession = (): void => {
+    const id = getSessionId();
+    if (sessionsSeen[sessionsSeen.length - 1] !== id) sessionsSeen.push(id);
+  };
+  const republishes = (): number => sessionsSeen.length - 1;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -558,15 +639,11 @@ describe('shadow-desync tripwire (committed_codewords vs sentCodewords)', () => 
       );
     });
     vi.stubGlobal('chrome', { runtime: { sendMessage } });
-    republishAll = vi.fn<(reason: string) => void>();
     initLabelSync({
-      store,
-      detachWrapper: vi.fn(),
-      reconcile: vi.fn(),
-      isBadgesVisible: () => false,
-      republishAll,
+      store, detachWrapper: vi.fn(), reconcile: vi.fn(), isBadgesVisible: () => false,
     });
     rotateSession();
+    sessionsSeen = [getSessionId()];
   });
 
   afterEach(() => {
@@ -584,31 +661,31 @@ describe('shadow-desync tripwire (committed_codewords vs sentCodewords)', () => 
     queueDelete('arch bake');
     committed = count;
     await syncNow('test');
+    noteSession();
   }
 
   it('republishes on divergence, once per cooldown, and again after it', async () => {
     // Agreement: plugin count matches the settled shadow — silent.
     await finalBatch(0);
-    expect(republishAll).not.toHaveBeenCalled();
+    expect(republishes()).toBe(0);
 
     // Divergence: the plugin holds codewords our shadow doesn't know (or
     // vice versa — the wiped-under-intact-shadow family). Recovery fires.
     await finalBatch(5);
-    expect(republishAll).toHaveBeenCalledTimes(1);
-    expect(republishAll.mock.calls[0][0]).toContain('shadow_desync');
+    expect(republishes()).toBe(1);
 
     // Still diverged inside the cooldown: logged, not re-fired.
     await finalBatch(5);
-    expect(republishAll).toHaveBeenCalledTimes(1);
+    expect(republishes()).toBe(1);
 
     // A divergence persisting past the cooldown fires again.
     await vi.advanceTimersByTimeAsync(11_000);
     await finalBatch(5);
-    expect(republishAll).toHaveBeenCalledTimes(2);
+    expect(republishes()).toBe(2);
   });
 
   it('a response without committed_codewords is ignored (synthetic shapes)', async () => {
     await finalBatch(undefined);
-    expect(republishAll).not.toHaveBeenCalled();
+    expect(republishes()).toBe(0);
   });
 });

@@ -154,6 +154,7 @@ import {
   hasSent,
   getSessionId,
   rotateSession,
+  republishAllGrammar,
   scheduleSync,
   syncNow,
 } from './labels/label-sync';
@@ -537,18 +538,14 @@ setFindCallbacks({
 });
 
 // Wire the LabelStage's catchup sync to content.ts-owned collaborators.
-// detachWrapper is imported from core/wrapper-lifecycle; reconcile is a hoisted
-// declaration; store is imported; the visibility flag (pageSession.badgesVisible)
-// is read lazily via the arrow. Catchup-built badges converge through the single
-// reconcile entry.
+// detachWrapper is imported from core/wrapper-lifecycle; store is imported; the
+// visibility flag (pageSession.badgesVisible) is read lazily via the arrow.
+// Catchup-built badges converge through the single reconcile entry.
 initLabelSync({
   store,
   detachWrapper,
   reconcile: () => engine.reconcile(),
   isBadgesVisible: () => pageSession.badgesVisible,
-  // Shadow-desync recovery: same full re-push the SW-restart resync and
-  // bfcache restore use (hoisted declaration).
-  republishAll: (reason) => republishAllGrammar(reason),
 });
 
 // Confirm-rejection handler (epoch-handshake Phase 4, review bug #5): the SW
@@ -1680,34 +1677,6 @@ pageSession.resources.listen(window, 'pageshow', (e) => {
   if (!e.persisted) return;
   pageSession.restore();
 });
-
-// Full grammar re-push. Used when the plugin's per-frame grammar was wiped
-// out from under us while our delta-sync shadow (`sentCodewords`) still
-// believes it's all live — so a plain `scheduleSync` computes an empty delta
-// and transmits nothing, leaving painted badges un-matchable. Two triggers
-// share this exact recovery:
-//   - transient SW restart (liveness Port reconnect → frame_liveness_disconnect
-//     wiped the grammar before we reconnected), and
-//   - bfcache restore (navigate-away ran purgeTab + session_end, then the
-//     frozen V8 context — shadow and all — was reactivated on back/forward).
-// `rotateSession` drops the stale shadow and hands the plugin a fresh
-// session_id so its `ensureFrameSession` clears stale per-prefix entries;
-// then re-queue every live, hintable wrapper for the next sync.
-function republishAllGrammar(reason: string): void {
-  rotateSession();
-  let requeued = 0;
-  for (const w of store.all) {
-    if (w.scanned.codeword && w.disconnectedAt === null) {
-      queuePut(w);
-      requeued++;
-    }
-  }
-  // Holders outside the store are NOT re-queued here: they re-publish off the
-  // is_final chokepoint in postBatch, which covers this path AND the ones this
-  // function never touches — notably a plain rescan, which is the common case.
-  bkLog('BK_GRAMMAR_REPUBLISH', { reason, requeued, wrappers: store.all.length });
-  scheduleSync(reason);
-}
 
 // The bfcache-restore body, owned by `PageSession.restore`.
 function restoreFromBfcache(): void {
