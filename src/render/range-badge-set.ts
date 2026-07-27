@@ -48,7 +48,9 @@ import { isAncestorChainInVisibleViewport } from '../lifecycle/strict-viewport';
 import { type BandCandidate, bandOverhang, planBandWindow } from '../lifecycle/band-window';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { labelReservoir } from '../labels/label-reservoir';
-import { exactCodewordMatch } from '../labels/codeword-typing';
+import {
+  exactCodewordMatch, anyCodewordMatchesPrefix, narrowBadge,
+} from '../labels/codeword-typing';
 import { poolLabelToAssignment, isVoiceAlphabetLoaded, type LabelAssignment } from '../labels/words';
 import { publishRecords, retireRecords, cancelPendingDelete } from '../labels/label-sync';
 import {
@@ -179,7 +181,6 @@ export class RangeBadgeSet {
       narrow: (prefix) => this.filterByPrefix(prefix),
       resolve: (cw) => spec.resolve(cw),
       soleMatch: (prefix) => this.soleMatch(prefix),
-      reposition: () => this.reposition(),
       relabel: () => this.relabel(),
       reconcile: (settle) => {
         if (spec.reconcile) spec.reconcile(settle);
@@ -232,10 +233,17 @@ export class RangeBadgeSet {
   }
 
   /**
-   * Mid-codeword progress: badges that can't complete `prefix` are marked
-   * non-candidates, the rest show their spoken prefix. The variant decides how
-   * each reads. `''` resets.
+   * [codeword, letterForm] for every member — this holder's ONE projection,
+   * read by the gate (matchesPrefix) and the fire (soleMatch). Paint-level,
+   * because a range set's members ARE its painted badges; the element store
+   * has a claim/paint split and this does not.
    */
+  private *entries(): Generator<readonly [string, string]> {
+    for (const [codeword, { label }] of this.members) {
+      yield [codeword, label.letter] as const;
+    }
+  }
+
   /**
    * Does any member's codeword start with `prefix`?
    *
@@ -245,43 +253,28 @@ export class RangeBadgeSet {
    * or they stay invisible to the keyboard.
    */
   matchesPrefix(prefix: string): boolean {
-    if (prefix === '') return this.members.size > 0;
-    for (const { label } of this.members.values()) {
-      if (label.letter.startsWith(prefix)) return true;
-    }
-    return false;
+    return anyCodewordMatchesPrefix(this.entries(), prefix);
   }
 
   /** Fires on the WHOLE painted codeword — the one typing rule, shared with
-   *  the element store (labels/codeword-typing.ts). Narrowing stays local and
-   *  prefix-based (filterByPrefix), so the set still converges as you type. */
+   *  the element store (labels/codeword-typing.ts). Narrowing is the same
+   *  module's other half (filterByPrefix), so the set still converges as you
+   *  type. */
   soleMatch(prefix: string): string | null {
-    return exactCodewordMatch(
-      (function* (members) {
-        for (const [codeword, { label }] of members) yield [codeword, label.letter] as const;
-      }(this.members)),
-      prefix,
-    );
+    return exactCodewordMatch(this.entries(), prefix);
   }
 
+  /**
+   * Mid-codeword progress: badges that can't complete `prefix` are marked
+   * non-candidates, the rest show their matched prefix. The variant decides how
+   * a non-candidate reads (hide vs dim). `''` resets.
+   *
+   * Arbitrary prefix lengths and every display mode, inherited from the shared
+   * rule — no charAt(0) special case for exactly two words.
+   */
   filterByPrefix(prefix: string): void {
     for (const { badge, label } of this.members.values()) {
-      const matches = prefix !== '' && label.letter.startsWith(prefix);
-      badge.setFiltered(prefix !== '' && !matches);
-      // Arbitrary prefix lengths and every display mode, inherited — no
-      // charAt(0) special case for exactly two words.
-      badge.setMatchedChars(matches ? prefix.length : 0);
-    }
-  }
-
-  /** Re-place every badge against its range's live rect (the holder
-   *  geometry hook; the settle-driven positioner pass handles steady-state,
-   *  so this is the explicit re-place for sweeps that ask for one). */
-  reposition(): void {
-    if (this.disposed) return;
-    for (const m of this.members.values()) {
-      const target = rangeTarget(m.range);
-      placeBadgeAtRect(m.badge, target.element, target.rect());
+      narrowBadge(badge, label.letter, prefix);
     }
   }
 

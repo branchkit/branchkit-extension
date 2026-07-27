@@ -24,7 +24,14 @@
  *   pool         held / republish / onCodewordRejected — v1's three, unchanged
  *   eligibility  matchesPrefix / narrow / resolve / soleMatch — replaces the
  *                routing seam's if-chains
- *   geometry     reposition / relabel — the sweeps unbridged today
+ *   paint        relabel — the sweep unbridged today. Deliberately NOT
+ *                geometry: badge POSITION is the reconcile positioner's
+ *                registry (render/reconcile-positioner.ts), which every
+ *                HintBadge joins on construction, so both hint kinds are
+ *                already covered by one pass driven from the settle engine.
+ *                A `reposition()` hook was declared here beside relabel and
+ *                implemented twice; no fan-out ever called it, because there
+ *                was nothing for it to do (deleted 2026-07-27).
  *   lifecycle    reconcile(settle) / dispose(reason) — ditto
  *
  * Exclusivity is a FIELD, not a guard written twice: an 'exclusive' holder
@@ -118,10 +125,8 @@ export interface CodewordHolder {
    *  can fire at the same moment speaking the whole codeword would. */
   soleMatch(prefix: string): string | null;
 
-  // -- geometry / paint (store-scoped sweeps unbridged in v1) --
+  // -- paint (store-scoped sweeps unbridged in v1) --
 
-  /** Badge positions may be stale (scroll, reflow) — re-place them. */
-  reposition(): void;
   /** The alphabet or display mode changed — re-render badge text. */
   relabel(): void;
 

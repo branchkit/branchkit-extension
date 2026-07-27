@@ -30,7 +30,7 @@ import { pageSession } from '../lifecycle/page-session';
 import { store } from '../core/store';
 import { keyHandler } from '../core/singletons';
 import { getDisplayMode, getHintVisibility } from '../config';
-import { poolLabelToAssignment } from '../labels/words';
+import { applyClaimLabel } from '../scan/element-wrapper';
 import { HintBadge } from './hints';
 import { elementTarget } from './badge-target';
 import { isVisible } from '../scan/scanner';
@@ -132,8 +132,7 @@ export async function showBadges(): Promise<void> {
   firehoseStep('showBadges:cache_end', renderable.length, 20);
   try {
     for (const wrapper of renderable) {
-      const label = poolLabelToAssignment(wrapper.scanned.codeword);
-      wrapper.label = label;
+      const label = applyClaimLabel(wrapper);
 
       if (!wrapper.hint) {
         wrapper.hint = new HintBadge(

@@ -37,7 +37,7 @@ import {
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { POOL_SIZE } from '../labels/label-pool';
 import { isVisible } from '../scan/scanner';
-import { poolLabelToAssignment } from '../labels/words';
+import { applyClaimLabel } from '../scan/element-wrapper';
 import { firehoseStep } from '../debug/firehose';
 import { harnessHooksEnabled } from '../debug/harness-hooks';
 import { recordCpu, lifecycleCounters } from '../debug/perf-counters';
@@ -436,8 +436,7 @@ export class SettleEngine {
   // Placement is NOT done here — the caller batch-places the returned set
   // (true = needs placement). Requires a warm layout cache.
   private prepareBadge(w: ElementWrapper): boolean {
-    const label = poolLabelToAssignment(w.scanned.codeword);
-    w.label = label;
+    const label = applyClaimLabel(w);
     // A CSS-invisible target (visibility:hidden / opacity:0 hover-reveal) must
     // not paint — no visibility transition fires for a never-revealed target,
     // so the recheck never cleans it up. The voice (strict) side reads the

@@ -68,7 +68,6 @@ function makeDelegates(store: ObservableWrapperStore): { delegates: StoreHolderD
       const w = store.all.find((lw) => lw.scanned.codeword === cw);
       if (w) { w.scanned.codeword = ''; w.label = null; }
     },
-    reposition: () => { rec.calls.push('reposition'); },
     relabel: () => { rec.calls.push('relabel'); },
     reconcile: (settle) => { rec.calls.push(`reconcile:${settle}`); },
     dispose: (reason) => { rec.calls.push(`dispose:${reason}`); },
@@ -187,16 +186,15 @@ describe('StoreHolder delegate seams', () => {
     expect(h.rec.reveals).toBe(1);
   });
 
-  it('pool, geometry, and lifecycle hooks route to their delegates', () => {
+  it('pool, paint, and lifecycle hooks route to their delegates', () => {
     const h = makeHarness();
     h.grant(['ab']);
     h.holder.republish();
-    h.holder.reposition();
     h.holder.relabel();
     for (const kind of SETTLE_KINDS) h.holder.reconcile(kind);
     h.holder.onCodewordRejected('ab');
     expect(h.rec.calls).toEqual([
-      'republish', 'reposition', 'relabel',
+      'republish', 'relabel',
       ...SETTLE_KINDS.map((k) => `reconcile:${k}`),
       'reject:ab',
     ]);
@@ -212,7 +210,6 @@ describe('StoreHolder delegate seams', () => {
 
     h.holder.republish();
     h.holder.narrow('a');
-    h.holder.reposition();
     h.holder.relabel();
     for (const kind of SETTLE_KINDS) h.holder.reconcile(kind);
     h.holder.onCodewordRejected('ab');

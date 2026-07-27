@@ -353,7 +353,6 @@ function makeStoreHarness(): HolderHarness {
       const w = store.all.find((lw) => lw.scanned.codeword === cw);
       if (w) { w.scanned.codeword = ''; w.label = null; }
     },
-    reposition: () => {},
     relabel: () => {},
     reconcile: () => {},
     dispose: () => {},

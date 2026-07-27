@@ -143,7 +143,13 @@ function srcFiles() {
     // 27 -> 26 (2026-07-27): updateBadgeLabels deleted — the display-mode
     // relabel now fans out through relabelAll() like the alphabet swap, so the
     // store-only sweep it used is gone rather than moved.
-    'src/content.ts': 26,
+    // 26 -> 25 (2026-07-27): narrowStoreHints lost its '' branch to the shared
+    // narrowing rule (labels/codeword-typing.ts narrowBadge) — one sweep, not
+    // two, because the empty prefix stopped being a special case.
+    // 25 -> 24 (2026-07-27): the store holder's `reposition` delegate deleted
+    // with the dead hook — badge POSITION is the reconcile positioner's
+    // registry, which both hint kinds already join.
+    'src/content.ts': 24,
     'src/render/badge-visibility.ts': 4,
     'src/plugin/resolve.ts': 1,
     'src/labels/label-sync.ts': 1,
@@ -153,7 +159,10 @@ function srcFiles() {
     // keystroke from repainting the page over three search results. Same
     // question badge-visibility's anyBadgesShowing asks; not routed through it
     // because labels/ importing render/ for one boolean is the worse trade.
-    'src/labels/store-holder.ts': 7,
+    // 7 → 5 (2026-07-27): matchesPrefix's two hand-written `store.all.some`
+    // scans collapsed into the holder's ONE claimEntries() projection, which
+    // soleMatch already walked. The gate and the fire now read the same list.
+    'src/labels/store-holder.ts': 5,
     'src/lifecycle/reconcile.ts': 2,
     'src/lifecycle/machinery-gate.ts': 2,
     'src/lifecycle/settle-engine.ts': 5,

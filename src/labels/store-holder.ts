@@ -45,7 +45,9 @@ import {
   CodewordHolder, HolderOutcome, SettleKind, prefixClaimedByOther,
   AMBIENT_PRIORITY, overlayCodewordsLive,
 } from './holder-registry';
-import { letterFormOf, exactCodewordMatch } from './codeword-typing';
+import {
+  letterFormOf, exactCodewordMatch, anyCodewordMatchesPrefix,
+} from './codeword-typing';
 
 /** Ambient — the default the additive holders fall through to, and the rank
  *  the spoken path's `resolveCodewordAboveAmbient` cuts at (the spoken
@@ -84,8 +86,6 @@ export interface StoreHolderDelegates {
   /** Strip the losing wrapper back to unhinted and re-claim (content's
    *  onConfirmRejected). Must clear the wrapper's claim-level codeword. */
   onCodewordRejected(codeword: string): void;
-  /** Re-place every painted badge. */
-  reposition(): void;
   /** Re-render badge text (alphabet / display-mode change). */
   relabel(): void;
   /** The store's settle-time sweep for this kind. */
@@ -158,9 +158,7 @@ export class StoreHolder implements CodewordHolder {
   matchesPrefix(prefix: string): boolean {
     if (this.disposed) return false;
     if (overlayCodewordsLive() && !this.painted) return false;
-    if (prefix === '') return this.store.all.some((w) => w.scanned.codeword !== '');
-    return this.store.all.some((w) =>
-      w.scanned.codeword !== '' && letterFormOf(w.scanned.codeword).startsWith(prefix));
+    return anyCodewordMatchesPrefix(this.claimEntries(), prefix);
   }
 
   narrow(prefix: string): void {
@@ -209,17 +207,19 @@ export class StoreHolder implements CodewordHolder {
     return exactCodewordMatch(this.claimEntries(), prefix);
   }
 
-  /** [codeword, letterForm] for every wrapper holding a claim. */
+  /**
+   * [codeword, letterForm] for every wrapper holding a claim — this holder's
+   * ONE projection, read by both the gate (matchesPrefix) and the fire
+   * (soleMatch). Claim-level, per the header: a wrapper that has claimed but
+   * not painted is typable, and narrowing's reveal is what makes it visible.
+   * `narrow` deliberately does NOT read this — it paints, so it asks the
+   * paint-level label (see the narrow delegate).
+   */
   private *claimEntries(): Generator<readonly [string, string]> {
     for (const w of this.store.all) {
       if (w.scanned.codeword === '') continue;
       yield [w.scanned.codeword, letterFormOf(w.scanned.codeword)] as const;
     }
-  }
-
-  reposition(): void {
-    if (this.disposed) return;
-    this.delegates.reposition();
   }
 
   relabel(): void {

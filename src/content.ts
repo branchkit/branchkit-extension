@@ -6,7 +6,7 @@
  */
 
 import { HintVisibility, ScannedElement, Message, DispatchResult, TabAction, ZoomAction } from './types';
-import { LabelAssignment, isVoiceAlphabetLoaded, setAlphabet, poolLabelToAssignment } from './labels/words';
+import { LabelAssignment, isVoiceAlphabetLoaded, setAlphabet } from './labels/words';
 import {
   SettleEngine,
   DEFERRED_REPOSITION_DEBOUNCE_MS,
@@ -15,7 +15,7 @@ import {
 import { initConnectionMirror } from './plugin/connection-mirror';
 import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters } from './scan/scanner';
 import { noteDisconnectedShadowAttach } from './scan/shadow-attach-signal';
-import { DiscoverySource, ElementWrapper } from './scan/element-wrapper';
+import { DiscoverySource, ElementWrapper, applyClaimLabel } from './scan/element-wrapper';
 import * as idRegistry from './scan/registry';
 import type { CodewordMemoryEntry } from './labels/codeword-memory';
 import { loadRecall, recalledCodewords, rememberClaimedCodewords, resolvePreferredCodeword, isRecallLoaded } from './labels/codeword-recall';
@@ -72,6 +72,7 @@ import {
   type CodewordOutcome,
 } from './labels/holder-registry';
 import { StoreHolder } from './labels/store-holder';
+import { narrowBadge } from './labels/codeword-typing';
 import { runEscapeCascade } from './activate/escape-cascade';
 import { setInnerTransientProbe } from './core/mode-stack';
 import { setModeMirrorSink } from './core/modes';
@@ -1501,15 +1502,13 @@ const storeHolder = new StoreHolder(store, {
     engine.scheduleReconcile();
     scheduleSync('confirm_rejected');
   },
-  reposition: () => placeBadges([...store.all].filter((w) => w.hint !== null)),
   // Alphabet-swap re-render (driven by relabelAll below): identities are
   // unchanged, only the spoken overlay moved — re-render and re-Put, no
   // re-claim.
   relabel: () => {
     for (const w of store.all) {
       if (!w.scanned.codeword) continue;
-      w.label = poolLabelToAssignment(w.scanned.codeword);
-      w.hint?.updateLabel(w.label, getDisplayMode());
+      w.hint?.updateLabel(applyClaimLabel(w), getDisplayMode());
       queuePut(w);
     }
   },
@@ -1524,21 +1523,11 @@ const storeHolder = new StoreHolder(store, {
 });
 registerHolder(storeHolder);
 
-/** Filter the painted link hints to `prefix` (`''` resets). */
+/** Filter the painted link hints to `prefix` (`''` resets) — the shared
+ *  narrowing rule (labels/codeword-typing.ts), read at PAINT level because
+ *  this paints: an unlabelled wrapper has nothing to show a prefix on. */
 function narrowStoreHints(prefix: string): void {
-  if (prefix === '') {
-    for (const w of store.all) {
-      w.hint?.setFiltered(false);
-      w.hint?.setMatchedChars(0);
-    }
-    return;
-  }
-  const matchSet = new Set(store.matchingLetterPrefix(prefix));
-  for (const w of store.all) {
-    const isMatch = matchSet.has(w);
-    w.hint?.setFiltered(!isMatch);
-    if (isMatch) w.hint?.setMatchedChars(prefix.length);
-  }
+  for (const w of store.all) narrowBadge(w.hint, w.label?.letter, prefix);
 }
 
 // The keyboard's accept gate asks the registry the SAME question the spoken
