@@ -24,6 +24,7 @@ import { modes } from '../core/modes';
 import { bkLog } from '../debug/bk-log';
 import { openPhraseSession, isDictatedInsert, type PhraseSession } from './phrase-collector';
 import { prefersReducedMotion } from '../activate/scroller';
+import { isRangeDead } from './range-liveness';
 
 /**
  * What the box is collecting a phrase FOR.
@@ -748,7 +749,48 @@ export function findAllRanges(query: string): Range[] {
   return locateTolerant(trimmed);
 }
 
+/**
+ * Drop matches whose Range has died, without moving the user.
+ *
+ * The badge set reaps its own dead ranges on every settle
+ * (render/range-badge-set.ts `reapDead`); this list never did, and it is the
+ * SAME ranges. So on a re-rendering app the badges correctly vanished while
+ * the session kept walking corpses: the pill counted matches that no longer
+ * existed, and `n` stepped onto them to scroll nowhere (`scrollToCurrent`
+ * calls `scrollIntoView` on a disconnected parent). Same shape as every bug in
+ * notes/DESIGN_HINT_ENGINE.md §2 — a rule one consumer had and the other
+ * lacked, so the predicate now has one home (scan/range-liveness.ts).
+ *
+ * READ-TIME, deliberately: no observer, no timer, no settle hook
+ * (notes/DESIGN_OBSERVED_STATE_READ_TIME.md, and the one-in-one-out sensing
+ * freeze). Death is derived where the list is consumed. A stale pill on a page
+ * nobody is interacting with is not a defect; a stale pill the moment you
+ * press `n` is, and that is exactly when this runs.
+ *
+ * `currentIndex` lands on the nearest SURVIVOR at or after where it was, so a
+ * sweep never scrolls and never silently renumbers you backwards past matches
+ * you had already stepped through. Trailing death clamps to the last survivor.
+ */
+function sweepDeadMatches(): void {
+  if (matchRanges.length === 0) return;
+  const live: Range[] = [];
+  let nextIndex = -1;
+  for (let i = 0; i < matchRanges.length; i++) {
+    if (isRangeDead(matchRanges[i])) continue;
+    if (nextIndex === -1 && i >= currentIndex) nextIndex = live.length;
+    live.push(matchRanges[i]);
+  }
+  if (live.length === matchRanges.length) return;
+  matchRanges = live;
+  state.matchCount = live.length;
+  currentIndex = live.length === 0 ? -1
+    : nextIndex === -1 ? live.length - 1
+      : nextIndex;
+  state.matchIndex = currentIndex + 1;
+}
+
 function move(delta: number): void {
+  sweepDeadMatches();
   if (matchRanges.length === 0) return;
   currentIndex = (currentIndex + delta + matchRanges.length) % matchRanges.length;
   state.matchIndex = currentIndex + 1;
@@ -923,12 +965,14 @@ export function hasActiveMatches(): boolean {
 
 /** The current match Range, or null when find is inactive / has no matches. */
 export function getCurrentMatchRange(): Range | null {
+  sweepDeadMatches();
   return currentIndex >= 0 && currentIndex < matchRanges.length ? matchRanges[currentIndex] : null;
 }
 
 /** Every committed match, in document order. The live array is module state
  *  that `move`/`applyHighlights` mutate, so this hands out a copy. */
 export function getMatchRanges(): Range[] {
+  sweepDeadMatches();
   return matchRanges.slice();
 }
 

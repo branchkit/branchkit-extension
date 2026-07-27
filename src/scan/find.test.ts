@@ -132,6 +132,7 @@ import {
   clearFindPaint,
   findNext,
   getMatchRanges,
+  getCurrentMatchRange,
   findGoToRange,
 } from './find';
 
@@ -1001,5 +1002,123 @@ describe('the comfort band: when a match jump moves the page', () => {
     const ranges = getMatchRanges();
     expect(findGoToRange(ranges[ranges.length - 1])).toBe(true);
     expect(scrolls).toHaveLength(1);
+  });
+});
+
+/**
+ * The session's match list reaps its dead, like the badge set already did.
+ *
+ * On a re-rendering app the badges vanished correctly (RangeBadgeSet.reapDead)
+ * while this list kept its collapsed Ranges: the pill counted matches that no
+ * longer existed and `n` stepped onto them to scroll nowhere. Same predicate,
+ * one home now (scan/range-liveness.ts).
+ */
+describe('dead matches are swept at read time', () => {
+  let swept: unknown[] = [];
+  const origSIV2 = Element.prototype.scrollIntoView;
+  const origVis2 = (Element.prototype as { checkVisibility?: () => boolean }).checkVisibility;
+  beforeEach(() => {
+    swept = [];
+    Element.prototype.scrollIntoView = function () { swept.push(1); };
+    (Element.prototype as { checkVisibility?: () => boolean }).checkVisibility = () => true;
+  });
+  afterEach(() => {
+    Element.prototype.scrollIntoView = origSIV2;
+    (Element.prototype as { checkVisibility?: () => boolean }).checkVisibility = origVis2;
+    closeFindMode();
+    document.body.innerHTML = '';
+  });
+
+  /** Kill the Nth match's text the way a re-render does — remove the node the
+   *  range is in, which COLLAPSES the range onto a still-connected parent. */
+  function killMatch(nth: number): void {
+    const ps = [...document.querySelectorAll('p')];
+    ps[nth].remove();
+  }
+
+  it('drops a dead match from the count', () => {
+    dom('<p>alpha</p><p>alpha</p><p>alpha</p>');
+    findImmediate('alpha');
+    expect(getFindState().matchCount).toBe(3);
+
+    killMatch(1);
+    getMatchRanges();
+
+    expect(getFindState().matchCount).toBe(2);
+    expect(getMatchRanges()).toHaveLength(2);
+  });
+
+  it('n does not step onto a corpse', () => {
+    dom('<p>alpha</p><p>alpha</p><p>alpha</p>');
+    findImmediate('alpha');
+    killMatch(1);
+
+    // Three survivors would cycle 1→2→3; two should cycle 1→2→1.
+    findNext();
+    findNext();
+    expect(getFindState().matchIndex).toBe(1);
+    expect(getFindState().matchCount).toBe(2);
+    expect(getCurrentMatchRange()!.collapsed).toBe(false);
+  });
+
+  it('keeps you on the same match when an EARLIER one dies', () => {
+    dom('<p>alpha</p><p>alpha</p><p>alpha</p>');
+    findImmediate('alpha');
+    findNext();                                  // on match 2 of 3
+    const stayOn = getCurrentMatchRange();
+    expect(getFindState().matchIndex).toBe(2);
+
+    killMatch(0);                                // the one BEFORE us
+    getMatchRanges();
+
+    // Renumbered 2 → 1, but pointing at the very same text.
+    expect(getFindState().matchIndex).toBe(1);
+    expect(getCurrentMatchRange()).toBe(stayOn);
+  });
+
+  it('lands on the next survivor when the CURRENT match dies', () => {
+    dom('<p>alpha</p><p>alpha</p><p>alpha</p>');
+    findImmediate('alpha');
+    findNext();                                  // on match 2 of 3
+    const third = getMatchRanges()[2];
+
+    killMatch(1);                                // the one we are standing on
+    getMatchRanges();
+
+    expect(getFindState().matchCount).toBe(2);
+    expect(getCurrentMatchRange()).toBe(third);  // forward, never backward
+  });
+
+  it('clamps to the last survivor when everything after us dies', () => {
+    dom('<p>alpha</p><p>alpha</p><p>alpha</p>');
+    findImmediate('alpha');
+    findNext();
+    findNext();                                  // on match 3 of 3
+    killMatch(1);
+    killMatch(1);                                // removes what was the 3rd
+    getMatchRanges();
+
+    expect(getFindState().matchCount).toBe(1);
+    expect(getFindState().matchIndex).toBe(1);
+  });
+
+  it('a sweep never scrolls — it is bookkeeping, not navigation', () => {
+    dom('<p>alpha</p><p>alpha</p><p>alpha</p>');
+    findImmediate('alpha');
+    swept = [];
+    killMatch(0);
+    getMatchRanges();
+    expect(swept).toEqual([]);
+  });
+
+  it('survives every match dying without throwing', () => {
+    dom('<p>alpha</p><p>alpha</p>');
+    findImmediate('alpha');
+    killMatch(0);
+    killMatch(0);
+    expect(getMatchRanges()).toEqual([]);
+    expect(getFindState().matchCount).toBe(0);
+    expect(getCurrentMatchRange()).toBeNull();
+    findNext();   // must not throw or divide by zero
   });
 });

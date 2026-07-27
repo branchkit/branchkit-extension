@@ -223,16 +223,32 @@ Do it in the order that makes each step independently verifiable:
    wiring rather than a consequence of what a search badge IS. The set now
    calls `recover()` from its own reap when every range dies.
 
-   **Known gap, deliberately not closed here: PARTIAL death does not
-   re-acquire.** If only some badged ranges collapse, the set reaps those
-   members, stays alive, and never calls `recover` — while `find.ts`'s
-   `matchRanges` keeps the dead ranges, so `n`/`N` and the pill count walk
-   them until a full empty or a fresh commit. Closing it is not just moving the
-   call: `refindCommitted` → `applyFoundRanges` recomputes `currentIndex` and
-   calls `scrollToCurrent()`, so re-finding on partial death would let ordinary
-   DOM churn scroll the page under the user. That is a UX decision (probably:
-   re-acquire without moving the viewport), not a refactor, and it wants its
-   own change.
+   **The partial-death gap — CLOSED 2026-07-27, and the prescription written
+   here first was wrong.** This paragraph originally said partial death needed
+   the set to call `recover`, and deferred it because `refindCommitted` →
+   `applyFoundRanges` calls `scrollToCurrent()` and would scroll the page under
+   the user. Both the diagnosis and the cure were mis-aimed.
+
+   The defect was never that the badges failed to re-acquire. It was that
+   **`find.ts`'s own match list had no liveness sweep at all**, while the badge
+   set reaps on every settle — the same Ranges, one consumer with the rule and
+   one without, which is the §2 shape exactly. `matchRanges` was only ever
+   wholesale-assigned, and `move()` is unguarded modular arithmetic, so the
+   pill counted text that was gone and `n` stepped onto corpses to scroll
+   nowhere (`scrollIntoView` on a disconnected parent).
+
+   Sweeping that list is strictly better than re-acquiring, and dissolves both
+   hazards rather than trading against them: no re-find, so nothing scrolls; no
+   re-arm, so no codewords are re-minted and no badge is renamed mid-utterance.
+   `isRangeDead` moved to `scan/range-liveness.ts` and now has one home for
+   three consumers. The sweep is READ-TIME (`move`, `getMatchRanges`,
+   `getCurrentMatchRange`) rather than a new observer — no sensing added, per
+   the one-in-one-out freeze — and `currentIndex` lands on the nearest survivor
+   at or after where it was, so a sweep never moves you.
+
+   The lesson worth keeping: "which consumer is missing the rule?" beat "which
+   mechanism should recover?" here, and the second question is what produced a
+   deferral for a problem that had a smaller answer.
 
 3. ~~**Move files.**~~ **DROPPED** (2026-07-27) — see §4.2.
 
