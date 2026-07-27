@@ -48,6 +48,7 @@ import { isAncestorChainInVisibleViewport } from '../lifecycle/strict-viewport';
 import { type BandCandidate, bandOverhang, planBandWindow } from '../lifecycle/band-window';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { labelReservoir } from '../labels/label-reservoir';
+import { exactCodewordMatch } from '../labels/codeword-typing';
 import { poolLabelToAssignment, isVoiceAlphabetLoaded, type LabelAssignment } from '../labels/words';
 import { publishRecords, retireRecords, cancelPendingDelete } from '../labels/label-sync';
 import {
@@ -251,15 +252,16 @@ export class RangeBadgeSet {
     return false;
   }
 
-  /** The one codeword `prefix` can still complete, if exactly one remains. */
+  /** Fires on the WHOLE painted codeword — the one typing rule, shared with
+   *  the element store (labels/codeword-typing.ts). Narrowing stays local and
+   *  prefix-based (filterByPrefix), so the set still converges as you type. */
   soleMatch(prefix: string): string | null {
-    let found: string | null = null;
-    for (const [codeword, { label }] of this.members) {
-      if (!label.letter.startsWith(prefix)) continue;
-      if (found) return null;
-      found = codeword;
-    }
-    return found;
+    return exactCodewordMatch(
+      (function* (members) {
+        for (const [codeword, { label }] of members) yield [codeword, label.letter] as const;
+      }(this.members)),
+      prefix,
+    );
   }
 
   filterByPrefix(prefix: string): void {

@@ -9,6 +9,7 @@
 import { ActionDispatcher, CommandRegistry } from '../dispatcher';
 import { comboFromEvent, serializeCombo } from './key-combo';
 import { modes } from '../core/modes';
+import { flashModeChipRefusal } from '../render/mode-chip';
 
 import { isMarkChar, isPrevPositionRegister } from '../marks';
 
@@ -429,18 +430,24 @@ export class KeyHandler {
     // palette — sitting above does not take them, so the walk steps past it).
     // Caret/visual owns the Vim movement alphabet + yank (DESIGN_MARKS_AND_
     // CARET.md); video the media keys (DESIGN_VIDEO_MEDIA_COMMANDS.md); hint
-    // mode the letters-filter (DESIGN_KEYBOARD_MODES.md) — and a range pick
-    // types through the hint machinery it entered with, which sits directly
-    // beneath it by construction. Real-modifier chords already took the fast
-    // path above (so Ctrl+C still copies the visual selection).
+    // mode the letters-filter (DESIGN_KEYBOARD_MODES.md). Real-modifier chords
+    // already took the fast path above (so Ctrl+C still copies the visual
+    // selection).
+    //
+    // A range pick is deliberately NOT a capturing entry. It used to be, on
+    // the reasoning that chips exist to be typed at — but that swallowed the
+    // whole Normal keymap for as long as chips were up, so j/k stopped
+    // scrolling exactly when a pick's off-screen matches made scrolling
+    // necessary (field, 2026-07-27). The walk steps past it and `f` reaches
+    // the dispatcher like anywhere else. Chips typed at from an ALREADY-live
+    // hint mode still work: the walk finds that entry underneath.
     const ids = modes.ids();
     for (let i = ids.length - 1; i >= 0; i--) {
       switch (ids[i]) {
         case 'caret': return this.onCaretKey ? this.onCaretKey(e) : false;
         case 'video': return this.onVideoKey ? this.onVideoKey(e) : false;
-        case 'range_pick':
         case 'hint': return this.handleHintKey(e);
-        default: continue; // find / palette — capture: none
+        default: continue; // find / palette / range_pick — capture: none
       }
     }
 
@@ -529,7 +536,13 @@ export class KeyHandler {
       // matches nothing and every hint vanishes until Escape. A stray key while
       // hints are up should do nothing, not blank the screen. (No predicate set
       // → accept any char, preserving the old behavior for tests/manual mode.)
+      //
+      // Refusing SILENTLY is what confused people: the letter left no trace, so
+      // the next Escape — aimed at unsaying it — found no prefix and dropped
+      // the mode instead, reading as "a stray key kicked me out" (field,
+      // 2026-07-27). The keystroke is still swallowed, it just says so.
       if (this.matchPredicate && !this.matchPredicate(next)) {
+        flashModeChipRefusal();
         return true;
       }
       this.filterText = next;

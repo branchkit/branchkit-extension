@@ -140,11 +140,20 @@ function srcFiles() {
   // (or belongs to the holder registry: heldAnywhere/allHeld/reconcileAll).
   // Under → an extraction won; lower the pin in the same commit.
   const PINS = {
-    'src/content.ts': 27,
+    // 27 -> 26 (2026-07-27): updateBadgeLabels deleted — the display-mode
+    // relabel now fans out through relabelAll() like the alphabet swap, so the
+    // store-only sweep it used is gone rather than moved.
+    'src/content.ts': 26,
     'src/render/badge-visibility.ts': 4,
     'src/plugin/resolve.ts': 1,
     'src/labels/label-sync.ts': 1,
-    'src/labels/store-holder.ts': 6,
+    // 6 → 7 (2026-07-27): StoreHolder.painted, a read of "is any of my paint on
+    // screen". It is what stops the store answering "that prefix is mine" while
+    // a find session or a pick owns the screen — the read that keeps one
+    // keystroke from repainting the page over three search results. Same
+    // question badge-visibility's anyBadgesShowing asks; not routed through it
+    // because labels/ importing render/ for one boolean is the worse trade.
+    'src/labels/store-holder.ts': 7,
     'src/lifecycle/reconcile.ts': 2,
     'src/lifecycle/machinery-gate.ts': 2,
     'src/lifecycle/settle-engine.ts': 5,

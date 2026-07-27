@@ -68,7 +68,7 @@ import { armSearchBadges, clearSearchBadges } from './activate/search-badges';
 import {
   registerHolder, anyHolderMatchesPrefix, narrowByPrefix, resolveCodeword,
   resolveCodewordAboveAmbient, soleHolderMatch, heldAnywhere, allHeld,
-  rejectAll, reconcileAll, relabelAll, disposeAllHolders,
+  rejectAll, reconcileAll, relabelAll, disposeAllHolders, overlayCodewordsLive,
   type CodewordOutcome,
 } from './labels/holder-registry';
 import { StoreHolder } from './labels/store-holder';
@@ -745,7 +745,12 @@ function shouldAutoShowBadges(): boolean {
 
 loadConfig({
   onDisplayModeChange: () => {
-    if (pageSession.badgesVisible) updateBadgeLabels();
+    // Through the registry, exactly as the alphabet swap below: a store-only
+    // loop left chips and search badges rendering the PREVIOUS display mode.
+    // The badgesVisible guard went with it — an overlay owns the screen while
+    // the store's own badges are hidden (find borrows them), which is the one
+    // state where the guard was guaranteed wrong.
+    relabelAll();
     // The tab-title marker follows the same setting — re-render it in place so
     // the tab prefix and the on-page hints for a letter stay in lockstep.
     refreshTabMarker();
@@ -1089,11 +1094,13 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
 // --- Register Action Handlers ---
 
 // `f` — the keyboard entry into hint mode (notes/DESIGN_KEYBOARD_MODES.md).
-// Hints stay always-visible for voice, but letters only filter them here. So
-// `f` ensures hints are painted and puts the keyboard in hint mode; the mode
-// chip then signals "type a codeword". Escape / activation returns to Normal.
+// Hints stay always-visible for voice, but letters only filter them here, so
+// `f` paints hints and enters hint mode; the chip signals "type a codeword".
+// That paint is the AMBIENT sweep, skipped when an overlay tier already holds
+// codewords — field 2026-07-26: `/ query Enter f`, to type a search badge,
+// repainted every link hint over the results just asked for.
 dispatcher.register('hint_mode', () => {
-  if (!pageSession.badgesVisible) { doScan(); showBadges(); }
+  if (!pageSession.badgesVisible && !overlayCodewordsLive()) { doScan(); showBadges(); }
   keyHandler.enterHintMode();
 });
 
@@ -1648,14 +1655,6 @@ function runWhenIdle(cb: (deadline?: IdleDeadline) => void, timeoutMs: number): 
   else pageSession.resources.timeout(cb, 100);
 }
 
-
-function updateBadgeLabels(): void {
-  for (const w of store.all) {
-    if (w.hint && w.label) {
-      w.hint.updateLabel(w.label, getDisplayMode());
-    }
-  }
-}
 
 // Visibility handoff after a keyboard hint action. In always-mode we clear
 // narrowing/keyboard state and schedule a refresh; in manual-mode we fully hide

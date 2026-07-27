@@ -124,6 +124,20 @@ describe('StoreHolder answers at CLAIM time, never through paint', () => {
     expect(h.holder.resolve('a s')).toBe('acted');
   });
 
+  it('fires on the whole codeword, never on a prefix that narrows to one', () => {
+    // ONE typing rule, shared with the range sets (labels/codeword-typing.ts):
+    // the badge paints "as", so "as" is what fires it. A lone hint makes 'a'
+    // narrow to exactly one — and firing there would click a link before the
+    // user finished naming it. The store looks dense enough for that to be
+    // rare, which is why it survived here after being fixed for chips; rare is
+    // not different (field, 2026-07-27).
+    const h = makeHarness();
+    h.store.addWrapper(claimedWrapper('a s'));
+    expect(h.holder.matchesPrefix('a')).toBe(true);   // still narrows
+    expect(h.holder.soleMatch('a')).toBe(null);       // ...but does not fire
+    expect(h.holder.soleMatch('as')).toBe('a s');
+  });
+
   it('wrappers without a codeword are invisible to every query', () => {
     const h = makeHarness();
     h.store.addWrapper(claimedWrapper(''));     // pool never assigned one

@@ -32,6 +32,7 @@ import { clearFindPaint } from '../scan/find';
 import { bkLog } from '../debug/bk-log';
 import { EXCLUSIVE_OVERLAY_PRIORITY, type HolderOutcome } from '../labels/holder-registry';
 import { modes } from '../core/modes';
+import { setInnerTransientProbe } from '../core/mode-stack';
 import { keyHandler } from '../core/singletons';
 import { borrowBadgeScreen, type BadgeBorrow } from '../render/badge-visibility';
 import type { Message } from '../types';
@@ -108,10 +109,39 @@ interface PickEntry {
   hintMode: boolean;
 }
 
+// The pick's intra-mode transient: the letters typed at a chip. It IS hint
+// mode's typed prefix, registered under the pick's own id rather than
+// inventing a second one. Alongside the caret's probe in
+// selection-commands.ts: the mode that owns the transient wires it.
+//
+// Needed because BOTH stack orders are reachable, and peelTop only ever asks
+// the TOP spec:
+//   f, then a pick arms      → [hint, range_pick]  ← this probe answers
+//   a pick arms, then f      → [range_pick, hint]  ← hint's own probe answers
+// The first order is the one that used to lose the letters: Escape cancelled
+// the whole pick when the user meant to unsay a keystroke.
+setInnerTransientProbe('range_pick', () => keyHandler.peelHintPrefix());
+
+/**
+ * Take the screen, and DON'T take the keyboard.
+ *
+ * The pick used to call enterHintMode() here, on the reasoning that chips
+ * exist to be typed at so the keyboard should already be handed over. The cost
+ * is the whole Normal-mode keymap: in hint mode bare letters are codeword
+ * input, so j/k stopped scrolling the moment chips appeared — and the matches
+ * a pick is asking about are frequently off-screen, which is exactly when
+ * scrolling matters (field, 2026-07-27).
+ *
+ * `f` is the one gesture that hands the keyboard over, for chips the same as
+ * for link hints. Badges being VISIBLE and badges being TYPABLE are separate
+ * states here — that separation is the whole reason hints can stay painted for
+ * voice without eating the keymap — and a pick is not a reason to collapse it.
+ * Voice is unaffected either way: a spoken codeword resolves through the
+ * holder registry and never consults keyboard mode.
+ */
 function borrowScreen(): PickEntry {
   const hintMode = keyHandler.isHintMode(); // before the borrow's hide
   const borrow = borrowBadgeScreen();
-  keyHandler.enterHintMode();
   return { borrow, hintMode };
 }
 

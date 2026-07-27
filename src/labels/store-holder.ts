@@ -43,8 +43,9 @@
 import type { WrapperStore, ElementWrapper } from '../scan/element-wrapper';
 import {
   CodewordHolder, HolderOutcome, SettleKind, prefixClaimedByOther,
-  AMBIENT_PRIORITY,
+  AMBIENT_PRIORITY, overlayCodewordsLive,
 } from './holder-registry';
+import { letterFormOf, exactCodewordMatch } from './codeword-typing';
 
 /** Ambient — the default the additive holders fall through to, and the rank
  *  the spoken path's `resolveCodewordAboveAmbient` cuts at (the spoken
@@ -93,11 +94,6 @@ export interface StoreHolderDelegates {
   dispose(reason: string): void;
 }
 
-/** Letter form of a claim-level codeword: "a s" -> "as". */
-function letterFormOf(codeword: string): string {
-  return codeword.replace(/\s+/g, '');
-}
-
 export class StoreHolder implements CodewordHolder {
   readonly id = 'store';
   readonly priority = STORE_HOLDER_PRIORITY;
@@ -130,8 +126,38 @@ export class StoreHolder implements CodewordHolder {
     this.delegates.onCodewordRejected(codeword);
   }
 
+  /** Is any of this holder's paint actually on screen right now? */
+  private get painted(): boolean {
+    for (const w of this.store.all) if (w.hint?.isVisible) return true;
+    return false;
+  }
+
+  /**
+   * Can the store finish `prefix`? — with one refusal that is about the SCREEN
+   * rather than the codewords.
+   *
+   * While an overlay tier holds codewords AND none of this holder's badges are
+   * painted, the store is not typeable: find borrowed the screen, or a pick
+   * hid it, and its own badges are the ones in front of the user. Typing at
+   * hints nobody can see is not a thing to support — and answering "yes, mine"
+   * here is what let a single keystroke repaint the whole page over a live
+   * find session (field, 2026-07-27: `/ query Enter f` then any letter the
+   * search badges could not finish put ten link hints over three results).
+   *
+   * The two callers both want this answer. The keyboard's accept gate
+   * (anyHolderMatchesPrefix) refuses the key outright, so nothing narrows and
+   * nothing reveals; and `narrow`'s reveal rule below asks the same question
+   * of itself. The `painted` half is what keeps the documented coexistence
+   * working: re-show the hints mid-session (Shift+F) and they are typeable
+   * again, because now they can be seen.
+   *
+   * Deliberately NOT applied to `resolve`: the SPOKEN path never comes through
+   * here, and speaking a link hint's codeword during a find session is exactly
+   * the additive behaviour search badges are documented to preserve.
+   */
   matchesPrefix(prefix: string): boolean {
     if (this.disposed) return false;
+    if (overlayCodewordsLive() && !this.painted) return false;
     if (prefix === '') return this.store.all.some((w) => w.scanned.codeword !== '');
     return this.store.all.some((w) =>
       w.scanned.codeword !== '' && letterFormOf(w.scanned.codeword).startsWith(prefix));
@@ -166,16 +192,29 @@ export class StoreHolder implements CodewordHolder {
     return 'acted';
   }
 
+  /**
+   * Fires on the WHOLE painted codeword — the one typing rule
+   * (labels/codeword-typing.ts), shared with the range sets.
+   *
+   * This used to fire on a prefix that narrowed to exactly one, which reads as
+   * correct only because the store is USUALLY dense: with a hundred hints a
+   * first letter is never unique, so the user types the whole thing anyway. On
+   * a page with four links it is unique, and a bare `a` clicked a link before
+   * the user finished naming it — the same defect that made pick chips vanish
+   * mid-word, at a frequency low enough to have gone unnoticed. Rarer is not
+   * different.
+   */
   soleMatch(prefix: string): string | null {
-    if (this.disposed || prefix === '') return null;
-    let found: string | null = null;
+    if (this.disposed) return null;
+    return exactCodewordMatch(this.claimEntries(), prefix);
+  }
+
+  /** [codeword, letterForm] for every wrapper holding a claim. */
+  private *claimEntries(): Generator<readonly [string, string]> {
     for (const w of this.store.all) {
       if (w.scanned.codeword === '') continue;
-      if (!letterFormOf(w.scanned.codeword).startsWith(prefix)) continue;
-      if (found !== null) return null;
-      found = w.scanned.codeword;
+      yield [w.scanned.codeword, letterFormOf(w.scanned.codeword)] as const;
     }
-    return found;
   }
 
   reposition(): void {

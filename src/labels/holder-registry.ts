@@ -232,6 +232,30 @@ export function resolveCodewordAboveAmbient(codeword: string): CodewordOutcome {
 }
 
 /**
+ * Is an overlay tier holding codewords right now — search badges after a find
+ * commit, the pick's chips?
+ *
+ * The keyboard's entry into hint mode asks this before it paints anything. An
+ * overlay owns the screen while it is up (find literally BORROWS the badge
+ * screen to get it), so those badges are the ones the user is reading, and a
+ * full ambient sweep would bury a handful of result codewords under every link
+ * on the page. Nothing needs painting in that case — hint mode alone is enough,
+ * because the typed-prefix path routes through this registry and already
+ * reaches every tier.
+ *
+ * Cut at the declared ambient rank rather than at any holder's identity: a
+ * future overlay inherits the behaviour by registering above ambient, which is
+ * the same contract `resolveCodewordAboveAmbient` reads.
+ */
+export function overlayCodewordsLive(): boolean {
+  for (const h of holders) {
+    if (h.priority <= AMBIENT_PRIORITY) continue;
+    for (const _cw of h.held()) return true;
+  }
+  return false;
+}
+
+/**
  * Would `prefix` start (or continue) some codeword on screen? The keyboard's
  * gate for accepting a keystroke at all. An exclusive holder answers ALONE —
  * a letter no chip can complete is refused rather than falling through to

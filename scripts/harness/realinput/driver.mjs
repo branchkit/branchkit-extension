@@ -32,11 +32,19 @@ import { launchExtension, launchFirefoxExtension } from '../../lib/launch.mjs';
 // Enough links that the page's resting badge count clearly exceeds the pick's
 // chip count (the borrow assertions need baseline > matches), exactly three
 // 'album' matches for the pick, and 'banana' for the typed find legs.
+//
+// 'signal' is deliberately repeated to the pick's 9-chip cap: a scenario that
+// needs a prefix which NARROWS without completing needs two chips sharing a
+// first letter, and three codewords drawn from the pool rarely collide. Nine
+// is not a guarantee either — the scenario Skips loudly if the draw gives no
+// shared letter.
 const FIXTURE = `<!doctype html><title>realinput fixture</title><body>
 <h1>RealInput fixture</h1>
 <p>The album charted. Another album followed. A third album closed the set.</p>
 <p>A repeated word: banana here, banana there, and banana everywhere.</p>
 <p>The unique-phrase-alpha appears exactly once.</p>
+<p>signal one, signal two, signal three, signal four, signal five, signal six,
+signal seven, signal eight, signal nine, signal ten, signal eleven.</p>
 <nav>
 <a href="#a1">link one</a> <a href="#a2">link two</a> <a href="#a3">link three</a>
 <a href="#a4">link four</a> <a href="#a5">link five</a> <a href="#a6">link six</a>
@@ -183,6 +191,11 @@ export async function dictateAnnounced(page, text) {
  * i.e. the keyboard could not reach the chips).
  */
 export async function answerPickByTyping(page) {
+  // `f` first: arming a pick takes the screen but NOT the keyboard, so bare
+  // letters are still commands until hint mode is entered explicitly — same
+  // gesture as for link hints (range-disambiguation.ts borrowScreen).
+  await page.keyboard.press('f');
+  await page.waitForTimeout(200);
   for (const ch of 'abcdefghijklmnopqrstuvwxyz') {
     await page.keyboard.press(ch);
     await page.waitForTimeout(90);

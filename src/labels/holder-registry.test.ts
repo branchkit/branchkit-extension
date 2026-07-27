@@ -54,7 +54,7 @@ import {
   __resetHolderRegistry, registerHolder, unregisterHolder, holdersByPriority,
   resolveCodeword, resolveCodewordAboveAmbient, anyHolderMatchesPrefix,
   narrowByPrefix, soleHolderMatch,
-  republishAll, rejectAll, reconcileAll, heldAnywhere, allHeld,
+  republishAll, rejectAll, reconcileAll, heldAnywhere, allHeld, overlayCodewordsLive,
   disposeAllHolders, prefixClaimedByOther, SETTLE_KINDS,
   EXCLUSIVE_OVERLAY_PRIORITY, ADDITIVE_OVERLAY_PRIORITY,
 } from './holder-registry';
@@ -247,6 +247,28 @@ describe('pool queries and fan-outs', () => {
     expect(heldAnywhere('cd')).toBe(true);
     expect(heldAnywhere('zz')).toBe(false);
     expect(allHeld().sort()).toEqual(['ab', 'cd', 'ef']);
+  });
+
+  // The gate on `f`'s ambient sweep: an overlay that is UP owns the screen, so
+  // hint mode must not repaint the page's link hints over it (field 2026-07-26,
+  // `/ query Enter f` buried the search badges). Registered-but-empty is not
+  // "up" — a set that has released its codewords holds nothing to protect.
+  it('overlayCodewordsLive sees any non-empty holder above the ambient rank', () => {
+    registerAllThree();
+    expect(overlayCodewordsLive()).toBe(false);
+
+    ambient.grant(['ef']);
+    expect(overlayCodewordsLive()).toBe(false);   // the store alone is not an overlay
+
+    search.grant(['cd']);
+    expect(overlayCodewordsLive()).toBe(true);
+
+    pick.grant(['ab']);
+    search.holder.dispose('find_deactivated');
+    expect(overlayCodewordsLive()).toBe(true);    // exclusive counts too
+
+    pick.holder.dispose('picked');
+    expect(overlayCodewordsLive()).toBe(false);   // ambient's 'ef' still does not count
   });
 
   it('republishAll and rejectAll reach every holder, exclusivity notwithstanding', () => {
