@@ -891,6 +891,31 @@ export function getMatchRanges(): Range[] {
 }
 
 /**
+ * Re-run the committed query against the CURRENT DOM, and report whether the
+ * match set changed.
+ *
+ * A find session outlives the DOM it was run against. On an app that
+ * re-renders — a filter, a live update, infinite scroll — the matched subtree
+ * is replaced by identical text in new nodes, and every Range the session
+ * holds collapses onto its old parent (the spec's boundary-point fixup). The
+ * text is still on the page; only our handles on it are gone.
+ *
+ * This is the whole re-find: the query is retained, the matcher is the same
+ * one the commit used, and `applyFoundRanges` is the same apply. Nothing new
+ * is searched for — the session simply re-acquires what it already asked for.
+ *
+ * Returns false when nothing was re-found, so a caller can distinguish "the
+ * page changed under us" from "this query genuinely has no matches now".
+ */
+export function refindCommitted(): boolean {
+  if (!state.active || state.query === '') return false;
+  const found = locateTolerant(state.query);
+  if (found.length === 0) return false;
+  applyFoundRanges(state.query, found);
+  return true;
+}
+
+/**
  * Jump straight to a specific match — the codeword path's twin of `n`/`N`.
  * Same effect as navigating there: it becomes current, gets the solid
  * highlight, scrolls into view, and the n/N counter follows. Returns false if

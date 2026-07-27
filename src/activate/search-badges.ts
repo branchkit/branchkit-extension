@@ -36,7 +36,7 @@
 
 import { RangeBadgeSet } from '../render/range-badge-set';
 import { SEARCH_VARIANT } from '../render/badge-variant';
-import { getMatchRanges, findGoToRange, isFindActive } from '../scan/find';
+import { getMatchRanges, findGoToRange, isFindActive, refindCommitted } from '../scan/find';
 import { bkLog } from '../debug/bk-log';
 import { labelReservoir } from '../labels/label-reservoir';
 import {
@@ -142,7 +142,22 @@ function reconcileSearchHolder(settle: SettleKind): void {
   }
   // Same self-selection as the set's default: every settle pass lands a
   // 'general'; the trailing 'scroll' would be rework.
-  if (settle === 'general') badges?.reconcile();
+  if (settle !== 'general') return;
+  badges?.reconcile();
+  // The set may have reaped itself to nothing just now. On a re-rendering app
+  // that is not "the results are gone" — the text is still on the page, only
+  // our Ranges into it collapsed (render/range-badge-set.ts isRangeDead). The
+  // session re-acquires its own query and re-arms.
+  //
+  // Rides the settle the holder is ALREADY given rather than observing
+  // mutations: re-finding is only worth doing once the DOM has stopped moving,
+  // which is what a settle means. Bounded by construction — a re-find that
+  // returns nothing leaves `badges` null and this becomes a null check until
+  // the next commit.
+  if (!badges && isFindActive() && refindCommitted()) {
+    bkLog('BK_SEARCH_BADGES_REFIND', { matches: getMatchRanges().length });
+    armSearchBadges();
+  }
 }
 
 /**

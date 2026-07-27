@@ -17,7 +17,7 @@ import { startFixtureServer, launchHarness, Skip } from './driver.mjs';
 const SCENARIOS = [
   'dictate-commit-pick', 'dictate-announced', 'badge-borrow', 'escape-unwind',
   'search-badge-hint-mode', 'armed-cue-tinted', 'pick-prefix-escape',
-  'refused-key-feedback', 'pick-keeps-keymap',
+  'refused-key-feedback', 'pick-keeps-keymap', 'search-survives-rerender',
 ];
 
 const browser = process.argv.includes('--browser=firefox') ? 'firefox' : 'chromium';
