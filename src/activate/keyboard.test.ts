@@ -212,6 +212,23 @@ describe('codeword filter — match predicate (no blank-on-nonmatch)', () => {
     expect(cb).not.toHaveBeenCalled(); // filter NOT applied → nothing hidden
   });
 
+  it('REPORTS the refusal, and reports nothing when the key is accepted', () => {
+    // The keyboard says "that was refused" and stops there; what a refusal
+    // looks like belongs to content, through the same seam mode changes use.
+    // Reaching for the mode chip directly gave it two writers (2026-07-27).
+    const refused = vi.fn();
+    handler.setRefusedKeyCallback(refused);
+    handler.setFilterCallback(vi.fn());
+    handler.enterHintMode();
+    handler.setMatchPredicate((p) => p.startsWith('a'));
+
+    handler.handleKeyDown(makeKey('k'));
+    expect(refused).toHaveBeenCalledTimes(1);
+
+    handler.handleKeyDown(makeKey('a'));
+    expect(refused).toHaveBeenCalledTimes(1); // accepted — still one
+  });
+
   it('accepts a matching first letter and filters', () => {
     const cb = vi.fn();
     handler.setFilterCallback(cb);

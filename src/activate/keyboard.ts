@@ -9,7 +9,6 @@
 import { ActionDispatcher, CommandRegistry } from '../dispatcher';
 import { comboFromEvent, serializeCombo } from './key-combo';
 import { modes } from '../core/modes';
-import { flashModeChipRefusal } from '../render/mode-chip';
 
 import { isMarkChar, isPrevPositionRegister } from '../marks';
 
@@ -76,6 +75,10 @@ export class KeyHandler {
   // codeword keystroke that matches nothing — otherwise the filter hides every
   // badge until Escape. Set by content.ts; null means accept any char.
   private matchPredicate: ((prefix: string) => boolean) | null = null;
+  // A keystroke the matchPredicate refused. Reported, not acted on: WHAT a
+  // refusal looks like is content's to decide, the same way it decides what a
+  // mode change looks like. Set by content.ts; null means report nowhere.
+  private onRefusedKey: (() => void) | null = null;
   // Explicit "pass keys to the page" state (Vimium's insert mode): every key
   // reaches the page until Escape. Distinct from the automatic field-focus
   // insert (`isInsertMode`) so it works anywhere, e.g. sites with their own
@@ -142,6 +145,12 @@ export class KeyHandler {
 
   setMatchPredicate(fn: (prefix: string) => boolean): void {
     this.matchPredicate = fn;
+  }
+
+  /** Invoked when a codeword keystroke is refused (no codeword starts with it).
+   *  Pairs with setMatchPredicate: the predicate says no, this reports it. */
+  setRefusedKeyCallback(cb: () => void): void {
+    this.onRefusedKey = cb;
   }
 
   /** Invoked when the user completes a mark (`m`/`` ` `` then a letter). `global`
@@ -540,9 +549,10 @@ export class KeyHandler {
       // Refusing SILENTLY is what confused people: the letter left no trace, so
       // the next Escape — aimed at unsaying it — found no prefix and dropped
       // the mode instead, reading as "a stray key kicked me out" (field,
-      // 2026-07-27). The keystroke is still swallowed, it just says so.
+      // 2026-07-27). The keystroke is still swallowed, it just says so — and
+      // WHAT it says is content's, through the same seam mode changes use.
       if (this.matchPredicate && !this.matchPredicate(next)) {
-        flashModeChipRefusal();
+        this.onRefusedKey?.();
         return true;
       }
       this.filterText = next;

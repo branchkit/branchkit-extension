@@ -57,7 +57,7 @@ import { toggleOverlay } from './render/debug-overlay';
 import { toggleHelpOverlayWithSpokenForms } from './render/help-overlay';
 import { registerPaletteCommands, closePalette } from './render/palette-host';
 import { setTabMarker, reapplyTabMarker, refreshTabMarker } from './render/tab-title';
-import { setModeChip } from './render/mode-chip';
+import { setModeChip, flashModeChipRefusal } from './render/mode-chip';
 import { getSiteKeyState, onSiteKeysChanged } from './keymap/keyboard-rules';
 import { copyText } from './activate/clipboard';
 import { flashToast } from './render/toast';
@@ -1405,6 +1405,11 @@ keyHandler.setModeChangeCallback((mode) => {
   setModeChip(mode);
   setKeyboardArmed(mode === 'hint');
 });
+
+// The chip has ONE writer, and it is this file. A refused keystroke pulses it;
+// the keyboard reports the refusal and does not know what a refusal looks like
+// (it briefly did, and that made the chip two-owner).
+keyHandler.setRefusedKeyCallback(() => flashModeChipRefusal());
 
 // Per-site keyboard policy — full exclusion (all keys to the page) and/or
 // granular passthrough (specific keys to the page, the rest of BranchKit's
