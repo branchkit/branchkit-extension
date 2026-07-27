@@ -323,34 +323,55 @@ export function prefixClaimedByOther(holder: CodewordHolder, prefix: string): bo
   return false;
 }
 
+/**
+ * EVERY fan-out below walks a SNAPSHOT of the list, not the list.
+ *
+ * A holder is allowed to unregister itself from inside the call it is
+ * handling, and two of them do: a range set that empties disposes, which
+ * unregisters (`empty` → `dispose` → the unregister returned by
+ * `registerHolder`). Reached from a settle (`reapDead`, every range died) and
+ * from a pool rejection (`onRejected`, the last codeword went). `unregisterHolder`
+ * SPLICES, so a live `for (const h of holders)` silently skips whichever holder
+ * sat immediately after the one that just left — the Nth-participant miss this
+ * registry exists to delete, reintroduced by the iteration itself. Search made
+ * it reachable in the ordinary case: its settle hook can dispose the old set and
+ * register a replacement in one call, so the holder after `search` lost that
+ * pass.
+ *
+ * Calling a holder that unregistered mid-pass is harmless in the other
+ * direction — every holder latches `disposed` and answers as a no-op — so the
+ * snapshot is safe both ways. `disposeAllHolders` already did this and said
+ * why; the rule is now uniform rather than one function's local knowledge.
+ */
+
 /** Re-publish every holder's records after a session rotation. */
 export function republishAll(): void {
-  for (const h of holders) h.republish();
+  for (const h of [...holders]) h.republish();
 }
 
 /** Tell every holder a codeword was refused by the pool. */
 export function rejectAll(codeword: string): void {
-  for (const h of holders) h.onCodewordRejected(codeword);
+  for (const h of [...holders]) h.onCodewordRejected(codeword);
 }
 
 /** Fan a settle out to every holder — every holder, every kind, always
  *  (the discriminated hook; see SETTLE_KINDS). */
 export function reconcileAll(settle: SettleKind): void {
-  for (const h of holders) h.reconcile(settle);
+  for (const h of [...holders]) h.reconcile(settle);
 }
 
 /** The alphabet or display mode changed — every holder re-renders its badge
  *  text. The store-only loop this replaces left chips and search badges
  *  wearing the old alphabet's words after a swap. */
 export function relabelAll(): void {
-  for (const h of holders) h.relabel();
+  for (const h of [...holders]) h.relabel();
 }
 
 /** Tear every holder down — the orphan-CS path's fan-out, so a holder that
  *  exists cannot be forgotten by the teardown that must release its
- *  codewords (the seam it replaces named pick and search by import). Each
- *  holder's dispose is its owner's policy and typically unregisters it, so
- *  the iteration walks a copy. */
+ *  codewords (the seam it replaces named pick and search by import). Walks a
+ *  snapshot for the reason above, which here is the common case rather than
+ *  the edge one: dispose is what unregisters. */
 export function disposeAllHolders(reason: string): void {
   for (const h of [...holders]) h.dispose(reason);
 }

@@ -57,6 +57,7 @@ import {
   republishAll, rejectAll, reconcileAll, heldAnywhere, allHeld, overlayCodewordsLive,
   disposeAllHolders, prefixClaimedByOther, SETTLE_KINDS,
   EXCLUSIVE_OVERLAY_PRIORITY, ADDITIVE_OVERLAY_PRIORITY,
+  type SettleKind,
 } from './holder-registry';
 import {
   describeCodewordHolderConformance, makeSyntheticHolder,
@@ -308,6 +309,39 @@ describe('pool queries and fan-outs', () => {
     for (const s of [pick, search, ambient]) {
       for (const kind of SETTLE_KINDS) expect(s.log).toContain(`reconcile:${kind}`);
     }
+  });
+
+  // The Nth-participant miss, reintroduced by the ITERATION rather than by a
+  // missed wiring site. A range set that empties disposes, and dispose
+  // unregisters — which splices — so a live `for (const h of holders)` skips
+  // whoever sat immediately after it. Search makes this reachable in the
+  // ordinary case: its settle hook can drop the old set and register a
+  // replacement in one call. Registration order below puts `ambient` after the
+  // holder that leaves, so it is the one that would be missed.
+  it('reconcileAll reaches every holder even when one unregisters mid-sweep', () => {
+    registerAllThree();
+    const origReconcile = search.holder.reconcile;
+    (search.holder as { reconcile(s: SettleKind): void }).reconcile = (s) => {
+      origReconcile(s);
+      unregisterHolder(search.holder);
+    };
+    reconcileAll('general');
+    expect(search.log).toContain('reconcile:general');
+    expect(ambient.log).toContain('reconcile:general');
+  });
+
+  it('rejectAll reaches every holder even when one unregisters mid-sweep', () => {
+    // A pool rejection can take a range set's last codeword, which empties it
+    // → dispose → unregister, on the same path.
+    registerAllThree();
+    const origReject = search.holder.onCodewordRejected;
+    (search.holder as { onCodewordRejected(cw: string): void }).onCodewordRejected = (cw) => {
+      origReject(cw);
+      unregisterHolder(search.holder);
+    };
+    rejectAll('ab');
+    expect(search.log).toContain('reject:ab');
+    expect(ambient.log).toContain('reject:ab');
   });
 
   it('prefixClaimedByOther excludes the asking holder', () => {
