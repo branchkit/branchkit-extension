@@ -13,11 +13,21 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-// The reservoir's DEFAULT rejection handler calls into the holder registry, so
-// the registry is mocked to assert it without standing up real holders. Every
+// The reservoir's DEFAULTED hooks call into the holder registry, so the
+// registry is mocked to assert them without standing up real holders. Every
 // other test here installs its own handler, so nothing else observes this.
 // (vi.mock is hoisted above the static import below.)
-vi.mock('./holder-registry', () => ({ rejectAll: vi.fn() }));
+//
+// `heldAnywhere` joined the defaults when the leak sweep's isHeld stopped being
+// injected from content.ts. It is backed by a Set the tests drive: WHICH
+// holders answer is holder-registry's own test's question, and what matters
+// here is that the reservoir asks the registry at all rather than waiting to be
+// handed a predicate.
+const registryHeld = new Set<string>();
+vi.mock('./holder-registry', () => ({
+  rejectAll: vi.fn(),
+  heldAnywhere: (cw: string) => registryHeld.has(cw),
+}));
 
 import { labelReservoir } from './label-reservoir';
 import { rejectAll } from './holder-registry';
@@ -507,26 +517,35 @@ describe('LabelReservoir.claim — recalled reservation (A3)', () => {
 });
 
 describe('LabelReservoir leak sweep (2026-06-29 review: outstanding never swept)', () => {
+  /** Seed, then install the sweep handler — _seedForTests clears it. */
+  function seed(labels: string[]): string[] {
+    const swept: string[] = [];
+    labelReservoir._seedForTests(labels);
+    labelReservoir.onLeakSwept((cws) => swept.push(...cws));
+    return swept;
+  }
+
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['performance'] });
+    registryHeld.clear();
   });
   afterEach(() => {
+    // Module-level and shared with the mock factory: a codeword left in it
+    // answers "still held" in every later test (sec 6c's leaked-cooldown class).
+    registryHeld.clear();
     vi.useRealTimers();
   });
 
   it('releases an aged outstanding codeword that no live wrapper holds', () => {
-    labelReservoir._seedForTests(['a', 'b', 'c']);
-    const held = new Set<string>();
-    const swept: string[] = [];
-    labelReservoir.installLeakSweep((cw) => held.has(cw), (cws) => swept.push(...cws));
+    const swept = seed(['a', 'b', 'c']);
 
     const [leak] = labelReservoir.claim(1);
     expect(leak).toBe('a');
-    // A release-skipping teardown strips the wrapper: 'a' never enters
-    // `held`, and reservoir.release() is never called.
+    // A release-skipping teardown strips the wrapper: no holder ever takes
+    // 'a', and reservoir.release() is never called.
 
     vi.advanceTimersByTime(31_000);
-    held.add('b');
+    registryHeld.add('b');
     labelReservoir.claim(1); // grants 'b'; its maybeRefill runs the sweep
 
     expect(swept).toEqual(['a']);
@@ -536,10 +555,8 @@ describe('LabelReservoir leak sweep (2026-06-29 review: outstanding never swept)
   });
 
   it('never sweeps a codeword a live wrapper still holds', () => {
-    labelReservoir._seedForTests(['a', 'b']);
-    const held = new Set<string>(['a']);
-    const swept: string[] = [];
-    labelReservoir.installLeakSweep((cw) => held.has(cw), (cws) => swept.push(...cws));
+    const swept = seed(['a', 'b']);
+    registryHeld.add('a');
 
     labelReservoir.claim(1); // 'a', held by a wrapper (e.g. dormant/limbo)
     vi.advanceTimersByTime(120_000);
@@ -548,14 +565,29 @@ describe('LabelReservoir leak sweep (2026-06-29 review: outstanding never swept)
   });
 
   it('never sweeps inside the claim→attach grace window', () => {
-    labelReservoir._seedForTests(['a', 'b']);
-    const swept: string[] = [];
-    labelReservoir.installLeakSweep(() => false, (cws) => swept.push(...cws));
+    const swept = seed(['a', 'b']);
 
     labelReservoir.claim(1); // 'a' granted, wrapper not in store yet
     vi.advanceTimersByTime(5_000); // < 30s grace
     labelReservoir.claim(1);
     expect(swept).toEqual([]);
+  });
+
+  // The arm the injection hid. With isHeld unset the old sweep early-returned,
+  // so "nobody wired a predicate" and "the registry says nobody holds it" were
+  // indistinguishable — and every test that skipped installLeakSweep was
+  // silently sweep-free. Sweeping with NOTHING installed is the one observation
+  // that separates a defaulted predicate from the old null one; every other
+  // test in this block passes either way.
+  it('sweeps with no handler installed at all — the predicate is not optional', () => {
+    labelReservoir._seedForTests(['a', 'b']); // deliberately no onLeakSwept
+
+    labelReservoir.claim(1);
+    vi.advanceTimersByTime(31_000);
+    labelReservoir.claim(1);
+
+    expect(sendMessageMock).toHaveBeenCalledWith({ type: 'RELEASE_LABELS', doc_id: expect.any(String), labels: ['a'] });
+    expect(labelReservoir.claim(1)[0]).toBe('a'); // reclaimable again
   });
 });
 

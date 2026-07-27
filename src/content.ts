@@ -64,7 +64,7 @@ import { startQueryFieldReporting } from './plugin/query-field';
 import { cancelRangePick } from './activate/range-disambiguation';
 import { armSearchBadges, clearSearchBadges } from './activate/search-badges';
 import {
-  registerHolder, narrowByPrefix, resolveCodewordAboveAmbient, heldAnywhere,
+  registerHolder, narrowByPrefix, resolveCodewordAboveAmbient,
   allHeld, reconcileAll, relabelAll, disposeAllHolders,
   overlayCodewordsLive, type CodewordOutcome,
 } from './labels/holder-registry';
@@ -539,28 +539,21 @@ initLabelSync({
 // wrapper holds (past the claim→attach grace) was leaked by a
 // release-skipping teardown path; the reservoir releases it back to the
 // pool, and we clear the plugin-side grammar entry it may still occupy.
-labelReservoir.installLeakSweep(
-  // "Does anyone still hold this codeword?" — the registry's question, each
-  // holder answering about its own bookkeeping (labels/holder-registry.ts).
-  // The chips and search badges answer for themselves; the store answers at
-  // CLAIM level through the StoreHolder (labels/store-holder.ts — `label` is
-  // only assigned at paint time, and the sweep's old paint-level byCodeword
-  // read reclaimed a LIVE claimed-but-unpainted wrapper's codeword; tests in
-  // scan/element-wrapper.test.ts "claimed-vs-painted"). This is the form that
-  // cannot drift when the store's shape changes.
-  (cw) => heldAnywhere(cw),
-  (leaked) => {
-    let deletesQueued = 0;
-    for (const cw of leaked) {
-      if (hasSent(cw)) {
-        queueDelete(cw);
-        deletesQueued++;
-      }
+// The sweep's own question ("does anyone still hold this?") is the holder
+// registry's and the reservoir asks it directly now; only the plugin-side
+// cleanup below still routes through here, because it reaches label-sync,
+// which imports the reservoir back.
+labelReservoir.onLeakSwept((leaked) => {
+  let deletesQueued = 0;
+  for (const cw of leaked) {
+    if (hasSent(cw)) {
+      queueDelete(cw);
+      deletesQueued++;
     }
-    bkLog('BK_RESERVOIR_SWEEP', { leaked: leaked.length, deletesQueued });
-    if (deletesQueued > 0) scheduleSync('reservoir_sweep');
-  },
-);
+  }
+  bkLog('BK_RESERVOIR_SWEEP', { leaked: leaked.length, deletesQueued });
+  if (deletesQueued > 0) scheduleSync('reservoir_sweep');
+});
 
 let lastActivatedElement: Element | null = null;
 
