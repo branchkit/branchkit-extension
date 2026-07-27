@@ -249,6 +249,56 @@ bug:
 
 ---
 
+## 6a. DECISION 2026-07-27 — the `content.ts` ceiling gets its working band back
+
+**Set to 3700 against a 3622-line file.** This overrides
+`DESIGN_ENTRY_POINT_TOPOLOGY.md` §4 ("Do not raise the ceiling to buy room to
+work"), deliberately and with the owner's agreement. Recorded here because
+`monolith-ceilings.json` cannot hold a comment.
+
+**Why.** The ratchet's slack is one-directional, which is easy to misread:
+
+```js
+const RATCHET_SLACK = 100;
+if (lines > ceiling)                        → fail   // grew a monolith
+else if (ceiling - lines > RATCHET_SLACK)   → fail   // bank the win
+```
+
+The 100 applies only DOWNWARD. The design intends the ceiling to sit up to 100
+lines above the file, and that band is the working room. Nothing in the ratchet
+asks for zero headroom — but the ceiling had been tightened to exactly the file
+size (3620/3620), where the next line added fails CI.
+
+That is what distorted two decisions on 2026-07-27: the refused-key pulse was
+wired as a direct render call rather than the house callback seam because the
+callback needed one line in `content.ts` and there was none (corrected in
+`4912f51`), and two comment blocks were trimmed purely to fit. A constraint
+that changes WHAT you write rather than HOW MUCH has stopped measuring what it
+was built to measure.
+
+This session also over-applied the rule in the other direction — lowering
+3620 → 3617 after an extraction, when the ratchet only compels a lower at 100+
+under. Both mistakes have the same root: treating the ceiling as a target
+instead of a band.
+
+**Why not simply delete the gate**, which was the first instinct: `content.ts`
+has regrown three times (rounds 1–3), the topology plan uses
+`monolith-ceilings.json` as its running score with each phase banking headroom
+in the same PR, and deleting it would take that instrument away from the very
+refactor meant to fix this.
+
+**Why 3700 and not 3722** (`lines + 100`, the maximum the ratchet allows): at
+3722 the file could not lose a single line without failing RATCHET DOWN.
+3700 gives a working range of 3600–3700 — room to grow AND to shrink — so
+ordinary edits in either direction are silent and only a real extraction
+(70+ lines) trips the bank-the-win branch, which is exactly when it should.
+
+**What this does not change:** the gate still fails on unbounded growth, still
+forces a win to be banked, and the D2 `store.all` pins are untouched. A phase
+that wins real headroom should still lower this number in the same PR.
+
+---
+
 ## 7. Relationship to `DESIGN_ENTRY_POINT_TOPOLOGY.md`
 
 Written independently and deliberately not shaped to avoid collision — the
