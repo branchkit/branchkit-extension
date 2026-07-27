@@ -27,11 +27,17 @@ export function isBranchKitConnected(): boolean {
 }
 
 /**
- * Load the mirrored flag and subscribe to updates. `onTransition` fires only
- * on real edges (the boot read included, if it differs from the default),
- * never on same-value writes.
+ * Load the mirrored flag and subscribe to updates.
+ *
+ * `onTransition` is optional and no production caller passes it — consumers
+ * read `isBranchKitConnected()` where they need it. It stays because it is the
+ * only way to observe that a transition fired *at all*: a same-value write is
+ * a no-op, and a no-op is indistinguishable from an edge through the getter
+ * alone, so connection-mirror.test.ts asserts the edge semantics through it.
+ * When passed, it fires only on real edges (the boot read included, if it
+ * differs from the default), never on same-value writes.
  */
-export function initConnectionMirror(onTransition: (connected: boolean) => void): void {
+export function initConnectionMirror(onTransition?: (connected: boolean) => void): void {
   if (typeof chrome === 'undefined' || !chrome.storage?.local) return;
   chrome.storage.local.get('branchkitConnected').then((r) => {
     if (sawLiveChange) return;
@@ -44,10 +50,10 @@ export function initConnectionMirror(onTransition: (connected: boolean) => void)
   });
 }
 
-function apply(next: boolean, onTransition: (connected: boolean) => void): void {
+function apply(next: boolean, onTransition?: (connected: boolean) => void): void {
   if (next === connected) return;
   connected = next;
-  onTransition(next);
+  onTransition?.(next);
 }
 
 /** Test seam: module state is per-page in production, shared across a vitest file. */

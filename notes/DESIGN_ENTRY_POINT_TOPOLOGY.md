@@ -294,7 +294,7 @@ the line.) They split three ways, and the middle group is the finding:
 
 | | count | seams |
 |---|---|---|
-| **DIRECT** — target imports the dependency, no cycle | 8 | scroll-boundary, onConfirmRejected, connection-mirror, video-key, mode-change, refused-key, site-keys, mode-mirror-sink, match-predicate, filter-callback |
+| **DIRECT** — target imports the dependency, no cycle | 10 | scroll-boundary, onConfirmRejected, connection-mirror, video-key, mode-change, refused-key, site-keys, mode-mirror-sink, match-predicate, filter-callback |
 | **CYCLE** — needs a surface or an event | 4 | find-callbacks, leak-sweep, escape-hook, inner-transient-probe |
 | **STATEFUL** — closes over `content.ts`-local mutable state | 4 | badge-visibility, label-sync, onRefillLanded, hint-escape |
 

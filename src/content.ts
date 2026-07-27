@@ -66,10 +66,9 @@ import { startQueryFieldReporting } from './plugin/query-field';
 import { cancelRangePick } from './activate/range-disambiguation';
 import { armSearchBadges, clearSearchBadges } from './activate/search-badges';
 import {
-  registerHolder, anyHolderMatchesPrefix, narrowByPrefix, resolveCodeword,
-  resolveCodewordAboveAmbient, soleHolderMatch, heldAnywhere, allHeld,
-  rejectAll, reconcileAll, relabelAll, disposeAllHolders, overlayCodewordsLive,
-  type CodewordOutcome,
+  registerHolder, narrowByPrefix, resolveCodewordAboveAmbient, heldAnywhere,
+  allHeld, rejectAll, reconcileAll, relabelAll, disposeAllHolders,
+  overlayCodewordsLive, type CodewordOutcome,
 } from './labels/holder-registry';
 import { StoreHolder } from './labels/store-holder';
 import { narrowBadge } from './labels/codeword-typing';
@@ -844,7 +843,7 @@ if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
 // plugin/connection-mirror.ts). Arms the mirror state consumed by the mode
 // chip and help overlay; badges paint at full opacity regardless of
 // connection since display-grade demotion phase 2.
-initConnectionMirror(() => {});
+initConnectionMirror();
 
 // Adopt the BranchKit voice alphabet (overlay) from chrome.storage.local on
 // script load, if BranchKit was already connected. Local (not sync) because the
@@ -1530,31 +1529,10 @@ function narrowStoreHints(prefix: string): void {
   for (const w of store.all) narrowBadge(w.hint, w.label?.letter, prefix);
 }
 
-// The keyboard's accept gate asks the registry the SAME question the spoken
-// path asks — who owns this codeword — instead of a store-only subset of it.
-// Chips and search badges hold codewords outside the store, and a keyboard
-// that only knew the store rejected their first letter as a stray key.
-keyHandler.setMatchPredicate((prefix) => anyHolderMatchesPrefix(prefix));
-
-// Mid-codeword progress and typed completion, through the ONE registry order
-// (labels/holder-registry.ts). A sole match fires at the same moment speaking
-// the whole codeword would — chip, search badge or link hint alike; the
-// store's completion bookkeeping lives in its activate delegate above. When
-// nothing completes, every eligible holder narrows in the same breath ('' —
-// the pair cancelled — resets them all).
-keyHandler.setFilterCallback((prefix: string) => {
-  const sole = soleHolderMatch(prefix);
-  if (sole) {
-    const outcome = resolveCodeword(sole);
-    if (outcome.kind === 'off_screen') {
-      flashToast('That match is off screen — scroll to it first');
-      return;
-    }
-    if (outcome.kind === 'acted') keyHandler.exitHintMode();
-    return;
-  }
-  narrowByPrefix(prefix);
-});
+// The keyboard's codeword wiring (match predicate + typed completion) moved to
+// core/singletons.ts, next to the KeyHandler it configures — the entry point
+// does not need to know that typing a codeword consults the holder registry.
+// See notes/DESIGN_ENTRY_POINT_TOPOLOGY.md §6a.
 
 // --- Core Functions ---
 
