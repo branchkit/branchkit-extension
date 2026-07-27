@@ -9,15 +9,25 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 let matchRanges: Range[] = [];
 let active = true;
 const wentTo: string[] = [];
-vi.mock('../scan/find', () => ({
-  getMatchRanges: () => matchRanges.slice(),
-  isFindActive: () => active,
-  findGoToRange: (r: Range) => {
-    if (!matchRanges.includes(r)) return false;
-    wentTo.push(r.toString());
-    return true;
-  },
-}));
+// The deactivate registration is CAPTURED, not stubbed away: this module
+// registers it at its own module scope now (it used to be a content.ts relay),
+// and holding what it handed over is the only way a test can tell a real
+// registration from none. Declared inside the factory — vi.mock is hoisted
+// above every top-level binding, and this one is written at import time.
+vi.mock('../scan/find', () => {
+  let deactivated: ((handoff: boolean) => void) | null = null;
+  return {
+    getMatchRanges: () => matchRanges.slice(),
+    isFindActive: () => active,
+    findGoToRange: (r: Range) => {
+      if (!matchRanges.includes(r)) return false;
+      wentTo.push(r.toString());
+      return true;
+    },
+    onFindDeactivated: (fn: ((handoff: boolean) => void) | null) => { deactivated = fn; },
+    _fireFindDeactivated: (handoff: boolean) => deactivated?.(handoff),
+  };
+});
 
 let pool: string[] = [];
 const released: string[][] = [];
@@ -59,6 +69,11 @@ vi.mock('../debug/bk-log', () => ({ bkLog: () => {} }));
 import {
   armSearchBadges, clearSearchBadges, isSearchBadgePending,
 } from './search-badges';
+import * as find from '../scan/find';
+
+/** Fire the deactivate this module registered with find (see the fake above). */
+const fireFindDeactivated = (handoff: boolean): void =>
+  (find as unknown as { _fireFindDeactivated(h: boolean): void })._fireFindDeactivated(handoff);
 import { SEARCH_VARIANT } from '../render/badge-variant';
 import {
   __resetHolderRegistry, resolveCodeword, narrowByPrefix,
@@ -99,6 +114,23 @@ describe('search badges', () => {
     expect(isSearchBadgePending()).toBe(true);
     expect(badgeInstances).toHaveLength(2);
     expect(badgeInstances.every(b => b.variant === SEARCH_VARIANT)).toBe(true);
+  });
+
+  // The badges exist only for a live find, so the find ending must end them.
+  // This wiring was a content.ts relay until 2026-07-27 and had no test
+  // anywhere; the module registers it itself now, which is what makes it
+  // reachable from here. Both handoff values, because the badges go either way
+  // — only the badge SCREEN borrow distinguishes them, and that is find's.
+  it('a find ending clears the badges, handoff or not', async () => {
+    for (const handoff of [false, true]) {
+      matchRanges = [makeRange('one'), makeRange('two')];
+      armSearchBadges();
+      await Promise.resolve();
+      expect(isSearchBadgePending()).toBe(true);
+
+      fireFindDeactivated(handoff);
+      expect(isSearchBadgePending()).toBe(false);
+    }
   });
 
   it('arms nothing when the commit found no matches', () => {

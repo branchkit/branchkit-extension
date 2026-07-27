@@ -141,7 +141,8 @@ import {
   isFindBarOpen,
   isFindBarFocused,
   getFindState,
-  setFindCallbacks,
+  onFindDeactivated,
+  onFindCommitted,
   clearFindPaint,
   findNext,
   getMatchRanges,
@@ -436,7 +437,10 @@ describe('find bar: phrase-targeting modes', () => {
     glyph: '⇥', placeholder: 'Extend selection to...',
     onPhrase: (q) => phrases.push(['extend', q]),
   });
-  afterEach(() => { closeFindMode(); setFindCallbacks({}); restoreEnv(); vi.useRealTimers(); });
+  afterEach(() => {
+    closeFindMode(); onFindDeactivated(null); onFindCommitted(null);
+    restoreEnv(); vi.useRealTimers();
+  });
 
   it('labels the box for what the phrase is for', () => {
     openHighlightBox();
@@ -458,7 +462,7 @@ describe('find bar: phrase-targeting modes', () => {
 
   it('a search commit does NOT fire onPhrase, and vice versa', () => {
     let commits = 0;
-    setFindCallbacks({ onCommit: () => { commits++; } });
+    onFindCommitted(() => { commits++; });
     openFindMode();
     dictate('alpha');
     vi.runAllTimers();
@@ -507,7 +511,7 @@ describe('find bar: phrase-targeting modes', () => {
     // consumer exit reaches. Both halves are find's own now, so this asserts
     // the borrow directly rather than a relay's callback order.
     const events: string[] = [];
-    setFindCallbacks({ onDeactivate: (handoff) => events.push(`deactivate:${handoff}`) });
+    onFindDeactivated((handoff) => events.push(`deactivate:${handoff}`));
 
     borrow.length = 0;
     openHighlightBox();
@@ -542,7 +546,7 @@ describe('find bar: phrase-targeting modes', () => {
   });
 
   it('a search commit keeps its own paint too, and still marks the current match', () => {
-    setFindCallbacks({});
+    onFindCommitted(null);
     openFindMode();
     dictate('alpha');
     vi.runAllTimers();
@@ -636,9 +640,12 @@ describe('voice find declares its own mode', () => {
       g.CSS.highlights = priorReg;
       g.Highlight = priorCtor;
     };
-    setFindCallbacks({ onCommit: () => commits.push(1) });
+    onFindCommitted(() => commits.push(1));
   });
-  afterEach(() => { closeFindMode(); setFindCallbacks({}); restoreEnv(); vi.useRealTimers(); });
+  afterEach(() => {
+    closeFindMode(); onFindDeactivated(null); onFindCommitted(null);
+    restoreEnv(); vi.useRealTimers();
+  });
 
   const openHighlightBox = () => openPhraseBox({
     glyph: '✦', placeholder: 'Highlight phrase...',

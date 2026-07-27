@@ -104,7 +104,7 @@ import {
   findNext,
   findPrevious,
   findImmediate,
-  setFindCallbacks,
+  onFindCommitted,
 } from './scan/find';
 import { focusFirstInput, handleFocusInputKey } from './activate/focus-input';
 import { saveReference, resolveReference, listReferences } from './scan/references';
@@ -483,31 +483,38 @@ function onTrackerCodewordsChanged(claimed: ElementWrapper[], released: string[]
 // call per scroll-end now, which makes per-call cost much less critical
 // than total observation overhead.)
 
-// What is left of find's relay. The badge borrow went home to find itself —
-// it imports render/badge-visibility now, which the FIND_HIGHLIGHT relocation
-// made possible — and resetCycleTarget went with it (scroller was never one of
-// the cycles, just a passenger in the same callback body).
+// All that is left of find's relay. The badge borrow went home to find itself
+// (it imports render/badge-visibility now, which the FIND_HIGHLIGHT relocation
+// made possible), resetCycleTarget went with it, and search-badges registers
+// its own deactivate teardown at its module scope.
 //
-// These two remain because search-badges and selection-commands BOTH import
-// scan/find directly, so find importing either is a real 2-cycle, not a
-// one-hop constant.
-setFindCallbacks({
-  onDeactivate: () => clearSearchBadges('find_deactivated'),
-  // When a search commits while caret/visual selection is active, extend the
-  // selection straight to the match — so "/ query Enter" is a find-and-select,
-  // no need to press `n` (which skips to the next match). `caret` is defined
-  // later but only called at runtime, well after module init.
-  // Commit is also when the results become a SET you move around in — n/N goes
-  // live here — so it's when each match gets a codeword. Arming per keystroke
-  // would churn codewords on every character typed.
-  onCommit: () => {
-    if (caret.isActive()) caret.extendToCurrentMatch();
-    armSearchBadges();
-  },
-  // (The onPhrase relay died with FindMode, Wave 3 C5b: the phrase box's
-  // commit handler now arrives with the open — selection-commands passes
-  // resolveSelectTo to openPhraseBox itself.)
+// This one stays, and it stays HERE, because it is a composition of two
+// features rather than either one's business:
+//   - a search commit while caret/visual selection is active extends the
+//     selection straight to the match, so "/ query Enter" is a find-and-select
+//     with no need to press `n` (which would skip to the NEXT match);
+//   - commit is also when the results become a SET you move around in — n/N
+//     goes live — so it is when each match gets a codeword. Arming per
+//     keystroke would churn codewords on every character typed.
+//
+// THE ORDER IS LOAD-BEARING and was undocumented until 2026-07-27. Caret's
+// extend calls scrollFocusIntoView; armSearchBadges ranks ranges by live
+// viewport geometry and publishes in_strict_viewport from it. Arming first
+// badges against the viewport the user is leaving. It reconverges at the next
+// scroll settle, which is exactly why this would survive a careless reorder —
+// so it is written down rather than left to be rediscovered.
+//
+// That is also why find exposes onFindCommitted as ONE slot and not a
+// multicast: a multicast puts this order at the mercy of module import order,
+// where nothing states it and nothing checks it. Neither consumer imports the
+// other, and neither owns what a commit means for the other.
+onFindCommitted(() => {
+  if (caret.isActive()) caret.extendToCurrentMatch();
+  armSearchBadges();
 });
+// (The onPhrase relay died with FindMode, Wave 3 C5b: the phrase box's commit
+// handler now arrives with the open — selection-commands passes resolveSelectTo
+// to openPhraseBox itself.)
 
 // Wire the LabelStage's catchup sync to content.ts-owned collaborators.
 // detachWrapper is imported from core/wrapper-lifecycle; store is imported; the

@@ -103,14 +103,38 @@ let onCommit: (() => void) | null = null;
 // asks for a phrase is the one that receives it, with no mode enum relayed
 // through a third module.)
 
-export function setFindCallbacks(opts: {
-  /** `handoff` is endSession's keepPaint: true means the session ended by
-   *  HANDING its candidates to a consumer (a phrase commit), not by closing. */
-  onDeactivate?: (handoff: boolean) => void;
-  onCommit?: () => void;
-}): void {
-  onDeactivate = opts.onDeactivate ?? null;
-  onCommit = opts.onCommit ?? null;
+/**
+ * The session ended. `handoff` is endSession's keepPaint: true means it ended
+ * by HANDING its candidates to a consumer (a phrase commit) rather than
+ * closing, so anything held on find's behalf stays held until clearFindPaint.
+ *
+ * Registered by activate/search-badges at its module scope — it already
+ * imports this module, so find cannot import it back (a real 2-cycle, unlike
+ * the badge-borrow edge, which was one relocatable constant).
+ */
+export function onFindDeactivated(fn: ((handoff: boolean) => void) | null): void {
+  onDeactivate = fn;
+}
+
+/**
+ * A search committed WITH matches (Enter or voice find).
+ *
+ * ONE slot, not a multicast, and that is the whole design note. There are two
+ * effects today and they are ORDERED: caret's extend-to-match calls
+ * scrollFocusIntoView, and arming the search badges ranks ranges by live
+ * viewport geometry and publishes in_strict_viewport from it — so arming
+ * before the scroll badges against the viewport the user is leaving. (It
+ * converges at the next scroll settle, which is why this reads as a soft
+ * dependency and would survive review as one.) A multicast would hand that
+ * order to module import order, where nothing states it and nothing checks it.
+ *
+ * So the composition stays a single ordered handler, and it stays in
+ * content.ts: both consumers import this module, neither imports the other,
+ * and neither owns "what a commit means" for the other. A second registrant
+ * here is an ordering question — answer it before adding one.
+ */
+export function onFindCommitted(fn: (() => void) | null): void {
+  onCommit = fn;
 }
 
 export function getFindState(): FindState {

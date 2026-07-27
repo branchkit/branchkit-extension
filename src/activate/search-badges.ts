@@ -36,7 +36,9 @@
 
 import { RangeBadgeSet } from '../render/range-badge-set';
 import { SEARCH_VARIANT } from '../render/badge-variant';
-import { getMatchRanges, findGoToRange, isFindActive, refindCommitted } from '../scan/find';
+import {
+  getMatchRanges, findGoToRange, isFindActive, refindCommitted, onFindDeactivated,
+} from '../scan/find';
 import { bkLog } from '../debug/bk-log';
 import { labelReservoir } from '../labels/label-reservoir';
 import {
@@ -196,3 +198,11 @@ function resolveSearchCodeword(codeword: string): HolderOutcome {
   bkLog('BK_SEARCH_BADGE_JUMP', { codeword });
   return 'acted';
 }
+
+// The badges exist only for a live find, so the find ending is what ends them.
+// content.ts used to relay this; it belongs here, and it can live here because
+// this module already imports scan/find — find cannot import it back, so the
+// direction has to be this one. Module scope for the same reason the other
+// self-registrations are: a pure slot assignment, no I/O, no listener, no
+// ordering (find's other signal, onFindCommitted, IS ordered — see its doc).
+onFindDeactivated(() => clearSearchBadges('find_deactivated'));

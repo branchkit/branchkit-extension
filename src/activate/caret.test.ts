@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { modes } from '../core/modes';
 import { CaretController } from './caret';
-import { findImmediate, closeFindMode, isFindActive, setFindCallbacks } from '../scan/find';
+import { findImmediate, closeFindMode, isFindActive, onFindDeactivated } from '../scan/find';
 
 // The Selection-movement path (Selection.modify) isn't implemented in happy-dom,
 // so grow/shrink granularity is verified in a real browser. Here we cover the
@@ -411,13 +411,13 @@ describe('CaretController — find → selection handoff (Phase B)', () => {
 // is the session's own is now DERIVED from stack order (sessionOwnsFind): a
 // find entry above the caret entry was opened mid-session.
 describe('CaretController — a find that pre-dates the session survives it', () => {
-  afterEach(() => { closeFindMode(); setFindCallbacks({}); });
+  afterEach(() => { closeFindMode(); onFindDeactivated(null); });
   const key = (k: string) => ({ key: k, preventDefault: vi.fn(), stopPropagation: vi.fn() } as unknown as KeyboardEvent);
 
   function committedFind(): { deactivations: number } {
     document.body.innerHTML = '<p>alpha beta gamma delta epsilon omega</p>';
     const counts = { deactivations: 0 };
-    setFindCallbacks({ onDeactivate: () => { counts.deactivations += 1; } });
+    onFindDeactivated(() => { counts.deactivations += 1; });
     findImmediate('gamma');
     expect(isFindActive()).toBe(true);
     return counts;
