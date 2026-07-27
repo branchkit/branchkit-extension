@@ -124,6 +124,12 @@ beforeEach(() => {
   // layer the KEY peeled — the cascade's return value is otherwise swallowed by
   // the boolean `handleKeyDown` needs.
   keyHandler.setEscapeHook(() => { peeled = runEscapeCascade('key_escape'); return peeled; });
+  // core/singletons installs the real holder-backed predicate at module scope,
+  // and with no holders registered it REFUSES every letter — so a hint prefix
+  // cannot be typed here without standing in for the holders. Accept-all is the
+  // right stand-in: which letters are legal is holder-registry's question, and
+  // no row below tests it. Only the prefix row presses a letter at all.
+  keyHandler.setMatchPredicate(() => true);
   reset();
 });
 
@@ -153,6 +159,18 @@ const SCENARIOS: Array<{ name: string; setup: () => void; expected: EscapeLayer 
     name: 'hint mode',
     setup: () => keyHandler.enterHintMode(),
     expected: 'hint_mode',
+  },
+  {
+    // The production inner-transient probe, which until now nothing drove:
+    // escape-cascade.test.ts installs a synthetic one and keyboard.test.ts
+    // installs the real body on a LOCAL handler, so both were blind to whether
+    // anything registers 'hint' on the singleton at all. It used to be a
+    // content.ts line, which is why — content.ts is not importable here.
+    // The row's whole content is that this differs from 'hint mode' above: a
+    // typed prefix peels the LETTERS and leaves the mode standing.
+    name: 'a typed hint prefix peels before the mode it is inside',
+    setup: () => { keyHandler.enterHintMode(); press('a'); },
+    expected: 'hint_prefix',
   },
   {
     name: 'a range pick outranks everything',

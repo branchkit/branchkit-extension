@@ -71,7 +71,6 @@ import {
 import { StoreHolder } from './labels/store-holder';
 import { narrowBadge } from './labels/codeword-typing';
 import { runEscapeCascade } from './activate/escape-cascade';
-import { setInnerTransientProbe } from './core/mode-stack';
 import { preemptsPageKeys } from './activate/key-preamble';
 import './debug/dev-keepalive';
 import {
@@ -1333,11 +1332,6 @@ dispatcher.register('scroll_to_element', (params) => {
 // The Escape key runs the SAME cascade the spoken "escape"/"over" runs, so the
 // two inputs unwind through one declared order rather than two that drift.
 keyHandler.setEscapeHook(() => runEscapeCascade('key_escape'));
-
-// Hint's intra-mode transient probe (core/mode-stack.ts): the typed prefix
-// peels before the mode does. One implementation — escapeHintLayer and the
-// stack's peelTop both route through peelHintPrefix.
-setInnerTransientProbe('hint', () => keyHandler.peelHintPrefix());
 
 // The mode-mirror transport (Wave 3 C4a): every mirrored-mode edge posts this
 // frame's stack; the SW derives the tag set (background/mode-mirror.ts, which
