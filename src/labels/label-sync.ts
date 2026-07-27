@@ -56,6 +56,7 @@ import { labelReservoir } from './label-reservoir';
 import { bkLog } from '../debug/bk-log';
 import { firehoseStep } from '../debug/firehose';
 import { recordSyncPost } from '../debug/sync-trace';
+import { getSettleEngine } from '../lifecycle/settle-engine-ref';
 
 /**
  * Content.ts-owned collaborators the catchup sync needs. Injected once at
@@ -65,8 +66,15 @@ import { recordSyncPost } from '../debug/sync-trace';
 export interface LabelSyncDeps {
   store: WrapperStore;
   detachWrapper: (element: Element) => void;
-  /** Single level-triggered convergence pass (claim + build). */
-  reconcile: () => void;
+  /**
+   * Single level-triggered convergence pass (claim + build).
+   *
+   * Optional: it defaults to the live SettleEngine, which this module can now
+   * reach on its own (lifecycle/settle-engine-ref.ts). It stays overridable
+   * because tests drive the sync with no engine standing and need to observe
+   * the request rather than serve it.
+   */
+  reconcile?: () => void;
   isBadgesVisible: () => boolean;
 }
 
@@ -74,6 +82,19 @@ let deps: LabelSyncDeps;
 
 export function initLabelSync(d: LabelSyncDeps): void {
   deps = d;
+}
+
+/**
+ * Ask for a convergence pass. The injected override wins (tests observe the
+ * request); otherwise the live engine serves it directly.
+ *
+ * Nothing to serve it is a real boot state, not an error — a sync landing
+ * before content.ts has constructed the engine has nothing to converge yet,
+ * and the next pass is level-triggered anyway.
+ */
+function requestReconcile(): void {
+  if (deps.reconcile) { deps.reconcile(); return; }
+  getSettleEngine()?.reconcile();
 }
 
 // --- Delta-sync state ---
@@ -710,7 +731,7 @@ async function doSyncNow(reason: string): Promise<void> {
     // Reconcile on the final chunk only — intermediate responses
     // describe a half-applied sync by construction.
     if (deps.isBadgesVisible() && resp.succeeded.length > 0) {
-      deps.reconcile();
+      requestReconcile();
     }
     // Middle chunks describe a half-applied sync; only the final chunk's
     // post-commit count is comparable against the settled shadow.

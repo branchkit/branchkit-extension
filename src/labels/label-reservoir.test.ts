@@ -21,6 +21,7 @@ vi.mock('./holder-registry', () => ({ rejectAll: vi.fn() }));
 
 import { labelReservoir } from './label-reservoir';
 import { rejectAll } from './holder-registry';
+import { setSettleEngine, _clearSettleEngineForTesting } from '../lifecycle/settle-engine-ref';
 
 let sendMessageMock: ReturnType<typeof vi.fn>;
 
@@ -267,6 +268,99 @@ describe('LabelReservoir refill threshold', () => {
     await new Promise(r => setTimeout(r, 0));
     const claims = sendMessageMock.mock.calls.filter(([m]) => m.type === 'CLAIM_LABELS');
     expect(claims).toHaveLength(1);
+  });
+});
+
+// The refill-landed hook had ONE caller (content.ts) and zero tests, which is
+// the same shape the confirm-rejection default landed in — uncovered, and only
+// mutation-testing found it. Written before that hook gets a default so the
+// coverage is known to bite first.
+describe('LabelReservoir refill-landed hook', () => {
+  afterEach(() => {
+    labelReservoir.onRefillLanded(() => {});
+    _clearSettleEngineForTesting();
+  });
+
+  // The DEFAULT, with no handler installed. This is the arm that landed
+  // uncovered last time a hook was defaulted here — every other test in this
+  // file injects its own handler, so none of them can see it.
+  it('drives the settle engine when nothing overrides it', async () => {
+    labelReservoir.onRefillLanded(null as unknown as () => void);
+    const scheduleReconcile = vi.fn();
+    setSettleEngine({ scheduleReconcile } as unknown as Parameters<typeof setSettleEngine>[0]);
+    labelReservoir._seedForTests([]);
+    sendMessageMock.mockResolvedValue({ labels: ['b', 'c'] });
+
+    labelReservoir.claim(1);
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(scheduleReconcile).toHaveBeenCalledTimes(1);
+  });
+
+  it('an installed handler wins over the engine', async () => {
+    const landed = vi.fn();
+    const scheduleReconcile = vi.fn();
+    labelReservoir.onRefillLanded(landed);
+    setSettleEngine({ scheduleReconcile } as unknown as Parameters<typeof setSettleEngine>[0]);
+    labelReservoir._seedForTests([]);
+    sendMessageMock.mockResolvedValue({ labels: ['b', 'c'] });
+
+    labelReservoir.claim(1);
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(landed).toHaveBeenCalledTimes(1);
+    expect(scheduleReconcile).not.toHaveBeenCalled();
+  });
+
+  // No engine yet is a real boot state: a refill can land before content.ts
+  // has constructed one. It must no-op, not take the frame down.
+  it('is inert when no engine has been published', async () => {
+    labelReservoir.onRefillLanded(null as unknown as () => void);
+    labelReservoir._seedForTests([]);
+    sendMessageMock.mockResolvedValue({ labels: ['b', 'c'] });
+
+    labelReservoir.claim(1);
+    await expect(new Promise(r => setTimeout(r, 0))).resolves.toBeUndefined();
+  });
+
+  it('fires when a refill actually adds codewords', async () => {
+    const landed = vi.fn();
+    labelReservoir.onRefillLanded(landed);
+    labelReservoir._seedForTests([]);
+    sendMessageMock.mockResolvedValue({ labels: ['b', 'c', 'd'] });
+
+    labelReservoir.claim(1);
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(landed).toHaveBeenCalledTimes(1);
+  });
+
+  // The point of the hook: a claim that ran dry left wrappers unhinted, and the
+  // reconciler's own triggers are all user-activity-driven. On a static page
+  // nothing would ever request the pass. But a refill that added NOTHING has
+  // not unblocked anything, so firing there would be a pass for no reason.
+  it('does not fire when the refill added nothing new', async () => {
+    const landed = vi.fn();
+    labelReservoir.onRefillLanded(landed);
+    labelReservoir._seedForTests(['a']);
+    sendMessageMock.mockResolvedValue({ labels: ['a'] }); // all already held
+
+    labelReservoir.claim(1);
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(landed).not.toHaveBeenCalled();
+  });
+
+  it('does not fire when the SW is unreachable', async () => {
+    const landed = vi.fn();
+    labelReservoir.onRefillLanded(landed);
+    labelReservoir._seedForTests([]);
+    sendMessageMock.mockRejectedValue(new Error('sw unreachable'));
+
+    labelReservoir.claim(1);
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(landed).not.toHaveBeenCalled();
   });
 });
 

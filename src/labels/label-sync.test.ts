@@ -29,6 +29,7 @@ import {
   postBatch,
 } from './label-sync';
 import { registerHolder, __resetHolderRegistry, type CodewordHolder } from './holder-registry';
+import { setSettleEngine, _clearSettleEngineForTesting } from '../lifecycle/settle-engine-ref';
 
 /** A minimal registered holder whose republish is counted — the v2 registry's
  *  stand-in for the old three-hook registration. */
@@ -539,6 +540,73 @@ describe('scheduleSync debounce + max-wait deadline (round 22c)', () => {
 // The recovery arm the tripwire below fires, and the one the SW-restart resync
 // and bfcache restore call directly. It lived in content.ts, so these are its
 // first tests — the tripwire suite could only ever assert that a mock ran.
+// The reconcile default, with nothing injected. Every other suite in this file
+// passes its own `reconcile`, so none of them can see this arm — the same blind
+// spot the reservoir's rejection default landed in.
+describe('the reconcile default', () => {
+  let store: WrapperStore;
+  let sendMessage: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    setAlphabet(ALPHABET);
+    store = new WrapperStore();
+    sendMessage = vi.fn((msg: { type: string }) =>
+      Promise.resolve(msg.type === 'GRAMMAR_BATCH'
+        ? { result: 'ok', succeeded: ['arch bake'], failed: [] }
+        : undefined));
+    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+    rotateSession();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    _clearSettleEngineForTesting();
+    document.body.innerHTML = '';
+  });
+
+  async function syncOneVisibleWrapper(): Promise<void> {
+    queuePut(makeWrapper('arch bake', store));
+    await syncNow('test');
+    await new Promise((r) => setTimeout(r, 0));
+  }
+
+  it('drives the live settle engine when nothing overrides it', async () => {
+    const reconcile = vi.fn();
+    setSettleEngine({ reconcile } as unknown as Parameters<typeof setSettleEngine>[0]);
+    initLabelSync({ store, detachWrapper: vi.fn(), isBadgesVisible: () => true });
+
+    await syncOneVisibleWrapper();
+    expect(reconcile).toHaveBeenCalled();
+  });
+
+  it('an injected reconcile wins over the engine', async () => {
+    const reconcile = vi.fn();
+    const injected = vi.fn();
+    setSettleEngine({ reconcile } as unknown as Parameters<typeof setSettleEngine>[0]);
+    initLabelSync({ store, detachWrapper: vi.fn(), reconcile: injected, isBadgesVisible: () => true });
+
+    await syncOneVisibleWrapper();
+    expect(injected).toHaveBeenCalled();
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  // A sync can land before content.ts has constructed an engine. Nothing to
+  // converge yet, and the next pass is level-triggered — so no-op, don't throw.
+  it('is inert when no engine has been published', async () => {
+    initLabelSync({ store, detachWrapper: vi.fn(), isBadgesVisible: () => true });
+    await expect(syncOneVisibleWrapper()).resolves.toBeUndefined();
+  });
+
+  it('does not reconcile at all while badges are hidden', async () => {
+    const reconcile = vi.fn();
+    setSettleEngine({ reconcile } as unknown as Parameters<typeof setSettleEngine>[0]);
+    initLabelSync({ store, detachWrapper: vi.fn(), isBadgesVisible: () => false });
+
+    await syncOneVisibleWrapper();
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+});
+
 describe('republishAllGrammar', () => {
   let store: WrapperStore;
   let sendMessage: ReturnType<typeof vi.fn>;

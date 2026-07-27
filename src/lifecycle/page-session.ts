@@ -32,6 +32,7 @@ import {
 import { constructPageMutationObserver } from '../observe/mutation-source';
 import { getSessionId } from '../labels/label-sync';
 import { SessionResources } from './session-resources';
+import { getSettleEngine, setSettleEngine } from './settle-engine-ref';
 
 /**
  * Why a session is tearing down. Carried so the teardown body (and its log
@@ -117,14 +118,26 @@ export class PageSession {
   deps!: PageSessionDeps;
 
   /**
-   * The settle engine (lifecycle/settle-engine.ts), assigned by content.ts at
+   * The settle engine (lifecycle/settle-engine.ts), published by content.ts at
    * construction — before start(), so sources may call it as soon as they
    * exist. Sources reach settle scheduling (schedulePassSoon, reposition,
    * deferred settle, mass-reveal paint) through this reference; the engine is
    * constructed over its own SettleDeps seam, so this adds no content.ts
    * coupling. Type-only import — no runtime cycle.
+   *
+   * An accessor, not a field, since 2026-07-27. The storage is
+   * `lifecycle/settle-engine-ref.ts`, because the label stage needs the same
+   * engine and cannot import this module (page-session reaches label-sync both
+   * directly and through core/wrapper-lifecycle). This stays as the name every
+   * source already reads, over the one reference — not a second copy of it.
    */
-  engine!: import('./settle-engine').SettleEngine;
+  get engine(): import('./settle-engine').SettleEngine {
+    return getSettleEngine()!;
+  }
+
+  set engine(e: import('./settle-engine').SettleEngine) {
+    setSettleEngine(e);
+  }
 
   /**
    * Owned listeners/intervals/timeouts/rAFs/observers (Phase 2a of

@@ -66,6 +66,7 @@
 import { documentInstanceId } from './document-identity';
 import { rejectAll } from './holder-registry';
 import { bkLog } from '../debug/bk-log';
+import { getSettleEngine } from '../lifecycle/settle-engine-ref';
 
 const INITIAL_RESERVATION = 100;
 const REFILL_THRESHOLD = 30;
@@ -146,12 +147,26 @@ class LabelReservoir {
    *  directly instead of waiting for user activity. */
   private refillLandedHandler: (() => void) | null = null;
 
+  /**
+   * Fire the refill-landed signal: the override if one was installed, else the
+   * live settle engine. Defaulted here rather than injected from content.ts —
+   * "codewords arrived, converge" needs no entry-point knowledge, and reaching
+   * the engine through lifecycle/settle-engine-ref costs no import cycle
+   * (that module is a leaf by construction).
+   */
+  private notifyRefillLanded(): void {
+    if (this.refillLandedHandler) { this.refillLandedHandler(); return; }
+    getSettleEngine()?.scheduleReconcile();
+  }
+
   /** Register the confirm-rejection handler (content.ts, once at boot). */
   onConfirmRejected(handler: (codewords: string[]) => void): void {
     this.rejectionHandler = handler;
   }
 
-  /** Register the refill-landed handler (content.ts, once at boot). */
+  /** Override the refill-landed handler. The default below is the real one;
+   *  this stays a test seam (and the escape hatch if a second consumer ever
+   *  needs the signal for something other than a settle pass). */
   onRefillLanded(handler: () => void): void {
     this.refillLandedHandler = handler;
   }
@@ -488,7 +503,7 @@ class LabelReservoir {
             added++;
           }
         }
-        if (added > 0) this.refillLandedHandler?.();
+        if (added > 0) this.notifyRefillLanded();
       }
     } catch {
       // SW unavailable. The reservoir stays at its current depth; the

@@ -131,6 +131,7 @@ import { doScan, scheduleDoScan } from './scan/scan-orchestrator';
 import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
 import { openLivenessPort, repairLivenessAfterBfcacheRestore } from './plugin/liveness';
 import { pageSession, scheduleYieldTask, yieldTask, TeardownReason } from './lifecycle/page-session';
+import { setSettleEngine } from './lifecycle/settle-engine-ref';
 import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './debug/message-counters';
 import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, rearmCpuShareBaseline, rearmWatchdogBaseline, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, lifecycleCounters, resetLifecycleCounters, claimCounters } from './debug/perf-counters';
 import { startVideoStallProbe } from './debug/video-stall-probe';
@@ -443,10 +444,13 @@ const engine = new SettleEngine(
     },
   },
 );
-// Source modules (mutation-source, visibility-tracker) reach settle
-// scheduling through the session singleton — assigned before start() so the
-// reference exists as soon as any source can fire.
-pageSession.engine = engine;
+// Publish the engine. Source modules (mutation-source, visibility-tracker)
+// reach settle scheduling through `pageSession.engine`; the label stage reads
+// lifecycle/settle-engine-ref directly, because page-session is unreachable
+// from labels/. ONE reference under two names, not two copies — pageSession's
+// is an accessor over this. Published before start() so the reference exists
+// as soon as any source can fire.
+setSettleEngine(engine);
 
 // The IntersectionTracker's codeword-claim sync. The tracker itself is owned
 // by `pageSession` (constructed in start(), Tier 3); this callback stays here
@@ -529,7 +533,6 @@ setFindCallbacks({
 initLabelSync({
   store,
   detachWrapper,
-  reconcile: () => engine.reconcile(),
   isBadgesVisible: () => pageSession.badgesVisible,
 });
 
@@ -566,14 +569,6 @@ labelReservoir.installLeakSweep(
     if (deletesQueued > 0) scheduleSync('reservoir_sweep');
   },
 );
-
-// A claim that ran while the reservoir was dry left its wrappers unhinted
-// ('' slots); the reconciler re-queues them, but its triggers are all
-// user-activity-driven (scroll settle, mutation, focus) — on a static, dense
-// first paint the overflow wrappers would stay bare indefinitely. When a
-// refill actually lands codewords, run the coalesced reconcile directly so
-// the starved wrappers claim + paint without waiting for the user to move.
-labelReservoir.onRefillLanded(() => engine.scheduleReconcile());
 
 let lastActivatedElement: Element | null = null;
 
