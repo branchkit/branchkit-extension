@@ -29,7 +29,7 @@ import { keyHandler } from '../core/singletons';
 import {
   anyBadgesShowing, hideBadges, toggleHints,
   setBadgesVisible, borrowBadgeScreen, _resetBadgeVisibilityForTesting,
-  assertBadgeScreenBorrow, returnBadgeScreenBorrow,
+  assertBadgeScreenBorrow, returnBadgeScreenBorrow, discardBadgeScreenBorrow,
 } from './badge-visibility';
 
 function fakeHint(visible: boolean) {
@@ -285,5 +285,39 @@ describe('the badge screen borrow slot', () => {
     returnBadgeScreenBorrow();
     await settle();
     expect(pageSession.badgesVisible).toBe(true);
+  });
+
+  // The same-document nav case. The slot outlived its page because nothing on
+  // the nav path returned it, and a SPENT took===false slot is invisible in the
+  // obvious assertion: re-asserting over it is inert either way (the test above
+  // pins exactly that). What distinguishes discarded from stale is the borrow
+  // AFTER — a discarded slot takes fresh and hides; a surviving one no-ops and
+  // leaves the highlights under a live badge layer.
+  it('a discarded slot takes fresh next time; a surviving one would not', async () => {
+    assertBadgeScreenBorrow();          // over hidden badges: took === false
+    discardBadgeScreenBorrow();         // the route changed
+    pageSession.badgesVisible = true;   // the user shows badges on the new page
+
+    assertBadgeScreenBorrow();          // find reopens
+    expect(pageSession.badgesVisible).toBe(false); // fresh borrow, screen taken
+
+    returnBadgeScreenBorrow();
+    await settle();
+    expect(pageSession.badgesVisible).toBe(true);  // and given back
+  });
+
+  // Discard is NOT restore, and that is load-bearing rather than a shortcut:
+  // restore()'s showBadges is async and raises the flag a frame later, while
+  // the nav path reads it synchronously on the next line to decide a
+  // manual-mode hide. A restoring discard would paint badges onto a page the
+  // nav had just decided to leave hidden.
+  it('discarding never re-shows, even for a borrow that took the screen', async () => {
+    pageSession.badgesVisible = true;
+    assertBadgeScreenBorrow();          // took === true, badges now hidden
+    expect(pageSession.badgesVisible).toBe(false);
+
+    discardBadgeScreenBorrow();
+    await settle();
+    expect(pageSession.badgesVisible).toBe(false); // still hidden — nav decides
   });
 });

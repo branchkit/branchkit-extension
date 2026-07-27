@@ -334,6 +334,35 @@ export function returnBadgeScreenBorrow(): void {
   screenBorrow = null;
 }
 
+/**
+ * Drop the borrow WITHOUT restoring — the slot describes a page that no longer
+ * exists (same-document nav).
+ *
+ * `closeFindMode` is reachable only from `find_close`, the escape cascade and
+ * caret, so nothing returned the borrow across an SPA nav and the slot outlived
+ * its page. Concretely: find opens over already-hidden badges (`took === false`),
+ * the route changes, the user shows badges, find reopens —
+ * `assertBadgeScreenBorrow` finds a non-null slot whose `took` is false, does
+ * nothing, and the highlights paint under a live badge layer. Same class as the
+ * 2026-07-26 field bug.
+ *
+ * Dropping rather than restoring is the whole subtlety, and it is not a
+ * shortcut. `restore()` on a `took === true` borrow kicks the ASYNC
+ * `showBadges`, which raises `pageSession.badgesVisible` only after a frame —
+ * while the nav path's manual-mode hide reads that flag synchronously on the
+ * next line. Restoring here would skip the hide and then paint badges onto a
+ * manual-mode page one frame later.
+ *
+ * What this does NOT fix: an always-mode page whose badges were hidden by a
+ * `took === true` borrow stays badge-less across the nav until the next `f`.
+ * That is unchanged — a stale slot was never restored either — and it wants the
+ * nav path to drive visibility positively rather than only hide, which is a
+ * separate change.
+ */
+export function discardBadgeScreenBorrow(): void {
+  screenBorrow = null;
+}
+
 /** Test-only reset. */
 export function _resetBadgeVisibilityForTesting(): void {
   screenBorrow = null;

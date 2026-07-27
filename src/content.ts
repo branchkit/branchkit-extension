@@ -32,7 +32,7 @@ import { harnessHooksEnabled } from './debug/harness-hooks';
 import { store } from './core/store';
 import {
   anyBadgesShowing, showBadges, hideBadges, clearHintFilter,
-  toggleHints, setBadgesVisible,
+  toggleHints, setBadgesVisible, discardBadgeScreenBorrow,
 } from './render/badge-visibility';
 import { HintBadge } from './render/hints';
 import { elementTarget } from './render/badge-target';
@@ -1981,6 +1981,13 @@ function rescanForNav(fromCache: boolean, reason: string): void {
     // replaced. The set only notices on a reconcile, which rides settle — so
     // left alone it survives to paint stale codewords over the new page.
     clearSearchBadges('spa_nav');
+    // And the same argument once more for find's badge-screen borrow: it is a
+    // snapshot of the page the nav replaced. Nothing returned it across a nav
+    // (closeFindMode is reachable only from find_close, the escape cascade and
+    // caret), so a spent slot survived and made the NEXT borrow a no-op —
+    // highlights painting under a live badge layer. Discarded, not restored;
+    // its doc has the reason restoring here would be wrong.
+    discardBadgeScreenBorrow();
   }
 
   // A same-document nav is a new page: in manual mode (or always-mode with an
