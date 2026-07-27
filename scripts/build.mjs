@@ -111,7 +111,7 @@ cpSync(resolve(root, 'icons'),          resolve(outDir, 'icons'), { recursive: t
 // place — `build-manifest.mjs` is also useful for cross-target diffs.
 const manifestResult = spawnSync(
   process.execPath,
-  [resolve(__dirname, 'build-manifest.mjs'), target, outDir],
+  [resolve(__dirname, 'build-manifest.mjs'), target, outDir, ...(release ? ['--release'] : [])],
   { stdio: 'inherit' },
 );
 if (manifestResult.status !== 0) process.exit(manifestResult.status ?? 1);

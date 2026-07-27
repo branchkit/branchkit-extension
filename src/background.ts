@@ -1260,7 +1260,13 @@ init();
 // typeof chain left the socket URL in release output.
 declare const __DEV_RELOAD__: boolean;
 if (__DEV_RELOAD__) {
-  const DEV_WS_URL = 'ws://localhost:35729';
+  // 127.0.0.1, not localhost: Firefox's MV3 default extension CSP carries
+  // upgrade-insecure-requests, and its potentially-trustworthy exemption has
+  // not reliably covered ws://localhost — the literal loopback IP is exempt
+  // everywhere. With ws://localhost the Firefox background NEVER connected
+  // (verified via the server's connection log, 2026-07-27), which is what
+  // made every reload broadcast miss it.
+  const DEV_WS_URL = 'ws://127.0.0.1:35729';
   // When THIS build generation started running. Sent on every (re)connect so
   // the server can heal a client that slept through a reload broadcast —
   // Firefox event pages miss fire-and-forget signals whenever they're

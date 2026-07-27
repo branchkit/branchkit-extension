@@ -26,9 +26,10 @@ const root = resolve(__dirname, '..');
 
 const target = process.argv[2];
 if (target !== 'chrome' && target !== 'firefox') {
-  console.error('usage: build-manifest.mjs <chrome|firefox>');
+  console.error('usage: build-manifest.mjs <chrome|firefox> [outDir] [--release]');
   process.exit(1);
 }
+const release = process.argv.includes('--release');
 
 const base = JSON.parse(readFileSync(resolve(root, 'manifest.json'), 'utf8'));
 
@@ -58,6 +59,19 @@ if (target === 'chrome') {
   // Firefox doesn't recognize the `offscreen` permission; AMO's
   // validator flags it. Strip if present.
   base.permissions = base.permissions.filter((p) => p !== 'offscreen');
+  // DEV ONLY: Firefox's default MV3 extension CSP carries
+  // upgrade-insecure-requests, whose loopback exemption covers plain http
+  // fetches (the actuator SSE always worked) but NOT WebSockets — the dev
+  // reload socket was force-upgraded to wss:// and failed on every attempt,
+  // so Firefox never received a reload broadcast and ran stale builds for
+  // whole sessions (2026-07-27, proven by probing ws:// from extension
+  // context with and without this CSP). Release builds strip the reload
+  // client entirely, so the store manifest keeps the platform default.
+  if (!release) {
+    base.content_security_policy = {
+      extension_pages: "script-src 'self'; object-src 'self'",
+    };
+  }
   // Firefox ignores `background.service_worker` and warns about it
   // during AMO review — `background.scripts` is the Firefox-supported
   // form. Both fields coexist in the base manifest so Chrome sees

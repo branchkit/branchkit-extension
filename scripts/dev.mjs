@@ -41,15 +41,26 @@ const PORT = 35729;
 const wss = new WebSocketServer({ port: PORT });
 const clients = new Set();
 
+// Connection log: which clients are attached and what they said. The one
+// place the reload chain was still dark — a browser that never reconnects
+// (or whose hello never arrives) is indistinguishable from a healthy one
+// without these lines (Firefox, 2026-07-27).
+let connSeq = 0;
+function logWs(id, what) {
+  console.log(`[dev] ws#${id} ${what} (clients=${clients.size})`);
+}
+
 wss.on('connection', (ws) => {
   clients.add(ws);
+  const id = ++connSeq;
+  logWs(id, 'connected');
   ws.on('message', (m) => {
     const msg = m.toString();
     // Out-of-band build notification: a bare `npm run build` (build.mjs)
     // connects, sends this, and disconnects — we broadcast the reload so no
     // loaded extension keeps running a prior generation against the freshly
     // swapped dist/.
-    if (msg === 'external-build') notifyReload();
+    if (msg === 'external-build') { logWs(id, 'external-build'); notifyReload(); }
     // Stale-client heal: the broadcast is fire-and-forget, so a background
     // asleep at broadcast time (Firefox event pages especially) missed it
     // FOREVER and ran a stale build while dist/ looked current — three field
@@ -58,10 +69,12 @@ wss.on('connection', (ws) => {
     // stale by construction and gets a direct reload, no broadcast needed.
     else if (msg.startsWith('hello ')) {
       const loadedAt = Number(msg.slice(6));
-      if (Number.isFinite(loadedAt) && lastBuildAt > loadedAt) ws.send('reload');
+      const stale = Number.isFinite(loadedAt) && lastBuildAt > loadedAt;
+      logWs(id, `hello loadedAt=${loadedAt} lastBuildAt=${lastBuildAt} → ${stale ? 'RELOAD' : 'current'}`);
+      if (stale) ws.send('reload');
     }
   });
-  ws.on('close', () => clients.delete(ws));
+  ws.on('close', () => { clients.delete(ws); logWs(id, 'closed'); });
 });
 
 // One reload per burst. Each target runs a watch context per entry point, so a
