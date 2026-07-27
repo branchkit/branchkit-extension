@@ -4,6 +4,9 @@ import {
   anyHolderMatchesPrefix, soleHolderMatch, resolveCodeword, narrowByPrefix,
 } from '../labels/holder-registry';
 import { flashToast } from '../render/toast';
+import { setModeChip, flashModeChipRefusal, setKeyboardArmed } from '../render/mode-chip';
+import { resolveVideoModeKey } from '../activate/media';
+import { getSiteKeyState, onSiteKeysChanged } from '../keymap/keyboard-rules';
 
 /**
  * Stable, construct-once runtime singletons, promoted out of content.ts module
@@ -57,3 +60,41 @@ keyHandler.setFilterCallback((prefix: string) => {
   }
   narrowByPrefix(prefix);
 });
+
+// The mode chip. The keyboard reports a mode change or a refusal and does not
+// know what either looks like — the chip has ONE writer and it is render/.
+keyHandler.setModeChangeCallback((mode) => {
+  setModeChip(mode);
+  setKeyboardArmed(mode === 'hint');
+});
+keyHandler.setRefusedKeyCallback(() => flashModeChipRefusal());
+
+// Video layer. The layer owns bare keys, so dispatch and consume BOTH swallow
+// the key — an unbound letter no-ops instead of firing a Normal bind or
+// reaching the page.
+keyHandler.setVideoKeyHandler((e) => {
+  const r = resolveVideoModeKey(e);
+  if (r.kind === 'exit') {
+    e.preventDefault();
+    e.stopPropagation();
+    keyHandler.exitVideoMode();
+    return true;
+  }
+  e.preventDefault();
+  e.stopPropagation();
+  if (r.kind === 'dispatch') dispatcher.dispatch(r.action, r.params ?? {});
+  return true;
+});
+
+// Per-site keyboard policy — full exclusion (all keys to the page) and/or
+// granular passthrough (specific keys to the page, the rest of BranchKit's
+// binds still work). Applied on load and kept live as the popup edits it.
+// Voice is unaffected. See notes/DESIGN_PASS_THROUGH.md.
+function applySiteKeys(): void {
+  void getSiteKeyState(location.href).then(({ excluded, passKeys }) => {
+    keyHandler.setExcluded(excluded);
+    keyHandler.setPassKeys(passKeys);
+  });
+}
+applySiteKeys();
+onSiteKeysChanged(applySiteKeys);

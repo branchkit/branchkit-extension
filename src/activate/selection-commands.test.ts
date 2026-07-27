@@ -241,13 +241,24 @@ describe('registration contract (Phase 1)', () => {
       .chrome.runtime.sendMessage;
     modes.reset();
 
+    // What leaves the frame is the STACK EDGE and nothing else. This read
+    // `not.toHaveBeenCalled()` until the mirror transport was defaulted in
+    // core/modes.ts, which passed only because no unit test wired the sink —
+    // it could not tell "posted nothing" from "had no transport". The edge now
+    // really posts, so the invariant is stated directly instead of inferred.
+    const postedTypes = () => send.mock.calls.map(([m]) => (m as { type: string }).type);
+
     caretOpts!.onModeChange('caret');
     expect(modes.has('caret')).toBe(true);   // the edge the SW derives from
-    expect(send).not.toHaveBeenCalled();     // no per-frame tag post remains
+    expect(postedTypes()).toEqual(['MODE_STACK']);
 
     caretOpts!.onModeChange(null);
     expect(modes.has('caret')).toBe(false);
-    expect(send).not.toHaveBeenCalled();
+    expect(postedTypes()).toEqual(['MODE_STACK', 'MODE_STACK']);
+    // The caret TAG is derived from the stack in the SW
+    // (background/mode-mirror.ts). A frame asserting it directly is the
+    // regression this test exists to catch.
+    expect(postedTypes()).not.toContain('CARET_ACTIVE');
   });
 
   it('go_next follows the page link when found, toasts when absent', async () => {

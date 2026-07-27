@@ -21,10 +21,31 @@
  */
 
 import { ModeStack, MODE_SPECS, type ModeMirrorSink } from './mode-stack';
+import { documentInstanceId } from '../labels/document-identity';
+import type { Message } from '../types';
 
-let sink: ModeMirrorSink = { post: () => true };
+/**
+ * The SW mirror transport, defaulted here rather than injected from content.ts:
+ * posting a frame's mode edge to the service worker is what this mirror IS, and
+ * the entry point had no say in it beyond spelling out the sendMessage.
+ *
+ * A throw means the extension context was invalidated (an orphaned content
+ * script), which is a real "not delivered" and must report false, not throw on.
+ */
+let sink: ModeMirrorSink = {
+  post: (edge) => {
+    try {
+      chrome.runtime.sendMessage({
+        type: 'MODE_STACK', docId: documentInstanceId, stack: [...edge.stack],
+      } as Message).catch(() => {});
+      return true;
+    } catch {
+      return false;
+    }
+  },
+};
 
-/** C4 wires the SW mirror transport here. */
+/** Test seam: substitute a recording sink. Production uses the default above. */
 export function setModeMirrorSink(s: ModeMirrorSink): void {
   sink = s;
 }

@@ -57,8 +57,6 @@ import { toggleOverlay } from './render/debug-overlay';
 import { toggleHelpOverlayWithSpokenForms } from './render/help-overlay';
 import { registerPaletteCommands, closePalette } from './render/palette-host';
 import { setTabMarker, reapplyTabMarker, refreshTabMarker } from './render/tab-title';
-import { setModeChip, flashModeChipRefusal } from './render/mode-chip';
-import { getSiteKeyState, onSiteKeysChanged } from './keymap/keyboard-rules';
 import { copyText } from './activate/clipboard';
 import { flashToast } from './render/toast';
 import { registerSelectionCommands, restorePosition, caret, SELECTION_ACTIONS, parseSelectionCommand } from './activate/selection-commands';
@@ -74,8 +72,6 @@ import { StoreHolder } from './labels/store-holder';
 import { narrowBadge } from './labels/codeword-typing';
 import { runEscapeCascade } from './activate/escape-cascade';
 import { setInnerTransientProbe } from './core/mode-stack';
-import { setModeMirrorSink } from './core/modes';
-import { documentInstanceId } from './labels/document-identity';
 import { preemptsPageKeys } from './activate/key-preamble';
 import './debug/dev-keepalive';
 import {
@@ -142,7 +138,7 @@ import { startVideoPresenceReporter } from './observe/video-presence';
 import { setVideoOverlayGateEnabled } from './render/video-overlay';
 import { detectBrowser } from './keymap/browser-shortcuts';
 import {
-  mediaPlayPause, mediaMute, mediaSpeed, mediaSeek, mediaRestart, resolveVideoModeKey,
+  mediaPlayPause, mediaMute, mediaSpeed, mediaSeek, mediaRestart,
   type PlayPauseOp, type MuteOp, type SpeedOp, type SeekDirection,
 } from './activate/media';
 import { notePaintSamplerScroll, snapshotExtras } from './debug/perf-report';
@@ -1299,23 +1295,6 @@ dispatcher.register('media_seek', (params) => {
   mediaSeek(direction, parseInt(params.seconds || '10', 10));
 });
 dispatcher.register('media_restart', () => mediaRestart());
-keyHandler.setVideoKeyHandler((e) => {
-  const r = resolveVideoModeKey(e);
-  if (r.kind === 'exit') {
-    e.preventDefault();
-    e.stopPropagation();
-    keyHandler.exitVideoMode();
-    return true;
-  }
-  // dispatch and consume both swallow the key — the layer owns bare keys, so
-  // an unbound letter no-ops instead of firing a Normal bind or reaching the
-  // page.
-  e.preventDefault();
-  e.stopPropagation();
-  if (r.kind === 'dispatch') dispatcher.dispatch(r.action, r.params ?? {});
-  return true;
-});
-
 // Selection / caret / marks / page-nav commands live in
 // activate/selection-commands.ts (round-3 feature module); registered below.
 registerSelectionCommands();
@@ -1393,37 +1372,6 @@ dispatcher.register('scroll_to_element', (params) => {
 // so it's obvious the extension is listening even in always-visible mode (where
 // badges don't otherwise change on F). No imposed color and no size change;
 // each badge just asserts its own hue harder. One write on the document root
-// arms every badge (custom props inherit through the badge shadow). The
-// per-badge color + the border rule live in the badge shadow CSS.
-function setKeyboardArmed(on: boolean): void {
-  const root = document.documentElement.style;
-  if (on) root.setProperty('--bk-kbd-b-alpha', '1');
-  else root.removeProperty('--bk-kbd-b-alpha');
-}
-
-keyHandler.setModeChangeCallback((mode) => {
-  setModeChip(mode);
-  setKeyboardArmed(mode === 'hint');
-});
-
-// The chip has ONE writer, and it is this file. A refused keystroke pulses it;
-// the keyboard reports the refusal and does not know what a refusal looks like
-// (it briefly did, and that made the chip two-owner).
-keyHandler.setRefusedKeyCallback(() => flashModeChipRefusal());
-
-// Per-site keyboard policy — full exclusion (all keys to the page) and/or
-// granular passthrough (specific keys to the page, the rest of BranchKit's
-// binds still work). Applied on load and kept live as the popup edits it.
-// Voice is unaffected. See notes/DESIGN_PASS_THROUGH.md.
-function applySiteKeys(): void {
-  void getSiteKeyState(location.href).then(({ excluded, passKeys }) => {
-    keyHandler.setExcluded(excluded);
-    keyHandler.setPassKeys(passKeys);
-  });
-}
-applySiteKeys();
-onSiteKeysChanged(applySiteKeys);
-
 // Escape out of hint mode: in ALWAYS-visible mode the badges stay painted
 // (they're for voice — Escape just leaves keyboard typing mode); in MANUAL
 // mode Escape dismisses the summoned hints, the Vimium behavior. The mode
@@ -1443,19 +1391,6 @@ setInnerTransientProbe('hint', () => keyHandler.peelHintPrefix());
 // The mode-mirror transport (Wave 3 C4a): every mirrored-mode edge posts this
 // frame's stack; the SW derives the tag set (background/mode-mirror.ts, which
 // carries the failure model). A sync throw reports the edge unposted → retry.
-setModeMirrorSink({
-  post: (edge) => {
-    try {
-      chrome.runtime.sendMessage({
-        type: 'MODE_STACK', docId: documentInstanceId, stack: [...edge.stack],
-      } as Message).catch(() => {});
-      return true;
-    } catch {
-      return false;
-    }
-  },
-});
-
 keyHandler.setHintEscapeCallback(() => {
   pendingHintAction = 'activate'; // an abandoned verb (yf/hover/… then Esc) must not leak to the next hint
   if (getHintVisibility() !== 'always') hideBadges();
