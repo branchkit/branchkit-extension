@@ -50,6 +50,8 @@ import {
   resolveMediaTargetTab, sendMediaActionToTab, handleMediaAllAction, setBrowserWindowFocused, initMedia,
 } from './background/media';
 import { purgeTab, logTabSwitch, scheduleSpaRescan, cancelSpaRescan, startDeadTabSweep } from './background/tab-sessions';
+import { registerMessageHandlers, routeMessage } from './background/message-router';
+import { commandOverrideMessageHandlers } from './background/command-overrides';
 
 // --- State ---
 //
@@ -334,19 +336,10 @@ function handleSSEEvent(data: any): void {
 
 // --- Message Listener ---
 
-// Map a failed plugin phrase-write to an editor-friendly message. A 400 carries
-// the actuator's validation text (user-actionable — relay it); a 404 means the
-// running BranchKit predates these routes (needs a rebuild); anything else is a
-// transport/availability problem. Avoids surfacing raw "404 page not found".
-async function phraseWriteError(resp: Response | null): Promise<string> {
-  if (!resp) return 'BranchKit isn’t running.';
-  if (resp.status === 400) {
-    const detail = (await resp.text().catch(() => '')).trim();
-    return detail || 'That phrase isn’t allowed.';
-  }
-  if (resp.status === 404) return 'Update BranchKit — this build can’t edit voice phrases yet.';
-  return 'Couldn’t save — is BranchKit up to date and running?';
-}
+// Handlers that have moved to their owning module. The remaining if-chain below
+// is what's left to lift; anything it doesn't match falls through to the table.
+// See notes/DESIGN_ENTRY_POINT_TOPOLOGY.md.
+registerMessageHandlers(commandOverrideMessageHandlers);
 
 chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   if (message.type === 'VIDEO_PRESENCE') {
@@ -580,11 +573,6 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     return true; // async response
   }
 
-  // --- Command-phrase overrides (editor on the keyboard-shortcuts page) ---
-  // The keymap editor can't reach the plugin directly; the SW forwards to the
-  // browser plugin's passthrough, which relays to the actuator override layer.
-  // See notes/DESIGN_COMMAND_PHRASE_OVERRIDES.md.
-
   if (message.type === 'DEV_PING') {
     return false; // dev keepalive — the WAKE is the point (dev-keepalive.ts)
   }
@@ -593,83 +581,6 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     // Privileged palette data (tabs + MRU + marks + bookmarks) — the fetch
     // lives with the palette session logic (background/palette.ts).
     return handlePaletteBootstrap(_sender, sendResponse);
-  }
-
-  if (message.type === 'GET_COMMAND_OVERRIDES') {
-    ensureConnected()
-      .then(() => getFromPlugin('/commands/overrides'))
-      .then((data) => {
-        const overrides = (data as { overrides?: unknown })?.overrides;
-        sendResponse({ overrides: Array.isArray(overrides) ? overrides : [] });
-      })
-      .catch(() => sendResponse({ overrides: [] }));
-    return true; // async response
-  }
-
-  if (message.type === 'SET_COMMAND_OVERRIDE') {
-    ensureConnected()
-      .then(() => postToPlugin('/commands/override', {
-        action: message.action,
-        default_pattern: message.defaultPattern,
-        new_pattern: message.newPattern,
-      }))
-      .then(async (resp) => {
-        if (resp && resp.ok) { sendResponse({ ok: true }); return; }
-        sendResponse({ ok: false, error: await phraseWriteError(resp) });
-      })
-      .catch(() => sendResponse({ ok: false, error: 'Not connected to BranchKit.' }));
-    return true; // async response
-  }
-
-  if (message.type === 'RESET_COMMAND_OVERRIDE') {
-    ensureConnected()
-      .then(() => postToPlugin('/commands/override/reset', {
-        action: message.action,
-        default_pattern: message.defaultPattern,
-      }))
-      .then((resp) => sendResponse({ ok: !!(resp && resp.ok) }))
-      .catch(() => sendResponse({ ok: false }));
-    return true; // async response
-  }
-
-  // Aliases: extra spoken forms (the "+ voice" free list).
-
-  if (message.type === 'GET_COMMAND_ALIASES') {
-    ensureConnected()
-      .then(() => getFromPlugin('/commands/aliases'))
-      .then((data) => {
-        const aliases = (data as { aliases?: unknown })?.aliases;
-        sendResponse({ aliases: Array.isArray(aliases) ? aliases : [] });
-      })
-      .catch(() => sendResponse({ aliases: [] }));
-    return true; // async response
-  }
-
-  if (message.type === 'ADD_COMMAND_ALIAS') {
-    ensureConnected()
-      .then(() => postToPlugin('/commands/alias', {
-        action: message.action,
-        default_pattern: message.defaultPattern,
-        new_pattern: message.newPattern,
-      }))
-      .then(async (resp) => {
-        if (resp && resp.ok) { sendResponse({ ok: true }); return; }
-        sendResponse({ ok: false, error: await phraseWriteError(resp) });
-      })
-      .catch(() => sendResponse({ ok: false, error: 'Not connected to BranchKit.' }));
-    return true; // async response
-  }
-
-  if (message.type === 'REMOVE_COMMAND_ALIAS') {
-    ensureConnected()
-      .then(() => postToPlugin('/commands/alias/remove', {
-        action: message.action,
-        default_pattern: message.defaultPattern,
-        new_pattern: message.newPattern,
-      }))
-      .then((resp) => sendResponse({ ok: !!(resp && resp.ok) }))
-      .catch(() => sendResponse({ ok: false }));
-    return true; // async response
   }
 
   if (message.type === 'HEALTH_STATUS') {
@@ -847,7 +758,7 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     return true;  // async response
   }
 
-  return false;
+  return routeMessage(message, _sender, sendResponse);
 });
 
 // (Per-frame liveness Ports moved to background/frame-liveness.ts — the
