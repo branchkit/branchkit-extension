@@ -322,7 +322,33 @@ inversions that depend on it. Phase 2 was scoped as one job; it is two.
 One free win: `initConnectionMirror(() => {})` (:847) passes an **empty
 callback**. The seam is dead and the parameter can go.
 
-Revised expectation: the 8 DIRECT inversions are unambiguous and land first.
+**DIRECT group EXECUTED 2026-07-27** (branch `refactor/seam-inversion`, four
+commits). All ten inverted; `content.ts` 3610 → 3506, 94 → 90 imports, ceiling
+3700 → 3600. Two homes emerged, and the split is principled:
+
+- **`core/singletons.ts`** takes the six `keyHandler` seams. Not for
+  convenience — `KeyHandler`'s hooks are `null` *by design*, since a null
+  `matchPredicate` means "accept every key", which is what lets
+  `activate/keyboard.test.ts` drive it without a registry. Defaulting the field
+  would silently gate every unset test against an empty one. Singletons already
+  constructs the handler and is the surface every module pulls it through.
+- **The owning module** takes the rest, defaulting the hook in place and
+  keeping the setter as a test seam: `core/modes.ts` (SW mirror transport),
+  `activate/scroller.ts` (boundary report), `labels/label-reservoir.ts`
+  (rejection → holder registry), `plugin/connection-mirror.ts`.
+
+Two findings worth carrying forward. A defaulted hook exposed
+`selection-commands.test.ts` asserting a caret edge sends *nothing* — true only
+because no unit test had ever wired the sink, so it could not tell "posted
+nothing" from "had no transport"; it now pins MODE_STACK-once-per-edge and
+never a `CARET_ACTIVE` post. And the reservoir's default landed **uncovered** —
+mutation-testing caught it (deleting `rejectAll` passed all 282 label tests,
+because every existing test injects its own handler and pins only the
+plumbing). Both are the extraction argument in miniature: the code was equally
+untested in `content.ts`, but there was nowhere to put the test.
+
+Original expectation, retained for the record: the DIRECT inversions are
+unambiguous and land first.
 The 4 CYCLE cases are where a small hint-owned surface is legitimately
 warranted — this is the place the withdrawn `hints/install.ts` facade was
 reaching for, and it is the right size for it *after* the inversions, not
