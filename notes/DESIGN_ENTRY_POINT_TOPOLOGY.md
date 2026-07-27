@@ -131,8 +131,10 @@ edits.
 *Expected: ~350–450 lines out of `background.ts`. Ratchet 1336 → ~900.*
 
 ### Phase 2 — invert the `content.ts` callback seams
-**DIRECT and STATEFUL groups executed 2026-07-27 — see §6a and §6b. CYCLE group
-(4 seams) outstanding.**
+**COMPLETE 2026-07-27. DIRECT §6a, STATEFUL §6b, CYCLE §6d.** 18 seams audited,
+17 retired or rehomed; the one that remains (`onFindCommitted`) is a deliberate
+composition, not an injection. `content.ts` 3610 → 3430, 94 → 90 imports,
+ceiling 3700 → 3500.
 
 
 The structural fix, and the one that changes the growth curve rather than the
@@ -520,7 +522,112 @@ change, and this phase is behaviour-equivalent by construction):
    in content.ts, whose reversal silently drops every new-tab promotion; the
    hint-escape callback body; and find's `onActivate`/`onPaintCleared` relay.
 
-**What is left.** The 4 CYCLE seams, unchanged, plus the tail of the find seam.
+### 6d. CYCLE group EXECUTED 2026-07-27 — three of the four were not cycles
+
+Six commits, `d300f58..12b8705`. `content.ts` 3453 → 3430, ceiling banked
+3550 → 3500, tests 2124 → 2129. Every commit ran tsc, vitest, both gate
+scripts, `npm run build`, and all three harnesses on both engines.
+
+**The headline: §6a's CYCLE classification was wrong for three of the four.**
+Each was re-checked against a value-import graph rebuilt from scratch (only
+value edges; `import type` and type-position `import('x').Y` erased), and each
+verdict below is a measurement, not a reading.
+
+| seam | §6a said | actually | landed as |
+|---|---|---|---|
+| `initBadgeVisibility` | (survivor, 1 field) | **no path either direction** | retired; module imports `doScan` |
+| `setInnerTransientProbe` | CYCLE | **`core/mode-stack` is a leaf** | registrant moves to `escape-cascade` |
+| `setEscapeHook` | CYCLE | genuine, but only for `singletons` | registrant moves to `escape-cascade` |
+| `installLeakSweep` | CYCLE | **half of it targets a leaf** | `isHeld` defaulted; `onSwept` stays |
+| `setFindCallbacks` | CYCLE | one hop, one hex string | split; borrow goes home to find |
+
+**Why the audit missed it, and it is one reason: §6a read each seam's own
+comment, and every one of those comments was written by the pass that created
+the seam.** `badge-visibility`'s said the scan "is a content.ts-local
+orchestration this module has no import path to" — `doScan` is
+`scan/scan-orchestrator.ts:69` and there is no path in *either* direction.
+§6a even proves the reservoir case wrong in its own text, three paragraphs
+before classifying it: `holder-registry` "has **zero relative imports** — a
+true leaf", and `label-reservoir` was already importing `rejectAll` from it.
+A seam's justification is evidence about what its author believed, not about
+the graph.
+
+**Two operations, not one, and they should be named differently.** Ten DIRECT
+seams *inverted* (the module acquires its dependency). Two of these instead
+changed **registrant** — the line moves verbatim to a module that already holds
+both ends. `escape-cascade.ts` took both escape seams because it already
+imports `keyHandler` (:48) and owns the one-order claim; `core/singletons`
+looks ideal (three keyHandler hooks of exactly this shape already sit there)
+and is illegal, because escape-cascade imports *it*.
+
+**`FIND_HIGHLIGHT` was the whole find cycle, confirmed.** One hex string, one
+edge. It now lives in `render/find-highlight.ts`, a leaf whose doc forbids it
+an import — one would re-create the path it exists to cut. `render/` → `scan/find`
+is 0/22.
+
+**The one that stayed, and why it is the most interesting result.** §6a
+proposed a find-owned multicast for the surviving find seams, reasoning that
+every call is a void notification. True, and not sufficient: the two
+`onCommit` effects are **ordered**. Caret's extend calls `scrollFocusIntoView`;
+`armSearchBadges` ranks by live viewport geometry and publishes
+`in_strict_viewport` from it. A multicast hands that order to module import
+order — and because it reconverges at the next scroll settle, a careless
+reorder would pass every test and every manual check, and be wrong only until
+the user's next scroll. So `onFindCommitted` is one slot, the composition stays
+in content.ts, and the ordering is written down at both ends. **The defect
+found here was not a seam; it was an undocumented dependency between two
+adjacent lines.**
+
+Entry points may **compose** features. What they may not do is **inject**
+behaviour a module could acquire itself. That is the line this phase actually
+drew, and it is why `installSiteKeyPolicy()` (§6a's correction) and
+`onFindCommitted` both legitimately remain.
+
+**Coverage, since three seams had none.** Every moved registration got a test
+that can fail, and the technique is worth carrying: where a test file must
+*replace* a hook to observe it (`escape-key-path.test.ts` installs a recorder),
+it is green whether or not production registers anything — so the fake instead
+**captures** the registration. Verified rather than assumed: under three
+mutants of the escape hook, `escape-key-path.test.ts` stayed 19/19 green.
+
+Two mechanical traps, both hit:
+- `vi.mock` is hoisted by a **static match on that literal**. Aliasing the
+  import (`vi as _vi`) silently skips hoisting; the mock never applies and the
+  test just reads empty.
+- A capture written at **import** time cannot live in a top-level `let` —
+  ESM hoists the import above it (TDZ). Sibling recorder arrays only look like
+  a precedent: they are written when a test calls in, never at import.
+
+Mutation testing paid again, twice over. It caught that `openFindMode`'s and
+`findImmediate`'s badge borrows were **uncovered** — and nearly did not, because
+the three take-sites are identical lines and the first mutant removed the wrong
+one. It also caught that the reservoir sweep's old `if (!this.isHeld) return`
+made "nobody wired a predicate" and "the registry says nobody holds it"
+indistinguishable, so every test that skipped `installLeakSweep` was silently
+sweep-free.
+
+**Deliberately NOT done: `initLabelSync`.** The prompt's expectation that it was
+near-empty is wrong. `detachWrapper` (via `core/wrapper-lifecycle.ts:23`, five
+symbols) and `isBadgesVisible` (via `lifecycle/page-session.ts:33`,
+`getSessionId`) are genuine value 2-cycles. Only `store` is free, and it is
+load-bearing for `label-sync.test.ts`, which injects a fresh `new WrapperStore()`
+rather than the singleton. Retiring the rest wants the put queue lifted into a
+leaf — which would also cut `wrapper-lifecycle → label-sync` and
+`reservoir → label-sync`, the surviving `onLeakSwept` seam's reason. That is the
+highest-leverage move left and it is its own piece of work, not a tail.
+
+**Harness note.** `realinput`'s `dictate-announced` failed once ("gs did not
+open the phrase box") and then passed six consecutive runs; `ext-dev` was
+confirmed stopped. Nothing in these commits reaches the phrase-box open path.
+Recorded as a flake to watch rather than explained away.
+
+**Seams left in `content.ts`** (6): `setSettleEngine`, `initLabelSync`,
+`onLeakSwept`, `initConnectionMirror`, `setHintEscapeCallback`, `initPoolAudit`
+— plus `onFindCommitted`, which is a composition and is meant to be there.
+
+---
+
+**What was left before 6d.** The 4 CYCLE seams, unchanged, plus the tail of the find seam.
 `setFindCallbacks` survives with `resetCycleTarget` / `clearSearchBadges` /
 `caret` / `armSearchBadges` — `scan/find.ts` cannot import `badge-visibility`,
 `search-badges`, or `selection-commands`. Two of those are hard structural
