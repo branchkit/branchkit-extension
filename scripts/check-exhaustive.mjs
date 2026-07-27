@@ -31,8 +31,11 @@
  *      sibling ../plugins/browser and SKIPs loudly when absent (extension
  *      CI runs standalone; the workspace dev loop and app CI have it).
  *   E. Every exported SW message-handler map is registered into the router,
- *      and the onMessage listener is the router itself. An unregistered map
- *      drops its message types exactly as silently as the if-chain used to
+ *      the onMessage listener is the router itself, and no two maps claim the
+ *      same message type. An unregistered map drops its types exactly as
+ *      silently as the if-chain used to; a duplicated type throws at
+ *      registration, which 479c09f made survivable but not visible — nothing
+ *      composes the real maps, so only a static check sees it
  *      (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md).
  *
  * Run: node scripts/check-exhaustive.mjs   (wired as a CI step)
@@ -351,8 +354,62 @@ function srcFiles() {
   if (!/onMessage\.addListener\(routeMessage\)/.test(bg)) {
     fail('background.ts no longer installs routeMessage as its sole onMessage listener — ' +
       'handlers belong in a module map (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md)');
-  } else if (unregistered.length === 0) {
-    ok(`message handlers: ${exported.length} exported maps all registered; listener is the table`);
+  }
+
+  // --- and no two maps may claim the same message type --------------------
+  //
+  // `registerMessageHandlers` throws on a duplicate, which 479c09f made
+  // survivable by installing the listener first — a collision now costs one
+  // handler instead of every handler. But it is still a runtime throw on a
+  // build that is green everywhere: no test composes the REAL maps (the router
+  // tests use synthetic ones), and the registration check above asks whether a
+  // map is wired up, not whether its keys are free.
+  //
+  // Disjointness is a static property of the source, so check it statically and
+  // leave the runtime throw as the backstop rather than the discovery mechanism.
+
+  /** Keys of the object literal whose opening brace is at `open`. */
+  const literalKeys = (src, open) => {
+    let depth = 0, i = open;
+    for (; i < src.length; i++) {
+      if (src[i] === '{') depth++;
+      else if (src[i] === '}' && --depth === 0) break;
+    }
+    // Handler keys sit at the literal's own level (2 spaces). An object literal
+    // inside a handler body is nested deeper, so its keys cannot match.
+    return [...src.slice(open, i).matchAll(/^ {2}([A-Z][A-Z0-9_]*):/gm)].map((m) => m[1]);
+  };
+
+  const owner = new Map();   // message type -> the map that claimed it first
+  const collisions = [];
+  let typeCount = 0;
+  const claim = (type, by) => {
+    typeCount++;
+    if (owner.has(type)) collisions.push({ type, first: owner.get(type), second: by });
+    else owner.set(type, by);
+  };
+
+  for (const { name, file } of exported) {
+    const src = read(file);
+    const open = src.indexOf('{', src.indexOf('=', src.indexOf(`export const ${name}`)));
+    for (const type of literalKeys(src, open)) claim(type, name);
+  }
+  // background.ts composes one map inline (the offscreen-bridge residue), and
+  // it can collide with a module's just as easily.
+  for (const m of bg.matchAll(/registerMessageHandlers\(\{/g)) {
+    for (const type of literalKeys(bg, m.index + m[0].length - 1)) claim(type, 'background.ts (inline)');
+  }
+
+  if (typeCount === 0) {
+    fail('lint E parsed zero message types out of the handler maps — fix the lint');
+  }
+  for (const { type, first, second } of collisions) {
+    fail(`message type '${type}' is claimed by both ${first} and ${second} — ` +
+      'registerMessageHandlers throws on the duplicate and that handler is lost');
+  }
+
+  if (unregistered.length === 0 && collisions.length === 0) {
+    ok(`message handlers: ${exported.length} maps registered, ${typeCount} types disjoint, listener is the table`);
   }
 }
 

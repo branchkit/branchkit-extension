@@ -195,6 +195,13 @@ Do **not** raise the ceiling to buy room to work. The last raise
 visible; a raise to create working space would relaunch the exact cycle rounds
 1–3 lost three times.
 
+That prohibition is about **why**, not whether. Raising to accommodate code you
+are about to write is the cycle. Moving a ceiling onto a legal grid point, or
+off the zero-headroom pathology §4.1 describes, is not buying room — it is
+placing the marker where a marker is allowed to sit, and the file underneath is
+unchanged. `850 → 900` in `479c09f` is the second kind: `background.ts` had
+landed exactly on 850, and the fix for that is never to trim the file to fit.
+
 ### 4.1 A ceiling is a band marker, not a measurement (2026-07-27)
 
 The rule above is right and was applied too literally in the other direction.
