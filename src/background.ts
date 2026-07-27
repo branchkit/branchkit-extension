@@ -13,7 +13,7 @@ import { claimLabels, confirmLabels, releaseLabels, clearAllStacks, alphabetsEqu
 import { setAlphabet } from './labels/words';
 import { buildCommandContributions } from './keymap/command-catalog';
 import { rememberCodewords, recallCodewords } from './labels/codeword-memory';
-import { discoverPlugin, ensureConnected, postToPlugin, getFromPlugin, getActuatorJson } from './plugin/actuator-client';
+import { discoverPlugin, postToPlugin, getActuatorJson } from './plugin/actuator-client';
 import { setLocalMark, getLocalMark, setGlobalMark, gotoGlobalMark } from './background/marks';
 import { baseUrl, type GlobalMark, type StoredMark } from './marks';
 import { recordTabActivated } from './background/tab-mru';
@@ -25,8 +25,8 @@ import { ensureContentScriptInjected } from './background/injection';
 import { bgState, connId } from './background/state';
 import { republishActiveTab, broadcastToAllTabs, resolveActiveContentTab, notifyActiveTab, resolveHintFromTab, setUnroutablePullReporter } from './background/frame-router';
 import {
-  initSSETransport, connectSSE, ensureOffscreen, scheduleSSERetry, onSSEConnected,
-  onSSEDisconnected, pauseVoice, resumeVoice, isVoicePaused, restoreVoicePaused, runConnectionCheck,
+  initSSETransport, connectSSE, ensureOffscreen, scheduleSSERetry,
+  isVoicePaused, restoreVoicePaused, runConnectionCheck,
 } from './plugin/sse-transport';
 import {
   forwardDispatchResult, forwardDebugLog, forwardPerfReport, forwardHintsSessionEnd,
@@ -52,6 +52,7 @@ import {
 import { purgeTab, logTabSwitch, scheduleSpaRescan, cancelSpaRescan, startDeadTabSweep } from './background/tab-sessions';
 import { registerMessageHandlers, routeMessage } from './background/message-router';
 import { commandOverrideMessageHandlers } from './background/command-overrides';
+import { voiceStatusMessageHandlers } from './background/voice-status';
 
 // --- State ---
 //
@@ -340,6 +341,7 @@ function handleSSEEvent(data: any): void {
 // is what's left to lift; anything it doesn't match falls through to the table.
 // See notes/DESIGN_ENTRY_POINT_TOPOLOGY.md.
 registerMessageHandlers(commandOverrideMessageHandlers);
+registerMessageHandlers(voiceStatusMessageHandlers);
 
 chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   if (message.type === 'VIDEO_PRESENCE') {
@@ -564,15 +566,6 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     return true; // async response
   }
 
-  if (message.type === 'GET_VOICE_STATUS') {
-    // The keymap editor sources voice phrases from its own catalog now; it only
-    // needs to know whether BranchKit is connected (for the not-connected note).
-    ensureConnected()
-      .then((connected) => sendResponse({ connected }))
-      .catch(() => sendResponse({ connected: false }));
-    return true; // async response
-  }
-
   if (message.type === 'DEV_PING') {
     return false; // dev keepalive — the WAKE is the point (dev-keepalive.ts)
   }
@@ -581,36 +574,6 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     // Privileged palette data (tabs + MRU + marks + bookmarks) — the fetch
     // lives with the palette session logic (background/palette.ts).
     return handlePaletteBootstrap(_sender, sendResponse);
-  }
-
-  if (message.type === 'HEALTH_STATUS') {
-    // The full connect/disconnect work runs on every report, not on flag
-    // edges — edge-gating masked the reconnect healer (the reconnect paths
-    // used to set the flag optimistically before the stream was up), and a
-    // down report while already-marked-down still needs a retry armed
-    // ("discovery succeeded but the SSE never came up"). scheduleSSERetry is
-    // idempotent while a timer is pending. notes/DESIGN_SSE_RESILIENCE.md.
-    if (message.branchkit) onSSEConnected();
-    else onSSEDisconnected();
-    return false;
-  }
-
-  if (message.type === 'GET_HEALTH') {
-    // Three states the popup renders distinctly: connected, paused-by-choice,
-    // and not-detected. `paused` lets it show "Voice paused" instead of
-    // inferring "not detected" while the host may well be running.
-    sendResponse({ branchkit: bgState.branchkitConnected, paused: isVoicePaused() });
-    return false;
-  }
-
-  if (message.type === 'SET_VOICE_PAUSED') {
-    // Popup toggle. Await the lifecycle so the response reflects the settled
-    // state (the popup re-reads status right after).
-    const fn = message.paused ? pauseVoice : resumeVoice;
-    fn()
-      .then(() => sendResponse({ paused: isVoicePaused(), branchkit: bgState.branchkitConnected }))
-      .catch(() => sendResponse({ paused: isVoicePaused(), branchkit: bgState.branchkitConnected }));
-    return true; // async response
   }
 
   // Per-tab label pool. Only trust messages from a content script in a tab —
