@@ -9,10 +9,9 @@
  */
 
 import { Message, ScannedElement, HintVisibility } from './types';
-import { claimLabels, confirmLabels, releaseLabels, clearAllStacks, alphabetsEqual, senderMayMutatePool, auditLabels } from './labels/label-pool';
+import { clearAllStacks, alphabetsEqual } from './labels/label-pool';
 import { setAlphabet } from './labels/words';
 import { buildCommandContributions } from './keymap/command-catalog';
-import { rememberCodewords, recallCodewords } from './labels/codeword-memory';
 import { discoverPlugin, postToPlugin, getActuatorJson } from './plugin/actuator-client';
 import { setLocalMark, getLocalMark, setGlobalMark, gotoGlobalMark } from './background/marks';
 import { baseUrl, type GlobalMark, type StoredMark } from './marks';
@@ -53,6 +52,7 @@ import { purgeTab, logTabSwitch, scheduleSpaRescan, cancelSpaRescan, startDeadTa
 import { registerMessageHandlers, routeMessage } from './background/message-router';
 import { commandOverrideMessageHandlers } from './background/command-overrides';
 import { voiceStatusMessageHandlers } from './background/voice-status';
+import { labelMessageHandlers } from './background/label-messages';
 
 // --- State ---
 //
@@ -342,6 +342,7 @@ function handleSSEEvent(data: any): void {
 // See notes/DESIGN_ENTRY_POINT_TOPOLOGY.md.
 registerMessageHandlers(commandOverrideMessageHandlers);
 registerMessageHandlers(voiceStatusMessageHandlers);
+registerMessageHandlers(labelMessageHandlers);
 
 chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   if (message.type === 'VIDEO_PRESENCE') {
@@ -576,105 +577,6 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
     return handlePaletteBootstrap(_sender, sendResponse);
   }
 
-  // Per-tab label pool. Only trust messages from a content script in a tab —
-  // popup / offscreen don't have a tab context and wouldn't be claiming labels.
-  if (message.type === 'CLAIM_LABELS') {
-    const tabId = _sender.tab?.id;
-    const frameId = _sender.frameId;
-    if (typeof tabId !== 'number' || typeof frameId !== 'number') {
-      sendResponse({ labels: [] });
-      return false;
-    }
-    // Prerender deny (DESIGN_PRERENDER_POOL_POISONING.md L1): a provisional
-    // frame id must never enter the pool. Empty grant; the CS's level-
-    // triggered claims retry after activation as the real frame 0.
-    if (!senderMayMutatePool(_sender)) {
-      void forwardDebugLog('pool.prerender_claim_denied', { tab_id: tabId, frame_id: frameId });
-      sendResponse({ labels: [] });
-      return false;
-    }
-    if (typeof message.doc_id !== 'string' || message.doc_id.length === 0) {
-      sendResponse({ labels: [] });
-      return false;
-    }
-    claimLabels(tabId, message.doc_id, frameId, message.count, message.preferred)
-      .then(labels => sendResponse({ labels }))
-      .catch(err => {
-        console.warn('[BranchKit SW] CLAIM_LABELS error:', err);
-        sendResponse({ labels: [] });
-      });
-    return true;
-  }
-
-  if (message.type === 'RELEASE_LABELS') {
-    // Frame-scoped: only the owning frame's release frees a codeword. The
-    // sender's frameId is authoritative (not message payload) — a frame with
-    // a stale local copy of a codeword another frame won must not free the
-    // winner's assignment. See releaseLabels.
-    const tabId = _sender.tab?.id;
-    if (typeof tabId !== 'number' || typeof message.doc_id !== 'string') return false;
-    releaseLabels(tabId, message.doc_id, message.labels).catch(err => {
-      console.warn('[BranchKit SW] RELEASE_LABELS error:', err);
-    });
-    return false;
-  }
-
-  if (message.type === 'CONFIRM_LABELS') {
-    // Sent by the content script's reservoir after `claim()` actually hands
-    // codewords to wrappers. An arbitrated EXCHANGE (review bug #5): promotes
-    // reserved → assigned, directly acquires from free (the released-then-
-    // locally-reclaimed case the old fire-and-forget silently dropped), and
-    // answers `rejected` for codewords another document won so the sender
-    // drops them. Unconfirmed reserved labels remain NOT routable — under
-    // sealed pull-resolution that means REFUSED (no_such_hint), which is
-    // deliberate: it's what kept iframe reservoirs holding unused codewords
-    // from capturing activations meant for a sibling's wrapper (the
-    // QuickBase `fine jury` failure 2026-06-05T17:18:37), and the refusal
-    // now reports instead of misrouting. See
-    // docs/completed/DESIGN_ELEMENT_IDENTITY_REGISTRY.md.
-    const tabId = _sender.tab?.id;
-    const frameId = _sender.frameId;
-    if (typeof tabId !== 'number' || typeof frameId !== 'number' || !Array.isArray(message.labels)) {
-      sendResponse({ rejected: [] });
-      return false;
-    }
-    // Prerender deny (DESIGN_PRERENDER_POOL_POISONING.md L1): nothing to
-    // arbitrate — a prerender sender was never granted. Accept-nothing (an
-    // empty rejected list) rather than reject: rejecting strips wrappers.
-    if (!senderMayMutatePool(_sender)) {
-      sendResponse({ rejected: [] });
-      return false;
-    }
-    if (typeof message.doc_id !== 'string' || message.doc_id.length === 0) {
-      sendResponse({ rejected: [] });
-      return false;
-    }
-    confirmLabels(tabId, message.doc_id, frameId, message.labels)
-      .then(result => sendResponse(result))
-      .catch(err => {
-        console.warn('[BranchKit SW] CONFIRM_LABELS error:', err);
-        // Transient error: don't reject — rejecting nukes wrappers; the
-        // codewords stay locally held and a later confirm re-arbitrates.
-        sendResponse({ rejected: [] });
-      });
-    return true;
-  }
-
-  if (message.type === 'POOL_AUDIT') {
-    // Read-only painted-vs-routable tripwire (debug/pool-audit.ts, dev
-    // builds). Pure read — outside the reservoir's single-sender MUTATION
-    // invariant.
-    const tabId = _sender.tab?.id;
-    if (typeof tabId !== 'number' || typeof message.doc_id !== 'string' || !Array.isArray(message.labels)) {
-      sendResponse({ unroutable: [], foreign: [] });
-      return false;
-    }
-    auditLabels(tabId, message.doc_id, message.labels)
-      .then(result => sendResponse(result))
-      .catch(() => sendResponse({ unroutable: [], foreign: [] }));
-    return true;
-  }
-
   if (message.type === 'LIVENESS_QUERY') {
     // Read-only: does the SW hold a LIVE liveness Port for this doc? Layer-2
     // probe of the bfcache-port question (debug/bfcache-probe.ts, dev builds).
@@ -682,36 +584,6 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
       tracked: typeof message.doc_id === 'string' && isDocPortLive(message.doc_id),
     });
     return false;
-  }
-
-  if (message.type === 'REMEMBER_CODEWORDS') {
-    // Regime B (DESIGN_CODEWORD_STABILITY): persist this frame's
-    // fingerprint→codeword pairs so a fresh content script after a
-    // full-document reload can reclaim the same codewords. Separate from the
-    // LabelStack (not pool-mutating), so no single-sender concern.
-    const tabId = _sender.tab?.id;
-    const frameId = _sender.frameId;
-    if (typeof tabId !== 'number' || typeof frameId !== 'number') return false;
-    if (!Array.isArray(message.entries)) return false;
-    rememberCodewords(tabId, frameId, message.entries).catch(err => {
-      console.warn('[BranchKit SW] REMEMBER_CODEWORDS error:', err);
-    });
-    return false;
-  }
-
-  if (message.type === 'RECALL_CODEWORDS') {
-    // A fresh content script (post Regime-B reload) asks for this frame's
-    // remembered fingerprint→codeword entries so it can seed preferredCodeword.
-    const tabId = _sender.tab?.id;
-    const frameId = _sender.frameId;
-    if (typeof tabId !== 'number' || typeof frameId !== 'number') {
-      sendResponse({ entries: [] });
-      return false;
-    }
-    recallCodewords(tabId, frameId)
-      .then(entries => sendResponse({ entries }))
-      .catch(() => sendResponse({ entries: [] }));
-    return true;
   }
 
   if (message.type === 'RESOLVE_HINT_FROM_TAB') {
