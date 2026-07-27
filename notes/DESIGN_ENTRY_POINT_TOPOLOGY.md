@@ -311,7 +311,12 @@ is itself a near-leaf (four imports). `render/mode-chip.ts`'s back-edge to it is
 `core/singletons.ts` cannot be imported by `activate/keyboard.ts`*, because
 `singletons.ts` constructs `new KeyHandler(...)`. That set is `palette-host`,
 `badge-visibility`, `escape-cascade`, `selection-commands`, `key-preamble`,
-`range-disambiguation`. Singletons is the *pull* surface that lets a module
+`range-disambiguation`, and — added 2026-07-27 — `keymap/site-key-policy`.
+That last one is a *pusher* (it calls `setExcluded`/`setPassKeys`), so
+`keyboard.ts` has no reason to import it today. But if the key path ever needs
+to *consult* per-site policy rather than be told, it must read
+`keymap/keyboard-rules.ts`, which is a genuine leaf and does not reach
+singletons — never `site-key-policy`. Singletons is the *pull* surface that lets a module
 reach `keyHandler` — it is not an escape from the cycle when `keyboard.ts` is
 the one that needs to reach out.
 
@@ -408,8 +413,12 @@ not sufficient: page-session reaches label-sync a *second* way, through
 by building the value-import graph and re-running reachability with each edge
 dropped. Hence the leaf module — with `pageSession.engine` demoted to an
 accessor over it, so there is still exactly one reference. A second copy
-assigned beside the first is the two-artifacts-in-sync shape, and 14 call sites
-already read the pageSession name.
+assigned beside the first is the two-artifacts-in-sync shape, and 10 read sites
+already use the pageSession name — 9 of them without `?.`, which is the actual
+argument: rewiring them to the nullable ref would have changed null-handling at
+each. (`241fefd`'s message says "14 call sites, 10 non-optionally". That was a
+whole-repo `grep -c` that swept in a design note and a code comment. Corrected
+here; the decision is unaffected.)
 
 **Mutation-testing earned its keep three times,** and the pattern is worth
 naming: *a test that asserts the observable a bug also produces is not a test.*
@@ -432,6 +441,84 @@ Retiring that hook removed the guarantee, and the surviving `requireHooks` sits
 behind an `if (pendingMutation)`. `clearHintFilter` now asserts it outright.
 The general form: **when a hook is retired, check what its call was
 incidentally proving.**
+
+### 6c. Four-agent review of the STATEFUL group (2026-07-27)
+
+Four independent read-only reviewers ran against `7f867ce..HEAD`: behaviour
+equivalence, boot order, test quality, and a fact-check of the load-bearing
+import-graph claims. Two rebuilt the value-import graph from scratch (one via
+the TypeScript compiler API, one via esbuild metafiles) rather than trusting
+this note. Worth repeating: **the graph verdicts turn on `import type` being
+erased**, and one reviewer noted that mis-parsing `page-session.ts`'s
+`get engine(): import('./settle-engine').SettleEngine` would have inverted its
+answer.
+
+Behaviour equivalence was **not falsifiable** — all five relocations equivalent,
+each with the specific fact that makes it so. Every architectural claim in §6b
+verified except one arithmetic error (corrected above). No decision undermined.
+
+**Three of the new tests could not fail**, all three mine, all three now fixed:
+- The unsubscribe test's mock helper reset the listener array it then checked
+  against, so the loop body never ran.
+- "is inert when no engine" asserted a freshly constructed timer promise, not
+  the code under test.
+- The `committed_codewords` guard test passed on a leaked cooldown: that state
+  is module-level and vitest reinstalls fake timers at the *real* clock, so a
+  predecessor's `advanceTimersByTimeAsync(11_000)` stamps the cooldown into the
+  future relative to the next test. `_resetShadowDesyncCooldownForTesting`
+  closes it.
+
+The generalisation, third time this arc: **an assertion that holds under both
+the correct and the broken implementation is not a test.** Mutation-testing
+catches it; reading does not. Two of these had passed a mutation pass — the
+mutants chosen were the ones the tests could see.
+
+**One arm has no honest test and is recorded as such.** The reservoir's
+"no engine yet -> no-op" default is unobservable: `notifyRefillLanded` is the
+last statement inside `refill`'s own `try/catch`, so a thrown non-null
+assertion is swallowed with nothing downstream to notice. Any test there passes
+either way. The label-sync twin IS testable because `syncNow` does not swallow.
+Deleting the fake test beat keeping a green one.
+
+Fixed in the same pass: `republishAllGrammar` gained a `deps` guard (the move
+from a module-imported `store` to `deps.store` turned a function that could not
+fail into one that throws if ever called before `initLabelSync`); the site-key
+catch now also `console.warn`s, because `bkLog` ships over the runtime channel
+that an invalidated context — the likeliest cause — has already killed; and a
+new test drives a policy from non-empty back to empty, the one regression that
+module could plausibly ship and which every prior test in the file missed.
+
+**Pre-existing, surfaced but deliberately NOT fixed here** (each is a behaviour
+change, and this phase is behaviour-equivalent by construction):
+
+1. **The badge-screen borrow is not reset on same-document navigation.**
+   `closeFindMode` is reachable only from `find_close`, the escape cascade, and
+   caret — not from teardown or nav. Concrete: find opens over already-hidden
+   badges (`took === false`), SPA nav, user shows badges, find reopens ->
+   `assertBadgeScreenBorrow` sees a non-null slot with `took === false` and does
+   nothing, so highlights paint under a live badge layer. Same class as the
+   2026-07-26 field bug. The borrow now lives next to the code that could tie it
+   to a session, which makes this the cheap moment.
+2. **`render/palette-host.ts:43/46`** runs `chrome.runtime.getURL` and registers
+   a `window` message listener at module scope, unowned by
+   `pageSession.resources`, so it survives orphan teardown. It is the LAST
+   survivor of the class §6a's correction fixed — the full module-scope
+   inventory across all 141 content-bundle modules is otherwise clean.
+3. **Nothing enforces that class.** `check-exhaustive.mjs` has no lint for
+   module-scope side effects, so the singletons defect would land again
+   silently. Cheap sixth lint, and the natural home for it.
+4. **`installSiteKeyPolicy`'s unsubscribe is discarded** at its call site, so
+   the storage listener outlives orphan quiesce. The old code had no unsubscribe
+   at all, so this is not a regression — but the handle now exists and
+   `SessionResources` has the slot for it.
+5. **Site-key policy is not re-applied on same-document navigation**, and reads
+   the *frame's* URL while the popup writes rules from the *tab's* — so a
+   path-scoped rule sticks across an SPA route, and "keys off on github.com"
+   leaves a third-party subframe fully bound.
+6. **Untested wiring** (the modules are covered; the entry-point relay is not):
+   the `promoteNewTabIfArmed` -> `activateWrapper` -> `takeHintAction` ordering
+   in content.ts, whose reversal silently drops every new-tab promotion; the
+   hint-escape callback body; and find's `onActivate`/`onPaintCleared` relay.
 
 **What is left.** The 4 CYCLE seams, unchanged, plus the tail of the find seam.
 `setFindCallbacks` survives with `resetCycleTarget` / `clearSearchBadges` /

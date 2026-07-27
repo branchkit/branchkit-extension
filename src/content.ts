@@ -1067,13 +1067,6 @@ dispatcher.register('hint_mode', () => {
   keyHandler.enterHintMode();
 });
 
-// The keyboard "hint action mode": what the next badge resolved by keyboard
-// should DO instead of a plain click. One armed value replaces the old pair of
-// booleans (activateInNewTab + yankHintArmed) so new verbs are a one-line add.
-// Set by a verb command (or the capital-letter new-tab affordance) before/while
-// in hint mode; consumed + reset in activateWrapper. See
-// notes/DESIGN_HINT_ACTION_MODES.md.
-
 // (toggleHints/setBadgesVisible — the shared Shift+F / voice-"toggle" /
 // popup transition — live in render/badge-visibility.ts, with the borrow
 // primitive the find bar and the range pick both ride.)

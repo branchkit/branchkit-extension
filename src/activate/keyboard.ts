@@ -41,8 +41,10 @@ function isInsertMode(): boolean {
   return false;
 }
 
-/** What a keyboard-resolved badge does instead of a plain click. */
-export type HintAction =
+/** What a keyboard-resolved badge does instead of a plain click. Deliberately
+ *  NOT exported: every arm site passes a literal, and the union is checked at
+ *  those call sites. An export would invite a second module to hold one. */
+type HintAction =
   'activate' | 'newtab' | 'yank' | 'hover' | 'focus' | 'copytext' | 'caret';
 
 export class KeyHandler {

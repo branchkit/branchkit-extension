@@ -277,7 +277,10 @@ describe('LabelReservoir refill threshold', () => {
 // coverage is known to bite first.
 describe('LabelReservoir refill-landed hook', () => {
   afterEach(() => {
-    labelReservoir.onRefillLanded(() => {});
+    // null, not `() => {}` — a truthy no-op leaks into every later describe in
+    // this file and would silently eat the signal for a future
+    // `expect(scheduleReconcile).not.toHaveBeenCalled()`.
+    labelReservoir.onRefillLanded(null as unknown as () => void);
     _clearSettleEngineForTesting();
   });
 
@@ -312,16 +315,14 @@ describe('LabelReservoir refill-landed hook', () => {
     expect(scheduleReconcile).not.toHaveBeenCalled();
   });
 
-  // No engine yet is a real boot state: a refill can land before content.ts
-  // has constructed one. It must no-op, not take the frame down.
-  it('is inert when no engine has been published', async () => {
-    labelReservoir.onRefillLanded(null as unknown as () => void);
-    labelReservoir._seedForTests([]);
-    sendMessageMock.mockResolvedValue({ labels: ['b', 'c'] });
-
-    labelReservoir.claim(1);
-    await expect(new Promise(r => setTimeout(r, 0))).resolves.toBeUndefined();
-  });
+  // NOT TESTED HERE, deliberately: "no engine published yet -> no-op rather
+  // than throw". `notifyRefillLanded` is the last statement inside `refill`'s
+  // own try/catch, so swapping its `?.` for a `!` throws, gets swallowed, and
+  // leaves NO observable difference — the codewords are already pushed by then.
+  // A test written against this path passes either way, which is the exact
+  // shape §6b warns about, so there is no honest test to write at this seam.
+  // The label-sync twin IS testable because syncNow does not swallow.
+  // Worth knowing on its own: that catch would hide a genuine engine error too.
 
   it('fires when a refill actually adds codewords', async () => {
     const landed = vi.fn();

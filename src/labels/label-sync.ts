@@ -219,6 +219,11 @@ export function rotateSession(): void {
  * field is gone with it; the tripwire calls this directly.
  */
 export function republishAllGrammar(reason: string): void {
+  // This used to close over the module-imported `store` and was callable from
+  // import time; reading it off `deps` made it depend on initLabelSync. Every
+  // caller today is well after that, but a function that could not fail should
+  // not silently start throwing if a future caller lands earlier in boot.
+  if (!deps) { bkLog('BK_GRAMMAR_REPUBLISH_PREINIT', { reason }, 'warn'); return; }
   rotateSession();
   let requeued = 0;
   for (const w of deps.store.all) {
@@ -498,6 +503,17 @@ function isWholesaleRefusal(resp: GrammarBatchResponse): boolean {
 // the log line makes any recurrence visible during soak.
 const SHADOW_DESYNC_REPUBLISH_COOLDOWN_MS = 10_000;
 let lastShadowDesyncRepublishAt = 0;
+
+/**
+ * Test-only. The cooldown is module state that outlives a test, and vitest
+ * reinstalls fake timers at the REAL clock each `beforeEach` — so a test that
+ * advanced time and republished leaves a stamp in the *future* relative to the
+ * next test, silently suppressing its republish. That made the
+ * `committed_codewords` guard test pass on the cooldown rather than the guard.
+ */
+export function _resetShadowDesyncCooldownForTesting(): void {
+  lastShadowDesyncRepublishAt = 0;
+}
 
 export function checkShadowDesync(resp: GrammarBatchResponse, requestSessionId: string, context: string): void {
   if (resp.result !== 'ok' && resp.result !== 'stored') return;

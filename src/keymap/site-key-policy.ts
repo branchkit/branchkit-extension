@@ -42,7 +42,14 @@ export async function applySiteKeys(): Promise<void> {
     keyHandler.setExcluded(excluded);
     keyHandler.setPassKeys(passKeys);
   } catch (e) {
+    // BOTH channels, on purpose. bkLog ships over chrome.runtime.sendMessage
+    // and swallows its own failure — and the likeliest reason the storage read
+    // threw is an invalidated runtime context, which is the same thing that
+    // kills bkLog's transport. Reporting only there would make exactly the
+    // common failure silent. The console line is what the old uncaught
+    // rejection used to give us for free.
     bkLog('BK_SITE_KEYS_FAILED', { error: String(e) }, 'warn');
+    console.warn('[BranchKit] site-key policy not applied:', e);
   }
 }
 

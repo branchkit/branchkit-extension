@@ -24,6 +24,7 @@ import {
   rotateSession,
   republishAllGrammar,
   getSessionId,
+  _resetShadowDesyncCooldownForTesting,
   scheduleSync,
   syncNow,
   postBatch,
@@ -664,11 +665,14 @@ describe('republishAllGrammar', () => {
     expect(pushedCodewords().sort()).toEqual(['arch bake', 'cave dove']);
   });
 
-  it('skips wrappers with no codeword and wrappers already disconnected', async () => {
+  it('skips wrappers already disconnected', async () => {
     makeWrapper('arch bake', store);
-    makeWrapper('', store);
     const gone = makeWrapper('cave dove', store);
     gone.disconnectedAt = 1;
+    // The empty-codeword case is NOT asserted here: the drain re-filters on
+    // `codeword`, so that half of the guard has no observable effect and a test
+    // naming it would be asserting the drain's work. See the source comment.
+    makeWrapper('', store);
 
     republishAllGrammar('test');
     await vi.advanceTimersByTimeAsync(400);
@@ -687,6 +691,12 @@ describe('shadow-desync tripwire (committed_codewords vs sentCodewords)', () => 
   // it is the effect the recovery actually depends on — a strictly stronger
   // assertion than "the callback ran".
   let sessionsSeen: string[];
+  // The republish's `reason` is no longer observable as a mock argument, so
+  // read it where it actually lands: BK_GRAMMAR_REPUBLISH on the debug channel.
+  const reasons = (): string[] =>
+    sendMessage.mock.calls
+      .filter((c) => c[0]?.type === 'PLUGIN_DEBUG_LOG' && c[0]?.tag === 'BK_GRAMMAR_REPUBLISH')
+      .map((c) => c[0].data?.reason);
   const noteSession = (): void => {
     const id = getSessionId();
     if (sessionsSeen[sessionsSeen.length - 1] !== id) sessionsSeen.push(id);
@@ -711,6 +721,7 @@ describe('shadow-desync tripwire (committed_codewords vs sentCodewords)', () => 
       store, detachWrapper: vi.fn(), reconcile: vi.fn(), isBadgesVisible: () => false,
     });
     rotateSession();
+    _resetShadowDesyncCooldownForTesting();
     sessionsSeen = [getSessionId()];
   });
 
@@ -738,9 +749,14 @@ describe('shadow-desync tripwire (committed_codewords vs sentCodewords)', () => 
     expect(republishes()).toBe(0);
 
     // Divergence: the plugin holds codewords our shadow doesn't know (or
-    // vice versa — the wiped-under-intact-shadow family). Recovery fires.
+    // vice versa — the wiped-under-intact-shadow family). Recovery fires,
+    // carrying the reason through to the sync it schedules.
     await finalBatch(5);
     expect(republishes()).toBe(1);
+    // `finalBatch` drives a pure-DELETE batch, so the context is the
+    // delete-flush chokepoint. Pinning the exact string keeps the reason
+    // threaded end to end — republish -> scheduleSync -> the log line.
+    expect(reasons()).toEqual(['shadow_desync_delete_flush']);
 
     // Still diverged inside the cooldown: logged, not re-fired.
     await finalBatch(5);

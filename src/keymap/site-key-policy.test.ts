@@ -15,15 +15,36 @@ import { keyHandler } from '../core/singletons';
 import { applySiteKeys, installSiteKeyPolicy } from './site-key-policy';
 import type { KeyboardRule } from './keyboard-rules';
 
-/** The change listeners registered against chrome.storage.onChanged. */
-let listeners: Array<(c: Record<string, unknown>, area: string) => void>;
+/**
+ * The change listeners registered against chrome.storage.onChanged.
+ *
+ * Deliberately NOT reset by `setRules` below. It used to be, and that made the
+ * unsubscribe test vacuous: re-mocking to change the stored rules also emptied
+ * the array the test then checked its saved listener against, so the loop body
+ * never ran and the assertion just read the install's own state.
+ */
+let listeners: Array<(c: Record<string, unknown>, area: string) => void> = [];
 
-function mockChrome(rules: KeyboardRule[] | 'reject'): void {
+/** Change what storage returns WITHOUT disturbing registered listeners. */
+let rules: KeyboardRule[] | 'reject' = [];
+const setRules = (r: KeyboardRule[] | 'reject'): void => { rules = r; };
+
+/** Fire a storage-change event at everything currently subscribed. */
+function fireStorageChange(): void {
+  for (const l of [...listeners]) l({ keyboardRules: {} }, 'sync');
+}
+
+/** How many times the policy has read storage since the last mockChrome. */
+let reads: number;
+
+function mockChrome(initial: KeyboardRule[] | 'reject'): void {
   listeners = [];
+  rules = initial;
+  reads = 0;
   (globalThis as unknown as { chrome: unknown }).chrome = {
     storage: {
       sync: {
-        get: () => (rules === 'reject'
+        get: () => (reads++, rules === 'reject'
           ? Promise.reject(new Error('storage unavailable'))
           : Promise.resolve({ keyboardRules: rules })),
         set: () => Promise.resolve(),
@@ -90,6 +111,20 @@ describe('applySiteKeys', () => {
     expect(policy()).toEqual({ excluded: false, passKeys: [] });
   });
 
+  // The regression this module could plausibly ship, and the one the test
+  // above CANNOT catch: it asserts the same values beforeEach already set, so
+  // an applySiteKeys that bailed early on an empty result would pass it. This
+  // drives non-empty -> empty, which is what deleting a rule in the popup does.
+  it('clears a policy the previous rules had applied', async () => {
+    mockChrome([{ pattern: 'mail.google.com', off: true, passKeys: 'jk' }]);
+    await applySiteKeys();
+    expect(policy()).toEqual({ excluded: true, passKeys: ['j', 'k'] });
+
+    setRules([]); // the user deleted the rule
+    await applySiteKeys();
+    expect(policy()).toEqual({ excluded: false, passKeys: [] });
+  });
+
   // The defect this module was extracted to fix: the original was
   // `void getSiteKeyState(...).then(...)` with no catch, so a storage read
   // that rejected became an unhandled rejection at content-script boot.
@@ -108,10 +143,11 @@ describe('applySiteKeys', () => {
 });
 
 describe('installSiteKeyPolicy', () => {
-  it('applies once on install', async () => {
+  it('applies exactly once on install', async () => {
     mockChrome([{ pattern: 'mail.google.com', passKeys: 'jk' }]);
     installSiteKeyPolicy();
     await vi.waitFor(() => expect(policy().passKeys).toEqual(['j', 'k']));
+    expect(reads).toBe(1); // "once" is the only thing separating this from the next test
   });
 
   it('re-applies when the rules change', async () => {
@@ -119,24 +155,27 @@ describe('installSiteKeyPolicy', () => {
     installSiteKeyPolicy();
     await vi.waitFor(() => expect(policy().passKeys).toEqual(['j', 'k']));
 
-    // Same fake storage object, new contents — then fire the change the popup
-    // would have fired. Re-mocking would drop the registered listener.
-    const fired = listeners.slice();
-    mockChrome([{ pattern: 'mail.google.com', off: true }]);
-    for (const l of fired) l({ keyboardRules: {} }, 'sync');
+    setRules([{ pattern: 'mail.google.com', off: true }]);
+    fireStorageChange(); // what the popup's edit would have fired
     await vi.waitFor(() => expect(policy().excluded).toBe(true));
   });
 
+  // The give-back half. `stop()` must actually deregister — the listener is
+  // the one thing installSiteKeyPolicy leaves behind on the page.
   it('returns an unsubscribe that stops further re-application', async () => {
     mockChrome([{ pattern: 'mail.google.com', passKeys: 'jk' }]);
     const stop = installSiteKeyPolicy();
     await vi.waitFor(() => expect(policy().passKeys).toEqual(['j', 'k']));
+    expect(listeners).toHaveLength(1); // it really did subscribe
 
-    const fired = listeners.slice();
     stop();
-    mockChrome([{ pattern: 'mail.google.com', off: true }]);
-    for (const l of fired) if (listeners.includes(l)) l({ keyboardRules: {} }, 'sync');
+    expect(listeners).toHaveLength(0); // ...and really did unsubscribe
+
+    // Fire anyway, at whoever is left. Nothing should move.
+    setRules([{ pattern: 'mail.google.com', off: true }]);
+    fireStorageChange();
     await new Promise((r) => setTimeout(r, 0));
     expect(policy().excluded).toBe(false);
+    expect(policy().passKeys).toEqual(['j', 'k']);
   });
 });
