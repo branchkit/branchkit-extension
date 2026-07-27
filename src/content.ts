@@ -21,7 +21,7 @@ import type { CodewordMemoryEntry } from './labels/codeword-memory';
 import { loadRecall, recalledCodewords, rememberClaimedCodewords, resolvePreferredCodeword, isRecallLoaded } from './labels/codeword-recall';
 import { type RebindCounters } from './labels/rebind';
 import { resolveTarget } from './activate/activate-resolution';
-import { schedulePointerVisibilitySweep, setPointerRecheckScopeEnabled, connectVisibilityMO, observeInvisibleCandidates } from './observe/visibility-tracker';
+import { schedulePointerVisibilitySweep, setPointerRecheckScopeEnabled, observeInvisibleCandidates } from './observe/visibility-tracker';
 import { rebindCounters, collectLimboWrappers, collectStrongKeyIndex, dropDisconnectedWrappers } from './observe/limbo';
 import { attachWrapper, detachWrapper, seedPreferredFromMemory, attachDiscovered } from './core/wrapper-lifecycle';
 import { getDomAddEpoch } from './observe/mutation-source';
@@ -30,6 +30,10 @@ import { firehoseStep } from './debug/firehose';
 import { bkLog, setLogCorrelation } from './debug/bk-log';
 import { harnessHooksEnabled } from './debug/harness-hooks';
 import { store } from './core/store';
+import {
+  initBadgeVisibility, anyBadgesShowing, showBadges, hideBadges, clearHintFilter,
+  toggleHints, setBadgesVisible, borrowBadgeScreen, type BadgeBorrow,
+} from './render/badge-visibility';
 import { HintBadge } from './render/hints';
 import { elementTarget } from './render/badge-target';
 import { reconcilePass, reconcileRegistrySize, lastReconcileChangedWrites } from './render/reconcile-positioner';
@@ -40,7 +44,7 @@ import { setOcclusionEnabled, isOccludedLive } from './observe/occlusion';
 import { VIEWPORT_MARGIN_PX } from './observe/intersection-tracker';
 import { setOcclusionMemoMode, occlusionMemoAllDirty, occlusionMemoNoteTarget, occlusionMemoNotePointer } from './observe/occlusion-memo';
 import { reconcileClipObservation, setClipObserverEnabled } from './observe/clip-observer';
-import { cacheLayout, cacheConstruction, clearLayoutCache, isRectOnScreen, geometryInBand } from './core/layout-cache';
+import { isRectOnScreen, geometryInBand } from './core/layout-cache';
 import { placeBadges, invalidateProbe } from './placement';
 import { activateElement, dispatchHover, resolveNavTarget, type ActivationResult } from './activate/event-sequence';
 import {
@@ -480,29 +484,34 @@ function onTrackerCodewordsChanged(claimed: ElementWrapper[], released: string[]
 // call per scroll-end now, which makes per-call cost much less critical
 // than total observation overhead.)
 
-// Were the page's badges showing when this find session started? Find hides
-// them while it runs — highlights and the badge layer compete for the same
-// screen — and restoring them on exit is the other half of that trade (field,
-// 2026-07-26: every exit left an always-mode page badge-less, healed only by
-// `f` as a side effect). Snapshotted, not assumed: under manual visibility the
-// badges were already hidden before find ran, and re-showing on exit would be
-// a state change the user never asked for. Recorded once per SESSION —
-// `findImmediate` re-fires onActivate over a live session, and re-reading
-// would snapshot the hidden state find itself caused.
-let findBadgeEntry: boolean | null = null;
+// Badge-visibility hooks: the module owns the transitions (render/
+// badge-visibility.ts); the scan and the pending hint-action verb stay
+// content-owned and reach it here.
+initBadgeVisibility({
+  doScan: () => { void doScan(); },
+  resetHintAction: () => { pendingHintAction = 'activate'; },
+});
 
-// Give back what find borrowed, in the state find snapshotted at its entry.
+// Find borrows the badge screen while it runs — highlights and the badge
+// layer compete for the same screen — and gives it back on exit (field,
+// 2026-07-26: every exit left an always-mode page badge-less, healed only by
+// `f` as a side effect). One borrow per SESSION: `findImmediate` re-fires
+// onActivate over a live session, and re-borrowing would snapshot the hidden
+// state find itself caused — so a live borrow just re-asserts the hide
+// (`f` mid-session may have re-shown badges).
+let findBorrow: BadgeBorrow | null = null;
+
 function returnFindBadgeBorrow(): void {
-  if (findBadgeEntry) void showBadges();
-  findBadgeEntry = null;
+  findBorrow?.restore();
+  findBorrow = null;
 }
 
 setFindCallbacks({
   // These callbacks own only the badge borrow/restore — the plugin's find tag
   // rides the mode stack's mirror (the session's push in find.ts, Wave 3 C4a).
   onActivate: () => {
-    findBadgeEntry ??= pageSession.badgesVisible || store.all.some((w) => w.hint?.isVisible);
-    if (findBadgeEntry) hideBadges();
+    if (findBorrow === null) findBorrow = borrowBadgeScreen();
+    else if (findBorrow.took) hideBadges();
   },
   // A HANDOFF end (phrase commit) passes the badge borrow to the consumer
   // along with the paint: restoring at deactivate re-showed every page badge
@@ -605,7 +614,6 @@ labelReservoir.installLeakSweep(
 labelReservoir.onRefillLanded(() => engine.scheduleReconcile());
 
 let lastActivatedElement: Element | null = null;
-const MAX_BADGE_COUNT = 676; // No artificial cap; word pairs for >26
 
 // Pre-phrase snapshot. Captured when the voice plugin signals a verb
 // prefix (show_hints_go / show_hints_set / show_hints_tables) so the
@@ -1080,16 +1088,6 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
 
 // --- Register Action Handlers ---
 
-// The modal `hint` mode (where Escape dismisses all hints) only makes sense
-// when the user explicitly summoned hints — i.e. manual visibility mode. In
-// always-visible mode hints are persistent and there's a dedicated hide chord,
-// so the handler stays in normal mode: Escape keeps its native behavior (close
-// a dropdown mid-utterance, etc.) instead of nuking every badge. Typing still
-// works in always mode via the hints-visible predicate, independent of mode.
-function enterHintModeIfManual(): void {
-  if (getHintVisibility() !== 'always') keyHandler.enterHintMode();
-}
-
 // `f` — the keyboard entry into hint mode (notes/DESIGN_KEYBOARD_MODES.md).
 // Hints stay always-visible for voice, but letters only filter them here. So
 // `f` ensures hints are painted and puts the keyboard in hint mode; the mode
@@ -1108,50 +1106,10 @@ dispatcher.register('hint_mode', () => {
 type HintAction = 'activate' | 'newtab' | 'yank' | 'hover' | 'focus' | 'copytext' | 'caret';
 let pendingHintAction: HintAction = 'activate';
 
-// The shared show/hide toggle used by both Shift+F (keyboard) and the voice
-// "toggle" command, so the two entry points can't drift. Branches on what's
-// actually on screen, not just the visibility flag: if the flag desyncs
-// (badges painted while it reads hidden), keying off it alone makes the toggle
-// "show" a second set on top instead of hiding — the double-badge / "won't
-// hide" report. Treat any actually-visible badge as "showing" so the toggle
-// always dismisses what the user sees. Keeps the new-tab modifier untouched so
-// a stray toggle doesn't re-arm new-tab activation.
-//
-// The hide is momentary — NOT persisted. In always mode the next page repaints
-// the badges (shouldAutoShowBadges); in manual mode a fresh page is hidden by
-// the mode itself. Persistent "stay hidden while I browse" IS manual mode, so
-// there's no separate hidden flag to silently override the visible setting.
-// Returns true if it ended up showing.
-function toggleHints(): boolean {
-  const showing = pageSession.badgesVisible || store.all.some((w) => w.hint?.isVisible);
-  return setBadgesVisible(!showing);
-}
-
-// Drive badges to a definite visibility. The popup's Show/Hide button uses this
-// (a definite set, not a blind toggle, so a click can't race the read that
-// labeled the button). Momentary — no persistence, exactly like Shift+F: in
-// always mode the next page repaints; in manual mode a fresh page is hidden by
-// the mode. Returns the resulting shown state. No-op when already there.
-function setBadgesVisible(visible: boolean): boolean {
-  const showing = pageSession.badgesVisible || store.all.some((w) => w.hint?.isVisible);
-  if (visible === showing) return showing;
-  if (visible) {
-    doScan();
-    showBadges();
-    enterHintModeIfManual();
-  } else {
-    hideBadges();
-    keyHandler.exitHintMode();
-  }
-  return visible;
-}
-
+// (toggleHints/setBadgesVisible — the shared Shift+F / voice-"toggle" /
+// popup transition — live in render/badge-visibility.ts, with the borrow
+// primitive the find bar and the range pick both ride.)
 dispatcher.register('toggle_hints', () => { toggleHints(); });
-
-// (The range pick's screen borrow/restore lives in
-// activate/range-disambiguation.ts now, riding the stack entry's floor
-// payload and reaching the badge layer through pageSession.deps — Wave 3
-// C3b retired the pickWindowHooks injection.)
 
 dispatcher.register('activate_hint', (params) => {
   const codeword = params.word2 ? `${params.word} ${params.word2}` : params.word;
@@ -1599,20 +1557,6 @@ keyHandler.setFilterCallback((prefix: string) => {
 
 // --- Core Functions ---
 
-/** Filter to viewport-visible elements and sort by position (top-left first). */
-function viewportSort(wrappers: ElementWrapper[]): ElementWrapper[] {
-  const vh = window.innerHeight;
-  const vw = window.innerWidth;
-  return wrappers
-    .filter(w => isRectOnScreen(w.element.getBoundingClientRect(), vw, vh))
-    .sort((a, b) => {
-      const ra = a.element.getBoundingClientRect();
-      const rb = b.element.getBoundingClientRect();
-      return (ra.top - rb.top) || (ra.left - rb.left);
-    });
-}
-
-
 /**
  * Pull-resolution live strict gate (ext notes/DESIGN_STATIC_PAIR_GRAMMAR.md
  * 0c): the sealed-alphabet match doesn't consult the `_strict` mirror, so
@@ -1656,146 +1600,9 @@ function reportNoSuchHint(
 // notes/DESIGN_EXTENSION_RESTRUCTURE.md.)
 
 
-async function showBadges(): Promise<void> {
-  // Wait one frame so any pending IntersectionObserver entries (queued
-  // synchronously by observe(), delivered async) have a chance to fire,
-  // then drain pending claims/releases. Without this, a `f` keypress
-  // immediately after page load can race the tracker — wrappers exist
-  // but their codewords haven't been claimed yet and badges would
-  // render with no labels.
-  await new Promise(r => requestAnimationFrame(() => r(null)));
-  await pageSession.tracker.flushNow();
-
-  const allTargets = [...store.all];
-
-  // pageSession.badgesVisible is the mode flag — "user wants hints showing." Set it
-  // even when the store has nothing to paint right now so subsequent
-  // wrappers arriving via the batched scan (or MutationObserver
-  // discovery) paint via badgeNewlyCodeworded, which is pageSession.badgesVisible-
-  // gated. Under the old whole-grammar path the store was always
-  // populated by the time showBadges fired, so an empty return here
-  // never mattered; under batched mode the scan is async and showBadges
-  // can race ahead of the first batch landing.
-  if (allTargets.length === 0) {
-    pageSession.badgesVisible = true;
-    return;
-  }
-
-  // Filter to viewport-visible and sort by position (same as grammar push)
-  const targets = viewportSort(allTargets);
-  if (targets.length === 0) {
-    pageSession.badgesVisible = true;
-    return;
-  }
-
-  // Only render hints for elements that received a pool codeword.
-  // Elements without one wouldn't be voice-addressable and their badge
-  // would say "?" — better to leave them unhinted.
-  const renderable = targets
-    .slice(0, MAX_BADGE_COUNT)
-    .filter(w => w.scanned.codeword.length > 0);
-
-  // Breadcrumbs around the heavy per-batch paint: HintBadge construction
-  // (shadow root + DOM per badge) + placeBadges layout reads. Suspected wedge
-  // on heavy SPA targets (YouTube /@channel/videos with 80+ badges).
-  firehoseStep('showBadges:start', renderable.length, 20);
-  cacheLayout(renderable.map(w => w.element));
-  // Ancestor warm (rect + style + dims) for the same construction walks the
-  // build pass warms for (see badgeNewlyCodeworded) — showBadges constructs
-  // the strict-viewport slice and pays them per badge otherwise.
-  cacheConstruction(renderable.map(w => w.element));
-  firehoseStep('showBadges:cache_end', renderable.length, 20);
-  try {
-    for (const wrapper of renderable) {
-      const label = poolLabelToAssignment(wrapper.scanned.codeword);
-      wrapper.label = label;
-
-      if (!wrapper.hint) {
-        wrapper.hint = new HintBadge(
-          elementTarget(wrapper.element),
-          label,
-          getDisplayMode(),
-        );
-      } else {
-        wrapper.hint.updateLabel(label, getDisplayMode());
-      }
-
-      // Don't paint a badge on a CSS-invisible target (visibility:hidden /
-      // opacity:0 — a hover-reveal action bar). These never fire a mutation
-      // (they're hidden from the start, never hovered), so the throttled
-      // visibility recheck never gets a transition to clean them up — the badge
-      // would stay painted (and flicker on scroll) on something the user can't
-      // see. Gate at the paint source instead. The voice (strict) side reads
-      // the same fact fresh at plan/stamp time — no stored flag; the cache is
-      // warm from cacheLayout above, so isVisible is cheap here.
-      const cssVisible = isVisible(wrapper.element);
-      if (cssVisible) {
-        wrapper.hint.show();
-        wrapper.tFirstShown ??= performance.now();
-      } else {
-        wrapper.hint.hide();
-      }
-    }
-    firehoseStep('showBadges:mount_end', renderable.length, 20);
-
-    // Ensure visibilityMO is running so class/style-driven visibility
-    // transitions (YouTube controls fading out, etc.) request the settle
-    // pass (schedulePassSoon — the demoted backstop). Idempotent — no-op if
-    // already connected, just refreshes the abandon timer.
-    if (renderable.length > 0) connectVisibilityMO();
-
-    const __pbStart = performance.now();
-    try { placeBadges(renderable); } finally {
-      recordCpu('placeBadges:show', performance.now() - __pbStart);
-      firehoseStep('showBadges:place_end', renderable.length, 20);
-    }
-  } finally {
-    clearLayoutCache();
-  }
-  pageSession.badgesVisible = true;
-  // showBadges painted only the strict-viewport `renderable` slice. Converge
-  // the rest of the desired set: build badges for in-band (IO-margin)
-  // codeworded wrappers that fell outside the strict viewport — the
-  // noHintObject set that otherwise stayed hintless until the next scroll.
-  engine.reconcile();
-}
-
-// Reset narrowing/interaction state on existing hint badges without
-// removing them from the DOM. Used after an action completes when we want
-// to keep badges visible (always-mode activate) but clear visual highlights
-// from prefix narrowing or keyboard filter typing, and exit interaction
-// modes (keyboard hint mode, new-tab flag) so the next utterance starts
-// fresh. Safe to call when no badges are showing — the per-wrapper calls
-// are no-ops on hidden hints.
-//
-// Does NOT reset matched-chars on badges. That state represents "user
-// matched the prefix X" — we want it preserved during the activation
-// flash so the user sees the narrowed text (e.g., "a check") while the
-// badge flashes yellow, not the displayMode default ("arch c"). The
-// scheduled hint refresh (after the flash completes) re-renders all
-// badges via updateLabel, which resets the text naturally.
-function clearHintFilter(): void {
-  pendingHintAction = 'activate';
-  keyHandler.exitHintMode();
-  for (const w of store.all) {
-    w.hint?.setFiltered(false);
-  }
-}
-
-function hideBadges(): void {
-  clearHintFilter();
-  pageSession.badgesVisible = false;
-  for (const w of store.all) {
-    w.hint?.hideLeader();
-    w.hint?.hide();
-  }
-
-  // Catch up on DOM changes that occurred while hints were visible
-  if (pageSession.pendingMutation) {
-    pageSession.pendingMutation = false;
-    pageSession.resources.timeout(() => doScan(), 100);
-  }
-}
+// (showBadges / hideBadges / clearHintFilter and the screen-borrow
+// primitive live in render/badge-visibility.ts; content wires its scan and
+// hint-action hooks at initBadgeVisibility below.)
 
 // Re-scan and re-render hint badges after a short delay. Used after
 // always-mode activation so post-activate DOM mutations (modal open, form
@@ -2109,7 +1916,6 @@ pageSession.start({
   restore: () => restoreFromBfcache(),
   onCodewordsChanged: onTrackerCodewordsChanged,
   showBadges,
-  hideBadges,
   discoverInSubtree,
   discoverInSubtreeBatched,
   reevaluateAttribute,
@@ -2569,9 +2375,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
     // Only the top frame answers so the popup receives a single response. The
     // count is this frame's hint candidates; subframe hints aren't aggregated.
     if (!isTopFrame) return false;
-    const badgesVisible =
-      pageSession.badgesVisible || store.all.some((w) => w.hint?.isVisible);
-    sendResponse({ hintCount: store.all.length, badgesVisible });
+    sendResponse({ hintCount: store.all.length, badgesVisible: anyBadgesShowing() });
     return false;
   }
 

@@ -140,7 +140,8 @@ function srcFiles() {
   // (or belongs to the holder registry: heldAnywhere/allHeld/reconcileAll).
   // Under → an extraction won; lower the pin in the same commit.
   const PINS = {
-    'src/content.ts': 34,
+    'src/content.ts': 27,
+    'src/render/badge-visibility.ts': 4,
     'src/plugin/resolve.ts': 1,
     'src/labels/label-sync.ts': 1,
     'src/labels/store-holder.ts': 6,
@@ -154,18 +155,23 @@ function srcFiles() {
     'src/observe/mutation-source.ts': 1,
     'src/observe/limbo.ts': 5,
     'src/rules/rule-apply.ts': 5,
-    'src/activate/range-disambiguation.ts': 1,
     'src/debug/debug-snapshot.ts': 5,
     'src/debug/perf-report.ts': 9,
     'src/debug/churn-log.ts': 1,
     'src/debug/pool-audit.ts': 1,
   };
   let total = 0;
+  const counts = new Map();
   for (const file of srcFiles()) {
     const count = (read(file).match(/\bstore\.all\b/g) ?? []).length;
-    if (count === 0) continue;
+    if (count > 0) counts.set(relative(root, join(root, file)), count);
     total += count;
-    const pin = PINS[relative(root, join(root, file))];
+  }
+  // Union of live counts and pins, so a pinned file whose LAST site was
+  // deleted still reports (drop the pin) rather than passing silently.
+  for (const file of new Set([...counts.keys(), ...Object.keys(PINS)])) {
+    const count = counts.get(file) ?? 0;
+    const pin = PINS[file];
     if (pin === undefined) {
       fail(`${file}: ${count} store.all site(s) in an unsanctioned module — membership questions go ` +
         'through the holder registry; wrapper-lifecycle work gets sanctioned here visibly');
@@ -173,11 +179,9 @@ function srcFiles() {
       fail(`${file}: ${count} store.all sites (pinned ${pin}) — a new sweep must be sanctioned here visibly ` +
         'or rerouted through the holder registry');
     } else if (count < pin) {
-      fail(`${file}: ${count} store.all sites, pinned ${pin} — lower the pin in this commit so the win locks in`);
+      fail(`${file}: ${count} store.all sites, pinned ${pin} — lower the pin in this commit so the win locks in` +
+        (count === 0 ? ' (remove the entry)' : ''));
     }
-  }
-  for (const file of Object.keys(PINS)) {
-    if (!existsSync(join(root, file))) fail(`store.all pin references deleted file ${file} — remove the pin`);
   }
   if (!failed) ok(`store.all: ${total} sites across ${Object.keys(PINS).length} sanctioned modules, all at pin`);
 }

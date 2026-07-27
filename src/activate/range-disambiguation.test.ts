@@ -99,6 +99,28 @@ vi.mock('../render/hints', () => ({
 }));
 vi.mock('../config', () => ({ getDisplayMode: () => 'letter' }));
 
+// The badge half of the pick's screen borrow is the shared primitive in
+// render/badge-visibility.ts (tested there against the real singletons); here
+// it is a SYNTHETIC borrow over a one-field screen model, so these tests pin
+// the pick's obligations — borrow at arm, give back exactly once on whichever
+// exit runs — without booting content's badge layer.
+const screen = vi.hoisted(() => ({ showing: false, shown: 0, hidden: 0 }));
+vi.mock('../render/badge-visibility', () => ({
+  borrowBadgeScreen: () => {
+    const took = screen.showing;
+    if (took) { screen.hidden++; screen.showing = false; }
+    let returned = false;
+    return {
+      took,
+      restore() {
+        if (returned) return;
+        returned = true;
+        if (took) { screen.shown++; screen.showing = true; }
+      },
+    };
+  },
+}));
+
 /** Chips still up: constructed, shown, not torn down. */
 function liveBadges(): FakeBadge[] {
   return badges.filter(b => !b.removed);
@@ -120,7 +142,6 @@ import {
   startRangePick, cancelRangePick, isRangePickPending,
   MAX_RANGE_BADGES,
 } from './range-disambiguation';
-import { pageSession } from '../lifecycle/page-session';
 import { keyHandler } from '../core/singletons';
 import {
   __resetHolderRegistry, resolveCodeword, anyHolderMatchesPrefix,
@@ -734,45 +755,40 @@ describe('range-disambiguation pick', () => {
   // keys to 'normal' — so answering a pick armed from hint mode handed back a
   // repainted page whose badge letters fired keybinds instead (2026-07-26).
   describe('entry state (the stack floor payload — Wave 3 C3b)', () => {
-    // The borrow reaches content's badge layer through pageSession.deps and
-    // the keyboard through the singleton; the floor rides the range_pick
-    // entry, so what push recorded is what whichever exit runs gives back.
-    let shown: number;
-    let hidden: number;
+    // The badge half rides the shared borrow primitive (the synthetic above)
+    // and the keyboard goes through the singleton; the floor rides the
+    // range_pick entry, so what push recorded is what whichever exit runs
+    // gives back. Assertions read the synthetic's counters.
     function arrangeScreen(at: { badgesVisible: boolean; hintMode: boolean }): void {
-      shown = 0;
-      hidden = 0;
-      pageSession.deps = {
-        showBadges: () => { shown++; },
-        hideBadges: () => { hidden++; },
-      } as unknown as typeof pageSession.deps;
-      pageSession.badgesVisible = at.badgesVisible;
+      screen.showing = at.badgesVisible;
+      screen.shown = 0;
+      screen.hidden = 0;
       if (at.hintMode) keyHandler.enterHintMode();
       else keyHandler.exitHintMode();
     }
     afterEach(() => {
       keyHandler.exitHintMode();
-      pageSession.badgesVisible = false;
+      screen.showing = false;
     });
 
     it('gives back BOTH halves of what it took — badges and keyboard mode', () => {
       arrangeScreen({ badgesVisible: true, hintMode: true });
       startRangePick([makeRange('a'), makeRange('b')], () => {});
-      expect(hidden).toBe(1);
+      expect(screen.hidden).toBe(1);
       expect(keyHandler.isHintMode()).toBe(true); // capturing codeword keys
-      expect(shown).toBe(0);
+      expect(screen.shown).toBe(0);
 
       resolveCodeword('alpha');
-      expect(shown).toBe(1);                      // badges back
+      expect(screen.shown).toBe(1);                      // badges back
       expect(keyHandler.isHintMode()).toBe(true); // hint mode back
     });
 
     it('restores the state it actually found, not a fixed one', () => {
       arrangeScreen({ badgesVisible: false, hintMode: false });
       startRangePick([makeRange('a'), makeRange('b')], () => {});
-      expect(hidden).toBe(0); // nothing was up, nothing to hide
+      expect(screen.hidden).toBe(0); // nothing was up, nothing to hide
       cancelRangePick('escape');
-      expect(shown).toBe(0);
+      expect(screen.shown).toBe(0);
       expect(keyHandler.isHintMode()).toBe(false);
     });
 
@@ -781,7 +797,7 @@ describe('range-disambiguation pick', () => {
       startRangePick([makeRange('a'), makeRange('b')], () => {});
       cancelRangePick('escape');
       cancelRangePick('escape_again');
-      expect(shown).toBe(1);
+      expect(screen.shown).toBe(1);
     });
 
     it('restores when the set empties itself rather than being answered', async () => {
@@ -797,7 +813,7 @@ describe('range-disambiguation pick', () => {
       await Promise.resolve();
 
       expect(isRangePickPending()).toBe(false);
-      expect(shown).toBe(1);
+      expect(screen.shown).toBe(1);
       expect(keyHandler.isHintMode()).toBe(true);
     });
 
@@ -816,7 +832,7 @@ describe('range-disambiguation pick', () => {
       expect(isRangePickPending()).toBe(false);
       expect(chipCount()).toBe(0);
       expect(pickWindowPosts[pickWindowPosts.length - 1]).toEqual([]);
-      expect(shown).toBe(1);
+      expect(screen.shown).toBe(1);
       expect(allHeld()).toEqual([]);
     });
 
@@ -825,8 +841,8 @@ describe('range-disambiguation pick', () => {
       nextClaim = [];
       arrangeScreen({ badgesVisible: true, hintMode: true });
       startRangePick([makeRange('a'), makeRange('b')], () => {});
-      expect(hidden).toBe(0);
-      expect(shown).toBe(0);
+      expect(screen.hidden).toBe(0);
+      expect(screen.shown).toBe(0);
       expect(modes.has('range_pick')).toBe(false);
     });
   });

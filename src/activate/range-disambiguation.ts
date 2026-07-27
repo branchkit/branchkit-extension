@@ -32,9 +32,8 @@ import { clearFindPaint } from '../scan/find';
 import { bkLog } from '../debug/bk-log';
 import { EXCLUSIVE_OVERLAY_PRIORITY, type HolderOutcome } from '../labels/holder-registry';
 import { modes } from '../core/modes';
-import { pageSession } from '../lifecycle/page-session';
-import { store } from '../core/store';
 import { keyHandler } from '../core/singletons';
+import { borrowBadgeScreen, type BadgeBorrow } from '../render/badge-visibility';
 import type { Message } from '../types';
 
 /**
@@ -96,31 +95,28 @@ let pending: PendingPick | null = null;
  * While chips are up they OWN the codewords, so the regular badges hide for
  * the window and the screen shows exactly what's speakable (user decision
  * 2026-07-25), and the keyboard captures codeword keys — a question asked in
- * codewords has to be answerable in them, by either input. The borrow reaches
- * content's badge layer through `pageSession.deps` (the sanctioned reach-back
- * the source modules use) and the keyboard through the singleton; the
- * snapshot MUST be read before the badges are hidden — hiding them also exits
- * hint mode. `isHintMode()` is the honest unranked read, so a pick armed from
- * hint mode while caret was also live restores hint correctly (the old
- * getMode()-ranked snapshot's known gap).
+ * codewords has to be answerable in them, by either input. The badge half is
+ * the shared borrow primitive (render/badge-visibility.ts — the same one the
+ * find bar rides) and the keyboard half goes through the singleton; the
+ * keyboard snapshot MUST be read before the borrow — hiding the badges also
+ * exits hint mode. `isHintMode()` is the honest unranked read, so a pick
+ * armed from hint mode while caret was also live restores hint correctly
+ * (the old getMode()-ranked snapshot's known gap).
  */
 interface PickEntry {
-  badgesVisible: boolean;
+  borrow: BadgeBorrow;
   hintMode: boolean;
 }
 
 function borrowScreen(): PickEntry {
-  const entry: PickEntry = {
-    badgesVisible: pageSession.badgesVisible || store.all.some((w) => w.hint?.isVisible),
-    hintMode: keyHandler.isHintMode(),
-  };
-  if (entry.badgesVisible) pageSession.deps.hideBadges();
+  const hintMode = keyHandler.isHintMode(); // before the borrow's hide
+  const borrow = borrowBadgeScreen();
   keyHandler.enterHintMode();
-  return entry;
+  return { borrow, hintMode };
 }
 
 function restoreScreen(entry: PickEntry): void {
-  if (entry.badgesVisible) pageSession.deps.showBadges();
+  entry.borrow.restore();
   // enterHintMode clears the codeword filter, which is right on both edges:
   // the badges the pick hid are repainted unfiltered, so a prefix typed
   // before the pick no longer names anything on screen.
