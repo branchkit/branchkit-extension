@@ -31,7 +31,7 @@ import { bkLog, setLogCorrelation } from './debug/bk-log';
 import { harnessHooksEnabled } from './debug/harness-hooks';
 import { store } from './core/store';
 import {
-  initBadgeVisibility, anyBadgesShowing, showBadges, hideBadges, clearHintFilter,
+  anyBadgesShowing, showBadges, hideBadges, clearHintFilter,
   toggleHints, setBadgesVisible, assertBadgeScreenBorrow, returnBadgeScreenBorrow,
 } from './render/badge-visibility';
 import { HintBadge } from './render/hints';
@@ -484,13 +484,6 @@ function onTrackerCodewordsChanged(claimed: ElementWrapper[], released: string[]
 // lazy-load. The scroll-debounce coalesces reposition bursts into one
 // call per scroll-end now, which makes per-call cost much less critical
 // than total observation overhead.)
-
-// Badge-visibility hooks: the module owns the transitions (render/
-// badge-visibility.ts); the scan and the pending hint-action verb stay
-// content-owned and reach it here.
-initBadgeVisibility({
-  doScan: () => { void doScan(); },
-});
 
 setFindCallbacks({
   // These callbacks own only the badge borrow/restore — the plugin's find tag
@@ -1473,8 +1466,8 @@ function reportNoSuchHint(
 
 
 // (showBadges / hideBadges / clearHintFilter and the screen-borrow
-// primitive live in render/badge-visibility.ts; content wires its scan and
-// hint-action hooks at initBadgeVisibility below.)
+// primitive live in render/badge-visibility.ts, which now acquires its own
+// doScan — content wires nothing into it.)
 
 // Re-scan and re-render hint badges after a short delay. Used after
 // always-mode activation so post-activate DOM mutations (modal open, form

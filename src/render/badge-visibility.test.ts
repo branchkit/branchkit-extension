@@ -4,18 +4,30 @@
  * The primitive under test is the one that, hand-rolled, shipped a field bug
  * twice in one arc: the screen borrow (snapshot-then-hide, conditional
  * idempotent give-back) and the compound showing-read behind it. Real
- * singletons (store, pageSession, keyHandler) with fake badges — no module
- * mocks, per the arc's synthetic-participants rule.
+ * singletons (store, pageSession, keyHandler) with fake badges, per the arc's
+ * synthetic-participants rule.
+ *
+ * The one module mock is scan-orchestrator, and it is not an exception to that
+ * rule: the rule is about the badges and the state this module OWNS, and
+ * doScan is the discovery layer ABOVE it — pulling the real walk in (adapters,
+ * rules, the observe stack) would make this a slow integration test of code
+ * that has its own. The mock also gives back the observation the retired
+ * `initBadgeVisibility({doScan})` hook used to provide for free.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+vi.mock('../scan/scan-orchestrator', () => ({
+  doScan: vi.fn(async () => {}),
+}));
+import { doScan } from '../scan/scan-orchestrator';
 import { ElementWrapper } from '../scan/element-wrapper';
 import { ScannedElement } from '../types';
 import { store } from '../core/store';
 import { pageSession } from '../lifecycle/page-session';
 import { keyHandler } from '../core/singletons';
 import {
-  initBadgeVisibility, anyBadgesShowing, hideBadges, toggleHints,
+  anyBadgesShowing, hideBadges, toggleHints,
   setBadgesVisible, borrowBadgeScreen, _resetBadgeVisibilityForTesting,
   assertBadgeScreenBorrow, returnBadgeScreenBorrow,
 } from './badge-visibility';
@@ -39,13 +51,8 @@ function seedWrapper(visibleHint: boolean): ElementWrapper {
   return w;
 }
 
-let scans: number;
-
 beforeEach(() => {
-  scans = 0;
-  initBadgeVisibility({
-    doScan: () => { scans++; },
-  });
+  vi.mocked(doScan).mockClear();
   // showBadges' fast path still awaits a frame + a tracker flush; neither
   // exists before pageSession.start(), so provide inert stand-ins.
   globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) =>
@@ -85,12 +92,10 @@ describe('the compound showing-read', () => {
   });
 });
 
-describe('use before init', () => {
-  it('fails loud, not silently no-op', () => {
-    _resetBadgeVisibilityForTesting();
-    expect(() => hideBadges()).toThrow(/initBadgeVisibility/);
-  });
-});
+// ('use before init' lived here. The module has no init step any more — it
+// imports doScan directly — so there is no unwired state to be in and nothing
+// for the assertion to catch. Kept as a note rather than rewritten into
+// something that passes either way.)
 
 describe('hideBadges', () => {
   it('clears the filter state, exits hint mode, drops the flag, hides every badge', () => {
@@ -109,12 +114,35 @@ describe('hideBadges', () => {
     expect(w.hint!.hide).toHaveBeenCalled();
     expect(w.hint!.setFiltered).toHaveBeenCalledWith(false);
   });
+
+  // The catch-up rescan: the page mutated while badges were up, so the store is
+  // stale by the time they come down. Asserted as a PAIR, because "doScan ran"
+  // alone is also what an unconditional rescan produces — only the second case
+  // separates the guard from no guard.
+  it('schedules a catch-up rescan iff the page mutated while badges were up', () => {
+    vi.useFakeTimers();
+    try {
+      pageSession.pendingMutation = true;
+      hideBadges();
+      expect(pageSession.pendingMutation).toBe(false); // consumed, not left armed
+      expect(doScan).not.toHaveBeenCalled();           // deferred, not synchronous
+      vi.advanceTimersByTime(100);
+      expect(doScan).toHaveBeenCalledTimes(1);
+
+      vi.mocked(doScan).mockClear();
+      hideBadges(); // pendingMutation is down now
+      vi.advanceTimersByTime(100);
+      expect(doScan).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('setBadgesVisible / toggleHints', () => {
   it('showing from hidden scans and raises the flag', async () => {
     expect(setBadgesVisible(true)).toBe(true);
-    expect(scans).toBe(1);
+    expect(doScan).toHaveBeenCalledTimes(1);
     await settle();
     expect(pageSession.badgesVisible).toBe(true);
   });
@@ -122,7 +150,7 @@ describe('setBadgesVisible / toggleHints', () => {
   it('is a no-op when already at the requested state', () => {
     pageSession.badgesVisible = true;
     expect(setBadgesVisible(true)).toBe(true);
-    expect(scans).toBe(0);
+    expect(doScan).not.toHaveBeenCalled();
   });
 
   it('toggle HIDES when the flag desynced but a badge is visible (never a second set on top)', () => {

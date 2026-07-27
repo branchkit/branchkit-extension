@@ -19,11 +19,23 @@
  * badge counts as showing, so a transition always acts on what the user
  * sees.
  *
- * Content-owned orchestration (the scan, the pending hint-action verb)
- * arrives through init hooks — this module owns visibility, not discovery
- * or dispatch. Source modules (observe/*) still reach showBadges through
- * pageSession.deps, their sanctioned reach-back; orchestration-layer
- * modules import this one directly.
+ * This module owns visibility, not discovery or dispatch — but it does
+ * TRIGGER a rescan on the hidden→shown edge, and it imports `doScan` to do
+ * it. That used to arrive through an init hook on the stated grounds that
+ * "the discovery walk is a content.ts-local orchestration this module has no
+ * import path to". Both halves were false: `doScan` lives in
+ * scan/scan-orchestrator and content.ts merely re-exports it, and the value-
+ * import graph has NO path in EITHER direction between this module and that
+ * one. There was no cycle to route around, so the hook (and with it the
+ * module's whole init step) is gone.
+ *
+ * Consequence worth stating, because retiring a hook usually costs something:
+ * `clearHintFilter` carried a bare `requireHooks()` whose only job was to
+ * fail loud on use-before-init. With nothing left to initialise there is no
+ * use-before-init state to be in — the requirement is gone, not the
+ * guarantee. Source modules (observe/*) still reach showBadges through
+ * pageSession.deps, their sanctioned reach-back; orchestration-layer modules
+ * import this one directly.
  */
 
 import { pageSession } from '../lifecycle/page-session';
@@ -34,6 +46,7 @@ import { applyClaimLabel } from '../scan/element-wrapper';
 import { HintBadge } from './hints';
 import { elementTarget } from './badge-target';
 import { isVisible } from '../scan/scanner';
+import { doScan } from '../scan/scan-orchestrator';
 import { connectVisibilityMO } from '../observe/visibility-tracker';
 import { placeBadges } from '../placement';
 import { cacheLayout, cacheConstruction, clearLayoutCache, isRectOnScreen } from '../core/layout-cache';
@@ -42,26 +55,6 @@ import { firehoseStep } from '../debug/firehose';
 import { recordCpu } from '../debug/perf-counters';
 
 const MAX_BADGE_COUNT = 676; // No artificial cap; word pairs for >26
-
-interface BadgeVisibilityHooks {
-  /** Re-scan the page (content's doScan — discovery orchestration). Sole
-   *  remaining hook: the discovery walk is a content.ts-local orchestration
-   *  this module has no import path to. The hint-action reset that used to sit
-   *  beside it is gone — that state lives on KeyHandler now, which this module
-   *  already holds. */
-  doScan: () => void;
-}
-
-let hooks: BadgeVisibilityHooks | null = null;
-
-export function initBadgeVisibility(h: BadgeVisibilityHooks): void {
-  hooks = h;
-}
-
-function requireHooks(): BadgeVisibilityHooks {
-  if (!hooks) throw new Error('badge-visibility used before initBadgeVisibility');
-  return hooks;
-}
 
 /** The one showing-read (see header: compound on purpose). */
 export function anyBadgesShowing(): boolean {
@@ -199,12 +192,6 @@ export async function showBadges(): Promise<void> {
 // scheduled hint refresh (after the flash completes) re-renders all
 // badges via updateLabel, which resets the text naturally.
 export function clearHintFilter(): void {
-  // Use-before-init must fail loud, not half-work. This assertion used to be
-  // implicit — the hint-action reset was a hook, so reaching it proved the
-  // module was wired. That hook moved to KeyHandler, and the guarantee has to
-  // be stated rather than inherited. Every hide/toggle transition routes
-  // through here, so asserting here covers the module.
-  requireHooks();
   // An abandoned verb must not survive the filter that armed it: clearing the
   // hint prefix is exactly the moment 'yank' stops applying to anything.
   keyHandler.resetHintAction();
@@ -225,7 +212,7 @@ export function hideBadges(): void {
   // Catch up on DOM changes that occurred while hints were visible
   if (pageSession.pendingMutation) {
     pageSession.pendingMutation = false;
-    pageSession.resources.timeout(() => requireHooks().doScan(), 100);
+    pageSession.resources.timeout(() => { void doScan(); }, 100);
   }
 }
 
@@ -263,7 +250,7 @@ export function setBadgesVisible(visible: boolean): boolean {
   const showing = anyBadgesShowing();
   if (visible === showing) return showing;
   if (visible) {
-    requireHooks().doScan();
+    void doScan();
     void showBadges();
     enterHintModeIfManual();
   } else {
@@ -349,6 +336,5 @@ export function returnBadgeScreenBorrow(): void {
 
 /** Test-only reset. */
 export function _resetBadgeVisibilityForTesting(): void {
-  hooks = null;
   screenBorrow = null;
 }
