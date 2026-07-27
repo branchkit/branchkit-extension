@@ -32,7 +32,7 @@ import { harnessHooksEnabled } from './debug/harness-hooks';
 import { store } from './core/store';
 import {
   initBadgeVisibility, anyBadgesShowing, showBadges, hideBadges, clearHintFilter,
-  toggleHints, setBadgesVisible, borrowBadgeScreen, type BadgeBorrow,
+  toggleHints, setBadgesVisible, assertBadgeScreenBorrow, returnBadgeScreenBorrow,
 } from './render/badge-visibility';
 import { HintBadge } from './render/hints';
 import { elementTarget } from './render/badge-target';
@@ -489,27 +489,13 @@ initBadgeVisibility({
   resetHintAction: () => { pendingHintAction = 'activate'; },
 });
 
-// Find borrows the badge screen while it runs — highlights and the badge
-// layer compete for the same screen — and gives it back on exit (field,
-// 2026-07-26: every exit left an always-mode page badge-less, healed only by
-// `f` as a side effect). One borrow per SESSION: `findImmediate` re-fires
-// onActivate over a live session, and re-borrowing would snapshot the hidden
-// state find itself caused — so a live borrow just re-asserts the hide
-// (`f` mid-session may have re-shown badges).
-let findBorrow: BadgeBorrow | null = null;
-
-function returnFindBadgeBorrow(): void {
-  findBorrow?.restore();
-  findBorrow = null;
-}
-
 setFindCallbacks({
   // These callbacks own only the badge borrow/restore — the plugin's find tag
   // rides the mode stack's mirror (the session's push in find.ts, Wave 3 C4a).
-  onActivate: () => {
-    if (findBorrow === null) findBorrow = borrowBadgeScreen();
-    else if (findBorrow.took) hideBadges();
-  },
+  // The borrow slot and its re-entrancy rule live in render/badge-visibility
+  // now; find.ts cannot import that module (a cycle through render/hints →
+  // render/badge-variant → scan/find), so these stay as the relay.
+  onActivate: () => assertBadgeScreenBorrow(),
   // A HANDOFF end (phrase commit) passes the badge borrow to the consumer
   // along with the paint: restoring at deactivate re-showed every page badge
   // around the pick chips (field, 2026-07-26 — chips own the screen, ratified
@@ -518,9 +504,9 @@ setFindCallbacks({
   onDeactivate: (handoff) => {
     resetCycleTarget();
     clearSearchBadges('find_deactivated');
-    if (!handoff) returnFindBadgeBorrow();
+    if (!handoff) returnBadgeScreenBorrow();
   },
-  onPaintCleared: () => returnFindBadgeBorrow(),
+  onPaintCleared: () => returnBadgeScreenBorrow(),
   // When a search commits while caret/visual selection is active, extend the
   // selection straight to the match — so "/ query Enter" is a find-and-select,
   // no need to press `n` (which skips to the next match). `caret` is defined

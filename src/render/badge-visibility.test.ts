@@ -17,6 +17,7 @@ import { keyHandler } from '../core/singletons';
 import {
   initBadgeVisibility, anyBadgesShowing, hideBadges, toggleHints,
   setBadgesVisible, borrowBadgeScreen, _resetBadgeVisibilityForTesting,
+  assertBadgeScreenBorrow, returnBadgeScreenBorrow,
 } from './badge-visibility';
 
 function fakeHint(visible: boolean) {
@@ -170,5 +171,90 @@ describe('borrowBadgeScreen', () => {
     expect(pageSession.badgesVisible).toBe(false);
     const borrow = borrowBadgeScreen();
     expect(borrow.took).toBe(true);
+  });
+});
+
+// The slot around the primitive. This was a bare `let` in content.ts, so the
+// re-entrancy rule below — the whole reason the slot exists — had never been
+// tested anywhere; find.test.ts pins the give-back paths, not the re-take.
+describe('the badge screen borrow slot', () => {
+  it('takes the screen on first assert', async () => {
+    pageSession.badgesVisible = true;
+    assertBadgeScreenBorrow();
+    expect(pageSession.badgesVisible).toBe(false);
+
+    returnBadgeScreenBorrow();
+    await settle();
+    expect(pageSession.badgesVisible).toBe(true);
+  });
+
+  // findImmediate re-fires the activate path over a live session. A second
+  // borrow there would snapshot the hidden state the FIRST borrow caused, so
+  // the give-back would decide the badges had always been hidden — an
+  // always-mode page left bare, which is the 2026-07-26 field bug.
+  it('re-asserting over a live borrow does not re-snapshot the hidden state', async () => {
+    pageSession.badgesVisible = true;
+    assertBadgeScreenBorrow();
+    assertBadgeScreenBorrow();
+    assertBadgeScreenBorrow();
+
+    returnBadgeScreenBorrow();
+    await settle();
+    expect(pageSession.badgesVisible).toBe(true); // still given back
+  });
+
+  // The other half of the same rule: `f` mid-session re-showed the badges and
+  // find still wants the screen, so a re-assert over a borrow that TOOK must
+  // hide again rather than no-op.
+  it('re-asserting re-hides badges that came back mid-session', () => {
+    pageSession.badgesVisible = true;
+    assertBadgeScreenBorrow();
+    expect(pageSession.badgesVisible).toBe(false);
+
+    pageSession.badgesVisible = true; // `f` re-showed them
+    assertBadgeScreenBorrow();
+    expect(pageSession.badgesVisible).toBe(false);
+  });
+
+  // A borrow that took nothing must not start hiding on re-entry — under
+  // manual visibility the screen was already hidden and find never owned it.
+  it('re-asserting over a borrow that took nothing stays inert', () => {
+    assertBadgeScreenBorrow();          // hidden screen: took === false
+    pageSession.badgesVisible = true;   // the user showed badges themselves
+    assertBadgeScreenBorrow();
+    expect(pageSession.badgesVisible).toBe(true);
+  });
+
+  it('returning is safe on a slot never taken, and safe twice', async () => {
+    returnBadgeScreenBorrow();
+    pageSession.badgesVisible = true;
+    assertBadgeScreenBorrow();
+    returnBadgeScreenBorrow();
+    await settle();
+    expect(pageSession.badgesVisible).toBe(true);
+
+    pageSession.badgesVisible = false; // something else hid it since
+    returnBadgeScreenBorrow();         // onPaintCleared after a plain close
+    await settle();
+    expect(pageSession.badgesVisible).toBe(false);
+  });
+
+  // Every find exit reaches a return, and the next session must take a FRESH
+  // borrow. Asserting only the second hide would not prove that: a spent
+  // borrow still reports took === true, so the re-assert arm hides either way.
+  // The give-back is where a stale slot shows — `restore` is idempotent, so
+  // the second session's return would no-op and leave the page bare.
+  it('a returned slot takes again on the next session, and gives back again', async () => {
+    pageSession.badgesVisible = true;
+    assertBadgeScreenBorrow();
+    returnBadgeScreenBorrow();
+    await settle();
+    expect(pageSession.badgesVisible).toBe(true);
+
+    assertBadgeScreenBorrow();
+    expect(pageSession.badgesVisible).toBe(false);
+    returnBadgeScreenBorrow();
+    await settle();
+    expect(pageSession.badgesVisible).toBe(true);
   });
 });

@@ -302,7 +302,45 @@ export function borrowBadgeScreen(): BadgeBorrow {
   };
 }
 
+// --- The screen borrow, as a single slot ---
+//
+// Find borrows the badge screen while it runs — highlights and the badge layer
+// compete for the same screen — and gives it back on exit (field, 2026-07-26:
+// every exit left an always-mode page badge-less, healed only by `f` as a side
+// effect). The slot and its re-entrancy rule lived in content.ts as a bare
+// `let`, which is exactly what made find's callback seam uninvertible; here it
+// sits beside the primitive it wraps and the hide/show it drives.
+//
+// One slot, not a stack, and that is deliberate: there is one screen, and a
+// second borrower arriving over a live borrow is a bug, not a nesting.
+let screenBorrow: BadgeBorrow | null = null;
+
+/**
+ * Take the badge screen if it is not already taken; re-assert the hide if it
+ * is.
+ *
+ * The re-assert half is the load-bearing one. `findImmediate` re-fires the
+ * activate path over a LIVE session, and re-borrowing there would snapshot the
+ * hidden state the borrow itself caused — the give-back would then conclude the
+ * badges had always been hidden and leave the page bare. Re-asserting instead
+ * covers the case it is actually for: `f` mid-session re-showed the badges and
+ * find still wants the screen.
+ */
+export function assertBadgeScreenBorrow(): void {
+  if (screenBorrow === null) screenBorrow = borrowBadgeScreen();
+  else if (screenBorrow.took) hideBadges();
+}
+
+/** Give the screen back in the state the borrow found it. Safe on a slot that
+ *  was never taken, and safe to call twice — `restore` is itself idempotent,
+ *  and every find exit path can reach here. */
+export function returnBadgeScreenBorrow(): void {
+  screenBorrow?.restore();
+  screenBorrow = null;
+}
+
 /** Test-only reset. */
 export function _resetBadgeVisibilityForTesting(): void {
   hooks = null;
+  screenBorrow = null;
 }
