@@ -85,7 +85,8 @@ let matchRanges: Range[] = [];
 let currentIndex = -1;
 
 let onActivate: (() => void) | null = null;
-let onDeactivate: (() => void) | null = null;
+let onDeactivate: ((handoff: boolean) => void) | null = null;
+let onPaintCleared: (() => void) | null = null;
 // Fired when a search commits WITH matches (Enter or voice find). Caret mode
 // uses it to auto-extend the selection to the match. See caret.ts.
 let onCommit: (() => void) | null = null;
@@ -96,12 +97,20 @@ let onCommit: (() => void) | null = null;
 
 export function setFindCallbacks(opts: {
   onActivate?: () => void;
-  onDeactivate?: () => void;
+  /** `handoff` is endSession's keepPaint: true means the session ended by
+   *  HANDING its candidates to a consumer (a phrase commit), not by closing.
+   *  Whatever the consumer holds on find's behalf — the badge borrow — must
+   *  not be returned yet; `onPaintCleared` is the return point. */
+  onDeactivate?: (handoff: boolean) => void;
   onCommit?: () => void;
+  /** The consumer answered (or abandoned) the handed-over question —
+   *  clearFindPaint fired. The moment borrowed screen state comes back. */
+  onPaintCleared?: () => void;
 }): void {
   onActivate = opts.onActivate ?? null;
   onDeactivate = opts.onDeactivate ?? null;
   onCommit = opts.onCommit ?? null;
+  onPaintCleared = opts.onPaintCleared ?? null;
 }
 
 export function getFindState(): FindState {
@@ -833,7 +842,9 @@ function endSession(keepPaint: boolean): void {
   if (!keepPaint) clearHighlights();
   removeFindBar();
   removeCommittedPill();
-  onDeactivate?.();
+  // keepPaint IS the handoff signal: the session ends but its candidates
+  // (and whatever the callbacks hold on its behalf) pass to the consumer.
+  onDeactivate?.(keepPaint);
 }
 
 /**
@@ -846,6 +857,9 @@ function endSession(keepPaint: boolean): void {
  */
 export function clearFindPaint(): void {
   clearHighlights();
+  // The handed-over question is answered (or abandoned) — the return point
+  // for anything the consumer held on find's behalf (the badge borrow).
+  onPaintCleared?.();
 }
 
 export function findNext(): void {

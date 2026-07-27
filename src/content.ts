@@ -481,40 +481,40 @@ function onTrackerCodewordsChanged(claimed: ElementWrapper[], released: string[]
 // than total observation overhead.)
 
 // Were the page's badges showing when this find session started? Find hides
-// them while it runs — the match highlights and the badge layer compete for the
-// same screen — and RESTORING them is the other half of that trade, which was
-// missing entirely. Every exit path (Escape, voice "over", the focus-loss close)
-// left an always-mode page with no badges and no indication why; the only way
-// back was to press `f`, which re-shows them as a side effect of entering hint
-// mode. Reported from the field 2026-07-26.
-//
-// Snapshotted rather than assumed, exactly as the pick window does it (see
-// setPickWindowHooks): under manual visibility the badges were already hidden
-// before find ran, and re-showing them on exit would be a state change the user
-// never asked for.
-//
-// Recorded once per SESSION, not per activate call — `findImmediate` re-fires
-// onActivate when a second voice find lands over a live one, and re-reading
-// there would snapshot the hidden state find itself had just caused, losing the
-// original answer. Same "no-op once active" shape as caret's findFloor.
+// them while it runs — highlights and the badge layer compete for the same
+// screen — and restoring them on exit is the other half of that trade (field,
+// 2026-07-26: every exit left an always-mode page badge-less, healed only by
+// `f` as a side effect). Snapshotted, not assumed: under manual visibility the
+// badges were already hidden before find ran, and re-showing on exit would be
+// a state change the user never asked for. Recorded once per SESSION —
+// `findImmediate` re-fires onActivate over a live session, and re-reading
+// would snapshot the hidden state find itself caused.
 let findBadgeEntry: boolean | null = null;
 
+// Give back what find borrowed, in the state find snapshotted at its entry.
+function returnFindBadgeBorrow(): void {
+  if (findBadgeEntry) void showBadges();
+  findBadgeEntry = null;
+}
+
 setFindCallbacks({
-  // The plugin's find tag rides the mode stack's mirror (the session's push
-  // in find.ts); these callbacks own only the badge borrow/restore.
+  // These callbacks own only the badge borrow/restore — the plugin's find tag
+  // rides the mode stack's mirror (the session's push in find.ts, Wave 3 C4a).
   onActivate: () => {
     findBadgeEntry ??= pageSession.badgesVisible || store.all.some((w) => w.hint?.isVisible);
     if (findBadgeEntry) hideBadges();
-    // The plugin's find tag rides the mode stack's mirror now — the session's
-    // push in find.ts is the one signal (Wave 3 C4a).
   },
-  onDeactivate: () => {
-    // Hand the screen back in the state find borrowed it in.
-    if (findBadgeEntry) void showBadges();
-    findBadgeEntry = null;
+  // A HANDOFF end (phrase commit) passes the badge borrow to the consumer
+  // along with the paint: restoring at deactivate re-showed every page badge
+  // around the pick chips (field, 2026-07-26 — chips own the screen, ratified
+  // 2026-07-25). The borrow returns at onPaintCleared instead, which every
+  // consumer exit reaches via clearFindPaint; a plain close returns it here.
+  onDeactivate: (handoff) => {
     resetCycleTarget();
     clearSearchBadges('find_deactivated');
+    if (!handoff) returnFindBadgeBorrow();
   },
+  onPaintCleared: () => returnFindBadgeBorrow(),
   // When a search commits while caret/visual selection is active, extend the
   // selection straight to the match — so "/ query Enter" is a find-and-select,
   // no need to press `n` (which skips to the next match). `caret` is defined

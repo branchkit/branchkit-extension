@@ -462,6 +462,29 @@ describe('find bar: phrase-targeting modes', () => {
     expect(el.selectionEnd).toBe('nonexistent'.length);
   });
 
+  it('a phrase commit deactivates as a HANDOFF; the borrow returns at clearFindPaint', () => {
+    // The badge borrow rides these two signals (content.ts): restoring at a
+    // handoff deactivate re-showed every page badge around the pick chips
+    // (field, 2026-07-26). handoff=true says "the consumer holds it now";
+    // onPaintCleared is the one return point every consumer exit reaches.
+    const events: string[] = [];
+    setFindCallbacks({
+      onDeactivate: (handoff) => events.push(`deactivate:${handoff}`),
+      onPaintCleared: () => events.push('paint-cleared'),
+    });
+    openHighlightBox();
+    dictate('alpha');
+    vi.runAllTimers();
+    expect(events).toEqual(['deactivate:true']);
+    clearFindPaint(); // the pick (or selection) answered
+    expect(events).toEqual(['deactivate:true', 'paint-cleared']);
+
+    // A plain close is NOT a handoff — nothing is pending, restore at once.
+    openHighlightBox();
+    closeFindMode();
+    expect(events[events.length - 1]).toBe('deactivate:false');
+  });
+
   it('the match paint SURVIVES the commit — the consumer owns it from there', () => {
     // Clearing it at commit put the pick chips over unmarked text and flashed a
     // single-match selection from highlighted to bare. The matches ARE the
