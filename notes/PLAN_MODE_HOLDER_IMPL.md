@@ -361,18 +361,37 @@ Verification after **each** step, not at the end: `just smoke`,
 
 ---
 
-## Wave 4 — gates (2 agents, parallel)
+## Wave 4 — gates (LANDED 2026-07-26, ext `abc1d41` D1 + `4cc5922` D2 + `52f02eb` extraction)
 
-- **D1 — a real-input test harness.** The gap that let all of this through is
-  that every mode/escape test calls the module directly. One harness that
-  dispatches real `KeyboardEvent`s and real `ingest_transcript`-shaped actions
-  into a jsdom content script, so "key and voice do the same thing" is an
-  assertion rather than a comment. Wave 1's A2 test is the seed; this
-  generalises it.
-- **D2 — exhaustiveness lint.** Every `ModeSpec` has a mirror decision (or an
-  explicit `null` with a reason); every registered holder declares a priority;
-  no `store.all` iteration outside the store module. Wire into CI the way
-  `just check-gen` is wired.
+- **D1 — real-input harness** (`scripts/harness/realinput/`, `npm run
+  harness:realinput[:firefox]`). Landed as Playwright over the REAL dist
+  rather than the jsdom shape sketched here — the wave's field regressions
+  showed the divergences live in engine delivery shapes and paint handoffs
+  jsdom cannot carry. Four scenarios, each an assertion written from a field
+  regression: dictated commit → chip pick (engine-native injected shape),
+  the Gecko announced-injection delivery (synthetic replay of the captured
+  keydown + per-char inserts), badge borrow through the find→pick handoff,
+  and escape unwind through stacked modes (hint/caret/video over a committed
+  find). 8/8 both engines at landing.
+- **D2 — exhaustiveness lints** (`scripts/check-exhaustive.mjs`, ext CI step).
+  (a) ModeId union ↔ MODE_SPECS cover each other; null mirrors carry their
+  DECISION comment. (b) Holder rank constants unique/ordered; production
+  priorities must use them. (c) `store.all` pinned per file, exact counts,
+  two-way ratchet. (d) forwarder↔passthrough: every voiced catalog action
+  and every plugin-dispatched action (modeMirror rows, ActionEvent literals,
+  builder-DSL `Action(pluginID+".x")` — the C4b shape) must have an
+  extension-side route; plugin-intercepted actions (tab surgery) subtracted.
+  The plugin half needs the workspace sibling and SKIPs loudly standalone.
+  Teeth verified by mutation both ways.
+- **content.ts extraction** (the arc's ceiling promise): badge visibility +
+  the screen-borrow primitive in `render/badge-visibility.ts` (own tests,
+  real singletons); find and the range pick both ride `borrowBadgeScreen`;
+  `pageSession.deps.hideBadges` retired with its last consumer. content.ts
+  3618, ceiling ratcheted 3815 → 3620.
+
+**THE ARC IS COMPLETE.** Remaining watches live in memory
+(project_mode_stack_holder_registry): C1b orphan-path soak, and content.ts's
+next growth lands in modules (the ratchet is green and tight again).
 
 ---
 
