@@ -23,6 +23,7 @@ import { bestPageMatch, normalizeFuzzy, fold1to1, lower1to1, flexiblePattern } f
 import { modes } from '../core/modes';
 import { bkLog } from '../debug/bk-log';
 import { openPhraseSession, isDictatedInsert, type PhraseSession } from './phrase-collector';
+import { prefersReducedMotion } from '../activate/scroller';
 
 /**
  * What the box is collecting a phrase FOR.
@@ -605,13 +606,54 @@ function pickInitialIndex(): number {
 // Reserve the floating pill's footprint at the bottom so the current match is
 // never scrolled to behind it (pill height + bottom margin, with slack).
 const FIND_BAR_RESERVE_PX = 60;
+/**
+ * Fraction of the viewport at each edge that reads as "too close to the edge" —
+ * the match is visible but there is no context around it to read.
+ */
+const COMFORT_EDGE_RATIO = 0.15;
+
+/**
+ * Bring the current match into view — the comfort band.
+ *
+ * ONE rule for every path that makes a match current (n/N, a spoken codeword,
+ * a fresh commit), because two rules read as a bug: the page yanking for a
+ * badge pick while refusing to follow n/N was the same question answered two
+ * different ways.
+ *
+ * The rule: a match sitting in the middle of the viewport is left alone — we
+ * never move the page for something already comfortably in view. Only when it
+ * lands in the top or bottom strip (or off-screen) do we slide it back to a
+ * consistent spot. That matters for picks specifically, since search badges
+ * refuse off-screen codewords (`resolveSearchCodeword`) — a picked match is
+ * ALWAYS already visible, so centring it unconditionally moved the page for a
+ * target the user was looking straight at.
+ *
+ * The bottom margin also clears the committed pill's footprint, so a match is
+ * never nudged to a spot the pill covers.
+ */
 function scrollToCurrent(): void {
   const r = matchRanges[currentIndex];
   if (!r) return;
   const rect = r.getBoundingClientRect();
-  if (rect.top < 0 || rect.bottom > window.innerHeight - FIND_BAR_RESERVE_PX) {
-    r.startContainer.parentElement?.scrollIntoView({ block: 'center', inline: 'nearest' });
-  }
+  const view = window.innerHeight;
+  const edge = view * COMFORT_EDGE_RATIO;
+  const bandTop = edge;
+  const bandBottom = view - Math.max(edge, FIND_BAR_RESERVE_PX);
+
+  // A match taller than the band can never fit inside it — anchor such a match
+  // on its top edge rather than scrolling on every single step.
+  const comfortable =
+    rect.top >= bandTop &&
+    (rect.bottom <= bandBottom || rect.height > bandBottom - bandTop);
+  if (comfortable) return;
+
+  r.startContainer.parentElement?.scrollIntoView({
+    block: 'center',
+    inline: 'nearest',
+    // Slide rather than teleport: the jump is what made a nudge disorienting,
+    // because nothing connected where you were to where you ended up.
+    behavior: prefersReducedMotion() ? 'auto' : 'smooth',
+  });
 }
 
 // --- Find logic ---
@@ -920,6 +962,9 @@ export function refindCommitted(): boolean {
  * Same effect as navigating there: it becomes current, gets the solid
  * highlight, scrolls into view, and the n/N counter follows. Returns false if
  * the range isn't one of the live matches (a stale codeword after a requery).
+ *
+ * Scrolls by the same comfort-band rule as n/N — a pick that is already
+ * comfortably in view does not move the page. See scrollToCurrent.
  */
 export function findGoToRange(range: Range): boolean {
   const i = matchRanges.indexOf(range);
