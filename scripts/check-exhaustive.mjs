@@ -30,6 +30,10 @@
  *      this check's reason to exist. The plugin half needs the workspace
  *      sibling ../plugins/browser and SKIPs loudly when absent (extension
  *      CI runs standalone; the workspace dev loop and app CI have it).
+ *   E. Every exported SW message-handler map is registered into the router,
+ *      and the onMessage listener is the router itself. An unregistered map
+ *      drops its message types exactly as silently as the if-chain used to
+ *      (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md).
  *
  * Run: node scripts/check-exhaustive.mjs   (wired as a CI step)
  */
@@ -287,6 +291,50 @@ function srcFiles() {
     if (pluginMissing.length === 0) {
       ok(`dispatch routes: all ${pluginActions.size} plugin-initiated actions handled`);
     }
+  }
+}
+
+// --- E. Every exported message-handler map is actually registered ----------
+//
+// The SW message table (background/message-router.ts) only routes what
+// background.ts composes into it. A module can export a perfectly good handler
+// map and simply never be registered — and the symptom is the same silent drop
+// the old if-chain had: the message matches nothing, the channel closes, and an
+// awaiting content script hangs or reads undefined.
+//
+// Both sides are read from the code, so there is no list to keep in sync.
+{
+  const bg = read('src/background.ts');
+
+  const exported = [];
+  for (const rel of srcFiles()) {
+    if (rel === join('src', 'background.ts')) continue;
+    for (const m of read(rel).matchAll(/^export const (\w*MessageHandlers)\b/gm)) {
+      exported.push({ name: m[1], file: rel });
+    }
+  }
+
+  const registered = new Set(
+    [...bg.matchAll(/registerMessageHandlers\(\s*(\w+)/g)].map((m) => m[1]),
+  );
+
+  if (exported.length === 0) {
+    fail('lint E found zero exported *MessageHandlers maps — fix the lint');
+  }
+
+  const unregistered = exported.filter((e) => !registered.has(e.name));
+  for (const { name, file } of unregistered) {
+    fail(`${name} (${file}) is exported but never registered in background.ts — ` +
+      'its message types route nowhere and senders await a response that never comes');
+  }
+
+  // Nothing may bypass the table: the listener takes routeMessage directly, so
+  // a reintroduced inline if-chain fails here rather than quietly coexisting.
+  if (!/onMessage\.addListener\(routeMessage\)/.test(bg)) {
+    fail('background.ts no longer installs routeMessage as its sole onMessage listener — ' +
+      'handlers belong in a module map (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md)');
+  } else if (unregistered.length === 0) {
+    ok(`message handlers: ${exported.length} exported maps all registered; listener is the table`);
   }
 }
 
