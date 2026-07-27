@@ -68,6 +68,17 @@ import { setInnerTransientProbe } from '../core/mode-stack';
 // registration in the one shared map.
 setInnerTransientProbe('hint', () => keyHandler.peelHintPrefix());
 
+// And the Escape KEY itself runs this cascade — the same one the spoken
+// "escape"/"over" runs, so the two inputs unwind through one declared order
+// rather than two that drift. That is this module's whole thesis, so the
+// wiring that makes it true belongs here rather than in the entry point.
+//
+// core/singletons is the other candidate and is NOT legal: it already carries
+// three keyHandler hook assignments of exactly this shape, but this module
+// imports IT (:48), so registering there would close a real 2-cycle. The one
+// place the graph allows is also the one that owns the claim.
+keyHandler.setEscapeHook(() => runEscapeCascade('key_escape'));
+
 export type EscapeLayer =
   | 'range_pick' | 'hint_prefix' | 'hint_mode' | 'selection' | 'video' | 'find' | '';
 

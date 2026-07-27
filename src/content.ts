@@ -1329,9 +1329,9 @@ dispatcher.register('scroll_to_element', (params) => {
 // Physical Escape peels a pending range pick. Without this the only exit is
 // the voice "escape" cascade — no help when a pick is stuck because voice is
 // degraded, which is exactly when one is most likely to be stuck.
-// The Escape key runs the SAME cascade the spoken "escape"/"over" runs, so the
-// two inputs unwind through one declared order rather than two that drift.
-keyHandler.setEscapeHook(() => runEscapeCascade('key_escape'));
+// (The Escape key's cascade wiring lives in activate/escape-cascade.ts now —
+// the module that owns the one-order claim registers the hook that makes it
+// true. content.ts still runs the SPOKEN half below.)
 
 // The mode-mirror transport (Wave 3 C4a): every mirrored-mode edge posts this
 // frame's stack; the SW derives the tag set (background/mode-mirror.ts, which
