@@ -82,6 +82,7 @@ import {
 import { dispatcher, registry, keyHandler } from './core/singletons';
 import { DEFAULT_KEYMAP, type KeymapEntry } from './keymap/command-catalog';
 import { loadKeymap, onKeymapChanged } from './keymap/keymap-storage';
+import { installSiteKeyPolicy } from './keymap/site-key-policy';
 import { scanWithAdapter } from './adapters';
 import {
   scroll,
@@ -1069,6 +1070,12 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
   void loadKeymap().then(buildRegistryFromKeymap);
   onKeymapChanged(buildRegistryFromKeymap);
 }
+
+// The keymap's per-site companion: which keys this page gets to keep. Same
+// shape as the block above (defaults stand until the async read lands, then
+// live on edits), and an explicit call for the same reason — a storage read at
+// some module's import scope is a boot order nobody chose.
+installSiteKeyPolicy();
 
 // --- Register Action Handlers ---
 

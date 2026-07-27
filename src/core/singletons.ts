@@ -6,7 +6,6 @@ import {
 import { flashToast } from '../render/toast';
 import { setModeChip, flashModeChipRefusal, setKeyboardArmed } from '../render/mode-chip';
 import { resolveVideoModeKey } from '../activate/media';
-import { getSiteKeyState, onSiteKeysChanged } from '../keymap/keyboard-rules';
 
 /**
  * Stable, construct-once runtime singletons, promoted out of content.ts module
@@ -86,15 +85,10 @@ keyHandler.setVideoKeyHandler((e) => {
   return true;
 });
 
-// Per-site keyboard policy — full exclusion (all keys to the page) and/or
-// granular passthrough (specific keys to the page, the rest of BranchKit's
-// binds still work). Applied on load and kept live as the popup edits it.
-// Voice is unaffected. See notes/DESIGN_PASS_THROUGH.md.
-function applySiteKeys(): void {
-  void getSiteKeyState(location.href).then(({ excluded, passKeys }) => {
-    keyHandler.setExcluded(excluded);
-    keyHandler.setPassKeys(passKeys);
-  });
-}
-applySiteKeys();
-onSiteKeysChanged(applySiteKeys);
+// Per-site keyboard policy is deliberately NOT here. Every hook above is a
+// pure function assignment — no I/O, no listener, no ordering. The site-key
+// policy needs an async storage read and a storage listener, and running those
+// at this module's scope made them fire at import time, in import order,
+// across the seven modules that pull `keyHandler` through here. It is an
+// explicit `installSiteKeyPolicy()` call from content.ts instead:
+// keymap/site-key-policy.ts.

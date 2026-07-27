@@ -347,6 +347,28 @@ because every existing test injects its own handler and pins only the
 plumbing). Both are the extraction argument in miniature: the code was equally
 untested in `content.ts`, but there was nowhere to put the test.
 
+**Correction — the site-key seam was inverted into a side effect.** The DIRECT
+pass put `applySiteKeys()` and `onSiteKeysChanged(...)` at `core/singletons.ts`
+*module scope*, so an async `chrome.storage` read and a listener registration
+fired at **import** time, in **import** order, across the seven modules that
+pull `keyHandler` through singletons. That is not an inversion — it trades an
+explicit boot call for an implicit one nobody schedules. (The `void …then()`
+also had no `.catch`, so a failed read was an unhandled rejection at boot.)
+
+Fixed with an explicit `installSiteKeyPolicy()` called once from `content.ts`.
+**Adding a boot line back to the entry point was correct**: the goal is zero
+behaviour *injection*, not zero lines. The distinguishing test for the rest of
+this phase — every other hook in `singletons.ts` is a pure function assignment,
+no I/O, no listener, no ordering. A seam that needs any of those needs a call
+site, and the entry point is where call sites belong.
+
+It landed in a **new `keymap/site-key-policy.ts`**, not in
+`keymap/keyboard-rules.ts` as first planned: `popup.ts` and `options.ts` are
+separate esbuild bundles that import `keyboard-rules` for their editors, and
+reaching `keyHandler` from it would drag the whole content-script singleton
+graph into both pages. A module that both a page bundle and the content script
+import cannot be the one that touches singletons.
+
 Original expectation, retained for the record: the DIRECT inversions are
 unambiguous and land first.
 The 4 CYCLE cases are where a small hint-owned surface is legitimately
