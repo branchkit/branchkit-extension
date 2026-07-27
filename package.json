@@ -26,7 +26,9 @@
     "test:scroll-accel-stability": "npm run build:chrome && node scripts/test-scroll-accel-stability.mjs",
     "soak:orphan": "npm run build:chrome && node scripts/_soak-orphan.mjs",
     "harness:lifecycle": "node scripts/harness/lifecycle/run.mjs",
-    "harness:lifecycle:firefox": "node scripts/harness/lifecycle/run.mjs --browser=firefox"
+    "harness:lifecycle:firefox": "node scripts/harness/lifecycle/run.mjs --browser=firefox",
+    "harness:realinput": "node scripts/harness/realinput/run.mjs",
+    "harness:realinput:firefox": "node scripts/harness/realinput/run.mjs --browser=firefox"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.268",
