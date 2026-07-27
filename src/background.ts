@@ -344,6 +344,20 @@ function handleSSEEvent(data: any): void {
 
 // --- Message Listener ---
 
+// The listener goes on FIRST, before any registration can throw.
+//
+// `registerMessageHandlers` rejects a duplicate type, which is the right
+// refusal — but every call below is a top-level statement in the service
+// worker's entry script, so a throw here aborts the whole script and the
+// listener is never installed at all. The blast radius of one colliding
+// message type would be EVERY message type, on a build whose tsc/vitest/CI
+// are all green (nothing composes the real maps together, and the
+// exhaustiveness lint checks registration, not collision). Installing the
+// listener first turns "the extension is dead" into "one handler is missing",
+// which is what the throw was trying to say. `routeMessage` reads the table
+// per message, so registering after this point is not a race.
+chrome.runtime.onMessage.addListener(routeMessage);
+
 // Every message type is owned by the module that owns its concern; this is the
 // composition point and nothing more. See notes/DESIGN_ENTRY_POINT_TOPOLOGY.md.
 registerMessageHandlers(commandOverrideMessageHandlers);
@@ -378,8 +392,6 @@ registerMessageHandlers({
   // Dev keepalive — the WAKE is the point (dev-keepalive.ts).
   DEV_PING: () => {},
 });
-
-chrome.runtime.onMessage.addListener(routeMessage);
 
 // (Per-frame liveness Ports moved to background/frame-liveness.ts — the
 // lifetime signal every doc-scoped cleanup keys off.)
