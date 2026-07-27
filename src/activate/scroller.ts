@@ -6,6 +6,8 @@
  * per-region named scrolling (Rango's geometric detection).
  */
 
+import type { Message } from '../types';
+
 // --- Scrollable container detection ---
 
 let suppressScrollEvent = 0;
@@ -238,8 +240,23 @@ export function setKeyHeld(held: boolean): void {
 
 export type ScrollBoundary = 'top' | 'bottom' | 'left' | 'right';
 
-let onBoundaryHit: ((boundary: ScrollBoundary, el: HTMLElement) => void) | null = null;
+/**
+ * Reporting a boundary to the SW is what hitting one MEANS here, so it is
+ * defaulted rather than injected from content.ts — the entry point's version of
+ * this was the sendMessage below, verbatim, and nothing else.
+ *
+ * A throw means the extension context was invalidated (an orphaned content
+ * script). Scrolling still works without the report, so it is swallowed.
+ */
+let onBoundaryHit: ((boundary: ScrollBoundary, el: HTMLElement) => void) | null = (boundary) => {
+  try {
+    chrome.runtime.sendMessage({ type: 'SCROLL_BOUNDARY', boundary } as Message);
+  } catch {
+    // Extension context may be invalidated.
+  }
+};
 
+/** Test seam: null silences the report, a spy observes it. */
 export function setScrollBoundaryCallback(
   cb: ((boundary: ScrollBoundary, el: HTMLElement) => void) | null,
 ): void {

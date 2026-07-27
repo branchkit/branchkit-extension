@@ -65,7 +65,7 @@ import { cancelRangePick } from './activate/range-disambiguation';
 import { armSearchBadges, clearSearchBadges } from './activate/search-badges';
 import {
   registerHolder, narrowByPrefix, resolveCodewordAboveAmbient, heldAnywhere,
-  allHeld, rejectAll, reconcileAll, relabelAll, disposeAllHolders,
+  allHeld, reconcileAll, relabelAll, disposeAllHolders,
   overlayCodewordsLive, type CodewordOutcome,
 } from './labels/holder-registry';
 import { StoreHolder } from './labels/store-holder';
@@ -94,7 +94,6 @@ import {
   scrollElement,
   scrollToPercent,
   setKeyHeld,
-  setScrollBoundaryCallback,
   type ScrollDirection,
   type ScrollAmount,
   type ScrollRegion,
@@ -536,17 +535,6 @@ setFindCallbacks({
   // resolveSelectTo to openPhraseBox itself.)
 });
 
-setScrollBoundaryCallback((boundary) => {
-  try {
-    chrome.runtime.sendMessage({
-      type: 'SCROLL_BOUNDARY',
-      boundary,
-    } as Message);
-  } catch {
-    // Extension context may be invalidated
-  }
-});
-
 // Wire the LabelStage's catchup sync to content.ts-owned collaborators.
 // detachWrapper is imported from core/wrapper-lifecycle; reconcile is a hoisted
 // declaration; store is imported; the visibility flag (pageSession.badgesVisible)
@@ -569,11 +557,6 @@ initLabelSync({
 // badges drop the losing badge, and the store's delegate (the StoreHolder
 // wiring below) strips the wrapper back to unhinted WITHOUT releaseLabel — a
 // RELEASE_LABELS here would free the WINNER's assignment out from under it.
-labelReservoir.onConfirmRejected((codewords) => {
-  for (const cw of codewords) rejectAll(cw);
-  bkLog('BK_CONFIRM_REJECTED', { codewords: codewords.length });
-});
-
 // Reservoir leak sweep (2026-06-29 review): an outstanding codeword no live
 // wrapper holds (past the claim→attach grace) was leaked by a
 // release-skipping teardown path; the reservoir releases it back to the

@@ -64,6 +64,8 @@
  */
 
 import { documentInstanceId } from './document-identity';
+import { rejectAll } from './holder-registry';
+import { bkLog } from '../debug/bk-log';
 
 const INITIAL_RESERVATION = 100;
 const REFILL_THRESHOLD = 30;
@@ -117,8 +119,17 @@ class LabelReservoir {
    *  arbitrated AWAY from this frame (another frame won them, or the pool
    *  no longer knows them). The handler must make the holding wrappers drop
    *  the codeword WITHOUT a RELEASE (we don't own it — releasing would free
-   *  the winner's assignment) and re-claim fresh. */
-  private rejectionHandler: ((codewords: string[]) => void) | null = null;
+   *  the winner's assignment) and re-claim fresh.
+   *
+   *  Defaulted to the holder registry rather than injected from content.ts:
+   *  "who is holding this codeword — make them drop it" is the registry's
+   *  question, and it is the only answer this hook has ever had.
+   *  holder-registry is a leaf (zero relative imports), so reaching it from
+   *  here introduces no cycle. The setter stays for tests. */
+  private rejectionHandler: ((codewords: string[]) => void) | null = (codewords) => {
+    for (const cw of codewords) rejectAll(cw);
+    bkLog('BK_CONFIRM_REJECTED', { codewords: codewords.length });
+  };
 
   /** True if a live wrapper currently holds the codeword (content.ts wires
    *  this to `store.byCodeword`). Null until installed — sweep disabled. */

@@ -12,7 +12,15 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+// The reservoir's DEFAULT rejection handler calls into the holder registry, so
+// the registry is mocked to assert it without standing up real holders. Every
+// other test here installs its own handler, so nothing else observes this.
+// (vi.mock is hoisted above the static import below.)
+vi.mock('./holder-registry', () => ({ rejectAll: vi.fn() }));
+
 import { labelReservoir } from './label-reservoir';
+import { rejectAll } from './holder-registry';
 
 let sendMessageMock: ReturnType<typeof vi.fn>;
 
@@ -102,6 +110,30 @@ describe('LabelReservoir confirm exchange (Phase 4 / review bug #5)', () => {
       Promise.resolve(m.type === 'CLAIM_LABELS' ? { labels: ['arch bake'] } : { rejected: [] }));
     labelReservoir.claim(1); // empty reservoir → grants nothing, arms a refill
     await vi.waitFor(() => expect(labelReservoir.stats().free).toBe(1));
+  });
+
+  it('with NO handler installed, the default drops the codeword at the registry', async () => {
+    // The default is what production runs — content.ts stopped injecting this
+    // (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md §6a). Without this test, losing the
+    // default is silent: an arbitrated-away codeword keeps its holder and the
+    // frame goes on answering for a codeword another frame won.
+    //
+    // A pristine module instance is required. The reservoir is a module-level
+    // singleton and the tests above install their own handlers on it, which
+    // beforeEach does not undo — it reseeds codewords, not hooks.
+    vi.resetModules();
+    vi.mocked(rejectAll).mockClear();
+    const { labelReservoir: fresh } = await import('./label-reservoir');
+
+    fresh._seedForTests(['arch bake', 'cave dove']);
+    sendMessageMock.mockImplementation((m: { type: string }) =>
+      Promise.resolve(m.type === 'CONFIRM_LABELS' ? { rejected: ['arch bake'] } : undefined));
+
+    fresh.claim(2);
+
+    await vi.waitFor(() => expect(rejectAll).toHaveBeenCalledWith('arch bake'));
+    // Only the rejected one — the codeword this frame kept must not be dropped.
+    expect(rejectAll).toHaveBeenCalledTimes(1);
   });
 
   it('a rejection with no registered handler does not throw', async () => {
