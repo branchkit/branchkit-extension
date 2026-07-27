@@ -25,6 +25,7 @@
  * listener + seed so wiring stays explicit.
  */
 
+import type { MessageHandler } from './message-router';
 import { ensureConnected, postToPlugin } from '../plugin/actuator-client';
 import { bgState, connId } from './state';
 
@@ -172,3 +173,14 @@ export function initMedia(): void {
     void syncMediaActive();
   });
 }
+
+/** Message handler owned by this module (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md). */
+export const mediaMessageHandlers: Record<string, MessageHandler> = {
+  VIDEO_PRESENCE: (message, sender) => {
+    const tabId = sender.tab?.id;
+    const frameId = sender.frameId;
+    if (typeof tabId === 'number' && typeof frameId === 'number') {
+      setVideoPresence(tabId, frameId, message.present === true);
+    }
+  },
+};

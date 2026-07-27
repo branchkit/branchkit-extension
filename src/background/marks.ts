@@ -9,6 +9,7 @@
  * background_scripts/marks.js `goto`.
  */
 
+import type { MessageHandler } from './message-router';
 import { baseUrl, localMarkKey, globalMarkKey, type StoredMark, type GlobalMark } from '../marks';
 
 export async function setLocalMark(url: string, letter: string, mark: StoredMark): Promise<void> {
@@ -110,3 +111,29 @@ export async function gotoGlobalMark(letter: string): Promise<boolean> {
   if (created.id != null) scrollAfterLoad(created.id, mark);
   return true;
 }
+
+/** Message handlers owned by this module (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md). */
+export const markMessageHandlers: Record<string, MessageHandler> = {
+  /**
+   * Content captured the position; the background owns storage. For a global
+   * mark the tab id/URL come from the sender (the tab it was set in).
+   */
+  MARK_SET: (message, sender) => {
+    const mark: StoredMark = { scrollX: message.scrollX, scrollY: message.scrollY, hash: message.hash };
+    if (message.scope === 'global') {
+      const global: GlobalMark = {
+        ...mark,
+        url: baseUrl(sender.tab?.url ?? message.url),
+        tabId: sender.tab?.id,
+      };
+      void setGlobalMark(message.letter, global);
+    } else {
+      void setLocalMark(message.url, message.letter, mark);
+    }
+  },
+
+  MARK_JUMP: (message) =>
+    message.scope === 'global'
+      ? gotoGlobalMark(message.letter).then((ok) => ({ ok }))
+      : getLocalMark(message.url, message.letter).then((mark) => ({ mark })),
+};

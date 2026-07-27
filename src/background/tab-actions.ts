@@ -8,6 +8,7 @@
  * Lifted out of background.ts (notes/DESIGN_RESTRUCTURE_ROUND3.md).
  */
 
+import type { MessageHandler } from './message-router';
 import { TabAction, ZoomAction } from '../types';
 import { cycleTabIndex } from './tab-nav';
 import { loadMru, previousCandidates } from './tab-mru';
@@ -146,3 +147,32 @@ export async function switchToTabById(tabId: number): Promise<void> {
     scheduleTabPublish();
   }
 }
+
+/** Message handlers owned by this module (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md). */
+export const tabActionMessageHandlers: Record<string, MessageHandler> = {
+  TAB_ACTION: (message) => {
+    if (typeof message.action !== 'string') return;
+    void handleTabAction(message.action, typeof message.index === 'number' ? message.index : undefined);
+  },
+
+  ZOOM_ACTION: (message) => {
+    if (typeof message.action !== 'string') return;
+    void handleZoomAction(message.action);
+  },
+
+  /**
+   * "stash" hint verb: open the resolved href without moving focus. openerTabId
+   * groups the new tab with the page it came from (inserted next to the opener,
+   * like a ctrl-click). Content validated the scheme, but re-check here — any
+   * frame can send runtime messages.
+   */
+  OPEN_TAB_BACKGROUND: (message, sender) => {
+    if (typeof message.url !== 'string' || !/^https?:\/\//i.test(message.url)) return;
+    const openerTabId = sender.tab?.id;
+    chrome.tabs.create({
+      url: message.url,
+      active: false,
+      ...(openerTabId !== undefined ? { openerTabId } : {}),
+    }).catch((e) => console.warn('[BranchKit BG] stash tab create failed:', e));
+  },
+};

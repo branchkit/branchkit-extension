@@ -8,44 +8,39 @@
  * - Manage offscreen document lifecycle (Chrome only)
  */
 
-import { Message, ScannedElement, HintVisibility } from './types';
+import { Message, HintVisibility } from './types';
 import { clearAllStacks, alphabetsEqual } from './labels/label-pool';
 import { setAlphabet } from './labels/words';
 import { buildCommandContributions } from './keymap/command-catalog';
-import { discoverPlugin, postToPlugin, getActuatorJson } from './plugin/actuator-client';
-import { setLocalMark, getLocalMark, setGlobalMark, gotoGlobalMark } from './background/marks';
-import { baseUrl, type GlobalMark, type StoredMark } from './marks';
+import { discoverPlugin, postToPlugin } from './plugin/actuator-client';
 import { recordTabActivated } from './background/tab-mru';
 import { scheduleTabPublish, resetTabPublishCache } from './background/tab-collection';
 import {
-  getTabMarker, pushTabMarker, reapplyTabMarker as reapplyTabMarkerFor, releaseTabMarker, transferTabMarker, setTabMarkersEnabled,
+  pushTabMarker, reapplyTabMarker as reapplyTabMarkerFor, releaseTabMarker, transferTabMarker, setTabMarkersEnabled,
 } from './background/tab-markers';
 import { ensureContentScriptInjected } from './background/injection';
 import { bgState, connId } from './background/state';
-import { republishActiveTab, broadcastToAllTabs, resolveActiveContentTab, notifyActiveTab, resolveHintFromTab, setUnroutablePullReporter } from './background/frame-router';
+import { republishActiveTab, broadcastToAllTabs, resolveActiveContentTab, notifyActiveTab, setUnroutablePullReporter } from './background/frame-router';
 import {
   initSSETransport, connectSSE, ensureOffscreen, scheduleSSERetry,
   isVoicePaused, restoreVoicePaused, runConnectionCheck,
 } from './plugin/sse-transport';
 import {
-  forwardDispatchResult, forwardDebugLog, forwardPerfReport, forwardHintsSessionEnd,
-  forwardHintsSessionStart, postGrammarBatch, transportFailure, postFocus, postActiveTab,
-  assertFocusIfFocused, setRangePick, setQueryFieldActive,
+  forwardDispatchResult, forwardDebugLog, forwardHintsSessionEnd, forwardHintsSessionStart,
+  postGrammarBatch, postFocus, postActiveTab, assertFocusIfFocused,
 } from './plugin/plugin-api';
-import { frameStackPosted, reassertMirror } from './background/mode-mirror';
-import { initFrameLiveness, isDocPortLive } from './background/frame-liveness';
-import type { ModeId } from './core/mode-stack';
-import { saveReferenceToCollection, pushReferenceNames, hydrateReferencesFromCollection } from './background/references';
-import { handleDebugSnapshot } from './background/debug-snapshot';
+import { reassertMirror } from './background/mode-mirror';
+import { initFrameLiveness } from './background/frame-liveness';
+import { pushReferenceNames, hydrateReferencesFromCollection } from './background/references';
 import { forwardCoalesced } from './background/log-coalesce';
 import { installUncaughtCapture } from './debug/uncaught';
 import { TAB_ACTION_BY_ID, ZOOM_ACTION_BY_ID, handleTabAction, handleZoomAction, switchToTabById } from './background/tab-actions';
 import { SURGERY_ACTIONS, handleSurgeryAction } from './background/tab-surgery';
 import {
-  publishPaletteVoice, clearPaletteVoice, handlePaletteAction, handlePaletteBootstrap,
+  clearPaletteVoice, handlePaletteAction,
   handlePaletteVoiceSelect, handlePaletteVoiceDismiss, clearPaletteForClosedTab } from './background/palette';
 import {
-  MEDIA_ACTIONS, syncMediaActive, setVideoPresence, clearTabMediaOnNav, clearTabMediaOnClose,
+  MEDIA_ACTIONS, syncMediaActive, clearTabMediaOnNav, clearTabMediaOnClose,
   resolveMediaTargetTab, sendMediaActionToTab, handleMediaAllAction, setBrowserWindowFocused, initMedia,
 } from './background/media';
 import { purgeTab, logTabSwitch, scheduleSpaRescan, cancelSpaRescan, startDeadTabSweep } from './background/tab-sessions';
@@ -53,6 +48,18 @@ import { registerMessageHandlers, routeMessage } from './background/message-rout
 import { commandOverrideMessageHandlers } from './background/command-overrides';
 import { voiceStatusMessageHandlers } from './background/voice-status';
 import { labelMessageHandlers } from './background/label-messages';
+import { pluginMessageHandlers } from './background/plugin-messages';
+import { mediaMessageHandlers } from './background/media';
+import { referenceMessageHandlers } from './background/references';
+import { logMessageHandlers } from './background/log-coalesce';
+import { debugSnapshotMessageHandlers } from './background/debug-snapshot';
+import { frameLivenessMessageHandlers } from './background/frame-liveness';
+import { frameRouterMessageHandlers } from './background/frame-router';
+import { tabMarkerMessageHandlers } from './background/tab-markers';
+import { tabActionMessageHandlers } from './background/tab-actions';
+import { markMessageHandlers } from './background/marks';
+import { modeMirrorMessageHandlers } from './background/mode-mirror';
+import { paletteMessageHandlers } from './background/palette';
 
 // --- State ---
 //
@@ -337,264 +344,42 @@ function handleSSEEvent(data: any): void {
 
 // --- Message Listener ---
 
-// Handlers that have moved to their owning module. The remaining if-chain below
-// is what's left to lift; anything it doesn't match falls through to the table.
-// See notes/DESIGN_ENTRY_POINT_TOPOLOGY.md.
+// Every message type is owned by the module that owns its concern; this is the
+// composition point and nothing more. See notes/DESIGN_ENTRY_POINT_TOPOLOGY.md.
 registerMessageHandlers(commandOverrideMessageHandlers);
 registerMessageHandlers(voiceStatusMessageHandlers);
 registerMessageHandlers(labelMessageHandlers);
+registerMessageHandlers(pluginMessageHandlers);
+registerMessageHandlers(mediaMessageHandlers);
+registerMessageHandlers(referenceMessageHandlers);
+registerMessageHandlers(logMessageHandlers);
+registerMessageHandlers(debugSnapshotMessageHandlers);
+registerMessageHandlers(frameLivenessMessageHandlers);
+registerMessageHandlers(frameRouterMessageHandlers);
+registerMessageHandlers(tabMarkerMessageHandlers);
+registerMessageHandlers(tabActionMessageHandlers);
+registerMessageHandlers(markMessageHandlers);
+registerMessageHandlers(modeMirrorMessageHandlers);
+registerMessageHandlers(paletteMessageHandlers);
 
-chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
-  if (message.type === 'VIDEO_PRESENCE') {
-    const tabId = _sender.tab?.id;
-    const frameId = _sender.frameId;
-    if (typeof tabId === 'number' && typeof frameId === 'number') {
-      setVideoPresence(tabId, frameId, message.present === true);
-    }
-    return false;
-  }
-  if (message.type === 'GRAMMAR_BATCH') {
-    // Content's batched doScan (Option B) sent a grammar batch. Stamp
-    // tab_id + frame_id and POST. Returning true keeps sendResponse
-    // alive across the await — Chrome closes the channel otherwise.
-    //
-    // Content scripts don't know their own frameId — only the SW does —
-    // but the plugin needs it to scope ids to the right frame on
-    // dispatch. See §8 of docs/completed/DESIGN_ELEMENT_IDENTITY_REGISTRY.md.
-    const tabId = _sender.tab?.id;
-    const frameId = _sender.frameId;
-    if (typeof tabId !== 'number' || typeof frameId !== 'number') {
-      sendResponse(transportFailure(message.request));
-      return false;
-    }
-    // No active-tab gate: every tab POSTs freely. The plugin stores each
-    // batch in its own per-source session and projects only the OS-focused
-    // source's grammar into the live collections (Option B), so a background
-    // tab's push can no longer clobber the focused tab's vocabulary.
-    for (const el of message.request.elements) {
-      el.frame_id = frameId;
-    }
-    postGrammarBatch(tabId, frameId, message.request).then(sendResponse);
-    return true;
-  }
+// The offscreen-bridge pair still closes over handleSSEEvent / storeAlphabet
+// above, so it registers from here rather than from a module. That is the
+// remaining residue in this file, and it moves when the SSE fan-out does.
+registerMessageHandlers({
+  // Offscreen doc forwarded an SSE event (Chrome path) — route to tabs.
+  SSE_EVENT: (message) => { handleSSEEvent(message.data); },
 
-  if (message.type === 'SSE_EVENT') {
-    // Offscreen doc forwarded an SSE event (Chrome path) — route to tabs
-    handleSSEEvent(message.data);
-    return false;
-  }
+  // Offscreen doc forwarded an alphabet event (Chrome path).
+  ALPHABET: (message) => {
+    if (!Array.isArray(message.words)) return;
+    void storeAlphabet(message.words);
+  },
 
-  if (message.type === 'OPEN_TAB_BACKGROUND') {
-    // "stash" hint verb: open the resolved href without moving focus.
-    // openerTabId groups the new tab with the page it came from (inserted
-    // next to the opener, like a ctrl-click). Content validated the scheme,
-    // but re-check here — any frame can send runtime messages.
-    if (typeof message.url === 'string' && /^https?:\/\//i.test(message.url)) {
-      const openerTabId = _sender.tab?.id;
-      chrome.tabs.create({
-        url: message.url,
-        active: false,
-        ...(openerTabId !== undefined ? { openerTabId } : {}),
-      }).catch((e) => console.warn('[BranchKit BG] stash tab create failed:', e));
-    }
-    return false;
-  }
-
-  if (message.type === 'ALPHABET' && Array.isArray(message.words)) {
-    // Offscreen doc forwarded an alphabet event (Chrome path)
-    storeAlphabet(message.words);
-    return false;
-  }
-
-  if (message.type === 'REFERENCE_NAMES_CHANGED') {
-    pushReferenceNames();
-    return false;
-  }
-
-  if (message.type === 'REFERENCE_SAVED') {
-    saveReferenceToCollection(message.host, message.name, message.reference);
-    return false;
-  }
-
-  if (message.type === 'DISPATCH_RESULT') {
-    forwardDispatchResult(message.payload);
-    return false;
-  }
-
-  if (message.type === 'DEBUG_LOG' && typeof message.tag === 'string') {
-    forwardDebugLog(message.tag, message.data);
-    return false;
-  }
-
-  if (message.type === 'PERF_REPORT' && message.snapshot) {
-    // Tab id comes from the sender; the content script doesn't know its
-    // own tab id. URL is the frame's URL — useful for attributing the
-    // report to a YouTube vs Gmail tab in the JSONL trail.
-    const tabId = _sender.tab?.id ?? -1;
-    // Prefer the content script's live location.href (message.url) over
-    // _sender.url. _sender.url is the URL the script was *injected* into and
-    // does not follow SPA navigation — on YouTube it stays "www.youtube.com/"
-    // after a homepage→/watch transition, mislabeling /watch samples in the
-    // trail and hiding them from /watch-filtered analysis.
-    const url = (message.url as string) ?? _sender.url ?? '';
-    const browser = typeof message.browser === 'string' ? message.browser : 'unknown';
-    forwardPerfReport({ url, tab_id: tabId, browser, snapshot: message.snapshot });
-    return false;
-  }
-
-  if (message.type === 'PLUGIN_DEBUG_LOG' && typeof message.tag === 'string') {
-    // Coalesced: BK_CS_BOOT bursts collapse to first-line + summary (background/log-coalesce.ts).
-    forwardCoalesced(message.tag, message.data, typeof message.level === 'string' ? message.level : 'debug');
-    return false;
-  }
-
-  if (message.type === 'DEBUG_SNAPSHOT' && message.payload) {
-    handleDebugSnapshot(message.payload, _sender);
-    return false;
-  }
-
-  if (message.type === 'TAB_ACTION' && typeof message.action === 'string') {
-    void handleTabAction(message.action, typeof message.index === 'number' ? message.index : undefined);
-    return false;
-  }
-
-  if (message.type === 'ZOOM_ACTION' && typeof message.action === 'string') {
-    void handleZoomAction(message.action);
-    return false;
-  }
-
-  if (message.type === 'MARK_SET') {
-    // Content captured the position; the background owns storage. For a global
-    // mark the tab id/URL come from the sender (the tab it was set in).
-    const mark: StoredMark = { scrollX: message.scrollX, scrollY: message.scrollY, hash: message.hash };
-    if (message.scope === 'global') {
-      const global: GlobalMark = {
-        ...mark,
-        url: baseUrl(_sender.tab?.url ?? message.url),
-        tabId: _sender.tab?.id,
-      };
-      void setGlobalMark(message.letter, global);
-    } else {
-      void setLocalMark(message.url, message.letter, mark);
-    }
-    return false;
-  }
-
-  if (message.type === 'MARK_JUMP') {
-    if (message.scope === 'global') {
-      gotoGlobalMark(message.letter).then((ok) => sendResponse({ ok }));
-    } else {
-      getLocalMark(message.url, message.letter).then((mark) => sendResponse({ mark }));
-    }
-    return true; // async sendResponse
-  }
-
-  if (message.type === 'QUERY_FIELD_ACTIVE') {
-    void setQueryFieldActive(message.active);
-    return false;
-  }
-
-  // A frame's mode-stack edge; the caret/find tags are DERIVED across all
-  // live frames in background/mode-mirror.ts (replaced CARET_ACTIVE/FIND_ACTIVE).
-  if (message.type === 'MODE_STACK') {
-    const tabId = _sender.tab?.id;
-    // Receipt breadcrumb (Firefox find-tag hunt, 2026-07-26): edges are
-    // user-action-rare, and every later drop point now logs — so a silent
-    // missing tag localizes to whichever line is absent.
-    forwardCoalesced('BK_MODE_STACK_RX', {
-      tab: tabId ?? null, docId: String(message.docId).slice(0, 8), stack: message.stack,
-    }, 'info');
-    if (typeof tabId === 'number') frameStackPosted(tabId, message.docId, message.stack as ModeId[]);
-    return false;
-  }
-
-  if (message.type === 'RANGE_PICK') {
-    // Content scripts don't know their own tab id — only the SW does — and the
-    // plugin scopes the hint-projection narrow to (conn, tab) so a background
-    // tab keeps projecting its full hint set. A release (empty codewords) with
-    // no tab id is still worth sending: the plugin honors releases from any
-    // source, and the tab id is only read on arm.
-    const tabId = _sender.tab?.id;
-    if (typeof tabId === 'number' || message.codewords.length === 0) {
-      void setRangePick(tabId ?? 0, message.codewords);
-    }
-    return false;
-  }
-
-  if (message.type === 'PALETTE_OPEN') {
-    // A palette bind fired in a subframe; the overlay must live in the top
-    // frame. Route it there as a PALETTE_COMMAND through the dispatcher.
-    const tabId = _sender.tab?.id;
-    if (typeof tabId === 'number') {
-      const action = message.command ?? 'toggle_palette';
-      chrome.tabs.sendMessage(tabId, { type: 'PALETTE_COMMAND', action }, { frameId: 0 })
-        .catch(() => {});
-    }
-    return false;
-  }
-
-  if (message.type === 'PALETTE_ACTION' && message.action?.kind) {
-    // From the palette iframe (extension origin, embedded in a tab — so
-    // _sender.tab is set). Close-then-execute; see handlePaletteAction.
-    void handlePaletteAction(message.action, _sender.tab?.id);
-    return false;
-  }
-
-  if (message.type === 'PALETTE_PUBLISH' && Array.isArray(message.entries)) {
-    // Palette iframe badged its rows: start the voice session. Sender is the
-    // iframe embedded in the host tab, so sender.tab names the origin tab.
-    const tabId = _sender.tab?.id;
-    if (typeof tabId === 'number') {
-      void publishPaletteVoice(tabId, message.entries, message.rows ?? []);
-    }
-    return false;
-  }
-
-  if (message.type === 'PALETTE_CLOSED') {
-    // Content removed the overlay (any path) — end the voice session.
-    void clearPaletteVoice('overlay_closed');
-    return false;
-  }
-
-  if (message.type === 'GET_TAB_MARKER') {
-    // Content bootstrapping its tab marker on load. Assign lazily, reply with
-    // the letter form (title supplies a preferred marker for reconciliation).
-    const tabId = _sender.tab?.id;
-    if (typeof tabId !== 'number') { sendResponse({ letters: null }); return false; }
-    getTabMarker(tabId, _sender.tab?.title ?? undefined)
-      .then((letters) => sendResponse({ letters }))
-      .catch(() => sendResponse({ letters: null }));
-    return true; // async response
-  }
-
-  if (message.type === 'DEV_PING') {
-    return false; // dev keepalive — the WAKE is the point (dev-keepalive.ts)
-  }
-
-  if (message.type === 'PALETTE_BOOTSTRAP') {
-    // Privileged palette data (tabs + MRU + marks + bookmarks) — the fetch
-    // lives with the palette session logic (background/palette.ts).
-    return handlePaletteBootstrap(_sender, sendResponse);
-  }
-
-  if (message.type === 'LIVENESS_QUERY') {
-    // Read-only: does the SW hold a LIVE liveness Port for this doc? Layer-2
-    // probe of the bfcache-port question (debug/bfcache-probe.ts, dev builds).
-    sendResponse({
-      tracked: typeof message.doc_id === 'string' && isDocPortLive(message.doc_id),
-    });
-    return false;
-  }
-
-  if (message.type === 'RESOLVE_HINT_FROM_TAB') {
-    resolveHintFromTab(message.tabId, message.codeword)
-      .then(sendResponse)
-      .catch(err => sendResponse({ ok: false, reason: String(err?.message ?? err) }));
-    return true;  // async response
-  }
-
-  return routeMessage(message, _sender, sendResponse);
+  // Dev keepalive — the WAKE is the point (dev-keepalive.ts).
+  DEV_PING: () => {},
 });
+
+chrome.runtime.onMessage.addListener(routeMessage);
 
 // (Per-frame liveness Ports moved to background/frame-liveness.ts — the
 // lifetime signal every doc-scoped cleanup keys off.)

@@ -7,6 +7,7 @@
  * signal every doc-scoped cleanup keys off.
  */
 
+import type { MessageHandler } from './message-router';
 import { releaseDocument } from '../labels/label-pool';
 import { clearCodewordMemory } from '../labels/codeword-memory';
 import { forwardHintsSessionEnd } from '../plugin/plugin-api';
@@ -94,3 +95,14 @@ export function initFrameLiveness(): void {
 export function isDocPortLive(docId: string): boolean {
   return livePortDocs.has(docId);
 }
+
+/**
+ * Message handler owned by this module (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md).
+ * Read-only: does the SW hold a LIVE liveness Port for this doc? Layer-2 probe
+ * of the bfcache-port question (debug/bfcache-probe.ts, dev builds).
+ */
+export const frameLivenessMessageHandlers: Record<string, MessageHandler> = {
+  LIVENESS_QUERY: (message) => ({
+    tracked: typeof message.doc_id === 'string' && isDocPortLive(message.doc_id),
+  }),
+};

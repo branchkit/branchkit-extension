@@ -13,6 +13,7 @@
  * background.ts (notes/DESIGN_RESTRUCTURE_ROUND3.md).
  */
 
+import type { MessageHandler } from './message-router';
 import { PaletteVoiceEntry, PaletteVoiceRow } from '../types';
 import type { PaletteDispatch, PaletteBookmark } from '../palette/model';
 import { ensureConnected, postToPlugin } from '../plugin/actuator-client';
@@ -175,3 +176,47 @@ export function handlePaletteVoiceDismiss(): void {
 export function clearPaletteForClosedTab(tabId: number): void {
   if (paletteVoice?.tabId === tabId) void clearPaletteVoice('tab_removed');
 }
+
+/** Message handlers owned by this module (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md). */
+export const paletteMessageHandlers: Record<string, MessageHandler> = {
+  /**
+   * A palette bind fired in a subframe; the overlay must live in the top frame.
+   * Route it there as a PALETTE_COMMAND through the dispatcher.
+   */
+  PALETTE_OPEN: (message, sender) => {
+    const tabId = sender.tab?.id;
+    if (typeof tabId !== 'number') return;
+    const action = message.command ?? 'toggle_palette';
+    chrome.tabs.sendMessage(tabId, { type: 'PALETTE_COMMAND', action }, { frameId: 0 }).catch(() => {});
+  },
+
+  /**
+   * From the palette iframe (extension origin, embedded in a tab — so
+   * sender.tab is set). Close-then-execute; see handlePaletteAction.
+   */
+  PALETTE_ACTION: (message, sender) => {
+    if (!message.action?.kind) return;
+    void handlePaletteAction(message.action, sender.tab?.id);
+  },
+
+  /**
+   * Palette iframe badged its rows: start the voice session. Sender is the
+   * iframe embedded in the host tab, so sender.tab names the origin tab.
+   */
+  PALETTE_PUBLISH: (message, sender) => {
+    if (!Array.isArray(message.entries)) return;
+    const tabId = sender.tab?.id;
+    if (typeof tabId !== 'number') return;
+    void publishPaletteVoice(tabId, message.entries, message.rows ?? []);
+  },
+
+  /** Content removed the overlay (any path) — end the voice session. */
+  PALETTE_CLOSED: () => { void clearPaletteVoice('overlay_closed'); },
+
+  /**
+   * Privileged palette data (tabs + MRU + marks + bookmarks). Adapts the
+   * callback-shaped bootstrap onto the router's promise contract.
+   */
+  PALETTE_BOOTSTRAP: (_message, sender) =>
+    new Promise((resolve) => { handlePaletteBootstrap(sender, resolve); }),
+};

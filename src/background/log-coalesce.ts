@@ -24,6 +24,7 @@
  * acceptable: the transport below is already best-effort, and boots around
  * a SW death re-announce on recovery per the bk-log convention.
  */
+import type { MessageHandler } from './message-router';
 import { forwardPluginDebugLog } from '../plugin/plugin-api';
 
 const COALESCED_TAGS = new Set(['BK_CS_BOOT']);
@@ -100,3 +101,14 @@ export function _resetCoalescerForTests(): void {
   }
   windows.clear();
 }
+
+/**
+ * Message handler owned by this module (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md).
+ * Coalesced: BK_CS_BOOT bursts collapse to first-line + summary.
+ */
+export const logMessageHandlers: Record<string, MessageHandler> = {
+  PLUGIN_DEBUG_LOG: (message) => {
+    if (typeof message.tag !== 'string') return;
+    forwardCoalesced(message.tag, message.data, typeof message.level === 'string' ? message.level : 'debug');
+  },
+};

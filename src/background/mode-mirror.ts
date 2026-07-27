@@ -30,6 +30,8 @@
  * instead of via a per-frame timer.
  */
 
+import type { MessageHandler } from './message-router';
+import { forwardCoalesced } from './log-coalesce';
 import { deriveMirror, diffMirror, type TagAssertion, type FrameId } from '../core/derive-mirror';
 import { MODE_SPECS, type ModeId } from '../core/mode-stack';
 import { setCaretActive, setFindActive, setVideoMode } from '../plugin/plugin-api';
@@ -87,3 +89,22 @@ export function __resetModeMirror(): void {
   frameStacks.clear();
   asserted = [];
 }
+
+/**
+ * Message handler owned by this module (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md).
+ *
+ * A frame's mode-stack edge; the caret/find tags are DERIVED across all live
+ * frames here (this replaced CARET_ACTIVE/FIND_ACTIVE).
+ */
+export const modeMirrorMessageHandlers: Record<string, MessageHandler> = {
+  MODE_STACK: (message, sender) => {
+    const tabId = sender.tab?.id;
+    // Receipt breadcrumb (Firefox find-tag hunt, 2026-07-26): edges are
+    // user-action-rare, and every later drop point now logs — so a silent
+    // missing tag localizes to whichever line is absent.
+    forwardCoalesced('BK_MODE_STACK_RX', {
+      tab: tabId ?? null, docId: String(message.docId).slice(0, 8), stack: message.stack,
+    }, 'info');
+    if (typeof tabId === 'number') frameStackPosted(tabId, message.docId, message.stack as ModeId[]);
+  },
+};

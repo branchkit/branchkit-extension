@@ -8,6 +8,7 @@
  * own when to fire (connect edge hydrates then pushes; saves push through).
  */
 
+import type { MessageHandler } from './message-router';
 import { ensureConnected, postToPlugin, getPluginPort, getPluginToken } from '../plugin/actuator-client';
 
 export const REFERENCES_STORAGE_KEY = 'branchkit_references';
@@ -71,3 +72,11 @@ export async function hydrateReferencesFromCollection(): Promise<void> {
     // Plugin may be down or tab URL unavailable
   }
 }
+
+/** Message handlers owned by this module (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md). */
+export const referenceMessageHandlers: Record<string, MessageHandler> = {
+  REFERENCE_NAMES_CHANGED: () => { void pushReferenceNames(); },
+  REFERENCE_SAVED: (message) => {
+    void saveReferenceToCollection(message.host, message.name, message.reference);
+  },
+};

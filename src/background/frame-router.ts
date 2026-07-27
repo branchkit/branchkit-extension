@@ -9,6 +9,7 @@
  * from background/state and the inject helpers from background/injection.
  */
 
+import type { MessageHandler } from './message-router';
 import { Message, ResolveHintResponse } from '../types';
 import { getFrameForLabel } from '../labels/label-pool';
 import { spokenCodewordToToken, spokenWordToLetter } from '../labels/words';
@@ -248,3 +249,10 @@ export async function resolveHintFromTab(tabId: number, codeword: string) {
   }
   return { ok: false, reason: lastReason };
 }
+
+/** Message handler owned by this module (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md). */
+export const frameRouterMessageHandlers: Record<string, MessageHandler> = {
+  RESOLVE_HINT_FROM_TAB: (message) =>
+    resolveHintFromTab(message.tabId, message.codeword)
+      .catch((err) => ({ ok: false, reason: String(err?.message ?? err) })),
+};

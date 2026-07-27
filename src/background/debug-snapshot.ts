@@ -7,6 +7,7 @@
  * feature module, not a raised ceiling).
  */
 
+import type { MessageHandler } from './message-router';
 import { ensureConnected, postToPlugin, getActuatorJson } from '../plugin/actuator-client';
 import { buildReconcileReport, type ReconcileWrapper, type ReconcileReport, type MatchableView } from '../debug/reconcile';
 import { poolSnapshot } from '../labels/label-pool';
@@ -117,3 +118,11 @@ export async function handleDebugSnapshot(
   else body.error = captureError || 'unknown';
   await postToPlugin('/debug-snapshot/screenshot', body);
 }
+
+/** Message handler owned by this module (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md). */
+export const debugSnapshotMessageHandlers: Record<string, MessageHandler> = {
+  DEBUG_SNAPSHOT: (message, sender) => {
+    if (!message.payload) return;
+    void handleDebugSnapshot(message.payload, sender);
+  },
+};

@@ -21,6 +21,7 @@
  * the chrome.* glue for unit testing, mirroring tab-mru.ts / tab-collection.ts.
  */
 
+import type { MessageHandler } from './message-router';
 import { LETTERS_26 } from '../labels/words';
 
 /** Reserved single-letter markers (from the typing-ergonomic head); the rest
@@ -254,3 +255,18 @@ async function undecorateAllTabs(): Promise<void> {
     if (typeof t.id === 'number') sendToTopFrame(t.id, { type: 'TAB_MARKER', letters: null });
   }
 }
+
+/**
+ * Message handler owned by this module (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md).
+ * Content bootstrapping its tab marker on load. Assign lazily, reply with the
+ * letter form (title supplies a preferred marker for reconciliation).
+ */
+export const tabMarkerMessageHandlers: Record<string, MessageHandler> = {
+  GET_TAB_MARKER: (_message, sender) => {
+    const tabId = sender.tab?.id;
+    if (typeof tabId !== 'number') return { letters: null };
+    return getTabMarker(tabId, sender.tab?.title ?? undefined)
+      .then((letters) => ({ letters }))
+      .catch(() => ({ letters: null }));
+  },
+};
