@@ -186,13 +186,30 @@ export function transportFailure(
   };
 }
 
+// The three mode-tag mirrors (caret, video, find) share one boolean-POST
+// shape, and one failure mode: every drop point was SILENT, which is what
+// let the Firefox find tag vanish without a trace (field, 2026-07-26 — the
+// tag never set while the neighboring query_field POST worked). Outcomes
+// are logged at each drop: not-connected, and a failed/refused POST.
+async function postModeTag(endpoint: string, tag: string, active: boolean): Promise<void> {
+  if (!(await ensureConnected())) {
+    void forwardPluginDebugLog('BK_MODE_TAG_DROPPED', { tag, active, reason: 'not_connected' }, 'warn');
+    return;
+  }
+  const r = await postToPlugin(endpoint, { conn_id: connId, active });
+  if (!r || !r.ok) {
+    void forwardPluginDebugLog(
+      'BK_MODE_TAG_DROPPED', { tag, active, reason: r ? `http_${r.status}` : 'post_null' }, 'warn',
+    );
+  }
+}
+
 // Caret voice mode: reflect the content script's caret/visual state to the
 // plugin so it holds the exclusive caret tag while active (gating the voice
 // selection commands). Boolean twin of the palette publish. See
 // notes/DESIGN_HINT_ACTION_MODES.md.
 export async function setCaretActive(active: boolean): Promise<void> {
-  if (!(await ensureConnected())) return;
-  await postToPlugin('/caret', { conn_id: connId, active });
+  await postModeTag('/caret', 'caret', active);
 }
 
 // Range-pick chip window: reflect the pending disambiguation pick so the plugin
@@ -219,8 +236,7 @@ export async function setRangePick(tabId: number, codewords: string[]): Promise<
 // exclusive video_mode tag while it is live. Caret's boolean-mirror shape;
 // the writer is the SW-derived mode mirror (background/mode-mirror.ts).
 export async function setVideoMode(active: boolean): Promise<void> {
-  if (!(await ensureConnected())) return;
-  await postToPlugin('/video-mode', { conn_id: connId, active });
+  await postModeTag('/video-mode', 'video_mode', active);
 }
 
 // Find voice gating: reflect the content script's find session (bar open OR
@@ -228,8 +244,7 @@ export async function setVideoMode(active: boolean): Promise<void> {
 // holds the non-exclusive find tag, gating voice "next"/"previous" to live
 // find sessions. Idempotent plugin-side; redundant posts are harmless.
 export async function setFindActive(active: boolean): Promise<void> {
-  if (!(await ensureConnected())) return;
-  await postToPlugin('/find', { conn_id: connId, active });
+  await postModeTag('/find', 'find', active);
 }
 
 // Query-field state: reflect "focus is in a single-line text input" so the

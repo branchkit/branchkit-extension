@@ -502,6 +502,12 @@ chrome.runtime.onMessage.addListener((message: any, _sender, sendResponse) => {
   // live frames in background/mode-mirror.ts (replaced CARET_ACTIVE/FIND_ACTIVE).
   if (message.type === 'MODE_STACK') {
     const tabId = _sender.tab?.id;
+    // Receipt breadcrumb (Firefox find-tag hunt, 2026-07-26): edges are
+    // user-action-rare, and every later drop point now logs — so a silent
+    // missing tag localizes to whichever line is absent.
+    forwardCoalesced('BK_MODE_STACK_RX', {
+      tab: tabId ?? null, docId: String(message.docId).slice(0, 8), stack: message.stack,
+    }, 'info');
     if (typeof tabId === 'number') frameStackPosted(tabId, message.docId, message.stack as ModeId[]);
     return false;
   }
