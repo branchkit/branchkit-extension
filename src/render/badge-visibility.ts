@@ -44,12 +44,12 @@ import { recordCpu } from '../debug/perf-counters';
 const MAX_BADGE_COUNT = 676; // No artificial cap; word pairs for >26
 
 interface BadgeVisibilityHooks {
-  /** Re-scan the page (content's doScan — discovery orchestration). */
+  /** Re-scan the page (content's doScan — discovery orchestration). Sole
+   *  remaining hook: the discovery walk is a content.ts-local orchestration
+   *  this module has no import path to. The hint-action reset that used to sit
+   *  beside it is gone — that state lives on KeyHandler now, which this module
+   *  already holds. */
   doScan: () => void;
-  /** Reset the pending hint-action verb to plain activate (content-owned
-   *  dispatch state; cleared with the filter so an abandoned verb cannot
-   *  leak to the next hint). */
-  resetHintAction: () => void;
 }
 
 let hooks: BadgeVisibilityHooks | null = null;
@@ -199,7 +199,15 @@ export async function showBadges(): Promise<void> {
 // scheduled hint refresh (after the flash completes) re-renders all
 // badges via updateLabel, which resets the text naturally.
 export function clearHintFilter(): void {
-  requireHooks().resetHintAction();
+  // Use-before-init must fail loud, not half-work. This assertion used to be
+  // implicit — the hint-action reset was a hook, so reaching it proved the
+  // module was wired. That hook moved to KeyHandler, and the guarantee has to
+  // be stated rather than inherited. Every hide/toggle transition routes
+  // through here, so asserting here covers the module.
+  requireHooks();
+  // An abandoned verb must not survive the filter that armed it: clearing the
+  // hint prefix is exactly the moment 'yank' stops applying to anything.
+  keyHandler.resetHintAction();
   keyHandler.exitHintMode();
   for (const w of store.all) {
     w.hint?.setFiltered(false);

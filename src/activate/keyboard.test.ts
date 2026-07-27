@@ -200,6 +200,74 @@ describe('new-tab casing (capital mid-codeword)', () => {
   });
 });
 
+// The pending hint action lived in content.ts as a bare `let`, so the
+// verb → activate → consume → reset arc had no test anywhere. These are its
+// first. The verb COMMANDS still register in content.ts; what moved here is
+// the state they arm, next to the newTabArmed it interacts with.
+describe('the pending hint action', () => {
+  it('is a plain activate until a verb arms one', () => {
+    expect(handler.takeHintAction()).toBe('activate');
+  });
+
+  it('holds the armed verb until something consumes it', () => {
+    handler.armHintAction('yank');
+    expect(handler.takeHintAction()).toBe('yank');
+  });
+
+  // The one-shot rule. A verb that survived its activation would silently
+  // apply to the NEXT badge the user picked — a `yf` that keeps yanking.
+  it('disarms on consumption, so a verb never reaches a second pick', () => {
+    handler.armHintAction('hover');
+    expect(handler.takeHintAction()).toBe('hover');
+    expect(handler.takeHintAction()).toBe('activate');
+  });
+
+  it('disarms without acting when the verb is abandoned', () => {
+    handler.armHintAction('copytext');
+    handler.resetHintAction();
+    expect(handler.takeHintAction()).toBe('activate');
+  });
+
+  it('takes the last verb armed when the user changes their mind', () => {
+    handler.armHintAction('yank');
+    handler.armHintAction('focus');
+    expect(handler.takeHintAction()).toBe('focus');
+  });
+
+  describe('the capital-letter new-tab promotion', () => {
+    it('promotes a plain activate to newtab when a capital armed new-tab', () => {
+      handler.enterHintMode();
+      handler.handleKeyDown(makeKey('a'));
+      handler.handleKeyDown(makeKey('A', { shiftKey: true }));
+      expect(handler.isNewTabArmed()).toBe(true);
+
+      handler.promoteNewTabIfArmed();
+      expect(handler.takeHintAction()).toBe('newtab');
+    });
+
+    // An explicit verb keeps precedence: `yf` then a capital still yanks. The
+    // capital is the affordance for "open this", and the user already said
+    // what to do instead of opening it.
+    it('leaves an explicit verb alone', () => {
+      handler.enterHintMode();
+      handler.armHintAction('yank');
+      handler.handleKeyDown(makeKey('a'));
+      handler.handleKeyDown(makeKey('A', { shiftKey: true }));
+      expect(handler.isNewTabArmed()).toBe(true);
+
+      handler.promoteNewTabIfArmed();
+      expect(handler.takeHintAction()).toBe('yank');
+    });
+
+    it('is a no-op when no capital was typed', () => {
+      handler.enterHintMode();
+      handler.handleKeyDown(makeKey('a'));
+      handler.promoteNewTabIfArmed();
+      expect(handler.takeHintAction()).toBe('activate');
+    });
+  });
+});
+
 describe('codeword filter — match predicate (no blank-on-nonmatch)', () => {
   it('no-ops a first letter no codeword starts with (hints stay put)', () => {
     const cb = vi.fn();

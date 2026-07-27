@@ -41,6 +41,10 @@ function isInsertMode(): boolean {
   return false;
 }
 
+/** What a keyboard-resolved badge does instead of a plain click. */
+export type HintAction =
+  'activate' | 'newtab' | 'yank' | 'hover' | 'focus' | 'copytext' | 'caret';
+
 export class KeyHandler {
   private sequence: string = '';
   private timeout: ReturnType<typeof setTimeout> | null = null;
@@ -50,6 +54,12 @@ export class KeyHandler {
   // the content-side filter callback on the unique match; reset whenever the
   // codeword / hint mode resets.
   private newTabArmed: boolean = false;
+  // What the NEXT badge resolved by keyboard should DO instead of a plain
+  // click, armed by a verb command (yf/gf/yc/gh/gv) before or during hint
+  // mode. The third field of this same hint-mode state machine, next to
+  // `filterText` and `newTabArmed` — it lived in content.ts only because the
+  // verb commands register there. See notes/DESIGN_HINT_ACTION_MODES.md.
+  private pendingHintAction: HintAction = 'activate';
   private registry: CommandRegistry;
   private dispatcher: ActionDispatcher;
   private onFilterChange: ((prefix: string) => void) | null = null;
@@ -324,6 +334,43 @@ export class KeyHandler {
    *  in a new tab. Read by the content-side filter callback on a unique match. */
   isNewTabArmed(): boolean {
     return this.newTabArmed;
+  }
+
+  // --- The pending hint action ---
+
+  /** Arm a verb for the next keyboard-resolved badge (yank, hover, …). */
+  armHintAction(a: HintAction): void {
+    this.pendingHintAction = a;
+  }
+
+  /**
+   * Consume the armed verb and disarm in the same breath, so no path can leak
+   * it to the next activation. Every activation goes through here — a verb is
+   * one-shot by construction, not by each caller remembering to clear it.
+   */
+  takeHintAction(): HintAction {
+    const a = this.pendingHintAction;
+    this.pendingHintAction = 'activate';
+    return a;
+  }
+
+  /**
+   * Disarm without acting. An abandoned verb (`yf`, then Escape, or the hint
+   * filter cleared out from under it) must not leak into the next hint.
+   */
+  resetHintAction(): void {
+    this.pendingHintAction = 'activate';
+  }
+
+  /**
+   * The "aA" affordance: finishing a codeword with a capital opens the pick in
+   * a new tab — UNLESS an explicit verb is already armed, which keeps
+   * precedence (`yf` then a capital still yanks).
+   */
+  promoteNewTabIfArmed(): void {
+    if (this.newTabArmed && this.pendingHintAction === 'activate') {
+      this.pendingHintAction = 'newtab';
+    }
   }
 
   handleKeyDown(e: KeyboardEvent): boolean {

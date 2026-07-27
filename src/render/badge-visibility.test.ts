@@ -40,14 +40,11 @@ function seedWrapper(visibleHint: boolean): ElementWrapper {
 }
 
 let scans: number;
-let hintActionResets: number;
 
 beforeEach(() => {
   scans = 0;
-  hintActionResets = 0;
   initBadgeVisibility({
     doScan: () => { scans++; },
-    resetHintAction: () => { hintActionResets++; },
   });
   // showBadges' fast path still awaits a frame + a tracker flush; neither
   // exists before pageSession.start(), so provide inert stand-ins.
@@ -62,6 +59,7 @@ afterEach(() => {
   for (const w of [...store.all]) store.removeWrapperByElement(w.element);
   pageSession.badgesVisible = false;
   keyHandler.exitHintMode();
+  keyHandler.resetHintAction();
   _resetBadgeVisibilityForTesting();
 });
 
@@ -99,10 +97,13 @@ describe('hideBadges', () => {
     const w = seedWrapper(true);
     pageSession.badgesVisible = true;
     keyHandler.enterHintMode();
+    keyHandler.armHintAction('yank'); // a verb armed but never resolved
 
     hideBadges();
 
-    expect(hintActionResets).toBe(1);
+    // Real state, not a hook-fired counter: the abandoned verb is disarmed, so
+    // the next badge the user picks is a plain click.
+    expect(keyHandler.takeHintAction()).toBe('activate');
     expect(keyHandler.isHintMode()).toBe(false);
     expect(pageSession.badgesVisible).toBe(false);
     expect(w.hint!.hide).toHaveBeenCalled();

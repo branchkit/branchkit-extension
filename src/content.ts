@@ -486,7 +486,6 @@ function onTrackerCodewordsChanged(claimed: ElementWrapper[], released: string[]
 // content-owned and reach it here.
 initBadgeVisibility({
   doScan: () => { void doScan(); },
-  resetHintAction: () => { pendingHintAction = 'activate'; },
 });
 
 setFindCallbacks({
@@ -1079,8 +1078,6 @@ dispatcher.register('hint_mode', () => {
 // Set by a verb command (or the capital-letter new-tab affordance) before/while
 // in hint mode; consumed + reset in activateWrapper. See
 // notes/DESIGN_HINT_ACTION_MODES.md.
-type HintAction = 'activate' | 'newtab' | 'yank' | 'hover' | 'focus' | 'copytext' | 'caret';
-let pendingHintAction: HintAction = 'activate';
 
 // (toggleHints/setBadgesVisible — the shared Shift+F / voice-"toggle" /
 // popup transition — live in render/badge-visibility.ts, with the borrow
@@ -1275,30 +1272,30 @@ registerSelectionCommands();
 // Yank a link via hint (Vimium yf): enter hint mode; the resolved codeword
 // copies the link's URL instead of following it. Keyboard-only.
 dispatcher.register('yank_hint', () => {
-  pendingHintAction = 'yank';
+  keyHandler.armHintAction('yank');
   keyHandler.enterHintMode();
 });
 // Focus a badge's element without activating it (Vimium focus hint). Then type
 // via Insert. Distinct from focus_input (first field) — this picks any element.
 dispatcher.register('focus_hint', () => {
-  pendingHintAction = 'focus';
+  keyHandler.armHintAction('focus');
   keyHandler.enterHintMode();
 });
 // Copy a badge's visible text (vs yank_hint's URL).
 dispatcher.register('copytext_hint', () => {
-  pendingHintAction = 'copytext';
+  keyHandler.armHintAction('copytext');
   keyHandler.enterHintMode();
 });
 // Hover a badge's element (reveal menus/controls) — keyboard twin of the voice
 // "hover {hint}" (still plugin-contributed; see DESIGN_HINT_ACTION_MODES.md 3b).
 dispatcher.register('hover_hint', () => {
-  pendingHintAction = 'hover';
+  keyHandler.armHintAction('hover');
   keyHandler.enterHintMode();
 });
 // Start a caret/visual selection at a badge's element (Vimium hint→caret) —
 // then drive it by keyboard or voice ("select word" / "copy that").
 dispatcher.register('caret_hint', () => {
-  pendingHintAction = 'caret';
+  keyHandler.armHintAction('caret');
   keyHandler.enterHintMode();
 });
 
@@ -1365,7 +1362,7 @@ setInnerTransientProbe('hint', () => keyHandler.peelHintPrefix());
 // frame's stack; the SW derives the tag set (background/mode-mirror.ts, which
 // carries the failure model). A sync throw reports the edge unposted → retry.
 keyHandler.setHintEscapeCallback(() => {
-  pendingHintAction = 'activate'; // an abandoned verb (yf/hover/… then Esc) must not leak to the next hint
+  keyHandler.resetHintAction(); // an abandoned verb (yf/hover/… then Esc) must not leak to the next hint
   if (getHintVisibility() !== 'always') hideBadges();
 });
 
@@ -1382,7 +1379,7 @@ const storeHolder = new StoreHolder(store, {
   // unless an explicit verb (yf then a capital) keeps precedence, then the
   // same hide-after-activate the store branch did.
   activate: (w) => {
-    if (keyHandler.isNewTabArmed() && pendingHintAction === 'activate') pendingHintAction = 'newtab';
+    keyHandler.promoteNewTabIfArmed();
     activateWrapper(w);
     hideBadges();
   },
@@ -1552,8 +1549,7 @@ function activateWrapper(wrapper: ElementWrapper): void {
   const el = wrapper.element as HTMLElement;
   // Consume the keyboard hint action and reset immediately, so no path can leak
   // it to the next activation. See notes/DESIGN_HINT_ACTION_MODES.md.
-  const action = pendingHintAction;
-  pendingHintAction = 'activate';
+  const action = keyHandler.takeHintAction();
 
   // Verbs that act ON the element without following it (Vimium hint modes).
   if (action === 'yank') {
