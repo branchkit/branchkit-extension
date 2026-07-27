@@ -129,6 +129,11 @@ await pingDevReload();
 console.log(`built dist/${target}/`);
 
 async function pingDevReload() {
+  // A build that isn't the developer's own must not reload their browsers.
+  // An agent, or a second checkout verifying `npm run build`, would otherwise
+  // tear down and re-inject every content script in every tab — which lands as
+  // a phantom failure in whatever harness the real session is running.
+  if (process.env.BRANCHKIT_NO_DEV_RELOAD === '1') return;
   let WebSocket;
   try {
     ({ WebSocket } = await import('ws'));
