@@ -87,6 +87,16 @@ export function armSearchBadges(): void {
     // any other and deliberately do NOT narrow the projection, because link
     // hints stay speakable alongside them.
     onEmpty: () => { badges = null; },
+    // The (query, occurrence) identity, made good: re-run the retained query
+    // and arm a fresh set. Required by RangeBadgeSet.create because
+    // SEARCH_VARIANT declares an identity — its absence is what bug #5 was.
+    // Bounded by construction: a re-find that finds nothing leaves `badges`
+    // null and nothing further happens until the next commit.
+    recover: () => {
+      if (!isFindActive() || !refindCommitted()) return;
+      bkLog('BK_SEARCH_BADGES_REFIND', { matches: getMatchRanges().length });
+      armSearchBadges();
+    },
     holder: {
       id: 'search',
       priority: ADDITIVE_OVERLAY_PRIORITY,
@@ -143,21 +153,18 @@ function reconcileSearchHolder(settle: SettleKind): void {
   // Same self-selection as the set's default: every settle pass lands a
   // 'general'; the trailing 'scroll' would be rework.
   if (settle !== 'general') return;
-  badges?.reconcile();
-  // The set may have reaped itself to nothing just now. On a re-rendering app
-  // that is not "the results are gone" — the text is still on the page, only
-  // our Ranges into it collapsed (render/range-badge-set.ts isRangeDead). The
-  // session re-acquires its own query and re-arms.
+  // Re-acquisition is NOT polled from here any more. The set reaps its own
+  // dead ranges inside this call and, if every one died, calls the `recover`
+  // its declared identity obliges it to have (render/badge-variant.ts). This
+  // used to be an `if (!badges && …)` check afterwards, which inferred "the
+  // set reaped itself to nothing" from a module binding having been nulled by
+  // a callback — the recovery was real but the trigger was a coincidence of
+  // wiring rather than a consequence of what a search badge IS.
   //
-  // Rides the settle the holder is ALREADY given rather than observing
+  // Still rides the settle the holder is ALREADY given rather than observing
   // mutations: re-finding is only worth doing once the DOM has stopped moving,
-  // which is what a settle means. Bounded by construction — a re-find that
-  // returns nothing leaves `badges` null and this becomes a null check until
-  // the next commit.
-  if (!badges && isFindActive() && refindCommitted()) {
-    bkLog('BK_SEARCH_BADGES_REFIND', { matches: getMatchRanges().length });
-    armSearchBadges();
-  }
+  // which is what a settle means.
+  badges?.reconcile();
 }
 
 /**

@@ -1,6 +1,6 @@
 # The hint engine — one piece, with declared boundaries between hint types
 
-**Status:** step 1 **DONE** (`bc7e213`); step 2 (identity) is the live proposal;
+**Status:** steps 1 and 2 **DONE** (`bc7e213`, and the identity axis);
 the `hints/` tree is **dropped** to a possible end state (§4.2). Written
 2026-07-27 at the end of a session that fixed five field bugs in this area; the
 bugs are the evidence and are catalogued in §2. Revised the same day after
@@ -101,7 +101,7 @@ them is currently expressed as data.
 | Axis | Link hints | Search badges | Pick chips | Expressed as |
 |---|---|---|---|---|
 | **Paint policy** | page fill, hide non-candidates, page defences, video suppression | find tint, dim, defences, suppression | page fill, dim, no defences, no suppression | ✅ `BadgeVariant` |
-| **Identity + lifecycle** | element; rebinds by fingerprint (`labels/rebind.ts`) | text occurrence; re-finds by query (`refindCommitted`) | text occurrence; does not recover, cancels | ❌ implicit in two class hierarchies |
+| **Identity + lifecycle** | element; rebinds by fingerprint (`labels/rebind.ts`) | text occurrence; re-finds by query (`refindCommitted`) | no identity; cannot recover, cancels | ✅ `BadgeVariant.identity` (2026-07-27) |
 | **Claim / arbitration** | ambient, additive | additive overlay | exclusive overlay | ⚠️ a `priority` + `claim` field passed at registration |
 | **Input policy** | typing narrows then fires on the whole codeword | same | same, plus the pick owns the answer | ⚠️ split between `codeword-typing.ts` and per-holder `narrow` |
 
@@ -205,6 +205,34 @@ Do it in the order that makes each step independently verifiable:
    This is the step that would have prevented bug #5: a search badge whose
    identity is *(query, occurrence)* obviously can be re-acquired, and nothing
    was asking.
+
+   **LANDED 2026-07-27.** `BadgeVariant.identity: HintIdentity`, with
+   `canRecover()` derived from it — never declared beside it.
+   `RangeBadgeSet.create` enforces the contract **both ways**: a recoverable
+   identity must be given a `recover`, and `'none'` must not have one. The
+   check exists because recovery was previously decided by whether the owner
+   *happened* to pass a `reconcile` hook — search supplied one,
+   `range-disambiguation` did not, and that accident was the entire dispatch.
+   A silent opt-in is exactly how bug #5 shipped; it is now a construction-time
+   throw in the first test that runs.
+
+   Search's re-find moved onto that seam. It used to be an
+   `if (!badges && isFindActive() && refindCommitted())` check *after*
+   `badges?.reconcile()` — inferring "the set reaped itself to nothing" from a
+   module binding having been nulled by a callback. Real, but a coincidence of
+   wiring rather than a consequence of what a search badge IS. The set now
+   calls `recover()` from its own reap when every range dies.
+
+   **Known gap, deliberately not closed here: PARTIAL death does not
+   re-acquire.** If only some badged ranges collapse, the set reaps those
+   members, stays alive, and never calls `recover` — while `find.ts`'s
+   `matchRanges` keeps the dead ranges, so `n`/`N` and the pill count walk
+   them until a full empty or a fresh commit. Closing it is not just moving the
+   call: `refindCommitted` → `applyFoundRanges` recomputes `currentIndex` and
+   calls `scrollToCurrent()`, so re-finding on partial death would let ordinary
+   DOM churn scroll the page under the user. That is a UX decision (probably:
+   re-acquire without moving the viewport), not a refactor, and it wants its
+   own change.
 
 3. ~~**Move files.**~~ **DROPPED** (2026-07-27) — see §4.2.
 

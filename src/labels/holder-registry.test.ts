@@ -65,7 +65,7 @@ import {
 } from '../testing/holder-conformance';
 import { StoreHolder } from './store-holder';
 import { RangeBadgeSet } from '../render/range-badge-set';
-import { RANGE_PICK_VARIANT, SEARCH_VARIANT } from '../render/badge-variant';
+import { RANGE_PICK_VARIANT, SEARCH_VARIANT, canRecover } from '../render/badge-variant';
 import type { BadgeVariant } from '../render/badge-variant';
 import { ObservableWrapperStore } from '../core/store';
 import { ElementWrapper } from '../scan/element-wrapper';
@@ -430,6 +430,10 @@ function makeRangeSetHarness(spec: {
           return r;
         }),
         variant: spec.variant,
+        // Identity ⟺ recovery: create() refuses the contradiction either way,
+        // so the harness supplies a stub exactly when the variant declares a
+        // target it could re-acquire (search), and none when it doesn't (pick).
+        ...(canRecover(spec.variant) ? { recover: () => {} } : {}),
         budget: cws.length,
         holder: {
           id: spec.id,

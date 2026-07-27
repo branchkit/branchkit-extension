@@ -42,7 +42,7 @@
 
 import { HintBadge } from './hints';
 import { rangeTarget } from './badge-target';
-import type { BadgeVariant } from './badge-variant';
+import { canRecover, type BadgeVariant } from './badge-variant';
 import { placeBadgeAtRect } from '../placement/position';
 import { isAncestorChainInVisibleViewport } from '../lifecycle/strict-viewport';
 import { type BandCandidate, bandOverhang, planBandWindow } from '../lifecycle/band-window';
@@ -125,6 +125,20 @@ export interface RangeBadgeSetOptions {
   onMembershipChanged?: (codewords: string[]) => void;
   /** The set emptied itself and disposed. `reason` is for logs/toasts. */
   onEmpty?: (reason: string) => void;
+  /**
+   * Re-acquire this set's targets from scratch, because every range died.
+   *
+   * Required if and only if `variant.identity` says the targets have an
+   * identity to re-acquire BY (render/badge-variant.ts `canRecover`) — the
+   * constructor enforces both directions, so this cannot be silently forgotten
+   * (bug #5) or silently supplied for a hint type that has no identity.
+   *
+   * Called AFTER the set has disposed, so it re-arms a fresh set rather than
+   * repairing this one — a re-find yields new Ranges, not repaired ones.
+   * On a re-rendering app "every range died" is not "the results are gone":
+   * the text is still on the page and only our Ranges into it collapsed.
+   */
+  recover?: () => void;
   /** Tag for the bkLog breadcrumbs, so two live sets are distinguishable. */
   logTag?: string;
 }
@@ -145,6 +159,25 @@ export class RangeBadgeSet {
    * instead of arming a question the user can neither see nor say.
    */
   static create(opts: RangeBadgeSetOptions): RangeBadgeSet | null {
+    // Identity ⟺ recovery, checked at construction rather than trusted.
+    // Recovery used to be decided by whether the owner HAPPENED to pass a
+    // `reconcile` hook — a silent opt-in, and search shipped without one
+    // (bug #5: badges pointing at text that no longer existed). Now the
+    // variant declares what the target IS and this refuses the contradiction
+    // either way, so the omission is a construction-time failure in the first
+    // test that runs rather than a silent lie on a re-rendering page.
+    if (canRecover(opts.variant) && !opts.recover) {
+      throw new Error(
+        `RangeBadgeSet: variant identity '${opts.variant.identity}' can be re-acquired, ` +
+        'but no `recover` was supplied — the set would silently point at dead targets.',
+      );
+    }
+    if (!canRecover(opts.variant) && opts.recover) {
+      throw new Error(
+        'RangeBadgeSet: `recover` supplied for identity \'none\' — a hint with no ' +
+        'identity has nothing to re-acquire; cancelling is the only honest option.',
+      );
+    }
     const set = new RangeBadgeSet(opts);
     const { plan, isStrict } = set.plan(new Set());
     if (plan.toClaim.length === 0) {
@@ -386,6 +419,11 @@ export class RangeBadgeSet {
     bkLog(`${this.tag}_REAP`, { dead: dead.length, remaining: this.members.size });
     if (this.members.size === 0) {
       this.empty('ranges_died');
+      // Every range died — the one case the identity axis exists for. A
+      // recoverable set re-acquires (a fresh set over fresh Ranges); one with
+      // no identity has already cancelled inside `empty`, and by contract has
+      // no `recover` to call.
+      this.opts.recover?.();
       return true;
     }
     this.opts.onMembershipChanged?.(this.codewords);

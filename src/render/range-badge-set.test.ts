@@ -61,7 +61,7 @@ vi.mock('../config', () => ({ getDisplayMode: () => 'letter' }));
 vi.mock('../debug/bk-log', () => ({ bkLog: () => {} }));
 
 import { RangeBadgeSet, RangeHolderSpec } from './range-badge-set';
-import { HINT_VARIANT, RANGE_PICK_VARIANT } from './badge-variant';
+import { SEARCH_VARIANT, RANGE_PICK_VARIANT } from './badge-variant';
 import {
   __resetHolderRegistry, holdersByPriority, rejectAll,
 } from '../labels/holder-registry';
@@ -113,7 +113,8 @@ describe('RangeBadgeSet', () => {
     })!;
     const second = RangeBadgeSet.create({
       ranges: [makeRange('three')],
-      variant: HINT_VARIANT, budget: 1, holder: testHolder(),
+      variant: SEARCH_VARIANT, budget: 1, holder: testHolder(),
+      recover: () => {},
     })!;
     await Promise.resolve();
 
@@ -132,8 +133,8 @@ describe('RangeBadgeSet', () => {
       variant: RANGE_PICK_VARIANT, budget: 2, holder: testHolder(),
     })!;
     const second = RangeBadgeSet.create({
-      ranges: [makeRange('three')], variant: HINT_VARIANT, budget: 1,
-      holder: testHolder(),
+      ranges: [makeRange('three')], variant: SEARCH_VARIANT, budget: 1,
+      holder: testHolder(), recover: () => {},
     })!;
     await Promise.resolve();
     const survivor = second.codewords[0];
@@ -154,11 +155,11 @@ describe('RangeBadgeSet', () => {
       holder: testHolder(),
     });
     RangeBadgeSet.create({
-      ranges: [makeRange('two')], variant: HINT_VARIANT, budget: 1,
-      holder: testHolder(),
+      ranges: [makeRange('two')], variant: SEARCH_VARIANT, budget: 1,
+      holder: testHolder(), recover: () => {},
     });
     await Promise.resolve();
-    expect(badges.map(b => b.variant)).toEqual([RANGE_PICK_VARIANT, HINT_VARIANT]);
+    expect(badges.map(b => b.variant)).toEqual([RANGE_PICK_VARIANT, SEARCH_VARIANT]);
   });
 
   it('create returns null when the pool is dry, claiming nothing', () => {
@@ -265,6 +266,72 @@ describe('RangeBadgeSet', () => {
       set.reconcile();
       await Promise.resolve();
       expect(published).toEqual(set.codewords);
+    });
+  });
+
+  // The identity axis (notes/DESIGN_HINT_ENGINE.md §4.1 step 2). Recovery used
+  // to depend on whether the owner HAPPENED to pass a `reconcile` hook — a
+  // silent opt-in, and search shipped without one (bug #5: badges pointing at
+  // text that no longer existed). The variant now declares what the target IS,
+  // and the contract is checked at construction in both directions.
+  describe('identity ⟺ recovery', () => {
+    it('refuses a recoverable identity with nothing wired to re-acquire', () => {
+      expect(() => RangeBadgeSet.create({
+        ranges: [makeRange('one')], variant: SEARCH_VARIANT, budget: 1,
+        holder: testHolder(),
+      })).toThrow(/can be re-acquired, but no `recover`/);
+    });
+
+    it("refuses a recover for identity 'none' — there is nothing to re-acquire", () => {
+      expect(() => RangeBadgeSet.create({
+        ranges: [makeRange('one')], variant: RANGE_PICK_VARIANT, budget: 1,
+        holder: testHolder(), recover: () => {},
+      })).toThrow(/identity 'none'/);
+    });
+
+    it('re-acquires when every range dies, driven by the set rather than the owner', async () => {
+      const p = document.createElement('p');
+      p.textContent = 'one';
+      document.body.appendChild(p);
+      const range = document.createRange();
+      range.selectNodeContents(p.firstChild!);
+
+      let recovered = 0;
+      const set = RangeBadgeSet.create({
+        ranges: [range], variant: SEARCH_VARIANT, budget: 1,
+        holder: testHolder(), recover: () => { recovered++; },
+      })!;
+      await Promise.resolve();
+      expect(set.size).toBe(1);
+      expect(recovered).toBe(0);
+
+      // The re-render: the range collapses while its text stays on the page.
+      range.collapse(true);
+      set.reconcile();
+
+      expect(set.size).toBe(0);
+      expect(recovered).toBe(1);
+    });
+
+    it('a pick that loses every range cancels, and has no recover to call', async () => {
+      const p = document.createElement('p');
+      p.textContent = 'one';
+      document.body.appendChild(p);
+      const range = document.createRange();
+      range.selectNodeContents(p.firstChild!);
+
+      const empties: string[] = [];
+      const set = RangeBadgeSet.create({
+        ranges: [range], variant: RANGE_PICK_VARIANT, budget: 1,
+        holder: testHolder('exclusive'), onEmpty: (r) => empties.push(r),
+      })!;
+      await Promise.resolve();
+
+      range.collapse(true);
+      set.reconcile();
+
+      expect(set.size).toBe(0);
+      expect(empties).toEqual(['ranges_died']);
     });
   });
 
