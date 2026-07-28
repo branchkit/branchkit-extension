@@ -194,6 +194,13 @@ start `pageSession`, call into feature init. `background.ts` similar. Neither
 file is the place a new feature *can* land, because neither owns registration
 or routing any more.
 
+**Half of that is now true rather than planned (§6m).** Neither entry point owns
+message routing (both listeners are the shared table), and `content.ts` owns
+zero command registrations — 43 → 0. What is left is not registration or routing:
+it is `content.ts`'s ~520 lines of excluded lifecycle glue plus its boot and
+callback wiring, and `background.ts`'s ~14 top-level `chrome.*` listeners and
+`init()`. The low hundreds needs §5's excluded region to come out of soak.
+
 ---
 
 ## 4. Exploiting the ratchet deliberately
@@ -1230,6 +1237,8 @@ tests.
 needs `activateWrapper`, `toggle_help` needs `currentKeymap` — both §6g.4-shaped
 state relocations), and phase 1's own residue, `handleSSEEvent` (~136 lines) plus
 `storeAlphabet`, which §7 named and which would take `background.ts` under ~700.
+**All three are DONE — §6m.** One of them was not a move: `activate_hint` had
+never been dispatchable and was deleted.
 
 ### 6j. The split EXECUTED (2026-07-28)
 
@@ -1540,10 +1549,12 @@ touch. The generalisable move was mutating the FIX and not just the finding:
 that is what turned up the second lint-D shadow and the fact that the first
 sealed-gate probe could not kill its own mutant.
 
-**Still queued, and now actually unblocked:** the duplicated `resolveTarget`
-wiring (§6j.3), which has real coverage on both sides for the first time — done
-in §6l; then `activate_hint`/`toggle_help`'s registrations; then
-`handleSSEEvent` + `storeAlphabet`.
+**Queue, as it stood:** the duplicated `resolveTarget` wiring (§6j.3), done in
+§6l; then `activate_hint`/`toggle_help`'s registrations and `handleSSEEvent` +
+`storeAlphabet`, all done in §6m — where this section's method held a third
+time. Every finding there was about verification too, and the biggest was that
+`activateWrapper`, the function every keyboard hint action ends in, could be
+emptied without failing anything.
 
 ### 6l. The `resolveTarget` collapse (2026-07-28)
 
@@ -1595,6 +1606,212 @@ refactor's clothes.
 
 `content.ts` 2,783 → 2,768, ceilings unchanged (82 under is inside the band,
 and §4.1's correction is that over-applying the lower is its own mistake).
+
+### 6m. The last three residues (2026-07-28)
+
+`0c8640a`..`b69ccb9`, six commits. `content.ts` 2,770 → **2,616** (ceiling 2,850
+→ **2,700**), `background.ts` 869 → **671** (ceiling 900 → **750**), tests 2,278
+→ **2,309**, lints 12 → **14** ok-lines, `harness:messages` 33 → **37**,
+`harness:realinput` 11 → **12** on both engines.
+
+Two things §6i named as moves turned out not to be, and both are more useful
+than the moves would have been.
+
+#### 6m.1 `activate_hint` was never reachable, so it was deleted
+
+§6i queued it as a registration to relocate. `git grep activate_hint 2db72ad` —
+the scaffold commit, 2026-03-12 — returns exactly ONE line, the registration
+itself. Four months registered, never dispatched, and nothing in the extension
+could have. Every `dispatcher.dispatch` call site was enumerated and each is
+closed: the video layer's own action union; two literals (`toggle_help`,
+`find_open`); registry entries, i.e. the keymap, where `mappable: false` is
+stripped on both save and load and asserted twice in keymap-storage's own tests;
+`PALETTE_COMMAND`, whose rows come from `palette/model`, which skips
+`!c.mappable`; and `DISPATCH_PASSTHROUGH_ACTIONS`, which lacks it. The catalog
+entry went too — `mappable: false` plus no `voice:` means `buildHelpModel` skips
+it and the palette drops it, so it rendered in no surface either.
+
+**The lint is the finding, not the deletion.** D asks demand → supply for VOICED
+ids; D2 asks it for PASSTHROUGH ids; nothing asked the third direction — given a
+catalog entry, can anything dispatch it at all. Nor could
+`command-catalog.test.ts`'s hand-mirrored `REGISTERED_ACTIONS` list, which
+checks that the catalog and the registrations agree: **they did, both being
+dead.** Lint H closes that direction with the three real dispatch paths as its
+escapes, each read from the code. A `keyHint`-only entry would be a legitimate
+fourth; none exists, so it is deliberately not written in.
+
+Mutating H's own FIX found a second defect, exactly as in §6k. The catalog is
+heavily commented BETWEEN entries and the parse sliced each entry up to the next
+one, so a trailing comment attached to the entry above it — a note reading "a
+note that happens to mention `mappable: true`" let an unreachable entry pass.
+Entries are brace-matched now. The same slice feeds lint D's `voiced` read,
+where the shadow was merely noisy rather than unsafe (a false positive DEMANDS a
+route, so it fails loudly); both are exact now, voiced count unchanged at 76.
+
+#### 6m.2 `activateWrapper` had no executable coverage of any kind
+
+The bigger finding, and the same shape as §6k's sealed gate one layer out. Every
+keyboard hint action ends in `activateWrapper` — plain activation and all five
+armed verbs — and **replacing its entire body with `return` left tsc, thirteen
+lints, 2,278 tests and every harness green.** Not a unit test (a `content.ts`
+local), not `harness:messages` (that drives the VOICE element verbs, which
+§6g.7 measured share no code with these), not any realinput scenario.
+
+So the probes went first, as §6i mandated and §6k re-proved. The new realinput
+scenario asserts two halves because neither discriminates alone: typing a
+codeword must FOLLOW the element (the page's own click plus the hash it lands
+on), and `gf` must FOCUS it and return — where the load-bearing assertion is
+that **no click landed at all**, because dropping the armed branch falls
+straight through to `activateElement` and a click-only check would pass against
+a `gf` that clicked the link.
+
+It walks the alphabet rather than reading the codeword out of an opened shadow
+root. `bkOpenShadow` would make the typing deterministic and is localStorage on
+a PERSISTENT profile — leaving it set breaks `shownBadges` (which identifies a
+real badge BY its closed shadow root) for every other scenario on the next run.
+That is §6j.1's order-dependence finding, avoided rather than re-learned.
+
+The move itself is byte-identical relocation to `activate/keyboard-activation.ts`
+— a new module on §6g.7's rule, because `keyboard-commands.ts` deliberately sits
+below the singletons, `event-sequence.ts` is the primitive this calls, and
+`badge-visibility.ts` owns whether badges are on screen, not what happens to an
+element. Its two helpers (`shouldAutoShowBadges`, `scheduleHintRefresh`) went to
+`badge-visibility` first, in their own commit, so the move that followed was pure
+— §6i's sequencing rule, and free by construction: neither needed an import that
+module did not already hold, and content.ts gained no import EDGE, only two names
+on one it already had.
+
+#### 6m.3 `toggle_help`, and content.ts stops knowing the dispatcher
+
+`keymap/keymap-registry.ts` takes `currentKeymap` and the registry sync; the
+binding registers from `render/help-overlay.ts`, which already imported the
+dispatcher (§6g.7's third case, the stated default). NOT folded into
+`keymap-storage.ts`, which is the layer below and must stay there —
+`palette-page.ts` imports it, and this reaches `core/singletons`, which
+constructs the KeyHandler and pulls in media, toast and the mode chip.
+
+`activeKeymap()` is a FUNCTION and that is the whole risk. The stored keymap
+arrives from an async read, so an exported binding captured at import time pins
+the factory defaults forever — and the overlay still opens and still renders
+every group, showing the wrong binds silently. That is what the probe written in
+`0c8640a` is aimed at: voice is disconnected under the harness, so a row
+survives only if the live keymap gave it a bind, which makes `?` and `F` the
+discriminator. Handed `[]`, the overlay opens with 0 bound keys and the probe
+names it. (`kbd.hint` is excluded — those come from the catalog, not the keymap,
+and would survive the mutation.)
+
+**`content.ts` now contains ZERO `dispatcher.register` calls** — 43 at the start
+of §6g.7, 2 after it, 0 now. `dispatcher` and `registry` both went unused.
+
+#### 6m.4 The SSE fan-out, and §7's residue closed
+
+`handleSSEEvent`, `storeAlphabet`, `BROADCAST_ACTIONS` and the offscreen bridge
+to `background/sse-events.ts`. `DEV_PING` stays in `background.ts` deliberately:
+the message is a no-op and the WAKE is the point — a suspended event page re-runs
+that script and reconnects the dev reload socket at the bottom of the same file —
+and its sender touches `window`, so a service worker cannot import it either way.
+
+**§6i's "under ~700" is met at 671 without touching the comment that put it out
+of reach.** The correction in the handoff was right about the arithmetic and
+wrong about the conclusion: `efd21bc`'s `BROADCAST_ACTIONS` comment costs 15
+lines, but it MOVES WITH the set it explains, along with the SSE section header
+and the bridge. A comment that travels with its subject was never the obstacle.
+
+Nothing had ever driven that pair: this harness sends INTO a tab, which is the
+far side of the fan-out, and the SW's own `onMessage` edge was never crossed.
+The sender has to be a third context — `runtime.sendMessage` from the service
+worker does not reach the service worker, and a page main world has no
+`chrome.runtime` — so the options page sends. Both probes are chosen to be
+independent of which tab is active, because opening that tab churns exactly that.
+
+#### 6m.5 Two lints fired for real, and one had a blind spot
+
+**Lint D, exactly as its own comment predicted.** Seven voiced ids left
+`handled` the moment the arms moved to a fourth file, and each failed with "no
+extension-side route" until `ROUTE_FILES` learned it. The claim that the list
+cannot go stale silently has now been tested in the direction it described.
+
+**Lint E could not read a one-line inline map.** `literalKeys` matches keys at
+the literal's own two-space indentation, so `registerMessageHandlers({ DEV_PING:
+… })` on one line parses to nothing: the type count went 55 → 54 and NOTHING
+failed, while the runtime registered it perfectly well. The failure is in the
+unsafe direction — its types leave the disjointness set while still being live.
+Closed by rejecting an inline map that yields zero keys, which keeps the parser
+as dumb as §6k argued it should be. Its `ok` is now gated on `failed` as well;
+printing "ok" beside its own FAIL is how a lint gets skimmed.
+
+#### 6m.6 What the two new module boundaries bought, beyond line count
+
+31 unit tests that could not have existed: an entry point cannot be imported.
+`activateWrapper` gets 15 (the four branches the realinput scenario cannot reach
+cheaply, plus the shape questions no end-to-end run answers well — that each
+verb acts and RETURNS, that the armed verb is consumed exactly once, that the
+caret's handoff runs BEFORE `enterAt` or it tears down the mode the caret just
+pushed). `handleSSEEvent` gets 16, all asserting ORDER, because that chain's
+meaning is positional: a tab verb answered below the forward goes to a content
+script that cannot reach `chrome.tabs`, a media verb answered below it goes to
+the focused page instead of the tab that is playing. Every case asserts both
+that the right thing happened AND that the fan-out did not.
+
+Thirteen mutants across the two files, all killed, each by the test that names
+its defect.
+
+#### 6m.7 Evaluation order moved once, and the §6g.1 trick could not stop it
+
+Fourth time in this arc. The new import in `content.ts` went last as always, but
+**the hoist came from the other end**: `help-overlay` is content.ts's import 58,
+so ITS new edge to `keymap-registry` pulled `keymap-storage` from index 124 to
+97, ahead of 27 modules it used to follow. §6g.1 protects the entry point's own
+list; it says nothing about a new edge added to a module the entry point imports
+early. Checked rather than assumed — keymap-storage's entire module scope is two
+string constants and one array literal, and its only `addListener` is inside
+`onKeymapChanged`. Inert, so benign.
+
+Two other resolutions came out clean and are worth recording because the
+reasoning would have got one of them wrong. Dropping `content.ts`'s direct edge
+to `activate/clipboard` moved nothing: `caret.ts` and `selection-commands.ts`
+already pinned it at index 102, so the direct import was never what placed it.
+And in `background.ts`, `tab-surgery` was DEMOTED 25 → 37, now reached only
+through the last import; its whole module scope is one `new Set` of string
+literals.
+
+Every one of these was resolved with a script over both import lists, not
+reasoned about.
+
+#### 6m.8 The `noUnusedLocals` pile, measured
+
+The standing open item now has a number: **49 unused locals repo-wide, 30 of
+them in the two entry points** (26 in `content.ts`, 4 in `background.ts`) at the
+start of this session. Turning the flag on is still its own commit.
+
+But it stopped being only a cleanup question. `noUnusedLocals: false` means a
+dead import in an ENTRY POINT is not inert — it is a live value edge holding a
+module in the bundle and in the evaluation order, which is the thing this arc
+has now had to re-verify four times. Every move in this session removed some:
+three from `activateWrapper`'s (one of which, `copyText`, deleted content.ts's
+whole edge to `activate/clipboard`), two from `toggle_help`'s, twelve from the
+SSE move. **All found with `tsc --noEmit --noUnusedLocals` diffed against a
+baseline captured before the first move**, which is the check the "one lived
+five commits" note asks for and the only reliable form of it.
+
+#### 6m.9 Open, carried forward
+
+- **`noUnusedLocals`** — 49 repo-wide, 19 outside the entry points now. Own
+  commit; several are in test files.
+- **The `keyHint`-only escape for lint H.** Documenting "type a badge's letters
+  to activate it" in the help overlay is a real product option and the mechanism
+  exists (`keyHint`); it is a product call, not a refactor, so it was flagged
+  rather than taken.
+- **CI's messages step is still unverified on Linux** (its `copytext_hint` probe
+  reads the real clipboard), and `harness:realinput` is still not in CI.
+- **`PALETTE_COMMAND` intermittent** — misattribution fixed, root cause not; the
+  lead in §6k stands.
+- **The `tr_`-scope probe still rides the `reactivate` arm**, so it would stay
+  green if `dispatchVoiceAction` went async. Unchanged by this session — none of
+  the newly moved code emits a `bkLog` reachable synchronously either.
+- **The dev auto-reload block** (~50 lines at the tail of `background.ts`) is the
+  next obvious lift and would take it to ~620. Not taken: it is not a reason the
+  entry point is a hub, which is §5's test, and `DEV_PING` would go with it.
 
 ---
 
