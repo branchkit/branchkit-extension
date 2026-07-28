@@ -141,6 +141,10 @@ import { registerScrollCommands } from './activate/scroll-commands';
 import { registerMediaCommands } from './activate/media-commands';
 import { registerKeyboardCommands } from './activate/keyboard-commands';
 import { registerTabCommands } from './activate/tab-commands';
+// LAST deliberately (§6g.1): every module this one imports is already in the
+// list above, so appending it at the end leaves module evaluation order
+// unchanged — only the new module itself is new to the order.
+import { dispatchVoiceAction } from './activate/voice-dispatch';
 
 // --- Idempotency guard ---
 //
@@ -1876,31 +1880,10 @@ function republishForActivation(reason: string): void {
 
 // --- Message Listener (from background / voice) ---
 
-// Voice actions that route straight to the local dispatcher (the same handlers
-// the keyboard uses). The discrete scroll/find actions are here so a contributed
-// voice phrase (e.g. "scroll down" → scroll_down) runs the identical command as
-// its keybind. Parameterized scroll + find_immediate carry params through.
-const DISPATCH_PASSTHROUGH_ACTIONS = new Set([
-  'scroll', 'scroll_to_element', 'scroll_to_percent',
-  'scroll_down', 'scroll_up', 'scroll_half_down', 'scroll_half_up',
-  'scroll_full_down', 'scroll_full_up',
-  'scroll_top', 'scroll_bottom', 'scroll_left', 'scroll_right',
-  'find_open', 'find_close', 'find_next', 'find_previous', 'find_immediate',
-  'select_to', // voice "extend to <phrase>" — dictated-argument find + extend
-  'focus_input',
-  'toggle_palette', // voice "palette all" — same handler as the Ctrl+K bind
-  'toggle_tab_palette', // voice "palette tabs" — the tabs-only palette (Ctrl+T twin)
-  'toggle_command_palette', // voice "palette commands" — the catalog source alone
-  'toggle_bookmark_palette', // voice "palette bookmarks" — the bookmark source alone
-  'toggle_help', // voice "help" — same handler as the ? bind
-  'go_next', 'go_previous', // voice "next/previous page"
-  'copy_url', // voice "copy url"
-  'go_up', 'go_root', // voice "go up" / "site root"
-  // voice "pause"/"mute"/"faster"/"skip ahead"/"restart video" — the media
-  // executors (activate/media.ts); each no-ops in a frame with no large video
-  'media_play_pause', 'media_mute', 'media_speed', 'media_seek', 'media_restart',
-  'video_mode', 'video_exit', // "video" = the `w` layer's entry; exit = the mirror forwarder (C4b)
-]);
+// DISPATCH_PASSTHROUGH_ACTIONS moved to activate/voice-dispatch.ts with the arm
+// that forwards it. §6h's finding is why it went WITH the dispatch rather than
+// staying: lint D reads that set as proof an id is handled, so a set here and a
+// forwarder there is the one direction the lint cannot see.
 
 // --- The content-side message table ---
 //
@@ -1940,43 +1923,29 @@ registerMessageHandlers(markRestoreMessageHandlers);
 registerMessageHandlers(paletteHostMessageHandlers);
 registerMessageHandlers(helpMessageHandlers);
 
-// The voice-action dispatch. Still composed here rather than from a module —
-// it is ~400 lines of element resolution and verb handling, and moving it is
-// its own change (phase 3a, second half).
+// The voice-action dispatch. TWO arms are composed here; the rest of the verbs
+// live in activate/voice-dispatch.ts.
+//
+// The split is drawn on a concern, not on line ranges (§6i): `activate` calls
+// preNavObserverTeardown (the nav-time wedge preempt) and `reactivate` calls
+// republishForActivation (the nav-rescan republish), and both are the
+// orphan-teardown arc's lifecycle glue that §5 excludes until it is out of
+// soak. Everything that only resolves an element and acts on it moved.
+//
+// `reactivate` is checked FIRST and `activate*` second so the two arms that
+// stay read as one block. Order carries no meaning beyond that: every arm in
+// this handler and in the module is an exact `action ===` test or a lookup in
+// a set disjoint from all of them, so the chain is a switch, not a cascade.
 registerMessageHandlers({
   BRANCHKIT_ACTION: (m: MessageOf<'BRANCHKIT_ACTION'>) => {
     const { action, params, correlation_id: correlationId } = m.payload;
     // Scope the actuator's tr_ to this dispatch's synchronous body so every
     // bkLog call in it lands in browser.log grep-joinable with the matcher
-    // chain. Self-clears on the next microtask (see bk-log.ts).
+    // chain. Self-clears on the next microtask (see bk-log.ts). Set before the
+    // branch, so the module's arms are inside the same scope.
     setLogCorrelation(correlationId);
-    if (action === 'toggle_hints') {
-      // Voice "toggle" — the same handler as Shift+F. Snapshot on the show
-      // direction so a codeword spoken in the same phrase resolves against the
-      // freshly-painted badges.
-      if (toggleHints()) capturePhraseSnapshot(store.all, performance.now());
-    } else if (action === 'rescan') {
-      pageSession.onUrlChange(params?.from_cache === 'true', params?.reason ?? '');
-    } else if (action === 'reactivate') {
+    if (action === 'reactivate') {
       republishForActivation(params?.reason ?? 'tab_activated');
-    } else if (action === 'set_badge_mode' && params?.mode) {
-      chrome.storage.sync.set({ badgeDisplayMode: params.mode });
-    } else if (DISPATCH_PASSTHROUGH_ACTIONS.has(action)) {
-      dispatcher.dispatch(action, params);
-    } else if (action === 'history_back') {
-      // history.back() steps through the full history stack regardless of
-      // skippable flags. The browser's UI back button skips entries whose
-      // pushState ran without sticky user activation, which is every voice
-      // click (synthetic events are isTrusted=false). Routing back through
-      // a JS call recovers the entries the UI button walks past.
-      history.back();
-    } else if (action === 'history_forward') {
-      // Same rationale as history_back: the UI forward button skips
-      // voice-navigated SPA entries (synthetic clicks are isTrusted=false),
-      // so route forward through a JS call to step the full stack.
-      history.forward();
-    } else if (action === 'refresh') {
-      location.reload();
     } else if (action === 'activate' || action === 'activate_hint_newtab' || action === 'activate_hint_background') {
       // Tab-targeted variants ("blank <hint>" / "stash <hint>", see
       // notes/DESIGN_MULTI_TARGET_COMMANDS.md phase 1): same resolution as
@@ -2198,152 +2167,10 @@ registerMessageHandlers({
         detail,
         fp,
       });
-    } else if (action === 'hover_hint' || action === 'focus_hint' || action === 'copytext_hint' || action === 'caret_hint') {
-      // Element-verb voice actions (Vimium hint modes): resolve the codeword to
-      // a wrapper and act ON it without following it —
-      //   hover        → pointer-in event sequence (pointerover/enter/move +
-      //                  mouse equivalents), revealing hover-state UI (player
-      //                  controls, dropdown menus) without grabbing the mouse
-      //                  (mirrors Rango's hoverElement).
-      //   focus_hint   → focus the element (a field to type in, or any element).
-      //   copytext_hint→ copy the element's visible text.
-      //   caret_hint   → start a caret/visual selection at the element.
-      // All share the same three-tier resolution as activate so codewords stay
-      // consistent across verbs. None tear down wrappers or hide hints
-      // (always-mode keeps badges so the user can follow up on what appeared).
-      const codeword = params?.codeword ?? '';
-      const idParam = parseInt(params?.id ?? '0', 10);
-      const frameIdParam = params?.frame_id != null ? parseInt(params.frame_id, 10) : -1;
-      const resolved = resolveTarget(
-        idParam, frameIdParam, codeword,
-        {
-          myFrameId: pageSession.myFrameId,
-          registry: {
-            get: idRegistry.get,
-            rebindRef: idRegistry.rebindRef,
-            unregister: idRegistry.unregister,
-            fingerprintFallback: idRegistry.fingerprintFallback,
-            fingerprintToString: idRegistry.fingerprintToString,
-          },
-          candidates: () => deepQuerySelectorAll(document, '*'),
-          resolveFromSnapshot: (cw) => resolveInPhrase(cw, performance.now()),
-          resolveFromStore: (cw) => store.byCodeword(cw),
-        },
-      );
-      const target = resolved.target;
-      // Same live gate as activate — the old path enforced strict at match
-      // time; sealed verbs enforce it here.
-      if (params?.prefix_letter != null && !sealedDispatchSeen(target)) {
-        reportNoSuchHint(action, codeword, resolved.resolution, resolved.fp, params);
-        return;
-      }
-      if (target instanceof HTMLElement) {
-        store.findWrapperFor(target)?.hint?.flash();
-        let detail = '';
-        if (action === 'hover_hint') {
-          dispatchHover(target);
-          detail = 'hover dispatched';
-        } else if (action === 'focus_hint') {
-          target.focus();
-          detail = 'focused';
-        } else if (action === 'caret_hint') {
-          caret.enterAt(target);
-          detail = 'caret at element';
-        } else {
-          const text = (target.textContent || '').trim();
-          if (text) void copyText(text).then((ok) => flashToast(ok ? 'Copied text' : 'Copy failed'));
-          else flashToast('No text');
-          detail = text ? 'text copied' : 'no text';
-        }
-        reportDispatchResult({
-          action, codeword, resolution: resolved.resolution, elem_tag: target.tagName.toLowerCase(),
-          taken: 'click', ok: true,
-          frame: trimFrameUrl(window.location.href),
-          detail,
-          fp: resolved.fp,
-        });
-      } else {
-        reportDispatchResult({
-          action, codeword, resolution: resolved.resolution, elem_tag: '',
-          taken: 'skipped', ok: false,
-          frame: trimFrameUrl(window.location.href),
-          detail: resolved.detail || `${action} target not resolved`,
-          fp: resolved.fp,
-        });
-      }
-    } else if (action === 'escape') {
-      // Voice "escape"/"over" — the Esc cascade (activate/escape-cascade.ts).
-      const peeled = runEscapeCascade('voice_escape');
-      reportDispatchResult({
-        action, codeword: '', resolution: 'none', elem_tag: '',
-        taken: peeled ? 'click' : 'skipped', ok: peeled !== '',
-        frame: trimFrameUrl(window.location.href),
-        detail: peeled ? `escape: ${peeled}` : 'nothing to close',
-        fp: '',
-      });
-    } else if (SELECTION_ACTIONS.has(action)) {
-      // Voice-driven adjustable selection ("extend sentence", "shrink word",
-      // "flip", "copy that", "stop selecting"). No-op unless caret mode is active
-      // — the CaretController guards it. See notes/DESIGN_VOICE_SELECTION_BOUNDS.md.
-      const cmd = parseSelectionCommand(action, params);
-      caret.applyVoice(cmd);
-      reportDispatchResult({
-        action, codeword: '', resolution: 'none', elem_tag: '',
-        taken: caret.isActive() ? 'click' : 'skipped', ok: caret.isActive(),
-        frame: trimFrameUrl(window.location.href),
-        detail: caret.isActive() ? `${action} ${cmd.granularity ?? ''}`.trim() : 'caret mode not active',
-        fp: '',
-      });
-    } else if (action === 'noop') {
-      // Mid-codeword progress. The SW translates the inbound spoken prefix word
-      // to its letter before forwarding (see frame-router), so `prefix` is
-      // already a letter here — the same shape the keyboard's filter callback
-      // passes, which is why both go through the registry's one fan-out
-      // (labels/holder-registry.ts narrowByPrefix). `''` resets (pair
-      // cancelled). This used to be an inline copy of the ordering that had
-      // drifted twice: it hardcoded setMatchedChars(1) where the keyboard uses
-      // the full prefix length, and it re-painted every link hint on any
-      // prefix, including one a search badge already answered.
-      narrowByPrefix(params?.prefix ?? '');
-    } else if (action === 'name_reference') {
-      const refName = params?.name?.toLowerCase().trim();
-      if (!refName) return;
-      const activated = lastActivatedElement();
-      if (!activated) {
-        console.warn('[BranchKit Content] name_reference: no last-activated element');
-        return;
-      }
-      saveReference(refName, activated).then(async () => {
-        const refs = await listReferences();
-        const ref = refs[refName];
-        try {
-          chrome.runtime.sendMessage({
-            type: 'REFERENCE_SAVED',
-            host: window.location.hostname,
-            name: refName,
-            reference: ref as unknown as Record<string, unknown>,
-          } as Message);
-          chrome.runtime.sendMessage({ type: 'REFERENCE_NAMES_CHANGED' } as Message);
-        } catch { /* context invalidated */ }
-      });
-    } else if (action === 'resolve_reference') {
-      const refName = params?.name?.toLowerCase().trim();
-      if (!refName) return;
-      resolveReference(refName).then(el => {
-        if (!el) {
-          console.warn('[BranchKit Content] resolve_reference: not found:', refName);
-          return;
-        }
-        noteActivated(el);
-        if (el instanceof HTMLElement) {
-          store.findWrapperFor(el)?.hint?.flash();
-          if (INPUT_TYPES.has(el.tagName.toLowerCase())) {
-            el.focus();
-          } else {
-            activateElement(el);
-          }
-        }
-      });
+    } else {
+      // Every other verb: activate/voice-dispatch.ts. Called synchronously,
+      // inside the correlation scope set above.
+      dispatchVoiceAction(action, params);
     }
   },
 });

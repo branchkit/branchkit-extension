@@ -168,13 +168,26 @@ function srcFiles() {
     // GET_PAGE_STATUS / SET_BADGES_VISIBLE went to badge-visibility.ts with
     // those handlers (entry-point topology phase 3a). This lower and
     // badge-visibility's raise are one move.
-    'src/content.ts': 18,
+    // 18 -> 17 (2026-07-28): toggle_hints' phrase snapshot went to
+    // activate/voice-dispatch.ts with the rest of the BRANCHKIT_ACTION arms
+    // that touch no lifecycle glue (entry-point topology §6i). This lower and
+    // voice-dispatch's pin below are one move.
+    'src/content.ts': 17,
     // 4 -> 6 (2026-07-28): the popup's two hint counts, arrived from
     // content.ts. Not a new membership question — the popup asks "how many
     // hints does this page have", which is the same total anyBadgesShowing
     // already reads the store for, one line above each of them.
     'src/render/badge-visibility.ts': 6,
     'src/plugin/resolve.ts': 1,
+    // New 2026-07-28: the voice `toggle_hints` arm's phrase snapshot —
+    // `capturePhraseSnapshot(store.all, …)` on the SHOW direction, so a
+    // codeword spoken in the same breath resolves against the badges that just
+    // painted. Arrived from content.ts unchanged. Not a membership question:
+    // the snapshot is a photograph of every wrapper at paint time, which is
+    // what makes it the tier that survives store churn during the utterance,
+    // and routing it through the holder registry would answer a different
+    // question (who owns a codeword NOW).
+    'src/activate/voice-dispatch.ts': 1,
     // 1 -> 3 (2026-07-27): republishAllGrammar's full re-push arrived from
     // content.ts — the loop over live wrappers plus the count it logs. Not a
     // new membership question: it is the same sweep content.ts ran, now beside
@@ -240,8 +253,17 @@ function srcFiles() {
 
 // --- D. Every dispatchable action has an extension-side route ---
 {
-  const content = read('src/content.ts');
-  const background = read('src/background.ts');
+  // The files that route a BRANCHKIT_ACTION. Two entry points and, since the
+  // §6i split, the module holding every arm that does not touch the nav-time
+  // lifecycle glue — `activate` and `reactivate` stayed in content.ts because
+  // they reach preNavObserverTeardown / republishForActivation.
+  //
+  // A list of filenames is normally the thing this file exists to avoid, but it
+  // cannot go stale silently in either direction: an arm that moves to a
+  // fourth file takes its ids out of `handled`, and every voiced id in it fails
+  // with "no extension-side route"; a file that stops routing anything is
+  // caught by setLiteral's own fail when the literal it names is gone.
+  const ROUTE_FILES = ['src/content.ts', 'src/background.ts', 'src/activate/voice-dispatch.ts'];
 
   const setLiteral = (src, name, file) => {
     const m = src.match(new RegExp(`${name}[^=]*=\\s*new Set(?:<[^>]*>)?\\(\\[([\\s\\S]*?)\\]\\)`));
@@ -256,10 +278,13 @@ function srcFiles() {
   const eqComparisons = (src) =>
     [...src.matchAll(/(?:data\.)?action === '([a-z_0-9]+)'/g)].map((x) => x[1]);
 
+  const PASSTHROUGH_FILE = 'src/activate/voice-dispatch.ts';
+  const passthroughIds = setLiteral(
+    read(PASSTHROUGH_FILE), 'DISPATCH_PASSTHROUGH_ACTIONS', PASSTHROUGH_FILE);
+
   const handled = new Set([
-    ...eqComparisons(content),
-    ...eqComparisons(background),
-    ...setLiteral(content, 'DISPATCH_PASSTHROUGH_ACTIONS', 'content.ts'),
+    ...ROUTE_FILES.flatMap((f) => eqComparisons(read(f))),
+    ...passthroughIds,
     ...setLiteral(read('src/activate/selection-commands.ts'), 'SELECTION_ACTIONS', 'selection-commands.ts'),
     // SELECTION_ACTIONS spreads the per-granularity extend_* ids from this
     // record rather than repeating them.
@@ -411,7 +436,7 @@ function srcFiles() {
           'and before that throw existed, whichever registrar ran last silently won');
       }
     }
-    const passthrough = setLiteral(content, 'DISPATCH_PASSTHROUGH_ACTIONS', 'content.ts');
+    const passthrough = passthroughIds;
     const orphaned = passthrough.filter((id) => !registered.has(id));
     for (const id of orphaned) {
       fail(`'${id}' is in DISPATCH_PASSTHROUGH_ACTIONS but nothing calls dispatcher.register('${id}') — ` +
