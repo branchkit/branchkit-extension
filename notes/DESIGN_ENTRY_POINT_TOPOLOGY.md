@@ -158,9 +158,10 @@ line count.
 *Expected: ~250–350 lines, and 93 imports down toward ~70.*
 
 ### Phase 3 — `content.ts` message router + command self-registration
-**3a HALF DONE, 3b IN PROGRESS 2026-07-28, §6g.** The listener is the table and
-ten of eleven branches are with their owners; `BRANCHKIT_ACTION` is blocked on
-§6g.5. 3b: 26 of 43 registrations moved (§6g.7), independent of that blocker.
+**3a HALF DONE, 3b ALL BUT TWO DONE 2026-07-28, §6g.** The listener is the table
+and ten of eleven branches are with their owners; `BRANCHKIT_ACTION` is blocked
+on §6g.5. 3b: 41 of 43 registrations moved (§6g.7); the two left need the same
+kind of state relocation §6g.4 did, not a binding move.
 
 Same move as phase 1 on the 11-branch listener at `content.ts:2361`, plus
 finishing the command-registration convention: 42 `dispatcher.register` calls
@@ -949,10 +950,10 @@ tests, and a runner that counts failures sees none. The runner distinguishes
 INVALID from SURVIVED now. Any mutation harness needs that check — "no test
 failed" and "no test ran" are the same signal to a naive reader.
 
-#### 6g.7 Phase 3b — three groups, and the rule for whether a group gets a module
+#### 6g.7 Phase 3b — SWEEP COMPLETE but for two, and the rule for whether a group gets a module
 
-`df00f0e`..`ddad207`. `content.ts` 3202 → **3055**, ceiling 3300 → **3150**,
-43 → **17** inline registrations. Scroll (14), media (7), find (5).
+`df00f0e`..`61f8712`. `content.ts` 3202 → **2977**, ceiling 3300 → **3050**,
+43 → **2** inline registrations, 2221 → 2262 tests.
 
 **§6a's worry did not survive contact.** Measured across all 43 bodies: they
 close over exactly **two** `content.ts` locals, `activateWrapper` and
@@ -1002,12 +1003,47 @@ the copies were spread over 66 lines. Preserved and pinned by a test that says
 why — it changes what a voice command does after a cycle, so it is a product
 call.
 
-**Remaining: 17.** The hint-action verbs (`yank_hint`, `focus_hint`,
-`copytext_hint`, `hover_hint`, `caret_hint`) are deliberately last — they are
-the same verbs `BRANCHKIT_ACTION`'s element-verb arm handles, so moving them
-teaches something about §6g.5's option 1 before that decision is made. The rest:
-hint mode (3), help (1, needs `currentKeymap`), palette/tab groups (2 loops),
-history/nav (4), keyboard modes (2).
+**Remaining: 2**, and they are the two the opening measurement predicted:
+`activate_hint` needs `activateWrapper`, `toggle_help` needs
+`currentKeymap`. Those are state relocations of the §6g.4 kind, not binding
+moves.
+
+Seven groups, in order: scroll (14), media (7), find (5), nav + keyboard modes
+(6, three destinations), tab + zoom (17 behind two loops), hint-action arms (5),
+hint mode (2). Ten commits.
+
+**What the hint-action group was kept for last to learn, and did.** They are the
+same VERBS `BRANCHKIT_ACTION`'s element-verb arm handles, so §6g.5 option 1
+was supposed to be informed by moving them. The answer is that the two paths
+barely resemble each other: the keyboard verbs close over **nothing** — each is
+`armHintAction(kind)` then `enterHintMode()`, a mode arm and no more — while
+the voice verbs resolve a codeword to an element through three tiers and act on
+it. Same verb to the user, no shared dependency, no reason for one to wait on
+the other.
+
+**And the measurement that actually moves §6g.5:** the element-verb arm does NOT
+touch `preNavObserverTeardown`. Only the `activate` arm does. So the blocked
+part of `BRANCHKIT_ACTION` is **one arm, not the handler**, and option 1 is
+cheaper than it reads.
+
+**Three collapses the moves exposed**, each a rule written out N times where the
+copies hid it: the cycle-target delegate (×10), `armHint` (×5), and the
+tab-verb forward (×14 behind a loop that already existed). Only the first
+changed anything anyone could see — see the scroll asymmetry above.
+
+**"Registers nothing at import time" had to be written three times before it
+stopped being missed** (find, focus-input, badge-visibility). It is not
+decoration: a module that self-registers makes its registrar decorative and
+**voids lint G2**, whose whole premise is that an uncalled registrar loses its
+commands.
+
+**The other survivor worth naming**: dropping the `!overlayCodewordsLive()`
+half of `hint_mode`'s guard passed every test. Badges-down alone is not the
+paint condition, and the second half is a field bug from 2026-07-26
+(`/ query Enter f` repainted every link hint over the search results just
+asked for). Covered now by registering a real holder above ambient rank, with a
+counterpart showing the paint returns when it lets go — "does not paint" alone
+would pass against a `hint_mode` that never painted.
 
 #### 6g.8 §7's unverified boundary is closed
 
