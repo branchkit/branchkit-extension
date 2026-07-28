@@ -1058,35 +1058,8 @@ registerMediaCommands();
 // activate/selection-commands.ts (round-3 feature module); registered below.
 registerSelectionCommands();
 
-// Yank a link via hint (Vimium yf): enter hint mode; the resolved codeword
-// copies the link's URL instead of following it. Keyboard-only.
-dispatcher.register('yank_hint', () => {
-  keyHandler.armHintAction('yank');
-  keyHandler.enterHintMode();
-});
-// Focus a badge's element without activating it (Vimium focus hint). Then type
-// via Insert. Distinct from focus_input (first field) — this picks any element.
-dispatcher.register('focus_hint', () => {
-  keyHandler.armHintAction('focus');
-  keyHandler.enterHintMode();
-});
-// Copy a badge's visible text (vs yank_hint's URL).
-dispatcher.register('copytext_hint', () => {
-  keyHandler.armHintAction('copytext');
-  keyHandler.enterHintMode();
-});
-// Hover a badge's element (reveal menus/controls) — keyboard twin of the voice
-// "hover {hint}" (still plugin-contributed; see DESIGN_HINT_ACTION_MODES.md 3b).
-dispatcher.register('hover_hint', () => {
-  keyHandler.armHintAction('hover');
-  keyHandler.enterHintMode();
-});
-// Start a caret/visual selection at a badge's element (Vimium hint→caret) —
-// then drive it by keyboard or voice ("select word" / "copy that").
-dispatcher.register('caret_hint', () => {
-  keyHandler.armHintAction('caret');
-  keyHandler.enterHintMode();
-});
+// The five hint-action arms register with the other keyboard modes, in
+// activate/keyboard-commands.ts.
 
 
 // --- Keyboard Filter Callback ---
