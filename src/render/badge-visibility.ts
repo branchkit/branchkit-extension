@@ -64,6 +64,40 @@ export function anyBadgesShowing(): boolean {
   return pageSession.badgesVisible || store.all.some((w) => w.hint?.isVisible);
 }
 
+// Hints appear on their own — on a fresh page or after an action — only in
+// "always" mode. "manual" mode never auto-shows (summon with `f`). A Shift+F
+// hide in always mode is momentary (this page only): there is no persisted
+// hidden state, so the next page paints them again — "Always" always means
+// always, and a stray hide can never silently strand the badges off.
+export function shouldAutoShowBadges(): boolean {
+  return getHintVisibility() === 'always';
+}
+
+// Re-scan and re-render hint badges after a short delay. Used after
+// always-mode activation so post-activate DOM mutations (modal open, form
+// expansion, autocomplete) are reflected. Idempotent re-call is coalesced:
+// if a refresh is already scheduled, drop the new request — the existing
+// one will pick up whatever changed by the time it fires.
+//
+// Delay must exceed the activation flash duration (400ms in hints.ts) so
+// the refresh's updateLabel — which resets badge text to the displayMode
+// default — runs AFTER the yellow flash completes. Otherwise the
+// activated badge's narrowed text ("a check") would visibly snap back to
+// "arch c" mid-flash.
+let hintRefreshScheduled = false;
+const HINT_REFRESH_DELAY_MS = 450;
+
+export function scheduleHintRefresh(): void {
+  if (hintRefreshScheduled) return;
+  hintRefreshScheduled = true;
+  pageSession.resources.timeout(() => {
+    hintRefreshScheduled = false;
+    if (!shouldAutoShowBadges()) return;
+    doScan();
+    showBadges();
+  }, HINT_REFRESH_DELAY_MS);
+}
+
 /** Filter to viewport-visible elements and sort by position (top-left first). */
 function viewportSort(wrappers: ElementWrapper[]): ElementWrapper[] {
   const vh = window.innerHeight;

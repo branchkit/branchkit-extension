@@ -32,7 +32,7 @@ import { store } from './core/store';
 import {
   anyBadgesShowing, showBadges, hideBadges, clearHintFilter,
   toggleHints, discardBadgeScreenBorrow, badgeVisibilityMessageHandlers,
-  registerHintModeCommands,
+  registerHintModeCommands, shouldAutoShowBadges, scheduleHintRefresh,
 } from './render/badge-visibility';
 import { HintBadge } from './render/hints';
 import { elementTarget } from './render/badge-target';
@@ -641,15 +641,6 @@ function whenDOMSettles(callback: () => void): void {
 
 // --- User settings from storage (core/config.ts) ---
 
-// Hints appear on their own — on a fresh page or after an action — only in
-// "always" mode. "manual" mode never auto-shows (summon with `f`). A Shift+F
-// hide in always mode is momentary (this page only): there is no persisted
-// hidden state, so the next page paints them again — "Always" always means
-// always, and a stray hide can never silently strand the badges off.
-function shouldAutoShowBadges(): boolean {
-  return getHintVisibility() === 'always';
-}
-
 loadConfig({
   onDisplayModeChange: () => {
     // Through the registry, exactly as the alphabet swap below: a store-only
@@ -1173,31 +1164,6 @@ function narrowStoreHints(prefix: string): void {
 // (showBadges / hideBadges / clearHintFilter and the screen-borrow
 // primitive live in render/badge-visibility.ts, which now acquires its own
 // doScan — content wires nothing into it.)
-
-// Re-scan and re-render hint badges after a short delay. Used after
-// always-mode activation so post-activate DOM mutations (modal open, form
-// expansion, autocomplete) are reflected. Idempotent re-call is coalesced:
-// if a refresh is already scheduled, drop the new request — the existing
-// one will pick up whatever changed by the time it fires.
-//
-// Delay must exceed the activation flash duration (400ms in hints.ts) so
-// the refresh's updateLabel — which resets badge text to the displayMode
-// default — runs AFTER the yellow flash completes. Otherwise the
-// activated badge's narrowed text ("a check") would visibly snap back to
-// "arch c" mid-flash.
-let hintRefreshScheduled = false;
-const HINT_REFRESH_DELAY_MS = 450;
-
-function scheduleHintRefresh(): void {
-  if (hintRefreshScheduled) return;
-  hintRefreshScheduled = true;
-  pageSession.resources.timeout(() => {
-    hintRefreshScheduled = false;
-    if (!shouldAutoShowBadges()) return;
-    doScan();
-    showBadges();
-  }, HINT_REFRESH_DELAY_MS);
-}
 
 // Run `cb` on the next idle frame, falling back to a short timeout where
 // requestIdleCallback is unavailable (Firefox content scripts historically).
