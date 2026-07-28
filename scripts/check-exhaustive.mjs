@@ -634,4 +634,46 @@ function stronglyConnected(graph) {
   if (!failed) ok(`module-scope registrars: ${checked} pinned into an entry point's import closure`);
 }
 
+// --- G2. Every command registrar is actually CALLED ------------------------
+//
+// The other half of the same failure. Phase 3b moves inline
+// `dispatcher.register` calls into `register*Commands()` functions that an
+// entry point invokes. G above catches a module that stops being IMPORTED;
+// this catches one that is imported and never RUN — an exported registrar
+// nobody calls, which drops every command it holds.
+//
+// The symptom is identical to lint E's unregistered handler map and to the
+// old if-chain's silent fall-through: the command is in the catalog, the
+// keybind and the voice phrase both resolve, and nothing happens. Its own
+// tests stay green because they call the registrar themselves.
+//
+// Both sides are read from the code. A new `register*Commands` export joins
+// the check by existing.
+{
+  const ENTRIES = ['src/content.ts', 'src/background.ts'];
+  const called = new Set();
+  for (const entry of ENTRIES) {
+    for (const m of read(entry).matchAll(/^\s*(register\w*Commands)\(\s*\)/gm)) called.add(m[1]);
+  }
+
+  const registrars = [];
+  for (const rel of srcFiles()) {
+    for (const m of read(rel).matchAll(/^export function (register\w*Commands)\s*\(/gm)) {
+      registrars.push({ name: m[1], file: rel });
+    }
+  }
+
+  if (registrars.length === 0) {
+    fail('lint G2 found zero register*Commands registrars — fix the lint');
+  }
+  for (const { name, file } of registrars) {
+    if (!called.has(name)) {
+      fail(`${name} (${file}) is exported but never called from an entry point — ` +
+        'every command it registers silently does nothing, and its own tests still pass ' +
+        'because they call it themselves');
+    }
+  }
+  if (!failed) ok(`command registrars: ${registrars.length} exported, all called at boot`);
+}
+
 process.exit(failed ? 1 : 0);
