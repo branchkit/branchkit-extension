@@ -62,7 +62,7 @@ import { flashToast } from './render/toast';
 import { registerSelectionCommands, restorePosition, caret, SELECTION_ACTIONS, parseSelectionCommand } from './activate/selection-commands';
 import { startQueryFieldReporting } from './plugin/query-field';
 import { cancelRangePick } from './activate/range-disambiguation';
-import { armSearchBadges, clearSearchBadges } from './activate/search-badges';
+import { armSearchBadges, clearSearchBadges, retrySearchBadgeArm } from './activate/search-badges';
 import {
   registerHolder, narrowByPrefix, resolveCodewordAboveAmbient,
   allHeld, reconcileAll, relabelAll, disposeAllHolders,
@@ -436,6 +436,13 @@ const engine = new SettleEngine(
     afterScrollSettle: () => {
       flushDeferredNavRescan();
       reconcileAll('scroll');
+      // A settle is also the signal that a find commit's own smooth scroll has
+      // finished moving the page. Arming happens AT commit, while that scroll
+      // is still in flight, so a match far down a long page is measured against
+      // the viewport being left and falls outside the band — and the empty set
+      // unregisters its holder, so the reconcileAll above can never reach it.
+      // This is the only way back. No-op unless an arm came up empty.
+      retrySearchBadgeArm();
     },
     afterSettle: () => {
       reconcileAll('general');

@@ -67,7 +67,7 @@ vi.mock('../config', () => ({ getDisplayMode: () => 'letter' }));
 vi.mock('../debug/bk-log', () => ({ bkLog: () => {} }));
 
 import {
-  armSearchBadges, clearSearchBadges, isSearchBadgePending,
+  armSearchBadges, clearSearchBadges, isSearchBadgePending, retrySearchBadgeArm,
 } from './search-badges';
 import * as find from '../scan/find';
 
@@ -131,6 +131,76 @@ describe('search badges', () => {
       fireFindDeactivated(handoff);
       expect(isSearchBadgePending()).toBe(false);
     }
+  });
+
+  // The commit's own scroll is SMOOTH and still in flight when onCommit fires
+  // (scan/find.ts scrollToCurrent, pinned by find.test.ts "slides rather than
+  // teleports"), so arming measures every match against the viewport the user
+  // is LEAVING. Search for something far down a long page and nothing is within
+  // the ±1000px band: RangeBadgeSet.create returns null, unregisters the
+  // holder, and no reconcile can ever fire — so that find gets no search badges
+  // at all, permanently. Found by review 2026-07-27.
+  it('a match outside the band arms nothing NOW, and recovers when the scroll settles', () => {
+    Range.prototype.getBoundingClientRect = () =>
+      ({ top: 5000, bottom: 5020, left: 10, right: 60, width: 50, height: 20 }) as DOMRect;
+    matchRanges = [makeRange('one'), makeRange('two')];
+
+    armSearchBadges();
+    expect(isSearchBadgePending()).toBe(false); // nothing in band, as before
+
+    // The scroll lands: the matches are now where the user is looking.
+    Range.prototype.getBoundingClientRect = () =>
+      ({ top: 10, bottom: 30, left: 10, right: 60, width: 50, height: 20 }) as DOMRect;
+    retrySearchBadgeArm();
+    expect(isSearchBadgePending()).toBe(true);
+    expect(badgeInstances).toHaveLength(2);
+  });
+
+  it('the settle retry is a no-op when the arm already succeeded', () => {
+    matchRanges = [makeRange('one')];
+    armSearchBadges();
+    expect(badgeInstances).toHaveLength(1);
+
+    retrySearchBadgeArm();
+    expect(badgeInstances).toHaveLength(1); // not re-armed, no codeword churn
+  });
+
+  it('the settle retry is a no-op once find has ended', () => {
+    Range.prototype.getBoundingClientRect = () =>
+      ({ top: 5000, bottom: 5020, left: 10, right: 60, width: 50, height: 20 }) as DOMRect;
+    matchRanges = [makeRange('one')];
+    armSearchBadges();
+    expect(isSearchBadgePending()).toBe(false);
+
+    active = false; // the user closed find before scrolling
+    Range.prototype.getBoundingClientRect = () =>
+      ({ top: 10, bottom: 30, left: 10, right: 60, width: 50, height: 20 }) as DOMRect;
+    retrySearchBadgeArm();
+    expect(isSearchBadgePending()).toBe(false); // no badges over a dead session
+  });
+
+  // A pending retry belongs to the session that armed it. Left set, it fires
+  // into the NEXT find — and that find may be open and typing rather than
+  // committed, so it would arm badges per keystroke, which is precisely what
+  // commit-only arming exists to avoid ("arming per keystroke would churn
+  // codewords on every character typed"). isFindActive() does not catch this:
+  // the new session IS active.
+  it('a pending arm does not survive its own session into the next find', () => {
+    Range.prototype.getBoundingClientRect = () =>
+      ({ top: 5000, bottom: 5020, left: 10, right: 60, width: 50, height: 20 }) as DOMRect;
+    matchRanges = [makeRange('one')];
+    armSearchBadges();
+    expect(isSearchBadgePending()).toBe(false); // retry now armed
+
+    fireFindDeactivated(false); // that session ends
+
+    // A new find is open and matching as the user types — nothing committed.
+    Range.prototype.getBoundingClientRect = () =>
+      ({ top: 10, bottom: 30, left: 10, right: 60, width: 50, height: 20 }) as DOMRect;
+    matchRanges = [makeRange('two')];
+    retrySearchBadgeArm();
+    expect(isSearchBadgePending()).toBe(false);
+    expect(badgeInstances).toHaveLength(0);
   });
 
   it('arms nothing when the commit found no matches', () => {
