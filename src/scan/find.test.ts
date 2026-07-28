@@ -1262,6 +1262,9 @@ describe('registerFindCommands', () => {
     // vi.resetModules() in one test handed the next a fresh, empty dispatcher
     // while registerFindCommands kept registering on the original.
     dispatch = (action, params = {}) => realDispatcher.dispatch(action, params);
+    // The registrars build fresh closures per call, so they are not idempotent
+    // under ActionDispatcher's duplicate-throw — clear before re-registering.
+    realDispatcher._resetForTesting();
     registerFindCommands();
   });
 

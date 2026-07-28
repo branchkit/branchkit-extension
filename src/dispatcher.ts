@@ -10,8 +10,45 @@ export type ActionHandler = (params: Record<string, string>) => void;
 export class ActionDispatcher {
   private handlers = new Map<string, ActionHandler>();
 
+  /**
+   * Bind an action id to its handler.
+   *
+   * Duplicate registration throws rather than silently overwriting. This used
+   * to be a bare `set`, which was survivable only because all 44 registrations
+   * sat in one contiguous block of content.ts where a collision was visible on
+   * sight. They now live in eleven feature modules
+   * (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md phase 3b), and a silent overwrite
+   * there resolves by the order the entry point happens to call the
+   * registrars — a property nobody edits deliberately. Verified: inserting one
+   * collision left all nine lints, tsc and the full suite green while the
+   * command it shadowed was dead.
+   *
+   * Re-registering the IDENTICAL function is a no-op, so composing twice is
+   * safe. Same contract as `registerMessageHandlers` in core/message-router.ts.
+   */
   register(action: string, handler: ActionHandler): void {
+    const existing = this.handlers.get(action);
+    if (existing && existing !== handler) {
+      throw new Error(`[BranchKit] duplicate handler for action '${action}'`);
+    }
     this.handlers.set(action, handler);
+  }
+
+  /** The registered action ids, sorted. Diagnostics, tests, and lint D. */
+  registeredActions(): string[] {
+    return [...this.handlers.keys()].sort();
+  }
+
+  /**
+   * Test seam. Production registers once at boot and never clears.
+   *
+   * Needed because the `register*Commands()` registrars build fresh closures
+   * on every call, so they are NOT idempotent under the duplicate check above —
+   * a test that re-registers per case has to clear first. Same seam as
+   * `resetMessageHandlers` in core/message-router.ts, and for the same reason.
+   */
+  _resetForTesting(): void {
+    this.handlers.clear();
   }
 
   dispatch(action: string, params: Record<string, string> = {}): void {

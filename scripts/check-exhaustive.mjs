@@ -340,6 +340,89 @@ function srcFiles() {
       ok(`dispatch routes: all ${pluginActions.size} plugin-initiated actions handled`);
     }
   }
+
+  // --- D2. Every passthrough id actually has a registered handler ----------
+  //
+  // The checks above treat DISPATCH_PASSTHROUGH_ACTIONS as PROOF that an id is
+  // handled. That was sound while the set and all 44 `dispatcher.register`
+  // calls lived ~250 lines apart in content.ts. Phase 3b moved the handlers to
+  // eleven feature modules and left the set behind, so the direction that
+  // matters now is the one lint D cannot see: the id is in the set, and
+  // nothing registers it.
+  //
+  // `dispatcher.dispatch` on an unregistered id is a bare console.warn, so the
+  // voice phrase matches, dispatches, arrives, and nothing happens. Verified:
+  // renaming a handler id together with its own test left every lint, tsc and
+  // the full suite green while the command was dead.
+  //
+  // Both sides are read from the code. Loop-driven registrations are read from
+  // their command tables the same way lint D reads its other literals.
+  {
+    /** action id -> the files that bind it. */
+    const owners = new Map();
+    const claim = (id, where) => {
+      if (!owners.has(id)) owners.set(id, []);
+      owners.get(id).push(where);
+    };
+
+    for (const rel of srcFiles()) {
+      for (const m of read(rel).matchAll(/dispatcher\.register\(\s*'([a-z_0-9]+)'/g)) {
+        claim(m[1], rel);
+      }
+    }
+    // The loops that register from a table rather than a literal.
+    for (const [file, name] of [
+      ['src/activate/tab-commands.ts', 'TAB_COMMANDS'],
+      ['src/activate/tab-commands.ts', 'ZOOM_COMMANDS'],
+    ]) {
+      const src = read(file);
+      const open = src.indexOf('[', src.indexOf(`const ${name}`));
+      const close = src.indexOf('];', open);
+      if (open === -1 || close === -1) fail(`lint D2 could not parse ${name} in ${file}`);
+      for (const m of src.slice(open, close).matchAll(/\[\s*'([a-z_0-9]+)'/g)) claim(m[1], `${file} (${name})`);
+    }
+    {
+      const src = read('src/render/palette-host.ts');
+      const open = src.indexOf('{', src.indexOf('const PALETTE_COMMAND_SCOPE'));
+      const close = src.indexOf('};', open);
+      if (open === -1 || close === -1) fail('lint D2 could not parse PALETTE_COMMAND_SCOPE');
+      for (const m of src.slice(open, close).matchAll(/^\s+([a-z_0-9]+):/gm)) {
+        claim(m[1], 'src/render/palette-host.ts (PALETTE_COMMAND_SCOPE)');
+      }
+    }
+
+    const registered = new Set(owners.keys());
+    if (registered.size === 0) {
+      fail('lint D2 found zero dispatcher.register ids — fix the lint');
+    }
+
+    // --- and no two modules may bind the same action ----------------------
+    //
+    // ActionDispatcher.register throws on a duplicate, but that is a RUNTIME
+    // throw during content.ts boot — and no unit test can reach it, because
+    // each module's tests register that module alone. Cross-module collision
+    // is only observable once every registrar has run, so check it statically
+    // and leave the throw as the backstop rather than the discovery mechanism.
+    // (Exactly the argument lint E makes for message-type disjointness.)
+    for (const [id, where] of owners) {
+      if (where.length > 1) {
+        fail(`action '${id}' is bound by ${where.length} sites (${where.join(', ')}) — ` +
+          'ActionDispatcher.register throws on the duplicate, so content.ts boot dies; ' +
+          'and before that throw existed, whichever registrar ran last silently won');
+      }
+    }
+    const passthrough = setLiteral(content, 'DISPATCH_PASSTHROUGH_ACTIONS', 'content.ts');
+    const orphaned = passthrough.filter((id) => !registered.has(id));
+    for (const id of orphaned) {
+      fail(`'${id}' is in DISPATCH_PASSTHROUGH_ACTIONS but nothing calls dispatcher.register('${id}') — ` +
+        'the voice command matches, dispatches, and lands on console.warn. Lint D counts the ' +
+        'passthrough set as proof of handling, so it cannot see this');
+    }
+    if (!failed) {
+      ok(`command bindings: ${registered.size} actions bound uniquely, ` +
+        `all ${passthrough.length} passthrough ids have a handler`);
+    }
+  }
 }
 
 // --- E. Every exported message-handler map is actually registered ----------

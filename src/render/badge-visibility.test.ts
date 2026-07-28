@@ -422,6 +422,7 @@ describe('registerHintModeCommands', () => {
 
   beforeEach(() => {
     dispatch = (a) => realDispatcher.dispatch(a, {});
+    realDispatcher._resetForTesting();
     registerHintModeCommands();
     vi.mocked(doScan).mockClear();
   });
@@ -490,7 +491,11 @@ describe('registerHintModeCommands', () => {
 });
 
 describe('hint_mode and the overlay tiers', () => {
-  beforeEach(() => { registerHintModeCommands(); vi.mocked(doScan).mockClear(); });
+  beforeEach(() => {
+    realDispatcher._resetForTesting();
+    registerHintModeCommands();
+    vi.mocked(doScan).mockClear();
+  });
 
   it('does NOT repaint while an overlay tier holds codewords, even with badges down', async () => {
     seedWrapper(false);
