@@ -1381,6 +1381,170 @@ group read zero at first because happy-dom answers `checkVisibility()` falsy.
 The exportedness is worth having for the day an arm grows logic that deserves a
 table test; re-testing what the probes already cover is not.
 
+### 6k. Review of the split, and its fixes (2026-07-28)
+
+`56fc37d`..`a7b5921` reviewed as a range against its base — §6h's method, and
+§6h's conclusion is why it happened at all. Six fix commits, `b410ae0`..
+`a97054a`. Baselines re-measured before anything: 27/27 probes, realinput 11
+both engines, lifecycle 7 PASS / 2 environmental SKIP, twelve lints, 2,278
+tests, all matching §6j's claims exactly.
+
+**No moved line was wrong, and the split's own reasoning held.** The
+relocation is byte-identical, re-verified mechanically rather than trusted: a
+multiset diff of normalised non-blank lines shows that of the 201 removed from
+`content.ts`, only six do not recur in `voice-dispatch.ts` — the replaced
+comment block, `const` → `export const`, and the `reactivate` arm that stayed.
+Disjointness re-measured and holds, including the cross-file pair §6j.3 did not
+check. The §6g.1 import trick holds: `voice-dispatch` is import 97 of 98 and
+all 18 of its imports resolve above it.
+
+**What the review found is that the verification was one-sided, and the thing
+holding it up was held up by nothing.** Every finding is that shape, and every
+one was proven by a mutant rather than argued.
+
+**The probes covered every arm that MOVED and neither of the two that stayed.**
+§6i asked for "a probe per moved arm" and got exactly that, which left
+`activate` and `reactivate` the only `BRANCHKIT_ACTION` arms with no coverage
+anywhere — this harness is the only thing in `scripts/` that drives
+`BRANCHKIT_ACTION` at all. The controlled experiment: the same one-line mutation
+(`resolveFromStore` returning `undefined`) applied to each copy of the
+duplicated three-tier wiring. In `voice-dispatch.ts` six probes fail. In
+`content.ts` it survives tsc, four lint scripts, 2,278 tests and four
+consecutive harness runs. **§6j.3's "it now has a probe suite waiting for it"
+was false for the half the queued collapse edits** — that collapse would have
+been verified on one side only. Now probed, and the mutant dies naming it.
+
+**The sealed strict gate had no coverage at either call site.** No probe set
+`prefix_letter`, the marker that arms it, and there is no `sealed-gate.test.ts`
+— so `sealedDispatchSeen` could be replaced wholesale by `return true`,
+clicking blind on off-screen, CSS-hidden and occluded targets, with every gate
+and all 27 probes green. This is one of the four helpers the arc moved to a
+leaf specifically so the split would be a pure relocation; the relocation was
+verified textually and the rule inside it was never executed.
+
+Two corrections while writing that probe are the more useful record:
+
+- **A probe over an unresolvable codeword does NOT kill a defeated gate.** It
+  refuses through `sealedDispatchSeen`'s not-an-element guard, which the mutant
+  leaves intact, so it only ever exercises half the rule. Caught because the
+  mutant survived it. A probe that survives its mutant is a hypothesis.
+- **Driving the OFF-SCREEN case does not work**: the band re-assigns codewords
+  on scroll, so the codeword stops resolving and the refusal comes from the
+  not-an-element guard again. Occlusion leaves the target in the band. The
+  assertion that makes it airtight is `resolution`: `reportNoSuchHint` echoes
+  what it was given, so a gate refusing a RESOLVED element says `live_store`
+  where a refusal over nothing says `none`. Asserting it turns a dropped
+  wrapper into a loud failure instead of a pass for the wrong reason.
+
+**`harness:messages` ran in no CI job, and three invariants had it as their
+sole enforcement.** `ci.yml` runs tsc, the lints and the tests;
+`lifecycle-harness.yml` ran only `harness:lifecycle`. So the arm-collision
+invariant, the element-verb resolution tiers and the sealed gate were all being
+held by a harness someone had to remember to run. Now wired, non-required,
+alongside a second finding from reading that gate: **`src/content.ts` was not
+in the path filter**, so a change to the bfcache / orphan-quiesce / nav-rescan
+region — the lifecycle harness's whole subject and the highest blast-radius
+code in the extension — did not run the lifecycle harness. 8 paths → 13, file
+renamed `browser-harnesses.yml`.
+
+**Both of §6j.3's self-flags were right to raise and one of its arguments was
+wrong.** The disjointness *measurement* is correct. The reasoning for not
+linting it — "a collision needs TWO deliberate steps" — is not: adding a named
+`action === 'x'` arm to `content.ts` for an id already handled in
+`voice-dispatch.ts` is ONE edit, lint D's `handled` is a union across route
+files so it structurally cannot see a duplicate, and unlike
+`dispatcher.register` there is no runtime throw. Mutation-verified: tsc, both
+lint scripts and 2,278 tests stayed green, two probes caught it. So the
+invariant is enforced — by the harness, which is why the CI wiring is the
+load-bearing fix and not the probes.
+
+**Lint D's over-match was real, exploitable, and there were two of it.** The
+second was found by mutating the fix for the first, which is the part worth
+keeping. A voiced catalog entry `{ id: 'hover' }` with no route anywhere passed
+as "all 77 voiced catalog actions handled", because `activateWrapper`'s six
+keyboard hint comparisons sat on a local that happened to also be called
+`action`; defeating just one made it fail correctly. Those six are the
+shortened forms of `hover_hint`/`focus_hint`/`caret_hint`/`copytext_hint` —
+exactly what someone shortening a voice id reaches for. Then, with a third
+demand source added for the extension's own dispatches, dropping the `rescan`
+arm *still* passed: `background.ts`'s `data.action === 'rescan' || …` is a
+DELIVERY decision (broadcast vs active tab) and both ids fall through to the
+content script, yet lint D read the comparison as a route.
+
+Both closed by **changing the shape, not the parser** — `hintAction` and a
+named `BROADCAST_ACTIONS` set. §6j.3 was right that scoping the check properly
+means parsing a function body and that this is more fragile than the invariant
+it guards; it was wrong that this left nothing to do. The collision is between
+two variables sharing a NAME, so renaming one removes it with no parser at all
+and the regex stays as dumb as it was. (That over-match is also why §6j.3
+counts 24 named arms; the chain has 18.)
+
+**Lint D was missing a whole class of demand.** It asked about voiced catalog
+ids and plugin-initiated ones; the extension's OWN dispatches — `BRANCHKIT_ACTION`
+messages the SW builds with a literal id — belonged to neither. `rescan` and
+`reactivate` live there, and deleting the `rescan` arm outright passed tsc,
+both lint scripts and 2,278 tests. Read from source via `srcFiles()` rather
+than listed, with its blind spot written in (`background/media.ts` builds its
+payload from a variable, so its two ids are invisible; both handled today).
+
+**Two harness defects that had nothing to do with the split.** The
+`PALETTE_COMMAND` probe's wait, added in `43d8703` to fix a fixed-delay flake,
+swallowed its own timeout (`.catch(() => {})`) — so a scroll that never landed
+fell through and failed the assertion, reporting a HARNESS precondition failure
+as a DISPATCHER failure. Seen three times in twelve runs. The misattribution is
+fixed and certain; the underlying intermittent is not, and is labelled so, with
+the one lead worth having: five seconds after a *successful* `scrollTo(0, 400)`
+the page reads 82, so the passing path passes only because it reads the instant
+`scrollY` crosses 380. And the `toggle_hints` probe asserted `toggleHints()`'s
+own return value — §6j.1's disease exactly, one probe further down the file
+than it looked. Inverting the snapshot to the HIDE edge passed it, lint C's
+newly-added pin, tsc and 2,278 tests. The TTL is the discriminator, and the two
+guards compose: deleting the sweep trips lint C's count, moving it to the wrong
+edge trips the probe.
+
+**Three findings REFUTED, with evidence — do not re-raise:**
+
+1. **The `tr_` no longer joins across the module boundary.** Measured, not
+   argued: a `bkLog` injected as the first statement of `dispatchVoiceAction`
+   emitted `{"tag":"probe.corr_scope","data":{"arm":"rescan","correlationId":"tr_probe"}}`.
+   `currentCorrelation` is module state in one bundle instance and the call is
+   synchronous. Now pinned by a probe, with its blind spot written in: it rides
+   `reactivate`, so it would stay green if `dispatchVoiceAction` ever went
+   async. Closing that needs a `bkLog` reachable synchronously from a moved arm
+   and none of the fifteen has one — checked, not assumed.
+2. **The move silently changed a line.** It did not; see the multiset diff
+   above. §6j.2's "172 in / 172 out" counts the handler body only.
+3. **Module evaluation order changed.** The `voice-dispatch` claim is exact.
+   But the arc's reasoning covered only one of the two new edges: `sealed-gate`
+   was inserted at import 34, pulling `render/toast` (was 43), `plugin/resolve`
+   (was 73) and `core/frame` (was 35) earlier. Checked both — `toast.ts` is four
+   consts and a template string at module scope, `plugin/resolve.ts` one
+   exported object literal. Inert, so benign. Recorded because it was unchecked,
+   not because it bit.
+
+**Cost.** `content.ts` 2,773 → 2,783 and `background.ts` 854 → 869, both from
+the comments that make the two renames load-bearing. Growing the monolith in an
+arc dedicated to shrinking it is worth stating plainly; §4.1's rule is that a
+ceiling must not change *what* you write, and a rename whose whole failure mode
+is that reverting it looks harmless has to carry its reason. Ceilings unchanged.
+
+**What this review says about the method.** §6h found that reviewing an arc at
+its end catches what per-commit mutation testing cannot, because each change is
+individually correct. This one says something narrower and sharper: **every
+finding here is about the verification, not the code.** The split was right,
+the probes written for it were good, and the arc still shipped a gate with no
+executable coverage, a probe suite that stopped at the file boundary, and a
+harness that no CI job ran. Mutation testing per commit would not have found any
+of it — the mutants that mattered had to be aimed at code the commits did not
+touch. The generalisable move was mutating the FIX and not just the finding:
+that is what turned up the second lint-D shadow and the fact that the first
+sealed-gate probe could not kill its own mutant.
+
+**Still queued, and now actually unblocked:** the duplicated `resolveTarget`
+wiring (§6j.3), which has real coverage on both sides for the first time; then
+`activate_hint`/`toggle_help`'s registrations; then `handleSSEEvent` +
+`storeAlphabet`.
+
 ---
 
 ## 7. Execution log — phase 1, 2026-07-27

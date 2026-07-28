@@ -165,7 +165,9 @@ export function isRangePickPending(codeword?: string): boolean {
  * both input paths here through the holder the set registers).
  *
  * Seen-is-pickable, enforced live at dispatch — the same rule the element path
- * applies in content's `sealedDispatchSeen`, for the same reason. The band
+ * applies in `sealedDispatchSeen` (activate/sealed-gate.ts, which is where it
+ * moved when the BRANCHKIT_ACTION split left its two callers on opposite
+ * sides of a module boundary), for the same reason. The band
  * paints chips past the fold as a scroll-ahead cue, so a chip can hold a
  * codeword the user has never read; acting on it would be acting on something
  * they can't see, which they could only have said by accident. Refusing keeps
