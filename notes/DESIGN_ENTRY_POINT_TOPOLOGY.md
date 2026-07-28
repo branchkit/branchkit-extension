@@ -133,8 +133,8 @@ edits.
 ### Phase 2 — invert the `content.ts` callback seams
 **COMPLETE 2026-07-27. DIRECT §6a, STATEFUL §6b, CYCLE §6d.** 18 seams audited,
 17 retired or rehomed; the one that remains (`onFindCommitted`) is a deliberate
-composition, not an injection. `content.ts` 3610 → 3430, 94 → 90 imports,
-ceiling 3700 → 3500.
+composition, not an injection. `content.ts` 3610 → 3455, 94 → 91 imports,
+ceiling 3700 → 3500. Reviewed by five agents 2026-07-27 — see §6e.
 
 
 The structural fix, and the one that changes the growth curve rather than the
@@ -524,7 +524,7 @@ change, and this phase is behaviour-equivalent by construction):
 
 ### 6d. CYCLE group EXECUTED 2026-07-27 — three of the four were not cycles
 
-Six commits, `d300f58..12b8705`. `content.ts` 3453 → 3430, ceiling banked
+Six commits, `d300f58..12b8705`. `content.ts` 3452 → 3437, ceiling banked
 3550 → 3500, tests 2124 → 2129. Every commit ran tsc, vitest, both gate
 scripts, `npm run build`, and all three harnesses on both engines.
 
@@ -563,7 +563,7 @@ and is illegal, because escape-cascade imports *it*.
 **`FIND_HIGHLIGHT` was the whole find cycle, confirmed.** One hex string, one
 edge. It now lives in `render/find-highlight.ts`, a leaf whose doc forbids it
 an import — one would re-create the path it exists to cut. `render/` → `scan/find`
-is 0/22.
+is 0/21 non-test modules (0/33 counting tests).
 
 **The one that stayed, and why it is the most interesting result.** §6a
 proposed a find-owned multicast for the surviving find seams, reasoning that
@@ -636,6 +636,114 @@ is a single hop, `render/badge-variant.ts:30` importing `FIND_HIGHLIGHT` from
 `scan/find` — **one hex colour string**. Relocating that constant to a leaf
 makes `badge-visibility → scan/find` unreachable outright. Cheapest available
 move on the CYCLE group and it was verified, not assumed.
+
+### 6e. Five-agent review of the CYCLE group (2026-07-27)
+
+Five independent reviewers against `d300f58..HEAD`: import-graph fact-check,
+behaviour equivalence, adversarial test quality (real mutation testing, in an
+isolated clone), boot order / module-scope side effects, and the two judgment
+calls. Fixes in `74d7f95`.
+
+**The graph work held; the judgment and the tests did not.** That split is the
+result worth keeping — the parts I verified mechanically were right, and the
+parts I argued in prose were where the errors were.
+
+**One real regression, caught by two reviewers independently.** `9018f6c`
+claimed the always-mode residual was "unchanged — a stale slot was never
+restored either." **False.** The stale slot survived the nav *with the find
+session that owned it still alive*, and that session's ordinary exit restored
+it — late, at find close, but it happened. Discarding removed that accidental
+recovery and left an always-mode page badge-less after an SPA nav. Fixed by
+driving visibility positively on `spa_nav`, which the discard's own doc had
+named as the follow-up. **Still open, and pre-existing:**
+`cancelRangePick('spa_nav')` eight lines above restores asynchronously, so the
+manual-mode hide can read `badgesVisible` before it rises — the exact hazard
+`discardBadgeScreenBorrow`'s doc describes, live on a neighbouring line. Needs a
+deferred decision, not a reordering.
+
+**§6d's `onCommit` ordering argument is weaker than it reads, and partly
+motivated.** The mechanism is real but the premise is false on the dominant
+path: `find.ts` calls `scrollToCurrent()` — a **smooth** scroll — on the line
+*before* `onCommit`, so the viewport has not moved when the handler runs, and
+`caret.isActive()` is false on most finds anyway. The argument also leads with
+`in_strict_viewport`, which the browser plugin's own source says is
+**display-only**; the cost that matters is *membership*, and if no match is
+within ±1000px of the pre-scroll viewport `RangeBadgeSet.create` returns `null`,
+unregisters the holder, and **search badges never appear for that find** — a
+live bug on the non-caret path. Reconvergence is ~100 ms after scroll settle,
+not "until the user's next scroll". The conclusion (not an anonymous multicast)
+survives; the reason given does not carry it. Right fix: arm after find's own
+scroll settles and make the `null` case recoverable — after which the two
+effects genuinely are independent and the multicast is correct.
+
+**Four tests that could not fail; 78 mutants run, none reused from the commit
+messages.** The one that matters: *"discarding never re-shows"* asserted only
+`badgesVisible === false`, which a **completely inert** discard also produces —
+so the bug the function exists to fix was pinned only on the other path. I had
+mutation-tested it, **with mutants I chose**. Also: `openFindMode` has four arms
+and two were covered (a mutant left find running with no borrow at all — the
+2026-07-26 field-bug class — green); `render/find-highlight.ts`, the module this
+arc *added*, had no test; `resetCycleTarget` was relocated with zero coverage.
+The find-highlight fix needed two attempts, because `toEqual({tint:
+FIND_HIGHLIGHT})` passes against a byte-identical hardcoded duplicate — seeing
+the difference takes a `doMock` to a sentinel colour.
+
+**Boot order: all three module-scope registrations SAFE, proven not argued.**
+Tarjan over the 141-module closure (two SCCs, neither touching them), confirmed
+against the built artifact — `dist/chrome/content.js` is fully flattened, zero
+`__esm()` wrappers, so evaluation order *is* source order. Idempotence holds:
+module scope and content.ts's top level are the same once-per-evaluation tier,
+so a re-inject re-runs all three in a fresh scope.
+
+Three costs none of the seven commits stated:
+
+- **Module evaluation order shifted broadly** (`scan/find` 61 → 106,
+  `scan-orchestrator` 127 → 84). Inert — every moved module's top-level
+  statements are pure declarations, and every registration still evaluates after
+  its registry — but the next edge into that region does not get that for free.
+- **The escape pair moved from *after* `installUncaughtCapture` to *before* it.**
+  A throw there is no longer captured as `BK_UNCAUGHT`. The one failure mode
+  that could occur is now also the one with no telemetry.
+- **A latent cliff with no enforcement.** If anything in `core/singletons`'
+  closure ever imports `escape-cascade`, the cycle inverts the order and the
+  whole content bundle throws at import in every frame (esbuild lowers
+  `const`→`var`, so: `Cannot read properties of undefined (reading
+  'setEscapeHook')`), and `build.mjs`'s footer only swallows `"duplicate
+  injection"`. **There is no import-cycle lint.**
+
+**The module-scope pattern's real price, named.** `escape-cascade` and
+`search-badges` are each imported by exactly one module — `content.ts` — for a
+value each. If a refactor moves the last value use out, esbuild drops the module
+and **the Escape key and the search-badge teardown silently stop working, with
+every unit test green** (tests import those modules directly). This applies to
+the two pre-existing siblings too, so it is inherited rather than created. The
+proposed teeth: a `check-exhaustive.mjs` rule that those modules must remain in
+`content.ts`'s value-import closure. That is the enforcement §6a's "seams may
+live at module scope" rule never had.
+
+**§6c item 2 is wrong: the module-scope inventory is NOT otherwise clean.**
+Besides `palette-host`, at HEAD: `debug/perf-counters.ts:175` writes
+`globalThis.__branchkitRecordCpu` — it **crosses bundles** and runs before the
+duplicate-injection guard, so a duplicate injection rebinds the global to the
+*aborted* bundle's recorder while five live modules read it through
+`globalThis`, draining the live instance's CPU accounting into a dead bundle it
+also pins. Unlike `palette-host` (inert), this one corrupts the live instance.
+Also `debug/dev-keepalive.ts:15` (a 20 s unowned `setInterval`, DCE'd in release
+but live in the dev and *harness* builds where orphan retention is measured) and
+two module-scope observer allocations.
+
+**Corrections to §6d's own prose:** "badge-variant becomes a true leaf" was true
+of the pre-change tree only — as landed it imports `./find-highlight`. `0/22`
+render modules is `0/21` non-test. Line counts in §6d and the Phase 2 header
+were stale (the note was written at `12b8705`; two commits landed after it).
+
+**Undeclared coupling.** `find` importing the real `badge-visibility` means
+`caret.test.ts` and `escape-key-path.test.ts` now execute the real borrow slot
+against the real `pageSession` — inert only because their stores are empty.
+Raising `badgesVisible` in either produces an unhandled `flushNow` rejection out
+of the async `showBadges`. Slot reset added to both; the comments say plainly
+that it stops leakage between tests and does *not* make the files safe to
+raise the flag in.
 
 ---
 
