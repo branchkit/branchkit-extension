@@ -44,7 +44,7 @@ const results = [];
 const check = (name, ok, detail) => { results.push({ name, ok, detail }); };
 
 /** How many probes a complete run reports. A run that stops short says so. */
-const EXPECTED = 27;
+const EXPECTED = 32;
 
 try {
   // The profile is persistent and reused between runs, so every piece of state
@@ -489,6 +489,155 @@ try {
     `stored=${JSON.stringify(storedRefs)} message=${JSON.stringify(savedMsg?.name)}`);
   await page.evaluate(() => document.getElementById('child')?.remove());
   await settle(500);
+
+  // --- The two arms that did NOT move (section 6i) -------------------------
+  //
+  // `activate` and `reactivate` stayed in content.ts because they reach
+  // preNavObserverTeardown and republishForActivation. Section 6i asked for a
+  // probe per MOVED arm and got one; these two were never in that scope and so
+  // ended up the only BRANCHKIT_ACTION arms with no coverage anywhere — this
+  // file is the only thing in scripts/ that drives BRANCHKIT_ACTION at all.
+  //
+  // That gap is load-bearing for what comes next. The three-tier resolution
+  // wiring is duplicated between content.ts's `activate` arm and
+  // voice-dispatch's element verbs, and collapsing it is the queued commit.
+  // Before these probes, the same one-line mutation (`resolveFromStore` made
+  // to return undefined) was killed by six probes in voice-dispatch.ts and
+  // survived tsc, four lint scripts, 2278 tests and four harness runs in
+  // content.ts. A collapse would have been verified on one side only.
+
+  await page.evaluate(() => {
+    window.__clicked = [];
+    document.addEventListener('click', (e) => {
+      window.__clicked.push((e.target.textContent || '').trim());
+    }, true);
+  });
+  await waitForBadges(page, { min: 1 });
+  await settle(700);
+  // Re-resolve: the reference arms above added and removed an iframe, so the
+  // codeword-to-element map from before them cannot be trusted here.
+  const byNameNow = new Map();
+  for (const cw of await badgeText()) {
+    const r = await send({ type: 'RESOLVE_HINT', codeword: cw }, { frameId: 0 });
+    if (r && r.ok && r.accessibleName) byNameNow.set(r.accessibleName, { cw, ...r });
+  }
+  const actT = byNameNow.get('epsilon');
+
+  // activate — the whole point is WHICH tier resolved it. `resolution` is the
+  // discriminator the element-verb probes rely on too, and it is the field a
+  // broken wiring changes first: a dead live-store tier reports 'none' and
+  // clicks nothing. The page-world click is the half that can only be true if
+  // activateElement actually ran. `epsilon` is used by no other probe.
+  await drain();
+  await act('activate', { codeword: actT?.cw ?? '__unresolvable__' });
+  await settle(1000);
+  const actR = await lastDispatch('activate');
+  const clicked = await page.evaluate(() => window.__clicked);
+  check('ARM activate',
+    clicked.includes('epsilon') && actR?.ok === true
+    && actR.elem_tag === 'button' && actR.resolution === 'live_store',
+    `clicked=${JSON.stringify(clicked)} report=${JSON.stringify(actR)}`);
+
+  // The sealed strict gate (activate/sealed-gate.ts), which this arc moved to
+  // a leaf and which had NO coverage at either call site: no probe set
+  // `prefix_letter`, the marker that arms it, so `sealedDispatchSeen` could be
+  // replaced by `return true` — clicking blind on off-screen, CSS-hidden and
+  // occluded targets — with every gate green.
+  //
+  // `detail` is the discriminator and the reason this asserts the string
+  // rather than just ok=false: BOTH the gate's refusal and an ordinary
+  // unresolved target report ok=false/skipped, and only the gate writes
+  // 'no_such_hint'. A defeated gate falls through to the unresolved-target
+  // branch and says 'activate target not resolved' instead.
+  await drain();
+  await act('activate',
+    { codeword: '__unresolvable__', prefix_letter: 'z', suffix_letter: 'q' });
+  await settle(800);
+  const sealedR = await lastDispatch('activate');
+  check('ARM activate refuses a sealed miss',
+    sealedR?.ok === false && sealedR.taken === 'skipped'
+    && sealedR.detail === 'no_such_hint',
+    JSON.stringify(sealedR));
+
+  // The gate's OTHER half, and it needs its own probe: the one above resolves
+  // to nothing, so it only exercises `sealedDispatchSeen`'s not-an-element
+  // guard. A mutant that kept that guard and defeated the live checks
+  // (`return true` in place of the on-screen / CSS-visible / not-occluded
+  // conjunction — i.e. clicking blind on exactly the targets the rule exists
+  // to refuse) passed the probe above. Measured, not supposed.
+  //
+  // Occlusion is the case to drive. Scrolling the target out of view was the
+  // first attempt and does not work: the band re-assigns on scroll, so the
+  // codeword stops resolving and the refusal comes from the not-an-element
+  // guard again. An overlay leaves the target itself untouched and in the
+  // band — only `isOccludedLive` changes.
+  //
+  // `resolution` is what makes this airtight, and it is why no separate
+  // RESOLVE_HINT witness is needed. reportNoSuchHint echoes the resolution it
+  // was given, so a gate refusing a RESOLVED element says 'live_store' while
+  // a refusal over nothing says 'none'. Asserting 'live_store' means a run
+  // where the wrapper was dropped fails loudly instead of passing for the
+  // wrong reason — the failure mode that killed the scroll version.
+  const occT = byNameNow.get('alpha');
+  await page.evaluate(() => {
+    const o = document.createElement('div');
+    o.id = '__probe_overlay__';
+    // Under the badge layer (2147483645) so badges still paint, over the page
+    // so the occlusion read hits this instead of the button.
+    o.style.cssText = 'position:fixed;inset:0;background:#fff;z-index:2147483000';
+    document.body.appendChild(o);
+  });
+  await settle(900);
+  await drain();
+  await act('activate',
+    { codeword: occT?.cw ?? '__unresolvable__', prefix_letter: 'z', suffix_letter: 'q' });
+  await settle(800);
+  const occR = await lastDispatch('activate');
+  const clickedAfterOcclusion = await page.evaluate(() => window.__clicked);
+  check('ARM activate refuses an occluded sealed target',
+    occR?.ok === false && occR.taken === 'skipped' && occR.detail === 'no_such_hint'
+    && occR.resolution === 'live_store' && !clickedAfterOcclusion.includes('alpha'),
+    `report=${JSON.stringify(occR)} clicked=${JSON.stringify(clickedAfterOcclusion)}`);
+  await page.evaluate(() => document.getElementById('__probe_overlay__')?.remove());
+  await settle(700);
+
+  // reactivate — republishForActivation rotates the put-queue session and
+  // re-Puts every live codeword. The rotate is the observable: it names both
+  // session ids, so a rotate that did not happen is not merely absent, it
+  // cannot be faked by an arm that logged and did nothing.
+  await waitForBadges(page, { min: 1 });
+  await settle(700);
+  await drain();
+  await act('reactivate', { reason: 'probe_reactivate' });
+  await settle(1200);
+  const rotate = (await drain()).find(
+    (m) => m.type === 'PLUGIN_DEBUG_LOG' && m.tag === 'BK_SESSION_ROTATE');
+  check('ARM reactivate',
+    !!rotate?.data?.from && !!rotate?.data?.to && rotate.data.from !== rotate.data.to,
+    JSON.stringify(rotate ?? null));
+
+  // The correlation scope, pinned rather than argued. setLogCorrelation runs
+  // in content.ts's handler and self-clears on the next microtask, so every
+  // arm below it has to sit inside that synchronous window for its bkLog
+  // lines to join the matcher's tr_ chain in browser.log. Read off a log line
+  // emitted from deep inside the arm, which is the only way to see it.
+  //
+  // It rides the same BK_SESSION_ROTATE line the probe above reads, so an arm
+  // that stops republishing fails BOTH — read them together, the rotate one
+  // names the cause.
+  //
+  // KNOWN BLIND SPOT, stated rather than papered over: this rides the
+  // `reactivate` arm, which is in content.ts. It pins the shared precondition
+  // — that setLogCorrelation still precedes the branch — and that is the
+  // failure worth catching, because it breaks both sides at once. It does NOT
+  // pin the moved side independently: if dispatchVoiceAction ever became
+  // async, its arms would fall out of scope and this probe would stay green.
+  // Closing that needs a bkLog reachable synchronously from a moved arm, and
+  // today none of the fifteen has one (checked: badge-visibility,
+  // holder-registry, escape-cascade, page-session and singletons emit none).
+  check('BRANCHKIT_ACTION scopes the tr_',
+    rotate?.data?.correlationId === 'tr_probe',
+    `correlationId=${JSON.stringify(rotate?.data?.correlationId)}`);
 
   // --- The navigating arms go LAST: each one replaces the content script.
 

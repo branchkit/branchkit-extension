@@ -45,9 +45,10 @@ Two things this cost, both measured rather than assumed (2026-07-28):
   only headless, suspect a fixed `settle()` standing in for a real wait before
   suspecting the browser.
 
-Verified equal to the headed baselines: `harness:messages` 27/27,
-`harness:realinput` 11 both engines, `harness:lifecycle` 7 PASS / 2 SKIP
-(the same two environmental skips), `test:placement`, `test:scroll-accel`.
+Verified equal to the headed baselines: `harness:messages` 32/32 (27/27 when
+this was written), `harness:realinput` 11 both engines, `harness:lifecycle`
+7 PASS / 2 SKIP (the same two environmental skips), `test:placement`,
+`test:scroll-accel`.
 
 The six underscore one-off diagnostics above still launch headed on purpose —
 you run those to watch them.
