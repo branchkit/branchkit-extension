@@ -132,11 +132,10 @@ export function buildPerfSnapshot(advanceShareBaseline = false) {
 // per second per hidden tab, times days of accumulated tabs. Direct one-shot
 // calls (boot marker, reset-handshake confirmation) publish regardless of
 // visibility: a tab loaded hidden must still publish once so dataset
-// presence works as a liveness probe (scripts/_test-hints.mjs, _test-sites.mjs,
-// _test-videos-tab-wedge.mjs all read it that way), and a reset delivered to a
-// hidden tab must confirm with
-// zeroed counters or drivers diff against pre-reset history
-// (scripts/test-perf.mjs).
+// presence works as a liveness probe (scripts/_test-hints.mjs, _test-sites.mjs
+// and _test-videos-tab-wedge.mjs all read it that way), and a reset delivered
+// to a hidden tab must confirm with zeroed counters or drivers diff against
+// pre-reset history (scripts/test-perf.mjs).
 export function publishPerfSnapshot(): void {
   if (!harnessHooksEnabled()) return;
   try {
@@ -176,6 +175,32 @@ export function shipPerfReport(): void {
 const PERF_REPORT_INTERVAL_MS = 5000;
 
 /**
+ * Zero the counter groups.
+ *
+ * `watchdog` is a parameter because the two reset paths genuinely differ: the
+ * console global clears all six, the main-world dataset trigger clears five and
+ * leaves the watchdog baseline alone. That asymmetry predates the lift out of
+ * content.ts and is preserved rather than quietly corrected — but as ONE list
+ * with a named argument, not two literal lists a reader has to diff.
+ *
+ * The duplication mattered more than the asymmetry: counter groups get added
+ * here regularly (rebindCounters, claimCounters and lifecycleCounters all
+ * post-date the original), and adding one to the canonical-looking list while
+ * missing the other leaves the harness reset path silently skipping it — after
+ * which scripts/test-perf.mjs diffs post-reset samples against pre-reset
+ * history for that group alone. That is the measurement-gap class the
+ * cpu.share comment above says cost the YouTube investigation.
+ */
+function resetCounterGroups({ watchdog }: { watchdog: boolean }): void {
+  resetPerfCounters();
+  resetMessageCounters();
+  resetLifecycleCounters();
+  resetCpuCounters();
+  resetLongtask();
+  if (watchdog) resetWatchdog();
+}
+
+/**
  * Install the perf surfaces: console globals in every frame, the dataset
  * mirror and the durable ship in the top frame only.
  *
@@ -186,14 +211,7 @@ export function installPerfReporting(): void {
   const isTopFrame = window === window.top;
 
   (window as any).branchkitPerfStats = buildPerfSnapshot;
-  (window as any).branchkitResetPerf = (): void => {
-    resetPerfCounters();
-    resetMessageCounters();
-    resetLifecycleCounters();
-    resetCpuCounters();
-    resetLongtask();
-    resetWatchdog();
-  };
+  (window as any).branchkitResetPerf = (): void => resetCounterGroups({ watchdog: true });
 
   // Top frame only: the dataset mirror exists for Playwright/in-page inspection,
   // which reads the top document's element. A subframe publishing to its own
@@ -229,18 +247,13 @@ export function installPerfReporting(): void {
     });
     // Reset trigger from main world — set the dataset to "1" and we reset.
     // Harness builds only (page-dispatchable, plus a standing attribute MO).
-    // NOTE: this path deliberately mirrors what content.ts did — it resets
-    // five of the six counter groups `branchkitResetPerf` above does, leaving
-    // the watchdog baseline alone. That asymmetry predates the lift and is
-    // preserved rather than quietly corrected; see §6g.
+    // watchdog:false is the asymmetry resetCounterGroups documents — this path
+    // has never re-armed the watchdog baseline, and preserving that is a
+    // deliberate no-change, not an omission.
     if (harnessHooksEnabled()) {
       new MutationObserver(() => {
         if (document.documentElement.dataset.branchkitResetPerf === '1') {
-          resetPerfCounters();
-          resetMessageCounters();
-          resetLifecycleCounters();
-          resetCpuCounters();
-          resetLongtask();
+          resetCounterGroups({ watchdog: false });
           delete document.documentElement.dataset.branchkitResetPerf;
           publishPerfSnapshot();
         }
