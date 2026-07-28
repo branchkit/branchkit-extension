@@ -1173,6 +1173,9 @@ at its end even when every step was verified.
 
 ### 6i. The `BRANCHKIT_ACTION` split — RESOLVED and scoped (2026-07-28)
 
+**EXECUTED — see §6j.** The plan below is what was done; the measurements it
+predicted held arm for arm.
+
 **§6g.5's decision is made: the exclusion is drawn on CONCERNS, not line
 ranges.** `trimFrameUrl` moves. It sits at `content.ts:1635`, between the
 orphan-quiesce and BK_ACTIVATE_PATH sections and therefore inside §5's excluded
@@ -1227,6 +1230,156 @@ tests.
 needs `activateWrapper`, `toggle_help` needs `currentKeymap` — both §6g.4-shaped
 state relocations), and phase 1's own residue, `handleSSEEvent` (~136 lines) plus
 `storeAlphabet`, which §7 named and which would take `background.ts` under ~700.
+
+### 6j. The split EXECUTED (2026-07-28)
+
+`523d06b`..`23c9500`, three commits, in §6i's mandated order: probes, then
+helpers, then the move. `content.ts` 2,985 → **2,772**, ceiling 3,050 → **2,850**,
+`harness:messages` 11 → **27** probes. Tests unchanged at 2,278, lints at twelve.
+
+| | lines |
+|---|---|
+| `activate/voice-dispatch.ts` | 264 (fifteen arms) |
+| `activate/sealed-gate.ts` | 71 |
+| `core/frame.ts` | 23 → 51 |
+| stayed in `content.ts` | `activate` (110) + `reactivate` (2) |
+
+**The plan was right about the shape and wrong about almost nothing** — which
+is itself worth recording, because §6a, §6g.5 and §6h each had a
+classification overturned by measurement and this one did not. The re-measure
+agreed arm for arm: once the four helpers were leaves, `activate` and
+`reactivate` were the only arms closing over anything left in the entry point.
+
+#### 6j.1 The probes were the work
+
+Two of three commits went in before a line of the handler moved, and the probe
+commit took longer than the split. That ratio is the finding. §6i asked for
+"a probe per moved arm"; writing them turned up four defects in the probes
+themselves, and **every one was found by a mutant, none by reading**:
+
+- **Two probes asserted the arm's own words and nothing else.** `copytext_hint`
+  writes `detail = 'text copied'` from the element's text whether or not the
+  copy happened, and `caret_hint` writes `'caret at element'` unconditionally.
+  Both probes passed against a mutant that deleted the verb. They read the
+  clipboard and the live DOM selection now, and only those halves kill it.
+- **The selection pair asserted `ok`, which just mirrors `caret.isActive()`** —
+  true for an arm that consults the caret and then applies nothing. It asserts
+  the selected TEXT now. The mutant that dropped `caret.applyVoice` survived
+  the first version and dies against the second.
+- **`SET_BADGES_VISIBLE`'s painted count was filtering on the HOST's computed
+  display and read 14 painted badges while all 14 were down.** The badge mirrors
+  its own state to `[data-bk-shown]`; the probe reads that.
+
+Seventeen mutants across four builds in the end, one per moved arm plus the
+changed probes. All killed, each failure naming the real defect, nothing else
+failing with it.
+
+**Escape unwinds a caret in TWO stages, and the first probe could not see it.**
+The first escape is an `inner` peel that collapses the visual selection to the
+one-character block caret and leaves the entry on the mode stack; the second
+peels the entry. Both report as the `selection` layer. The draft probe used a
+selection verb that never entered visual mode, so it only ever reached stage
+two and would have passed against a cascade with no inner peel at all. The
+discriminator that works is the selection LENGTH: an implementation that
+skipped the inner stage exits on the first escape, and the second call answers
+`nothing to close`.
+
+**A persistent profile makes a harness order-dependent silently.** The
+`set_badge_mode` and reference arms WRITE state, and the profile is reused
+between runs, so run N+1 started where run N stopped. Reset at startup now.
+This is the same class as §6g.8's "reported ALL PROBES PASS having run none":
+a verification script needs the scepticism of a test, and its own state is part
+of that.
+
+**Probe numbering in the comments is gone rather than renumbered.** It was a
+second copy of the order, it had already drifted inside one editing session,
+and `EXPECTED` already catches a short run.
+
+#### 6j.2 The move itself was mechanical, and provably so
+
+The moved text is byte-identical to what it replaced modulo indentation —
+checked mechanically, 172 non-blank lines in and 172 out, not eyeballed.
+`content.ts`'s own diff is **three non-comment lines**: the import, `reactivate`
+moved to the head of the chain, and the delegating `else`. The `activate` arm
+was not touched at all.
+
+**`DISPATCH_PASSTHROUGH_ACTIONS` moved WITH the forwarder rather than staying.**
+§6h found the failure in the mirror image: lint D reads that set as PROOF an id
+is handled, so a set in one file and a forwarder in another is the one
+direction it cannot see. Adjacency is the fix that finding argues for, and this
+split was the chance to take it.
+
+**Lint D hardcoded `content.ts` as where routes live, and failed loudly on 40
+ids.** That is the lint working, not an obstacle. It reads a named
+`ROUTE_FILES` list now. A list of filenames is normally what this file exists
+to avoid, and the reason it is acceptable here is that it cannot go stale
+silently in EITHER direction: an arm that moves to a fourth file takes its ids
+out of `handled` and every voiced id in it fails with "no extension-side
+route"; a file that stops holding the literal fails by name in `setLiteral`.
+Both arms mutation-verified.
+
+**§6g.1's import trick held.** All 18 modules `voice-dispatch` imports are
+already imported above it in `content.ts` — verified by resolving both import
+lists rather than by assuming — so appending it last leaves module evaluation
+order unchanged.
+
+#### 6j.3 Two decisions recorded rather than taken
+
+**The three arm selectors are pairwise disjoint, and nothing enforces it.**
+Measured: 24 named `action ===` arms, 37 `DISPATCH_PASSTHROUGH_ACTIONS` ids, 10
+`SELECTION_ACTIONS` ids, all three intersections empty. That disjointness is
+what makes reordering the chain (`reactivate` and `activate*` now checked
+first) behaviour-preserving, and it used to be visible as one if/else ladder in
+one file. This is the §6h class exactly — an invariant held by adjacency,
+losing the adjacency.
+
+Not linted, deliberately, and the argument is:
+
+1. A collision needs TWO deliberate steps, not one slip. Lint D2 requires every
+   passthrough id to have a `dispatcher.register` handler, so adding `escape`
+   to the passthrough set also means registering an `escape` command.
+2. The check needs the BRANCHKIT_ACTION chain's ids specifically, and
+   `eqComparisons` over a whole file over-matches: `content.ts` has six
+   `action === '…'` comparisons at :1246–:1298 that belong to the KEYBOARD
+   hint-action path and a different `action` variable entirely. Scoping the
+   check properly means parsing a function body by name, which is more fragile
+   than the invariant it would guard. (That over-match is also a pre-existing
+   looseness in lint D's `handled` set, named here because it was found here.)
+
+If it is ever taken, the honest version reads the chain's range, not the file.
+
+**The three-tier resolution wiring is now duplicated ACROSS a file boundary.**
+The 16-line `resolveTarget(idParam, frameIdParam, codeword, {…})` block plus
+the three `parseInt` lines above it are identical in the `activate` arm
+(`content.ts`) and the element-verb arm (`voice-dispatch.ts`). The duplication
+predates this work — §6g.5 measured it as one of the reasons both arms look
+alike — but the split turned "two places in one file" into "two files", which
+is worse.
+
+The collapse is obvious (`resolveDispatchTarget(params)` beside
+`sealedDispatchSeen`, which the same two call sites already share) and is NOT
+in the excluded region: it touches neither `preNavObserverTeardown` nor
+`republishForActivation` nor the bfcache/orphan-quiesce/nav-rescan/teardown
+band. It is left undone because it edits the `activate` arm, and this arc's
+rule is that a behaviour-preserving collapse is its own commit with its own
+mutation pass, not a rider on a relocation (§6g.1). It is the obvious next
+step and it now has a probe suite waiting for it.
+
+#### 6j.4 What the split bought beyond the line count
+
+`dispatchVoiceAction` is an exported function taking `(action, params)`. Fifteen
+arms that were unreachable from a test — the `content.ts is untestable` problem
+in its purest form, 0 exports and 66 top-level side effects — are now callable
+directly.
+
+**No unit tests were added for them, deliberately.** All fifteen are already
+exercised over the real `chrome.runtime.onMessage` boundary by
+`harness:messages`, against a real store, real badges and a real DOM. A
+happy-dom unit test would assert less about a weaker substrate, and §6g.7's
+find-command lesson is standing evidence: every find match assertion in that
+group read zero at first because happy-dom answers `checkVisibility()` falsy.
+The exportedness is worth having for the day an arm grows logic that deserves a
+table test; re-testing what the probes already cover is not.
 
 ---
 
