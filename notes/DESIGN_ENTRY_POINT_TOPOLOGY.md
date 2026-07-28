@@ -1060,6 +1060,114 @@ having run none** — it aborted on a bad fixture handle and `[].every()` is tru
 A verification script needs the same scepticism as a test: a pass over an empty
 list is not a pass.
 
+### 6h. Eight-angle code review of the whole arc, and its fixes (2026-07-28)
+
+`c67adac`..`0d668be`, eight commits. Reviewed `a58e053..HEAD` — phase 4, 3a and
+3b together — with eight finder angles and six verifiers. Ten findings survived
+verification; all ten are fixed. Three candidates were REFUTED and are recorded
+below so they are not re-raised.
+
+**The two that mattered were the ones the refactor itself created, and both were
+proven by experiment rather than argued.** Dispersing 44 command registrations
+from one contiguous `content.ts` block to eleven modules removed the adjacency
+that was holding two invariants:
+
+- `ActionDispatcher.register` was a silent last-write-wins `Map.set`. A reviewer
+  inserted one colliding registration and watched **all nine lints, tsc and
+  2262 tests stay green** while the primary scroll verb was dead — resolution
+  decided by which registrar `content.ts` calls last. It throws now, matching
+  the contract `registerMessageHandlers` was given in this same arc.
+- `DISPATCH_PASSTHROUGH_ACTIONS` stayed in `content.ts` byte-identical while
+  every handler it forwards to left. Lint D reads that set as PROOF an id is
+  handled, so the one direction it cannot see is the one the move created.
+  Renaming a handler **together with its own test** — what a developer actually
+  does — left lint, tsc and the module's tests green while the voice command
+  became a `console.warn`.
+
+**A runtime throw is not a substitute for a lint, and finding out why was the
+useful part.** No unit test can reach the duplicate throw, because each module's
+tests register that module alone; cross-module collision is only observable once
+every registrar has run. So lint D2 checks uniqueness statically — including the
+three loop-driven tables a regex over `dispatcher.register('…')` cannot see —
+and the throw stays as the backstop rather than the discovery mechanism.
+
+**The throw earned itself immediately** by catching something unconsidered: the
+`register*Commands` registrars build fresh closures per call, so they are **not
+idempotent**, and two test files re-registered per case. That is a real property
+of the convention, now documented on the seam and pinned by a test.
+
+**A second `BK_UNCAUGHT` regression, undocumented until the review.** §6e
+recorded one uncaught-coverage loss in this arc (the escape pair moving above
+`installUncaughtCapture`); routing `content.ts`'s chain through the table
+introduced another. The old listener had no try/catch, so a throw in the
+~400-line voice dispatch escaped and became a `BK_UNCAUGHT` line carrying the
+dispatch's `tr_`. `routeMessage` caught it and only `console.warn`ed — and
+`console.*` is kept out of browser.log by design. `reportCaught` goes through
+the emitter `uncaught.ts` was installed with rather than importing one, because
+the two bundles emit differently (`bkLog` vs `forwardCoalesced`); that
+indirection is also what makes the new path share the per-boot cap instead of
+opening an uncapped second route.
+
+**Payload types were traded away silently.** The table's value type imposes
+`any`, so all eleven handlers read untyped payloads — proven by changing a field
+read to `message.lettttters` and watching tsc stay at exit 0. `MessageOf<'X'>`
+buys it back without changing the map shape. The failure it closes is not the
+typo but a **sender-side rename in types.ts**: tsc updates the sender, accepts
+it, and the receiver reads `undefined`. Background's 44 handlers traded the same
+checking away before this branch and can adopt `MessageOf` incrementally.
+
+**Two comments of mine were wrong and are corrected in place.** Both entry
+points claimed that installing the listener before composing the maps reduces a
+duplicate-type throw to "one map" / "one handler is missing". It does not:
+`content.ts`'s registrations sit a thousand lines from the end and
+`background.ts`'s ~38% in, so a collision also skips the settle wiring, the
+pointer and key listeners, the machinery gate, the initial scan, and on the SW
+side the tab listeners, `initMedia` and `init()`. Lint E prevents the collision;
+the ordering only bounds the damage.
+
+**Lint G2 generalised to `install*` as well as `register*Commands`** — 13
+registrars. `installPerfReporting` and `installWindowFocusTracking` were covered
+by nothing, and dropping the former stops the dataset mirror four harness
+scripts read as a liveness probe. Its one blind spot is written into the lint:
+the called-set is a union across entry points, so a registrar belonging to BOTH
+and dropped from one still passes. `installUncaughtCapture` is the only such
+case; fixing it needs per-registrar metadata, which is the list-to-maintain that
+reading both sides from code exists to avoid. Deliberate trade, stated.
+
+**The focus latch guarded listeners that outlive it.** `installed` was module
+state, but the listeners are `pageSession.resources`, torn down as a set. After
+a teardown a re-install would re-seed and attach nothing, freezing `hasFocus`
+while lint E kept `GET_FOCUS_STATUS` answering it — failing by lying rather than
+erroring. The latch is gone; re-installing means re-attaching. Note the test I
+had written (`'re-seeds without double-registering'`) **pinned the hazard in
+place** with a fake registry that never tears down.
+
+**Three findings REFUTED, with evidence — do not re-raise:**
+
+1. `pageSession.engine` being a `!`-assertion over a nullable ref in
+   `perf-snapshot.ts`. Unreachable: `setSettleEngine` at `content.ts:439`
+   unconditionally precedes `installPerfReporting()` at `:2975` in the same
+   module body, and every entry point to `buildPerfSnapshot` is created inside
+   the installer. `perf-report.ts:218` has done the identical read since before
+   this branch.
+2. The ungated `window.branchkitPerfStats` / `branchkitResetPerf` globals as a
+   page-readable fingerprint. Wrong: those are **isolated-world** content-script
+   globals, which is precisely why the dataset mirror exists as a cross-world
+   bridge. The one genuinely page-world global (`__branchkitDebugJSON`) hops via
+   `wrappedJSObject` and IS gated.
+3. Per-frame registration cost. Unchanged: 56 `dispatcher.register` call sites
+   at both `a58e053` and HEAD; the tab/zoom loops were already ungated
+   module-scope work. Release `content.js` grew 2,655 bytes (+0.38%) across the
+   whole arc, no new esbuild lazy-init wrappers, no bundle cross-contamination.
+
+**What the review says about the arc's method.** The findings that mattered were
+structural rather than local — no moved line was wrong, but three invariants
+were being held by adjacency and lost it, and two of my own comments asserted a
+containment the code did not have. Mutation testing per commit did not catch any
+of them, because each change was individually correct; only reading the whole
+range against its base surfaced them. That is an argument for reviewing an arc
+at its end even when every step was verified.
+
 ---
 
 ## 7. Execution log — phase 1, 2026-07-27
