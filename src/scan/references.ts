@@ -144,3 +144,34 @@ export async function listAllReferenceNames(): Promise<string[]> {
   }
   return [...names];
 }
+
+// --- The element a reference would name -------------------------------------
+//
+// "name that <word>" saves whatever the user last activated, so something has
+// to remember it across the two paths that activate: the keyboard hint action
+// and the voice dispatch. It was a content.ts local because content.ts held
+// both writers (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md phase 3); the reason it
+// EXISTS is this module's feature, so it lives here.
+
+let lastActivated: Element | null = null;
+
+/** Record an activation. Both the keyboard and voice paths call this. */
+export function noteActivated(el: Element): void {
+  lastActivated = el;
+}
+
+/**
+ * The element a reference would name, or null.
+ *
+ * Null once it leaves the DOM: an SPA that swapped the page out from under a
+ * remembered node would otherwise have "name that thing" save a selector for
+ * a detached element, which resolves to nothing forever after.
+ */
+export function lastActivatedElement(): Element | null {
+  return lastActivated?.isConnected ? lastActivated : null;
+}
+
+/** Test seam. */
+export function _resetLastActivatedForTesting(): void {
+  lastActivated = null;
+}

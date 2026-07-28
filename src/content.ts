@@ -73,9 +73,8 @@ import { runEscapeCascade } from './activate/escape-cascade';
 import { preemptsPageKeys } from './activate/key-preamble';
 import './debug/dev-keepalive';
 import {
-  CodewordSnapshot,
-  takeSnapshot,
-  resolveFromSnapshot,
+  capturePhraseSnapshot,
+  resolveInPhrase,
 } from './activate/snapshot';
 import { dispatcher, registry, keyHandler } from './core/singletons';
 import { DEFAULT_KEYMAP, type KeymapEntry } from './keymap/command-catalog';
@@ -105,7 +104,7 @@ import {
   findImmediate,
 } from './scan/find';
 import { focusFirstInput, handleFocusInputKey } from './activate/focus-input';
-import { saveReference, resolveReference, listReferences } from './scan/references';
+import { saveReference, resolveReference, listReferences, noteActivated, lastActivatedElement } from './scan/references';
 import {
   matchRules,
   applyExclusions,
@@ -536,14 +535,9 @@ labelReservoir.onLeakSwept((leaked) => {
   if (deletesQueued > 0) scheduleSync('reservoir_sweep');
 });
 
-let lastActivatedElement: Element | null = null;
-
-// Pre-phrase snapshot. Captured when the voice plugin signals a verb
-// prefix (show_hints_go / show_hints_set / show_hints_tables) so the
-// codeword the user speaks resolves to the wrapper they SAW at speech
-// start, even if the page has mutated by the time the action arrives.
-// See src/snapshot.ts and DESIGN_BROWSER_HINT_ALLOCATOR.md section 3.C.
-let phraseSnapshot: CodewordSnapshot | null = null;
+// The last-activated element (scan/references.ts) and the pre-phrase codeword
+// snapshot (activate/snapshot.ts) both live with the feature that gives them a
+// reason to exist. See notes/DESIGN_ENTRY_POINT_TOPOLOGY.md phase 3.
 
 // Input element types — used by the "activate" action to decide click vs focus.
 const INPUT_TYPES = new Set(['input', 'textarea', 'select', 'contenteditable']);
@@ -1546,7 +1540,7 @@ function activateWrapper(wrapper: ElementWrapper): void {
     return;
   }
 
-  lastActivatedElement = el;
+  noteActivated(el);
   hintActionHandoff();
 
   wrapper.hint?.flash();
@@ -2216,7 +2210,7 @@ registerMessageHandlers({
       // Voice "toggle" — the same handler as Shift+F. Snapshot on the show
       // direction so a codeword spoken in the same phrase resolves against the
       // freshly-painted badges.
-      if (toggleHints()) phraseSnapshot = takeSnapshot(store.all, performance.now());
+      if (toggleHints()) capturePhraseSnapshot(store.all, performance.now());
     } else if (action === 'rescan') {
       pageSession.onUrlChange(params?.from_cache === 'true', params?.reason ?? '');
     } else if (action === 'reactivate') {
@@ -2307,7 +2301,7 @@ registerMessageHandlers({
             fingerprintToString: idRegistry.fingerprintToString,
           },
           candidates: () => deepQuerySelectorAll(document, '*'),
-          resolveFromSnapshot: (cw) => resolveFromSnapshot(phraseSnapshot, cw, performance.now()),
+          resolveFromSnapshot: (cw) => resolveInPhrase(cw, performance.now()),
           resolveFromStore: (cw) => store.byCodeword(cw),
         },
       );
@@ -2333,7 +2327,7 @@ registerMessageHandlers({
 
       if (target instanceof HTMLElement) {
         elemTag = target.tagName.toLowerCase();
-        lastActivatedElement = target;
+        noteActivated(target);
         // Visibility handoff after activation:
         //  - Always-mode: keep badges visible so the user can immediately
         //    voice-trigger the next action. Just clear narrowing/keyboard
@@ -2488,7 +2482,7 @@ registerMessageHandlers({
             fingerprintToString: idRegistry.fingerprintToString,
           },
           candidates: () => deepQuerySelectorAll(document, '*'),
-          resolveFromSnapshot: (cw) => resolveFromSnapshot(phraseSnapshot, cw, performance.now()),
+          resolveFromSnapshot: (cw) => resolveInPhrase(cw, performance.now()),
           resolveFromStore: (cw) => store.byCodeword(cw),
         },
       );
@@ -2570,11 +2564,12 @@ registerMessageHandlers({
     } else if (action === 'name_reference') {
       const refName = params?.name?.toLowerCase().trim();
       if (!refName) return;
-      if (!lastActivatedElement || !lastActivatedElement.isConnected) {
+      const activated = lastActivatedElement();
+      if (!activated) {
         console.warn('[BranchKit Content] name_reference: no last-activated element');
         return;
       }
-      saveReference(refName, lastActivatedElement).then(async () => {
+      saveReference(refName, activated).then(async () => {
         const refs = await listReferences();
         const ref = refs[refName];
         try {
@@ -2595,7 +2590,7 @@ registerMessageHandlers({
           console.warn('[BranchKit Content] resolve_reference: not found:', refName);
           return;
         }
-        lastActivatedElement = el;
+        noteActivated(el);
         if (el instanceof HTMLElement) {
           store.findWrapperFor(el)?.hint?.flash();
           if (INPUT_TYPES.has(el.tagName.toLowerCase())) {

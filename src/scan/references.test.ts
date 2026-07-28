@@ -4,6 +4,9 @@ import {
   resolveReference,
   deleteReference,
   listReferences,
+  noteActivated,
+  lastActivatedElement,
+  _resetLastActivatedForTesting,
 } from './references';
 
 let storage: Record<string, unknown>;
@@ -141,5 +144,43 @@ describe('listReferences', () => {
 
     const refs = await listReferences();
     expect(Object.keys(refs)).toEqual(['first', 'second']);
+  });
+});
+
+describe('the last-activated element', () => {
+  beforeEach(() => _resetLastActivatedForTesting());
+
+  it('is null before anything has been activated', () => {
+    expect(lastActivatedElement()).toBeNull();
+  });
+
+  it('remembers the element the last activation named', () => {
+    document.body.innerHTML = '<a id="one">One</a><a id="two">Two</a>';
+    const one = document.getElementById('one')!;
+    const two = document.getElementById('two')!;
+    noteActivated(one);
+    expect(lastActivatedElement()).toBe(one);
+    noteActivated(two);
+    expect(lastActivatedElement()).toBe(two);
+  });
+
+  it('forgets an element that left the DOM — a saved selector for a detached node resolves to nothing forever', () => {
+    document.body.innerHTML = '<a id="gone">Gone</a>';
+    const el = document.getElementById('gone')!;
+    noteActivated(el);
+    expect(lastActivatedElement()).toBe(el);
+    el.remove();
+    expect(lastActivatedElement()).toBeNull();
+  });
+
+  it('recovers when a later activation replaces a detached one', () => {
+    document.body.innerHTML = '<a id="gone">Gone</a><a id="live">Live</a>';
+    const gone = document.getElementById('gone')!;
+    const live = document.getElementById('live')!;
+    noteActivated(gone);
+    gone.remove();
+    expect(lastActivatedElement()).toBeNull();
+    noteActivated(live);
+    expect(lastActivatedElement()).toBe(live);
   });
 });

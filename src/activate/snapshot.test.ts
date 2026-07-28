@@ -9,7 +9,7 @@
  * Run: npm test
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { ElementWrapper } from '../scan/element-wrapper';
 import { ScannedElement } from '../types';
 import {
@@ -17,6 +17,10 @@ import {
   resolveFromSnapshot,
   isStale,
   SNAPSHOT_TTL_MS,
+  capturePhraseSnapshot,
+  resolveInPhrase,
+  isPhraseSnapshotStale,
+  _resetPhraseSnapshotForTesting,
 } from './snapshot';
 
 function fakeElement(connected = true): Element {
@@ -144,5 +148,50 @@ describe('isStale', () => {
   it('treats an aged snapshot as stale', () => {
     const snap = takeSnapshot([], 0);
     expect(isStale(snap, SNAPSHOT_TTL_MS + 1)).toBe(true);
+  });
+});
+
+describe('the live phrase snapshot', () => {
+  beforeEach(() => _resetPhraseSnapshotForTesting());
+
+  it('resolves nothing until a phrase is captured', () => {
+    expect(resolveInPhrase('arch', 0)).toBeUndefined();
+    expect(isPhraseSnapshotStale(0)).toBe(true);
+  });
+
+  it('resolves a captured codeword to the wrapper the user saw', () => {
+    const w = makeWrapper('arch');
+    capturePhraseSnapshot([w, makeWrapper('bake')], 1000);
+    expect(resolveInPhrase('arch', 1000)).toBe(w);
+    expect(isPhraseSnapshotStale(1000)).toBe(false);
+  });
+
+  it('stops resolving once the snapshot ages past TTL', () => {
+    capturePhraseSnapshot([makeWrapper('arch')], 1000);
+    expect(resolveInPhrase('arch', 1000 + SNAPSHOT_TTL_MS)).toBeDefined();
+    expect(resolveInPhrase('arch', 1000 + SNAPSHOT_TTL_MS + 1)).toBeUndefined();
+    expect(isPhraseSnapshotStale(1000 + SNAPSHOT_TTL_MS + 1)).toBe(true);
+  });
+
+  it('drops a wrapper whose element left the DOM between capture and speech', () => {
+    capturePhraseSnapshot([makeWrapper('arch', /* connected = */ false)], 1000);
+    expect(resolveInPhrase('arch', 1000)).toBeUndefined();
+  });
+
+  it('a second capture REPLACES the first — one phrase at a time', () => {
+    const first = makeWrapper('arch');
+    capturePhraseSnapshot([first], 1000);
+    const second = makeWrapper('bake');
+    capturePhraseSnapshot([second], 2000);
+    // Merging would let a codeword from the previous utterance still resolve,
+    // which is exactly the staleness the snapshot exists to prevent.
+    expect(resolveInPhrase('bake', 2000)).toBe(second);
+    expect(resolveInPhrase('arch', 2000)).toBeUndefined();
+  });
+
+  it('the recapture also resets the clock', () => {
+    capturePhraseSnapshot([makeWrapper('arch')], 1000);
+    capturePhraseSnapshot([makeWrapper('bake')], 1000 + SNAPSHOT_TTL_MS);
+    expect(isPhraseSnapshotStale(1000 + SNAPSHOT_TTL_MS)).toBe(false);
   });
 });
