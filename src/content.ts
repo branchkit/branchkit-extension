@@ -46,7 +46,9 @@ import { setOcclusionMemoMode, occlusionMemoAllDirty, occlusionMemoNoteTarget, o
 import { reconcileClipObservation, setClipObserverEnabled } from './observe/clip-observer';
 import { isRectOnScreen } from './core/layout-cache';
 import { placeBadges, invalidateProbe } from './placement';
-import { activateElement, dispatchHover, resolveNavTarget, type ActivationResult } from './activate/event-sequence';
+import { activateElement, dispatchHover, resolveNavTarget, INPUT_TYPES, type ActivationResult } from './activate/event-sequence';
+import { sealedDispatchSeen, reportNoSuchHint } from './activate/sealed-gate';
+import { trimFrameUrl } from './core/frame';
 import {
   emitActivatePath,
   elementSnap,
@@ -520,8 +522,8 @@ labelReservoir.onLeakSwept((leaked) => {
 // snapshot (activate/snapshot.ts) both live with the feature that gives them a
 // reason to exist. See notes/DESIGN_ENTRY_POINT_TOPOLOGY.md phase 3.
 
-// Input element types — used by the "activate" action to decide click vs focus.
-const INPUT_TYPES = new Set(['input', 'textarea', 'select', 'contenteditable']);
+// INPUT_TYPES (click vs focus) moved next to activateElement, which answers
+// the same question for every other tag — activate/event-sequence.ts.
 
 // --- Per-domain hint rules: wiring (state + appliers live in rules/rule-apply.ts) ---
 
@@ -1159,42 +1161,9 @@ function narrowStoreHints(prefix: string): void {
 
 // --- Core Functions ---
 
-/**
- * Pull-resolution live strict gate (ext notes/DESIGN_STATIC_PAIR_GRAMMAR.md
- * 0c): the sealed-alphabet match doesn't consult the `_strict` mirror, so
- * seen-is-clickable is enforced at dispatch, against live state — on-screen,
- * CSS-visible, not occluded. Shared by activate and the element verbs.
- */
-function sealedDispatchSeen(target: unknown): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  const w = store.findWrapperFor(target);
-  const rect = target.getBoundingClientRect();
-  // isVisible(target) IS the live cssHidden check (phase 1) and
-  // isOccludedLive the live occlusion check (phase 2) — no stored flags
-  // (notes/DESIGN_OBSERVED_STATE_READ_TIME.md).
-  return (
-    isRectOnScreen(rect, window.innerWidth, window.innerHeight) &&
-    isVisible(target) &&
-    !(w !== undefined && isOccludedLive(w))
-  );
-}
-
-/** The refused-pair feedback + dispatch result for a sealed miss. */
-function reportNoSuchHint(
-  action: string,
-  codeword: string,
-  resolution: DispatchResult['resolution'],
-  fp: string,
-  params: Record<string, string> | undefined,
-): void {
-  flashToast(`No hint "${(params?.prefix_word && params?.suffix_word)
-    ? `${params.prefix_word} ${params.suffix_word}` : codeword}"`);
-  reportDispatchResult({
-    action, codeword, resolution, elem_tag: '', taken: 'skipped',
-    ok: false, frame: trimFrameUrl(window.location.href),
-    detail: 'no_such_hint', fp,
-  });
-}
+// The sealed strict gate and its refusal moved to activate/sealed-gate.ts:
+// they are two halves of one rule, and after the BRANCHKIT_ACTION split their
+// two call sites sit on opposite sides of the module boundary.
 
 // (The ResizeObserver hintability safety net and the viewport-scoped
 // AttentionObserver are owned by `pageSession` — constructed in
@@ -1630,17 +1599,9 @@ function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
 // docs/completed/DESIGN_PLUGIN_LOGGING.md §4.
 
 
-// Truncate the frame URL for log readability. Includes path but not query
-// strings (which often carry session data). Capped to 200 chars.
-function trimFrameUrl(href: string): string {
-  try {
-    const u = new URL(href);
-    const out = `${u.origin}${u.pathname}`;
-    return out.length > 200 ? out.slice(0, 200) + '…' : out;
-  } catch {
-    return href.slice(0, 200);
-  }
-}
+// trimFrameUrl moved to core/frame.ts. It sat in this band but was never in
+// this band's CONCERN — it trims a URL, and has nothing to do with bfcache,
+// orphan quiesce, nav rescan or teardown. See §6i.
 
 // (preNavDetachAll is gone — notes/DESIGN_NAV_WIPE_RETIREMENT.md step 3. The
 // spa_nav hard detach it implemented was freeze-investigation residue; the

@@ -126,6 +126,20 @@ const INTERACTIVE_ROLES = new Set([
 const INTERACTIVE_TAGS = new Set(['button', 'select', 'textarea', 'summary', 'input']);
 
 /**
+ * Tags for which "activate" means FOCUS rather than click — a field you type
+ * into is entered, not pressed. Read off the LIVE element's tag at dispatch
+ * time, never off the voice plugin's `elem_type` hint, which was captured at
+ * grammar-push time and can be stale by the time the action arrives.
+ *
+ * Here rather than in the entry point because it is the same question
+ * `activateElement` answers for every other tag, and both callers (the voice
+ * activate arm and the saved-reference arm) ask the two together. It overlaps
+ * INTERACTIVE_TAGS deliberately: that set decides whether to delegate a click
+ * UP to an ancestor anchor, this one decides whether to click at all.
+ */
+export const INPUT_TYPES = new Set(['input', 'textarea', 'select', 'contenteditable']);
+
+/**
  * True when `el` is an interactive control in its own right, not just a
  * presentational descendant (icon/span/text) of an anchor. Anchor
  * delegation must be suppressed for these: a <button> nested inside an
