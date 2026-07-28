@@ -33,6 +33,8 @@
  * clean — there's no `MutationObserver.unobserve(target)`.
  */
 
+import { recordCpu } from '../debug/perf-counters';
+
 type TargetMutationCallback = (target: Element) => void;
 
 let callback: TargetMutationCallback | null = null;
@@ -67,13 +69,10 @@ export function trackTargetMutations(target: Element): void {
     // scope re-appears in the perf trail. The 2026-06-01 measurement that
     // surfaced 16M fires / 160s CPU on Google SERPs (when subtree:true was
     // still on) is the canonical "this bucket is hot, look here" signal.
-    // Reported via the global recorder content.ts wires up (see
-    // __branchkitRecordCpu); no-op in tests / early boot when the recorder
-    // isn't present.
+    // Reported through debug/perf-counters, imported directly.
     const __t0 = performance.now();
     if (!isAllOwn(records)) callback?.(target);
-    const rec = (globalThis as { __branchkitRecordCpu?: (label: string, ms: number) => void }).__branchkitRecordCpu;
-    if (rec) rec('targetMutation:callback', performance.now() - __t0);
+    recordCpu('targetMutation:callback', performance.now() - __t0);
   });
   observer.observe(target, { attributes: true, attributeFilter: ['style'] });
   observers.set(target, observer);

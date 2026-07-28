@@ -24,6 +24,8 @@
  * coupling this module to wrapper state.
  */
 
+import { recordCpu } from '../debug/perf-counters';
+
 export interface ReconcileWrite {
   host: HTMLElement;
   x: number;
@@ -115,7 +117,6 @@ export function reconcilePass(): Map<ReconcileBadge, DOMRect> {
     w.host.style.transform = next;
   }
   lastChangedWrites = changed;
-  const rec = (globalThis as { __branchkitRecordCpu?: (label: string, ms: number) => void }).__branchkitRecordCpu;
-  if (rec && t0) rec('reconcilePositioner:tick', performance.now() - t0);
+  if (t0) recordCpu('reconcilePositioner:tick', performance.now() - t0);
   return rects;
 }

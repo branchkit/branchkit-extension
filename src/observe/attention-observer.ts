@@ -14,6 +14,8 @@
 // different lifecycles. Same element gets observed by both while
 // inside the attention region.
 
+import { recordCpu } from '../debug/perf-counters';
+
 export interface AttentionEvents {
   onEnter: (element: Element) => void;
   onLeave: (element: Element) => void;
@@ -53,7 +55,6 @@ export class AttentionObserver {
 
   private handleEntries = (entries: IntersectionObserverEntry[]): void => {
     // Sync cost reported via the global recorder content.ts wires up
-    // (see __branchkitRecordCpu). No-op when the recorder isn't present.
     const __t0 = performance.now();
     for (const entry of entries) {
       const el = entry.target;
@@ -80,8 +81,7 @@ export class AttentionObserver {
         if (farBelow || farAbove) this.io.unobserve(el);
       }
     }
-    const rec = (globalThis as { __branchkitRecordCpu?: (label: string, ms: number) => void }).__branchkitRecordCpu;
-    if (rec) rec('attention:handleEntries', performance.now() - __t0);
+    recordCpu('attention:handleEntries', performance.now() - __t0);
   };
 }
 
