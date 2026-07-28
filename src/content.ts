@@ -1240,10 +1240,20 @@ function activateWrapper(wrapper: ElementWrapper): void {
   const el = wrapper.element as HTMLElement;
   // Consume the keyboard hint action and reset immediately, so no path can leak
   // it to the next activation. See notes/DESIGN_HINT_ACTION_MODES.md.
-  const action = keyHandler.takeHintAction();
+  //
+  // NOT named `action`, and that is load-bearing rather than style. Lint D
+  // reads `action === '…'` across a whole ROUTE_FILE as proof a voiced command
+  // id has an extension-side route, so while these six keyboard hint verbs
+  // were called `action` they silently vouched for yank/copytext/focus/hover/
+  // caret/newtab — none of which any BRANCHKIT_ACTION arm handles. Measured:
+  // a voiced entry `{ id: 'hover' }` with no route passed as "all 77 voiced
+  // catalog actions handled", and failed correctly once this stopped matching.
+  // Those are the shortened forms of hover_hint/focus_hint/caret_hint/
+  // copytext_hint, i.e. exactly what a future edit reaches for.
+  const hintAction = keyHandler.takeHintAction();
 
   // Verbs that act ON the element without following it (Vimium hint modes).
-  if (action === 'yank') {
+  if (hintAction === 'yank') {
     // Copy the link's URL (Vimium yf).
     const href = (el.closest('a') as HTMLAnchorElement | null)?.href ?? '';
     wrapper.hint?.flash();
@@ -1252,7 +1262,7 @@ function activateWrapper(wrapper: ElementWrapper): void {
     hintActionHandoff();
     return;
   }
-  if (action === 'copytext') {
+  if (hintAction === 'copytext') {
     // Copy the element's visible text (Vimium copy-link-text).
     const text = (el.textContent || '').trim();
     wrapper.hint?.flash();
@@ -1261,7 +1271,7 @@ function activateWrapper(wrapper: ElementWrapper): void {
     hintActionHandoff();
     return;
   }
-  if (action === 'focus') {
+  if (hintAction === 'focus') {
     // Focus without activating — a field to type in, or any element (Vimium focus).
     wrapper.hint?.flash();
     el.focus();
@@ -1269,7 +1279,7 @@ function activateWrapper(wrapper: ElementWrapper): void {
     hintActionHandoff();
     return;
   }
-  if (action === 'hover') {
+  if (hintAction === 'hover') {
     // Reveal hover-state UI (menus, player controls) without clicking (Vimium
     // hover). The always-mode handoff re-scans, so badges appear for whatever
     // the hover just exposed. Voice "hover {hint}" is the twin (plugin-side).
@@ -1279,7 +1289,7 @@ function activateWrapper(wrapper: ElementWrapper): void {
     hintActionHandoff();
     return;
   }
-  if (action === 'caret') {
+  if (hintAction === 'caret') {
     // Start a caret/visual selection AT this element (Vimium hint→caret). Then
     // drive it by keyboard (hjkl/y) or voice ("select word" / "copy that").
     wrapper.hint?.flash();
@@ -1295,7 +1305,7 @@ function activateWrapper(wrapper: ElementWrapper): void {
   if (wrapper.category === 'input') {
     el.focus();
   } else {
-    activateElement(el, { newTab: action === 'newtab' });
+    activateElement(el, { newTab: hintAction === 'newtab' });
   }
 }
 
