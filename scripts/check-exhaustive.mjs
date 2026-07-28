@@ -273,17 +273,23 @@ function srcFiles() {
 
 // --- D. Every dispatchable action has an extension-side route ---
 {
-  // The files that route a BRANCHKIT_ACTION. Two entry points and, since the
-  // §6i split, the module holding every arm that does not touch the nav-time
-  // lifecycle glue — `activate` and `reactivate` stayed in content.ts because
-  // they reach preNavObserverTeardown / republishForActivation.
+  // The files that route a BRANCHKIT_ACTION. Both entry points; the module
+  // holding every CONTENT arm that does not touch the nav-time lifecycle glue
+  // (§6i — `activate` and `reactivate` stayed in content.ts because they reach
+  // preNavObserverTeardown / republishForActivation); and the module holding
+  // the SW's own fan-out, which decides between answering an event here,
+  // forwarding it to the active tab, and broadcasting it (§6m).
   //
   // A list of filenames is normally the thing this file exists to avoid, but it
-  // cannot go stale silently in either direction: an arm that moves to a
-  // fourth file takes its ids out of `handled`, and every voiced id in it fails
-  // with "no extension-side route"; a file that stops routing anything is
-  // caught by setLiteral's own fail when the literal it names is gone.
-  const ROUTE_FILES = ['src/content.ts', 'src/background.ts', 'src/activate/voice-dispatch.ts'];
+  // cannot go stale silently in either direction, and both directions have now
+  // fired for real: moving the fan-out to sse-events.ts took seven voiced ids
+  // out of `handled` and failed with "no extension-side route" until this list
+  // learned the file. A file that stops routing anything is caught by
+  // setLiteral's own fail when the literal it names is gone.
+  const ROUTE_FILES = [
+    'src/content.ts', 'src/background.ts',
+    'src/activate/voice-dispatch.ts', 'src/background/sse-events.ts',
+  ];
 
   const setLiteral = (src, name, file) => {
     const m = src.match(new RegExp(`${name}[^=]*=\\s*new Set(?:<[^>]*>)?\\(\\[([\\s\\S]*?)\\]\\)`));
@@ -683,7 +689,22 @@ function srcFiles() {
     // module's just as easily.
     const src = entrySrc.get(entry);
     for (const m of src.matchAll(/registerMessageHandlers\(\{/g)) {
-      for (const type of literalKeys(src, m.index + m[0].length - 1)) claim(type, `${entry} (inline)`);
+      const types = literalKeys(src, m.index + m[0].length - 1);
+      // An inline map this cannot read is a map this cannot check, and the
+      // failure is silent in the direction that matters — its types would be
+      // absent from the disjointness set while the runtime still registers
+      // them. `literalKeys` matches keys at the literal's own two-space
+      // indentation, so a one-line `registerMessageHandlers({ DEV_PING: … })`
+      // parses to nothing and quietly leaves the table. Measured: writing the
+      // DEV_PING map on one line dropped the type count from 55 to 54 and
+      // nothing failed. Cheaper than a smarter parser, and it keeps the parser
+      // dumb, which is the point.
+      if (types.length === 0) {
+        fail(`${entry} composes an inline handler map this check cannot read — put its keys on ` +
+          'their own lines at the literal\'s indentation, or its types silently leave the ' +
+          'disjointness set while still registering at runtime');
+      }
+      for (const type of types) claim(type, `${entry} (inline)`);
     }
   }
 
@@ -695,7 +716,10 @@ function srcFiles() {
       'registerMessageHandlers throws on the duplicate and that handler is lost');
   }
 
-  if (unregistered.length === 0 && collisions.length === 0) {
+  // Gated on `failed`, not just on these two lists: the unreadable-inline-map
+  // guard above reports through fail() as well, and a lint that prints "ok" in
+  // the same breath as its own FAIL is a lint people learn to skim.
+  if (!failed && unregistered.length === 0 && collisions.length === 0) {
     ok(`message handlers: ${exported.length} maps across ${ENTRIES.length} tables, ` +
       `${typeCount} types disjoint per table, both listeners are the table`);
   }
