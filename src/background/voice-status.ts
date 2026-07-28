@@ -15,7 +15,7 @@ import {
   onSSEConnected, onSSEDisconnected, pauseVoice, resumeVoice, isVoicePaused,
 } from '../plugin/sse-transport';
 import { ensureConnected } from '../plugin/actuator-client';
-import type { MessageHandler } from './message-router';
+import type { MessageHandler } from '../core/message-router';
 
 /** The popup renders three distinct states off this shape. */
 function healthSnapshot(): { branchkit: boolean; paused: boolean } {

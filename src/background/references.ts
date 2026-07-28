@@ -8,7 +8,7 @@
  * own when to fire (connect edge hydrates then pushes; saves push through).
  */
 
-import type { MessageHandler } from './message-router';
+import type { MessageHandler } from '../core/message-router';
 import { ensureConnected, postToPlugin, getPluginPort, getPluginToken } from '../plugin/actuator-client';
 
 export const REFERENCES_STORAGE_KEY = 'branchkit_references';

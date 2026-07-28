@@ -1,10 +1,20 @@
 /**
- * BranchKit Browser — service-worker message router.
+ * BranchKit Browser — the `chrome.runtime.onMessage` router, shared by both
+ * entry points.
  *
  * Replaces the 44-branch `if (message.type === …)` chain that used to be 38% of
- * background.ts. Handlers live with the module that owns their concern and are
- * composed here as data; background.ts installs the table and knows nothing
- * about who registered what. See notes/DESIGN_ENTRY_POINT_TOPOLOGY.md.
+ * background.ts, and the 11-branch one in content.ts. Handlers live with the
+ * module that owns their concern and are composed here as data; the entry point
+ * installs the table and knows nothing about who registered what. See
+ * notes/DESIGN_ENTRY_POINT_TOPOLOGY.md.
+ *
+ * ## One module, two instances
+ *
+ * `content.ts` and `background.ts` are separate esbuild bundles, so each gets
+ * its own copy of the table below — a content script cannot see the SW's
+ * handlers, and vice versa. That is why this can be ONE module rather than a
+ * factory, or (worse) two files kept in sync: the isolation the two contexts
+ * need is already a property of the bundling.
  *
  * ## The response contract is carried by the RETURN VALUE, not a boolean
  *
@@ -66,7 +76,7 @@ export function registerMessageHandlers(map: Record<string, MessageHandler>): vo
   for (const [type, handler] of Object.entries(map)) {
     const existing = handlers.get(type);
     if (existing && existing !== handler) {
-      throw new Error(`[BranchKit SW] duplicate message handler for '${type}'`);
+      throw new Error(`[BranchKit] duplicate message handler for '${type}'`);
     }
     handlers.set(type, handler);
   }
@@ -106,7 +116,7 @@ export function routeMessage(
     result = handler(message, sender);
   } catch (err) {
     // A synchronous throw means no response is coming. Close the channel.
-    console.warn(`[BranchKit SW] handler '${type}' threw:`, err);
+    console.warn(`[BranchKit] handler '${type}' threw:`, err);
     return false;
   }
 
@@ -116,7 +126,7 @@ export function routeMessage(
     result.then(
       (value) => sendResponse(value),
       (err) => {
-        console.warn(`[BranchKit SW] handler '${type}' rejected:`, err);
+        console.warn(`[BranchKit] handler '${type}' rejected:`, err);
         sendResponse(undefined);
       },
     );

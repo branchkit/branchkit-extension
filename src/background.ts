@@ -44,7 +44,7 @@ import {
   resolveMediaTargetTab, sendMediaActionToTab, handleMediaAllAction, setBrowserWindowFocused, initMedia,
 } from './background/media';
 import { purgeTab, logTabSwitch, scheduleSpaRescan, cancelSpaRescan, startDeadTabSweep } from './background/tab-sessions';
-import { registerMessageHandlers, routeMessage } from './background/message-router';
+import { registerMessageHandlers, routeMessage } from './core/message-router';
 import { commandOverrideMessageHandlers } from './background/command-overrides';
 import { voiceStatusMessageHandlers } from './background/voice-status';
 import { labelMessageHandlers } from './background/label-messages';

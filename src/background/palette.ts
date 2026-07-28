@@ -13,7 +13,7 @@
  * background.ts (notes/DESIGN_RESTRUCTURE_ROUND3.md).
  */
 
-import type { MessageHandler } from './message-router';
+import type { MessageHandler } from '../core/message-router';
 import { PaletteVoiceEntry, PaletteVoiceRow } from '../types';
 import type { PaletteDispatch, PaletteBookmark } from '../palette/model';
 import { ensureConnected, postToPlugin } from '../plugin/actuator-client';
