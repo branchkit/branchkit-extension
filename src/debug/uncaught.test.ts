@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { installUncaughtCapture, _resetUncaughtForTests } from './uncaught';
+import { installUncaughtCapture, reportCaught, _resetUncaughtForTests } from './uncaught';
 
 const EXT_BASE = 'chrome-extension://abcdefgh/';
 
@@ -107,6 +107,64 @@ describe('installUncaughtCapture (cs)', () => {
     });
     install('cs');
     fireRejection(new Error('boom'));
+    expect(emit).not.toHaveBeenCalled();
+  });
+});
+
+// --- reportCaught: the channel the message router lost ---------------------
+//
+// Routing content.ts's onMessage chain through a table put a try/catch around
+// handlers that previously had none, so a throw stopped surfacing as an
+// uncaught error and became a console.warn — invisible to `dev plog`, since
+// console.* is kept out of browser.log by design.
+describe('reportCaught', () => {
+  it('emits a BK_UNCAUGHT line through the installed emitter', () => {
+    install('cs');
+    reportCaught("message handler 'BRANCHKIT_ACTION'", new Error('boom'), { phase: 'sync' });
+
+    expect(emit).toHaveBeenCalledTimes(1);
+    const [tag, data, level] = emit.mock.calls[0];
+    expect(tag).toBe('BK_UNCAUGHT');
+    expect(level).toBe('error');
+    expect(data).toMatchObject({
+      source: 'cs',
+      kind: 'caught',
+      where: "message handler 'BRANCHKIT_ACTION'",
+      message: 'boom',
+      phase: 'sync',
+    });
+    expect((data as { stack: string[] }).stack.length).toBeGreaterThan(0);
+  });
+
+  it('stamps the source it was installed with, so an SW throw is greppable apart', () => {
+    install('sw');
+    reportCaught('message handler X', new Error('boom'));
+    expect(emit.mock.calls[0][1]).toMatchObject({ source: 'sw' });
+  });
+
+  it('is a no-op before install — nothing to send to yet', () => {
+    reportCaught('too early', new Error('boom'));
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('handles a non-Error throw without inventing a stack', () => {
+    install('cs');
+    reportCaught('handler', 'a bare string');
+    expect(emit.mock.calls[0][1]).toMatchObject({ message: 'a bare string', stack: [] });
+  });
+
+  it('shares the per-boot cap with the listeners rather than opening a second path', () => {
+    install('cs');
+    // 19 caught reports, then the 20th is the capped marker.
+    for (let i = 0; i < 25; i++) reportCaught('handler', new Error(`e${i}`));
+    expect(emit).toHaveBeenCalledTimes(20);
+    expect(emit.mock.calls[19][1]).toMatchObject({ capped: true });
+
+    // And a real uncaught error after the cap is silent too — one budget, not two.
+    emit.mockClear();
+    window.dispatchEvent(new ErrorEvent('error', {
+      message: 'later', filename: `${EXT_BASE}content.js`,
+    }));
     expect(emit).not.toHaveBeenCalled();
   });
 });

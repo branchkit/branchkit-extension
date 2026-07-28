@@ -18,6 +18,7 @@ import {
   setMessageGuard,
   type MessageSender,
 } from './message-router';
+import { installUncaughtCapture, _resetUncaughtForTests } from '../debug/uncaught';
 
 const sender = { tab: { id: 7 }, frameId: 0 } as unknown as MessageSender;
 
@@ -203,5 +204,76 @@ describe('registration', () => {
     registerMessageHandlers({ B: () => 1, A: () => 1 });
     registerMessageHandlers({ C: () => 1 });
     expect(registeredMessageTypes()).toEqual(['A', 'B', 'C']);
+  });
+});
+
+// --- The BK_UNCAUGHT channel the catch would otherwise close ---------------
+//
+// Before content.ts's chain became this table, a synchronous throw in a handler
+// escaped the listener and installUncaughtCapture turned it into a BK_UNCAUGHT
+// line in browser.log carrying the dispatch's tr_. The catch below is right —
+// it closes the channel instead of hanging the sender — but console.* is kept
+// out of browser.log by design, so without this the extension's largest
+// handler could fail with no telemetry at all.
+describe('errors still reach browser.log', () => {
+  it('reports a synchronous throw as BK_UNCAUGHT, naming the message type', () => {
+    const emit = vi.fn();
+    _resetUncaughtForTests();
+    vi.stubGlobal('chrome', { runtime: { getURL: () => 'chrome-extension://abc/' } });
+    const uninstall = installUncaughtCapture(emit, 'cs');
+    try {
+      registerMessageHandlers({ BRANCHKIT_ACTION: () => { throw new Error('boom'); } });
+      routeMessage({ type: 'BRANCHKIT_ACTION' }, sender, vi.fn());
+
+      expect(emit).toHaveBeenCalledTimes(1);
+      const [tag, data] = emit.mock.calls[0];
+      expect(tag).toBe('BK_UNCAUGHT');
+      expect(data).toMatchObject({
+        kind: 'caught',
+        where: "message handler 'BRANCHKIT_ACTION'",
+        message: 'boom',
+        phase: 'sync',
+      });
+    } finally {
+      uninstall();
+      vi.unstubAllGlobals();
+      _resetUncaughtForTests();
+    }
+  });
+
+  it('reports a rejected promise too, tagged async', async () => {
+    const emit = vi.fn();
+    _resetUncaughtForTests();
+    vi.stubGlobal('chrome', { runtime: { getURL: () => 'chrome-extension://abc/' } });
+    const uninstall = installUncaughtCapture(emit, 'cs');
+    try {
+      registerMessageHandlers({ SLOW: () => Promise.reject(new Error('transport')) });
+      const respond = vi.fn();
+      expect(routeMessage({ type: 'SLOW' }, sender, respond)).toBe(true);
+      await vi.waitFor(() => expect(respond).toHaveBeenCalledWith(undefined));
+
+      expect(emit).toHaveBeenCalledTimes(1);
+      expect(emit.mock.calls[0][1]).toMatchObject({ phase: 'async', message: 'transport' });
+    } finally {
+      uninstall();
+      vi.unstubAllGlobals();
+      _resetUncaughtForTests();
+    }
+  });
+
+  it('a handler that returns normally reports nothing', () => {
+    const emit = vi.fn();
+    _resetUncaughtForTests();
+    vi.stubGlobal('chrome', { runtime: { getURL: () => 'chrome-extension://abc/' } });
+    const uninstall = installUncaughtCapture(emit, 'cs');
+    try {
+      registerMessageHandlers({ FINE: () => ({ ok: true }) });
+      routeMessage({ type: 'FINE' }, sender, vi.fn());
+      expect(emit).not.toHaveBeenCalled();
+    } finally {
+      uninstall();
+      vi.unstubAllGlobals();
+      _resetUncaughtForTests();
+    }
   });
 });

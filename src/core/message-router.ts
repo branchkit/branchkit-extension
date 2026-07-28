@@ -47,6 +47,8 @@
  * loudly — a hung content script is far harder to diagnose than a logged throw.
  */
 
+import { reportCaught } from '../debug/uncaught';
+
 export type MessageSender = chrome.runtime.MessageSender;
 
 /**
@@ -138,6 +140,13 @@ export function routeMessage(
     result = handler(message, sender);
   } catch (err) {
     // A synchronous throw means no response is coming. Close the channel.
+    // Also to browser.log: before content.ts's chain became this table, a
+    // synchronous throw here escaped the listener and installUncaughtCapture
+    // turned it into a BK_UNCAUGHT line carrying the dispatch's tr_. Catching
+    // it is right — the channel closes instead of hanging the sender — but a
+    // console.warn is invisible to `dev plog`, and the biggest handler in the
+    // extension routes through here.
+    reportCaught(`message handler '${type}'`, err, { phase: 'sync' });
     console.warn(`[BranchKit] handler '${type}' threw:`, err);
     return false;
   }
@@ -148,6 +157,7 @@ export function routeMessage(
     result.then(
       (value) => sendResponse(value),
       (err) => {
+        reportCaught(`message handler '${type}'`, err, { phase: 'async' });
         console.warn(`[BranchKit] handler '${type}' rejected:`, err);
         sendResponse(undefined);
       },
