@@ -19,6 +19,10 @@ const SCENARIOS = [
   'search-badge-hint-mode', 'armed-cue-tinted', 'pick-prefix-escape',
   'refused-key-feedback', 'pick-keeps-keymap', 'search-survives-rerender',
   'find-reaps-dead-matches',
+  // Last: it is the only scenario that ACTIVATES, so it leaves the page at a
+  // fragment and moves focus. It resets both, but running it after the
+  // observation-only scenarios keeps that promise from being load-bearing.
+  'hint-type-activates',
 ];
 
 const browser = process.argv.includes('--browser=firefox') ? 'firefox' : 'chromium';

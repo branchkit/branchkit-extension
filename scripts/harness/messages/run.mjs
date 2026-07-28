@@ -32,6 +32,11 @@
  *   - a page-world effect for the arms that report nothing (badge visibility,
  *     activeElement, a pointerover the page can see, an iframe appearing).
  *
+ * THIRD HALF (section 6m): the last two entry-point residues, probed before
+ * they move. `toggle_help` is a content registration that closes over the live
+ * keymap; `SSE_EVENT` / `ALPHABET` are the service worker's own, and they need
+ * a sender that is neither this SW nor a page main world — see there.
+ *
  * `pipelines.ingest_transcript` is deliberately NOT used: CLAUDE.md is explicit
  * that it really executes actions on the user's own machine.
  */
@@ -44,7 +49,7 @@ const results = [];
 const check = (name, ok, detail) => { results.push({ name, ok, detail }); };
 
 /** How many probes a complete run reports. A run that stops short says so. */
-const EXPECTED = 33;
+const EXPECTED = 37;
 
 try {
   // The profile is persistent and reused between runs, so every piece of state
@@ -700,6 +705,103 @@ try {
   check('BRANCHKIT_ACTION scopes the tr_',
     rotate?.data?.correlationId === 'tr_probe',
     `correlationId=${JSON.stringify(rotate?.data?.correlationId)}`);
+
+  // --- The two entry-point residues section 6i left, probed before they move -
+
+  // `toggle_help` is the last dispatcher registration in content.ts, and it is
+  // there because it closes over `currentKeymap` — the module-level `let` the
+  // keymap-changed callback writes. Relocating that state is the risk, and the
+  // failure it can produce is NOT "the overlay does not open": pass an empty
+  // keymap and the overlay still opens, still renders its groups, and simply
+  // shows no binds. So the assertion is the KEYS.
+  //
+  // Voice is not connected under the harness, so buildHelpModel drops every
+  // spoken phrase and a row survives only if the live keymap gave it a bind.
+  // That makes `?` (shift+Slash → toggle_help) and `F` (KeyF → hint_mode)
+  // exactly the discriminator: a stale or empty keymap renders neither.
+  // `kbd.hint` is excluded because those come from the catalog's `keyHint`,
+  // not from the keymap, and would survive the mutation this probe exists for.
+  await drain();
+  await act('toggle_help');
+  await settle(1600);
+  const helpKeys = await page.evaluate(() => {
+    const host = document.querySelector('[data-branchkit-help]');
+    if (!host?.shadowRoot) return null;
+    return [...host.shadowRoot.querySelectorAll('kbd:not(.hint)')].map((k) => k.textContent.trim());
+  });
+  check('toggle_help opens over the LIVE keymap',
+    Array.isArray(helpKeys) && helpKeys.includes('?') && helpKeys.includes('F'),
+    helpKeys === null ? 'no [data-branchkit-help] host — the overlay never opened'
+      : `${helpKeys.length} bound keys, ? =${helpKeys.includes('?')} F=${helpKeys.includes('F')}`);
+
+  // Toggling closed is the other half of the same registration, and it has to
+  // happen anyway: the overlay carries data-branchkit-hint (so the page's own
+  // observer skips it) and installs a capture-phase Escape, both of which
+  // would follow this probe into every one below it.
+  await act('toggle_help');
+  await settle(900);
+  const helpClosed = await page.evaluate(() => !document.querySelector('[data-branchkit-help]'));
+  check('toggle_help closes', helpClosed, `host gone=${helpClosed}`);
+
+  // `handleSSEEvent` and `storeAlphabet` are background.ts's own residue (§7),
+  // and the offscreen bridge registers SSE_EVENT / ALPHABET from the entry
+  // point only because it closes over them. Nothing has ever driven that pair:
+  // this harness sends chrome.tabs.sendMessage INTO a tab, which is the far
+  // side of the fan-out, and the SW's own onMessage edge was never crossed.
+  //
+  // The sender has to be a DIFFERENT extension context — chrome.runtime
+  // .sendMessage from the service worker does not reach the service worker's
+  // own listeners, and a page's main world has no chrome.runtime at all. The
+  // options page is one, costs a tab, and is closed immediately.
+  //
+  // Both probes are deliberately chosen to be independent of which tab is
+  // active, because opening that tab churns exactly that: `rescan` is in
+  // BROADCAST_ACTIONS so it goes to every tab, and the alphabet's observable is
+  // storage.
+  const optionsUrl = await sw.evaluate(() => chrome.runtime.getURL('options.html'));
+  const optionsPage = await ctx.newPage();
+  await optionsPage.goto(optionsUrl);
+  await settle(600);
+  const fromExtensionPage = (msg) => optionsPage.evaluate(
+    (m) => chrome.runtime.sendMessage(m).then(() => 'sent').catch((e) => `err:${String(e)}`), msg);
+
+  await drain();
+  await fromExtensionPage({
+    type: 'SSE_EVENT',
+    data: { action: 'rescan', params: { reason: 'probe_sse_bridge', from_cache: 'false' } },
+  });
+  await settle(1400);
+  const sseRescan = (await drain()).filter(
+    (m) => m.type === 'DEBUG_LOG' && m.tag === 'pipeline.cs_rescan_received'
+      && m.data?.reason === 'probe_sse_bridge');
+  check('SSE_EVENT fans out to the content script',
+    sseRescan.length === 1,
+    `${sseRescan.length} rescan(s) reached content: ${JSON.stringify(sseRescan)}`);
+
+  // storeAlphabet, both directions of its length guard. The reject half is
+  // what makes the accept half mean something: a handler that wrote whatever
+  // it was handed would pass the accept alone, and 26 is the contract the
+  // letter-to-codeword overlay depends on.
+  const A26 = ['able', 'brave', 'crisp', 'dusty', 'eager', 'flint', 'grove', 'hazel',
+    'ivory', 'jolly', 'kite', 'lunar', 'mango', 'noble', 'olive', 'pearl', 'quill',
+    'raven', 'stone', 'tulip', 'umber', 'vivid', 'wharf', 'xenon', 'yield', 'zesty'];
+  await sw.evaluate(() => chrome.storage.local.remove('alphabet'));
+  await fromExtensionPage({ type: 'ALPHABET', words: A26.slice(0, 25) });
+  await settle(700);
+  const afterShort = await sw.evaluate(async () =>
+    (await chrome.storage.local.get('alphabet')).alphabet ?? null);
+  await fromExtensionPage({ type: 'ALPHABET', words: A26 });
+  await settle(900);
+  const afterFull = await sw.evaluate(async () =>
+    (await chrome.storage.local.get('alphabet')).alphabet ?? null);
+  check('ALPHABET stores 26 words and refuses a short list',
+    afterShort === null && Array.isArray(afterFull) && afterFull.length === 26
+      && afterFull[0] === 'able' && afterFull[25] === 'zesty',
+    `after 25 words=${JSON.stringify(afterShort)} after 26=${JSON.stringify(afterFull?.slice(0, 2))}…`);
+
+  await optionsPage.close();
+  await page.bringToFront();
+  await settle(600);
 
   // --- The navigating arms go LAST: each one replaces the content script.
 
