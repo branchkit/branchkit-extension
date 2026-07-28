@@ -1014,14 +1014,6 @@ installSiteKeyPolicy();
 // repainted every link hint over the results just asked for.
 registerHintModeCommands();
 
-
-dispatcher.register('activate_hint', (params) => {
-  const codeword = params.word2 ? `${params.word} ${params.word2}` : params.word;
-  if (!codeword) return;
-  const w = store.byCodeword(codeword);
-  if (w) activateWrapper(w);
-});
-
 // --- Scroll action handlers ---
 
 // Scroll commands register from activate/scroll-commands.ts.

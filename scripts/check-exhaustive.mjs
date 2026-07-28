@@ -50,6 +50,13 @@
  *      registration, which 479c09f made survivable but not visible — nothing
  *      composes the real maps, so only a static check sees it
  *      (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md).
+ *   H. The third direction D and D2 do not run: given a CATALOG entry, can
+ *      anything dispatch it at all? `activate_hint` answered no from the
+ *      scaffold commit to 2026-07-28 and was registered in content.ts the whole
+ *      time. D asks only about voiced ids, D2 only about passthrough ids, and
+ *      the catalog's own hand-mirrored REGISTERED_ACTIONS list only asks
+ *      whether the catalog and the registrations agree — which they did, both
+ *      being dead.
  *
  * Run: node scripts/check-exhaustive.mjs   (wired as a CI step)
  */
@@ -314,17 +321,36 @@ function srcFiles() {
   const catalog = read('src/keymap/command-catalog.ts');
   const voiced = [];
   const entryRe = /\{\s*id:\s*'([a-z_0-9]+)'/g;
-  let m, prev = null;
   const catalogEntries = [];
-  while ((m = entryRe.exec(catalog)) !== null) {
-    if (prev) catalogEntries.push({ id: prev.id, text: catalog.slice(prev.index, m.index) });
-    prev = { id: m[1], index: m.index };
+  // Each entry is its OWN object literal, brace-matched — not the slice up to
+  // the next entry. The catalog is heavily commented BETWEEN entries, and that
+  // slice attached every trailing comment to the entry above it, so a note
+  // mentioning `mappable: true` or `voice:` vouched for the entry before it.
+  // Harmless for the voiced read (a false positive there DEMANDS a route, so it
+  // fails loudly) and unsafe for lint H, which reads the same markers as
+  // permission. Found by mutating H's fix: a comment reading "a note that
+  // happens to mention mappable: true" let an unreachable entry pass.
+  //
+  // Balanced braces inside strings (`'blank {hint}'`) cancel out, so depth
+  // counting is exact here; an unbalanced one would fail the parse below rather
+  // than mis-slice quietly.
+  for (let m; (m = entryRe.exec(catalog)) !== null;) {
+    let depth = 0, end = -1;
+    for (let i = m.index; i < catalog.length; i++) {
+      if (catalog[i] === '{') depth++;
+      else if (catalog[i] === '}' && --depth === 0) { end = i + 1; break; }
+    }
+    if (end === -1) {
+      fail(`lint D could not brace-match catalog entry '${m[1]}' — fix the lint, not the code`);
+      continue;
+    }
+    catalogEntries.push({ id: m[1], text: catalog.slice(m.index, end) });
   }
-  if (prev) catalogEntries.push({ id: prev.id, text: catalog.slice(prev.index) });
   for (const e of catalogEntries) {
     if (/voice:/.test(e.text)) voiced.push(e.id);
   }
   if (voiced.length === 0) fail('lint D parsed zero voiced catalog entries — fix the lint, not the code');
+  if (catalogEntries.length === 0) fail('lint D parsed zero catalog entries — fix the lint, not the code');
 
   const missing = voiced.filter((id) => !handled.has(id));
   for (const id of missing) {
@@ -497,6 +523,54 @@ function srcFiles() {
     if (!failed) {
       ok(`command bindings: ${registered.size} actions bound uniquely, ` +
         `all ${passthrough.length} passthrough ids have a handler`);
+    }
+  }
+
+  // --- H. Every catalog entry is reachable by SOMETHING --------------------
+  //
+  // D and D2 both run demand → supply: given something that can be dispatched,
+  // is it handled. This is the third direction and nothing asked it: given a
+  // catalog entry, can anything dispatch it AT ALL?
+  //
+  // `activate_hint` lived in that gap from the scaffold commit (2026-03-12) to
+  // 2026-07-28 — registered in content.ts, and unreachable the whole time. It
+  // is `mappable: false`, so keymap-storage strips it from every stored keymap
+  // and palette/model.ts drops it from the command rows; it carries no `voice:`,
+  // so the plugin never contributes it and it can never arrive as a
+  // BRANCHKIT_ACTION; and it is not in DISPATCH_PASSTHROUGH_ACTIONS. Every
+  // dispatcher.dispatch call site was enumerated and none can carry it. D could
+  // not see it (it only asks about VOICED ids), D2 could not (only passthrough
+  // ids), and command-catalog.test.ts's hand-mirrored REGISTERED_ACTIONS list
+  // could not either — it checks that the catalog and the registrations agree,
+  // which they did. Both of them were dead together.
+  //
+  // The three escapes below are the three real dispatch paths, and each is read
+  // from the code:
+  //   mappable  → a key can be bound to it, so registry.match dispatches it
+  //   voice:    → the plugin contributes the phrase and sends the id back
+  //   passthrough → a parameterised/contributed form the plugin sends, whose
+  //                 ids the catalog does not carry as patterns
+  //
+  // A `keyHint`-only entry (documented, reached by a mode's own keys rather
+  // than by the registry) would be a legitimate fourth escape. None exists
+  // today, so it is not written in: adding one should be a deliberate edit here
+  // with its reason, not a hole standing open for it.
+  {
+    const passthroughSet = new Set(passthroughIds);
+    const unreachable = catalogEntries.filter((e) =>
+      !/voice:/.test(e.text)
+      && !/mappable:\s*true/.test(e.text)
+      && !passthroughSet.has(e.id));
+    for (const e of unreachable) {
+      fail(`catalog command '${e.id}' is not mappable, carries no voice pattern, and is not in ` +
+        'DISPATCH_PASSTHROUGH_ACTIONS — nothing in the extension can dispatch it. It renders ' +
+        'nowhere (buildHelpModel and the palette both skip it), so a handler registered for it ' +
+        'is dead code that reads as live. Give it a bind, a phrase, a passthrough entry, or ' +
+        'delete the entry');
+    }
+    if (unreachable.length === 0) {
+      ok(`catalog reachability: all ${catalogEntries.length} entries dispatchable ` +
+        '(mappable, voiced, or passthrough)');
     }
   }
 }
