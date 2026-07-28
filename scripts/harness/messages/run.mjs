@@ -83,15 +83,57 @@ try {
   const y1 = await page.evaluate(() => window.scrollY);
   check('BRANCHKIT_ACTION (scroll_down)', y1 > y0, `scrollY ${y0} -> ${y1}`);
 
-  // 7. An unknown type must be ignored, not throw the listener.
+  // 7. PALETTE_CLOSE — the ONE handler whose response carries an ordering
+  // guarantee: background/palette.ts awaits it before dispatching, and its
+  // catch is silent, so a handler that stopped answering would look exactly
+  // like a dead tab while the action ran against a still-mounted overlay.
+  // Answering `true` is the contract; the close itself is idempotent.
+  const closed = await send({ type: 'PALETTE_CLOSE' }, { frameId: 0 });
+  check('PALETTE_CLOSE answers', closed === true, JSON.stringify(closed));
+
+  // 8. PALETTE_COMMAND — fire-and-forget INTO the dispatcher, so it exercises
+  // the command table from the message side. scroll_top is benign and visible.
+  await page.evaluate(() => window.scrollTo(0, 400));
+  await settle(200);
+  const yBefore = await page.evaluate(() => window.scrollY);
+  await send({ type: 'PALETTE_COMMAND', action: 'scroll_top', params: {} }, { frameId: 0 });
+  await settle(1200);
+  const yTop = await page.evaluate(() => window.scrollY);
+  // Near the top rather than exactly 0: scroll_top animates, so the settled
+  // value lands within a pixel or two. What is being probed is that the
+  // message reached the dispatcher at all, not the easing curve.
+  check('PALETTE_COMMAND reaches the dispatcher', yBefore > 300 && yTop < 50,
+    `scrollY ${yBefore} -> ${yTop}`);
+
+  // 9. TAB_MARKER_REAPPLY — restores the marker after the page overwrites the
+  // title, which is the whole reason the message exists.
+  await send({ type: 'TAB_MARKER', letters: 'zq' }, { frameId: 0 });
+  await settle(300);
+  await page.evaluate(() => { document.title = 'Rewritten By The Page'; });
+  await settle(200);
+  await send({ type: 'TAB_MARKER_REAPPLY' }, { frameId: 0 });
+  await settle(500);
+  const reapplied = await page.title();
+  check('TAB_MARKER_REAPPLY', reapplied === '[zq] Rewritten By The Page', JSON.stringify(reapplied));
+
+  // 10. MARK_RESTORE — a global-mark jump landing on this tab. Top frame only,
+  // and the one handler that writes scroll position.
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await settle(200);
+  await send({ type: 'MARK_RESTORE', scrollX: 0, scrollY: 250, hash: '' }, { frameId: 0 });
+  await settle(600);
+  const restored = await page.evaluate(() => window.scrollY);
+  check('MARK_RESTORE', restored > 0, `scrollY -> ${restored}`);
+
+  // 11. An unknown type must be ignored, not throw the listener.
   await send({ type: 'NOT_A_REAL_TYPE' }, { frameId: 0 });
   const still = await send({ type: 'GET_PAGE_STATUS' }, { frameId: 0 });
   check('unknown type does not break the table',
     still && typeof still.hintCount === 'number', JSON.stringify(still));
 } finally {
   for (const r of results) console.log(`${r.ok ? 'PASS' : 'FAIL'}  ${r.name}  ${r.detail}`);
-  if (results.length < 7) console.log(`\nONLY ${results.length}/7 PROBES RAN — the run aborted, this is NOT a pass`);
-  else console.log(results.every((r) => r.ok) ? '\nALL 7 PROBES PASS' : `\n${results.filter(r => !r.ok).length} PROBE FAILURE(S)`);
+  if (results.length < 11) console.log(`\nONLY ${results.length}/11 PROBES RAN — the run aborted, this is NOT a pass`);
+  else console.log(results.every((r) => r.ok) ? '\nALL 11 PROBES PASS' : `\n${results.filter(r => !r.ok).length} PROBE FAILURE(S)`);
   await ctx.close();
   fixture.server.close();
 }
