@@ -34,6 +34,7 @@ const keyHandler = {
 const caretInstance = {
   enterFromFind: vi.fn(() => false), enterFromNormal: vi.fn(), enter: vi.fn(),
   extendToPhrase: vi.fn(), extendToRange: vi.fn(), handleKey: vi.fn(), isActive: vi.fn(() => false),
+  extendToCurrentMatch: vi.fn(),
 };
 const findPageLink = vi.fn();
 const flashToast = vi.fn();
@@ -41,6 +42,15 @@ const copyText = vi.fn(async () => true);
 const findAllRanges = vi.fn((): Range[] => []);
 const openPhraseBox = vi.fn();
 const clearFindPaint = vi.fn();
+// find's commit multicast. CAPTURED rather than stubbed away: this module
+// registers the caret's extend-to-match at its own module scope now (it was a
+// content.ts composition until 2026-07-27), and holding what it registered is
+// the only way a test can tell a real registration from none.
+let committedListener: (() => void) | null = null;
+const onFindCommitted = vi.fn((fn: () => void) => {
+  committedListener = fn;
+  return () => { committedListener = null; };
+});
 const startRangePick = vi.fn();
 const cancelRangePick = vi.fn();
 
@@ -61,7 +71,7 @@ async function loadModule(): Promise<SelectionCommands> {
   vi.doMock('../pagination', () => ({ findPageLink }));
   vi.doMock('../url-nav', () => ({ urlUp: vi.fn(() => null), urlRoot: vi.fn(() => null) }));
   vi.doMock('../clipboard', () => ({ copyText }));
-  vi.doMock('../scan/find', () => ({ findAllRanges, openPhraseBox, clearFindPaint }));
+  vi.doMock('../scan/find', () => ({ findAllRanges, openPhraseBox, clearFindPaint, onFindCommitted }));
   vi.doMock('./range-disambiguation', () => ({ startRangePick, cancelRangePick }));
   return await import('./selection-commands');
 }
@@ -70,6 +80,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   registered.clear();
   caretOpts = null;
+  committedListener = null;
   vi.stubGlobal('chrome', { runtime: { sendMessage: vi.fn().mockResolvedValue(undefined) } });
 });
 
@@ -119,6 +130,28 @@ describe('registration contract (Phase 1)', () => {
     await loadModule();
     expect(dispatcher.register).not.toHaveBeenCalled();
     expect(keyHandler.setMarkCallback).not.toHaveBeenCalled();
+  });
+
+  // ...but it DOES subscribe to find's commit, and that is deliberate: the
+  // caret's extend-to-match is not a command, it is a reaction to one. It moved
+  // here from a content.ts composition (2026-07-27) because this module owns
+  // the caret instance, and it lands at module scope like the mode probe beside
+  // it. Nothing else observes the registration, so without this the whole
+  // find-and-select behaviour stays untested — as it was the entire time it
+  // lived in content.ts, which has no test file.
+  it('subscribes to find commits at import, and extends only when caret is live', async () => {
+    await loadModule();
+    expect(committedListener).toBeTypeOf('function');
+
+    caretInstance.isActive.mockReturnValue(false);
+    committedListener!();
+    expect(caretInstance.extendToCurrentMatch).not.toHaveBeenCalled();
+
+    // The guard is the point: "/ query Enter" is a find-and-select ONLY inside
+    // a caret/visual session; outside one it must stay an ordinary find.
+    caretInstance.isActive.mockReturnValue(true);
+    committedListener!();
+    expect(caretInstance.extendToCurrentMatch).toHaveBeenCalledTimes(1);
   });
 
   it('registerSelectionCommands installs the handlers once', async () => {

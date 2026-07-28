@@ -96,8 +96,8 @@ let currentIndex = -1;
 // is now a leaf of its own (render/find-highlight.ts). See that file.
 let onDeactivate: ((handoff: boolean) => void) | null = null;
 // Fired when a search commits WITH matches (Enter or voice find). Caret mode
-// uses it to auto-extend the selection to the match. See caret.ts.
-let onCommit: (() => void) | null = null;
+// uses it to auto-extend the selection to the match; the search badges arm.
+const committedListeners = new Set<() => void>();
 // (The onPhrase callback died with FindMode: a phrase-targeting box's commit
 // handler arrives WITH the open — openPhraseBox(target) — so the caller that
 // asks for a phrase is the one that receives it, with no mode enum relayed
@@ -117,24 +117,36 @@ export function onFindDeactivated(fn: ((handoff: boolean) => void) | null): void
 }
 
 /**
- * A search committed WITH matches (Enter or voice find).
+ * A search committed WITH matches (Enter or voice find). Returns an
+ * unsubscribe.
  *
- * ONE slot, not a multicast, and that is the whole design note. There are two
- * effects today and they are ORDERED: caret's extend-to-match calls
- * scrollFocusIntoView, and arming the search badges ranks ranges by live
- * viewport geometry and publishes in_strict_viewport from it — so arming
- * before the scroll badges against the viewport the user is leaving. (It
- * converges at the next scroll settle, which is why this reads as a soft
- * dependency and would survive review as one.) A multicast would hand that
- * order to module import order, where nothing states it and nothing checks it.
+ * MULTICAST, and listener order is deliberately not significant — which is a
+ * correction, not an assumption. This was a single slot on the argument that
+ * its two effects were ordered: caret's extend calls scrollFocusIntoView, and
+ * arming the search badges reads live viewport geometry, so arming first would
+ * measure against the viewport being left. Reviewed 2026-07-27 and the premise
+ * was wrong — `scrollToCurrent()` fires a SMOOTH scroll on the line above the
+ * commit notification, so the viewport has not moved for EITHER listener, and
+ * the ordering bought nothing while hiding the real defect (a match outside the
+ * band armed nothing, permanently).
  *
- * So the composition stays a single ordered handler, and it stays in
- * content.ts: both consumers import this module, neither imports the other,
- * and neither owns "what a commit means" for the other. A second registrant
- * here is an ordering question — answer it before adding one.
+ * That defect is fixed at the settle instead, and the fix is what makes the
+ * order irrelevant: an arm that finds nothing in band retries on the scroll
+ * settle, and one that partially succeeds re-plans through its holder's
+ * reconcile. Both listeners converge on the post-scroll viewport however they
+ * are sequenced. Add a third freely; if one ever needs to observe another's
+ * effect, that is a dependency to make explicit, not an order to rely on.
  */
-export function onFindCommitted(fn: (() => void) | null): void {
-  onCommit = fn;
+export function onFindCommitted(fn: () => void): () => void {
+  committedListeners.add(fn);
+  return () => { committedListeners.delete(fn); };
+}
+
+/** Notify every commit listener. Not error-isolated: these are independent
+ *  effects, and a throw in one is a real bug that should not be swallowed on
+ *  its neighbour's behalf. */
+function fireCommitted(): void {
+  for (const fn of [...committedListeners]) fn();
 }
 
 export function getFindState(): FindState {
@@ -859,7 +871,7 @@ function commitFind(): void {
   removeFindBar();
   showCommittedPill();
   scrollToCurrent();
-  if (matchRanges.length > 0) onCommit?.();
+  if (matchRanges.length > 0) fireCommitted();
 }
 
 // --- Public API ---
@@ -1137,5 +1149,5 @@ export function findImmediate(query: string): void {
   // hang off; a phrase box filled by voice is still collecting an argument, and
   // in that mode a codeword means "select this one" — the range pick's job, not
   // a search badge's. commitFind draws the same line for the typed path.
-  if (phraseTarget === null && matchRanges.length > 0) onCommit?.();
+  if (phraseTarget === null && matchRanges.length > 0) fireCommitted();
 }

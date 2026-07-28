@@ -16,6 +16,7 @@ const wentTo: string[] = [];
 // above every top-level binding, and this one is written at import time.
 vi.mock('../scan/find', () => {
   let deactivated: ((handoff: boolean) => void) | null = null;
+  let committed: (() => void) | null = null;
   return {
     getMatchRanges: () => matchRanges.slice(),
     isFindActive: () => active,
@@ -26,6 +27,11 @@ vi.mock('../scan/find', () => {
     },
     onFindDeactivated: (fn: ((handoff: boolean) => void) | null) => { deactivated = fn; },
     _fireFindDeactivated: (handoff: boolean) => deactivated?.(handoff),
+    // The commit multicast. Captured for the same reason as the deactivate:
+    // this module subscribes at its own module scope now, and holding what it
+    // registered is the only way to tell a real subscription from none.
+    onFindCommitted: (fn: () => void) => { committed = fn; return () => { committed = null; }; },
+    _fireFindCommitted: () => committed?.(),
   };
 });
 
@@ -74,6 +80,10 @@ import * as find from '../scan/find';
 /** Fire the deactivate this module registered with find (see the fake above). */
 const fireFindDeactivated = (handoff: boolean): void =>
   (find as unknown as { _fireFindDeactivated(h: boolean): void })._fireFindDeactivated(handoff);
+
+/** Fire the commit this module subscribed to (see the fake above). */
+const fireFindCommitted = (): void =>
+  (find as unknown as { _fireFindCommitted(): void })._fireFindCommitted();
 import { SEARCH_VARIANT } from '../render/badge-variant';
 import {
   __resetHolderRegistry, resolveCodeword, narrowByPrefix,
@@ -152,6 +162,20 @@ describe('search badges', () => {
     Range.prototype.getBoundingClientRect = () =>
       ({ top: 10, bottom: 30, left: 10, right: 60, width: 50, height: 20 }) as DOMRect;
     retrySearchBadgeArm();
+    expect(isSearchBadgePending()).toBe(true);
+    expect(badgeInstances).toHaveLength(2);
+  });
+
+  // Arming is a REACTION to a commit, not a command, and this module subscribes
+  // to it at import — it was a content.ts composition until 2026-07-27, ordered
+  // against the caret's extend on an argument that did not survive review.
+  // Nothing else observes the subscription, so without this the arm-on-commit
+  // behaviour is untested, exactly as it was while it lived in content.ts.
+  it('subscribes to find commits at import, and arms from that signal alone', () => {
+    matchRanges = [makeRange('one'), makeRange('two')];
+    expect(isSearchBadgePending()).toBe(false);
+
+    fireFindCommitted(); // no direct armSearchBadges() call anywhere here
     expect(isSearchBadgePending()).toBe(true);
     expect(badgeInstances).toHaveLength(2);
   });

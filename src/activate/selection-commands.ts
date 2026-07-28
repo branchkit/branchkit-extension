@@ -15,7 +15,7 @@
 import { dispatcher, keyHandler } from '../core/singletons';
 import { setInnerTransientProbe } from '../core/mode-stack';
 import { CaretController, type SelectionCommand } from './caret';
-import { findAllRanges, openPhraseBox, clearFindPaint } from '../scan/find';
+import { findAllRanges, openPhraseBox, clearFindPaint, onFindCommitted } from '../scan/find';
 import { startRangePick, cancelRangePick } from './range-disambiguation';
 import {
   PREV_POSITION_REGISTERS, isPrevPositionRegister, marksToHash, type StoredMark,
@@ -69,6 +69,17 @@ export const caret = new CaretController({
 // its one implementation in CaretController.peelInner; escape() and the
 // stack's peelTop both route through it.
 setInnerTransientProbe('caret', () => caret.peelInner());
+
+// A search commit while a caret/visual selection is live extends that selection
+// straight to the match, so "/ query Enter" is a find-and-select rather than a
+// find you then have to press `n` through (n skips to the NEXT match).
+//
+// Registered HERE, next to the caret instance this module owns, rather than
+// composed in content.ts: find's commit signal is a multicast whose listener
+// order does not matter (see onFindCommitted), so nothing has to sequence this
+// against the search badges arming on the same signal. The isActive() guard is
+// the caret's own question and travels with it.
+onFindCommitted(() => { if (caret.isActive()) caret.extendToCurrentMatch(); });
 
 // (The window-focus caret re-assert timer is retired: the plugin still drains
 // the exclusive caret tag on OS focus loss, and the SW now replays the

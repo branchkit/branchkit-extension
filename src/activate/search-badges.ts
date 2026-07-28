@@ -38,6 +38,7 @@ import { RangeBadgeSet } from '../render/range-badge-set';
 import { SEARCH_VARIANT } from '../render/badge-variant';
 import {
   getMatchRanges, findGoToRange, isFindActive, refindCommitted, onFindDeactivated,
+  onFindCommitted,
 } from '../scan/find';
 import { bkLog } from '../debug/bk-log';
 import { labelReservoir } from '../labels/label-reservoir';
@@ -243,3 +244,9 @@ function resolveSearchCodeword(codeword: string): HolderOutcome {
 // self-registrations are: a pure slot assignment, no I/O, no listener, no
 // ordering (find's other signal, onFindCommitted, IS ordered — see its doc).
 onFindDeactivated(() => clearSearchBadges('find_deactivated'));
+
+// Commit is when the results become a SET you move around in — n/N goes live —
+// so it is when each match earns a codeword. Arming per keystroke instead would
+// churn codewords on every character typed, which is why this rides the commit
+// and not the query.
+onFindCommitted(() => armSearchBadges());

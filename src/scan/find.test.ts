@@ -163,6 +163,16 @@ import {
   findGoToRange,
 } from './find';
 
+/**
+ * onFindCommitted is a MULTICAST now, so a test's listener would otherwise
+ * outlive it and fire inside the next one. Hold the unsubscribes and drop them
+ * in afterEach — the same thing production gets by registering once, at module
+ * scope, from the module that owns the effect.
+ */
+const commitSubs: Array<() => void> = [];
+const onCommitted = (fn: () => void): void => { commitSubs.push(onFindCommitted(fn)); };
+const clearCommitted = (): void => { for (const off of commitSubs.splice(0)) off(); };
+
 const pill = () =>
   [...document.querySelectorAll('[data-branchkit-find]')].find(
     (el) => !el.querySelector('input'),
@@ -451,7 +461,7 @@ describe('find bar: phrase-targeting modes', () => {
     onPhrase: (q) => phrases.push(['extend', q]),
   });
   afterEach(() => {
-    closeFindMode(); onFindDeactivated(null); onFindCommitted(null);
+    closeFindMode(); onFindDeactivated(null); clearCommitted();
     restoreEnv(); vi.useRealTimers();
   });
 
@@ -475,7 +485,7 @@ describe('find bar: phrase-targeting modes', () => {
 
   it('a search commit does NOT fire onPhrase, and vice versa', () => {
     let commits = 0;
-    onFindCommitted(() => { commits++; });
+    onCommitted(() => { commits++; });
     openFindMode();
     dictate('alpha');
     vi.runAllTimers();
@@ -605,7 +615,7 @@ describe('find bar: phrase-targeting modes', () => {
   });
 
   it('a search commit keeps its own paint too, and still marks the current match', () => {
-    onFindCommitted(null);
+    clearCommitted();
     openFindMode();
     dictate('alpha');
     vi.runAllTimers();
@@ -699,10 +709,10 @@ describe('voice find declares its own mode', () => {
       g.CSS.highlights = priorReg;
       g.Highlight = priorCtor;
     };
-    onFindCommitted(() => commits.push(1));
+    onCommitted(() => commits.push(1));
   });
   afterEach(() => {
-    closeFindMode(); onFindDeactivated(null); onFindCommitted(null);
+    closeFindMode(); onFindDeactivated(null); clearCommitted();
     restoreEnv(); vi.useRealTimers();
   });
 
