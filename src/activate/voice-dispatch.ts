@@ -33,11 +33,9 @@ import { dispatcher } from '../core/singletons';
 import { pageSession } from '../lifecycle/page-session';
 import { toggleHints } from '../render/badge-visibility';
 import { flashToast } from '../render/toast';
-import { capturePhraseSnapshot, resolveInPhrase } from './snapshot';
-import { resolveTarget } from './activate-resolution';
+import { capturePhraseSnapshot } from './snapshot';
+import { resolveDispatchTarget } from './dispatch-target';
 import { narrowByPrefix } from '../labels/holder-registry';
-import * as idRegistry from '../scan/registry';
-import { deepQuerySelectorAll } from '../scan/scanner';
 import {
   saveReference, resolveReference, listReferences, noteActivated, lastActivatedElement,
 } from '../scan/references';
@@ -128,24 +126,7 @@ export function dispatchVoiceAction(action: string, params?: Record<string, stri
     // consistent across verbs. None tear down wrappers or hide hints
     // (always-mode keeps badges so the user can follow up on what appeared).
     const codeword = params?.codeword ?? '';
-    const idParam = parseInt(params?.id ?? '0', 10);
-    const frameIdParam = params?.frame_id != null ? parseInt(params.frame_id, 10) : -1;
-    const resolved = resolveTarget(
-      idParam, frameIdParam, codeword,
-      {
-        myFrameId: pageSession.myFrameId,
-        registry: {
-          get: idRegistry.get,
-          rebindRef: idRegistry.rebindRef,
-          unregister: idRegistry.unregister,
-          fingerprintFallback: idRegistry.fingerprintFallback,
-          fingerprintToString: idRegistry.fingerprintToString,
-        },
-        candidates: () => deepQuerySelectorAll(document, '*'),
-        resolveFromSnapshot: (cw) => resolveInPhrase(cw, performance.now()),
-        resolveFromStore: (cw) => store.byCodeword(cw),
-      },
-    );
+    const resolved = resolveDispatchTarget(params, codeword);
     const target = resolved.target;
     // Same live gate as activate — the old path enforced strict at match
     // time; sealed verbs enforce it here.

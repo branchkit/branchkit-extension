@@ -20,7 +20,6 @@ import * as idRegistry from './scan/registry';
 import type { CodewordMemoryEntry } from './labels/codeword-memory';
 import { loadRecall, recalledCodewords, rememberClaimedCodewords, resolvePreferredCodeword, isRecallLoaded } from './labels/codeword-recall';
 import { type RebindCounters } from './labels/rebind';
-import { resolveTarget } from './activate/activate-resolution';
 import { schedulePointerVisibilitySweep, setPointerRecheckScopeEnabled, observeInvisibleCandidates } from './observe/visibility-tracker';
 import { rebindCounters, collectLimboWrappers, collectStrongKeyIndex, dropDisconnectedWrappers } from './observe/limbo';
 import { attachWrapper, detachWrapper, seedPreferredFromMemory, attachDiscovered } from './core/wrapper-lifecycle';
@@ -75,10 +74,6 @@ import { narrowBadge } from './labels/codeword-typing';
 import { runEscapeCascade } from './activate/escape-cascade';
 import { preemptsPageKeys } from './activate/key-preamble';
 import './debug/dev-keepalive';
-import {
-  capturePhraseSnapshot,
-  resolveInPhrase,
-} from './activate/snapshot';
 import { dispatcher, registry, keyHandler } from './core/singletons';
 import { DEFAULT_KEYMAP, type KeymapEntry } from './keymap/command-catalog';
 import { loadKeymap, onKeymapChanged } from './keymap/keymap-storage';
@@ -141,9 +136,17 @@ import { registerScrollCommands } from './activate/scroll-commands';
 import { registerMediaCommands } from './activate/media-commands';
 import { registerKeyboardCommands } from './activate/keyboard-commands';
 import { registerTabCommands } from './activate/tab-commands';
-// LAST deliberately (§6g.1): every module this one imports is already in the
-// list above, so appending it at the end leaves module evaluation order
-// unchanged — only the new module itself is new to the order.
+// These two go LAST deliberately (§6g.1): every module they import is already
+// in the list above, so appending them here leaves module evaluation order
+// unchanged — only the new modules themselves are new to the order.
+//
+// dispatch-target matters for this specifically. Placed where the
+// activate-resolution import it replaced used to sit (index 11), it hoisted
+// `lifecycle/page-session` from index 74 to 11 and `core/store` from 20 —
+// both of which construct a singleton at module scope. Verified rather than
+// assumed, and then moved rather than reasoned about, because the trick is
+// free and the reasoning is not.
+import { resolveDispatchTarget } from './activate/dispatch-target';
 import { dispatchVoiceAction } from './activate/voice-dispatch';
 
 // --- Idempotency guard ---
@@ -1967,7 +1970,9 @@ registerMessageHandlers({
         action === 'activate_hint_newtab' ? 'new' :
         action === 'activate_hint_background' ? 'background' : 'none';
       // Three-tier resolution (see docs/completed/DESIGN_ELEMENT_IDENTITY_REGISTRY.md §6).
-      // Algorithm lives in activate-resolution.ts so it's unit-testable.
+      // Algorithm lives in activate-resolution.ts so it stays unit-testable;
+      // the binding to this live page is activate/dispatch-target.ts, shared
+      // with the element verbs so one implementation answers both.
       const codeword = params?.codeword ?? '';
       // A spoken codeword may name a text RANGE rather than an element — a
       // range-pick chip answering "highlight"/"select to", or a search-match
@@ -2009,26 +2014,8 @@ registerMessageHandlers({
         else if (!ok && search) flashToast('That match is off screen — scroll to it first');
         return;
       }
-      const idParam = parseInt(params?.id ?? '0', 10);
-      const frameIdParam = params?.frame_id != null ? parseInt(params.frame_id, 10) : -1;
-
-      const resolved = resolveTarget(
-        idParam, frameIdParam, codeword,
-        {
-          myFrameId: pageSession.myFrameId,
-          registry: {
-            get: idRegistry.get,
-            rebindRef: idRegistry.rebindRef,
-            unregister: idRegistry.unregister,
-            fingerprintFallback: idRegistry.fingerprintFallback,
-            fingerprintToString: idRegistry.fingerprintToString,
-          },
-          candidates: () => deepQuerySelectorAll(document, '*'),
-          resolveFromSnapshot: (cw) => resolveInPhrase(cw, performance.now()),
-          resolveFromStore: (cw) => store.byCodeword(cw),
-        },
-      );
-      const { target, resolution, fp } = resolved;
+      const resolved = resolveDispatchTarget(params, codeword);
+      const { target, resolution, fp, idParam } = resolved;
       let detail = resolved.detail;
 
       // Pull-resolution live strict gate (ext notes/DESIGN_STATIC_PAIR_GRAMMAR
