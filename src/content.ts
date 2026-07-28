@@ -81,20 +81,7 @@ import { DEFAULT_KEYMAP, type KeymapEntry } from './keymap/command-catalog';
 import { loadKeymap, onKeymapChanged } from './keymap/keymap-storage';
 import { installSiteKeyPolicy } from './keymap/site-key-policy';
 import { scanWithAdapter } from './adapters';
-import {
-  scroll,
-  scrollRegion,
-  scrollAtElement,
-  snapToElement,
-  cycleScrollTarget,
-  getCycleTarget,
-  scrollElement,
-  scrollToPercent,
-  setKeyHeld,
-  type ScrollDirection,
-  type ScrollAmount,
-  type ScrollRegion,
-} from './activate/scroller';
+import { setKeyHeld } from './activate/scroller';
 import {
   openFindMode,
   closeFindMode,
@@ -158,6 +145,7 @@ import { installUncaughtCapture } from './debug/uncaught';
 import { registerMessageHandlers, routeMessage, setMessageGuard } from './core/message-router';
 import { focusMessageHandlers, installWindowFocusTracking } from './core/window-focus';
 import { installPerfReporting } from './debug/perf-snapshot';
+import { registerScrollCommands } from './activate/scroll-commands';
 
 // --- Idempotency guard ---
 //
@@ -1041,71 +1029,8 @@ dispatcher.register('activate_hint', (params) => {
 
 // --- Scroll action handlers ---
 
-dispatcher.register('scroll_down', (params) => {
-  const count = parseInt(params.count || '1', 10) || 1;
-  const ct = getCycleTarget();
-  if (ct) scrollElement(ct, 'down', 'step', count);
-  else scroll('down', 'step', count);
-});
-
-dispatcher.register('scroll_up', (params) => {
-  const count = parseInt(params.count || '1', 10) || 1;
-  const ct = getCycleTarget();
-  if (ct) scrollElement(ct, 'up', 'step', count);
-  else scroll('up', 'step', count);
-});
-
-dispatcher.register('scroll_half_down', () => {
-  const ct = getCycleTarget();
-  if (ct) scrollElement(ct, 'down', 'half');
-  else scroll('down', 'half');
-});
-
-dispatcher.register('scroll_half_up', () => {
-  const ct = getCycleTarget();
-  if (ct) scrollElement(ct, 'up', 'half');
-  else scroll('up', 'half');
-});
-
-dispatcher.register('scroll_full_down', () => {
-  const ct = getCycleTarget();
-  if (ct) scrollElement(ct, 'down', 'full');
-  else scroll('down', 'full');
-});
-
-dispatcher.register('scroll_full_up', () => {
-  const ct = getCycleTarget();
-  if (ct) scrollElement(ct, 'up', 'full');
-  else scroll('up', 'full');
-});
-
-dispatcher.register('scroll_top', () => {
-  const ct = getCycleTarget();
-  if (ct) scrollElement(ct, 'up', 'top');
-  else scroll('up', 'top');
-});
-
-dispatcher.register('scroll_bottom', () => {
-  const ct = getCycleTarget();
-  if (ct) scrollElement(ct, 'down', 'bottom');
-  else scroll('down', 'bottom');
-});
-
-dispatcher.register('scroll_left', () => {
-  const ct = getCycleTarget();
-  if (ct) scrollElement(ct, 'left', 'step');
-  else scroll('left', 'step');
-});
-
-dispatcher.register('scroll_right', () => {
-  const ct = getCycleTarget();
-  if (ct) scrollElement(ct, 'right', 'step');
-  else scroll('right', 'step');
-});
-
-dispatcher.register('cycle_scroll_target', () => {
-  cycleScrollTarget();
-});
+// Scroll commands register from activate/scroll-commands.ts.
+registerScrollCommands();
 
 // --- Find action handlers ---
 
@@ -1253,32 +1178,6 @@ dispatcher.register('find_immediate', (params) => {
 });
 
 // Voice scroll handler — receives parameterized scroll commands from the plugin
-dispatcher.register('scroll', (params) => {
-  const direction = (params.direction || 'down') as ScrollDirection;
-  const amount = (params.amount || 'step') as ScrollAmount;
-  const count = parseInt(params.count || '1', 10) || 1;
-  const region = params.region as ScrollRegion | undefined;
-
-  if (region) {
-    scrollRegion(region, direction, amount, count);
-  } else {
-    scroll(direction, amount, count);
-  }
-});
-
-dispatcher.register('scroll_to_percent', (params) => {
-  const pct = parseInt(params.percent || '50', 10);
-  scrollToPercent(pct);
-});
-
-dispatcher.register('scroll_to_element', (params) => {
-  const position = (params.position || 'top') as 'top' | 'center' | 'bottom';
-  const selector = params.selector;
-  if (selector) {
-    const el = document.querySelector(selector);
-    if (el) snapToElement(el, position);
-  }
-});
 
 
 // --- Keyboard Filter Callback ---
