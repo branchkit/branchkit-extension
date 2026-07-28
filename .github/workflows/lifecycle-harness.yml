@@ -39,6 +39,15 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      # Installs BOTH "Chrome for Testing" and "Chrome Headless Shell". The
+      # full build is the one that matters: scripts/lib/launch.mjs passes
+      # `channel: 'chromium'` when headless because the SHELL cannot load
+      # extensions — the service worker never registers and the harness dies
+      # on waitForEvent("serviceworker"). Do not narrow this to --only-shell.
       - run: npx playwright install --with-deps chromium
       - run: npm run build
+      # xvfb is REDUNDANT since the harnesses went headless by default
+      # (2026-07-28) and is kept only as belt-and-braces: if the headless
+      # default is ever reverted or overridden, this job keeps working instead
+      # of failing on a missing display. It is not load-bearing.
       - run: xvfb-run -a npm run harness:lifecycle
