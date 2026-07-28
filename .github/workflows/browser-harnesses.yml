@@ -1,0 +1,102 @@
+# The browser harnesses as a CI job (DESIGN_LIFECYCLE_HARNESS.md) — the half
+# of verification only a real browser can answer. Path-gated so it costs
+# minutes only when the surfaces it covers change. Non-required
+# (continue-on-error) until both prove flake-clean for a couple of weeks;
+# promote by removing that line.
+#
+# TWO harnesses, and adding the second is the point (2026-07-28):
+#
+#   harness:lifecycle — pool, liveness, routing, bfcache/orphan transitions.
+#   harness:messages  — every handler in both message tables, and every
+#                       BRANCHKIT_ACTION arm, over the real onMessage boundary.
+#
+# `harness:messages` ran nowhere in CI, and it is the ONLY thing anywhere that
+# drives BRANCHKIT_ACTION. Three separate invariants had it as their sole
+# enforcement, each proven by a mutant that passed tsc, every lint and 2278
+# tests and was caught only here:
+#
+#   - a colliding arm added across the content.ts / voice-dispatch.ts boundary
+#     (ONE edit — lint D's `handled` set is a union across route files, so it
+#     structurally cannot see a duplicate, and there is no register-style
+#     runtime throw to catch it either)
+#   - a broken element-verb resolution tier
+#   - the sealed strict gate defeated, clicking blind on occluded targets
+#
+# All three were being held by a harness someone had to remember to run.
+#
+# The gate also gained `src/content.ts` and `src/activate/**`. content.ts was
+# NOT gated before, which meant a change to the bfcache / orphan-quiesce /
+# nav-rescan region — the lifecycle harness's whole subject, and the highest
+# blast-radius code in the extension — did not run the lifecycle harness.
+name: browser-harnesses
+
+# The two path lists are duplicated rather than shared through a YAML anchor.
+# GitHub Actions' workflow parser is not dependable about anchors and the only
+# way to find out is to push, so this keeps the shape the file already had.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/content.ts'
+      - 'src/activate/**'
+      - 'src/labels/**'
+      - 'src/plugin/**'
+      - 'src/background.ts'
+      - 'src/background/**'
+      - 'src/lifecycle/**'
+      - 'src/core/message-router.ts'
+      - 'src/render/badge-visibility.ts'
+      - 'src/debug/pool-audit.ts'
+      - 'scripts/harness/**'
+      - 'scripts/lib/launch.mjs'
+      - 'test-fixtures/lifecycle/**'
+  pull_request:
+    paths:
+      - 'src/content.ts'
+      - 'src/activate/**'
+      - 'src/labels/**'
+      - 'src/plugin/**'
+      - 'src/background.ts'
+      - 'src/background/**'
+      - 'src/lifecycle/**'
+      - 'src/core/message-router.ts'
+      - 'src/render/badge-visibility.ts'
+      - 'src/debug/pool-audit.ts'
+      - 'scripts/harness/**'
+      - 'scripts/lib/launch.mjs'
+      - 'test-fixtures/lifecycle/**'
+
+jobs:
+  chromium:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # Installs BOTH "Chrome for Testing" and "Chrome Headless Shell". The
+      # full build is the one that matters: scripts/lib/launch.mjs passes
+      # `channel: 'chromium'` when headless because the SHELL cannot load
+      # extensions — the service worker never registers and the harness dies
+      # on waitForEvent("serviceworker"). Do not narrow this to --only-shell.
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      # xvfb is REDUNDANT since the harnesses went headless by default
+      # (2026-07-28) and is kept only as belt-and-braces: if the headless
+      # default is ever reverted or overridden, this job keeps working instead
+      # of failing on a missing display. It is not load-bearing.
+      - run: xvfb-run -a npm run harness:lifecycle
+      # `always()` so the two never hide each other: they cover different
+      # surfaces, and one red answer should not cost us the other.
+      #
+      # UNVERIFIED ON LINUX, flagged rather than assumed: the copytext_hint
+      # probe reads the real clipboard through navigator.clipboard with
+      # granted permissions. That passes headless on macOS; this job is the
+      # first time it runs on Linux. If it is the only probe that fails, it
+      # needs a platform guard — and continue-on-error is exactly why finding
+      # that out costs a log line rather than a blocked merge.
+      - run: xvfb-run -a npm run harness:messages
+        if: always()
