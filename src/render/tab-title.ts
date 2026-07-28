@@ -29,7 +29,7 @@
 import { stripTabMarker, decorateTitle } from '../tab-marker-format';
 import { labelToDisplay, type LabelAssignment } from '../labels/words';
 import { getDisplayMode } from '../config';
-import type { MessageHandler } from '../core/message-router';
+import type { MessageHandler, MessageOf } from '../core/message-router';
 
 // The current marker letters ("a" / "qr"), or null when the feature is off /
 // this tab is unmarked. Set by the background push.
@@ -138,6 +138,6 @@ export function _resetTabTitleForTesting(): void {
 const inTopFrame = () => window === window.top;
 
 export const tabTitleMessageHandlers: Record<string, MessageHandler> = {
-  TAB_MARKER: (message) => { if (inTopFrame()) setTabMarker(message.letters); },
+  TAB_MARKER: (m: MessageOf<'TAB_MARKER'>) => { if (inTopFrame()) setTabMarker(m.letters); },
   TAB_MARKER_REAPPLY: () => { if (inTopFrame()) reapplyTabMarker(); },
 };

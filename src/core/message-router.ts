@@ -48,17 +48,40 @@
  */
 
 import { reportCaught } from '../debug/uncaught';
+import type { Message } from '../types';
 
 export type MessageSender = chrome.runtime.MessageSender;
 
 /**
  * Returning `undefined` means "no response". No handler answers with a literal
  * `undefined` payload today; if one ever needs to, it should answer `null`.
+ *
+ * `message` is `any` so the TABLE can hold handlers of eleven different payload
+ * shapes. Individual handlers should NOT accept `any` — see `MessageOf`.
  */
 export type MessageHandler = (
   message: any,
   sender: MessageSender,
 ) => unknown | Promise<unknown> | void;
+
+/**
+ * The `Message` union member for one type — how a handler gets its payload
+ * checked back.
+ *
+ * The old `if (message.type === 'X')` chain narrowed a `(message: Message)`
+ * parameter, so every payload field read was checked by tsc. Moving to a table
+ * traded that away: the map's value type imposes `any`, and a sender-side
+ * rename in types.ts then compiles on both sides while the handler silently
+ * reads `undefined`. Annotating the parameter buys it back — a narrower
+ * parameter is still assignable to `MessageHandler`, so the map shape is
+ * unchanged.
+ *
+ *     TAB_MARKER: (m: MessageOf<'TAB_MARKER'>) => setTabMarker(m.letters),
+ *
+ * A type not in the union resolves to `never`, so a typo in the type name is
+ * itself a compile error at the first field read.
+ */
+export type MessageOf<T extends Message['type']> = Extract<Message, { type: T }>;
 
 const handlers = new Map<string, MessageHandler>();
 

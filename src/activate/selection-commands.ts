@@ -26,7 +26,7 @@ import { findPageLink, type Rel } from './pagination';
 import { urlUp, urlRoot } from './url-nav';
 import { copyText } from './clipboard';
 import type { Message } from '../types';
-import type { MessageHandler } from '../core/message-router';
+import type { MessageHandler, MessageOf } from '../core/message-router';
 
 const isTopFrame = window === window.top;
 
@@ -305,7 +305,7 @@ export function registerSelectionCommands(): void {
 // branch of content.ts's onMessage chain; `restorePosition` is right here.
 
 export const markRestoreMessageHandlers: Record<string, MessageHandler> = {
-  MARK_RESTORE: (message) => {
-    if (isTopFrame) restorePosition({ scrollX: message.scrollX, scrollY: message.scrollY, hash: message.hash });
+  MARK_RESTORE: (m: MessageOf<'MARK_RESTORE'>) => {
+    if (isTopFrame) restorePosition({ scrollX: m.scrollX, scrollY: m.scrollY, hash: m.hash });
   },
 };

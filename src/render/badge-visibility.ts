@@ -54,7 +54,7 @@ import { cacheLayout, cacheConstruction, clearLayoutCache, isRectOnScreen } from
 import type { ElementWrapper } from '../scan/element-wrapper';
 import { firehoseStep } from '../debug/firehose';
 import { recordCpu } from '../debug/perf-counters';
-import type { MessageHandler } from '../core/message-router';
+import type { MessageHandler, MessageOf } from '../core/message-router';
 
 const MAX_BADGE_COUNT = 676; // No artificial cap; word pairs for >26
 
@@ -391,8 +391,8 @@ export const badgeVisibilityMessageHandlers: Record<string, MessageHandler> = {
   // frameId) so "this page" means the whole page, not just the top frame; each
   // frame drives its own badges. Only the top frame answers, so the popup gets
   // one response to refresh its readout from.
-  SET_BADGES_VISIBLE: (message) => {
-    const nowShowing = setBadgesVisible(message.visible);
+  SET_BADGES_VISIBLE: (m: MessageOf<'SET_BADGES_VISIBLE'>) => {
+    const nowShowing = setBadgesVisible(m.visible);
     return inTopFrame() ? { badgesVisible: nowShowing, hintCount: store.all.length } : undefined;
   },
 };

@@ -18,7 +18,7 @@ import { codewordToAssignment, labelToDisplay } from '../labels/words';
 import { BadgeDisplayMode, DispatchResult, Message, ResolveHintResponse } from '../types';
 import { store } from '../core/store';
 import { getDisplayMode } from '../config';
-import type { MessageHandler } from '../core/message-router';
+import type { MessageHandler, MessageOf } from '../core/message-router';
 
 function normalizeCodeword(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, '');
@@ -109,5 +109,5 @@ export function reportDispatchResult(result: DispatchResult): void {
 // content.ts do it.
 
 export const hintResolveMessageHandlers: Record<string, MessageHandler> = {
-  RESOLVE_HINT: (message) => resolveHintLocally(store, message.codeword, getDisplayMode()),
+  RESOLVE_HINT: (m: MessageOf<'RESOLVE_HINT'>) => resolveHintLocally(store, m.codeword, getDisplayMode()),
 };

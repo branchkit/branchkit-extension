@@ -132,7 +132,7 @@ import {
   syncNow,
 } from './labels/label-sync';
 import { installUncaughtCapture } from './debug/uncaught';
-import { registerMessageHandlers, routeMessage, setMessageGuard } from './core/message-router';
+import { registerMessageHandlers, routeMessage, setMessageGuard, type MessageOf } from './core/message-router';
 import { focusMessageHandlers, installWindowFocusTracking } from './core/window-focus';
 import { installPerfReporting } from './debug/perf-snapshot';
 import { registerScrollCommands } from './activate/scroll-commands';
@@ -1975,8 +1975,8 @@ registerMessageHandlers(helpMessageHandlers);
 // it is ~400 lines of element resolution and verb handling, and moving it is
 // its own change (phase 3a, second half).
 registerMessageHandlers({
-  BRANCHKIT_ACTION: (message) => {
-    const { action, params, correlation_id: correlationId } = message.payload;
+  BRANCHKIT_ACTION: (m: MessageOf<'BRANCHKIT_ACTION'>) => {
+    const { action, params, correlation_id: correlationId } = m.payload;
     // Scope the actuator's tr_ to this dispatch's synchronous body so every
     // bkLog call in it lands in browser.log grep-joinable with the matcher
     // chain. Self-clears on the next microtask (see bk-log.ts).

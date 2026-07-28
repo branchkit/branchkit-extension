@@ -18,7 +18,7 @@ import { reportDispatchResult } from '../plugin/resolve';
 import { dispatcher } from '../core/singletons';
 import { modes } from '../core/modes';
 import type { Message } from '../types';
-import type { MessageHandler } from '../core/message-router';
+import type { MessageHandler, MessageOf } from '../core/message-router';
 
 /** Palette lifecycle breadcrumbs → the plugin's dispatch-result log. The
  * palette frame itself can't reach the plugin (no privileges on Firefox), so
@@ -172,5 +172,5 @@ export function registerPaletteCommands(): void {
 export const paletteHostMessageHandlers: Record<string, MessageHandler> = {
   // The background awaits the close before dispatching, so this one answers.
   PALETTE_CLOSE: () => { closePalette(); return true; },
-  PALETTE_COMMAND: (message) => { dispatcher.dispatch(message.action, message.params ?? {}); },
+  PALETTE_COMMAND: (m: MessageOf<'PALETTE_COMMAND'>) => { dispatcher.dispatch(m.action, m.params ?? {}); },
 };
