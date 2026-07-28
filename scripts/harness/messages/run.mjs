@@ -44,7 +44,7 @@ const results = [];
 const check = (name, ok, detail) => { results.push({ name, ok, detail }); };
 
 /** How many probes a complete run reports. A run that stops short says so. */
-const EXPECTED = 32;
+const EXPECTED = 33;
 
 try {
   // The profile is persistent and reused between runs, so every piece of state
@@ -460,12 +460,40 @@ try {
     `candidates ${candidatesAll} -> ${candidatesNarrow} (prefix ${JSON.stringify(prefix)}) -> ${candidatesReset}`);
 
   // toggle_hints — the voice twin of Shift+F.
+  //
+  // The visibility flip below is only half the arm. The other half is
+  // `capturePhraseSnapshot(store.all, …)` on the SHOW direction, so a
+  // codeword spoken in the same breath as "toggle" resolves against the
+  // badges that just painted — the sweep check-exhaustive's lint C
+  // specifically sanctioned into voice-dispatch.ts. Asserting the flip alone
+  // reads back `toggleHints()`'s own return value and nothing else, which is
+  // the exact disease section 6j.1 diagnosed in the copytext and caret
+  // probes; inverting the arm to snapshot on HIDE passed this, lint C's pin,
+  // tsc and 2278 tests.
+  //
+  // The discriminator is the TTL. Waiting past SNAPSHOT_TTL_MS between the
+  // hide and the show means a snapshot taken on the wrong edge is already
+  // stale, so resolution falls through to 'live_store'; one taken on the
+  // right edge is fresh and reports 'snapshot'. That is a tier name only the
+  // photograph can produce.
   await act('toggle_hints');
   await settle(900);
   const offStatus = await send({ type: 'GET_PAGE_STATUS' }, { frameId: 0 });
+  // Past SNAPSHOT_TTL_MS (5s, activate/snapshot.ts) while badges are hidden.
+  await settle(5600);
   await act('toggle_hints');
   await settle(900);
   const onStatus = await send({ type: 'GET_PAGE_STATUS' }, { frameId: 0 });
+  // Straight into a dispatch, no settle: the snapshot the show just took has
+  // to be the tier that answers.
+  const snapCw = (await badgeText())[0];
+  await drain();
+  await act('hover_hint', { codeword: snapCw ?? '__unresolvable__' });
+  await settle(700);
+  const snapR = await lastDispatch('hover_hint');
+  check('ARM toggle_hints snapshots on the SHOW edge',
+    snapR?.ok === true && snapR.resolution === 'snapshot',
+    `codeword=${JSON.stringify(snapCw)} report=${JSON.stringify(snapR)}`);
   check('ARM toggle_hints', offStatus?.badgesVisible === false && onStatus?.badgesVisible === true,
     `badgesVisible ${offStatus?.badgesVisible} -> ${onStatus?.badgesVisible}`);
 
