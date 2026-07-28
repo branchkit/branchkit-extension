@@ -749,6 +749,71 @@ of the async `showBadges`. Slot reset added to both; the comments say plainly
 that it stops leakage between tests and does *not* make the files safe to
 raise the flag in.
 
+### 6f. The review's backlog, worked (2026-07-27)
+
+`a44661a`..`80c6e33`. Everything §6e left open except the one product call.
+
+**Lints F and G** (`scripts/check-exhaustive.mjs`). G is the enforcement §6a's
+"a seam may live at module scope" rule never had: five modules install behaviour
+purely by being imported, so each must stay in an entry point's value-import
+closure or esbuild drops it and the feature silently stops existing with a green
+suite. F rejects new import cycles, which here are a boot hazard rather than a
+style issue. Both mutation-verified; F's baseline independently matches the SCCs
+a reviewer computed via the TypeScript compiler API and esbuild metafiles.
+
+**The search-badge arming bug**, which the review found while checking something
+else. A find whose match is far down a long page got NO search badges at all,
+permanently — arming happens at commit while find's own SMOOTH scroll is still
+in flight, so nothing is within the ±1000px band, `create()` returns null and
+unregisters the holder, and no reconcile can reach a set that was never made. It
+retries on the scroll settle now. `RangeBadgeSet`'s contract was deliberately
+NOT changed: `create() === null` means "nothing to badge" to
+range-disambiguation, and one caller's bug is not a reason to change a contract
+two callers read.
+
+**`onFindCommitted` is a multicast again** — `12b8705`'s central decision,
+reversed. With arming no longer racing a scroll the two effects are independent,
+so both register from the modules that own them and **content.ts holds no find
+relay at all**. 18 of 18.
+
+**The put queue is a leaf**, and it settled the question §6e expected it to
+open. `initLabelSync`'s `detachWrapper` and `isBadgesVisible` invert; `store`
+stays, for test isolation rather than a cycle. But `onLeakSwept` now CANNOT go:
+retiring the other two pointed label-sync into the lifecycle knot, and
+observe/intersection-tracker reaches the reservoir from inside it, so
+`reservoir → label-sync` would merge the label layer in — measured, the SCC goes
+6 modules → 15. The layering is put-queue < reservoir < the knot < label-sync,
+and that seam points UP. Two seams retired at the cost of the third staying is
+the trade; lint F now enforces it.
+
+**The nav's async restores.** Both fixed, and the first was an ordering bug in
+`9018f6c` itself: `cancelRangePick`'s teardown calls `clearFindPaint`, which
+RESTORES the borrow slot, and the discard ran after it. The pick's own borrow
+needed an API — `cancelRangePick(reason, restoreBadges)` — with the keyboard
+half still restoring, because a nav must not strand the user in a hint mode
+entered for chips that no longer exist.
+
+**`recordCpu` is an import.** The globalThis stash was justified as avoiding an
+API surface and the graph says it never bought anything (perf-counters' only
+import is a type). It bought a cross-bundle write before the injection guard,
+which let a duplicate injection redirect the live instance's CPU accounting into
+a dead bundle it also pinned in memory.
+
+**Still open.** `closeFindMode()` on `spa_nav` — a product call, not a refactor:
+find survives a same-document nav today with a pill advertising a count for a
+page whose matches are gone, dead `n`/`N`, and Escape consumed by a dead layer.
+Both reviewers argue for closing it; it changes what the user sees, so it waits
+for a decision. Also still open: §6c item 3's module-scope side-effect lint,
+which is blocked behind `render/palette-host.ts` — orphan-teardown ownership,
+one layer at a time.
+
+**The pattern across this whole session, worth carrying.** Four times a test
+went in that could not fail, and every one was caught by mutation-testing with
+mutants chosen by someone other than the author — including the author's own
+re-check. Reading never caught one. The specific shape recurs: asserting an
+observable that the BROKEN implementation also produces (a flag that is already
+false, a hint mode that is already on, a hex that is coincidentally equal).
+
 ---
 
 ## 7. Execution log — phase 1, 2026-07-27
