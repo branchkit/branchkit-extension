@@ -132,8 +132,9 @@ export function buildPerfSnapshot(advanceShareBaseline = false) {
 // per second per hidden tab, times days of accumulated tabs. Direct one-shot
 // calls (boot marker, reset-handshake confirmation) publish regardless of
 // visibility: a tab loaded hidden must still publish once so dataset
-// presence works as a liveness probe (scripts/_test-extension-reload-
-// firefox.mjs), and a reset delivered to a hidden tab must confirm with
+// presence works as a liveness probe (scripts/_test-hints.mjs, _test-sites.mjs,
+// _test-videos-tab-wedge.mjs all read it that way), and a reset delivered to a
+// hidden tab must confirm with
 // zeroed counters or drivers diff against pre-reset history
 // (scripts/test-perf.mjs).
 export function publishPerfSnapshot(): void {

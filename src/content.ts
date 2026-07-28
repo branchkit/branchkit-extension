@@ -1949,8 +1949,16 @@ const DISPATCH_PASSTHROUGH_ACTIONS = new Set([
 // core/message-router.ts explains why one module serves both bundles.
 // Lint E in scripts/check-exhaustive.mjs holds both halves of that shape.
 //
-// Install the listener BEFORE composing the maps: a duplicate-type throw then
-// costs one map instead of leaving the page with no listener at all.
+// Install the listener BEFORE composing the maps, so a duplicate-type throw
+// still leaves the page with a listener rather than none.
+//
+// That is the whole of what the ordering buys, and an earlier version of this
+// comment claimed more — "costs one map" is wrong. These calls sit a thousand
+// lines from the end of this file, and `registerMessageHandlers` throws, so a
+// collision also skips BRANCHKIT_ACTION, the settle wiring, the pointer and key
+// listeners, the machinery gate, the initial scan and installPerfReporting. The
+// page would answer GET_FOCUS_STATUS while doing none of its actual work. Lint E
+// is what actually prevents that; the ordering is a seatbelt, not a fix.
 chrome.runtime.onMessage.addListener(routeMessage);
 
 // A torn-down orphan (a superseded elder whose chrome.runtime is still live)

@@ -353,9 +353,13 @@ function handleSSEEvent(data: any): void {
 // message type would be EVERY message type, on a build whose tsc/vitest/CI
 // are all green (nothing composes the real maps together, and the
 // exhaustiveness lint checks registration, not collision). Installing the
-// listener first turns "the extension is dead" into "one handler is missing",
-// which is what the throw was trying to say. `routeMessage` reads the table
-// per message, so registering after this point is not a race.
+// listener first means the SW at least keeps a listener. It does NOT reduce
+// this to "one handler is missing", which an earlier version of this comment
+// claimed: the registrations are ~38% into the file, so a throw also skips the
+// tab/webNavigation/windows listeners, initMedia, the alarms and init(). Lint E
+// is what prevents the collision; this ordering only bounds the damage.
+// `routeMessage` reads the table per message, so registering after this point
+// is not a race.
 chrome.runtime.onMessage.addListener(routeMessage);
 
 // Every message type is owned by the module that owns its concern; this is the

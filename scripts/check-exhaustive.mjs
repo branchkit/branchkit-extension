@@ -730,33 +730,52 @@ function stronglyConnected(graph) {
 // keybind and the voice phrase both resolve, and nothing happens. Its own
 // tests stay green because they call the registrar themselves.
 //
-// Both sides are read from the code. A new `register*Commands` export joins
-// the check by existing.
+// The same hole exists for the OTHER boot convention: `install*()`. Dropping
+// `installPerfReporting()` stops the 5s trail and the dataset mirror that four
+// harness scripts read as a content-script liveness probe; dropping
+// `installWindowFocusTracking()` freezes `hasFocus` while lint E keeps
+// GET_FOCUS_STATUS answering the stale value — a feature that fails by lying
+// rather than by erroring. Both modules' own suites call the installer
+// directly and stay green, which is the same shape lint G was written for.
+//
+// Both sides are read from the code. A new `register*Commands` or `install*`
+// export joins the check by existing.
+//
+// WHAT THIS DOES NOT COVER, stated rather than left to be discovered: the
+// "called" set is the UNION across both entry points, so a registrar that
+// belongs in BOTH and is dropped from one still passes. `installUncaughtCapture`
+// is the only one of those today. Requiring per-entry-point calls would need
+// per-registrar metadata — a list to maintain, which is exactly what reading
+// both sides from the code buys us out of — so the union is the deliberate
+// trade, not an oversight.
 {
   const ENTRIES = ['src/content.ts', 'src/background.ts'];
+  // `install*` takes arguments (installUncaughtCapture does), so the call
+  // pattern cannot require empty parens the way the registrar one does.
+  const EXPORTED = /^export function (register\w*Commands|install[A-Z]\w*)\s*\(/gm;
+  const CALLED = /^\s*(register\w*Commands|install[A-Z]\w*)\(/gm;
+
   const called = new Set();
   for (const entry of ENTRIES) {
-    for (const m of read(entry).matchAll(/^\s*(register\w*Commands)\(\s*\)/gm)) called.add(m[1]);
+    for (const m of read(entry).matchAll(CALLED)) called.add(m[1]);
   }
 
   const registrars = [];
   for (const rel of srcFiles()) {
-    for (const m of read(rel).matchAll(/^export function (register\w*Commands)\s*\(/gm)) {
-      registrars.push({ name: m[1], file: rel });
-    }
+    for (const m of read(rel).matchAll(EXPORTED)) registrars.push({ name: m[1], file: rel });
   }
 
   if (registrars.length === 0) {
-    fail('lint G2 found zero register*Commands registrars — fix the lint');
+    fail('lint G2 found zero boot registrars — fix the lint');
   }
   for (const { name, file } of registrars) {
     if (!called.has(name)) {
       fail(`${name} (${file}) is exported but never called from an entry point — ` +
-        'every command it registers silently does nothing, and its own tests still pass ' +
+        'whatever it installs silently does not happen, and its own tests still pass ' +
         'because they call it themselves');
     }
   }
-  if (!failed) ok(`command registrars: ${registrars.length} exported, all called at boot`);
+  if (!failed) ok(`boot registrars: ${registrars.length} exported, all called at boot`);
 }
 
 process.exit(failed ? 1 : 0);
