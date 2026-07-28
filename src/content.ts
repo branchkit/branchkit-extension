@@ -45,7 +45,7 @@ import { setOcclusionMemoMode, occlusionMemoAllDirty, occlusionMemoNoteTarget, o
 import { reconcileClipObservation, setClipObserverEnabled } from './observe/clip-observer';
 import { isRectOnScreen } from './core/layout-cache';
 import { placeBadges, invalidateProbe } from './placement';
-import { activateElement, dispatchHover, resolveNavTarget, INPUT_TYPES, type ActivationResult } from './activate/event-sequence';
+import { activateElement, resolveNavTarget, INPUT_TYPES, type ActivationResult } from './activate/event-sequence';
 import { sealedDispatchSeen, reportNoSuchHint } from './activate/sealed-gate';
 import { trimFrameUrl } from './core/frame';
 import {
@@ -58,9 +58,8 @@ import { toggleOverlay } from './render/debug-overlay';
 import { toggleHelpOverlayWithSpokenForms, helpMessageHandlers } from './render/help-overlay';
 import { registerPaletteCommands, paletteHostMessageHandlers } from './render/palette-host';
 import { setTabMarker, refreshTabMarker, tabTitleMessageHandlers } from './render/tab-title';
-import { copyText } from './activate/clipboard';
 import { flashToast } from './render/toast';
-import { registerSelectionCommands, caret, SELECTION_ACTIONS, parseSelectionCommand, markRestoreMessageHandlers } from './activate/selection-commands';
+import { registerSelectionCommands, SELECTION_ACTIONS, parseSelectionCommand, markRestoreMessageHandlers } from './activate/selection-commands';
 import { startQueryFieldReporting } from './plugin/query-field';
 import { cancelRangePick } from './activate/range-disambiguation';
 import { clearSearchBadges, retrySearchBadgeArm } from './activate/search-badges';
@@ -136,7 +135,7 @@ import { registerScrollCommands } from './activate/scroll-commands';
 import { registerMediaCommands } from './activate/media-commands';
 import { registerKeyboardCommands } from './activate/keyboard-commands';
 import { registerTabCommands } from './activate/tab-commands';
-// These two go LAST deliberately (§6g.1): every module they import is already
+// These three go LAST deliberately (§6g.1): every module they import is already
 // in the list above, so appending them here leaves module evaluation order
 // unchanged — only the new modules themselves are new to the order.
 //
@@ -148,6 +147,7 @@ import { registerTabCommands } from './activate/tab-commands';
 // free and the reasoning is not.
 import { resolveDispatchTarget } from './activate/dispatch-target';
 import { dispatchVoiceAction } from './activate/voice-dispatch';
+import { activateWrapper } from './activate/keyboard-activation';
 
 // --- Idempotency guard ---
 //
@@ -1182,92 +1182,6 @@ function runWhenIdle(cb: (deadline?: IdleDeadline) => void, timeoutMs: number): 
   // path called it synchronously.
   if (typeof w.requestIdleCallback === 'function') w.requestIdleCallback(cb, { timeout: timeoutMs });
   else pageSession.resources.timeout(cb, 100);
-}
-
-
-// Visibility handoff after a keyboard hint action. In always-mode we clear
-// narrowing/keyboard state and schedule a refresh; in manual-mode we fully hide
-// so the user can re-summon explicitly. Shared by every activateWrapper verb.
-function hintActionHandoff(): void {
-  if (shouldAutoShowBadges()) {
-    clearHintFilter();
-    scheduleHintRefresh();
-  } else {
-    hideBadges();
-  }
-}
-
-function activateWrapper(wrapper: ElementWrapper): void {
-  const el = wrapper.element as HTMLElement;
-  // Consume the keyboard hint action and reset immediately, so no path can leak
-  // it to the next activation. See notes/DESIGN_HINT_ACTION_MODES.md.
-  //
-  // NOT named `action`, and that is load-bearing rather than style. Lint D
-  // reads `action === '…'` across a whole ROUTE_FILE as proof a voiced command
-  // id has an extension-side route, so while these six keyboard hint verbs
-  // were called `action` they silently vouched for yank/copytext/focus/hover/
-  // caret/newtab — none of which any BRANCHKIT_ACTION arm handles. Measured:
-  // a voiced entry `{ id: 'hover' }` with no route passed as "all 77 voiced
-  // catalog actions handled", and failed correctly once this stopped matching.
-  // Those are the shortened forms of hover_hint/focus_hint/caret_hint/
-  // copytext_hint, i.e. exactly what a future edit reaches for.
-  const hintAction = keyHandler.takeHintAction();
-
-  // Verbs that act ON the element without following it (Vimium hint modes).
-  if (hintAction === 'yank') {
-    // Copy the link's URL (Vimium yf).
-    const href = (el.closest('a') as HTMLAnchorElement | null)?.href ?? '';
-    wrapper.hint?.flash();
-    if (href) void copyText(href).then((ok) => flashToast(ok ? 'Copied link' : 'Copy failed'));
-    else flashToast('Not a link');
-    hintActionHandoff();
-    return;
-  }
-  if (hintAction === 'copytext') {
-    // Copy the element's visible text (Vimium copy-link-text).
-    const text = (el.textContent || '').trim();
-    wrapper.hint?.flash();
-    if (text) void copyText(text).then((ok) => flashToast(ok ? 'Copied text' : 'Copy failed'));
-    else flashToast('No text');
-    hintActionHandoff();
-    return;
-  }
-  if (hintAction === 'focus') {
-    // Focus without activating — a field to type in, or any element (Vimium focus).
-    wrapper.hint?.flash();
-    el.focus();
-    flashToast('Focused');
-    hintActionHandoff();
-    return;
-  }
-  if (hintAction === 'hover') {
-    // Reveal hover-state UI (menus, player controls) without clicking (Vimium
-    // hover). The always-mode handoff re-scans, so badges appear for whatever
-    // the hover just exposed. Voice "hover {hint}" is the twin (plugin-side).
-    wrapper.hint?.flash();
-    dispatchHover(el);
-    flashToast('Hovered');
-    hintActionHandoff();
-    return;
-  }
-  if (hintAction === 'caret') {
-    // Start a caret/visual selection AT this element (Vimium hint→caret). Then
-    // drive it by keyboard (hjkl/y) or voice ("select word" / "copy that").
-    wrapper.hint?.flash();
-    hintActionHandoff();
-    caret.enterAt(el);
-    return;
-  }
-
-  noteActivated(el);
-  hintActionHandoff();
-
-  wrapper.hint?.flash();
-  if (wrapper.category === 'input') {
-    el.focus();
-  } else {
-    activateElement(el, { newTab: hintAction === 'newtab' });
-  }
 }
 
 /**
