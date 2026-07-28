@@ -499,15 +499,13 @@ function onTrackerCodewordsChanged(claimed: ElementWrapper[], released: string[]
 // handler now arrives with the open — selection-commands passes resolveSelectTo
 // to openPhraseBox itself.)
 
-// Wire the LabelStage's catchup sync to content.ts-owned collaborators.
-// detachWrapper is imported from core/wrapper-lifecycle; store is imported; the
-// visibility flag (pageSession.badgesVisible) is read lazily via the arrow.
-// Catchup-built badges converge through the single reconcile entry.
-initLabelSync({
-  store,
-  detachWrapper,
-  isBadgesVisible: () => pageSession.badgesVisible,
-});
+// One field left, and it is not a cycle — it is test isolation. label-sync can
+// reach `store` perfectly well (core/store is a leaf both ways), but
+// label-sync.test.ts drives every case against a FRESH WrapperStore rather than
+// the singleton, and a direct import would silently point the module at the
+// real one. The other two fields went home once the put queue moved to a leaf:
+// detachWrapper and pageSession.badgesVisible are imports in label-sync now.
+initLabelSync({ store });
 
 // Confirm-rejection handler (epoch-handshake Phase 4, review bug #5): the SW
 // pool arbitrated these codewords AWAY from this frame — another frame won

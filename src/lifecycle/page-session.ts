@@ -30,7 +30,7 @@ import {
   untrackPendingCandidate,
 } from '../observe/visibility-tracker';
 import { constructPageMutationObserver } from '../observe/mutation-source';
-import { getSessionId } from '../labels/label-sync';
+import { getSessionId } from '../labels/put-queue';
 import { SessionResources } from './session-resources';
 import { getSettleEngine, setSettleEngine } from './settle-engine-ref';
 

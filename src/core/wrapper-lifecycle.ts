@@ -20,7 +20,7 @@ import { ScannedElement } from '../types';
 import { domSeenAt } from '../observe/dom-seen';
 import * as idRegistry from '../scan/registry';
 import { isRecallLoaded, resolvePreferredCodeword } from '../labels/codeword-recall';
-import { dropPendingPut, hasSent, queueDelete, queuePut, scheduleSync } from '../labels/label-sync';
+import { dropPendingPut, hasSent, queueDelete } from '../labels/put-queue';
 import { tryRebindFromLimbo, tryRebindByStrongKey, tryRebindByCoattail, isRecentlyOrphaned } from '../observe/limbo';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
 import { geometryInBand, getCachedRect, isRectOnScreen } from './layout-cache';

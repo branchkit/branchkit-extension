@@ -174,13 +174,27 @@ class LabelReservoir {
    * occupy plugin-side grammar entries, so they need queued deletes.
    *
    * This is the half of the old two-argument `installLeakSweep` that could not
-   * be defaulted. Its body reaches labels/label-sync (hasSent, queueDelete,
-   * scheduleSync), and label-sync imports THIS module back at :55 — a real
-   * value 2-cycle, unlike the `isHeld` half beside it, which turned out to
-   * target a leaf this module was already importing. Retiring it needs the put
-   * queue lifted into a leaf of its own, which would also cut
-   * core/wrapper-lifecycle's edge to label-sync; that is a bigger extraction
-   * than this seam justifies on its own, so the seam stays and says why.
+   * be defaulted, and the put-queue extraction did NOT free it — it settled the
+   * question the other way, which is worth stating because the obvious next
+   * move is now a trap.
+   *
+   * Two of the three things the body needs are in the leaf: `hasSent` and
+   * `queueDelete` are `labels/put-queue`. The third, `scheduleSync`, is the
+   * debounced flush and genuinely belongs to label-sync. Importing label-sync
+   * from here is what the extraction was supposed to make legal, and it is
+   * MORE illegal than before: retiring `detachWrapper` and `isBadgesVisible`
+   * pointed label-sync INTO the lifecycle knot (core/wrapper-lifecycle,
+   * lifecycle/page-session), and observe/intersection-tracker reaches this
+   * module from inside that knot. So `reservoir → label-sync` closes a cycle
+   * that merges the label layer into it — measured, not guessed: the SCC goes
+   * from 6 modules to 15, taking core/store, scan/element-wrapper and
+   * placement/ with it. Lint F would reject it.
+   *
+   * The layering that fell out is: put-queue (leaf) < this module < the
+   * lifecycle knot < label-sync. This seam points UP, and no extraction fixes
+   * that — only moving the debounce below the knot would, which is a different
+   * piece of work with a different justification. Two seams retired at the cost
+   * of this one staying is the trade that was taken.
    */
   onLeakSwept(handler: (codewords: string[]) => void): void {
     this.sweepHandler = handler;

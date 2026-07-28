@@ -9,6 +9,24 @@
  * Run: npm test
  */
 
+// label-sync reaches two modules DIRECTLY now that the put queue is a leaf:
+// detachWrapper (core/wrapper-lifecycle) and pageSession.badgesVisible. Both
+// are mocked rather than real, and that is a deliberate trade — wrapper-lifecycle
+// and page-session are two members of the six-module lifecycle SCC (observers,
+// limbo, mutation source), so importing them for real would turn a label-layer
+// unit test into an integration test of code that has its own. The fakes are
+// exactly the two things label-sync touches.
+//
+// detachWrapper is referenced LAZILY inside the factory arrow: vi.mock is
+// hoisted above every top-level binding, so a factory that read it eagerly
+// would be a TDZ error. pageSession's fake is built inside the factory for the
+// same reason and mutated through the imported reference.
+const detachWrapper = vi.fn<(element: Element) => void>();
+vi.mock('../core/wrapper-lifecycle', () => ({
+  detachWrapper: (el: Element) => detachWrapper(el),
+}));
+vi.mock('../lifecycle/page-session', () => ({ pageSession: { badgesVisible: false } }));
+
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
 import { ScannedElement } from '../types';
@@ -30,6 +48,7 @@ import {
   postBatch,
 } from './label-sync';
 import { registerHolder, __resetHolderRegistry, type CodewordHolder } from './holder-registry';
+import { pageSession } from '../lifecycle/page-session';
 import { setSettleEngine, _clearSettleEngineForTesting } from '../lifecycle/settle-engine-ref';
 
 /** A minimal registered holder whose republish is counted — the v2 registry's
@@ -96,9 +115,7 @@ describe('syncNow wholesale refusal (calibration_active)', () => {
     vi.stubGlobal('chrome', { runtime: { sendMessage } });
     initLabelSync({
       store,
-      detachWrapper: vi.fn(),
       reconcile: vi.fn(),
-      isBadgesVisible: () => false,
     });
     // Clear module-level delta-sync state from prior tests.
     rotateSession();
@@ -282,9 +299,7 @@ describe('pipelined delete accounting (audit 2026-07-04)', () => {
     vi.stubGlobal('chrome', { runtime: { sendMessage } });
     initLabelSync({
       store,
-      detachWrapper: vi.fn(),
       reconcile: vi.fn(),
-      isBadgesVisible: () => false,
     });
     rotateSession();
   });
@@ -359,10 +374,9 @@ describe('syncNow transport failure keeps wrappers (BranchKit down)', () => {
   // plugin response may detach.
   let store: WrapperStore;
   let sendMessage: ReturnType<typeof vi.fn>;
-  let detachWrapper: ReturnType<typeof vi.fn<(element: Element) => void>>;
   // Scripted per-batch behavior; the last entry repeats. 'echo' answers ok
   // with every requested codeword.
-  let script: ('error' | 'reject' | 'echo')[];
+  let script: ('error' | 'reject' | 'echo' | 'fail-arch')[];
 
   const batchCalls = () =>
     sendMessage.mock.calls.filter((c) => c[0]?.type === 'GRAMMAR_BATCH');
@@ -372,11 +386,21 @@ describe('syncNow transport failure keeps wrappers (BranchKit down)', () => {
     setAlphabet(ALPHABET);
     store = new WrapperStore();
     script = [];
-    detachWrapper = vi.fn<(element: Element) => void>();
+    detachWrapper.mockClear();
     sendMessage = vi.fn((msg: { type: string; request?: { elements: ScannedElement[] } }) => {
       if (msg.type !== 'GRAMMAR_BATCH') return Promise.resolve(undefined);
       const step = script.length > 1 ? script.shift()! : script[0];
       if (step === 'reject') return Promise.reject(new Error('sw unreachable'));
+      if (step === 'fail-arch') {
+        // A GENUINE plugin response: the batch applied, but this codeword was
+        // refused. Distinct from 'error', whose transport reason means nothing
+        // was applied and nothing may be detached.
+        return Promise.resolve({
+          result: 'ok',
+          succeeded: msg.request!.elements.map((e) => e.codeword).filter((c) => c !== 'arch'),
+          failed: [{ codeword: 'arch', reason: 'rejected' }],
+        });
+      }
       if (step === 'error') {
         // The SW's transportFailure shape: synthetic result:'error' with
         // every element in failed, reason 'transport'.
@@ -391,9 +415,7 @@ describe('syncNow transport failure keeps wrappers (BranchKit down)', () => {
     vi.stubGlobal('chrome', { runtime: { sendMessage } });
     initLabelSync({
       store,
-      detachWrapper,
       reconcile: vi.fn(),
-      isBadgesVisible: () => false,
     });
     rotateSession();
   });
@@ -433,6 +455,59 @@ describe('syncNow transport failure keeps wrappers (BranchKit down)', () => {
     const second = batchCalls()[1][0].request;
     expect(second.elements.map((e: ScannedElement) => e.codeword)).toContain('arch');
     expect(hasSent('arch')).toBe(true);
+  });
+
+  // detachWrapper is an IMPORT now, not an injected dep — content.ts stopped
+  // handing it over once the put queue moved to a leaf. Every existing test
+  // here asserts it is NOT called, which is the shape that let the default land
+  // uncovered: deleting the call entirely passed all 25 (review discipline,
+  // 2026-07-27). These two pin the positive, and the pair is the point — the
+  // SAME per-codeword failure detaches or re-queues purely on whether the
+  // element is still in the document.
+  it('a per-codeword plugin failure detaches a wrapper whose element is GONE', async () => {
+    const w = makeWrapper('arch', store);
+    queuePut(w);
+    w.element.remove(); // released from the DOM while the chunk was in flight
+    script = ['fail-arch'];
+
+    await runSync();
+    expect(detachWrapper).toHaveBeenCalledTimes(1);
+    expect(detachWrapper).toHaveBeenCalledWith(w.element);
+    expect(hasSent('arch')).toBe(false);
+  });
+
+  it('...and re-queues rather than detaching when the element is still connected', async () => {
+    const w = makeWrapper('arch', store);
+    queuePut(w);
+    script = ['fail-arch', 'echo'];
+
+    await runSync();
+    expect(detachWrapper).not.toHaveBeenCalled();
+
+    // Re-queued, so the next sync carries it again — a failed put must not be
+    // silently dropped just because the badge stayed painted.
+    await runSync();
+    const second = batchCalls()[1][0].request;
+    expect(second.elements.map((e: ScannedElement) => e.codeword)).toContain('arch');
+  });
+
+  // The OTHER detachWrapper site, and it is a different question: this wrapper
+  // SUCCEEDED, and left the DOM while the batch was in flight. Its codeword is
+  // live plugin-side, so the sweep both detaches the element and queues the
+  // delete — leaving either half undone strands a codeword the plugin keeps
+  // matching against nothing.
+  it('sweeps a SUCCEEDED wrapper whose element left the DOM, and queues its delete', async () => {
+    const w = makeWrapper('arch', store);
+    queuePut(w);
+    script = ['echo'];
+    // Disconnect between the drain and the response landing.
+    const p = syncNow('test');
+    w.element.remove();
+    await vi.advanceTimersByTimeAsync(10);
+    await p;
+
+    expect(detachWrapper).toHaveBeenCalledWith(w.element);
+    expect(hasPendingDeletes()).toBe(true);
   });
 
   it('a sendMessage rejection (SW restarting) behaves the same', async () => {
@@ -498,9 +573,7 @@ describe('scheduleSync debounce + max-wait deadline (round 22c)', () => {
     vi.stubGlobal('chrome', { runtime: { sendMessage } });
     initLabelSync({
       store,
-      detachWrapper: vi.fn(),
       reconcile: vi.fn(),
-      isBadgesVisible: () => false,
     });
     rotateSession();
   });
@@ -574,7 +647,8 @@ describe('the reconcile default', () => {
   it('drives the live settle engine when nothing overrides it', async () => {
     const reconcile = vi.fn();
     setSettleEngine({ reconcile } as unknown as Parameters<typeof setSettleEngine>[0]);
-    initLabelSync({ store, detachWrapper: vi.fn(), isBadgesVisible: () => true });
+    pageSession.badgesVisible = true;
+    initLabelSync({ store });
 
     await syncOneVisibleWrapper();
     expect(reconcile).toHaveBeenCalled();
@@ -584,7 +658,8 @@ describe('the reconcile default', () => {
     const reconcile = vi.fn();
     const injected = vi.fn();
     setSettleEngine({ reconcile } as unknown as Parameters<typeof setSettleEngine>[0]);
-    initLabelSync({ store, detachWrapper: vi.fn(), reconcile: injected, isBadgesVisible: () => true });
+    pageSession.badgesVisible = true;
+    initLabelSync({ store, reconcile: injected });
 
     await syncOneVisibleWrapper();
     expect(injected).toHaveBeenCalled();
@@ -594,14 +669,16 @@ describe('the reconcile default', () => {
   // A sync can land before content.ts has constructed an engine. Nothing to
   // converge yet, and the next pass is level-triggered — so no-op, don't throw.
   it('is inert when no engine has been published', async () => {
-    initLabelSync({ store, detachWrapper: vi.fn(), isBadgesVisible: () => true });
+    pageSession.badgesVisible = true;
+    initLabelSync({ store });
     await expect(syncOneVisibleWrapper()).resolves.toBeUndefined();
   });
 
   it('does not reconcile at all while badges are hidden', async () => {
     const reconcile = vi.fn();
     setSettleEngine({ reconcile } as unknown as Parameters<typeof setSettleEngine>[0]);
-    initLabelSync({ store, detachWrapper: vi.fn(), isBadgesVisible: () => false });
+    pageSession.badgesVisible = false;
+    initLabelSync({ store });
 
     await syncOneVisibleWrapper();
     expect(reconcile).not.toHaveBeenCalled();
@@ -628,9 +705,7 @@ describe('republishAllGrammar', () => {
         ? { result: 'ok', succeeded: [], failed: [] }
         : undefined));
     vi.stubGlobal('chrome', { runtime: { sendMessage } });
-    initLabelSync({
-      store, detachWrapper: vi.fn(), reconcile: vi.fn(), isBadgesVisible: () => false,
-    });
+    initLabelSync({ store, reconcile: vi.fn() });
     rotateSession();
   });
 
@@ -717,9 +792,7 @@ describe('shadow-desync tripwire (committed_codewords vs sentCodewords)', () => 
       );
     });
     vi.stubGlobal('chrome', { runtime: { sendMessage } });
-    initLabelSync({
-      store, detachWrapper: vi.fn(), reconcile: vi.fn(), isBadgesVisible: () => false,
-    });
+    initLabelSync({ store, reconcile: vi.fn() });
     rotateSession();
     _resetShadowDesyncCooldownForTesting();
     sessionsSeen = [getSessionId()];
