@@ -29,6 +29,7 @@
 import { stripTabMarker, decorateTitle } from '../tab-marker-format';
 import { labelToDisplay, type LabelAssignment } from '../labels/words';
 import { getDisplayMode } from '../config';
+import { inTopFrame } from '../core/frame';
 import type { MessageHandler, MessageOf } from '../core/message-router';
 
 // The current marker letters ("a" / "qr"), or null when the feature is off /
@@ -130,12 +131,6 @@ export function _resetTabTitleForTesting(): void {
 //
 // Top frame only: the marker decorates the TAB title, which subframes do not
 // own. Both were branches of content.ts's onMessage chain.
-
-// Read at CALL time, not module scope: `window.top` never changes for a
-// frame's lifetime, so this costs nothing, and a module-scope const would make
-// the gate untestable without reloading the module. Same shape as toast.ts and
-// mode-chip.ts.
-const inTopFrame = () => window === window.top;
 
 export const tabTitleMessageHandlers: Record<string, MessageHandler> = {
   TAB_MARKER: (m: MessageOf<'TAB_MARKER'>) => { if (inTopFrame()) setTabMarker(m.letters); },

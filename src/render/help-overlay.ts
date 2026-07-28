@@ -20,6 +20,7 @@ import { letterToSpokenWord, isVoiceAlphabetLoaded } from '../labels/words';
 import { isBranchKitConnected } from '../plugin/connection-mirror';
 import { micGlyph } from './mic-glyph';
 import { dispatcher } from '../core/singletons';
+import { inTopFrame } from '../core/frame';
 import type { MessageHandler } from '../core/message-router';
 import { effectiveVoice, overridesFromList, type OverrideMap, type OverrideRecord } from '../keymap/command-override';
 
@@ -510,12 +511,6 @@ export function _resetHelpForTesting(): void {
 // takes the identical path as `?` and voice "help" — including whatever
 // content.ts registered `toggle_help` to do. Top frame only: the overlay is a
 // page-level surface.
-
-// Read at CALL time, not module scope: `window.top` never changes for a
-// frame's lifetime, so this costs nothing, and a module-scope const would make
-// the gate untestable without reloading the module. Same shape as toast.ts and
-// mode-chip.ts.
-const inTopFrame = () => window === window.top;
 
 export const helpMessageHandlers: Record<string, MessageHandler> = {
   OPEN_HELP: () => { if (inTopFrame()) dispatcher.dispatch('toggle_help', {}); },

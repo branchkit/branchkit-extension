@@ -41,6 +41,7 @@
 import { pageSession } from '../lifecycle/page-session';
 import { store } from '../core/store';
 import { dispatcher, keyHandler } from '../core/singletons';
+import { inTopFrame } from '../core/frame';
 import { getDisplayMode, getHintVisibility } from '../config';
 import { applyClaimLabel } from '../scan/element-wrapper';
 import { HintBadge } from './hints';
@@ -374,12 +375,6 @@ export function _resetBadgeVisibilityForTesting(): void {
 //
 // Both handlers used to be branches of content.ts's onMessage chain. They read
 // and write exactly what this module owns, so they belong beside it.
-
-// Read at CALL time, not module scope: `window.top` never changes for a
-// frame's lifetime, so this costs nothing, and a module-scope const would make
-// the gate untestable without reloading the module. Same shape as toast.ts and
-// mode-chip.ts.
-const inTopFrame = () => window === window.top;
 
 export const badgeVisibilityMessageHandlers: Record<string, MessageHandler> = {
   // Only the top frame answers, so the popup receives a single response. The

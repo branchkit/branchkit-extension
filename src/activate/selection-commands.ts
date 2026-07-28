@@ -27,6 +27,7 @@ import { urlUp, urlRoot } from './url-nav';
 import { copyText } from './clipboard';
 import type { Message } from '../types';
 import type { MessageHandler, MessageOf } from '../core/message-router';
+import { inTopFrame } from '../core/frame';
 
 const isTopFrame = window === window.top;
 
@@ -306,6 +307,9 @@ export function registerSelectionCommands(): void {
 
 export const markRestoreMessageHandlers: Record<string, MessageHandler> = {
   MARK_RESTORE: (m: MessageOf<'MARK_RESTORE'>) => {
-    if (isTopFrame) restorePosition({ scrollX: m.scrollX, scrollY: m.scrollY, hash: m.hash });
+    // inTopFrame() rather than this file's module-scope `isTopFrame`: the const
+    // is read once at import, so a subframe test would need a module reload —
+    // and this is the one message handler that performs a scroll/hash write.
+    if (inTopFrame()) restorePosition({ scrollX: m.scrollX, scrollY: m.scrollY, hash: m.hash });
   },
 };
