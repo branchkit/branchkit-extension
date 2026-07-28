@@ -1957,18 +1957,26 @@ function rescanForNav(fromCache: boolean, reason: string): void {
   // machinery survives a nav by rebinding wrappers; the pick can only be
   // re-asked.
   if (reason === 'spa_nav') {
-    cancelRangePick('spa_nav');
+    // FIRST, before anything that could hand it back: find's badge-screen
+    // borrow is a snapshot of the page the nav replaced. Nothing returned it
+    // across a nav (closeFindMode is reachable only from find_close, the escape
+    // cascade and caret), so a spent slot survived and made the NEXT borrow a
+    // no-op — highlights painting under a live badge layer.
+    //
+    // Order is load-bearing and was wrong until 2026-07-27: cancelRangePick's
+    // teardown calls clearFindPaint, which RESTORES this slot. Running the
+    // discard after it meant the slot had already been given back, kicking the
+    // async showBadges the discard exists to prevent.
+    discardBadgeScreenBorrow();
+    // A route swap invalidates the pick's question; `restoreBadges: false`
+    // because the nav decides visibility below, and the pick's own restore is
+    // the same async-showBadges hazard (see cancelRangePick's doc). Its
+    // keyboard half still runs.
+    cancelRangePick('spa_nav', false);
     // Same argument, same Ranges: a search badge points into DOM the nav just
     // replaced. The set only notices on a reconcile, which rides settle — so
     // left alone it survives to paint stale codewords over the new page.
     clearSearchBadges('spa_nav');
-    // And the same argument once more for find's badge-screen borrow: it is a
-    // snapshot of the page the nav replaced. Nothing returned it across a nav
-    // (closeFindMode is reachable only from find_close, the escape cascade and
-    // caret), so a spent slot survived and made the NEXT borrow a no-op —
-    // highlights painting under a live badge layer. Discarded, not restored;
-    // its doc has the reason restoring here would be wrong.
-    discardBadgeScreenBorrow();
   }
 
   // A same-document nav is a new page, so drive visibility to what the MODE

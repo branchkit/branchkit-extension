@@ -145,8 +145,8 @@ function borrowScreen(): PickEntry {
   return { borrow, hintMode };
 }
 
-function restoreScreen(entry: PickEntry): void {
-  entry.borrow.restore();
+function restoreScreen(entry: PickEntry, restoreBadges = true): void {
+  if (restoreBadges) entry.borrow.restore();
   // enterHintMode clears the codeword filter, which is right on both edges:
   // the badges the pick hid are repainted unfiltered, so a prefix typed
   // before the pick no longer names anything on screen.
@@ -191,8 +191,21 @@ function resolvePickCodeword(codeword: string): HolderOutcome {
 }
 
 /** Cancel any pending pick (new arm replaces old, escape, requery, nav). */
-export function cancelRangePick(reason: string): void {
-  if (pending) teardown(reason);
+/**
+ * End a pending pick.
+ *
+ * `restoreBadges: false` tears down WITHOUT giving the badge screen back, for
+ * the one caller where giving it back is wrong: a same-document navigation.
+ * The borrow is a snapshot of the page the nav replaced, and `restore()` kicks
+ * an ASYNC showBadges that raises pageSession.badgesVisible a frame later —
+ * while the nav path reads that flag synchronously to decide whether the new
+ * page starts hidden. Restoring here makes the nav skip its own hide and then
+ * paint badges onto a manual-mode page one frame after it decided not to. The
+ * keyboard half of the restore still runs: a nav must not leave the user in a
+ * hint mode entered for chips that no longer exist.
+ */
+export function cancelRangePick(reason: string, restoreBadges = true): void {
+  if (pending) teardown(reason, restoreBadges);
 }
 
 /**
@@ -274,7 +287,7 @@ export function startRangePick(ranges: Range[], onPick: (range: Range) => void):
 // (Settle-driven chip reconciliation is the registered holder's now — the
 // registry's reconcileAll fan-out reaches the set directly, every kind.)
 
-function teardown(reason: string): void {
+function teardown(reason: string, restoreBadges = true): void {
   if (!pending) return;
   const { chips } = pending;
   pending = null;
@@ -286,8 +299,9 @@ function teardown(reason: string): void {
   // ownership can safely cross the module boundary at all.
   clearFindPaint();
   // Badges and keyboard together: whatever the pick borrowed, the recorded
-  // floor gives back.
-  if (floor) restoreScreen(floor.payload as PickEntry);
+  // floor gives back — except on a nav, where the caller owns visibility and
+  // the badge half must not fire (see cancelRangePick).
+  if (floor) restoreScreen(floor.payload as PickEntry, restoreBadges);
   // Release the projection narrow AFTER the set gave its codewords back, so the
   // page's own hints are what the HUD falls back to.
   publishPickWindow([]);
