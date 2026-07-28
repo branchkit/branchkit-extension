@@ -67,10 +67,76 @@ import { dirname, join, relative } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 let failed = false;
-const fail = (msg) => { failed = true; console.error(`FAIL: ${msg}`); };
+let failCount = 0;
+const fail = (msg) => { failed = true; failCount++; console.error(`FAIL: ${msg}`); };
 const ok = (msg) => console.log(`ok: ${msg}`);
 
+/**
+ * Local pass/fail for ONE lint block: `const clean = section(); … if (clean())`.
+ *
+ * Every block used to gate its `ok` on the process-global `failed`, which is
+ * monotonic — so a failure in ANY earlier lint deleted a later one's verdict
+ * even though it passed. A missing `ok:` line reads as "that check did not
+ * run", which is the ambiguity the ok/FAIL pairing exists to remove; observed
+ * for real when an unrelated catalog failure swallowed lint E's line whole.
+ */
+const section = () => {
+  const before = failCount;
+  return () => failCount === before;
+};
+
 const read = (rel) => readFileSync(join(root, rel), 'utf8');
+
+/**
+ * Blank out string literals and comments, preserving LENGTH and NEWLINES.
+ *
+ * Every lint here reads source with a deliberately dumb regex, and four
+ * separate defects traced to the same root: the regex also read the source's
+ * own prose. A `}` inside `keyHint: '}'` ended a catalog entry four lines
+ * early and silently dropped it from lint D's demand set; `description: '…
+ * by voice: …'` granted lint H's reachability to an entry nothing could
+ * dispatch; a comment mentioning `registerMessageHandlers({` failed lint E
+ * against text that is not code. Masking first keeps every regex as dumb as
+ * it was and makes all of them read CODE.
+ *
+ * Offsets are preserved so a masked index is valid in the original, and
+ * newlines so `^`-anchored and indentation-sensitive patterns still work.
+ *
+ * BLIND SPOT, stated rather than left to be found: a regex literal containing
+ * `//` (e.g. `/https:\/\//`) would start a comment here. Guarded only by not
+ * treating a backslash-escaped slash as a comment opener, which covers the
+ * escaped form this codebase actually writes. A bare `//` inside an unescaped
+ * character class would still mis-mask — no file linted here has one, checked.
+ */
+function maskNonCode(src) {
+  const out = src.split('');
+  const blank = (from, to) => {
+    for (let i = from; i < to && i < out.length; i++) if (out[i] !== '\n') out[i] = ' ';
+  };
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (c === '"' || c === "'" || c === '`') {
+      let j = i + 1;
+      while (j < src.length && src[j] !== c) j += src[j] === '\\' ? 2 : 1;
+      blank(i + 1, j);
+      i = j;
+    } else if (c === '/' && src[i + 1] === '/' && src[i - 1] !== '\\') {
+      let j = src.indexOf('\n', i);
+      if (j === -1) j = src.length;
+      blank(i, j);
+      i = j - 1;
+    } else if (c === '/' && src[i + 1] === '*') {
+      const j = src.indexOf('*/', i + 2);
+      const end = j === -1 ? src.length : j + 2;
+      blank(i, end);
+      i = end - 1;
+    }
+  }
+  return out.join('');
+}
+
+/** Source with its prose masked out — what a dumb regex should read. */
+const readCode = (rel) => maskNonCode(read(rel));
 
 /** Every non-test .ts under src/, as repo-relative paths. */
 function srcFiles() {
@@ -88,6 +154,7 @@ function srcFiles() {
 
 // --- A. ModeSpec table: union covered, null mirrors carry their reason ---
 {
+  const clean = section();
   const src = read('src/core/mode-stack.ts');
   const unionMatch = src.match(/export type ModeId =([^;]+);/);
   const union = [...(unionMatch?.[1] ?? '').matchAll(/'([a-z_]+)'/g)].map((m) => m[1]);
@@ -123,11 +190,12 @@ function srcFiles() {
       fail(`ModeSpec '${s.id}' has mirror: null with no recorded reason — write the DECISION comment in the entry`);
     }
   }
-  if (!failed) ok(`mode specs: ${specIds.length} entries cover the ModeId union; null mirrors carry reasons`);
+  if (clean()) ok(`mode specs: ${specIds.length} entries cover the ModeId union; null mirrors carry reasons`);
 }
 
 // --- B. Holder priorities: declared ranks, unique, strictly ordered ---
 {
+  const clean = section();
   const reg = read('src/labels/holder-registry.ts');
   const rank = (name) => Number(reg.match(new RegExp(`export const ${name} = (\\d+)`))?.[1]);
   const excl = rank('EXCLUSIVE_OVERLAY_PRIORITY');
@@ -157,11 +225,12 @@ function srcFiles() {
       }
     }
   }
-  if (!failed) ok(`holder priorities: ranks ${excl}>${add}>${amb}; ${sites} priority sites all use declared ranks`);
+  if (clean()) ok(`holder priorities: ranks ${excl}>${add}>${amb}; ${sites} priority sites all use declared ranks`);
 }
 
 // --- C. store.all iteration pinned per file ---
 {
+  const clean = section();
   // The sanctioned modules and their exact site counts at pin time
   // (2026-07-26, Wave 4 D2). Over → a new sweep needs a visible raise here
   // (or belongs to the holder registry: heldAnywhere/allHeld/reconcileAll).
@@ -268,11 +337,12 @@ function srcFiles() {
         (count === 0 ? ' (remove the entry)' : ''));
     }
   }
-  if (!failed) ok(`store.all: ${total} sites across ${Object.keys(PINS).length} sanctioned modules, all at pin`);
+  if (clean()) ok(`store.all: ${total} sites across ${Object.keys(PINS).length} sanctioned modules, all at pin`);
 }
 
 // --- D. Every dispatchable action has an extension-side route ---
 {
+  const clean = section();
   // The files that route a BRANCHKIT_ACTION. Both entry points; the module
   // holding every CONTENT arm that does not touch the nav-time lifecycle glue
   // (§6i — `activate` and `reactivate` stayed in content.ts because they reach
@@ -324,7 +394,12 @@ function srcFiles() {
   // Sources half 1 — the extension's own catalog: every voiced command id
   // can come back over SSE as a BRANCHKIT_ACTION (plus per-pattern params
   // actions when a pattern overrides the action — none do today).
+  // TWO views of one file, which is what preserving offsets buys. Ids are
+  // string literals, so they have to be read from the raw text; structure and
+  // markers must not be, or a `}` in a string ends an entry early and a
+  // `voice:` in a description grants lint H's permission. Same indices.
   const catalog = read('src/keymap/command-catalog.ts');
+  const catalogCode = maskNonCode(catalog);
   const voiced = [];
   const entryRe = /\{\s*id:\s*'([a-z_0-9]+)'/g;
   const catalogEntries = [];
@@ -337,26 +412,34 @@ function srcFiles() {
   // permission. Found by mutating H's fix: a comment reading "a note that
   // happens to mention mappable: true" let an unreachable entry pass.
   //
-  // Balanced braces inside strings (`'blank {hint}'`) cancel out, so depth
-  // counting is exact here; an unbalanced one would fail the parse below rather
-  // than mis-slice quietly.
+  // Braces inside strings and comments are masked out before this runs, so the
+  // depth count sees only code. It used to see `'blank {hint}'` too and got
+  // away with it because those happen to balance — but `keyHint: '}'` ended an
+  // entry four lines early, and the entry then left lint D's demand set with
+  // the count unchanged at its green baseline. A stray `{` in CODE still fails
+  // loudly below; a stray `}` never could, because it always finds an `end`.
   for (let m; (m = entryRe.exec(catalog)) !== null;) {
     let depth = 0, end = -1;
-    for (let i = m.index; i < catalog.length; i++) {
-      if (catalog[i] === '{') depth++;
-      else if (catalog[i] === '}' && --depth === 0) { end = i + 1; break; }
+    for (let i = m.index; i < catalogCode.length; i++) {
+      if (catalogCode[i] === '{') depth++;
+      else if (catalogCode[i] === '}' && --depth === 0) { end = i + 1; break; }
     }
     if (end === -1) {
       fail(`lint D could not brace-match catalog entry '${m[1]}' — fix the lint, not the code`);
       continue;
     }
-    catalogEntries.push({ id: m[1], text: catalog.slice(m.index, end) });
+    catalogEntries.push({ id: m[1], text: catalogCode.slice(m.index, end) });
   }
   for (const e of catalogEntries) {
     if (/voice:/.test(e.text)) voiced.push(e.id);
   }
-  if (voiced.length === 0) fail('lint D parsed zero voiced catalog entries — fix the lint, not the code');
-  if (catalogEntries.length === 0) fail('lint D parsed zero catalog entries — fix the lint, not the code');
+  // One message, not two: `voiced` is derived from `catalogEntries`, so an
+  // empty parse tripped both and read as two independent problems.
+  if (catalogEntries.length === 0) {
+    fail('lint D parsed zero catalog entries — fix the lint, not the code');
+  } else if (voiced.length === 0) {
+    fail('lint D parsed zero voiced catalog entries — fix the lint, not the code');
+  }
 
   const missing = voiced.filter((id) => !handled.has(id));
   for (const id of missing) {
@@ -466,6 +549,7 @@ function srcFiles() {
   // Both sides are read from the code. Loop-driven registrations are read from
   // their command tables the same way lint D reads its other literals.
   {
+    const cleanSub = section();
     /** action id -> the files that bind it. */
     const owners = new Map();
     const claim = (id, where) => {
@@ -526,7 +610,7 @@ function srcFiles() {
         'the voice command matches, dispatches, and lands on console.warn. Lint D counts the ' +
         'passthrough set as proof of handling, so it cannot see this');
     }
-    if (!failed) {
+    if (cleanSub()) {
       ok(`command bindings: ${registered.size} actions bound uniquely, ` +
         `all ${passthrough.length} passthrough ids have a handler`);
     }
@@ -560,8 +644,12 @@ function srcFiles() {
   // A `keyHint`-only entry (documented, reached by a mode's own keys rather
   // than by the registry) would be a legitimate fourth escape. None exists
   // today, so it is not written in: adding one should be a deliberate edit here
-  // with its reason, not a hole standing open for it.
+  // with its reason, not a hole standing open for it. The failure text says so,
+  // because the first version told the author such an entry "renders nowhere" —
+  // false, and it steers a correct edit toward deleting a row the help overlay
+  // does render.
   {
+    const cleanSub = section();
     const passthroughSet = new Set(passthroughIds);
     const unreachable = catalogEntries.filter((e) =>
       !/voice:/.test(e.text)
@@ -569,10 +657,12 @@ function srcFiles() {
       && !passthroughSet.has(e.id));
     for (const e of unreachable) {
       fail(`catalog command '${e.id}' is not mappable, carries no voice pattern, and is not in ` +
-        'DISPATCH_PASSTHROUGH_ACTIONS — nothing in the extension can dispatch it. It renders ' +
-        'nowhere (buildHelpModel and the palette both skip it), so a handler registered for it ' +
-        'is dead code that reads as live. Give it a bind, a phrase, a passthrough entry, or ' +
-        'delete the entry');
+        'DISPATCH_PASSTHROUGH_ACTIONS — nothing in the extension can dispatch it, so a handler ' +
+        'registered for it is dead code that reads as live. Give it a bind, a phrase, a ' +
+        'passthrough entry, or delete it. If it is a mode-owned command meant to be DOCUMENTED ' +
+        'rather than dispatched, note that buildHelpModel does render a keyHint-only row ' +
+        '(help-overlay.ts: it skips only when keys, voice AND keyHint are all empty) — add that ' +
+        'fourth escape here deliberately, with its reason, rather than deleting a live row');
     }
     if (unreachable.length === 0) {
       ok(`catalog reachability: all ${catalogEntries.length} entries dispatchable ` +
@@ -598,14 +688,18 @@ function srcFiles() {
 // the SW's are not competing for anything, and a rule that said otherwise
 // would be inventing a constraint the runtime does not have.
 {
+  const clean = section();
   const ENTRIES = ['src/background.ts', 'src/content.ts'];
-  const entrySrc = new Map(ENTRIES.map((e) => [e, read(e)]));
+  // Masked throughout: every read below is a structural question, and a
+  // comment quoting `registerMessageHandlers(` or `onMessage.addListener(` is
+  // prose, not a registration.
+  const entryCode = new Map(ENTRIES.map((e) => [e, readCode(e)]));
   const entryPaths = new Set(ENTRIES.map((e) => join(...e.split('/'))));
 
   const exported = [];
   for (const rel of srcFiles()) {
     if (entryPaths.has(rel)) continue;
-    for (const m of read(rel).matchAll(/^export const (\w*MessageHandlers)\b/gm)) {
+    for (const m of readCode(rel).matchAll(/^export const (\w*MessageHandlers)\b/gm)) {
       exported.push({ name: m[1], file: rel });
     }
   }
@@ -613,7 +707,7 @@ function srcFiles() {
   /** entry -> the map names it composes. */
   const registeredBy = new Map(
     ENTRIES.map((e) => [e, new Set(
-      [...entrySrc.get(e).matchAll(/registerMessageHandlers\(\s*(\w+)/g)].map((m) => m[1]),
+      [...entryCode.get(e).matchAll(/registerMessageHandlers\(\s*(\w+)/g)].map((m) => m[1]),
     )]),
   );
   const registeredAnywhere = new Set([...registeredBy.values()].flatMap((s) => [...s]));
@@ -631,7 +725,7 @@ function srcFiles() {
   // Nothing may bypass the table: each listener takes routeMessage directly, so
   // a reintroduced inline if-chain fails here rather than quietly coexisting.
   for (const entry of ENTRIES) {
-    if (!/onMessage\.addListener\(routeMessage\)/.test(entrySrc.get(entry))) {
+    if (!/onMessage\.addListener\(routeMessage\)/.test(entryCode.get(entry))) {
       fail(`${entry} no longer installs routeMessage as its sole onMessage listener — ` +
         'handlers belong in a module map (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md)');
     }
@@ -649,21 +743,54 @@ function srcFiles() {
   // Disjointness is a static property of the source, so check it statically and
   // leave the runtime throw as the backstop rather than the discovery mechanism.
 
-  /** Keys of the object literal whose opening brace is at `open`. */
+  /**
+   * Keys of the object literal whose opening brace is at `open`, or NULL when
+   * the literal has content this cannot read.
+   *
+   * Never `[]` for a non-empty literal — a silently-empty key set is exactly
+   * the failure this check exists to prevent, and it was live: one-lining an
+   * unrelated module map dropped four types out of the disjointness set, still
+   * printed `ok`, and a genuine duplicate `GET_HEALTH` then passed green while
+   * `registerMessageHandlers` threw at service-worker boot.
+   *
+   * Keys are found by POSITION IN THE GRAMMAR — at the literal's own bracket
+   * depth, in a slot that follows the opening brace or a comma — not by
+   * indentation. Every indentation heuristic tried here cut both ways: at a
+   * fixed two spaces a one-line map read as zero keys AND a correctly written
+   * map nested one block deeper failed the guard; deriving the indent from the
+   * first line then made a one-line map read as exactly ONE key, which is
+   * worse, because the guard only fires on zero and 52 types passed as `ok`.
+   *
+   * Requiring the key slot (after `{` or a depth-0 `,`) is what keeps this
+   * honest without a real parser: a ternary's `? BAR :` sits in a value slot
+   * and cannot be mistaken for a key. `src` is expected to be MASKED, so
+   * braces and colons inside strings and comments are already gone.
+   */
   const literalKeys = (src, open) => {
     let depth = 0, i = open;
     for (; i < src.length; i++) {
       if (src[i] === '{') depth++;
       else if (src[i] === '}' && --depth === 0) break;
     }
-    // Handler keys sit at the literal's own level (2 spaces). An object literal
-    // inside a handler body is nested deeper, so its keys cannot match.
-    return [...src.slice(open, i).matchAll(/^ {2}([A-Z][A-Z0-9_]*):/gm)].map((m) => m[1]);
+    const body = src.slice(open + 1, i);
+    const keys = [];
+    let d = 0, keySlot = true;
+    for (let k = 0; k < body.length; k++) {
+      const ch = body[k];
+      if (ch === '{' || ch === '(' || ch === '[') { d++; continue; }
+      if (ch === '}' || ch === ')' || ch === ']') { d--; continue; }
+      if (d === 0 && ch === ',') { keySlot = true; continue; }
+      if (!keySlot || /\s/.test(ch)) continue;
+      const m = /^([A-Z][A-Z0-9_]*)\s*:/.exec(body.slice(k));
+      if (m) { keys.push(m[1]); k += m[0].length - 1; }
+      keySlot = false;
+    }
+    return keys.length === 0 && body.trim() !== '' ? null : keys;
   };
 
-  /** Types a named map claims, or null if the map's literal cannot be found. */
+  /** Types a named map claims, or null if its literal cannot be read. */
   const keysOfMap = (name, file) => {
-    const src = read(file);
+    const src = readCode(file);
     const at = src.indexOf(`export const ${name}`);
     if (at === -1) return null;
     return literalKeys(src, src.indexOf('{', src.indexOf('=', at)));
@@ -682,27 +809,32 @@ function srcFiles() {
     };
     for (const { name, file } of exported) {
       if (!registeredBy.get(entry).has(name)) continue;
-      for (const type of keysOfMap(name, file) ?? []) claim(type, name);
+      const types = keysOfMap(name, file);
+      // The guard belongs on BOTH paths. It was added to the inline one only,
+      // and the named one — 23 maps against 2 — kept the identical hole: an
+      // unreadable literal became `?? []`, so the map's types left the
+      // disjointness set while the runtime still registered them, and the
+      // collision check lost its teeth on a file nobody had edited.
+      if (types === null) {
+        fail(`${name} (${file}) has a handler literal this check cannot read, so its message ` +
+          'types silently leave the disjointness set while still registering at runtime');
+        continue;
+      }
+      for (const type of types) claim(type, name);
     }
     // Both entry points compose a map inline — the SW's offscreen-bridge
     // residue, content.ts's BRANCHKIT_ACTION — and either can collide with a
     // module's just as easily.
-    const src = entrySrc.get(entry);
+    const src = entryCode.get(entry);
     for (const m of src.matchAll(/registerMessageHandlers\(\{/g)) {
       const types = literalKeys(src, m.index + m[0].length - 1);
-      // An inline map this cannot read is a map this cannot check, and the
-      // failure is silent in the direction that matters — its types would be
-      // absent from the disjointness set while the runtime still registers
-      // them. `literalKeys` matches keys at the literal's own two-space
-      // indentation, so a one-line `registerMessageHandlers({ DEV_PING: … })`
-      // parses to nothing and quietly leaves the table. Measured: writing the
-      // DEV_PING map on one line dropped the type count from 55 to 54 and
-      // nothing failed. Cheaper than a smarter parser, and it keeps the parser
-      // dumb, which is the point.
-      if (types.length === 0) {
-        fail(`${entry} composes an inline handler map this check cannot read — put its keys on ` +
-          'their own lines at the literal\'s indentation, or its types silently leave the ' +
-          'disjointness set while still registering at runtime');
+      // Same guard as the named path above. The scan reads MASKED source, so a
+      // comment or string containing `registerMessageHandlers({` — a shape this
+      // file's own prose uses — no longer fails the lint against text that is
+      // not code.
+      if (types === null) {
+        fail(`${entry} composes an inline handler map this check cannot read, so its types ` +
+          'silently leave the disjointness set while still registering at runtime');
       }
       for (const type of types) claim(type, `${entry} (inline)`);
     }
@@ -719,7 +851,7 @@ function srcFiles() {
   // Gated on `failed`, not just on these two lists: the unreadable-inline-map
   // guard above reports through fail() as well, and a lint that prints "ok" in
   // the same breath as its own FAIL is a lint people learn to skim.
-  if (!failed && unregistered.length === 0 && collisions.length === 0) {
+  if (clean() && unregistered.length === 0 && collisions.length === 0) {
     ok(`message handlers: ${exported.length} maps across ${ENTRIES.length} tables, ` +
       `${typeCount} types disjoint per table, both listeners are the table`);
   }
@@ -819,6 +951,7 @@ function stronglyConnected(graph) {
 // endorsed. This is a ratchet: breaking one is a win to be banked by deleting
 // its line, and a NEW cycle fails.
 {
+  const clean = section();
   const KNOWN_CYCLES = [
     // The lifecycle/observer knot. Wrapper teardown, the page session and the
     // observers that feed them are mutually recursive by construction.
@@ -842,7 +975,7 @@ function stronglyConnected(graph) {
         '      Delete it from KNOWN_CYCLES in this commit so the win locks in.');
     }
   }
-  if (!failed) ok(`import cycles: ${found.length} at baseline, none new`);
+  if (clean()) ok(`import cycles: ${found.length} at baseline, none new`);
 }
 
 // --- G. Module-scope registrations stay reachable from an entry point -------
@@ -858,6 +991,7 @@ function stronglyConnected(graph) {
 // §6a's rule is "a seam may live at module scope if it is a pure assignment".
 // This is that rule's missing half: it may, and then it must stay imported.
 {
+  const clean = section();
   const REGISTRARS = {
     'src/activate/escape-cascade.ts': 'Escape key → the cascade; hint inner-transient probe',
     'src/activate/search-badges.ts': 'find deactivate → clear the search badges',
@@ -888,7 +1022,7 @@ function stronglyConnected(graph) {
     }
     checked++;
   }
-  if (!failed) ok(`module-scope registrars: ${checked} pinned into an entry point's import closure`);
+  if (clean()) ok(`module-scope registrars: ${checked} pinned into an entry point's import closure`);
 }
 
 // --- G2. Every command registrar is actually CALLED ------------------------
@@ -923,6 +1057,7 @@ function stronglyConnected(graph) {
 // both sides from the code buys us out of — so the union is the deliberate
 // trade, not an oversight.
 {
+  const clean = section();
   const ENTRIES = ['src/content.ts', 'src/background.ts'];
   // `install*` takes arguments (installUncaughtCapture does), so the call
   // pattern cannot require empty parens the way the registrar one does.
@@ -949,7 +1084,7 @@ function stronglyConnected(graph) {
         'because they call it themselves');
     }
   }
-  if (!failed) ok(`boot registrars: ${registrars.length} exported, all called at boot`);
+  if (clean()) ok(`boot registrars: ${registrars.length} exported, all called at boot`);
 }
 
 process.exit(failed ? 1 : 0);
