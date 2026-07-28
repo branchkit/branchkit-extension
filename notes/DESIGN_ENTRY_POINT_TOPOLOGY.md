@@ -159,9 +159,10 @@ line count.
 
 ### Phase 3 — `content.ts` message router + command self-registration
 **3a HALF DONE, 3b ALL BUT TWO DONE 2026-07-28, §6g.** The listener is the table
-and ten of eleven branches are with their owners; `BRANCHKIT_ACTION` is blocked
-on §6g.5. 3b: 41 of 43 registrations moved (§6g.7); the two left need the same
-kind of state relocation §6g.4 did, not a binding move.
+and ten of eleven branches are with their owners. `BRANCHKIT_ACTION` is the last
+one: **unblocked and scoped in §6i** — two of its arms stay (they reach the
+excluded nav glue), ~200 of 403 lines move. 3b: 41 of 43 registrations moved
+(§6g.7); the two left need the same state relocation §6g.4 did, not a binding move.
 
 Same move as phase 1 on the 11-branch listener at `content.ts:2361`, plus
 finishing the command-registration convention: 42 `dispatcher.register` calls
@@ -894,6 +895,8 @@ had that check.
 
 #### 6g.5 STOPPED: `BRANCHKIT_ACTION` cannot leave without a decision
 
+**Superseded by §6i — the decision was made and the split is scoped there.**
+
 403 lines, and it closes over **nine** `content.ts` locals — measured, not
 estimated: `DISPATCH_PASSTHROUGH_ACTIONS`, `INPUT_TYPES`,
 `preNavObserverTeardown`, `reportNoSuchHint`, `republishForActivation`,
@@ -1167,6 +1170,63 @@ containment the code did not have. Mutation testing per commit did not catch any
 of them, because each change was individually correct; only reading the whole
 range against its base surfaced them. That is an argument for reviewing an arc
 at its end even when every step was verified.
+
+### 6i. The `BRANCHKIT_ACTION` split — RESOLVED and scoped (2026-07-28)
+
+**§6g.5's decision is made: the exclusion is drawn on CONCERNS, not line
+ranges.** `trimFrameUrl` moves. It sits at `content.ts:1635`, between the
+orphan-quiesce and BK_ACTIVATE_PATH sections and therefore inside §5's excluded
+*band*, but it is a pure URL-trimming string helper with 15 callers and no
+relationship to bfcache, orphan quiesce, nav rescan or teardown. Injecting it
+instead would re-introduce the exact seam pattern phase 2 spent a session
+retiring, for a function that trims a URL. Ratified by the user 2026-07-28.
+
+**Option 1 is the plan, and it is a cleaner cut than §6g.5 could see.** Every
+arm was mapped against the `content.ts` locals it actually uses (script: walk
+the handler body, split on `action === …` / `*_ACTIONS.has(action)`, intersect
+identifiers with top-level declarations minus imports):
+
+| arm | `content.ts` locals it needs |
+|---|---|
+| `toggle_hints`, `rescan`, `set_badge_mode` | — |
+| `history_back`, `history_forward`, `refresh` | — |
+| `noop`, `name_reference` | — |
+| `hover_hint` / `focus_hint` / `copytext_hint` / `caret_hint` | `sealedDispatchSeen`, `reportNoSuchHint`, `trimFrameUrl` |
+| `escape`, `SELECTION_ACTIONS` | `trimFrameUrl` |
+| `resolve_reference` | `INPUT_TYPES` |
+| passthrough | `DISPATCH_PASSTHROUGH_ACTIONS` |
+| **`reactivate`** | **`republishForActivation`** (:1886, nav-rescan region) |
+| **`activate` / `activate_hint_newtab` / `activate_hint_background`** | **`preNavObserverTeardown`** (:1663, the nav wedge preempt) + `trimFrameUrl`, `sealedDispatchSeen`, `reportNoSuchHint`, `shouldAutoShowBadges`, `scheduleHintRefresh`, `INPUT_TYPES` |
+
+**Exactly two arms reach into the excluded concern**, and they are the last two
+rows. Everything above them — roughly 200 of the 403 lines — moves with
+`trimFrameUrl`, `sealedDispatchSeen`, `reportNoSuchHint` and `INPUT_TYPES`, and
+touches no lifecycle glue at all.
+
+So the split is NOT "draw the module boundary around an import constraint",
+which is what made option 1 unattractive when it was written. The boundary lands
+on a real seam: **resolve-and-act-on-an-element** (movable) versus **navigate
+away from this page** (the wedge preempt, the reactivation republish), which is
+the orphan-teardown arc's territory and stays until that is out of soak.
+
+**Sequencing when this runs.** Move the four helpers to leaves first, one commit,
+so the split itself is a pure relocation — same shape as §6g.4, and it keeps the
+diff that touches the voice path as small and readable as possible.
+
+**Verification this needs beyond the usual gates.** realinput drives real keys,
+not voice, and `harness:messages` probes exactly one benign voice verb
+(`scroll_down`). The moved arms are the element verbs, escape, selection and the
+reference actions — none of which any harness currently exercises through
+`BRANCHKIT_ACTION`. Extend `scripts/harness/messages/run.mjs` with a probe per
+moved arm BEFORE the move, so the harness can prove equivalence rather than
+merely fail to notice. `pipelines.ingest_transcript` is NOT an option here: CLAUDE.md
+is explicit that actions really execute and it must not be driven from automated
+tests.
+
+**Still after this, in order:** the two remaining registrations (`activate_hint`
+needs `activateWrapper`, `toggle_help` needs `currentKeymap` — both §6g.4-shaped
+state relocations), and phase 1's own residue, `handleSSEEvent` (~136 lines) plus
+`storeAlphabet`, which §7 named and which would take `background.ts` under ~700.
 
 ---
 
