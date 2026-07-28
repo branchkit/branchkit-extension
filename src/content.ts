@@ -55,7 +55,7 @@ import {
 } from './activate/activate-path-log';
 import { captureDebugSnapshot } from './debug/debug-snapshot';
 import { toggleOverlay } from './render/debug-overlay';
-import { toggleHelpOverlayWithSpokenForms, helpMessageHandlers } from './render/help-overlay';
+import { registerHelpCommands, helpMessageHandlers } from './render/help-overlay';
 import { registerPaletteCommands, paletteHostMessageHandlers } from './render/palette-host';
 import { setTabMarker, refreshTabMarker, tabTitleMessageHandlers } from './render/tab-title';
 import { flashToast } from './render/toast';
@@ -73,9 +73,7 @@ import { narrowBadge } from './labels/codeword-typing';
 import { runEscapeCascade } from './activate/escape-cascade';
 import { preemptsPageKeys } from './activate/key-preamble';
 import './debug/dev-keepalive';
-import { dispatcher, registry, keyHandler } from './core/singletons';
-import { DEFAULT_KEYMAP, type KeymapEntry } from './keymap/command-catalog';
-import { loadKeymap, onKeymapChanged } from './keymap/keymap-storage';
+import { keyHandler } from './core/singletons';
 import { installSiteKeyPolicy } from './keymap/site-key-policy';
 import { scanWithAdapter } from './adapters';
 import { setKeyHeld } from './activate/scroller';
@@ -148,6 +146,7 @@ import { registerTabCommands } from './activate/tab-commands';
 import { resolveDispatchTarget } from './activate/dispatch-target';
 import { dispatchVoiceAction } from './activate/voice-dispatch';
 import { activateWrapper } from './activate/keyboard-activation';
+import { installKeymapRegistry } from './keymap/keymap-registry';
 
 // --- Idempotency guard ---
 //
@@ -958,36 +957,11 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
 
 // --- Register Commands (built from the keymap) ---
 //
-// The registry is the matcher; the keymap (command-catalog.ts DEFAULT_KEYMAP,
-// overridable per-user via keymap-storage) is the source of truth for what's
-// bound to what. Building the registry from data (rather than hardcoded
-// registry.add calls) is what lets the options-page editor rebuild bindings
-// live via registry.replaceAll — see notes/DESIGN_KEYMAP_CONFIG.md.
-//
-// The default set, for reference: one binding per command, preferring the
-// always-mode form (Shift/modifier chords route to commands even with hints
-// painted; bare letters are codeword input then, so they'd be eaten).
-// Shift+J/K/D/U/T/G scroll; Shift+H/L cycle tabs; Shift+F toggles hints, `f`
-// enters hint mode, and a capital letter in hint mode opens in a new tab — the
-// trio that replaced the discrete show/hide/show-new-tab commands. A few
-// inherently-bare, hidden-only binds (h/l horizontal scroll, `cs`, `/`, `n`).
-// Users add extra binds (e.g. plain j) via the options editor.
-// The effective keymap, kept in sync with the registry so the help overlay can
-// render the user's actual binds (not just the defaults).
-let currentKeymap: readonly KeymapEntry[] = DEFAULT_KEYMAP;
-function buildRegistryFromKeymap(entries: readonly KeymapEntry[]): void {
-  currentKeymap = entries;
-  registry.replaceAll(
-    entries.map((e) => ({ keys: e.keys, action: e.command, params: e.params })),
-  );
-}
-// Defaults synchronously so keybinds work before the async storage read
-// returns; then apply the stored keymap (if any) and rebuild live on edits.
-buildRegistryFromKeymap(DEFAULT_KEYMAP);
-if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
-  void loadKeymap().then(buildRegistryFromKeymap);
-  onKeymapChanged(buildRegistryFromKeymap);
-}
+// The keymap-to-registry sync and the live keymap it keeps live in
+// keymap/keymap-registry.ts, which carries the rationale. An explicit call
+// because it does I/O: a storage read at some module's import scope is a boot
+// order nobody chose — the same reason installSiteKeyPolicy is called below.
+installKeymapRegistry();
 
 // The keymap's per-site companion: which keys this page gets to keep. Same
 // shape as the block above (defaults stand until the async read lands, then
@@ -1013,11 +987,11 @@ registerScrollCommands();
 // Find commands register from scan/find.ts.
 registerFindCommands();
 
+registerHelpCommands();
 
-// Keyboard help overlay (default ?). Reads the live keymap so it shows the
-// user's actual binds; the overlay fetches phrase overrides + aliases on open
-// (render/help-overlay.ts). Extension-owned — works without BranchKit connected.
-dispatcher.register('toggle_help', () => toggleHelpOverlayWithSpokenForms(currentKeymap));
+
+// Keyboard help overlay (default ?) — registers with the overlay it opens, in
+// render/help-overlay.ts. Extension-owned: works without BranchKit connected.
 
 // Command palette (notes/DESIGN_TAB_NAVIGATION.md, Layer 2): the open
 // commands live with the overlay host (render/palette-host.ts).

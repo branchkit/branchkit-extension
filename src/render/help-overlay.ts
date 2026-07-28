@@ -23,6 +23,7 @@ import { dispatcher } from '../core/singletons';
 import { inTopFrame } from '../core/frame';
 import type { MessageHandler } from '../core/message-router';
 import { effectiveVoice, overridesFromList, type OverrideMap, type OverrideRecord } from '../keymap/command-override';
+import { activeKeymap } from '../keymap/keymap-registry';
 
 export interface HelpRow {
   /** Display strings for every binding of this command (e.g. ["Shift+J"]). */
@@ -505,11 +506,27 @@ export function _resetHelpForTesting(): void {
   close();
 }
 
+/**
+ * `toggle_help` (default `?`, voice "help"). Registers here rather than from
+ * the entry point because the keymap it reads is no longer a `content.ts` local
+ * — keymap/keymap-registry.ts owns it, and this module already imports the
+ * dispatcher for OPEN_HELP below, so binding here closes no cycle and adds no
+ * closure (section 6g.7's third case, which is the default).
+ *
+ * `activeKeymap()` is CALLED per dispatch, not captured at registration. The
+ * user's stored keymap arrives from an async storage read, so a keymap read
+ * once at boot is the factory default — and the overlay would still open and
+ * still render every group, showing the wrong binds silently.
+ */
+export function registerHelpCommands(): void {
+  dispatcher.register('toggle_help', () => toggleHelpOverlayWithSpokenForms(activeKeymap()));
+}
+
 // --- Popup Help button (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md phase 3) ---
 //
 // Routed through the dispatcher rather than calling the toggle directly, so it
 // takes the identical path as `?` and voice "help" — including whatever
-// content.ts registered `toggle_help` to do. Top frame only: the overlay is a
+// `toggle_help` is registered above to do. Top frame only: the overlay is a
 // page-level surface.
 
 export const helpMessageHandlers: Record<string, MessageHandler> = {
