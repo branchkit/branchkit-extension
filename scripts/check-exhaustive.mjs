@@ -424,4 +424,170 @@ function srcFiles() {
   }
 }
 
+// --- The value-import graph, shared by F and G -----------------------------
+//
+// VALUE edges only. `import type {…}`, `export type {…} from`, an import whose
+// every named specifier is `type`-prefixed, and type-position `import('x').Y` /
+// `typeof import('x')` are ERASED by the compiler and are NOT edges. Every
+// verdict below turns on that: a reviewer who counted them would have called
+// `page-session → settle-engine` a cycle, and one who ignored bare
+// `import './x'` would have missed a real one.
+
+/** value-import adjacency over non-test src, as repo-relative paths. */
+function valueImportGraph() {
+  const files = srcFiles();
+  const known = new Set(files);
+  const graph = new Map(files.map((f) => [f, new Set()]));
+  // Comments first: a commented-out import is not an edge.
+  const decomment = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const resolve = (from, spec) => {
+    if (!spec.startsWith('.')) return null;
+    const base = join(dirname(from), spec);
+    for (const c of [`${base}.ts`, join(base, 'index.ts')]) if (known.has(c)) return c;
+    return null;
+  };
+  for (const file of files) {
+    const src = decomment(read(file));
+    for (const m of src.matchAll(/(?:^|\n)\s*(?:import|export)\s+([\s\S]*?)\s*from\s*['"]([^'"]+)['"]/g)) {
+      const clause = m[1].trim();
+      const target = resolve(file, m[2]);
+      if (!target) continue;
+      if (/^type\s/.test(clause)) continue;                       // import type {…} / export type {…}
+      const named = clause.match(/^\{([\s\S]*)\}$/);
+      if (named) {
+        const parts = named[1].split(',').map((s) => s.trim()).filter(Boolean);
+        if (parts.length && parts.every((p) => /^type\s/.test(p))) continue; // all-inline-type
+      }
+      graph.get(file).add(target);
+    }
+    for (const m of src.matchAll(/(?:^|\n)\s*import\s*['"](\.[^'"]+)['"]/g)) {  // bare side-effect import
+      const target = resolve(file, m[1]);
+      if (target) graph.get(file).add(target);
+    }
+  }
+  return graph;
+}
+
+/** Files reachable from `entry` over value edges, inclusive. */
+function closureOf(graph, entry) {
+  const seen = new Set([entry]);
+  const stack = [entry];
+  while (stack.length) {
+    for (const next of graph.get(stack.pop()) ?? []) {
+      if (!seen.has(next)) { seen.add(next); stack.push(next); }
+    }
+  }
+  return seen;
+}
+
+/** Tarjan. Returns only non-trivial SCCs (size > 1, or a self-loop). */
+function stronglyConnected(graph) {
+  const index = new Map(), low = new Map(), onStack = new Set();
+  const stack = [], out = [];
+  let counter = 0;
+  const strongConnect = (v) => {
+    index.set(v, counter); low.set(v, counter); counter++;
+    stack.push(v); onStack.add(v);
+    for (const w of graph.get(v) ?? []) {
+      if (!index.has(w)) { strongConnect(w); low.set(v, Math.min(low.get(v), low.get(w))); }
+      else if (onStack.has(w)) low.set(v, Math.min(low.get(v), index.get(w)));
+    }
+    if (low.get(v) === index.get(v)) {
+      const comp = [];
+      for (;;) { const w = stack.pop(); onStack.delete(w); comp.push(w); if (w === v) break; }
+      if (comp.length > 1 || (graph.get(v) ?? new Set()).has(v)) out.push(comp.sort());
+    }
+  };
+  for (const v of graph.keys()) if (!index.has(v)) strongConnect(v);
+  return out;
+}
+
+// --- F. The value-import graph gains no new import cycle -------------------
+//
+// A cycle is not merely untidy here, it is a boot hazard with no other
+// detector. `activate/escape-cascade.ts` registers the Escape hook at module
+// scope and reads `keyHandler` eagerly to do it, which is only safe because
+// `core/singletons` strictly precedes it. Close a cycle between them and
+// evaluation order inverts: esbuild lowers `const`→`var`, so the bundle throws
+// `Cannot read properties of undefined (reading 'setEscapeHook')` at import —
+// in EVERY frame — and build.mjs's IIFE footer only swallows messages
+// containing "duplicate injection", so it re-throws uncaught and the content
+// script is simply dead. Nothing else in CI sees that (2026-07-27 review).
+//
+// The two entries below are pre-existing and deliberately grandfathered, not
+// endorsed. This is a ratchet: breaking one is a win to be banked by deleting
+// its line, and a NEW cycle fails.
+{
+  const KNOWN_CYCLES = [
+    // The lifecycle/observer knot. Wrapper teardown, the page session and the
+    // observers that feed them are mutually recursive by construction.
+    ['src/core/wrapper-lifecycle.ts', 'src/lifecycle/page-session.ts', 'src/observe/limbo.ts',
+      'src/observe/mutation-source.ts', 'src/observe/visibility-tracker.ts', 'src/rules/rule-apply.ts'],
+    // The adapter registry and its one concrete adapter.
+    ['src/adapters/index.ts', 'src/adapters/quickbase.ts'],
+  ].map((c) => c.slice().sort().join(' + '));
+
+  const found = stronglyConnected(valueImportGraph()).map((c) => c.join(' + '));
+  for (const cycle of found) {
+    if (!KNOWN_CYCLES.includes(cycle)) {
+      fail(`NEW import cycle: ${cycle}\n` +
+        '      A cycle here is a boot hazard, not a style issue — module-scope registrations ' +
+        'depend on a strict evaluation order that a cycle inverts (lint F header).');
+    }
+  }
+  for (const cycle of KNOWN_CYCLES) {
+    if (!found.includes(cycle)) {
+      fail(`import cycle BROKEN (good) but still listed: ${cycle}\n` +
+        '      Delete it from KNOWN_CYCLES in this commit so the win locks in.');
+    }
+  }
+  if (!failed) ok(`import cycles: ${found.length} at baseline, none new`);
+}
+
+// --- G. Module-scope registrations stay reachable from an entry point -------
+//
+// These modules install behaviour by being IMPORTED — `escape-cascade` wires
+// the Escape key, `search-badges` its find teardown, and the two probe
+// registrations below. None is called by name from anywhere. So each is live
+// only as long as some entry point still value-imports it for an unrelated
+// reason, and if a refactor moves that last use out, esbuild drops the module
+// and the feature silently stops existing — with every unit test still green,
+// because tests import these modules directly (2026-07-27 review).
+//
+// §6a's rule is "a seam may live at module scope if it is a pure assignment".
+// This is that rule's missing half: it may, and then it must stay imported.
+{
+  const REGISTRARS = {
+    'src/activate/escape-cascade.ts': 'Escape key → the cascade; hint inner-transient probe',
+    'src/activate/search-badges.ts': 'find deactivate → clear the search badges',
+    'src/activate/selection-commands.ts': "caret's inner-transient probe",
+    'src/activate/range-disambiguation.ts': "range_pick's inner-transient probe",
+  };
+  const graph = valueImportGraph();
+  const reachable = new Set([
+    ...closureOf(graph, 'src/content.ts'),
+    ...closureOf(graph, 'src/background.ts'),
+  ]);
+  let checked = 0;
+  for (const [file, what] of Object.entries(REGISTRARS)) {
+    if (!graph.has(file)) {
+      fail(`lint G: ${file} no longer exists — update REGISTRARS, and check ${what} still happens`);
+      continue;
+    }
+    // The registration must actually be there, or the pin is guarding nothing.
+    const topLevelCall = read(file).split('\n').some((l) => /^[a-zA-Z_$][\w.]*\(/.test(l));
+    if (!topLevelCall) {
+      fail(`lint G: ${file} has no module-scope registration any more (${what}) — ` +
+        'if it moved, move this pin with it; if it went away, delete the entry');
+    }
+    if (!reachable.has(file)) {
+      fail(`${file} is no longer value-imported by content.ts or background.ts, so esbuild will ` +
+        `drop it and this stops happening: ${what}. Nothing else fails when it does — ` +
+        'its own tests import it directly and stay green.');
+    }
+    checked++;
+  }
+  if (!failed) ok(`module-scope registrars: ${checked} pinned into an entry point's import closure`);
+}
+
 process.exit(failed ? 1 : 0);
