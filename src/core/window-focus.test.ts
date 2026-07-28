@@ -82,13 +82,24 @@ describe('installWindowFocusTracking', () => {
     expect(listeners.map((l) => l.capture)).toEqual([true, true]);
   });
 
-  it('re-seeds without double-registering when called twice', async () => {
+  it('re-installing ATTACHES again — the listeners it seeds are torn down with the session', async () => {
     const m = await load();
     const focused = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
     m.installWindowFocusTracking();
+    expect(listeners).toHaveLength(2);
+
+    // What a teardown does: pageSession.resources removes them as a set.
+    listeners.length = 0;
     focused.mockReturnValue(true);
     m.installWindowFocusTracking();
+
+    // An already-installed latch would re-seed and attach nothing, freezing
+    // the value forever while GET_FOCUS_STATUS kept answering it.
     expect(m.windowHasFocus()).toBe(true);
     expect(listeners).toHaveLength(2);
+    const fire = (type: string) =>
+      listeners.filter((l) => l.type === type).forEach((l) => l.fn(at(type, window)));
+    fire('blur');
+    expect(m.windowHasFocus()).toBe(false);
   });
 });

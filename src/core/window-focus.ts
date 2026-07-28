@@ -16,7 +16,6 @@ import { pageSession } from '../lifecycle/page-session';
 import type { MessageHandler } from './message-router';
 
 let hasFocus = false;
-let installed = false;
 
 /** Whether this frame's window currently holds focus. */
 export function windowHasFocus(): boolean {
@@ -30,23 +29,23 @@ export function windowHasFocus(): boolean {
  * The initial read happens HERE rather than at module scope: a frame injected
  * into an already-focused page must not report `false` until its first focus
  * event, which would only ever arrive on a refocus that may never come.
+ *
+ * There is deliberately no already-installed latch. One would be module state
+ * outliving the listeners it guards — `pageSession.resources` are torn down as
+ * a set by orphan quiesce, so a latch left `true` would make a re-install
+ * re-seed `hasFocus` and then attach nothing, freezing the value forever while
+ * GET_FOCUS_STATUS below kept answering it. Re-installing has to mean
+ * re-attaching. Calling this twice without a teardown in between would
+ * double-register, which is why content.ts calls it exactly once.
  */
 export function installWindowFocusTracking(): void {
   hasFocus = document.hasFocus();
-  if (installed) return;
-  installed = true;
   pageSession.resources.listen(window, 'focus', (e) => {
     if (e.target === window) hasFocus = true;
   }, true);
   pageSession.resources.listen(window, 'blur', (e) => {
     if (e.target === window) hasFocus = false;
   }, true);
-}
-
-/** Test seam. */
-export function _resetWindowFocusForTesting(): void {
-  hasFocus = false;
-  installed = false;
 }
 
 export const focusMessageHandlers: Record<string, MessageHandler> = {
