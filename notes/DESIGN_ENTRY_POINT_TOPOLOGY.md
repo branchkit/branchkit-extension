@@ -158,6 +158,9 @@ line count.
 *Expected: ~250–350 lines, and 93 imports down toward ~70.*
 
 ### Phase 3 — `content.ts` message router + command self-registration
+**3a HALF DONE 2026-07-28, §6g.** The listener is the table and ten of eleven
+branches are with their owners; `BRANCHKIT_ACTION` is blocked on §6g.5. 3b (the
+43 inline `dispatcher.register` calls) not started.
 
 Same move as phase 1 on the 11-branch listener at `content.ts:2361`, plus
 finishing the command-registration convention: 42 `dispatcher.register` calls
@@ -170,6 +173,8 @@ can now support.
 *Expected: ~400–500 lines.*
 
 ### Phase 4 — lift the perf block
+**COMPLETE 2026-07-28, §6g.1.** 197 lines to `debug/perf-snapshot.ts`; ceiling
+banked 3500 → 3300.
 
 `buildPerfSnapshot` / `publishPerfSnapshot` / `shipPerfReport` and the report
 interval, `content.ts:3430–3619`. Pure aggregation over counters that already
@@ -279,10 +284,10 @@ visibly. Neither guard should be weakened by this work.
 
 ## 6. Open questions
 
-1. **Handler-table shape.** Reuse `core/dispatcher` for messages, or a separate
-   thinner registry? Messages have a `sendResponse` + `return true` async
-   contract that dispatcher actions do not. Leaning separate-but-parallel, so
-   neither surface grows the other's concerns.
+1. ~~**Handler-table shape.**~~ **RESOLVED — a separate registry, and ONE of
+   them for both entry points (§6g.2). The "separate-but-parallel" lean was
+   about content-vs-background, and it was wrong: the bundles are separate, so
+   one module already gives two tables.**
 2. **Frame gating.** Several `content.ts` handlers are top-frame-only
    (`GET_PAGE_STATUS`, `TAB_MARKER`). Does that predicate live in the table as
    registration metadata, or stay inside each handler? Metadata is tidier and
@@ -813,6 +818,151 @@ mutants chosen by someone other than the author — including the author's own
 re-check. Reading never caught one. The specific shape recurs: asserting an
 observable that the BROKEN implementation also produces (a flag that is already
 false, a hint mode that is already on, a hex that is coincidentally equal).
+
+### 6g. Phase 4 and half of phase 3a EXECUTED (2026-07-28)
+
+`5345ce3`..`28b97a4`, four commits. `content.ts` 3444 → **3202**, ceiling
+3500 → **3300**, 95 → 93 imports, 2147 → **2203** tests. Stopped mid-3a on a
+decision that is not mine to make — §6g.5.
+
+#### 6g.1 Phase 4 — the perf block (`5345ce3`)
+
+197 lines to `debug/perf-snapshot.ts`, installed by one call. Mechanical, as
+predicted. Two things the plan did not know:
+
+`perf-report.ts`'s header asserted the `buildPerfSnapshot` INTEGRATOR "stays in
+content.ts by design (it reads counters from everywhere)". That is backwards —
+reading from everywhere is a reason to be a **leaf that imports widely**, not a
+reason to sit in the entry point. Nothing imports the new module but
+`content.ts`, so its nine imports close no cycle and lint F is unmoved at 2.
+
+**Module evaluation order did not shift at all**, unlike §6e's CYCLE group. The
+import goes LAST in `content.ts`'s list, so every dependency was already
+evaluated and only the new module itself is new to the order. That is a
+generalisable trick, not luck: a leaf appended at the end of the entry point's
+imports is order-neutral by construction.
+
+One asymmetry preserved rather than corrected: the main-world reset trigger
+resets five counter groups where `branchkitResetPerf` resets six, leaving the
+watchdog baseline alone. It predates the lift. Pinned as-is, and named in the
+module — a behaviour change belongs in its own commit, not smuggled into a move.
+
+#### 6g.2 Phase 3a — the router is shared, not duplicated (`d91b935`)
+
+Open question 1 leaned "separate-but-parallel" for the content router. **That
+was decided without checking whether sharing was safe.** It is, and the reason
+is in `build.mjs` rather than in the code: `content.ts` and `background.ts` are
+separate esbuild entry points, so each bundle gets its own copy of the
+module-level handler table. One module, two instances, no factory and no
+instance parameter. `background/message-router.ts` → `core/message-router.ts`,
+16 import paths, three `[BranchKit SW]` strings → `[BranchKit]`.
+
+#### 6g.3 Phase 3a — the listener becomes the table (`2b2e68a`)
+
+Ten of eleven branches to their owners; `BRANCHKIT_ACTION` composed inline
+pending §6g.5. Two shape calls:
+
+**The orphan guard is not an eleventh handler.** It is a statement about the
+CONTEXT ("this elder is torn down"), and it must hold for types the table does
+not know — the orphan gauge counts every message a dead context saw, including
+unroutable ones. So the router grew `setMessageGuard`, checked above the type
+lookup. The SW sets none.
+
+**The frame gates read `window === window.top` at CALL time.** `window.top`
+never changes for a frame's lifetime, so it costs nothing, and it is the
+difference between a gate that can be tested and one that needs a module reload
+to see it. `toast.ts` and `mode-chip.ts` already did it this way; a module-scope
+const was the accident.
+
+**Lint E's generalisation is the load-bearing part, and the obvious version is
+wrong.** Two entry points means two SEPARATE tables, so registration is checked
+against "some entry point" while disjointness is checked WITHIN one.
+`MARK_RESTORE` in content's table and `MARK_SET` in the SW's are not competing
+for anything; a global disjointness check would invent a constraint the runtime
+does not have. All seven arms mutation-verified, including that the cross-table
+case is deliberately allowed.
+
+#### 6g.4 Phase 3a — two locals go to their features (`28b97a4`)
+
+`phraseSnapshot` → `activate/snapshot.ts`, `lastActivatedElement` →
+`scan/references.ts`. Both are read by `BRANCHKIT_ACTION`, so they had to move
+first. `lastActivatedElement()` now returns null for a detached node instead of
+handing one back for the caller to check — same behaviour, but a property of the
+accessor rather than a convention. The keyboard path, the other writer, never
+had that check.
+
+#### 6g.5 STOPPED: `BRANCHKIT_ACTION` cannot leave without a decision
+
+403 lines, and it closes over **nine** `content.ts` locals — measured, not
+estimated: `DISPATCH_PASSTHROUGH_ACTIONS`, `INPUT_TYPES`,
+`preNavObserverTeardown`, `reportNoSuchHint`, `republishForActivation`,
+`scheduleHintRefresh`, `sealedDispatchSeen`, `shouldAutoShowBadges`,
+`trimFrameUrl`.
+
+Six are ordinary and would move with (or ahead of) the handler. The blocker is
+`preNavObserverTeardown` (`content.ts:1888`): the nav-time wedge preempt, which
+synchronously unobserves every wrapper before the simulated click triggers a DOM
+swap. That is §5's excluded lifecycle glue and the load-bearing wedge fix. So
+the handler cannot leave without one of:
+
+1. **Split by dependency, not by feature.** Lift the element verbs, escape,
+   selection, noop and the reference actions (~200 lines); leave `activate`
+   inline because it is the only arm that touches the band. Honest and
+   unblocking, but it draws the module boundary around an import constraint
+   rather than around a concern, and phase 3b then inherits that shape.
+2. **Reduce to ONE injection.** Move `trimFrameUrl` (a pure string helper that
+   merely happens to be declared at :1860), `shouldAutoShowBadges` and
+   `scheduleHintRefresh` out, then inject `preNavObserverTeardown` alone. One
+   deliberate seam with a stated reason beats nine accidental ones — but phase 2
+   spent a whole session retiring exactly this pattern, and re-introducing it
+   for the largest handler needs saying out loud.
+3. **Wait.** Take the whole handler once the orphan-teardown arc is out of soak
+   and the band is touchable.
+
+Also worth noting for whichever wins: `trimFrameUrl` has 15 call sites in
+`content.ts` and is not lifecycle glue by nature — it is inside the excluded
+LINE RANGE but not inside the excluded CONCERN. Whether §5's exclusion is drawn
+on lines or on concerns is the smaller question hiding inside the big one.
+
+#### 6g.6 What the mutation pass caught this time
+
+56 mutants across the four commits, all killed **after three rewrites**. The
+recurring shape held, and once again reading caught none of them:
+
+- *"copies rather than aliases the counter objects"* asserted `not.toBe()`
+  against a **hand-written duplicate**, which is true of an alias too. It
+  mutates the source object after the snapshot now, and that kills all five
+  aliasing mutants. This is §6f's third bullet, reproduced exactly.
+- The RESOLVE_HINT not-found test passed against a handler that **ignored the
+  codeword entirely**, because nothing resolvable was on the page. A resolvable
+  wrapper has to be present for a negative to mean anything.
+- A `MutationObserver` survives `vi.resetModules()`. A stale observer from an
+  earlier test was answering the reset trigger, so the harness-off case looked
+  installed and the installed case passed for the wrong reason. Found because
+  the harness-off assertion failed — the one test in that file that could not
+  be satisfied by leakage.
+
+And one about the tooling rather than the code: **a mutant that does not compile
+was being scored as "survived".** `GET_PAGE_STATUS: () => { … }` needs parens
+around an object literal; without them the file fails to parse, vitest runs zero
+tests, and a runner that counts failures sees none. The runner distinguishes
+INVALID from SURVIVED now. Any mutation harness needs that check — "no test
+failed" and "no test ran" are the same signal to a naive reader.
+
+#### 6g.7 §7's unverified boundary is closed
+
+§7 recorded after phase 1 that "a green suite here is not a green browser" —
+every handler in both tables only ever runs behind `chrome.runtime.onMessage`,
+and nothing in tsc, vitest or the build exercises that edge. That gap is now
+`npm run harness:messages`: it sends each type from the service worker to a real
+tab and reads what comes back. 7/7 through the new content table, including
+`BRANCHKIT_ACTION`. Opt-in rather than part of the lifecycle run, so it does not
+move that harness's PASS/SKIP baseline.
+
+It counts its own probes, because **the first version reported ALL PROBES PASS
+having run none** — it aborted on a bad fixture handle and `[].every()` is true.
+A verification script needs the same scepticism as a test: a pass over an empty
+list is not a pass.
 
 ---
 
