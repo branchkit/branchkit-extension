@@ -1990,13 +1990,30 @@ function rescanForNav(fromCache: boolean, reason: string): void {
     discardBadgeScreenBorrow();
   }
 
-  // A same-document nav is a new page: in manual mode (or always-mode with an
-  // active F-hide) it should start hidden. The SPA nav keeps this content
-  // script alive, so F-shown hints from the previous URL would otherwise
-  // linger. Refocus (the other from_cache caller) is NOT a new page — only
-  // reset on spa_nav.
-  if (reason === 'spa_nav' && !shouldAutoShowBadges() && pageSession.badgesVisible) {
-    hideBadges();
+  // A same-document nav is a new page, so drive visibility to what the MODE
+  // says the new page should look like rather than only unwinding the old
+  // one's state. Refocus (the other from_cache caller) is NOT a new page —
+  // only reset on spa_nav.
+  //
+  // Manual mode: start hidden. The SPA nav keeps this content script alive, so
+  // F-shown hints from the previous URL would otherwise linger.
+  //
+  // Always mode: start SHOWN, and this arm is the fix for a regression I
+  // shipped one commit ago. badge-visibility's header already states the rule
+  // ("the hide is momentary — NOT persisted; in always mode the next page
+  // repaints the badges"), and an SPA nav never honoured it. That was masked
+  // while a find's badge borrow survived the nav, because the find's own exit
+  // eventually restored it — discarding the slot removed that accidental
+  // recovery and left an always-mode page badge-less until the next `f`.
+  // Gated on anyBadgesShowing() so the ordinary nav — badges already up — stays
+  // a no-op rather than repainting against a wrapper set the rescan below is
+  // about to replace.
+  if (reason === 'spa_nav') {
+    if (!shouldAutoShowBadges()) {
+      if (pageSession.badgesVisible) hideBadges();
+    } else if (!anyBadgesShowing()) {
+      void showBadges();
+    }
   }
 
   if (fromCache) {

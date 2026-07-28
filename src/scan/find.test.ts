@@ -12,6 +12,19 @@ vi.mock('../render/badge-visibility', () => ({
   returnBadgeScreenBorrow: () => { borrow.push('give'); },
 }));
 
+// find's other relocated collaborator. `resetCycleTarget` moved out of
+// content.ts's onDeactivate and into endSession, and arrived with ZERO tests
+// anywhere — deleting the call passed the whole suite (review, 2026-07-27).
+// find imports exactly these two from scroller, so the fake is complete.
+const cycleResets: number[] = [];
+vi.mock('../activate/scroller', () => ({
+  // false is what the real one answers under happy-dom, and "slides rather
+  // than teleports" pins that find's commit scroll is SMOOTH — which is also
+  // the fact that undercuts the onCommit ordering argument (see §6d).
+  prefersReducedMotion: () => false,
+  resetCycleTarget: () => { cycleResets.push(1); },
+}));
+
 import { findMatchRanges, findRangesFlexible, findFirstRange, buildBlockIndex } from './find';
 import { entitySpan, trimSpan } from '../activate/segmenter';
 
@@ -481,6 +494,52 @@ describe('find bar: phrase-targeting modes', () => {
     const el = barInput();
     expect(el.selectionStart).toBe(0);
     expect(el.selectionEnd).toBe('nonexistent'.length);
+  });
+
+  // openFindMode has FOUR arms and the test below only drove one. The other
+  // three are where a borrow can go missing without anything noticing: a
+  // mutant that returned the borrow on the phrase→search replace path left
+  // find running with NO borrow at all — highlights under a live badge layer,
+  // the same class as the 2026-07-26 field bug — and every test stayed green
+  // (review, 2026-07-27).
+  it('openFindMode keeps exactly one borrow across all four of its arms', () => {
+    borrow.length = 0;
+
+    // (1) replace a live PHRASE session: closes it (give) then opens fresh (take)
+    openHighlightBox();
+    openFindMode();
+    expect(borrow).toEqual(['take', 'give', 'take']);
+
+    // (2) re-entry with the bar already open: focus/select, no borrow churn
+    openFindMode();
+    expect(borrow).toEqual(['take', 'give', 'take']);
+
+    // (3) committed reopen (bar closed, session live): reseeds the bar, and the
+    // borrow it already holds must not be re-taken or dropped.
+    dictate('alpha');
+    vi.runAllTimers();
+    openFindMode();
+    expect(borrow).toEqual(['take', 'give', 'take']);
+
+    // (4) and the whole session gives back exactly once
+    closeFindMode();
+    expect(borrow).toEqual(['take', 'give', 'take', 'give']);
+  });
+
+  // The scroll cycle target is bookkeeping about the session that is ending —
+  // "keep scrolling the region I picked" cannot outlive the find that set it.
+  // Asserted on BOTH exit shapes, because the borrow beside it is deliberately
+  // conditional on handoff and this one deliberately is not.
+  it('every session end drops the scroll cycle target, handoff or not', () => {
+    cycleResets.length = 0;
+    openFindMode();
+    closeFindMode();
+    expect(cycleResets).toHaveLength(1);
+
+    openHighlightBox();       // a phrase commit ends as a HANDOFF
+    dictate('alpha');
+    vi.runAllTimers();
+    expect(cycleResets).toHaveLength(2);
   });
 
   it('every entry point takes the badge screen, and a re-entry re-asserts it', () => {

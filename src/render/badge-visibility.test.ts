@@ -311,7 +311,14 @@ describe('the badge screen borrow slot', () => {
   // the nav path reads it synchronously on the next line to decide a
   // manual-mode hide. A restoring discard would paint badges onto a page the
   // nav had just decided to leave hidden.
-  it('discarding never re-shows, even for a borrow that took the screen', async () => {
+  //
+  // The flag alone does NOT prove that: an entirely inert discard leaves it
+  // false too. (Mine did assert only the flag, and survived a `discard that
+  // does nothing for took === true` mutant — review, 2026-07-27.) The slot has
+  // to be shown GONE, and the only way to see that is the borrow AFTER it: a
+  // fresh borrow over a hidden screen takes nothing, so its give-back restores
+  // nothing. A surviving took === true slot would re-show here instead.
+  it('discarding never re-shows, and the slot is gone rather than merely unrestored', async () => {
     pageSession.badgesVisible = true;
     assertBadgeScreenBorrow();          // took === true, badges now hidden
     expect(pageSession.badgesVisible).toBe(false);
@@ -319,5 +326,10 @@ describe('the badge screen borrow slot', () => {
     discardBadgeScreenBorrow();
     await settle();
     expect(pageSession.badgesVisible).toBe(false); // still hidden — nav decides
+
+    assertBadgeScreenBorrow();          // the next find: must be a FRESH borrow
+    returnBadgeScreenBorrow();
+    await settle();
+    expect(pageSession.badgesVisible).toBe(false); // took nothing, restored nothing
   });
 });

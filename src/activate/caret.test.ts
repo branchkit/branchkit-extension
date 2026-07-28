@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { modes } from '../core/modes';
 import { CaretController } from './caret';
 import { findImmediate, closeFindMode, isFindActive, onFindDeactivated } from '../scan/find';
+import { _resetBadgeVisibilityForTesting } from '../render/badge-visibility';
 
 // The Selection-movement path (Selection.modify) isn't implemented in happy-dom,
 // so grow/shrink granularity is verified in a real browser. Here we cover the
@@ -19,6 +20,19 @@ beforeEach(() => {
 afterEach(() => {
   (Element.prototype as { checkVisibility?: () => boolean }).checkVisibility = origCheckVis;
   document.body.innerHTML = '';
+  // find imports the REAL badge-visibility now (it takes the badge screen
+  // itself), so driving find from here drives the real single-slot borrow
+  // against the real pageSession/store — an undeclared coupling this file
+  // acquired without asking for it (review, 2026-07-27).
+  //
+  // This clears the SLOT, so a borrow cannot leak from one test into the next.
+  // It does not make the file safe to raise pageSession.badgesVisible in: a
+  // took === true borrow's restore() kicks an async showBadges into a
+  // pageSession that has no tracker here, which surfaces as an unhandled
+  // "Cannot read properties of undefined (reading 'flushNow')". That failure is
+  // at least LOUD. If this file ever needs visible badges, mock
+  // ../render/badge-visibility the way scan/find.test.ts does.
+  _resetBadgeVisibilityForTesting();
 });
 
 /** The escape as production derives it (Wave 3 C3): the stack asks peelInner

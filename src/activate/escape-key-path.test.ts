@@ -64,6 +64,7 @@ import {
   findImmediate, openFindMode, closeFindMode,
   isFindActive, isFindBarOpen, isFindBarFocused,
 } from '../scan/find';
+import { _resetBadgeVisibilityForTesting } from '../render/badge-visibility';
 
 // The mocked modules' states as stack entries (C3: the cascade's decider is
 // peelTop, so an armed pick / active caret is an entry the way production
@@ -136,6 +137,11 @@ beforeEach(() => {
 afterEach(() => {
   document.removeEventListener('keydown', listener, true);
   reset();
+  // See caret.test.ts: find drives the real badge-screen borrow now, and this
+  // file drives find. Clears the slot between tests; does NOT make the file
+  // safe to raise pageSession.badgesVisible in (that throws loudly out of an
+  // async showBadges — mock ../render/badge-visibility if you need it).
+  _resetBadgeVisibilityForTesting();
 });
 
 /** A committed find: highlights + read-only pill, bar closed. */
