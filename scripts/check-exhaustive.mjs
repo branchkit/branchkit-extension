@@ -160,7 +160,11 @@ function srcFiles() {
     // (entry-point seam inversion, phase 2 STATEFUL). The sweep did not grow or
     // shrink — it changed file, so this lower and label-sync's raise below are
     // one move and must be read together.
-    'src/content.ts': 22,
+    // 22 -> 20 (2026-07-28): buildPerfSnapshot's store walk and its
+    // `store.all.length` went to debug/perf-snapshot.ts with the rest of the
+    // perf block (entry-point topology phase 4). Same two sites, new file —
+    // this lower and perf-snapshot's pin below are one move.
+    'src/content.ts': 20,
     'src/render/badge-visibility.ts': 4,
     'src/plugin/resolve.ts': 1,
     // 1 -> 3 (2026-07-27): republishAllGrammar's full re-push arrived from
@@ -193,6 +197,10 @@ function srcFiles() {
     'src/rules/rule-apply.ts': 5,
     'src/debug/debug-snapshot.ts': 5,
     'src/debug/perf-report.ts': 9,
+    // New 2026-07-28: the perf-snapshot integrator's one store walk (limbo /
+    // sentinel-disconnected / in-band split) plus the wrapperCount read.
+    // Arrived from content.ts unchanged — see the content.ts note above.
+    'src/debug/perf-snapshot.ts': 2,
     'src/debug/churn-log.ts': 1,
     'src/debug/pool-audit.ts': 1,
   };
