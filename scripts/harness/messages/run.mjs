@@ -52,10 +52,17 @@ const check = (name, ok, detail) => { results.push({ name, ok, detail }); };
 const EXPECTED = 37;
 
 try {
-  // The profile is persistent and reused between runs, so every piece of state
-  // a probe WRITES has to be reset here or run N+1 starts where run N stopped.
-  // The set_badge_mode arm writes badgeDisplayMode; the reference arms write
-  // branchkit_references. Both were silently order-dependent before this.
+  // Seed the state the probes depend on, in one place: the set_badge_mode arm
+  // asserts a transition FROM letter mode, and the reference arms assert an
+  // empty starting set.
+  //
+  // NOT because the profile survives, which is what this comment used to say
+  // and what §6j.1 recorded. `launchExtension` defaults `freshProfile = true`
+  // and rm -rf's the profile dir before every launch (scripts/lib/launch.mjs),
+  // as does the Firefox launcher — so no storage write can reach run N+1, and
+  // the order-dependence §6j.1 diagnosed had to come from somewhere else. What
+  // this block genuinely buys is independence from the ORDER OF PROBES within
+  // one run, which is real: several probes write state that later ones read.
   await sw.evaluate(async () => {
     await chrome.storage.sync.set({ badgeDisplayMode: 'letter' });
     await chrome.storage.local.remove('branchkit_references');

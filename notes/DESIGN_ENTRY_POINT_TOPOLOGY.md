@@ -1293,7 +1293,9 @@ discriminator that works is the selection LENGTH: an implementation that
 skipped the inner stage exits on the first escape, and the second call answers
 `nothing to close`.
 
-**A persistent profile makes a harness order-dependent silently.** The
+**A persistent profile makes a harness order-dependent silently.** *(The
+mechanism named here is wrong — profiles are wiped on every launch. The reset
+was still the right fix, for within-run ordering. See §6m.10.)* The
 `set_badge_mode` and reference arms WRITE state, and the profile is reused
 between runs, so run N+1 started where run N stopped. Reset at startup now.
 This is the same class as §6g.8's "reported ALL PROBES PASS having run none":
@@ -1666,10 +1668,14 @@ straight through to `activateElement` and a click-only check would pass against
 a `gf` that clicked the link.
 
 It walks the alphabet rather than reading the codeword out of an opened shadow
-root. `bkOpenShadow` would make the typing deterministic and is localStorage on
-a PERSISTENT profile — leaving it set breaks `shownBadges` (which identifies a
-real badge BY its closed shadow root) for every other scenario on the next run.
-That is §6j.1's order-dependence finding, avoided rather than re-learned.
+root. `bkOpenShadow` OPENS the badge shadow roots, and `shownBadges` — the driver
+probe five other scenarios assert on — identifies a real badge BY its closed
+shadow root. Every scenario shares one page, so setting the flag would make this
+scenario's POSITION in the list load-bearing for the others.
+
+*(Corrected in review: this paragraph first said the flag would leak to the next
+RUN via a persistent profile, citing §6j.1. That is wrong, and so is §6j.1 —
+see §6m.10.)*
 
 The move itself is byte-identical relocation to `activate/keyboard-activation.ts`
 — a new module on §6g.7's rule, because `keyboard-commands.ts` deliberately sits
@@ -1810,8 +1816,70 @@ five commits" note asks for and the only reliable form of it.
   green if `dispatchVoiceAction` went async. Unchanged by this session — none of
   the newly moved code emits a `bkLog` reachable synchronously either.
 - **The dev auto-reload block** (~50 lines at the tail of `background.ts`) is the
-  next obvious lift and would take it to ~620. Not taken: it is not a reason the
-  entry point is a hub, which is §5's test, and `DEV_PING` would go with it.
+  next obvious lift and would take it to ~620. Not taken, and on reflection not
+  worth taking as a line-count play: it is not a reason the entry point is a hub
+  (§5's test), and its ~50 lines record THREE silent field bugs in three days
+  (`ws://localhost` never connecting on Firefox, a wake-time `Date.now()`
+  laundering a stale build, a bare catch that killed the reload chain) with no
+  test and no harness able to reach it. If it ever moves, the probe comes first
+  and is worth more than the lift: stand up a WS server on 127.0.0.1:35729,
+  assert the `hello <generation>` frame, send `reload`, assert the SW restarts.
+- **Two review follow-ups**, both pre-existing and neither a regression (§6m.10):
+  the `hintActionHandoff` copy in `content.ts`'s `activate` arm, and
+  `installKeymapRegistry`'s last-writer-wins load/subscribe race.
+
+#### 6m.10 The review, and the one premise that was false
+
+A high-effort review of the whole arc (eight finder angles, adversarial verify)
+returned ten findings. **Six were in `check-exhaustive.mjs` — the lint code this
+session wrote — and none was in any moved line of product code.** The
+removed-behaviour and cross-file angles both re-derived the relocations
+independently: byte-equivalence, `activate_hint`'s unreachability re-proved from
+the dispatch call sites, every removed import's module still in both bundles,
+all three message types still registered.
+
+The pattern across the lint findings is one this arc should have predicted: two
+of them were **fixes applied at one of two sites**. Lint H's brace-matching
+closed the between-entry comment case and left the within-entry one; lint E's
+zero-key guard went on the inline path (2 maps) and not the named one (23).
+§6k's rule is "mutate the FIX, not just the finding", and it was applied to the
+mutation that motivated each fix rather than to the fix's whole surface. All six
+are closed in `1e7aad0`, at their shared root: every lint now reads source with
+strings and comments masked out, so the dumb regexes read CODE.
+
+**Fixing it needed two goes, which is the more useful record.** Replacing the
+hard-coded two-space key indentation with a DERIVED indent made a one-line map
+parse as exactly one key instead of zero — worse than before, because the guard
+only fires on zero, so 52 types passed as `ok`. Caught only by re-running the
+review's own mutant against the fix. Keys are now found by grammar position (at
+the literal's bracket depth, in a slot after `{` or a depth-0 `,`), which is
+indentation-free.
+
+**And one finding was that a premise was false.** `launchExtension` and
+`launchFirefoxExtension` both default `freshProfile = true` and `rm -rf` the
+profile before every launch, so nothing a harness writes can reach the next run.
+That contradicts §6j.1's fourth finding, the header comment on
+`harness/messages/run.mjs`, and the justification §6m.2 gave for walking the
+alphabet — all three now corrected. The reset block and the walk are both still
+right; their reason is within-RUN probe ordering, which is real. Worth stating
+plainly because this arc's whole method is that a comment carries its reason: a
+true conclusion resting on a false premise is the failure mode that method has,
+and it survived a session of mutation testing because no mutant can test a
+comment.
+
+Two findings were left as follow-ups rather than fixed, both pre-existing and
+neither a regression: `content.ts`'s `activate` arm open-codes
+`hintActionHandoff` behind an extra `tabTarget === 'background'` case (the
+duplication was intra-file before this arc and is cross-file now, and moving it
+would edit the arm §6i keeps out of scope until orphan-teardown clears soak);
+and `installKeymapRegistry`'s `loadKeymap()` / `onKeymapChanged` pair is a
+last-writer-wins race, relocated verbatim, whose sibling §6e already books as
+accepted.
+
+One challenge deliberately put up and failed to land: the `DEV_PING` placement
+argument was attacked and held — `dev-keepalive.ts` dereferences `window` at
+module scope, so the natural co-location genuinely is unimportable by a service
+worker.
 
 ---
 

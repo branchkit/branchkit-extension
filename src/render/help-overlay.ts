@@ -454,7 +454,7 @@ function close(): void {
  * overrides + additive aliases) via the SW → plugin. Best effort — empty lists
  * (disconnected / none) just show catalog defaults. Close toggles immediately,
  * no round trip. */
-export function toggleHelpOverlayWithSpokenForms(keymap: readonly KeymapEntry[]): void {
+function toggleHelpOverlayWithSpokenForms(keymap: readonly KeymapEntry[]): void {
   if (state.active) { close(); return; }
   void Promise.all([
     chrome.runtime.sendMessage({ type: 'GET_COMMAND_OVERRIDES' }).catch(() => undefined),

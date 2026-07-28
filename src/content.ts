@@ -987,11 +987,9 @@ registerScrollCommands();
 // Find commands register from scan/find.ts.
 registerFindCommands();
 
-registerHelpCommands();
-
-
 // Keyboard help overlay (default ?) — registers with the overlay it opens, in
 // render/help-overlay.ts. Extension-owned: works without BranchKit connected.
+registerHelpCommands();
 
 // Command palette (notes/DESIGN_TAB_NAVIGATION.md, Layer 2): the open
 // commands live with the overlay host (render/palette-host.ts).

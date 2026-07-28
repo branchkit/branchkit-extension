@@ -28,11 +28,21 @@
  *
  * The codeword is found by walking the alphabet rather than read out of the
  * badge, deliberately. `bkOpenShadow` would make the typing deterministic, but
- * it is localStorage on a PERSISTENT profile — leaving it set silently breaks
- * `shownBadges` (which identifies a real badge by its CLOSED shadow root) for
- * every other scenario on the next run. That is section 6j.1's order-dependence
- * finding, and the walk avoids it entirely: `narrowByPrefix` refuses a letter no
- * live codeword can complete, so the prefix only ever grows along a real path.
+ * it OPENS the badge shadow roots — and `shownBadges`, the driver probe five
+ * other scenarios assert on, identifies a real badge BY its closed shadow root.
+ * Every scenario in a run shares one page and one origin, so setting the flag
+ * would make this scenario's position in the list load-bearing for the others.
+ * It runs last today, which makes that harmless today; relying on it would be
+ * the kind of order coupling a harness should not have.
+ *
+ * (An earlier draft of this comment said the flag would leak to the NEXT RUN
+ * via a persistent profile. That is wrong — `launchExtension` and
+ * `launchFirefoxExtension` both default `freshProfile = true` and rm -rf the
+ * profile before launch. The walk is still the right call, for the reason
+ * above.)
+ *
+ * The walk works because `narrowByPrefix` refuses a letter no live codeword can
+ * complete, so the prefix only ever grows along a real path.
  */
 
 import { freshPage, settle } from '../driver.mjs';

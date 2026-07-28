@@ -74,7 +74,7 @@ export interface StoreHolderDelegates {
    *  eye. WHEN to reveal is the holder's rule (see narrow); a no-op when the
    *  badges are already up is the delegate's own guard. */
   reveal(): void;
-  /** Activate a resolved wrapper (content's activateWrapper) plus the TYPED
+  /** Activate a resolved wrapper (activate/keyboard-activation.ts) plus the TYPED
    *  path's sole-completion bookkeeping (new-tab arming, badge hide / hint
    *  mode exit). Only the typed path reaches this — the spoken path resolves
    *  elements itself, snapshot-first, with its dispatch params (see
