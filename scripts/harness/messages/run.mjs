@@ -179,13 +179,43 @@ try {
 
   // PALETTE_COMMAND — fire-and-forget INTO the dispatcher, so it exercises
   // the command table from the message side. scroll_top is benign and visible.
-  // WAIT for the scroll to land rather than assuming a fixed delay covers it.
-  // The scroll is animated, and headless runs the animation on a different
-  // rAF cadence: a fixed 200ms read the page 91px into a 400px scroll and
-  // failed the precondition, not the thing being probed.
+  //
+  // This probe has a history: a fixed 200ms delay read the page 91px into a
+  // 400px scroll, and the wait added to fix that swallowed its own timeout
+  // (`.catch(() => {})`), so a scroll that never landed still fell through to
+  // the assertion and reported as a DISPATCHER failure. Observed three times
+  // in twelve runs at `scrollY 82 -> 2` — the same shape as the original 91.
+  // The wait did not fix the flake, it made it rarer and kept blaming the
+  // wrong thing.
+  //
+  // Two changes. First, settle before setting the precondition: the two
+  // probes above drive scroll_down and a reset through the extension's own
+  // animated scroller, and a scrollTo issued into an easing animation is the
+  // best available explanation for a partial landing (suspected, not proven —
+  // the flake is intermittent and was not reproduced on demand).
+  //
+  // One lead for whoever settles it, gathered by forcing the wait to time
+  // out: five seconds AFTER a successful `scrollTo(0, 400)` the page reads
+  // 82, the same value the real failures report. So the position is not
+  // stable after the scrollTo — the passing path passes because it reads the
+  // instant scrollY crosses 380, not because the page stays there. The
+  // stability wait below addresses the wrong end of that if the real cause is
+  // something re-scrolling AFTER the setup rather than before it.
+  //
+  // Second, and
+  // this part is certain: a precondition that does not hold is reported AS a
+  // precondition, so the next person reads "the harness never scrolled"
+  // instead of "the dispatcher is broken".
+  await page.waitForFunction(() => {
+    const y = window.scrollY;
+    const settled = window.__probeLastY === y;
+    window.__probeLastY = y;
+    return settled;
+  }, undefined, { timeout: 5000, polling: 250 }).catch(() => {});
   await page.evaluate(() => window.scrollTo(0, 400));
-  await page.waitForFunction(() => window.scrollY >= 380, undefined, { timeout: 5000 })
-    .catch(() => {});
+  const scrolledTo400 = await page
+    .waitForFunction(() => window.scrollY >= 380, undefined, { timeout: 5000 })
+    .then(() => true, () => false);
   const yBefore = await page.evaluate(() => window.scrollY);
   const geom = await page.evaluate(() => ({
     h: document.documentElement.scrollHeight, vh: window.innerHeight,
@@ -197,8 +227,12 @@ try {
   // Near the top rather than exactly 0: scroll_top animates, so the settled
   // value lands within a pixel or two. What is being probed is that the
   // message reached the dispatcher at all, not the easing curve.
-  check('PALETTE_COMMAND reaches the dispatcher', yBefore > 300 && yTop < 50,
-    `scrollY ${yBefore} -> ${yTop} (doc ${geom.h}, viewport ${geom.vh}, body min-height ${JSON.stringify(geom.minH)})`);
+  check('PALETTE_COMMAND reaches the dispatcher', scrolledTo400 && yTop < 50,
+    scrolledTo400
+      ? `scrollY ${yBefore} -> ${yTop} (doc ${geom.h}, viewport ${geom.vh}, body min-height ${JSON.stringify(geom.minH)})`
+      : `HARNESS PRECONDITION FAILED, not the dispatcher: the page never reached 400 `
+        + `(stalled at ${yBefore}) so scroll_top had nothing to undo. `
+        + `doc ${geom.h}, viewport ${geom.vh}, body min-height ${JSON.stringify(geom.minH)}`);
 
   // TAB_MARKER_REAPPLY — restores the marker after the page overwrites the
   // title, which is the whole reason the message exists.
