@@ -158,9 +158,9 @@ line count.
 *Expected: ~250–350 lines, and 93 imports down toward ~70.*
 
 ### Phase 3 — `content.ts` message router + command self-registration
-**3a HALF DONE 2026-07-28, §6g.** The listener is the table and ten of eleven
-branches are with their owners; `BRANCHKIT_ACTION` is blocked on §6g.5. 3b (the
-43 inline `dispatcher.register` calls) not started.
+**3a HALF DONE, 3b IN PROGRESS 2026-07-28, §6g.** The listener is the table and
+ten of eleven branches are with their owners; `BRANCHKIT_ACTION` is blocked on
+§6g.5. 3b: 26 of 43 registrations moved (§6g.7), independent of that blocker.
 
 Same move as phase 1 on the 11-branch listener at `content.ts:2361`, plus
 finishing the command-registration convention: 42 `dispatcher.register` calls
@@ -949,7 +949,67 @@ tests, and a runner that counts failures sees none. The runner distinguishes
 INVALID from SURVIVED now. Any mutation harness needs that check — "no test
 failed" and "no test ran" are the same signal to a naive reader.
 
-#### 6g.7 §7's unverified boundary is closed
+#### 6g.7 Phase 3b — three groups, and the rule for whether a group gets a module
+
+`df00f0e`..`ddad207`. `content.ts` 3202 → **3055**, ceiling 3300 → **3150**,
+43 → **17** inline registrations. Scroll (14), media (7), find (5).
+
+**§6a's worry did not survive contact.** Measured across all 43 bodies: they
+close over exactly **two** `content.ts` locals, `activateWrapper` and
+`currentKeymap`, one command each. They were not entangled in entry-point state
+the way `BRANCHKIT_ACTION` is — they were inline because nobody moved them.
+That is what makes 3b independent of §6g.5's blocked decision.
+
+**Whether a group needs its own `*-commands.ts` is a question about the import
+graph, and the answer differs per group.** Three cases so far:
+
+- `scroller.ts` imports nothing but a type, which is what lets `scan/find`
+  depend on it for the mechanism alone. Registering there would drag the whole
+  dispatcher/keyboard/mode-chip closure into everything that wanted to scroll
+  an element. **Separate module**, on the §6f layering argument.
+- `core/singletons` imports `activate/media`, so registering there would be a
+  real cycle — the boot hazard lint F rejects, not a preference. **Separate
+  module**, and the stronger reason.
+- `scan/find` already reaches `core/singletons` transitively via
+  `render/badge-visibility`. Importing the dispatcher closes no cycle and adds
+  no closure. **Registration goes in the feature module**, as
+  `registerSelectionCommands` always did.
+
+The default is the third. Ask the graph before adding a file.
+
+**Lint G2** (`scripts/check-exhaustive.mjs`, `c45449d`) is G's other half: G
+catches a module that stops being IMPORTED, G2 an exported registrar that is
+never CALLED. Same silent failure — the command stays in the catalog, its
+keybind and voice phrase both resolve, nothing happens, and the registrar's own
+tests pass because they call it themselves. Both sides read from the code, so a
+new `register*Commands` export joins by existing; it caught `registerFindCommands`
+before it was wired. Four arms plus a false-positive guard, mutation-verified.
+
+**Two test findings, both the familiar shape.** Every find match assertion read
+zero at first: happy-dom answers `checkVisibility()` falsy and find drops
+invisible matches, so the whole group would have passed against a binding that
+searched for the wrong string. And *"registers nothing at import time"* — which
+scroll and media had and find did not — genuinely survived its mutant until
+written. It matters more than it looks: a module that self-registers makes its
+registrar decorative and **voids lint G2**, whose premise is that an uncalled
+registrar loses its commands.
+
+**Also surfaced, not fixed.** Collapsing ten copies of the cycle-target rule
+exposed that the GENERIC `scroll` command does not consult the cycle target at
+all, while the ten named ones do. After cycling to a sidebar, "scroll down"
+scrolls the sidebar but the parameterised form scrolls the page. Invisible while
+the copies were spread over 66 lines. Preserved and pinned by a test that says
+why — it changes what a voice command does after a cycle, so it is a product
+call.
+
+**Remaining: 17.** The hint-action verbs (`yank_hint`, `focus_hint`,
+`copytext_hint`, `hover_hint`, `caret_hint`) are deliberately last — they are
+the same verbs `BRANCHKIT_ACTION`'s element-verb arm handles, so moving them
+teaches something about §6g.5's option 1 before that decision is made. The rest:
+hint mode (3), help (1, needs `currentKeymap`), palette/tab groups (2 loops),
+history/nav (4), keyboard modes (2).
+
+#### 6g.8 §7's unverified boundary is closed
 
 §7 recorded after phase 1 that "a green suite here is not a green browser" —
 every handler in both tables only ever runs behind `chrome.runtime.onMessage`,
