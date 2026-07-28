@@ -164,8 +164,16 @@ function srcFiles() {
     // `store.all.length` went to debug/perf-snapshot.ts with the rest of the
     // perf block (entry-point topology phase 4). Same two sites, new file —
     // this lower and perf-snapshot's pin below are one move.
-    'src/content.ts': 20,
-    'src/render/badge-visibility.ts': 4,
+    // 20 -> 18 (2026-07-28): the two `store.all.length` hint counts in
+    // GET_PAGE_STATUS / SET_BADGES_VISIBLE went to badge-visibility.ts with
+    // those handlers (entry-point topology phase 3a). This lower and
+    // badge-visibility's raise are one move.
+    'src/content.ts': 18,
+    // 4 -> 6 (2026-07-28): the popup's two hint counts, arrived from
+    // content.ts. Not a new membership question — the popup asks "how many
+    // hints does this page have", which is the same total anyBadgesShowing
+    // already reads the store for, one line above each of them.
+    'src/render/badge-visibility.ts': 6,
     'src/plugin/resolve.ts': 1,
     // 1 -> 3 (2026-07-27): republishAllGrammar's full re-push arrived from
     // content.ts — the loop over live wrappers plus the count it logs. Not a
@@ -343,36 +351,51 @@ function srcFiles() {
 // awaiting content script hangs or reads undefined.
 //
 // Both sides are read from the code, so there is no list to keep in sync.
+//
+// TWO entry points since phase 3: background.ts and content.ts. They are
+// separate esbuild bundles, so each has its OWN handler table — which is why
+// registration is checked against "some entry point" and disjointness is
+// checked WITHIN one. `MARK_RESTORE` in the content table and `MARK_SET` in
+// the SW's are not competing for anything, and a rule that said otherwise
+// would be inventing a constraint the runtime does not have.
 {
-  const bg = read('src/background.ts');
+  const ENTRIES = ['src/background.ts', 'src/content.ts'];
+  const entrySrc = new Map(ENTRIES.map((e) => [e, read(e)]));
+  const entryPaths = new Set(ENTRIES.map((e) => join(...e.split('/'))));
 
   const exported = [];
   for (const rel of srcFiles()) {
-    if (rel === join('src', 'background.ts')) continue;
+    if (entryPaths.has(rel)) continue;
     for (const m of read(rel).matchAll(/^export const (\w*MessageHandlers)\b/gm)) {
       exported.push({ name: m[1], file: rel });
     }
   }
 
-  const registered = new Set(
-    [...bg.matchAll(/registerMessageHandlers\(\s*(\w+)/g)].map((m) => m[1]),
+  /** entry -> the map names it composes. */
+  const registeredBy = new Map(
+    ENTRIES.map((e) => [e, new Set(
+      [...entrySrc.get(e).matchAll(/registerMessageHandlers\(\s*(\w+)/g)].map((m) => m[1]),
+    )]),
   );
+  const registeredAnywhere = new Set([...registeredBy.values()].flatMap((s) => [...s]));
 
   if (exported.length === 0) {
     fail('lint E found zero exported *MessageHandlers maps — fix the lint');
   }
 
-  const unregistered = exported.filter((e) => !registered.has(e.name));
+  const unregistered = exported.filter((e) => !registeredAnywhere.has(e.name));
   for (const { name, file } of unregistered) {
-    fail(`${name} (${file}) is exported but never registered in background.ts — ` +
+    fail(`${name} (${file}) is exported but never registered in an entry point — ` +
       'its message types route nowhere and senders await a response that never comes');
   }
 
-  // Nothing may bypass the table: the listener takes routeMessage directly, so
+  // Nothing may bypass the table: each listener takes routeMessage directly, so
   // a reintroduced inline if-chain fails here rather than quietly coexisting.
-  if (!/onMessage\.addListener\(routeMessage\)/.test(bg)) {
-    fail('background.ts no longer installs routeMessage as its sole onMessage listener — ' +
-      'handlers belong in a module map (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md)');
+  for (const entry of ENTRIES) {
+    if (!/onMessage\.addListener\(routeMessage\)/.test(entrySrc.get(entry))) {
+      fail(`${entry} no longer installs routeMessage as its sole onMessage listener — ` +
+        'handlers belong in a module map (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md)');
+    }
   }
 
   // --- and no two maps may claim the same message type --------------------
@@ -399,36 +422,49 @@ function srcFiles() {
     return [...src.slice(open, i).matchAll(/^ {2}([A-Z][A-Z0-9_]*):/gm)].map((m) => m[1]);
   };
 
-  const owner = new Map();   // message type -> the map that claimed it first
-  const collisions = [];
-  let typeCount = 0;
-  const claim = (type, by) => {
-    typeCount++;
-    if (owner.has(type)) collisions.push({ type, first: owner.get(type), second: by });
-    else owner.set(type, by);
+  /** Types a named map claims, or null if the map's literal cannot be found. */
+  const keysOfMap = (name, file) => {
+    const src = read(file);
+    const at = src.indexOf(`export const ${name}`);
+    if (at === -1) return null;
+    return literalKeys(src, src.indexOf('{', src.indexOf('=', at)));
   };
 
-  for (const { name, file } of exported) {
-    const src = read(file);
-    const open = src.indexOf('{', src.indexOf('=', src.indexOf(`export const ${name}`)));
-    for (const type of literalKeys(src, open)) claim(type, name);
-  }
-  // background.ts composes one map inline (the offscreen-bridge residue), and
-  // it can collide with a module's just as easily.
-  for (const m of bg.matchAll(/registerMessageHandlers\(\{/g)) {
-    for (const type of literalKeys(bg, m.index + m[0].length - 1)) claim(type, 'background.ts (inline)');
+  const collisions = [];
+  let typeCount = 0;
+
+  // Disjointness is per TABLE, and each entry point owns one.
+  for (const entry of ENTRIES) {
+    const owner = new Map();   // message type -> the map that claimed it first
+    const claim = (type, by) => {
+      typeCount++;
+      if (owner.has(type)) collisions.push({ entry, type, first: owner.get(type), second: by });
+      else owner.set(type, by);
+    };
+    for (const { name, file } of exported) {
+      if (!registeredBy.get(entry).has(name)) continue;
+      for (const type of keysOfMap(name, file) ?? []) claim(type, name);
+    }
+    // Both entry points compose a map inline — the SW's offscreen-bridge
+    // residue, content.ts's BRANCHKIT_ACTION — and either can collide with a
+    // module's just as easily.
+    const src = entrySrc.get(entry);
+    for (const m of src.matchAll(/registerMessageHandlers\(\{/g)) {
+      for (const type of literalKeys(src, m.index + m[0].length - 1)) claim(type, `${entry} (inline)`);
+    }
   }
 
   if (typeCount === 0) {
     fail('lint E parsed zero message types out of the handler maps — fix the lint');
   }
-  for (const { type, first, second } of collisions) {
-    fail(`message type '${type}' is claimed by both ${first} and ${second} — ` +
+  for (const { entry, type, first, second } of collisions) {
+    fail(`message type '${type}' is claimed by both ${first} and ${second} in ${entry}'s table — ` +
       'registerMessageHandlers throws on the duplicate and that handler is lost');
   }
 
   if (unregistered.length === 0 && collisions.length === 0) {
-    ok(`message handlers: ${exported.length} maps registered, ${typeCount} types disjoint, listener is the table`);
+    ok(`message handlers: ${exported.length} maps across ${ENTRIES.length} tables, ` +
+      `${typeCount} types disjoint per table, both listeners are the table`);
   }
 }
 

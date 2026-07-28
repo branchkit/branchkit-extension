@@ -26,6 +26,7 @@ import { findPageLink, type Rel } from './pagination';
 import { urlUp, urlRoot } from './url-nav';
 import { copyText } from './clipboard';
 import type { Message } from '../types';
+import type { MessageHandler } from '../core/message-router';
 
 const isTopFrame = window === window.top;
 
@@ -287,3 +288,15 @@ export function registerSelectionCommands(): void {
     else flashToast('Already at the root');
   });
 }
+
+// --- Global-mark restore (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md phase 3) ---
+//
+// A global-mark jump landed on (or opened) this tab — restore the saved
+// position. Top frame only; sub-frame scroll is out of scope for MVP. Was a
+// branch of content.ts's onMessage chain; `restorePosition` is right here.
+
+export const markRestoreMessageHandlers: Record<string, MessageHandler> = {
+  MARK_RESTORE: (message) => {
+    if (isTopFrame) restorePosition({ scrollX: message.scrollX, scrollY: message.scrollY, hash: message.hash });
+  },
+};

@@ -15,6 +15,7 @@ import {
   resetMessageHandlers,
   registeredMessageTypes,
   routeMessage,
+  setMessageGuard,
   type MessageSender,
 } from './message-router';
 
@@ -134,6 +135,54 @@ describe('unmatched traffic', () => {
       expect(routeMessage(message, sender, respond)).toBe(false);
       expect(respond).not.toHaveBeenCalled();
     }
+  });
+});
+
+describe('the context guard', () => {
+  it('stops every handler while it refuses, and lets them run again when it does not', () => {
+    let alive = false;
+    const seen: string[] = [];
+    registerMessageHandlers({ ACT: () => { seen.push('act'); return { ok: true }; } });
+    setMessageGuard(() => alive);
+
+    const blocked = vi.fn();
+    expect(routeMessage({ type: 'ACT' }, sender, blocked)).toBe(false);
+    expect(seen).toEqual([]);
+    expect(blocked).not.toHaveBeenCalled();
+
+    // The positive counterpart: without it, an inert handler reads the same.
+    alive = true;
+    const allowed = vi.fn();
+    expect(routeMessage({ type: 'ACT' }, sender, allowed)).toBe(false);
+    expect(seen).toEqual(['act']);
+    expect(allowed).toHaveBeenCalledWith({ ok: true });
+  });
+
+  it('runs on unregistered types too, so a refusing context can count what it ignored', () => {
+    // The content script's orphan gauge counts every message a torn-down
+    // context saw, not just the ones it had a handler for.
+    const asked: string[] = [];
+    setMessageGuard(() => { asked.push('checked'); return false; });
+    registerMessageHandlers({ KNOWN: () => 1 });
+
+    routeMessage({ type: 'SOMEONE_ELSES' }, sender, vi.fn());
+    routeMessage({ type: 'KNOWN' }, sender, vi.fn());
+    expect(asked).toEqual(['checked', 'checked']);
+  });
+
+  it('routes normally with no guard installed — the service worker never sets one', () => {
+    registerMessageHandlers({ ACT: () => ({ ok: true }) });
+    const respond = vi.fn();
+    routeMessage({ type: 'ACT' }, sender, respond);
+    expect(respond).toHaveBeenCalledWith({ ok: true });
+  });
+
+  it('a promise handler behind a refusing guard never keeps the channel open', () => {
+    registerMessageHandlers({ SLOW: () => new Promise(() => {}) });
+    setMessageGuard(() => false);
+    // Returning true here would leave the sender awaiting a dead context
+    // forever — the exact hang the router exists to make unexpressible.
+    expect(routeMessage({ type: 'SLOW' }, sender, vi.fn())).toBe(false);
   });
 });
 

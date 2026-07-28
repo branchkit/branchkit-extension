@@ -16,6 +16,9 @@ import { generateSelector } from '../scan/selector-generator';
 import { accessibleName } from '../scan/accessible-name';
 import { codewordToAssignment, labelToDisplay } from '../labels/words';
 import { BadgeDisplayMode, DispatchResult, Message, ResolveHintResponse } from '../types';
+import { store } from '../core/store';
+import { getDisplayMode } from '../config';
+import type { MessageHandler } from '../core/message-router';
 
 function normalizeCodeword(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, '');
@@ -97,3 +100,14 @@ export function reportDispatchResult(result: DispatchResult): void {
     // Extension context invalidated; nothing useful to do.
   }
 }
+
+// --- The options page's lookup (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md phase 3) ---
+//
+// `resolveHintLocally` above takes its store as a parameter so it stays a pure
+// function under test. The MESSAGE handler is the one caller that always means
+// the live page store, so it binds the singleton here rather than making
+// content.ts do it.
+
+export const hintResolveMessageHandlers: Record<string, MessageHandler> = {
+  RESOLVE_HINT: (message) => resolveHintLocally(store, message.codeword, getDisplayMode()),
+};

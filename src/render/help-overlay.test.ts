@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { buildHelpModel, buildAlphabetModel, toggleHelpOverlay, _resetHelpForTesting } from './help-overlay';
+import { buildHelpModel, buildAlphabetModel, toggleHelpOverlay, _resetHelpForTesting, helpMessageHandlers } from './help-overlay';
 import type { CommandMeta, KeymapEntry } from '../keymap/command-catalog';
 import { setAlphabet, clearAlphabet } from '../labels/words';
 import { initConnectionMirror, resetConnectionMirrorForTest } from '../plugin/connection-mirror';
@@ -174,5 +174,35 @@ describe('toggleHelpOverlay voice availability (alphabet AND connection)', () =>
     expect(shadow().querySelector('.alpha-empty')).toBeNull();
     expect(shadow().querySelector('.cmds')!.classList.contains('no-voice')).toBe(false);
     expect(shadow().querySelector('.voice')).not.toBeNull();
+  });
+});
+
+describe('helpMessageHandlers', () => {
+  const subframe = () =>
+    Object.defineProperty(window, 'top', { configurable: true, get: () => ({} as Window) });
+  const topframe = () =>
+    Object.defineProperty(window, 'top', { configurable: true, get: () => window });
+
+  afterEach(() => topframe());
+
+  it('routes the popup Help button through the dispatcher, not the toggle directly', async () => {
+    topframe();
+    const { dispatcher } = await import('../core/singletons');
+    const spy = vi.spyOn(dispatcher, 'dispatch').mockImplementation(() => {});
+    helpMessageHandlers.OPEN_HELP({ type: 'OPEN_HELP' }, {} as never);
+    // Through `toggle_help` so the popup takes the identical path as `?` and
+    // voice "help" — including whatever content.ts bound that command to
+    // (spoken-forms overlay). Calling toggleHelpOverlay here would skip it.
+    expect(spy).toHaveBeenCalledWith('toggle_help', {});
+    spy.mockRestore();
+  });
+
+  it('does nothing in a subframe — the overlay is a page-level surface', async () => {
+    const { dispatcher } = await import('../core/singletons');
+    const spy = vi.spyOn(dispatcher, 'dispatch').mockImplementation(() => {});
+    subframe();
+    helpMessageHandlers.OPEN_HELP({ type: 'OPEN_HELP' }, {} as never);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
   });
 });

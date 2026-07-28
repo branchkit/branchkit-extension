@@ -30,6 +30,7 @@ import {
   anyBadgesShowing, hideBadges, toggleHints,
   setBadgesVisible, borrowBadgeScreen, _resetBadgeVisibilityForTesting,
   assertBadgeScreenBorrow, returnBadgeScreenBorrow, discardBadgeScreenBorrow,
+  badgeVisibilityMessageHandlers,
 } from './badge-visibility';
 
 function fakeHint(visible: boolean) {
@@ -331,5 +332,81 @@ describe('the badge screen borrow slot', () => {
     returnBadgeScreenBorrow();
     await settle();
     expect(pageSession.badgesVisible).toBe(false); // took nothing, restored nothing
+  });
+});
+
+// --- The popup's two messages (entry-point topology phase 3a) --------------
+//
+// The asymmetry is the whole point and it is easy to "simplify" away:
+// SET_BADGES_VISIBLE is broadcast to EVERY frame because each frame drives its
+// own badges, but only the top frame ANSWERS so the popup gets one readout.
+// Gating the whole handler on the frame would leave subframe badges stuck.
+describe('badgeVisibilityMessageHandlers', () => {
+  const subframe = () =>
+    Object.defineProperty(window, 'top', { configurable: true, get: () => ({} as Window) });
+  const topframe = () =>
+    Object.defineProperty(window, 'top', { configurable: true, get: () => window });
+
+  beforeEach(() => { topframe(); });
+  afterEach(() => { topframe(); });
+
+  it('GET_PAGE_STATUS answers the top frame with the hint count and showing state', () => {
+    seedWrapper(true);
+    seedWrapper(false);
+    expect(badgeVisibilityMessageHandlers.GET_PAGE_STATUS({ type: 'GET_PAGE_STATUS' }, {} as never))
+      .toEqual({ hintCount: 2, badgesVisible: true });
+  });
+
+  it('GET_PAGE_STATUS stays silent in a subframe so the popup gets ONE response', () => {
+    seedWrapper(true);
+    subframe();
+    expect(badgeVisibilityMessageHandlers.GET_PAGE_STATUS({ type: 'GET_PAGE_STATUS' }, {} as never))
+      .toBeUndefined();
+  });
+
+  it('SET_BADGES_VISIBLE shows this frame\'s badges and answers from the top frame', async () => {
+    seedWrapper(false);
+    const answer = badgeVisibilityMessageHandlers.SET_BADGES_VISIBLE(
+      { type: 'SET_BADGES_VISIBLE', visible: true }, {} as never,
+    );
+    await settle();
+    expect(doScan).toHaveBeenCalled();
+    expect(pageSession.badgesVisible).toBe(true);
+    expect(answer).toEqual({ badgesVisible: true, hintCount: 1 });
+  });
+
+  it('SET_BADGES_VISIBLE still shows a SUBFRAME\'s badges, it just does not answer', async () => {
+    seedWrapper(false);
+    subframe();
+    const answer = badgeVisibilityMessageHandlers.SET_BADGES_VISIBLE(
+      { type: 'SET_BADGES_VISIBLE', visible: true }, {} as never,
+    );
+    await settle();
+    // The action happened in the subframe — a handler gated wholesale on the
+    // frame would leave subframe badges stuck at whatever they were.
+    expect(doScan).toHaveBeenCalled();
+    expect(pageSession.badgesVisible).toBe(true);
+    // Only the response was withheld.
+    expect(answer).toBeUndefined();
+  });
+
+  it('SET_BADGES_VISIBLE hides too, in a subframe as much as the top one', async () => {
+    const top = seedWrapper(true);
+    pageSession.badgesVisible = true;
+    const answer = badgeVisibilityMessageHandlers.SET_BADGES_VISIBLE(
+      { type: 'SET_BADGES_VISIBLE', visible: false }, {} as never,
+    );
+    await settle();
+    expect(top.hint!.hide).toHaveBeenCalled();
+    expect(answer).toEqual({ badgesVisible: false, hintCount: 1 });
+
+    const sub = seedWrapper(true);
+    pageSession.badgesVisible = true;
+    subframe();
+    expect(badgeVisibilityMessageHandlers.SET_BADGES_VISIBLE(
+      { type: 'SET_BADGES_VISIBLE', visible: false }, {} as never,
+    )).toBeUndefined();
+    await settle();
+    expect(sub.hint!.hide).toHaveBeenCalled();
   });
 });

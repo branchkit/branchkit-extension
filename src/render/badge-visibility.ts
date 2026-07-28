@@ -53,6 +53,7 @@ import { cacheLayout, cacheConstruction, clearLayoutCache, isRectOnScreen } from
 import type { ElementWrapper } from '../scan/element-wrapper';
 import { firehoseStep } from '../debug/firehose';
 import { recordCpu } from '../debug/perf-counters';
+import type { MessageHandler } from '../core/message-router';
 
 const MAX_BADGE_COUNT = 676; // No artificial cap; word pairs for >26
 
@@ -367,3 +368,30 @@ export function discardBadgeScreenBorrow(): void {
 export function _resetBadgeVisibilityForTesting(): void {
   screenBorrow = null;
 }
+
+// --- Popup ⇄ page badge state (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md phase 3) ---
+//
+// Both handlers used to be branches of content.ts's onMessage chain. They read
+// and write exactly what this module owns, so they belong beside it.
+
+// Read at CALL time, not module scope: `window.top` never changes for a
+// frame's lifetime, so this costs nothing, and a module-scope const would make
+// the gate untestable without reloading the module. Same shape as toast.ts and
+// mode-chip.ts.
+const inTopFrame = () => window === window.top;
+
+export const badgeVisibilityMessageHandlers: Record<string, MessageHandler> = {
+  // Only the top frame answers, so the popup receives a single response. The
+  // count is this frame's hint candidates; subframe hints aren't aggregated.
+  GET_PAGE_STATUS: () =>
+    inTopFrame() ? { hintCount: store.all.length, badgesVisible: anyBadgesShowing() } : undefined,
+
+  // Popup Show/Hide button — the UI twin of Shift+F. Sent to every frame (no
+  // frameId) so "this page" means the whole page, not just the top frame; each
+  // frame drives its own badges. Only the top frame answers, so the popup gets
+  // one response to refresh its readout from.
+  SET_BADGES_VISIBLE: (message) => {
+    const nowShowing = setBadgesVisible(message.visible);
+    return inTopFrame() ? { badgesVisible: nowShowing, hintCount: store.all.length } : undefined;
+  },
+};

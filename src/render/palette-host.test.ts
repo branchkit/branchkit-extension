@@ -59,3 +59,32 @@ describe('palette open/close and the mode stack (Wave 3 C2)', () => {
     expect(modes.has('palette')).toBe(false);
   });
 });
+
+describe('paletteHostMessageHandlers', () => {
+  it('PALETTE_CLOSE closes the overlay and ANSWERS — the background awaits it', () => {
+    host.openPalette('all');
+    const answer = host.paletteHostMessageHandlers.PALETTE_CLOSE({ type: 'PALETTE_CLOSE' }, {} as never);
+    // Returning undefined here would close the channel with no response, and
+    // the background's `await sendMessage` would resolve to undefined before
+    // the overlay was gone — it dispatches into the page on that resolution.
+    expect(answer).toBe(true);
+    expect(document.querySelector('iframe')).toBeNull();
+  });
+
+  it('PALETTE_COMMAND forwards action and params to the dispatcher', async () => {
+    const { dispatcher } = await import('../core/singletons');
+    const spy = vi.spyOn(dispatcher, 'dispatch').mockImplementation(() => {});
+    host.paletteHostMessageHandlers.PALETTE_COMMAND(
+      { type: 'PALETTE_COMMAND', action: 'scroll_down', params: { amount: '3' } }, {} as never,
+    );
+    expect(spy).toHaveBeenCalledWith('scroll_down', { amount: '3' });
+
+    // A command with no params must still dispatch — an `?? {}` that became a
+    // guard would silently drop every parameterless palette pick.
+    host.paletteHostMessageHandlers.PALETTE_COMMAND(
+      { type: 'PALETTE_COMMAND', action: 'toggle_help' }, {} as never,
+    );
+    expect(spy).toHaveBeenLastCalledWith('toggle_help', {});
+    spy.mockRestore();
+  });
+});

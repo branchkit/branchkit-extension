@@ -319,3 +319,43 @@ describe('registration contract (Phase 1)', () => {
     expect(modes.has('caret')).toBe(false);
   });
 });
+
+describe('markRestoreMessageHandlers', () => {
+  const asFrame = (top: boolean) =>
+    Object.defineProperty(window, 'top', {
+      configurable: true, get: () => (top ? window : ({} as Window)),
+    });
+
+  afterEach(() => asFrame(true));
+
+  it('restores a hash mark in the top frame', async () => {
+    asFrame(true);
+    const m = await loadModule();
+    m.markRestoreMessageHandlers.MARK_RESTORE(
+      { type: 'MARK_RESTORE', scrollX: 0, scrollY: 0, hash: '#readme' }, {} as never,
+    );
+    expect(location.hash).toBe('#readme');
+  });
+
+  it('restores a scroll mark in the top frame', async () => {
+    asFrame(true);
+    const m = await loadModule();
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    m.markRestoreMessageHandlers.MARK_RESTORE(
+      { type: 'MARK_RESTORE', scrollX: 12, scrollY: 340, hash: '' }, {} as never,
+    );
+    expect(scrollTo).toHaveBeenCalledWith(12, 340);
+    scrollTo.mockRestore();
+  });
+
+  it('does nothing in a subframe — sub-frame scroll is out of scope', async () => {
+    asFrame(false);
+    const m = await loadModule();
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    m.markRestoreMessageHandlers.MARK_RESTORE(
+      { type: 'MARK_RESTORE', scrollX: 12, scrollY: 340, hash: '' }, {} as never,
+    );
+    expect(scrollTo).not.toHaveBeenCalled();
+    scrollTo.mockRestore();
+  });
+});

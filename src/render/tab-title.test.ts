@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { setTabMarker, reapplyTabMarker, _resetTabTitleForTesting } from './tab-title';
+import { setTabMarker, reapplyTabMarker, _resetTabTitleForTesting, tabTitleMessageHandlers } from './tab-title';
 
 describe('tab title decorator', () => {
   beforeEach(() => {
@@ -57,5 +57,47 @@ describe('tab title decorator', () => {
     _resetTabTitleForTesting();
     setTabMarker('a');
     expect(document.title).toBe('');
+  });
+});
+
+describe('tabTitleMessageHandlers', () => {
+  const subframe = () =>
+    Object.defineProperty(window, 'top', { configurable: true, get: () => ({} as Window) });
+  const topframe = () =>
+    Object.defineProperty(window, 'top', { configurable: true, get: () => window });
+
+  beforeEach(() => {
+    topframe();
+    document.title = 'GitHub';
+    _resetTabTitleForTesting();
+  });
+
+  it('sets the marker in the top frame', () => {
+    tabTitleMessageHandlers.TAB_MARKER({ type: 'TAB_MARKER', letters: 'qr' }, {} as never);
+    expect(document.title).toBe('[qr] GitHub');
+  });
+
+  it('does nothing in a subframe — the marker decorates the TAB title', () => {
+    subframe();
+    tabTitleMessageHandlers.TAB_MARKER({ type: 'TAB_MARKER', letters: 'qr' }, {} as never);
+    expect(document.title).toBe('GitHub');
+  });
+
+  it('reapplies a marker the page overwrote, top frame only', () => {
+    tabTitleMessageHandlers.TAB_MARKER({ type: 'TAB_MARKER', letters: 'qr' }, {} as never);
+    document.title = 'GitHub — Pull requests';
+    tabTitleMessageHandlers.TAB_MARKER_REAPPLY({ type: 'TAB_MARKER_REAPPLY' }, {} as never);
+    expect(document.title).toBe('[qr] GitHub — Pull requests');
+
+    document.title = 'GitHub — Issues';
+    subframe();
+    tabTitleMessageHandlers.TAB_MARKER_REAPPLY({ type: 'TAB_MARKER_REAPPLY' }, {} as never);
+    expect(document.title).toBe('GitHub — Issues');
+  });
+
+  it('clears the marker on a null letters payload', () => {
+    tabTitleMessageHandlers.TAB_MARKER({ type: 'TAB_MARKER', letters: 'qr' }, {} as never);
+    tabTitleMessageHandlers.TAB_MARKER({ type: 'TAB_MARKER', letters: null }, {} as never);
+    expect(document.title).toBe('GitHub');
   });
 });

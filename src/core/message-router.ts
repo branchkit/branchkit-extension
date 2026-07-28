@@ -60,6 +60,25 @@ export type MessageHandler = (
 
 const handlers = new Map<string, MessageHandler>();
 
+let guard: (() => boolean) | null = null;
+
+/**
+ * A context-wide precondition, checked before any handler runs. Returning
+ * `false` makes this context ignore every message.
+ *
+ * The content script needs it: a torn-down orphan (a superseded elder whose
+ * `chrome.runtime` is still live) must not act on broadcasts, or it fires
+ * navigations, clicks and grammar into a dead session alongside its successor
+ * (notes/DESIGN_TEARDOWN_OWNERSHIP.md). That guard has to sit ABOVE the table
+ * rather than inside eleven handlers, because the rule is "this context is
+ * done", not "this message does not apply".
+ *
+ * Unset in the service worker, which has no such state.
+ */
+export function setMessageGuard(fn: (() => boolean) | null): void {
+  guard = fn;
+}
+
 function isThenable(v: unknown): v is Promise<unknown> {
   return typeof (v as { then?: unknown } | null | undefined)?.then === 'function';
 }
@@ -82,9 +101,10 @@ export function registerMessageHandlers(map: Record<string, MessageHandler>): vo
   }
 }
 
-/** Test seam. Production installs once at SW boot and never clears. */
+/** Test seam. Production installs once at boot and never clears. */
 export function resetMessageHandlers(): void {
   handlers.clear();
+  guard = null;
 }
 
 /** The registered types, sorted. Diagnostics and tests. */
@@ -105,6 +125,8 @@ export function routeMessage(
   sender: MessageSender,
   sendResponse: (response?: unknown) => void,
 ): boolean {
+  if (guard && !guard()) return false;
+
   const type = message?.type;
   if (typeof type !== 'string') return false;
 

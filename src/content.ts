@@ -32,7 +32,7 @@ import { harnessHooksEnabled } from './debug/harness-hooks';
 import { store } from './core/store';
 import {
   anyBadgesShowing, showBadges, hideBadges, clearHintFilter,
-  toggleHints, setBadgesVisible, discardBadgeScreenBorrow,
+  toggleHints, discardBadgeScreenBorrow, badgeVisibilityMessageHandlers,
 } from './render/badge-visibility';
 import { HintBadge } from './render/hints';
 import { elementTarget } from './render/badge-target';
@@ -53,12 +53,12 @@ import {
 } from './activate/activate-path-log';
 import { captureDebugSnapshot } from './debug/debug-snapshot';
 import { toggleOverlay } from './render/debug-overlay';
-import { toggleHelpOverlayWithSpokenForms } from './render/help-overlay';
-import { registerPaletteCommands, closePalette } from './render/palette-host';
-import { setTabMarker, reapplyTabMarker, refreshTabMarker } from './render/tab-title';
+import { toggleHelpOverlayWithSpokenForms, helpMessageHandlers } from './render/help-overlay';
+import { registerPaletteCommands, paletteHostMessageHandlers } from './render/palette-host';
+import { setTabMarker, refreshTabMarker, tabTitleMessageHandlers } from './render/tab-title';
 import { copyText } from './activate/clipboard';
 import { flashToast } from './render/toast';
-import { registerSelectionCommands, restorePosition, caret, SELECTION_ACTIONS, parseSelectionCommand } from './activate/selection-commands';
+import { registerSelectionCommands, caret, SELECTION_ACTIONS, parseSelectionCommand, markRestoreMessageHandlers } from './activate/selection-commands';
 import { startQueryFieldReporting } from './plugin/query-field';
 import { cancelRangePick } from './activate/range-disambiguation';
 import { clearSearchBadges, retrySearchBadgeArm } from './activate/search-badges';
@@ -124,7 +124,7 @@ import { isScrollTimelineSupported } from './render/scroll-accel';
 import { setNudgesFromSettings } from './placement';
 import { labelReservoir } from './labels/label-reservoir';
 import { doScan, scheduleDoScan } from './scan/scan-orchestrator';
-import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
+import { reportDispatchResult, hintResolveMessageHandlers } from './plugin/resolve';
 import { openLivenessPort, repairLivenessAfterBfcacheRestore } from './plugin/liveness';
 import { pageSession, scheduleYieldTask, yieldTask, TeardownReason } from './lifecycle/page-session';
 import { setSettleEngine } from './lifecycle/settle-engine-ref';
@@ -156,6 +156,8 @@ import {
   syncNow,
 } from './labels/label-sync';
 import { installUncaughtCapture } from './debug/uncaught';
+import { registerMessageHandlers, routeMessage, setMessageGuard } from './core/message-router';
+import { focusMessageHandlers, installWindowFocusTracking } from './core/window-focus';
 import { installPerfReporting } from './debug/perf-snapshot';
 
 // --- Idempotency guard ---
@@ -1572,20 +1574,8 @@ function activateWrapper(wrapper: ElementWrapper): void {
  * paints badges whose voice command is live.
  */
 // --- Active-frame tracking ---
-//
-// Each frame's content script knows whether `window` currently has focus.
-// The background uses this (via GET_FOCUS_STATUS) to route actions to
-// whichever frame the user is interacting with, when that's relevant.
-// Trusted focus/blur events on `window` are the canonical signal.
-
-let windowHasFocus = document.hasFocus();
-
-pageSession.resources.listen(window, 'focus', (e) => {
-  if (e.target === window) windowHasFocus = true;
-}, true);
-pageSession.resources.listen(window, 'blur', (e) => {
-  if (e.target === window) windowHasFocus = false;
-}, true);
+// Tracker and its GET_FOCUS_STATUS handler live in core/window-focus.ts.
+installWindowFocusTracking();
 
 // --- bfcache restore ---
 //
@@ -2182,74 +2172,41 @@ const DISPATCH_PASSTHROUGH_ACTIONS = new Set([
   'video_mode', 'video_exit', // "video" = the `w` layer's entry; exit = the mirror forwarder (C4b)
 ]);
 
-chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {
-  // A torn-down orphan (a superseded elder whose chrome.runtime is still live)
-  // must not act on broadcasts — it would fire navigations/clicks/grammar into
-  // a dead session alongside the successor. See notes/DESIGN_TEARDOWN_OWNERSHIP.md.
-  if (pageSession.isTornDown) { recordOrphanHit(); return false; }
-  if (message.type === 'GET_FOCUS_STATUS') {
-    sendResponse({ focused: windowHasFocus });
-    return false;
-  }
+// --- The content-side message table ---
+//
+// Same shape as background.ts (phase 1): the listener IS the table, handlers
+// live with the module that owns their concern, and a handler's RETURN VALUE
+// carries the response contract instead of a hand-written `return true`.
+// core/message-router.ts explains why one module serves both bundles.
+// Lint E in scripts/check-exhaustive.mjs holds both halves of that shape.
+//
+// Install the listener BEFORE composing the maps: a duplicate-type throw then
+// costs one map instead of leaving the page with no listener at all.
+chrome.runtime.onMessage.addListener(routeMessage);
 
-  if (message.type === 'RESOLVE_HINT') {
-    sendResponse(resolveHintLocally(store, message.codeword, getDisplayMode()));
-    return false;
-  }
+// A torn-down orphan (a superseded elder whose chrome.runtime is still live)
+// must not act on broadcasts — it would fire navigations/clicks/grammar into
+// a dead session alongside the successor. See notes/DESIGN_TEARDOWN_OWNERSHIP.md.
+// Above the table, not inside the handlers: the rule is "this context is done".
+setMessageGuard(() => {
+  if (!pageSession.isTornDown) return true;
+  recordOrphanHit();
+  return false;
+});
 
-  if (message.type === 'GET_PAGE_STATUS') {
-    // Only the top frame answers so the popup receives a single response. The
-    // count is this frame's hint candidates; subframe hints aren't aggregated.
-    if (!isTopFrame) return false;
-    sendResponse({ hintCount: store.all.length, badgesVisible: anyBadgesShowing() });
-    return false;
-  }
+registerMessageHandlers(focusMessageHandlers);
+registerMessageHandlers(hintResolveMessageHandlers);
+registerMessageHandlers(badgeVisibilityMessageHandlers);
+registerMessageHandlers(tabTitleMessageHandlers);
+registerMessageHandlers(markRestoreMessageHandlers);
+registerMessageHandlers(paletteHostMessageHandlers);
+registerMessageHandlers(helpMessageHandlers);
 
-  if (message.type === 'SET_BADGES_VISIBLE') {
-    // Popup Show/Hide button — the UI twin of Shift+F. Sent to every frame
-    // (no frameId) so "this page" means the whole page, not just the top
-    // frame; each frame drives its own badges. Only the top frame answers, so
-    // the popup gets one response to refresh its readout from.
-    const nowShowing = setBadgesVisible(message.visible);
-    if (isTopFrame) sendResponse({ badgesVisible: nowShowing, hintCount: store.all.length });
-    return false;
-  }
-
-  if (message.type === 'TAB_MARKER') {
-    if (isTopFrame) setTabMarker(message.letters);
-    return false;
-  }
-
-  if (message.type === 'MARK_RESTORE') {
-    // A global-mark jump landed on (or opened) this tab — restore the saved
-    // position. Top frame only; sub-frame scroll is out of scope for MVP.
-    if (isTopFrame) restorePosition({ scrollX: message.scrollX, scrollY: message.scrollY, hash: message.hash });
-    return false;
-  }
-
-  if (message.type === 'TAB_MARKER_REAPPLY') {
-    if (isTopFrame) reapplyTabMarker();
-    return false;
-  }
-
-  if (message.type === 'PALETTE_CLOSE') {
-    closePalette();
-    sendResponse(true); // background awaits the close before dispatching
-    return false;
-  }
-
-  if (message.type === 'PALETTE_COMMAND') {
-    dispatcher.dispatch(message.action, message.params ?? {});
-    return false;
-  }
-
-  if (message.type === 'OPEN_HELP') {
-    // Popup Help button — top frame owns the overlay. Same path as ? / "help".
-    if (isTopFrame) dispatcher.dispatch('toggle_help', {});
-    return false;
-  }
-
-  if (message.type === 'BRANCHKIT_ACTION') {
+// The voice-action dispatch. Still composed here rather than from a module —
+// it is ~400 lines of element resolution and verb handling, and moving it is
+// its own change (phase 3a, second half).
+registerMessageHandlers({
+  BRANCHKIT_ACTION: (message) => {
     const { action, params, correlation_id: correlationId } = message.payload;
     // Scope the actuator's tr_ to this dispatch's synchronous body so every
     // bkLog call in it lands in browser.log grep-joinable with the matcher
@@ -2649,7 +2606,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         }
       });
     }
-  }
+  },
 });
 
 // --- Settle-signal wiring (step 3 of notes/DESIGN_SETTLE_ENGINE_EXTRACTION.md) ---
