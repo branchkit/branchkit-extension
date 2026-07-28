@@ -22,14 +22,27 @@
  *      to the holder registry (heldAnywhere/allHeld). Pins are exact and
  *      ratchet both ways, like monolith-ceilings.
  *   D. Every action the platform can dispatch at the extension has a
- *      handler: the catalog's voiced command ids and the browser plugin's
- *      own dispatch sites (mode-mirror forwarders, plugin-initiated events)
- *      must appear in the background's intercepts or content's dispatch
- *      routes. The C4b field bug (spoken "video" matched, dispatched,
- *      arrived — and dropped silently off the end of the else-if chain) is
- *      this check's reason to exist. The plugin half needs the workspace
- *      sibling ../plugins/browser and SKIPs loudly when absent (extension
- *      CI runs standalone; the workspace dev loop and app CI have it).
+ *      handler. THREE demand sources, because two was a hole: the catalog's
+ *      voiced command ids; the browser plugin's own dispatch sites
+ *      (mode-mirror forwarders, plugin-initiated events); and the
+ *      extension's OWN dispatches — BRANCHKIT_ACTION messages the SW builds
+ *      with a literal id, which belong to neither of the other two and so
+ *      were never asked about. `rescan` was live in that gap: deleting its
+ *      arm passed everything. All must appear in the background's intercepts
+ *      or content's dispatch routes. The C4b field bug (spoken "video"
+ *      matched, dispatched, arrived — and dropped silently off the end of
+ *      the else-if chain) is this check's reason to exist. The plugin half
+ *      needs the workspace sibling ../plugins/browser and SKIPs loudly when
+ *      absent (extension CI runs standalone; the workspace dev loop and app
+ *      CI have it).
+ *
+ *      The supply side reads `action === '…'` file-wide, which is dumb on
+ *      purpose and therefore over-matches: any comparison on a variable
+ *      NAMED `action` vouches for that id. Two shadows were found and closed
+ *      by renaming rather than by teaching the regex to parse — the keyboard
+ *      hint verbs in content.ts (`hintAction` now) and the SW's broadcast
+ *      decision (`BROADCAST_ACTIONS` now). Keep new non-route comparisons
+ *      off that shape; it is cheaper than a smarter parser.
  *   E. Every exported SW message-handler map is registered into the router,
  *      the onMessage listener is the router itself, and no two maps claim the
  *      same message type. An unregistered map drops its types exactly as
@@ -364,6 +377,44 @@ function srcFiles() {
     if (pluginMissing.length === 0) {
       ok(`dispatch routes: all ${pluginActions.size} plugin-initiated actions handled`);
     }
+  }
+
+  // Sources half 3 — the extension's OWN dispatches.
+  //
+  // background.ts and tab-sessions.ts build BRANCHKIT_ACTION messages with
+  // literal action ids that originate HERE rather than in the voiced catalog
+  // or the plugin, so neither half above ever asks whether they have a
+  // content-side route. `rescan` is the live case and it was a real hole:
+  // deleting its arm outright passed tsc, both lint scripts and 2278 tests,
+  // and only the messages harness — which no CI job runs — noticed.
+  //
+  // Read out of the source, not listed, so a fourth dispatch site is covered
+  // the day it is written. The pattern is deliberately narrow: a literal
+  // `action: '…'` inside the message construction itself. Forwards of a
+  // plugin payload (`payload: data`, `action: data.action`) carry no literal
+  // and are correctly invisible here — halves 1 and 2 own those.
+  //
+  // Blind spot, stated rather than left to be discovered: background/media.ts
+  // builds its payload from a variable chosen a few lines above, so its two
+  // ids are not seen. Both are in DISPATCH_PASSTHROUGH_ACTIONS and handled,
+  // but the same indirection in a NEW dispatch would be invisible to this.
+  const selfDispatched = new Set();
+  for (const f of srcFiles()) {
+    for (const m of read(f).matchAll(
+      /type:\s*'BRANCHKIT_ACTION'[\s\S]{0,160}?\baction:\s*'([a-z_0-9]+)'/g)) {
+      selfDispatched.add(m[1]);
+    }
+  }
+  if (selfDispatched.size === 0) {
+    fail('lint D parsed zero extension-originated dispatches — fix the lint, not the code');
+  }
+  const selfMissing = [...selfDispatched].filter((id) => !handled.has(id));
+  for (const id of selfMissing) {
+    fail(`the extension dispatches '${id}' to its own content script but nothing routes it — ` +
+      'a BRANCHKIT_ACTION built in the SW with no arm left to receive it');
+  }
+  if (selfMissing.length === 0) {
+    ok(`dispatch routes: all ${selfDispatched.size} extension-originated actions handled`);
   }
 
   // --- D2. Every passthrough id actually has a registered handler ----------

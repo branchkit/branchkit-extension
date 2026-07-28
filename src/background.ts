@@ -206,6 +206,21 @@ async function contributeCommands(): Promise<void> {
 
 // --- SSE Event Handling (shared by both paths) ---
 
+/**
+ * Actions whose effect is per-TAB rather than per-focused-page, so every tab
+ * has to hear them and not only the active one.
+ *
+ * A named set rather than an `action === … || action === …` chain, and that
+ * is load-bearing rather than style. Lint D reads that shape across a
+ * ROUTE_FILE as proof an id is ROUTED there, and this is a DELIVERY decision:
+ * both ids fall straight through to the content script, whose arms in
+ * activate/voice-dispatch.ts are what actually handle them. While it was a
+ * chain it vouched for 'rescan', and deleting that real arm passed tsc, both
+ * lint scripts and 2278 tests — the same shadow the keyboard hint verbs cast
+ * in content.ts, from the other direction.
+ */
+const BROADCAST_ACTIONS = new Set(['rescan', 'set_badge_mode']);
+
 function handleSSEEvent(data: any): void {
   // Paused: drop any action from a stream that outlived the teardown (a
   // surviving offscreen doc, an in-flight event mid-pause). Voice must not act
@@ -328,7 +343,7 @@ function handleSSEEvent(data: any): void {
     return;
   }
 
-  if (data.action === 'rescan' || data.action === 'set_badge_mode') {
+  if (BROADCAST_ACTIONS.has(data.action)) {
     // Broadcast to ALL tabs
     broadcastToAllTabs({
       type: 'BRANCHKIT_ACTION',
