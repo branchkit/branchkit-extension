@@ -5,7 +5,7 @@
  * Voice commands arrive via background → BRANCHKIT_ACTION messages.
  */
 
-import { HintVisibility, ScannedElement, Message, DispatchResult, TabAction, ZoomAction } from './types';
+import { HintVisibility, ScannedElement, Message, DispatchResult } from './types';
 import { LabelAssignment, isVoiceAlphabetLoaded, setAlphabet } from './labels/words';
 import {
   SettleEngine,
@@ -137,6 +137,7 @@ import { installPerfReporting } from './debug/perf-snapshot';
 import { registerScrollCommands } from './activate/scroll-commands';
 import { registerMediaCommands } from './activate/media-commands';
 import { registerKeyboardCommands } from './activate/keyboard-commands';
+import { registerTabCommands } from './activate/tab-commands';
 
 // --- Idempotency guard ---
 //
@@ -1036,39 +1037,8 @@ dispatcher.register('toggle_help', () => toggleHelpOverlayWithSpokenForms(curren
 // commands live with the overlay host (render/palette-host.ts).
 registerPaletteCommands();
 
-// Tab verbs — forward to the background SW's handleTabAction (content scripts
-// can't touch chrome.tabs). These registrations serve the keyboard path only;
-// voice never reaches them (the background intercepts tab actions off the SSE
-// stream so they work on pages without a content script).
-const TAB_COMMANDS: ReadonlyArray<readonly [string, TabAction]> = [
-  ['next_tab', 'next'], ['previous_tab', 'previous'],
-  ['first_tab', 'first'], ['last_tab', 'last'], ['goto_tab', 'goto'],
-  ['last_active_tab', 'last_active'],
-  ['new_tab', 'new'], ['close_tab', 'close'], ['restore_tab', 'restore'],
-  ['duplicate_tab', 'duplicate'], ['pin_tab', 'pin'], ['mute_tab', 'mute'],
-  ['move_tab_left', 'move_left'], ['move_tab_right', 'move_right'],
-];
-for (const [command, action] of TAB_COMMANDS) {
-  dispatcher.register(command, (params) => {
-    const n = parseInt(params.index ?? '', 10);
-    const msg: Message = Number.isFinite(n)
-      ? { type: 'TAB_ACTION', action, index: n }
-      : { type: 'TAB_ACTION', action };
-    chrome.runtime.sendMessage(msg).catch(() => {});
-  });
-}
-
-// Page zoom — like the tab verbs, forwarded to the background SW (chrome.tabs
-// zoom APIs are unavailable in content scripts). Keyboard path only; voice is
-// intercepted off the SSE stream in the background.
-const ZOOM_COMMANDS: ReadonlyArray<readonly [string, ZoomAction]> = [
-  ['zoom_in', 'in'], ['zoom_out', 'out'], ['zoom_reset', 'reset'],
-];
-for (const [command, action] of ZOOM_COMMANDS) {
-  dispatcher.register(command, () => {
-    chrome.runtime.sendMessage({ type: 'ZOOM_ACTION', action } as Message).catch(() => {});
-  });
-}
+// Tab and zoom verbs, forwarded to the SW — activate/tab-commands.ts.
+registerTabCommands();
 
 // Page navigation — also handled inline in the BRANCHKIT_ACTION listener for the
 // voice path; registering here makes them keyboard-bindable (extension-owned).
