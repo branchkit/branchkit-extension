@@ -120,10 +120,6 @@ import { startVideoStallProbe } from './debug/video-stall-probe';
 import { startVideoPresenceReporter } from './observe/video-presence';
 import { setVideoOverlayGateEnabled } from './render/video-overlay';
 import { detectBrowser } from './keymap/browser-shortcuts';
-import {
-  mediaPlayPause, mediaMute, mediaSpeed, mediaSeek, mediaRestart,
-  type PlayPauseOp, type MuteOp, type SpeedOp, type SeekDirection,
-} from './activate/media';
 import { notePaintSamplerScroll, snapshotExtras } from './debug/perf-report';
 import { initPoolAudit } from './debug/pool-audit';
 import { probeBfcacheRestore } from './debug/bfcache-probe';
@@ -146,6 +142,7 @@ import { registerMessageHandlers, routeMessage, setMessageGuard } from './core/m
 import { focusMessageHandlers, installWindowFocusTracking } from './core/window-focus';
 import { installPerfReporting } from './debug/perf-snapshot';
 import { registerScrollCommands } from './activate/scroll-commands';
+import { registerMediaCommands } from './activate/media-commands';
 
 // --- Idempotency guard ---
 //
@@ -1122,22 +1119,7 @@ dispatcher.register('pass_next_key', () => {
 // Element-API transport verbs — no-ops in a frame with no large video, so a
 // tab-wide voice broadcast acts only in the frame that has one (embeds work
 // for free). The layer routes bare keys here via the injected handler.
-dispatcher.register('video_mode', () => keyHandler.enterVideoMode());
-dispatcher.register('video_exit', () => keyHandler.exitVideoMode()); // the plugin's mode-mirror forwarder (external tag clear)
-dispatcher.register('media_play_pause', (params) => {
-  mediaPlayPause((params.op as PlayPauseOp) || 'toggle');
-});
-dispatcher.register('media_mute', (params) => {
-  mediaMute((params.op as MuteOp) || 'toggle');
-});
-dispatcher.register('media_speed', (params) => {
-  mediaSpeed((params.op as SpeedOp) || 'faster');
-});
-dispatcher.register('media_seek', (params) => {
-  const direction: SeekDirection = params.direction === 'back' ? 'back' : 'ahead';
-  mediaSeek(direction, parseInt(params.seconds || '10', 10));
-});
-dispatcher.register('media_restart', () => mediaRestart());
+registerMediaCommands();
 // Selection / caret / marks / page-nav commands live in
 // activate/selection-commands.ts (round-3 feature module); registered below.
 registerSelectionCommands();
