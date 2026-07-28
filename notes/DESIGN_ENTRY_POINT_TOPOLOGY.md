@@ -1541,9 +1541,60 @@ that is what turned up the second lint-D shadow and the fact that the first
 sealed-gate probe could not kill its own mutant.
 
 **Still queued, and now actually unblocked:** the duplicated `resolveTarget`
-wiring (§6j.3), which has real coverage on both sides for the first time; then
-`activate_hint`/`toggle_help`'s registrations; then `handleSSEEvent` +
-`storeAlphabet`.
+wiring (§6j.3), which has real coverage on both sides for the first time — done
+in §6l; then `activate_hint`/`toggle_help`'s registrations; then
+`handleSSEEvent` + `storeAlphabet`.
+
+### 6l. The `resolveTarget` collapse (2026-07-28)
+
+`dc110ff`. The 18-line binding that hands the live page to `resolveTarget` was
+written out twice, byte-identical; it is now `activate/dispatch-target.ts` and
+both call sites read two lines.
+
+**The mutation pass is the whole argument.** Before §6k's probes, the same
+one-line mutation (`resolveFromStore` returning `undefined`) killed six probes
+in `voice-dispatch.ts` and *nothing* in `content.ts`. It now fails **nine**
+probes across both arms from one edit. That is the difference between a shared
+implementation and two copies that happen to agree, and it is why the probe
+commit had to come first.
+
+**Placed against §6j.3's suggestion, for a reason worth keeping.** Not
+`activate-resolution.ts` — it imports three types and nothing else, which is
+exactly what lets its algorithm carry a 344-line unit test, and binding five
+live singletons into it would trade that for adjacency. Not `sealed-gate.ts`
+either: that module is one rule in two halves and its coherence is the point.
+
+**Three things the plan did not predict, all caught by tooling rather than
+reading:**
+
+- `tsc` found the one coupling the diff could not show: `idParam` feeds three
+  `emitActivatePath` emits further down the activate arm. Diagnostics, not
+  resolution, so it did not widen the change — but it is *returned* from the
+  helper rather than re-parsed, because a second
+  `parseInt(params?.id ?? '0', 10)` carrying the same magic default is the
+  drift this commit exists to remove.
+- Placed where `activate-resolution`'s import sat (index 11), it **hoisted
+  `lifecycle/page-session` from 74 and `core/store` from 20** — both construct
+  a singleton at module scope. Moved last (§6g.1's trick) and re-verified with
+  §6k's own script rather than reasoned about. This is the third time in this
+  arc that a new module edge moved evaluation order and the second time it was
+  only noticed by running the check.
+- **`capturePhraseSnapshot` had been a dead import in `content.ts` since
+  `23c9500`** — 2 uses before the split, 1 (the import line) after.
+  `noUnusedLocals` is `false`, so nothing caught it for five commits. Removed
+  with two more in `voice-dispatch.ts`. It qualifies §6j.2's "content.ts's own
+  diff is three non-comment lines", and it is the second time in two sessions
+  that a checker's blind spot mattered more than the code did. **Turning
+  `noUnusedLocals` on is its own commit and may surface a pile — open.**
+
+**Deliberately untouched:** the holder consult. `content.ts`'s arm asks
+`resolveCodewordAboveAmbient` about range picks and search badges before
+reaching the collapsed block; the element verbs do not. Pre-existing, adjacent
+to the moved lines, and folding it in would be a behaviour change wearing a
+refactor's clothes.
+
+`content.ts` 2,783 → 2,768, ceilings unchanged (82 under is inside the band,
+and §4.1's correction is that over-applying the lower is its own mistake).
 
 ---
 
