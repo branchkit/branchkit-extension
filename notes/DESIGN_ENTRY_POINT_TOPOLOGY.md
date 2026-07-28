@@ -133,8 +133,10 @@ edits.
 ### Phase 2 — invert the `content.ts` callback seams
 **COMPLETE 2026-07-27. DIRECT §6a, STATEFUL §6b, CYCLE §6d.** 18 seams audited,
 17 retired or rehomed; the one that remains (`onFindCommitted`) is a deliberate
-composition, not an injection. `content.ts` 3610 → 3455, 94 → 91 imports,
-ceiling 3700 → 3500. Reviewed by five agents 2026-07-27 — see §6e.
+composition, not an injection — **and after the review that one went too
+(`4a53961`), so 18 of 18 are retired or rehomed.** `content.ts` 3610 → 3438,
+94 → 90 imports, ceiling 3700 → 3500. Reviewed by five agents 2026-07-27 —
+see §6e, which is where the disagreements are.
 
 
 The structural fix, and the one that changes the growth curve rather than the
@@ -662,7 +664,9 @@ manual-mode hide can read `badgesVisible` before it rises — the exact hazard
 deferred decision, not a reordering.
 
 **§6d's `onCommit` ordering argument is weaker than it reads, and partly
-motivated.** The mechanism is real but the premise is false on the dominant
+motivated — ACTED ON, `2ad4d01`+`4a53961`: the arm now retries on the settle,
+and with the race gone the seam is a multicast registered from the two modules
+that own the effects. content.ts holds no find relay at all.** The mechanism is real but the premise is false on the dominant
 path: `find.ts` calls `scrollToCurrent()` — a **smooth** scroll — on the line
 *before* `onCommit`, so the viewport has not moved when the handler runs, and
 `caret.isActive()` is false on most finds anyway. The argument also leads with
