@@ -273,6 +273,15 @@ export function registerSelectionCommands(): void {
   dispatcher.register('go_next', () => navigatePage('next'));
   dispatcher.register('go_previous', () => navigatePage('prev'));
   // Copy the current page URL (Vimium yy).
+  // Session history and reload. Here rather than in a module of their own
+  // because this is where the rest of the go-somewhere-else family already
+  // lives (go_next/go_previous, go_up/go_root, copy_url) — the file is named
+  // for selection but has been the page-navigation home for a while, and
+  // splitting that out is its own change, not one to smuggle into a move.
+  dispatcher.register('history_back', () => { history.back(); });
+  dispatcher.register('history_forward', () => { history.forward(); });
+  dispatcher.register('refresh', () => { location.reload(); });
+
   dispatcher.register('copy_url', () => {
     void copyText(location.href).then((ok) => flashToast(ok ? 'Copied URL' : 'Copy failed'));
   });

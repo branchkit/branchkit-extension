@@ -83,7 +83,7 @@ import { installSiteKeyPolicy } from './keymap/site-key-policy';
 import { scanWithAdapter } from './adapters';
 import { setKeyHeld } from './activate/scroller';
 import { purgeOrphanedFindPaint, registerFindCommands } from './scan/find';
-import { focusFirstInput, handleFocusInputKey } from './activate/focus-input';
+import { handleFocusInputKey, registerFocusInputCommands } from './activate/focus-input';
 import { saveReference, resolveReference, listReferences, noteActivated, lastActivatedElement } from './scan/references';
 import {
   matchRules,
@@ -136,6 +136,7 @@ import { focusMessageHandlers, installWindowFocusTracking } from './core/window-
 import { installPerfReporting } from './debug/perf-snapshot';
 import { registerScrollCommands } from './activate/scroll-commands';
 import { registerMediaCommands } from './activate/media-commands';
+import { registerKeyboardCommands } from './activate/keyboard-commands';
 
 // --- Idempotency guard ---
 //
@@ -1073,26 +1074,10 @@ for (const [command, action] of ZOOM_COMMANDS) {
 // voice path; registering here makes them keyboard-bindable (extension-owned).
 // history.back/forward step the full stack so voice-navigated SPA entries
 // (synthetic clicks, isTrusted=false) aren't skipped like the UI buttons do.
-dispatcher.register('history_back', () => {
-  history.back();
-});
-dispatcher.register('history_forward', () => {
-  history.forward();
-});
-dispatcher.register('focus_input', () => {
-  focusFirstInput();
-});
-dispatcher.register('refresh', () => {
-  location.reload();
-});
-// Pass-through: hand the keyboard to the page (its own shortcuts work) until
-// Escape. See notes/DESIGN_PASS_THROUGH.md.
-dispatcher.register('insert_mode', () => {
-  keyHandler.enterInsertMode();
-});
-dispatcher.register('pass_next_key', () => {
-  keyHandler.armPassNextKey();
-});
+// history_back / history_forward / refresh register with the rest of the
+// go-somewhere-else family in activate/selection-commands.ts.
+registerFocusInputCommands();
+registerKeyboardCommands();
 
 // Media commands + video layer (notes/DESIGN_VIDEO_MEDIA_COMMANDS.md).
 // Element-API transport verbs — no-ops in a frame with no large video, so a

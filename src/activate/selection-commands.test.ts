@@ -158,11 +158,42 @@ describe('registration contract (Phase 1)', () => {
     const m = await loadModule();
     m.registerSelectionCommands();
     for (const a of ['mark_set', 'mark_jump', 'caret_mode', 'visual_line_mode', 'select_to',
-      'go_next', 'go_previous', 'copy_url', 'go_up', 'go_root']) {
+      'go_next', 'go_previous', 'copy_url', 'go_up', 'go_root',
+      'history_back', 'history_forward', 'refresh']) {
       expect(registered.has(a)).toBe(true);
     }
     expect(keyHandler.setMarkCallback).toHaveBeenCalledTimes(1);
     expect(keyHandler.setCaretKeyHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it('the session-history verbs each step the right way, and refresh reloads', async () => {
+    const m = await loadModule();
+    m.registerSelectionCommands();
+    const back = vi.spyOn(history, 'back').mockImplementation(() => {});
+    const forward = vi.spyOn(history, 'forward').mockImplementation(() => {});
+    const reload = vi.fn();
+    const original = window.location;
+    Object.defineProperty(window, 'location', {
+      configurable: true, value: { ...original, reload, href: original.href },
+    });
+    try {
+      dispatcher.dispatch('history_back');
+      expect(back).toHaveBeenCalledTimes(1);
+      expect(forward).not.toHaveBeenCalled();
+
+      dispatcher.dispatch('history_forward');
+      expect(forward).toHaveBeenCalledTimes(1);
+      // Still once — a forward wired to back would show up only as a second
+      // back() call, which a per-command assertion in isolation would miss.
+      expect(back).toHaveBeenCalledTimes(1);
+
+      dispatcher.dispatch('refresh');
+      expect(reload).toHaveBeenCalledTimes(1);
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: original });
+      back.mockRestore();
+      forward.mockRestore();
+    }
   });
 
   it('caret_mode prefers promoting a find match before dropping to caret', async () => {

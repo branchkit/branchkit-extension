@@ -7,6 +7,8 @@
  * If there's only one input it's focused and the mode doesn't engage.
  */
 
+import { dispatcher } from '../core/singletons';
+
 const TEXT_INPUT_SELECTOR = [
   'input:not([type])',
   'input[type="text"]', 'input[type="search"]', 'input[type="email"]',
@@ -113,4 +115,15 @@ export function _resetFocusInputForTesting(): void {
   active = false;
   inputs = [];
   idx = -1;
+}
+
+// --- Command binding (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md phase 3b) --------
+//
+// Registered here rather than in a separate binding module: `content.ts` is
+// this module's only importer, so pulling `core/singletons` into its closure
+// costs nothing that content.ts was not already carrying, and no cycle exists
+// in either direction.
+
+export function registerFocusInputCommands(): void {
+  dispatcher.register('focus_input', () => { focusFirstInput(); });
 }

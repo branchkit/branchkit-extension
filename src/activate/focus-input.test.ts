@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { collectTextInputs } from './focus-input';
 
 function dom(html: string): HTMLElement {
@@ -44,5 +44,33 @@ describe('collectTextInputs', () => {
     const root = dom('<input id="vis"><input id="hid">');
     const visible = collectTextInputs(root, (el) => el.id === 'vis');
     expect(visible.map((e) => e.id)).toEqual(['vis']);
+  });
+});
+
+describe('registerFocusInputCommands', () => {
+  it('registers focus_input, and nothing at import time', async () => {
+    const seen: string[] = [];
+    let handler: (() => void) | null = null;
+    vi.resetModules();
+    vi.doMock('../core/singletons', () => ({
+      dispatcher: { register: (a: string, fn: () => void) => { seen.push(a); handler = fn; } },
+    }));
+    try {
+      const m = await import('./focus-input');
+      expect(seen).toEqual([]);            // import alone registers nothing
+
+      m.registerFocusInputCommands();
+      expect(seen).toEqual(['focus_input']);
+
+      // And the binding reaches the mode, not just any function: focusing a
+      // sole input engages nothing, so observe the focus itself.
+      document.body.innerHTML = '<input id="only" type="text">';
+      handler!();
+      expect(document.activeElement?.id).toBe('only');
+    } finally {
+      vi.doUnmock('../core/singletons');
+      vi.resetModules();
+      document.body.innerHTML = '';
+    }
   });
 });
