@@ -179,9 +179,18 @@ try {
 
   // PALETTE_COMMAND — fire-and-forget INTO the dispatcher, so it exercises
   // the command table from the message side. scroll_top is benign and visible.
+  // WAIT for the scroll to land rather than assuming a fixed delay covers it.
+  // The scroll is animated, and headless runs the animation on a different
+  // rAF cadence: a fixed 200ms read the page 91px into a 400px scroll and
+  // failed the precondition, not the thing being probed.
   await page.evaluate(() => window.scrollTo(0, 400));
-  await settle(200);
+  await page.waitForFunction(() => window.scrollY >= 380, undefined, { timeout: 5000 })
+    .catch(() => {});
   const yBefore = await page.evaluate(() => window.scrollY);
+  const geom = await page.evaluate(() => ({
+    h: document.documentElement.scrollHeight, vh: window.innerHeight,
+    minH: document.body.style.minHeight,
+  }));
   await send({ type: 'PALETTE_COMMAND', action: 'scroll_top', params: {} }, { frameId: 0 });
   await settle(1200);
   const yTop = await page.evaluate(() => window.scrollY);
@@ -189,7 +198,7 @@ try {
   // value lands within a pixel or two. What is being probed is that the
   // message reached the dispatcher at all, not the easing curve.
   check('PALETTE_COMMAND reaches the dispatcher', yBefore > 300 && yTop < 50,
-    `scrollY ${yBefore} -> ${yTop}`);
+    `scrollY ${yBefore} -> ${yTop} (doc ${geom.h}, viewport ${geom.vh}, body min-height ${JSON.stringify(geom.minH)})`);
 
   // TAB_MARKER_REAPPLY — restores the marker after the page overwrites the
   // title, which is the whole reason the message exists.

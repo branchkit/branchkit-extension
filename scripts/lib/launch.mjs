@@ -33,6 +33,26 @@ const root = resolve(__dirname, '../..');
 const ACTUATOR_URL = 'http://127.0.0.1:21551';
 
 /**
+ * Headed or headless, decided in ONE place because every harness launches
+ * through this module (enforced by src/harness-isolation.test.ts's ratchet).
+ *
+ * Headless is the DEFAULT, and the reason is not speed. A headed browser on
+ * macOS activates its window on launch and on every `bringToFront`, so a
+ * harness run repeatedly steals keyboard focus from whatever the developer is
+ * doing — realinput opens a context per scenario. That is not cosmetic: it
+ * makes the machine unusable for the length of the run, which turns the
+ * verification you are meant to run before every commit into the one you learn
+ * to avoid. The same focus theft is already named at the top of this file as
+ * half of the 2026-07-02 incident.
+ *
+ * `BK_HEADED=1` opts back in, which is what you want when a probe fails and
+ * you need to watch it happen.
+ */
+export function harnessHeadless() {
+  return process.env.BK_HEADED !== '1';
+}
+
+/**
  * Launch a persistent Chromium context with the extension loaded.
  *
  * @param {object} opts
@@ -40,7 +60,7 @@ const ACTUATOR_URL = 'http://127.0.0.1:21551';
  * @param {boolean} [opts.allowDiscovery=false] - let the extension discover a
  *   live BranchKit host. Requires BRANCHKIT_ALLOW_LIVE=1 when one is reachable.
  * @param {boolean} [opts.freshProfile=true] - rm -rf the profile first
- * @param {boolean} [opts.headless=false]
+ * @param {boolean} [opts.headless] - defaults to harnessHeadless()
  * @param {string[]} [opts.extraArgs=[]] - appended to the extension args
  * @param {object} [opts.contextOptions={}] - extra launchPersistentContext options
  * @returns {Promise<{ctx: import('playwright').BrowserContext,
@@ -50,7 +70,7 @@ export async function launchExtension({
   profile,
   allowDiscovery = false,
   freshProfile = true,
-  headless = false,
+  headless = harnessHeadless(),
   extraArgs = [],
   contextOptions = {},
 } = {}) {
@@ -80,6 +100,13 @@ export async function launchExtension({
 
   const ctx = await chromium.launchPersistentContext(profile, {
     headless,
+    // Headless MUST be the full Chromium binary, not Playwright's default
+    // headless shell: the shell has no extension support, so the service
+    // worker never registers and every harness dies on
+    // `waitForEvent("serviceworker")` after 10s. `channel: 'chromium'` selects
+    // the real browser running --headless=new, which does load extensions.
+    // Measured, not assumed — this was the first thing headless broke.
+    ...(headless ? { channel: 'chromium' } : {}),
     args: [
       `--disable-extensions-except=${extDir}`,
       `--load-extension=${extDir}`,
@@ -102,7 +129,7 @@ export async function launchExtension({
  * @param {string} opts.profile - persistent profile dir (wiped when freshProfile)
  * @param {boolean} [opts.allowDiscovery=false]
  * @param {boolean} [opts.freshProfile=true]
- * @param {boolean} [opts.headless=false]
+ * @param {boolean} [opts.headless] - defaults to harnessHeadless()
  * @param {object} [opts.firefoxUserPrefs={}]
  * @param {object} [opts.contextOptions={}]
  * @returns {Promise<{ctx: import('playwright').BrowserContext, extDir: string}>}
@@ -111,7 +138,7 @@ export async function launchFirefoxExtension({
   profile,
   allowDiscovery = false,
   freshProfile = true,
-  headless = false,
+  headless = harnessHeadless(),
   firefoxUserPrefs = {},
   contextOptions = {},
 } = {}) {

@@ -66,11 +66,13 @@ export async function startFixtureServer() {
 
 export async function launchHarness(browser = 'chromium') {
   if (browser === 'firefox') {
-    // Headless works with playwright-webextext; hintVisibility defaults to
-    // 'always' in config.ts, so no seeding is needed.
+    // hintVisibility defaults to 'always' in config.ts, so no seeding is needed.
+    // Headless is NOT pinned here any more: it was the one arm that already ran
+    // headless, and hardcoding it meant BK_HEADED=1 could not open a window for
+    // the engine you most often need to watch. It follows the shared default
+    // (harnessHeadless) like everything else now.
     const { ctx } = await launchFirefoxExtension({
       profile: '/tmp/branchkit-realinput-ff',
-      headless: true,
     });
     return { ctx };
   }
