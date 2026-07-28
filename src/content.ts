@@ -82,14 +82,7 @@ import { loadKeymap, onKeymapChanged } from './keymap/keymap-storage';
 import { installSiteKeyPolicy } from './keymap/site-key-policy';
 import { scanWithAdapter } from './adapters';
 import { setKeyHeld } from './activate/scroller';
-import {
-  openFindMode,
-  closeFindMode,
-  purgeOrphanedFindPaint,
-  findNext,
-  findPrevious,
-  findImmediate,
-} from './scan/find';
+import { purgeOrphanedFindPaint, registerFindCommands } from './scan/find';
 import { focusFirstInput, handleFocusInputKey } from './activate/focus-input';
 import { saveReference, resolveReference, listReferences, noteActivated, lastActivatedElement } from './scan/references';
 import {
@@ -1029,23 +1022,9 @@ dispatcher.register('activate_hint', (params) => {
 // Scroll commands register from activate/scroll-commands.ts.
 registerScrollCommands();
 
-// --- Find action handlers ---
+// Find commands register from scan/find.ts.
+registerFindCommands();
 
-dispatcher.register('find_open', () => {
-  openFindMode();
-});
-
-dispatcher.register('find_close', () => {
-  closeFindMode();
-});
-
-dispatcher.register('find_next', () => {
-  findNext();
-});
-
-dispatcher.register('find_previous', () => {
-  findPrevious();
-});
 
 // Keyboard help overlay (default ?). Reads the live keymap so it shows the
 // user's actual binds; the overlay fetches phrase overrides + aliases on open
@@ -1153,13 +1132,6 @@ dispatcher.register('caret_hint', () => {
   keyHandler.armHintAction('caret');
   keyHandler.enterHintMode();
 });
-
-dispatcher.register('find_immediate', (params) => {
-  const query = params.query || '';
-  if (query) findImmediate(query);
-});
-
-// Voice scroll handler — receives parameterized scroll commands from the plugin
 
 
 // --- Keyboard Filter Callback ---

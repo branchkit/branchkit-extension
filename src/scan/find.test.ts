@@ -161,6 +161,7 @@ import {
   getMatchRanges,
   getCurrentMatchRange,
   findGoToRange,
+  registerFindCommands,
 } from './find';
 
 /**
@@ -1234,5 +1235,104 @@ describe('dead matches are swept at read time', () => {
     expect(getFindState().matchCount).toBe(0);
     expect(getCurrentMatchRange()).toBeNull();
     findNext();   // must not throw or divide by zero
+  });
+});
+
+// --- Command bindings (entry-point topology phase 3b) ----------------------
+//
+// These five were inline in content.ts and untested. The dispatcher is the
+// REAL one here rather than a fake: find.ts already reaches core/singletons
+// transitively, and registering onto the real registry is what proves the
+// binding is wired the way the entry point will see it.
+import { dispatcher as realDispatcher } from '../core/singletons';
+
+describe('registerFindCommands', () => {
+  let dispatch: (action: string, params?: Record<string, string>) => void;
+  const origSIV3 = Element.prototype.scrollIntoView;
+  const origVis3 = (Element.prototype as { checkVisibility?: () => boolean }).checkVisibility;
+
+  beforeEach(() => {
+    // happy-dom answers checkVisibility() falsy, and find drops invisible
+    // matches — without this every query finds nothing and an assertion about
+    // match COUNTS would pass against a binding that searched for the wrong
+    // thing. Same stub the reaping suite above installs.
+    Element.prototype.scrollIntoView = function () {};
+    (Element.prototype as { checkVisibility?: () => boolean }).checkVisibility = () => true;
+    // The STATIC instance. Importing it dynamically here meant a
+    // vi.resetModules() in one test handed the next a fresh, empty dispatcher
+    // while registerFindCommands kept registering on the original.
+    dispatch = (action, params = {}) => realDispatcher.dispatch(action, params);
+    registerFindCommands();
+  });
+
+  afterEach(() => {
+    Element.prototype.scrollIntoView = origSIV3;
+    (Element.prototype as { checkVisibility?: () => boolean }).checkVisibility = origVis3;
+    closeFindMode();
+    document.body.innerHTML = '';
+  });
+
+  it('find_open opens a find session; find_close ends it', () => {
+    dom('<p>alpha beta</p>');
+    dispatch('find_open');
+    expect(isFindBarOpen()).toBe(true);
+    dispatch('find_close');
+    expect(isFindBarOpen()).toBe(false);
+  });
+
+  it('find_immediate searches without ever opening the box', () => {
+    dom('<p>beta</p><p>beta</p>');
+    dispatch('find_immediate', { query: 'beta' });
+    expect(isFindActive()).toBe(true);
+    expect(getMatchRanges().length).toBeGreaterThan(0);
+    // The dictated path's whole point: no bar for the user to dismiss.
+    expect(isFindBarOpen()).toBe(false);
+  });
+
+  it('find_immediate with an empty or missing query does NOTHING', () => {
+    dom('<p>alpha beta</p>');
+    dispatch('find_immediate', { query: '' });
+    dispatch('find_immediate');
+    // Not merely "no matches" — no session at all. Opening one would strand
+    // the user in a find they never asked for, with Escape newly consumed.
+    expect(isFindActive()).toBe(false);
+    expect(isFindBarOpen()).toBe(false);
+  });
+
+  it('registers nothing at import time — the entry point decides when', async () => {
+    // Loaded fresh against a fake registry, so this observes the NEW module's
+    // import, not the one the rest of this file has already registered from.
+    // A module that self-registered would make registerFindCommands()
+    // decorative and quietly weaken lint G2, whose whole premise is that an
+    // uncalled registrar loses its commands.
+    const seen: string[] = [];
+    vi.resetModules();
+    vi.doMock('../core/singletons', () => ({
+      dispatcher: { register: (a: string) => { seen.push(a); } },
+    }));
+    try {
+      const fresh = await import('./find');
+      expect(seen).toEqual([]);
+      fresh.registerFindCommands();
+      expect(seen).toContain('find_open');
+    } finally {
+      vi.doUnmock('../core/singletons');
+      vi.resetModules();
+    }
+  });
+
+  it('find_next and find_previous walk the matches of a live session', () => {
+    dom('<p>beta</p><p>beta</p><p>beta</p>');
+    dispatch('find_immediate', { query: 'beta' });
+    const total = getMatchRanges().length;
+    expect(total).toBeGreaterThan(1);
+
+    const seen = [getCurrentMatchRange()];
+    dispatch('find_next');
+    seen.push(getCurrentMatchRange());
+    expect(seen[1]).not.toBe(seen[0]);
+
+    dispatch('find_previous');
+    expect(getCurrentMatchRange()).toBe(seen[0]);
   });
 });

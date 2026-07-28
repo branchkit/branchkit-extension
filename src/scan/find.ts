@@ -27,6 +27,7 @@ import { prefersReducedMotion, resetCycleTarget } from '../activate/scroller';
 import { assertBadgeScreenBorrow, returnBadgeScreenBorrow } from '../render/badge-visibility';
 import { FIND_HIGHLIGHT } from '../render/find-highlight';
 import { isRangeDead } from './range-liveness';
+import { dispatcher } from '../core/singletons';
 
 /**
  * What the box is collecting a phrase FOR.
@@ -1150,4 +1151,29 @@ export function findImmediate(query: string): void {
   // in that mode a codeword means "select this one" — the range pick's job, not
   // a search badge's. commitFind draws the same line for the typed path.
   if (phraseTarget === null && matchRanges.length > 0) fireCommitted();
+}
+
+// --- Command bindings (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md phase 3b) -------
+//
+// Five registrations lifted from content.ts. They live HERE rather than in a
+// separate `find-commands.ts` because there is no layering reason to split
+// them: this module already reaches `core/singletons` transitively (through
+// render/badge-visibility), so importing the dispatcher directly closes no
+// cycle and pulls in no closure it was not already carrying. That is the
+// difference from scroll-commands.ts and media-commands.ts, both of which had
+// a real reason. registerSelectionCommands is the precedent for this shape.
+
+export function registerFindCommands(): void {
+  dispatcher.register('find_open', () => { openFindMode(); });
+  dispatcher.register('find_close', () => { closeFindMode(); });
+  dispatcher.register('find_next', () => { findNext(); });
+  dispatcher.register('find_previous', () => { findPrevious(); });
+
+  // The dictated-argument path: the plugin has already collected the phrase,
+  // so this searches without ever opening the box. An empty query is a
+  // no-op rather than an open — "find" with nothing dictated must not leave
+  // the user in a find session they did not ask for.
+  dispatcher.register('find_immediate', (p) => {
+    if (p.query) findImmediate(p.query);
+  });
 }
