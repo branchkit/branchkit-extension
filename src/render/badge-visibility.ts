@@ -40,13 +40,14 @@
 
 import { pageSession } from '../lifecycle/page-session';
 import { store } from '../core/store';
-import { keyHandler } from '../core/singletons';
+import { dispatcher, keyHandler } from '../core/singletons';
 import { getDisplayMode, getHintVisibility } from '../config';
 import { applyClaimLabel } from '../scan/element-wrapper';
 import { HintBadge } from './hints';
 import { elementTarget } from './badge-target';
 import { isVisible } from '../scan/scanner';
 import { doScan } from '../scan/scan-orchestrator';
+import { overlayCodewordsLive } from '../labels/holder-registry';
 import { connectVisibilityMO } from '../observe/visibility-tracker';
 import { placeBadges } from '../placement';
 import { cacheLayout, cacheConstruction, clearLayoutCache, isRectOnScreen } from '../core/layout-cache';
@@ -395,3 +396,22 @@ export const badgeVisibilityMessageHandlers: Record<string, MessageHandler> = {
     return inTopFrame() ? { badgesVisible: nowShowing, hintCount: store.all.length } : undefined;
   },
 };
+
+// --- Command bindings (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md phase 3b) -------
+//
+// Registered here rather than in a binding module: this module already reaches
+// core/singletons, and it already owns every collaborator both commands need.
+
+export function registerHintModeCommands(): void {
+  dispatcher.register('hint_mode', () => {
+    // The ambient paint, skipped when an overlay tier already holds codewords
+    // — field 2026-07-26: `/ query Enter f`, to type a search badge, repainted
+    // every link hint over the results just asked for.
+    if (!pageSession.badgesVisible && !overlayCodewordsLive()) { void doScan(); void showBadges(); }
+    keyHandler.enterHintMode();
+  });
+
+  // The shared Shift+F / voice-"toggle" / popup transition, which is this
+  // module's own primitive.
+  dispatcher.register('toggle_hints', () => { toggleHints(); });
+}

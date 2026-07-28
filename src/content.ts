@@ -33,6 +33,7 @@ import { store } from './core/store';
 import {
   anyBadgesShowing, showBadges, hideBadges, clearHintFilter,
   toggleHints, discardBadgeScreenBorrow, badgeVisibilityMessageHandlers,
+  registerHintModeCommands,
 } from './render/badge-visibility';
 import { HintBadge } from './render/hints';
 import { elementTarget } from './render/badge-target';
@@ -65,7 +66,7 @@ import { clearSearchBadges, retrySearchBadgeArm } from './activate/search-badges
 import {
   registerHolder, narrowByPrefix, resolveCodewordAboveAmbient,
   allHeld, reconcileAll, relabelAll, disposeAllHolders,
-  overlayCodewordsLive, type CodewordOutcome,
+  type CodewordOutcome,
 } from './labels/holder-registry';
 import { StoreHolder } from './labels/store-holder';
 import { narrowBadge } from './labels/codeword-typing';
@@ -1002,15 +1003,8 @@ installSiteKeyPolicy();
 // That paint is the AMBIENT sweep, skipped when an overlay tier already holds
 // codewords — field 2026-07-26: `/ query Enter f`, to type a search badge,
 // repainted every link hint over the results just asked for.
-dispatcher.register('hint_mode', () => {
-  if (!pageSession.badgesVisible && !overlayCodewordsLive()) { doScan(); showBadges(); }
-  keyHandler.enterHintMode();
-});
+registerHintModeCommands();
 
-// (toggleHints/setBadgesVisible — the shared Shift+F / voice-"toggle" /
-// popup transition — live in render/badge-visibility.ts, with the borrow
-// primitive the find bar and the range pick both ride.)
-dispatcher.register('toggle_hints', () => { toggleHints(); });
 
 dispatcher.register('activate_hint', (params) => {
   const codeword = params.word2 ? `${params.word} ${params.word2}` : params.word;

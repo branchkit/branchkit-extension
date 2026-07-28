@@ -25,12 +25,14 @@ import { ElementWrapper } from '../scan/element-wrapper';
 import { ScannedElement } from '../types';
 import { store } from '../core/store';
 import { pageSession } from '../lifecycle/page-session';
-import { keyHandler } from '../core/singletons';
+import { keyHandler, dispatcher as realDispatcher } from '../core/singletons';
+import { registerHolder } from '../labels/holder-registry';
 import {
   anyBadgesShowing, hideBadges, toggleHints,
   setBadgesVisible, borrowBadgeScreen, _resetBadgeVisibilityForTesting,
   assertBadgeScreenBorrow, returnBadgeScreenBorrow, discardBadgeScreenBorrow,
   badgeVisibilityMessageHandlers,
+  registerHintModeCommands,
 } from './badge-visibility';
 
 function fakeHint(visible: boolean) {
@@ -408,5 +410,140 @@ describe('badgeVisibilityMessageHandlers', () => {
     )).toBeUndefined();
     await settle();
     expect(sub.hint!.hide).toHaveBeenCalled();
+  });
+});
+
+describe('registerHintModeCommands', () => {
+  // Statically bound: a vi.resetModules() in the import-time test below must
+  // not hand the others a fresh, empty dispatcher while the registrar keeps
+  // registering on the original.
+  let dispatch: (a: string) => void;
+  let detachOverlay: (() => void) | null = null;
+
+  beforeEach(() => {
+    dispatch = (a) => realDispatcher.dispatch(a, {});
+    registerHintModeCommands();
+    vi.mocked(doScan).mockClear();
+  });
+
+  afterEach(() => { detachOverlay?.(); detachOverlay = null; });
+
+  /** A real holder above ambient rank, holding one codeword — what an open
+   *  range pick or a painted search-badge set looks like to the registry. */
+  function overlayHolding(codeword: string): void {
+    detachOverlay = registerHolder({
+      id: 'test-overlay', priority: 100, claim: 'additive',
+      held: () => [codeword],
+      republish: () => {}, onCodewordRejected: () => {},
+    } as unknown as Parameters<typeof registerHolder>[0]);
+  }
+
+  it('hint_mode paints the ambient badges when nothing is showing', async () => {
+    seedWrapper(false);
+    dispatch('hint_mode');
+    await settle();
+    expect(doScan).toHaveBeenCalled();
+    expect(pageSession.badgesVisible).toBe(true);
+  });
+
+  it('hint_mode does NOT repaint when badges are already up', async () => {
+    seedWrapper(true);
+    pageSession.badgesVisible = true;
+    dispatch('hint_mode');
+    await settle();
+    // The ambient sweep is skipped, not merely idempotent — repainting here is
+    // the `/ query Enter f` field bug, where typing a search badge repainted
+    // every link hint over the results just asked for.
+    expect(doScan).not.toHaveBeenCalled();
+  });
+
+  it('hint_mode enters hint mode in every case, painted or not', async () => {
+    const enter = vi.spyOn(keyHandler, 'enterHintMode').mockImplementation(() => {});
+    try {
+      seedWrapper(false);
+      dispatch('hint_mode');
+      await settle();
+      expect(enter).toHaveBeenCalledTimes(1);
+
+      pageSession.badgesVisible = true;
+      dispatch('hint_mode');
+      await settle();
+      // Skipping the paint must not skip the MODE — that would leave `f`
+      // painting nothing and swallowing the keystroke.
+      expect(enter).toHaveBeenCalledTimes(2);
+    } finally {
+      enter.mockRestore();
+    }
+  });
+
+  it('toggle_hints flips the shared showing state both ways', async () => {
+    const w = seedWrapper(false);
+    dispatch('toggle_hints');
+    await settle();
+    expect(pageSession.badgesVisible).toBe(true);
+
+    dispatch('toggle_hints');
+    await settle();
+    expect(w.hint!.hide).toHaveBeenCalled();
+    expect(anyBadgesShowing()).toBe(false);
+  });
+});
+
+describe('hint_mode and the overlay tiers', () => {
+  beforeEach(() => { registerHintModeCommands(); vi.mocked(doScan).mockClear(); });
+
+  it('does NOT repaint while an overlay tier holds codewords, even with badges down', async () => {
+    seedWrapper(false);
+    expect(pageSession.badgesVisible).toBe(false);   // the paint would otherwise fire
+    const detach = registerHolder({
+      id: 'test-overlay', priority: 100, claim: 'additive',
+      held: () => ['arch'],
+      republish: () => {}, onCodewordRejected: () => {},
+    } as unknown as Parameters<typeof registerHolder>[0]);
+    try {
+      realDispatcher.dispatch('hint_mode', {});
+      await settle();
+      // The field bug this guard exists for (2026-07-26): `/ query Enter f`,
+      // to type a search badge, repainted every link hint over the results the
+      // user had just asked for. Badges-down alone is NOT the condition.
+      expect(doScan).not.toHaveBeenCalled();
+    } finally {
+      detach();
+    }
+  });
+
+  it('repaints again once the overlay tier lets go', async () => {
+    seedWrapper(false);
+    const detach = registerHolder({
+      id: 'test-overlay', priority: 100, claim: 'additive',
+      held: () => ['arch'],
+      republish: () => {}, onCodewordRejected: () => {},
+    } as unknown as Parameters<typeof registerHolder>[0]);
+    realDispatcher.dispatch('hint_mode', {});
+    await settle();
+    expect(doScan).not.toHaveBeenCalled();
+
+    detach();
+    realDispatcher.dispatch('hint_mode', {});
+    await settle();
+    expect(doScan).toHaveBeenCalled();
+  });
+
+  it('registers nothing at import time', async () => {
+    const seen: string[] = [];
+    vi.resetModules();
+    vi.doMock('../core/singletons', () => ({
+      dispatcher: { register: (a: string) => { seen.push(a); } },
+      keyHandler: { enterHintMode: () => {}, exitHintMode: () => {} },
+    }));
+    try {
+      const fresh = await import('./badge-visibility');
+      expect(seen).toEqual([]);
+      fresh.registerHintModeCommands();
+      expect(seen.sort()).toEqual(['hint_mode', 'toggle_hints']);
+    } finally {
+      vi.doUnmock('../core/singletons');
+      vi.resetModules();
+    }
   });
 });
