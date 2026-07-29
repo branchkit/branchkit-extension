@@ -181,22 +181,44 @@ rules that were duplicated. Not the paint, and not the pool.
 ## The tradeoff that must not be re-litigated
 
 **One-word codewords and mid-utterance feedback are mutually exclusive.**
-Feedback requires a step boundary; a step boundary requires at least two words.
-No transport, registry or matcher change alters this. A single-token capture has
+Feedback requires a step boundary; a step boundary requires at least two steps.
+No transport, registry or matcher change alters this. A single-step capture has
 no midpoint to report.
 
 `palette/codewords.ts:32` allocates uniform-length badges by row count: singles
-at ≤26 rows, pairs to 650, triples beyond. The recommendation is to **keep that
-tiering**:
+at ≤26 rows, pairs to 650, triples beyond. Keep that tiering: at ≤26 rows the
+word *is* the whole key, there is no partial state to visualise, and the user
+should keep paying one word. The uniform-length-per-open invariant that makes
+chopping safe (`codewords.ts:9-21`) is untouched — tiers never mix within a
+session.
 
-- **≤26 rows → singles, no dimming, and none is owed.** The word *is* the whole
-  key; there is no partial state to visualise. The user pays one word, as today.
-- **>26 rows → pairs, dimming for free** once the holder is registered and
-  capture progress is role-keyed.
+### CORRECTION (2026-07-29): two words is not two steps
 
-This puts the feedback exactly where the complaint originates and taxes nothing
-where it doesn't. The uniform-length-per-open invariant that makes chopping safe
-(`codewords.ts:9-21`) is untouched — tiers still never mix within a session.
+An earlier draft of this note said pairs get dimming "for free" once the holder
+is registered and capture progress is role-keyed. **That was wrong**, and the
+distinction it missed is the one that governs the whole feature.
+
+`palette_select` captures `{browser_palette}` — ONE step, a single named-entity
+lookup. A key of two *words* ("ocean river") is still one *capture*, so the
+matcher has no boundary at which to emit progress. Verified empirically: every
+`capture.progress` in `actuator.log` carries `next_collection: browser_alpha`
+(the hint pair) and not one carries the palette.
+
+So the holder registration and the role-keyed forwarding are **necessary and not
+sufficient**. They are the transport; the palette currently has nothing to put
+on it.
+
+**The remaining piece is a prefix-shaped projection.** Allocation and capture
+shape are separable, and only allocation was argued above: the palette can keep
+assigning its own codewords (its rows can't move; it needs none of the pool's
+stability machinery) while projecting them into a two-step collection family the
+way `batch.go` does for hints — `browser_palette_<prefix>` plus a
+`browser_palette_prefix` index, with `palette_select` becoming
+`<prefix:…> <suffix:…>`. Then the boundary exists, progress fires, and the
+already-built path lights up.
+
+That is a matcher-facing change to a working selection flow, so it wants its own
+wave and a live pass, not a bundle with the transport.
 
 ## Also in scope, downstream
 
@@ -213,17 +235,26 @@ prerequisite, and should not be bundled into the same wave.
 
 ## Sequencing
 
-1. **`focus.go` capture progress keyed on role.** Independent, testable alone,
-   and inert until a second multi-step capture exists. Land first.
-2. **Relay message + host-side mirror.** No behaviour change yet — the mirror is
-   populated and asserted against the frame's own map in tests.
-3. **Register the holder.** Narrowing goes live. Palettes above 26 rows dim; the
-   exclusive claim moves from ambient assumption to registry fact.
-4. **HUD `title` field.** Independent of 1–3; can land any time.
-5. **Fold `POST /palette` into the grammar batch.** Separate wave.
+1. **`focus.go` capture progress keyed on role.** ✅ LANDED (browser `ecb7e82`).
+   Plugin-side only — the event already carried `next_capture` /
+   `next_collection`, so no actuator or contract change was needed. Inert until
+   a second multi-step capture exists.
+2. **Relay message + host-side mirror.** ✅ LANDED (ext `37d9897`).
+3. **Register the holder.** ✅ LANDED (same commit). Runs the shared conformance
+   suite and joins the registration meta-test. The exclusive claim is now a
+   registry fact rather than an ambient assumption.
+4. **HUD `title` field.** ✅ LANDED (browser `d621b08`, ext `e69ea2f`).
+5. **Prefix-shaped palette projection.** ⬅ THE REMAINING PIECE. Until this
+   lands, 1–3 are a transport with nothing on it: `{browser_palette}` is a
+   single capture, so no progress is ever emitted for the palette and
+   `narrow()` is never called. See the CORRECTION above. Wants its own wave —
+   it changes the matcher-facing shape of a selection flow that works today.
+6. **Fold `POST /palette` into the grammar batch.** Separate wave, unchanged.
 
-Steps 1 and 3 are the ones that close the reported gap. Step 2 is the transport
-they both need.
+Steps 1–4 are green and verified by unit tests, the conformance suite, and the
+exhaustiveness lints. **None of them is user-visible yet.** The visible fix is
+step 5, and honest reporting of that gap matters more than the green suites:
+registration proves the palette can be narrowed, not that it is.
 
 ## Risks
 
