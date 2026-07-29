@@ -1824,6 +1824,28 @@ five commits" note asks for and the only reliable form of it.
   test and no harness able to reach it. If it ever moves, the probe comes first
   and is worth more than the lift: stand up a WS server on 127.0.0.1:35729,
   assert the `hello <generation>` frame, send `reload`, assert the SW restarts.
+- **The lints have no tests, and that is the arc's own defect one level up.**
+  `check-exhaustive.mjs` is ~1,090 lines of hand-rolled parsing, it gates CI, and
+  its only verification has ever been mutants run by hand and then deleted —
+  precisely the state `activateWrapper` was in. The review found six defects in
+  it and none in the moved product code. It is also, structurally, a monolith
+  entry point: zero exports, twelve top-level side-effecting blocks, reading
+  files off a hardcoded root, which is exactly why it cannot be imported and
+  pointed at a fixture. The fix has this arc's shape — give each lint a seam
+  (take a reader, return findings), let the script compose them, then assert
+  against fixture directories. Assert the MESSAGE, not just the exit code: lint
+  H's rejection was correct while its text was wrong, and an exit-code test
+  would have passed it. Incremental — start with the three that just had
+  defects.
+- **Evaluation order has no guard, and lint F already shows the shape.** The
+  check was run by hand three times this session and caught a real shift once.
+  Pinning all ~153 modules in order is too brittle (one new module renumbers
+  everything); the narrow form follows what the arc actually learned — inert
+  modules moving is provably benign, verified three times, and SIDE-EFFECTING
+  modules moving is the hazard. So pin the relative order of only the modules
+  with module-scope side effects and fail when two of them swap. Lint G already
+  has a `topLevelCall` detector to identify them. Worth landing BEFORE any
+  further moves, because that is when it pays.
 - **Two review follow-ups**, both pre-existing and neither a regression (§6m.10):
   the `hintActionHandoff` copy in `content.ts`'s `activate` arm, and
   `installKeymapRegistry`'s last-writer-wins load/subscribe race.
