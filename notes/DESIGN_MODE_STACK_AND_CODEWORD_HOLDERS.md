@@ -167,6 +167,16 @@ each holder's `reconcile`/`dispose` stays its own. That closes every finding in
 the review at a fraction of the risk of merging the lifecycles, and it is the
 version where the third Range-backed holder is a registration.
 
+### The fourth participant is in another realm
+
+The palette is a `CodewordHolder` that this note's registry cannot reach: it
+lives in an extension iframe, and the whole codeword stack is content-script
+resident. It therefore reimplemented allocation, narrowing and chop-safety
+rather than registering. It does participate in Primitive 2 — but via the host
+(`palette-host.ts:114`, `modes.push('palette')`), not from inside the frame.
+Extending that same host-as-proxy pattern to Primitive 1 is
+`DESIGN_CROSS_REALM_CODEWORD_HOLDERS.md`.
+
 ---
 
 ## Primitive 2: the mode stack — what the user is in
