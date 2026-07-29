@@ -617,11 +617,21 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 // Init immediately (service worker may be waking from alarm)
 init();
 
-// --- Dev auto-reload (stripped from production builds by esbuild) ---
-// Direct guard, not typeof: every build path defines __DEV_RELOAD__
-// (dev.mjs true, build.mjs true/--release false), and a literal `if (false)`
-// is the form esbuild's dead-branch elimination actually removes — the
-// typeof chain left the socket URL in release output.
+// --- Dev auto-reload (stripped from release builds) ---
+// Direct guard, not typeof: every build path defines __DEV_RELOAD__ (dev.mjs
+// true, build.mjs true/--release false), so this collapses to a literal
+// `if (false)` in release.
+//
+// That collapse is necessary and NOT sufficient, which cost a P0. esbuild's
+// dead-branch elimination is a MINIFY feature: given `if (false) { ... }` and
+// no minification it emits the block verbatim, so release bundles shipped this
+// socket for days behind a guard that read as correct. An earlier version of
+// this comment asserted the opposite — that the literal form "is what esbuild's
+// dead-branch elimination actually removes" — which was true only under
+// minification, and nothing minified. The removal is done by
+// `minifySyntax: release` in build.mjs, and enforced by check-release-gate.mjs
+// asserting the built BYTES, not the build flags. Neither is optional; if you
+// are moving this code, move both.
 declare const __DEV_RELOAD__: boolean;
 if (__DEV_RELOAD__) {
   // 127.0.0.1, not localhost: Firefox's MV3 default extension CSP carries

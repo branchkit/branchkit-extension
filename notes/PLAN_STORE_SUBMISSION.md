@@ -41,7 +41,7 @@ with the optional app, localhost only"), `activeTab` row removed, date bumped.
 ## What's already good (verified this session)
 
 - No remote code, no `eval` / `new Function` / remote `.src` (grep-clean).
-- No outbound network beyond localhost `127.0.0.1` (companion app). **Qualified 2026-07-28** — true of the SOURCE, not of the shipped release bundle, which still contains a dev-reload WebSocket client for `127.0.0.1:35729`. See P0 item 2.
+- No outbound network beyond localhost `127.0.0.1` (companion app). Held of the source throughout; **true of the shipped release bundle again as of 2026-07-29**, when the dev-reload WebSocket client stopped surviving into it and a gate started asserting its absence. See P0 item 2 for why it was qualified for a day.
 - esbuild bundles locally; nothing loaded from a CDN at runtime.
 - All declared permissions are actually used (sessions, webNavigation, alarms,
   scripting all have live call sites — no unused-permission rejection).
@@ -164,6 +164,42 @@ built output; the Chrome build declares it. See "What's already good.")*
 
    Pre-existing and not introduced by any current branch: verified by building
    `main` at `c3e2ab5` and grepping the same bundle.
+
+   **FIXED 2026-07-29.** The cause was narrower than "esbuild is not eliminating
+   the branch": esbuild's dead-branch elimination is a **minify** feature, and
+   nothing here minified. `--define:__F__=false` alone leaves the block,
+   `--tree-shaking=true` also leaves it, `--minify-syntax` removes it — measured
+   on a reduced case, then on the real bundle. `background.ts`'s comment
+   claiming the literal `if (false)` form is "what esbuild's dead-branch
+   elimination actually removes" was true only under minification, which is why
+   the 2026-07-24 fix looked right and shipped the socket anyway.
+
+   `build.mjs` now sets `minifySyntax: release`. Syntax level only — identifiers
+   and formatting survive, so a reviewer still reads recognisable code and
+   SOURCE_BUILD.md's byte-reproducibility story is unaffected (a deterministic
+   transform of the same input). Chose this over lifting the block behind a
+   release-dropped import because it removes the whole *class*: every
+   `if (__DEV_RELOAD__)` and `if (__HARNESS_HOOKS__)` dead branch goes, not just
+   the one that was noticed.
+
+   `check-release-gate.mjs` grew check 2: a `FORBIDDEN` list of literal
+   substrings (`ws://127.0.0.1:35729`, `[BranchKit Dev]`) asserted absent from
+   every release `.js`. Literals rather than regexes so a human can grep the
+   artifact and confirm by eye. Not `new WebSocket` or `ws://` as blanket bans —
+   both are plausible in legitimate future code, and a gate that cries wolf gets
+   deleted.
+
+   Verified: release defines WITHOUT `minifySyntax` → all three literals
+   present; WITH it → all three absent. And the resulting release bundle still
+   *runs* — loaded into Chromium it painted 14 badges and answered
+   `GET_PAGE_STATUS {"hintCount":14,"badgesVisible":true}`, so the transform did
+   not cost the content script, the service worker or the message table.
+
+   NOT yet run: `check-release-gate.mjs` end to end. It rm+renames `dist/` for
+   both targets, and Chrome and Firefox were both running the unpacked extension
+   (the wedge hazard in DESIGN_EXTENSION_CONNECTION_HEALTH.md). Run it with both
+   browsers closed before submitting. Everything above was verified by building
+   to a throwaway directory, which leaves `dist/` untouched.
 
 ### P1 — High-scrutiny surfaces (pre-justify, minimize footprint)
 

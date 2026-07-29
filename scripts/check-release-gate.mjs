@@ -12,10 +12,29 @@
  *     `__HARNESS_HOOKS__` token — a new entrypoint missing the define would
  *     leave the token literal (and the hooks ENABLED, since undefined
  *     counts as enabled for vitest's sake).
- *  2. package.json packaging scripts route through --release / BK_RELEASE.
+ *  2. Release bundles contain none of the DEV-ONLY BYTES listed below.
+ *  3. package.json packaging scripts route through --release / BK_RELEASE.
+ *
+ * Check 2 exists because check 1 was not enough, and the way it was not enough
+ * is the point. Asserting the define is APPLIED is a guard on the INPUT: it
+ * proves `__DEV_RELOAD__` became `false`, and says nothing about whether the
+ * branch it guards survived. It did survive. esbuild's dead-branch elimination
+ * is a minify feature, so `if (false) { ... }` was emitted verbatim and every
+ * release bundle shipped `new WebSocket('ws://127.0.0.1:35729')` plus its
+ * reconnect loop — a hardcoded localhost socket with no user-facing purpose, a
+ * different port and peer than the companion-app host the permission
+ * justifications describe, and the first thing a store reviewer grepping the
+ * bundle would find. build.mjs now sets `minifySyntax` on release builds, which
+ * removes it; this check is what keeps it removed, because the next way the
+ * bytes come back will not be the same way.
+ *
+ * So: assert on the OUTPUT. A gate that reads the build flags can only ever
+ * re-state the build's own intent back to itself.
  *
  * Rebuilds dist/ in release mode, so it restores the dev build afterwards
- * when run locally (CI doesn't care).
+ * when run locally (CI doesn't care). NOTE: that rebuild rm+renames dist/ for
+ * BOTH targets — see DESIGN_EXTENSION_CONNECTION_HEALTH.md on running it with
+ * an unpacked extension loaded in a live browser.
  */
 
 import { execSync } from 'node:child_process';
@@ -28,6 +47,16 @@ const run = (cmd) => execSync(cmd, { cwd: root, stdio: 'pipe' }).toString();
 
 let failed = false;
 
+/**
+ * Bytes that must not appear in a shipped bundle, with the reason a reviewer
+ * would give. Substrings rather than regexes: each one is a literal a human
+ * can grep the artifact for and confirm by eye.
+ */
+const FORBIDDEN = [
+  ['ws://127.0.0.1:35729', 'the dev auto-reload socket (dev.mjs\'s livereload port)'],
+  ['[BranchKit Dev]', 'dev auto-reload console output'],
+];
+
 for (const browser of ['chrome', 'firefox']) {
   run(`node scripts/build.mjs ${browser} --release`);
   const dist = resolve(root, `dist/${browser}`);
@@ -39,8 +68,18 @@ for (const browser of ['chrome', 'firefox']) {
         `(undefined counts as enabled). Add the define to its esbuild entry.`);
       failed = true;
     }
+    for (const [needle, why] of FORBIDDEN) {
+      if (!src.includes(needle)) continue;
+      console.error(`RELEASE GATE: dist/${browser}/${f} contains ${JSON.stringify(needle)} — ` +
+        `${why}. The define being applied is not enough: esbuild only eliminates ` +
+        `a dead \`if (false)\` branch when minifySyntax is on. Check that ` +
+        `build.mjs still sets minifySyntax for release, and that this code is ` +
+        `behind a define-guarded branch at all.`);
+      failed = true;
+    }
   }
   console.log(`ok: dist/${browser} release bundles have the define applied`);
+  console.log(`ok: dist/${browser} release bundles carry none of the ${FORBIDDEN.length} dev-only literals`);
 }
 
 const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));

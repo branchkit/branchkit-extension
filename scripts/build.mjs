@@ -67,6 +67,22 @@ await Promise.all(ENTRIES.map((e) =>
     bundle: true,
     format: e.format,
     logLevel: 'warning',
+    // Dead-branch elimination is a MINIFY feature in esbuild, not a bundling
+    // one. Without this, `if (__DEV_RELOAD__)` becomes a literal `if (false)
+    // { ... }` and esbuild emits the whole block verbatim — which is how a
+    // release bundle kept shipping `new WebSocket('ws://127.0.0.1:35729')`
+    // and its reconnect loop long after the define was correct. Verified
+    // directly: `--define:__F__=false` alone leaves the socket URL in the
+    // output, `--tree-shaking=true` also leaves it, `--minify-syntax` removes
+    // it. background.ts's comment claiming the literal `if (false)` form is
+    // "what esbuild's dead-branch elimination actually removes" was true only
+    // under minification, and nothing here minified.
+    //
+    // minifySyntax and NOT minify: syntax-level only, so identifiers and
+    // formatting survive. A store reviewer still reads recognisable code, and
+    // SOURCE_BUILD.md's byte-reproducibility story is unaffected — this is a
+    // deterministic transform of the same input.
+    minifySyntax: release,
     define: {
       __BUILD_ID__: JSON.stringify(buildId),
       __HARNESS_HOOKS__: release ? 'false' : 'true',
