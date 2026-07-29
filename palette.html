@@ -77,6 +77,16 @@
       border: 1px solid #4b535c;
       border-radius: 3px; padding: 0 4px; white-space: nowrap;
     }
+    /* Mid-codeword narrowing, driven by the host's CodewordHolder (the voice
+       path's capture.progress, or a typed prefix). A non-candidate DIMS
+       rather than disappearing — the range/search badges make the same call,
+       and for a list the user is reading, rows vanishing mid-utterance is
+       disorienting where a fade is legible. HINT_VARIANT hides instead
+       because a page badge sits over content it would otherwise obscure. */
+    .row.bk-dimmed { opacity: 0.28; }
+    /* The already-spoken half of a candidate's badge, faded the same way the
+       on-page badges fade their matched prefix. */
+    .cw .done { opacity: 0.45; }
     /* Leftover-space-only (flex-basis 0): a long description must never
        squeeze the title or push the voice/kbd chips off the edge — those are
        the row's essentials; the description ellipsizes into whatever room is

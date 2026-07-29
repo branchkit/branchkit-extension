@@ -13,7 +13,12 @@
  * through the background (PALETTE_OPEN → PALETTE_COMMAND at frame 0).
  */
 
-import { RELAY_HELLO, RELAY_REQ, RELAY_RESP, RELAY_DIAG } from '../palette/relay';
+import {
+  RELAY_HELLO, RELAY_REQ, RELAY_RESP, RELAY_DIAG,
+  RELAY_CODEWORDS, RELAY_NARROW, RELAY_ACTIVATE, RELAY_RELABEL,
+  type PaletteCodewordWire,
+} from '../palette/relay';
+import { PaletteHolder } from '../palette/palette-holder';
 import { reportDispatchResult } from '../plugin/resolve';
 import { dispatcher } from '../core/singletons';
 import { modes } from '../core/modes';
@@ -44,6 +49,21 @@ let prevFocus: HTMLElement | null = null;
 const FRAME_ORIGIN = new URL(chrome.runtime.getURL('')).origin;
 let relaySecret: string | null = null;
 
+/** Post one of the holder's void legs into the frame. Fire-and-forget by
+ *  contract — nothing the registry asks synchronously waits on this. */
+function toFrame(type: string, payload: Record<string, unknown> = {}): void {
+  frame?.contentWindow?.postMessage({ type, secret: relaySecret, ...payload }, FRAME_ORIGIN);
+}
+
+/** The palette's registry membership. Constructed once and reused across
+ *  opens: it registers on adopt and unregisters when it empties or disposes,
+ *  so an exclusive holder in the list is always a live question. */
+const paletteHolder = new PaletteHolder({
+  narrow: (prefix) => { toFrame(RELAY_NARROW, { prefix }); },
+  activate: (rowId) => { toFrame(RELAY_ACTIVATE, { rowId }); },
+  relabel: () => { toFrame(RELAY_RELABEL); },
+});
+
 window.addEventListener('message', (ev) => {
   // Only OUR frame's requests; the page posting from its own window (even
   // via frame.contentWindow.postMessage) has a different event.source.
@@ -52,6 +72,22 @@ window.addEventListener('message', (ev) => {
   if (!d) return;
   if (d.type === RELAY_DIAG && typeof d.msg === 'string') {
     paletteDiag('frame: ' + d.msg.slice(0, 200));
+    return;
+  }
+  // The frame's assignment, once per open. The host registers a
+  // CodewordHolder on its behalf — the same host-as-proxy shape modes.push
+  // below already uses — and answers the registry's synchronous questions
+  // from this mirror. See notes/DESIGN_CROSS_REALM_CODEWORD_HOLDERS.md.
+  //
+  // Authenticated by event.source (checked at the top of this listener), NOT
+  // by the secret: this leg travels frame → parent with targetOrigin '*', so
+  // anything it carried would be page-readable. A page cannot forge
+  // event.source without executing inside the extension frame.
+  if (d.type === RELAY_CODEWORDS) {
+    const msg = d as unknown as { rows?: PaletteCodewordWire[] };
+    const rows = Array.isArray(msg.rows) ? msg.rows : [];
+    paletteHolder.adopt(rows);
+    paletteDiag(`codewords adopted rows=${rows.length}`);
     return;
   }
   if (d.type !== RELAY_REQ) return;
@@ -118,6 +154,11 @@ export function closePalette(): void {
   if (!frame) return;
   frame.remove();
   frame = null;
+  // Leave the registry BEFORE the frame is gone from the mode stack's point
+  // of view — an exclusive holder outliving its surface would swallow every
+  // codeword on the page with nothing able to answer them. Idempotent.
+  paletteHolder.dispose('palette closed');
+  relaySecret = null;
   modes.pop('palette');
   // Every close path funnels here, so this is THE teardown signal for the
   // palette's voice session: background drains the plugin's palette entries,

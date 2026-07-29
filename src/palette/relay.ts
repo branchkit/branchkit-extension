@@ -30,6 +30,50 @@ export const RELAY_RESP = 'BK_PALETTE_BOOTSTRAP_RESP';
  * error names only, never tab data. */
 export const RELAY_DIAG = 'BK_PALETTE_DIAG';
 
+/**
+ * Frame → host, once per open: the codeword set the frame just assigned.
+ *
+ * The host registers a CodewordHolder on the frame's behalf and answers the
+ * registry's synchronous questions (held / matchesPrefix / soleMatch /
+ * resolve) from this mirror — the same host-as-proxy shape the mode stack
+ * already uses (`modes.push('palette')` in palette-host.ts). Only the two
+ * void-returning legs travel back into the frame.
+ *
+ * Carries NO secret, and must not: like REQ it travels frame → parent with
+ * targetOrigin '*' (the frame cannot know the page's origin), so the page can
+ * read it. The host authenticates this direction by `event.source` — a page
+ * cannot spoof that without executing inside the extension frame. Row ids and
+ * letter tokens are the palette's own badges, already visible on screen.
+ */
+export const RELAY_CODEWORDS = 'BK_PALETTE_CODEWORDS';
+
+// Host → frame legs. These DO carry the secret: they travel to the extension
+// targetOrigin (page-unreadable), but the page holds the frame's
+// contentWindow reference and could post to it, and a forged ACTIVATE would
+// dispatch a row the user never spoke.
+
+/** Host → frame: mid-codeword narrowing ('' resets). Visual only. */
+export const RELAY_NARROW = 'BK_PALETTE_NARROW';
+/** Host → frame: activate this row (a codeword resolved to it). */
+export const RELAY_ACTIVATE = 'BK_PALETTE_ACTIVATE';
+/** Host → frame: alphabet or display mode changed — re-render badge text. */
+export const RELAY_RELABEL = 'BK_PALETTE_RELABEL';
+
+/**
+ * One row's badge, as the frame assigned it.
+ *
+ * `token` is the CLAIM-LEVEL form the holder registry speaks: letters,
+ * space-joined ("o", "o r"), matching the label pool's token shape so
+ * `letterFormOf` / `anyCodewordMatchesPrefix` apply unchanged. The FRAME
+ * computes it, because the frame owns the alphabet it assigned from —
+ * deriving it host-side would make correctness depend on two independently
+ * loaded alphabets agreeing.
+ */
+export interface PaletteCodewordWire {
+  token: string;
+  rowId: string;
+}
+
 /** Wire shape of the bootstrap payload (mirrors PALETTE_BOOTSTRAP's response). */
 export interface BootstrapWire {
   tabs?: Array<{ tabId: number; title: string; url: string }>;

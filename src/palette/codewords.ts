@@ -137,3 +137,42 @@ export function assignCodewords(
   }
   return out;
 }
+
+/**
+ * Claim-level token for a badge — letters, space-joined ("o", "o r").
+ *
+ * This is the shape the codeword holder registry speaks (`labels/words.ts`
+ * pool tokens), so `letterFormOf` and `anyCodewordMatchesPrefix` apply to
+ * palette badges unchanged. Two badge shapes reach it:
+ *
+ *  - FULL PALETTE — `badge` is spoken alphabet words ("ocean river"). A
+ *    word's letter is its ALPHABETICAL index in the array: BranchKit pushes
+ *    its 26 codewords in A–Z order, so alphabet[0] is the word for 'a'. This
+ *    is the exact inverse of `markToSpokenWords`' `charCodeAt(0) - 97`, and
+ *    deliberately NOT `LETTERS_26`, whose order is typing-ergonomic (home
+ *    row first) and would bind every badge to the wrong letter.
+ *  - TABS SCOPE — `badge` is already a strip mark ("a", "ab"), so its
+ *    letters just need separating.
+ *
+ * `alphabet` is a parameter rather than the words.ts overlay because the
+ * frame assigned from THIS array; deriving from a separately loaded overlay
+ * would make correctness depend on the two agreeing.
+ *
+ * An unmappable word yields '' — the row is unspeakable rather than bound to
+ * the wrong letter.
+ */
+export function codewordToken(badge: string, alphabet: readonly string[]): string {
+  const parts = badge.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '';
+  // A mark is one whitespace-free run of letters, already in claim form.
+  if (parts.length === 1 && !alphabet.includes(parts[0])) {
+    return parts[0].split('').join(' ');
+  }
+  const letters: string[] = [];
+  for (const word of parts) {
+    const idx = alphabet.indexOf(word);
+    if (idx < 0 || idx > 25) return '';
+    letters.push(String.fromCharCode(97 + idx));
+  }
+  return letters.join(' ');
+}

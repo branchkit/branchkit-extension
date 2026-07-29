@@ -22,10 +22,14 @@ import {
   buildTabItems, buildCommandItems, buildBookmarkItems, filterPalette, resolvePaletteQuery,
   type PaletteItem, type PaletteSection, type PaletteTab, type PaletteBookmark,
 } from './palette/model';
-import { assignCodewords, codewordDisplay, classifyMarkInput } from './palette/codewords';
+import { assignCodewords, codewordDisplay, classifyMarkInput, codewordToken } from './palette/codewords';
 import { micGlyph } from './render/mic-glyph';
 import { markToSpokenWords, type MarkerMap } from './background/tab-markers';
-import { RELAY_HELLO, RELAY_REQ, RELAY_RESP, RELAY_DIAG, type BootstrapWire } from './palette/relay';
+import {
+  RELAY_HELLO, RELAY_REQ, RELAY_RESP, RELAY_DIAG,
+  RELAY_CODEWORDS, RELAY_NARROW, RELAY_ACTIVATE, RELAY_RELABEL,
+  type BootstrapWire, type PaletteCodewordWire,
+} from './palette/relay';
 
 // Lifecycle breadcrumbs → host → plugin dispatch-result log (actuator.log,
 // action=palette_diag). The only way to see inside this frame on browsers no
@@ -90,6 +94,10 @@ let selected = 0;
  *  refiltering never reassigns, so a row's badge is stable for the palette's
  *  lifetime). Empty when the voice alphabet isn't loaded. */
 let codewords: Map<string, string> = new Map();
+/** Claim-level token per row id ("o", "o r") — the same assignment as
+ *  `codewords`, in the letter form the host's CodewordHolder speaks. Derived
+ *  alongside it at the one publish point, so the two cannot drift. */
+let tokens: Map<string, string> = new Map();
 /** The alphabet the codewords were assigned from (for letter display). */
 let voiceAlphabet: string[] = [];
 /** tabId → stable strip mark (letter token). In tabs scope the palette rows
@@ -164,6 +172,21 @@ window.addEventListener('message', (ev) => {
     relayError = d.error ?? null;
     relayResolve?.(d.data ?? null);
     relayResolve = null;
+    return;
+  }
+  // The holder's void legs, driven by the host's registry membership. All
+  // secret-checked: the page shares this window, and an activate it could
+  // forge would dispatch a row the user never spoke.
+  if (relaySecret === null || d.secret !== relaySecret) return;
+  const leg = d as unknown as { prefix?: string; rowId?: string };
+  if (d.type === RELAY_NARROW && typeof leg.prefix === 'string') {
+    narrowRowBadges(leg.prefix);
+  } else if (d.type === RELAY_ACTIVATE && typeof leg.rowId === 'string') {
+    const item = [...tabItems, ...commandItems, ...bookmarkItems]
+      .find((it) => it.id === leg.rowId);
+    if (item) dispatchItem(item);
+  } else if (d.type === RELAY_RELABEL) {
+    renderCurrent();
   }
 });
 
@@ -261,8 +284,11 @@ function render(sections: PaletteSection[]): void {
         // the badge matches the strip. Full palette: word codewords → display
         // per badgeDisplayMode.
         const badge = scope === 'tabs' ? cw : codewordDisplay(cw, voiceAlphabet, displayMode);
-        row.appendChild(el('span', 'cw', badge));
+        row.appendChild(badgeSpan(badge, tokens.get(item.id) ?? ''));
       }
+      // Non-candidates dim; the row stays in place so the list doesn't
+      // reflow mid-utterance.
+      if (narrowPrefix && !isNarrowCandidate(item.id)) row.classList.add('bk-dimmed');
       row.appendChild(el('span', 'title', item.title));
       if (item.subtitle && item.subtitle !== item.title) {
         row.appendChild(el('span', 'sub', item.subtitle));
@@ -299,6 +325,52 @@ function render(sections: PaletteSection[]): void {
 
 /** Render for the current mode: letter mode narrows tabs by mark prefix; fuzzy
  *  mode filters by the typed title query. */
+/**
+ * Mid-codeword narrowing state, owned by the host's CodewordHolder and
+ * pushed in over the relay ('' resets). Visual only — it never changes which
+ * rows exist, which is the holder contract's `narrow` rule.
+ */
+let narrowPrefix = '';
+
+/** Can this claim token ("o r") still complete the live prefix? */
+function tokenIsCandidate(token: string): boolean {
+  const letters = token.replace(/\s+/g, '');
+  return letters !== '' && letters.startsWith(narrowPrefix);
+}
+
+function isNarrowCandidate(rowId: string): boolean {
+  return tokenIsCandidate(tokens.get(rowId) ?? '');
+}
+
+/**
+ * The badge, with the already-spoken words faded when a prefix is live.
+ * One letter of prefix == one consumed word, since a token carries one letter
+ * per spoken word — so the split is by word, not by character.
+ */
+function badgeSpan(badge: string, token: string): HTMLElement {
+  const span = el('span', 'cw');
+  const consumed = narrowPrefix && tokenIsCandidate(token) ? narrowPrefix.length : 0;
+  if (consumed === 0) {
+    span.textContent = badge;
+    return span;
+  }
+  const parts = badge.split(/\s+/).filter(Boolean);
+  parts.forEach((part, i) => {
+    if (i > 0) span.appendChild(document.createTextNode(' '));
+    if (i < consumed) span.appendChild(el('span', 'done', part));
+    else span.appendChild(document.createTextNode(part));
+  });
+  return span;
+}
+
+/** Host → frame narrowing leg. Re-render is the whole implementation: the
+ *  list is a snapshot, so there is no incremental badge state to maintain. */
+function narrowRowBadges(prefix: string): void {
+  if (prefix === narrowPrefix) return;
+  narrowPrefix = prefix;
+  renderCurrent();
+}
+
 function renderCurrent(): void {
   if (scope === 'tabs' && mode === 'letter') {
     const items = markPrefix === ''
@@ -531,9 +603,18 @@ function assignAndPublish(alphabet: string[]): void {
 
   const entries: PaletteVoiceEntry[] = [];
   const rows: PaletteVoiceRow[] = [];
+  const claim: PaletteCodewordWire[] = [];
+  tokens = new Map();
   for (const item of all) {
     const cw = codewords.get(item.id);
     if (!cw) continue;
+    // Claim-level token for the host's holder — one letter per spoken word,
+    // derived from the alphabet THIS assignment used.
+    const token = codewordToken(cw, alphabet);
+    if (token) {
+      tokens.set(item.id, token);
+      claim.push({ token, rowId: item.id });
+    }
     // Tabs: cw is a mark letter → spoken is its overlay words (empty when no
     // alphabet). Full palette: cw is already the spoken word.
     const spoken = scope === 'tabs' ? markToSpokenWords(cw, alphabet) : cw;
@@ -546,6 +627,17 @@ function assignAndPublish(alphabet: string[]): void {
   if (entries.length === 0) return;
   voiceLive = true;
   chrome.runtime.sendMessage({ type: 'PALETTE_PUBLISH', entries, rows } as Message).catch(() => {});
+  // Hand the host our assignment so it can register the CodewordHolder that
+  // makes mid-utterance narrowing reach these rows. Voice-live only: a
+  // keyboard-only palette claims no exclusivity it isn't using.
+  //
+  // NO SECRET on this leg. It goes to the parent with targetOrigin '*' (the
+  // frame cannot know the page's origin), so the page can read it — sending
+  // the secret here would hand over the ability to forge a RESP or an
+  // ACTIVATE. The host authenticates this direction by event.source, which a
+  // page cannot spoof without executing inside the extension frame.
+  // notes/DESIGN_CROSS_REALM_CODEWORD_HOLDERS.md.
+  window.parent.postMessage({ type: RELAY_CODEWORDS, rows: claim }, '*');
 }
 
 /** One footer chip: the mic glyph + a spoken phrase, then what it does. */

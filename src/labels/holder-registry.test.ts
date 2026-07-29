@@ -64,6 +64,7 @@ import {
   HolderFactory, HolderHarness, SyntheticHolder,
 } from '../testing/holder-conformance';
 import { StoreHolder } from './store-holder';
+import { PaletteHolder } from '../palette/palette-holder';
 import { RangeBadgeSet } from '../render/range-badge-set';
 import { RANGE_PICK_VARIANT, SEARCH_VARIANT, canRecover } from '../render/badge-variant';
 import type { BadgeVariant } from '../render/badge-variant';
@@ -450,6 +451,24 @@ function makeRangeSetHarness(spec: {
   };
 }
 
+/** The palette's mirror-backed holder, with the frame legs stubbed — the
+ *  cross-realm participant. Its own file covers the legs; this is the entry
+ *  that makes it answerable to the shared invariants (and to the meta-test
+ *  below). Locally defined, as makeStoreHarness is: the participant list owns
+ *  its own construction. */
+function makePaletteHarness(): HolderHarness {
+  __resetHolderRegistry();
+  const holder = new PaletteHolder({ narrow() {}, activate() {}, relabel() {} });
+  const granted: string[] = [];
+  return {
+    holder,
+    grant: (cws) => {
+      granted.push(...cws);
+      holder.adopt(granted.map((token, i) => ({ token, rowId: `row:${i}` })));
+    },
+  };
+}
+
 const participants: Array<{ name: string; make: HolderFactory; liveness?: 'armed' }> = [
   {
     name: 'synthetic exclusive (pick-shaped)',
@@ -491,6 +510,16 @@ const participants: Array<{ name: string; make: HolderFactory; liveness?: 'armed
       id: 'search', priority: ADDITIVE_OVERLAY_PRIORITY, claim: 'additive',
       variant: SEARCH_VARIANT,
     }),
+  },
+  // The cross-realm participant: the palette lives in an extension iframe, so
+  // the HOST registers on its behalf and answers the synchronous half from a
+  // mirror of the frame's assignment. Its own file covers the frame legs;
+  // this entry is what makes it answerable to the shared invariants at all.
+  // See notes/DESIGN_CROSS_REALM_CODEWORD_HOLDERS.md.
+  {
+    name: 'palette rows (PaletteHolder, exclusive, mirrored)',
+    liveness: 'armed',
+    make: makePaletteHarness,
   },
 ];
 
