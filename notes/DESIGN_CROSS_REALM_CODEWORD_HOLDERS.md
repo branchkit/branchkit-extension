@@ -346,6 +346,18 @@ Two instances in one sitting is the argument for the guard over the fix: the
 shape of this bug is "a token kind one walk understands and the other doesn't,"
 and it will recur every time a token kind is added.
 
+**The guard covers two of the three projections.** The never-standalone weight
+policy (`never_standalone_words`) has the SAME blind spot and is deliberately
+left with it: an absent penalty under-biases, which is the safe direction, and
+today it is a genuine no-op — the palette's prefix index and hint_pair's
+`browser_alpha` are both leading lists elsewhere, so those words are unpenalized
+either way. Documented at the code rather than fixed, with the trigger named:
+close it before adding a dependent/macro command whose words cannot lead
+anywhere else. Stating this matters more than the green suite — "three
+projections of one derivation" now has teeth for two of them, and reading the
+guard as covering all three is exactly the wrong turn this section exists to
+prevent.
+
 ## Also in scope, downstream
 
 `browser_palette` declares no `display` block, so HUD subtitles auto-derive from
