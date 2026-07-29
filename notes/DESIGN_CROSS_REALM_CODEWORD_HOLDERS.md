@@ -318,6 +318,34 @@ disagreement is silent.** A word missing from `narrow_to` doesn't error, it
 just never decodes, and only inside the mode. The next surface with an
 exclusive gate over a templated collection would have hit the same wall.
 
+### The class guard, and the second instance it found (2026-07-29)
+
+Fixing the one token kind wasn't enough, because nothing enforced the claim.
+`narrow_to` and the DAG are two independent walks over `CommandToken`, so
+"projections of one derivation" was an intention, not a mechanism.
+
+`assert_word_list_covers_dag` makes it a mechanism: feed both walks ONE
+vocabulary and assert the word list contains every DAG arc word and every
+BOUNDED open-tail alphabet. Equal inputs are the point — production reads
+`grammar_hwm` for the DAG and the live `entity_cache` for the word list, and
+HWM is deliberately never pruned, so that legitimate asymmetry would mask
+exactly what's under test. `every_token_kind_puts_its_dag_words_in_the_word_list`
+drives it with one command per token kind; mutation-verified (reverting the glob
+fails it independently).
+
+Writing the fixture immediately turned up a **second instance of the same
+class**: capture MACROS expand only in the compiled tokens, so
+`<targets:hint_pair>+` is opaque to the raw-pattern walk (`hint_pair` names a
+macro, not a collection) while the DAG bounds its tail to the union of the inner
+slots' alphabets. Live today in the browser's implicit-stash caret twin, which
+is gated `[hints, caret]` — caret is exclusive. It never bit only because that
+command sits beside sibling commands whose plain `browser_alpha` captures happen
+to supply the same words. Fixed additively in `collect_pattern_words`.
+
+Two instances in one sitting is the argument for the guard over the fix: the
+shape of this bug is "a token kind one walk understands and the other doesn't,"
+and it will recur every time a token kind is added.
+
 ## Also in scope, downstream
 
 `browser_palette` declares no `display` block, so HUD subtitles auto-derive from
@@ -330,6 +358,43 @@ marked `display: secondary`, populated at the same single publish point.
 grammar batch path, per the standing preference for extending the unified
 collection API over adding RPCs. It is downstream of everything above, not a
 prerequisite, and should not be bundled into the same wave.
+
+### RETRACTED (2026-07-29) — that paragraph is wrong twice
+
+**It is not a fourth strand of the fork.** The fork was: own allocation, own
+transport, own renderer, no holder. Three of those are now settled — the holder
+joined, the allocation is justified by the volatility rule, the renderer is
+per-surface paint policy `BadgeVariant` already sanctions. What's left,
+`POST /palette`, is not a fork at all: it is one of a dozen sibling endpoints on
+the same handler (`/tabs`, `/caret`, `/video-mode`, `/query-field`,
+`/range-pick`, `/find`, `/focus`, `/active-tab`), each mapping ONE extension
+semantic onto plugin-owned collections and tags. That is the house style, and
+the right one — the extension declares a semantic, the plugin owns the tag names
+and collection shapes. `/palette` is the most conventional thing about it.
+
+**The cited preference is about a different layer.** "Extend the unified
+collection API over adding RPCs" governs plugin→ACTUATOR RPCs — `state.put` /
+`collection.delete_records` instead of bespoke collection verbs. The palette
+already complies: it writes through `toolkit.ReplaceCollection`, which is
+exactly that pair. `POST /palette` is extension→PLUGIN HTTP. Invoking the
+collection-API preference against it is a category error.
+
+**And folding would contradict this note's own rule.** The grammar batch is a
+per-frame SESSION protocol — `session_id`, `batch_index`, `is_final`, `doc_id`,
+per-(conn,tab,frame) state, storm absorption, stale-session TTL, unconfirmed
+carryover. Every one of those exists because page-hint anchors move. The
+palette's cannot; that is the volatility argument above, and the reason step 5
+let the palette keep its own allocation. Routing it through the batch would mean
+minting a fake session per open, and would make the palette the only surface
+paying for machinery it provably doesn't need.
+
+So step 6 is **retired, not deferred.** If it comes back it should come back as
+a different proposal: not "fold the palette into the hint transport" but "is
+there one declarative shape these dozen semantic endpoints should share?" — a
+question about the whole handler, which the palette neither raises nor answers.
+
+`PaletteHolder.republish()` therefore stays a documented no-op permanently
+rather than provisionally; its doc comment should lose the "if it lands" hedge.
 
 ## Sequencing
 
@@ -347,7 +412,10 @@ prerequisite, and should not be bundled into the same wave.
    into `browser_palette_prefix` + `browser_palette_<prefix>`; the flat
    collection keeps atomic keys only. Carried one actuator fix that was not in
    the plan — see "As built" above. This is the step that lights up 1–4.
-6. **Fold `POST /palette` into the grammar batch.** Separate wave, unchanged.
+6. **Fold `POST /palette` into the grammar batch.** ❌ RETIRED 2026-07-29 —
+   the proposal was wrong on both its premises and contradicted this note's own
+   volatility rule. Reasoning in "Also in scope, downstream" above; don't
+   re-propose without reading it.
 
 Steps 1–4 were green on unit tests, the conformance suite, and the
 exhaustiveness lints while being **invisible to the user** — registration

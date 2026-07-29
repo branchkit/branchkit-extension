@@ -93,11 +93,16 @@ export class PaletteHolder implements CodewordHolder {
   }
 
   /**
-   * No-op by construction. `republish` re-sends grammar records into a
-   * rotated session; palette entries do not travel the grammar batch — they
-   * are POSTed separately and drained on close, so no session rotation can
-   * strand them. (Folding that transport into the batch is a later wave; if
-   * it lands, this becomes a real re-POST.)
+   * No-op by construction, permanently. `republish` re-sends grammar records
+   * into a rotated session; palette entries do not travel the grammar batch —
+   * they are POSTed separately and drained on close, so no session rotation
+   * can strand them.
+   *
+   * An earlier draft hedged this as "if the transport folds into the batch,
+   * this becomes a real re-POST". That fold is RETIRED (see
+   * notes/DESIGN_CROSS_REALM_CODEWORD_HOLDERS.md, "Also in scope, downstream"):
+   * the batch is a per-frame session protocol built for anchors that move, and
+   * the palette's cannot. There is no session here to rotate.
    */
   republish(): void {}
 
