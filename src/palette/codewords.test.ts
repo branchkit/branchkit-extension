@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   assignCodewords, codewordDisplay, codewordLength, classifyMarkInput, maxVoiceRows,
+  splitSpokenBadge,
 } from './codewords';
 
 // A–Z order, as BranchKit pushes it.
@@ -132,5 +133,46 @@ describe('codewordDisplay', () => {
     expect(codewordDisplay('arch', ALPHABET, 'expand')).toBe('arch');
     expect(codewordDisplay('ocean pearl', ALPHABET, 'expand')).toBe('ocean p');
     expect(codewordDisplay('ocean pearl quill', ALPHABET, 'expand')).toBe('ocean pq');
+  });
+});
+
+describe('splitSpokenBadge (already-spoken half of a badge)', () => {
+  // The regression this exists for. A tabs-scope badge is a bare mark ("op"),
+  // and the old whitespace-only split saw ONE segment — so speaking the first
+  // word faded the whole badge, reading as "this row is out" instead of "the o
+  // is spent, say the p". Page hints branch per display mode in
+  // setMatchedChars; this states the same rule once, over the rendered string.
+  it('consumes one CHARACTER per word in letter form', () => {
+    expect(splitSpokenBadge('op', 1)).toEqual({ done: 'o', rest: 'p' });
+    expect(splitSpokenBadge('opq', 2)).toEqual({ done: 'op', rest: 'q' });
+  });
+
+  it('consumes one WORD per word in spaced form', () => {
+    expect(splitSpokenBadge('ocean pearl', 1)).toEqual({ done: 'ocean', rest: ' pearl' });
+    // expand form: first word spelled out, tail as letters.
+    expect(splitSpokenBadge('ocean p', 1)).toEqual({ done: 'ocean', rest: ' p' });
+  });
+
+  it('nothing consumed leaves the badge whole', () => {
+    expect(splitSpokenBadge('ocean pearl', 0)).toEqual({ done: '', rest: 'ocean pearl' });
+    expect(splitSpokenBadge('op', -1)).toEqual({ done: '', rest: 'op' });
+  });
+
+  // The holder and the badge can disagree for a frame during teardown; an
+  // over-long prefix consumes everything rather than throwing or dropping text.
+  it('clamps a prefix longer than the badge', () => {
+    expect(splitSpokenBadge('op', 5)).toEqual({ done: 'op', rest: '' });
+    expect(splitSpokenBadge('ocean pearl', 9)).toEqual({ done: 'ocean pearl', rest: '' });
+  });
+
+  // The property the caller depends on: the two halves reassemble the badge,
+  // so no rendering path can silently lose or duplicate a character.
+  it('done + rest always reconstructs the badge', () => {
+    for (const badge of ['o', 'op', 'opq', 'ocean pearl', 'ocean p', 'ocean pearl quill']) {
+      for (let n = -1; n <= 5; n++) {
+        const { done, rest } = splitSpokenBadge(badge, n);
+        expect(done + rest).toBe(badge);
+      }
+    }
   });
 });

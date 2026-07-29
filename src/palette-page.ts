@@ -22,7 +22,9 @@ import {
   buildTabItems, buildCommandItems, buildBookmarkItems, filterPalette, resolvePaletteQuery,
   type PaletteItem, type PaletteSection, type PaletteTab, type PaletteBookmark,
 } from './palette/model';
-import { assignCodewords, codewordDisplay, classifyMarkInput, codewordToken } from './palette/codewords';
+import {
+  assignCodewords, codewordDisplay, classifyMarkInput, codewordToken, splitSpokenBadge,
+} from './palette/codewords';
 import { micGlyph } from './render/mic-glyph';
 import { markToSpokenWords, type MarkerMap } from './background/tab-markers';
 import {
@@ -343,23 +345,17 @@ function isNarrowCandidate(rowId: string): boolean {
 }
 
 /**
- * The badge, with the already-spoken words faded when a prefix is live.
- * One letter of prefix == one consumed word, since a token carries one letter
- * per spoken word — so the split is by word, not by character.
+ * The badge, with the already-spoken part faded when a prefix is live. One
+ * letter of prefix == one consumed word, since a token carries one letter per
+ * spoken word; `splitSpokenBadge` maps that onto whichever shape the badge is
+ * rendered in (a character in letter form, a word in spaced form).
  */
 function badgeSpan(badge: string, token: string): HTMLElement {
   const span = el('span', 'cw');
   const consumed = narrowPrefix && tokenIsCandidate(token) ? narrowPrefix.length : 0;
-  if (consumed === 0) {
-    span.textContent = badge;
-    return span;
-  }
-  const parts = badge.split(/\s+/).filter(Boolean);
-  parts.forEach((part, i) => {
-    if (i > 0) span.appendChild(document.createTextNode(' '));
-    if (i < consumed) span.appendChild(el('span', 'done', part));
-    else span.appendChild(document.createTextNode(part));
-  });
+  const { done, rest } = splitSpokenBadge(badge, consumed);
+  if (done) span.appendChild(el('span', 'done', done));
+  if (rest) span.appendChild(document.createTextNode(rest));
   return span;
 }
 

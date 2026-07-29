@@ -139,6 +139,49 @@ export function assignCodewords(
 }
 
 /**
+ * Split a rendered badge into the part the user has already spoken and the
+ * part still owed, given how many words are consumed. `done + rest === badge`
+ * always, so the caller only has to decide how to paint each half.
+ *
+ * ONE BADGE SEGMENT PER SPOKEN WORD is the whole rule, and a segment is a
+ * CHARACTER in letter form ("io") or a WORD in spaced form ("is opal", and
+ * expand's "is o"). That single statement covers every shape the palette
+ * renders — tabs-scope marks and all three `badgeDisplayMode` values — because
+ * it is the same invariant `codewordToken` already relies on: one letter per
+ * spoken word.
+ *
+ * Splitting only on whitespace (what this used to do) collapsed letter form to
+ * a single segment, so speaking the first word of "io" faded the ENTIRE badge —
+ * which reads as "this row is out", the opposite of the intended "the i is
+ * spent, now say the o". Page hints get this right via `setMatchedChars`
+ * (render/hints.ts), which branches per display mode; the palette can state it
+ * once instead because it splits the already-rendered string.
+ */
+export function splitSpokenBadge(
+  badge: string,
+  consumed: number,
+): { done: string; rest: string } {
+  if (consumed <= 0) return { done: '', rest: badge };
+  if (!/\s/.test(badge)) {
+    const cut = Math.min(consumed, badge.length);
+    return { done: badge.slice(0, cut), rest: badge.slice(cut) };
+  }
+  // End of the `consumed`-th run of non-space characters. A prefix longer than
+  // the badge has segments consumes all of it rather than throwing — the
+  // holder and the badge can disagree for one frame during teardown.
+  const runs = /\S+/g;
+  let cut = badge.length;
+  let seen = 0;
+  for (let m = runs.exec(badge); m !== null; m = runs.exec(badge)) {
+    if (++seen === consumed) {
+      cut = m.index + m[0].length;
+      break;
+    }
+  }
+  return { done: badge.slice(0, cut), rest: badge.slice(cut) };
+}
+
+/**
  * Claim-level token for a badge — letters, space-joined ("o", "o r").
  *
  * This is the shape the codeword holder registry speaks (`labels/words.ts`
