@@ -21,7 +21,7 @@
  */
 
 import * as esbuild from 'esbuild';
-import { cpSync, mkdirSync, rmSync, renameSync, existsSync } from 'node:fs';
+import { cpSync, mkdirSync, rmSync, renameSync, existsSync, readdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
@@ -113,8 +113,69 @@ const manifestResult = spawnSync(
 if (manifestResult.status !== 0) process.exit(manifestResult.status ?? 1);
 
 // Swap staging into place (ms-scale window instead of the whole build).
-if (existsSync(finalDir)) rmSync(finalDir, { recursive: true });
-renameSync(outDir, finalDir);
+swapIntoPlace(outDir, finalDir);
+
+/**
+ * Move `staging` onto `final` WITHOUT the destination directory ever ceasing
+ * to exist.
+ *
+ * The previous form was `rmSync(final)` + `renameSync(staging, final)`: one
+ * atomic syscall, but for a few milliseconds the loaded extension's directory
+ * was GONE. Chrome tolerates that (its hazard is the SW re-reading a
+ * half-written dist, which either form solves). Gecko does not — it treats the
+ * directory disappearing as the add-on being removed and tears it down hard
+ * enough to take the browser with it. Recorded 2026-07-28 in
+ * DESIGN_EXTENSION_CONNECTION_HEALTH.md as "two consecutive build.mjs runs
+ * under a Firefox with the extension temporarily installed, and Firefox went
+ * down"; reproduced 2026-07-29 by check-release-gate.mjs, which builds four
+ * times in a row and killed a live Firefox doing it.
+ *
+ * That note proposed two fixes and both were workarounds: decline to swap a
+ * dist a browser has loaded, or rename BRANCHKIT_NO_DEV_RELOAD to admit what it
+ * does. Neither lets you rebuild while developing, which is the entire point of
+ * the dev loop. So the destination directory is kept and its CONTENTS are
+ * replaced instead — every individual file still lands via `renameSync`, so a
+ * reader either sees the whole old file or the whole new one, never a torn one.
+ *
+ * The trade is honest and worth naming: a whole-directory rename is atomic
+ * across ALL files at once, whereas this is atomic per file, so there is a
+ * millisecond window where dist holds a mix of generations. That window already
+ * existed in practice — it is what the post-swap dev-reload ping closes — and a
+ * mixed dist costs a reload, while a vanished dist costs the browser.
+ */
+function swapIntoPlace(staging, final) {
+  if (!existsSync(final)) {
+    renameSync(staging, final); // nothing has it open; take the atomic path
+    return;
+  }
+  const walk = (dir, base = '') => readdirSync(dir, { withFileTypes: true })
+    .flatMap((d) => (d.isDirectory()
+      ? walk(resolve(dir, d.name), `${base}${d.name}/`)
+      : [`${base}${d.name}`]));
+
+  const incoming = walk(staging);
+  for (const rel of incoming) {
+    const dest = resolve(final, rel);
+    mkdirSync(dirname(dest), { recursive: true });
+    renameSync(resolve(staging, rel), dest);
+  }
+  // Drop anything the new build no longer produces, so a stale bundle can't
+  // outlive the entry that emitted it.
+  for (const rel of walk(final)) {
+    if (!incoming.includes(rel)) rmSync(resolve(final, rel));
+  }
+  // ...and the directories that removal just emptied, so a retired entry
+  // point's folder doesn't outlive it either. Depth-first: a parent only
+  // becomes empty once its children are gone.
+  const pruneEmpty = (dir) => {
+    for (const d of readdirSync(dir, { withFileTypes: true })) {
+      if (d.isDirectory()) pruneEmpty(resolve(dir, d.name));
+    }
+    if (dir !== final && readdirSync(dir).length === 0) rmSync(dir, { recursive: true });
+  };
+  pruneEmpty(final);
+  rmSync(staging, { recursive: true });
+}
 
 // Couple "files changed" to "extension reloaded": if a dev-reload server
 // (scripts/dev.mjs) is listening, ask it to broadcast a reload so no loaded

@@ -60,6 +60,14 @@ const FORBIDDEN = [
 for (const browser of ['chrome', 'firefox']) {
   run(`node scripts/build.mjs ${browser} --release`);
   const dist = resolve(root, `dist/${browser}`);
+  // Tracked per check, because an `ok:` line printed unconditionally after the
+  // loop is a gate whose output contradicts its own verdict. The first run of
+  // check 2 did exactly that — four RELEASE GATE errors and five `ok:` lines in
+  // the same output, one of them asserting a file carried none of the literals
+  // it had just been reported as carrying. The exit code was right and the
+  // transcript was not, which is the half a human reads.
+  let defineOk = true;
+  let bytesOk = true;
   for (const f of readdirSync(dist).filter((f) => f.endsWith('.js'))) {
     const src = readFileSync(resolve(dist, f), 'utf8');
     if (src.includes('__HARNESS_HOOKS__')) {
@@ -67,6 +75,7 @@ for (const browser of ['chrome', 'firefox']) {
         `this bundle's harness hooks would be LIVE in the shipped build ` +
         `(undefined counts as enabled). Add the define to its esbuild entry.`);
       failed = true;
+      defineOk = false;
     }
     for (const [needle, why] of FORBIDDEN) {
       if (!src.includes(needle)) continue;
@@ -76,10 +85,13 @@ for (const browser of ['chrome', 'firefox']) {
         `build.mjs still sets minifySyntax for release, and that this code is ` +
         `behind a define-guarded branch at all.`);
       failed = true;
+      bytesOk = false;
     }
   }
-  console.log(`ok: dist/${browser} release bundles have the define applied`);
-  console.log(`ok: dist/${browser} release bundles carry none of the ${FORBIDDEN.length} dev-only literals`);
+  if (defineOk) console.log(`ok: dist/${browser} release bundles have the define applied`);
+  if (bytesOk) {
+    console.log(`ok: dist/${browser} release bundles carry none of the ${FORBIDDEN.length} dev-only literals`);
+  }
 }
 
 const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));

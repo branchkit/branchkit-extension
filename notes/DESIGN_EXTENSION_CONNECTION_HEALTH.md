@@ -73,7 +73,19 @@ Candidate fixes, smallest first (now justified — the mid-write/mixed-generatio
 
    The load-bearing detail is that **`BRANCHKIT_NO_DEV_RELOAD=1` suppresses the post-swap reload ping but not the destructive swap**. That flag exists so an agent or a second checkout does not reload the developer's browsers — but the ping is the half that closes the version-skew window, so using the flag exactly as intended leaves the *more* damaging behaviour and removes the recovery. Its contract is incomplete: it should either also decline to swap a dist a browser currently has loaded, or be renamed to say what it really does.
 
-   Working rule until that is settled: **do not run `build.mjs` directly while a browser has the extension loaded.** Go through the running `dev.mjs` watcher (`just ext-dev`), which rebuilds and pings, or stop the browser first.
+   ~~Working rule until that is settled: **do not run `build.mjs` directly while a browser has the extension loaded.**~~
+
+   **FIXED 2026-07-29 — and the working rule is retired.** Reproduced first: `check-release-gate.mjs` builds four times in a row, and running it took a live Firefox down, which is what surfaced this again.
+
+   Both proposed fixes above were workarounds. "Decline to swap a dist a browser has loaded" and "rename the flag to admit what it does" each leave you unable to rebuild while developing, which is the entire point of the dev loop. The hazard is not the flag — it is that the swap **deleted the directory the browser was holding**. Gecko reads that as the add-on being removed and tears it down hard enough to take the browser with it.
+
+   So `swapIntoPlace()` in `build.mjs` keeps the destination directory and replaces its CONTENTS: every file still lands via `renameSync`, so a reader sees the whole old file or the whole new one and never a torn one, but the directory itself never ceases to exist. Stale files are removed afterwards, and directories that removal empties are pruned depth-first so a retired entry point's folder cannot outlive it.
+
+   The trade, named rather than buried: a whole-directory rename is atomic across ALL files at once; this is atomic per file, so there is a millisecond window where `dist/` holds a mix of generations. That window already existed in practice — it is exactly what item 2's post-swap ping closes — and **a mixed dist costs a reload, while a vanished dist costs the browser.**
+
+   Verified with both browsers live and holding the extension: two consecutive `build.mjs firefox` runs, then a full `npm run build`, then `check-release-gate.mjs` end to end (four release builds plus two dev restores). Firefox stayed on PID 84378 and Chrome on 608 throughout — the same two-consecutive-builds gesture that killed Firefox before. `dist/firefox` came out byte-identical in file list to the pre-change baseline, a planted stale file and a planted nested stale file were both removed, the emptied directory was pruned, `icons/` (non-empty) was not, and both browser harnesses still pass (41/41 and 4/4).
+
+   `BRANCHKIT_NO_DEV_RELOAD=1` is now honestly named: the swap it leaves behind is no longer destructive, so suppressing the ping suppresses only the reload.
 2. **Build↔reload coupling** — bare `npm run build` pings the dev-reload websocket (port 35729) when a watcher is listening, so "files changed" and "extension reloaded" can't be separate events. (The version-skew window — SW respawn between an out-of-band build and any reload — only closes this way; atomicity alone doesn't.)
 
 If the banner shows something else entirely, revisit — don't ship fixes for an unconfirmed mechanism.
