@@ -1808,10 +1808,12 @@ five commits" note asks for and the only reliable form of it.
   to activate it" in the help overlay is a real product option and the mechanism
   exists (`keyHint`); it is a product call, not a refactor, so it was flagged
   rather than taken.
-- **CI's messages step is still unverified on Linux** (its `copytext_hint` probe
-  reads the real clipboard), and `harness:realinput` is still not in CI.
-- **`PALETTE_COMMAND` intermittent** — misattribution fixed, root cause not; the
-  lead in §6k stands.
+- ~~**CI's messages step is unverified on Linux**~~ — **RESOLVED 2026-07-29 by
+  the first CI run**: `copytext_hint` reads the real clipboard fine under xvfb
+  on ubuntu-latest. No platform guard needed. `harness:realinput` is still not
+  in CI (second browser install, cost call).
+- ~~**`PALETTE_COMMAND` intermittent**~~ — **ROOT-CAUSED AND FIXED 2026-07-29**,
+  see §6m.11.
 - **The `tr_`-scope probe still rides the `reactivate` arm**, so it would stay
   green if `dispatchVoiceAction` went async. Unchanged by this session — none of
   the newly moved code emits a `bkLog` reachable synchronously either.
@@ -1849,6 +1851,38 @@ five commits" note asks for and the only reliable form of it.
 - **Two review follow-ups**, both pre-existing and neither a regression (§6m.10):
   the `hintActionHandoff` copy in `content.ts`'s `activate` arm, and
   `installKeymapRegistry`'s last-writer-wins load/subscribe race.
+
+#### 6m.11 The first CI run, and the step that could not fail
+
+79 commits had never seen CI — the branch had never been pushed. PR #1 is the
+first run, and it paid for itself twice.
+
+**`harness:messages` had no exit code at all.** The job reported `success`
+while its own last line read `1 PROBE FAILURE(S)`. `scripts/harness/messages/
+run.mjs` printed its tally and never set one — the other two harnesses each
+call `process.exit`; this one had zero. So §6k's "the CI wiring is the
+load-bearing fix" was wrong in a way nobody could see locally: the step it
+added can never go red, which is exactly the "someone has to remember to read
+it" failure that wiring it up was meant to end. It is §6g.8's "reported ALL
+PROBES PASS having run none" in different clothes, one layer out. Now
+`process.exitCode = 1` on both arms (a failed probe, and a short run), both
+mutation-verified — and note it took a REAL failure to expose, because a green
+harness and a harness that cannot fail print the same thing.
+
+**And the failure it was hiding is the `PALETTE_COMMAND` intermittent, now
+root-caused.** §6k could not explain "five seconds after a SUCCESSFUL
+`scrollTo(0, 400)` the page reads 82" and recorded it as a slow scroll. It is
+not slow — **82 is where the previous probe left it.** `ARM passthrough
+(scroll_down)` scrolls 0 → 79 using one of the extension's own eased scroll
+animations, and that animation is still writing `scrollY` when the next probe
+issues its single `scrollTo(0, 400)`. The write is simply overwritten, and then
+the code WAITS — which can never help, because nothing re-issues the scroll.
+Fixed by re-issuing on every poll with `behavior: 'instant'`. CI is slower than
+a dev laptop and loses that race more often, which is why the first CI run
+reproduced what twelve local runs mostly did not.
+
+Everything else was green on Linux first time, including the two harnesses'
+full results and the clipboard probe §6m.9 had flagged as unverified.
 
 #### 6m.10 The review, and the one premise that was false
 

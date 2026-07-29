@@ -224,9 +224,21 @@ try {
     window.__probeLastY = y;
     return settled;
   }, undefined, { timeout: 5000, polling: 250 }).catch(() => {});
-  await page.evaluate(() => window.scrollTo(0, 400));
+  // Re-issue the scroll on every poll instead of once, and force `instant`.
+  // Issuing it once and then WAITING cannot work: the previous probe
+  // (`scroll_down`) leaves one of the extension's own eased scroll animations
+  // in flight, and that animation keeps writing scrollY afterwards — so a
+  // single scrollTo is simply overwritten and no amount of waiting re-applies
+  // it. That is the intermittent §6k could not root-cause: it observed "five
+  // seconds after a SUCCESSFUL scrollTo(0, 400) the page reads 82" and read it
+  // as a slow scroll, when 82 is where `scroll_down` had left it. Reproduced on
+  // the first CI run (Linux, 2026-07-29), which is slower than a dev laptop and
+  // so loses the race more often.
   const scrolledTo400 = await page
-    .waitForFunction(() => window.scrollY >= 380, undefined, { timeout: 5000 })
+    .waitForFunction(() => {
+      if (window.scrollY < 380) window.scrollTo({ top: 400, behavior: 'instant' });
+      return window.scrollY >= 380;
+    }, undefined, { timeout: 8000, polling: 200 })
     .then(() => true, () => false);
   const yBefore = await page.evaluate(() => window.scrollY);
   const geom = await page.evaluate(() => ({
@@ -839,12 +851,25 @@ try {
     `back->${backTo} forward->${fwdTo} refresh cleared sentinel=${reloaded}`);
 } finally {
   for (const r of results) console.log(`${r.ok ? 'PASS' : 'FAIL'}  ${r.name}  ${r.detail}`);
+  // EXIT CODE, not just a printed tally. Without this the CI step wired up in
+  // §6k could never fail: the first CI run reported `success` while its own
+  // last line read "1 PROBE FAILURE(S)". A harness that always exits 0 is a
+  // harness someone has to read, which is precisely what putting it in CI was
+  // meant to stop — and it is §6g.8's "reported ALL PROBES PASS having run
+  // none" wearing different clothes. The other two harnesses already exit
+  // non-zero; this one had no `process.exit` at all.
+  //
+  // `process.exitCode` rather than `process.exit()` so the ctx/server cleanup
+  // below still runs.
+  const failures = results.filter((r) => !r.ok).length;
   if (results.length < EXPECTED) {
     console.log(`\nONLY ${results.length}/${EXPECTED} PROBES RAN — the run aborted, this is NOT a pass`);
+    process.exitCode = 1;
+  } else if (failures) {
+    console.log(`\n${failures} PROBE FAILURE(S)`);
+    process.exitCode = 1;
   } else {
-    console.log(results.every((r) => r.ok)
-      ? `\nALL ${EXPECTED} PROBES PASS`
-      : `\n${results.filter((r) => !r.ok).length} PROBE FAILURE(S)`);
+    console.log(`\nALL ${EXPECTED} PROBES PASS`);
   }
   await ctx.close();
   fixture.server.close();
