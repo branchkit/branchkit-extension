@@ -346,17 +346,39 @@ Two instances in one sitting is the argument for the guard over the fix: the
 shape of this bug is "a token kind one walk understands and the other doesn't,"
 and it will recur every time a token kind is added.
 
-**The guard covers two of the three projections.** The never-standalone weight
-policy (`never_standalone_words`) has the SAME blind spot and is deliberately
-left with it: an absent penalty under-biases, which is the safe direction, and
-today it is a genuine no-op — the palette's prefix index and hint_pair's
-`browser_alpha` are both leading lists elsewhere, so those words are unpenalized
-either way. Documented at the code rather than fixed, with the trigger named:
-close it before adding a dependent/macro command whose words cannot lead
-anywhere else. Stating this matters more than the green suite — "three
-projections of one derivation" now has teeth for two of them, and reading the
-guard as covering all three is exactly the wrong turn this section exists to
-prevent.
+### The third projection — and a wrong call, corrected
+
+First pass said the never-standalone weight policy had the same blind spot but
+that it was "a genuine no-op, because those words lead elsewhere." **That was
+wrong, and the way it was wrong is the interesting part:** the reasoning was
+free-context, but `never_standalone_words` calls `engine_eligible_commands` and
+is therefore computed PER CONTEXT. In palette mode the eligible set is only the
+two badge shapes — so a suffix word leads nothing, and must carry the penalty.
+It wasn't getting it.
+
+A test rather than an argument settled it: in a palette-mode fixture the
+penalty set came back EMPTY when it should have held the suffix word. Fixed by
+globbing the dependent skeleton, the same move the other two projections make.
+
+It had been invisible in production for one reason only — **Lever E defaults
+OFF**, so nothing consumes the policy today. Enabling the penalty would have
+exposed it, in precisely the narrow modal grammars the lever exists for. "It
+happens to be inert" and "it is correct" are not the same claim, and the first
+one is what the earlier note was really resting on.
+
+**What genuinely remains open: capture macros.** `<targets:hint_pair>+` yields
+a macro name, not a collection, so its inner words are still outside the policy.
+Left deliberately, and for a structural reason rather than a risk one: closing
+it needs the inner slots classified POSITIONALLY (a group's first inner slot
+leads iff the group does), and macros exist only in `token_alternatives` while
+that loop walks `cmd.pattern` — a restructure, not a glob. Verified harmless for
+the one live macro: `hint_pair`'s inner slots are `browser_alpha`, which the
+caret twin of the sealed activate puts in a LEADING slot inside the same
+caret-modal set, so those words are excluded either way. Trigger to close it: a
+macro whose inner words cannot lead anywhere in its own mode.
+
+So the guard covers two of three, and the third is now correct for dependent
+captures and honestly scoped for macros.
 
 ## Also in scope, downstream
 
