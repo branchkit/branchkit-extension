@@ -25,6 +25,7 @@ import {
 } from './label-pool';
 import { vi } from 'vitest';
 import { LETTERS_26 } from './words';
+import { markDocLive, markDocGone, _resetDocLivenessForTesting } from '../core/doc-liveness';
 
 // The pool builds from the fixed extension-owned letter alphabet, so claim/
 // release tokens are letter pairs. Derive the expected square-fill order from
@@ -688,5 +689,80 @@ describe('label-pool', () => {
       const clash = await confirmLabels(tab, 'docB', 5, [LP[0]]);
       expect(clash.rejected).toEqual([LP[0]]);
     });
+  });
+});
+
+describe('L3 reap — assignments whose document is gone', () => {
+  // notes/DESIGN_ASSIGNED_LABEL_RECLAIM.md. `releaseDocument` returns these
+  // normally; its only caller is the liveness Port's onDisconnect, which
+  // cannot fire in a service worker that was not running when the port died.
+  // Field evidence: two dead documents held 248 of 676 labels, unchanged
+  // across six minutes and 31 minutes after death.
+  const STALE = 16 * 60_000; // > ASSIGNMENT_STALE_MS
+
+  /** Fill the pool so the next claim must reclaim to succeed. */
+  async function exhaust(tabId: number, docId: string) {
+    const all = await claimLabels(tabId, docId, 0, POOL_SIZE);
+    await confirmLabels(tabId, docId, 0, all);
+    return all;
+  }
+
+  beforeEach(() => { _resetDocLivenessForTesting(); vi.useRealTimers(); });
+  afterEach(() => { vi.useRealTimers(); _resetDocLivenessForTesting(); });
+
+  it('reclaims a dead document\'s labels once the pool is exhausted', async () => {
+    const tabId = nextTabId();
+    await exhaust(tabId, 'dead');
+    markDocGone('dead');
+    vi.setSystemTime(Date.now() + STALE);
+
+    // `claimLabels` returns a FIXED-LENGTH array with '' for ungranted slots,
+    // so length proves nothing — count the ones actually handed out.
+    const got = (await claimLabels(tabId, 'live', 0, 5)).filter(Boolean);
+    expect(got).toHaveLength(5);
+  });
+
+  it('does NOT touch a document that still holds a live Port', async () => {
+    const tabId = nextTabId();
+    await exhaust(tabId, 'alive');
+    markDocLive('alive');
+    vi.setSystemTime(Date.now() + STALE);
+
+    // The whole pool belongs to a live document: better to hand out nothing
+    // than to steal the page the user is looking at.
+    const got = (await claimLabels(tabId, 'other', 0, 5)).filter(Boolean);
+    expect(got).toHaveLength(0);
+    const snap = await poolSnapshot(tabId);
+    expect(snap!.assigned_by_doc.alive).toBe(POOL_SIZE);
+  });
+
+  it('does NOT reap a portless document that is merely young', async () => {
+    const tabId = nextTabId();
+    await exhaust(tabId, 'young');
+    markDocGone('young');
+    // No clock advance: this is the window right after a worker restart, when
+    // the liveness set is empty and the live page has not re-registered yet.
+    const got = (await claimLabels(tabId, 'other', 0, 5)).filter(Boolean);
+    expect(got).toHaveLength(0);
+  });
+
+  it('reaps only the dead document, leaving a live sibling intact', async () => {
+    const tabId = nextTabId();
+    const half = Math.floor(POOL_SIZE / 2);
+    const deadLabels = await claimLabels(tabId, 'dead', 0, half);
+    await confirmLabels(tabId, 'dead', 0, deadLabels);
+    const liveLabels = await claimLabels(tabId, 'alive', 1, POOL_SIZE - half);
+    await confirmLabels(tabId, 'alive', 1, liveLabels);
+
+    markDocGone('dead');
+    markDocLive('alive');
+    vi.setSystemTime(Date.now() + STALE);
+
+    const got = (await claimLabels(tabId, 'third', 2, 5)).filter(Boolean);
+    expect(got).toHaveLength(5);
+    // Every granted label came from the dead document, none from the live one.
+    for (const l of got) expect(liveLabels).not.toContain(l);
+    const snap = await poolSnapshot(tabId);
+    expect(snap!.assigned_by_doc.alive).toBe(POOL_SIZE - half);
   });
 });

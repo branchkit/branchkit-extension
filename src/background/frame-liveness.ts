@@ -8,6 +8,7 @@
  */
 
 import type { MessageHandler } from '../core/message-router';
+import { markDocLive, markDocGone, isDocPortLive as isLive } from '../core/doc-liveness';
 import { releaseDocument } from '../labels/label-pool';
 import { clearCodewordMemory } from '../labels/codeword-memory';
 import { forwardHintsSessionEnd } from '../plugin/plugin-api';
@@ -39,7 +40,7 @@ const LIVENESS_PORT_NAME = 'frame-liveness';
 // silently-dead channel. SW restart wipes it with the rest of module state —
 // correct: after a restart nothing is tracked until CSs reconnect. Read by
 // LIVENESS_QUERY only; ratify as fix input or remove with layer 3.
-const livePortDocs = new Set<string>();
+
 
 /** Register the Port listener. Called once from background.ts boot. */
 export function initFrameLiveness(): void {
@@ -63,9 +64,9 @@ export function initFrameLiveness(): void {
   } catch {
     // Port may already be closing; harmless.
   }
-  livePortDocs.add(docId);
+  markDocLive(docId);
   port.onDisconnect.addListener(() => {
-    livePortDocs.delete(docId);
+    markDocGone(docId);
     // Doc-scoped, BOTH halves: this document frees only ITS labels and
     // ends only ITS grammar session — never a successor's at the same
     // (tab, frame) key (they share frame 0; they do not share a docId).
@@ -93,7 +94,7 @@ export function initFrameLiveness(): void {
 /** Read-only probe: does the SW hold a LIVE liveness Port for this doc?
  *  (LIVENESS_QUERY — the bfcache-port probe surface.) */
 export function isDocPortLive(docId: string): boolean {
-  return livePortDocs.has(docId);
+  return isLive(docId);
 }
 
 /**

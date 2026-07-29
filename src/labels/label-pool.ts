@@ -10,6 +10,7 @@
 
 import { LabelStack, LabelOwner } from '../types';
 import { LETTERS_26 } from './words';
+import { isDocPortLive } from '../core/doc-liveness';
 
 // Total addressable codewords per tab — the single source of truth for the
 // pool cap. All hints are two-word pairs drawn from the 26-letter alphabet,
@@ -185,6 +186,28 @@ function ensureReservedField(stack: LabelStack): void {
   for (const label of Object.keys(stack.reserved)) {
     if (!(label in stack.reservedAt)) stack.reservedAt[label] = Date.now();
   }
+  // Same lazy migration for assignments. Grandfathering to NOW rather than to
+  // 0 matters: a stack persisted before this field would otherwise present
+  // every live assignment as maximally stale and be reaped on the first
+  // exhausted grant.
+  if (!stack.assignedAt) stack.assignedAt = {};
+  for (const label of Object.keys(stack.assigned)) {
+    if (!(label in stack.assignedAt)) stack.assignedAt[label] = Date.now();
+  }
+}
+
+/** Stamp an assignment. Every write to `stack.assigned` goes through here so
+ *  the stamp cannot drift from the map it describes. */
+function assign(stack: LabelStack, label: string, owner: LabelOwner): void {
+  stack.assigned[label] = owner;
+  if (!stack.assignedAt) stack.assignedAt = {};
+  stack.assignedAt[label] = Date.now();
+}
+
+/** Drop an assignment and its stamp together. */
+function unassign(stack: LabelStack, label: string): void {
+  delete stack.assigned[label];
+  if (stack.assignedAt) delete stack.assignedAt[label];
 }
 
 /** A stack persisted by a pre-document-keying build has numeric owners.
@@ -208,6 +231,20 @@ function stackShapeCurrent(stack: LabelStack): boolean {
  * it and the holder's strip-and-reclaim recovery replaces it.
  */
 const RESERVATION_STALE_MS = 5 * 60_000;
+/**
+ * How old an assignment must be before a document with no live liveness Port
+ * is treated as dead and its labels reclaimed (L3, below).
+ *
+ * DELIBERATELY MUCH LONGER than the reservation TTL, and the reason is the
+ * worker restart. `isDocPortLive` is in-memory and empty for a moment after
+ * every restart, so for that window the LIVE page also looks portless; the age
+ * requirement is the only thing standing between this reap and the labels of
+ * the page the user is reading. Content scripts re-register through the
+ * SW-restart healer in well under a minute, so fifteen is generous by an order
+ * of magnitude — and being late to reclaim costs nothing, while being early
+ * costs the user their badges.
+ */
+const ASSIGNMENT_STALE_MS = 15 * 60_000;
 
 /**
  * Reserve `count` labels from a tab's pool for a specific frame. The result is
@@ -292,6 +329,38 @@ export async function claimLabels(
           k++;
         }
       }
+
+      // L3 reap (notes/DESIGN_ASSIGNED_LABEL_RECLAIM.md): still short, so go
+      // after ASSIGNMENTS whose document is gone.
+      //
+      // `releaseDocument` is supposed to return these, and it is correct — but
+      // its only caller is the liveness Port's `onDisconnect`, which cannot
+      // fire in a service worker that is not running. Chrome does not replay a
+      // disconnect for a port that died while the worker slept, so those labels
+      // are never released by anyone: field evidence had two dead documents
+      // holding 248 of 676 labels, unchanged across six minutes and several
+      // navigations, 31 minutes after death. L2 above only covers `reserved`,
+      // which is why the reserved half self-heals and the assigned half does
+      // not.
+      //
+      // BOTH conditions are required and neither is sufficient. "No live Port"
+      // alone would free the live page's labels for the moment after every
+      // worker restart, when the set is empty and nothing has re-registered
+      // yet. Age alone would free a document that is simply quiet.
+      if (k < needsFresh.length) {
+        const now = Date.now();
+        for (const [label, owner] of Object.entries(stack.assigned)) {
+          if (k >= needsFresh.length) break;
+          if (granted.has(label) || owner.d === docId) continue;
+          if (isDocPortLive(owner.d)) continue;
+          const at = stack.assignedAt?.[label];
+          if (at === undefined || now - at < ASSIGNMENT_STALE_MS) continue;
+          unassign(stack, label);
+          granted.add(label);
+          result[needsFresh[k]] = label;
+          k++;
+        }
+      }
     }
 
     if (granted.size > 0) {
@@ -360,13 +429,13 @@ export async function confirmLabels(
         // Stamp the CURRENT frameId — the prerender heal: the same document
         // confirming post-activation moves routing from the provisional
         // frame id to the real one.
-        stack.assigned[label] = { d: docId, f: frameId };
+        assign(stack, label, { d: docId, f: frameId });
         changed = true;
       } else if (stack.assigned[label]?.d === docId) {
         // Already ours — idempotent re-confirm; refresh routing if this
         // document's frame identity changed (prerender activation).
         if (stack.assigned[label].f !== frameId) {
-          stack.assigned[label] = { d: docId, f: frameId };
+          assign(stack, label, { d: docId, f: frameId });
           changed = true;
         }
       } else if (label in stack.reserved || label in stack.assigned) {
@@ -375,7 +444,7 @@ export async function confirmLabels(
         const idx = stack.free.indexOf(label);
         if (idx !== -1) {
           stack.free.splice(idx, 1);
-          stack.assigned[label] = { d: docId, f: frameId };
+          assign(stack, label, { d: docId, f: frameId });
           changed = true;
         } else {
           rejected.push(label); // unknown to the pool (stale alphabet etc.)
@@ -419,7 +488,7 @@ export async function releaseLabels(tabId: number, docId: string, labels: string
       // A label is in exactly one of assigned / reserved / free at a time;
       // check both owned states so release works pre- and post-confirm.
       if (stack.assigned[label]?.d === docId) {
-        delete stack.assigned[label];
+        unassign(stack, label);
         toReturn.push(label);
       } else if (stack.reserved[label]?.d === docId) {
         delete stack.reserved[label];
@@ -527,7 +596,7 @@ export async function releaseDocument(tabId: number, docId: string): Promise<voi
       if (owner.d === docId) toRelease.push(label);
     }
     for (const label of toRelease) {
-      delete stack.assigned[label];
+      unassign(stack, label);
     }
     // Reservoir-held labels for the dying document must also come back —
     // they were pre-allocated to its reservoir, no wrapper ever confirmed,

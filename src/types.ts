@@ -412,6 +412,17 @@ export interface LabelStack {
   reservedAt?: Record<string, number>;
   /** Wrapper-confirmed codewords mapped to their owner. */
   assigned: Record<string, LabelOwner>;
+  /**
+   * When each assignment was made (epoch ms). The `reservedAt` twin, and it
+   * exists for the same reason one TTL later: an assignment whose document
+   * died while the service worker was asleep is never released, because
+   * `releaseDocument` only ever runs from a liveness-Port `onDisconnect` that
+   * cannot fire in a worker that is not running. Without a stamp there is no
+   * way to tell that assignment from the live page's.
+   * See notes/DESIGN_ASSIGNED_LABEL_RECLAIM.md. Lazily migrated like
+   * `reservedAt`: missing stamps grandfather to load time.
+   */
+  assignedAt?: Record<string, number>;
 }
 
 // --- Grammar format matching browser plugin Go types ---
