@@ -36,9 +36,13 @@ export interface VoicePattern {
    * Spoken slot sequence: space-separated literal words plus `{number}` /
    * `{text}` captures (e.g. "scroll down", "scroll down {number}", "find {text}").
    * `{hint}` is the compound hint codeword (prefix + suffix words); `{hint+}`
-   * is one-or-more of them, delivered as an ordered target list. The browser
-   * plugin expands both into its capture shapes and attaches the hint context
-   * gating, so the extension never names collections or platform tags.
+   * is one-or-more of them, delivered as an ordered target list. `{palette}` is
+   * a command-palette row badge. The browser plugin expands all three into its
+   * capture shapes and attaches the context gating, so the extension never
+   * names collections or platform tags — and for `{palette}` the shape depends
+   * on badge length (a one-word badge is a flat lookup, a two-word badge a
+   * prefix + dependent suffix pair, which is what gives it mid-badge dimming),
+   * a distinction that belongs entirely to the plugin.
    */
   pattern: string;
   /**
@@ -672,15 +676,20 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     description: 'Open a bookmark in this tab — search by title, site, or folder. “blank”/“stash” + badge opens a new tab instead.',
     voice: [{ pattern: 'palette bookmarks' }] },
   // Palette voice selection (voice half of Layer 2): every palette row shows
-  // an alphabet codeword badge; the spoken codeword resolves to the row_id
-  // through the browser_palette collection (as_named_entities, value=row_id),
-  // and the background maps row_id back to the row's dispatch. Gated on the
-  // plugin's exclusive palette tag via voiceContext — while the palette is
-  // open, page-hint captures are suppressed, so these badges can reuse the
-  // hint alphabet without ambiguity.
+  // an alphabet codeword badge; `{palette}` is the plugin-owned slot for it,
+  // and the background maps the resolved row_id back to the row's dispatch.
+  // Gated on the plugin's exclusive palette tag via voiceContext — while the
+  // palette is open, page-hint captures are suppressed, so these badges can
+  // reuse the hint alphabet without ambiguity.
+  //
+  // The slot used to be a bare `{browser_palette}` capture with the row_id
+  // param spelled here. That named the plugin's collection from the extension
+  // AND pinned the badge to a single capture step, which is why speaking the
+  // first word of a two-word badge did nothing at all — no dim, no HUD narrow,
+  // no activation on pause. See notes/DESIGN_CROSS_REALM_CODEWORD_HOLDERS.md.
   { id: 'palette_select', label: 'Select palette row', group: 'Palette', mappable: false, params: [],
     description: 'Activate a palette row by speaking its codeword badge.',
-    voice: [{ pattern: '{browser_palette}', params: { row_id: '{browser_palette}' } }],
+    voice: [{ pattern: '{palette}' }],
     voiceContext: 'palette' },
   // blank / stash + badge — the same verbs as the hint twins
   // (activate_hint_newtab/_background), for palette rows: bare selection
@@ -689,11 +698,11 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // and dispatch normally.
   { id: 'palette_select_newtab', label: 'Open palette row in new tab', group: 'Palette', mappable: false, params: [],
     description: 'Open a palette bookmark in a new focused tab (“blank” + its badge).',
-    voice: [{ pattern: 'blank {browser_palette}', params: { row_id: '{browser_palette}' } }],
+    voice: [{ pattern: 'blank {palette}' }],
     voiceContext: 'palette' },
   { id: 'palette_select_background', label: 'Open palette row in background tab', group: 'Palette', mappable: false, params: [],
     description: 'Open a palette bookmark in a background tab — the page you are on keeps focus (“stash” + its badge).',
-    voice: [{ pattern: 'stash {browser_palette}', params: { row_id: '{browser_palette}' } }],
+    voice: [{ pattern: 'stash {palette}' }],
     voiceContext: 'palette' },
   // Same word as hint-hide, disambiguated by context: palette open = only
   // this one is eligible (exclusive tag); palette closed = only the hint one.

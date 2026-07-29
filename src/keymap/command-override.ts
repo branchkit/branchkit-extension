@@ -21,13 +21,13 @@ function innerName(token: string): string {
 
 /**
  * An "open" capture is one the recognizer can't statically enumerate, so it
- * must be the last word: free text (`{text}`), a repeat (`{…+}`), or the hint
- * codeword (`{hint}` expands to a dependent capture). Named list captures
- * (`{number}`, `{tab}`) are closed and may appear anywhere.
+ * must be the last word: free text (`{text}`), a repeat (`{…+}`), or a badge
+ * codeword (`{hint}` and `{palette}` both expand to a dependent capture).
+ * Named list captures (`{number}`, `{tab}`) are closed and may appear anywhere.
  */
 function isOpen(token: string): boolean {
   const inner = innerName(token);
-  return inner === 'text' || inner === 'hint' || inner.endsWith('+');
+  return inner === 'text' || inner === 'hint' || inner === 'palette' || inner.endsWith('+');
 }
 
 /**

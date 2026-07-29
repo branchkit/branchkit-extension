@@ -1,9 +1,10 @@
 # Design: Codeword holders across a realm boundary
 
-**Status:** Proposal, 2026-07-29. Extends `DESIGN_MODE_STACK_AND_CODEWORD_HOLDERS.md`
-(Primitive 1) with the participant it could not reach. Nothing here is landed.
-The badge target seam (`DESIGN_BADGE_TARGET_SEAM.md`) and the two badge
-lifecycles stand unchanged; this note adds no third one.
+**Status:** Landed 2026-07-29 (steps 1–5; step 6 deliberately deferred).
+Extends `DESIGN_MODE_STACK_AND_CODEWORD_HOLDERS.md` (Primitive 1) with the
+participant it could not reach. The badge target seam
+(`DESIGN_BADGE_TARGET_SEAM.md`) and the two badge lifecycles stand unchanged;
+this note adds no third one.
 
 ## Problem
 
@@ -280,6 +281,43 @@ per-prefix collections) · `plugin.json` (declare `browser_palette_prefix` and
 Three-word keys (>650 rows) stay atomic and unnarrowed — documented, and
 vanishingly rare.
 
+### As built (2026-07-29)
+
+Four places, as predicted, plus one the plan missed.
+
+The pattern became a plugin-owned SLOT — `{palette}`, the `{hint}` precedent —
+rather than the extension continuing to name `{browser_palette}`. It has to:
+the expansion is now *two* commands and which one can match depends on badge
+length, a fact the extension has no business encoding. `contribute.go` gained
+`buildContributedPaletteCommands`, which emits the atomic variant
+(`<browser_palette>`) and the pair variant
+(`<prefix:browser_palette_prefix> <suffix:browser_palette_${prefix.codeword}>`)
+side by side. Both are pushed once; the projection decides which is live,
+because a pair-badged open leaves the flat collection empty and an
+atomic-badged one leaves the prefix index empty. No `DisplaySource` was needed
+after all — a dependent capture already resolves to its per-prefix collection
+in `get_next_required_token`, and unlike hints the palette's match surface and
+its display surface are the same collection.
+
+**The miss: `narrow_to` did not know about dependent captures.**
+`collect_pattern_words` (`command_dispatch.rs`) expanded `<list>` slots through
+the entity cache but dropped any name containing `${` on the floor — nothing to
+resolve against at grammar-build time. Harmless everywhere it had been used
+before, because no exclusive-gated command carried a dependent capture: hints
+are non-exclusive, and the caret twin uses the sealed `browser_alpha` pair. The
+palette is both exclusive and dependent, and in an exclusive mode `narrow_to`
+IS the engine's word list — so every suffix word would have been undecodable in
+the one context that gates it. `grammar_dag`'s `dependent_capture_alphabet`
+already globbed the template skeleton for exactly this reason; the fix is the
+same glob in the word-list projection, which is what "three projections of one
+derivation" was supposed to guarantee. Pinned by
+`narrowed_vocab_globs_dependent_capture_suffixes`.
+
+Worth generalising: **the two projections agreeing is not automatic, and a
+disagreement is silent.** A word missing from `narrow_to` doesn't error, it
+just never decodes, and only inside the mode. The next surface with an
+exclusive gate over a templated collection would have hit the same wall.
+
 ## Also in scope, downstream
 
 `browser_palette` declares no `display` block, so HUD subtitles auto-derive from
@@ -304,17 +342,21 @@ prerequisite, and should not be bundled into the same wave.
    suite and joins the registration meta-test. The exclusive claim is now a
    registry fact rather than an ambient assumption.
 4. **HUD `title` field.** ✅ LANDED (browser `d621b08`, ext `e69ea2f`).
-5. **Prefix-shaped palette projection.** ⬅ THE REMAINING PIECE. Until this
-   lands, 1–3 are a transport with nothing on it: `{browser_palette}` is a
-   single capture, so no progress is ever emitted for the palette and
-   `narrow()` is never called. See the CORRECTION above. Wants its own wave —
-   it changes the matcher-facing shape of a selection flow that works today.
+5. **Prefix-shaped palette projection.** ✅ LANDED (browser + ext + actuator,
+   2026-07-29). `{palette}` slot → atomic + pair commands; pair badges project
+   into `browser_palette_prefix` + `browser_palette_<prefix>`; the flat
+   collection keeps atomic keys only. Carried one actuator fix that was not in
+   the plan — see "As built" above. This is the step that lights up 1–4.
 6. **Fold `POST /palette` into the grammar batch.** Separate wave, unchanged.
 
-Steps 1–4 are green and verified by unit tests, the conformance suite, and the
-exhaustiveness lints. **None of them is user-visible yet.** The visible fix is
-step 5, and honest reporting of that gap matters more than the green suites:
-registration proves the palette can be narrowed, not that it is.
+Steps 1–4 were green on unit tests, the conformance suite, and the
+exhaustiveness lints while being **invisible to the user** — registration
+proves the palette *can* be narrowed, not that it is. Step 5 is what supplies
+the progress event those three were waiting for. Its own verification is
+correspondingly split: the projection and command shapes are unit-tested and
+the matcher's resolve preview confirms the two-step shape, but the dim itself
+is a screen the suites can't see, so it stays a field claim until the user
+speaks a pair.
 
 ## Risks
 
