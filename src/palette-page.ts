@@ -537,7 +537,9 @@ function assignAndPublish(alphabet: string[]): void {
     // Tabs: cw is a mark letter → spoken is its overlay words (empty when no
     // alphabet). Full palette: cw is already the spoken word.
     const spoken = scope === 'tabs' ? markToSpokenWords(cw, alphabet) : cw;
-    if (spoken) entries.push({ spoken, row_id: item.id });
+    // `title` is display-only — it gives the Discovery HUD a human subtitle
+    // instead of the opaque row_id it would otherwise derive.
+    if (spoken) entries.push({ spoken, title: item.title, row_id: item.id });
     rows.push({ row_id: item.id, dispatch: item.dispatch });
   }
   // No spoken entries (voice off) → don't open a voice session / exclusive tag.

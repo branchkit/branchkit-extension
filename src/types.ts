@@ -312,9 +312,16 @@ export type Message =
   // is unnecessary too.
   | { type: 'PALETTE_BOOTSTRAP' };
 
-/** One spoken palette codeword → row binding, published to the plugin. */
+/** One spoken palette codeword → row binding, published to the plugin.
+ *
+ * `title` is the row's human label. It exists only so display surfaces have
+ * something to render: the Discovery HUD auto-derives its subtitle from the
+ * collection's value_field, which is `row_id` — an internal handle ("tab:12",
+ * "cmd:pin_tab"). The manifest declares title as the secondary field so it
+ * wins that slot. */
 export interface PaletteVoiceEntry {
   spoken: string;
+  title: string;
   row_id: string;
 }
 
