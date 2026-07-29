@@ -25,6 +25,7 @@
 import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
 import { labelReservoir } from '../labels/label-reservoir';
 import { geometryInBand } from '../core/layout-cache';
+import { recordCpu } from '../debug/perf-counters';
 
 // Wide rootMargin to match Rango's lazy-construction model: catch elements
 // while they're still ~5 viewport-line-rows away, so the per-badge work
@@ -217,8 +218,7 @@ export class IntersectionTracker {
       activity = true;
     }
     if (activity) this.events.onBandActivity();
-    const rec = (globalThis as { __branchkitRecordCpu?: (label: string, ms: number) => void }).__branchkitRecordCpu;
-    if (rec) rec('intersection:handleEntries', performance.now() - __t0);
+    recordCpu('intersection:handleEntries', performance.now() - __t0);
   };
 
   /**

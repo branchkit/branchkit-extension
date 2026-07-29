@@ -9,7 +9,7 @@
  * from background/state and the inject helpers from background/injection.
  */
 
-import type { MessageHandler } from './message-router';
+import type { MessageHandler } from '../core/message-router';
 import { Message, ResolveHintResponse } from '../types';
 import { getFrameForLabel } from '../labels/label-pool';
 import { spokenCodewordToToken, spokenWordToLetter } from '../labels/words';

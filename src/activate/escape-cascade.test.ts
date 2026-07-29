@@ -29,15 +29,35 @@ vi.mock('../scan/find', () => ({
 
 const hintPeels: string[] = [];
 const videoExits: number[] = [];
-vi.mock('../core/singletons', () => ({
-  keyHandler: {
-    escapeHintMode: () => { hintPeels.push('hint_mode'); },
-    exitVideoMode: () => { videoExits.push(1); },
-  },
-}));
+// setEscapeHook is called at escape-cascade's IMPORT now, so the fake has to
+// answer it — and capturing what it was handed is what lets the registration
+// itself be asserted below rather than merely assumed.
+//
+// The capture lives INSIDE the factory on purpose. ESM hoists the
+// `import './escape-cascade'` below above every top-level let/const in this
+// file, so an outer binding written at import time is a TDZ error (it was —
+// "Cannot access 'installedEscapeHook' before initialization"). The sibling
+// arrays get away with being outer because they are only written when a test
+// calls into them, never at import.
+vi.mock('../core/singletons', () => {
+  let escapeHook: (() => string) | null = null;
+  return {
+    keyHandler: {
+      escapeHintMode: () => { hintPeels.push('hint_mode'); },
+      exitVideoMode: () => { videoExits.push(1); },
+      setEscapeHook: (cb: () => string) => { escapeHook = cb; },
+      _installedEscapeHook: () => escapeHook,
+    },
+  };
+});
 
 import { runEscapeCascade } from './escape-cascade';
+import { keyHandler } from '../core/singletons';
 import { modes } from '../core/modes';
+
+/** What escape-cascade handed setEscapeHook at import (see the fake above). */
+const installedEscapeHook = (): (() => string) | null =>
+  (keyHandler as unknown as { _installedEscapeHook(): (() => string) | null })._installedEscapeHook();
 import { setInnerTransientProbe, clearInnerTransientProbes } from '../core/mode-stack';
 
 // Hint's typed prefix, as the probe models it: peels once, then the mode has
@@ -63,6 +83,29 @@ beforeEach(() => {
   videoExits.length = 0;
 });
 afterEach(() => vi.clearAllMocks());
+
+// The wiring, not the derivation. This used to be a content.ts line, and while
+// it was, nothing could see it: escape-key-path.test.ts must REPLACE the hook
+// with a recorder to read the peeled layer back, so it is green whether or not
+// anything registers one in production. Here the fake singleton captures the
+// registration instead of overwriting it, which is the only place the two
+// implementations differ.
+describe('the Escape key wiring belongs to this module', () => {
+  it('registers a hook at import that runs this cascade, naming the key input', () => {
+    const hook = installedEscapeHook();
+    expect(hook).toBeTypeOf('function');
+
+    modes.push('video');
+    expect(hook!()).toBe('video');   // the real cascade ran, not a stub
+    expect(videoExits).toEqual([1]); // and its exit effect fired
+
+    // The reason string is the hook's, and it is what tells a peeled layer
+    // which input unwound it — 'key_escape' vs the spoken 'voice_escape'.
+    modes.push('range_pick');
+    hook!();
+    expect(cancelled).toEqual(['key_escape']);
+  });
+});
 
 describe('escape cascade (derived from the mode stack)', () => {
   it('peels nothing and says so when nothing is open', () => {

@@ -68,6 +68,12 @@ Hypothesis: MV3 service workers idle-terminate and re-read their JS from disk on
 Candidate fixes, smallest first (now justified — the mid-write/mixed-generation window is the only plausible trigger on this timeline):
 
 1. **Atomic dist swap** — `scripts/build.mjs` writes to `dist/.chrome.tmp` and renames into place, closing the mid-write window.
+
+   **Follow-up (2026-07-28): the swap shrinks the window, it does not remove the hazard, and one mitigation can be switched off.** The swap is `rmSync(dist/<target>)` + `renameSync(staging → dist/<target>)` — for a few milliseconds the loaded extension's directory does not exist, and afterwards every file it holds open has a new inode. Observed: two consecutive `build.mjs` runs under a Firefox with the extension temporarily installed, and Firefox went down (no crash report written, consistent with the extension being torn down rather than a process fault). The MV3 half of this is documented above; the Gecko half was not.
+
+   The load-bearing detail is that **`BRANCHKIT_NO_DEV_RELOAD=1` suppresses the post-swap reload ping but not the destructive swap**. That flag exists so an agent or a second checkout does not reload the developer's browsers — but the ping is the half that closes the version-skew window, so using the flag exactly as intended leaves the *more* damaging behaviour and removes the recovery. Its contract is incomplete: it should either also decline to swap a dist a browser currently has loaded, or be renamed to say what it really does.
+
+   Working rule until that is settled: **do not run `build.mjs` directly while a browser has the extension loaded.** Go through the running `dev.mjs` watcher (`just ext-dev`), which rebuilds and pings, or stop the browser first.
 2. **Build↔reload coupling** — bare `npm run build` pings the dev-reload websocket (port 35729) when a watcher is listening, so "files changed" and "extension reloaded" can't be separate events. (The version-skew window — SW respawn between an out-of-band build and any reload — only closes this way; atomicity alone doesn't.)
 
 If the banner shows something else entirely, revisit — don't ship fixes for an unconfirmed mechanism.

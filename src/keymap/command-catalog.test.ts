@@ -11,7 +11,7 @@ import {
 // entry (or vice-versa) fails this test, prompting the catalog update.
 const REGISTERED_ACTIONS = [
   'toggle_hints', 'hint_mode',
-  'activate_hint', 'yank_hint', 'focus_hint', 'copytext_hint', 'hover_hint', 'caret_hint',
+  'yank_hint', 'focus_hint', 'copytext_hint', 'hover_hint', 'caret_hint',
   'scroll_down', 'scroll_up', 'scroll_half_down', 'scroll_half_up',
   'scroll_full_down', 'scroll_full_up',
   'scroll_top', 'scroll_bottom', 'scroll_left', 'scroll_right',
@@ -61,7 +61,7 @@ const VOICE_ONLY_CONTENT = [
 // argument, but it now opens the phrase box when dispatched without one, so a
 // key can bind it like any other command (gs).
 const NOT_MAPPABLE = new Set([
-  'activate_hint', 'find_immediate', 'scroll_to_element', 'scroll',
+  'find_immediate', 'scroll_to_element', 'scroll',
   ...VOICE_ONLY_BACKGROUND,
   ...VOICE_ONLY_CONTENT,
 ]);

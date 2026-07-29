@@ -24,7 +24,7 @@ import {
 } from '../labels/label-pool';
 import { rememberCodewords, recallCodewords } from '../labels/codeword-memory';
 import { forwardDebugLog } from '../plugin/plugin-api';
-import type { MessageHandler, MessageSender } from './message-router';
+import type { MessageHandler, MessageSender } from '../core/message-router';
 
 /** Tab + frame off the sender, or null when this isn't a content script. */
 function frameOf(sender: MessageSender): { tabId: number; frameId: number } | null {

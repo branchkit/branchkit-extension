@@ -67,3 +67,64 @@ describe('ActionDispatcher', () => {
     warn.mockRestore();
   });
 });
+
+// --- Registration contract (entry-point topology phase 3b follow-up) --------
+//
+// `register` became a duplicate-THROW rather than a silent `Map.set` when the
+// 44 command bindings left content.ts for eleven feature modules. While they
+// all sat in one contiguous block a collision was visible on sight; dispersed,
+// a silent overwrite resolves by whichever registrar the entry point calls
+// last — a property nobody edits deliberately.
+describe('ActionDispatcher registration', () => {
+  it('throws when a second module claims an action already bound', () => {
+    const d = new ActionDispatcher();
+    d.register('scroll_down', () => {});
+    expect(() => d.register('scroll_down', () => {}))
+      .toThrow(/duplicate handler for action 'scroll_down'/);
+  });
+
+  it('keeps the FIRST handler when a duplicate is refused', () => {
+    const d = new ActionDispatcher();
+    const calls: string[] = [];
+    d.register('find_next', () => { calls.push('first'); });
+    try { d.register('find_next', () => { calls.push('second'); }); } catch { /* expected */ }
+    d.dispatch('find_next');
+    // Last-write-wins was the old behaviour and is the bug being closed: the
+    // shadowed command was dead with every lint, tsc and test green.
+    expect(calls).toEqual(['first']);
+  });
+
+  it('re-registering the IDENTICAL function is a no-op, so composing twice is safe', () => {
+    const d = new ActionDispatcher();
+    const handler = () => {};
+    d.register('same', handler);
+    expect(() => d.register('same', handler)).not.toThrow();
+    expect(d.registeredActions()).toEqual(['same']);
+  });
+
+  it('does not confuse two actions that merely share one handler', () => {
+    const d = new ActionDispatcher();
+    const shared = () => {};
+    d.register('a_one', shared);
+    expect(() => d.register('a_two', shared)).not.toThrow();
+    expect(d.registeredActions()).toEqual(['a_one', 'a_two']);
+  });
+
+  it('reports every bound id, sorted', () => {
+    const d = new ActionDispatcher();
+    d.register('zoom_in', () => {});
+    d.register('find_open', () => {});
+    expect(d.registeredActions()).toEqual(['find_open', 'zoom_in']);
+  });
+
+  it('the registrars are NOT idempotent, which is what the test reset is for', () => {
+    const d = new ActionDispatcher();
+    // A registrar builds a fresh closure per call, so identity never matches.
+    const registrar = () => { d.register('scroll_up', () => {}); };
+    registrar();
+    expect(() => registrar()).toThrow(/duplicate handler/);
+    d._resetForTesting();
+    expect(d.registeredActions()).toEqual([]);
+    expect(() => registrar()).not.toThrow();
+  });
+});

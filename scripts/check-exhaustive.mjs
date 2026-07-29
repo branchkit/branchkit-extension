@@ -22,14 +22,27 @@
  *      to the holder registry (heldAnywhere/allHeld). Pins are exact and
  *      ratchet both ways, like monolith-ceilings.
  *   D. Every action the platform can dispatch at the extension has a
- *      handler: the catalog's voiced command ids and the browser plugin's
- *      own dispatch sites (mode-mirror forwarders, plugin-initiated events)
- *      must appear in the background's intercepts or content's dispatch
- *      routes. The C4b field bug (spoken "video" matched, dispatched,
- *      arrived — and dropped silently off the end of the else-if chain) is
- *      this check's reason to exist. The plugin half needs the workspace
- *      sibling ../plugins/browser and SKIPs loudly when absent (extension
- *      CI runs standalone; the workspace dev loop and app CI have it).
+ *      handler. THREE demand sources, because two was a hole: the catalog's
+ *      voiced command ids; the browser plugin's own dispatch sites
+ *      (mode-mirror forwarders, plugin-initiated events); and the
+ *      extension's OWN dispatches — BRANCHKIT_ACTION messages the SW builds
+ *      with a literal id, which belong to neither of the other two and so
+ *      were never asked about. `rescan` was live in that gap: deleting its
+ *      arm passed everything. All must appear in the background's intercepts
+ *      or content's dispatch routes. The C4b field bug (spoken "video"
+ *      matched, dispatched, arrived — and dropped silently off the end of
+ *      the else-if chain) is this check's reason to exist. The plugin half
+ *      needs the workspace sibling ../plugins/browser and SKIPs loudly when
+ *      absent (extension CI runs standalone; the workspace dev loop and app
+ *      CI have it).
+ *
+ *      The supply side reads `action === '…'` file-wide, which is dumb on
+ *      purpose and therefore over-matches: any comparison on a variable
+ *      NAMED `action` vouches for that id. Two shadows were found and closed
+ *      by renaming rather than by teaching the regex to parse — the keyboard
+ *      hint verbs in content.ts (`hintAction` now) and the SW's broadcast
+ *      decision (`BROADCAST_ACTIONS` now). Keep new non-route comparisons
+ *      off that shape; it is cheaper than a smarter parser.
  *   E. Every exported SW message-handler map is registered into the router,
  *      the onMessage listener is the router itself, and no two maps claim the
  *      same message type. An unregistered map drops its types exactly as
@@ -37,6 +50,13 @@
  *      registration, which 479c09f made survivable but not visible — nothing
  *      composes the real maps, so only a static check sees it
  *      (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md).
+ *   H. The third direction D and D2 do not run: given a CATALOG entry, can
+ *      anything dispatch it at all? `activate_hint` answered no from the
+ *      scaffold commit to 2026-07-28 and was registered in content.ts the whole
+ *      time. D asks only about voiced ids, D2 only about passthrough ids, and
+ *      the catalog's own hand-mirrored REGISTERED_ACTIONS list only asks
+ *      whether the catalog and the registrations agree — which they did, both
+ *      being dead.
  *
  * Run: node scripts/check-exhaustive.mjs   (wired as a CI step)
  */
@@ -47,10 +67,76 @@ import { dirname, join, relative } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 let failed = false;
-const fail = (msg) => { failed = true; console.error(`FAIL: ${msg}`); };
+let failCount = 0;
+const fail = (msg) => { failed = true; failCount++; console.error(`FAIL: ${msg}`); };
 const ok = (msg) => console.log(`ok: ${msg}`);
 
+/**
+ * Local pass/fail for ONE lint block: `const clean = section(); … if (clean())`.
+ *
+ * Every block used to gate its `ok` on the process-global `failed`, which is
+ * monotonic — so a failure in ANY earlier lint deleted a later one's verdict
+ * even though it passed. A missing `ok:` line reads as "that check did not
+ * run", which is the ambiguity the ok/FAIL pairing exists to remove; observed
+ * for real when an unrelated catalog failure swallowed lint E's line whole.
+ */
+const section = () => {
+  const before = failCount;
+  return () => failCount === before;
+};
+
 const read = (rel) => readFileSync(join(root, rel), 'utf8');
+
+/**
+ * Blank out string literals and comments, preserving LENGTH and NEWLINES.
+ *
+ * Every lint here reads source with a deliberately dumb regex, and four
+ * separate defects traced to the same root: the regex also read the source's
+ * own prose. A `}` inside `keyHint: '}'` ended a catalog entry four lines
+ * early and silently dropped it from lint D's demand set; `description: '…
+ * by voice: …'` granted lint H's reachability to an entry nothing could
+ * dispatch; a comment mentioning `registerMessageHandlers({` failed lint E
+ * against text that is not code. Masking first keeps every regex as dumb as
+ * it was and makes all of them read CODE.
+ *
+ * Offsets are preserved so a masked index is valid in the original, and
+ * newlines so `^`-anchored and indentation-sensitive patterns still work.
+ *
+ * BLIND SPOT, stated rather than left to be found: a regex literal containing
+ * `//` (e.g. `/https:\/\//`) would start a comment here. Guarded only by not
+ * treating a backslash-escaped slash as a comment opener, which covers the
+ * escaped form this codebase actually writes. A bare `//` inside an unescaped
+ * character class would still mis-mask — no file linted here has one, checked.
+ */
+function maskNonCode(src) {
+  const out = src.split('');
+  const blank = (from, to) => {
+    for (let i = from; i < to && i < out.length; i++) if (out[i] !== '\n') out[i] = ' ';
+  };
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (c === '"' || c === "'" || c === '`') {
+      let j = i + 1;
+      while (j < src.length && src[j] !== c) j += src[j] === '\\' ? 2 : 1;
+      blank(i + 1, j);
+      i = j;
+    } else if (c === '/' && src[i + 1] === '/' && src[i - 1] !== '\\') {
+      let j = src.indexOf('\n', i);
+      if (j === -1) j = src.length;
+      blank(i, j);
+      i = j - 1;
+    } else if (c === '/' && src[i + 1] === '*') {
+      const j = src.indexOf('*/', i + 2);
+      const end = j === -1 ? src.length : j + 2;
+      blank(i, end);
+      i = end - 1;
+    }
+  }
+  return out.join('');
+}
+
+/** Source with its prose masked out — what a dumb regex should read. */
+const readCode = (rel) => maskNonCode(read(rel));
 
 /** Every non-test .ts under src/, as repo-relative paths. */
 function srcFiles() {
@@ -68,6 +154,7 @@ function srcFiles() {
 
 // --- A. ModeSpec table: union covered, null mirrors carry their reason ---
 {
+  const clean = section();
   const src = read('src/core/mode-stack.ts');
   const unionMatch = src.match(/export type ModeId =([^;]+);/);
   const union = [...(unionMatch?.[1] ?? '').matchAll(/'([a-z_]+)'/g)].map((m) => m[1]);
@@ -103,11 +190,12 @@ function srcFiles() {
       fail(`ModeSpec '${s.id}' has mirror: null with no recorded reason — write the DECISION comment in the entry`);
     }
   }
-  if (!failed) ok(`mode specs: ${specIds.length} entries cover the ModeId union; null mirrors carry reasons`);
+  if (clean()) ok(`mode specs: ${specIds.length} entries cover the ModeId union; null mirrors carry reasons`);
 }
 
 // --- B. Holder priorities: declared ranks, unique, strictly ordered ---
 {
+  const clean = section();
   const reg = read('src/labels/holder-registry.ts');
   const rank = (name) => Number(reg.match(new RegExp(`export const ${name} = (\\d+)`))?.[1]);
   const excl = rank('EXCLUSIVE_OVERLAY_PRIORITY');
@@ -137,11 +225,12 @@ function srcFiles() {
       }
     }
   }
-  if (!failed) ok(`holder priorities: ranks ${excl}>${add}>${amb}; ${sites} priority sites all use declared ranks`);
+  if (clean()) ok(`holder priorities: ranks ${excl}>${add}>${amb}; ${sites} priority sites all use declared ranks`);
 }
 
 // --- C. store.all iteration pinned per file ---
 {
+  const clean = section();
   // The sanctioned modules and their exact site counts at pin time
   // (2026-07-26, Wave 4 D2). Over → a new sweep needs a visible raise here
   // (or belongs to the holder registry: heldAnywhere/allHeld/reconcileAll).
@@ -156,10 +245,46 @@ function srcFiles() {
     // 25 -> 24 (2026-07-27): the store holder's `reposition` delegate deleted
     // with the dead hook — badge POSITION is the reconcile positioner's
     // registry, which both hint kinds already join.
-    'src/content.ts': 24,
-    'src/render/badge-visibility.ts': 4,
+    // 24 -> 22 (2026-07-27): republishAllGrammar moved to labels/label-sync.ts
+    // (entry-point seam inversion, phase 2 STATEFUL). The sweep did not grow or
+    // shrink — it changed file, so this lower and label-sync's raise below are
+    // one move and must be read together.
+    // 22 -> 20 (2026-07-28): buildPerfSnapshot's store walk and its
+    // `store.all.length` went to debug/perf-snapshot.ts with the rest of the
+    // perf block (entry-point topology phase 4). Same two sites, new file —
+    // this lower and perf-snapshot's pin below are one move.
+    // 20 -> 18 (2026-07-28): the two `store.all.length` hint counts in
+    // GET_PAGE_STATUS / SET_BADGES_VISIBLE went to badge-visibility.ts with
+    // those handlers (entry-point topology phase 3a). This lower and
+    // badge-visibility's raise are one move.
+    // 18 -> 17 (2026-07-28): toggle_hints' phrase snapshot went to
+    // activate/voice-dispatch.ts with the rest of the BRANCHKIT_ACTION arms
+    // that touch no lifecycle glue (entry-point topology §6i). This lower and
+    // voice-dispatch's pin below are one move.
+    'src/content.ts': 17,
+    // 4 -> 6 (2026-07-28): the popup's two hint counts, arrived from
+    // content.ts. Not a new membership question — the popup asks "how many
+    // hints does this page have", which is the same total anyBadgesShowing
+    // already reads the store for, one line above each of them.
+    'src/render/badge-visibility.ts': 6,
     'src/plugin/resolve.ts': 1,
-    'src/labels/label-sync.ts': 1,
+    // New 2026-07-28: the voice `toggle_hints` arm's phrase snapshot —
+    // `capturePhraseSnapshot(store.all, …)` on the SHOW direction, so a
+    // codeword spoken in the same breath resolves against the badges that just
+    // painted. Arrived from content.ts unchanged. Not a membership question:
+    // the snapshot is a photograph of every wrapper at paint time, which is
+    // what makes it the tier that survives store churn during the utterance,
+    // and routing it through the holder registry would answer a different
+    // question (who owns a codeword NOW).
+    'src/activate/voice-dispatch.ts': 1,
+    // 1 -> 3 (2026-07-27): republishAllGrammar's full re-push arrived from
+    // content.ts — the loop over live wrappers plus the count it logs. Not a
+    // new membership question: it is the same sweep content.ts ran, now beside
+    // the session rotation and the put queue it exists to feed. It does NOT
+    // route through the holder registry deliberately — holders outside the
+    // store re-publish off the is_final chokepoint in postBatch instead, which
+    // also covers the plain-rescan path this function never reaches.
+    'src/labels/label-sync.ts': 3,
     // 6 → 7 (2026-07-27): StoreHolder.painted, a read of "is any of my paint on
     // screen". It is what stops the store answering "that prefix is mine" while
     // a find session or a pick owns the screen — the read that keeps one
@@ -182,6 +307,10 @@ function srcFiles() {
     'src/rules/rule-apply.ts': 5,
     'src/debug/debug-snapshot.ts': 5,
     'src/debug/perf-report.ts': 9,
+    // New 2026-07-28: the perf-snapshot integrator's one store walk (limbo /
+    // sentinel-disconnected / in-band split) plus the wrapperCount read.
+    // Arrived from content.ts unchanged — see the content.ts note above.
+    'src/debug/perf-snapshot.ts': 2,
     'src/debug/churn-log.ts': 1,
     'src/debug/pool-audit.ts': 1,
   };
@@ -208,13 +337,29 @@ function srcFiles() {
         (count === 0 ? ' (remove the entry)' : ''));
     }
   }
-  if (!failed) ok(`store.all: ${total} sites across ${Object.keys(PINS).length} sanctioned modules, all at pin`);
+  if (clean()) ok(`store.all: ${total} sites across ${Object.keys(PINS).length} sanctioned modules, all at pin`);
 }
 
 // --- D. Every dispatchable action has an extension-side route ---
 {
-  const content = read('src/content.ts');
-  const background = read('src/background.ts');
+  const clean = section();
+  // The files that route a BRANCHKIT_ACTION. Both entry points; the module
+  // holding every CONTENT arm that does not touch the nav-time lifecycle glue
+  // (§6i — `activate` and `reactivate` stayed in content.ts because they reach
+  // preNavObserverTeardown / republishForActivation); and the module holding
+  // the SW's own fan-out, which decides between answering an event here,
+  // forwarding it to the active tab, and broadcasting it (§6m).
+  //
+  // A list of filenames is normally the thing this file exists to avoid, but it
+  // cannot go stale silently in either direction, and both directions have now
+  // fired for real: moving the fan-out to sse-events.ts took seven voiced ids
+  // out of `handled` and failed with "no extension-side route" until this list
+  // learned the file. A file that stops routing anything is caught by
+  // setLiteral's own fail when the literal it names is gone.
+  const ROUTE_FILES = [
+    'src/content.ts', 'src/background.ts',
+    'src/activate/voice-dispatch.ts', 'src/background/sse-events.ts',
+  ];
 
   const setLiteral = (src, name, file) => {
     const m = src.match(new RegExp(`${name}[^=]*=\\s*new Set(?:<[^>]*>)?\\(\\[([\\s\\S]*?)\\]\\)`));
@@ -229,10 +374,13 @@ function srcFiles() {
   const eqComparisons = (src) =>
     [...src.matchAll(/(?:data\.)?action === '([a-z_0-9]+)'/g)].map((x) => x[1]);
 
+  const PASSTHROUGH_FILE = 'src/activate/voice-dispatch.ts';
+  const passthroughIds = setLiteral(
+    read(PASSTHROUGH_FILE), 'DISPATCH_PASSTHROUGH_ACTIONS', PASSTHROUGH_FILE);
+
   const handled = new Set([
-    ...eqComparisons(content),
-    ...eqComparisons(background),
-    ...setLiteral(content, 'DISPATCH_PASSTHROUGH_ACTIONS', 'content.ts'),
+    ...ROUTE_FILES.flatMap((f) => eqComparisons(read(f))),
+    ...passthroughIds,
     ...setLiteral(read('src/activate/selection-commands.ts'), 'SELECTION_ACTIONS', 'selection-commands.ts'),
     // SELECTION_ACTIONS spreads the per-granularity extend_* ids from this
     // record rather than repeating them.
@@ -246,20 +394,52 @@ function srcFiles() {
   // Sources half 1 — the extension's own catalog: every voiced command id
   // can come back over SSE as a BRANCHKIT_ACTION (plus per-pattern params
   // actions when a pattern overrides the action — none do today).
+  // TWO views of one file, which is what preserving offsets buys. Ids are
+  // string literals, so they have to be read from the raw text; structure and
+  // markers must not be, or a `}` in a string ends an entry early and a
+  // `voice:` in a description grants lint H's permission. Same indices.
   const catalog = read('src/keymap/command-catalog.ts');
+  const catalogCode = maskNonCode(catalog);
   const voiced = [];
   const entryRe = /\{\s*id:\s*'([a-z_0-9]+)'/g;
-  let m, prev = null;
   const catalogEntries = [];
-  while ((m = entryRe.exec(catalog)) !== null) {
-    if (prev) catalogEntries.push({ id: prev.id, text: catalog.slice(prev.index, m.index) });
-    prev = { id: m[1], index: m.index };
+  // Each entry is its OWN object literal, brace-matched — not the slice up to
+  // the next entry. The catalog is heavily commented BETWEEN entries, and that
+  // slice attached every trailing comment to the entry above it, so a note
+  // mentioning `mappable: true` or `voice:` vouched for the entry before it.
+  // Harmless for the voiced read (a false positive there DEMANDS a route, so it
+  // fails loudly) and unsafe for lint H, which reads the same markers as
+  // permission. Found by mutating H's fix: a comment reading "a note that
+  // happens to mention mappable: true" let an unreachable entry pass.
+  //
+  // Braces inside strings and comments are masked out before this runs, so the
+  // depth count sees only code. It used to see `'blank {hint}'` too and got
+  // away with it because those happen to balance — but `keyHint: '}'` ended an
+  // entry four lines early, and the entry then left lint D's demand set with
+  // the count unchanged at its green baseline. A stray `{` in CODE still fails
+  // loudly below; a stray `}` never could, because it always finds an `end`.
+  for (let m; (m = entryRe.exec(catalog)) !== null;) {
+    let depth = 0, end = -1;
+    for (let i = m.index; i < catalogCode.length; i++) {
+      if (catalogCode[i] === '{') depth++;
+      else if (catalogCode[i] === '}' && --depth === 0) { end = i + 1; break; }
+    }
+    if (end === -1) {
+      fail(`lint D could not brace-match catalog entry '${m[1]}' — fix the lint, not the code`);
+      continue;
+    }
+    catalogEntries.push({ id: m[1], text: catalogCode.slice(m.index, end) });
   }
-  if (prev) catalogEntries.push({ id: prev.id, text: catalog.slice(prev.index) });
   for (const e of catalogEntries) {
     if (/voice:/.test(e.text)) voiced.push(e.id);
   }
-  if (voiced.length === 0) fail('lint D parsed zero voiced catalog entries — fix the lint, not the code');
+  // One message, not two: `voiced` is derived from `catalogEntries`, so an
+  // empty parse tripped both and read as two independent problems.
+  if (catalogEntries.length === 0) {
+    fail('lint D parsed zero catalog entries — fix the lint, not the code');
+  } else if (voiced.length === 0) {
+    fail('lint D parsed zero voiced catalog entries — fix the lint, not the code');
+  }
 
   const missing = voiced.filter((id) => !handled.has(id));
   for (const id of missing) {
@@ -313,6 +493,182 @@ function srcFiles() {
       ok(`dispatch routes: all ${pluginActions.size} plugin-initiated actions handled`);
     }
   }
+
+  // Sources half 3 — the extension's OWN dispatches.
+  //
+  // background.ts and tab-sessions.ts build BRANCHKIT_ACTION messages with
+  // literal action ids that originate HERE rather than in the voiced catalog
+  // or the plugin, so neither half above ever asks whether they have a
+  // content-side route. `rescan` is the live case and it was a real hole:
+  // deleting its arm outright passed tsc, both lint scripts and 2278 tests,
+  // and only the messages harness — which no CI job runs — noticed.
+  //
+  // Read out of the source, not listed, so a fourth dispatch site is covered
+  // the day it is written. The pattern is deliberately narrow: a literal
+  // `action: '…'` inside the message construction itself. Forwards of a
+  // plugin payload (`payload: data`, `action: data.action`) carry no literal
+  // and are correctly invisible here — halves 1 and 2 own those.
+  //
+  // Blind spot, stated rather than left to be discovered: background/media.ts
+  // builds its payload from a variable chosen a few lines above, so its two
+  // ids are not seen. Both are in DISPATCH_PASSTHROUGH_ACTIONS and handled,
+  // but the same indirection in a NEW dispatch would be invisible to this.
+  const selfDispatched = new Set();
+  for (const f of srcFiles()) {
+    for (const m of read(f).matchAll(
+      /type:\s*'BRANCHKIT_ACTION'[\s\S]{0,160}?\baction:\s*'([a-z_0-9]+)'/g)) {
+      selfDispatched.add(m[1]);
+    }
+  }
+  if (selfDispatched.size === 0) {
+    fail('lint D parsed zero extension-originated dispatches — fix the lint, not the code');
+  }
+  const selfMissing = [...selfDispatched].filter((id) => !handled.has(id));
+  for (const id of selfMissing) {
+    fail(`the extension dispatches '${id}' to its own content script but nothing routes it — ` +
+      'a BRANCHKIT_ACTION built in the SW with no arm left to receive it');
+  }
+  if (selfMissing.length === 0) {
+    ok(`dispatch routes: all ${selfDispatched.size} extension-originated actions handled`);
+  }
+
+  // --- D2. Every passthrough id actually has a registered handler ----------
+  //
+  // The checks above treat DISPATCH_PASSTHROUGH_ACTIONS as PROOF that an id is
+  // handled. That was sound while the set and all 44 `dispatcher.register`
+  // calls lived ~250 lines apart in content.ts. Phase 3b moved the handlers to
+  // eleven feature modules and left the set behind, so the direction that
+  // matters now is the one lint D cannot see: the id is in the set, and
+  // nothing registers it.
+  //
+  // `dispatcher.dispatch` on an unregistered id is a bare console.warn, so the
+  // voice phrase matches, dispatches, arrives, and nothing happens. Verified:
+  // renaming a handler id together with its own test left every lint, tsc and
+  // the full suite green while the command was dead.
+  //
+  // Both sides are read from the code. Loop-driven registrations are read from
+  // their command tables the same way lint D reads its other literals.
+  {
+    const cleanSub = section();
+    /** action id -> the files that bind it. */
+    const owners = new Map();
+    const claim = (id, where) => {
+      if (!owners.has(id)) owners.set(id, []);
+      owners.get(id).push(where);
+    };
+
+    for (const rel of srcFiles()) {
+      for (const m of read(rel).matchAll(/dispatcher\.register\(\s*'([a-z_0-9]+)'/g)) {
+        claim(m[1], rel);
+      }
+    }
+    // The loops that register from a table rather than a literal.
+    for (const [file, name] of [
+      ['src/activate/tab-commands.ts', 'TAB_COMMANDS'],
+      ['src/activate/tab-commands.ts', 'ZOOM_COMMANDS'],
+    ]) {
+      const src = read(file);
+      const open = src.indexOf('[', src.indexOf(`const ${name}`));
+      const close = src.indexOf('];', open);
+      if (open === -1 || close === -1) fail(`lint D2 could not parse ${name} in ${file}`);
+      for (const m of src.slice(open, close).matchAll(/\[\s*'([a-z_0-9]+)'/g)) claim(m[1], `${file} (${name})`);
+    }
+    {
+      const src = read('src/render/palette-host.ts');
+      const open = src.indexOf('{', src.indexOf('const PALETTE_COMMAND_SCOPE'));
+      const close = src.indexOf('};', open);
+      if (open === -1 || close === -1) fail('lint D2 could not parse PALETTE_COMMAND_SCOPE');
+      for (const m of src.slice(open, close).matchAll(/^\s+([a-z_0-9]+):/gm)) {
+        claim(m[1], 'src/render/palette-host.ts (PALETTE_COMMAND_SCOPE)');
+      }
+    }
+
+    const registered = new Set(owners.keys());
+    if (registered.size === 0) {
+      fail('lint D2 found zero dispatcher.register ids — fix the lint');
+    }
+
+    // --- and no two modules may bind the same action ----------------------
+    //
+    // ActionDispatcher.register throws on a duplicate, but that is a RUNTIME
+    // throw during content.ts boot — and no unit test can reach it, because
+    // each module's tests register that module alone. Cross-module collision
+    // is only observable once every registrar has run, so check it statically
+    // and leave the throw as the backstop rather than the discovery mechanism.
+    // (Exactly the argument lint E makes for message-type disjointness.)
+    for (const [id, where] of owners) {
+      if (where.length > 1) {
+        fail(`action '${id}' is bound by ${where.length} sites (${where.join(', ')}) — ` +
+          'ActionDispatcher.register throws on the duplicate, so content.ts boot dies; ' +
+          'and before that throw existed, whichever registrar ran last silently won');
+      }
+    }
+    const passthrough = passthroughIds;
+    const orphaned = passthrough.filter((id) => !registered.has(id));
+    for (const id of orphaned) {
+      fail(`'${id}' is in DISPATCH_PASSTHROUGH_ACTIONS but nothing calls dispatcher.register('${id}') — ` +
+        'the voice command matches, dispatches, and lands on console.warn. Lint D counts the ' +
+        'passthrough set as proof of handling, so it cannot see this');
+    }
+    if (cleanSub()) {
+      ok(`command bindings: ${registered.size} actions bound uniquely, ` +
+        `all ${passthrough.length} passthrough ids have a handler`);
+    }
+  }
+
+  // --- H. Every catalog entry is reachable by SOMETHING --------------------
+  //
+  // D and D2 both run demand → supply: given something that can be dispatched,
+  // is it handled. This is the third direction and nothing asked it: given a
+  // catalog entry, can anything dispatch it AT ALL?
+  //
+  // `activate_hint` lived in that gap from the scaffold commit (2026-03-12) to
+  // 2026-07-28 — registered in content.ts, and unreachable the whole time. It
+  // is `mappable: false`, so keymap-storage strips it from every stored keymap
+  // and palette/model.ts drops it from the command rows; it carries no `voice:`,
+  // so the plugin never contributes it and it can never arrive as a
+  // BRANCHKIT_ACTION; and it is not in DISPATCH_PASSTHROUGH_ACTIONS. Every
+  // dispatcher.dispatch call site was enumerated and none can carry it. D could
+  // not see it (it only asks about VOICED ids), D2 could not (only passthrough
+  // ids), and command-catalog.test.ts's hand-mirrored REGISTERED_ACTIONS list
+  // could not either — it checks that the catalog and the registrations agree,
+  // which they did. Both of them were dead together.
+  //
+  // The three escapes below are the three real dispatch paths, and each is read
+  // from the code:
+  //   mappable  → a key can be bound to it, so registry.match dispatches it
+  //   voice:    → the plugin contributes the phrase and sends the id back
+  //   passthrough → a parameterised/contributed form the plugin sends, whose
+  //                 ids the catalog does not carry as patterns
+  //
+  // A `keyHint`-only entry (documented, reached by a mode's own keys rather
+  // than by the registry) would be a legitimate fourth escape. None exists
+  // today, so it is not written in: adding one should be a deliberate edit here
+  // with its reason, not a hole standing open for it. The failure text says so,
+  // because the first version told the author such an entry "renders nowhere" —
+  // false, and it steers a correct edit toward deleting a row the help overlay
+  // does render.
+  {
+    const cleanSub = section();
+    const passthroughSet = new Set(passthroughIds);
+    const unreachable = catalogEntries.filter((e) =>
+      !/voice:/.test(e.text)
+      && !/mappable:\s*true/.test(e.text)
+      && !passthroughSet.has(e.id));
+    for (const e of unreachable) {
+      fail(`catalog command '${e.id}' is not mappable, carries no voice pattern, and is not in ` +
+        'DISPATCH_PASSTHROUGH_ACTIONS — nothing in the extension can dispatch it, so a handler ' +
+        'registered for it is dead code that reads as live. Give it a bind, a phrase, a ' +
+        'passthrough entry, or delete it. If it is a mode-owned command meant to be DOCUMENTED ' +
+        'rather than dispatched, note that buildHelpModel does render a keyHint-only row ' +
+        '(help-overlay.ts: it skips only when keys, voice AND keyHint are all empty) — add that ' +
+        'fourth escape here deliberately, with its reason, rather than deleting a live row');
+    }
+    if (unreachable.length === 0) {
+      ok(`catalog reachability: all ${catalogEntries.length} entries dispatchable ` +
+        '(mappable, voiced, or passthrough)');
+    }
+  }
 }
 
 // --- E. Every exported message-handler map is actually registered ----------
@@ -324,36 +680,55 @@ function srcFiles() {
 // awaiting content script hangs or reads undefined.
 //
 // Both sides are read from the code, so there is no list to keep in sync.
+//
+// TWO entry points since phase 3: background.ts and content.ts. They are
+// separate esbuild bundles, so each has its OWN handler table — which is why
+// registration is checked against "some entry point" and disjointness is
+// checked WITHIN one. `MARK_RESTORE` in the content table and `MARK_SET` in
+// the SW's are not competing for anything, and a rule that said otherwise
+// would be inventing a constraint the runtime does not have.
 {
-  const bg = read('src/background.ts');
+  const clean = section();
+  const ENTRIES = ['src/background.ts', 'src/content.ts'];
+  // Masked throughout: every read below is a structural question, and a
+  // comment quoting `registerMessageHandlers(` or `onMessage.addListener(` is
+  // prose, not a registration.
+  const entryCode = new Map(ENTRIES.map((e) => [e, readCode(e)]));
+  const entryPaths = new Set(ENTRIES.map((e) => join(...e.split('/'))));
 
   const exported = [];
   for (const rel of srcFiles()) {
-    if (rel === join('src', 'background.ts')) continue;
-    for (const m of read(rel).matchAll(/^export const (\w*MessageHandlers)\b/gm)) {
+    if (entryPaths.has(rel)) continue;
+    for (const m of readCode(rel).matchAll(/^export const (\w*MessageHandlers)\b/gm)) {
       exported.push({ name: m[1], file: rel });
     }
   }
 
-  const registered = new Set(
-    [...bg.matchAll(/registerMessageHandlers\(\s*(\w+)/g)].map((m) => m[1]),
+  /** entry -> the map names it composes. */
+  const registeredBy = new Map(
+    ENTRIES.map((e) => [e, new Set(
+      [...entryCode.get(e).matchAll(/registerMessageHandlers\(\s*(\w+)/g)].map((m) => m[1]),
+    )]),
   );
+  const registeredAnywhere = new Set([...registeredBy.values()].flatMap((s) => [...s]));
 
   if (exported.length === 0) {
     fail('lint E found zero exported *MessageHandlers maps — fix the lint');
   }
 
-  const unregistered = exported.filter((e) => !registered.has(e.name));
+  const unregistered = exported.filter((e) => !registeredAnywhere.has(e.name));
   for (const { name, file } of unregistered) {
-    fail(`${name} (${file}) is exported but never registered in background.ts — ` +
+    fail(`${name} (${file}) is exported but never registered in an entry point — ` +
       'its message types route nowhere and senders await a response that never comes');
   }
 
-  // Nothing may bypass the table: the listener takes routeMessage directly, so
+  // Nothing may bypass the table: each listener takes routeMessage directly, so
   // a reintroduced inline if-chain fails here rather than quietly coexisting.
-  if (!/onMessage\.addListener\(routeMessage\)/.test(bg)) {
-    fail('background.ts no longer installs routeMessage as its sole onMessage listener — ' +
-      'handlers belong in a module map (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md)');
+  for (const entry of ENTRIES) {
+    if (!/onMessage\.addListener\(routeMessage\)/.test(entryCode.get(entry))) {
+      fail(`${entry} no longer installs routeMessage as its sole onMessage listener — ` +
+        'handlers belong in a module map (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md)');
+    }
   }
 
   // --- and no two maps may claim the same message type --------------------
@@ -368,49 +743,348 @@ function srcFiles() {
   // Disjointness is a static property of the source, so check it statically and
   // leave the runtime throw as the backstop rather than the discovery mechanism.
 
-  /** Keys of the object literal whose opening brace is at `open`. */
+  /**
+   * Keys of the object literal whose opening brace is at `open`, or NULL when
+   * the literal has content this cannot read.
+   *
+   * Never `[]` for a non-empty literal — a silently-empty key set is exactly
+   * the failure this check exists to prevent, and it was live: one-lining an
+   * unrelated module map dropped four types out of the disjointness set, still
+   * printed `ok`, and a genuine duplicate `GET_HEALTH` then passed green while
+   * `registerMessageHandlers` threw at service-worker boot.
+   *
+   * Keys are found by POSITION IN THE GRAMMAR — at the literal's own bracket
+   * depth, in a slot that follows the opening brace or a comma — not by
+   * indentation. Every indentation heuristic tried here cut both ways: at a
+   * fixed two spaces a one-line map read as zero keys AND a correctly written
+   * map nested one block deeper failed the guard; deriving the indent from the
+   * first line then made a one-line map read as exactly ONE key, which is
+   * worse, because the guard only fires on zero and 52 types passed as `ok`.
+   *
+   * Requiring the key slot (after `{` or a depth-0 `,`) is what keeps this
+   * honest without a real parser: a ternary's `? BAR :` sits in a value slot
+   * and cannot be mistaken for a key. `src` is expected to be MASKED, so
+   * braces and colons inside strings and comments are already gone.
+   */
   const literalKeys = (src, open) => {
     let depth = 0, i = open;
     for (; i < src.length; i++) {
       if (src[i] === '{') depth++;
       else if (src[i] === '}' && --depth === 0) break;
     }
-    // Handler keys sit at the literal's own level (2 spaces). An object literal
-    // inside a handler body is nested deeper, so its keys cannot match.
-    return [...src.slice(open, i).matchAll(/^ {2}([A-Z][A-Z0-9_]*):/gm)].map((m) => m[1]);
+    const body = src.slice(open + 1, i);
+    const keys = [];
+    let d = 0, keySlot = true;
+    for (let k = 0; k < body.length; k++) {
+      const ch = body[k];
+      if (ch === '{' || ch === '(' || ch === '[') { d++; continue; }
+      if (ch === '}' || ch === ')' || ch === ']') { d--; continue; }
+      if (d === 0 && ch === ',') { keySlot = true; continue; }
+      if (!keySlot || /\s/.test(ch)) continue;
+      const m = /^([A-Z][A-Z0-9_]*)\s*:/.exec(body.slice(k));
+      if (m) { keys.push(m[1]); k += m[0].length - 1; }
+      keySlot = false;
+    }
+    return keys.length === 0 && body.trim() !== '' ? null : keys;
   };
 
-  const owner = new Map();   // message type -> the map that claimed it first
+  /** Types a named map claims, or null if its literal cannot be read. */
+  const keysOfMap = (name, file) => {
+    const src = readCode(file);
+    const at = src.indexOf(`export const ${name}`);
+    if (at === -1) return null;
+    return literalKeys(src, src.indexOf('{', src.indexOf('=', at)));
+  };
+
   const collisions = [];
   let typeCount = 0;
-  const claim = (type, by) => {
-    typeCount++;
-    if (owner.has(type)) collisions.push({ type, first: owner.get(type), second: by });
-    else owner.set(type, by);
-  };
 
-  for (const { name, file } of exported) {
-    const src = read(file);
-    const open = src.indexOf('{', src.indexOf('=', src.indexOf(`export const ${name}`)));
-    for (const type of literalKeys(src, open)) claim(type, name);
-  }
-  // background.ts composes one map inline (the offscreen-bridge residue), and
-  // it can collide with a module's just as easily.
-  for (const m of bg.matchAll(/registerMessageHandlers\(\{/g)) {
-    for (const type of literalKeys(bg, m.index + m[0].length - 1)) claim(type, 'background.ts (inline)');
+  // Disjointness is per TABLE, and each entry point owns one.
+  for (const entry of ENTRIES) {
+    const owner = new Map();   // message type -> the map that claimed it first
+    const claim = (type, by) => {
+      typeCount++;
+      if (owner.has(type)) collisions.push({ entry, type, first: owner.get(type), second: by });
+      else owner.set(type, by);
+    };
+    for (const { name, file } of exported) {
+      if (!registeredBy.get(entry).has(name)) continue;
+      const types = keysOfMap(name, file);
+      // The guard belongs on BOTH paths. It was added to the inline one only,
+      // and the named one — 23 maps against 2 — kept the identical hole: an
+      // unreadable literal became `?? []`, so the map's types left the
+      // disjointness set while the runtime still registered them, and the
+      // collision check lost its teeth on a file nobody had edited.
+      if (types === null) {
+        fail(`${name} (${file}) has a handler literal this check cannot read, so its message ` +
+          'types silently leave the disjointness set while still registering at runtime');
+        continue;
+      }
+      for (const type of types) claim(type, name);
+    }
+    // Both entry points compose a map inline — the SW's offscreen-bridge
+    // residue, content.ts's BRANCHKIT_ACTION — and either can collide with a
+    // module's just as easily.
+    const src = entryCode.get(entry);
+    for (const m of src.matchAll(/registerMessageHandlers\(\{/g)) {
+      const types = literalKeys(src, m.index + m[0].length - 1);
+      // Same guard as the named path above. The scan reads MASKED source, so a
+      // comment or string containing `registerMessageHandlers({` — a shape this
+      // file's own prose uses — no longer fails the lint against text that is
+      // not code.
+      if (types === null) {
+        fail(`${entry} composes an inline handler map this check cannot read, so its types ` +
+          'silently leave the disjointness set while still registering at runtime');
+      }
+      for (const type of types) claim(type, `${entry} (inline)`);
+    }
   }
 
   if (typeCount === 0) {
     fail('lint E parsed zero message types out of the handler maps — fix the lint');
   }
-  for (const { type, first, second } of collisions) {
-    fail(`message type '${type}' is claimed by both ${first} and ${second} — ` +
+  for (const { entry, type, first, second } of collisions) {
+    fail(`message type '${type}' is claimed by both ${first} and ${second} in ${entry}'s table — ` +
       'registerMessageHandlers throws on the duplicate and that handler is lost');
   }
 
-  if (unregistered.length === 0 && collisions.length === 0) {
-    ok(`message handlers: ${exported.length} maps registered, ${typeCount} types disjoint, listener is the table`);
+  // Gated on `failed`, not just on these two lists: the unreadable-inline-map
+  // guard above reports through fail() as well, and a lint that prints "ok" in
+  // the same breath as its own FAIL is a lint people learn to skim.
+  if (clean() && unregistered.length === 0 && collisions.length === 0) {
+    ok(`message handlers: ${exported.length} maps across ${ENTRIES.length} tables, ` +
+      `${typeCount} types disjoint per table, both listeners are the table`);
   }
+}
+
+// --- The value-import graph, shared by F and G -----------------------------
+//
+// VALUE edges only. `import type {…}`, `export type {…} from`, an import whose
+// every named specifier is `type`-prefixed, and type-position `import('x').Y` /
+// `typeof import('x')` are ERASED by the compiler and are NOT edges. Every
+// verdict below turns on that: a reviewer who counted them would have called
+// `page-session → settle-engine` a cycle, and one who ignored bare
+// `import './x'` would have missed a real one.
+
+/** value-import adjacency over non-test src, as repo-relative paths. */
+function valueImportGraph() {
+  const files = srcFiles();
+  const known = new Set(files);
+  const graph = new Map(files.map((f) => [f, new Set()]));
+  // Comments first: a commented-out import is not an edge.
+  const decomment = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const resolve = (from, spec) => {
+    if (!spec.startsWith('.')) return null;
+    const base = join(dirname(from), spec);
+    for (const c of [`${base}.ts`, join(base, 'index.ts')]) if (known.has(c)) return c;
+    return null;
+  };
+  for (const file of files) {
+    const src = decomment(read(file));
+    for (const m of src.matchAll(/(?:^|\n)\s*(?:import|export)\s+([\s\S]*?)\s*from\s*['"]([^'"]+)['"]/g)) {
+      const clause = m[1].trim();
+      const target = resolve(file, m[2]);
+      if (!target) continue;
+      if (/^type\s/.test(clause)) continue;                       // import type {…} / export type {…}
+      const named = clause.match(/^\{([\s\S]*)\}$/);
+      if (named) {
+        const parts = named[1].split(',').map((s) => s.trim()).filter(Boolean);
+        if (parts.length && parts.every((p) => /^type\s/.test(p))) continue; // all-inline-type
+      }
+      graph.get(file).add(target);
+    }
+    for (const m of src.matchAll(/(?:^|\n)\s*import\s*['"](\.[^'"]+)['"]/g)) {  // bare side-effect import
+      const target = resolve(file, m[1]);
+      if (target) graph.get(file).add(target);
+    }
+  }
+  return graph;
+}
+
+/** Files reachable from `entry` over value edges, inclusive. */
+function closureOf(graph, entry) {
+  const seen = new Set([entry]);
+  const stack = [entry];
+  while (stack.length) {
+    for (const next of graph.get(stack.pop()) ?? []) {
+      if (!seen.has(next)) { seen.add(next); stack.push(next); }
+    }
+  }
+  return seen;
+}
+
+/** Tarjan. Returns only non-trivial SCCs (size > 1, or a self-loop). */
+function stronglyConnected(graph) {
+  const index = new Map(), low = new Map(), onStack = new Set();
+  const stack = [], out = [];
+  let counter = 0;
+  const strongConnect = (v) => {
+    index.set(v, counter); low.set(v, counter); counter++;
+    stack.push(v); onStack.add(v);
+    for (const w of graph.get(v) ?? []) {
+      if (!index.has(w)) { strongConnect(w); low.set(v, Math.min(low.get(v), low.get(w))); }
+      else if (onStack.has(w)) low.set(v, Math.min(low.get(v), index.get(w)));
+    }
+    if (low.get(v) === index.get(v)) {
+      const comp = [];
+      for (;;) { const w = stack.pop(); onStack.delete(w); comp.push(w); if (w === v) break; }
+      if (comp.length > 1 || (graph.get(v) ?? new Set()).has(v)) out.push(comp.sort());
+    }
+  };
+  for (const v of graph.keys()) if (!index.has(v)) strongConnect(v);
+  return out;
+}
+
+// --- F. The value-import graph gains no new import cycle -------------------
+//
+// A cycle is not merely untidy here, it is a boot hazard with no other
+// detector. `activate/escape-cascade.ts` registers the Escape hook at module
+// scope and reads `keyHandler` eagerly to do it, which is only safe because
+// `core/singletons` strictly precedes it. Close a cycle between them and
+// evaluation order inverts: esbuild lowers `const`→`var`, so the bundle throws
+// `Cannot read properties of undefined (reading 'setEscapeHook')` at import —
+// in EVERY frame — and build.mjs's IIFE footer only swallows messages
+// containing "duplicate injection", so it re-throws uncaught and the content
+// script is simply dead. Nothing else in CI sees that (2026-07-27 review).
+//
+// The two entries below are pre-existing and deliberately grandfathered, not
+// endorsed. This is a ratchet: breaking one is a win to be banked by deleting
+// its line, and a NEW cycle fails.
+{
+  const clean = section();
+  const KNOWN_CYCLES = [
+    // The lifecycle/observer knot. Wrapper teardown, the page session and the
+    // observers that feed them are mutually recursive by construction.
+    ['src/core/wrapper-lifecycle.ts', 'src/lifecycle/page-session.ts', 'src/observe/limbo.ts',
+      'src/observe/mutation-source.ts', 'src/observe/visibility-tracker.ts', 'src/rules/rule-apply.ts'],
+    // The adapter registry and its one concrete adapter.
+    ['src/adapters/index.ts', 'src/adapters/quickbase.ts'],
+  ].map((c) => c.slice().sort().join(' + '));
+
+  const found = stronglyConnected(valueImportGraph()).map((c) => c.join(' + '));
+  for (const cycle of found) {
+    if (!KNOWN_CYCLES.includes(cycle)) {
+      fail(`NEW import cycle: ${cycle}\n` +
+        '      A cycle here is a boot hazard, not a style issue — module-scope registrations ' +
+        'depend on a strict evaluation order that a cycle inverts (lint F header).');
+    }
+  }
+  for (const cycle of KNOWN_CYCLES) {
+    if (!found.includes(cycle)) {
+      fail(`import cycle BROKEN (good) but still listed: ${cycle}\n` +
+        '      Delete it from KNOWN_CYCLES in this commit so the win locks in.');
+    }
+  }
+  if (clean()) ok(`import cycles: ${found.length} at baseline, none new`);
+}
+
+// --- G. Module-scope registrations stay reachable from an entry point -------
+//
+// These modules install behaviour by being IMPORTED — `escape-cascade` wires
+// the Escape key, `search-badges` its find teardown, and the two probe
+// registrations below. None is called by name from anywhere. So each is live
+// only as long as some entry point still value-imports it for an unrelated
+// reason, and if a refactor moves that last use out, esbuild drops the module
+// and the feature silently stops existing — with every unit test still green,
+// because tests import these modules directly (2026-07-27 review).
+//
+// §6a's rule is "a seam may live at module scope if it is a pure assignment".
+// This is that rule's missing half: it may, and then it must stay imported.
+{
+  const clean = section();
+  const REGISTRARS = {
+    'src/activate/escape-cascade.ts': 'Escape key → the cascade; hint inner-transient probe',
+    'src/activate/search-badges.ts': 'find deactivate → clear the search badges',
+    'src/activate/selection-commands.ts': "caret's inner-transient probe",
+    'src/activate/range-disambiguation.ts': "range_pick's inner-transient probe",
+  };
+  const graph = valueImportGraph();
+  const reachable = new Set([
+    ...closureOf(graph, 'src/content.ts'),
+    ...closureOf(graph, 'src/background.ts'),
+  ]);
+  let checked = 0;
+  for (const [file, what] of Object.entries(REGISTRARS)) {
+    if (!graph.has(file)) {
+      fail(`lint G: ${file} no longer exists — update REGISTRARS, and check ${what} still happens`);
+      continue;
+    }
+    // The registration must actually be there, or the pin is guarding nothing.
+    const topLevelCall = read(file).split('\n').some((l) => /^[a-zA-Z_$][\w.]*\(/.test(l));
+    if (!topLevelCall) {
+      fail(`lint G: ${file} has no module-scope registration any more (${what}) — ` +
+        'if it moved, move this pin with it; if it went away, delete the entry');
+    }
+    if (!reachable.has(file)) {
+      fail(`${file} is no longer value-imported by content.ts or background.ts, so esbuild will ` +
+        `drop it and this stops happening: ${what}. Nothing else fails when it does — ` +
+        'its own tests import it directly and stay green.');
+    }
+    checked++;
+  }
+  if (clean()) ok(`module-scope registrars: ${checked} pinned into an entry point's import closure`);
+}
+
+// --- G2. Every command registrar is actually CALLED ------------------------
+//
+// The other half of the same failure. Phase 3b moves inline
+// `dispatcher.register` calls into `register*Commands()` functions that an
+// entry point invokes. G above catches a module that stops being IMPORTED;
+// this catches one that is imported and never RUN — an exported registrar
+// nobody calls, which drops every command it holds.
+//
+// The symptom is identical to lint E's unregistered handler map and to the
+// old if-chain's silent fall-through: the command is in the catalog, the
+// keybind and the voice phrase both resolve, and nothing happens. Its own
+// tests stay green because they call the registrar themselves.
+//
+// The same hole exists for the OTHER boot convention: `install*()`. Dropping
+// `installPerfReporting()` stops the 5s trail and the dataset mirror that four
+// harness scripts read as a content-script liveness probe; dropping
+// `installWindowFocusTracking()` freezes `hasFocus` while lint E keeps
+// GET_FOCUS_STATUS answering the stale value — a feature that fails by lying
+// rather than by erroring. Both modules' own suites call the installer
+// directly and stay green, which is the same shape lint G was written for.
+//
+// Both sides are read from the code. A new `register*Commands` or `install*`
+// export joins the check by existing.
+//
+// WHAT THIS DOES NOT COVER, stated rather than left to be discovered: the
+// "called" set is the UNION across both entry points, so a registrar that
+// belongs in BOTH and is dropped from one still passes. `installUncaughtCapture`
+// is the only one of those today. Requiring per-entry-point calls would need
+// per-registrar metadata — a list to maintain, which is exactly what reading
+// both sides from the code buys us out of — so the union is the deliberate
+// trade, not an oversight.
+{
+  const clean = section();
+  const ENTRIES = ['src/content.ts', 'src/background.ts'];
+  // `install*` takes arguments (installUncaughtCapture does), so the call
+  // pattern cannot require empty parens the way the registrar one does.
+  const EXPORTED = /^export function (register\w*Commands|install[A-Z]\w*)\s*\(/gm;
+  const CALLED = /^\s*(register\w*Commands|install[A-Z]\w*)\(/gm;
+
+  const called = new Set();
+  for (const entry of ENTRIES) {
+    for (const m of read(entry).matchAll(CALLED)) called.add(m[1]);
+  }
+
+  const registrars = [];
+  for (const rel of srcFiles()) {
+    for (const m of read(rel).matchAll(EXPORTED)) registrars.push({ name: m[1], file: rel });
+  }
+
+  if (registrars.length === 0) {
+    fail('lint G2 found zero boot registrars — fix the lint');
+  }
+  for (const { name, file } of registrars) {
+    if (!called.has(name)) {
+      fail(`${name} (${file}) is exported but never called from an entry point — ` +
+        'whatever it installs silently does not happen, and its own tests still pass ' +
+        'because they call it themselves');
+    }
+  }
+  if (clean()) ok(`boot registrars: ${registrars.length} exported, all called at boot`);
 }
 
 process.exit(failed ? 1 : 0);

@@ -153,3 +153,16 @@ export function _resetModeChipForTesting(): void {
   host?.remove();
   host = null;
 }
+
+/**
+ * Arms every badge (custom props inherit through the badge shadow). The
+ * per-badge color and the border rule live in the badge shadow CSS.
+ *
+ * Lives beside the chip because both are the same signal — "keyboard typing is
+ * live" — rendered in two places, and render/ owns what that looks like.
+ */
+export function setKeyboardArmed(on: boolean): void {
+  const root = document.documentElement.style;
+  if (on) root.setProperty('--bk-kbd-b-alpha', '1');
+  else root.removeProperty('--bk-kbd-b-alpha');
+}

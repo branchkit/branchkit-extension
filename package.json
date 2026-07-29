@@ -28,7 +28,8 @@
     "harness:lifecycle": "node scripts/harness/lifecycle/run.mjs",
     "harness:lifecycle:firefox": "node scripts/harness/lifecycle/run.mjs --browser=firefox",
     "harness:realinput": "node scripts/harness/realinput/run.mjs",
-    "harness:realinput:firefox": "node scripts/harness/realinput/run.mjs --browser=firefox"
+    "harness:realinput:firefox": "node scripts/harness/realinput/run.mjs --browser=firefox",
+    "harness:messages": "node scripts/harness/messages/run.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.268",

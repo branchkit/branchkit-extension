@@ -64,6 +64,9 @@
  */
 
 import { documentInstanceId } from './document-identity';
+import { rejectAll, heldAnywhere } from './holder-registry';
+import { bkLog } from '../debug/bk-log';
+import { getSettleEngine } from '../lifecycle/settle-engine-ref';
 
 const INITIAL_RESERVATION = 100;
 const REFILL_THRESHOLD = 30;
@@ -117,14 +120,21 @@ class LabelReservoir {
    *  arbitrated AWAY from this frame (another frame won them, or the pool
    *  no longer knows them). The handler must make the holding wrappers drop
    *  the codeword WITHOUT a RELEASE (we don't own it — releasing would free
-   *  the winner's assignment) and re-claim fresh. */
-  private rejectionHandler: ((codewords: string[]) => void) | null = null;
+   *  the winner's assignment) and re-claim fresh.
+   *
+   *  Defaulted to the holder registry rather than injected from content.ts:
+   *  "who is holding this codeword — make them drop it" is the registry's
+   *  question, and it is the only answer this hook has ever had.
+   *  holder-registry is a leaf (zero relative imports), so reaching it from
+   *  here introduces no cycle. The setter stays for tests. */
+  private rejectionHandler: ((codewords: string[]) => void) | null = (codewords) => {
+    for (const cw of codewords) rejectAll(cw);
+    bkLog('BK_CONFIRM_REJECTED', { codewords: codewords.length });
+  };
 
-  /** True if a live wrapper currently holds the codeword (content.ts wires
-   *  this to `store.byCodeword`). Null until installed — sweep disabled. */
-  private isHeld: ((codeword: string) => boolean) | null = null;
-  /** Post-sweep hook: content.ts queues plugin-side deletes for leaked
-   *  codewords the grammar may still hold. */
+  /** Post-sweep hook: queues plugin-side deletes for leaked codewords the
+   *  grammar may still hold. Unlike its neighbours this one CANNOT be
+   *  defaulted here — see onLeakSwept. */
   private sweepHandler: ((codewords: string[]) => void) | null = null;
 
   /** Refill-landed hook: a claim that ran while the reservoir was dry
@@ -135,25 +145,59 @@ class LabelReservoir {
    *  directly instead of waiting for user activity. */
   private refillLandedHandler: (() => void) | null = null;
 
+  /**
+   * Fire the refill-landed signal: the override if one was installed, else the
+   * live settle engine. Defaulted here rather than injected from content.ts —
+   * "codewords arrived, converge" needs no entry-point knowledge, and reaching
+   * the engine through lifecycle/settle-engine-ref costs no import cycle
+   * (that module is a leaf by construction).
+   */
+  private notifyRefillLanded(): void {
+    if (this.refillLandedHandler) { this.refillLandedHandler(); return; }
+    getSettleEngine()?.scheduleReconcile();
+  }
+
   /** Register the confirm-rejection handler (content.ts, once at boot). */
   onConfirmRejected(handler: (codewords: string[]) => void): void {
     this.rejectionHandler = handler;
   }
 
-  /** Register the refill-landed handler (content.ts, once at boot). */
+  /** Override the refill-landed handler. The default below is the real one;
+   *  this stays a test seam (and the escape hatch if a second consumer ever
+   *  needs the signal for something other than a settle pass). */
   onRefillLanded(handler: () => void): void {
     this.refillLandedHandler = handler;
   }
 
-  /** Install the leak sweep (content.ts, once at boot): `isHeld` answers
-   *  whether a live wrapper holds the codeword; `onSwept` runs after leaked
-   *  codewords are released back to the pool. */
-  installLeakSweep(
-    isHeld: (codeword: string) => boolean,
-    onSwept?: (codewords: string[]) => void,
-  ): void {
-    this.isHeld = isHeld;
-    this.sweepHandler = onSwept ?? null;
+  /**
+   * Register what runs AFTER a leak sweep: the leaked codewords may still
+   * occupy plugin-side grammar entries, so they need queued deletes.
+   *
+   * This is the half of the old two-argument `installLeakSweep` that could not
+   * be defaulted, and the put-queue extraction did NOT free it — it settled the
+   * question the other way, which is worth stating because the obvious next
+   * move is now a trap.
+   *
+   * Two of the three things the body needs are in the leaf: `hasSent` and
+   * `queueDelete` are `labels/put-queue`. The third, `scheduleSync`, is the
+   * debounced flush and genuinely belongs to label-sync. Importing label-sync
+   * from here is what the extraction was supposed to make legal, and it is
+   * MORE illegal than before: retiring `detachWrapper` and `isBadgesVisible`
+   * pointed label-sync INTO the lifecycle knot (core/wrapper-lifecycle,
+   * lifecycle/page-session), and observe/intersection-tracker reaches this
+   * module from inside that knot. So `reservoir → label-sync` closes a cycle
+   * that merges the label layer into it — measured, not guessed: the SCC goes
+   * from 6 modules to 15, taking core/store, scan/element-wrapper and
+   * placement/ with it. Lint F would reject it.
+   *
+   * The layering that fell out is: put-queue (leaf) < this module < the
+   * lifecycle knot < label-sync. This seam points UP, and no extraction fixes
+   * that — only moving the debounce below the knot would, which is a different
+   * piece of work with a different justification. Two seams retired at the cost
+   * of this one staying is the trade that was taken.
+   */
+  onLeakSwept(handler: (codewords: string[]) => void): void {
+    this.sweepHandler = handler;
   }
 
   /** Self-heal the `free ∪ outstanding` invariant: an outstanding codeword
@@ -165,12 +209,18 @@ class LabelReservoir {
    *  Runs at the refill chokepoint (maybeRefill), so it fires exactly when
    *  reservoir depth matters. */
   private sweepOutstanding(): void {
-    if (!this.isHeld) return;
     const now = performance.now();
     const leaked: string[] = [];
     for (const [cw, grantedAt] of this.outstanding) {
       if (now - grantedAt < OUTSTANDING_SWEEP_GRACE_MS) continue;
-      if (!this.isHeld(cw)) leaked.push(cw);
+      // "Does anyone still hold this?" is the holder registry's question, and
+      // it is the only answer this ever had — content.ts passed it verbatim.
+      // holder-registry is a leaf (zero relative imports of any kind) and this
+      // module already imported rejectAll from it, so asking directly costs no
+      // new edge. Note the old null-guard is gone with the injection: an
+      // uninstalled isHeld disabled the sweep ENTIRELY, which meant every test
+      // that never called installLeakSweep was silently sweep-free.
+      if (!heldAnywhere(cw)) leaked.push(cw);
     }
     if (leaked.length === 0) return;
     this.release(leaked);
@@ -440,7 +490,6 @@ class LabelReservoir {
     this.reserved = new Set(reserved);
     this.refillInFlight = null;
     this.initialReady = labels.length > 0 ? Promise.resolve() : null;
-    this.isHeld = null;
     this.sweepHandler = null;
   }
 
@@ -477,7 +526,7 @@ class LabelReservoir {
             added++;
           }
         }
-        if (added > 0) this.refillLandedHandler?.();
+        if (added > 0) this.notifyRefillLanded();
       }
     } catch {
       // SW unavailable. The reservoir stays at its current depth; the

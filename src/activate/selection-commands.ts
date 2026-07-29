@@ -15,7 +15,7 @@
 import { dispatcher, keyHandler } from '../core/singletons';
 import { setInnerTransientProbe } from '../core/mode-stack';
 import { CaretController, type SelectionCommand } from './caret';
-import { findAllRanges, openPhraseBox, clearFindPaint } from '../scan/find';
+import { findAllRanges, openPhraseBox, clearFindPaint, onFindCommitted } from '../scan/find';
 import { startRangePick, cancelRangePick } from './range-disambiguation';
 import {
   PREV_POSITION_REGISTERS, isPrevPositionRegister, marksToHash, type StoredMark,
@@ -26,6 +26,8 @@ import { findPageLink, type Rel } from './pagination';
 import { urlUp, urlRoot } from './url-nav';
 import { copyText } from './clipboard';
 import type { Message } from '../types';
+import type { MessageHandler, MessageOf } from '../core/message-router';
+import { inTopFrame } from '../core/frame';
 
 const isTopFrame = window === window.top;
 
@@ -69,6 +71,17 @@ export const caret = new CaretController({
 // its one implementation in CaretController.peelInner; escape() and the
 // stack's peelTop both route through it.
 setInnerTransientProbe('caret', () => caret.peelInner());
+
+// A search commit while a caret/visual selection is live extends that selection
+// straight to the match, so "/ query Enter" is a find-and-select rather than a
+// find you then have to press `n` through (n skips to the NEXT match).
+//
+// Registered HERE, next to the caret instance this module owns, rather than
+// composed in content.ts: find's commit signal is a multicast whose listener
+// order does not matter (see onFindCommitted), so nothing has to sequence this
+// against the search badges arming on the same signal. The isActive() guard is
+// the caret's own question and travels with it.
+onFindCommitted(() => { if (caret.isActive()) caret.extendToCurrentMatch(); });
 
 // (The window-focus caret re-assert timer is retired: the plugin still drains
 // the exclusive caret tag on OS focus loss, and the SW now replays the
@@ -261,6 +274,15 @@ export function registerSelectionCommands(): void {
   dispatcher.register('go_next', () => navigatePage('next'));
   dispatcher.register('go_previous', () => navigatePage('prev'));
   // Copy the current page URL (Vimium yy).
+  // Session history and reload. Here rather than in a module of their own
+  // because this is where the rest of the go-somewhere-else family already
+  // lives (go_next/go_previous, go_up/go_root, copy_url) — the file is named
+  // for selection but has been the page-navigation home for a while, and
+  // splitting that out is its own change, not one to smuggle into a move.
+  dispatcher.register('history_back', () => { history.back(); });
+  dispatcher.register('history_forward', () => { history.forward(); });
+  dispatcher.register('refresh', () => { location.reload(); });
+
   dispatcher.register('copy_url', () => {
     void copyText(location.href).then((ok) => flashToast(ok ? 'Copied URL' : 'Copy failed'));
   });
@@ -276,3 +298,18 @@ export function registerSelectionCommands(): void {
     else flashToast('Already at the root');
   });
 }
+
+// --- Global-mark restore (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md phase 3) ---
+//
+// A global-mark jump landed on (or opened) this tab — restore the saved
+// position. Top frame only; sub-frame scroll is out of scope for MVP. Was a
+// branch of content.ts's onMessage chain; `restorePosition` is right here.
+
+export const markRestoreMessageHandlers: Record<string, MessageHandler> = {
+  MARK_RESTORE: (m: MessageOf<'MARK_RESTORE'>) => {
+    // inTopFrame() rather than this file's module-scope `isTopFrame`: the const
+    // is read once at import, so a subframe test would need a module reload —
+    // and this is the one message handler that performs a scroll/hash write.
+    if (inTopFrame()) restorePosition({ scrollX: m.scrollX, scrollY: m.scrollY, hash: m.hash });
+  },
+};

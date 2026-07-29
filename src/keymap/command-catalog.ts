@@ -136,8 +136,12 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // keyboard-typeable here, and only here. See notes/DESIGN_KEYBOARD_MODES.md.
   { id: 'hint_mode', label: 'Type a badge', group: 'Badges', mappable: true, params: [],
     description: 'Make the painted badges keyboard-typeable — then type a letter to activate one. Esc exits.' },
-  { id: 'activate_hint', label: 'Activate badge by letter or word', group: 'Badges', mappable: false, params: [],
-    description: 'Activate the badge matching a spoken word or typed letter (runtime value — not bindable).' },
+  // There is deliberately NO entry for "activate the badge you just typed".
+  // One existed from the scaffold commit until 2026-07-28 (`activate_hint`) and
+  // in all that time nothing in the extension could dispatch it — typing a
+  // codeword resolves through the store's CodewordHolder delegate, which hands
+  // a wrapper straight to the activation and never names a command id. Lint H
+  // in scripts/check-exhaustive.mjs is what now makes that state unwritable.
   // blank / stash — the voice twins of the typed-capital new-tab affordance,
   // which spoken codewords can't express (no capitals in speech). Verbs match
   // the Rango convention; choice rationale in

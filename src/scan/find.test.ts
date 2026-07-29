@@ -1,4 +1,30 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+// find takes and returns the badge screen ITSELF now — it used to relay both
+// through content.ts, where nothing could test either. The real module reads
+// pageSession and the wrapper store to decide whether a borrow took anything,
+// so with an empty store every call is a silent no-op and a test could not tell
+// take-then-give from nothing-at-all. Recording the calls is what distinguishes
+// them; whether a borrow correctly hides badges is badge-visibility.test.ts's.
+const borrow: string[] = [];
+vi.mock('../render/badge-visibility', () => ({
+  assertBadgeScreenBorrow: () => { borrow.push('take'); },
+  returnBadgeScreenBorrow: () => { borrow.push('give'); },
+}));
+
+// find's other relocated collaborator. `resetCycleTarget` moved out of
+// content.ts's onDeactivate and into endSession, and arrived with ZERO tests
+// anywhere — deleting the call passed the whole suite (review, 2026-07-27).
+// find imports exactly these two from scroller, so the fake is complete.
+const cycleResets: number[] = [];
+vi.mock('../activate/scroller', () => ({
+  // false is what the real one answers under happy-dom, and "slides rather
+  // than teleports" pins that find's commit scroll is SMOOTH — which is also
+  // the fact that undercuts the onCommit ordering argument (see §6d).
+  prefersReducedMotion: () => false,
+  resetCycleTarget: () => { cycleResets.push(1); },
+}));
+
 import { findMatchRanges, findRangesFlexible, findFirstRange, buildBlockIndex } from './find';
 import { entitySpan, trimSpan } from '../activate/segmenter';
 
@@ -117,7 +143,7 @@ describe('buildBlockIndex — caret text-object substrate (word/sentence/paragra
 // happy-dom note: match VISIBILITY (isMatchVisible) is engine-dependent here,
 // so these assert pill lifecycle + state, not match counts.
 
-import { afterEach, vi } from 'vitest';
+import { afterEach } from 'vitest';
 import {
   findImmediate,
   openPhraseBox,
@@ -128,13 +154,25 @@ import {
   isFindBarOpen,
   isFindBarFocused,
   getFindState,
-  setFindCallbacks,
+  onFindDeactivated,
+  onFindCommitted,
   clearFindPaint,
   findNext,
   getMatchRanges,
   getCurrentMatchRange,
   findGoToRange,
+  registerFindCommands,
 } from './find';
+
+/**
+ * onFindCommitted is a MULTICAST now, so a test's listener would otherwise
+ * outlive it and fire inside the next one. Hold the unsubscribes and drop them
+ * in afterEach — the same thing production gets by registering once, at module
+ * scope, from the module that owns the effect.
+ */
+const commitSubs: Array<() => void> = [];
+const onCommitted = (fn: () => void): void => { commitSubs.push(onFindCommitted(fn)); };
+const clearCommitted = (): void => { for (const off of commitSubs.splice(0)) off(); };
 
 const pill = () =>
   [...document.querySelectorAll('[data-branchkit-find]')].find(
@@ -423,7 +461,10 @@ describe('find bar: phrase-targeting modes', () => {
     glyph: '⇥', placeholder: 'Extend selection to...',
     onPhrase: (q) => phrases.push(['extend', q]),
   });
-  afterEach(() => { closeFindMode(); setFindCallbacks({}); restoreEnv(); vi.useRealTimers(); });
+  afterEach(() => {
+    closeFindMode(); onFindDeactivated(null); clearCommitted();
+    restoreEnv(); vi.useRealTimers();
+  });
 
   it('labels the box for what the phrase is for', () => {
     openHighlightBox();
@@ -445,7 +486,7 @@ describe('find bar: phrase-targeting modes', () => {
 
   it('a search commit does NOT fire onPhrase, and vice versa', () => {
     let commits = 0;
-    setFindCallbacks({ onCommit: () => { commits++; } });
+    onCommitted(() => { commits++; });
     openFindMode();
     dictate('alpha');
     vi.runAllTimers();
@@ -466,27 +507,98 @@ describe('find bar: phrase-targeting modes', () => {
     expect(el.selectionEnd).toBe('nonexistent'.length);
   });
 
+  // openFindMode has FOUR arms and the test below only drove one. The other
+  // three are where a borrow can go missing without anything noticing: a
+  // mutant that returned the borrow on the phrase→search replace path left
+  // find running with NO borrow at all — highlights under a live badge layer,
+  // the same class as the 2026-07-26 field bug — and every test stayed green
+  // (review, 2026-07-27).
+  it('openFindMode keeps exactly one borrow across all four of its arms', () => {
+    borrow.length = 0;
+
+    // (1) replace a live PHRASE session: closes it (give) then opens fresh (take)
+    openHighlightBox();
+    openFindMode();
+    expect(borrow).toEqual(['take', 'give', 'take']);
+
+    // (2) re-entry with the bar already open: focus/select, no borrow churn
+    openFindMode();
+    expect(borrow).toEqual(['take', 'give', 'take']);
+
+    // (3) committed reopen (bar closed, session live): reseeds the bar, and the
+    // borrow it already holds must not be re-taken or dropped.
+    dictate('alpha');
+    vi.runAllTimers();
+    openFindMode();
+    expect(borrow).toEqual(['take', 'give', 'take']);
+
+    // (4) and the whole session gives back exactly once
+    closeFindMode();
+    expect(borrow).toEqual(['take', 'give', 'take', 'give']);
+  });
+
+  // The scroll cycle target is bookkeeping about the session that is ending —
+  // "keep scrolling the region I picked" cannot outlive the find that set it.
+  // Asserted on BOTH exit shapes, because the borrow beside it is deliberately
+  // conditional on handoff and this one deliberately is not.
+  it('every session end drops the scroll cycle target, handoff or not', () => {
+    cycleResets.length = 0;
+    openFindMode();
+    closeFindMode();
+    expect(cycleResets).toHaveLength(1);
+
+    openHighlightBox();       // a phrase commit ends as a HANDOFF
+    dictate('alpha');
+    vi.runAllTimers();
+    expect(cycleResets).toHaveLength(2);
+  });
+
+  it('every entry point takes the badge screen, and a re-entry re-asserts it', () => {
+    // Three ways in — `/`, a phrase box, and voice — and find competes with the
+    // badge layer for the screen in all three. While this was a content.ts
+    // relay only the phrase-box path had a test; the other two were the
+    // untested wiring sec 6c item 6 names.
+    borrow.length = 0;
+    openFindMode();
+    expect(borrow).toEqual(['take']);
+    closeFindMode();
+
+    borrow.length = 0;
+    findImmediate('alpha');
+    expect(borrow).toEqual(['take']);
+    // Over a LIVE session it re-asserts rather than skipping. Re-BORROWING here
+    // would snapshot the hidden state the borrow itself caused, and the
+    // give-back would then conclude the badges had always been hidden and leave
+    // the page bare — the re-entrancy rule assertBadgeScreenBorrow exists for.
+    findImmediate('alpha');
+    expect(borrow).toEqual(['take', 'take']);
+  });
+
   it('a phrase commit deactivates as a HANDOFF; the borrow returns at clearFindPaint', () => {
-    // The badge borrow rides these two signals (content.ts): restoring at a
-    // handoff deactivate re-showed every page badge around the pick chips
-    // (field, 2026-07-26). handoff=true says "the consumer holds it now";
-    // onPaintCleared is the one return point every consumer exit reaches.
+    // Restoring the badge screen at a handoff deactivate re-showed every page
+    // badge around the pick chips (field, 2026-07-26). handoff=true says "the
+    // consumer holds it now"; clearFindPaint is the one return point every
+    // consumer exit reaches. Both halves are find's own now, so this asserts
+    // the borrow directly rather than a relay's callback order.
     const events: string[] = [];
-    setFindCallbacks({
-      onDeactivate: (handoff) => events.push(`deactivate:${handoff}`),
-      onPaintCleared: () => events.push('paint-cleared'),
-    });
+    onFindDeactivated((handoff) => events.push(`deactivate:${handoff}`));
+
+    borrow.length = 0;
     openHighlightBox();
     dictate('alpha');
     vi.runAllTimers();
     expect(events).toEqual(['deactivate:true']);
+    // The load-bearing assertion: NOT given back yet, though the session ended.
+    expect(borrow).toEqual(['take']);
     clearFindPaint(); // the pick (or selection) answered
-    expect(events).toEqual(['deactivate:true', 'paint-cleared']);
+    expect(borrow).toEqual(['take', 'give']);
 
     // A plain close is NOT a handoff — nothing is pending, restore at once.
+    borrow.length = 0;
     openHighlightBox();
     closeFindMode();
     expect(events[events.length - 1]).toBe('deactivate:false');
+    expect(borrow).toEqual(['take', 'give']);
   });
 
   it('the match paint SURVIVES the commit — the consumer owns it from there', () => {
@@ -504,7 +616,7 @@ describe('find bar: phrase-targeting modes', () => {
   });
 
   it('a search commit keeps its own paint too, and still marks the current match', () => {
-    setFindCallbacks({});
+    clearCommitted();
     openFindMode();
     dictate('alpha');
     vi.runAllTimers();
@@ -598,9 +710,12 @@ describe('voice find declares its own mode', () => {
       g.CSS.highlights = priorReg;
       g.Highlight = priorCtor;
     };
-    setFindCallbacks({ onCommit: () => commits.push(1) });
+    onCommitted(() => commits.push(1));
   });
-  afterEach(() => { closeFindMode(); setFindCallbacks({}); restoreEnv(); vi.useRealTimers(); });
+  afterEach(() => {
+    closeFindMode(); onFindDeactivated(null); clearCommitted();
+    restoreEnv(); vi.useRealTimers();
+  });
 
   const openHighlightBox = () => openPhraseBox({
     glyph: '✦', placeholder: 'Highlight phrase...',
@@ -1120,5 +1235,107 @@ describe('dead matches are swept at read time', () => {
     expect(getFindState().matchCount).toBe(0);
     expect(getCurrentMatchRange()).toBeNull();
     findNext();   // must not throw or divide by zero
+  });
+});
+
+// --- Command bindings (entry-point topology phase 3b) ----------------------
+//
+// These five were inline in content.ts and untested. The dispatcher is the
+// REAL one here rather than a fake: find.ts already reaches core/singletons
+// transitively, and registering onto the real registry is what proves the
+// binding is wired the way the entry point will see it.
+import { dispatcher as realDispatcher } from '../core/singletons';
+
+describe('registerFindCommands', () => {
+  let dispatch: (action: string, params?: Record<string, string>) => void;
+  const origSIV3 = Element.prototype.scrollIntoView;
+  const origVis3 = (Element.prototype as { checkVisibility?: () => boolean }).checkVisibility;
+
+  beforeEach(() => {
+    // happy-dom answers checkVisibility() falsy, and find drops invisible
+    // matches — without this every query finds nothing and an assertion about
+    // match COUNTS would pass against a binding that searched for the wrong
+    // thing. Same stub the reaping suite above installs.
+    Element.prototype.scrollIntoView = function () {};
+    (Element.prototype as { checkVisibility?: () => boolean }).checkVisibility = () => true;
+    // The STATIC instance. Importing it dynamically here meant a
+    // vi.resetModules() in one test handed the next a fresh, empty dispatcher
+    // while registerFindCommands kept registering on the original.
+    dispatch = (action, params = {}) => realDispatcher.dispatch(action, params);
+    // The registrars build fresh closures per call, so they are not idempotent
+    // under ActionDispatcher's duplicate-throw — clear before re-registering.
+    realDispatcher._resetForTesting();
+    registerFindCommands();
+  });
+
+  afterEach(() => {
+    Element.prototype.scrollIntoView = origSIV3;
+    (Element.prototype as { checkVisibility?: () => boolean }).checkVisibility = origVis3;
+    closeFindMode();
+    document.body.innerHTML = '';
+  });
+
+  it('find_open opens a find session; find_close ends it', () => {
+    dom('<p>alpha beta</p>');
+    dispatch('find_open');
+    expect(isFindBarOpen()).toBe(true);
+    dispatch('find_close');
+    expect(isFindBarOpen()).toBe(false);
+  });
+
+  it('find_immediate searches without ever opening the box', () => {
+    dom('<p>beta</p><p>beta</p>');
+    dispatch('find_immediate', { query: 'beta' });
+    expect(isFindActive()).toBe(true);
+    expect(getMatchRanges().length).toBeGreaterThan(0);
+    // The dictated path's whole point: no bar for the user to dismiss.
+    expect(isFindBarOpen()).toBe(false);
+  });
+
+  it('find_immediate with an empty or missing query does NOTHING', () => {
+    dom('<p>alpha beta</p>');
+    dispatch('find_immediate', { query: '' });
+    dispatch('find_immediate');
+    // Not merely "no matches" — no session at all. Opening one would strand
+    // the user in a find they never asked for, with Escape newly consumed.
+    expect(isFindActive()).toBe(false);
+    expect(isFindBarOpen()).toBe(false);
+  });
+
+  it('registers nothing at import time — the entry point decides when', async () => {
+    // Loaded fresh against a fake registry, so this observes the NEW module's
+    // import, not the one the rest of this file has already registered from.
+    // A module that self-registered would make registerFindCommands()
+    // decorative and quietly weaken lint G2, whose whole premise is that an
+    // uncalled registrar loses its commands.
+    const seen: string[] = [];
+    vi.resetModules();
+    vi.doMock('../core/singletons', () => ({
+      dispatcher: { register: (a: string) => { seen.push(a); } },
+    }));
+    try {
+      const fresh = await import('./find');
+      expect(seen).toEqual([]);
+      fresh.registerFindCommands();
+      expect(seen).toContain('find_open');
+    } finally {
+      vi.doUnmock('../core/singletons');
+      vi.resetModules();
+    }
+  });
+
+  it('find_next and find_previous walk the matches of a live session', () => {
+    dom('<p>beta</p><p>beta</p><p>beta</p>');
+    dispatch('find_immediate', { query: 'beta' });
+    const total = getMatchRanges().length;
+    expect(total).toBeGreaterThan(1);
+
+    const seen = [getCurrentMatchRange()];
+    dispatch('find_next');
+    seen.push(getCurrentMatchRange());
+    expect(seen[1]).not.toBe(seen[0]);
+
+    dispatch('find_previous');
+    expect(getCurrentMatchRange()).toBe(seen[0]);
   });
 });

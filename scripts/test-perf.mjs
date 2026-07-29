@@ -27,7 +27,7 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { existsSync, rmSync } from 'node:fs';
 import { parseArgs } from 'node:util';
-import { launchExtension } from './lib/launch.mjs';
+import { launchExtension, harnessHeadless } from './lib/launch.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
@@ -41,7 +41,12 @@ const { values: argv } = parseArgs({
     engine: { type: 'string', default: 'branchkit' }, // branchkit|rango|both|none
     'rango-path': { type: 'string', default: '/tmp/rango/dist/chrome' },
     scroll: { type: 'boolean', default: false },
-    headless: { type: 'boolean', default: false },
+    // Follows the shared default (headless unless BK_HEADED=1) so a perf run
+    // does not steal focus for its whole soak. Every engine arm reads this one
+    // value, so an A/B stays like-for-like whichever way it is set — the thing
+    // that would actually invalidate a comparison is one arm headed and the
+    // other not.
+    headless: { type: 'boolean', default: harnessHeadless() },
     warmup: { type: 'string', default: '2' },
   },
 });

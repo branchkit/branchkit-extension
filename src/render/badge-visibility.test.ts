@@ -4,19 +4,35 @@
  * The primitive under test is the one that, hand-rolled, shipped a field bug
  * twice in one arc: the screen borrow (snapshot-then-hide, conditional
  * idempotent give-back) and the compound showing-read behind it. Real
- * singletons (store, pageSession, keyHandler) with fake badges — no module
- * mocks, per the arc's synthetic-participants rule.
+ * singletons (store, pageSession, keyHandler) with fake badges, per the arc's
+ * synthetic-participants rule.
+ *
+ * The one module mock is scan-orchestrator, and it is not an exception to that
+ * rule: the rule is about the badges and the state this module OWNS, and
+ * doScan is the discovery layer ABOVE it — pulling the real walk in (adapters,
+ * rules, the observe stack) would make this a slow integration test of code
+ * that has its own. The mock also gives back the observation the retired
+ * `initBadgeVisibility({doScan})` hook used to provide for free.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+vi.mock('../scan/scan-orchestrator', () => ({
+  doScan: vi.fn(async () => {}),
+}));
+import { doScan } from '../scan/scan-orchestrator';
 import { ElementWrapper } from '../scan/element-wrapper';
 import { ScannedElement } from '../types';
 import { store } from '../core/store';
 import { pageSession } from '../lifecycle/page-session';
-import { keyHandler } from '../core/singletons';
+import { keyHandler, dispatcher as realDispatcher } from '../core/singletons';
+import { registerHolder } from '../labels/holder-registry';
 import {
-  initBadgeVisibility, anyBadgesShowing, hideBadges, toggleHints,
+  anyBadgesShowing, hideBadges, toggleHints,
   setBadgesVisible, borrowBadgeScreen, _resetBadgeVisibilityForTesting,
+  assertBadgeScreenBorrow, returnBadgeScreenBorrow, discardBadgeScreenBorrow,
+  badgeVisibilityMessageHandlers,
+  registerHintModeCommands,
 } from './badge-visibility';
 
 function fakeHint(visible: boolean) {
@@ -38,16 +54,8 @@ function seedWrapper(visibleHint: boolean): ElementWrapper {
   return w;
 }
 
-let scans: number;
-let hintActionResets: number;
-
 beforeEach(() => {
-  scans = 0;
-  hintActionResets = 0;
-  initBadgeVisibility({
-    doScan: () => { scans++; },
-    resetHintAction: () => { hintActionResets++; },
-  });
+  vi.mocked(doScan).mockClear();
   // showBadges' fast path still awaits a frame + a tracker flush; neither
   // exists before pageSession.start(), so provide inert stand-ins.
   globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) =>
@@ -61,6 +69,7 @@ afterEach(() => {
   for (const w of [...store.all]) store.removeWrapperByElement(w.element);
   pageSession.badgesVisible = false;
   keyHandler.exitHintMode();
+  keyHandler.resetHintAction();
   _resetBadgeVisibilityForTesting();
 });
 
@@ -86,33 +95,57 @@ describe('the compound showing-read', () => {
   });
 });
 
-describe('use before init', () => {
-  it('fails loud, not silently no-op', () => {
-    _resetBadgeVisibilityForTesting();
-    expect(() => hideBadges()).toThrow(/initBadgeVisibility/);
-  });
-});
+// ('use before init' lived here. The module has no init step any more — it
+// imports doScan directly — so there is no unwired state to be in and nothing
+// for the assertion to catch. Kept as a note rather than rewritten into
+// something that passes either way.)
 
 describe('hideBadges', () => {
   it('clears the filter state, exits hint mode, drops the flag, hides every badge', () => {
     const w = seedWrapper(true);
     pageSession.badgesVisible = true;
     keyHandler.enterHintMode();
+    keyHandler.armHintAction('yank'); // a verb armed but never resolved
 
     hideBadges();
 
-    expect(hintActionResets).toBe(1);
+    // Real state, not a hook-fired counter: the abandoned verb is disarmed, so
+    // the next badge the user picks is a plain click.
+    expect(keyHandler.takeHintAction()).toBe('activate');
     expect(keyHandler.isHintMode()).toBe(false);
     expect(pageSession.badgesVisible).toBe(false);
     expect(w.hint!.hide).toHaveBeenCalled();
     expect(w.hint!.setFiltered).toHaveBeenCalledWith(false);
+  });
+
+  // The catch-up rescan: the page mutated while badges were up, so the store is
+  // stale by the time they come down. Asserted as a PAIR, because "doScan ran"
+  // alone is also what an unconditional rescan produces — only the second case
+  // separates the guard from no guard.
+  it('schedules a catch-up rescan iff the page mutated while badges were up', () => {
+    vi.useFakeTimers();
+    try {
+      pageSession.pendingMutation = true;
+      hideBadges();
+      expect(pageSession.pendingMutation).toBe(false); // consumed, not left armed
+      expect(doScan).not.toHaveBeenCalled();           // deferred, not synchronous
+      vi.advanceTimersByTime(100);
+      expect(doScan).toHaveBeenCalledTimes(1);
+
+      vi.mocked(doScan).mockClear();
+      hideBadges(); // pendingMutation is down now
+      vi.advanceTimersByTime(100);
+      expect(doScan).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
 describe('setBadgesVisible / toggleHints', () => {
   it('showing from hidden scans and raises the flag', async () => {
     expect(setBadgesVisible(true)).toBe(true);
-    expect(scans).toBe(1);
+    expect(doScan).toHaveBeenCalledTimes(1);
     await settle();
     expect(pageSession.badgesVisible).toBe(true);
   });
@@ -120,7 +153,7 @@ describe('setBadgesVisible / toggleHints', () => {
   it('is a no-op when already at the requested state', () => {
     pageSession.badgesVisible = true;
     expect(setBadgesVisible(true)).toBe(true);
-    expect(scans).toBe(0);
+    expect(doScan).not.toHaveBeenCalled();
   });
 
   it('toggle HIDES when the flag desynced but a badge is visible (never a second set on top)', () => {
@@ -170,5 +203,352 @@ describe('borrowBadgeScreen', () => {
     expect(pageSession.badgesVisible).toBe(false);
     const borrow = borrowBadgeScreen();
     expect(borrow.took).toBe(true);
+  });
+});
+
+// The slot around the primitive. This was a bare `let` in content.ts, so the
+// re-entrancy rule below — the whole reason the slot exists — had never been
+// tested anywhere; find.test.ts pins the give-back paths, not the re-take.
+describe('the badge screen borrow slot', () => {
+  it('takes the screen on first assert', async () => {
+    pageSession.badgesVisible = true;
+    assertBadgeScreenBorrow();
+    expect(pageSession.badgesVisible).toBe(false);
+
+    returnBadgeScreenBorrow();
+    await settle();
+    expect(pageSession.badgesVisible).toBe(true);
+  });
+
+  // findImmediate re-fires the activate path over a live session. A second
+  // borrow there would snapshot the hidden state the FIRST borrow caused, so
+  // the give-back would decide the badges had always been hidden — an
+  // always-mode page left bare, which is the 2026-07-26 field bug.
+  it('re-asserting over a live borrow does not re-snapshot the hidden state', async () => {
+    pageSession.badgesVisible = true;
+    assertBadgeScreenBorrow();
+    assertBadgeScreenBorrow();
+    assertBadgeScreenBorrow();
+
+    returnBadgeScreenBorrow();
+    await settle();
+    expect(pageSession.badgesVisible).toBe(true); // still given back
+  });
+
+  // The other half of the same rule: `f` mid-session re-showed the badges and
+  // find still wants the screen, so a re-assert over a borrow that TOOK must
+  // hide again rather than no-op.
+  it('re-asserting re-hides badges that came back mid-session', () => {
+    pageSession.badgesVisible = true;
+    assertBadgeScreenBorrow();
+    expect(pageSession.badgesVisible).toBe(false);
+
+    pageSession.badgesVisible = true; // `f` re-showed them
+    assertBadgeScreenBorrow();
+    expect(pageSession.badgesVisible).toBe(false);
+  });
+
+  // A borrow that took nothing must not start hiding on re-entry — under
+  // manual visibility the screen was already hidden and find never owned it.
+  it('re-asserting over a borrow that took nothing stays inert', () => {
+    assertBadgeScreenBorrow();          // hidden screen: took === false
+    pageSession.badgesVisible = true;   // the user showed badges themselves
+    assertBadgeScreenBorrow();
+    expect(pageSession.badgesVisible).toBe(true);
+  });
+
+  it('returning is safe on a slot never taken, and safe twice', async () => {
+    returnBadgeScreenBorrow();
+    pageSession.badgesVisible = true;
+    assertBadgeScreenBorrow();
+    returnBadgeScreenBorrow();
+    await settle();
+    expect(pageSession.badgesVisible).toBe(true);
+
+    pageSession.badgesVisible = false; // something else hid it since
+    returnBadgeScreenBorrow();         // onPaintCleared after a plain close
+    await settle();
+    expect(pageSession.badgesVisible).toBe(false);
+  });
+
+  // Every find exit reaches a return, and the next session must take a FRESH
+  // borrow. Asserting only the second hide would not prove that: a spent
+  // borrow still reports took === true, so the re-assert arm hides either way.
+  // The give-back is where a stale slot shows — `restore` is idempotent, so
+  // the second session's return would no-op and leave the page bare.
+  it('a returned slot takes again on the next session, and gives back again', async () => {
+    pageSession.badgesVisible = true;
+    assertBadgeScreenBorrow();
+    returnBadgeScreenBorrow();
+    await settle();
+    expect(pageSession.badgesVisible).toBe(true);
+
+    assertBadgeScreenBorrow();
+    expect(pageSession.badgesVisible).toBe(false);
+    returnBadgeScreenBorrow();
+    await settle();
+    expect(pageSession.badgesVisible).toBe(true);
+  });
+
+  // The same-document nav case. The slot outlived its page because nothing on
+  // the nav path returned it, and a SPENT took===false slot is invisible in the
+  // obvious assertion: re-asserting over it is inert either way (the test above
+  // pins exactly that). What distinguishes discarded from stale is the borrow
+  // AFTER — a discarded slot takes fresh and hides; a surviving one no-ops and
+  // leaves the highlights under a live badge layer.
+  it('a discarded slot takes fresh next time; a surviving one would not', async () => {
+    assertBadgeScreenBorrow();          // over hidden badges: took === false
+    discardBadgeScreenBorrow();         // the route changed
+    pageSession.badgesVisible = true;   // the user shows badges on the new page
+
+    assertBadgeScreenBorrow();          // find reopens
+    expect(pageSession.badgesVisible).toBe(false); // fresh borrow, screen taken
+
+    returnBadgeScreenBorrow();
+    await settle();
+    expect(pageSession.badgesVisible).toBe(true);  // and given back
+  });
+
+  // Discard is NOT restore, and that is load-bearing rather than a shortcut:
+  // restore()'s showBadges is async and raises the flag a frame later, while
+  // the nav path reads it synchronously on the next line to decide a
+  // manual-mode hide. A restoring discard would paint badges onto a page the
+  // nav had just decided to leave hidden.
+  //
+  // The flag alone does NOT prove that: an entirely inert discard leaves it
+  // false too. (Mine did assert only the flag, and survived a `discard that
+  // does nothing for took === true` mutant — review, 2026-07-27.) The slot has
+  // to be shown GONE, and the only way to see that is the borrow AFTER it: a
+  // fresh borrow over a hidden screen takes nothing, so its give-back restores
+  // nothing. A surviving took === true slot would re-show here instead.
+  it('discarding never re-shows, and the slot is gone rather than merely unrestored', async () => {
+    pageSession.badgesVisible = true;
+    assertBadgeScreenBorrow();          // took === true, badges now hidden
+    expect(pageSession.badgesVisible).toBe(false);
+
+    discardBadgeScreenBorrow();
+    await settle();
+    expect(pageSession.badgesVisible).toBe(false); // still hidden — nav decides
+
+    assertBadgeScreenBorrow();          // the next find: must be a FRESH borrow
+    returnBadgeScreenBorrow();
+    await settle();
+    expect(pageSession.badgesVisible).toBe(false); // took nothing, restored nothing
+  });
+});
+
+// --- The popup's two messages (entry-point topology phase 3a) --------------
+//
+// The asymmetry is the whole point and it is easy to "simplify" away:
+// SET_BADGES_VISIBLE is broadcast to EVERY frame because each frame drives its
+// own badges, but only the top frame ANSWERS so the popup gets one readout.
+// Gating the whole handler on the frame would leave subframe badges stuck.
+describe('badgeVisibilityMessageHandlers', () => {
+  const subframe = () =>
+    Object.defineProperty(window, 'top', { configurable: true, get: () => ({} as Window) });
+  const topframe = () =>
+    Object.defineProperty(window, 'top', { configurable: true, get: () => window });
+
+  beforeEach(() => { topframe(); });
+  afterEach(() => { topframe(); });
+
+  it('GET_PAGE_STATUS answers the top frame with the hint count and showing state', () => {
+    seedWrapper(true);
+    seedWrapper(false);
+    expect(badgeVisibilityMessageHandlers.GET_PAGE_STATUS({ type: 'GET_PAGE_STATUS' }, {} as never))
+      .toEqual({ hintCount: 2, badgesVisible: true });
+  });
+
+  it('GET_PAGE_STATUS stays silent in a subframe so the popup gets ONE response', () => {
+    seedWrapper(true);
+    subframe();
+    expect(badgeVisibilityMessageHandlers.GET_PAGE_STATUS({ type: 'GET_PAGE_STATUS' }, {} as never))
+      .toBeUndefined();
+  });
+
+  it('SET_BADGES_VISIBLE shows this frame\'s badges and answers from the top frame', async () => {
+    seedWrapper(false);
+    const answer = badgeVisibilityMessageHandlers.SET_BADGES_VISIBLE(
+      { type: 'SET_BADGES_VISIBLE', visible: true }, {} as never,
+    );
+    await settle();
+    expect(doScan).toHaveBeenCalled();
+    expect(pageSession.badgesVisible).toBe(true);
+    expect(answer).toEqual({ badgesVisible: true, hintCount: 1 });
+  });
+
+  it('SET_BADGES_VISIBLE still shows a SUBFRAME\'s badges, it just does not answer', async () => {
+    seedWrapper(false);
+    subframe();
+    const answer = badgeVisibilityMessageHandlers.SET_BADGES_VISIBLE(
+      { type: 'SET_BADGES_VISIBLE', visible: true }, {} as never,
+    );
+    await settle();
+    // The action happened in the subframe — a handler gated wholesale on the
+    // frame would leave subframe badges stuck at whatever they were.
+    expect(doScan).toHaveBeenCalled();
+    expect(pageSession.badgesVisible).toBe(true);
+    // Only the response was withheld.
+    expect(answer).toBeUndefined();
+  });
+
+  it('SET_BADGES_VISIBLE hides too, in a subframe as much as the top one', async () => {
+    const top = seedWrapper(true);
+    pageSession.badgesVisible = true;
+    const answer = badgeVisibilityMessageHandlers.SET_BADGES_VISIBLE(
+      { type: 'SET_BADGES_VISIBLE', visible: false }, {} as never,
+    );
+    await settle();
+    expect(top.hint!.hide).toHaveBeenCalled();
+    expect(answer).toEqual({ badgesVisible: false, hintCount: 1 });
+
+    const sub = seedWrapper(true);
+    pageSession.badgesVisible = true;
+    subframe();
+    expect(badgeVisibilityMessageHandlers.SET_BADGES_VISIBLE(
+      { type: 'SET_BADGES_VISIBLE', visible: false }, {} as never,
+    )).toBeUndefined();
+    await settle();
+    expect(sub.hint!.hide).toHaveBeenCalled();
+  });
+});
+
+describe('registerHintModeCommands', () => {
+  // Statically bound: a vi.resetModules() in the import-time test below must
+  // not hand the others a fresh, empty dispatcher while the registrar keeps
+  // registering on the original.
+  let dispatch: (a: string) => void;
+  let detachOverlay: (() => void) | null = null;
+
+  beforeEach(() => {
+    dispatch = (a) => realDispatcher.dispatch(a, {});
+    realDispatcher._resetForTesting();
+    registerHintModeCommands();
+    vi.mocked(doScan).mockClear();
+  });
+
+  afterEach(() => { detachOverlay?.(); detachOverlay = null; });
+
+  /** A real holder above ambient rank, holding one codeword — what an open
+   *  range pick or a painted search-badge set looks like to the registry. */
+  function overlayHolding(codeword: string): void {
+    detachOverlay = registerHolder({
+      id: 'test-overlay', priority: 100, claim: 'additive',
+      held: () => [codeword],
+      republish: () => {}, onCodewordRejected: () => {},
+    } as unknown as Parameters<typeof registerHolder>[0]);
+  }
+
+  it('hint_mode paints the ambient badges when nothing is showing', async () => {
+    seedWrapper(false);
+    dispatch('hint_mode');
+    await settle();
+    expect(doScan).toHaveBeenCalled();
+    expect(pageSession.badgesVisible).toBe(true);
+  });
+
+  it('hint_mode does NOT repaint when badges are already up', async () => {
+    seedWrapper(true);
+    pageSession.badgesVisible = true;
+    dispatch('hint_mode');
+    await settle();
+    // The ambient sweep is skipped, not merely idempotent — repainting here is
+    // the `/ query Enter f` field bug, where typing a search badge repainted
+    // every link hint over the results just asked for.
+    expect(doScan).not.toHaveBeenCalled();
+  });
+
+  it('hint_mode enters hint mode in every case, painted or not', async () => {
+    const enter = vi.spyOn(keyHandler, 'enterHintMode').mockImplementation(() => {});
+    try {
+      seedWrapper(false);
+      dispatch('hint_mode');
+      await settle();
+      expect(enter).toHaveBeenCalledTimes(1);
+
+      pageSession.badgesVisible = true;
+      dispatch('hint_mode');
+      await settle();
+      // Skipping the paint must not skip the MODE — that would leave `f`
+      // painting nothing and swallowing the keystroke.
+      expect(enter).toHaveBeenCalledTimes(2);
+    } finally {
+      enter.mockRestore();
+    }
+  });
+
+  it('toggle_hints flips the shared showing state both ways', async () => {
+    const w = seedWrapper(false);
+    dispatch('toggle_hints');
+    await settle();
+    expect(pageSession.badgesVisible).toBe(true);
+
+    dispatch('toggle_hints');
+    await settle();
+    expect(w.hint!.hide).toHaveBeenCalled();
+    expect(anyBadgesShowing()).toBe(false);
+  });
+});
+
+describe('hint_mode and the overlay tiers', () => {
+  beforeEach(() => {
+    realDispatcher._resetForTesting();
+    registerHintModeCommands();
+    vi.mocked(doScan).mockClear();
+  });
+
+  it('does NOT repaint while an overlay tier holds codewords, even with badges down', async () => {
+    seedWrapper(false);
+    expect(pageSession.badgesVisible).toBe(false);   // the paint would otherwise fire
+    const detach = registerHolder({
+      id: 'test-overlay', priority: 100, claim: 'additive',
+      held: () => ['arch'],
+      republish: () => {}, onCodewordRejected: () => {},
+    } as unknown as Parameters<typeof registerHolder>[0]);
+    try {
+      realDispatcher.dispatch('hint_mode', {});
+      await settle();
+      // The field bug this guard exists for (2026-07-26): `/ query Enter f`,
+      // to type a search badge, repainted every link hint over the results the
+      // user had just asked for. Badges-down alone is NOT the condition.
+      expect(doScan).not.toHaveBeenCalled();
+    } finally {
+      detach();
+    }
+  });
+
+  it('repaints again once the overlay tier lets go', async () => {
+    seedWrapper(false);
+    const detach = registerHolder({
+      id: 'test-overlay', priority: 100, claim: 'additive',
+      held: () => ['arch'],
+      republish: () => {}, onCodewordRejected: () => {},
+    } as unknown as Parameters<typeof registerHolder>[0]);
+    realDispatcher.dispatch('hint_mode', {});
+    await settle();
+    expect(doScan).not.toHaveBeenCalled();
+
+    detach();
+    realDispatcher.dispatch('hint_mode', {});
+    await settle();
+    expect(doScan).toHaveBeenCalled();
+  });
+
+  it('registers nothing at import time', async () => {
+    const seen: string[] = [];
+    vi.resetModules();
+    vi.doMock('../core/singletons', () => ({
+      dispatcher: { register: (a: string) => { seen.push(a); } },
+      keyHandler: { enterHintMode: () => {}, exitHintMode: () => {} },
+    }));
+    try {
+      const fresh = await import('./badge-visibility');
+      expect(seen).toEqual([]);
+      fresh.registerHintModeCommands();
+      expect(seen.sort()).toEqual(['hint_mode', 'toggle_hints']);
+    } finally {
+      vi.doUnmock('../core/singletons');
+      vi.resetModules();
+    }
   });
 });

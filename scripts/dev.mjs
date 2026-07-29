@@ -24,6 +24,7 @@ import { cpSync, mkdirSync, rmSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { ENTRIES, STATIC_FILES, STATIC_DIRS, guardBailWrap } from './lib/bundle-spec.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
@@ -92,14 +93,6 @@ function notifyReload() {
   }, 150);
 }
 
-const entries = [
-  { in: 'src/content.ts',    out: 'content.js',    format: 'iife' },
-  { in: 'src/bootstrap.ts',  out: 'bootstrap.js',  format: 'iife' },
-  { in: 'src/background.ts', out: 'background.js', format: 'esm'  },
-  { in: 'src/offscreen.ts',  out: 'offscreen.js',  format: 'iife' },
-  { in: 'src/popup.ts',      out: 'popup.js',      format: 'iife' },
-  { in: 'src/options.ts',    out: 'options.js',    format: 'iife' },
-];
 
 // A wedged watcher is worse than a failed build: the dist keeps its last good
 // output, the browser keeps running it, and every later "rebuilt, go test it"
@@ -130,10 +123,8 @@ for (const target of targets) {
 
   // Static files copied once at startup. The manifest splitter writes
   // dist/<target>/manifest.json — re-run by hand if you edit it.
-  cpSync(resolve(root, 'offscreen.html'), resolve(outDir, 'offscreen.html'));
-  cpSync(resolve(root, 'popup.html'),     resolve(outDir, 'popup.html'));
-  cpSync(resolve(root, 'options.html'),   resolve(outDir, 'options.html'));
-  cpSync(resolve(root, 'icons'),          resolve(outDir, 'icons'), { recursive: true });
+  for (const f of STATIC_FILES) cpSync(resolve(root, f), resolve(outDir, f));
+  for (const d of STATIC_DIRS) cpSync(resolve(root, d), resolve(outDir, d), { recursive: true });
 
   const manifestResult = spawnSync(
     process.execPath,
@@ -154,7 +145,7 @@ for (const target of targets) {
   // Start a watch context per entry point. Reloads are coalesced above, so all
   // targets and entries settle into a single broadcast.
   const contexts = await Promise.all(
-    entries.map((e) =>
+    ENTRIES.map((e) =>
       esbuild.context({
         entryPoints: [resolve(root, e.in)],
         outfile: resolve(outDir, e.out),
@@ -169,6 +160,7 @@ for (const target of targets) {
           __BUILD_ID__: JSON.stringify('dev-watch'),
         },
         plugins: [reloadPlugin],
+        ...guardBailWrap(e),
       })
     )
   );

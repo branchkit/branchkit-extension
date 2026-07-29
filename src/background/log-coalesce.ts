@@ -24,7 +24,7 @@
  * acceptable: the transport below is already best-effort, and boots around
  * a SW death re-announce on recovery per the bk-log convention.
  */
-import type { MessageHandler } from './message-router';
+import type { MessageHandler } from '../core/message-router';
 import { forwardPluginDebugLog } from '../plugin/plugin-api';
 
 const COALESCED_TAGS = new Set(['BK_CS_BOOT']);

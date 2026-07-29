@@ -5,7 +5,7 @@
  * Voice commands arrive via background → BRANCHKIT_ACTION messages.
  */
 
-import { HintVisibility, ScannedElement, Message, DispatchResult, TabAction, ZoomAction } from './types';
+import { HintVisibility, ScannedElement, Message, DispatchResult } from './types';
 import { LabelAssignment, isVoiceAlphabetLoaded, setAlphabet } from './labels/words';
 import {
   SettleEngine,
@@ -13,14 +13,13 @@ import {
   REVEAL_REPAIR_FAST_ARM,
 } from './lifecycle/settle-engine';
 import { initConnectionMirror } from './plugin/connection-mirror';
-import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE, getPerfCounters, resetPerfCounters } from './scan/scanner';
+import { scanElements, scanSingle, isHintable, isVisible, deepQuerySelectorAll, scanInBatches, DEFAULT_SCAN_BATCH_SIZE } from './scan/scanner';
 import { noteDisconnectedShadowAttach } from './scan/shadow-attach-signal';
 import { DiscoverySource, ElementWrapper, applyClaimLabel } from './scan/element-wrapper';
 import * as idRegistry from './scan/registry';
 import type { CodewordMemoryEntry } from './labels/codeword-memory';
 import { loadRecall, recalledCodewords, rememberClaimedCodewords, resolvePreferredCodeword, isRecallLoaded } from './labels/codeword-recall';
 import { type RebindCounters } from './labels/rebind';
-import { resolveTarget } from './activate/activate-resolution';
 import { schedulePointerVisibilitySweep, setPointerRecheckScopeEnabled, observeInvisibleCandidates } from './observe/visibility-tracker';
 import { rebindCounters, collectLimboWrappers, collectStrongKeyIndex, dropDisconnectedWrappers } from './observe/limbo';
 import { attachWrapper, detachWrapper, seedPreferredFromMemory, attachDiscovered } from './core/wrapper-lifecycle';
@@ -31,8 +30,9 @@ import { bkLog, setLogCorrelation } from './debug/bk-log';
 import { harnessHooksEnabled } from './debug/harness-hooks';
 import { store } from './core/store';
 import {
-  initBadgeVisibility, anyBadgesShowing, showBadges, hideBadges, clearHintFilter,
-  toggleHints, setBadgesVisible, borrowBadgeScreen, type BadgeBorrow,
+  anyBadgesShowing, showBadges, hideBadges, clearHintFilter,
+  toggleHints, discardBadgeScreenBorrow, badgeVisibilityMessageHandlers,
+  registerHintModeCommands, shouldAutoShowBadges, scheduleHintRefresh,
 } from './render/badge-visibility';
 import { HintBadge } from './render/hints';
 import { elementTarget } from './render/badge-target';
@@ -41,12 +41,13 @@ import { onContainerResize } from './observe/container-resize-tracker';
 import { onTransformAncestorMutation, setTransformTriggerEnabled } from './observe/transform-ancestor-tracker';
 import { onTargetMutation } from './observe/target-mutation-tracker';
 import { setOcclusionEnabled, isOccludedLive } from './observe/occlusion';
-import { VIEWPORT_MARGIN_PX } from './observe/intersection-tracker';
 import { setOcclusionMemoMode, occlusionMemoAllDirty, occlusionMemoNoteTarget, occlusionMemoNotePointer } from './observe/occlusion-memo';
 import { reconcileClipObservation, setClipObserverEnabled } from './observe/clip-observer';
-import { isRectOnScreen, geometryInBand } from './core/layout-cache';
+import { isRectOnScreen } from './core/layout-cache';
 import { placeBadges, invalidateProbe } from './placement';
-import { activateElement, dispatchHover, resolveNavTarget, type ActivationResult } from './activate/event-sequence';
+import { activateElement, resolveNavTarget, INPUT_TYPES, type ActivationResult } from './activate/event-sequence';
+import { sealedDispatchSeen, reportNoSuchHint } from './activate/sealed-gate';
+import { trimFrameUrl } from './core/frame';
 import {
   emitActivatePath,
   elementSnap,
@@ -54,67 +55,31 @@ import {
 } from './activate/activate-path-log';
 import { captureDebugSnapshot } from './debug/debug-snapshot';
 import { toggleOverlay } from './render/debug-overlay';
-import { toggleHelpOverlayWithSpokenForms } from './render/help-overlay';
-import { registerPaletteCommands, closePalette } from './render/palette-host';
-import { setTabMarker, reapplyTabMarker, refreshTabMarker } from './render/tab-title';
-import { setModeChip, flashModeChipRefusal } from './render/mode-chip';
-import { getSiteKeyState, onSiteKeysChanged } from './keymap/keyboard-rules';
-import { copyText } from './activate/clipboard';
+import { registerHelpCommands, helpMessageHandlers } from './render/help-overlay';
+import { registerPaletteCommands, paletteHostMessageHandlers } from './render/palette-host';
+import { setTabMarker, refreshTabMarker, tabTitleMessageHandlers } from './render/tab-title';
 import { flashToast } from './render/toast';
-import { registerSelectionCommands, restorePosition, caret, SELECTION_ACTIONS, parseSelectionCommand } from './activate/selection-commands';
+import { registerSelectionCommands, SELECTION_ACTIONS, parseSelectionCommand, markRestoreMessageHandlers } from './activate/selection-commands';
 import { startQueryFieldReporting } from './plugin/query-field';
 import { cancelRangePick } from './activate/range-disambiguation';
-import { armSearchBadges, clearSearchBadges } from './activate/search-badges';
+import { clearSearchBadges, retrySearchBadgeArm } from './activate/search-badges';
 import {
-  registerHolder, anyHolderMatchesPrefix, narrowByPrefix, resolveCodeword,
-  resolveCodewordAboveAmbient, soleHolderMatch, heldAnywhere, allHeld,
-  rejectAll, reconcileAll, relabelAll, disposeAllHolders, overlayCodewordsLive,
+  registerHolder, narrowByPrefix, resolveCodewordAboveAmbient,
+  allHeld, reconcileAll, relabelAll, disposeAllHolders,
   type CodewordOutcome,
 } from './labels/holder-registry';
 import { StoreHolder } from './labels/store-holder';
 import { narrowBadge } from './labels/codeword-typing';
 import { runEscapeCascade } from './activate/escape-cascade';
-import { setInnerTransientProbe } from './core/mode-stack';
-import { setModeMirrorSink } from './core/modes';
-import { documentInstanceId } from './labels/document-identity';
 import { preemptsPageKeys } from './activate/key-preamble';
 import './debug/dev-keepalive';
-import {
-  CodewordSnapshot,
-  takeSnapshot,
-  resolveFromSnapshot,
-} from './activate/snapshot';
-import { dispatcher, registry, keyHandler } from './core/singletons';
-import { DEFAULT_KEYMAP, type KeymapEntry } from './keymap/command-catalog';
-import { loadKeymap, onKeymapChanged } from './keymap/keymap-storage';
+import { keyHandler } from './core/singletons';
+import { installSiteKeyPolicy } from './keymap/site-key-policy';
 import { scanWithAdapter } from './adapters';
-import {
-  scroll,
-  scrollRegion,
-  scrollAtElement,
-  snapToElement,
-  cycleScrollTarget,
-  getCycleTarget,
-  resetCycleTarget,
-  scrollElement,
-  scrollToPercent,
-  setKeyHeld,
-  setScrollBoundaryCallback,
-  type ScrollDirection,
-  type ScrollAmount,
-  type ScrollRegion,
-} from './activate/scroller';
-import {
-  openFindMode,
-  closeFindMode,
-  purgeOrphanedFindPaint,
-  findNext,
-  findPrevious,
-  findImmediate,
-  setFindCallbacks,
-} from './scan/find';
-import { focusFirstInput, handleFocusInputKey } from './activate/focus-input';
-import { saveReference, resolveReference, listReferences } from './scan/references';
+import { setKeyHeld } from './activate/scroller';
+import { purgeOrphanedFindPaint, registerFindCommands } from './scan/find';
+import { handleFocusInputKey, registerFocusInputCommands } from './activate/focus-input';
+import { saveReference, resolveReference, listReferences, noteActivated, lastActivatedElement } from './scan/references';
 import {
   matchRules,
   applyExclusions,
@@ -133,19 +98,16 @@ import { isScrollTimelineSupported } from './render/scroll-accel';
 import { setNudgesFromSettings } from './placement';
 import { labelReservoir } from './labels/label-reservoir';
 import { doScan, scheduleDoScan } from './scan/scan-orchestrator';
-import { resolveHintLocally, reportDispatchResult } from './plugin/resolve';
+import { reportDispatchResult, hintResolveMessageHandlers } from './plugin/resolve';
 import { openLivenessPort, repairLivenessAfterBfcacheRestore } from './plugin/liveness';
 import { pageSession, scheduleYieldTask, yieldTask, TeardownReason } from './lifecycle/page-session';
-import { ensureSendMessageWrapped, resetMessageCounters, messageCountersSnapshot } from './debug/message-counters';
-import { recordCpu, resetCpuCounters, resetLongtask, resetWatchdog, computeCpuShare, rearmCpuShareBaseline, rearmWatchdogBaseline, cpuBucketsSnapshot, longtaskSnapshot, watchdogSnapshot, startPerfObservers, lifecycleCounters, resetLifecycleCounters, claimCounters } from './debug/perf-counters';
+import { setSettleEngine } from './lifecycle/settle-engine-ref';
+import { ensureSendMessageWrapped } from './debug/message-counters';
+import { recordCpu, startPerfObservers, claimCounters } from './debug/perf-counters';
 import { startVideoStallProbe } from './debug/video-stall-probe';
 import { startVideoPresenceReporter } from './observe/video-presence';
 import { setVideoOverlayGateEnabled } from './render/video-overlay';
 import { detectBrowser } from './keymap/browser-shortcuts';
-import {
-  mediaPlayPause, mediaMute, mediaSpeed, mediaSeek, mediaRestart, resolveVideoModeKey,
-  type PlayPauseOp, type MuteOp, type SpeedOp, type SeekDirection,
-} from './activate/media';
 import { notePaintSamplerScroll, snapshotExtras } from './debug/perf-report';
 import { initPoolAudit } from './debug/pool-audit';
 import { probeBfcacheRestore } from './debug/bfcache-probe';
@@ -159,10 +121,32 @@ import {
   hasSent,
   getSessionId,
   rotateSession,
+  republishAllGrammar,
   scheduleSync,
   syncNow,
 } from './labels/label-sync';
 import { installUncaughtCapture } from './debug/uncaught';
+import { registerMessageHandlers, routeMessage, setMessageGuard, type MessageOf } from './core/message-router';
+import { focusMessageHandlers, installWindowFocusTracking } from './core/window-focus';
+import { installPerfReporting } from './debug/perf-snapshot';
+import { registerScrollCommands } from './activate/scroll-commands';
+import { registerMediaCommands } from './activate/media-commands';
+import { registerKeyboardCommands } from './activate/keyboard-commands';
+import { registerTabCommands } from './activate/tab-commands';
+// These three go LAST deliberately (§6g.1): every module they import is already
+// in the list above, so appending them here leaves module evaluation order
+// unchanged — only the new modules themselves are new to the order.
+//
+// dispatch-target matters for this specifically. Placed where the
+// activate-resolution import it replaced used to sit (index 11), it hoisted
+// `lifecycle/page-session` from index 74 to 11 and `core/store` from 20 —
+// both of which construct a singleton at module scope. Verified rather than
+// assumed, and then moved rather than reasoned about, because the trick is
+// free and the reasoning is not.
+import { resolveDispatchTarget } from './activate/dispatch-target';
+import { dispatchVoiceAction } from './activate/voice-dispatch';
+import { activateWrapper } from './activate/keyboard-activation';
+import { installKeymapRegistry } from './keymap/keymap-registry';
 
 // --- Idempotency guard ---
 //
@@ -441,16 +425,26 @@ const engine = new SettleEngine(
     afterScrollSettle: () => {
       flushDeferredNavRescan();
       reconcileAll('scroll');
+      // A settle is also the signal that a find commit's own smooth scroll has
+      // finished moving the page. Arming happens AT commit, while that scroll
+      // is still in flight, so a match far down a long page is measured against
+      // the viewport being left and falls outside the band — and the empty set
+      // unregisters its holder, so the reconcileAll above can never reach it.
+      // This is the only way back. No-op unless an arm came up empty.
+      retrySearchBadgeArm();
     },
     afterSettle: () => {
       reconcileAll('general');
     },
   },
 );
-// Source modules (mutation-source, visibility-tracker) reach settle
-// scheduling through the session singleton — assigned before start() so the
-// reference exists as soon as any source can fire.
-pageSession.engine = engine;
+// Publish the engine. Source modules (mutation-source, visibility-tracker)
+// reach settle scheduling through `pageSession.engine`; the label stage reads
+// lifecycle/settle-engine-ref directly, because page-session is unreachable
+// from labels/. ONE reference under two names, not two copies — pageSession's
+// is an accessor over this. Published before start() so the reference exists
+// as soon as any source can fire.
+setSettleEngine(engine);
 
 // The IntersectionTracker's codeword-claim sync. The tracker itself is owned
 // by `pageSession` (constructed in start(), Tier 3); this callback stays here
@@ -485,87 +479,23 @@ function onTrackerCodewordsChanged(claimed: ElementWrapper[], released: string[]
 // call per scroll-end now, which makes per-call cost much less critical
 // than total observation overhead.)
 
-// Badge-visibility hooks: the module owns the transitions (render/
-// badge-visibility.ts); the scan and the pending hint-action verb stay
-// content-owned and reach it here.
-initBadgeVisibility({
-  doScan: () => { void doScan(); },
-  resetHintAction: () => { pendingHintAction = 'activate'; },
-});
+// find's relay is GONE — the last of it went at the review's prompting. The
+// badge borrow lives in find, resetCycleTarget with it, and both commit effects
+// now register from the modules that own them (activate/selection-commands for
+// the caret extend, activate/search-badges for the arm). The composition that
+// sat here was justified by an ordering between them that turned out not to
+// exist; onFindCommitted is a multicast again and says why.
+// (The onPhrase relay died with FindMode, Wave 3 C5b: the phrase box's commit
+// handler now arrives with the open — selection-commands passes resolveSelectTo
+// to openPhraseBox itself.)
 
-// Find borrows the badge screen while it runs — highlights and the badge
-// layer compete for the same screen — and gives it back on exit (field,
-// 2026-07-26: every exit left an always-mode page badge-less, healed only by
-// `f` as a side effect). One borrow per SESSION: `findImmediate` re-fires
-// onActivate over a live session, and re-borrowing would snapshot the hidden
-// state find itself caused — so a live borrow just re-asserts the hide
-// (`f` mid-session may have re-shown badges).
-let findBorrow: BadgeBorrow | null = null;
-
-function returnFindBadgeBorrow(): void {
-  findBorrow?.restore();
-  findBorrow = null;
-}
-
-setFindCallbacks({
-  // These callbacks own only the badge borrow/restore — the plugin's find tag
-  // rides the mode stack's mirror (the session's push in find.ts, Wave 3 C4a).
-  onActivate: () => {
-    if (findBorrow === null) findBorrow = borrowBadgeScreen();
-    else if (findBorrow.took) hideBadges();
-  },
-  // A HANDOFF end (phrase commit) passes the badge borrow to the consumer
-  // along with the paint: restoring at deactivate re-showed every page badge
-  // around the pick chips (field, 2026-07-26 — chips own the screen, ratified
-  // 2026-07-25). The borrow returns at onPaintCleared instead, which every
-  // consumer exit reaches via clearFindPaint; a plain close returns it here.
-  onDeactivate: (handoff) => {
-    resetCycleTarget();
-    clearSearchBadges('find_deactivated');
-    if (!handoff) returnFindBadgeBorrow();
-  },
-  onPaintCleared: () => returnFindBadgeBorrow(),
-  // When a search commits while caret/visual selection is active, extend the
-  // selection straight to the match — so "/ query Enter" is a find-and-select,
-  // no need to press `n` (which skips to the next match). `caret` is defined
-  // later but only called at runtime, well after module init.
-  // Commit is also when the results become a SET you move around in — n/N goes
-  // live here — so it's when each match gets a codeword. Arming per keystroke
-  // would churn codewords on every character typed.
-  onCommit: () => {
-    if (caret.isActive()) caret.extendToCurrentMatch();
-    armSearchBadges();
-  },
-  // (The onPhrase relay died with FindMode, Wave 3 C5b: the phrase box's
-  // commit handler now arrives with the open — selection-commands passes
-  // resolveSelectTo to openPhraseBox itself.)
-});
-
-setScrollBoundaryCallback((boundary) => {
-  try {
-    chrome.runtime.sendMessage({
-      type: 'SCROLL_BOUNDARY',
-      boundary,
-    } as Message);
-  } catch {
-    // Extension context may be invalidated
-  }
-});
-
-// Wire the LabelStage's catchup sync to content.ts-owned collaborators.
-// detachWrapper is imported from core/wrapper-lifecycle; reconcile is a hoisted
-// declaration; store is imported; the visibility flag (pageSession.badgesVisible)
-// is read lazily via the arrow. Catchup-built badges converge through the single
-// reconcile entry.
-initLabelSync({
-  store,
-  detachWrapper,
-  reconcile: () => engine.reconcile(),
-  isBadgesVisible: () => pageSession.badgesVisible,
-  // Shadow-desync recovery: same full re-push the SW-restart resync and
-  // bfcache restore use (hoisted declaration).
-  republishAll: (reason) => republishAllGrammar(reason),
-});
+// One field left, and it is not a cycle — it is test isolation. label-sync can
+// reach `store` perfectly well (core/store is a leaf both ways), but
+// label-sync.test.ts drives every case against a FRESH WrapperStore rather than
+// the singleton, and a direct import would silently point the module at the
+// real one. The other two fields went home once the put queue moved to a leaf:
+// detachWrapper and pageSession.badgesVisible are imports in label-sync now.
+initLabelSync({ store });
 
 // Confirm-rejection handler (epoch-handshake Phase 4, review bug #5): the SW
 // pool arbitrated these codewords AWAY from this frame — another frame won
@@ -574,57 +504,32 @@ initLabelSync({
 // badges drop the losing badge, and the store's delegate (the StoreHolder
 // wiring below) strips the wrapper back to unhinted WITHOUT releaseLabel — a
 // RELEASE_LABELS here would free the WINNER's assignment out from under it.
-labelReservoir.onConfirmRejected((codewords) => {
-  for (const cw of codewords) rejectAll(cw);
-  bkLog('BK_CONFIRM_REJECTED', { codewords: codewords.length });
-});
-
 // Reservoir leak sweep (2026-06-29 review): an outstanding codeword no live
 // wrapper holds (past the claim→attach grace) was leaked by a
 // release-skipping teardown path; the reservoir releases it back to the
 // pool, and we clear the plugin-side grammar entry it may still occupy.
-labelReservoir.installLeakSweep(
-  // "Does anyone still hold this codeword?" — the registry's question, each
-  // holder answering about its own bookkeeping (labels/holder-registry.ts).
-  // The chips and search badges answer for themselves; the store answers at
-  // CLAIM level through the StoreHolder (labels/store-holder.ts — `label` is
-  // only assigned at paint time, and the sweep's old paint-level byCodeword
-  // read reclaimed a LIVE claimed-but-unpainted wrapper's codeword; tests in
-  // scan/element-wrapper.test.ts "claimed-vs-painted"). This is the form that
-  // cannot drift when the store's shape changes.
-  (cw) => heldAnywhere(cw),
-  (leaked) => {
-    let deletesQueued = 0;
-    for (const cw of leaked) {
-      if (hasSent(cw)) {
-        queueDelete(cw);
-        deletesQueued++;
-      }
+// The sweep's own question ("does anyone still hold this?") is the holder
+// registry's and the reservoir asks it directly now; only the plugin-side
+// cleanup below still routes through here, because it reaches label-sync,
+// which imports the reservoir back.
+labelReservoir.onLeakSwept((leaked) => {
+  let deletesQueued = 0;
+  for (const cw of leaked) {
+    if (hasSent(cw)) {
+      queueDelete(cw);
+      deletesQueued++;
     }
-    bkLog('BK_RESERVOIR_SWEEP', { leaked: leaked.length, deletesQueued });
-    if (deletesQueued > 0) scheduleSync('reservoir_sweep');
-  },
-);
+  }
+  bkLog('BK_RESERVOIR_SWEEP', { leaked: leaked.length, deletesQueued });
+  if (deletesQueued > 0) scheduleSync('reservoir_sweep');
+});
 
-// A claim that ran while the reservoir was dry left its wrappers unhinted
-// ('' slots); the reconciler re-queues them, but its triggers are all
-// user-activity-driven (scroll settle, mutation, focus) — on a static, dense
-// first paint the overflow wrappers would stay bare indefinitely. When a
-// refill actually lands codewords, run the coalesced reconcile directly so
-// the starved wrappers claim + paint without waiting for the user to move.
-labelReservoir.onRefillLanded(() => engine.scheduleReconcile());
+// The last-activated element (scan/references.ts) and the pre-phrase codeword
+// snapshot (activate/snapshot.ts) both live with the feature that gives them a
+// reason to exist. See notes/DESIGN_ENTRY_POINT_TOPOLOGY.md phase 3.
 
-let lastActivatedElement: Element | null = null;
-
-// Pre-phrase snapshot. Captured when the voice plugin signals a verb
-// prefix (show_hints_go / show_hints_set / show_hints_tables) so the
-// codeword the user speaks resolves to the wrapper they SAW at speech
-// start, even if the page has mutated by the time the action arrives.
-// See src/snapshot.ts and DESIGN_BROWSER_HINT_ALLOCATOR.md section 3.C.
-let phraseSnapshot: CodewordSnapshot | null = null;
-
-// Input element types — used by the "activate" action to decide click vs focus.
-const INPUT_TYPES = new Set(['input', 'textarea', 'select', 'contenteditable']);
+// INPUT_TYPES (click vs focus) moved next to activateElement, which answers
+// the same question for every other tag — activate/event-sequence.ts.
 
 // --- Per-domain hint rules: wiring (state + appliers live in rules/rule-apply.ts) ---
 
@@ -735,15 +640,6 @@ function whenDOMSettles(callback: () => void): void {
 
 // --- User settings from storage (core/config.ts) ---
 
-// Hints appear on their own — on a fresh page or after an action — only in
-// "always" mode. "manual" mode never auto-shows (summon with `f`). A Shift+F
-// hide in always mode is momentary (this page only): there is no persisted
-// hidden state, so the next page paints them again — "Always" always means
-// always, and a stray hide can never silently strand the badges off.
-function shouldAutoShowBadges(): boolean {
-  return getHintVisibility() === 'always';
-}
-
 loadConfig({
   onDisplayModeChange: () => {
     // Through the registry, exactly as the alphabet swap below: a store-only
@@ -844,7 +740,7 @@ if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
 // plugin/connection-mirror.ts). Arms the mirror state consumed by the mode
 // chip and help overlay; badges paint at full opacity regardless of
 // connection since display-grade demotion phase 2.
-initConnectionMirror(() => {});
+initConnectionMirror();
 
 // Adopt the BranchKit voice alphabet (overlay) from chrome.storage.local on
 // script load, if BranchKit was already connected. Local (not sync) because the
@@ -1061,36 +957,17 @@ if (typeof chrome !== 'undefined' && chrome.storage?.local) {
 
 // --- Register Commands (built from the keymap) ---
 //
-// The registry is the matcher; the keymap (command-catalog.ts DEFAULT_KEYMAP,
-// overridable per-user via keymap-storage) is the source of truth for what's
-// bound to what. Building the registry from data (rather than hardcoded
-// registry.add calls) is what lets the options-page editor rebuild bindings
-// live via registry.replaceAll — see notes/DESIGN_KEYMAP_CONFIG.md.
-//
-// The default set, for reference: one binding per command, preferring the
-// always-mode form (Shift/modifier chords route to commands even with hints
-// painted; bare letters are codeword input then, so they'd be eaten).
-// Shift+J/K/D/U/T/G scroll; Shift+H/L cycle tabs; Shift+F toggles hints, `f`
-// enters hint mode, and a capital letter in hint mode opens in a new tab — the
-// trio that replaced the discrete show/hide/show-new-tab commands. A few
-// inherently-bare, hidden-only binds (h/l horizontal scroll, `cs`, `/`, `n`).
-// Users add extra binds (e.g. plain j) via the options editor.
-// The effective keymap, kept in sync with the registry so the help overlay can
-// render the user's actual binds (not just the defaults).
-let currentKeymap: readonly KeymapEntry[] = DEFAULT_KEYMAP;
-function buildRegistryFromKeymap(entries: readonly KeymapEntry[]): void {
-  currentKeymap = entries;
-  registry.replaceAll(
-    entries.map((e) => ({ keys: e.keys, action: e.command, params: e.params })),
-  );
-}
-// Defaults synchronously so keybinds work before the async storage read
-// returns; then apply the stored keymap (if any) and rebuild live on edits.
-buildRegistryFromKeymap(DEFAULT_KEYMAP);
-if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
-  void loadKeymap().then(buildRegistryFromKeymap);
-  onKeymapChanged(buildRegistryFromKeymap);
-}
+// The keymap-to-registry sync and the live keymap it keeps live in
+// keymap/keymap-registry.ts, which carries the rationale. An explicit call
+// because it does I/O: a storage read at some module's import scope is a boot
+// order nobody chose — the same reason installSiteKeyPolicy is called below.
+installKeymapRegistry();
+
+// The keymap's per-site companion: which keys this page gets to keep. Same
+// shape as the block above (defaults stand until the async read lands, then
+// live on edits), and an explicit call for the same reason — a storage read at
+// some module's import scope is a boot order nobody chose.
+installSiteKeyPolicy();
 
 // --- Register Action Handlers ---
 
@@ -1100,289 +977,47 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
 // That paint is the AMBIENT sweep, skipped when an overlay tier already holds
 // codewords — field 2026-07-26: `/ query Enter f`, to type a search badge,
 // repainted every link hint over the results just asked for.
-dispatcher.register('hint_mode', () => {
-  if (!pageSession.badgesVisible && !overlayCodewordsLive()) { doScan(); showBadges(); }
-  keyHandler.enterHintMode();
-});
-
-// The keyboard "hint action mode": what the next badge resolved by keyboard
-// should DO instead of a plain click. One armed value replaces the old pair of
-// booleans (activateInNewTab + yankHintArmed) so new verbs are a one-line add.
-// Set by a verb command (or the capital-letter new-tab affordance) before/while
-// in hint mode; consumed + reset in activateWrapper. See
-// notes/DESIGN_HINT_ACTION_MODES.md.
-type HintAction = 'activate' | 'newtab' | 'yank' | 'hover' | 'focus' | 'copytext' | 'caret';
-let pendingHintAction: HintAction = 'activate';
-
-// (toggleHints/setBadgesVisible — the shared Shift+F / voice-"toggle" /
-// popup transition — live in render/badge-visibility.ts, with the borrow
-// primitive the find bar and the range pick both ride.)
-dispatcher.register('toggle_hints', () => { toggleHints(); });
-
-dispatcher.register('activate_hint', (params) => {
-  const codeword = params.word2 ? `${params.word} ${params.word2}` : params.word;
-  if (!codeword) return;
-  const w = store.byCodeword(codeword);
-  if (w) activateWrapper(w);
-});
+registerHintModeCommands();
 
 // --- Scroll action handlers ---
 
-dispatcher.register('scroll_down', (params) => {
-  const count = parseInt(params.count || '1', 10) || 1;
-  const ct = getCycleTarget();
-  if (ct) scrollElement(ct, 'down', 'step', count);
-  else scroll('down', 'step', count);
-});
+// Scroll commands register from activate/scroll-commands.ts.
+registerScrollCommands();
 
-dispatcher.register('scroll_up', (params) => {
-  const count = parseInt(params.count || '1', 10) || 1;
-  const ct = getCycleTarget();
-  if (ct) scrollElement(ct, 'up', 'step', count);
-  else scroll('up', 'step', count);
-});
+// Find commands register from scan/find.ts.
+registerFindCommands();
 
-dispatcher.register('scroll_half_down', () => {
-  const ct = getCycleTarget();
-  if (ct) scrollElement(ct, 'down', 'half');
-  else scroll('down', 'half');
-});
-
-dispatcher.register('scroll_half_up', () => {
-  const ct = getCycleTarget();
-  if (ct) scrollElement(ct, 'up', 'half');
-  else scroll('up', 'half');
-});
-
-dispatcher.register('scroll_full_down', () => {
-  const ct = getCycleTarget();
-  if (ct) scrollElement(ct, 'down', 'full');
-  else scroll('down', 'full');
-});
-
-dispatcher.register('scroll_full_up', () => {
-  const ct = getCycleTarget();
-  if (ct) scrollElement(ct, 'up', 'full');
-  else scroll('up', 'full');
-});
-
-dispatcher.register('scroll_top', () => {
-  const ct = getCycleTarget();
-  if (ct) scrollElement(ct, 'up', 'top');
-  else scroll('up', 'top');
-});
-
-dispatcher.register('scroll_bottom', () => {
-  const ct = getCycleTarget();
-  if (ct) scrollElement(ct, 'down', 'bottom');
-  else scroll('down', 'bottom');
-});
-
-dispatcher.register('scroll_left', () => {
-  const ct = getCycleTarget();
-  if (ct) scrollElement(ct, 'left', 'step');
-  else scroll('left', 'step');
-});
-
-dispatcher.register('scroll_right', () => {
-  const ct = getCycleTarget();
-  if (ct) scrollElement(ct, 'right', 'step');
-  else scroll('right', 'step');
-});
-
-dispatcher.register('cycle_scroll_target', () => {
-  cycleScrollTarget();
-});
-
-// --- Find action handlers ---
-
-dispatcher.register('find_open', () => {
-  openFindMode();
-});
-
-dispatcher.register('find_close', () => {
-  closeFindMode();
-});
-
-dispatcher.register('find_next', () => {
-  findNext();
-});
-
-dispatcher.register('find_previous', () => {
-  findPrevious();
-});
-
-// Keyboard help overlay (default ?). Reads the live keymap so it shows the
-// user's actual binds; the overlay fetches phrase overrides + aliases on open
-// (render/help-overlay.ts). Extension-owned — works without BranchKit connected.
-dispatcher.register('toggle_help', () => toggleHelpOverlayWithSpokenForms(currentKeymap));
+// Keyboard help overlay (default ?) — registers with the overlay it opens, in
+// render/help-overlay.ts. Extension-owned: works without BranchKit connected.
+registerHelpCommands();
 
 // Command palette (notes/DESIGN_TAB_NAVIGATION.md, Layer 2): the open
 // commands live with the overlay host (render/palette-host.ts).
 registerPaletteCommands();
 
-// Tab verbs — forward to the background SW's handleTabAction (content scripts
-// can't touch chrome.tabs). These registrations serve the keyboard path only;
-// voice never reaches them (the background intercepts tab actions off the SSE
-// stream so they work on pages without a content script).
-const TAB_COMMANDS: ReadonlyArray<readonly [string, TabAction]> = [
-  ['next_tab', 'next'], ['previous_tab', 'previous'],
-  ['first_tab', 'first'], ['last_tab', 'last'], ['goto_tab', 'goto'],
-  ['last_active_tab', 'last_active'],
-  ['new_tab', 'new'], ['close_tab', 'close'], ['restore_tab', 'restore'],
-  ['duplicate_tab', 'duplicate'], ['pin_tab', 'pin'], ['mute_tab', 'mute'],
-  ['move_tab_left', 'move_left'], ['move_tab_right', 'move_right'],
-];
-for (const [command, action] of TAB_COMMANDS) {
-  dispatcher.register(command, (params) => {
-    const n = parseInt(params.index ?? '', 10);
-    const msg: Message = Number.isFinite(n)
-      ? { type: 'TAB_ACTION', action, index: n }
-      : { type: 'TAB_ACTION', action };
-    chrome.runtime.sendMessage(msg).catch(() => {});
-  });
-}
-
-// Page zoom — like the tab verbs, forwarded to the background SW (chrome.tabs
-// zoom APIs are unavailable in content scripts). Keyboard path only; voice is
-// intercepted off the SSE stream in the background.
-const ZOOM_COMMANDS: ReadonlyArray<readonly [string, ZoomAction]> = [
-  ['zoom_in', 'in'], ['zoom_out', 'out'], ['zoom_reset', 'reset'],
-];
-for (const [command, action] of ZOOM_COMMANDS) {
-  dispatcher.register(command, () => {
-    chrome.runtime.sendMessage({ type: 'ZOOM_ACTION', action } as Message).catch(() => {});
-  });
-}
+// Tab and zoom verbs, forwarded to the SW — activate/tab-commands.ts.
+registerTabCommands();
 
 // Page navigation — also handled inline in the BRANCHKIT_ACTION listener for the
 // voice path; registering here makes them keyboard-bindable (extension-owned).
 // history.back/forward step the full stack so voice-navigated SPA entries
 // (synthetic clicks, isTrusted=false) aren't skipped like the UI buttons do.
-dispatcher.register('history_back', () => {
-  history.back();
-});
-dispatcher.register('history_forward', () => {
-  history.forward();
-});
-dispatcher.register('focus_input', () => {
-  focusFirstInput();
-});
-dispatcher.register('refresh', () => {
-  location.reload();
-});
-// Pass-through: hand the keyboard to the page (its own shortcuts work) until
-// Escape. See notes/DESIGN_PASS_THROUGH.md.
-dispatcher.register('insert_mode', () => {
-  keyHandler.enterInsertMode();
-});
-dispatcher.register('pass_next_key', () => {
-  keyHandler.armPassNextKey();
-});
+// history_back / history_forward / refresh register with the rest of the
+// go-somewhere-else family in activate/selection-commands.ts.
+registerFocusInputCommands();
+registerKeyboardCommands();
 
 // Media commands + video layer (notes/DESIGN_VIDEO_MEDIA_COMMANDS.md).
 // Element-API transport verbs — no-ops in a frame with no large video, so a
 // tab-wide voice broadcast acts only in the frame that has one (embeds work
 // for free). The layer routes bare keys here via the injected handler.
-dispatcher.register('video_mode', () => keyHandler.enterVideoMode());
-dispatcher.register('video_exit', () => keyHandler.exitVideoMode()); // the plugin's mode-mirror forwarder (external tag clear)
-dispatcher.register('media_play_pause', (params) => {
-  mediaPlayPause((params.op as PlayPauseOp) || 'toggle');
-});
-dispatcher.register('media_mute', (params) => {
-  mediaMute((params.op as MuteOp) || 'toggle');
-});
-dispatcher.register('media_speed', (params) => {
-  mediaSpeed((params.op as SpeedOp) || 'faster');
-});
-dispatcher.register('media_seek', (params) => {
-  const direction: SeekDirection = params.direction === 'back' ? 'back' : 'ahead';
-  mediaSeek(direction, parseInt(params.seconds || '10', 10));
-});
-dispatcher.register('media_restart', () => mediaRestart());
-keyHandler.setVideoKeyHandler((e) => {
-  const r = resolveVideoModeKey(e);
-  if (r.kind === 'exit') {
-    e.preventDefault();
-    e.stopPropagation();
-    keyHandler.exitVideoMode();
-    return true;
-  }
-  // dispatch and consume both swallow the key — the layer owns bare keys, so
-  // an unbound letter no-ops instead of firing a Normal bind or reaching the
-  // page.
-  e.preventDefault();
-  e.stopPropagation();
-  if (r.kind === 'dispatch') dispatcher.dispatch(r.action, r.params ?? {});
-  return true;
-});
-
+registerMediaCommands();
 // Selection / caret / marks / page-nav commands live in
 // activate/selection-commands.ts (round-3 feature module); registered below.
 registerSelectionCommands();
 
-// Yank a link via hint (Vimium yf): enter hint mode; the resolved codeword
-// copies the link's URL instead of following it. Keyboard-only.
-dispatcher.register('yank_hint', () => {
-  pendingHintAction = 'yank';
-  keyHandler.enterHintMode();
-});
-// Focus a badge's element without activating it (Vimium focus hint). Then type
-// via Insert. Distinct from focus_input (first field) — this picks any element.
-dispatcher.register('focus_hint', () => {
-  pendingHintAction = 'focus';
-  keyHandler.enterHintMode();
-});
-// Copy a badge's visible text (vs yank_hint's URL).
-dispatcher.register('copytext_hint', () => {
-  pendingHintAction = 'copytext';
-  keyHandler.enterHintMode();
-});
-// Hover a badge's element (reveal menus/controls) — keyboard twin of the voice
-// "hover {hint}" (still plugin-contributed; see DESIGN_HINT_ACTION_MODES.md 3b).
-dispatcher.register('hover_hint', () => {
-  pendingHintAction = 'hover';
-  keyHandler.enterHintMode();
-});
-// Start a caret/visual selection at a badge's element (Vimium hint→caret) —
-// then drive it by keyboard or voice ("select word" / "copy that").
-dispatcher.register('caret_hint', () => {
-  pendingHintAction = 'caret';
-  keyHandler.enterHintMode();
-});
-
-dispatcher.register('find_immediate', (params) => {
-  const query = params.query || '';
-  if (query) findImmediate(query);
-});
-
-// Voice scroll handler — receives parameterized scroll commands from the plugin
-dispatcher.register('scroll', (params) => {
-  const direction = (params.direction || 'down') as ScrollDirection;
-  const amount = (params.amount || 'step') as ScrollAmount;
-  const count = parseInt(params.count || '1', 10) || 1;
-  const region = params.region as ScrollRegion | undefined;
-
-  if (region) {
-    scrollRegion(region, direction, amount, count);
-  } else {
-    scroll(direction, amount, count);
-  }
-});
-
-dispatcher.register('scroll_to_percent', (params) => {
-  const pct = parseInt(params.percent || '50', 10);
-  scrollToPercent(pct);
-});
-
-dispatcher.register('scroll_to_element', (params) => {
-  const position = (params.position || 'top') as 'top' | 'center' | 'bottom';
-  const selector = params.selector;
-  if (selector) {
-    const el = document.querySelector(selector);
-    if (el) snapToElement(el, position);
-  }
-});
+// The five hint-action arms register with the other keyboard modes, in
+// activate/keyboard-commands.ts.
 
 
 // --- Keyboard Filter Callback ---
@@ -1394,37 +1029,6 @@ dispatcher.register('scroll_to_element', (params) => {
 // so it's obvious the extension is listening even in always-visible mode (where
 // badges don't otherwise change on F). No imposed color and no size change;
 // each badge just asserts its own hue harder. One write on the document root
-// arms every badge (custom props inherit through the badge shadow). The
-// per-badge color + the border rule live in the badge shadow CSS.
-function setKeyboardArmed(on: boolean): void {
-  const root = document.documentElement.style;
-  if (on) root.setProperty('--bk-kbd-b-alpha', '1');
-  else root.removeProperty('--bk-kbd-b-alpha');
-}
-
-keyHandler.setModeChangeCallback((mode) => {
-  setModeChip(mode);
-  setKeyboardArmed(mode === 'hint');
-});
-
-// The chip has ONE writer, and it is this file. A refused keystroke pulses it;
-// the keyboard reports the refusal and does not know what a refusal looks like
-// (it briefly did, and that made the chip two-owner).
-keyHandler.setRefusedKeyCallback(() => flashModeChipRefusal());
-
-// Per-site keyboard policy — full exclusion (all keys to the page) and/or
-// granular passthrough (specific keys to the page, the rest of BranchKit's
-// binds still work). Applied on load and kept live as the popup edits it.
-// Voice is unaffected. See notes/DESIGN_PASS_THROUGH.md.
-function applySiteKeys(): void {
-  void getSiteKeyState(location.href).then(({ excluded, passKeys }) => {
-    keyHandler.setExcluded(excluded);
-    keyHandler.setPassKeys(passKeys);
-  });
-}
-applySiteKeys();
-onSiteKeysChanged(applySiteKeys);
-
 // Escape out of hint mode: in ALWAYS-visible mode the badges stay painted
 // (they're for voice — Escape just leaves keyboard typing mode); in MANUAL
 // mode Escape dismisses the summoned hints, the Vimium behavior. The mode
@@ -1432,33 +1036,15 @@ onSiteKeysChanged(applySiteKeys);
 // Physical Escape peels a pending range pick. Without this the only exit is
 // the voice "escape" cascade — no help when a pick is stuck because voice is
 // degraded, which is exactly when one is most likely to be stuck.
-// The Escape key runs the SAME cascade the spoken "escape"/"over" runs, so the
-// two inputs unwind through one declared order rather than two that drift.
-keyHandler.setEscapeHook(() => runEscapeCascade('key_escape'));
-
-// Hint's intra-mode transient probe (core/mode-stack.ts): the typed prefix
-// peels before the mode does. One implementation — escapeHintLayer and the
-// stack's peelTop both route through peelHintPrefix.
-setInnerTransientProbe('hint', () => keyHandler.peelHintPrefix());
+// (The Escape key's cascade wiring lives in activate/escape-cascade.ts now —
+// the module that owns the one-order claim registers the hook that makes it
+// true. content.ts still runs the SPOKEN half below.)
 
 // The mode-mirror transport (Wave 3 C4a): every mirrored-mode edge posts this
 // frame's stack; the SW derives the tag set (background/mode-mirror.ts, which
 // carries the failure model). A sync throw reports the edge unposted → retry.
-setModeMirrorSink({
-  post: (edge) => {
-    try {
-      chrome.runtime.sendMessage({
-        type: 'MODE_STACK', docId: documentInstanceId, stack: [...edge.stack],
-      } as Message).catch(() => {});
-      return true;
-    } catch {
-      return false;
-    }
-  },
-});
-
 keyHandler.setHintEscapeCallback(() => {
-  pendingHintAction = 'activate'; // an abandoned verb (yf/hover/… then Esc) must not leak to the next hint
+  keyHandler.resetHintAction(); // an abandoned verb (yf/hover/… then Esc) must not leak to the next hint
   if (getHintVisibility() !== 'always') hideBadges();
 });
 
@@ -1475,7 +1061,7 @@ const storeHolder = new StoreHolder(store, {
   // unless an explicit verb (yf then a capital) keeps precedence, then the
   // same hide-after-activate the store branch did.
   activate: (w) => {
-    if (keyHandler.isNewTabArmed() && pendingHintAction === 'activate') pendingHintAction = 'newtab';
+    keyHandler.promoteNewTabIfArmed();
     activateWrapper(w);
     hideBadges();
   },
@@ -1530,70 +1116,16 @@ function narrowStoreHints(prefix: string): void {
   for (const w of store.all) narrowBadge(w.hint, w.label?.letter, prefix);
 }
 
-// The keyboard's accept gate asks the registry the SAME question the spoken
-// path asks — who owns this codeword — instead of a store-only subset of it.
-// Chips and search badges hold codewords outside the store, and a keyboard
-// that only knew the store rejected their first letter as a stray key.
-keyHandler.setMatchPredicate((prefix) => anyHolderMatchesPrefix(prefix));
-
-// Mid-codeword progress and typed completion, through the ONE registry order
-// (labels/holder-registry.ts). A sole match fires at the same moment speaking
-// the whole codeword would — chip, search badge or link hint alike; the
-// store's completion bookkeeping lives in its activate delegate above. When
-// nothing completes, every eligible holder narrows in the same breath ('' —
-// the pair cancelled — resets them all).
-keyHandler.setFilterCallback((prefix: string) => {
-  const sole = soleHolderMatch(prefix);
-  if (sole) {
-    const outcome = resolveCodeword(sole);
-    if (outcome.kind === 'off_screen') {
-      flashToast('That match is off screen — scroll to it first');
-      return;
-    }
-    if (outcome.kind === 'acted') keyHandler.exitHintMode();
-    return;
-  }
-  narrowByPrefix(prefix);
-});
+// The keyboard's codeword wiring (match predicate + typed completion) moved to
+// core/singletons.ts, next to the KeyHandler it configures — the entry point
+// does not need to know that typing a codeword consults the holder registry.
+// See notes/DESIGN_ENTRY_POINT_TOPOLOGY.md §6a.
 
 // --- Core Functions ---
 
-/**
- * Pull-resolution live strict gate (ext notes/DESIGN_STATIC_PAIR_GRAMMAR.md
- * 0c): the sealed-alphabet match doesn't consult the `_strict` mirror, so
- * seen-is-clickable is enforced at dispatch, against live state — on-screen,
- * CSS-visible, not occluded. Shared by activate and the element verbs.
- */
-function sealedDispatchSeen(target: unknown): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  const w = store.findWrapperFor(target);
-  const rect = target.getBoundingClientRect();
-  // isVisible(target) IS the live cssHidden check (phase 1) and
-  // isOccludedLive the live occlusion check (phase 2) — no stored flags
-  // (notes/DESIGN_OBSERVED_STATE_READ_TIME.md).
-  return (
-    isRectOnScreen(rect, window.innerWidth, window.innerHeight) &&
-    isVisible(target) &&
-    !(w !== undefined && isOccludedLive(w))
-  );
-}
-
-/** The refused-pair feedback + dispatch result for a sealed miss. */
-function reportNoSuchHint(
-  action: string,
-  codeword: string,
-  resolution: DispatchResult['resolution'],
-  fp: string,
-  params: Record<string, string> | undefined,
-): void {
-  flashToast(`No hint "${(params?.prefix_word && params?.suffix_word)
-    ? `${params.prefix_word} ${params.suffix_word}` : codeword}"`);
-  reportDispatchResult({
-    action, codeword, resolution, elem_tag: '', taken: 'skipped',
-    ok: false, frame: trimFrameUrl(window.location.href),
-    detail: 'no_such_hint', fp,
-  });
-}
+// The sealed strict gate and its refusal moved to activate/sealed-gate.ts:
+// they are two halves of one rule, and after the BRANCHKIT_ACTION split their
+// two call sites sit on opposite sides of the module boundary.
 
 // (The ResizeObserver hintability safety net and the viewport-scoped
 // AttentionObserver are owned by `pageSession` — constructed in
@@ -1602,33 +1134,8 @@ function reportNoSuchHint(
 
 
 // (showBadges / hideBadges / clearHintFilter and the screen-borrow
-// primitive live in render/badge-visibility.ts; content wires its scan and
-// hint-action hooks at initBadgeVisibility below.)
-
-// Re-scan and re-render hint badges after a short delay. Used after
-// always-mode activation so post-activate DOM mutations (modal open, form
-// expansion, autocomplete) are reflected. Idempotent re-call is coalesced:
-// if a refresh is already scheduled, drop the new request — the existing
-// one will pick up whatever changed by the time it fires.
-//
-// Delay must exceed the activation flash duration (400ms in hints.ts) so
-// the refresh's updateLabel — which resets badge text to the displayMode
-// default — runs AFTER the yellow flash completes. Otherwise the
-// activated badge's narrowed text ("a check") would visibly snap back to
-// "arch c" mid-flash.
-let hintRefreshScheduled = false;
-const HINT_REFRESH_DELAY_MS = 450;
-
-function scheduleHintRefresh(): void {
-  if (hintRefreshScheduled) return;
-  hintRefreshScheduled = true;
-  pageSession.resources.timeout(() => {
-    hintRefreshScheduled = false;
-    if (!shouldAutoShowBadges()) return;
-    doScan();
-    showBadges();
-  }, HINT_REFRESH_DELAY_MS);
-}
+// primitive live in render/badge-visibility.ts, which now acquires its own
+// doScan — content wires nothing into it.)
 
 // Run `cb` on the next idle frame, falling back to a short timeout where
 // requestIdleCallback is unavailable (Firefox content scripts historically).
@@ -1649,83 +1156,6 @@ function runWhenIdle(cb: (deadline?: IdleDeadline) => void, timeoutMs: number): 
   else pageSession.resources.timeout(cb, 100);
 }
 
-
-// Visibility handoff after a keyboard hint action. In always-mode we clear
-// narrowing/keyboard state and schedule a refresh; in manual-mode we fully hide
-// so the user can re-summon explicitly. Shared by every activateWrapper verb.
-function hintActionHandoff(): void {
-  if (shouldAutoShowBadges()) {
-    clearHintFilter();
-    scheduleHintRefresh();
-  } else {
-    hideBadges();
-  }
-}
-
-function activateWrapper(wrapper: ElementWrapper): void {
-  const el = wrapper.element as HTMLElement;
-  // Consume the keyboard hint action and reset immediately, so no path can leak
-  // it to the next activation. See notes/DESIGN_HINT_ACTION_MODES.md.
-  const action = pendingHintAction;
-  pendingHintAction = 'activate';
-
-  // Verbs that act ON the element without following it (Vimium hint modes).
-  if (action === 'yank') {
-    // Copy the link's URL (Vimium yf).
-    const href = (el.closest('a') as HTMLAnchorElement | null)?.href ?? '';
-    wrapper.hint?.flash();
-    if (href) void copyText(href).then((ok) => flashToast(ok ? 'Copied link' : 'Copy failed'));
-    else flashToast('Not a link');
-    hintActionHandoff();
-    return;
-  }
-  if (action === 'copytext') {
-    // Copy the element's visible text (Vimium copy-link-text).
-    const text = (el.textContent || '').trim();
-    wrapper.hint?.flash();
-    if (text) void copyText(text).then((ok) => flashToast(ok ? 'Copied text' : 'Copy failed'));
-    else flashToast('No text');
-    hintActionHandoff();
-    return;
-  }
-  if (action === 'focus') {
-    // Focus without activating — a field to type in, or any element (Vimium focus).
-    wrapper.hint?.flash();
-    el.focus();
-    flashToast('Focused');
-    hintActionHandoff();
-    return;
-  }
-  if (action === 'hover') {
-    // Reveal hover-state UI (menus, player controls) without clicking (Vimium
-    // hover). The always-mode handoff re-scans, so badges appear for whatever
-    // the hover just exposed. Voice "hover {hint}" is the twin (plugin-side).
-    wrapper.hint?.flash();
-    dispatchHover(el);
-    flashToast('Hovered');
-    hintActionHandoff();
-    return;
-  }
-  if (action === 'caret') {
-    // Start a caret/visual selection AT this element (Vimium hint→caret). Then
-    // drive it by keyboard (hjkl/y) or voice ("select word" / "copy that").
-    wrapper.hint?.flash();
-    hintActionHandoff();
-    caret.enterAt(el);
-    return;
-  }
-
-  lastActivatedElement = el;
-  hintActionHandoff();
-
-  wrapper.hint?.flash();
-  if (wrapper.category === 'input') {
-    el.focus();
-  } else {
-    activateElement(el, { newTab: action === 'newtab' });
-  }
-}
-
 /**
  * Per-batch replacement for `doScan` + `pushGrammar`. Walks the DOM
  * once via `scanInBatches`, claims codewords per batch, POSTs each
@@ -1743,20 +1173,8 @@ function activateWrapper(wrapper: ElementWrapper): void {
  * paints badges whose voice command is live.
  */
 // --- Active-frame tracking ---
-//
-// Each frame's content script knows whether `window` currently has focus.
-// The background uses this (via GET_FOCUS_STATUS) to route actions to
-// whichever frame the user is interacting with, when that's relevant.
-// Trusted focus/blur events on `window` are the canonical signal.
-
-let windowHasFocus = document.hasFocus();
-
-pageSession.resources.listen(window, 'focus', (e) => {
-  if (e.target === window) windowHasFocus = true;
-}, true);
-pageSession.resources.listen(window, 'blur', (e) => {
-  if (e.target === window) windowHasFocus = false;
-}, true);
+// Tracker and its GET_FOCUS_STATUS handler live in core/window-focus.ts.
+installWindowFocusTracking();
 
 // --- bfcache restore ---
 //
@@ -1777,34 +1195,6 @@ pageSession.resources.listen(window, 'pageshow', (e) => {
   if (!e.persisted) return;
   pageSession.restore();
 });
-
-// Full grammar re-push. Used when the plugin's per-frame grammar was wiped
-// out from under us while our delta-sync shadow (`sentCodewords`) still
-// believes it's all live — so a plain `scheduleSync` computes an empty delta
-// and transmits nothing, leaving painted badges un-matchable. Two triggers
-// share this exact recovery:
-//   - transient SW restart (liveness Port reconnect → frame_liveness_disconnect
-//     wiped the grammar before we reconnected), and
-//   - bfcache restore (navigate-away ran purgeTab + session_end, then the
-//     frozen V8 context — shadow and all — was reactivated on back/forward).
-// `rotateSession` drops the stale shadow and hands the plugin a fresh
-// session_id so its `ensureFrameSession` clears stale per-prefix entries;
-// then re-queue every live, hintable wrapper for the next sync.
-function republishAllGrammar(reason: string): void {
-  rotateSession();
-  let requeued = 0;
-  for (const w of store.all) {
-    if (w.scanned.codeword && w.disconnectedAt === null) {
-      queuePut(w);
-      requeued++;
-    }
-  }
-  // Holders outside the store are NOT re-queued here: they re-publish off the
-  // is_final chokepoint in postBatch, which covers this path AND the ones this
-  // function never touches — notably a plain rescan, which is the common case.
-  bkLog('BK_GRAMMAR_REPUBLISH', { reason, requeued, wrappers: store.all.length });
-  scheduleSync(reason);
-}
 
 // The bfcache-restore body, owned by `PageSession.restore`.
 function restoreFromBfcache(): void {
@@ -2070,17 +1460,9 @@ function quiesceOrphan(reason: TeardownReason = 'orphan'): void {
 // docs/completed/DESIGN_PLUGIN_LOGGING.md §4.
 
 
-// Truncate the frame URL for log readability. Includes path but not query
-// strings (which often carry session data). Capped to 200 chars.
-function trimFrameUrl(href: string): string {
-  try {
-    const u = new URL(href);
-    const out = `${u.origin}${u.pathname}`;
-    return out.length > 200 ? out.slice(0, 200) + '…' : out;
-  } catch {
-    return href.slice(0, 200);
-  }
-}
+// trimFrameUrl moved to core/frame.ts. It sat in this band but was never in
+// this band's CONCERN — it trims a URL, and has nothing to do with bfcache,
+// orphan quiesce, nav rescan or teardown. See §6i.
 
 // (preNavDetachAll is gone — notes/DESIGN_NAV_WIPE_RETIREMENT.md step 3. The
 // spa_nav hard detach it implemented was freeze-investigation residue; the
@@ -2156,20 +1538,52 @@ function rescanForNav(fromCache: boolean, reason: string): void {
   // machinery survives a nav by rebinding wrappers; the pick can only be
   // re-asked.
   if (reason === 'spa_nav') {
-    cancelRangePick('spa_nav');
+    // FIRST, before anything that could hand it back: find's badge-screen
+    // borrow is a snapshot of the page the nav replaced. Nothing returned it
+    // across a nav (closeFindMode is reachable only from find_close, the escape
+    // cascade and caret), so a spent slot survived and made the NEXT borrow a
+    // no-op — highlights painting under a live badge layer.
+    //
+    // Order is load-bearing and was wrong until 2026-07-27: cancelRangePick's
+    // teardown calls clearFindPaint, which RESTORES this slot. Running the
+    // discard after it meant the slot had already been given back, kicking the
+    // async showBadges the discard exists to prevent.
+    discardBadgeScreenBorrow();
+    // A route swap invalidates the pick's question; `restoreBadges: false`
+    // because the nav decides visibility below, and the pick's own restore is
+    // the same async-showBadges hazard (see cancelRangePick's doc). Its
+    // keyboard half still runs.
+    cancelRangePick('spa_nav', false);
     // Same argument, same Ranges: a search badge points into DOM the nav just
     // replaced. The set only notices on a reconcile, which rides settle — so
     // left alone it survives to paint stale codewords over the new page.
     clearSearchBadges('spa_nav');
   }
 
-  // A same-document nav is a new page: in manual mode (or always-mode with an
-  // active F-hide) it should start hidden. The SPA nav keeps this content
-  // script alive, so F-shown hints from the previous URL would otherwise
-  // linger. Refocus (the other from_cache caller) is NOT a new page — only
-  // reset on spa_nav.
-  if (reason === 'spa_nav' && !shouldAutoShowBadges() && pageSession.badgesVisible) {
-    hideBadges();
+  // A same-document nav is a new page, so drive visibility to what the MODE
+  // says the new page should look like rather than only unwinding the old
+  // one's state. Refocus (the other from_cache caller) is NOT a new page —
+  // only reset on spa_nav.
+  //
+  // Manual mode: start hidden. The SPA nav keeps this content script alive, so
+  // F-shown hints from the previous URL would otherwise linger.
+  //
+  // Always mode: start SHOWN, and this arm is the fix for a regression I
+  // shipped one commit ago. badge-visibility's header already states the rule
+  // ("the hide is momentary — NOT persisted; in always mode the next page
+  // repaints the badges"), and an SPA nav never honoured it. That was masked
+  // while a find's badge borrow survived the nav, because the find's own exit
+  // eventually restored it — discarding the slot removed that accidental
+  // recovery and left an always-mode page badge-less until the next `f`.
+  // Gated on anyBadgesShowing() so the ordinary nav — badges already up — stays
+  // a no-op rather than repainting against a wrapper set the rescan below is
+  // about to replace.
+  if (reason === 'spa_nav') {
+    if (!shouldAutoShowBadges()) {
+      if (pageSession.badgesVisible) hideBadges();
+    } else if (!anyBadgesShowing()) {
+      void showBadges();
+    }
   }
 
   if (fromCache) {
@@ -2323,132 +1737,72 @@ function republishForActivation(reason: string): void {
 
 // --- Message Listener (from background / voice) ---
 
-// Voice actions that route straight to the local dispatcher (the same handlers
-// the keyboard uses). The discrete scroll/find actions are here so a contributed
-// voice phrase (e.g. "scroll down" → scroll_down) runs the identical command as
-// its keybind. Parameterized scroll + find_immediate carry params through.
-const DISPATCH_PASSTHROUGH_ACTIONS = new Set([
-  'scroll', 'scroll_to_element', 'scroll_to_percent',
-  'scroll_down', 'scroll_up', 'scroll_half_down', 'scroll_half_up',
-  'scroll_full_down', 'scroll_full_up',
-  'scroll_top', 'scroll_bottom', 'scroll_left', 'scroll_right',
-  'find_open', 'find_close', 'find_next', 'find_previous', 'find_immediate',
-  'select_to', // voice "extend to <phrase>" — dictated-argument find + extend
-  'focus_input',
-  'toggle_palette', // voice "palette all" — same handler as the Ctrl+K bind
-  'toggle_tab_palette', // voice "palette tabs" — the tabs-only palette (Ctrl+T twin)
-  'toggle_command_palette', // voice "palette commands" — the catalog source alone
-  'toggle_bookmark_palette', // voice "palette bookmarks" — the bookmark source alone
-  'toggle_help', // voice "help" — same handler as the ? bind
-  'go_next', 'go_previous', // voice "next/previous page"
-  'copy_url', // voice "copy url"
-  'go_up', 'go_root', // voice "go up" / "site root"
-  // voice "pause"/"mute"/"faster"/"skip ahead"/"restart video" — the media
-  // executors (activate/media.ts); each no-ops in a frame with no large video
-  'media_play_pause', 'media_mute', 'media_speed', 'media_seek', 'media_restart',
-  'video_mode', 'video_exit', // "video" = the `w` layer's entry; exit = the mirror forwarder (C4b)
-]);
+// DISPATCH_PASSTHROUGH_ACTIONS moved to activate/voice-dispatch.ts with the arm
+// that forwards it. §6h's finding is why it went WITH the dispatch rather than
+// staying: lint D reads that set as proof an id is handled, so a set here and a
+// forwarder there is the one direction the lint cannot see.
 
-chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) => {
-  // A torn-down orphan (a superseded elder whose chrome.runtime is still live)
-  // must not act on broadcasts — it would fire navigations/clicks/grammar into
-  // a dead session alongside the successor. See notes/DESIGN_TEARDOWN_OWNERSHIP.md.
-  if (pageSession.isTornDown) { recordOrphanHit(); return false; }
-  if (message.type === 'GET_FOCUS_STATUS') {
-    sendResponse({ focused: windowHasFocus });
-    return false;
-  }
+// --- The content-side message table ---
+//
+// Same shape as background.ts (phase 1): the listener IS the table, handlers
+// live with the module that owns their concern, and a handler's RETURN VALUE
+// carries the response contract instead of a hand-written `return true`.
+// core/message-router.ts explains why one module serves both bundles.
+// Lint E in scripts/check-exhaustive.mjs holds both halves of that shape.
+//
+// Install the listener BEFORE composing the maps, so a duplicate-type throw
+// still leaves the page with a listener rather than none.
+//
+// That is the whole of what the ordering buys, and an earlier version of this
+// comment claimed more — "costs one map" is wrong. These calls sit a thousand
+// lines from the end of this file, and `registerMessageHandlers` throws, so a
+// collision also skips BRANCHKIT_ACTION, the settle wiring, the pointer and key
+// listeners, the machinery gate, the initial scan and installPerfReporting. The
+// page would answer GET_FOCUS_STATUS while doing none of its actual work. Lint E
+// is what actually prevents that; the ordering is a seatbelt, not a fix.
+chrome.runtime.onMessage.addListener(routeMessage);
 
-  if (message.type === 'RESOLVE_HINT') {
-    sendResponse(resolveHintLocally(store, message.codeword, getDisplayMode()));
-    return false;
-  }
+// A torn-down orphan (a superseded elder whose chrome.runtime is still live)
+// must not act on broadcasts — it would fire navigations/clicks/grammar into
+// a dead session alongside the successor. See notes/DESIGN_TEARDOWN_OWNERSHIP.md.
+// Above the table, not inside the handlers: the rule is "this context is done".
+setMessageGuard(() => {
+  if (!pageSession.isTornDown) return true;
+  recordOrphanHit();
+  return false;
+});
 
-  if (message.type === 'GET_PAGE_STATUS') {
-    // Only the top frame answers so the popup receives a single response. The
-    // count is this frame's hint candidates; subframe hints aren't aggregated.
-    if (!isTopFrame) return false;
-    sendResponse({ hintCount: store.all.length, badgesVisible: anyBadgesShowing() });
-    return false;
-  }
+registerMessageHandlers(focusMessageHandlers);
+registerMessageHandlers(hintResolveMessageHandlers);
+registerMessageHandlers(badgeVisibilityMessageHandlers);
+registerMessageHandlers(tabTitleMessageHandlers);
+registerMessageHandlers(markRestoreMessageHandlers);
+registerMessageHandlers(paletteHostMessageHandlers);
+registerMessageHandlers(helpMessageHandlers);
 
-  if (message.type === 'SET_BADGES_VISIBLE') {
-    // Popup Show/Hide button — the UI twin of Shift+F. Sent to every frame
-    // (no frameId) so "this page" means the whole page, not just the top
-    // frame; each frame drives its own badges. Only the top frame answers, so
-    // the popup gets one response to refresh its readout from.
-    const nowShowing = setBadgesVisible(message.visible);
-    if (isTopFrame) sendResponse({ badgesVisible: nowShowing, hintCount: store.all.length });
-    return false;
-  }
-
-  if (message.type === 'TAB_MARKER') {
-    if (isTopFrame) setTabMarker(message.letters);
-    return false;
-  }
-
-  if (message.type === 'MARK_RESTORE') {
-    // A global-mark jump landed on (or opened) this tab — restore the saved
-    // position. Top frame only; sub-frame scroll is out of scope for MVP.
-    if (isTopFrame) restorePosition({ scrollX: message.scrollX, scrollY: message.scrollY, hash: message.hash });
-    return false;
-  }
-
-  if (message.type === 'TAB_MARKER_REAPPLY') {
-    if (isTopFrame) reapplyTabMarker();
-    return false;
-  }
-
-  if (message.type === 'PALETTE_CLOSE') {
-    closePalette();
-    sendResponse(true); // background awaits the close before dispatching
-    return false;
-  }
-
-  if (message.type === 'PALETTE_COMMAND') {
-    dispatcher.dispatch(message.action, message.params ?? {});
-    return false;
-  }
-
-  if (message.type === 'OPEN_HELP') {
-    // Popup Help button — top frame owns the overlay. Same path as ? / "help".
-    if (isTopFrame) dispatcher.dispatch('toggle_help', {});
-    return false;
-  }
-
-  if (message.type === 'BRANCHKIT_ACTION') {
-    const { action, params, correlation_id: correlationId } = message.payload;
+// The voice-action dispatch. TWO arms are composed here; the rest of the verbs
+// live in activate/voice-dispatch.ts.
+//
+// The split is drawn on a concern, not on line ranges (§6i): `activate` calls
+// preNavObserverTeardown (the nav-time wedge preempt) and `reactivate` calls
+// republishForActivation (the nav-rescan republish), and both are the
+// orphan-teardown arc's lifecycle glue that §5 excludes until it is out of
+// soak. Everything that only resolves an element and acts on it moved.
+//
+// `reactivate` is checked FIRST and `activate*` second so the two arms that
+// stay read as one block. Order carries no meaning beyond that: every arm in
+// this handler and in the module is an exact `action ===` test or a lookup in
+// a set disjoint from all of them, so the chain is a switch, not a cascade.
+registerMessageHandlers({
+  BRANCHKIT_ACTION: (m: MessageOf<'BRANCHKIT_ACTION'>) => {
+    const { action, params, correlation_id: correlationId } = m.payload;
     // Scope the actuator's tr_ to this dispatch's synchronous body so every
     // bkLog call in it lands in browser.log grep-joinable with the matcher
-    // chain. Self-clears on the next microtask (see bk-log.ts).
+    // chain. Self-clears on the next microtask (see bk-log.ts). Set before the
+    // branch, so the module's arms are inside the same scope.
     setLogCorrelation(correlationId);
-    if (action === 'toggle_hints') {
-      // Voice "toggle" — the same handler as Shift+F. Snapshot on the show
-      // direction so a codeword spoken in the same phrase resolves against the
-      // freshly-painted badges.
-      if (toggleHints()) phraseSnapshot = takeSnapshot(store.all, performance.now());
-    } else if (action === 'rescan') {
-      pageSession.onUrlChange(params?.from_cache === 'true', params?.reason ?? '');
-    } else if (action === 'reactivate') {
+    if (action === 'reactivate') {
       republishForActivation(params?.reason ?? 'tab_activated');
-    } else if (action === 'set_badge_mode' && params?.mode) {
-      chrome.storage.sync.set({ badgeDisplayMode: params.mode });
-    } else if (DISPATCH_PASSTHROUGH_ACTIONS.has(action)) {
-      dispatcher.dispatch(action, params);
-    } else if (action === 'history_back') {
-      // history.back() steps through the full history stack regardless of
-      // skippable flags. The browser's UI back button skips entries whose
-      // pushState ran without sticky user activation, which is every voice
-      // click (synthetic events are isTrusted=false). Routing back through
-      // a JS call recovers the entries the UI button walks past.
-      history.back();
-    } else if (action === 'history_forward') {
-      // Same rationale as history_back: the UI forward button skips
-      // voice-navigated SPA entries (synthetic clicks are isTrusted=false),
-      // so route forward through a JS call to step the full stack.
-      history.forward();
-    } else if (action === 'refresh') {
-      location.reload();
     } else if (action === 'activate' || action === 'activate_hint_newtab' || action === 'activate_hint_background') {
       // Tab-targeted variants ("blank <hint>" / "stash <hint>", see
       // notes/DESIGN_MULTI_TARGET_COMMANDS.md phase 1): same resolution as
@@ -2460,7 +1814,9 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         action === 'activate_hint_newtab' ? 'new' :
         action === 'activate_hint_background' ? 'background' : 'none';
       // Three-tier resolution (see docs/completed/DESIGN_ELEMENT_IDENTITY_REGISTRY.md §6).
-      // Algorithm lives in activate-resolution.ts so it's unit-testable.
+      // Algorithm lives in activate-resolution.ts so it stays unit-testable;
+      // the binding to this live page is activate/dispatch-target.ts, shared
+      // with the element verbs so one implementation answers both.
       const codeword = params?.codeword ?? '';
       // A spoken codeword may name a text RANGE rather than an element — a
       // range-pick chip answering "highlight"/"select to", or a search-match
@@ -2502,26 +1858,8 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         else if (!ok && search) flashToast('That match is off screen — scroll to it first');
         return;
       }
-      const idParam = parseInt(params?.id ?? '0', 10);
-      const frameIdParam = params?.frame_id != null ? parseInt(params.frame_id, 10) : -1;
-
-      const resolved = resolveTarget(
-        idParam, frameIdParam, codeword,
-        {
-          myFrameId: pageSession.myFrameId,
-          registry: {
-            get: idRegistry.get,
-            rebindRef: idRegistry.rebindRef,
-            unregister: idRegistry.unregister,
-            fingerprintFallback: idRegistry.fingerprintFallback,
-            fingerprintToString: idRegistry.fingerprintToString,
-          },
-          candidates: () => deepQuerySelectorAll(document, '*'),
-          resolveFromSnapshot: (cw) => resolveFromSnapshot(phraseSnapshot, cw, performance.now()),
-          resolveFromStore: (cw) => store.byCodeword(cw),
-        },
-      );
-      const { target, resolution, fp } = resolved;
+      const resolved = resolveDispatchTarget(params, codeword);
+      const { target, resolution, fp, idParam } = resolved;
       let detail = resolved.detail;
 
       // Pull-resolution live strict gate (ext notes/DESIGN_STATIC_PAIR_GRAMMAR
@@ -2543,7 +1881,7 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
 
       if (target instanceof HTMLElement) {
         elemTag = target.tagName.toLowerCase();
-        lastActivatedElement = target;
+        noteActivated(target);
         // Visibility handoff after activation:
         //  - Always-mode: keep badges visible so the user can immediately
         //    voice-trigger the next action. Just clear narrowing/keyboard
@@ -2670,153 +2008,12 @@ chrome.runtime.onMessage.addListener((message: Message, _sender, sendResponse) =
         detail,
         fp,
       });
-    } else if (action === 'hover_hint' || action === 'focus_hint' || action === 'copytext_hint' || action === 'caret_hint') {
-      // Element-verb voice actions (Vimium hint modes): resolve the codeword to
-      // a wrapper and act ON it without following it —
-      //   hover        → pointer-in event sequence (pointerover/enter/move +
-      //                  mouse equivalents), revealing hover-state UI (player
-      //                  controls, dropdown menus) without grabbing the mouse
-      //                  (mirrors Rango's hoverElement).
-      //   focus_hint   → focus the element (a field to type in, or any element).
-      //   copytext_hint→ copy the element's visible text.
-      //   caret_hint   → start a caret/visual selection at the element.
-      // All share the same three-tier resolution as activate so codewords stay
-      // consistent across verbs. None tear down wrappers or hide hints
-      // (always-mode keeps badges so the user can follow up on what appeared).
-      const codeword = params?.codeword ?? '';
-      const idParam = parseInt(params?.id ?? '0', 10);
-      const frameIdParam = params?.frame_id != null ? parseInt(params.frame_id, 10) : -1;
-      const resolved = resolveTarget(
-        idParam, frameIdParam, codeword,
-        {
-          myFrameId: pageSession.myFrameId,
-          registry: {
-            get: idRegistry.get,
-            rebindRef: idRegistry.rebindRef,
-            unregister: idRegistry.unregister,
-            fingerprintFallback: idRegistry.fingerprintFallback,
-            fingerprintToString: idRegistry.fingerprintToString,
-          },
-          candidates: () => deepQuerySelectorAll(document, '*'),
-          resolveFromSnapshot: (cw) => resolveFromSnapshot(phraseSnapshot, cw, performance.now()),
-          resolveFromStore: (cw) => store.byCodeword(cw),
-        },
-      );
-      const target = resolved.target;
-      // Same live gate as activate — the old path enforced strict at match
-      // time; sealed verbs enforce it here.
-      if (params?.prefix_letter != null && !sealedDispatchSeen(target)) {
-        reportNoSuchHint(action, codeword, resolved.resolution, resolved.fp, params);
-        return;
-      }
-      if (target instanceof HTMLElement) {
-        store.findWrapperFor(target)?.hint?.flash();
-        let detail = '';
-        if (action === 'hover_hint') {
-          dispatchHover(target);
-          detail = 'hover dispatched';
-        } else if (action === 'focus_hint') {
-          target.focus();
-          detail = 'focused';
-        } else if (action === 'caret_hint') {
-          caret.enterAt(target);
-          detail = 'caret at element';
-        } else {
-          const text = (target.textContent || '').trim();
-          if (text) void copyText(text).then((ok) => flashToast(ok ? 'Copied text' : 'Copy failed'));
-          else flashToast('No text');
-          detail = text ? 'text copied' : 'no text';
-        }
-        reportDispatchResult({
-          action, codeword, resolution: resolved.resolution, elem_tag: target.tagName.toLowerCase(),
-          taken: 'click', ok: true,
-          frame: trimFrameUrl(window.location.href),
-          detail,
-          fp: resolved.fp,
-        });
-      } else {
-        reportDispatchResult({
-          action, codeword, resolution: resolved.resolution, elem_tag: '',
-          taken: 'skipped', ok: false,
-          frame: trimFrameUrl(window.location.href),
-          detail: resolved.detail || `${action} target not resolved`,
-          fp: resolved.fp,
-        });
-      }
-    } else if (action === 'escape') {
-      // Voice "escape"/"over" — the Esc cascade (activate/escape-cascade.ts).
-      const peeled = runEscapeCascade('voice_escape');
-      reportDispatchResult({
-        action, codeword: '', resolution: 'none', elem_tag: '',
-        taken: peeled ? 'click' : 'skipped', ok: peeled !== '',
-        frame: trimFrameUrl(window.location.href),
-        detail: peeled ? `escape: ${peeled}` : 'nothing to close',
-        fp: '',
-      });
-    } else if (SELECTION_ACTIONS.has(action)) {
-      // Voice-driven adjustable selection ("extend sentence", "shrink word",
-      // "flip", "copy that", "stop selecting"). No-op unless caret mode is active
-      // — the CaretController guards it. See notes/DESIGN_VOICE_SELECTION_BOUNDS.md.
-      const cmd = parseSelectionCommand(action, params);
-      caret.applyVoice(cmd);
-      reportDispatchResult({
-        action, codeword: '', resolution: 'none', elem_tag: '',
-        taken: caret.isActive() ? 'click' : 'skipped', ok: caret.isActive(),
-        frame: trimFrameUrl(window.location.href),
-        detail: caret.isActive() ? `${action} ${cmd.granularity ?? ''}`.trim() : 'caret mode not active',
-        fp: '',
-      });
-    } else if (action === 'noop') {
-      // Mid-codeword progress. The SW translates the inbound spoken prefix word
-      // to its letter before forwarding (see frame-router), so `prefix` is
-      // already a letter here — the same shape the keyboard's filter callback
-      // passes, which is why both go through the registry's one fan-out
-      // (labels/holder-registry.ts narrowByPrefix). `''` resets (pair
-      // cancelled). This used to be an inline copy of the ordering that had
-      // drifted twice: it hardcoded setMatchedChars(1) where the keyboard uses
-      // the full prefix length, and it re-painted every link hint on any
-      // prefix, including one a search badge already answered.
-      narrowByPrefix(params?.prefix ?? '');
-    } else if (action === 'name_reference') {
-      const refName = params?.name?.toLowerCase().trim();
-      if (!refName) return;
-      if (!lastActivatedElement || !lastActivatedElement.isConnected) {
-        console.warn('[BranchKit Content] name_reference: no last-activated element');
-        return;
-      }
-      saveReference(refName, lastActivatedElement).then(async () => {
-        const refs = await listReferences();
-        const ref = refs[refName];
-        try {
-          chrome.runtime.sendMessage({
-            type: 'REFERENCE_SAVED',
-            host: window.location.hostname,
-            name: refName,
-            reference: ref as unknown as Record<string, unknown>,
-          } as Message);
-          chrome.runtime.sendMessage({ type: 'REFERENCE_NAMES_CHANGED' } as Message);
-        } catch { /* context invalidated */ }
-      });
-    } else if (action === 'resolve_reference') {
-      const refName = params?.name?.toLowerCase().trim();
-      if (!refName) return;
-      resolveReference(refName).then(el => {
-        if (!el) {
-          console.warn('[BranchKit Content] resolve_reference: not found:', refName);
-          return;
-        }
-        lastActivatedElement = el;
-        if (el instanceof HTMLElement) {
-          store.findWrapperFor(el)?.hint?.flash();
-          if (INPUT_TYPES.has(el.tagName.toLowerCase())) {
-            el.focus();
-          } else {
-            activateElement(el);
-          }
-        }
-      });
+    } else {
+      // Every other verb: activate/voice-dispatch.ts. Called synchronously,
+      // inside the correlation scope set above.
+      dispatchVoiceAction(action, params);
     }
-  }
+  },
 });
 
 // --- Settle-signal wiring (step 3 of notes/DESIGN_SETTLE_ENGINE_EXTRACTION.md) ---
@@ -3409,202 +2606,8 @@ watchUndefinedCustomElements(document);
 // Wrap eagerly here so calls from this point on are counted (idempotent).
 ensureSendMessageWrapped();
 
-
-// Scan / hintability perf snapshot. Counters are cumulative since CS load
-// (or last reset). Useful diff sequence: reset → interact for N seconds →
-// read. Surfaces "are we paying 5000 getComputedStyle calls per scan?".
-// `advanceShareBaseline` gates the rolling cpu.share window. Only the
-// durable 5s ship (shipPerfReport) should advance it; the 250ms live
-// publisher must read without consuming the delta, or it cannibalizes
-// the window the trail is meant to measure (pct collapses to ~0 and
-// share.buckets goes empty — the YouTube-investigation measurement gap).
-function buildPerfSnapshot(advanceShareBaseline = false) {
-  // Walk the store once to split connected from limbo. Limbo wrappers
-  // have `disconnectedAt !== null` — the design's "wrapper held while
-  // we wait for a possible rebind" state. A monotonically-climbing
-  // limboCount across the leak samples is the signature of a
-  // finalize-sweeper that's falling behind.
-  let limbo = 0;
-  let sentinelDisconnected = 0;
-  let inViewport = 0;
-  let inViewportWithCodeword = 0;
-  // Band membership derived live (no stored flag — DESIGN_OBSERVED_STATE_
-  // READ_TIME phase 3): one rect read per live wrapper at snapshot cadence
-  // (5s ship / on-demand), the same price the band-convergence pass pays.
-  const __vw = window.innerWidth, __vh = window.innerHeight;
-  for (const w of store.all) {
-    if (w.disconnectedAt !== null) { limbo++; continue; }
-    if (!w.element.isConnected) { sentinelDisconnected++; continue; }
-    let __inBand = false;
-    try {
-      __inBand = geometryInBand(w.element.getBoundingClientRect(), __vw, __vh, VIEWPORT_MARGIN_PX);
-    } catch { /* detached mid-read */ }
-    if (__inBand) {
-      inViewport++;
-      if (w.scanned.codeword) inViewportWithCodeword++;
-    }
-  }
-  return {
-    ...getPerfCounters(),
-    // Publish timestamp. The dataset mirror freezes while the tab is hidden
-    // (visibility gate below), so consumers need this to tell a fresh snapshot
-    // from one stranded at the moment the tab was backgrounded.
-    ts: Date.now(),
-    // Subframe count of this (top) frame — preserves the ad-frame-swarm signal
-    // now that subframes no longer ship their own trail entries.
-    frames: window.length,
-    // Total DOM element count (live-collection length, O(1) read) — the
-    // giant-DOM breaker's Phase-0 input (notes/DESIGN_GIANT_DOM_BREAKER.md):
-    // correlate >25k-element pages with the walk/store cpu buckets to pick
-    // the breaker option. No machinery before the numbers.
-    domElementCount: document.getElementsByTagName('*').length,
-    wrapperCount: store.all.length,
-    wrapperLimboCount: limbo,
-    // claim.* splits codeword acquisition by path so we can see if the scan
-    // path went silent while the viewport tracker kept the visible handful
-    // alive.
-    claim: { ...claimCounters },
-    // Direct symptom metric: of wrappers the tracker considers in-viewport
-    // (IO band margin), how many actually hold a codeword. < 1.0 ratio = the
-    // visible-links-without-badges bug.
-    inViewportWrappers: inViewport,
-    inViewportWithCodeword,
-    // Disconnected wrappers that aren't yet in limbo. Should be ≈ 0 in
-    // steady state; nonzero means dropDisconnectedWrappers isn't being
-    // called between detach and snapshot.
-    wrapperDisconnectedOutOfLimbo: sentinelDisconnected,
-    lifecycleCounters: { ...lifecycleCounters },
-    rebindCounters: { ...rebindCounters },
-    messages: messageCountersSnapshot(),
-    cpu: {
-      // share: rolling CPU share since the prior snapshot publish — the
-      // metric Firefox uses to flag "extension is slowing things down."
-      // advanceShareBaseline gates the rolling window so only the durable
-      // 5s ship advances it; see computeCpuShare in telemetry/perf-counters.
-      share: computeCpuShare(advanceShareBaseline),
-      buckets: cpuBucketsSnapshot(),
-      longtask: longtaskSnapshot(),
-      watchdog: watchdogSnapshot(),
-    },
-    // Grammar-epoch tripwire (Phase 2a of DESIGN_GRAMMAR_EPOCH_HANDSHAKE.md):
-    // checks should climb with sync traffic; mismatches should stay 0 except
-    // around the enumerated republish triggers — those firings are the
-    // evidence Phase 3 needs before retiring them.
-    // What the settle pass DID (Phase E, decision 4 of the unified-reconciler
-    // note): per-class applied counts for the last pass + cumulative. The
-    // plan is authoritative, so this replaces the old shadow counts/diff.
-    reconcileApplied: {
-      passes: engine.applied.passes,
-      last: { ...engine.applied.last },
-      total: { ...engine.applied.total },
-    },
-  };
-}
-(window as any).branchkitPerfStats = buildPerfSnapshot;
-(window as any).branchkitResetPerf = (): void => {
-  resetPerfCounters();
-  resetMessageCounters();
-  resetLifecycleCounters();
-  resetCpuCounters();
-  resetLongtask();
-  resetWatchdog();
-};
-// Cross-world bridge: content script globals live in the isolated world,
-// so Playwright's page.evaluate (main world) can't call them directly.
-// Mirror the snapshot to a documentElement dataset attribute every 250ms
-// so any world can read it. The interval is a pausable, so hidden tabs skip
-// the work entirely — including the timer wakeup (the dataset goes stale,
-// not empty): the snapshot walks the whole wrapper store and the JSON grows
-// with CPU-bucket count, and Firefox only throttles hidden-tab timers to
-// ~1s (vs Chrome's ~1/min), so unpaused this was a store-walk + stringify
-// per second per hidden tab, times days of accumulated tabs. Direct one-shot
-// calls (boot marker, reset-handshake confirmation) publish regardless of
-// visibility: a tab loaded hidden must still publish once so dataset
-// presence works as a liveness probe (scripts/_test-extension-reload-
-// firefox.mjs), and a reset delivered to a hidden tab must confirm with
-// zeroed counters or drivers diff against pre-reset history
-// (scripts/test-perf.mjs).
-function publishPerfSnapshot(): void {
-  if (!harnessHooksEnabled()) return;
-  try {
-    document.documentElement.dataset.branchkitPerf =
-      JSON.stringify(buildPerfSnapshot());
-  } catch { /* dom not ready */ }
-}
-// Top frame only: the dataset mirror exists for Playwright/in-page inspection,
-// which reads the top document's element. A subframe publishing to its own
-// (unread) documentElement is pure 4Hz waste across the ad-frame swarm.
-// Harness builds only: in release this is a 4Hz store-walk+stringify forever
-// AND a page-readable disclosure surface (any site can fingerprint the
-// extension and read the full perf payload). The 5s PERF_REPORT ship below
-// stays — it goes to the paired plugin, not the page.
-if (isTopFrame && harnessHooksEnabled()) {
-  pageSession.resources.pausableInterval(publishPerfSnapshot, 250);
-  publishPerfSnapshot();
-}
-
-// Periodic ship to the browser plugin's /perf-report endpoint so we have
-// a JSONL trail in `~/Library/Application Support/BranchKitDev/plugins/
-// browser/extension-perf.jsonl` for offline analysis. The dataset
-// publish above is for live in-page inspection; this is the durable
-// record. Every 5s is the sample interval — slow enough to be cheap,
-// fast enough to bracket a Firefox unresponsive-script event.
-// Visible tabs only (the interval is a pausable, stopped while hidden): a
-// hidden tab has nothing new to report, and every ship is a sendMessage
-// that resets the background's idle timer — with N accumulated tabs that's
-// N/5 wakeups/sec keeping the Firefox event page (and the plugin's
-// /perf-report handler) permanently hot. The trail keeps full coverage of
-// the tab the user is actually looking at.
-function shipPerfReport(): void {
-  try {
-    const snapshot = buildPerfSnapshot(true);
-    const ua = navigator.userAgent;
-    const browser = /Firefox\//i.test(ua) ? 'firefox' : /Chrome\//i.test(ua) ? 'chrome' : 'other';
-    chrome.runtime.sendMessage({
-      type: 'PERF_REPORT',
-      url: location.href,
-      browser,
-      snapshot,
-    }).catch(() => {/* extension context may be invalidated */});
-  } catch {
-    /* extension orphan or chrome.runtime missing */
-  }
-}
-const PERF_REPORT_INTERVAL_MS = 5000;
-// Top frame only: each subframe shipping its own snapshot every 5s is what
-// flooded the trail with ~700 ad-frame entries per sample on ad-heavy pages.
-// The top-frame snapshot carries `frames` (subframe count) so the trail still
-// surfaces swarm size without 700 separate sendMessage round-trips.
-if (isTopFrame) {
-  pageSession.resources.pausableInterval(shipPerfReport, PERF_REPORT_INTERVAL_MS);
-  // Pause stops ships while hidden, which also stops the only cpu.share
-  // baseline advance — without a re-arm, the first ship after refocus would
-  // compute its share window over the entire hidden span (hours), diluting
-  // pct toward 0 and lumping all hidden-period bucket deltas into one bogus
-  // trail sample. Re-arm (without shipping) on the visible transition so the
-  // first sample covers a normal window; the watchdog baseline needs the
-  // same treatment or its first post-resume tick reads the hidden span as
-  // one giant stall.
-  pageSession.resources.listen(document, 'visibilitychange', () => {
-    if (document.visibilityState === 'visible') {
-      rearmCpuShareBaseline();
-      rearmWatchdogBaseline();
-    }
-  });
-  // Reset trigger from main world — set the dataset to "1" and we reset.
-  // Harness builds only (page-dispatchable, plus a standing attribute MO).
-  if (harnessHooksEnabled()) {
-    new MutationObserver(() => {
-      if (document.documentElement.dataset.branchkitResetPerf === '1') {
-        resetPerfCounters();
-        resetMessageCounters();
-        resetLifecycleCounters();
-        resetCpuCounters();
-        resetLongtask();
-        delete document.documentElement.dataset.branchkitResetPerf;
-        publishPerfSnapshot();
-      }
-    }).observe(document.documentElement, { attributes: true, attributeFilter: ['data-branchkit-reset-perf'] });
-  }
-}
+// Perf snapshot integrator, dataset mirror and the 5s trail ship — all of it
+// in debug/perf-snapshot.ts. Installed last so every counter surface it reads
+// is already wired.
+installPerfReporting();
 

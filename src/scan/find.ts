@@ -23,8 +23,11 @@ import { bestPageMatch, normalizeFuzzy, fold1to1, lower1to1, flexiblePattern } f
 import { modes } from '../core/modes';
 import { bkLog } from '../debug/bk-log';
 import { openPhraseSession, isDictatedInsert, type PhraseSession } from './phrase-collector';
-import { prefersReducedMotion } from '../activate/scroller';
+import { prefersReducedMotion, resetCycleTarget } from '../activate/scroller';
+import { assertBadgeScreenBorrow, returnBadgeScreenBorrow } from '../render/badge-visibility';
+import { FIND_HIGHLIGHT } from '../render/find-highlight';
 import { isRangeDead } from './range-liveness';
+import { dispatcher } from '../core/singletons';
 
 /**
  * What the box is collecting a phrase FOR.
@@ -86,33 +89,65 @@ let phrase: PhraseSession | null = null;
 let matchRanges: Range[] = [];
 let currentIndex = -1;
 
-let onActivate: (() => void) | null = null;
+// The badge borrow is no longer relayed through content.ts. find and the badge
+// layer compete for the same screen, so find takes it on activate and gives it
+// back when the paint clears — and this module imports render/badge-visibility
+// to do it. That import was impossible until 2026-07-27: render reached back
+// here through ONE edge, badge-variant importing the FIND_HIGHLIGHT hex, which
+// is now a leaf of its own (render/find-highlight.ts). See that file.
 let onDeactivate: ((handoff: boolean) => void) | null = null;
-let onPaintCleared: (() => void) | null = null;
 // Fired when a search commits WITH matches (Enter or voice find). Caret mode
-// uses it to auto-extend the selection to the match. See caret.ts.
-let onCommit: (() => void) | null = null;
+// uses it to auto-extend the selection to the match; the search badges arm.
+const committedListeners = new Set<() => void>();
 // (The onPhrase callback died with FindMode: a phrase-targeting box's commit
 // handler arrives WITH the open — openPhraseBox(target) — so the caller that
 // asks for a phrase is the one that receives it, with no mode enum relayed
 // through a third module.)
 
-export function setFindCallbacks(opts: {
-  onActivate?: () => void;
-  /** `handoff` is endSession's keepPaint: true means the session ended by
-   *  HANDING its candidates to a consumer (a phrase commit), not by closing.
-   *  Whatever the consumer holds on find's behalf — the badge borrow — must
-   *  not be returned yet; `onPaintCleared` is the return point. */
-  onDeactivate?: (handoff: boolean) => void;
-  onCommit?: () => void;
-  /** The consumer answered (or abandoned) the handed-over question —
-   *  clearFindPaint fired. The moment borrowed screen state comes back. */
-  onPaintCleared?: () => void;
-}): void {
-  onActivate = opts.onActivate ?? null;
-  onDeactivate = opts.onDeactivate ?? null;
-  onCommit = opts.onCommit ?? null;
-  onPaintCleared = opts.onPaintCleared ?? null;
+/**
+ * The session ended. `handoff` is endSession's keepPaint: true means it ended
+ * by HANDING its candidates to a consumer (a phrase commit) rather than
+ * closing, so anything held on find's behalf stays held until clearFindPaint.
+ *
+ * Registered by activate/search-badges at its module scope — it already
+ * imports this module, so find cannot import it back (a real 2-cycle, unlike
+ * the badge-borrow edge, which was one relocatable constant).
+ */
+export function onFindDeactivated(fn: ((handoff: boolean) => void) | null): void {
+  onDeactivate = fn;
+}
+
+/**
+ * A search committed WITH matches (Enter or voice find). Returns an
+ * unsubscribe.
+ *
+ * MULTICAST, and listener order is deliberately not significant — which is a
+ * correction, not an assumption. This was a single slot on the argument that
+ * its two effects were ordered: caret's extend calls scrollFocusIntoView, and
+ * arming the search badges reads live viewport geometry, so arming first would
+ * measure against the viewport being left. Reviewed 2026-07-27 and the premise
+ * was wrong — `scrollToCurrent()` fires a SMOOTH scroll on the line above the
+ * commit notification, so the viewport has not moved for EITHER listener, and
+ * the ordering bought nothing while hiding the real defect (a match outside the
+ * band armed nothing, permanently).
+ *
+ * That defect is fixed at the settle instead, and the fix is what makes the
+ * order irrelevant: an arm that finds nothing in band retries on the scroll
+ * settle, and one that partially succeeds re-plans through its holder's
+ * reconcile. Both listeners converge on the post-scroll viewport however they
+ * are sequenced. Add a third freely; if one ever needs to observe another's
+ * effect, that is a dependency to make explicit, not an order to rely on.
+ */
+export function onFindCommitted(fn: () => void): () => void {
+  committedListeners.add(fn);
+  return () => { committedListeners.delete(fn); };
+}
+
+/** Notify every commit listener. Not error-isolated: these are independent
+ *  effects, and a throw in one is a real bug that should not be swallowed on
+ *  its neighbour's behalf. */
+function fireCommitted(): void {
+  for (const fn of [...committedListeners]) fn();
 }
 
 export function getFindState(): FindState {
@@ -159,16 +194,6 @@ function highlightApi(): { reg: Map<string, HighlightLike>; Ctor: HighlightCtor 
   const Ctor = (globalThis as unknown as { Highlight?: HighlightCtor }).Highlight;
   return reg && Ctor ? { reg, Ctor } : null;
 }
-
-/**
- * Highlighter yellow — the colour a found match wears.
- *
- * Exported because anything that has to READ as "this is a search match" must
- * wear the same colour, and a second copy of the hex is a thing that drifts.
- * Search-match badges tint themselves from this (render/badge-variant.ts), so
- * retheming the highlight retints the badges with it.
- */
-export const FIND_HIGHLIGHT = '#ffeb3b';
 
 function ensureHighlightStyle(): void {
   if (document.querySelector(`[${STYLE_ATTR}]`)) return;
@@ -847,7 +872,7 @@ function commitFind(): void {
   removeFindBar();
   showCommittedPill();
   scrollToCurrent();
-  if (matchRanges.length > 0) onCommit?.();
+  if (matchRanges.length > 0) fireCommitted();
 }
 
 // --- Public API ---
@@ -867,7 +892,7 @@ export function openPhraseBox(target: PhraseTarget): void {
   state.matchIndex = 0;
   state.matchCount = 0;
   createFindBar();
-  onActivate?.();
+  assertBadgeScreenBorrow();
 }
 
 export function openFindMode(): void {
@@ -896,7 +921,7 @@ export function openFindMode(): void {
   state.matchIndex = 0;
   state.matchCount = 0;
   createFindBar();
-  onActivate?.();
+  assertBadgeScreenBorrow();
 }
 
 export function closeFindMode(): void {
@@ -926,9 +951,17 @@ function endSession(keepPaint: boolean): void {
   if (!keepPaint) clearHighlights();
   removeFindBar();
   removeCommittedPill();
+  // The find cycle target is scroller-owned bookkeeping about THIS session;
+  // it dies with the session. (scroller is a leaf this module already imported
+  // — it was never one of the seam's cycles, only sitting in the same body.)
+  resetCycleTarget();
   // keepPaint IS the handoff signal: the session ends but its candidates
   // (and whatever the callbacks hold on its behalf) pass to the consumer.
   onDeactivate?.(keepPaint);
+  // A plain close returns the screen here; a handoff leaves it borrowed for
+  // the consumer, who returns it via clearFindPaint. Ordered AFTER the
+  // callback so it lands where content.ts had it, last.
+  if (!keepPaint) returnBadgeScreenBorrow();
 }
 
 /**
@@ -941,9 +974,11 @@ function endSession(keepPaint: boolean): void {
  */
 export function clearFindPaint(): void {
   clearHighlights();
-  // The handed-over question is answered (or abandoned) — the return point
-  // for anything the consumer held on find's behalf (the badge borrow).
-  onPaintCleared?.();
+  // The handed-over question is answered (or abandoned) — the badge screen
+  // comes back here rather than at deactivate, because a HANDOFF end passes
+  // the borrow to the consumer along with the paint (field, 2026-07-26:
+  // restoring at deactivate re-showed every page badge around the pick chips).
+  returnBadgeScreenBorrow();
 }
 
 export function findNext(): void {
@@ -1073,7 +1108,7 @@ export function findImmediate(query: string): void {
   state.active = true;
   modes.push('find'); // dedupes: an immediate find into a live session joins it
   ensureHighlightStyle();
-  onActivate?.();
+  assertBadgeScreenBorrow();
   // Voice find is tolerant (typed find stays exact/incremental). Layered:
   //   1. exact substring, then
   //   2. punctuation/accent-tolerant (handles "Martín", "(", odd spacing), then
@@ -1115,5 +1150,30 @@ export function findImmediate(query: string): void {
   // hang off; a phrase box filled by voice is still collecting an argument, and
   // in that mode a codeword means "select this one" — the range pick's job, not
   // a search badge's. commitFind draws the same line for the typed path.
-  if (phraseTarget === null && matchRanges.length > 0) onCommit?.();
+  if (phraseTarget === null && matchRanges.length > 0) fireCommitted();
+}
+
+// --- Command bindings (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md phase 3b) -------
+//
+// Five registrations lifted from content.ts. They live HERE rather than in a
+// separate `find-commands.ts` because there is no layering reason to split
+// them: this module already reaches `core/singletons` transitively (through
+// render/badge-visibility), so importing the dispatcher directly closes no
+// cycle and pulls in no closure it was not already carrying. That is the
+// difference from scroll-commands.ts and media-commands.ts, both of which had
+// a real reason. registerSelectionCommands is the precedent for this shape.
+
+export function registerFindCommands(): void {
+  dispatcher.register('find_open', () => { openFindMode(); });
+  dispatcher.register('find_close', () => { closeFindMode(); });
+  dispatcher.register('find_next', () => { findNext(); });
+  dispatcher.register('find_previous', () => { findPrevious(); });
+
+  // The dictated-argument path: the plugin has already collected the phrase,
+  // so this searches without ever opening the box. An empty query is a
+  // no-op rather than an open — "find" with nothing dictated must not leave
+  // the user in a find session they did not ask for.
+  dispatcher.register('find_immediate', (p) => {
+    if (p.query) findImmediate(p.query);
+  });
 }

@@ -36,7 +36,10 @@
 
 import { RangeBadgeSet } from '../render/range-badge-set';
 import { SEARCH_VARIANT } from '../render/badge-variant';
-import { getMatchRanges, findGoToRange, isFindActive, refindCommitted } from '../scan/find';
+import {
+  getMatchRanges, findGoToRange, isFindActive, refindCommitted, onFindDeactivated,
+  onFindCommitted,
+} from '../scan/find';
 import { bkLog } from '../debug/bk-log';
 import { labelReservoir } from '../labels/label-reservoir';
 import {
@@ -68,6 +71,12 @@ export function isSearchBadgePending(codeword?: string): boolean {
  * replaces the previous set, so codewords track the current results rather
  * than a stale search.
  */
+/**
+ * An arm found live matches but none within the viewport band, so it produced
+ * nothing and there is no set to reconcile. See retrySearchBadgeArm.
+ */
+let armPending = false;
+
 export function armSearchBadges(): void {
   clearSearchBadges('recommitted');
   const ranges = getMatchRanges();
@@ -108,8 +117,17 @@ export function armSearchBadges(): void {
       dispose: (reason) => clearSearchBadges(reason),
     },
   });
+  // Nothing was in band, but the matches are live — so this is the "still
+  // scrolling" case, not the "nothing to badge" case. Arm again when the
+  // viewport settles. Without this the find is permanently badge-less:
+  // create() returned null, which unregistered the holder, so no reconcile can
+  // reach the set that was never made.
+  armPending = badges === null;
+
   const pool = labelReservoir.stats();
-  bkLog('BK_SEARCH_BADGES_ARM', { matches: ranges.length, badged: badges?.size ?? 0 });
+  bkLog('BK_SEARCH_BADGES_ARM', {
+    matches: ranges.length, badged: badges?.size ?? 0, arm_pending: armPending,
+  });
   debugLog('search_badges.armed', {
     matches: ranges.length,
     badged: badges?.size ?? 0,
@@ -134,9 +152,31 @@ function debugLog(tag: string, data: Record<string, unknown>): void {
 
 /** Drop every search badge (find session ended, or a requery replaced them). */
 export function clearSearchBadges(reason: string): void {
+  // Before the early return: a pending arm exists precisely WHEN there is no
+  // set, so gating it on `badges` would leave it armed past the session it
+  // belongs to.
+  armPending = false;
   if (!badges) return;
   badges.dispose(reason);
   badges = null;
+}
+
+/**
+ * Re-attempt an arm that found live matches but nothing inside the viewport
+ * band. Driven from the scroll settle (content.ts's afterScrollSettle), which
+ * is the signal that the commit's own smooth scroll has finished moving the
+ * page — the arm at commit time measured against the viewport being left.
+ *
+ * A no-op unless an arm actually came up empty, so the ordinary commit pays
+ * nothing and a successful set is never re-armed (which would churn codewords).
+ * Retries ride user-driven settles and stop as soon as one succeeds or the find
+ * ends, so there is no loop to bound.
+ */
+export function retrySearchBadgeArm(): void {
+  if (!armPending) return;
+  armPending = false;
+  if (!isFindActive()) return;
+  armSearchBadges();
 }
 
 /**
@@ -196,3 +236,17 @@ function resolveSearchCodeword(codeword: string): HolderOutcome {
   bkLog('BK_SEARCH_BADGE_JUMP', { codeword });
   return 'acted';
 }
+
+// The badges exist only for a live find, so the find ending is what ends them.
+// content.ts used to relay this; it belongs here, and it can live here because
+// this module already imports scan/find — find cannot import it back, so the
+// direction has to be this one. Module scope for the same reason the other
+// self-registrations are: a pure slot assignment, no I/O, no listener, no
+// ordering (find's other signal, onFindCommitted, IS ordered — see its doc).
+onFindDeactivated(() => clearSearchBadges('find_deactivated'));
+
+// Commit is when the results become a SET you move around in — n/N goes live —
+// so it is when each match earns a codeword. Arming per keystroke instead would
+// churn codewords on every character typed, which is why this rides the commit
+// and not the query.
+onFindCommitted(() => armSearchBadges());

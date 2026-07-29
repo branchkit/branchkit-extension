@@ -8,7 +8,7 @@
  * Lifted out of background.ts (notes/DESIGN_RESTRUCTURE_ROUND3.md).
  */
 
-import type { MessageHandler } from './message-router';
+import type { MessageHandler } from '../core/message-router';
 import { TabAction, ZoomAction } from '../types';
 import { cycleTabIndex } from './tab-nav';
 import { loadMru, previousCandidates } from './tab-mru';

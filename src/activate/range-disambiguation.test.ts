@@ -119,6 +119,14 @@ vi.mock('../render/badge-visibility', () => ({
       },
     };
   },
+  // find's single-slot borrow, which it drives itself now (scan/find.ts) —
+  // these arrive here because teardown calls clearFindPaint. Deliberately inert
+  // and deliberately NOT wired to `screen`: no find borrow is ever live in this
+  // file, so a wired fake would be indistinguishable from this one, and the
+  // pick's borrow above is what these tests are about. find's own borrow is
+  // pinned in scan/find.test.ts ("every entry point takes the badge screen").
+  assertBadgeScreenBorrow: () => {},
+  returnBadgeScreenBorrow: () => {},
 }));
 
 /** Chips still up: constructed, shown, not torn down. */
@@ -781,6 +789,42 @@ describe('range-disambiguation pick', () => {
       resolveCodeword('alpha');
       expect(screen.shown).toBe(1);                      // badges back
       expect(keyHandler.isHintMode()).toBe(true); // hint mode back
+    });
+
+    // The nav arm. A same-document navigation owns what the NEW page looks
+    // like, so the pick must not hand the old page's badge state back on its
+    // way out — restore() kicks an ASYNC showBadges that raises
+    // pageSession.badgesVisible a frame later, while the nav path reads that
+    // flag synchronously to decide whether the new page starts hidden. The
+    // keyboard half still runs, because a nav must not strand the user in a
+    // hint mode entered for chips that no longer exist. Asserting the halves
+    // SEPARATELY is the whole point — skipping both would also leave
+    // screen.shown at 0.
+    it('a nav teardown gives back the keyboard but NOT the badges', () => {
+      // hintMode FALSE at arm, then entered during the pick (`f` at the chips).
+      // That is what makes the keyboard assertion able to fail: restoring to a
+      // floor of `false` must EXIT hint mode, so skipping the keyboard half is
+      // visible. Arming with hintMode already true would leave the flag true
+      // either way — the restore's enterHintMode is a no-op re-entry — and the
+      // test would pass against an implementation that restored nothing at all.
+      arrangeScreen({ badgesVisible: true, hintMode: false });
+      startRangePick([makeRange('a'), makeRange('b')], () => {});
+      keyHandler.enterHintMode();
+      expect(screen.hidden).toBe(1);
+      expect(screen.shown).toBe(0);
+
+      cancelRangePick('spa_nav', false);
+      expect(screen.shown).toBe(0);                // badges NOT re-shown
+      expect(keyHandler.isHintMode()).toBe(false); // keyboard half DID restore
+      expect(isRangePickPending()).toBe(false);
+    });
+
+    it('every other exit still gives both halves back', () => {
+      arrangeScreen({ badgesVisible: true, hintMode: true });
+      startRangePick([makeRange('a'), makeRange('b')], () => {});
+      cancelRangePick('escape'); // the default, unchanged
+      expect(screen.shown).toBe(1);
+      expect(keyHandler.isHintMode()).toBe(true);
     });
 
     it('takes the screen but NOT the keyboard — `f` still hands that over', () => {

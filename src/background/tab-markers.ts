@@ -21,7 +21,7 @@
  * the chrome.* glue for unit testing, mirroring tab-mru.ts / tab-collection.ts.
  */
 
-import type { MessageHandler } from './message-router';
+import type { MessageHandler } from '../core/message-router';
 import { LETTERS_26 } from '../labels/words';
 
 /** Reserved single-letter markers (from the typing-ergonomic head); the rest

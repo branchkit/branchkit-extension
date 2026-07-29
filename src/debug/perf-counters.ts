@@ -166,13 +166,17 @@ export function cpuBucketsSnapshot(): Record<string, { count: number; totalMs: n
   );
 }
 
-// Expose recordCpu globally so peer modules without a direct content.ts
-// import (intersection-tracker, attention-observer) can attribute their
-// callback time to the same bucket system content.ts already collects.
-// Plain globalThis stash — explicit string contract beats an event-callback
-// wire-up that would add an API surface to two observers nothing else
-// touches. Read by handleEntries in both observers.
-(globalThis as { __branchkitRecordCpu?: (label: string, ms: number) => void }).__branchkitRecordCpu = recordCpu;
+// (`__branchkitRecordCpu`, a globalThis stash of recordCpu, lived here until
+// 2026-07-27. Its five readers import recordCpu directly now. The stash was
+// justified as avoiding an API surface, and the graph says it never bought
+// anything: this module's ONLY import is a type, so it is a leaf and no reader
+// could have cycled through it. What it did buy was a cross-bundle write —
+// globalThis is the shared isolated world — executed at module scope BEFORE
+// content.ts's duplicate-injection guard. A duplicate injection rebound the
+// global to the ABORTED bundle's recorder, so the live instance's five readers
+// fed a dead bundle's ring buffer while the global pinned its whole graph in
+// memory. Found by review; the readers' `if (rec)` guards existed only because
+// a global can be absent.)
 
 // Long Tasks API (Chrome/Edge only; Firefox returns false for supportedEntryTypes).
 // Catches anything that monopolizes the main thread for >50ms regardless of source —

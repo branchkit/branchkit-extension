@@ -7,7 +7,7 @@
  * signal every doc-scoped cleanup keys off.
  */
 
-import type { MessageHandler } from './message-router';
+import type { MessageHandler } from '../core/message-router';
 import { releaseDocument } from '../labels/label-pool';
 import { clearCodewordMemory } from '../labels/codeword-memory';
 import { forwardHintsSessionEnd } from '../plugin/plugin-api';

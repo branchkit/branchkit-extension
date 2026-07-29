@@ -9,6 +9,24 @@
  * Run: npm test
  */
 
+// label-sync reaches two modules DIRECTLY now that the put queue is a leaf:
+// detachWrapper (core/wrapper-lifecycle) and pageSession.badgesVisible. Both
+// are mocked rather than real, and that is a deliberate trade — wrapper-lifecycle
+// and page-session are two members of the six-module lifecycle SCC (observers,
+// limbo, mutation source), so importing them for real would turn a label-layer
+// unit test into an integration test of code that has its own. The fakes are
+// exactly the two things label-sync touches.
+//
+// detachWrapper is referenced LAZILY inside the factory arrow: vi.mock is
+// hoisted above every top-level binding, so a factory that read it eagerly
+// would be a TDZ error. pageSession's fake is built inside the factory for the
+// same reason and mutated through the imported reference.
+const detachWrapper = vi.fn<(element: Element) => void>();
+vi.mock('../core/wrapper-lifecycle', () => ({
+  detachWrapper: (el: Element) => detachWrapper(el),
+}));
+vi.mock('../lifecycle/page-session', () => ({ pageSession: { badgesVisible: false } }));
+
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ElementWrapper, WrapperStore } from '../scan/element-wrapper';
 import { ScannedElement } from '../types';
@@ -22,11 +40,16 @@ import {
   hasSent,
   hasPendingDeletes,
   rotateSession,
+  republishAllGrammar,
+  getSessionId,
+  _resetShadowDesyncCooldownForTesting,
   scheduleSync,
   syncNow,
   postBatch,
 } from './label-sync';
 import { registerHolder, __resetHolderRegistry, type CodewordHolder } from './holder-registry';
+import { pageSession } from '../lifecycle/page-session';
+import { setSettleEngine, _clearSettleEngineForTesting } from '../lifecycle/settle-engine-ref';
 
 /** A minimal registered holder whose republish is counted — the v2 registry's
  *  stand-in for the old three-hook registration. */
@@ -92,10 +115,7 @@ describe('syncNow wholesale refusal (calibration_active)', () => {
     vi.stubGlobal('chrome', { runtime: { sendMessage } });
     initLabelSync({
       store,
-      detachWrapper: vi.fn(),
       reconcile: vi.fn(),
-      isBadgesVisible: () => false,
-      republishAll: vi.fn(),
     });
     // Clear module-level delta-sync state from prior tests.
     rotateSession();
@@ -279,10 +299,7 @@ describe('pipelined delete accounting (audit 2026-07-04)', () => {
     vi.stubGlobal('chrome', { runtime: { sendMessage } });
     initLabelSync({
       store,
-      detachWrapper: vi.fn(),
       reconcile: vi.fn(),
-      isBadgesVisible: () => false,
-      republishAll: vi.fn(),
     });
     rotateSession();
   });
@@ -357,10 +374,9 @@ describe('syncNow transport failure keeps wrappers (BranchKit down)', () => {
   // plugin response may detach.
   let store: WrapperStore;
   let sendMessage: ReturnType<typeof vi.fn>;
-  let detachWrapper: ReturnType<typeof vi.fn<(element: Element) => void>>;
   // Scripted per-batch behavior; the last entry repeats. 'echo' answers ok
   // with every requested codeword.
-  let script: ('error' | 'reject' | 'echo')[];
+  let script: ('error' | 'reject' | 'echo' | 'fail-arch')[];
 
   const batchCalls = () =>
     sendMessage.mock.calls.filter((c) => c[0]?.type === 'GRAMMAR_BATCH');
@@ -370,11 +386,21 @@ describe('syncNow transport failure keeps wrappers (BranchKit down)', () => {
     setAlphabet(ALPHABET);
     store = new WrapperStore();
     script = [];
-    detachWrapper = vi.fn<(element: Element) => void>();
+    detachWrapper.mockClear();
     sendMessage = vi.fn((msg: { type: string; request?: { elements: ScannedElement[] } }) => {
       if (msg.type !== 'GRAMMAR_BATCH') return Promise.resolve(undefined);
       const step = script.length > 1 ? script.shift()! : script[0];
       if (step === 'reject') return Promise.reject(new Error('sw unreachable'));
+      if (step === 'fail-arch') {
+        // A GENUINE plugin response: the batch applied, but this codeword was
+        // refused. Distinct from 'error', whose transport reason means nothing
+        // was applied and nothing may be detached.
+        return Promise.resolve({
+          result: 'ok',
+          succeeded: msg.request!.elements.map((e) => e.codeword).filter((c) => c !== 'arch'),
+          failed: [{ codeword: 'arch', reason: 'rejected' }],
+        });
+      }
       if (step === 'error') {
         // The SW's transportFailure shape: synthetic result:'error' with
         // every element in failed, reason 'transport'.
@@ -389,10 +415,7 @@ describe('syncNow transport failure keeps wrappers (BranchKit down)', () => {
     vi.stubGlobal('chrome', { runtime: { sendMessage } });
     initLabelSync({
       store,
-      detachWrapper,
       reconcile: vi.fn(),
-      isBadgesVisible: () => false,
-      republishAll: vi.fn(),
     });
     rotateSession();
   });
@@ -432,6 +455,59 @@ describe('syncNow transport failure keeps wrappers (BranchKit down)', () => {
     const second = batchCalls()[1][0].request;
     expect(second.elements.map((e: ScannedElement) => e.codeword)).toContain('arch');
     expect(hasSent('arch')).toBe(true);
+  });
+
+  // detachWrapper is an IMPORT now, not an injected dep — content.ts stopped
+  // handing it over once the put queue moved to a leaf. Every existing test
+  // here asserts it is NOT called, which is the shape that let the default land
+  // uncovered: deleting the call entirely passed all 25 (review discipline,
+  // 2026-07-27). These two pin the positive, and the pair is the point — the
+  // SAME per-codeword failure detaches or re-queues purely on whether the
+  // element is still in the document.
+  it('a per-codeword plugin failure detaches a wrapper whose element is GONE', async () => {
+    const w = makeWrapper('arch', store);
+    queuePut(w);
+    w.element.remove(); // released from the DOM while the chunk was in flight
+    script = ['fail-arch'];
+
+    await runSync();
+    expect(detachWrapper).toHaveBeenCalledTimes(1);
+    expect(detachWrapper).toHaveBeenCalledWith(w.element);
+    expect(hasSent('arch')).toBe(false);
+  });
+
+  it('...and re-queues rather than detaching when the element is still connected', async () => {
+    const w = makeWrapper('arch', store);
+    queuePut(w);
+    script = ['fail-arch', 'echo'];
+
+    await runSync();
+    expect(detachWrapper).not.toHaveBeenCalled();
+
+    // Re-queued, so the next sync carries it again — a failed put must not be
+    // silently dropped just because the badge stayed painted.
+    await runSync();
+    const second = batchCalls()[1][0].request;
+    expect(second.elements.map((e: ScannedElement) => e.codeword)).toContain('arch');
+  });
+
+  // The OTHER detachWrapper site, and it is a different question: this wrapper
+  // SUCCEEDED, and left the DOM while the batch was in flight. Its codeword is
+  // live plugin-side, so the sweep both detaches the element and queues the
+  // delete — leaving either half undone strands a codeword the plugin keeps
+  // matching against nothing.
+  it('sweeps a SUCCEEDED wrapper whose element left the DOM, and queues its delete', async () => {
+    const w = makeWrapper('arch', store);
+    queuePut(w);
+    script = ['echo'];
+    // Disconnect between the drain and the response landing.
+    const p = syncNow('test');
+    w.element.remove();
+    await vi.advanceTimersByTimeAsync(10);
+    await p;
+
+    expect(detachWrapper).toHaveBeenCalledWith(w.element);
+    expect(hasPendingDeletes()).toBe(true);
   });
 
   it('a sendMessage rejection (SW restarting) behaves the same', async () => {
@@ -497,10 +573,7 @@ describe('scheduleSync debounce + max-wait deadline (round 22c)', () => {
     vi.stubGlobal('chrome', { runtime: { sendMessage } });
     initLabelSync({
       store,
-      detachWrapper: vi.fn(),
       reconcile: vi.fn(),
-      isBadgesVisible: () => false,
-      republishAll: vi.fn(),
     });
     rotateSession();
   });
@@ -538,11 +611,172 @@ describe('scheduleSync debounce + max-wait deadline (round 22c)', () => {
 
 // --- Shadow-desync tripwire ---
 
+// The recovery arm the tripwire below fires, and the one the SW-restart resync
+// and bfcache restore call directly. It lived in content.ts, so these are its
+// first tests — the tripwire suite could only ever assert that a mock ran.
+// The reconcile default, with nothing injected. Every other suite in this file
+// passes its own `reconcile`, so none of them can see this arm — the same blind
+// spot the reservoir's rejection default landed in.
+describe('the reconcile default', () => {
+  let store: WrapperStore;
+  let sendMessage: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    setAlphabet(ALPHABET);
+    store = new WrapperStore();
+    sendMessage = vi.fn((msg: { type: string }) =>
+      Promise.resolve(msg.type === 'GRAMMAR_BATCH'
+        ? { result: 'ok', succeeded: ['arch bake'], failed: [] }
+        : undefined));
+    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+    rotateSession();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    _clearSettleEngineForTesting();
+    document.body.innerHTML = '';
+  });
+
+  async function syncOneVisibleWrapper(): Promise<void> {
+    queuePut(makeWrapper('arch bake', store));
+    await syncNow('test');
+    await new Promise((r) => setTimeout(r, 0));
+  }
+
+  it('drives the live settle engine when nothing overrides it', async () => {
+    const reconcile = vi.fn();
+    setSettleEngine({ reconcile } as unknown as Parameters<typeof setSettleEngine>[0]);
+    pageSession.badgesVisible = true;
+    initLabelSync({ store });
+
+    await syncOneVisibleWrapper();
+    expect(reconcile).toHaveBeenCalled();
+  });
+
+  it('an injected reconcile wins over the engine', async () => {
+    const reconcile = vi.fn();
+    const injected = vi.fn();
+    setSettleEngine({ reconcile } as unknown as Parameters<typeof setSettleEngine>[0]);
+    pageSession.badgesVisible = true;
+    initLabelSync({ store, reconcile: injected });
+
+    await syncOneVisibleWrapper();
+    expect(injected).toHaveBeenCalled();
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+
+  // A sync can land before content.ts has constructed an engine. Nothing to
+  // converge yet, and the next pass is level-triggered — so no-op, don't throw.
+  it('is inert when no engine has been published', async () => {
+    pageSession.badgesVisible = true;
+    initLabelSync({ store });
+    await expect(syncOneVisibleWrapper()).resolves.toBeUndefined();
+  });
+
+  it('does not reconcile at all while badges are hidden', async () => {
+    const reconcile = vi.fn();
+    setSettleEngine({ reconcile } as unknown as Parameters<typeof setSettleEngine>[0]);
+    pageSession.badgesVisible = false;
+    initLabelSync({ store });
+
+    await syncOneVisibleWrapper();
+    expect(reconcile).not.toHaveBeenCalled();
+  });
+});
+
+describe('republishAllGrammar', () => {
+  let store: WrapperStore;
+  let sendMessage: ReturnType<typeof vi.fn>;
+
+  /** Codewords that actually went out on the wire, across every batch. */
+  const pushedCodewords = (): string[] =>
+    sendMessage.mock.calls
+      .filter((c) => c[0]?.type === 'GRAMMAR_BATCH')
+      .flatMap((c) => (c[0].request?.elements ?? [])
+        .map((e: ScannedElement) => e.codeword));
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    setAlphabet(ALPHABET);
+    store = new WrapperStore();
+    sendMessage = vi.fn((msg: { type: string }) =>
+      Promise.resolve(msg.type === 'GRAMMAR_BATCH'
+        ? { result: 'ok', succeeded: [], failed: [] }
+        : undefined));
+    vi.stubGlobal('chrome', { runtime: { sendMessage } });
+    initLabelSync({ store, reconcile: vi.fn() });
+    rotateSession();
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = '';
+  });
+
+  // Rotating is the half that makes the re-push land: without it the plugin's
+  // ensureFrameSession keeps the stale per-prefix entries the republish exists
+  // to clear, and our own shadow still claims the codewords are sent — so the
+  // re-queued puts settle to an empty delta and nothing transmits.
+  it('rotates the session', () => {
+    const before = getSessionId();
+    republishAllGrammar('test');
+    expect(getSessionId()).not.toBe(before);
+  });
+
+  it('re-queues every live codeworded wrapper and transmits them', async () => {
+    makeWrapper('arch bake', store);
+    makeWrapper('cave dove', store);
+    // Already sent under the OLD session — the rotation clears the shadow, so
+    // this must go out again rather than settle to an empty delta. This is the
+    // whole point of the function.
+    markSent('arch bake');
+
+    republishAllGrammar('test');
+    await vi.advanceTimersByTimeAsync(400);
+
+    expect(pushedCodewords().sort()).toEqual(['arch bake', 'cave dove']);
+  });
+
+  it('skips wrappers already disconnected', async () => {
+    makeWrapper('arch bake', store);
+    const gone = makeWrapper('cave dove', store);
+    gone.disconnectedAt = 1;
+    // The empty-codeword case is NOT asserted here: the drain re-filters on
+    // `codeword`, so that half of the guard has no observable effect and a test
+    // naming it would be asserting the drain's work. See the source comment.
+    makeWrapper('', store);
+
+    republishAllGrammar('test');
+    await vi.advanceTimersByTimeAsync(400);
+
+    expect(pushedCodewords()).toEqual(['arch bake']);
+  });
+});
+
 describe('shadow-desync tripwire (committed_codewords vs sentCodewords)', () => {
   let store: WrapperStore;
   let sendMessage: ReturnType<typeof vi.fn>;
-  let republishAll: ReturnType<typeof vi.fn<(reason: string) => void>>;
   let committed: number | undefined;
+
+  // The republish is no longer an injected mock, so count the observable it
+  // leaves behind: a session rotation. Nothing else on this path rotates, and
+  // it is the effect the recovery actually depends on — a strictly stronger
+  // assertion than "the callback ran".
+  let sessionsSeen: string[];
+  // The republish's `reason` is no longer observable as a mock argument, so
+  // read it where it actually lands: BK_GRAMMAR_REPUBLISH on the debug channel.
+  const reasons = (): string[] =>
+    sendMessage.mock.calls
+      .filter((c) => c[0]?.type === 'PLUGIN_DEBUG_LOG' && c[0]?.tag === 'BK_GRAMMAR_REPUBLISH')
+      .map((c) => c[0].data?.reason);
+  const noteSession = (): void => {
+    const id = getSessionId();
+    if (sessionsSeen[sessionsSeen.length - 1] !== id) sessionsSeen.push(id);
+  };
+  const republishes = (): number => sessionsSeen.length - 1;
 
   beforeEach(() => {
     vi.useFakeTimers();
@@ -558,15 +792,10 @@ describe('shadow-desync tripwire (committed_codewords vs sentCodewords)', () => 
       );
     });
     vi.stubGlobal('chrome', { runtime: { sendMessage } });
-    republishAll = vi.fn<(reason: string) => void>();
-    initLabelSync({
-      store,
-      detachWrapper: vi.fn(),
-      reconcile: vi.fn(),
-      isBadgesVisible: () => false,
-      republishAll,
-    });
+    initLabelSync({ store, reconcile: vi.fn() });
     rotateSession();
+    _resetShadowDesyncCooldownForTesting();
+    sessionsSeen = [getSessionId()];
   });
 
   afterEach(() => {
@@ -584,31 +813,36 @@ describe('shadow-desync tripwire (committed_codewords vs sentCodewords)', () => 
     queueDelete('arch bake');
     committed = count;
     await syncNow('test');
+    noteSession();
   }
 
   it('republishes on divergence, once per cooldown, and again after it', async () => {
     // Agreement: plugin count matches the settled shadow — silent.
     await finalBatch(0);
-    expect(republishAll).not.toHaveBeenCalled();
+    expect(republishes()).toBe(0);
 
     // Divergence: the plugin holds codewords our shadow doesn't know (or
-    // vice versa — the wiped-under-intact-shadow family). Recovery fires.
+    // vice versa — the wiped-under-intact-shadow family). Recovery fires,
+    // carrying the reason through to the sync it schedules.
     await finalBatch(5);
-    expect(republishAll).toHaveBeenCalledTimes(1);
-    expect(republishAll.mock.calls[0][0]).toContain('shadow_desync');
+    expect(republishes()).toBe(1);
+    // `finalBatch` drives a pure-DELETE batch, so the context is the
+    // delete-flush chokepoint. Pinning the exact string keeps the reason
+    // threaded end to end — republish -> scheduleSync -> the log line.
+    expect(reasons()).toEqual(['shadow_desync_delete_flush']);
 
     // Still diverged inside the cooldown: logged, not re-fired.
     await finalBatch(5);
-    expect(republishAll).toHaveBeenCalledTimes(1);
+    expect(republishes()).toBe(1);
 
     // A divergence persisting past the cooldown fires again.
     await vi.advanceTimersByTimeAsync(11_000);
     await finalBatch(5);
-    expect(republishAll).toHaveBeenCalledTimes(2);
+    expect(republishes()).toBe(2);
   });
 
   it('a response without committed_codewords is ignored (synthetic shapes)', async () => {
     await finalBatch(undefined);
-    expect(republishAll).not.toHaveBeenCalled();
+    expect(republishes()).toBe(0);
   });
 });

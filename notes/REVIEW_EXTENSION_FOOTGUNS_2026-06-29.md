@@ -276,6 +276,44 @@ correctly in the selector generator.
 
 ---
 
+## 3b. Addendum (2026-07-28) — the dev loop built a different extension than the build
+
+Found by opening `welcome.html` during live verification: blank page, because
+the file was not in `dist/`. Root cause was not the page.
+
+`scripts/dev.mjs` (what `just ext-dev` runs) **wipes `dist/<target>` at startup**
+and repopulates it from its own copies of `build.mjs`'s lists. Three had drifted:
+
+| | `build.mjs` | `dev.mjs` |
+|---|---|---|
+| esbuild entries | 7 | 6 — no `palette-page.ts` |
+| static HTML | 5 | 3 — no `palette.html`, no `welcome.html` |
+| `content.ts` guard-bail wrap | yes | no |
+
+So starting the documented dev workflow **after** a correct build deleted
+`palette.html`, `palette.js` and `welcome.html` and left them gone for the whole
+session: the command palette was dead and the getting-started page blank. Plain
+`npm run build` always produced a correct dist, so the defect existed only in
+the workflow the docs tell you to use — which is why no gate, harness or CI job
+ever saw it. Every harness calls `npm run build`.
+
+The third row was costing signal rather than function: without the wrapper,
+`content.ts`'s INTENTIONAL duplicate-injection throw surfaced in dev as an
+uncaught page error and a `BK_UNCAUGHT` line in `browser.log`. Dev sessions had
+been logging a phantom error that release builds do not — worth knowing when
+reading old logs.
+
+Fixed at the source in `c85cca4`: `scripts/lib/bundle-spec.mjs` holds `ENTRIES`,
+`STATIC_FILES`, `STATIC_DIRS` and `guardBailWrap`, and both builders import
+them. Deliberately a shared list rather than a drift check — a check would need
+a list of its own.
+
+**The generalisable footgun**, which is why this is in this file: *two builders
+for one artifact.* Any second way to produce `dist/` is a second definition of
+what the extension IS, and the divergence is invisible to everything that only
+exercises the first. If a third build path is ever added (a packaging script, a
+CI-only fast path), it imports the spec or it is the same bug again.
+
 ## 4. Suggested order
 
 1. Orphan-listener guard (`content.ts` onMessage) — one line, closes a known

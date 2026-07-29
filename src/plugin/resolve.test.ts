@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { resolveHintLocally } from './resolve';
 import { WrapperStore, ElementWrapper } from '../scan/element-wrapper';
 import { setAlphabet, type LabelAssignment } from '../labels/words';
-import type { ScannedElement } from '../types';
+import type { ScannedElement, ResolveHintResponse } from '../types';
 
 const ALPHABET = [
   'arch', 'bake', 'cape', 'dune', 'elm', 'frog', 'glad', 'half', 'iron', 'jake',
@@ -94,5 +94,51 @@ describe('resolveHintLocally — WYSIWYG hint matching', () => {
     const res = resolveHintLocally(store, 'cg', 'letter');
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.reason).toMatch(/no longer in the DOM/i);
+  });
+});
+
+describe('hintResolveMessageHandlers', () => {
+  it('resolves against the LIVE page store, not a store the caller passes', async () => {
+    const { store } = await import('../core/store');
+    const { hintResolveMessageHandlers } = await import('./resolve');
+    setAlphabet(ALPHABET);
+    document.body.innerHTML = `<button id="del">Delete</button>`;
+    const el = document.getElementById('del')!;
+    const w = new ElementWrapper(el, scanned('c g'));
+    store.addWrapper(w);
+    try {
+      const answer = hintResolveMessageHandlers.RESOLVE_HINT(
+        { type: 'RESOLVE_HINT', codeword: 'cg' }, {} as never,
+      ) as ResolveHintResponse;
+      // The whole point of the handler: the options page sends a codeword and
+      // gets the live page's answer. Binding an empty store would answer
+      // found:false forever, with every unit test still green.
+      expect(answer.ok).toBe(true);
+      expect(answer.ok && answer.selector).toBeTruthy();
+    } finally {
+      store.removeWrapperByElement(el);
+      el.remove();
+    }
+  });
+
+  it('answers not-ok for a codeword nothing on the page holds', async () => {
+    const { store } = await import('../core/store');
+    const { hintResolveMessageHandlers } = await import('./resolve');
+    setAlphabet(ALPHABET);
+    document.body.innerHTML = `<button id="del">Delete</button>`;
+    const el = document.getElementById('del')!;
+    // A RESOLVABLE wrapper has to be present, or a handler that ignored the
+    // codeword entirely would answer not-ok here for the wrong reason and
+    // this test would pass against it.
+    const w = new ElementWrapper(el, scanned('c g'));
+    store.addWrapper(w);
+    try {
+      const answer = hintResolveMessageHandlers.RESOLVE_HINT(
+        { type: 'RESOLVE_HINT', codeword: 'zz' }, {} as never,
+      ) as ResolveHintResponse;
+      expect(answer.ok).toBe(false);
+    } finally {
+      store.removeWrapperByElement(el);
+    }
   });
 });

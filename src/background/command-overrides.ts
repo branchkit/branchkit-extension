@@ -16,7 +16,7 @@
  */
 
 import { ensureConnected, postToPlugin, getFromPlugin } from '../plugin/actuator-client';
-import type { MessageHandler } from './message-router';
+import type { MessageHandler } from '../core/message-router';
 
 /**
  * Map a failed plugin phrase-write to an editor-friendly message. A 400 carries

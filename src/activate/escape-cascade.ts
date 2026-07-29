@@ -46,6 +46,38 @@ import { cancelRangePick } from './range-disambiguation';
 import { caret } from './selection-commands';
 import { closeFindMode } from '../scan/find';
 import { keyHandler } from '../core/singletons';
+import { setInnerTransientProbe } from '../core/mode-stack';
+
+// Hint's intra-mode transient (the peelInner probe the header describes): the
+// typed prefix peels before the mode does. One implementation — escapeHintLayer
+// and the stack's peelTop both route through peelHintPrefix.
+//
+// Registered HERE rather than in content.ts, which is where it sat, and there
+// was never a cycle stopping it: core/mode-stack has zero imports of any kind,
+// and this module already holds keyHandler (:48, via core/singletons). It sits
+// at module scope for the same reason its two siblings do —
+// selection-commands.ts registers 'caret' and range-disambiguation.ts
+// registers 'range_pick' the same way. A pure map write: no I/O, no listener,
+// no ordering (an unregistered probe reads as "no transient", so registering
+// EARLIER is strictly safer, and clearInnerTransientProbes has no production
+// caller).
+//
+// Not on KeyHandler's constructor, though it owns hint mode and owns
+// peelHintPrefix: tests build their own `new KeyHandler(...)`, and a
+// constructor write would have each of them clobber the singleton's
+// registration in the one shared map.
+setInnerTransientProbe('hint', () => keyHandler.peelHintPrefix());
+
+// And the Escape KEY itself runs this cascade — the same one the spoken
+// "escape"/"over" runs, so the two inputs unwind through one declared order
+// rather than two that drift. That is this module's whole thesis, so the
+// wiring that makes it true belongs here rather than in the entry point.
+//
+// core/singletons is the other candidate and is NOT legal: it already carries
+// three keyHandler hook assignments of exactly this shape, but this module
+// imports IT (:48), so registering there would close a real 2-cycle. The one
+// place the graph allows is also the one that owns the claim.
+keyHandler.setEscapeHook(() => runEscapeCascade('key_escape'));
 
 export type EscapeLayer =
   | 'range_pick' | 'hint_prefix' | 'hint_mode' | 'selection' | 'video' | 'find' | '';

@@ -9,7 +9,7 @@
  * background_scripts/marks.js `goto`.
  */
 
-import type { MessageHandler } from './message-router';
+import type { MessageHandler } from '../core/message-router';
 import { baseUrl, localMarkKey, globalMarkKey, type StoredMark, type GlobalMark } from '../marks';
 
 export async function setLocalMark(url: string, letter: string, mark: StoredMark): Promise<void> {

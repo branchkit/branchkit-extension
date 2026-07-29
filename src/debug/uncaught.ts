@@ -25,6 +25,11 @@ const STACK_FRAMES = 3;
 
 let emitted = 0;
 
+// The emitter this bundle was installed with, kept so `reportCaught` below can
+// reach the same channel (and the same cap) as the listeners.
+let installedEmit: UncaughtEmit | null = null;
+let installedSource: 'sw' | 'cs' = 'cs';
+
 function trimStack(stack: string | undefined): string[] {
   if (!stack) return [];
   return stack
@@ -54,6 +59,8 @@ function guardedEmit(emit: UncaughtEmit, data: Record<string, unknown>): void {
  * sharing one window do).
  */
 export function installUncaughtCapture(emit: UncaughtEmit, source: 'sw' | 'cs'): () => void {
+  installedEmit = emit;
+  installedSource = source;
   const target: EventTarget =
     source === 'sw' ? (globalThis as unknown as EventTarget) : window;
 
@@ -102,7 +109,40 @@ export function installUncaughtCapture(emit: UncaughtEmit, source: 'sw' | 'cs'):
   };
 }
 
-/** Test-only: reset the per-boot cap counter. */
+/**
+ * Report an error the code CAUGHT but that still means something broke.
+ *
+ * The two bundles emit differently — content.ts passes `bkLog`, background.ts
+ * passes `forwardCoalesced` — so a caller that wants the BK_UNCAUGHT channel
+ * cannot import an emitter directly. It comes through the one this module was
+ * installed with, which also means it inherits the per-boot cap rather than
+ * opening an uncapped second path to the log.
+ *
+ * Added for `core/message-router.ts`. Routing content.ts's onMessage chain
+ * through a table put a try/catch around handlers that previously had none, so
+ * a throw in (say) the voice-action dispatch stopped surfacing as an uncaught
+ * error and became a console.warn — and console.* is kept out of browser.log by
+ * design (header above). Catching the error is right; losing the only telemetry
+ * for it is not.
+ *
+ * No-op before `installUncaughtCapture` has run, which mirrors the listeners:
+ * there is nothing to send to yet.
+ */
+export function reportCaught(where: string, err: unknown, extra?: Record<string, unknown>): void {
+  if (!installedEmit) return;
+  const e = err instanceof Error ? err : undefined;
+  guardedEmit(installedEmit, {
+    source: installedSource,
+    kind: 'caught',
+    where,
+    message: e?.message ?? String(err),
+    stack: trimStack(e?.stack),
+    ...extra,
+  });
+}
+
+/** Test-only: reset the per-boot cap counter and the installed emitter. */
 export function _resetUncaughtForTests(): void {
   emitted = 0;
+  installedEmit = null;
 }

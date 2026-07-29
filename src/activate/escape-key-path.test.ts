@@ -64,6 +64,7 @@ import {
   findImmediate, openFindMode, closeFindMode,
   isFindActive, isFindBarOpen, isFindBarFocused,
 } from '../scan/find';
+import { _resetBadgeVisibilityForTesting } from '../render/badge-visibility';
 
 // The mocked modules' states as stack entries (C3: the cascade's decider is
 // peelTop, so an armed pick / active caret is an entry the way production
@@ -124,12 +125,23 @@ beforeEach(() => {
   // layer the KEY peeled — the cascade's return value is otherwise swallowed by
   // the boolean `handleKeyDown` needs.
   keyHandler.setEscapeHook(() => { peeled = runEscapeCascade('key_escape'); return peeled; });
+  // core/singletons installs the real holder-backed predicate at module scope,
+  // and with no holders registered it REFUSES every letter — so a hint prefix
+  // cannot be typed here without standing in for the holders. Accept-all is the
+  // right stand-in: which letters are legal is holder-registry's question, and
+  // no row below tests it. Only the prefix row presses a letter at all.
+  keyHandler.setMatchPredicate(() => true);
   reset();
 });
 
 afterEach(() => {
   document.removeEventListener('keydown', listener, true);
   reset();
+  // See caret.test.ts: find drives the real badge-screen borrow now, and this
+  // file drives find. Clears the slot between tests; does NOT make the file
+  // safe to raise pageSession.badgesVisible in (that throws loudly out of an
+  // async showBadges — mock ../render/badge-visibility if you need it).
+  _resetBadgeVisibilityForTesting();
 });
 
 /** A committed find: highlights + read-only pill, bar closed. */
@@ -153,6 +165,18 @@ const SCENARIOS: Array<{ name: string; setup: () => void; expected: EscapeLayer 
     name: 'hint mode',
     setup: () => keyHandler.enterHintMode(),
     expected: 'hint_mode',
+  },
+  {
+    // The production inner-transient probe, which until now nothing drove:
+    // escape-cascade.test.ts installs a synthetic one and keyboard.test.ts
+    // installs the real body on a LOCAL handler, so both were blind to whether
+    // anything registers 'hint' on the singleton at all. It used to be a
+    // content.ts line, which is why — content.ts is not importable here.
+    // The row's whole content is that this differs from 'hint mode' above: a
+    // typed prefix peels the LETTERS and leaves the mode standing.
+    name: 'a typed hint prefix peels before the mode it is inside',
+    setup: () => { keyHandler.enterHintMode(); press('a'); },
+    expected: 'hint_prefix',
   },
   {
     name: 'a range pick outranks everything',

@@ -12,7 +12,26 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+
+// The reservoir's DEFAULTED hooks call into the holder registry, so the
+// registry is mocked to assert them without standing up real holders. Every
+// other test here installs its own handler, so nothing else observes this.
+// (vi.mock is hoisted above the static import below.)
+//
+// `heldAnywhere` joined the defaults when the leak sweep's isHeld stopped being
+// injected from content.ts. It is backed by a Set the tests drive: WHICH
+// holders answer is holder-registry's own test's question, and what matters
+// here is that the reservoir asks the registry at all rather than waiting to be
+// handed a predicate.
+const registryHeld = new Set<string>();
+vi.mock('./holder-registry', () => ({
+  rejectAll: vi.fn(),
+  heldAnywhere: (cw: string) => registryHeld.has(cw),
+}));
+
 import { labelReservoir } from './label-reservoir';
+import { rejectAll } from './holder-registry';
+import { setSettleEngine, _clearSettleEngineForTesting } from '../lifecycle/settle-engine-ref';
 
 let sendMessageMock: ReturnType<typeof vi.fn>;
 
@@ -102,6 +121,30 @@ describe('LabelReservoir confirm exchange (Phase 4 / review bug #5)', () => {
       Promise.resolve(m.type === 'CLAIM_LABELS' ? { labels: ['arch bake'] } : { rejected: [] }));
     labelReservoir.claim(1); // empty reservoir → grants nothing, arms a refill
     await vi.waitFor(() => expect(labelReservoir.stats().free).toBe(1));
+  });
+
+  it('with NO handler installed, the default drops the codeword at the registry', async () => {
+    // The default is what production runs — content.ts stopped injecting this
+    // (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md §6a). Without this test, losing the
+    // default is silent: an arbitrated-away codeword keeps its holder and the
+    // frame goes on answering for a codeword another frame won.
+    //
+    // A pristine module instance is required. The reservoir is a module-level
+    // singleton and the tests above install their own handlers on it, which
+    // beforeEach does not undo — it reseeds codewords, not hooks.
+    vi.resetModules();
+    vi.mocked(rejectAll).mockClear();
+    const { labelReservoir: fresh } = await import('./label-reservoir');
+
+    fresh._seedForTests(['arch bake', 'cave dove']);
+    sendMessageMock.mockImplementation((m: { type: string }) =>
+      Promise.resolve(m.type === 'CONFIRM_LABELS' ? { rejected: ['arch bake'] } : undefined));
+
+    fresh.claim(2);
+
+    await vi.waitFor(() => expect(rejectAll).toHaveBeenCalledWith('arch bake'));
+    // Only the rejected one — the codeword this frame kept must not be dropped.
+    expect(rejectAll).toHaveBeenCalledTimes(1);
   });
 
   it('a rejection with no registered handler does not throw', async () => {
@@ -235,6 +278,100 @@ describe('LabelReservoir refill threshold', () => {
     await new Promise(r => setTimeout(r, 0));
     const claims = sendMessageMock.mock.calls.filter(([m]) => m.type === 'CLAIM_LABELS');
     expect(claims).toHaveLength(1);
+  });
+});
+
+// The refill-landed hook had ONE caller (content.ts) and zero tests, which is
+// the same shape the confirm-rejection default landed in — uncovered, and only
+// mutation-testing found it. Written before that hook gets a default so the
+// coverage is known to bite first.
+describe('LabelReservoir refill-landed hook', () => {
+  afterEach(() => {
+    // null, not `() => {}` — a truthy no-op leaks into every later describe in
+    // this file and would silently eat the signal for a future
+    // `expect(scheduleReconcile).not.toHaveBeenCalled()`.
+    labelReservoir.onRefillLanded(null as unknown as () => void);
+    _clearSettleEngineForTesting();
+  });
+
+  // The DEFAULT, with no handler installed. This is the arm that landed
+  // uncovered last time a hook was defaulted here — every other test in this
+  // file injects its own handler, so none of them can see it.
+  it('drives the settle engine when nothing overrides it', async () => {
+    labelReservoir.onRefillLanded(null as unknown as () => void);
+    const scheduleReconcile = vi.fn();
+    setSettleEngine({ scheduleReconcile } as unknown as Parameters<typeof setSettleEngine>[0]);
+    labelReservoir._seedForTests([]);
+    sendMessageMock.mockResolvedValue({ labels: ['b', 'c'] });
+
+    labelReservoir.claim(1);
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(scheduleReconcile).toHaveBeenCalledTimes(1);
+  });
+
+  it('an installed handler wins over the engine', async () => {
+    const landed = vi.fn();
+    const scheduleReconcile = vi.fn();
+    labelReservoir.onRefillLanded(landed);
+    setSettleEngine({ scheduleReconcile } as unknown as Parameters<typeof setSettleEngine>[0]);
+    labelReservoir._seedForTests([]);
+    sendMessageMock.mockResolvedValue({ labels: ['b', 'c'] });
+
+    labelReservoir.claim(1);
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(landed).toHaveBeenCalledTimes(1);
+    expect(scheduleReconcile).not.toHaveBeenCalled();
+  });
+
+  // NOT TESTED HERE, deliberately: "no engine published yet -> no-op rather
+  // than throw". `notifyRefillLanded` is the last statement inside `refill`'s
+  // own try/catch, so swapping its `?.` for a `!` throws, gets swallowed, and
+  // leaves NO observable difference — the codewords are already pushed by then.
+  // A test written against this path passes either way, which is the exact
+  // shape §6b warns about, so there is no honest test to write at this seam.
+  // The label-sync twin IS testable because syncNow does not swallow.
+  // Worth knowing on its own: that catch would hide a genuine engine error too.
+
+  it('fires when a refill actually adds codewords', async () => {
+    const landed = vi.fn();
+    labelReservoir.onRefillLanded(landed);
+    labelReservoir._seedForTests([]);
+    sendMessageMock.mockResolvedValue({ labels: ['b', 'c', 'd'] });
+
+    labelReservoir.claim(1);
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(landed).toHaveBeenCalledTimes(1);
+  });
+
+  // The point of the hook: a claim that ran dry left wrappers unhinted, and the
+  // reconciler's own triggers are all user-activity-driven. On a static page
+  // nothing would ever request the pass. But a refill that added NOTHING has
+  // not unblocked anything, so firing there would be a pass for no reason.
+  it('does not fire when the refill added nothing new', async () => {
+    const landed = vi.fn();
+    labelReservoir.onRefillLanded(landed);
+    labelReservoir._seedForTests(['a']);
+    sendMessageMock.mockResolvedValue({ labels: ['a'] }); // all already held
+
+    labelReservoir.claim(1);
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(landed).not.toHaveBeenCalled();
+  });
+
+  it('does not fire when the SW is unreachable', async () => {
+    const landed = vi.fn();
+    labelReservoir.onRefillLanded(landed);
+    labelReservoir._seedForTests([]);
+    sendMessageMock.mockRejectedValue(new Error('sw unreachable'));
+
+    labelReservoir.claim(1);
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(landed).not.toHaveBeenCalled();
   });
 });
 
@@ -380,26 +517,35 @@ describe('LabelReservoir.claim — recalled reservation (A3)', () => {
 });
 
 describe('LabelReservoir leak sweep (2026-06-29 review: outstanding never swept)', () => {
+  /** Seed, then install the sweep handler — _seedForTests clears it. */
+  function seed(labels: string[]): string[] {
+    const swept: string[] = [];
+    labelReservoir._seedForTests(labels);
+    labelReservoir.onLeakSwept((cws) => swept.push(...cws));
+    return swept;
+  }
+
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['performance'] });
+    registryHeld.clear();
   });
   afterEach(() => {
+    // Module-level and shared with the mock factory: a codeword left in it
+    // answers "still held" in every later test (sec 6c's leaked-cooldown class).
+    registryHeld.clear();
     vi.useRealTimers();
   });
 
   it('releases an aged outstanding codeword that no live wrapper holds', () => {
-    labelReservoir._seedForTests(['a', 'b', 'c']);
-    const held = new Set<string>();
-    const swept: string[] = [];
-    labelReservoir.installLeakSweep((cw) => held.has(cw), (cws) => swept.push(...cws));
+    const swept = seed(['a', 'b', 'c']);
 
     const [leak] = labelReservoir.claim(1);
     expect(leak).toBe('a');
-    // A release-skipping teardown strips the wrapper: 'a' never enters
-    // `held`, and reservoir.release() is never called.
+    // A release-skipping teardown strips the wrapper: no holder ever takes
+    // 'a', and reservoir.release() is never called.
 
     vi.advanceTimersByTime(31_000);
-    held.add('b');
+    registryHeld.add('b');
     labelReservoir.claim(1); // grants 'b'; its maybeRefill runs the sweep
 
     expect(swept).toEqual(['a']);
@@ -409,10 +555,8 @@ describe('LabelReservoir leak sweep (2026-06-29 review: outstanding never swept)
   });
 
   it('never sweeps a codeword a live wrapper still holds', () => {
-    labelReservoir._seedForTests(['a', 'b']);
-    const held = new Set<string>(['a']);
-    const swept: string[] = [];
-    labelReservoir.installLeakSweep((cw) => held.has(cw), (cws) => swept.push(...cws));
+    const swept = seed(['a', 'b']);
+    registryHeld.add('a');
 
     labelReservoir.claim(1); // 'a', held by a wrapper (e.g. dormant/limbo)
     vi.advanceTimersByTime(120_000);
@@ -421,14 +565,29 @@ describe('LabelReservoir leak sweep (2026-06-29 review: outstanding never swept)
   });
 
   it('never sweeps inside the claim→attach grace window', () => {
-    labelReservoir._seedForTests(['a', 'b']);
-    const swept: string[] = [];
-    labelReservoir.installLeakSweep(() => false, (cws) => swept.push(...cws));
+    const swept = seed(['a', 'b']);
 
     labelReservoir.claim(1); // 'a' granted, wrapper not in store yet
     vi.advanceTimersByTime(5_000); // < 30s grace
     labelReservoir.claim(1);
     expect(swept).toEqual([]);
+  });
+
+  // The arm the injection hid. With isHeld unset the old sweep early-returned,
+  // so "nobody wired a predicate" and "the registry says nobody holds it" were
+  // indistinguishable — and every test that skipped installLeakSweep was
+  // silently sweep-free. Sweeping with NOTHING installed is the one observation
+  // that separates a defaulted predicate from the old null one; every other
+  // test in this block passes either way.
+  it('sweeps with no handler installed at all — the predicate is not optional', () => {
+    labelReservoir._seedForTests(['a', 'b']); // deliberately no onLeakSwept
+
+    labelReservoir.claim(1);
+    vi.advanceTimersByTime(31_000);
+    labelReservoir.claim(1);
+
+    expect(sendMessageMock).toHaveBeenCalledWith({ type: 'RELEASE_LABELS', doc_id: expect.any(String), labels: ['a'] });
+    expect(labelReservoir.claim(1)[0]).toBe('a'); // reclaimable again
   });
 });
 

@@ -54,8 +54,16 @@ import { documentInstanceId } from './document-identity';
 import { republishAll } from './holder-registry';
 import { labelReservoir } from './label-reservoir';
 import { bkLog } from '../debug/bk-log';
+import { detachWrapper } from '../core/wrapper-lifecycle';
+import { pageSession } from '../lifecycle/page-session';
+import {
+  hasSent, markSent, unmarkSent, sentCount, queueDelete, queuePut, rotateSession,
+  drainPendingPuts, requeuePut, hasPendingDeletes, drainPendingDeletes, requeueDeletes,
+  getSessionId,
+} from './put-queue';
 import { firehoseStep } from '../debug/firehose';
 import { recordSyncPost } from '../debug/sync-trace';
+import { getSettleEngine } from '../lifecycle/settle-engine-ref';
 
 /**
  * Content.ts-owned collaborators the catchup sync needs. Injected once at
@@ -64,17 +72,15 @@ import { recordSyncPost } from '../debug/sync-trace';
  */
 export interface LabelSyncDeps {
   store: WrapperStore;
-  detachWrapper: (element: Element) => void;
-  /** Single level-triggered convergence pass (claim + build). */
-  reconcile: () => void;
-  isBadgesVisible: () => boolean;
   /**
-   * Full grammar re-push (content.ts republishAllGrammar): rotate the
-   * session, re-queue every live wrapper. The shadow-desync tripwire's
-   * recovery arm — the same one the SW-restart resync and bfcache restore
-   * already use.
+   * Single level-triggered convergence pass (claim + build).
+   *
+   * Optional: it defaults to the live SettleEngine, which this module can now
+   * reach on its own (lifecycle/settle-engine-ref.ts). It stays overridable
+   * because tests drive the sync with no engine standing and need to observe
+   * the request rather than serve it.
    */
-  republishAll: (reason: string) => void;
+  reconcile?: () => void;
 }
 
 let deps: LabelSyncDeps;
@@ -83,105 +89,78 @@ export function initLabelSync(d: LabelSyncDeps): void {
   deps = d;
 }
 
-// --- Delta-sync state ---
-const sentCodewords: Set<string> = new Set();
-const pendingPuts: Set<ElementWrapper> = new Set();
-const pendingDeleteCodewords: string[] = [];
-
-
-/** Enqueue a newly-codeworded wrapper for the next Put. */
-export function queuePut(w: ElementWrapper): void {
-  pendingPuts.add(w);
-}
-
-/** Drop a pending Put (the wrapper detached before it was flushed). */
-export function dropPendingPut(w: ElementWrapper): void {
-  pendingPuts.delete(w);
-}
-
-/** Queue a codeword for plugin-side delete on the next batch. */
-export function queueDelete(codeword: string): void {
-  pendingDeleteCodewords.push(codeword);
-}
-
 /**
- * Un-queue a delete for a codeword that came BACK before the batch flushed.
+ * Ask for a convergence pass. The injected override wins (tests observe the
+ * request); otherwise the live engine serves it directly.
  *
- * The element path never needs this: its Puts and Deletes ride the same
- * debounced batch, so the plugin applies them together in a defined order.
- * `publishRecords` (the range-pick chips) POSTs immediately while retires wait
- * for the debounce — so a codeword released and re-claimed in one turn is Put
- * now and Deleted a quarter-second later, leaving a chip that is painted and
- * armed but absent from the hint collections, and therefore missing from the
- * Discovery HUD's suffix menu. Recycling codewords is deliberate (a chip the
- * user is mid-way through saying must not be renamed), so the retire has to
- * yield instead.
+ * Nothing to serve it is a real boot state, not an error — a sync landing
+ * before content.ts has constructed the engine has nothing to converge yet,
+ * and the next pass is level-triggered anyway.
  */
-export function cancelPendingDelete(codeword: string): void {
-  for (let i = pendingDeleteCodewords.length - 1; i >= 0; i--) {
-    if (pendingDeleteCodewords[i] === codeword) pendingDeleteCodewords.splice(i, 1);
-  }
+// The put queue and the session id live in a leaf now (labels/put-queue.ts).
+// Re-exported here because six modules already import them from this path and
+// the split is about the IMPORT GRAPH, not about renaming a public surface —
+// callers that only want the queue should import the leaf directly, and the
+// three that had to (wrapper-lifecycle, label-reservoir, page-session) now do.
+export {
+  queuePut, dropPendingPut, queueDelete, cancelPendingDelete,
+  markSent, hasSent, hasPendingDeletes, drainPendingDeletes,
+  getSessionId, rotateSession,
+} from './put-queue';
+
+function requestReconcile(): void {
+  if (deps.reconcile) { deps.reconcile(); return; }
+  getSettleEngine()?.reconcile();
 }
 
-/** Mark a codeword as live on the plugin side (acknowledged in a POST). */
-export function markSent(codeword: string): void {
-  sentCodewords.add(codeword);
-}
-
-/** Whether the plugin currently holds this codeword. */
-export function hasSent(codeword: string): boolean {
-  return sentCodewords.has(codeword);
-}
-
-/** Whether any deletes are queued (drives the scan path's terminal flush). */
-export function hasPendingDeletes(): boolean {
-  return pendingDeleteCodewords.length > 0;
-}
-
-// --- Session id ---
-
-function generateSessionId(): string {
-  // Crypto-random UUID-shaped id; we just need uniqueness per scan,
-  // not RFC 4122 conformance. crypto is available in extension content.
-  const a = crypto.getRandomValues(new Uint8Array(16));
-  let s = '';
-  for (const b of a) s += b.toString(16).padStart(2, '0');
-  return s.slice(0, 8) + '-' + s.slice(8, 12) + '-' + s.slice(12, 16) + '-' + s.slice(16, 20) + '-' + s.slice(20);
-}
-
-// Per-content-script session id. Generated once at module load and
-// re-used across every batched POST for this content script's lifetime.
-// notes/DESIGN_OPTION_B_REATTEMPT.md "Problem 1": rotating the session_id
-// on every doScanBatched call made `ensureFrameSession` on the plugin
-// side wipe entity_cache for the frame between MO rescans, opening a
-// "badges painted but voice doesn't match" window. Same id across
-// rescans keeps `session.Codewords` accumulating.
-//
-// Reset only on alphabet change (via rotateSession) — that's the one
-// in-lifetime event where we WANT plugin-side cleanup of stale per-prefix
-// entries.
-let sessionId = generateSessionId();
-
-export function getSessionId(): string {
-  return sessionId;
-}
 
 /**
- * Rotate the session id and drop all delta-sync state. Called on alphabet
- * swap: the prior alphabet's codewords are invalid and the plugin still
- * holds them, so a fresh session_id makes the plugin's ensureFrameSession
- * clear stale per-prefix entries. The local mirror state is now stale too,
- * so reset it; the engine's band-convergence claims + onCodewordsChanged re-queue the
- * in-viewport wrappers as pending Puts.
+ * Full grammar re-push: rotate the session, then re-queue every live,
+ * hintable wrapper. The recovery arm shared by three paths that all leave the
+ * plugin holding a grammar we can no longer describe with deltas —
+ *
+ *   - SW restart (the service worker's in-memory per-frame grammar went with
+ *     it, and it wiped ours before we reconnected),
+ *   - bfcache restore (navigate-away ran purgeTab + session_end, then the
+ *     frozen V8 context — shadow and all — was reactivated on back/forward),
+ *   - the shadow-desync tripwire above.
+ *
+ * `rotateSession` drops the stale shadow and hands the plugin a fresh
+ * session_id, so its `ensureFrameSession` clears stale per-prefix entries.
+ *
+ * This lived in content.ts purely because it was written before the module
+ * existed. Every collaborator it has is right here — the session, the put
+ * queue, the sync debounce — and the store it walks is already an injected
+ * dep, so the entry point was holding it for no one. Its `deps.republishAll`
+ * field is gone with it; the tripwire calls this directly.
  */
-export function rotateSession(): void {
-  const from = sessionId;
-  sessionId = generateSessionId();
-  const sentCount = sentCodewords.size;
-  sentCodewords.clear();
-  pendingPuts.clear();
-  pendingDeleteCodewords.length = 0;
-  bkLog('BK_SESSION_ROTATE', { from, to: sessionId, clearedSent: sentCount });
+export function republishAllGrammar(reason: string): void {
+  // This used to close over the module-imported `store` and was callable from
+  // import time; reading it off `deps` made it depend on initLabelSync. Every
+  // caller today is well after that, but a function that could not fail should
+  // not silently start throwing if a future caller lands earlier in boot.
+  if (!deps) { bkLog('BK_GRAMMAR_REPUBLISH_PREINIT', { reason }, 'warn'); return; }
+  rotateSession();
+  let requeued = 0;
+  for (const w of deps.store.all) {
+    // `disconnectedAt` is load-bearing and mutation-covered. The `codeword`
+    // half is NOT observable: the drain in fireBatchedSync re-checks it (and
+    // re-checks it later, which is the check that matters — a codeword can go
+    // away between queue and flush). Deleting it here passes every test, and
+    // that is the truth rather than a coverage gap. It stays because dropping
+    // it would let empty-codeword wrappers into pendingPuts, and this phase is
+    // behaviour-equivalent by construction; retire it with the drain's filter
+    // as one deliberate change if that redundancy is ever worth closing.
+    if (w.scanned.codeword && w.disconnectedAt === null) {
+      queuePut(w);
+      requeued++;
+    }
+  }
+  // Holders outside the store are NOT re-queued here: they re-publish off the
+  // is_final chokepoint in postBatch, which covers this path AND the ones this
+  // function never touches — notably a plain rescan, which is the common case.
+  bkLog('BK_GRAMMAR_REPUBLISH', { reason, requeued, wrappers: deps.store.all.length });
+  scheduleSync(reason);
 }
 
 // --- Transport ---
@@ -214,7 +193,7 @@ export async function claimLabels(count: number, preferred: string[] = []): Prom
 export async function publishRecords(records: ScannedElement[]): Promise<Set<string>> {
   const admitted = new Set<string>();
   if (records.length === 0 || !isVoiceAlphabetLoaded()) return admitted;
-  const sid = sessionId;
+  const sid = getSessionId();
   const resp = await postBatch({
     session_id: sid,
     batch_index: 0,
@@ -251,7 +230,7 @@ export async function publishRecords(records: ScannedElement[]): Promise<Set<str
 export function retireRecords(codewords: string[]): void {
   let queued = 0;
   for (const cw of codewords) {
-    if (sentCodewords.has(cw)) {
+    if (hasSent(cw)) {
       queueDelete(cw);
       queued++;
     }
@@ -259,15 +238,6 @@ export function retireRecords(codewords: string[]): void {
   if (queued > 0) scheduleSync('range_records_retire');
 }
 
-/** Drain the queued deletes for an outbound batch. Callers pass the drained
- * list to postBatch, which owns settling it (see below). Exported for the
- * scan path's terminal deletes-only flush (content.ts doScanBatched). */
-export function drainPendingDeletes(): string[] {
-  if (pendingDeleteCodewords.length === 0) return [];
-  const drained = pendingDeleteCodewords.slice();
-  pendingDeleteCodewords.length = 0;
-  return drained;
-}
 
 export async function postBatch(
   request: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id' | 'doc_id'>,
@@ -319,7 +289,7 @@ export async function postBatch(
     const resp: GrammarBatchResponse =
       await chrome.runtime.sendMessage({ type: 'GRAMMAR_BATCH', request: fullRequest } as Message);
     if (resp.result === 'ok' || resp.result === 'stored') {
-      for (const cw of deletes) sentCodewords.delete(cw);
+      for (const cw of deletes) unmarkSent(cw);
       // An is_final batch closes the session's inheritance window: the plugin
       // drops every codeword the rebuild did not re-confirm. Rebuilds are
       // assembled from `store.all`, so a codeword held OUTSIDE the store is
@@ -339,7 +309,7 @@ export async function postBatch(
       if (request.is_final) republishAll();
     } else if (deletes.length > 0) {
       // Refusal (calibration_active) or plugin-side error: nothing applied.
-      pendingDeleteCodewords.push(...deletes);
+      requeueDeletes(deletes);
     }
     trace(resp.result, resp.failed.length);
     return resp;
@@ -347,7 +317,7 @@ export async function postBatch(
     // Restore drained deletes on transport failure so they're carried
     // on the next attempt — otherwise an SW restart mid-scan would
     // strand the deletes silently.
-    pendingDeleteCodewords.push(...deletes);
+    requeueDeletes(deletes);
     trace('error', request.elements.length);
     return {
       result: 'error',
@@ -441,20 +411,31 @@ function isWholesaleRefusal(resp: GrammarBatchResponse): boolean {
 const SHADOW_DESYNC_REPUBLISH_COOLDOWN_MS = 10_000;
 let lastShadowDesyncRepublishAt = 0;
 
+/**
+ * Test-only. The cooldown is module state that outlives a test, and vitest
+ * reinstalls fake timers at the REAL clock each `beforeEach` — so a test that
+ * advanced time and republished leaves a stamp in the *future* relative to the
+ * next test, silently suppressing its republish. That made the
+ * `committed_codewords` guard test pass on the cooldown rather than the guard.
+ */
+export function _resetShadowDesyncCooldownForTesting(): void {
+  lastShadowDesyncRepublishAt = 0;
+}
+
 export function checkShadowDesync(resp: GrammarBatchResponse, requestSessionId: string, context: string): void {
   if (resp.result !== 'ok' && resp.result !== 'stored') return;
   if (typeof resp.committed_codewords !== 'number') return;
   // A rotation happened while this batch was in flight: the count
   // describes a dead session and the shadow was just cleared — nothing
   // meaningful to compare.
-  if (requestSessionId !== sessionId) return;
-  const shadow = sentCodewords.size;
+  if (requestSessionId !== getSessionId()) return;
+  const shadow = sentCount();
   if (resp.committed_codewords === shadow) return;
   bkLog('BK_GRAMMAR_SHADOW_DESYNC', { committed: resp.committed_codewords, shadow, context });
   const now = Date.now();
   if (now - lastShadowDesyncRepublishAt < SHADOW_DESYNC_REPUBLISH_COOLDOWN_MS) return;
   lastShadowDesyncRepublishAt = now;
-  deps.republishAll(`shadow_desync_${context}`);
+  republishAllGrammar(`shadow_desync_${context}`);
 }
 
 /**
@@ -543,8 +524,7 @@ async function doSyncNow(reason: string): Promise<void> {
   // Filter out wrappers whose codeword went away or were replaced in
   // the store between schedule and drain (race with IT viewport-leave
   // or rebind).
-  const drained = [...pendingPuts];
-  pendingPuts.clear();
+  const drained = drainPendingPuts();
   const puts = drained.filter(w =>
     w.scanned.codeword && deps.store.findWrapperFor(w.element) === w,
   );
@@ -554,7 +534,7 @@ async function doSyncNow(reason: string): Promise<void> {
   // the steady state the only way to land here is "MO fired but no
   // hintability change", which is the bulk of cosmetic-mutation
   // pages (style toggles, animation classes, hover state churn).
-  if (puts.length === 0 && pendingDeleteCodewords.length === 0) {
+  if (puts.length === 0 && !hasPendingDeletes()) {
     void reason;
     return;
   }
@@ -570,7 +550,7 @@ async function doSyncNow(reason: string): Promise<void> {
     // Pure-delete push: one empty batch carrying the queued deletes.
     // postBatch settles them (shadow drop on apply, queue restore on
     // refusal or transport failure) — this path only paces the retry.
-    const sid = sessionId;
+    const sid = getSessionId();
     const drainedDeletes = drainPendingDeletes();
     const resp = await postBatch({
       session_id: sid,
@@ -626,7 +606,7 @@ async function doSyncNow(reason: string): Promise<void> {
       // (rotate + full re-Put) once the host returns — a timer here would
       // hammer forever in the standalone-with-stale-alphabet steady state.
       halted = true;
-      for (const w of chunk) pendingPuts.add(w);
+      for (const w of chunk) requeuePut(w);
       bkLog('BK_SYNC_TRANSPORT_FAILED', { requeued: chunk.length, deletes: deletesRiding.length });
       return;
     }
@@ -637,7 +617,7 @@ async function doSyncNow(reason: string): Promise<void> {
       // Already-in-flight siblings settle through this same handler and
       // re-queue themselves too.
       halted = true;
-      for (const w of chunk) pendingPuts.add(w);
+      for (const w of chunk) requeuePut(w);
       bkLog('BK_SYNC_REFUSED', {
         result: resp.result, requeued: chunk.length, deletes: deletesRiding.length,
       });
@@ -656,24 +636,29 @@ async function doSyncNow(reason: string): Promise<void> {
         // re-queues the Put for the next delta.
         if (w.scanned.codeword && failedSet.has(w.scanned.codeword)) {
           if (w.element.isConnected) {
-            pendingPuts.add(w);
+            requeuePut(w);
             requeued++;
           } else {
-            deps.detachWrapper(w.element);
+            detachWrapper(w.element);
           }
         }
       }
       if (requeued > 0) bkLog('BK_SYNC_PUT_FAILED_REQUEUED', { requeued });
     }
     const succeededSet = new Set(resp.succeeded);
-    for (const cw of succeededSet) sentCodewords.add(cw);
+    for (const cw of succeededSet) markSent(cw);
     // (Deletes that rode this chunk were already settled by postBatch.)
     const succeededWrappers = chunk.filter(w => succeededSet.has(w.scanned.codeword));
-    sweepDisconnectedAfterBatch(succeededWrappers, (el) => el.isConnected, pendingDeleteCodewords, deps.detachWrapper);
+    // The sweep pushes the codewords of wrappers that left the DOM. Collected
+    // locally and handed back rather than letting it mutate the queue's array
+    // in place — same order, same batch, and the queue keeps its encapsulation.
+    const sweptDeletes: string[] = [];
+    sweepDisconnectedAfterBatch(succeededWrappers, (el) => el.isConnected, sweptDeletes, detachWrapper);
+    requeueDeletes(sweptDeletes);
     // Reconcile on the final chunk only — intermediate responses
     // describe a half-applied sync by construction.
-    if (deps.isBadgesVisible() && resp.succeeded.length > 0) {
-      deps.reconcile();
+    if (pageSession.badgesVisible && resp.succeeded.length > 0) {
+      requestReconcile();
     }
     // Middle chunks describe a half-applied sync; only the final chunk's
     // post-commit count is comparable against the settled shadow.
@@ -703,7 +688,7 @@ async function doSyncNow(reason: string): Promise<void> {
     const deletesRiding = index === 0 || isLast ? drainPendingDeletes() : [];
     if (chunk.length === 0 && deletesRiding.length === 0 && !isLast) return;
     stampStrictViewport(chunk);
-    const sid = sessionId;
+    const sid = getSessionId();
     const resp = await postBatch({
       session_id: sid,
       batch_index: index,
@@ -723,7 +708,7 @@ async function doSyncNow(reason: string): Promise<void> {
   // handleResponse; this covers only the ones the halt short-circuited.
   const requeueUndispatched = (fromIndex: number): void => {
     for (const c of chunks.slice(fromIndex)) {
-      for (const w of c) pendingPuts.add(w);
+      for (const w of c) requeuePut(w);
     }
   };
 

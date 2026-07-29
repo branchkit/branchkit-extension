@@ -8,9 +8,8 @@
  * - Manage offscreen document lifecycle (Chrome only)
  */
 
-import { Message, HintVisibility } from './types';
-import { clearAllStacks, alphabetsEqual } from './labels/label-pool';
-import { setAlphabet } from './labels/words';
+import { HintVisibility } from './types';
+import { clearAllStacks } from './labels/label-pool';
 import { buildCommandContributions } from './keymap/command-catalog';
 import { discoverPlugin, postToPlugin } from './plugin/actuator-client';
 import { recordTabActivated } from './background/tab-mru';
@@ -20,31 +19,27 @@ import {
 } from './background/tab-markers';
 import { ensureContentScriptInjected } from './background/injection';
 import { bgState, connId } from './background/state';
-import { republishActiveTab, broadcastToAllTabs, resolveActiveContentTab, notifyActiveTab, setUnroutablePullReporter } from './background/frame-router';
+import { republishActiveTab, resolveActiveContentTab, setUnroutablePullReporter } from './background/frame-router';
 import {
   initSSETransport, connectSSE, ensureOffscreen, scheduleSSERetry,
   isVoicePaused, restoreVoicePaused, runConnectionCheck,
 } from './plugin/sse-transport';
 import {
   forwardDispatchResult, forwardDebugLog, forwardHintsSessionEnd, forwardHintsSessionStart,
-  postGrammarBatch, postFocus, postActiveTab, assertFocusIfFocused,
+  postFocus, postActiveTab, assertFocusIfFocused,
 } from './plugin/plugin-api';
 import { reassertMirror } from './background/mode-mirror';
 import { initFrameLiveness } from './background/frame-liveness';
 import { pushReferenceNames, hydrateReferencesFromCollection } from './background/references';
 import { forwardCoalesced } from './background/log-coalesce';
 import { installUncaughtCapture } from './debug/uncaught';
-import { TAB_ACTION_BY_ID, ZOOM_ACTION_BY_ID, handleTabAction, handleZoomAction, switchToTabById } from './background/tab-actions';
-import { SURGERY_ACTIONS, handleSurgeryAction } from './background/tab-surgery';
+import { clearPaletteForClosedTab } from './background/palette';
 import {
-  clearPaletteVoice, handlePaletteAction,
-  handlePaletteVoiceSelect, handlePaletteVoiceDismiss, clearPaletteForClosedTab } from './background/palette';
-import {
-  MEDIA_ACTIONS, syncMediaActive, clearTabMediaOnNav, clearTabMediaOnClose,
-  resolveMediaTargetTab, sendMediaActionToTab, handleMediaAllAction, setBrowserWindowFocused, initMedia,
+  syncMediaActive, clearTabMediaOnNav, clearTabMediaOnClose,
+  setBrowserWindowFocused, initMedia,
 } from './background/media';
 import { purgeTab, logTabSwitch, scheduleSpaRescan, cancelSpaRescan, startDeadTabSweep } from './background/tab-sessions';
-import { registerMessageHandlers, routeMessage } from './background/message-router';
+import { registerMessageHandlers, routeMessage } from './core/message-router';
 import { commandOverrideMessageHandlers } from './background/command-overrides';
 import { voiceStatusMessageHandlers } from './background/voice-status';
 import { labelMessageHandlers } from './background/label-messages';
@@ -60,6 +55,7 @@ import { tabActionMessageHandlers } from './background/tab-actions';
 import { markMessageHandlers } from './background/marks';
 import { modeMirrorMessageHandlers } from './background/mode-mirror';
 import { paletteMessageHandlers } from './background/palette';
+import { handleSSEEvent, storeAlphabet, sseBridgeMessageHandlers } from './background/sse-events';
 
 // --- State ---
 //
@@ -127,41 +123,6 @@ function rescanActiveTab(): void {
   }).catch(() => {});
 }
 
-// --- Alphabet ---
-
-// Persist the BranchKit voice alphabet so content scripts on every page see
-// the same codewords voice will recognize. content.ts reads this on load
-// and subscribes to chrome.storage.onChanged for live updates.
-//
-// Short-circuits the storage write when the incoming alphabet matches the one
-// already stored. Voice re-pushes the alphabet on a hot path (688 pushes in a
-// single observed session, almost all identical); each distinct push wakes
-// every content script (storage.onChanged) into a grammar re-push + re-render,
-// so the dedup avoids that churn. The overlay itself is updated every call
-// (idempotent) so the SW translation layer is always current.
-async function storeAlphabet(words: string[]): Promise<void> {
-  if (!Array.isArray(words) || words.length !== 26) return;
-  if (words.some(w => typeof w !== 'string' || w.length === 0)) return;
-
-  // Install the SW-realm voice overlay so postGrammarBatch / frame-router can
-  // translate letter tokens <-> spoken codewords at the plugin boundary. The
-  // pool itself builds from fixed letters and is NOT touched by an alphabet
-  // change — hint identities stay stable when voice connects/disconnects.
-  setAlphabet(words);
-
-  try {
-    const current = await chrome.storage.local.get('alphabet');
-    // Skip a no-op push: an unchanged alphabet would still wake every content
-    // script (storage.onChanged) into a needless grammar re-push + re-render.
-    if (Array.isArray(current.alphabet) && alphabetsEqual(current.alphabet, words)) {
-      return;
-    }
-    await chrome.storage.local.set({ alphabet: words });
-  } catch (err) {
-    console.error('[BranchKit BG] alphabet store error:', err);
-  }
-}
-
 // Pull-resolution "no such hint" (ext notes/DESIGN_STATIC_PAIR_GRAMMAR.md 0c):
 // a sealed-alphabet activate whose pair no frame claims reports through the
 // same dispatch-result channel the content script uses, with a distinct
@@ -204,144 +165,6 @@ async function contributeCommands(): Promise<void> {
   }
 }
 
-// --- SSE Event Handling (shared by both paths) ---
-
-function handleSSEEvent(data: any): void {
-  // Paused: drop any action from a stream that outlived the teardown (a
-  // surviving offscreen doc, an in-flight event mid-pause). Voice must not act
-  // while the user has it paused. The stream is torn down on pause and on a
-  // paused wake, so this is defense-in-depth for the race window.
-  if (isVoicePaused()) return;
-  // Tab verbs are handled here, not forwarded to content: they act on
-  // chrome.tabs regardless of what page is focused (content scripts can't
-  // reach the API, and the active page may not even have one).
-  const tabAction = TAB_ACTION_BY_ID[data.action];
-  if (tabAction) {
-    const n = parseInt(data.params?.index ?? '', 10);
-    void handleTabAction(tabAction, Number.isFinite(n) ? n : undefined);
-    return;
-  }
-
-  // Tab-surgery request/response (plugin tab-to-desk orchestration) — like
-  // the tab verbs, background-only chrome.windows/tabs work; each request is
-  // answered on POST /surgery/result. See background/tab-surgery.ts.
-  if (SURGERY_ACTIONS.has(data.action)) {
-    handleSurgeryAction(data.action, data.params);
-    return;
-  }
-
-  // Page zoom — also chrome.tabs, also handled here so it works regardless of
-  // the active page's content-script state.
-  const zoomAction = ZOOM_ACTION_BY_ID[data.action];
-  if (zoomAction) {
-    void handleZoomAction(zoomAction);
-    return;
-  }
-
-  // Media verbs route by the media-target priority, not the active tab —
-  // "pause" from an unrelated app must reach the background tab that's
-  // actually playing. The *_all forms fan out to every audible tab.
-  if (data.action === 'media_pause_all' || data.action === 'media_mute_all') {
-    handleMediaAllAction(data.action);
-    return;
-  }
-  if (MEDIA_ACTIONS.has(data.action)) {
-    const target = resolveMediaTargetTab();
-    if (target !== null) {
-      sendMediaActionToTab(target, data);
-      return;
-    }
-    // No known target anywhere — fall through to the active tab, the
-    // pre-background behavior (its frames no-op if truly nothing's there).
-  }
-
-  // "tab <codeword>" — like the tab verbs, handled here so it works
-  // regardless of the active page's content-script state.
-  if (data.action === 'switch_to_tab') {
-    const id = parseInt(data.params?.tab_id ?? '', 10);
-    if (Number.isFinite(id)) void switchToTabById(id);
-    return;
-  }
-
-  // Palette voice selection: the matched codeword's row_id comes back from
-  // the browser_palette collection; resolve it through the session's dispatch
-  // map and reuse the keyboard path (close overlay, then execute). An unknown
-  // row id (stale utterance racing a re-open) just closes the palette. The
-  // matcher already cleared the exclusive tag (ClearsTags at match time);
-  // handlePaletteAction's clearPaletteVoice drains the entries to match.
-  if (data.action === 'palette_select') {
-    handlePaletteVoiceSelect(data.params?.row_id);
-    return;
-  }
-  // "blank"/"stash" + badge: same resolution, different landing spot for
-  // bookmark rows (new focused / background tab instead of the origin tab).
-  if (data.action === 'palette_select_newtab') {
-    handlePaletteVoiceSelect(data.params?.row_id, 'blank');
-    return;
-  }
-  if (data.action === 'palette_select_background') {
-    handlePaletteVoiceSelect(data.params?.row_id, 'stash');
-    return;
-  }
-  if (data.action === 'palette_dismiss') {
-    handlePaletteVoiceDismiss();
-    return;
-  }
-
-  // Multi-target hint verbs ("stash huge gap arch same"): the plugin delivers
-  // the matched targets as a JSON-encoded ordered list under params.targets
-  // (SSE params are string-keyed). Fan out to one per-target action, awaited
-  // in spoken order, so per-codeword frame routing and the content script's
-  // single-target handling work unchanged.
-  if (typeof data.params?.targets === 'string') {
-    let targets: unknown;
-    try {
-      targets = JSON.parse(data.params.targets);
-    } catch {
-      console.warn('[BranchKit BG] multi-target action with unparseable targets:', data.action);
-      return;
-    }
-    if (!Array.isArray(targets)) return;
-    void (async () => {
-      for (const t of targets) {
-        if (t === null || typeof t !== 'object') continue;
-        const params: Record<string, string> = {};
-        for (const [k, v] of Object.entries(t)) params[k] = String(v);
-        await notifyActiveTab({
-          type: 'BRANCHKIT_ACTION',
-          payload: { action: data.action, params, correlation_id: data.correlation_id },
-        });
-      }
-    })();
-    return;
-  }
-
-  // Active-tab-only routing for events that carry params.target === 'active'.
-  // The plugin uses this for focus-driven rescans where only the active
-  // tab's state matters — broadcasting to every tab would multiply the
-  // refocus latency by tab count for no functional benefit.
-  if (data.params?.target === 'active') {
-    notifyActiveTab({
-      type: 'BRANCHKIT_ACTION',
-      payload: data,
-    });
-    return;
-  }
-
-  if (data.action === 'rescan' || data.action === 'set_badge_mode') {
-    // Broadcast to ALL tabs
-    broadcastToAllTabs({
-      type: 'BRANCHKIT_ACTION',
-      payload: data,
-    });
-  } else {
-    notifyActiveTab({
-      type: 'BRANCHKIT_ACTION',
-      payload: data,
-    });
-  }
-}
-
 // --- Message Listener ---
 
 // The listener goes on FIRST, before any registration can throw.
@@ -353,9 +176,13 @@ function handleSSEEvent(data: any): void {
 // message type would be EVERY message type, on a build whose tsc/vitest/CI
 // are all green (nothing composes the real maps together, and the
 // exhaustiveness lint checks registration, not collision). Installing the
-// listener first turns "the extension is dead" into "one handler is missing",
-// which is what the throw was trying to say. `routeMessage` reads the table
-// per message, so registering after this point is not a race.
+// listener first means the SW at least keeps a listener. It does NOT reduce
+// this to "one handler is missing", which an earlier version of this comment
+// claimed: the registrations are ~38% into the file, so a throw also skips the
+// tab/webNavigation/windows listeners, initMedia, the alarms and init(). Lint E
+// is what prevents the collision; this ordering only bounds the damage.
+// `routeMessage` reads the table per message, so registering after this point
+// is not a race.
 chrome.runtime.onMessage.addListener(routeMessage);
 
 // Every message type is owned by the module that owns its concern; this is the
@@ -375,21 +202,15 @@ registerMessageHandlers(tabActionMessageHandlers);
 registerMessageHandlers(markMessageHandlers);
 registerMessageHandlers(modeMirrorMessageHandlers);
 registerMessageHandlers(paletteMessageHandlers);
+registerMessageHandlers(sseBridgeMessageHandlers);
 
-// The offscreen-bridge pair still closes over handleSSEEvent / storeAlphabet
-// above, so it registers from here rather than from a module. That is the
-// remaining residue in this file, and it moves when the SSE fan-out does.
+// DEV_PING stays HERE rather than moving with the bridge, and that is the
+// honest placement: the message is a no-op and the WAKE is the whole point
+// (debug/dev-keepalive.ts pings from any open page so a suspended event page
+// re-runs this script and reconnects the reload socket at the bottom of this
+// file). Its sender touches `window`, so the service worker cannot import it
+// either way.
 registerMessageHandlers({
-  // Offscreen doc forwarded an SSE event (Chrome path) — route to tabs.
-  SSE_EVENT: (message) => { handleSSEEvent(message.data); },
-
-  // Offscreen doc forwarded an alphabet event (Chrome path).
-  ALPHABET: (message) => {
-    if (!Array.isArray(message.words)) return;
-    void storeAlphabet(message.words);
-  },
-
-  // Dev keepalive — the WAKE is the point (dev-keepalive.ts).
   DEV_PING: () => {},
 });
 

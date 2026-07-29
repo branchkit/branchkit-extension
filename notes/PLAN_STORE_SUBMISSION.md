@@ -41,7 +41,7 @@ with the optional app, localhost only"), `activeTab` row removed, date bumped.
 ## What's already good (verified this session)
 
 - No remote code, no `eval` / `new Function` / remote `.src` (grep-clean).
-- No outbound network beyond localhost `127.0.0.1` (companion app).
+- No outbound network beyond localhost `127.0.0.1` (companion app). **Qualified 2026-07-28** — true of the SOURCE, not of the shipped release bundle, which still contains a dev-reload WebSocket client for `127.0.0.1:35729`. See P0 item 2.
 - esbuild bundles locally; nothing loaded from a CDN at runtime.
 - All declared permissions are actually used (sessions, webNavigation, alarms,
   scripting all have live call sites — no unused-permission rejection).
@@ -138,6 +138,32 @@ built output; the Chrome build declares it. See "What's already good.")*
    `<all_urls>` host, omits `activeTab` — the closer precedent.) Verify nothing
    references `chrome.tabs` in a way that depends on the activeTab grant before
    removing from the base manifest.
+
+2. **The RELEASE bundle still ships the dev auto-reload WebSocket client**
+   (found 2026-07-28). `dist/chrome/background.js` and the Firefox build both
+   contain `new WebSocket("ws://127.0.0.1:35729")` and its reconnect loop after
+   `npm run build:release`. It is dead code — `__DEV_RELOAD__` is defined to
+   `false` — but esbuild is not eliminating the branch, and the string survives.
+
+   Why this is a P0 and not a tidy-up: a reviewer grepping the bundle finds a
+   hardcoded localhost WebSocket with **no user-facing purpose and no entry in
+   the permission justifications above**. The `127.0.0.1` host justification we
+   drafted describes the companion app on the app's port; this is a different
+   port and a different peer (a build server on the developer's machine). That
+   is exactly the "undisclosed local network activity" shape that draws a
+   rejection or a review round-trip, and it undercuts the "no outbound network
+   beyond localhost (companion app)" claim under *What's already good*.
+
+   **`check-release-gate.mjs` passes** — it verifies the define is APPLIED and
+   that the packaging scripts route through `--release`; it never looks for the
+   socket. So the guard we have proves the input and not the output. The fix is
+   two-part: make the branch actually eliminate (or lift the block behind an
+   import that release drops), and extend the gate to assert the built bytes
+   contain no `ws://`, no `35729`, and no `new WebSocket` — an output assertion,
+   which is the only kind that could have caught this.
+
+   Pre-existing and not introduced by any current branch: verified by building
+   `main` at `c3e2ab5` and grepping the same bundle.
 
 ### P1 — High-scrutiny surfaces (pre-justify, minimize footprint)
 

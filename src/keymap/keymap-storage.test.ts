@@ -164,11 +164,11 @@ describe('effectiveKeymap', () => {
   it('drops unknown, unmappable, and keyless data', () => {
     const km = effectiveKeymap({
       no_such_command: [{ keys: 'KeyX' }],
-      activate_hint: [{ keys: 'KeyY' }],       // mappable: false
+      find_immediate: [{ keys: 'KeyY' }],      // mappable: false
       scroll_up: [{ keys: '' }],                // keyless → unbound, not a bad entry
     } as unknown as KeymapDelta);
     expect(km.some((e) => e.command === 'no_such_command')).toBe(false);
-    expect(km.some((e) => e.command === 'activate_hint')).toBe(false);
+    expect(km.some((e) => e.command === 'find_immediate')).toBe(false);
     expect(km.some((e) => e.keys === '')).toBe(false);
     expect(km.some((e) => e.command === 'scroll_up')).toBe(false);
   });
@@ -391,13 +391,13 @@ describe('legacy snapshot migration', () => {
     storeLegacySnapshot([
       { keys: 'KeyJ', command: 'scroll_down' },
       { keys: 'KeyX', command: 'no_such_command' },
-      { keys: 'KeyY', command: 'activate_hint' },
+      { keys: 'KeyY', command: 'find_immediate' },
       { keys: '', command: 'scroll_up' },
     ]);
     const km = await loadKeymap();
     expect(km).toContainEqual({ keys: 'KeyJ', command: 'scroll_down' });
     expect(km.some((e) => e.command === 'no_such_command')).toBe(false);
-    expect(km.some((e) => e.command === 'activate_hint')).toBe(false);
+    expect(km.some((e) => e.command === 'find_immediate')).toBe(false);
     expect(km.some((e) => e.keys === '')).toBe(false);
   });
 });

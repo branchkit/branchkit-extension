@@ -86,3 +86,40 @@ export function isStale(snapshot: CodewordSnapshot | null, now: number): boolean
   if (!snapshot) return true;
   return now - snapshot.takenAt > SNAPSHOT_TTL_MS;
 }
+
+// --- The live phrase snapshot -----------------------------------------------
+//
+// The functions above are pure so they stay testable against injected time.
+// The CURRENT snapshot is a single per-frame value, though, and it lived as a
+// content.ts local for no better reason than that content.ts happened to hold
+// both the capture and the two reads (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md
+// phase 3). It belongs here, beside the shape it holds.
+
+let current: CodewordSnapshot | null = null;
+
+/** Capture the snapshot the next spoken codeword resolves against. */
+export function capturePhraseSnapshot(
+  wrappers: Iterable<ElementWrapper>,
+  now: number,
+): void {
+  current = takeSnapshot(wrappers, now);
+}
+
+/**
+ * Resolve a codeword against the live phrase snapshot. Undefined when there is
+ * none, it has aged out, or the element it named is gone — the caller falls
+ * through to the live store in all three cases.
+ */
+export function resolveInPhrase(codeword: string, now: number): ElementWrapper | undefined {
+  return resolveFromSnapshot(current, codeword, now);
+}
+
+/** Whether the live snapshot is absent or past TTL. */
+export function isPhraseSnapshotStale(now: number): boolean {
+  return isStale(current, now);
+}
+
+/** Test seam. */
+export function _resetPhraseSnapshotForTesting(): void {
+  current = null;
+}

@@ -29,6 +29,8 @@
 import { stripTabMarker, decorateTitle } from '../tab-marker-format';
 import { labelToDisplay, type LabelAssignment } from '../labels/words';
 import { getDisplayMode } from '../config';
+import { inTopFrame } from '../core/frame';
+import type { MessageHandler, MessageOf } from '../core/message-router';
 
 // The current marker letters ("a" / "qr"), or null when the feature is off /
 // this tab is unmarked. Set by the background push.
@@ -124,3 +126,13 @@ export function _resetTabTitleForTesting(): void {
   lastUndecorated = document.title;
   lastDecorated = document.title;
 }
+
+// --- SW-driven marker messages (notes/DESIGN_ENTRY_POINT_TOPOLOGY.md phase 3) ---
+//
+// Top frame only: the marker decorates the TAB title, which subframes do not
+// own. Both were branches of content.ts's onMessage chain.
+
+export const tabTitleMessageHandlers: Record<string, MessageHandler> = {
+  TAB_MARKER: (m: MessageOf<'TAB_MARKER'>) => { if (inTopFrame()) setTabMarker(m.letters); },
+  TAB_MARKER_REAPPLY: () => { if (inTopFrame()) reapplyTabMarker(); },
+};

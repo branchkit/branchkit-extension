@@ -30,7 +30,7 @@
  * instead of via a per-frame timer.
  */
 
-import type { MessageHandler } from './message-router';
+import type { MessageHandler } from '../core/message-router';
 import { forwardCoalesced } from './log-coalesce';
 import { deriveMirror, diffMirror, type TagAssertion, type FrameId } from '../core/derive-mirror';
 import { MODE_SPECS, type ModeId } from '../core/mode-stack';

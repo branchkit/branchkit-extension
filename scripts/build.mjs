@@ -25,6 +25,7 @@ import { cpSync, mkdirSync, rmSync, renameSync, existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { ENTRIES, STATIC_FILES, STATIC_DIRS, guardBailWrap } from './lib/bundle-spec.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, '..');
@@ -58,22 +59,8 @@ const buildId = process.env.BK_BUILD_ID ?? new Date().toISOString();
 if (existsSync(outDir)) rmSync(outDir, { recursive: true });
 mkdirSync(outDir, { recursive: true });
 
-const entries = [
-  // `swallowGuardBail`: content.ts's duplicate-injection guard deliberately
-  // throws to abort its IIFE when a script is injected into a frame that
-  // already has one. That throw is correct, but it surfaces as an "Uncaught
-  // Error" in the page console / dev error list. Wrap the IIFE so ONLY that
-  // intentional bail is caught (any real error re-throws, still uncaught).
-  { in: 'src/content.ts',    out: 'content.js',    format: 'iife', swallowGuardBail: true },
-  { in: 'src/bootstrap.ts',  out: 'bootstrap.js',  format: 'iife' },
-  { in: 'src/background.ts', out: 'background.js', format: 'esm'  },
-  { in: 'src/offscreen.ts',  out: 'offscreen.js',  format: 'iife' },
-  { in: 'src/popup.ts',      out: 'popup.js',      format: 'iife' },
-  { in: 'src/options.ts',    out: 'options.js',    format: 'iife' },
-  { in: 'src/palette-page.ts', out: 'palette.js',  format: 'iife' },
-];
 
-await Promise.all(entries.map((e) =>
+await Promise.all(ENTRIES.map((e) =>
   esbuild.build({
     entryPoints: [resolve(root, e.in)],
     outfile: resolve(outDir, e.out),
@@ -92,20 +79,13 @@ await Promise.all(entries.map((e) =>
       // store submission).
       __DEV_RELOAD__: release ? 'false' : 'true',
     },
-    ...(e.swallowGuardBail ? {
-      banner: { js: 'try {' },
-      footer: { js: '} catch (e) { if (String((e && e.message) || e).indexOf("duplicate injection") === -1) throw e; }' },
-    } : {}),
+    ...guardBailWrap(e),
   })
 ));
 
 // Static assets (HTML pages + icons).
-cpSync(resolve(root, 'offscreen.html'), resolve(outDir, 'offscreen.html'));
-cpSync(resolve(root, 'popup.html'),     resolve(outDir, 'popup.html'));
-cpSync(resolve(root, 'options.html'),   resolve(outDir, 'options.html'));
-cpSync(resolve(root, 'palette.html'),   resolve(outDir, 'palette.html'));
-cpSync(resolve(root, 'welcome.html'),   resolve(outDir, 'welcome.html'));
-cpSync(resolve(root, 'icons'),          resolve(outDir, 'icons'), { recursive: true });
+for (const f of STATIC_FILES) cpSync(resolve(root, f), resolve(outDir, f));
+for (const d of STATIC_DIRS) cpSync(resolve(root, d), resolve(outDir, d), { recursive: true });
 
 // Target-specific manifest patch. Delegated to keep that logic in one
 // place — `build-manifest.mjs` is also useful for cross-target diffs.

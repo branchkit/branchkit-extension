@@ -15,7 +15,7 @@ import {
   forwardDispatchResult, forwardDebugLog, forwardPerfReport, postGrammarBatch,
   transportFailure, setRangePick, setQueryFieldActive,
 } from '../plugin/plugin-api';
-import type { MessageHandler } from './message-router';
+import type { MessageHandler } from '../core/message-router';
 
 export const pluginMessageHandlers: Record<string, MessageHandler> = {
   /**

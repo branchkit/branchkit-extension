@@ -34,6 +34,7 @@ const keyHandler = {
 const caretInstance = {
   enterFromFind: vi.fn(() => false), enterFromNormal: vi.fn(), enter: vi.fn(),
   extendToPhrase: vi.fn(), extendToRange: vi.fn(), handleKey: vi.fn(), isActive: vi.fn(() => false),
+  extendToCurrentMatch: vi.fn(),
 };
 const findPageLink = vi.fn();
 const flashToast = vi.fn();
@@ -41,6 +42,15 @@ const copyText = vi.fn(async () => true);
 const findAllRanges = vi.fn((): Range[] => []);
 const openPhraseBox = vi.fn();
 const clearFindPaint = vi.fn();
+// find's commit multicast. CAPTURED rather than stubbed away: this module
+// registers the caret's extend-to-match at its own module scope now (it was a
+// content.ts composition until 2026-07-27), and holding what it registered is
+// the only way a test can tell a real registration from none.
+let committedListener: (() => void) | null = null;
+const onFindCommitted = vi.fn((fn: () => void) => {
+  committedListener = fn;
+  return () => { committedListener = null; };
+});
 const startRangePick = vi.fn();
 const cancelRangePick = vi.fn();
 
@@ -61,7 +71,7 @@ async function loadModule(): Promise<SelectionCommands> {
   vi.doMock('../pagination', () => ({ findPageLink }));
   vi.doMock('../url-nav', () => ({ urlUp: vi.fn(() => null), urlRoot: vi.fn(() => null) }));
   vi.doMock('../clipboard', () => ({ copyText }));
-  vi.doMock('../scan/find', () => ({ findAllRanges, openPhraseBox, clearFindPaint }));
+  vi.doMock('../scan/find', () => ({ findAllRanges, openPhraseBox, clearFindPaint, onFindCommitted }));
   vi.doMock('./range-disambiguation', () => ({ startRangePick, cancelRangePick }));
   return await import('./selection-commands');
 }
@@ -70,6 +80,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   registered.clear();
   caretOpts = null;
+  committedListener = null;
   vi.stubGlobal('chrome', { runtime: { sendMessage: vi.fn().mockResolvedValue(undefined) } });
 });
 
@@ -121,15 +132,68 @@ describe('registration contract (Phase 1)', () => {
     expect(keyHandler.setMarkCallback).not.toHaveBeenCalled();
   });
 
+  // ...but it DOES subscribe to find's commit, and that is deliberate: the
+  // caret's extend-to-match is not a command, it is a reaction to one. It moved
+  // here from a content.ts composition (2026-07-27) because this module owns
+  // the caret instance, and it lands at module scope like the mode probe beside
+  // it. Nothing else observes the registration, so without this the whole
+  // find-and-select behaviour stays untested — as it was the entire time it
+  // lived in content.ts, which has no test file.
+  it('subscribes to find commits at import, and extends only when caret is live', async () => {
+    await loadModule();
+    expect(committedListener).toBeTypeOf('function');
+
+    caretInstance.isActive.mockReturnValue(false);
+    committedListener!();
+    expect(caretInstance.extendToCurrentMatch).not.toHaveBeenCalled();
+
+    // The guard is the point: "/ query Enter" is a find-and-select ONLY inside
+    // a caret/visual session; outside one it must stay an ordinary find.
+    caretInstance.isActive.mockReturnValue(true);
+    committedListener!();
+    expect(caretInstance.extendToCurrentMatch).toHaveBeenCalledTimes(1);
+  });
+
   it('registerSelectionCommands installs the handlers once', async () => {
     const m = await loadModule();
     m.registerSelectionCommands();
     for (const a of ['mark_set', 'mark_jump', 'caret_mode', 'visual_line_mode', 'select_to',
-      'go_next', 'go_previous', 'copy_url', 'go_up', 'go_root']) {
+      'go_next', 'go_previous', 'copy_url', 'go_up', 'go_root',
+      'history_back', 'history_forward', 'refresh']) {
       expect(registered.has(a)).toBe(true);
     }
     expect(keyHandler.setMarkCallback).toHaveBeenCalledTimes(1);
     expect(keyHandler.setCaretKeyHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it('the session-history verbs each step the right way, and refresh reloads', async () => {
+    const m = await loadModule();
+    m.registerSelectionCommands();
+    const back = vi.spyOn(history, 'back').mockImplementation(() => {});
+    const forward = vi.spyOn(history, 'forward').mockImplementation(() => {});
+    const reload = vi.fn();
+    const original = window.location;
+    Object.defineProperty(window, 'location', {
+      configurable: true, value: { ...original, reload, href: original.href },
+    });
+    try {
+      dispatcher.dispatch('history_back');
+      expect(back).toHaveBeenCalledTimes(1);
+      expect(forward).not.toHaveBeenCalled();
+
+      dispatcher.dispatch('history_forward');
+      expect(forward).toHaveBeenCalledTimes(1);
+      // Still once — a forward wired to back would show up only as a second
+      // back() call, which a per-command assertion in isolation would miss.
+      expect(back).toHaveBeenCalledTimes(1);
+
+      dispatcher.dispatch('refresh');
+      expect(reload).toHaveBeenCalledTimes(1);
+    } finally {
+      Object.defineProperty(window, 'location', { configurable: true, value: original });
+      back.mockRestore();
+      forward.mockRestore();
+    }
   });
 
   it('caret_mode prefers promoting a find match before dropping to caret', async () => {
@@ -241,13 +305,24 @@ describe('registration contract (Phase 1)', () => {
       .chrome.runtime.sendMessage;
     modes.reset();
 
+    // What leaves the frame is the STACK EDGE and nothing else. This read
+    // `not.toHaveBeenCalled()` until the mirror transport was defaulted in
+    // core/modes.ts, which passed only because no unit test wired the sink —
+    // it could not tell "posted nothing" from "had no transport". The edge now
+    // really posts, so the invariant is stated directly instead of inferred.
+    const postedTypes = () => send.mock.calls.map(([m]) => (m as { type: string }).type);
+
     caretOpts!.onModeChange('caret');
     expect(modes.has('caret')).toBe(true);   // the edge the SW derives from
-    expect(send).not.toHaveBeenCalled();     // no per-frame tag post remains
+    expect(postedTypes()).toEqual(['MODE_STACK']);
 
     caretOpts!.onModeChange(null);
     expect(modes.has('caret')).toBe(false);
-    expect(send).not.toHaveBeenCalled();
+    expect(postedTypes()).toEqual(['MODE_STACK', 'MODE_STACK']);
+    // The caret TAG is derived from the stack in the SW
+    // (background/mode-mirror.ts). A frame asserting it directly is the
+    // regression this test exists to catch.
+    expect(postedTypes()).not.toContain('CARET_ACTIVE');
   });
 
   it('go_next follows the page link when found, toasts when absent', async () => {
@@ -273,5 +348,45 @@ describe('registration contract (Phase 1)', () => {
 
     caretOpts!.onModeChange(null);
     expect(modes.has('caret')).toBe(false);
+  });
+});
+
+describe('markRestoreMessageHandlers', () => {
+  const asFrame = (top: boolean) =>
+    Object.defineProperty(window, 'top', {
+      configurable: true, get: () => (top ? window : ({} as Window)),
+    });
+
+  afterEach(() => asFrame(true));
+
+  it('restores a hash mark in the top frame', async () => {
+    asFrame(true);
+    const m = await loadModule();
+    m.markRestoreMessageHandlers.MARK_RESTORE(
+      { type: 'MARK_RESTORE', scrollX: 0, scrollY: 0, hash: '#readme' }, {} as never,
+    );
+    expect(location.hash).toBe('#readme');
+  });
+
+  it('restores a scroll mark in the top frame', async () => {
+    asFrame(true);
+    const m = await loadModule();
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    m.markRestoreMessageHandlers.MARK_RESTORE(
+      { type: 'MARK_RESTORE', scrollX: 12, scrollY: 340, hash: '' }, {} as never,
+    );
+    expect(scrollTo).toHaveBeenCalledWith(12, 340);
+    scrollTo.mockRestore();
+  });
+
+  it('does nothing in a subframe — sub-frame scroll is out of scope', async () => {
+    asFrame(false);
+    const m = await loadModule();
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => {});
+    m.markRestoreMessageHandlers.MARK_RESTORE(
+      { type: 'MARK_RESTORE', scrollX: 12, scrollY: 340, hash: '' }, {} as never,
+    );
+    expect(scrollTo).not.toHaveBeenCalled();
+    scrollTo.mockRestore();
   });
 });

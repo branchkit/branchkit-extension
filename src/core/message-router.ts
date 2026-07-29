@@ -1,10 +1,20 @@
 /**
- * BranchKit Browser — service-worker message router.
+ * BranchKit Browser — the `chrome.runtime.onMessage` router, shared by both
+ * entry points.
  *
  * Replaces the 44-branch `if (message.type === …)` chain that used to be 38% of
- * background.ts. Handlers live with the module that owns their concern and are
- * composed here as data; background.ts installs the table and knows nothing
- * about who registered what. See notes/DESIGN_ENTRY_POINT_TOPOLOGY.md.
+ * background.ts, and the 11-branch one in content.ts. Handlers live with the
+ * module that owns their concern and are composed here as data; the entry point
+ * installs the table and knows nothing about who registered what. See
+ * notes/DESIGN_ENTRY_POINT_TOPOLOGY.md.
+ *
+ * ## One module, two instances
+ *
+ * `content.ts` and `background.ts` are separate esbuild bundles, so each gets
+ * its own copy of the table below — a content script cannot see the SW's
+ * handlers, and vice versa. That is why this can be ONE module rather than a
+ * factory, or (worse) two files kept in sync: the isolation the two contexts
+ * need is already a property of the bundling.
  *
  * ## The response contract is carried by the RETURN VALUE, not a boolean
  *
@@ -37,18 +47,62 @@
  * loudly — a hung content script is far harder to diagnose than a logged throw.
  */
 
+import { reportCaught } from '../debug/uncaught';
+import type { Message } from '../types';
+
 export type MessageSender = chrome.runtime.MessageSender;
 
 /**
  * Returning `undefined` means "no response". No handler answers with a literal
  * `undefined` payload today; if one ever needs to, it should answer `null`.
+ *
+ * `message` is `any` so the TABLE can hold handlers of eleven different payload
+ * shapes. Individual handlers should NOT accept `any` — see `MessageOf`.
  */
 export type MessageHandler = (
   message: any,
   sender: MessageSender,
 ) => unknown | Promise<unknown> | void;
 
+/**
+ * The `Message` union member for one type — how a handler gets its payload
+ * checked back.
+ *
+ * The old `if (message.type === 'X')` chain narrowed a `(message: Message)`
+ * parameter, so every payload field read was checked by tsc. Moving to a table
+ * traded that away: the map's value type imposes `any`, and a sender-side
+ * rename in types.ts then compiles on both sides while the handler silently
+ * reads `undefined`. Annotating the parameter buys it back — a narrower
+ * parameter is still assignable to `MessageHandler`, so the map shape is
+ * unchanged.
+ *
+ *     TAB_MARKER: (m: MessageOf<'TAB_MARKER'>) => setTabMarker(m.letters),
+ *
+ * A type not in the union resolves to `never`, so a typo in the type name is
+ * itself a compile error at the first field read.
+ */
+export type MessageOf<T extends Message['type']> = Extract<Message, { type: T }>;
+
 const handlers = new Map<string, MessageHandler>();
+
+let guard: (() => boolean) | null = null;
+
+/**
+ * A context-wide precondition, checked before any handler runs. Returning
+ * `false` makes this context ignore every message.
+ *
+ * The content script needs it: a torn-down orphan (a superseded elder whose
+ * `chrome.runtime` is still live) must not act on broadcasts, or it fires
+ * navigations, clicks and grammar into a dead session alongside its successor
+ * (notes/DESIGN_TEARDOWN_OWNERSHIP.md). That guard has to sit ABOVE the table
+ * rather than inside eleven handlers, because the rule is "this context is
+ * done", not "this message does not apply".
+ *
+ * Unset in the service worker, which has no such state.
+ */
+export function setMessageGuard(fn: (() => boolean) | null): void {
+  guard = fn;
+}
 
 function isThenable(v: unknown): v is Promise<unknown> {
   return typeof (v as { then?: unknown } | null | undefined)?.then === 'function';
@@ -66,15 +120,16 @@ export function registerMessageHandlers(map: Record<string, MessageHandler>): vo
   for (const [type, handler] of Object.entries(map)) {
     const existing = handlers.get(type);
     if (existing && existing !== handler) {
-      throw new Error(`[BranchKit SW] duplicate message handler for '${type}'`);
+      throw new Error(`[BranchKit] duplicate message handler for '${type}'`);
     }
     handlers.set(type, handler);
   }
 }
 
-/** Test seam. Production installs once at SW boot and never clears. */
+/** Test seam. Production installs once at boot and never clears. */
 export function resetMessageHandlers(): void {
   handlers.clear();
+  guard = null;
 }
 
 /** The registered types, sorted. Diagnostics and tests. */
@@ -95,6 +150,8 @@ export function routeMessage(
   sender: MessageSender,
   sendResponse: (response?: unknown) => void,
 ): boolean {
+  if (guard && !guard()) return false;
+
   const type = message?.type;
   if (typeof type !== 'string') return false;
 
@@ -106,7 +163,14 @@ export function routeMessage(
     result = handler(message, sender);
   } catch (err) {
     // A synchronous throw means no response is coming. Close the channel.
-    console.warn(`[BranchKit SW] handler '${type}' threw:`, err);
+    // Also to browser.log: before content.ts's chain became this table, a
+    // synchronous throw here escaped the listener and installUncaughtCapture
+    // turned it into a BK_UNCAUGHT line carrying the dispatch's tr_. Catching
+    // it is right — the channel closes instead of hanging the sender — but a
+    // console.warn is invisible to `dev plog`, and the biggest handler in the
+    // extension routes through here.
+    reportCaught(`message handler '${type}'`, err, { phase: 'sync' });
+    console.warn(`[BranchKit] handler '${type}' threw:`, err);
     return false;
   }
 
@@ -116,7 +180,8 @@ export function routeMessage(
     result.then(
       (value) => sendResponse(value),
       (err) => {
-        console.warn(`[BranchKit SW] handler '${type}' rejected:`, err);
+        reportCaught(`message handler '${type}'`, err, { phase: 'async' });
+        console.warn(`[BranchKit] handler '${type}' rejected:`, err);
         sendResponse(undefined);
       },
     );

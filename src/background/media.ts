@@ -25,7 +25,7 @@
  * listener + seed so wiring stays explicit.
  */
 
-import type { MessageHandler } from './message-router';
+import type { MessageHandler } from '../core/message-router';
 import { ensureConnected, postToPlugin } from '../plugin/actuator-client';
 import { bgState, connId } from './state';
 
