@@ -220,6 +220,66 @@ already-built path lights up.
 That is a matcher-facing change to a working selection flow, so it wants its own
 wave and a live pass, not a bundle with the transport.
 
+### Field confirmation + the exact emit condition (2026-07-29)
+
+User test, tabs-scope palette, mark `io` → spoken key `"is opal"`:
+
+```
+words=["is","opal"]  → winner=GatedUnscoped   (the whole key matches; row activates)
+words=["is"]         → winner=NoMatch, partials=0/4, gated_partial_seen=false
+```
+
+Zero partials — a bare prefix is not an in-progress match, it is an unmatched
+word. So all three symptoms (no dim, no HUD narrow, no activation on pause) are
+one cause.
+
+**The emit condition, read off `matching_service.rs:2326-2349`.** Progress fires
+when the command's NEXT token is either:
+
+- a `DependentCapture` whose template resolves AND whose resolved collection is
+  in `entity_cache`; or
+- a plain collection `Capture` with a non-empty binding set (`!named.is_empty()`).
+
+Hints take the second arm: both slots are `Capture(_, "browser_alpha")`
+(`collections.go:204-206`), so once `prefix` binds, the next token is a plain
+collection capture and progress emits with `next_collection: browser_alpha` —
+exactly what the log shows. **The per-prefix `browser_hints_<prefix>`
+collections are for HUD `DisplaySource`, not for matching.** (Note
+`collections.go:139`'s doc comment still describes the older
+`<suffix:browser_hints_${prefix}>` dependent form — stale against the code.)
+
+So the requirement is exact: **the palette command needs a second capture
+token.** Nothing else moves it.
+
+**Why the palette must use ENTITY captures, not `browser_alpha`.** Copying the
+hint shape (two `browser_alpha` slots) would make any alphabet word pair match,
+with resolution deferred to the extension. That is safe for hints but not here:
+a bare `"is"` would then COMPLETE a one-slot variant and fire before the user
+reaches "opal" (per `collections.go:222-232`, a Complete beats a Partial). The
+projection must therefore be precise —
+`Capture("prefix", "browser_palette_prefix")` plus
+`Capture("suffix", "browser_palette_${prefix.codeword}")` (the dependent form,
+first arm), with the flat `browser_palette` collection holding ONLY single-word
+keys so a pair's first word can never complete it.
+
+**Mixed lengths are safe.** Within one open, keys are either uniform (full
+palette, `codewords.ts:32`) or prefix-free (tabs scope: singles come from
+`LETTERS_26.slice(0, MARKER_SINGLES)`, pairs only from the tail, so a pair's
+first letter is never a single mark). A first word therefore either completes a
+single key or starts a pair — never both.
+
+**Scope of the change.** The palette command is EXTENSION-CONTRIBUTED, not
+plugin-built, so step 5 spans four places:
+`command-catalog.ts` (the pattern) · `contribute.go`
+(`parsePatternSlots` has no dependent-template form, and the palette needs its
+own `DisplaySource` pair rather than the hint one at `:422-423`) ·
+`palette.go` (split entries by word count; project the prefix index and the
+per-prefix collections) · `plugin.json` (declare `browser_palette_prefix` and
+`browser_palette_*`, with grammar seeds).
+
+Three-word keys (>650 rows) stay atomic and unnarrowed — documented, and
+vanishingly rare.
+
 ## Also in scope, downstream
 
 `browser_palette` declares no `display` block, so HUD subtitles auto-derive from
