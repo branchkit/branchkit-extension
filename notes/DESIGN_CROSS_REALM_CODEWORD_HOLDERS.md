@@ -366,19 +366,50 @@ exposed it, in precisely the narrow modal grammars the lever exists for. "It
 happens to be inert" and "it is correct" are not the same claim, and the first
 one is what the earlier note was really resting on.
 
-**What genuinely remains open: capture macros.** `<targets:hint_pair>+` yields
-a macro name, not a collection, so its inner words are still outside the policy.
-Left deliberately, and for a structural reason rather than a risk one: closing
-it needs the inner slots classified POSITIONALLY (a group's first inner slot
-leads iff the group does), and macros exist only in `token_alternatives` while
-that loop walks `cmd.pattern` — a restructure, not a glob. Verified harmless for
-the one live macro: `hint_pair`'s inner slots are `browser_alpha`, which the
-caret twin of the sealed activate puts in a LEADING slot inside the same
-caret-modal set, so those words are excluded either way. Trigger to close it: a
-macro whose inner words cannot lead anywhere in its own mode.
+### Then the root cause, and the type that closes it
 
-So the guard covers two of three, and the third is now correct for dependent
-captures and honestly scoped for macros.
+Fixing instances was the wrong altitude. The shape is not "an enum with many
+consumers" — Rust would catch a missing variant. It is that **`Command` carries
+its pattern twice**: `token_alternatives` (typed `CommandToken`s) and `pattern`
+(the authored form, where a capture is an unparsed string). Consumers of the
+typed form get exhaustiveness from the compiler and never had this bug.
+Consumers of the string form re-parsed with
+
+```rust
+fn extract_list_names(slot: &str) -> Vec<String>
+```
+
+whose return type **cannot express "this is not a plain collection name."**
+`<suffix:coll_${dep}>` came back as the string `"coll_${dep}"`; the caller did
+`map.get(..)` → `None` → contributed nothing, indistinguishable from a
+legitimately empty collection.
+
+Three production call sites walked that way. All three were wrong. Each was
+masked by a different accident — a sibling command sharing an alphabet, a
+setting defaulting off, a grammar seed — which is why none surfaced until the
+palette was both exclusive-gated and dependent-captured.
+
+`SlotRef` (`Lists` / `Template` / `Macro` / `FreeText`) makes the distinction a
+type. Every caller destructures it and must decide what a template and a macro
+mean for its own policy; a new slot syntax is now a compile error at each site.
+Macro-ness needs the OWNING plugin's table (`<targets:hint_pair>` and
+`<name:apps>` are syntactically identical), so the classifier takes it.
+
+Converting the three sites closed both loose ends in the process:
+
+- **Macros in the weight policy** — the item scoped above as "needs a
+  restructure". Having the macro table at the call site *was* the restructure,
+  and it was small. Inner slots are now classified POSITIONALLY: the first
+  inherits the group's position, the rest are non-leading.
+- **`rebuild_hwm_for_plugin`** — a third instance found while writing this up.
+  Its doc comment promised the HWM "reflects exactly what the new command set
+  requires the recognizer to hear"; false for any dependent capture or macro,
+  and masked by the grammar-seed re-add, which only covers seeded collections.
+
+The runtime guard stays (it checks agreement between the word list and the DAG,
+which the type cannot). But the type is what stops the class, and the honest
+summary of this whole thread is that three rounds of instance-fixing were worth
+one afternoon of asking why the instances kept appearing.
 
 ## Also in scope, downstream
 
