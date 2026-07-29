@@ -1,6 +1,12 @@
 # Stranded assignments — the label pool's one-way leak
 
-**Status:** Diagnosed from field evidence 2026-07-29, fix proposed, not yet built.
+**Status:** Diagnosed from field evidence 2026-07-29. Fix BUILT in `cc4c7c5`
+(L3 reap in `claimLabels`, four tests, three mutants). Live verification
+TABLED 2026-07-29 — unit coverage pins the logic, but the reap is lazy (it
+runs only inside a grant that has already exhausted `free`), so observing it
+end-to-end means deliberately draining the pool first, and no repro recipe
+has actually been exercised. Branch `fix/stranded-label-reclaim`, unpushed;
+no app pin references it.
 **Siblings:** `DESIGN_DOCUMENT_SCOPED_POOL_OWNERSHIP.md` (who owns a label),
 `DESIGN_PRERENDER_POOL_POISONING.md` (stranded *reservations*, and the L2 steal
 that reclaims them). This note is that note's missing half.

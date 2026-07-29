@@ -580,10 +580,19 @@ export async function getFrameForLabel(tabId: number, label: string): Promise<nu
  * detached without the whole tab going away (e.g. iframe removed from the
  * DOM). Wired to the per-frame liveness Port's `onDisconnect` in
  * `background.ts` — when a frame's content script tears down, its Port
- * disconnects and we reclaim its codewords here. The one residual gap is
- * the service-worker-idle window: if the SW is terminated when the frame
- * dies, `onDisconnect` may not fire until the SW next wakes, so the
- * reclaim is delayed (bounded by the 676-label pool capacity, not lost).
+ * disconnects and we reclaim its codewords here.
+ *
+ * The residual gap is the service-worker-idle window, and it is a LEAK, not
+ * a delay. This comment used to claim the reclaim was merely "delayed
+ * (bounded by the 676-label pool capacity, not lost)" — that is wrong, and
+ * it is the assumption the stranded-label bug rested on. If the SW is not
+ * running when the frame dies there is no listener to fire, and Chrome does
+ * not replay disconnects for ports that died while the worker slept. When
+ * the worker next wakes the document is already gone: nothing holds its
+ * `docId` and nothing will ever call this for it. Field evidence had two
+ * dead documents holding 248 of 676 labels, unchanged 31 minutes after
+ * death. The L3 reap in `claimLabels` is what actually recovers them.
+ * See notes/DESIGN_ASSIGNED_LABEL_RECLAIM.md.
  */
 export async function releaseDocument(tabId: number, docId: string): Promise<void> {
   return withTabLock(tabId, async () => {
