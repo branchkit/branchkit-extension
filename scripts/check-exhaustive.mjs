@@ -213,8 +213,21 @@ function srcFiles() {
     // arbitrary priorities are the suite's fixtures, not registry ranks.
     if (file.startsWith('src/testing/')) continue;
     const src = read(file);
-    if (!/from '[^']*labels\/holder-registry'/.test(src)) continue;
-    for (const m of src.matchAll(/priority:\s*([^,\n]+)[,\n]/g)) {
+    // Match the relative form too: a file inside src/labels/ imports the
+    // registry as './holder-registry', so the labels-path pattern alone
+    // skipped the whole directory — StoreHolder included.
+    if (!/from '[^']*\bholder-registry'/.test(src)) continue;
+    // Scan CODE, not prose: a doc comment explaining a holder's rank ("…at
+    // overlay priority: while the palette is open…") otherwise reads as a
+    // priority site and fails a file whose actual declaration is correct.
+    // Stripping comments loses no teeth — every real site is still scanned.
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+    // Both declaration forms. `priority:` alone caught only object-literal
+    // holders (the RangeBadgeSet specs) and silently skipped every CLASS
+    // field — StoreHolder and PaletteHolder both declare
+    // `readonly priority = <RANK>`, so the holders most likely to hard-code a
+    // number were the ones the lint never read.
+    for (const m of code.matchAll(/\bpriority\s*[:=]\s*([^,;\n]+)[,;\n]/g)) {
       const value = m[1].trim();
       if (/^number;?$/.test(value)) continue; // a type annotation, not a value
       sites++;
