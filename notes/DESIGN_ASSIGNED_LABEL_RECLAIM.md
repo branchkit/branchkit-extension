@@ -1,12 +1,11 @@
 # Stranded assignments — the label pool's one-way leak
 
 **Status:** Diagnosed from field evidence 2026-07-29. Fix BUILT in `cc4c7c5`
-(L3 reap in `claimLabels`, four tests, three mutants). Live verification
-PENDING — unit coverage pins the logic, but the reap is lazy (it runs only
-inside a grant that has already exhausted `free`), so observing it end-to-end
-means deliberately draining the pool first, and no repro recipe has actually
-been exercised. Branch `fix/stranded-label-reclaim`, unpushed; no app pin
-references it.
+(L3 reap in `claimLabels`, four tests, three mutants). **Reap VERIFIED in a real
+browser 2026-07-29** — `npm run harness:labelreap`, 4 probes, with a negative
+control. Read "What the harness proves, and what it does not" below before
+citing this as the leak being closed. Branch `fix/stranded-label-reclaim`,
+unpushed; no app pin references it.
 
 An earlier revision of this line read "TABLED 2026-07-29". That was a
 misreading: the tabling was inferred from a reader saying they were confused
@@ -14,6 +13,44 @@ about the arc, which was a request to explain it, not to stop. Nothing about
 the verification was ever declined. Recorded because a status line saying
 TABLED is the kind of thing a later reader takes as a decision with reasons
 behind it, and there were none.
+
+## What the harness proves, and what it does not
+
+**Proves:** given a pool whose `free` list is empty and whose assignments belong
+to a document with no live Port and a stamp older than `ASSIGNMENT_STALE_MS`, a
+claim reclaims those labels and badges paint. That is the reap, running in the
+real extension, in a real browser.
+
+**Does not prove:** that the leak is reproduced. Reproducing the leak needs the
+service worker genuinely asleep at the instant a document dies, and the harness
+cannot stage that — the worker is busy driving it, so the disconnect fires and
+the healthy path runs. Two different claims; only the first is made.
+
+Both of the reap's conditions are real rather than stubbed. The owner document
+is an id that never had a Port, so `isDocPortLive` is genuinely false. The
+stamps are genuinely older than the TTL. **Only the clock is staged**, by
+writing stamps in the past instead of waiting fifteen minutes.
+
+The seam is `stackCache`, the in-memory mirror: `loadStack` consults it first
+and falls back to `chrome.storage.session`, so a tab whose stack has never been
+loaded reads whatever session storage holds. A tab parked on `about:blank` has
+no content script and therefore no claim, so its mirror stays cold and the
+seeded stack is what the first real claim sees.
+
+**The negative control is the load-bearing half.** A run that only asserted
+"badges appeared" could not tell the reap from an ordinary claim against a
+healthy pool — the fixture paints badges either way. So the same pool is staged
+twice, differing ONLY in the stamp:
+
+| | stale stamps | fresh stamps (control) |
+|---|---|---|
+| badges painted | 14 | **0** |
+| assignments on the dead doc | 40 → 14 (26 reclaimed) | 40 → **40**, untouched |
+
+26 labels moved out of `assigned` and into the new document's `reserved` (the
+reservoir claims more than it paints, which is why 26 reclaimed yields 14
+badges). The fresh-stamp arm reclaimed nothing and painted nothing, which is
+the whole point: the stamp is the only variable, so the reap is what moved.
 **Siblings:** `DESIGN_DOCUMENT_SCOPED_POOL_OWNERSHIP.md` (who owns a label),
 `DESIGN_PRERENDER_POOL_POISONING.md` (stranded *reservations*, and the L2 steal
 that reclaims them). This note is that note's missing half.

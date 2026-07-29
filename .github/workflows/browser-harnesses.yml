@@ -100,3 +100,17 @@ jobs:
       # that out costs a log line rather than a blocked merge.
       - run: xvfb-run -a npm run harness:messages
         if: always()
+      # harness:labelreap — the L3 assignment reap
+      # (DESIGN_ASSIGNED_LABEL_RECLAIM.md). Cheap (~30s, one fixture, two
+      # navigations) and it is the only thing that runs that path anywhere: the
+      # reap is lazy, firing only inside a grant that has already exhausted
+      # `free`, so no ordinary scenario reaches it.
+      #
+      # It carries its own negative control — the same staged pool with FRESH
+      # stamps must paint NOTHING — because "badges appeared" is what an
+      # ordinary claim against a healthy pool also looks like. If the control
+      # arm ever goes green-by-painting, the reap has stopped discriminating on
+      # age and is reclaiming live pages' labels, which is worse than the leak
+      # it replaced.
+      - run: xvfb-run -a npm run harness:labelreap
+        if: always()
