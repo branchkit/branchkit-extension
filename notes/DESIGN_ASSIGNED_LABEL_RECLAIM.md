@@ -2,11 +2,18 @@
 
 **Status:** Diagnosed from field evidence 2026-07-29. Fix BUILT in `cc4c7c5`
 (L3 reap in `claimLabels`, four tests, three mutants). Live verification
-TABLED 2026-07-29 — unit coverage pins the logic, but the reap is lazy (it
-runs only inside a grant that has already exhausted `free`), so observing it
-end-to-end means deliberately draining the pool first, and no repro recipe
-has actually been exercised. Branch `fix/stranded-label-reclaim`, unpushed;
-no app pin references it.
+PENDING — unit coverage pins the logic, but the reap is lazy (it runs only
+inside a grant that has already exhausted `free`), so observing it end-to-end
+means deliberately draining the pool first, and no repro recipe has actually
+been exercised. Branch `fix/stranded-label-reclaim`, unpushed; no app pin
+references it.
+
+An earlier revision of this line read "TABLED 2026-07-29". That was a
+misreading: the tabling was inferred from a reader saying they were confused
+about the arc, which was a request to explain it, not to stop. Nothing about
+the verification was ever declined. Recorded because a status line saying
+TABLED is the kind of thing a later reader takes as a decision with reasons
+behind it, and there were none.
 **Siblings:** `DESIGN_DOCUMENT_SCOPED_POOL_OWNERSHIP.md` (who owns a label),
 `DESIGN_PRERENDER_POOL_POISONING.md` (stranded *reservations*, and the L2 steal
 that reclaims them). This note is that note's missing half.

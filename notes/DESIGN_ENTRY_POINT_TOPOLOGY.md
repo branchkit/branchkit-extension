@@ -2022,6 +2022,61 @@ Also unaddressed: `background.ts` still holds `handleSSEEvent` (~136 lines) and
 entry point rather than a module. That is the honest residue and the obvious
 next lift — it would take the file under ~700.
 
+### What the list above cost when it was measured (2026-07-29)
+
+The six items were written as a guess at where the surface was. Measuring
+instead of guessing changed the picture, so the measurement is recorded here
+rather than the guess.
+
+An extra `onMessage` listener in the SW — extra listeners observe without
+consuming, so this cannot perturb the real table — recorded every type that
+crossed the boundary during a full run of the then-37 probes. **21 of the 43
+background types executed; 22 never ran at all.** The gap is not spread evenly
+across the six items: everything reached SW→tab, and nothing reached tab→SW,
+which is the direction the popup, palette and options page actually use.
+
+That reframes the list. Items 1 and 6 were already covered incidentally —
+badges cannot paint without `CLAIM_LABELS`, and `GET_TAB_MARKER` runs on every
+load. Items 2, 3 and 5 were the real holes.
+
+Four probes now close the reachable part (`harness:messages`, EXPECTED 41):
+`PALETTE_BOOTSTRAP` answering through its adapter, the palette page rendering
+rows from that answer (the page has a relay fallback that would otherwise mask
+a direct-path failure), `GET_HEALTH` answering, and the popup rendering a state
+rather than a blank panel. All four passed first run — the adapter was fine.
+
+**Two things the probes taught that the code did not.**
+
+*A non-answering handler hangs the harness rather than failing it.* Mutating
+`PALETTE_BOOTSTRAP` to never resolve left the run pending indefinitely, because
+`sendMessage`'s promise never settles. In CI that is a job timeout, which names
+the job instead of the handler — the same defect as §6k's missing exit code,
+one layer in. The probes now race an 8s timeout and report `NO ANSWER in
+8000ms`. Mutation-verified after the fix: the mutant FAILS both palette probes
+by name, and a clean bundle passes 41/41.
+
+*Item 5 cannot be probed against a live host.* `SET_COMMAND_OVERRIDE`,
+`RESET_COMMAND_OVERRIDE`, `ADD_COMMAND_ALIAS` and `REMOVE_COMMAND_ALIAS` route
+through `writeReporting` → `ensureConnected` → `postToPlugin`, so a probe would
+write to whatever actuator is listening on the developer's own machine. Their
+read siblings already execute. Covering the writes needs a stub host; until
+then item 5 stays open, and the reason is a hazard rather than an oversight.
+
+Item 4 (`MARK_SET` / `MARK_JUMP`) also stays open: `MARK_SET` reads
+`sender.tab?.id`, so it has to originate in a content script, which this
+harness cannot drive. `harness:realinput` drives real keys and is the natural
+home for it.
+
+Still never executed by any harness, after these four: `ADD_COMMAND_ALIAS`,
+`DEBUG_SNAPSHOT`, `HEALTH_STATUS`, `MARK_JUMP`, `MARK_SET`,
+`OPEN_TAB_BACKGROUND`, `PALETTE_ACTION`, `PALETTE_CLOSED`, `PALETTE_OPEN`,
+`QUERY_FIELD_ACTIVE`, `RANGE_PICK`, `RELEASE_LABELS`, `REMOVE_COMMAND_ALIAS`,
+`RESET_COMMAND_OVERRIDE`, `RESOLVE_HINT_FROM_TAB`, `SET_COMMAND_OVERRIDE`,
+`SET_VOICE_PAUSED`, `TAB_ACTION`, `ZOOM_ACTION`. Listed rather than counted,
+because a count is a number someone can feel fine about and a list is a
+worklist. `RELEASE_LABELS` is worth calling out: it is the pool's own return
+path, and `DESIGN_ASSIGNED_LABEL_RECLAIM.md` is a leak in exactly that area.
+
 ---
 
 ## 8. Sequencing note

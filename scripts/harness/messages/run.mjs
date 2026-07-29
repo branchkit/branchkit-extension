@@ -49,7 +49,7 @@ const results = [];
 const check = (name, ok, detail) => { results.push({ name, ok, detail }); };
 
 /** How many probes a complete run reports. A run that stops short says so. */
-const EXPECTED = 37;
+const EXPECTED = 41;
 
 try {
   // Seed the state the probes depend on, in one place: the set_badge_mode arm
@@ -849,6 +849,91 @@ try {
   check('ARM history_back / history_forward / refresh',
     backTo === `${url}/a.html` && fwdTo === `${url}/b.html` && reloaded,
     `back->${backTo} forward->${fwdTo} refresh cleared sentinel=${reloaded}`);
+
+  // FOURTH HALF: the service worker's own table, from a real extension page.
+  //
+  // Everything above sends SW -> tab. These four go the other way, which is the
+  // direction the popup, the palette and the options page actually use, and
+  // which nothing exercised: a coverage count taken over a full run of the 37
+  // probes above showed 22 of the 43 background types never executing at all.
+  //
+  // The response contract is the whole point. `sendMessage` resolves undefined
+  // when a handler declines to answer, so a handler that should answer and does
+  // not is indistinguishable here from one that answered `undefined` — which is
+  // exactly the silent hang section 7 named as this arc's specific risk.
+  //
+  // NOT probed, deliberately: SET_COMMAND_OVERRIDE / RESET_COMMAND_OVERRIDE /
+  // ADD_COMMAND_ALIAS / REMOVE_COMMAND_ALIAS. They route through
+  // `writeReporting` -> `ensureConnected` -> `postToPlugin`, so a probe would
+  // write to whatever actuator is listening on the developer's own machine.
+  // Their read siblings (GET_COMMAND_OVERRIDES, GET_COMMAND_ALIASES) already
+  // execute during the run above. Covering the writes needs a stub host, not a
+  // live one — booked in DESIGN_ENTRY_POINT_TOPOLOGY.md.
+  // A handler that never answers leaves `sendMessage`'s promise forever
+  // pending, so an un-raced probe does not FAIL — it HANGS, and CI reports a
+  // job timeout instead of naming the handler. Verified by mutation: making
+  // PALETTE_BOOTSTRAP's promise never resolve hung the run indefinitely rather
+  // than failing it. That is the same defect as the missing exit code below,
+  // one layer in — a harness that cannot fail cleanly for the one failure it
+  // was built to catch.
+  const ask = (page, type, ms = 8000) => page.evaluate(
+    ([t, limit]) => Promise.race([
+      chrome.runtime.sendMessage({ type: t }).catch((e) => ({ __err: String(e) })),
+      new Promise((r) => setTimeout(() => r({ __timeout: limit }), limit)),
+    ]),
+    [type, ms],
+  );
+
+  const extId = new URL(sw.url()).host;
+  const extPage = await ctx.newPage();
+  await extPage.goto(`chrome-extension://${extId}/palette.html`);
+  await settle(600);
+
+  // PALETTE_BOOTSTRAP is the one handler in either table wrapped in a
+  // callback->promise adapter: handlePaletteBootstrap takes a sendResponse and
+  // returns the legacy `true`, and the table ignores that return in favour of
+  // the promise. If the adapter ever fails to resolve, the palette opens and
+  // stays empty forever with nothing logged.
+  const boot = await ask(extPage, 'PALETTE_BOOTSTRAP');
+  check('PALETTE_BOOTSTRAP resolves through the callback adapter',
+    !!boot && !boot.__err && !boot.__timeout && Array.isArray(boot.tabs) && boot.tabs.length > 0
+      && 'activeTabId' in boot && Array.isArray(boot.mru),
+    boot?.__timeout ? `NO ANSWER in ${boot.__timeout}ms — the adapter never resolved`
+      : JSON.stringify(boot && { tabs: boot.tabs?.length, mru: boot.mru?.length, activeTabId: boot.activeTabId }));
+
+  // The palette page consuming its own bootstrap — the adapter answering is
+  // necessary but not sufficient, since palette-page.ts has a relay fallback
+  // that would mask a direct-path failure.
+  // `.row` and `.empty` are render()'s two outcomes, and the probe has to tell
+  // them apart: `.empty` means the page bootstrapped and then found nothing to
+  // show, which prints the same "no rows" as a bootstrap that never arrived.
+  const palette = await extPage.evaluate(() => ({
+    rows: document.querySelectorAll('.row').length,
+    titles: [...document.querySelectorAll('.row .title')].slice(0, 3).map((e) => e.textContent),
+    empty: document.querySelector('.empty')?.textContent ?? null,
+  }));
+  check('the palette page renders rows from its bootstrap',
+    palette.rows > 0 && palette.empty === null,
+    `${palette.rows} row(s) ${JSON.stringify(palette.titles)}${palette.empty ? ` empty=${JSON.stringify(palette.empty)}` : ''}`);
+
+  // GET_HEALTH is the popup's read. It answers a snapshot whether or not voice
+  // is connected, so "not connected" is a valid PASS — what would fail is no
+  // answer at all.
+  const health = await ask(extPage, 'GET_HEALTH');
+  check('GET_HEALTH answers a snapshot',
+    !!health && !health.__err && !health.__timeout && typeof health === 'object',
+    health?.__timeout ? `NO ANSWER in ${health.__timeout}ms` : JSON.stringify(health));
+
+  // The popup end to end, since GET_HEALTH answering does not prove the popup
+  // reads it. Any rendered text beats a blank panel.
+  const popup = await ctx.newPage();
+  await popup.goto(`chrome-extension://${extId}/popup.html`);
+  await settle(800);
+  const popupText = (await popup.evaluate(() => document.body.innerText ?? '')).trim();
+  check('the popup renders a state rather than staying blank', popupText.length > 0,
+    JSON.stringify(popupText.slice(0, 80)));
+  await popup.close();
+  await extPage.close();
 } finally {
   for (const r of results) console.log(`${r.ok ? 'PASS' : 'FAIL'}  ${r.name}  ${r.detail}`);
   // EXIT CODE, not just a printed tally. Without this the CI step wired up in
