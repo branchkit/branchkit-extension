@@ -125,19 +125,49 @@ called.
 This is the piece that is actively wrong today rather than merely missing, and
 it is what unblocks every future surface rather than this one.
 
-## What does not converge
+## What does not converge, and the rule for deciding
 
-**Allocation stays per-surface.** Page hints need codewords stable across
-rescans and full reloads — `codeword-memory.ts` recalls them by DOM fingerprint,
-and `label-pool.ts:478-500` returns labels en bloc so an immediate re-claim of
-the same count yields the same labels. Palette rows are ephemeral, assigned in
-empty-state order, discarded on close. Those are different requirements, and the
-exclusive tag means the palette does not need the shared pool. Forcing it onto
-the reservoir would fight page-hint stability memory and buy nothing.
+**Allocation complexity tracks anchor volatility.** That is the whole rule, and
+it is what separates the layer that converges from the layer that doesn't.
 
-Tabs scope has already converged on the right thing on its own — a row's
-codeword is its tab's stable strip mark (`palette-page.ts:519-527`), so the badge
-matches the strip. That instinct is correct and this note preserves it.
+Every expensive mechanism in the label pool is a response to the anchor set
+changing underneath it:
+
+| pressure | machinery it forces |
+|---|---|
+| elements appear / vanish mid-session | rebinding, `observe/limbo.ts`, the identity registry |
+| the viewport scrolls | claim on band entry, release on exit (`intersection-tracker.ts:330,236`) |
+| the document reloads | fingerprint recall (`codeword-memory.ts`) |
+| frames compete for one tab-scoped pool | free/reserved/assigned, stale-reservation steal, dead-doc reap, per-tab locks, confirm arbitration |
+| the page is adversarial | shadow host, attribute defender, inline-style avoidance |
+
+The palette receives **none** of those inputs. Its rows are assembled once at
+open, assignment runs once in empty-state order, refiltering never reassigns, and
+the set drains at close. The structural guarantee is stronger than convention:
+`palette-page.ts` registers no `chrome.runtime.onMessage` listener at all — only
+the `window.postMessage` relay — so nothing can push a row update into the frame.
+The list cannot destabilize; the only mutation available to it is teardown.
+
+So the pool's stability machinery would be pure overhead on a set that has no way
+to become unstable, and adopting it would additionally fight page-hint recall for
+a shared resource the palette's exclusive tag means it never needed.
+
+**The rule for the next surface**, stated so this is judged rather than
+re-argued: a new badge surface joins the holder registry **always** — eligibility,
+narrowing, exclusivity and resolution are the same questions no matter how the
+anchors behave. It inherits the **pool** only if its anchors can move.
+
+Tabs scope is the worked example, and it got there on its own: a row's codeword is
+its tab's stable strip mark (`palette-page.ts:519-527`), so the badge matches the
+strip. Tab identity outlives the palette, so that allocation is borrowed rather
+than invented — the volatility rule applied correctly without anyone writing it
+down. This note preserves it.
+
+**One thing the rule does not cover.** If a tab closes while the tabs palette is
+open, that row's dispatch goes stale. That is a *liveness* failure — the row
+points at something gone — not an *allocation* failure; the codeword remains
+uniquely and correctly assigned. It wants its own answer (reject-and-report at
+dispatch, most likely) and it is not an argument for the shared pool.
 
 **Rendering stays per-surface.** The frame paints its own rows; `HintBadge`
 positions against viewport rects and mounts a shadow host with page-adversarial
