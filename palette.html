@@ -120,13 +120,17 @@
       padding: 6px 14px; font-size: 11px; color: #8b949e; white-space: nowrap;
     }
     #footer[hidden] { display: none; }
-    /* Keyboard-mode indicator (notes/DESIGN_PALETTE_KEYBOARD_NAV.md). Same
-       yellow-on-slate as the page's mode chip (render/mode-chip.ts), so "which
-       mode am I in" reads identically on both surfaces. `mode` is the class
-       renderModeChip owns; the footer's other chips are untouched siblings. */
+    /* Keyboard-mode indicator (notes/DESIGN_PALETTE_KEYBOARD_NAV.md). Reads as a
+       quiet NOTE, not an alert: a step brighter than the footer's body gray so
+       it's still the first thing you find, a step smaller so it doesn't compete
+       with the rows, and no accent colour — the page's mode chip
+       (render/mode-chip.ts) is yellow because it floats over arbitrary page
+       content with nothing else to anchor it, which isn't this footer's problem.
+       The uppercase label carries the "this is a mode" signal instead. `mode` is
+       the class renderModeChip owns; the other footer chips are untouched
+       siblings. */
     #footer .mode {
-      color: #f2cc60; font-weight: 700; letter-spacing: 0.06em;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: #c9d1d9; font-size: 10px; font-weight: 600; letter-spacing: 0.03em;
     }
   </style>
 </head>
