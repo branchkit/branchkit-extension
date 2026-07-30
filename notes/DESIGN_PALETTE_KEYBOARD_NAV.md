@@ -352,18 +352,19 @@ file today — the pure helpers are where the coverage goes.
    both palettes render the label you must type on the row you are looking at.
    Revisit only if a disjoint-first-letter partition between the two pools ever
    becomes cheap, which the deleted `SINGLES` knob suggests it is not.
-2. **Badges don't read in visual order in grouped scopes.** `assignAndPublish`
-   assigns over `[...tabItems, ...commandItems, ...bookmarkItems]`, but
-   `filterPalette` renders commands and bookmarks REGROUPED by category/folder —
-   so the command palette shows `ab`, `ac`, `br`, `bs`… down the list instead of
-   running in sequence. Pre-existing (assignment order never mattered while
-   badges were spoken-only) and newly visible now that letter mode paints them as
-   typeable labels. `codewords.ts` documents assignment as "in empty-state row
-   order", which the grouped scopes do not satisfy — so the doc and the code
-   disagree and the doc is the one that's right. The fix is to assign over the
-   empty-state SECTIONED order, but that changes the published voice entries too,
-   so it wants its own change rather than riding along here. Purely cosmetic; no
-   label is ambiguous, and every row shows the label that picks it.
+2. ~~**Badges don't read in visual order in grouped scopes.**~~ **FIXED.**
+   Assignment walked `[...tabItems, ...commandItems, ...bookmarkItems]` while the
+   renderer walked filterPalette's regrouped sections, so the commands palette
+   read `ab`, `ac`, `br`, `bs`… down the list. The defect was that the two orders
+   were computed INDEPENDENTLY; the fix makes display order the single source
+   (`emptyStateSections()` / `publishOrder()`, used by both), which is also what
+   `codewords.ts` had always documented ("in empty-state row order"). Only the
+   `commands` scope diverged in practice: bookmarks are pre-sorted by folder rank
+   in `buildBookmarkItems`, `all` keeps commands flat, and `tabs` uses stable
+   marks rather than positional badges. `publishOrder` appends any row the browse
+   sections omit — unreachable today, since the empty-query partition is
+   exhaustive, but an unbadged row is invisible to both voice and keyboard, so it
+   loses its place rather than its badge.
 3. **`MARKER_SINGLES` retune — raising it is a *bad* trade.** All five reserved
    letters sit in the head, so 16 now yields 11 singles. The instinct is to raise
    it; the arithmetic says don't, because letters moved head-ward cost the pair

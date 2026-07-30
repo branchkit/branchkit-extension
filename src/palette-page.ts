@@ -167,9 +167,40 @@ function dispatchItem(item: PaletteItem | undefined): void {
   if (item) send(item.dispatch);
 }
 
-/** Every row this palette holds, in publish order (the badge index space). */
-function allItems(): PaletteItem[] {
-  return [...tabItems, ...commandItems, ...bookmarkItems];
+/**
+ * The sections the palette paints with no query — browse order.
+ *
+ * ONE definition, used by both the renderer and badge assignment. They used to
+ * compute order independently (assignment walked
+ * `[...tabItems, ...commandItems, ...bookmarkItems]`, the renderer walked
+ * filterPalette's regrouped sections), and in the commands scope — the only one
+ * where `groupedBrowse` regroups by catalog group — they disagreed, so the
+ * palette read `ab`, `ac`, `br`, `bs`… down the list. Harmless while badges were
+ * spoken-only; visibly wrong once letter mode paints them as labels you type.
+ */
+function emptyStateSections(): PaletteSection[] {
+  return filterPalette(tabItems, commandItems, '', scope === 'commands', bookmarkItems);
+}
+
+/**
+ * Every row this palette holds, in the order it is painted — the badge index
+ * space, so badge N belongs to the Nth row on screen.
+ *
+ * With an empty query filterPalette's partition is exhaustive (`groupLabels`
+ * enumerates every group present, and each item lands in exactly one), so this
+ * is a reordering of all rows, not a filter. The tail append is a guard, not a
+ * routine path: if that ever stops holding, a row must lose its PLACE rather
+ * than its badge, because an unbadged row is unreachable by both voice and
+ * keyboard.
+ */
+function publishOrder(): PaletteItem[] {
+  const ordered = emptyStateSections().flatMap((s) => s.items);
+  const every = [...tabItems, ...commandItems, ...bookmarkItems];
+  if (ordered.length === every.length) return ordered;
+  const seen = new Set(ordered.map((it) => it.id));
+  const missing = every.filter((it) => !seen.has(it.id));
+  fdiag(`publishOrder: ${missing.length} row(s) missing from browse sections`);
+  return [...ordered, ...missing];
 }
 
 /**
@@ -425,9 +456,7 @@ function renderCurrent(): void {
     // label prefix. Sections come from filterPalette so letter mode groups
     // bookmarks by folder exactly as search does — one layout, two input modes.
     queryNote = '';
-    const sections = filterPalette(
-      tabItems, commandItems, '', scope === 'commands', bookmarkItems,
-    );
+    const sections = emptyStateSections();
     render(markPrefix === '' ? sections : sections
       .map((s) => ({
         ...s,
@@ -496,7 +525,7 @@ function typeMarkLetter(ch: string): void {
   const next = markPrefix + ch;
   switch (classifyMarkInput([...typedLabels.values()], next)) {
     case 'exact': {
-      const item = allItems().find((it) => typedLabels.get(it.id) === next);
+      const item = publishOrder().find((it) => typedLabels.get(it.id) === next);
       if (item) dispatchItem(item);
       return;
     }
@@ -694,7 +723,10 @@ const tabIdOf = (rowId: string): number | null =>
  */
 function assignAndPublish(alphabet: string[]): void {
   voiceAlphabet = alphabet;
-  const all = allItems();
+  // Browse order, so badge N belongs to the Nth row painted — what
+  // codewords.ts has always documented ("in empty-state row order") and what
+  // the concatenation quietly failed to deliver in the commands scope.
+  const all = publishOrder();
   if (scope === 'tabs') {
     codewords = new Map();
     for (const item of tabItems) {
