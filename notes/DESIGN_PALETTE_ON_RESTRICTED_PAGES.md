@@ -1,0 +1,155 @@
+# Design: Reaching the Palette on Restricted Pages
+
+Status: proposal. Nothing built. Field report 2026-07-30: "I open a new browser
+tab and the extension isn't active — I can't get into the palette to go to one of
+my bookmarks."
+
+Open a new tab and the palette is unreachable. Same on `chrome://settings`,
+`chrome://extensions`, the Chrome Web Store, and the PDF viewer. The new tab page
+is the one that hurts, because it is exactly where you want to jump to a bookmark.
+
+## Why it fails
+
+Two independent reasons, both confirmed against the built manifest:
+
+- **No content script.** `content_scripts` matches `<all_urls>`, which
+  **excludes** `chrome://` URLs — Chrome refuses injection there. Nothing of ours
+  is running on the page at all.
+- **No browser-level shortcut.** `commands` is absent from the manifest, so every
+  keybind is a content-script `keydown` (`keymap-registry.ts`). With no content
+  script there is nothing listening for `Shift+B`.
+
+And even with a key, the palette is an iframe injected *into a page*
+(`render/palette-host.ts`), and on a restricted page there is no page to inject
+into.
+
+Note this is a superset of "new tab". The same dead zone appears whenever the
+content script is **orphaned** — the "Extension context invalidated" state after
+an extension reload, which today leaves no palette until you reload the page.
+
+## The enabling fact
+
+**`palette.html` is already a standalone extension page.** Verified repeatedly on
+2026-07-30 by loading `chrome-extension://<id>/palette.html?scope=…` as a
+top-level tab: bootstrap, tab marks, letter mode, prefix narrowing, badges and the
+mode indicator all worked, because the page fetches its privileged data over
+`PALETTE_BOOTSTRAP` rather than reading `chrome.*` directly (the Firefox
+iframe-privileges fallback, `palette-page.ts:138-150`, pays off here).
+
+So the palette does not need a host page. It needs somewhere to be *shown* that
+isn't a restricted page. That is the whole design space.
+
+## Route A — own the new tab page (do this first)
+
+`chrome_url_overrides.newtab` points Chrome's new tab at a page we serve. Being
+an extension page, our keymap can run on it **directly** — no content script, no
+Chrome restriction — so the existing keybinds work there unchanged.
+
+**It must not steal focus from the omnibox.** Chrome focuses the address bar when
+you open a new tab, and `Ctrl+T` then typing a URL is muscle memory you would
+notice losing within a minute. This is the failure mode that makes extension new
+tab pages hated, so it is a hard constraint rather than a preference:
+
+- `Ctrl+T`, then type → omnibox, exactly as today.
+- `Ctrl+T`, then `Shift+B` → bookmark palette, focused, on the page.
+
+Nothing is taken away and no new shortcut is invented.
+
+**The override cannot be a runtime setting.** `chrome_url_overrides` is a manifest
+key, claimed at install time; no checkbox in our options page can hand the new tab
+page back to Chrome. What exists instead:
+
+- **Chrome's own revert.** Chrome prompts ("An extension changed your new tab
+  page") with keep-or-revert, and the choice is revisitable in Chrome's settings.
+  That is the user's off switch, and it is Chrome's, not ours.
+- **Everything *inside* the page is ours to make configurable** — what it shows,
+  whether it shows anything at all. An "off" setting can reduce our page to
+  near-blank, which costs little in practice since the omnibox is focused anyway;
+  what it cannot do is restore Chrome's own new tab content.
+
+The user asked for an on/off toggle. This is the honest answer: the *behaviour* can
+toggle, the *claim* cannot.
+
+## Route B — a palette window reachable anywhere (later)
+
+A `chrome.commands` shortcut is handled by the browser, not a page, so it fires on
+restricted pages. Its handler shows the palette in an extension-page context.
+
+**Do NOT use `_execute_action` / the toolbar popup.** `action.default_popup` is
+already `popup.html`, the quick-settings panel (badge persistence, badge labels,
+hint visibility). Chrome allows exactly one popup, and an icon click is
+indistinguishable from an `_execute_action` press, so we cannot serve settings to
+one and the palette to the other without losing the settings panel.
+
+Use a normal command whose handler opens `palette.html` via
+`chrome.windows.create({ type: 'popup', … })` instead. That leaves the settings
+popup intact and gives full control of size and position. Cost: it is a real OS
+window — it appears in the window list and will not auto-dismiss on blur the way a
+toolbar popup does, so teardown is ours to handle. (The palette's existing
+`window.addEventListener('blur', close)` may cover this; verify rather than
+assume.)
+
+**Command rows would silently do nothing.** `handlePaletteAction` dispatches a
+command only when it has an origin tab — `action.kind === 'command' && typeof
+originTabId === 'number'` (`background/palette.ts`). Opened from a window there is
+no sender tab, so the command palette would appear and then quietly fail, which is
+the worst failure shape available. Needs a fallback to the active tab, and that
+carries a real question: active tab of *which* window, given the palette window
+itself is now frontmost?
+
+Bookmarks and tab switching need no such work. `switch_tab` carries its own tab
+id, and `open_bookmark` now defaults to a new tab, which is exactly what the
+no-origin-tab path already does.
+
+**Shortcut constraints.** A `chrome.commands` binding must include Ctrl/Alt/Cmd —
+it cannot be a bare `Shift+B` — so this route necessarily introduces a *second*
+shortcut for the same surface. A wart, and the same one Vimium and friends carry.
+Also, if the suggested key collides with a Chrome-owned shortcut, Chrome silently
+declines to bind it and the user must set it at `chrome://extensions/shortcuts`;
+the setup docs need to say so, because the failure is invisible.
+
+## Why A before B
+
+They aren't competitors, and the order costs nothing: Route A creates no work that
+Route B throws away. A fixes the case actually being hit, with no extra keystroke,
+no second window, and no origin-tab problem. B is the general safety net —
+`chrome://settings`, the Web Store, and orphaned content scripts — and is strictly
+more work, mostly because of the settings-popup collision and the command-dispatch
+gap.
+
+## Non-goals
+
+- **An omnibox keyword** (`chrome.omnibox`, e.g. `bk work github`). Considered and
+  declined: on a new tab the address bar is already focused, so it fits the case
+  neatly and is cheap — but it renders in Chrome's suggestion UI, which means no
+  codeword badges, no folder sections, and no letter mode. It would be a second,
+  differently-shaped bookmark finder rather than the palette. Revisit only if both
+  routes above prove unworkable.
+- **Making the palette work inside restricted pages.** Not possible; Chrome
+  forbids injection. Every route here is about hosting it elsewhere.
+- **Unifying the in-page and browser-level shortcuts.** Chrome's modifier
+  requirement makes it impossible.
+
+## Open questions
+
+1. **What does the new tab page show when it isn't hosting a palette?** You will
+   look at it dozens of times a day, and it replaces Chrome's shortcut tiles. A
+   deliberately plain page is the safe default — the omnibox is focused, so a blank
+   page costs less than it sounds — but "plain" still needs deciding. Resolve
+   before building, not during.
+2. **Does the palette auto-open on a new tab?** Leaning no: auto-opening means
+   auto-focusing, which breaks `Ctrl+T` + type. A visible hint plus `Shift+B` is
+   the conservative shape. Worth field-testing both, cheaply, before committing.
+3. **Host as an iframe, or render the palette directly?** Hosting via
+   `palette-host.ts` reuses the relay and the codeword-holder plumbing; rendering
+   `palette-page.ts` straight into the new tab page is simpler but bypasses the
+   host. See (4) — they differ in what the voice half gets.
+4. **What does the voice half lose with no content script?** `PALETTE_PUBLISH`
+   goes page → background → plugin and needs no content script, so voice
+   *selection* should work. But mid-utterance narrowing arrives over
+   `RELAY_CODEWORDS` to `window.parent`, and the exclusive `PaletteHolder` lives in
+   the content-script realm (`DESIGN_CROSS_REALM_CODEWORD_HOLDERS.md`) — with no
+   host, badge dimming and prefix narrowing likely go missing. Unverified;
+   establish it empirically before designing around it, since it may just work.
+5. **Which window's active tab** for Route B's command fallback, given the palette
+   window is frontmost when the pick happens.
