@@ -155,19 +155,36 @@ exact `codewords.ts` `SINGLES` mechanism already written for the palette;
 the palette runs it at `SINGLES = 0` because it holds tabs *plus* every
 command; tab mode runs it at ~16 because it holds only tabs.)
 
-Capacity is `S + P·(P−1)` with `P = 26 − S`:
+**Only the LEADER is drawn from the tail** (corrected 2026-07-29). Prefix-freedom
+needs exactly one thing — no complete marker starts a longer one — which
+constrains the *first* letter and nothing else. A pair's second letter may be any
+letter, head included: "ia" is unambiguous beside single "a", because pressing `i`
+completes nothing, so the surface is already committed to a pair before the second
+key arrives, and single "a" is only reachable as a FIRST keystroke.
 
-| Reserved singles (S) | Pair pool | Pairs | **Total tabs** |
-|---|---|---|---|
-| 20 | 6 | 30 | 50 |
-| 18 | 8 | 56 | 74 |
-| **16** | **10** | **90** | **106** |
-| 14 | 12 | 132 | 146 |
-| 12 | 14 | 182 | 194 |
+This file previously specified pairs as tail×tail, which cost more than half the
+pool for no invariant: 10×9 = 90 pairs where 10×25 = 250 were available. It also
+made `S` look far more expensive than it is, because moving a letter head-ward
+shrank *both* positions at once.
 
-**Default S = 16**: sixteen single-letter fast markers + ninety pairs cover
-a 100-tab session. Drop to 14 for habitual 100+ hoarders. One-line constant,
-retune once seen live.
+Capacity is `S + P·25` with `P = 26 − S` (no repeated letter within a pair — "ii"
+is prefix-free and typeable, but speaks as "iris iris", and a decoder that
+collapses a doubled word would resolve to the wrong tab):
+
+| Reserved singles (S) | Pair leaders | Pairs | **Total tabs** | With 5 nav letters withheld |
+|---|---|---|---|---|
+| 21 | 5 | 125 | 146 | 116 |
+| 20 | 6 | 150 | 170 | — |
+| 18 | 8 | 200 | 218 | 173 |
+| **16** | **10** | **250** | **266** | **211** |
+| 14 | 12 | 300 | 314 | — |
+| 12 | 14 | 350 | 364 | 268 |
+
+**Default S = 16**, holding at 211 usable markers once the palette's five
+navigation letters are withheld (`DESIGN_PALETTE_KEYBOARD_NAV.md`) — eleven
+single-keystroke and two hundred pairs. Raising it to 21 buys sixteen
+single-keystroke markers at 116 total, which is the better trade only for someone
+who stays well under a hundred tabs. One-line constant either way.
 
 ### Markers supersede voice-positional
 
@@ -391,7 +408,10 @@ letter form (above).
    form ("go tab", Rango's) — a recognition-robustness call to make once
    live, not a collision problem.
 3. **Reserved-letter tuning.** S = 16 default; confirm against real
-   peak-tab-count once live. MRU-vs-longest-lived for single assignment is a
+   peak-tab-count once live. Much less urgent since the leader-only correction —
+   the cost of raising S is now linear, and 211 usable markers is far above the
+   old 101. The live trade is 11 single-keystroke markers at 211 total (S = 16)
+   versus 16 at 116 (S = 21). MRU-vs-longest-lived for single assignment is a
    sub-knob.
 4. **Favicon badge for pinned tabs** (canvas-drawn overlay, content-side
    icon swap). v2.

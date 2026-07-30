@@ -27,8 +27,10 @@ import { loadKeymap } from '../keymap/keymap-storage';
 import { derivePaletteNav } from '../keymap/palette-reserved';
 
 /** Reserved single-letter markers (from the typing-ergonomic head); the rest
- *  form the pair pool. 16 → 16 singles + 10×9 = 90 pairs = 106 tabs. See the
- *  capacity table in the design doc; one-line retune. */
+ *  LEAD the pairs. 16 → 16 singles + 10 leaders × 25 seconds = 266 tabs (211
+ *  once the palette's five nav letters are withheld). Only the leader is drawn
+ *  from the tail, so raising this costs pairs linearly, not quadratically. See
+ *  the capacity table in the design doc; one-line retune. */
 export const MARKER_SINGLES = 16;
 
 /** tabId → assigned letter-token marker ("a", "iz"). */
@@ -44,11 +46,12 @@ const NO_RESERVED: ReadonlySet<string> = new Set();
  *
  * `reserved` holds letters the palette needs for list navigation
  * (keymap/palette-reserved.ts): a bare `j` cannot both jump to mark "j" and move
- * the selection down. Filtering happens AFTER the head/tail split, not before,
- * so reservation never promotes a tail letter into the singles head — a letter's
- * role stays fixed and the pair pool keeps its size. With the shipping keymap
- * that costs five of sixteen singles (all of d/g/j/k/u sit in the head) and no
- * pairs at all: 11 + 90 = 101 markers.
+ * the selection down. Marks are READ on the tab strip but TYPED in the palette,
+ * which is why a tab-strip label has to respect a palette keybinding. Filtering
+ * happens AFTER the head/tail split, not before, so reservation never promotes a
+ * tail letter into the singles head — a letter's role stays fixed. With the
+ * shipping keymap that costs five of sixteen singles (all of d/g/j/k/u sit in the
+ * head): 11 singles + 200 pairs = 211 markers.
  */
 export function buildMarkerSequence(
   singles = MARKER_SINGLES,
@@ -56,10 +59,26 @@ export function buildMarkerSequence(
 ): string[] {
   const usable = (ls: readonly string[]): string[] => ls.filter((l) => !reserved.has(l));
   const out: string[] = usable(LETTERS_26.slice(0, singles));
-  const tail = usable(LETTERS_26.slice(singles));
-  for (let i = 0; i < tail.length; i++) {
-    for (let j = 0; j < tail.length; j++) {
-      if (i !== j) out.push(`${tail[i]}${tail[j]}`);
+  // Only the LEADING letter is constrained. Prefix-freedom needs exactly one
+  // thing — that no complete mark starts a longer one — so a pair's leader must
+  // come from the tail, while its second letter can be ANY eligible letter,
+  // including a singles-head letter. "ia" is unambiguous next to single "a":
+  // pressing `i` completes nothing, so the palette is already committed to a
+  // pair before the second key arrives, and single "a" is only reachable as a
+  // FIRST keystroke.
+  //
+  // Restricting the second letter to the tail as well (what this did until
+  // 2026-07-29) cost more than half the pool for nothing: 10x9=90 pairs where
+  // 10x20=200 were available. It also made `singles` look far more expensive
+  // than it is, since moving a letter head-ward shrank both positions at once.
+  const leaders = usable(LETTERS_26.slice(singles));
+  const seconds = usable(LETTERS_26);
+  for (const lead of leaders) {
+    for (const second of seconds) {
+      // No repeats: "ii" is prefix-free and typeable, but its spoken overlay is
+      // "iris iris", and a decoder that collapses a doubled word would resolve
+      // to the wrong mark.
+      if (second !== lead) out.push(`${lead}${second}`);
     }
   }
   return out;

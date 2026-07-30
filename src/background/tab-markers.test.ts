@@ -19,11 +19,28 @@ describe('buildMarkerSequence (letter-first)', () => {
     expect(seq[16]).toHaveLength(2); // first pair, two letters concatenated
   });
 
-  it('draws pair letters only from the tail — prefix-free', () => {
+  // Only the LEADING letter is constrained. This used to assert that NEITHER
+  // letter came from the head, welding an incidental restriction to the real
+  // invariant — and that restriction cost more than half the pool.
+  it('draws pair LEADERS only from the tail — the actual prefix-free rule', () => {
     const seq = buildMarkerSequence(16);
     const heads = new Set(LETTERS_26.slice(0, 16));
     for (const m of seq.filter((s) => s.length === 2)) {
-      for (const ch of m) expect(heads.has(ch)).toBe(false);
+      expect(heads.has(m[0])).toBe(false);
+    }
+  });
+
+  it('lets a pair’s SECOND letter be any letter, head included', () => {
+    const seq = buildMarkerSequence(16);
+    // "ia" — tail leader, head second. Unambiguous beside single "a".
+    expect(seq).toContain('ia');
+    expect(seq).toContain('is');
+    expect(seq).toContain('io'); // tail-second still works
+  });
+
+  it('never repeats a letter within a pair (spoken form would double a word)', () => {
+    for (const m of buildMarkerSequence(16).filter((s) => s.length === 2)) {
+      expect(m[0]).not.toBe(m[1]);
     }
   });
 
@@ -35,9 +52,11 @@ describe('buildMarkerSequence (letter-first)', () => {
     }
   });
 
-  it('capacity is S + P·(P−1)', () => {
-    expect(buildMarkerSequence(16)).toHaveLength(16 + 10 * 9); // 106
-    expect(buildMarkerSequence(20)).toHaveLength(20 + 6 * 5);  // 50
+  // Leaders × (every other letter), so raising `singles` costs pairs LINEARLY
+  // rather than quadratically — which is what makes the split worth tuning.
+  it('capacity is S + leaders·25', () => {
+    expect(buildMarkerSequence(16)).toHaveLength(16 + 10 * 25); // 266
+    expect(buildMarkerSequence(20)).toHaveLength(20 + 6 * 25);  // 170
   });
 });
 
@@ -54,8 +73,9 @@ describe('buildMarkerSequence — reserved nav letters', () => {
     for (const r of SHIPPING) expect(singles).not.toContain(r);
   });
 
-  it('costs no pairs — all five shipping letters sit in the head', () => {
-    expect(buildMarkerSequence(16, SHIPPING)).toHaveLength(11 + 10 * 9); // 101
+  it('costs 5 singles and no LEADERS — all five sit in the head', () => {
+    // 11 singles + 10 leaders × 20 remaining eligible seconds.
+    expect(buildMarkerSequence(16, SHIPPING)).toHaveLength(11 + 10 * 20); // 211
   });
 
   it('filters AFTER the head/tail split, so no tail letter is promoted', () => {
@@ -64,7 +84,9 @@ describe('buildMarkerSequence — reserved nav letters', () => {
     // pool at full size.
     const seq = buildMarkerSequence(16, new Set(['a']));
     expect(seq.filter((m) => m.length === 1)).not.toContain('i');
-    expect(seq.filter((m) => m.length === 2)).toHaveLength(10 * 9);
+    // Leaders stay the 10 tail letters; seconds are the 25 non-reserved letters
+    // minus the leader itself.
+    expect(seq.filter((m) => m.length === 2)).toHaveLength(10 * 24);
   });
 
   it('never emits a reserved letter anywhere, singles or pairs', () => {
