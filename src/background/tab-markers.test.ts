@@ -41,6 +41,51 @@ describe('buildMarkerSequence (letter-first)', () => {
   });
 });
 
+// notes/DESIGN_PALETTE_KEYBOARD_NAV.md — letters the palette needs for list
+// navigation are withheld from the pool, so a bare `j` can move the selection
+// instead of jumping to mark "j".
+describe('buildMarkerSequence — reserved nav letters', () => {
+  const SHIPPING = new Set(['d', 'g', 'j', 'k', 'u']);
+
+  it('drops reserved letters from the singles head', () => {
+    const seq = buildMarkerSequence(16, SHIPPING);
+    const singles = seq.filter((m) => m.length === 1);
+    expect(singles).toHaveLength(11);
+    for (const r of SHIPPING) expect(singles).not.toContain(r);
+  });
+
+  it('costs no pairs — all five shipping letters sit in the head', () => {
+    expect(buildMarkerSequence(16, SHIPPING)).toHaveLength(11 + 10 * 9); // 101
+  });
+
+  it('filters AFTER the head/tail split, so no tail letter is promoted', () => {
+    // Reserving a head letter must not pull `i` (the first tail letter) up into
+    // the singles: a letter's role stays fixed, which is what keeps the pair
+    // pool at full size.
+    const seq = buildMarkerSequence(16, new Set(['a']));
+    expect(seq.filter((m) => m.length === 1)).not.toContain('i');
+    expect(seq.filter((m) => m.length === 2)).toHaveLength(10 * 9);
+  });
+
+  it('never emits a reserved letter anywhere, singles or pairs', () => {
+    const reserved = new Set(['a', 'i', 'z']); // one head letter, two tail
+    for (const m of buildMarkerSequence(16, reserved)) {
+      for (const ch of m) expect(reserved.has(ch)).toBe(false);
+    }
+  });
+
+  it('stays prefix-free under reservation', () => {
+    const seq = buildMarkerSequence(16, SHIPPING);
+    for (const s of seq.filter((m) => m.length === 1)) {
+      expect(seq.some((m) => m.length === 2 && m[0] === s)).toBe(false);
+    }
+  });
+
+  it('is unchanged when nothing is reserved (arrow-key user)', () => {
+    expect(buildMarkerSequence(16, new Set())).toEqual(buildMarkerSequence(16));
+  });
+});
+
 describe('markToSpokenWords (voice overlay)', () => {
   it('maps each letter to its alphabet word by alphabetical position', () => {
     expect(markToSpokenWords('a', ALPHABET)).toBe('arch');

@@ -17,6 +17,10 @@
 
 import { COMMAND_CATALOG } from './keymap/command-catalog';
 import { loadKeymap } from './keymap/keymap-storage';
+import {
+  derivePaletteNav, navKeyToken, type PaletteNavIntent,
+} from './keymap/palette-reserved';
+import { applyNavIntent } from './palette/nav';
 import { overridesFromList, type OverrideRecord } from './keymap/command-override';
 import {
   buildTabItems, buildCommandItems, buildBookmarkItems, filterPalette, resolvePaletteQuery,
@@ -118,8 +122,21 @@ let displayMode: BadgeDisplayMode = 'letter';
 // (scope=all) is always fuzzy.
 type PaletteMode = 'letter' | 'fuzzy';
 let mode: PaletteMode = 'fuzzy';
+/**
+ * Whether this scope has a letter mode at all. Phase 2 of
+ * DESIGN_PALETTE_KEYBOARD_NAV.md makes every scope letter-capable and deletes
+ * this constant; until then it is what keeps the unified Escape ladder from
+ * stepping into a mode the command/bookmark palettes don't yet have.
+ */
+const HAS_LETTER_MODE = scope === 'tabs';
 /** The mark letters typed so far in letter mode ("i" waiting for a pair). */
 let markPrefix = '';
+/**
+ * Reserved nav letters + their meanings, derived from the user's keymap at open
+ * (keymap/palette-reserved.ts). Empty until init resolves, and empty for a user
+ * who navigates with the arrow keys.
+ */
+let navBindings: ReadonlyMap<string, PaletteNavIntent> = new Map();
 /** Note shown above the rows when the effective query isn't the box text. */
 let queryNote = '';
 
@@ -399,6 +416,35 @@ function moveSelection(delta: number): void {
   renderCurrent();
 }
 
+/**
+ * How many rows are on screen right now, counted from the DOM rather than
+ * derived from heights. Exact by construction: it absorbs the section headers
+ * and overflow notes interleaved with the rows, and any future row that renders
+ * taller than its siblings. Only runs on a jump keypress.
+ */
+function visibleRowCount(): number {
+  // Viewport rects, NOT offsetTop: `offsetTop` is measured from the nearest
+  // POSITIONED ancestor, and #list isn't positioned — so offsetTop lands in the
+  // panel's coordinate space while scrollTop/clientHeight are in the list's, and
+  // comparing them undercounts badly (measured: 6 visible rows read as 2, making
+  // `d` step one row instead of three). getBoundingClientRect puts both sides in
+  // the same space and folds in the scroll offset for free.
+  const box = listEl.getBoundingClientRect();
+  let n = 0;
+  for (const row of listEl.querySelectorAll<HTMLElement>('.row')) {
+    const r = row.getBoundingClientRect();
+    if (r.top < box.bottom && r.bottom > box.top) n++;
+  }
+  return n;
+}
+
+/** Move the selection per a reserved nav key. */
+function navigate(intent: PaletteNavIntent): void {
+  if (flat.length === 0) return;
+  selected = applyNavIntent(intent, selected, flat.length, visibleRowCount());
+  renderCurrent();
+}
+
 // A mark letter in letter mode. Prefix-free marks make this crisp: an exact
 // match jumps immediately (a single-letter mark can't be the start of a pair);
 // a prefix narrows the list; anything else is a no-op (never blanks the list).
@@ -424,6 +470,13 @@ function backspaceMark(): void {
   if (markPrefix.length === 0) return;
   markPrefix = markPrefix.slice(0, -1);
   queryInput.value = markPrefix;
+  selected = 0;
+  renderCurrent();
+}
+
+function clearMarkPrefix(): void {
+  markPrefix = '';
+  queryInput.value = '';
   selected = 0;
   renderCurrent();
 }
@@ -456,6 +509,7 @@ function enterFuzzyMode(seed = ''): void {
   queryInput.classList.remove('letter-mode');
   queryInput.focus();
   selected = 0;
+  renderModeChip();
   renderCurrent();
 }
 
@@ -466,6 +520,7 @@ function enterLetterMode(): void {
   queryInput.placeholder = placeholderFor('letter');
   queryInput.classList.add('letter-mode');
   selected = 0;
+  renderModeChip();
   renderCurrent();
 }
 
@@ -476,7 +531,7 @@ function enterLetterMode(): void {
 // search query, not a mark.
 queryInput.addEventListener('input', (ev) => {
   phrase.handleInput(ev as InputEvent);
-  if (scope === 'tabs' && mode === 'letter') {
+  if (HAS_LETTER_MODE && mode === 'letter') {
     enterFuzzyMode(queryInput.value.slice(markPrefix.length));
     return;
   }
@@ -520,23 +575,35 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault(); dispatchItem(flat[selected]); return;
   }
 
+  // The Escape ladder, one rule for every scope
+  // (notes/DESIGN_PALETTE_KEYBOARD_NAV.md): clear a pending prefix, else step
+  // search → letter, else close. The only scope-dependent input is whether a
+  // letter mode exists to step back to, which phase 2 makes unconditional.
+  // Dismissal does not regress: a fresh palette has no prefix and is already in
+  // its default mode, so one press still closes it.
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    if (markPrefix) { clearMarkPrefix(); return; }
+    if (mode === 'fuzzy' && HAS_LETTER_MODE) { enterLetterMode(); return; }
+    close();
+    return;
+  }
+
   // Letter mode (tab palette default): keystroke-capture for mark-jump.
-  if (scope === 'tabs' && mode === 'letter') {
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      if (markPrefix) {
-        // Two-stage: clear the typed prefix first, then a second Escape closes.
-        markPrefix = '';
-        queryInput.value = '';
-        selected = 0;
-        renderCurrent();
-      } else {
-        close();
-      }
-      return;
-    }
+  if (HAS_LETTER_MODE && mode === 'letter') {
     if (e.key === '/') { e.preventDefault(); enterFuzzyMode(); return; }
     if (e.key === 'Backspace') { e.preventDefault(); backspaceMark(); return; }
+    // Reserved nav letters (keymap/palette-reserved.ts). They are withheld from
+    // the mark pool, so no mark can begin with one — the two letter sets are
+    // disjoint by construction and this cannot shadow a jump. Sitting before the
+    // mark consume is documentation of intent, not disambiguation.
+    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      const intent = navBindings.get(navKeyToken(e.key, e.shiftKey));
+      if (intent) { e.preventDefault(); navigate(intent); return; }
+    }
+    // Free of the keymap and of any collision, so they are wired unconditionally.
+    if (e.key === 'Home') { e.preventDefault(); navigate('first'); return; }
+    if (e.key === 'End') { e.preventDefault(); navigate('last'); return; }
     // Consume EVERY single-character press (letters pick a mark, anything else
     // is a no-op) so no keystroke can reach the input's value. What remains —
     // multi-character insertions from the dictation sink or a paste — falls
@@ -550,12 +617,8 @@ window.addEventListener('keydown', (e) => {
     }
     return; // swallow anything else in letter mode
   }
-
-  // Fuzzy mode: Escape returns to letter mode (tab palette) or closes (full).
-  if (e.key === 'Escape') {
-    e.preventDefault();
-    if (scope === 'tabs') enterLetterMode(); else close();
-  }
+  // Fuzzy mode needs no tail: every key it cares about is handled above, and
+  // Escape belongs to the ladder.
 });
 
 backdrop.addEventListener('click', (e) => {
@@ -681,6 +744,34 @@ function showBookmarkFooter(): void {
   footer.hidden = false;
 }
 
+/**
+ * Mode indicator, shown whenever this scope has two modes to be in.
+ *
+ * The same reasoning render/mode-chip.ts states for the page: with letters
+ * meaning "pick a label" in one mode and "type a query" in the other, nothing on
+ * screen otherwise says which one you are in — and the author of the tab palette
+ * still expected `/`-to-search in every scope, which is the evidence that the
+ * mode has to be visible rather than inferred. Not shared code with mode-chip:
+ * that is a content-script component in a page shadow root, this is the frame's
+ * own footer.
+ *
+ * Rebuilt in place on every mode change, and it keeps the footer's other
+ * occupants (the dictation chip, the bookmarks verbs) intact by owning one span.
+ */
+function renderModeChip(): void {
+  const footer = document.getElementById('footer');
+  if (!footer || !HAS_LETTER_MODE) return;
+  let chip = footer.querySelector<HTMLElement>('.mode');
+  if (!chip) {
+    chip = el('span', 'mode');
+    footer.prepend(chip);
+  }
+  chip.textContent = mode === 'letter'
+    ? 'LETTER — type a label, / to search'
+    : 'SEARCH — Esc for labels';
+  footer.hidden = false;
+}
+
 async function init(): Promise<void> {
   queryInput.focus();
   const [boot, keymap, stored, sync, overridesResp, aliasesResp] = await Promise.all([
@@ -698,6 +789,7 @@ async function init(): Promise<void> {
   if (typeof sync.badgeDisplayMode === 'string') {
     displayMode = sync.badgeDisplayMode as BadgeDisplayMode;
   }
+  navBindings = derivePaletteNav(keymap).bindings;
   markMap = boot.marks;
   // A scoped open drops the other sources entirely — same overlay, one
   // source (the Vomnibar "scoped by trigger key" pattern). Bookmarks are
@@ -720,6 +812,7 @@ async function init(): Promise<void> {
   // usable. Full palette is always fuzzy.
   if (scope === 'tabs' && codewords.size > 0) enterLetterMode();
   else queryInput.placeholder = placeholderFor('fuzzy');
+  renderModeChip();
   renderCurrent();
   fdiag(`init ok tabs=${tabItems.length} commands=${commandItems.length} bookmarks=${bookmarkItems.length}${bookmarksError ? ` bookmarks_error=${bookmarksError}` : ''} marks=${codewords.size}`);
 }

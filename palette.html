@@ -120,6 +120,14 @@
       padding: 6px 14px; font-size: 11px; color: #8b949e; white-space: nowrap;
     }
     #footer[hidden] { display: none; }
+    /* Keyboard-mode indicator (notes/DESIGN_PALETTE_KEYBOARD_NAV.md). Same
+       yellow-on-slate as the page's mode chip (render/mode-chip.ts), so "which
+       mode am I in" reads identically on both surfaces. `mode` is the class
+       renderModeChip owns; the footer's other chips are untouched siblings. */
+    #footer .mode {
+      color: #f2cc60; font-weight: 700; letter-spacing: 0.06em;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
   </style>
 </head>
 <body>

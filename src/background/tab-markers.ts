@@ -23,6 +23,8 @@
 
 import type { MessageHandler } from '../core/message-router';
 import { LETTERS_26 } from '../labels/words';
+import { loadKeymap } from '../keymap/keymap-storage';
+import { derivePaletteNav } from '../keymap/palette-reserved';
 
 /** Reserved single-letter markers (from the typing-ergonomic head); the rest
  *  form the pair pool. 16 → 16 singles + 10×9 = 90 pairs = 106 tabs. See the
@@ -32,15 +34,29 @@ export const MARKER_SINGLES = 16;
 /** tabId → assigned letter-token marker ("a", "iz"). */
 export type MarkerMap = Record<number, string>;
 
+const NO_RESERVED: ReadonlySet<string> = new Set();
+
 /**
  * The ordered canonical marker sequence: single letters (ergonomic head)
  * first, then pairs drawn only from the tail. Assignment takes the earliest
  * free entry, so the most-reachable single letters go to the earliest tabs.
  * No voice dependency — the markers are letters.
+ *
+ * `reserved` holds letters the palette needs for list navigation
+ * (keymap/palette-reserved.ts): a bare `j` cannot both jump to mark "j" and move
+ * the selection down. Filtering happens AFTER the head/tail split, not before,
+ * so reservation never promotes a tail letter into the singles head — a letter's
+ * role stays fixed and the pair pool keeps its size. With the shipping keymap
+ * that costs five of sixteen singles (all of d/g/j/k/u sit in the head) and no
+ * pairs at all: 11 + 90 = 101 markers.
  */
-export function buildMarkerSequence(singles = MARKER_SINGLES): string[] {
-  const out: string[] = LETTERS_26.slice(0, singles);
-  const tail = LETTERS_26.slice(singles);
+export function buildMarkerSequence(
+  singles = MARKER_SINGLES,
+  reserved: ReadonlySet<string> = NO_RESERVED,
+): string[] {
+  const usable = (ls: readonly string[]): string[] => ls.filter((l) => !reserved.has(l));
+  const out: string[] = usable(LETTERS_26.slice(0, singles));
+  const tail = usable(LETTERS_26.slice(singles));
   for (let i = 0; i < tail.length; i++) {
     for (let j = 0; j < tail.length; j++) {
       if (i !== j) out.push(`${tail[i]}${tail[j]}`);
@@ -181,8 +197,16 @@ export async function setTabMarkersEnabled(on: boolean): Promise<void> {
  */
 export async function getTabMarker(tabId: number, title?: string): Promise<string | null> {
   if (!enabled) return null;
-  const sequence = buildMarkerSequence();
-  const map = await loadMarkerMap();
+  // The keymap is read per assignment rather than cached: a stale reserved set
+  // would hand out a marker the palette can no longer type, and there is no
+  // invalidation hook that wouldn't be a new listener. Reads sit alongside the
+  // marker-map read, so this costs a second concurrent storage get on a tab's
+  // FIRST sight only — assignMarker returns early for an already-marked tab.
+  const [reserved, map] = await Promise.all([
+    loadKeymap().then((km) => derivePaletteNav(km).reserved).catch(() => undefined),
+    loadMarkerMap(),
+  ]);
+  const sequence = buildMarkerSequence(MARKER_SINGLES, reserved);
   const preferred = title ? parseMarker(title) ?? undefined : undefined;
   const marker = assignMarker(map, tabId, sequence, preferred);
   if (marker && map[tabId] !== marker) {
