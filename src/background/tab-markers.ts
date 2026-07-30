@@ -190,6 +190,27 @@ export async function setTabMarkersEnabled(on: boolean): Promise<void> {
 }
 
 /**
+ * Serializes marker assignment. Load→assign→save is a read-modify-write across
+ * two awaits, so concurrent callers otherwise all read the SAME pre-write map,
+ * all pick "the earliest free marker", and all pick the SAME one — lost updates.
+ * Measured 2026-07-29: creating 13 tabs in one loop produced `q` four times and
+ * `l` three times, which makes every duplicate but one unreachable by mark and
+ * starves the pair pool (13 tabs still fit in singles).
+ *
+ * Chained rather than locked because the operation is short, ordering is a fine
+ * outcome (earliest caller gets the earliest marker), and a chain cannot deadlock
+ * if a link rejects. Per-SW-lifetime is sufficient: every link persists before
+ * the next reads.
+ */
+let markerWrites: Promise<unknown> = Promise.resolve();
+
+function serializeMarkerWrite<T>(op: () => Promise<T>): Promise<T> {
+  const done = markerWrites.then(op, op);
+  markerWrites = done.catch(() => undefined);
+  return done;
+}
+
+/**
  * Ensure `tabId` has a marker (assigning + persisting on first sight) and
  * return its letter token, or null when the feature is off / pool exhausted.
  * `title`, if decorated, supplies a preferred marker so a reconciled/restored
@@ -197,23 +218,25 @@ export async function setTabMarkersEnabled(on: boolean): Promise<void> {
  */
 export async function getTabMarker(tabId: number, title?: string): Promise<string | null> {
   if (!enabled) return null;
-  // The keymap is read per assignment rather than cached: a stale reserved set
-  // would hand out a marker the palette can no longer type, and there is no
-  // invalidation hook that wouldn't be a new listener. Reads sit alongside the
-  // marker-map read, so this costs a second concurrent storage get on a tab's
-  // FIRST sight only — assignMarker returns early for an already-marked tab.
-  const [reserved, map] = await Promise.all([
-    loadKeymap().then((km) => derivePaletteNav(km).reserved).catch(() => undefined),
-    loadMarkerMap(),
-  ]);
-  const sequence = buildMarkerSequence(MARKER_SINGLES, reserved);
-  const preferred = title ? parseMarker(title) ?? undefined : undefined;
-  const marker = assignMarker(map, tabId, sequence, preferred);
-  if (marker && map[tabId] !== marker) {
-    map[tabId] = marker;
-    await saveMarkerMap(map);
-  }
-  return marker;
+  return serializeMarkerWrite(async () => {
+    // The keymap is read per assignment rather than cached: a stale reserved set
+    // would hand out a marker the palette can no longer type, and there is no
+    // invalidation hook that wouldn't be a new listener. Reads sit alongside the
+    // marker-map read, so this costs a second concurrent storage get on a tab's
+    // FIRST sight only — assignMarker returns early for an already-marked tab.
+    const [reserved, map] = await Promise.all([
+      loadKeymap().then((km) => derivePaletteNav(km).reserved).catch(() => undefined),
+      loadMarkerMap(),
+    ]);
+    const sequence = buildMarkerSequence(MARKER_SINGLES, reserved);
+    const preferred = title ? parseMarker(title) ?? undefined : undefined;
+    const marker = assignMarker(map, tabId, sequence, preferred);
+    if (marker && map[tabId] !== marker) {
+      map[tabId] = marker;
+      await saveMarkerMap(map);
+    }
+    return marker;
+  });
 }
 
 function sendToTopFrame(tabId: number, message: unknown): void {

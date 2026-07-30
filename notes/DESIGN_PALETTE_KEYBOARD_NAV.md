@@ -12,6 +12,16 @@ rather than by tests:
   `scrollTop`/`clientHeight` are relative to the list — 6 visible rows measured
   as 2, and `d` stepped one row instead of three. `getBoundingClientRect()` on
   both sides fixes it and folds the scroll offset in for free.
+- **Marker assignment was racy, and reservation made it easier to hit.**
+  `getTabMarker` does load→assign→save across two awaits, so concurrent callers
+  all read the same pre-write map and all pick "the earliest free marker" — the
+  same one. Creating 13 tabs in one loop produced `q` four times and `l` three
+  times, which makes every duplicate but one unreachable by mark. Pre-existing
+  (the sequence had this shape before), but reserving letters shrinks the singles
+  head from 16 to 11, so collisions start sooner. Now serialized through a promise
+  chain; verified at 14 tabs → 14 distinct marks. Not unit-covered, matching this
+  file's own split — pure pool ops are tested, chrome.* glue is not. Reproduce
+  with `chrome.tabs.create` in a loop from an extension page.
 - **`mode` initialises to `'fuzzy'` even though letter mode is the default.**
   That value only covers the window before the bootstrap round-trip resolves;
   init promotes to letter mode once labels exist. Starting in letter mode would
