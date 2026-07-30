@@ -413,9 +413,45 @@ letter form (above).
    old 101. The live trade is 11 single-keystroke markers at 211 total (S = 16)
    versus 16 at 116 (S = 21). MRU-vs-longest-lived for single assignment is a
    sub-knob.
-4. **Favicon badge for pinned tabs** (canvas-drawn overlay, content-side
-   icon swap). v2.
-5. **Firefox**: same APIs (`tabs.onUpdated`, session storage, exclusive
+4. ~~**Favicon badge for pinned tabs**~~ **PARKED — user is skeptical, and the
+   overlay form is measured-illegible.** Mocked up 2026-07-29 at real 16px
+   (candidates rendered at 64px and downscaled, as Chrome does on Retina):
+
+   - **Overlay forms do not work.** A corner circle and a bottom band both
+     reduce to a smudge, and a two-letter mark in either is unreadable. Sixteen
+     pixels cannot hold a site icon *and* 1–2 legible characters. So the "overlay
+     on the existing favicon" shape this item originally proposed is dead, not
+     merely unbuilt — don't rebuild the mockups.
+   - **Full replacement is legible**, single letters comfortably and pairs
+     borderline, but it costs the site icon on every badged tab, which is the
+     primary scanning cue once tabs narrow.
+   - **Stacking a pair** (each glyph full width, half height) is *worse* than
+     side-by-side — a 7px-tall lowercase glyph has almost no x-height.
+     Side-by-side with tight kerning or a condensed face is the best pair form.
+   - The least-bad shape found was **badge the SINGLE-letter marks only**, leaving
+     pair-marked tabs their real favicon: one glyph filling the tile stays legible
+     even on a title-less sliver, so it is the only variant that survives a high
+     tab count, and it would let title decoration be dropped entirely (closing the
+     bookmark-pollution cost below).
+
+   **Not pursued.** The user is skeptical of the favicon direction generally, and
+   the honest ceiling is that it serves the ~11–16 single-letter tabs rather than
+   the long tail, which is where a heavy-tab user actually needs help. Revisit only
+   if the palette proves insufficient as the primary surface.
+
+5. **Title decoration leaks into stored data — accepted, not fixed.**
+   `document.title` is the only thing Chrome reads for the tab strip, so the
+   marker prefix also lands in **bookmark titles** (field-confirmed), and by the
+   same mechanism in history entries, session records, Chrome's own tab search,
+   and what screen readers announce. Deliberately left as is 2026-07-29: the
+   alternatives were a favicon badge (parked above), decorating only while the
+   palette is open, or dropping strip marks entirely (`tabMarkersEnabled` already
+   does this). Repairing bookmarks after creation via `chrome.bookmarks.onCreated`
+   was explicitly REFUSED — the user does not want their bookmark data written to.
+   Note the prefix also stops being *useful* at high tab counts, since Chrome
+   truncates the title away entirely while the prefix keeps consuming the width
+   that remains.
+6. **Firefox**: same APIs (`tabs.onUpdated`, session storage, exclusive
    gate); persistent background simplifies the pool. No known blockers.
 
 ## Phased plan
