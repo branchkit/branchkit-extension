@@ -818,19 +818,21 @@ function showVoiceSearchHint(): void {
 }
 
 /**
- * Sticky footer for the bookmarks palette: teaches the three spoken open
- * dispositions — the bare badge navigates this tab (Enter's voice twin);
- * "blank"/"stash" + badge = new focused / background tab (the hint verbs).
- * Voice-gated: the phrases are spoken commands, so a voiceless palette
- * would advertise phrases nothing hears.
+ * Sticky footer for the bookmarks palette: teaches the spoken open
+ * dispositions — the bare badge opens a new focused tab (Enter's voice twin),
+ * "stash" opens it behind instead. Voice-gated: the phrases are spoken
+ * commands, so a voiceless palette would advertise phrases nothing hears.
+ *
+ * "blank" still works as a synonym for the bare badge, but isn't taught: it
+ * named the non-default disposition until new-tab BECAME the default, and
+ * advertising a verb that does what pressing nothing does is noise.
  */
 function showBookmarkFooter(): void {
   const footer = document.getElementById('footer');
   if (!footer) return;
   footer.append(
-    spokenChip('“⟨badge⟩”', 'opens here'),
-    spokenChip('“blank ⟨badge⟩”', 'new tab'),
-    spokenChip('“stash ⟨badge⟩”', 'background tab'),
+    spokenChip('“⟨badge⟩”', 'opens in a new tab'),
+    spokenChip('“stash ⟨badge⟩”', 'opens behind'),
   );
   footer.hidden = false;
 }

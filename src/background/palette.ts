@@ -104,9 +104,10 @@ export async function clearPaletteVoice(reason: string): Promise<void> {
   await postToPlugin('/palette', { conn_id: connId, entries: [] });
 }
 
-/** Where an open_bookmark dispatch lands: the origin tab itself (default),
- *  a new focused tab ("blank"), or a new background tab ("stash") — the same
- *  verbs as the hint twins. Non-bookmark rows ignore it. */
+/** Where an open_bookmark dispatch lands: a new focused tab (DEFAULT), a new
+ *  background tab ("stash"), or the origin tab itself ("here" — reachable
+ *  through this API, but no verb or keybind currently asks for it).
+ *  Non-bookmark rows ignore it. */
 export type OpenWhere = 'here' | 'blank' | 'stash';
 
 // Command palette selection (Layer 2). Always close the overlay in the origin
@@ -117,7 +118,7 @@ export type OpenWhere = 'here' | 'blank' | 'stash';
 export async function handlePaletteAction(
   action: PaletteDispatch | { kind: 'close' },
   originTabId: number | undefined,
-  where: OpenWhere = 'here',
+  where: OpenWhere = 'blank',
 ): Promise<void> {
   // Direct teardown besides the content-side PALETTE_CLOSED signal: if the
   // content script is gone (catch below), the signal never fires, and the
@@ -132,11 +133,13 @@ export async function handlePaletteAction(
     // A stale id (tab closed while the palette was open) is a silent no-op.
     await focusWindowAndActivateTab(action.tabId);
   } else if (action.kind === 'open_bookmark') {
-    // In place by default: a bookmark picker is a "go there" surface, like
-    // typing in the address bar — the origin tab navigates. "blank"/"stash"
-    // open a new focused / background tab instead (spoken verbs; footer in
-    // the bookmarks palette teaches them). Origin gone (tab died mid-pick)
-    // falls back to a new tab rather than dropping the pick.
+    // A NEW FOCUSED TAB by default (changed 2026-07-29). A bookmark is
+    // somewhere you want to go *as well as* where you already are, so
+    // replacing the origin tab throws away context you didn't ask to lose —
+    // the reverse of a page hint, where a bare activation navigates in place
+    // because following a link IS the browsing flow. Deliberately diverges
+    // from the hint twins for that reason. "stash" opens it behind instead.
+    // 'here' stays in the type as a capability with no caller.
     if (where === 'here' && typeof originTabId === 'number') {
       await chrome.tabs.update(originTabId, { url: action.url }).catch(() => {});
     } else {
@@ -160,7 +163,11 @@ export async function handlePaletteAction(
 // unknown row id (stale utterance racing a re-open) just closes the palette.
 // The matcher already cleared the exclusive tag (ClearsTags at match time);
 // handlePaletteAction's clearPaletteVoice drains the entries to match.
-export function handlePaletteVoiceSelect(rowId: string | undefined, where: OpenWhere = 'here'): void {
+// `where` is deliberately WITHOUT a default and passed straight through:
+// handlePaletteAction owns the one default disposition. This used to default to
+// 'here' independently, so the keyboard and voice paths each carried their own
+// copy — and flipping the default in one place silently left the other behind.
+export function handlePaletteVoiceSelect(rowId: string | undefined, where?: OpenWhere): void {
   const pv = paletteVoice;
   if (!pv) return;
   const dispatch = pv.rows.get(rowId ?? '');

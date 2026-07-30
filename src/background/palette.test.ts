@@ -83,10 +83,39 @@ describe('voice select', () => {
 });
 
 describe('open_bookmark dispositions', () => {
-  it('default navigates the origin tab in place', async () => {
+  // Changed 2026-07-29: a bookmark is somewhere you want to go as well as where
+  // you already are, so the default no longer discards the origin tab.
+  it('default opens a new focused tab, leaving the origin tab alone', async () => {
     const palette = await loadPalette();
     await palette.publishPaletteVoice(5, [], rows);
     palette.handlePaletteVoiceSelect('bm1');
+    await flush();
+    expect(chrome.tabs.create).toHaveBeenCalledWith({ url: 'https://example.com/', active: true });
+    expect(chrome.tabs.update).not.toHaveBeenCalled();
+  });
+
+  // The voice path used to carry its OWN copy of the default, so flipping
+  // handlePaletteAction's left it behind and the two surfaces disagreed. There is
+  // one default now; this pins the two paths together.
+  it('voice and keyboard paths share one default', async () => {
+    const palette = await loadPalette();
+    await palette.publishPaletteVoice(5, [], rows);
+    const create = vi.mocked(chrome.tabs.create);
+    const lastCall = (): unknown => create.mock.calls[create.mock.calls.length - 1];
+    palette.handlePaletteVoiceSelect('bm1');            // voice, no `where`
+    await flush();
+    const viaVoice = lastCall();
+    create.mockClear();
+    await palette.handlePaletteAction(                   // keyboard, no `where`
+      { kind: 'open_bookmark', url: 'https://example.com/' }, 5,
+    );
+    expect(lastCall()).toEqual(viaVoice);
+  });
+
+  it('explicit "here" still navigates the origin tab', async () => {
+    const palette = await loadPalette();
+    await palette.publishPaletteVoice(5, [], rows);
+    palette.handlePaletteVoiceSelect('bm1', 'here');
     await flush();
     expect(chrome.tabs.update).toHaveBeenCalledWith(5, { url: 'https://example.com/' });
     expect(chrome.tabs.create).not.toHaveBeenCalled();

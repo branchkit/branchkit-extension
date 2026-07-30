@@ -669,11 +669,11 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     description: 'Browse and search every command in the palette overlay.',
     voice: [{ pattern: 'palette commands' }] },
   // The bookmark source alone (scope-only: bookmarks would bloat the full
-  // launcher). Selection navigates the current tab — a bookmark picker is a
-  // "go there" surface, like typing in the address bar; the blank/stash
-  // variants below are the deliberate ways to keep the page you were on.
+  // launcher). Selection opens a NEW focused tab: a bookmark is somewhere you
+  // want to go as well as where you already are, so replacing the current tab
+  // discards context you never asked to lose. "stash" opens it behind instead.
   { id: 'toggle_bookmark_palette', label: 'Bookmark palette', group: 'Palette', mappable: true, params: [],
-    description: 'Open a bookmark in this tab — search by title, site, or folder. “blank”/“stash” + badge opens a new tab instead.',
+    description: 'Open a bookmark in a new tab — search by title, site, or folder. “stash” + badge opens it behind instead.',
     voice: [{ pattern: 'palette bookmarks' }] },
   // Palette voice selection (voice half of Layer 2): every palette row shows
   // an alphabet codeword badge; `{palette}` is the plugin-owned slot for it,
@@ -691,13 +691,15 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     description: 'Activate a palette row by speaking its codeword badge.',
     voice: [{ pattern: '{palette}' }],
     voiceContext: 'palette' },
-  // blank / stash + badge — the same verbs as the hint twins
-  // (activate_hint_newtab/_background), for palette rows: bare selection
-  // navigates the current tab, these open a new focused / background tab
-  // instead. Rows that aren't links (tabs, commands) ignore the modifier
-  // and dispatch normally.
+  // blank / stash + badge — borrowed from the hint twins
+  // (activate_hint_newtab/_background). NOTE the divergence: for hints a bare
+  // activation navigates in place, whereas a bare palette selection opens a new
+  // focused tab, so "blank" here is now a SYNONYM for the default rather than a
+  // modifier. Kept because it costs nothing and the muscle memory transfers from
+  // the hint surface; not taught in the footer. Rows that aren't links (tabs,
+  // commands) ignore the modifier and dispatch normally.
   { id: 'palette_select_newtab', label: 'Open palette row in new tab', group: 'Palette', mappable: false, params: [],
-    description: 'Open a palette bookmark in a new focused tab (“blank” + its badge).',
+    description: 'Open a palette bookmark in a new focused tab — the default, so “blank” is optional.',
     voice: [{ pattern: 'blank {palette}' }],
     voiceContext: 'palette' },
   { id: 'palette_select_background', label: 'Open palette row in background tab', group: 'Palette', mappable: false, params: [],
