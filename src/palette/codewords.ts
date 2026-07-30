@@ -28,45 +28,60 @@
 /**
  * Uniform badge length for a palette of `rowCount` rows — the smallest tier
  * that covers the whole list.
+ *
+ * `eligible` is how many alphabet letters are actually available. It is below 26
+ * when the palette has withheld letters for list navigation
+ * (keymap/palette-reserved.ts): badges are TYPED in letter mode, so a letter that
+ * moves the selection cannot also label a row. With the shipping five reserved
+ * the tiers become 21 / 420 / 7,980.
  */
-export function codewordLength(rowCount: number): 1 | 2 | 3 {
-  if (rowCount <= 26) return 1;
-  if (rowCount <= 26 * 25) return 2;
+export function codewordLength(rowCount: number, eligible = 26): 1 | 2 | 3 {
+  if (rowCount <= eligible) return 1;
+  if (rowCount <= eligible * (eligible - 1)) return 2;
   return 3;
 }
 
 /** Maximum rows that can carry a voice badge (the triple tier's capacity). */
-export function maxVoiceRows(): number {
-  return 26 * 25 * 24;
+export function maxVoiceRows(eligible = 26): number {
+  return eligible * (eligible - 1) * (eligible - 2);
+}
+
+/** The letter an alphabet slot stands for — index 0 is 'a' (A–Z order). */
+function letterAt(index: number): string {
+  return String.fromCharCode(97 + index);
 }
 
 /**
- * The `index`-th codeword of `length` distinct alphabet words: unranks the
- * index into the ordered no-repeat word sequences, leading word varying
- * slowest (row 0 starts at the alphabet head). Null past the tier's capacity.
+ * The `index`-th codeword of `length` distinct words drawn from `words`: unranks
+ * the index into the ordered no-repeat sequences, leading word varying slowest
+ * (row 0 starts at the head). Null past the tier's capacity.
+ *
+ * `words` is the ELIGIBLE subset, not necessarily the full 26 — reserved letters
+ * are already removed by the caller. Everything here is relative to
+ * `words.length`, so the arithmetic needs no other change.
  */
 function codewordAt(
-  alphabet: readonly string[],
+  words: readonly string[],
   index: number,
   length: number,
 ): string | null {
   let capacity = 1;
-  for (let k = 0; k < length; k++) capacity *= alphabet.length - k;
+  for (let k = 0; k < length; k++) capacity *= words.length - k;
   if (index >= capacity) return null;
-  const pool = [...alphabet];
-  const words: string[] = [];
+  const pool = [...words];
+  const picked: string[] = [];
   let rem = index;
   let block = capacity;
   for (let k = 0; k < length; k++) {
     // Sequences sharing the word chosen at this position (exact integer:
     // capacity is the running product of these divisors).
-    block /= alphabet.length - k;
+    block /= words.length - k;
     const i = Math.floor(rem / block);
     rem %= block;
-    words.push(pool[i]);
+    picked.push(pool[i]);
     pool.splice(i, 1);
   }
-  return words.join(' ');
+  return picked.join(' ');
 }
 
 /**
@@ -118,19 +133,29 @@ export function classifyMarkInput(
  * Map row ids to spoken badges. `alphabet` is the 26-word voice alphabet in
  * A–Z order (empty/invalid → empty map: the palette degrades to keyboard-only).
  * Rows past `maxVoiceRows()` are left out of the map.
+ *
+ * `reserved` names letters the palette needs for list navigation, which are
+ * withheld from assignment. IT IS FILTERED OUT OF THE UNRANKING ONLY — the
+ * `alphabet` array itself stays 26 long, because it is the letter↔word
+ * DICTIONARY that codewordDisplay and codewordToken index by position. Shortening
+ * it would silently bind every badge to the wrong letter, which is the same trap
+ * the header note about "deliberately NOT LETTERS_26" guards against.
  */
 export function assignCodewords(
   rowIds: readonly string[],
   alphabet: readonly string[],
+  reserved: ReadonlySet<string> = new Set(),
 ): Map<string, string> {
   const out = new Map<string, string>();
   if (alphabet.length !== 26 || alphabet.some((w) => typeof w !== 'string' || w.length === 0)) {
     return out;
   }
-  const length = codewordLength(rowIds.length);
+  const eligible = alphabet.filter((_, i) => !reserved.has(letterAt(i)));
+  if (eligible.length < 3) return out; // can't even form a triple
+  const length = codewordLength(rowIds.length, eligible.length);
   let i = 0;
   for (const id of rowIds) {
-    const cw = codewordAt(alphabet, i, length);
+    const cw = codewordAt(eligible, i, length);
     if (cw === null) break; // beyond the triple tier — unbadged
     out.set(id, cw);
     i++;

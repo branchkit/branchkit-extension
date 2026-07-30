@@ -106,6 +106,16 @@ let codewords: Map<string, string> = new Map();
 let tokens: Map<string, string> = new Map();
 /** The alphabet the codewords were assigned from (for letter display). */
 let voiceAlphabet: string[] = [];
+/**
+ * WHAT YOU TYPE to pick each row, in letter form ("f", "iz", "qr").
+ *
+ * The one label surface the keyboard speaks, so the typing path needs no scope
+ * branch: tabs scope fills it with stable strip marks, every other scope with the
+ * letter form of the row's codeword. Both are prefix-free — marks by the
+ * head/tail split, codewords by uniform length within an open — which is the
+ * property that lets a complete label activate on its last keystroke.
+ */
+let typedLabels: Map<string, string> = new Map();
 /** tabId → stable strip mark (letter token). In tabs scope the palette rows
  *  use these instead of ephemeral codewords, so the strip and the palette show
  *  the SAME letter. */
@@ -115,21 +125,20 @@ let markMap: MarkerMap = {};
  *  Same 'letter' fallback as config.ts. */
 let displayMode: BadgeDisplayMode = 'letter';
 
-// Tab-palette input model (notes/DESIGN_TAB_MARKERS.md): the tab palette opens
-// in LETTER mode — like a page of tab hints, you type a tab's mark letter to
-// jump (prefix-free marks activate instantly). `/` switches to FUZZY title
-// search, matching the page's "hints vs / find" model. The full palette
-// (scope=all) is always fuzzy.
+// Input model (notes/DESIGN_PALETTE_KEYBOARD_NAV.md, extending
+// DESIGN_TAB_MARKERS.md): EVERY scope opens in LETTER mode — like a page of
+// hints, you type a row's label to pick it (prefix-free labels activate on the
+// last keystroke) and the reserved nav letters walk the list. `/` switches to
+// FUZZY search, mirroring the page's "hints vs / find" model, and Escape steps
+// back. One model for all four scopes: the tabs-only asymmetry this replaced was
+// invisible enough to mislead the person who built it.
 type PaletteMode = 'letter' | 'fuzzy';
+// 'fuzzy' is the PRE-BOOTSTRAP value, not the default: init promotes to letter
+// mode as soon as labels exist. Starting in letter mode instead would swallow
+// anything typed in the window before the bootstrap round-trip resolves, since
+// letter mode consumes every single-character press.
 let mode: PaletteMode = 'fuzzy';
-/**
- * Whether this scope has a letter mode at all. Phase 2 of
- * DESIGN_PALETTE_KEYBOARD_NAV.md makes every scope letter-capable and deletes
- * this constant; until then it is what keeps the unified Escape ladder from
- * stepping into a mode the command/bookmark palettes don't yet have.
- */
-const HAS_LETTER_MODE = scope === 'tabs';
-/** The mark letters typed so far in letter mode ("i" waiting for a pair). */
+/** The label letters typed so far in letter mode ("i" waiting for a pair). */
 let markPrefix = '';
 /**
  * Reserved nav letters + their meanings, derived from the user's keymap at open
@@ -137,6 +146,12 @@ let markPrefix = '';
  * who navigates with the arrow keys.
  */
 let navBindings: ReadonlyMap<string, PaletteNavIntent> = new Map();
+/**
+ * The letters those bindings occupy, withheld from codeword assignment. Tab marks
+ * are filtered background-side (tab-markers.ts) since they outlive one palette
+ * open; codewords are assigned here, so they are filtered here.
+ */
+let reservedLetters: ReadonlySet<string> = new Set();
 /** Note shown above the rows when the effective query isn't the box text. */
 let queryNote = '';
 
@@ -150,6 +165,22 @@ function close(): void {
 
 function dispatchItem(item: PaletteItem | undefined): void {
   if (item) send(item.dispatch);
+}
+
+/** Every row this palette holds, in publish order (the badge index space). */
+function allItems(): PaletteItem[] {
+  return [...tabItems, ...commandItems, ...bookmarkItems];
+}
+
+/**
+ * Whether letter mode is reachable — i.e. whether anything carries a typeable
+ * label. False when marks are off, the pool is exhausted, or the voice alphabet
+ * never loaded; the palette is then search-only, and Escape closes rather than
+ * stepping into an inert mode. Replaces the phase-1 per-scope constant: the real
+ * condition was never the scope, it was whether labels exist.
+ */
+function hasLetterMode(): boolean {
+  return typedLabels.size > 0;
 }
 
 /** The privileged data the palette needs at open, fetched from the
@@ -299,10 +330,14 @@ function render(sections: PaletteSection[]): void {
       const row = el('div', i === selected ? 'row sel' : 'row');
       const cw = codewords.get(item.id);
       if (cw) {
-        // Tabs scope: the codeword IS the stable mark letter — show it as-is so
-        // the badge matches the strip. Full palette: word codewords → display
-        // per badgeDisplayMode.
-        const badge = scope === 'tabs' ? cw : codewordDisplay(cw, voiceAlphabet, displayMode);
+        // LETTER MODE SHOWS WHAT YOU TYPE, overriding badgeDisplayMode: a row
+        // labelled "ocean river" that you activate by typing "or" has to say
+        // "or". Outside letter mode the badge is purely a voice handle, so the
+        // user's shared letter/word/expand preference governs again. This is the
+        // tab-marker precedent generalized — letters primary, voice derived.
+        const badge = mode === 'letter'
+          ? (typedLabels.get(item.id) ?? '')
+          : codewordDisplay(cw, voiceAlphabet, displayMode);
         row.appendChild(badgeSpan(badge, tokens.get(item.id) ?? ''));
       }
       // Non-candidates dim; the row stays in place so the list doesn't
@@ -385,12 +420,20 @@ function narrowRowBadges(prefix: string): void {
 }
 
 function renderCurrent(): void {
-  if (scope === 'tabs' && mode === 'letter') {
-    const items = markPrefix === ''
-      ? tabItems
-      : tabItems.filter((it) => (codewords.get(it.id) ?? '').startsWith(markPrefix));
+  if (mode === 'letter') {
+    // The full sectioned list (empty query = no ranking), narrowed by the typed
+    // label prefix. Sections come from filterPalette so letter mode groups
+    // bookmarks by folder exactly as search does — one layout, two input modes.
     queryNote = '';
-    render([{ source: 'tabs', label: 'Tabs', items }]);
+    const sections = filterPalette(
+      tabItems, commandItems, '', scope === 'commands', bookmarkItems,
+    );
+    render(markPrefix === '' ? sections : sections
+      .map((s) => ({
+        ...s,
+        items: s.items.filter((it) => (typedLabels.get(it.id) ?? '').startsWith(markPrefix)),
+      }))
+      .filter((s) => s.items.length > 0));
     return;
   }
   const resolved = resolvePaletteQuery(
@@ -445,14 +488,15 @@ function navigate(intent: PaletteNavIntent): void {
   renderCurrent();
 }
 
-// A mark letter in letter mode. Prefix-free marks make this crisp: an exact
-// match jumps immediately (a single-letter mark can't be the start of a pair);
-// a prefix narrows the list; anything else is a no-op (never blanks the list).
+// A label letter in letter mode. Prefix-freedom makes this crisp: an exact match
+// activates immediately (nothing longer starts with a complete label); a prefix
+// narrows the list; anything else is a no-op (never blanks the list). Scope-blind
+// — `typedLabels` already resolved marks-vs-codewords at publish.
 function typeMarkLetter(ch: string): void {
   const next = markPrefix + ch;
-  switch (classifyMarkInput([...codewords.values()], next)) {
+  switch (classifyMarkInput([...typedLabels.values()], next)) {
     case 'exact': {
-      const item = tabItems.find((it) => codewords.get(it.id) === next);
+      const item = allItems().find((it) => typedLabels.get(it.id) === next);
       if (item) dispatchItem(item);
       return;
     }
@@ -490,14 +534,17 @@ let voiceLive = false;
 /** Placeholder for the current mode — the keyboard truth, plus the spoken one
  *  when voice is connected. The exact hold key lives in the footer. */
 function placeholderFor(m: PaletteMode): string {
-  if (scope === 'tabs' && m === 'letter') {
-    return voiceLive
-      ? 'Type a tab’s letter — / or speak to search'
-      : 'Type a tab’s letter — or / to search';
-  }
   const what = scope === 'commands' ? 'commands'
     : scope === 'bookmarks' ? 'bookmarks'
     : scope === 'tabs' ? 'tabs' : 'tabs and commands';
+  if (m === 'letter') {
+    // "a tab's letter" no longer generalizes — commands and bookmarks carry
+    // labels too — so name the noun the scope actually holds.
+    const noun = scope === 'tabs' ? 'a tab’s letter' : 'a row’s letters';
+    return voiceLive
+      ? `Type ${noun} — / or speak to search`
+      : `Type ${noun} — or / to search`;
+  }
   return voiceLive ? `Search ${what} — type or speak…` : `Search ${what}…`;
 }
 
@@ -531,7 +578,7 @@ function enterLetterMode(): void {
 // search query, not a mark.
 queryInput.addEventListener('input', (ev) => {
   phrase.handleInput(ev as InputEvent);
-  if (HAS_LETTER_MODE && mode === 'letter') {
+  if (mode === 'letter') {
     enterFuzzyMode(queryInput.value.slice(markPrefix.length));
     return;
   }
@@ -584,13 +631,13 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     e.preventDefault();
     if (markPrefix) { clearMarkPrefix(); return; }
-    if (mode === 'fuzzy' && HAS_LETTER_MODE) { enterLetterMode(); return; }
+    if (mode === 'fuzzy' && hasLetterMode()) { enterLetterMode(); return; }
     close();
     return;
   }
 
-  // Letter mode (tab palette default): keystroke-capture for mark-jump.
-  if (HAS_LETTER_MODE && mode === 'letter') {
+  // Letter mode: keystroke-capture for label-pick, in every scope.
+  if (mode === 'letter') {
     if (e.key === '/') { e.preventDefault(); enterFuzzyMode(); return; }
     if (e.key === 'Backspace') { e.preventDefault(); backspaceMark(); return; }
     // Reserved nav letters (keymap/palette-reserved.ts). They are withheld from
@@ -647,7 +694,7 @@ const tabIdOf = (rowId: string): number | null =>
  */
 function assignAndPublish(alphabet: string[]): void {
   voiceAlphabet = alphabet;
-  const all = [...tabItems, ...commandItems, ...bookmarkItems];
+  const all = allItems();
   if (scope === 'tabs') {
     codewords = new Map();
     for (const item of tabItems) {
@@ -656,7 +703,19 @@ function assignAndPublish(alphabet: string[]): void {
       if (mark) codewords.set(item.id, mark);
     }
   } else {
-    codewords = assignCodewords(all.map((r) => r.id), alphabet);
+    // Reserved letters are withheld: these codewords are TYPED in letter mode,
+    // so a letter that walks the list cannot also label a row.
+    codewords = assignCodewords(all.map((r) => r.id), alphabet, reservedLetters);
+  }
+  // The keyboard's view of the same assignment. Marks are already letters; word
+  // codewords reduce to their letter form, which is exactly what a user types and
+  // what letter mode renders on the badge.
+  typedLabels = new Map();
+  for (const item of all) {
+    const cw = codewords.get(item.id);
+    if (!cw) continue;
+    const label = scope === 'tabs' ? cw : codewordDisplay(cw, alphabet, 'letter');
+    if (label) typedLabels.set(item.id, label);
   }
   if (codewords.size === 0) return;
 
@@ -760,7 +819,7 @@ function showBookmarkFooter(): void {
  */
 function renderModeChip(): void {
   const footer = document.getElementById('footer');
-  if (!footer || !HAS_LETTER_MODE) return;
+  if (!footer || !hasLetterMode()) return;
   let chip = footer.querySelector<HTMLElement>('.mode');
   if (!chip) {
     chip = el('span', 'mode');
@@ -789,7 +848,9 @@ async function init(): Promise<void> {
   if (typeof sync.badgeDisplayMode === 'string') {
     displayMode = sync.badgeDisplayMode as BadgeDisplayMode;
   }
-  navBindings = derivePaletteNav(keymap).bindings;
+  const paletteNav = derivePaletteNav(keymap);
+  navBindings = paletteNav.bindings;
+  reservedLetters = paletteNav.reserved;
   markMap = boot.marks;
   // A scoped open drops the other sources entirely — same overlay, one
   // source (the Vomnibar "scoped by trigger key" pattern). Bookmarks are
@@ -807,11 +868,11 @@ async function init(): Promise<void> {
   // Dictated search works in every scope, so the hint is unconditional on
   // scope — only on voice being live.
   if (voiceLive) showVoiceSearchHint();
-  // Tab palette opens in letter mode when marks exist (the fast path); with no
-  // marks (feature off / pool empty) fall back to fuzzy so the palette is still
-  // usable. Full palette is always fuzzy.
-  if (scope === 'tabs' && codewords.size > 0) enterLetterMode();
-  else queryInput.placeholder = placeholderFor('fuzzy');
+  // Every scope opens in letter mode when there are labels to type; with none
+  // (marks off / pool empty / voice alphabet absent) fall back to search so the
+  // palette is still usable rather than an inert list.
+  if (typedLabels.size > 0) enterLetterMode();
+  else enterFuzzyMode();
   renderModeChip();
   renderCurrent();
   fdiag(`init ok tabs=${tabItems.length} commands=${commandItems.length} bookmarks=${bookmarkItems.length}${bookmarksError ? ` bookmarks_error=${bookmarksError}` : ''} marks=${codewords.size}`);

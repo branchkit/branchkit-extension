@@ -1,7 +1,22 @@
 # Design: Palette Keyboard Modes + Bare Vim Navigation
 
-Status: proposal. Scope: all four palette scopes (`tabs`, `commands`,
-`bookmarks`, `all`). Supersedes the narrow tab-palette-only version of this note.
+Status: **LANDED** (both phases, 2026-07-29). Scope: all four palette scopes
+(`tabs`, `commands`, `bookmarks`, `all`). Supersedes the narrow
+tab-palette-only version of this note.
+
+Two implementation notes worth keeping, both found by driving the real browser
+rather than by tests:
+
+- **`offsetTop` is the wrong coordinate space** for measuring visible rows.
+  `#list` is not positioned, so `offsetTop` is relative to the panel while
+  `scrollTop`/`clientHeight` are relative to the list — 6 visible rows measured
+  as 2, and `d` stepped one row instead of three. `getBoundingClientRect()` on
+  both sides fixes it and folds the scroll offset in for free.
+- **`mode` initialises to `'fuzzy'` even though letter mode is the default.**
+  That value only covers the window before the bootstrap round-trip resolves;
+  init promotes to letter mode once labels exist. Starting in letter mode would
+  swallow anything typed during that window, since letter mode consumes every
+  single-character press.
 
 Two things, and they need each other:
 
@@ -78,6 +93,14 @@ the command palette's dominant path, and it is the price of the uniform model �
 accepted deliberately, because the alternative is the invisible asymmetry that
 prompted this note. Partly offset: in letter mode a command is reachable in two
 keystrokes via its badge, against `/` plus three or four characters of its name.
+
+**Letter mode shows what you type, overriding `badgeDisplayMode`.** A row
+labelled "ocean river" that you activate by typing `or` has to render `or`.
+Outside letter mode the badge is purely a voice handle, so the user's shared
+letter/word/expand preference governs again. This generalizes the tab-marker
+precedent — letters primary, voice derived — and it is why the frame keeps a
+`typedLabels` map ("what you type to pick this row") distinct from `codewords`
+("what you say"): one map, no scope branch in the typing path.
 
 **Letter mode works for badges because the tiers are already uniform-length.**
 `assignCodewords` gives every row in an open a badge of the *same* length —
@@ -317,14 +340,31 @@ file today — the pure helpers are where the coverage goes.
 
 ## Open questions
 
-1. **A tab's handle differs between scopes.** `palette-page.ts:588-597` gives
-   tabs their stable marks in `tabs` scope but positional `assignCodewords`
-   badges in `all` scope — so with letter mode everywhere, the same tab is typed
-   as `f` in one palette and `qr` in another. Pre-existing, newly visible.
-   Probably wants `all` scope to prefer a tab's mark, which means mixing mark and
-   badge label lengths in one open — and that reopens chop safety, so it is not a
-   one-liner. Decide before phase 2 ships.
-2. **`MARKER_SINGLES` retune — raising it is a *bad* trade.** All five reserved
+1. ~~**A tab's handle differs between scopes.**~~ **RESOLVED — leave it.** A tab is
+   typed as `f` in the tab palette and as its positional badge in `all` scope.
+   Converging them means letting a 1-letter mark and a 2-letter badge coexist in
+   one open, which breaks the uniform-length invariant that IS the chop-safety
+   mechanism for voice (`codewords.ts:9-21`): a spoken 1-word mark would also be
+   the first word of some 2-word badge. That trades a live correctness property
+   for cross-scope consistency in a place the user never needs it — the tab
+   palette is where memorized marks live, while `all` is a launcher you search.
+   And the cost is bounded to memory across scopes, not confusion within one:
+   both palettes render the label you must type on the row you are looking at.
+   Revisit only if a disjoint-first-letter partition between the two pools ever
+   becomes cheap, which the deleted `SINGLES` knob suggests it is not.
+2. **Badges don't read in visual order in grouped scopes.** `assignAndPublish`
+   assigns over `[...tabItems, ...commandItems, ...bookmarkItems]`, but
+   `filterPalette` renders commands and bookmarks REGROUPED by category/folder —
+   so the command palette shows `ab`, `ac`, `br`, `bs`… down the list instead of
+   running in sequence. Pre-existing (assignment order never mattered while
+   badges were spoken-only) and newly visible now that letter mode paints them as
+   typeable labels. `codewords.ts` documents assignment as "in empty-state row
+   order", which the grouped scopes do not satisfy — so the doc and the code
+   disagree and the doc is the one that's right. The fix is to assign over the
+   empty-state SECTIONED order, but that changes the published voice entries too,
+   so it wants its own change rather than riding along here. Purely cosmetic; no
+   label is ambiguous, and every row shows the label that picks it.
+3. **`MARKER_SINGLES` retune — raising it is a *bad* trade.** All five reserved
    letters sit in the head, so 16 now yields 11 singles. The instinct is to raise
    it; the arithmetic says don't, because letters moved head-ward cost the pair
    pool quadratically:
@@ -340,10 +380,10 @@ file today — the pure helpers are where the coverage goes.
    shifts the optimum *down*. 16 is a defensible middle; changing it wants real
    peak-tab-count data, which the open question in `DESIGN_TAB_MARKERS.md` also
    wants — resolve them together, not here.
-3. **Does the footer indicator need a first-run nudge?** The `/`-to-search step is
+4. **Does the footer indicator need a first-run nudge?** The `/`-to-search step is
    the one genuinely new thing a returning user must learn. A persistent footer
    hint may be enough; if not, the answer is a one-time line, not a tour.
-4. **Keymap editor warning text.** `DESIGN_KEYMAP_CONFIG.md` warns on bare
+5. **Keymap editor warning text.** `DESIGN_KEYMAP_CONFIG.md` warns on bare
    lowercase letters because they type codewords in always-mode. After this,
    binding vertical nav to a bare letter also shrinks the palette pools — worth a
    clause, low priority.

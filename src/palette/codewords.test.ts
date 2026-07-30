@@ -93,6 +93,74 @@ describe('assignCodewords', () => {
   });
 });
 
+// notes/DESIGN_PALETTE_KEYBOARD_NAV.md — badges are TYPED in letter mode, so the
+// letters the palette uses for list navigation are withheld from assignment.
+describe('assignCodewords — reserved nav letters', () => {
+  const SHIPPING = new Set(['d', 'g', 'j', 'k', 'u']);
+  /** The alphabet words those letters stand for, by A–Z position. */
+  const RESERVED_WORDS = ['drum', 'grove', 'jade', 'kite', 'urn'];
+
+  it('never uses a reserved letter’s word, at any tier', () => {
+    for (const n of [5, 21, 40, 500]) {
+      for (const cw of assignCodewords(ids(n), ALPHABET, SHIPPING).values()) {
+        for (const w of cw.split(' ')) expect(RESERVED_WORDS).not.toContain(w);
+      }
+    }
+  });
+
+  it('shifts the tier boundary to the eligible count (21 singles, not 26)', () => {
+    expectUniform(assignCodewords(ids(21), ALPHABET, SHIPPING), 1);
+    expectUniform(assignCodewords(ids(22), ALPHABET, SHIPPING), 2);
+  });
+
+  it('keeps badges uniform-length, so chop safety survives reservation', () => {
+    expectUniform(assignCodewords(ids(100), ALPHABET, SHIPPING), 2);
+    expectUniform(assignCodewords(ids(500), ALPHABET, SHIPPING), 3);
+  });
+
+  it('is prefix-free in letter form (uniform length ⇒ typeable)', () => {
+    const labels = [...assignCodewords(ids(100), ALPHABET, SHIPPING).values()]
+      .map((cw) => codewordDisplay(cw, ALPHABET, 'letter'));
+    expect(new Set(labels).size).toBe(labels.length);
+    for (const a of labels) {
+      for (const b of labels) {
+        if (a !== b) expect(b.startsWith(a)).toBe(false);
+      }
+    }
+  });
+
+  it('still maps letters through the FULL 26 — the alphabet is a dictionary', () => {
+    // The trap this guards: shortening `alphabet` instead of filtering the
+    // unranking would silently bind every badge to the wrong letter.
+    const m = assignCodewords(ids(3), ALPHABET, SHIPPING);
+    const [first] = [...m.values()];
+    expect(first).toBe('arch'); // 'a' isn't reserved, so row 0 still starts there
+    expect(codewordDisplay(first, ALPHABET, 'letter')).toBe('a');
+  });
+
+  it('reserving nothing is identical to the unreserved assignment', () => {
+    expect([...assignCodewords(ids(40), ALPHABET, new Set()).values()])
+      .toEqual([...assignCodewords(ids(40), ALPHABET).values()]);
+  });
+
+  it('degrades to keyboard-only rather than throwing if nearly all is reserved', () => {
+    const nearly = new Set(
+      ALPHABET.map((_, i) => String.fromCharCode(97 + i)).slice(0, 24),
+    );
+    expect(assignCodewords(ids(5), ALPHABET, nearly).size).toBe(0);
+  });
+});
+
+describe('codewordLength / maxVoiceRows with a reduced alphabet', () => {
+  it('scales the tiers to the eligible count', () => {
+    expect(codewordLength(21, 21)).toBe(1);
+    expect(codewordLength(22, 21)).toBe(2);
+    expect(codewordLength(21 * 20, 21)).toBe(2);
+    expect(codewordLength(21 * 20 + 1, 21)).toBe(3);
+    expect(maxVoiceRows(21)).toBe(21 * 20 * 19);
+  });
+});
+
 describe('classifyMarkInput (tab palette letter-jump)', () => {
   // Prefix-free marks: singles from the head, pairs from a disjoint tail.
   const marks = ['a', 'b', 'c', 'iz', 'io', 'zx'];
