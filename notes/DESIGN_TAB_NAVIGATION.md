@@ -254,6 +254,15 @@ Phases: (1) window sections + search annotation, extension-only.
 while connected; also the natural home for teaching "stash tab desk 3"
 in context later.
 
+**Amendment (same day, field): the tab palette is a SWITCHER — strip
+order, cursor on the current tab.** The active-tab-last MRU order read as
+"out of order" the moment the sections made the list spatial. Shift+T now
+mirrors the strip exactly (active tab in place, no Previous pin) and the
+selection OPENS on the current tab's row, so j/k step to strip neighbors.
+The full palette keeps MRU + previous-pin: launcher semantics (Enter =
+back to what you were doing). Two scopes, two contracts, two orders —
+deliberately.
+
 ## Tab verbs (Vimium parity) — shipped 2026-07-01
 
 The mechanical verbs that need no palette. Every verb has both a keyboard
