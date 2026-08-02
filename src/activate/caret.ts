@@ -976,7 +976,7 @@ export class CaretController {
       // WHAT was copied, not just how much (notes/DESIGN_VOICE_SELECTION_BOUNDS.md).
       const preview = text.replace(/\s+/g, ' ').trim().slice(0, 40);
       const ellipsis = text.trim().length > 40 ? '…' : '';
-      flashToast(`Yanked ${n} character${n === 1 ? '' : 's'}: ${preview}${ellipsis}`);
+      flashToast(`Copied ${n} character${n === 1 ? '' : 's'}: ${preview}${ellipsis}`);
     });
   }
 }
