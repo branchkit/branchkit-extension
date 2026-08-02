@@ -159,16 +159,19 @@ let reservedLetters: ReadonlySet<string> = new Set();
 /** Note shown above the rows when the effective query isn't the box text. */
 let queryNote = '';
 
-function send(action: Extract<Message, { type: 'PALETTE_ACTION' }>['action']): void {
-  chrome.runtime.sendMessage({ type: 'PALETTE_ACTION', action } as Message).catch(() => {});
+function send(
+  action: Extract<Message, { type: 'PALETTE_ACTION' }>['action'],
+  where?: 'here' | 'blank' | 'stash',
+): void {
+  chrome.runtime.sendMessage({ type: 'PALETTE_ACTION', action, where } as Message).catch(() => {});
 }
 
 function close(): void {
   send({ kind: 'close' });
 }
 
-function dispatchItem(item: PaletteItem | undefined): void {
-  if (item) send(item.dispatch);
+function dispatchItem(item: PaletteItem | undefined, where?: 'here' | 'blank' | 'stash'): void {
+  if (item) send(item.dispatch, where);
 }
 
 /**
@@ -701,7 +704,9 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault(); moveSelection(-1); return;
   }
   if (e.key === 'Enter') {
-    e.preventDefault(); dispatchItem(flat[selected]); return;
+    // Shift+Enter = "here": navigate this tab instead of the new-tab
+    // default. Same modifier meaning as the spoken "here" + badge.
+    e.preventDefault(); dispatchItem(flat[selected], e.shiftKey ? 'here' : undefined); return;
   }
 
   // The Escape ladder, one rule for every scope

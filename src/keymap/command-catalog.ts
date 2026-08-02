@@ -706,6 +706,14 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     description: 'Open a palette bookmark in a background tab — the page you are on keeps focus (“stash” + its badge).',
     voice: [{ pattern: 'stash {palette}' }],
     voiceContext: 'palette' },
+  // The third disposition, completing the set: navigate THIS tab instead of
+  // opening one. The default stays new-tab everywhere — one rule, and the
+  // safe one (an unwanted tab closes for free; a replaced page loses its
+  // state) — "here" is the explicit "this tab is done, take it somewhere".
+  { id: 'palette_select_here', label: 'Open palette row in this tab', group: 'Palette', mappable: false, params: [],
+    description: 'Navigate the current tab to a palette row — no new tab (“here” + its badge, or Shift+Enter).',
+    voice: [{ pattern: 'here {palette}' }],
+    voiceContext: 'palette' },
   // Same word as hint-hide, disambiguated by context: palette open = only
   // this one is eligible (exclusive tag); palette closed = only the hint one.
   { id: 'palette_dismiss', label: 'Dismiss palette', group: 'Palette', mappable: false, params: [],

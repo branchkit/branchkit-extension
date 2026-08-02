@@ -274,7 +274,7 @@ export type Message =
   // Palette page (extension iframe) → background. A selection or an explicit
   // close. Background closes the overlay in the sender's tab first, then
   // executes: switch_tab directly, command via PALETTE_COMMAND to the tab.
-  | { type: 'PALETTE_ACTION'; action: PaletteDispatch | { kind: 'close' } }
+  | { type: 'PALETTE_ACTION'; action: PaletteDispatch | { kind: 'close' }; where?: 'here' | 'blank' | 'stash' }
   // Background → content (top frame). Remove the palette iframe and restore
   // focus to the page.
   | { type: 'PALETTE_CLOSE' }

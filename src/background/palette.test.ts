@@ -139,6 +139,21 @@ describe('query rows (URL/search — codewords at open, dispatch per keystroke)'
     expect(chrome.tabs.create).not.toHaveBeenCalled();
   });
 
+  it('Shift+Enter rides PALETTE_ACTION as where=here and navigates in place', async () => {
+    const palette = await loadPalette();
+    palette.paletteMessageHandlers.PALETTE_ACTION(
+      {
+        type: 'PALETTE_ACTION',
+        action: { kind: 'navigate', url: 'https://example.com/' },
+        where: 'here',
+      } as never,
+      { tab: { id: 5 } } as never,
+    );
+    await flush();
+    expect(chrome.tabs.update).toHaveBeenCalledWith(5, { url: 'https://example.com/' });
+    expect(chrome.tabs.create).not.toHaveBeenCalled();
+  });
+
   it('non-query ids in an update are refused (map integrity)', async () => {
     const palette = await loadPalette();
     await palette.publishPaletteVoice(5, [], rows);

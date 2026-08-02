@@ -106,8 +106,8 @@ export async function clearPaletteVoice(reason: string): Promise<void> {
 
 /** Where a navigate dispatch (bookmark, URL, or web-search row) lands: a new
  *  focused tab (DEFAULT), a new background tab ("stash"), or the origin tab
- *  itself ("here" — reachable through this API, but no verb or keybind
- *  currently asks for it). Non-navigate rows ignore it. */
+ *  itself ("here" — spoken "here" + badge, or Shift+Enter). Non-navigate
+ *  rows ignore it. */
 export type OpenWhere = 'here' | 'blank' | 'stash';
 
 // Command palette selection (Layer 2). Always close the overlay in the origin
@@ -209,7 +209,7 @@ export const paletteMessageHandlers: Record<string, MessageHandler> = {
    */
   PALETTE_ACTION: (message, sender) => {
     if (!message.action?.kind) return;
-    void handlePaletteAction(message.action, sender.tab?.id);
+    void handlePaletteAction(message.action, sender.tab?.id, message.where ?? 'blank');
   },
 
   /**

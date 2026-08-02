@@ -163,6 +163,12 @@ export function handleSSEEvent(data: any): void {
     handlePaletteVoiceSelect(data.params?.row_id, 'stash');
     return;
   }
+  // "here" + badge: navigate the origin tab itself — the explicit opt-out
+  // of the new-tab default.
+  if (data.action === 'palette_select_here') {
+    handlePaletteVoiceSelect(data.params?.row_id, 'here');
+    return;
+  }
   if (data.action === 'palette_dismiss') {
     handlePaletteVoiceDismiss();
     return;

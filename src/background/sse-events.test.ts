@@ -118,8 +118,10 @@ describe('handleSSEEvent — answered HERE, never forwarded', () => {
     handleSSEEvent({ action: 'palette_select', params: { row_id: 'r1' } });
     handleSSEEvent({ action: 'palette_select_newtab', params: { row_id: 'r2' } });
     handleSSEEvent({ action: 'palette_select_background', params: { row_id: 'r3' } });
+    handleSSEEvent({ action: 'palette_select_here', params: { row_id: 'r4' } });
     handleSSEEvent({ action: 'palette_dismiss' });
-    expect(handlePaletteVoiceSelect.mock.calls).toEqual([['r1'], ['r2', 'blank'], ['r3', 'stash']]);
+    expect(handlePaletteVoiceSelect.mock.calls)
+      .toEqual([['r1'], ['r2', 'blank'], ['r3', 'stash'], ['r4', 'here']]);
     expect(handlePaletteVoiceDismiss).toHaveBeenCalledTimes(1);
     notForwarded();
   });
