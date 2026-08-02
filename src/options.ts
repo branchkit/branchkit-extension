@@ -45,6 +45,11 @@ import {
 } from './badge-settings-storage';
 import { initKeymapEditor } from './keymap/keymap-options';
 import { loadKeyboardRules, saveKeyboardRules, type KeyboardRule } from './keymap/keyboard-rules';
+import {
+  DEFAULT_SEARCH_TEMPLATE,
+  loadSearchTemplate,
+  saveSearchTemplate,
+} from './search-engine-storage';
 
 // --- State ---
 
@@ -669,9 +674,36 @@ async function init(): Promise<void> {
   });
 
   await initBadgeSettings();
+  await initSearchEngine();
   await initKeymapEditor();
   await initKeyboardRules();
   initSideNav();
+}
+
+// --- Search engine (palette web-search row template) ---
+
+async function initSearchEngine(): Promise<void> {
+  const input = document.getElementById('search-template') as HTMLInputElement | null;
+  const note = document.getElementById('search-template-note') as HTMLDivElement | null;
+  if (!input || !note) return;
+  input.placeholder = DEFAULT_SEARCH_TEMPLATE;
+  input.value = await loadSearchTemplate();
+  const renderNote = (): void => {
+    // Same tolerance as the palette (searchUrl): no %s appends the query, so
+    // warn rather than reject — the row keeps working either way.
+    note.textContent = input.value.trim() !== '' && !input.value.includes('%s')
+      ? 'No %s in the template — the query will be appended to the end.'
+      : `Blank restores the default (${DEFAULT_SEARCH_TEMPLATE}).`;
+  };
+  renderNote();
+  let saveTimer: ReturnType<typeof setTimeout> | null = null;
+  input.addEventListener('input', () => {
+    renderNote();
+    // Debounced like pattern input — storage.sync write quota is per-minute,
+    // and a keystroke per write would burn through it.
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => saveSearchTemplate(input.value), PATTERN_SAVE_DEBOUNCE_MS);
+  });
 }
 
 // --- Key rules (per-site keyboard pass-through / disable) ---

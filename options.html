@@ -314,6 +314,7 @@
     <a href="#sec-keyboard-rules" class="side-link">Key rules</a>
     <a href="#sec-keyboard" class="side-link">Keyboard shortcuts</a>
     <a href="#sec-badge" class="side-link">Badge appearance</a>
+    <a href="#sec-search" class="side-link">Search engine</a>
   </nav>
   <div class="container">
     <h1 id="sec-rules" class="sec"><img src="icons/icon48.png" alt="">Badge rules</h1>
@@ -609,6 +610,20 @@
       #bs-advanced summary { cursor: pointer; font-size: 13px; color: var(--fg-muted); }
       #bs-advanced[open] summary { margin-bottom: 10px; }
     </style>
+
+    <h1 id="sec-search" class="sec" style="margin-top: 40px">Search engine</h1>
+    <div class="subtitle">
+      Where the palette's "Search for …" row goes. A URL template —
+      <code>%s</code> is replaced with your query.
+    </div>
+    <div class="rule" style="padding: 16px">
+      <div class="badge-row">
+        <label for="search-template">URL template</label>
+        <input type="text" id="search-template" spellcheck="false"
+               style="flex: 1; max-width: 420px; font: inherit; padding: 3px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--card)">
+      </div>
+      <div class="bs-note" id="search-template-note"></div>
+    </div>
 
     <template id="rule-template">
       <div class="rule">

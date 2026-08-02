@@ -25,7 +25,11 @@ export type PaletteDispatch =
   | { kind: 'command'; command: string; params?: Record<string, string> };
 
 export interface PaletteItem {
-  source: PaletteSourceId;
+  /** `'query'` marks a query-derived row (DESIGN_PALETTE_URL_SEARCH.md) — a
+   *  different structural role from the enumerated sources: synthesized from
+   *  the query itself, appended after filtering, never ranked, and never part
+   *  of the corpus `resolvePaletteQuery` recovers against. */
+  source: PaletteSourceId | 'query';
   /** Stable row id ("tab:12", "cmd:scroll_down") — the future voice-codeword
    *  anchor, so a row keeps its badge across re-renders. */
   id: string;
@@ -46,7 +50,7 @@ export interface PaletteItem {
 }
 
 export interface PaletteSection {
-  source: PaletteSourceId;
+  source: PaletteSourceId | 'query';
   label: string;
   items: PaletteItem[];
 }
@@ -373,4 +377,49 @@ export function filterPalette(
     build('commands', 'Commands', commandItems);
   }
   return sections;
+}
+
+/** The query substituted into an engine template. No `%s` in the template is
+ *  tolerated (append) rather than validated — a broken setting must still
+ *  produce a working search, not a dead row. */
+export function searchUrl(template: string, query: string): string {
+  const q = encodeURIComponent(query);
+  return template.includes('%s') ? template.replace('%s', q) : template + q;
+}
+
+/**
+ * The web-search row (DESIGN_PALETTE_URL_SEARCH.md phase 1): a query-derived
+ * section the caller appends AFTER `resolvePaletteQuery` and `filterPalette`
+ * have run. Null at empty query — the browse state and its Enter-lands-on-
+ * previous-tab default must not grow a row.
+ *
+ * Two properties are load-bearing, one structural and one defensive:
+ * - the caller never passes this row to `resolvePaletteQuery` — a row that
+ *   matches every query would make `hits()` universally true and silently
+ *   kill both of its recoveries (the appended-utterance retry and the
+ *   phonetic correction);
+ * - `words` is empty, so even a leaked row scores 0 and can't match. Belt
+ *   under the suspenders, tested as such.
+ *
+ * Position (last) is the caller's job: this row is the fallthrough, not the
+ * guess — a ranked match above it is usually right.
+ */
+export function buildSearchSection(query: string, template: string): PaletteSection | null {
+  const q = query.trim();
+  if (q === '') return null;
+  const url = searchUrl(template, q);
+  return {
+    source: 'query',
+    label: 'Web',
+    items: [{
+      source: 'query',
+      id: 'query:search',
+      title: `Search for “${q}”`,
+      subtitle: hostOf(url),
+      keys: [],
+      voice: [],
+      words: [],
+      dispatch: { kind: 'open_bookmark', url },
+    }],
+  };
 }

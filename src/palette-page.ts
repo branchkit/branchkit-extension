@@ -24,8 +24,10 @@ import { applyNavIntent } from './palette/nav';
 import { overridesFromList, type OverrideRecord } from './keymap/command-override';
 import {
   buildTabItems, buildCommandItems, buildBookmarkItems, filterPalette, resolvePaletteQuery,
+  buildSearchSection,
   type PaletteItem, type PaletteSection, type PaletteTab, type PaletteBookmark,
 } from './palette/model';
+import { DEFAULT_SEARCH_TEMPLATE, loadSearchTemplate } from './search-engine-storage';
 import {
   assignCodewords, codewordDisplay, classifyMarkInput, codewordToken, splitSpokenBadge,
 } from './palette/codewords';
@@ -93,6 +95,8 @@ let tabItems: PaletteItem[] = [];
 let commandItems: PaletteItem[] = [];
 let bookmarkItems: PaletteItem[] = [];
 let bookmarksError: string | undefined;
+/** Engine template for the web-search row (search-engine-storage.ts). */
+let searchTemplate = DEFAULT_SEARCH_TEMPLATE;
 /** Flat render order of the current sections — the selection index space. */
 let flat: PaletteItem[] = [];
 let selected = 0;
@@ -477,9 +481,23 @@ function renderCurrent(): void {
     phrase.seed(resolved.query);
   }
   queryNote = resolved.reason === 'phonetic' ? `Showing results for “${resolved.query}”` : '';
-  render(filterPalette(
+  const sections = filterPalette(
     tabItems, commandItems, resolved.query, scope === 'commands', bookmarkItems,
-  ));
+  );
+  // Web-search row, LAST (fallthrough, not the guess), full + bookmarks scopes
+  // only — tabs and commands are closed sets by intent. Appended after
+  // resolvePaletteQuery so the row can't enter its corpus (a row matching
+  // every query would silently kill both recoveries above — the note's one
+  // load-bearing exclusion). Searches the BOX text, not the resolved query:
+  // a phonetic snap corrects toward what exists in the palette, but the web
+  // has no such corpus — the user's own words are the right thing to search.
+  // (dictated_retry re-seeds the box to the utterance above, so box text is
+  // already the right words there too.)
+  if (scope === 'all' || scope === 'bookmarks') {
+    const search = buildSearchSection(queryInput.value, searchTemplate);
+    if (search) sections.push(search);
+  }
+  render(sections);
 }
 
 function moveSelection(delta: number): void {
@@ -867,14 +885,16 @@ function renderModeChip(): void {
 
 async function init(): Promise<void> {
   queryInput.focus();
-  const [boot, keymap, stored, sync, overridesResp, aliasesResp] = await Promise.all([
+  const [boot, keymap, stored, sync, overridesResp, aliasesResp, engine] = await Promise.all([
     loadBootstrap(),
     loadKeymap().catch(() => []),
     chrome.storage.local.get('alphabet').catch(() => ({} as Record<string, unknown>)),
     chrome.storage.sync.get('badgeDisplayMode').catch(() => ({} as Record<string, unknown>)),
     chrome.runtime.sendMessage({ type: 'GET_COMMAND_OVERRIDES' }).catch(() => undefined),
     chrome.runtime.sendMessage({ type: 'GET_COMMAND_ALIASES' }).catch(() => undefined),
+    loadSearchTemplate().catch(() => DEFAULT_SEARCH_TEMPLATE),
   ]);
+  searchTemplate = engine;
   const overrides = overridesFromList(
     ((overridesResp as { overrides?: OverrideRecord[] } | undefined)?.overrides) ?? [],
   );

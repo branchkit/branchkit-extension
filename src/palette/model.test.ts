@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   searchWords, buildTabItems, buildCommandItems, buildBookmarkItems, scoreItem, filterPalette,
-  resolvePaletteQuery,
+  resolvePaletteQuery, searchUrl, buildSearchSection,
   type PaletteTab, type PaletteItem,
 } from './model';
 import type { CommandMeta, KeymapEntry } from '../keymap/command-catalog';
@@ -278,5 +278,60 @@ describe('resolvePaletteQuery', () => {
   it('does not rewrite a typed query the user is still building', () => {
     // "gith" prefix-matches, so no fallback runs even though it is incomplete.
     expect(resolvePaletteQuery('gith', '', items)).toEqual({ query: 'gith', reason: null });
+  });
+});
+
+describe('searchUrl', () => {
+  it('substitutes the encoded query for %s', () => {
+    expect(searchUrl('https://duckduckgo.com/?q=%s', 'rust book'))
+      .toBe('https://duckduckgo.com/?q=rust%20book');
+  });
+
+  it('appends when the template has no %s (broken setting still searches)', () => {
+    expect(searchUrl('https://example.com/search?q=', 'a&b'))
+      .toBe('https://example.com/search?q=a%26b');
+  });
+});
+
+describe('buildSearchSection', () => {
+  const TEMPLATE = 'https://www.google.com/search?q=%s';
+
+  it('is absent at empty query — the browse state must not grow a row', () => {
+    expect(buildSearchSection('', TEMPLATE)).toBeNull();
+    expect(buildSearchSection('   ', TEMPLATE)).toBeNull();
+  });
+
+  it('builds one navigate-dispatch row from the trimmed query', () => {
+    const s = buildSearchSection(' quantum papers ', TEMPLATE)!;
+    expect(s.source).toBe('query');
+    expect(s.items).toHaveLength(1);
+    expect(s.items[0].id).toBe('query:search');
+    expect(s.items[0].title).toBe('Search for “quantum papers”');
+    expect(s.items[0].subtitle).toBe('www.google.com');
+    expect(s.items[0].dispatch)
+      .toEqual({ kind: 'open_bookmark', url: 'https://www.google.com/search?q=quantum%20papers' });
+  });
+
+  // REGRESSION GUARDS (DESIGN_PALETTE_URL_SEARCH.md): resolvePaletteQuery's
+  // recoveries fire only when the literal box text matches NOTHING. A row
+  // that matches every query would make hits() universally true and silently
+  // kill both. The structural fix is that the caller appends the row after
+  // resolution; these tests pin the defensive layer under it — the row can't
+  // match even if it leaks into the corpus.
+
+  it('scores 0 for every query — unrankable by construction', () => {
+    const row = buildSearchSection('github', TEMPLATE)!.items[0];
+    expect(row.words).toEqual([]);
+    expect(scoreItem(row, ['github'])).toBe(0);
+    expect(scoreItem(row, ['search'])).toBe(0); // not even its own title words
+  });
+
+  it('leaves both recoveries live even when leaked into the corpus', () => {
+    const items = buildTabItems(TABS, [], null);
+    const leaked = [...items, buildSearchSection('gmailgithub', TEMPLATE)!.items[0]];
+    expect(resolvePaletteQuery('gmailgithub', 'github', leaked))
+      .toEqual({ query: 'github', reason: 'dictated_retry' });
+    const r = resolvePaletteQuery('rest book', '', leaked);
+    expect(r).toEqual({ query: 'rust book', reason: 'phonetic' });
   });
 });
