@@ -19,20 +19,21 @@ import {
   type PaletteCodewordWire,
 } from '../palette/relay';
 import { PaletteHolder } from '../palette/palette-holder';
-import { reportDispatchResult } from '../plugin/resolve';
+import { bkLog } from '../debug/bk-log';
 import { dispatcher } from '../core/singletons';
 import { modes } from '../core/modes';
 import type { Message } from '../types';
 import type { MessageHandler, MessageOf } from '../core/message-router';
 
-/** Palette lifecycle breadcrumbs → the plugin's dispatch-result log. The
- * palette frame itself can't reach the plugin (no privileges on Firefox), so
- * the host reports for both — grep actuator.log for `palette_diag`. */
+/** Palette lifecycle breadcrumbs → `plugin-logs/browser.log` (BK_PALETTE),
+ * where `dev plog browser` actually looks. The palette frame itself can't
+ * reach the plugin (no privileges on Firefox), so the host reports for both.
+ * These used to ride reportDispatchResult — a category error (they are not
+ * dispatch outcomes) that routed them to plugin stderr → actuator.log, the
+ * one log the retrieval tooling doesn't search; a 2026-08-02 field debug ran
+ * the right plog query and concluded the channel was dead. */
 function paletteDiag(detail: string): void {
-  reportDispatchResult({
-    action: 'palette_diag', codeword: '', resolution: 'none', elem_tag: '',
-    taken: 'skipped', ok: true, frame: location.origin, detail, fp: '',
-  });
+  bkLog('BK_PALETTE', { msg: detail, frame: location.origin });
 }
 
 const HOST_ATTR = 'data-branchkit-palette';
