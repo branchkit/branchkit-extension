@@ -60,8 +60,13 @@ let aliases: OverrideRecord[] = [];
 
 let keymapEl: HTMLDivElement;
 
-const MAPPABLE = COMMAND_CATALOG.filter((c) => c.mappable);
-const GROUPS = [...new Set(MAPPABLE.map((c) => c.group))];
+// Every command the editor lists: key-bindable ones AND voice-only ones
+// (mappable:false but spoken — the palette/hint landing verbs, caret verbs,
+// escape…). mappable gates the KEY column only; the phrase is editable either
+// way — "not key-bindable" and "phrase not customizable" are different roles,
+// and conflating them left "here"/"stash"/"blank" with no editing surface.
+const LISTED = COMMAND_CATALOG.filter((c) => c.mappable || (c.voice?.length ?? 0) > 0);
+const GROUPS = [...new Set(LISTED.map((c) => c.group))];
 
 /** " (back to J)" / " (back to unbound)" — names the state a reset returns to,
  *  so the control says what it will do rather than just that it undoes. */
@@ -121,7 +126,7 @@ function render(): void {
     // catalog order holds within each partition. Keeps "No key bound" cards from
     // dominating the top of a group (e.g. Hints' show/hide verbs sit below the
     // bound Ctrl+S toggle + f hint-mode).
-    const inGroup = MAPPABLE.filter((c) => c.group === group)
+    const inGroup = LISTED.filter((c) => c.group === group)
       .sort((a, b) => Number(isBound(b)) - Number(isBound(a)));
     for (const cmd of inGroup) {
       keymapEl.appendChild(renderCommand(cmd, dupes));
@@ -149,6 +154,20 @@ function renderCommand(meta: CommandMeta, dupes: Set<string>): HTMLElement {
 
   const keys = document.createElement('div');
   keys.className = 'km-keys';
+  // Voice-only commands (mappable:false — the target is a runtime spoken
+  // value) are listed for their EDITABLE PHRASE; the keys cell says why it's
+  // empty and offers nothing to click. No keyboard glyph — there is no
+  // "press this" to mark.
+  if (!meta.mappable) {
+    const none = document.createElement('span');
+    none.className = 'km-no-shortcut';
+    none.textContent = 'voice only';
+    none.title = 'This command takes a spoken value (a badge word), so it has no key form.';
+    keys.appendChild(none);
+    row.appendChild(keys);
+    if (meta.voice && meta.voice.length > 0) row.appendChild(renderVoiceRow(meta));
+    return row;
+  }
   keys.appendChild(keyGlyph()); // the mic's twin — "press this" beside "say this"
   // Unbound is a valid, permanent state — the command still exists (and stays
   // voice-reachable). Show a calm "no shortcut" so it reads as optional, not
