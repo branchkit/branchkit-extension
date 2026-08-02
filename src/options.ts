@@ -57,7 +57,7 @@ import {
 } from './palette-open-storage';
 import { DISPOSITIONS, type DispositionKey } from './keymap/command-catalog';
 import {
-  effectiveDispositionWord, saveDispositionWord, onVoiceCustomizationsChanged,
+  effectiveDispositionWord, navigateToSharedWord, onVoiceCustomizationsChanged,
 } from './keymap/keymap-options';
 import { micGlyph, keyGlyph } from './render/mic-glyph';
 
@@ -751,7 +751,7 @@ async function initPaletteOpen(): Promise<void> {
       keys.appendChild(document.createTextNode(isDefault ? `Enter · ${KEYS[v]}` : KEYS[v]));
       const voice = cell(micGlyph());
       if (isDefault) voice.appendChild(document.createTextNode('the badge word — or'));
-      voice.appendChild(wordChip(v, word, renderNote));
+      voice.appendChild(wordChip(v, word));
       voice.appendChild(document.createTextNode('+ badge'));
       row.append(label, keys, voice);
       note.appendChild(row);
@@ -768,42 +768,17 @@ async function initPaletteOpen(): Promise<void> {
   });
 }
 
-/** The editable spoken word: a chip that swaps to an inline input, saving
- *  through the keymap editor's fan-out — the same one edit an in-editor
- *  rename is, just reachable where the palette teaches the word. */
-function wordChip(v: PaletteOpenDefault, word: string, rerender: () => void): HTMLElement {
+/** The spoken word as a projection chip: renaming happens in ONE place (the
+ *  keymap section's "Shared words" card), so clicking navigates there — the
+ *  linkage is shown, not fanned out invisibly from here. */
+function wordChip(v: PaletteOpenDefault, word: string): HTMLElement {
   const chip = document.createElement('button');
   chip.type = 'button';
   chip.className = 'km-voice-phrase shared';
   if (word !== DISPOSITIONS[OPEN_DISPOSITION[v]].word) chip.classList.add('changed');
   chip.textContent = `\u201c${word}\u201d`;
-  chip.title = 'Click to change what you say — on every surface that speaks it.';
-  chip.addEventListener('click', () => {
-    const input = document.createElement('input');
-    input.type = 'text';
-    input.value = word;
-    input.className = 'km-voice-phrase';
-    input.style.width = `${Math.max(word.length + 2, 6)}ch`;
-    input.setAttribute('aria-label', 'Spoken word');
-    chip.replaceWith(input);
-    input.focus();
-    input.select();
-    let done = false;
-    const finish = (): void => { done = true; rerender(); };
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { e.preventDefault(); finish(); return; }
-      if (e.key !== 'Enter') return;
-      e.preventDefault();
-      if (done) return;
-      void saveDispositionWord(OPEN_DISPOSITION[v], input.value).then((err) => {
-        if (err === null) { finish(); return; }
-        input.setCustomValidity(err);
-        input.reportValidity();
-      });
-    });
-    input.addEventListener('blur', () => { if (!done) finish(); });
-    input.addEventListener('input', () => input.setCustomValidity(''));
-  });
+  chip.title = 'A shared word — rename it once under “Shared words”. Click to go there.';
+  chip.addEventListener('click', () => navigateToSharedWord(OPEN_DISPOSITION[v]));
   return chip;
 }
 

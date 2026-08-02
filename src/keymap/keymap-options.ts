@@ -103,6 +103,109 @@ function updateSaveBar(): void {
   if (bar) bar.hidden = !isDirty();
 }
 
+/**
+ * The canonical editing place for shared words (DISPOSITIONS) — one card,
+ * one row per word: what it means, the editable word, who speaks it. Every
+ * other appearance of the word (member command cards, the palette table) is
+ * a projection that NAVIGATES here, so renames happen where the sharing is
+ * visible instead of fanning out invisibly from wherever you clicked.
+ */
+function renderSharedWords(): HTMLElement {
+  const card = document.createElement('div');
+  card.className = 'km-shared';
+  card.id = 'km-shared-words';
+  const head = document.createElement('div');
+  head.className = 'km-group-head';
+  head.textContent = 'Shared words';
+  card.appendChild(head);
+  const sub = document.createElement('div');
+  sub.className = 'km-shared-sub';
+  sub.textContent = 'One word, spoken on every surface that has the action — renaming it here renames it everywhere it appears below.';
+  card.appendChild(sub);
+  for (const key of Object.keys(DISPOSITIONS) as DispositionKey[]) {
+    const members = sharedMembers(key);
+    if (members.length === 0) continue;
+    const row = document.createElement('div');
+    row.className = 'km-row km-shared-row';
+    row.id = `km-shared-word-${key}`;
+    const label = document.createElement('span');
+    label.className = 'km-row-label';
+    label.textContent = `Opens ${DISPOSITIONS[key].label}`;
+    row.appendChild(label);
+    row.appendChild(sharedWordChip(key));
+    const usedBy = document.createElement('span');
+    usedBy.className = 'km-shared-used';
+    usedBy.textContent = members.map((m) => m.meta.label).join(' · ');
+    row.appendChild(usedBy);
+    card.appendChild(row);
+  }
+  return card;
+}
+
+/** The one editable word chip. Click to edit in place; Enter saves through
+ *  the fan-out, Escape/blur cancels; the shipped word resets all members. */
+function sharedWordChip(key: DispositionKey): HTMLElement {
+  const word = effectiveDispositionWord(key);
+  const wrap = document.createElement('span');
+  wrap.className = 'km-voice-item';
+  const chip = document.createElement('button');
+  chip.type = 'button';
+  chip.className = 'km-voice-phrase shared';
+  if (word !== DISPOSITIONS[key].word) chip.classList.add('changed');
+  chip.textContent = `\u201c${word}\u201d`;
+  chip.title = 'Click to change the word — everywhere it is spoken.';
+  chip.addEventListener('click', () => {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = word;
+    input.className = 'km-voice-phrase';
+    input.style.width = `${Math.max(word.length + 2, 6)}ch`;
+    input.setAttribute('aria-label', 'Shared spoken word');
+    chip.replaceWith(input);
+    input.focus();
+    input.select();
+    let done = false;
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); done = true; render(); return; }
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      if (done) return;
+      void saveDispositionWord(key, input.value).then((err) => {
+        if (err === null) { done = true; return; } // save re-renders
+        input.setCustomValidity(err);
+        input.reportValidity();
+      });
+    });
+    input.addEventListener('blur', () => { if (!done) { done = true; render(); } });
+    input.addEventListener('input', () => input.setCustomValidity(''));
+  });
+  wrap.appendChild(chip);
+  if (word !== DISPOSITIONS[key].word) {
+    const reset = document.createElement('button');
+    reset.type = 'button';
+    reset.className = 'km-voice-reset';
+    reset.textContent = '\u21ba';
+    reset.title = `Reset to \u201c${DISPOSITIONS[key].word}\u201d — everywhere.`;
+    reset.addEventListener('click', () => {
+      const m = sharedMembers(key)[0];
+      if (m) void resetVoicePattern(m.meta, m.vp); // fans out + re-renders
+    });
+    wrap.appendChild(reset);
+  }
+  return wrap;
+}
+
+/** Scroll the canonical card's row for `key` into view and flash it — the
+ *  landing half of every projection's click-to-go. */
+export function navigateToSharedWord(key: DispositionKey): void {
+  const row = document.getElementById(`km-shared-word-${key}`);
+  if (!row) return;
+  row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  row.classList.remove('km-flash');
+  void (row as HTMLElement).offsetWidth; // restart the animation
+  row.classList.add('km-flash');
+}
+
 // Other same-page projections of the voice customizations (the palette
 // landing-spot table) re-render off this — one owner of override state
 // (this module), N views. Fired from render(), which every mutation path
@@ -127,6 +230,9 @@ function render(): void {
     note.textContent = 'Voice phrases unavailable — BranchKit isn’t running. Start it to see what you can say for each command.';
     keymapEl.appendChild(note);
   }
+  // The canonical shared-words card leads: the projections below it (member
+  // command cards) navigate back up here.
+  keymapEl.appendChild(renderSharedWords());
   const dupes = duplicateKeys(keymap);
   const isBound = (c: CommandMeta): boolean => keymap.some((e) => e.command === c.id);
   for (const group of GROUPS) {
@@ -395,13 +501,23 @@ function fillVoicePatternItem(wrap: HTMLElement, meta: CommandMeta, vp: VoicePat
   phrase.className = 'km-voice-phrase';
   if (custom !== undefined) phrase.classList.add('changed');
   phrase.textContent = effective;
+  if (vp.sharedWord) {
+    // A shared word has ONE editing place — the "Shared words" card. This
+    // chip is a projection: clicking it takes you there, so the linkage is
+    // learned by using it rather than discovered after an invisible fan-out.
+    const key = vp.sharedWord;
+    phrase.classList.add('shared');
+    phrase.title = 'A shared word — rename it once under “Shared words”. Click to go there.';
+    phrase.addEventListener('click', () => navigateToSharedWord(key));
+    wrap.appendChild(phrase);
+    return;
+  }
   if (disconnected) {
     phrase.disabled = true;
   } else {
-    phrase.title = 'Click to change what you say.' + sharedTitle(meta, vp);
+    phrase.title = 'Click to change what you say';
     phrase.addEventListener('click', () => editVoicePattern(wrap, meta, vp));
   }
-  if (vp.sharedWord) phrase.classList.add('shared');
   wrap.appendChild(phrase);
 
   if (custom !== undefined && !disconnected) {
@@ -409,7 +525,7 @@ function fillVoicePatternItem(wrap: HTMLElement, meta: CommandMeta, vp: VoicePat
     reset.type = 'button';
     reset.className = 'km-voice-reset';
     reset.textContent = '↺';
-    reset.title = 'Reset to the default phrase.' + sharedTitle(meta, vp);
+    reset.title = 'Reset to the default phrase';
     reset.addEventListener('click', () => void resetVoicePattern(meta, vp));
     wrap.appendChild(reset);
   }
@@ -572,12 +688,12 @@ export function effectiveDispositionWord(key: DispositionKey): string {
 }
 
 /**
- * Save a disposition word from any projection: builds the first member's
- * pattern from the word, validates it, and runs the same fan-out as an
- * in-editor edit. Returns null on success or a user-facing error. A word
- * equal to the shipped default resets every member instead.
+ * Save a disposition word from the canonical "Shared words" card: builds the
+ * first member's pattern from the word, validates it, and runs the fan-out.
+ * Returns null on success or a user-facing error. A word equal to the
+ * shipped default resets every member instead.
  */
-export async function saveDispositionWord(key: DispositionKey, word: string): Promise<string | null> {
+async function saveDispositionWord(key: DispositionKey, word: string): Promise<string | null> {
   const members = sharedMembers(key);
   if (members.length === 0) return 'Unknown word.';
   const first = members[0];
@@ -594,13 +710,6 @@ export async function saveDispositionWord(key: DispositionKey, word: string): Pr
   return failures[0] ?? null;
 }
 
-/** "also spoken by: Open badge in new tab" — the linkage, named. */
-function sharedTitle(meta: CommandMeta, vp: VoicePattern): string {
-  if (!vp.sharedWord) return '';
-  const others = sharedMembers(vp.sharedWord).filter((m) => m.meta.id !== meta.id);
-  if (others.length === 0) return '';
-  return ` This word is shared with ${others.map((m) => `\u201c${m.meta.label}\u201d`).join(', ')} — changing it changes all of them.`;
-}
 
 /** The fan-out core shared by in-editor edits and external projections
  *  (saveDispositionWord): write each member's re-targeted override, mirror
