@@ -319,7 +319,7 @@ async function loadBootstrap(): Promise<PaletteBootstrap> {
     tabs: (resp.tabs ?? []).map((t) => ({
       // Strip the marker decoration from titles — the mark shows as the
       // row's badge, not baked into the title text.
-      tabId: t.tabId, title: stripTabMarker(t.title), url: t.url,
+      tabId: t.tabId, title: stripTabMarker(t.title), url: t.url, windowId: t.windowId,
     })),
     mru: resp.mru ?? [],
     marks: resp.marks ?? {},
@@ -1035,7 +1035,7 @@ async function init(): Promise<void> {
   else enterFuzzyMode(queryInput.value);
   renderModeChip();
   renderCurrent();
-  fdiag(`init ok tabs=${tabItems.length} commands=${commandItems.length} bookmarks=${bookmarkItems.length}${bookmarksError ? ` bookmarks_error=${bookmarksError}` : ''} marks=${codewords.size}`);
+  fdiag(`init ok tabs=${tabItems.length} windows=${new Set(boot.tabs.map((t) => t.windowId)).size} commands=${commandItems.length} bookmarks=${bookmarkItems.length}${bookmarksError ? ` bookmarks_error=${bookmarksError}` : ''} marks=${codewords.size}`);
 }
 
 init().catch((err: unknown) => {
