@@ -464,7 +464,9 @@
          cleanly (no floating separators). */
       .km-voice-phrases { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
       .km-voice-item { display: inline-flex; align-items: center; gap: 2px; }
-      .km-voice-phrase { font: inherit; font-style: italic; color: var(--fg-muted); background: transparent; border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; cursor: text; }
+      /* Same brightness and size as the key caps (.km-keycap: 12px, --fg) —
+         the two ways in are equals; italic alone carries "spoken". */
+      .km-voice-phrase { font: inherit; font-size: 12px; font-style: italic; color: var(--fg); background: transparent; border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; cursor: text; }
       /* Shared-vocabulary word (DISPOSITIONS): dotted underline = "linked".
          Projection chips navigate to the canonical Shared-words card; only
          the card's own chip edits. */
