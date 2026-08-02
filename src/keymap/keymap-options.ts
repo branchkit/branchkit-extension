@@ -18,7 +18,7 @@ import {
   type ParamSchema,
   type VoicePattern,
 } from './command-catalog';
-import { micGlyph } from '../render/mic-glyph';
+import { micGlyph, keyGlyph } from '../render/mic-glyph';
 import { overrideKey, validateOverridePhrase, overridesFromList, type OverrideRecord } from './command-override';
 import {
   loadKeymap,
@@ -149,6 +149,7 @@ function renderCommand(meta: CommandMeta, dupes: Set<string>): HTMLElement {
 
   const keys = document.createElement('div');
   keys.className = 'km-keys';
+  keys.appendChild(keyGlyph()); // the mic's twin — "press this" beside "say this"
   // Unbound is a valid, permanent state — the command still exists (and stays
   // voice-reachable). Show a calm "no shortcut" so it reads as optional, not
   // removed; commands are never deletable (they come from the catalog).

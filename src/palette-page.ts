@@ -31,7 +31,7 @@ import { DEFAULT_SEARCH_TEMPLATE, loadSearchTemplate } from './search-engine-sto
 import {
   assignCodewords, codewordDisplay, classifyMarkInput, codewordToken, splitSpokenBadge,
 } from './palette/codewords';
-import { micGlyph } from './render/mic-glyph';
+import { micGlyph, keyGlyph } from './render/mic-glyph';
 import { markToSpokenWords, type MarkerMap } from './background/tab-markers';
 import {
   RELAY_HELLO, RELAY_REQ, RELAY_RESP, RELAY_DIAG,
@@ -392,7 +392,14 @@ function render(sections: PaletteSection[]): void {
         say.appendChild(document.createTextNode(`“${item.voice[0]}”`));
         meta.appendChild(say);
       }
-      for (const k of item.keys) meta.appendChild(el('kbd', undefined, k));
+      if (item.keys.length) {
+        // Keyboard glyph + chips — the mic's twin, so the two ways in read
+        // as a pair across every surface.
+        const press = el('span', 'press');
+        press.appendChild(keyGlyph());
+        for (const k of item.keys) press.appendChild(el('kbd', undefined, k));
+        meta.appendChild(press);
+      }
       if (meta.childNodes.length) row.appendChild(meta);
       row.addEventListener('mousedown', (ev) => ev.preventDefault()); // keep input focus
       row.addEventListener('click', () => dispatchItem(item));

@@ -18,7 +18,7 @@ import { COMMAND_CATALOG, type CommandMeta, type KeymapEntry } from '../keymap/c
 import { comboDisplay } from '../activate/key-combo';
 import { letterToSpokenWord, isVoiceAlphabetLoaded } from '../labels/words';
 import { isBranchKitConnected } from '../plugin/connection-mirror';
-import { micGlyph } from './mic-glyph';
+import { micGlyph, keyGlyph } from './mic-glyph';
 import { dispatcher } from '../core/singletons';
 import { inTopFrame } from '../core/frame';
 import type { MessageHandler } from '../core/message-router';
@@ -247,7 +247,11 @@ const STYLE = `
   white-space: pre-line; box-shadow: 0 6px 20px rgba(1, 4, 9, 0.6);
   z-index: 20; pointer-events: none;
 }
-.keys { display: inline-flex; gap: 3px; flex-wrap: wrap; }
+.keys { display: inline-flex; align-items: center; gap: 3px; flex-wrap: wrap; }
+.keys > svg {
+  flex: 0 0 auto; width: 12px; height: 12px; margin-right: 2px;
+  color: #7d8590; opacity: 0.9;
+}
 kbd {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px;
   background: #21262d; color: #e6edf3; border: 1px solid #30363d;
@@ -359,9 +363,13 @@ function buildHelpOverlay(
       }
       row.appendChild(labelCell);
 
-      // 2 — how to type it: aligned key chips. Real registry binds first, then
-      // any mode-owned hint keys (dimmed — they only work inside the mode).
+      // 2 — how to type it: keyboard glyph (the mic's twin) + aligned key
+      // chips. Real registry binds first, then any mode-owned hint keys
+      // (dimmed — they only work inside the mode). Glyph only when there are
+      // keys, so an unbound command's cell stays empty rather than orphaning
+      // an icon.
       const keys = el('div', 'keys');
+      if (r.keys.length + r.keyHint.length > 0) keys.appendChild(keyGlyph());
       for (const k of r.keys) keys.appendChild(el('kbd', undefined, k));
       for (const k of r.keyHint) keys.appendChild(el('kbd', 'hint', k));
       row.appendChild(keys);

@@ -59,6 +59,7 @@ import { COMMAND_BY_ID } from './keymap/command-catalog';
 import {
   effectiveVoice, overridesFromList, type OverrideRecord,
 } from './keymap/command-override';
+import { micGlyph, keyGlyph } from './render/mic-glyph';
 
 // --- State ---
 
@@ -752,19 +753,22 @@ async function initPaletteOpen(): Promise<void> {
         chip.style.cssText = 'color: var(--accent); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;';
         label.appendChild(chip);
       }
-      const keys = document.createElement('span');
-      keys.style.cssText = 'font-size: 12px; color: var(--fg-muted);';
+      const cell = (glyph: SVGElement, text: string): HTMLSpanElement => {
+        const span = document.createElement('span');
+        span.style.cssText = 'display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--fg-muted);';
+        glyph.style.cssText = 'width: 12px; height: 12px; flex: 0 0 auto; opacity: 0.85;';
+        span.append(glyph, document.createTextNode(text));
+        return span;
+      };
       const KEYS: Record<PaletteOpenDefault, string> = {
         blank: 'a Capital badge letter',
         here: 'Shift+Enter',
         stash: 'Ctrl/Cmd+Enter',
       };
-      keys.textContent = isDefault ? `Enter · ${KEYS[v]}` : KEYS[v];
-      const voice = document.createElement('span');
-      voice.style.cssText = 'font-size: 12px; color: var(--fg-muted);';
-      voice.textContent = isDefault
+      const keys = cell(keyGlyph(), isDefault ? `Enter · ${KEYS[v]}` : KEYS[v]);
+      const voice = cell(micGlyph(), isDefault
         ? `the badge word — or ${spokenFor(v)} + badge`
-        : `${spokenFor(v)} + badge`;
+        : `${spokenFor(v)} + badge`);
       row.append(label, keys, voice);
       note.appendChild(row);
     }
