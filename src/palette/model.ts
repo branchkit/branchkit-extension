@@ -92,38 +92,23 @@ function hostOf(url: string): string {
 }
 
 /**
- * Tab items in empty-state order: the MRU stack ranks them (index 0 = most
- * recent), tabs absent from the stack keep tab-strip order after the ranked
- * ones, and the currently active tab drops to the END — so open-palette +
- * Enter lands on the *previous* tab, the half of switcher usage that needs
- * zero typing.
+ * Tab items in TAB-STRIP order (DESIGN_TAB_NAVIGATION.md, switcher-vs-
+ * launcher amendment): the list mirrors the strip — the order you see at
+ * the top of the window, active tab in place. With window info, items carry
+ * a `group` ("This window" first, then "Window 2"… in enumeration order)
+ * and browse mode sections by it; other-window rows carry the window in
+ * their subtitle. Search mode ignores groups (one ranked list — a hunt must
+ * not fragment by window).
  *
- * With window info (DESIGN_TAB_NAVIGATION.md, window/desk sections): items
- * carry a `group` — "This window" first, then "Window 2"… in tab-strip
- * order — and browse mode sections by it. Search mode ignores groups (one
- * ranked list; a hunt must not fragment by window) but other-window rows
- * carry the window in their subtitle. The GLOBAL previous tab stays the
- * first row regardless of its window (pinned into a one-row "Previous"
- * group when it is cross-window) — Enter's meaning survives the grouping.
- * Without window info (old wire, single window) nothing changes: no groups,
- * the flat MRU list as always.
+ * Recency lives in the CURSOR, not the order: the tab palette opens with
+ * the selection on the current tab (movement relative to where you are);
+ * the full palette opens with it on the previous tab (Enter = bounce back).
+ * Both are the caller's job — this builder is purely spatial.
  */
 export function buildTabItems(
   tabs: readonly PaletteTab[],
-  mru: readonly number[],
-  activeTabId: number | null,
   activeWindowId?: number | null,
-  order: 'mru' | 'strip' = 'mru',
 ): PaletteItem[] {
-  const mruRank = new Map<number, number>();
-  mru.forEach((id, i) => { if (!mruRank.has(id)) mruRank.set(id, i); });
-  const rank = (t: PaletteTab): number => mruRank.get(t.tabId) ?? mru.length;
-  const byMruActiveLast = (a: PaletteTab, b: PaletteTab): number => {
-    const aActive = a.tabId === activeTabId ? 1 : 0;
-    const bActive = b.tabId === activeTabId ? 1 : 0;
-    if (aActive !== bActive) return aActive - bActive; // active tab last
-    return rank(a) - rank(b);
-  };
   const mkItem = (t: PaletteTab, group?: string, windowNote?: string): PaletteItem => {
     const host = hostOf(t.url);
     const title = t.title.trim() || host || t.url;
@@ -143,45 +128,25 @@ export function buildTabItems(
   const windowIds = [...new Set(
     tabs.map((t) => t.windowId).filter((w): w is number => typeof w === 'number'),
   )];
-  // STRIP order (the tab palette): the list mirrors the tab strip — same
-  // left-to-right order you see in the window, active tab in place, no
-  // Previous pin (the caller starts the SELECTION on the current tab, so
-  // movement is relative to where you are; MRU's Enter-means-previous is
-  // the launcher's contract, not the switcher's). chrome.tabs.query returns
-  // strip order per window already.
-  const sortFor = (arr: readonly PaletteTab[]): PaletteTab[] =>
-    order === 'strip' ? [...arr] : [...arr].sort(byMruActiveLast);
   const grouped = typeof activeWindowId === 'number'
     && windowIds.includes(activeWindowId) && windowIds.length > 1;
   if (!grouped) {
-    return sortFor(tabs).map((t) => mkItem(t));
+    return tabs.map((t) => mkItem(t));
   }
 
-  // Window order: this window first, the rest in tab-strip enumeration
-  // order. Labels are ordinals ("Window 2"), stable for the palette's
-  // lifetime — phase 2 appends the desk here when BranchKit is connected.
+  // Window order: this window first, the rest in enumeration order. Labels
+  // are ordinals ("Window 2"), stable for the palette's lifetime — phase 2
+  // appends the desk here when BranchKit is connected.
   const otherIds = windowIds.filter((w) => w !== activeWindowId);
   const labelFor = new Map<number, string>();
   otherIds.forEach((w, i) => labelFor.set(w, `Window ${i + 2}`));
-
   const out: PaletteItem[] = [];
-  // The global previous tab (best MRU rank that isn't the active tab). When
-  // it lives in another window, pin it ahead of the sections — MRU order
-  // only; strip order has no pin (see above).
-  const previous = [...tabs].filter((t) => t.tabId !== activeTabId).sort((a, b) => rank(a) - rank(b))[0];
-  const pinned = order === 'mru' && previous !== undefined && previous.windowId !== activeWindowId
-    && rank(previous) < mru.length ? previous : undefined;
-  if (pinned) {
-    out.push(mkItem(pinned, 'Previous', labelFor.get(pinned.windowId ?? -1)));
+  for (const t of tabs.filter((t) => t.windowId === activeWindowId)) {
+    out.push(mkItem(t, 'This window'));
   }
-  const inWindow = (w: number): PaletteTab[] => sortFor(tabs.filter((t) => t.windowId === w));
-  for (const t of inWindow(activeWindowId)) out.push(mkItem(t, 'This window'));
   for (const w of otherIds) {
     const label = labelFor.get(w)!;
-    for (const t of inWindow(w)) {
-      if (t.tabId === pinned?.tabId) continue; // already pinned up top
-      out.push(mkItem(t, label, label));
-    }
+    for (const t of tabs.filter((t) => t.windowId === w)) out.push(mkItem(t, label, label));
   }
   return out;
 }

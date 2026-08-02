@@ -1010,14 +1010,7 @@ async function init(): Promise<void> {
   // scope-only: they'd bloat the full launcher, and "palette bookmarks" /
   // Shift+B is the deliberate way in.
   tabItems = scope === 'commands' || scope === 'bookmarks'
-    ? [] : buildTabItems(
-      boot.tabs, boot.mru, boot.activeTabId, boot.activeWindowId,
-      // The tab palette is a SWITCHER: it mirrors the strip (your order, your
-      // position — selection starts on the current tab below). The full
-      // palette is a LAUNCHER: MRU with the previous tab first, Enter = back
-      // to what you were doing.
-      scope === 'tabs' ? 'strip' : 'mru',
-    );
+    ? [] : buildTabItems(boot.tabs, boot.activeWindowId);
   commandItems = scope === 'tabs' || scope === 'bookmarks'
     ? [] : buildCommandItems(COMMAND_CATALOG, keymap, undefined, overrides, aliases);
   bookmarkItems = scope === 'bookmarks' ? buildBookmarkItems(boot.bookmarks) : [];
@@ -1040,11 +1033,17 @@ async function init(): Promise<void> {
   // digits landed. Their text outranks our mode default.
   if (typedLabels.size > 0 && queryInput.value === '') enterLetterMode();
   else enterFuzzyMode(queryInput.value);
-  // Switcher semantics (tabs scope): the cursor opens ON the current tab —
-  // "I'm on the fifth tab" = the fifth row is selected — so j/k step to
-  // strip neighbors. Mode entry reset selection to 0; land it after.
-  if (scope === 'tabs' && boot.activeTabId !== null) {
-    const at = flat.findIndex((it) => it.id === `tab:${boot.activeTabId}`);
+  // One strip order everywhere; RECENCY LIVES IN THE CURSOR. The tab
+  // palette opens on the CURRENT tab ("I'm on the fifth tab" = fifth row
+  // selected; j/k step to strip neighbors). The full palette opens on the
+  // PREVIOUS tab, so Enter still means "back to what I was doing" — the
+  // launcher's bounce. Mode entry reset selection to 0; land it after.
+  const cursorTab = scope === 'tabs'
+    ? boot.activeTabId
+    : boot.mru.find((id) => id !== boot.activeTabId
+        && flat.some((it) => it.id === `tab:${id}`)) ?? null;
+  if (cursorTab !== null) {
+    const at = flat.findIndex((it) => it.id === `tab:${cursorTab}`);
     if (at >= 0) { selected = at; renderCurrent(); }
   }
   renderModeChip();

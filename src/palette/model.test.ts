@@ -25,26 +25,26 @@ describe('searchWords', () => {
 });
 
 describe('buildTabItems', () => {
-  it('orders by MRU with the active tab demoted to the end', () => {
-    // MRU says 3 is current, 1 was previous. Active = 3, so 1 leads.
-    const items = buildTabItems(TABS, [3, 1, 2], 3);
+  it('mirrors the tab strip — input order, active tab in place', () => {
+    // Recency lives in the CURSOR (the caller's job), not the order.
+    const items = buildTabItems(TABS);
     expect(items.map((i) => i.dispatch)).toEqual([
       { kind: 'switch_tab', tabId: 1 },
       { kind: 'switch_tab', tabId: 2 },
-      { kind: 'switch_tab', tabId: 4 }, // absent from MRU → after ranked ones
-      { kind: 'switch_tab', tabId: 3 }, // active last
+      { kind: 'switch_tab', tabId: 3 },
+      { kind: 'switch_tab', tabId: 4 },
     ]);
   });
 
   it('falls back to host when a tab has no title, and indexes host words', () => {
-    const items = buildTabItems(TABS, [], null);
+    const items = buildTabItems(TABS);
     const hn = items.find((i) => i.id === 'tab:4')!;
     expect(hn.title).toBe('news.ycombinator.com');
     expect(hn.words).toContain('ycombinator');
   });
 
   it('carries a stable row id per tab', () => {
-    const items = buildTabItems(TABS, [], null);
+    const items = buildTabItems(TABS);
     expect(items.map((i) => i.id).sort()).toEqual(['tab:1', 'tab:2', 'tab:3', 'tab:4']);
   });
 });
@@ -102,8 +102,7 @@ describe('buildCommandItems', () => {
 });
 
 describe('buildTabItems — window sections (DESIGN_TAB_NAVIGATION.md)', () => {
-  // Two windows: 10/11 in window 1 (active window, active tab 10),
-  // 20/21 in window 2. MRU: 10 current, 20 previous, then 11.
+  // Two windows: 10/11 in window 1 (the palette's window), 20/21 in window 2.
   const W: PaletteTab[] = [
     { tabId: 10, title: 'Docs', url: 'https://docs.example.com/', windowId: 1 },
     { tabId: 11, title: 'Mail', url: 'https://mail.example.com/', windowId: 1 },
@@ -111,57 +110,34 @@ describe('buildTabItems — window sections (DESIGN_TAB_NAVIGATION.md)', () => {
     { tabId: 21, title: 'Chat', url: 'https://chat.example.com/', windowId: 2 },
   ];
 
-  it('groups by window, this window first, MRU within, active last', () => {
-    // MRU: 10 current, 20 PREVIOUS (cross-window), then 11.
-    const items = buildTabItems(W, [10, 20, 11], 10, 1);
+  it('groups by window, this window first, strip order within', () => {
+    const items = buildTabItems(W, 1);
     expect(items.map((i) => [i.id, i.group])).toEqual([
-      ['tab:20', 'Previous'],      // global previous, pinned cross-window
-      ['tab:11', 'This window'],
-      ['tab:10', 'This window'],   // active tab last within its window
-      ['tab:21', 'Window 2'],      // tab 20 not duplicated below the pin
-    ]);
-  });
-
-  it('annotates other-window rows in the subtitle; this window stays clean', () => {
-    const items = buildTabItems(W, [10, 11, 20], 10, 1);
-    expect(items.find((i) => i.id === 'tab:21')!.subtitle).toBe('chat.example.com · Window 2');
-    expect(items.find((i) => i.id === 'tab:20')!.subtitle).toBe('ci.example.com · Window 2');
-    expect(items.find((i) => i.id === 'tab:11')!.subtitle).toBe('mail.example.com');
-  });
-
-  it('no Previous pin when the previous tab is in this window', () => {
-    const items = buildTabItems(W, [10, 11, 20], 10, 1 /* prev 11? no — mru[1]=11 */);
-    // With MRU [10, 11, ...], the previous tab (11) is in the active window:
-    const items2 = buildTabItems(W, [10, 11], 10, 1);
-    expect(items2[0].id).toBe('tab:11');
-    expect(items2[0].group).toBe('This window');
-    expect(items2.some((i) => i.group === 'Previous')).toBe(false);
-    void items;
-  });
-
-  it('single window (or no window info) stays flat — no groups', () => {
-    const single = W.map((t) => ({ ...t, windowId: 1 }));
-    expect(buildTabItems(single, [10], 10, 1).every((i) => i.group === undefined)).toBe(true);
-    expect(buildTabItems(W, [10], 10, undefined).every((i) => i.group === undefined)).toBe(true);
-  });
-
-  it('strip order mirrors the tab strip: in-place active tab, no Previous pin', () => {
-    const items = buildTabItems(W, [10, 20, 11], 10, 1, 'strip');
-    expect(items.map((i) => [i.id, i.group])).toEqual([
-      ['tab:10', 'This window'],   // strip order, active tab IN PLACE
+      ['tab:10', 'This window'],
       ['tab:11', 'This window'],
       ['tab:20', 'Window 2'],
       ['tab:21', 'Window 2'],
     ]);
-    expect(items.some((i) => i.group === 'Previous')).toBe(false);
+  });
+
+  it('annotates other-window rows in the subtitle; this window stays clean', () => {
+    const items = buildTabItems(W, 1);
+    expect(items.find((i) => i.id === 'tab:21')!.subtitle).toBe('chat.example.com · Window 2');
+    expect(items.find((i) => i.id === 'tab:11')!.subtitle).toBe('mail.example.com');
+  });
+
+  it('single window (or no window info) stays flat — no groups', () => {
+    expect(buildTabItems(W.map((t) => ({ ...t, windowId: 1 })), 1)
+      .every((i) => i.group === undefined)).toBe(true);
+    expect(buildTabItems(W, undefined).every((i) => i.group === undefined)).toBe(true);
   });
 
   it('browse mode sections by window; search mode is one ranked list', () => {
-    const items = buildTabItems(W, [10, 20, 11], 10, 1);
+    const items = buildTabItems(W, 1);
     const browse = filterPalette(items, [], '');
-    expect(browse.map((s) => s.label)).toEqual(['Previous', 'This window', 'Window 2']);
+    expect(browse.map((sec) => sec.label)).toEqual(['This window', 'Window 2']);
     const search = filterPalette(items, [], 'example');
-    expect(search.map((s) => s.label)).toEqual(['Tabs']);
+    expect(search.map((sec) => sec.label)).toEqual(['Tabs']);
     expect(search[0].items.length).toBe(4);
   });
 });
@@ -188,7 +164,7 @@ describe('scoreItem', () => {
 });
 
 describe('filterPalette', () => {
-  const tabs = buildTabItems(TABS, [3, 1], 3);
+  const tabs = buildTabItems(TABS);
   const commands = buildCommandItems(COMMAND_CATALOG, DEFAULT_KEYMAP as KeymapEntry[]);
 
   it('empty query keeps empty-state order and both sections (flat launcher)', () => {
@@ -305,7 +281,7 @@ describe('filterPalette', () => {
 });
 
 describe('resolvePaletteQuery', () => {
-  const items = buildTabItems(TABS, [], null);
+  const items = buildTabItems(TABS);
 
   it('uses the box text verbatim when it matches', () => {
     expect(resolvePaletteQuery('github', '', items)).toEqual({ query: 'github', reason: null });
@@ -392,7 +368,7 @@ describe('buildSearchSection', () => {
   });
 
   it('leaves both recoveries live even when leaked into the corpus', () => {
-    const items = buildTabItems(TABS, [], null);
+    const items = buildTabItems(TABS);
     const leaked = [...items, buildSearchSection('gmailgithub', TEMPLATE)!.items[0]];
     expect(resolvePaletteQuery('gmailgithub', 'github', leaked))
       .toEqual({ query: 'github', reason: 'dictated_retry' });
