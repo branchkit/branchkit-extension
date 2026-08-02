@@ -1010,7 +1010,14 @@ async function init(): Promise<void> {
   // scope-only: they'd bloat the full launcher, and "palette bookmarks" /
   // Shift+B is the deliberate way in.
   tabItems = scope === 'commands' || scope === 'bookmarks'
-    ? [] : buildTabItems(boot.tabs, boot.mru, boot.activeTabId, boot.activeWindowId);
+    ? [] : buildTabItems(
+      boot.tabs, boot.mru, boot.activeTabId, boot.activeWindowId,
+      // The tab palette is a SWITCHER: it mirrors the strip (your order, your
+      // position — selection starts on the current tab below). The full
+      // palette is a LAUNCHER: MRU with the previous tab first, Enter = back
+      // to what you were doing.
+      scope === 'tabs' ? 'strip' : 'mru',
+    );
   commandItems = scope === 'tabs' || scope === 'bookmarks'
     ? [] : buildCommandItems(COMMAND_CATALOG, keymap, undefined, overrides, aliases);
   bookmarkItems = scope === 'bookmarks' ? buildBookmarkItems(boot.bookmarks) : [];
@@ -1033,6 +1040,13 @@ async function init(): Promise<void> {
   // digits landed. Their text outranks our mode default.
   if (typedLabels.size > 0 && queryInput.value === '') enterLetterMode();
   else enterFuzzyMode(queryInput.value);
+  // Switcher semantics (tabs scope): the cursor opens ON the current tab —
+  // "I'm on the fifth tab" = the fifth row is selected — so j/k step to
+  // strip neighbors. Mode entry reset selection to 0; land it after.
+  if (scope === 'tabs' && boot.activeTabId !== null) {
+    const at = flat.findIndex((it) => it.id === `tab:${boot.activeTabId}`);
+    if (at >= 0) { selected = at; renderCurrent(); }
+  }
   renderModeChip();
   renderCurrent();
   fdiag(`init ok tabs=${tabItems.length} windows=${new Set(boot.tabs.map((t) => t.windowId)).size} commands=${commandItems.length} bookmarks=${bookmarkItems.length}${bookmarksError ? ` bookmarks_error=${bookmarksError}` : ''} marks=${codewords.size}`);

@@ -113,6 +113,7 @@ export function buildTabItems(
   mru: readonly number[],
   activeTabId: number | null,
   activeWindowId?: number | null,
+  order: 'mru' | 'strip' = 'mru',
 ): PaletteItem[] {
   const mruRank = new Map<number, number>();
   mru.forEach((id, i) => { if (!mruRank.has(id)) mruRank.set(id, i); });
@@ -142,10 +143,18 @@ export function buildTabItems(
   const windowIds = [...new Set(
     tabs.map((t) => t.windowId).filter((w): w is number => typeof w === 'number'),
   )];
+  // STRIP order (the tab palette): the list mirrors the tab strip — same
+  // left-to-right order you see in the window, active tab in place, no
+  // Previous pin (the caller starts the SELECTION on the current tab, so
+  // movement is relative to where you are; MRU's Enter-means-previous is
+  // the launcher's contract, not the switcher's). chrome.tabs.query returns
+  // strip order per window already.
+  const sortFor = (arr: readonly PaletteTab[]): PaletteTab[] =>
+    order === 'strip' ? [...arr] : [...arr].sort(byMruActiveLast);
   const grouped = typeof activeWindowId === 'number'
     && windowIds.includes(activeWindowId) && windowIds.length > 1;
   if (!grouped) {
-    return [...tabs].sort(byMruActiveLast).map((t) => mkItem(t));
+    return sortFor(tabs).map((t) => mkItem(t));
   }
 
   // Window order: this window first, the rest in tab-strip enumeration
@@ -157,14 +166,15 @@ export function buildTabItems(
 
   const out: PaletteItem[] = [];
   // The global previous tab (best MRU rank that isn't the active tab). When
-  // it lives in another window, pin it ahead of the sections.
+  // it lives in another window, pin it ahead of the sections — MRU order
+  // only; strip order has no pin (see above).
   const previous = [...tabs].filter((t) => t.tabId !== activeTabId).sort((a, b) => rank(a) - rank(b))[0];
-  const pinned = previous !== undefined && previous.windowId !== activeWindowId
+  const pinned = order === 'mru' && previous !== undefined && previous.windowId !== activeWindowId
     && rank(previous) < mru.length ? previous : undefined;
   if (pinned) {
     out.push(mkItem(pinned, 'Previous', labelFor.get(pinned.windowId ?? -1)));
   }
-  const inWindow = (w: number): PaletteTab[] => tabs.filter((t) => t.windowId === w).sort(byMruActiveLast);
+  const inWindow = (w: number): PaletteTab[] => sortFor(tabs.filter((t) => t.windowId === w));
   for (const t of inWindow(activeWindowId)) out.push(mkItem(t, 'This window'));
   for (const w of otherIds) {
     const label = labelFor.get(w)!;

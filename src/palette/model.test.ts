@@ -145,6 +145,17 @@ describe('buildTabItems — window sections (DESIGN_TAB_NAVIGATION.md)', () => {
     expect(buildTabItems(W, [10], 10, undefined).every((i) => i.group === undefined)).toBe(true);
   });
 
+  it('strip order mirrors the tab strip: in-place active tab, no Previous pin', () => {
+    const items = buildTabItems(W, [10, 20, 11], 10, 1, 'strip');
+    expect(items.map((i) => [i.id, i.group])).toEqual([
+      ['tab:10', 'This window'],   // strip order, active tab IN PLACE
+      ['tab:11', 'This window'],
+      ['tab:20', 'Window 2'],
+      ['tab:21', 'Window 2'],
+    ]);
+    expect(items.some((i) => i.group === 'Previous')).toBe(false);
+  });
+
   it('browse mode sections by window; search mode is one ranked list', () => {
     const items = buildTabItems(W, [10, 20, 11], 10, 1);
     const browse = filterPalette(items, [], '');
