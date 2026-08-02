@@ -61,7 +61,7 @@ describe('buildCommandItems', () => {
 
   it('shows the live keybind display for a bound command', () => {
     const sd = items.find((i) => i.id === 'cmd:scroll_down')!;
-    expect(sd.keys).toEqual(['J']);
+    expect(sd.keys).toEqual(['j']);
   });
 
   it('indexes voice phrases so typing a spoken form finds the command', () => {

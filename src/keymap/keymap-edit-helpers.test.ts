@@ -8,13 +8,13 @@ describe('displayKeys', () => {
   it('renders single combos', () => {
     expect(displayKeys('shift+KeyH')).toBe('Shift+H');
     expect(displayKeys('ctrl+KeyF')).toBe('Ctrl+F');
-    expect(displayKeys('KeyJ')).toBe('J');
+    expect(displayKeys('KeyJ')).toBe('j');
     expect(displayKeys('Slash')).toBe('/');
   });
 
   it('renders multi-key sequences token-by-token', () => {
-    expect(displayKeys('KeyG KeyG')).toBe('G G');
-    expect(displayKeys('KeyC KeyS')).toBe('C S');
+    expect(displayKeys('KeyG KeyG')).toBe('g g');
+    expect(displayKeys('KeyC KeyS')).toBe('c s');
   });
 });
 
