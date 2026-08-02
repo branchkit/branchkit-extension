@@ -58,7 +58,7 @@ describe('buildHelpModel', () => {
   it('carries both keys and voice when a command has both', () => {
     const catalog = [cmd('scroll_down', 'Scroll', ['scroll down'])];
     const model = buildHelpModel(catalog, [{ keys: 'shift+KeyJ', command: 'scroll_down' }]);
-    expect(model[0].rows[0].keys).toEqual(['Shift+J']);
+    expect(model[0].rows[0].keys).toEqual(['J']);
     expect(model[0].rows[0].voice).toEqual(['scroll down']);
   });
 
@@ -80,7 +80,7 @@ describe('buildHelpModel', () => {
     // voice-only command falls out entirely (unreachable without voice)
     expect(model.map((g) => g.group)).toEqual(['Scroll']);
     // the surviving row keeps its keys but shows no spoken phrase
-    expect(model[0].rows[0].keys).toEqual(['Shift+J']);
+    expect(model[0].rows[0].keys).toEqual(['J']);
     expect(model[0].rows[0].voice).toEqual([]);
   });
 
@@ -91,7 +91,7 @@ describe('buildHelpModel', () => {
       { keys: 'shift+KeyA', command: 'scroll_left' },
     ];
     const model = buildHelpModel(catalog, keymap);
-    expect(model[0].rows[0].keys).toEqual(['h', 'Shift+A']);
+    expect(model[0].rows[0].keys).toEqual(['h', 'A']);
   });
 
   it('formats space-joined key sequences and shifted-symbol punctuation', () => {

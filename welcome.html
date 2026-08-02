@@ -65,11 +65,11 @@
 
     <div class="hero">
       <h2>Start here</h2>
-      <p>Every link, button, and field gets a short badge. Press <kbd>F</kbd> on
+      <p>Every link, button, and field gets a short badge. Press <kbd data-cmd="hint_mode">f</kbd> on
         any page to start clicking by keyboard, then type a badge's letters to
         activate it — that's the whole idea.</p>
       <ol class="steps">
-        <li>Press <kbd>F</kbd> &rarr; the badges highlight — their borders brighten to show they're listening (and the badges appear if you don't already keep them on)</li>
+        <li>Press <kbd data-cmd="hint_mode">f</kbd> &rarr; the badges highlight — their borders brighten to show they're listening (and the badges appear if you don't already keep them on)</li>
         <li>Type a badge (e.g. <kbd>a</kbd><kbd>s</kbd>) &rarr; it activates</li>
         <li>A <b style="color:var(--fg-bright)">Capital</b> opens it in a new tab; <kbd>Esc</kbd> exits</li>
       </ol>
@@ -78,27 +78,27 @@
     <div class="hero">
       <h2>A few more (Vim-style)</h2>
       <dl class="cheats">
-        <dt><kbd>Shift</kbd><kbd>F</kbd></dt><dd>show / hide the badges — handy when they're in the way</dd>
-        <dt><kbd>j</kbd> <kbd>k</kbd></dt><dd>scroll down / up</dd>
-        <dt><kbd>/</kbd></dt><dd>find on page &nbsp;·&nbsp; <kbd>n</kbd> / <kbd>N</kbd> next / prev</dd>
-        <dt><kbd>H</kbd> <kbd>L</kbd></dt><dd>back / forward</dd>
-        <dt><kbd>y</kbd><kbd>y</kbd></dt><dd>copy the page URL</dd>
+        <dt><kbd data-cmd="toggle_hints">F</kbd></dt><dd>show / hide the badges — handy when they're in the way</dd>
+        <dt><kbd data-cmd="scroll_down">j</kbd> <kbd data-cmd="scroll_up">k</kbd></dt><dd>scroll down / up</dd>
+        <dt><kbd data-cmd="find_open">/</kbd></dt><dd>find on page &nbsp;·&nbsp; <kbd data-cmd="find_next">n</kbd> / <kbd data-cmd="find_previous">N</kbd> next / prev</dd>
+        <dt><kbd data-cmd="history_back">H</kbd> <kbd data-cmd="history_forward">L</kbd></dt><dd>back / forward</dd>
+        <dt><span data-cmd="copy_url"><kbd>y</kbd><kbd>y</kbd></span></dt><dd>copy the page URL</dd>
       </dl>
     </div>
 
     <div class="hero">
-      <h2>One launcher for everything — <kbd>Ctrl</kbd><kbd>K</kbd></h2>
-      <p>Press <kbd>Ctrl</kbd><kbd>K</kbd> to open the command palette: search your
+      <h2>One launcher for everything — <span data-cmd="toggle_palette"><kbd>Ctrl</kbd><kbd>K</kbd></span></h2>
+      <p>Press <span data-cmd="toggle_palette"><kbd>Ctrl</kbd><kbd>K</kbd></span> to open the command palette: search your
         open tabs and every command in one place, then press <kbd>Enter</kbd> to
         jump to a tab or run the command — scroll, find, copy, navigate, and the
         rest. Each command also shows its shortcut and voice phrase, so it doubles
-        as a way to learn them. (<kbd>Shift</kbd><kbd>T</kbd> opens a tabs-only
+        as a way to learn them. (<kbd data-cmd="toggle_tab_palette">T</kbd> opens a tabs-only
         version.)</p>
     </div>
 
     <div class="hero callout">
-      <h2>Forgot a shortcut? Press <kbd>?</kbd></h2>
-      <p>On any page, press <kbd>?</kbd> to open the full list of shortcuts and
+      <h2>Forgot a shortcut? Press <kbd data-cmd="toggle_help">?</kbd></h2>
+      <p>On any page, press <kbd data-cmd="toggle_help">?</kbd> to open the full list of shortcuts and
         voice phrases — it's always one key away. You can also reach it from the
         <b>Help</b> button in the toolbar popup.</p>
     </div>
@@ -136,5 +136,6 @@
       <a class="link" href="https://branchkit.dev">Learn more</a> -->
     </div>
   </main>
+  <script src="welcome.js"></script>
 </body>
 </html>

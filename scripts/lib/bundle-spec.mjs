@@ -36,6 +36,7 @@ export const ENTRIES = [
   { in: 'src/offscreen.ts',    out: 'offscreen.js',  format: 'iife' },
   { in: 'src/popup.ts',        out: 'popup.js',      format: 'iife' },
   { in: 'src/options.ts',      out: 'options.js',    format: 'iife' },
+  { in: 'src/welcome.ts',      out: 'welcome.js',    format: 'iife' },
   { in: 'src/palette-page.ts', out: 'palette.js',    format: 'iife' },
 ];
 

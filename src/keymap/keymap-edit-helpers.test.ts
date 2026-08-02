@@ -6,7 +6,7 @@ import {
 
 describe('displayKeys', () => {
   it('renders single combos', () => {
-    expect(displayKeys('shift+KeyH')).toBe('Shift+H');
+    expect(displayKeys('shift+KeyH')).toBe('H');
     expect(displayKeys('ctrl+KeyF')).toBe('Ctrl+F');
     expect(displayKeys('KeyJ')).toBe('j');
     expect(displayKeys('Slash')).toBe('/');

@@ -103,15 +103,18 @@ export function comboDisplay(spec: string): string {
     // The symbol already implies Shift (e.g. "?"), so don't prefix "Shift+".
     parts.push(shifted);
   } else {
-    if (c.shift) parts.push('Shift');
     const label = keyLabel(c.code);
-    // A BARE letter renders lowercase: a capital means "press Shift"
-    // everywhere else in the product (the badge new-tab affordance), so an
-    // uppercase J for a bare KeyJ read as a shifted bind. Modifier combos
-    // keep the OS convention (Ctrl+F, Shift+J) — the modifier names are
-    // explicit, so the capital carries no shift claim there.
-    const bare = !c.ctrl && !c.alt && !c.meta && !c.shift;
-    parts.push(bare && /^[A-Z]$/.test(label) ? label.toLowerCase() : label);
+    const letter = /^[A-Z]$/.test(label);
+    const named = c.ctrl || c.alt || c.meta;
+    // The letter-case grammar (the badge new-tab affordance made this
+    // load-bearing product knowledge): a bare letter renders lowercase (j),
+    // Shift-plus-letter renders as the capital ALONE (J) — the capital IS
+    // the shift claim, as when typing a badge. Named-modifier combos and
+    // shifted non-letters stay explicit with OS-convention capitals
+    // (Ctrl+F, Ctrl+Shift+J, Shift+Tab) — a capital beside a named
+    // modifier carries no claim, and Tab has no capital form.
+    if (c.shift && (!letter || named)) parts.push('Shift');
+    parts.push(letter && !named ? (c.shift ? label : label.toLowerCase()) : label);
   }
   return parts.join('+');
 }
