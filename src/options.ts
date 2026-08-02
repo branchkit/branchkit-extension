@@ -756,7 +756,7 @@ async function initPaletteOpen(): Promise<void> {
       const cell = (glyph: SVGElement, text: string): HTMLSpanElement => {
         const span = document.createElement('span');
         span.style.cssText = 'display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--fg-muted);';
-        glyph.style.cssText = 'width: 12px; height: 12px; flex: 0 0 auto; opacity: 0.85;';
+        glyph.style.cssText = 'width: 12px; height: 12px; flex: 0 0 auto; color: var(--accent); opacity: 0.9;';
         span.append(glyph, document.createTextNode(text));
         return span;
       };

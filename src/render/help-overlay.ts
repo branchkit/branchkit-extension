@@ -250,7 +250,7 @@ const STYLE = `
 .keys { display: inline-flex; align-items: center; gap: 3px; flex-wrap: wrap; }
 .keys > svg {
   flex: 0 0 auto; width: 12px; height: 12px; margin-right: 2px;
-  color: #7d8590; opacity: 0.9;
+  color: #58a6ff; opacity: 0.95;
 }
 kbd {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px;
