@@ -784,7 +784,7 @@ function wordChip(v: PaletteOpenDefault, word: string): HTMLElement {
   chip.className = 'km-voice-phrase shared';
   const isPrimary = word === effectiveDispositionWord(OPEN_DISPOSITION[v]);
   if (isPrimary && word !== DISPOSITIONS[OPEN_DISPOSITION[v]].word) chip.classList.add('changed');
-  chip.textContent = `\u201c${word}\u201d`;
+  chip.textContent = word;
   chip.title = 'A shared word — rename it once under “Shared words”. Click to go there.';
   chip.addEventListener('click', () => navigateToSharedWord(OPEN_DISPOSITION[v]));
   return chip;

@@ -142,7 +142,7 @@ function renderSharedWords(): HTMLElement {
       item.className = 'km-voice-item';
       const chip = document.createElement('span');
       chip.className = 'km-voice-phrase km-voice-added';
-      chip.textContent = `“${w}”`;
+      chip.textContent = w;
       item.appendChild(chip);
       const remove = document.createElement('button');
       remove.type = 'button';
@@ -174,7 +174,7 @@ function sharedWordChip(key: DispositionKey): HTMLElement {
   chip.type = 'button';
   chip.className = 'km-voice-phrase shared';
   if (word !== DISPOSITIONS[key].word) chip.classList.add('changed');
-  chip.textContent = `\u201c${word}\u201d`;
+  chip.textContent = word;
   chip.title = 'Click to change the word — everywhere it is spoken.';
   chip.addEventListener('click', () => {
     const input = document.createElement('input');
