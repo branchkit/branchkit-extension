@@ -55,6 +55,10 @@ import {
   savePaletteOpenDefault,
   type PaletteOpenDefault,
 } from './palette-open-storage';
+import { COMMAND_BY_ID } from './keymap/command-catalog';
+import {
+  effectiveVoice, overridesFromList, type OverrideRecord,
+} from './keymap/command-override';
 
 // --- State ---
 
@@ -688,12 +692,63 @@ async function init(): Promise<void> {
 
 // --- Palette (default landing spot for a plain pick) ---
 
+/** The catalog verb behind each landing spot ('blank' is palette_select_newtab
+ *  etc.), so the hint below the select can show the words the USER actually
+ *  says — overrides and aliases applied — not the shipped defaults. */
+const OPEN_VERB_COMMANDS: Record<PaletteOpenDefault, string> = {
+  blank: 'palette_select_newtab',
+  here: 'palette_select_here',
+  stash: 'palette_select_background',
+};
+
+const OPEN_LABELS: Record<PaletteOpenDefault, string> = {
+  blank: 'a new tab',
+  here: 'this tab',
+  stash: 'a background tab',
+};
+
 async function initPaletteOpen(): Promise<void> {
   const select = document.getElementById('palette-open-default') as HTMLSelectElement | null;
-  if (!select) return;
+  const note = document.getElementById('palette-open-note') as HTMLDivElement | null;
+  if (!select || !note) return;
   select.value = await loadPaletteOpenDefault();
+
+  // Effective spoken form per verb (user phrase overrides + aliases applied;
+  // both fetches fall back to [] when BranchKit isn't running, leaving the
+  // shipped words). "blank {palette}" → the word said before a badge.
+  const [overridesResp, aliasesResp] = await Promise.all([
+    chrome.runtime.sendMessage({ type: 'GET_COMMAND_OVERRIDES' }).catch(() => undefined),
+    chrome.runtime.sendMessage({ type: 'GET_COMMAND_ALIASES' }).catch(() => undefined),
+  ]);
+  const overrides = overridesFromList(
+    ((overridesResp as { overrides?: OverrideRecord[] } | undefined)?.overrides) ?? [],
+  );
+  const aliases = ((aliasesResp as { aliases?: OverrideRecord[] } | undefined)?.aliases) ?? [];
+  const spokenFor = (openAs: PaletteOpenDefault): string => {
+    const meta = COMMAND_BY_ID.get(OPEN_VERB_COMMANDS[openAs]);
+    const patterns = (meta?.voice ?? []).map((v) => v.pattern);
+    const words = effectiveVoice(OPEN_VERB_COMMANDS[openAs], patterns, overrides, aliases)
+      .map((p) => p.replace('{palette}', '').trim())
+      .filter((w) => w !== '');
+    return [...new Set(words)].map((w) => `“${w}”`).join(' or ');
+  };
+
+  // What the two non-default spots cost to reach — the words to remember,
+  // shown so the choice of default is made knowing its price.
+  const renderNote = (): void => {
+    const chosen = select.value as PaletteOpenDefault;
+    const others = (['blank', 'here', 'stash'] as const).filter((v) => v !== chosen);
+    const parts = others.map((v) => {
+      const keyboard = v === 'here' ? ' or Shift+Enter' : '';
+      return `${spokenFor(v)}${keyboard} + a row’s badge for ${OPEN_LABELS[v]}`;
+    });
+    note.textContent = `Plain Enter or a bare badge word opens ${OPEN_LABELS[chosen]}. `
+      + `Say ${parts.join(', or ')}.`;
+  };
+  renderNote();
   select.addEventListener('change', () => {
     savePaletteOpenDefault(select.value as PaletteOpenDefault);
+    renderNote();
   });
 }
 
