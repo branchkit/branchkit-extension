@@ -132,7 +132,29 @@ function renderSharedWords(): HTMLElement {
     label.className = 'km-row-label';
     label.textContent = `Opens ${DISPOSITIONS[key].label}`;
     row.appendChild(label);
-    row.appendChild(sharedWordChip(key));
+    const phrases = document.createElement('span');
+    phrases.className = 'km-voice-phrases';
+    phrases.appendChild(sharedWordChip(key));
+    // Added words ("go to" alongside "blank") — the default stays; each is
+    // removable and fans exactly like the rename.
+    for (const w of aliasWordsForDisposition(key)) {
+      const item = document.createElement('span');
+      item.className = 'km-voice-item';
+      const chip = document.createElement('span');
+      chip.className = 'km-voice-phrase km-voice-added';
+      chip.textContent = `“${w}”`;
+      item.appendChild(chip);
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'km-voice-reset';
+      remove.textContent = '×';
+      remove.title = 'Remove this word — everywhere.';
+      remove.addEventListener('click', () => void removeDispositionAlias(key, w));
+      item.appendChild(remove);
+      phrases.appendChild(item);
+    }
+    phrases.appendChild(sharedAliasAddButton(key));
+    row.appendChild(phrases);
     const usedBy = document.createElement('span');
     usedBy.className = 'km-shared-used';
     usedBy.textContent = members.map((m) => m.meta.label).join(' · ');
@@ -193,6 +215,108 @@ function sharedWordChip(key: DispositionKey): HTMLElement {
     wrap.appendChild(reset);
   }
   return wrap;
+}
+
+/** Distinct added words for a shared word, across its members ("go to"
+ *  alongside "blank"). Exported for the palette table's projection. */
+export function aliasWordsForDisposition(key: DispositionKey): string[] {
+  const words = new Set<string>();
+  for (const m of sharedMembers(key)) {
+    for (const a of aliases) {
+      if (a.action !== m.meta.id || a.default_pattern !== m.vp.pattern) continue;
+      const w = a.new_pattern.split(/\s+/).filter((t) => !t.startsWith('{')).join(' ');
+      if (w) words.add(w);
+    }
+  }
+  return [...words];
+}
+
+/** Add a second way to say a shared word ("go to" alongside "blank") — an
+ *  alias fanned to every member, same one-edit contract as the rename. */
+async function addDispositionAlias(key: DispositionKey, word: string): Promise<string | null> {
+  const members = sharedMembers(key);
+  const first = members[0];
+  if (!first) return 'Unknown word.';
+  const w = word.trim();
+  if (w === effectiveDispositionWord(key)) return 'That is already the word.';
+  if (aliasWordsForDisposition(key).includes(w)) return 'Already added.';
+  const caps = first.vp.pattern.split(/\s+/).filter((t) => t.startsWith('{'));
+  const candidate = [w, ...caps].join(' ');
+  const invalid = validateOverridePhrase(first.vp.pattern, candidate);
+  if (invalid) return invalid;
+  const failures: string[] = [];
+  for (const m of members) {
+    const target = retargetPattern(candidate, m.vp.pattern);
+    const r = await chrome.runtime.sendMessage({
+      type: 'ADD_COMMAND_ALIAS',
+      action: m.meta.id,
+      defaultPattern: m.vp.pattern,
+      newPattern: target,
+    }).catch(() => ({ ok: false, error: 'Not connected to BranchKit.' }));
+    if (r?.ok) aliases = [...aliases, { action: m.meta.id, default_pattern: m.vp.pattern, new_pattern: target }];
+    else failures.push(r?.error || `Could not add for “${m.meta.label}”.`);
+  }
+  render();
+  return failures[0] ?? null;
+}
+
+/** Remove an added word from every member. */
+async function removeDispositionAlias(key: DispositionKey, word: string): Promise<void> {
+  for (const m of sharedMembers(key)) {
+    const mine = aliases.filter((a) => {
+      if (a.action !== m.meta.id || a.default_pattern !== m.vp.pattern) return false;
+      return a.new_pattern.split(/\s+/).filter((t) => !t.startsWith('{')).join(' ') === word;
+    });
+    for (const a of mine) {
+      const r = await chrome.runtime.sendMessage({
+        type: 'REMOVE_COMMAND_ALIAS',
+        action: a.action,
+        defaultPattern: a.default_pattern,
+        newPattern: a.new_pattern,
+      }).catch(() => ({ ok: false }));
+      if (r?.ok) {
+        aliases = aliases.filter((x) => !(
+          x.action === a.action && x.default_pattern === a.default_pattern && x.new_pattern === a.new_pattern
+        ));
+      }
+    }
+  }
+  render();
+}
+
+/** The card's "+ word" — add a second accepted word without losing the
+ *  default. Same inline-input shape as the word chip's editor. */
+function sharedAliasAddButton(key: DispositionKey): HTMLButtonElement {
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'km-voice-add';
+  add.textContent = '+ word';
+  add.title = 'Add another word that means the same thing — on every surface.';
+  add.addEventListener('click', () => {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'km-voice-phrase';
+    input.placeholder = 'another word';
+    input.style.width = '12ch';
+    input.setAttribute('aria-label', 'Add a shared spoken word');
+    add.replaceWith(input);
+    input.focus();
+    let done = false;
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); done = true; render(); return; }
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      if (done || input.value.trim() === '') return;
+      void addDispositionAlias(key, input.value).then((err) => {
+        if (err === null) { done = true; return; } // add re-renders
+        input.setCustomValidity(err);
+        input.reportValidity();
+      });
+    });
+    input.addEventListener('blur', () => { if (!done) { done = true; render(); } });
+    input.addEventListener('input', () => input.setCustomValidity(''));
+  });
+  return add;
 }
 
 /** Scroll the canonical card's row for `key` into view and flash it — the
@@ -367,7 +491,10 @@ function renderVoiceRow(meta: CommandMeta): HTMLElement {
 
   // "+ voice" — the free-list add, mirroring the keys' "+ key". Only when
   // connected (the phrase is stored in the actuator through the plugin).
-  if (!disconnected) phrases.appendChild(makeVoiceAddButton(meta));
+  // Fully-shared commands add words on the Shared-words card instead — a
+  // per-command add here would be exactly the drift the card exists to end.
+  const allShared = (meta.voice ?? []).every((v) => v.sharedWord !== undefined);
+  if (!disconnected && !allShared) phrases.appendChild(makeVoiceAddButton(meta));
 
   row.appendChild(phrases);
   return row;

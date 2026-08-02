@@ -57,7 +57,8 @@ import {
 } from './palette-open-storage';
 import { DISPOSITIONS, type DispositionKey } from './keymap/command-catalog';
 import {
-  effectiveDispositionWord, navigateToSharedWord, onVoiceCustomizationsChanged,
+  effectiveDispositionWord, aliasWordsForDisposition, navigateToSharedWord,
+  onVoiceCustomizationsChanged,
 } from './keymap/keymap-options';
 import { micGlyph, keyGlyph } from './render/mic-glyph';
 
@@ -752,6 +753,12 @@ async function initPaletteOpen(): Promise<void> {
       const voice = cell(micGlyph());
       if (isDefault) voice.appendChild(document.createTextNode('the badge word — or'));
       voice.appendChild(wordChip(v, word));
+      // Added words project too ("go to" alongside "blank") — same
+      // navigate-to-canonical chips.
+      for (const extra of aliasWordsForDisposition(OPEN_DISPOSITION[v])) {
+        voice.appendChild(document.createTextNode('or'));
+        voice.appendChild(wordChip(v, extra));
+      }
       voice.appendChild(document.createTextNode('+ badge'));
       row.append(label, keys, voice);
       note.appendChild(row);
@@ -775,7 +782,8 @@ function wordChip(v: PaletteOpenDefault, word: string): HTMLElement {
   const chip = document.createElement('button');
   chip.type = 'button';
   chip.className = 'km-voice-phrase shared';
-  if (word !== DISPOSITIONS[OPEN_DISPOSITION[v]].word) chip.classList.add('changed');
+  const isPrimary = word === effectiveDispositionWord(OPEN_DISPOSITION[v]);
+  if (isPrimary && word !== DISPOSITIONS[OPEN_DISPOSITION[v]].word) chip.classList.add('changed');
   chip.textContent = `\u201c${word}\u201d`;
   chip.title = 'A shared word — rename it once under “Shared words”. Click to go there.';
   chip.addEventListener('click', () => navigateToSharedWord(OPEN_DISPOSITION[v]));
