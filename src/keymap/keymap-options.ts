@@ -11,6 +11,8 @@
 
 import {
   COMMAND_CATALOG,
+  DISPOSITIONS,
+  type DispositionKey,
   COMMAND_BY_ID,
   DEFAULT_KEYMAP,
   type CommandMeta,
@@ -101,7 +103,17 @@ function updateSaveBar(): void {
   if (bar) bar.hidden = !isDirty();
 }
 
+// Other same-page projections of the voice customizations (the palette
+// landing-spot table) re-render off this — one owner of override state
+// (this module), N views. Fired from render(), which every mutation path
+// already funnels through.
+const voiceChangeListeners: Array<() => void> = [];
+export function onVoiceCustomizationsChanged(cb: () => void): void {
+  voiceChangeListeners.push(cb);
+}
+
 function render(): void {
+  for (const cb of voiceChangeListeners) cb();
   keymapEl.replaceChildren();
   // Voice reset only exists when there's a BranchKit to reset against (the
   // overrides live in the actuator). Shown whenever connected — even with nothing
@@ -546,6 +558,42 @@ function retargetPattern(edited: string, memberDefault: string): string {
     .join(' ');
 }
 
+/**
+ * The disposition word as the user currently speaks it — the first member's
+ * effective pattern minus its capture slots. The palette settings table
+ * renders and edits THIS, never its own copy.
+ */
+export function effectiveDispositionWord(key: DispositionKey): string {
+  const m = sharedMembers(key)[0];
+  if (!m) return DISPOSITIONS[key].word;
+  const eff = overrides.get(overrideKey(m.meta.id, m.vp.pattern)) ?? m.vp.pattern;
+  const words = eff.split(/\s+/).filter((t) => !t.startsWith('{'));
+  return words.join(' ') || DISPOSITIONS[key].word;
+}
+
+/**
+ * Save a disposition word from any projection: builds the first member's
+ * pattern from the word, validates it, and runs the same fan-out as an
+ * in-editor edit. Returns null on success or a user-facing error. A word
+ * equal to the shipped default resets every member instead.
+ */
+export async function saveDispositionWord(key: DispositionKey, word: string): Promise<string | null> {
+  const members = sharedMembers(key);
+  if (members.length === 0) return 'Unknown word.';
+  const first = members[0];
+  const caps = first.vp.pattern.split(/\s+/).filter((t) => t.startsWith('{'));
+  const candidate = [word.trim(), ...caps].join(' ');
+  if (candidate === first.vp.pattern) {
+    await resetVoicePattern(first.meta, first.vp); // fans out
+    return null;
+  }
+  const invalid = validateOverridePhrase(first.vp.pattern, candidate);
+  if (invalid) return invalid;
+  const failures = await fanOutSharedSave(members, candidate);
+  render();
+  return failures[0] ?? null;
+}
+
 /** "also spoken by: Open badge in new tab" — the linkage, named. */
 function sharedTitle(meta: CommandMeta, vp: VoicePattern): string {
   if (!vp.sharedWord) return '';
@@ -554,13 +602,13 @@ function sharedTitle(meta: CommandMeta, vp: VoicePattern): string {
   return ` This word is shared with ${others.map((m) => `\u201c${m.meta.label}\u201d`).join(', ')} — changing it changes all of them.`;
 }
 
-async function saveVoicePattern(meta: CommandMeta, vp: VoicePattern, newPattern: string): Promise<void> {
-  // Shared word → one edit, every member. Each member gets the same words
-  // re-targeted at its own capture slots. Non-shared patterns are a
-  // one-member list of themselves, so both shapes take the same path.
-  const members = vp.sharedWord
-    ? sharedMembers(vp.sharedWord)
-    : [{ meta, vp }];
+/** The fan-out core shared by in-editor edits and external projections
+ *  (saveDispositionWord): write each member's re-targeted override, mirror
+ *  successes into the local map, collect failures. */
+async function fanOutSharedSave(
+  members: Array<{ meta: CommandMeta; vp: VoicePattern }>,
+  newPattern: string,
+): Promise<string[]> {
   const failures: string[] = [];
   for (const m of members) {
     const target = retargetPattern(newPattern, m.vp.pattern);
@@ -573,6 +621,17 @@ async function saveVoicePattern(meta: CommandMeta, vp: VoicePattern, newPattern:
     if (r?.ok) overrides.set(overrideKey(m.meta.id, m.vp.pattern), target);
     else failures.push(r?.error || `Could not save for \u201c${m.meta.label}\u201d.`);
   }
+  return failures;
+}
+
+async function saveVoicePattern(meta: CommandMeta, vp: VoicePattern, newPattern: string): Promise<void> {
+  // Shared word → one edit, every member. Each member gets the same words
+  // re-targeted at its own capture slots. Non-shared patterns are a
+  // one-member list of themselves, so both shapes take the same path.
+  const members = vp.sharedWord
+    ? sharedMembers(vp.sharedWord)
+    : [{ meta, vp }];
+  const failures = await fanOutSharedSave(members, newPattern);
   render();
   if (failures.length > 0) {
     // Reopen on the row the user edited, naming what failed — successes

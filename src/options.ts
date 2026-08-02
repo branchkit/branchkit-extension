@@ -55,10 +55,10 @@ import {
   savePaletteOpenDefault,
   type PaletteOpenDefault,
 } from './palette-open-storage';
-import { COMMAND_BY_ID } from './keymap/command-catalog';
+import { DISPOSITIONS, type DispositionKey } from './keymap/command-catalog';
 import {
-  effectiveVoice, overridesFromList, type OverrideRecord,
-} from './keymap/command-override';
+  effectiveDispositionWord, saveDispositionWord, onVoiceCustomizationsChanged,
+} from './keymap/keymap-options';
 import { micGlyph, keyGlyph } from './render/mic-glyph';
 
 // --- State ---
@@ -685,27 +685,21 @@ async function init(): Promise<void> {
 
   await initBadgeSettings();
   await initSearchEngine();
-  await initPaletteOpen();
   await initKeymapEditor();
+  // After the keymap editor: the palette table projects ITS override state.
+  await initPaletteOpen();
   await initKeyboardRules();
   initSideNav();
 }
 
 // --- Palette (default landing spot for a plain pick) ---
 
-/** The catalog verb behind each landing spot ('blank' is palette_select_newtab
- *  etc.), so the hint below the select can show the words the USER actually
- *  says — overrides and aliases applied — not the shipped defaults. */
-const OPEN_VERB_COMMANDS: Record<PaletteOpenDefault, string> = {
-  blank: 'palette_select_newtab',
-  here: 'palette_select_here',
-  stash: 'palette_select_background',
-};
-
-const OPEN_LABELS: Record<PaletteOpenDefault, string> = {
-  blank: 'a new tab',
-  here: 'this tab',
-  stash: 'a background tab',
+/** Landing spot → its DISPOSITIONS key (palette-open-storage names follow
+ *  OpenWhere; the vocabulary names follow the catalog). */
+const OPEN_DISPOSITION: Record<PaletteOpenDefault, DispositionKey> = {
+  blank: 'newtab',
+  here: 'here',
+  stash: 'background',
 };
 
 async function initPaletteOpen(): Promise<void> {
@@ -714,50 +708,38 @@ async function initPaletteOpen(): Promise<void> {
   if (!select || !note) return;
   select.value = await loadPaletteOpenDefault();
 
-  // Effective spoken form per verb (user phrase overrides + aliases applied;
-  // both fetches fall back to [] when BranchKit isn't running, leaving the
-  // shipped words). "blank {palette}" → the word said before a badge.
-  const [overridesResp, aliasesResp] = await Promise.all([
-    chrome.runtime.sendMessage({ type: 'GET_COMMAND_OVERRIDES' }).catch(() => undefined),
-    chrome.runtime.sendMessage({ type: 'GET_COMMAND_ALIASES' }).catch(() => undefined),
-  ]);
-  const overrides = overridesFromList(
-    ((overridesResp as { overrides?: OverrideRecord[] } | undefined)?.overrides) ?? [],
-  );
-  const aliases = ((aliasesResp as { aliases?: OverrideRecord[] } | undefined)?.aliases) ?? [];
-  const spokenFor = (openAs: PaletteOpenDefault): string => {
-    const meta = COMMAND_BY_ID.get(OPEN_VERB_COMMANDS[openAs]);
-    const patterns = (meta?.voice ?? []).map((v) => v.pattern);
-    const words = effectiveVoice(OPEN_VERB_COMMANDS[openAs], patterns, overrides, aliases)
-      .map((p) => p.replace('{palette}', '').trim())
-      .filter((w) => w !== '');
-    return [...new Set(words)].map((w) => `“${w}”`).join(' or ');
-  };
-
   // One row per landing spot: what it does, the keys, the spoken form —
   // re-annotated as the default moves, so the choice of one rule is made
   // seeing exactly what the other two cost to reach.
+  //
+  // The spoken words are a PROJECTION of the keymap editor's override state
+  // (effectiveDispositionWord) and edit THROUGH it (saveDispositionWord),
+  // so this table and the editor above cannot drift — one owner, two views.
+  // The keys column stays read-only: the Enter family is palette-internal
+  // semantics (a closed set), not registry binds.
   const renderNote = (): void => {
     const chosen = select.value as PaletteOpenDefault;
     note.textContent = '';
     for (const v of ['blank', 'here', 'stash'] as const) {
       const isDefault = v === chosen;
+      const word = effectiveDispositionWord(OPEN_DISPOSITION[v]);
       const row = document.createElement('div');
       row.className = 'km-row';
       const label = document.createElement('span');
       label.className = 'km-row-label';
-      label.textContent = OPEN_LABELS[v].replace(/^(a|this) /, (m) => m[0].toUpperCase() + m.slice(1));
+      label.textContent = DISPOSITIONS[OPEN_DISPOSITION[v]].label
+        .replace(/^(a|this) /, (m) => m[0].toUpperCase() + m.slice(1));
       if (isDefault) {
         const chip = document.createElement('span');
         chip.textContent = ' default';
         chip.style.cssText = 'color: var(--accent); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;';
         label.appendChild(chip);
       }
-      const cell = (glyph: SVGElement, text: string): HTMLSpanElement => {
+      const cell = (glyph: SVGElement): HTMLSpanElement => {
         const span = document.createElement('span');
         span.style.cssText = 'display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--fg-muted);';
         glyph.style.cssText = 'width: 12px; height: 12px; flex: 0 0 auto; color: var(--accent); opacity: 0.9;';
-        span.append(glyph, document.createTextNode(text));
+        span.append(glyph);
         return span;
       };
       const KEYS: Record<PaletteOpenDefault, string> = {
@@ -765,19 +747,64 @@ async function initPaletteOpen(): Promise<void> {
         here: 'Shift+Enter',
         stash: 'Ctrl/Cmd+Enter',
       };
-      const keys = cell(keyGlyph(), isDefault ? `Enter · ${KEYS[v]}` : KEYS[v]);
-      const voice = cell(micGlyph(), isDefault
-        ? `the badge word — or ${spokenFor(v)} + badge`
-        : `${spokenFor(v)} + badge`);
+      const keys = cell(keyGlyph());
+      keys.appendChild(document.createTextNode(isDefault ? `Enter · ${KEYS[v]}` : KEYS[v]));
+      const voice = cell(micGlyph());
+      if (isDefault) voice.appendChild(document.createTextNode('the badge word — or'));
+      voice.appendChild(wordChip(v, word, renderNote));
+      voice.appendChild(document.createTextNode('+ badge'));
       row.append(label, keys, voice);
       note.appendChild(row);
     }
   };
+
   renderNote();
+  // Re-render when the keymap editor (or this table) changes a word — one
+  // override store, every projection current.
+  onVoiceCustomizationsChanged(renderNote);
   select.addEventListener('change', () => {
     savePaletteOpenDefault(select.value as PaletteOpenDefault);
     renderNote();
   });
+}
+
+/** The editable spoken word: a chip that swaps to an inline input, saving
+ *  through the keymap editor's fan-out — the same one edit an in-editor
+ *  rename is, just reachable where the palette teaches the word. */
+function wordChip(v: PaletteOpenDefault, word: string, rerender: () => void): HTMLElement {
+  const chip = document.createElement('button');
+  chip.type = 'button';
+  chip.className = 'km-voice-phrase shared';
+  if (word !== DISPOSITIONS[OPEN_DISPOSITION[v]].word) chip.classList.add('changed');
+  chip.textContent = `\u201c${word}\u201d`;
+  chip.title = 'Click to change what you say — on every surface that speaks it.';
+  chip.addEventListener('click', () => {
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = word;
+    input.className = 'km-voice-phrase';
+    input.style.width = `${Math.max(word.length + 2, 6)}ch`;
+    input.setAttribute('aria-label', 'Spoken word');
+    chip.replaceWith(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = (): void => { done = true; rerender(); };
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); finish(); return; }
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      if (done) return;
+      void saveDispositionWord(OPEN_DISPOSITION[v], input.value).then((err) => {
+        if (err === null) { finish(); return; }
+        input.setCustomValidity(err);
+        input.reportValidity();
+      });
+    });
+    input.addEventListener('blur', () => { if (!done) finish(); });
+    input.addEventListener('input', () => input.setCustomValidity(''));
+  });
+  return chip;
 }
 
 // --- Search engine (palette web-search row template) ---
