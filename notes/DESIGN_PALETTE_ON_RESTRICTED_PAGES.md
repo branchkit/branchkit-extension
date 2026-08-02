@@ -1,8 +1,9 @@
 # Design: Reaching the Palette on Restricted Pages
 
-Status: proposal. Nothing built. Field report 2026-07-30: "I open a new browser
-tab and the extension isn't active — I can't get into the palette to go to one of
-my bookmarks."
+Status: proposal, investigation 2026-08-02 (section at bottom — resolves most
+of Q3/Q4, adds a store-sequencing decision). Nothing built. Field report
+2026-07-30: "I open a new browser tab and the extension isn't active — I can't
+get into the palette to go to one of my bookmarks."
 
 Open a new tab and the palette is unreachable. Same on `chrome://settings`,
 `chrome://extensions`, the Chrome Web Store, and the PDF viewer. The new tab page
@@ -153,3 +154,66 @@ gap.
    establish it empirically before designing around it, since it may just work.
 5. **Which window's active tab** for Route B's command fallback, given the palette
    window is frontmost when the pick happens.
+
+## Investigation 2026-08-02
+
+Done from the workspace after the palette URL+search arc landed
+(`DESIGN_PALETTE_URL_SEARCH.md`) — which changes this note's stakes: the
+standalone palette is now a **complete** exit from a restricted page
+(bookmark, open tab, never-visited URL, or web search), not just a switcher
+over what already exists. Two references above age with that arc:
+`open_bookmark` is now `navigate` (rename, phases 2–3), and Route B's "opens
+in a new tab, which is exactly what the no-origin-tab path already does"
+claim now covers the URL and search rows too — they dispatch `navigate` and
+need no origin tab. Q1 also softens: even with zero bookmarks, an NTP-hosted
+palette has real content, because typing anything produces a destination.
+
+**Q4 (voice half without a content script) — mostly resolved, statically.**
+The voice pipeline splits cleanly by realm:
+
+- *Publish and selection never touch the content script.* The frame posts
+  `PALETTE_PUBLISH` over `chrome.runtime.sendMessage` (works from any
+  extension page); `publishPaletteVoice` POSTs `/palette` from the
+  background; and a spoken pick returns to `handlePaletteVoiceSelect`
+  (background), which holds the row→dispatch map itself. Voice selection on
+  an NTP palette should work with zero new code.
+- *What is genuinely content-script-bound:* the holder registry
+  (`labels/holder-registry.ts`) — mid-utterance `narrowByPrefix` fan-out and
+  exclusive-claim arbitration — plus the host's `modes.push('palette')`
+  mode-stack membership. On a page with no hints, arbitration is moot (there
+  are no competing holders to suppress), so the real loss is exactly one
+  feature: **live badge dimming/prefix narrowing mid-utterance**, whose
+  progress leg today ends at the focused tab's content script.
+- Consequence: the missing piece is one background→palette-tab forwarding
+  leg for narrow progress (an extension page receives
+  `chrome.tabs.sendMessage` addressed to its tab), not a re-architecture.
+  Ship without it first — selection works, the rows still filter by typed
+  text — and add the leg if mid-utterance dimming proves missed in the
+  field.
+
+**Q3 (iframe host vs direct render) — leans direct render.** The host earns
+its existence through page isolation (host page must not observe keystrokes)
+and Firefox CS-privilege relaying. An NTP extension page needs neither:
+there is no untrusted page to isolate from, and the page is fully
+privileged, so `PALETTE_BOOTSTRAP` goes direct (already the Chrome
+standalone path, verified 2026-07-30). Rendering palette-page directly also
+sidesteps the host's mode-stack and holder plumbing consistently with the
+Q4 finding — those are content-script concepts, absent by design rather
+than half-present.
+
+**New decision surfaced — store-submission sequencing.**
+`chrome_url_overrides.newtab` is not just a manifest key: it adds Chrome's
+"An extension changed your new tab page" keep-or-revert prompt, an install
+warning on the listing, extra CWS review scrutiny (NTP-override extensions
+are a policy hot spot), and Firefox's own first-new-tab confirmation. The
+browser-store submission arc is at the console-work stage. Options:
+
+1. Submit first, ship Route A in a later update — the initial listing stays
+   clean; the update triggers re-review but with an established extension.
+2. Claim the NTP from day one — one review cycle, but the scariest
+   permission is on the first impression.
+
+Leaning (1); it also buys field time with the standalone palette
+(`palette.html` as a pinned/bookmarked tab) to answer Q1/Q2 from experience
+before committing to what the NTP shows. Decide before implementation, not
+during.
