@@ -325,10 +325,16 @@ export type Message =
  * something to render: the Discovery HUD auto-derives its subtitle from the
  * collection's value_field, which is `row_id` — an internal handle ("tab:12",
  * "cmd:pin_tab"). The manifest declares title as the secondary field so it
- * wins that slot. */
+ * wins that slot.
+ *
+ * `group` is the row's display section ("Tabs" / "Commands" / "Bookmarks" /
+ * "Search"), declared with the `group` role so the Discovery HUD sections
+ * the palette's rows by source. Stamped here — the plugin treats row_id as
+ * opaque, so it cannot derive the section itself. Display-only, like title. */
 export interface PaletteVoiceEntry {
   spoken: string;
   title: string;
+  group: string;
   row_id: string;
 }
 

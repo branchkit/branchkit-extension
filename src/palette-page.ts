@@ -200,6 +200,19 @@ function emptyStateSections(): PaletteSection[] {
  * than its badge, because an unbadged row is unreachable by both voice and
  * keyboard.
  */
+/** Discovery-HUD section name for a row's source — published on each voice
+ *  entry via the collection's `group` display role, so the HUD sections the
+ *  palette's rows (Tabs / Commands / Bookmarks / Search) instead of one flat
+ *  list. Display-only vocabulary; dispatch never reads it. */
+function voiceGroupLabel(source: PaletteItem['source']): string {
+  switch (source) {
+    case 'tabs': return 'Tabs';
+    case 'commands': return 'Commands';
+    case 'bookmarks': return 'Bookmarks';
+    case 'query': return 'Search';
+  }
+}
+
 function publishOrder(): PaletteItem[] {
   const ordered = emptyStateSections().flatMap((s) => s.items);
   const every = [...tabItems, ...commandItems, ...bookmarkItems];
@@ -864,9 +877,12 @@ function assignAndPublish(alphabet: string[]): void {
     // Tabs: cw is a mark letter → spoken is its overlay words (empty when no
     // alphabet). Full palette: cw is already the spoken word.
     const spoken = scope === 'tabs' ? markToSpokenWords(cw, alphabet) : cw;
-    // `title` is display-only — it gives the Discovery HUD a human subtitle
-    // instead of the opaque row_id it would otherwise derive.
-    if (spoken) entries.push({ spoken, title: item.title, row_id: item.id });
+    // `title` and `group` are display-only — the title gives the Discovery
+    // HUD a human subtitle instead of the opaque row_id it would otherwise
+    // derive, and the group sections the HUD's rows by source.
+    if (spoken) {
+      entries.push({ spoken, title: item.title, group: voiceGroupLabel(item.source), row_id: item.id });
+    }
     rows.push({ row_id: item.id, dispatch: item.dispatch });
   }
   // Query rows: spoken entries + narrowing claim like any row, but NO rows[]
@@ -886,7 +902,7 @@ function assignAndPublish(alphabet: string[]): void {
       tokens.set(rowId, token);
       claim.push({ token, rowId });
     }
-    entries.push({ spoken: cw, title, row_id: rowId });
+    entries.push({ spoken: cw, title, group: voiceGroupLabel('query'), row_id: rowId });
   }
   // No spoken entries (voice off) → don't open a voice session / exclusive tag.
   if (entries.length === 0) return;
