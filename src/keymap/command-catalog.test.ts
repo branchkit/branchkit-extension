@@ -3,6 +3,7 @@ import {
   COMMAND_CATALOG,
   COMMAND_BY_ID,
   DEFAULT_KEYMAP,
+  DISPOSITIONS,
   type CommandMeta,
 } from './command-catalog';
 
@@ -247,5 +248,32 @@ describe('default keymap', () => {
       { keys: 'shift+KeyB', command: 'toggle_bookmark_palette' },
       { keys: 'shift+Slash', command: 'toggle_help' },
     ]);
+  });
+});
+
+describe('shared vocabulary (DISPOSITIONS)', () => {
+  it('every sharedWord pattern leads with its vocabulary word — the single source', () => {
+    for (const c of COMMAND_CATALOG) {
+      for (const vp of c.voice ?? []) {
+        if (!vp.sharedWord) continue;
+        const word = DISPOSITIONS[vp.sharedWord].word;
+        expect(vp.pattern.startsWith(word + ' '), `${c.id}: ${vp.pattern}`).toBe(true);
+      }
+    }
+  });
+
+  it('each disposition word is spoken by every surface that has the disposition', () => {
+    // The linkage the editor fans over: page badges + palette for newtab and
+    // background; the palette alone speaks here (a bare hint pick already
+    // navigates in place). Growing a surface should grow these lists.
+    const byKey = new Map<string, string[]>();
+    for (const c of COMMAND_CATALOG) {
+      for (const vp of c.voice ?? []) {
+        if (vp.sharedWord) byKey.set(vp.sharedWord, [...(byKey.get(vp.sharedWord) ?? []), c.id]);
+      }
+    }
+    expect(byKey.get('newtab')?.sort()).toEqual(['activate_hint_newtab', 'palette_select_newtab']);
+    expect(byKey.get('background')?.sort()).toEqual(['activate_hint_background', 'palette_select_background']);
+    expect(byKey.get('here')).toEqual(['palette_select_here']);
   });
 });

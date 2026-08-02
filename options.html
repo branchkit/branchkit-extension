@@ -465,6 +465,9 @@
       .km-voice-phrases { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
       .km-voice-item { display: inline-flex; align-items: center; gap: 2px; }
       .km-voice-phrase { font: inherit; font-style: italic; color: var(--fg-muted); background: transparent; border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; cursor: text; }
+      /* Shared-vocabulary word (DISPOSITIONS): dotted underline = "linked" —
+         editing it edits every surface that speaks it (tooltip names them). */
+      .km-voice-phrase.shared { text-decoration: underline dotted; text-underline-offset: 3px; }
       .km-voice-phrase:hover:not(:disabled) { border-color: var(--accent); color: var(--fg); }
       .km-voice-phrase:disabled { cursor: default; }
       .km-voice-phrase.changed { color: var(--accent); border-color: var(--accent); font-style: normal; }

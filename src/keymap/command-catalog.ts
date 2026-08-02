@@ -26,6 +26,20 @@ export interface ParamSchema {
 }
 
 /**
+ * The landing-spot vocabulary — one feature spanning surfaces (page badges,
+ * palette rows): where a pick lands. The words live HERE, once; every voice
+ * pattern that speaks them derives from this table and tags itself with
+ * `sharedWord`, so renaming a word (keymap editor) is one edit that follows
+ * the feature across its boundaries rather than one surface's copy drifting.
+ */
+export const DISPOSITIONS = {
+  newtab: { word: 'blank', label: 'a new tab' },
+  background: { word: 'stash', label: 'a background tab' },
+  here: { word: 'here', label: 'this tab' },
+} as const;
+export type DispositionKey = keyof typeof DISPOSITIONS;
+
+/**
  * A spoken form of a command, owned by the extension. When BranchKit is present
  * the extension contributes these up to the browser plugin (the registrar), so
  * voice phrases live in ONE place with the command's keybind and action — never
@@ -45,6 +59,15 @@ export interface VoicePattern {
    * a distinction that belongs entirely to the plugin.
    */
   pattern: string;
+  /**
+   * Names the shared vocabulary this pattern's fixed words belong to
+   * (DISPOSITIONS): ONE word used across surfaces — "stash {hint+}" on page
+   * badges and "stash {palette}" in the palette are one feature, and the
+   * keymap editor edits the word ONCE, fanning the override to every member
+   * pattern. The catalog is the single source; per-command overrides are the
+   * derived projection.
+   */
+  sharedWord?: DispositionKey;
   /**
    * Action params this phrase binds. Values may reference a capture by name
    * ("{number}" / "{text}"). Omitted = the command's bare action.
@@ -152,13 +175,13 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // notes/DESIGN_MULTI_TARGET_COMMANDS.md (phase 1).
   { id: 'activate_hint_newtab', label: 'Open badge in new tab', group: 'Badges', mappable: false, params: [],
     description: 'Open the badge’s link in a new focused tab.',
-    voice: [{ pattern: 'blank {hint}' }] },
+    voice: [{ pattern: `${DISPOSITIONS.newtab.word} {hint}`, sharedWord: 'newtab' }] },
   // {hint+} = one or more hint codewords in a single breath ("stash huge gap
   // arch same" opens both) — the plugin expands it to its repeated capture
   // macro and delivers the ordered target list; the SW fans it out per target.
   { id: 'activate_hint_background', label: 'Open badges in background tabs', group: 'Badges', mappable: false, params: [],
     description: 'Open one or more badge links in background tabs; badges stay up for the next command.',
-    voice: [{ pattern: 'stash {hint+}' }],
+    voice: [{ pattern: `${DISPOSITIONS.background.word} {hint+}`, sharedWord: 'background' }],
     retainsHints: true },
 
   // --- Scroll ---
@@ -698,11 +721,11 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // (tabs, commands) ignore the modifier and dispatch normally.
   { id: 'palette_select_newtab', label: 'Open palette row in new tab', group: 'Palette', mappable: false, params: [],
     description: 'Open a palette row in a new focused tab, whatever your default (“blank” + its badge, or type a badge letter as a CAPITAL — the hint surface’s aA affordance).',
-    voice: [{ pattern: 'blank {palette}' }],
+    voice: [{ pattern: `${DISPOSITIONS.newtab.word} {palette}`, sharedWord: 'newtab' }],
     voiceContext: 'palette' },
   { id: 'palette_select_background', label: 'Open palette row in background tab', group: 'Palette', mappable: false, params: [],
     description: 'Open a palette row in a background tab — the page you are on keeps focus (“stash” + its badge, or Ctrl/Cmd+Enter).',
-    voice: [{ pattern: 'stash {palette}' }],
+    voice: [{ pattern: `${DISPOSITIONS.background.word} {palette}`, sharedWord: 'background' }],
     voiceContext: 'palette' },
   // The third disposition, completing the set: navigate THIS tab instead of
   // opening one. Ships as the non-default — new-tab is the safe bare pick
@@ -710,7 +733,7 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // but the bare-pick meaning is the user's to configure.
   { id: 'palette_select_here', label: 'Open palette row in this tab', group: 'Palette', mappable: false, params: [],
     description: 'Navigate the current tab to a palette row — no new tab (“here” + its badge, or Shift+Enter).',
-    voice: [{ pattern: 'here {palette}' }],
+    voice: [{ pattern: `${DISPOSITIONS.here.word} {palette}`, sharedWord: 'here' }],
     voiceContext: 'palette' },
   // Same word as hint-hide, disambiguated by context: palette open = only
   // this one is eligible (exclusive tag); palette closed = only the hint one.

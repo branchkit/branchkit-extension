@@ -386,9 +386,10 @@ function fillVoicePatternItem(wrap: HTMLElement, meta: CommandMeta, vp: VoicePat
   if (disconnected) {
     phrase.disabled = true;
   } else {
-    phrase.title = 'Click to change what you say';
+    phrase.title = 'Click to change what you say.' + sharedTitle(meta, vp);
     phrase.addEventListener('click', () => editVoicePattern(wrap, meta, vp));
   }
+  if (vp.sharedWord) phrase.classList.add('shared');
   wrap.appendChild(phrase);
 
   if (custom !== undefined && !disconnected) {
@@ -396,7 +397,7 @@ function fillVoicePatternItem(wrap: HTMLElement, meta: CommandMeta, vp: VoicePat
     reset.type = 'button';
     reset.className = 'km-voice-reset';
     reset.textContent = '↺';
-    reset.title = 'Reset to the default phrase';
+    reset.title = 'Reset to the default phrase.' + sharedTitle(meta, vp);
     reset.addEventListener('click', () => void resetVoicePattern(meta, vp));
     wrap.appendChild(reset);
   }
@@ -514,24 +515,72 @@ export function openInlineEditor(spec: InlineEditorSpec): void {
   else validate();
 }
 
-async function saveVoicePattern(meta: CommandMeta, vp: VoicePattern, newPattern: string): Promise<void> {
-  const r = await chrome.runtime.sendMessage({
-    type: 'SET_COMMAND_OVERRIDE',
-    action: meta.id,
-    defaultPattern: vp.pattern,
-    newPattern,
-  }).catch(() => ({ ok: false, error: 'Not connected to BranchKit.' }));
 
-  if (r?.ok) {
-    overrides.set(overrideKey(meta.id, vp.pattern), newPattern);
-    render();
-    return;
+// --- Shared-word fan-out (DISPOSITIONS, command-catalog.ts) ---
+//
+// A pattern tagged `sharedWord` speaks a vocabulary word that other surfaces
+// speak too ("stash" on page badges AND palette rows — one feature across
+// boundaries). The editor treats the WORD as the thing being edited: saving
+// or resetting any member fans the change to every member, so the surfaces
+// cannot drift apart. Overrides stay per-command on the wire (no schema
+// change); the fan-out is what makes them one edit.
+
+/** Every (command, pattern) speaking this shared word. */
+function sharedMembers(key: NonNullable<VoicePattern['sharedWord']>): Array<{ meta: CommandMeta; vp: VoicePattern }> {
+  const out: Array<{ meta: CommandMeta; vp: VoicePattern }> = [];
+  for (const meta of COMMAND_CATALOG) {
+    for (const vp of meta.voice ?? []) {
+      if (vp.sharedWord === key) out.push({ meta, vp });
+    }
   }
-  // Server rejected it (rare — the client mirror catches most). Reopen the
-  // editor on the same row with the attempted value and the server's message.
+  return out;
+}
+
+/** The edited pattern re-targeted at another member: same words, the member's
+ *  own capture slots swapped in positionally ({palette} → {hint+}…). */
+function retargetPattern(edited: string, memberDefault: string): string {
+  const memberCaps = memberDefault.split(/\s+/).filter((t) => t.startsWith('{'));
+  let i = 0;
+  return edited.split(/\s+/)
+    .map((t) => (t.startsWith('{') ? memberCaps[i++] ?? t : t))
+    .join(' ');
+}
+
+/** "also spoken by: Open badge in new tab" — the linkage, named. */
+function sharedTitle(meta: CommandMeta, vp: VoicePattern): string {
+  if (!vp.sharedWord) return '';
+  const others = sharedMembers(vp.sharedWord).filter((m) => m.meta.id !== meta.id);
+  if (others.length === 0) return '';
+  return ` This word is shared with ${others.map((m) => `\u201c${m.meta.label}\u201d`).join(', ')} — changing it changes all of them.`;
+}
+
+async function saveVoicePattern(meta: CommandMeta, vp: VoicePattern, newPattern: string): Promise<void> {
+  // Shared word → one edit, every member. Each member gets the same words
+  // re-targeted at its own capture slots. Non-shared patterns are a
+  // one-member list of themselves, so both shapes take the same path.
+  const members = vp.sharedWord
+    ? sharedMembers(vp.sharedWord)
+    : [{ meta, vp }];
+  const failures: string[] = [];
+  for (const m of members) {
+    const target = retargetPattern(newPattern, m.vp.pattern);
+    const r = await chrome.runtime.sendMessage({
+      type: 'SET_COMMAND_OVERRIDE',
+      action: m.meta.id,
+      defaultPattern: m.vp.pattern,
+      newPattern: target,
+    }).catch(() => ({ ok: false, error: 'Not connected to BranchKit.' }));
+    if (r?.ok) overrides.set(overrideKey(m.meta.id, m.vp.pattern), target);
+    else failures.push(r?.error || `Could not save for \u201c${m.meta.label}\u201d.`);
+  }
   render();
-  const wrap = findVoiceItem(meta.id, vp.pattern);
-  if (wrap) editVoicePattern(wrap, meta, vp, newPattern, r?.error || 'Could not save the phrase.');
+  if (failures.length > 0) {
+    // Reopen on the row the user edited, naming what failed — successes
+    // stand (same partial-failure honesty as resetAllVoice: non-atomic,
+    // REPORTED rather than claimed complete).
+    const wrap = findVoiceItem(meta.id, vp.pattern);
+    if (wrap) editVoicePattern(wrap, meta, vp, newPattern, failures[0]);
+  }
 }
 
 /**
@@ -605,12 +654,16 @@ function showResetStatus(message: string, isError = false): void {
 let resetStatusTimer: number | null = null;
 
 async function resetVoicePattern(meta: CommandMeta, vp: VoicePattern): Promise<void> {
-  const r = await chrome.runtime.sendMessage({
-    type: 'RESET_COMMAND_OVERRIDE',
-    action: meta.id,
-    defaultPattern: vp.pattern,
-  }).catch(() => ({ ok: false }));
-  if (r?.ok) overrides.delete(overrideKey(meta.id, vp.pattern));
+  // Same fan-out as save: resetting a shared word resets every member.
+  const members = vp.sharedWord ? sharedMembers(vp.sharedWord) : [{ meta, vp }];
+  for (const m of members) {
+    const r = await chrome.runtime.sendMessage({
+      type: 'RESET_COMMAND_OVERRIDE',
+      action: m.meta.id,
+      defaultPattern: m.vp.pattern,
+    }).catch(() => ({ ok: false }));
+    if (r?.ok) overrides.delete(overrideKey(m.meta.id, m.vp.pattern));
+  }
   render();
 }
 
