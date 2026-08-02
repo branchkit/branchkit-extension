@@ -1,9 +1,9 @@
 # Design: Palette URL Entry + Web Search
 
-Status: phase 1 (search row + engine template) implemented 2026-08-02, live
-verify pending. Phases 2–3 not started. Child of
-`notes/DESIGN_TAB_NAVIGATION.md` (Layer 2); reconciles with
-`notes/DESIGN_PALETTE_ON_RESTRICTED_PAGES.md`.
+Status: all three phases implemented 2026-08-02 (search row + engine
+template, URL row + destination heuristic, `open_bookmark` → `navigate`
+rename), live verify pending. Child of `notes/DESIGN_TAB_NAVIGATION.md`
+(Layer 2); reconciles with `notes/DESIGN_PALETTE_ON_RESTRICTED_PAGES.md`.
 
 The palette ranks over what already exists — open tabs, bookmarks, commands.
 There is no path to a destination the browser has never seen: no "go to this

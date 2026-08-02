@@ -21,7 +21,7 @@ export type PaletteSourceId = 'tabs' | 'commands' | 'bookmarks';
 
 export type PaletteDispatch =
   | { kind: 'switch_tab'; tabId: number }
-  | { kind: 'open_bookmark'; url: string }
+  | { kind: 'navigate'; url: string }
   | { kind: 'command'; command: string; params?: Record<string, string> };
 
 export interface PaletteItem {
@@ -155,7 +155,7 @@ export function buildBookmarkItems(bookmarks: readonly PaletteBookmark[]): Palet
       voice: [],
       words: [...searchWords(b.title), ...searchWords(host), ...searchWords(b.path)],
       group: b.path || undefined,
-      dispatch: { kind: 'open_bookmark' as const, url: b.url },
+      dispatch: { kind: 'navigate' as const, url: b.url },
     };
   });
 }
@@ -379,6 +379,82 @@ export function filterPalette(
   return sections;
 }
 
+/**
+ * TLDs the bare-domain heuristic accepts. Deliberately a SHORT list, not
+ * IANA's: the failure modes are asymmetric (DESIGN_PALETTE_URL_SEARCH.md).
+ * A missed URL still has the search row — engines redirect bare domains —
+ * while a false positive steals the first row and breaks Enter. So common
+ * TLDs only, and none that collide with file extensions ("main.rs",
+ * "node.js" are things people SEARCH for; .rs and .js stay out even though
+ * they are real TLDs).
+ */
+const COMMON_TLDS = new Set([
+  'com', 'net', 'org', 'edu', 'gov', 'mil', 'int', 'io', 'dev', 'app', 'ai',
+  'co', 'me', 'tv', 'fm', 'gg', 'xyz', 'info', 'biz', 'blog', 'shop', 'news',
+  'wiki', 'site', 'online', 'store', 'cloud', 'uk', 'de', 'fr', 'jp', 'cn',
+  'ca', 'au', 'us', 'br', 'in', 'ru', 'nl', 'se', 'no', 'fi', 'dk', 'pl',
+  'ch', 'at', 'be', 'es', 'it', 'pt', 'ie', 'nz', 'cz', 'gr',
+]);
+
+/**
+ * The normalized URL when `query` parses as a destination, else null — the
+ * gate on the "Go to …" row, which sits FIRST and therefore owns Enter. It
+ * claims "URL" only on strong signals; everything ambiguous falls through to
+ * the search row, which handles it correctly anyway:
+ * - an explicit http(s) scheme;
+ * - localhost / an IPv4 address (optional port; http, not https — dev
+ *   servers rarely speak TLS);
+ * - a dotted host whose tail is a COMMON_TLDS member, no whitespace.
+ * Detection never rewrites the typed text — normalization lives in the
+ * returned URL, which the row displays, so Enter has no surprises.
+ */
+export function destinationUrl(query: string): string | null {
+  const q = query.trim();
+  if (q === '' || /\s/.test(q)) return null;
+  if (/^https?:\/\//i.test(q)) {
+    try { return new URL(q).href; } catch { return null; }
+  }
+  // host[:port][/path…] — userinfo deliberately unmatched ("a@b.com" is an
+  // email being searched, not a URL with credentials).
+  const m = /^([^/?#:]+)(:\d{1,5})?([/?#].*)?$/.exec(q);
+  if (!m) return null;
+  const host = m[1].toLowerCase();
+  const labels = host.split('.');
+  const isIp = labels.length === 4
+    && labels.every((l) => /^\d{1,3}$/.test(l) && Number(l) <= 255);
+  const isDotted = labels.length >= 2
+    && labels.every((l) => /^[a-z0-9-]+$/.test(l))
+    && COMMON_TLDS.has(labels[labels.length - 1]);
+  const scheme = host === 'localhost' || isIp ? 'http' : 'https';
+  if (host !== 'localhost' && !isIp && !isDotted) return null;
+  try { return new URL(`${scheme}://${q}`).href; } catch { return null; }
+}
+
+/**
+ * The "Go to …" row (phase 2): present only when the query parses as a
+ * destination, positioned FIRST by the caller — URL-shaped input is
+ * unambiguous intent and Enter should honor it (the omnibox/Vomnibar rule).
+ * Same corpus-exclusion contract as buildSearchSection.
+ */
+export function buildUrlSection(query: string): PaletteSection | null {
+  const url = destinationUrl(query);
+  if (url === null) return null;
+  return {
+    source: 'query',
+    label: 'Address',
+    items: [{
+      source: 'query',
+      id: 'query:url',
+      title: `Go to ${url}`,
+      subtitle: hostOf(url),
+      keys: [],
+      voice: [],
+      words: [],
+      dispatch: { kind: 'navigate', url },
+    }],
+  };
+}
+
 /** The query substituted into an engine template. No `%s` in the template is
  *  tolerated (append) rather than validated — a broken setting must still
  *  produce a working search, not a dead row. */
@@ -419,7 +495,7 @@ export function buildSearchSection(query: string, template: string): PaletteSect
       keys: [],
       voice: [],
       words: [],
-      dispatch: { kind: 'open_bookmark', url },
+      dispatch: { kind: 'navigate', url },
     }],
   };
 }

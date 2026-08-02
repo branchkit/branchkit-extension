@@ -104,10 +104,10 @@ export async function clearPaletteVoice(reason: string): Promise<void> {
   await postToPlugin('/palette', { conn_id: connId, entries: [] });
 }
 
-/** Where an open_bookmark dispatch lands: a new focused tab (DEFAULT), a new
- *  background tab ("stash"), or the origin tab itself ("here" — reachable
- *  through this API, but no verb or keybind currently asks for it).
- *  Non-bookmark rows ignore it. */
+/** Where a navigate dispatch (bookmark, URL, or web-search row) lands: a new
+ *  focused tab (DEFAULT), a new background tab ("stash"), or the origin tab
+ *  itself ("here" — reachable through this API, but no verb or keybind
+ *  currently asks for it). Non-navigate rows ignore it. */
 export type OpenWhere = 'here' | 'blank' | 'stash';
 
 // Command palette selection (Layer 2). Always close the overlay in the origin
@@ -132,7 +132,7 @@ export async function handlePaletteAction(
   if (action.kind === 'switch_tab') {
     // A stale id (tab closed while the palette was open) is a silent no-op.
     await focusWindowAndActivateTab(action.tabId);
-  } else if (action.kind === 'open_bookmark') {
+  } else if (action.kind === 'navigate') {
     // A NEW FOCUSED TAB by default (changed 2026-07-29). A bookmark is
     // somewhere you want to go *as well as* where you already are, so
     // replacing the origin tab throws away context you didn't ask to lose —

@@ -24,7 +24,7 @@ import { applyNavIntent } from './palette/nav';
 import { overridesFromList, type OverrideRecord } from './keymap/command-override';
 import {
   buildTabItems, buildCommandItems, buildBookmarkItems, filterPalette, resolvePaletteQuery,
-  buildSearchSection,
+  buildSearchSection, buildUrlSection,
   type PaletteItem, type PaletteSection, type PaletteTab, type PaletteBookmark,
 } from './palette/model';
 import { DEFAULT_SEARCH_TEMPLATE, loadSearchTemplate } from './search-engine-storage';
@@ -484,16 +484,21 @@ function renderCurrent(): void {
   const sections = filterPalette(
     tabItems, commandItems, resolved.query, scope === 'commands', bookmarkItems,
   );
-  // Web-search row, LAST (fallthrough, not the guess), full + bookmarks scopes
-  // only — tabs and commands are closed sets by intent. Appended after
-  // resolvePaletteQuery so the row can't enter its corpus (a row matching
-  // every query would silently kill both recoveries above — the note's one
-  // load-bearing exclusion). Searches the BOX text, not the resolved query:
-  // a phonetic snap corrects toward what exists in the palette, but the web
-  // has no such corpus — the user's own words are the right thing to search.
+  // Query-derived rows, full + bookmarks scopes only — tabs and commands are
+  // closed sets by intent. Both appended after resolvePaletteQuery so
+  // neither can enter its corpus (a row matching every query would silently
+  // kill both recoveries above — the note's one load-bearing exclusion), and
+  // both read the BOX text, not the resolved query: a phonetic snap corrects
+  // toward what exists in the palette, but a destination or web search has
+  // no such corpus — the user's own words are the right thing.
   // (dictated_retry re-seeds the box to the utterance above, so box text is
   // already the right words there too.)
+  // Positions are the design's asymmetry: URL row FIRST (URL-shaped input is
+  // unambiguous intent — Enter should honor it), search row LAST (the
+  // fallthrough, not the guess).
   if (scope === 'all' || scope === 'bookmarks') {
+    const url = buildUrlSection(queryInput.value);
+    if (url) sections.unshift(url);
     const search = buildSearchSection(queryInput.value, searchTemplate);
     if (search) sections.push(search);
   }

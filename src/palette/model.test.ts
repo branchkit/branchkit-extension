@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   searchWords, buildTabItems, buildCommandItems, buildBookmarkItems, scoreItem, filterPalette,
-  resolvePaletteQuery, searchUrl, buildSearchSection,
+  resolvePaletteQuery, searchUrl, buildSearchSection, destinationUrl, buildUrlSection,
   type PaletteTab, type PaletteItem,
 } from './model';
 import type { CommandMeta, KeymapEntry } from '../keymap/command-catalog';
@@ -153,7 +153,7 @@ describe('filterPalette', () => {
       { title: 'Pull requests', url: 'https://github.com/branchkit/app/pulls', path: 'Bookmarks Bar / Work' },
       { title: 'Recipes', url: 'https://cooking.example.com/', path: '' },
     ]);
-    expect(bms[0].dispatch).toEqual({ kind: 'open_bookmark', url: 'https://github.com/branchkit/app/pulls' });
+    expect(bms[0].dispatch).toEqual({ kind: 'navigate', url: 'https://github.com/branchkit/app/pulls' });
     expect(bms[0].subtitle).toBe('github.com — Bookmarks Bar / Work');
     expect(scoreItem(bms[0], ['work'])).toBeGreaterThan(0);   // folder path
     expect(scoreItem(bms[0], ['github'])).toBeGreaterThan(0); // host
@@ -309,7 +309,7 @@ describe('buildSearchSection', () => {
     expect(s.items[0].title).toBe('Search for “quantum papers”');
     expect(s.items[0].subtitle).toBe('www.google.com');
     expect(s.items[0].dispatch)
-      .toEqual({ kind: 'open_bookmark', url: 'https://www.google.com/search?q=quantum%20papers' });
+      .toEqual({ kind: 'navigate', url: 'https://www.google.com/search?q=quantum%20papers' });
   });
 
   // REGRESSION GUARDS (DESIGN_PALETTE_URL_SEARCH.md): resolvePaletteQuery's
@@ -333,5 +333,65 @@ describe('buildSearchSection', () => {
       .toEqual({ query: 'github', reason: 'dictated_retry' });
     const r = resolvePaletteQuery('rest book', '', leaked);
     expect(r).toEqual({ query: 'rust book', reason: 'phonetic' });
+  });
+});
+
+describe('destinationUrl', () => {
+  // The row this gates sits FIRST and owns Enter, so the table leans hard
+  // toward null: a missed URL still reaches its destination through the
+  // search row (engines redirect bare domains); a false positive hijacks
+  // Enter onto a browser error page.
+  const CASES: Array<[string, string | null]> = [
+    // strong signals — accepted
+    ['github.com', 'https://github.com/'],
+    ['github.com/anthropics', 'https://github.com/anthropics'],
+    ['GitHub.Com', 'https://github.com/'],
+    ['news.ycombinator.com', 'https://news.ycombinator.com/'],
+    ['example.com:8080/path', 'https://example.com:8080/path'],
+    ['https://example.org/x?y=1', 'https://example.org/x?y=1'],
+    ['http://example.org', 'http://example.org/'],
+    ['localhost', 'http://localhost/'],
+    ['localhost:21551/traffic', 'http://localhost:21551/traffic'],
+    ['127.0.0.1:8080', 'http://127.0.0.1:8080/'],
+    // ambiguous — refused, the search row handles them
+    ['rust book', null],            // whitespace: a query, never an address
+    ['github', null],               // no dot
+    ['node.js', null],              // real TLD, but a thing people SEARCH for
+    ['main.rs', null],              // file-extension collision, same
+    ['foo.bar', null],              // real TLD, not in the conservative list
+    ['a@b.com', null],              // email being searched, not credentials
+    ['999.1.1.1', null],            // not an IP, 999 not a TLD
+    ['github.com.', null],          // trailing dot: empty label
+    ['', null],
+    ['   ', null],
+  ];
+  for (const [input, expected] of CASES) {
+    it(`${JSON.stringify(input)} → ${expected === null ? 'null' : expected}`, () => {
+      expect(destinationUrl(input)).toBe(expected);
+    });
+  }
+});
+
+describe('buildUrlSection', () => {
+  it('is absent for anything that is not URL-shaped', () => {
+    expect(buildUrlSection('rust book')).toBeNull();
+    expect(buildUrlSection('')).toBeNull();
+  });
+
+  it('builds one navigate row showing the normalized form', () => {
+    const s = buildUrlSection('github.com/anthropics')!;
+    expect(s.source).toBe('query');
+    expect(s.items).toHaveLength(1);
+    expect(s.items[0].id).toBe('query:url');
+    expect(s.items[0].title).toBe('Go to https://github.com/anthropics');
+    expect(s.items[0].subtitle).toBe('github.com');
+    expect(s.items[0].dispatch)
+      .toEqual({ kind: 'navigate', url: 'https://github.com/anthropics' });
+  });
+
+  it('shares the corpus-exclusion contract (words empty, scores 0)', () => {
+    const row = buildUrlSection('github.com')!.items[0];
+    expect(row.words).toEqual([]);
+    expect(scoreItem(row, ['github'])).toBe(0);
   });
 });

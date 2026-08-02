@@ -51,7 +51,7 @@ async function flush(): Promise<void> {
 const rows = [
   { row_id: 'r1', dispatch: { kind: 'command', command: 'scroll_down' } },
   { row_id: 'r2', dispatch: { kind: 'switch_tab', tabId: 42 } },
-  { row_id: 'bm1', dispatch: { kind: 'open_bookmark', url: 'https://example.com/' } },
+  { row_id: 'bm1', dispatch: { kind: 'navigate', url: 'https://example.com/' } },
 ] as never[];
 
 describe('voice select', () => {
@@ -82,7 +82,7 @@ describe('voice select', () => {
   });
 });
 
-describe('open_bookmark dispositions', () => {
+describe('navigate dispositions', () => {
   // Changed 2026-07-29: a bookmark is somewhere you want to go as well as where
   // you already are, so the default no longer discards the origin tab.
   it('default opens a new focused tab, leaving the origin tab alone', async () => {
@@ -107,7 +107,7 @@ describe('open_bookmark dispositions', () => {
     const viaVoice = lastCall();
     create.mockClear();
     await palette.handlePaletteAction(                   // keyboard, no `where`
-      { kind: 'open_bookmark', url: 'https://example.com/' }, 5,
+      { kind: 'navigate', url: 'https://example.com/' }, 5,
     );
     expect(lastCall()).toEqual(viaVoice);
   });
@@ -141,7 +141,7 @@ describe('open_bookmark dispositions', () => {
   it('falls back to a new tab when the origin tab is gone', async () => {
     const palette = await loadPalette();
     await palette.handlePaletteAction(
-      { kind: 'open_bookmark', url: 'https://example.com/' }, undefined,
+      { kind: 'navigate', url: 'https://example.com/' }, undefined,
     );
     expect(chrome.tabs.create).toHaveBeenCalledWith({ url: 'https://example.com/', active: true });
     expect(chrome.tabs.update).not.toHaveBeenCalled();
