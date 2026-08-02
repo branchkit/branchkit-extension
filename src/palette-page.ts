@@ -930,8 +930,15 @@ async function init(): Promise<void> {
   // Every scope opens in letter mode when there are labels to type; with none
   // (marks off / pool empty / voice alphabet absent) fall back to search so the
   // palette is still usable rather than an inert list.
-  if (typedLabels.size > 0) enterLetterMode();
-  else enterFuzzyMode();
+  //
+  // UNLESS the user already typed: mode starts fuzzy precisely so the
+  // bootstrap window doesn't swallow keystrokes, and promoting here would
+  // clobber what that window collected (enterLetterMode seeds the box empty)
+  // AND leave letter mode eating the keystrokes that follow. Field report
+  // 2026-08-02: typed "localhost:" during a slow bootstrap, box wiped as the
+  // digits landed. Their text outranks our mode default.
+  if (typedLabels.size > 0 && queryInput.value === '') enterLetterMode();
+  else enterFuzzyMode(queryInput.value);
   renderModeChip();
   renderCurrent();
   fdiag(`init ok tabs=${tabItems.length} commands=${commandItems.length} bookmarks=${bookmarkItems.length}${bookmarksError ? ` bookmarks_error=${bookmarksError}` : ''} marks=${codewords.size}`);
