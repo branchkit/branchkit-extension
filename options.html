@@ -315,6 +315,7 @@
     <a href="#sec-keyboard" class="side-link">Keyboard shortcuts</a>
     <a href="#sec-badge" class="side-link">Badge appearance</a>
     <a href="#sec-search" class="side-link">Search engine</a>
+    <a href="#sec-palette" class="side-link">Palette</a>
   </nav>
   <div class="container">
     <h1 id="sec-rules" class="sec"><img src="icons/icon48.png" alt="">Badge rules</h1>
@@ -623,6 +624,24 @@
                style="flex: 1; max-width: 420px; font: inherit; padding: 3px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--card)">
       </div>
       <div class="bs-note" id="search-template-note"></div>
+    </div>
+
+    <h1 id="sec-palette" class="sec" style="margin-top: 40px">Palette</h1>
+    <div class="subtitle">
+      Where a plain pick (Enter, or just the badge word) lands a bookmark,
+      URL, or search row. The modifiers — “blank”, “stash”, “here”, and
+      Shift+Enter — always mean the same thing regardless of this default.
+    </div>
+    <div class="rule" style="padding: 16px">
+      <div class="badge-row">
+        <label for="palette-open-default">Plain pick opens in</label>
+        <select id="palette-open-default"
+                style="font: inherit; padding: 3px 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--card)">
+          <option value="blank">A new tab (default)</option>
+          <option value="here">This tab</option>
+          <option value="stash">A background tab</option>
+        </select>
+      </div>
     </div>
 
     <template id="rule-template">

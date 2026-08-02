@@ -50,6 +50,11 @@ import {
   loadSearchTemplate,
   saveSearchTemplate,
 } from './search-engine-storage';
+import {
+  loadPaletteOpenDefault,
+  savePaletteOpenDefault,
+  type PaletteOpenDefault,
+} from './palette-open-storage';
 
 // --- State ---
 
@@ -675,9 +680,21 @@ async function init(): Promise<void> {
 
   await initBadgeSettings();
   await initSearchEngine();
+  await initPaletteOpen();
   await initKeymapEditor();
   await initKeyboardRules();
   initSideNav();
+}
+
+// --- Palette (default landing spot for a plain pick) ---
+
+async function initPaletteOpen(): Promise<void> {
+  const select = document.getElementById('palette-open-default') as HTMLSelectElement | null;
+  if (!select) return;
+  select.value = await loadPaletteOpenDefault();
+  select.addEventListener('change', () => {
+    savePaletteOpenDefault(select.value as PaletteOpenDefault);
+  });
 }
 
 // --- Search engine (palette web-search row template) ---

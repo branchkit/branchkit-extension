@@ -691,15 +691,13 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     description: 'Activate a palette row by speaking its codeword badge.',
     voice: [{ pattern: '{palette}' }],
     voiceContext: 'palette' },
-  // blank / stash + badge — borrowed from the hint twins
-  // (activate_hint_newtab/_background). NOTE the divergence: for hints a bare
-  // activation navigates in place, whereas a bare palette selection opens a new
-  // focused tab, so "blank" here is now a SYNONYM for the default rather than a
-  // modifier. Kept because it costs nothing and the muscle memory transfers from
-  // the hint surface; not taught in the footer. Rows that aren't links (tabs,
-  // commands) ignore the modifier and dispatch normally.
+  // blank / stash / here + badge — the landing-spot modifiers, borrowed from
+  // the hint twins (activate_hint_newtab/_background). The modifiers are
+  // ABSOLUTE; what a bare pick means is the user's configured default
+  // (palette-open-storage.ts, ships as new-tab). Rows that aren't links
+  // (tabs, commands) ignore the modifier and dispatch normally.
   { id: 'palette_select_newtab', label: 'Open palette row in new tab', group: 'Palette', mappable: false, params: [],
-    description: 'Open a palette bookmark in a new focused tab — the default, so “blank” is optional.',
+    description: 'Open a palette row in a new focused tab, whatever your default (“blank” + its badge).',
     voice: [{ pattern: 'blank {palette}' }],
     voiceContext: 'palette' },
   { id: 'palette_select_background', label: 'Open palette row in background tab', group: 'Palette', mappable: false, params: [],
@@ -707,9 +705,9 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     voice: [{ pattern: 'stash {palette}' }],
     voiceContext: 'palette' },
   // The third disposition, completing the set: navigate THIS tab instead of
-  // opening one. The default stays new-tab everywhere — one rule, and the
-  // safe one (an unwanted tab closes for free; a replaced page loses its
-  // state) — "here" is the explicit "this tab is done, take it somewhere".
+  // opening one. Ships as the non-default — new-tab is the safe bare pick
+  // (an unwanted tab closes for free; a replaced page loses its state) —
+  // but the bare-pick meaning is the user's to configure.
   { id: 'palette_select_here', label: 'Open palette row in this tab', group: 'Palette', mappable: false, params: [],
     description: 'Navigate the current tab to a palette row — no new tab (“here” + its badge, or Shift+Enter).',
     voice: [{ pattern: 'here {palette}' }],

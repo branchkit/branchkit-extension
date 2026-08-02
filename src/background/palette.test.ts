@@ -36,6 +36,7 @@ beforeEach(() => {
       create: vi.fn(async () => ({})),
     },
     windows: { update: vi.fn(async () => ({})) },
+    storage: { sync: { get: vi.fn(async () => ({})) } },
   });
 });
 
@@ -137,6 +138,26 @@ describe('query rows (URL/search — codewords at open, dispatch per keystroke)'
     await flush();
     expect(sentMessages).toHaveLength(0);
     expect(chrome.tabs.create).not.toHaveBeenCalled();
+  });
+
+  it('a configured default governs the BARE pick', async () => {
+    const palette = await loadPalette();
+    vi.mocked(chrome.storage.sync.get).mockResolvedValue({ paletteOpenDefault: 'here' } as never);
+    await palette.publishPaletteVoice(5, [], rows);
+    palette.handlePaletteVoiceSelect('bm1'); // no modifier
+    await flush();
+    expect(chrome.tabs.update).toHaveBeenCalledWith(5, { url: 'https://example.com/' });
+    expect(chrome.tabs.create).not.toHaveBeenCalled();
+  });
+
+  it('explicit modifiers stay absolute over the configured default', async () => {
+    const palette = await loadPalette();
+    vi.mocked(chrome.storage.sync.get).mockResolvedValue({ paletteOpenDefault: 'here' } as never);
+    await palette.publishPaletteVoice(5, [], rows);
+    palette.handlePaletteVoiceSelect('bm1', 'blank'); // "blank" + badge
+    await flush();
+    expect(chrome.tabs.create).toHaveBeenCalledWith({ url: 'https://example.com/', active: true });
+    expect(chrome.tabs.update).not.toHaveBeenCalled();
   });
 
   it('Shift+Enter rides PALETTE_ACTION as where=here and navigates in place', async () => {

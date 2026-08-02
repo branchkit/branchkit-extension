@@ -21,6 +21,7 @@ import { focusWindowAndActivateTab } from './tab-actions';
 import { connId } from './state';
 import { loadMru } from './tab-mru';
 import { loadMarkerMap } from './tab-markers';
+import { loadPaletteOpenDefault } from '../palette-open-storage';
 
 /**
  * Flatten the bookmark tree to leaf bookmarks with their folder path (for the
@@ -118,8 +119,12 @@ export type OpenWhere = 'here' | 'blank' | 'stash';
 export async function handlePaletteAction(
   action: PaletteDispatch | { kind: 'close' },
   originTabId: number | undefined,
-  where: OpenWhere = 'blank',
+  where?: OpenWhere,
 ): Promise<void> {
+  // An unmodified pick means whatever the user configured it to mean
+  // (palette-open-storage.ts); explicit modifiers arrive as a concrete
+  // `where` and skip the lookup. Read per pick — no cached copy.
+  const landing = where ?? (action.kind === 'navigate' ? await loadPaletteOpenDefault() : 'blank');
   // Direct teardown besides the content-side PALETTE_CLOSED signal: if the
   // content script is gone (catch below), the signal never fires, and the
   // exclusive tag must not outlive the palette.
@@ -133,17 +138,17 @@ export async function handlePaletteAction(
     // A stale id (tab closed while the palette was open) is a silent no-op.
     await focusWindowAndActivateTab(action.tabId);
   } else if (action.kind === 'navigate') {
-    // A NEW FOCUSED TAB by default (changed 2026-07-29). A bookmark is
-    // somewhere you want to go *as well as* where you already are, so
-    // replacing the origin tab throws away context you didn't ask to lose —
-    // the reverse of a page hint, where a bare activation navigates in place
-    // because following a link IS the browsing flow. Deliberately diverges
-    // from the hint twins for that reason. "stash" opens it behind instead.
-    // 'here' stays in the type as a capability with no caller.
-    if (where === 'here' && typeof originTabId === 'number') {
+    // A NEW FOCUSED TAB by the shipped default (changed 2026-07-29): a
+    // bookmark is somewhere you want to go *as well as* where you already
+    // are, so replacing the origin tab throws away context you didn't ask
+    // to lose — the reverse of a page hint, where a bare activation
+    // navigates in place because following a link IS the browsing flow.
+    // The user can flip the unmodified-pick default (options page); the
+    // spoken modifiers and Shift+Enter stay absolute either way.
+    if (landing === 'here' && typeof originTabId === 'number') {
       await chrome.tabs.update(originTabId, { url: action.url }).catch(() => {});
     } else {
-      await chrome.tabs.create({ url: action.url, active: where !== 'stash' }).catch(() => {});
+      await chrome.tabs.create({ url: action.url, active: landing !== 'stash' }).catch(() => {});
     }
   } else if (action.kind === 'command' && typeof originTabId === 'number') {
     // Through the content dispatcher in the top frame — the exact semantics
@@ -209,7 +214,7 @@ export const paletteMessageHandlers: Record<string, MessageHandler> = {
    */
   PALETTE_ACTION: (message, sender) => {
     if (!message.action?.kind) return;
-    void handlePaletteAction(message.action, sender.tab?.id, message.where ?? 'blank');
+    void handlePaletteAction(message.action, sender.tab?.id, message.where);
   },
 
   /**
