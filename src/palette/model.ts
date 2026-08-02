@@ -60,6 +60,9 @@ export interface PaletteTab {
   tabId: number;
   title: string;
   url: string;
+  /** Chrome window the tab lives in. Absent in old fixtures/wires → the
+   *  single-window (ungrouped) rendering. */
+  windowId?: number;
 }
 
 /** One flattened bookmark (background/palette.ts loadBookmarks): a leaf with
@@ -94,36 +97,83 @@ function hostOf(url: string): string {
  * ones, and the currently active tab drops to the END — so open-palette +
  * Enter lands on the *previous* tab, the half of switcher usage that needs
  * zero typing.
+ *
+ * With window info (DESIGN_TAB_NAVIGATION.md, window/desk sections): items
+ * carry a `group` — "This window" first, then "Window 2"… in tab-strip
+ * order — and browse mode sections by it. Search mode ignores groups (one
+ * ranked list; a hunt must not fragment by window) but other-window rows
+ * carry the window in their subtitle. The GLOBAL previous tab stays the
+ * first row regardless of its window (pinned into a one-row "Previous"
+ * group when it is cross-window) — Enter's meaning survives the grouping.
+ * Without window info (old wire, single window) nothing changes: no groups,
+ * the flat MRU list as always.
  */
 export function buildTabItems(
   tabs: readonly PaletteTab[],
   mru: readonly number[],
   activeTabId: number | null,
+  activeWindowId?: number | null,
 ): PaletteItem[] {
   const mruRank = new Map<number, number>();
   mru.forEach((id, i) => { if (!mruRank.has(id)) mruRank.set(id, i); });
-  const ordered = [...tabs].sort((a, b) => {
+  const rank = (t: PaletteTab): number => mruRank.get(t.tabId) ?? mru.length;
+  const byMruActiveLast = (a: PaletteTab, b: PaletteTab): number => {
     const aActive = a.tabId === activeTabId ? 1 : 0;
     const bActive = b.tabId === activeTabId ? 1 : 0;
     if (aActive !== bActive) return aActive - bActive; // active tab last
-    const ar = mruRank.get(a.tabId) ?? mru.length;
-    const br = mruRank.get(b.tabId) ?? mru.length;
-    return ar - br;
-  });
-  return ordered.map((t) => {
+    return rank(a) - rank(b);
+  };
+  const mkItem = (t: PaletteTab, group?: string, windowNote?: string): PaletteItem => {
     const host = hostOf(t.url);
     const title = t.title.trim() || host || t.url;
     return {
       source: 'tabs' as const,
       id: `tab:${t.tabId}`,
       title,
-      subtitle: host,
+      subtitle: windowNote ? `${host} · ${windowNote}` : host,
       keys: [],
       voice: [],
       words: [...searchWords(title), ...searchWords(host)],
+      group,
       dispatch: { kind: 'switch_tab' as const, tabId: t.tabId },
     };
-  });
+  };
+
+  const windowIds = [...new Set(
+    tabs.map((t) => t.windowId).filter((w): w is number => typeof w === 'number'),
+  )];
+  const grouped = typeof activeWindowId === 'number'
+    && windowIds.includes(activeWindowId) && windowIds.length > 1;
+  if (!grouped) {
+    return [...tabs].sort(byMruActiveLast).map((t) => mkItem(t));
+  }
+
+  // Window order: this window first, the rest in tab-strip enumeration
+  // order. Labels are ordinals ("Window 2"), stable for the palette's
+  // lifetime — phase 2 appends the desk here when BranchKit is connected.
+  const otherIds = windowIds.filter((w) => w !== activeWindowId);
+  const labelFor = new Map<number, string>();
+  otherIds.forEach((w, i) => labelFor.set(w, `Window ${i + 2}`));
+
+  const out: PaletteItem[] = [];
+  // The global previous tab (best MRU rank that isn't the active tab). When
+  // it lives in another window, pin it ahead of the sections.
+  const previous = [...tabs].filter((t) => t.tabId !== activeTabId).sort((a, b) => rank(a) - rank(b))[0];
+  const pinned = previous !== undefined && previous.windowId !== activeWindowId
+    && rank(previous) < mru.length ? previous : undefined;
+  if (pinned) {
+    out.push(mkItem(pinned, 'Previous', labelFor.get(pinned.windowId ?? -1)));
+  }
+  const inWindow = (w: number): PaletteTab[] => tabs.filter((t) => t.windowId === w).sort(byMruActiveLast);
+  for (const t of inWindow(activeWindowId)) out.push(mkItem(t, 'This window'));
+  for (const w of otherIds) {
+    const label = labelFor.get(w)!;
+    for (const t of inWindow(w)) {
+      if (t.tabId === pinned?.tabId) continue; // already pinned up top
+      out.push(mkItem(t, label, label));
+    }
+  }
+  return out;
 }
 
 /**
@@ -349,7 +399,17 @@ export function filterPalette(
     const picked = q.length === 0 ? [...items] : rank(items);
     if (picked.length) sections.push({ source, label, items: picked });
   };
-  build('tabs', 'Tabs', tabItems);
+  // Browse mode sections tabs by window group when present ("Previous" /
+  // "This window" / "Window 2"…, first-appearance order — the build order).
+  // Search mode collapses to ONE ranked section: a hunt must not fragment
+  // by window; the subtitle carries the window instead.
+  if (q.length === 0 && tabItems.some((i) => i.group !== undefined)) {
+    for (const g of groupLabels(tabItems, 'Tabs')) {
+      build('tabs', g, tabItems.filter((i) => (i.group ?? 'Tabs') === g));
+    }
+  } else {
+    build('tabs', 'Tabs', tabItems);
+  }
   if (q.length === 0) {
     for (const g of groupLabels(bookmarkItems, 'Bookmarks')) {
       build('bookmarks', g, bookmarkItems.filter((i) => (i.group ?? 'Bookmarks') === g));

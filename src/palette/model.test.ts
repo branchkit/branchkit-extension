@@ -101,6 +101,60 @@ describe('buildCommandItems', () => {
   });
 });
 
+describe('buildTabItems — window sections (DESIGN_TAB_NAVIGATION.md)', () => {
+  // Two windows: 10/11 in window 1 (active window, active tab 10),
+  // 20/21 in window 2. MRU: 10 current, 20 previous, then 11.
+  const W: PaletteTab[] = [
+    { tabId: 10, title: 'Docs', url: 'https://docs.example.com/', windowId: 1 },
+    { tabId: 11, title: 'Mail', url: 'https://mail.example.com/', windowId: 1 },
+    { tabId: 20, title: 'CI', url: 'https://ci.example.com/', windowId: 2 },
+    { tabId: 21, title: 'Chat', url: 'https://chat.example.com/', windowId: 2 },
+  ];
+
+  it('groups by window, this window first, MRU within, active last', () => {
+    // MRU: 10 current, 20 PREVIOUS (cross-window), then 11.
+    const items = buildTabItems(W, [10, 20, 11], 10, 1);
+    expect(items.map((i) => [i.id, i.group])).toEqual([
+      ['tab:20', 'Previous'],      // global previous, pinned cross-window
+      ['tab:11', 'This window'],
+      ['tab:10', 'This window'],   // active tab last within its window
+      ['tab:21', 'Window 2'],      // tab 20 not duplicated below the pin
+    ]);
+  });
+
+  it('annotates other-window rows in the subtitle; this window stays clean', () => {
+    const items = buildTabItems(W, [10, 11, 20], 10, 1);
+    expect(items.find((i) => i.id === 'tab:21')!.subtitle).toBe('chat.example.com · Window 2');
+    expect(items.find((i) => i.id === 'tab:20')!.subtitle).toBe('ci.example.com · Window 2');
+    expect(items.find((i) => i.id === 'tab:11')!.subtitle).toBe('mail.example.com');
+  });
+
+  it('no Previous pin when the previous tab is in this window', () => {
+    const items = buildTabItems(W, [10, 11, 20], 10, 1 /* prev 11? no — mru[1]=11 */);
+    // With MRU [10, 11, ...], the previous tab (11) is in the active window:
+    const items2 = buildTabItems(W, [10, 11], 10, 1);
+    expect(items2[0].id).toBe('tab:11');
+    expect(items2[0].group).toBe('This window');
+    expect(items2.some((i) => i.group === 'Previous')).toBe(false);
+    void items;
+  });
+
+  it('single window (or no window info) stays flat — no groups', () => {
+    const single = W.map((t) => ({ ...t, windowId: 1 }));
+    expect(buildTabItems(single, [10], 10, 1).every((i) => i.group === undefined)).toBe(true);
+    expect(buildTabItems(W, [10], 10, undefined).every((i) => i.group === undefined)).toBe(true);
+  });
+
+  it('browse mode sections by window; search mode is one ranked list', () => {
+    const items = buildTabItems(W, [10, 20, 11], 10, 1);
+    const browse = filterPalette(items, [], '');
+    expect(browse.map((s) => s.label)).toEqual(['Previous', 'This window', 'Window 2']);
+    const search = filterPalette(items, [], 'example');
+    expect(search.map((s) => s.label)).toEqual(['Tabs']);
+    expect(search[0].items.length).toBe(4);
+  });
+});
+
 describe('scoreItem', () => {
   const item = (words: string[]): PaletteItem => ({
     source: 'tabs', id: 't', title: '', subtitle: '', keys: [], voice: [], words,

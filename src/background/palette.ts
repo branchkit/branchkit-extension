@@ -71,8 +71,9 @@ export function handlePaletteBootstrap(
     sendResponse({
       tabs: tabs
         .filter((t) => typeof t.id === 'number')
-        .map((t) => ({ tabId: t.id, title: t.title ?? '', url: t.url ?? '' })),
+        .map((t) => ({ tabId: t.id, title: t.title ?? '', url: t.url ?? '', windowId: t.windowId })),
       mru, marks, bookmarks: bm.list, bookmarksError: bm.error, activeTabId,
+      activeWindowId: sender.tab?.windowId ?? null,
     });
   }).catch(() => sendResponse({ tabs: [], mru: [], marks: {}, bookmarks: [], activeTabId }));
   return true;

@@ -218,6 +218,42 @@ named generically because the hold is rebindable and the extension can't read
 the platform's keybinds (same wording as the catalog's dictated-argument
 commands).
 
+## Window and desk sections in the tab list (designed 2026-08-02)
+
+Field ask: "which window — and which desktop — is this tab on? Show the
+current window's tabs first." What each layer knows:
+
+- **Windows — the extension knows, free.** Every `chrome.tabs.Tab` carries
+  `windowId`; the palette bootstrap simply discarded it. Works standalone.
+- **Desks — only BranchKit knows.** Chrome has no Space API. The plugin
+  already correlates Chrome windows to macOS windows by bounds and maps them
+  to Mission Control spaces (the tab-to-desk machinery — `query_windows`
+  reports bounds precisely for this). Desk info therefore exists only while
+  connected.
+
+**The two are not alternatives: a desk is a grouping OF windows.** The
+section unit is always the window; desk is an ordering-and-labeling layer on
+top. Connected: This window → other windows on this desk → windows on other
+desks, headers like "Window 2 · Desk 3". Standalone: same structure, desk
+ordering and labels absent. Disconnection degrades annotation, never shape.
+
+**Browse mode groups; search mode annotates.** With a query you are hunting
+one tab — relevance ordering must not fragment by window, so search stays
+one flat ranked section and other-window rows carry the window in their
+subtitle. Browse mode gets the sections.
+
+**The Enter default survives by pinning.** Open-palette + Enter = the
+GLOBAL previous tab (half of switcher usage), which may live in another
+window. Grouping current-window-first would demote it, so the global
+previous is pinned as the first row regardless of its window — in a
+one-row "Previous" section when it is cross-window, naturally first in
+"This window" otherwise.
+
+Phases: (1) window sections + search annotation, extension-only.
+(2) desk ordering/labels via a plugin query at palette open, shown only
+while connected; also the natural home for teaching "stash tab desk 3"
+in context later.
+
 ## Tab verbs (Vimium parity) — shipped 2026-07-01
 
 The mechanical verbs that need no palette. Every verb has both a keyboard

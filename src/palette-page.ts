@@ -233,6 +233,7 @@ interface PaletteBootstrap {
   bookmarks: PaletteBookmark[];
   bookmarksError?: string;
   activeTabId: number | null;
+  activeWindowId: number | null;
 }
 
 // --- Bootstrap relay (Firefox fallback; protocol doc in palette/relay.ts) ---
@@ -331,6 +332,7 @@ async function loadBootstrap(): Promise<PaletteBootstrap> {
         ? 'stale extension background (no bookmarks in response) — reload the extension'
         : undefined),
     activeTabId: resp.activeTabId ?? null,
+    activeWindowId: resp.activeWindowId ?? null,
   };
 }
 
@@ -1008,7 +1010,7 @@ async function init(): Promise<void> {
   // scope-only: they'd bloat the full launcher, and "palette bookmarks" /
   // Shift+B is the deliberate way in.
   tabItems = scope === 'commands' || scope === 'bookmarks'
-    ? [] : buildTabItems(boot.tabs, boot.mru, boot.activeTabId);
+    ? [] : buildTabItems(boot.tabs, boot.mru, boot.activeTabId, boot.activeWindowId);
   commandItems = scope === 'tabs' || scope === 'bookmarks'
     ? [] : buildCommandItems(COMMAND_CATALOG, keymap, undefined, overrides, aliases);
   bookmarkItems = scope === 'bookmarks' ? buildBookmarkItems(boot.bookmarks) : [];
