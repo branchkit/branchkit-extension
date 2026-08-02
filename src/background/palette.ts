@@ -19,7 +19,6 @@ import type { PaletteDispatch, PaletteBookmark } from '../palette/model';
 import { ensureConnected, postToPlugin } from '../plugin/actuator-client';
 import { focusWindowAndActivateTab } from './tab-actions';
 import { connId } from './state';
-import { loadMru } from './tab-mru';
 import { loadMarkerMap } from './tab-markers';
 import { loadPaletteOpenDefault } from '../palette-open-storage';
 
@@ -64,18 +63,17 @@ export function handlePaletteBootstrap(
   const activeTabId = sender.tab?.id ?? null;
   Promise.all([
     chrome.tabs.query({}).catch(() => [] as chrome.tabs.Tab[]),
-    loadMru().catch(() => [] as number[]),
     loadMarkerMap().catch(() => ({})),
     loadBookmarks(),
-  ]).then(([tabs, mru, marks, bm]) => {
+  ]).then(([tabs, marks, bm]) => {
     sendResponse({
       tabs: tabs
         .filter((t) => typeof t.id === 'number')
         .map((t) => ({ tabId: t.id, title: t.title ?? '', url: t.url ?? '', windowId: t.windowId })),
-      mru, marks, bookmarks: bm.list, bookmarksError: bm.error, activeTabId,
+      marks, bookmarks: bm.list, bookmarksError: bm.error, activeTabId,
       activeWindowId: sender.tab?.windowId ?? null,
     });
-  }).catch(() => sendResponse({ tabs: [], mru: [], marks: {}, bookmarks: [], activeTabId }));
+  }).catch(() => sendResponse({ tabs: [], marks: {}, bookmarks: [], activeTabId }));
   return true;
 }
 

@@ -77,7 +77,6 @@ export interface PaletteCodewordWire {
 /** Wire shape of the bootstrap payload (mirrors PALETTE_BOOTSTRAP's response). */
 export interface BootstrapWire {
   tabs?: Array<{ tabId: number; title: string; url: string; windowId?: number }>;
-  mru?: number[];
   marks?: Record<number, string>;
   bookmarks?: Array<{ title: string; url: string; path: string }>;
   /** Set when the bookmarks fetch failed (permission missing) — loud, not empty. */

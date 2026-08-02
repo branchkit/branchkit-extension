@@ -228,7 +228,6 @@ function hasLetterMode(): boolean {
  * report. Chrome would allow direct reads, but one path serves both. */
 interface PaletteBootstrap {
   tabs: PaletteTab[];
-  mru: number[];
   marks: MarkerMap;
   bookmarks: PaletteBookmark[];
   bookmarksError?: string;
@@ -321,7 +320,6 @@ async function loadBootstrap(): Promise<PaletteBootstrap> {
       // row's badge, not baked into the title text.
       tabId: t.tabId, title: stripTabMarker(t.title), url: t.url, windowId: t.windowId,
     })),
-    mru: resp.mru ?? [],
     marks: resp.marks ?? {},
     bookmarks: resp.bookmarks ?? [],
     // A response with NO bookmarks key (vs an empty list) means the answering
@@ -1033,17 +1031,14 @@ async function init(): Promise<void> {
   // digits landed. Their text outranks our mode default.
   if (typedLabels.size > 0 && queryInput.value === '') enterLetterMode();
   else enterFuzzyMode(queryInput.value);
-  // One strip order everywhere; RECENCY LIVES IN THE CURSOR. The tab
-  // palette opens on the CURRENT tab ("I'm on the fifth tab" = fifth row
-  // selected; j/k step to strip neighbors). The full palette opens on the
-  // PREVIOUS tab, so Enter still means "back to what I was doing" — the
-  // launcher's bounce. Mode entry reset selection to 0; land it after.
-  const cursorTab = scope === 'tabs'
-    ? boot.activeTabId
-    : boot.mru.find((id) => id !== boot.activeTabId
-        && flat.some((it) => it.id === `tab:${id}`)) ?? null;
-  if (cursorTab !== null) {
-    const at = flat.findIndex((it) => it.id === `tab:${cursorTab}`);
+  // One strip order, one cursor rule: the selection opens ON the current
+  // tab wherever tabs are shown — "I'm on the fifth tab" = the fifth row is
+  // selected, j/k step to strip neighbors, in Shift+T and Ctrl+K alike.
+  // (An Enter-means-previous-tab bounce was tried and rejected 2026-08-02:
+  // one consistent landing beats a second contract to remember.) Mode entry
+  // reset selection to 0; land it after.
+  if (boot.activeTabId !== null) {
+    const at = flat.findIndex((it) => it.id === `tab:${boot.activeTabId}`);
     if (at >= 0) { selected = at; renderCurrent(); }
   }
   renderModeChip();

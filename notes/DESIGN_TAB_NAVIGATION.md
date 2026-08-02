@@ -254,17 +254,18 @@ Phases: (1) window sections + search annotation, extension-only.
 while connected; also the natural home for teaching "stash tab desk 3"
 in context later.
 
-**Amendment (same day, field, twice-refined): ONE strip order everywhere;
-RECENCY LIVES IN THE CURSOR.** The active-tab-last MRU order read as "out
-of order" the moment the sections made the list spatial. Both palettes now
-mirror the tab strip exactly (active tab in place, no Previous pin, no MRU
-shuffle) and the OPENING SELECTION carries each surface's contract: the
-tab palette opens on the CURRENT tab (switcher — j/k step to strip
-neighbors), the full palette opens on the PREVIOUS tab (launcher — Enter
-still means "back to what I was doing"). One order to learn; the cursor
-position is the only difference, and it costs nothing to preserve both
-gestures. buildTabItems is purely spatial now; the MRU stack's remaining
-palette job is choosing the launcher's opening cursor.
+**Amendment (same day, field, settled on the third pass): ONE strip order,
+ONE cursor rule.** The active-tab-last MRU order read as "out of order"
+the moment the sections made the list spatial. Both palettes mirror the
+tab strip exactly (active tab in place, no Previous pin, no MRU shuffle)
+and the selection OPENS ON THE CURRENT TAB in both — j/k step to strip
+neighbors wherever tabs are shown. An intermediate design opened the full
+palette on the PREVIOUS tab to preserve an Enter-means-bounce gesture;
+rejected in the field the same day: one consistent landing beats a second
+contract to remember, and the bounce survives as `last_active_tab`
+(Ctrl+6 / "last tab"). buildTabItems is purely spatial; the palette
+bootstrap no longer carries the MRU stack at all (its remaining consumers
+are the tab verbs, background-side).
 
 ## Tab verbs (Vimium parity) — shipped 2026-07-01
 
