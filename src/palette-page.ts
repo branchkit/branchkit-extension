@@ -657,6 +657,15 @@ window.addEventListener('keydown', (e) => {
     phrase.handleKeydown(e);
     return;
   }
+  // Single-character keydowns disarm too. The collector's arm safety rests
+  // on "the very next keydown disarms" — which the multi-char-only
+  // forwarding above silently broke: an arrow/Home/End arm (no insert ever
+  // comes) survived here until the next typed character was misclassified
+  // as a dictated chunk, and a stale lastDictation() then let the palette's
+  // dictated-retry rewrite the box mid-typing (field 2026-08-02,
+  // "localhost:<digit>"). A single-char key can never hit the collector's
+  // commit/cancel branches (those match named keys), so this is pure disarm.
+  if (e.key.length === 1) phrase.handleKeydown(e);
   // Common navigation (both modes). Ctrl+K closes either palette (the full
   // palette's opener toggles it; a convenience for the tab palette). The tab
   // palette opens with bare `T`, which is a mark letter inside letter mode, so

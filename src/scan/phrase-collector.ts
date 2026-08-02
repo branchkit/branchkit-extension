@@ -259,8 +259,19 @@ export function isSentinelKey(ev: PhraseKeyEventLike): boolean {
  * OTHER multi-char named key ("ArrowLeft", "Dead", media keys) fires no
  * insertText — arming on one is inert, and the very next keydown disarms.
  */
+/** The spec's modifier-key values (KeyboardEvent.key) — a CLOSED set. A
+ *  modifier's name is multi-character but can never be injected text, and
+ *  treating one as an announcement is not inert: the announce branch wipes a
+ *  settled utterance (field 2026-08-02 — Shift pressed to type ':' cleared
+ *  the palette box) and arms an expectation that misclassifies the typed
+ *  characters that follow as dictated chunks. */
+const MODIFIER_KEYS = new Set([
+  'Shift', 'Control', 'Alt', 'AltGraph', 'Meta', 'CapsLock', 'Fn', 'FnLock',
+  'NumLock', 'ScrollLock', 'Symbol', 'SymbolLock', 'Hyper', 'Super',
+]);
+
 export function isInjectedTextKeydown(ev: PhraseKeyEventLike): boolean {
-  return ev.key.length > 1;
+  return ev.key.length > 1 && !MODIFIER_KEYS.has(ev.key);
 }
 
 const defaultTimers: PhraseTimers = {

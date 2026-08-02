@@ -382,6 +382,39 @@ describe('phrase collector: Gecko announces the injection on the keydown', () =>
     h.settle();
     expect(h.commits).toHaveLength(0);
   });
+
+  // Field 2026-08-02 (palette, "localhost:<digit>"): Shift — pressed to type
+  // ':' — is a multi-char key, and treating it as an announcement is NOT
+  // inert. The announce branch (a) wipes a settled utterance at the keydown
+  // and (b) arms an expectation that misclassifies the typed characters that
+  // follow as dictated chunks, handing a stale lastDictation() to consumers
+  // like the palette's dictated-retry. Modifiers are a closed spec set and
+  // never injected text.
+
+  it('a modifier keydown after a settled dictation does not wipe the box', () => {
+    const h = makeHarness();
+    dictateGecko(h, 'github');
+    h.settle();
+    expect(h.session.handleKeydown({ key: 'Shift' })).toBe('pass');
+    expect(h.port.read()).toBe('github'); // announce-replace must NOT fire
+  });
+
+  it('a modifier keydown does not arm — subsequent inserts stay typed', () => {
+    const h = makeHarness();
+    // The palette's old wiring forwarded ONLY multi-char keydowns, so model
+    // that worst case: Shift's keydown arrives, the ':' and '2' keydowns do
+    // not — their inserts alone must still read as typing, not chunks.
+    h.type('localhost');
+    h.session.handleKeydown({ key: 'Shift' });
+    for (const ch of ':2') {
+      h.port.sinkType(ch);
+      h.session.handleInput({ inputType: 'insertText', data: ch });
+    }
+    expect(h.port.read()).toBe('localhost:2');
+    expect(h.session.lastDictation()).toBe(''); // typing owns the box
+    h.settle();
+    expect(h.commits).toHaveLength(0);
+  });
 });
 
 describe('phrase collector: re-dictation replaces rather than appends', () => {
