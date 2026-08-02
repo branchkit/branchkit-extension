@@ -754,9 +754,12 @@ async function initPaletteOpen(): Promise<void> {
       }
       const keys = document.createElement('span');
       keys.style.cssText = 'font-size: 12px; color: var(--fg-muted);';
-      keys.textContent = v === 'here'
-        ? (isDefault ? 'Enter or Shift+Enter' : 'Shift+Enter')
-        : (isDefault ? 'Enter' : '—');
+      const KEYS: Record<PaletteOpenDefault, string> = {
+        blank: 'a Capital badge letter',
+        here: 'Shift+Enter',
+        stash: 'Ctrl/Cmd+Enter',
+      };
+      keys.textContent = isDefault ? `Enter · ${KEYS[v]}` : KEYS[v];
       const voice = document.createElement('span');
       voice.style.cssText = 'font-size: 12px; color: var(--fg-muted);';
       voice.textContent = isDefault

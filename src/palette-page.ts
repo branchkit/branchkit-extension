@@ -564,21 +564,30 @@ function navigate(intent: PaletteNavIntent): void {
   renderCurrent();
 }
 
+/** A CAPITAL label letter arms "open this pick in a new tab" — the hint
+ *  surface's "aA" affordance mirrored (activate/keyboard.ts handleHintKey),
+ *  so a capital means NEW TAB on both surfaces regardless of the configured
+ *  default. Cleared with the prefix: unsaying the letters unsays the arm. */
+let markNewTabArmed = false;
+
 // A label letter in letter mode. Prefix-freedom makes this crisp: an exact match
 // activates immediately (nothing longer starts with a complete label); a prefix
 // narrows the list; anything else is a no-op (never blanks the list). Scope-blind
 // — `typedLabels` already resolved marks-vs-codewords at publish.
-function typeMarkLetter(ch: string): void {
+function typeMarkLetter(ch: string, shift = false): void {
   const next = markPrefix + ch;
   switch (classifyMarkInput([...typedLabels.values()], next)) {
     case 'exact': {
       const item = publishOrder().find((it) => typedLabels.get(it.id) === next);
-      if (item) dispatchItem(item);
+      const armed = markNewTabArmed || shift;
+      markNewTabArmed = false;
+      if (item) dispatchItem(item, armed ? 'blank' : undefined);
       return;
     }
     case 'none':
-      return; // no mark continues this — ignore the keystroke
+      return; // no mark continues this — ignore the keystroke (and its case)
     case 'prefix':
+      if (shift) markNewTabArmed = true; // accepted capital arms, like hints
       markPrefix = next;
       queryInput.value = markPrefix;
       selected = 0;
@@ -589,6 +598,7 @@ function typeMarkLetter(ch: string): void {
 function backspaceMark(): void {
   if (markPrefix.length === 0) return;
   markPrefix = markPrefix.slice(0, -1);
+  if (markPrefix.length === 0) markNewTabArmed = false;
   queryInput.value = markPrefix;
   selected = 0;
   renderCurrent();
@@ -596,6 +606,7 @@ function backspaceMark(): void {
 
 function clearMarkPrefix(): void {
   markPrefix = '';
+  markNewTabArmed = false;
   queryInput.value = '';
   selected = 0;
   renderCurrent();
@@ -627,6 +638,7 @@ function placeholderFor(m: PaletteMode): string {
 function enterFuzzyMode(seed = ''): void {
   mode = 'fuzzy';
   markPrefix = '';
+  markNewTabArmed = false;
   queryInput.value = seed;
   queryInput.placeholder = placeholderFor('fuzzy');
   queryInput.classList.remove('letter-mode');
@@ -639,6 +651,7 @@ function enterFuzzyMode(seed = ''): void {
 function enterLetterMode(): void {
   mode = 'letter';
   markPrefix = '';
+  markNewTabArmed = false;
   phrase.seed(''); // clears the box and dictation ownership together
   queryInput.placeholder = placeholderFor('letter');
   queryInput.classList.add('letter-mode');
@@ -704,9 +717,15 @@ window.addEventListener('keydown', (e) => {
     e.preventDefault(); moveSelection(-1); return;
   }
   if (e.key === 'Enter') {
-    // Shift+Enter = "here": navigate this tab instead of the new-tab
-    // default. Same modifier meaning as the spoken "here" + badge.
-    e.preventDefault(); dispatchItem(flat[selected], e.shiftKey ? 'here' : undefined); return;
+    // The Enter family mirrors the spoken modifiers: Ctrl/Cmd+Enter =
+    // "stash" (the browser's Ctrl/Cmd+click = background-tab convention),
+    // Shift+Enter = "here", plain Enter = the configured default — unless a
+    // capital label letter armed new-tab first (letter mode's aA affordance).
+    const where = (e.ctrlKey || e.metaKey) ? 'stash'
+      : e.shiftKey ? 'here'
+      : markNewTabArmed ? 'blank' : undefined;
+    markNewTabArmed = false;
+    e.preventDefault(); dispatchItem(flat[selected], where); return;
   }
 
   // The Escape ladder, one rule for every scope
@@ -746,7 +765,8 @@ window.addEventListener('keydown', (e) => {
     // which is exactly how the tab palette read as "voice can't search".
     if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault();
-      if (/^[a-z]$/i.test(e.key)) typeMarkLetter(e.key.toLowerCase());
+      // Case rides along: a capital arms new-tab (see typeMarkLetter).
+      if (/^[a-z]$/i.test(e.key)) typeMarkLetter(e.key.toLowerCase(), /^[A-Z]$/.test(e.key));
       return;
     }
     return; // swallow anything else in letter mode

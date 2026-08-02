@@ -697,11 +697,11 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // (palette-open-storage.ts, ships as new-tab). Rows that aren't links
   // (tabs, commands) ignore the modifier and dispatch normally.
   { id: 'palette_select_newtab', label: 'Open palette row in new tab', group: 'Palette', mappable: false, params: [],
-    description: 'Open a palette row in a new focused tab, whatever your default (“blank” + its badge).',
+    description: 'Open a palette row in a new focused tab, whatever your default (“blank” + its badge, or type a badge letter as a CAPITAL — the hint surface’s aA affordance).',
     voice: [{ pattern: 'blank {palette}' }],
     voiceContext: 'palette' },
   { id: 'palette_select_background', label: 'Open palette row in background tab', group: 'Palette', mappable: false, params: [],
-    description: 'Open a palette bookmark in a background tab — the page you are on keeps focus (“stash” + its badge).',
+    description: 'Open a palette row in a background tab — the page you are on keeps focus (“stash” + its badge, or Ctrl/Cmd+Enter).',
     voice: [{ pattern: 'stash {palette}' }],
     voiceContext: 'palette' },
   // The third disposition, completing the set: navigate THIS tab instead of
