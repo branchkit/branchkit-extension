@@ -733,17 +733,38 @@ async function initPaletteOpen(): Promise<void> {
     return [...new Set(words)].map((w) => `“${w}”`).join(' or ');
   };
 
-  // What the two non-default spots cost to reach — the words to remember,
-  // shown so the choice of default is made knowing its price.
+  // One row per landing spot: what it does, the keys, the spoken form —
+  // re-annotated as the default moves, so the choice of one rule is made
+  // seeing exactly what the other two cost to reach.
   const renderNote = (): void => {
     const chosen = select.value as PaletteOpenDefault;
-    const others = (['blank', 'here', 'stash'] as const).filter((v) => v !== chosen);
-    const parts = others.map((v) => {
-      const keyboard = v === 'here' ? ' or Shift+Enter' : '';
-      return `${spokenFor(v)}${keyboard} + a row’s badge for ${OPEN_LABELS[v]}`;
-    });
-    note.textContent = `Plain Enter or a bare badge word opens ${OPEN_LABELS[chosen]}. `
-      + `Say ${parts.join(', or ')}.`;
+    note.textContent = '';
+    for (const v of ['blank', 'here', 'stash'] as const) {
+      const isDefault = v === chosen;
+      const row = document.createElement('div');
+      row.className = 'km-row';
+      const label = document.createElement('span');
+      label.className = 'km-row-label';
+      label.textContent = OPEN_LABELS[v].replace(/^(a|this) /, (m) => m[0].toUpperCase() + m.slice(1));
+      if (isDefault) {
+        const chip = document.createElement('span');
+        chip.textContent = ' default';
+        chip.style.cssText = 'color: var(--accent); font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em;';
+        label.appendChild(chip);
+      }
+      const keys = document.createElement('span');
+      keys.style.cssText = 'font-size: 12px; color: var(--fg-muted);';
+      keys.textContent = v === 'here'
+        ? (isDefault ? 'Enter or Shift+Enter' : 'Shift+Enter')
+        : (isDefault ? 'Enter' : '—');
+      const voice = document.createElement('span');
+      voice.style.cssText = 'font-size: 12px; color: var(--fg-muted);';
+      voice.textContent = isDefault
+        ? `the badge word — or ${spokenFor(v)} + badge`
+        : `${spokenFor(v)} + badge`;
+      row.append(label, keys, voice);
+      note.appendChild(row);
+    }
   };
   renderNote();
   select.addEventListener('change', () => {
