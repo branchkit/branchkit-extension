@@ -25,10 +25,17 @@ const STYLE = `
   position: fixed; bottom: 14px; right: 14px; z-index: ${Z_INDEX};
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px; font-weight: 700; letter-spacing: 0.06em;
-  color: #f2cc60; background: #1c2128;
+  color: #c9d1d9; background: #1c2128;
   border: 1px solid #3d444d; border-radius: 6px;
   padding: 4px 9px; box-shadow: 0 4px 14px rgba(1, 4, 9, 0.5);
   display: flex; flex-direction: column; gap: 2px;
+}
+/* The mode name: a filled pill, not a hue — shape is the separator between
+   "which mode" and "what to do", matching the product's pill vocabulary
+   (palette codeword chips, HUD tags, keycaps). */
+.name {
+  color: #f0f6fc; background: rgba(255, 255, 255, 0.14);
+  padding: 1px 6px; border-radius: 4px;
 }
 .chip .row { display: flex; gap: 8px; align-items: baseline; }
 .chip .sub { color: #8b949e; font-weight: 500; letter-spacing: 0; }
@@ -45,11 +52,11 @@ const STYLE = `
 .chip.refused { animation: bk-chip-refused 260ms ease-out; }
 @keyframes bk-chip-refused {
   0%   { border-color: #3d444d; }
-  25%  { border-color: #d97706; background: #2b2016; }
+  25%  { border-color: #f0f6fc; background: #2d333b; }
   100% { border-color: #3d444d; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .chip.refused { animation: none; border-color: #d97706; }
+  .chip.refused { animation: none; border-color: #f0f6fc; }
 }
 `;
 
@@ -90,6 +97,7 @@ function build(mode: ChipMode, voiceConnected: boolean): HTMLElement {
   const row = document.createElement('div');
   row.className = 'row';
   const label = document.createElement('span');
+  label.className = 'name';
   label.textContent = CHIP_TEXT[mode].label;
   const sub = document.createElement('span');
   sub.className = 'sub';
