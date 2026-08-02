@@ -171,6 +171,12 @@ export function handlePaletteVoiceSelect(rowId: string | undefined, where?: Open
   const pv = paletteVoice;
   if (!pv) return;
   const dispatch = pv.rows.get(rowId ?? '');
+  // Query rows exist only while the box holds a query; their codewords are
+  // published for the palette's whole lifetime. Speaking one while its row
+  // is absent is a no-op, NOT a close — the unknown-row close below is for
+  // stale utterances racing a re-open, and these ids are never stale, just
+  // currently rowless.
+  if (!dispatch && (rowId?.startsWith('query:') ?? false)) return;
   void handlePaletteAction(dispatch ?? { kind: 'close' }, pv.tabId, where);
 }
 
@@ -215,6 +221,21 @@ export const paletteMessageHandlers: Record<string, MessageHandler> = {
     const tabId = sender.tab?.id;
     if (typeof tabId !== 'number') return;
     void publishPaletteVoice(tabId, message.entries, message.rows ?? []);
+  },
+
+  /**
+   * The query-derived rows' current dispatches (URL/search rows — their
+   * spoken entries published at open, their dispatch embeds the query).
+   * Reconcile: clear both ids, set what the frame says is on screen now.
+   */
+  PALETTE_QUERY_ROWS: (message) => {
+    if (!paletteVoice || !Array.isArray(message.rows)) return;
+    for (const id of ['query:url', 'query:search']) paletteVoice.rows.delete(id);
+    for (const r of message.rows) {
+      if (typeof r?.row_id === 'string' && r.row_id.startsWith('query:') && r.dispatch) {
+        paletteVoice.rows.set(r.row_id, r.dispatch);
+      }
+    }
   },
 
   /** Content removed the overlay (any path) — end the voice session. */

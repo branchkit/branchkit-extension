@@ -298,6 +298,13 @@ export type Message =
   // which Puts the exclusive palette tag. Sent only when the voice alphabet
   // is loaded — keyboard-only palettes have no voice session at all.
   | { type: 'PALETTE_PUBLISH'; entries: PaletteVoiceEntry[]; rows: PaletteVoiceRow[] }
+  // Palette page → background: the query-derived rows' CURRENT dispatches
+  // (DESIGN_PALETTE_URL_SEARCH.md voice half). Their spoken entries publish
+  // once at open like any row, but their dispatch embeds the query and
+  // changes per keystroke — this refreshes only the background's map, no
+  // plugin round-trip. Sent when the set changes; empty `rows` clears them
+  // (query emptied → the rows left the screen).
+  | { type: 'PALETTE_QUERY_ROWS'; rows: PaletteVoiceRow[] }
   // Content → background. The palette overlay was removed (any close path:
   // background-driven PALETTE_CLOSE, local Ctrl+K toggle, blur). Background
   // drains the plugin's palette entries — which clears the exclusive tag —

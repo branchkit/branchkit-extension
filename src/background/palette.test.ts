@@ -82,6 +82,77 @@ describe('voice select', () => {
   });
 });
 
+describe('query rows (URL/search — codewords at open, dispatch per keystroke)', () => {
+  const queryRows = (palette: Palette, rs: unknown): void => {
+    palette.paletteMessageHandlers.PALETTE_QUERY_ROWS(
+      { type: 'PALETTE_QUERY_ROWS', rows: rs } as never, {} as never,
+    );
+  };
+
+  it('a published query row resolves like any row', async () => {
+    const palette = await loadPalette();
+    await palette.publishPaletteVoice(5, [], rows);
+    queryRows(palette, [
+      { row_id: 'query:search', dispatch: { kind: 'navigate', url: 'https://g/?q=rust' } },
+    ]);
+    palette.handlePaletteVoiceSelect('query:search');
+    await flush();
+    expect(chrome.tabs.create).toHaveBeenCalledWith({ url: 'https://g/?q=rust', active: true });
+  });
+
+  it('a later update wins — the dispatch follows the query', async () => {
+    const palette = await loadPalette();
+    await palette.publishPaletteVoice(5, [], rows);
+    queryRows(palette, [
+      { row_id: 'query:search', dispatch: { kind: 'navigate', url: 'https://g/?q=ru' } },
+    ]);
+    queryRows(palette, [
+      { row_id: 'query:search', dispatch: { kind: 'navigate', url: 'https://g/?q=rust' } },
+      { row_id: 'query:url', dispatch: { kind: 'navigate', url: 'https://rust-lang.org/' } },
+    ]);
+    palette.handlePaletteVoiceSelect('query:url');
+    await flush();
+    expect(chrome.tabs.create).toHaveBeenCalledWith({ url: 'https://rust-lang.org/', active: true });
+  });
+
+  it('speaking a query codeword while its row is absent is a NO-OP, not a close', async () => {
+    // The codewords publish for the palette's lifetime; the rows exist only
+    // while a query does. Absent-row picks must not tear the palette down.
+    const palette = await loadPalette();
+    await palette.publishPaletteVoice(5, [], rows);
+    palette.handlePaletteVoiceSelect('query:search');
+    await flush();
+    expect(sentMessages).toHaveLength(0);
+    expect(chrome.tabs.create).not.toHaveBeenCalled();
+  });
+
+  it('an empty update clears both rows (query emptied)', async () => {
+    const palette = await loadPalette();
+    await palette.publishPaletteVoice(5, [], rows);
+    queryRows(palette, [
+      { row_id: 'query:search', dispatch: { kind: 'navigate', url: 'https://g/?q=rust' } },
+    ]);
+    queryRows(palette, []);
+    palette.handlePaletteVoiceSelect('query:search');
+    await flush();
+    expect(sentMessages).toHaveLength(0);
+    expect(chrome.tabs.create).not.toHaveBeenCalled();
+  });
+
+  it('non-query ids in an update are refused (map integrity)', async () => {
+    const palette = await loadPalette();
+    await palette.publishPaletteVoice(5, [], rows);
+    queryRows(palette, [
+      { row_id: 'r1', dispatch: { kind: 'navigate', url: 'https://evil/' } },
+    ]);
+    palette.handlePaletteVoiceSelect('r1');
+    await flush();
+    // r1 still dispatches its ORIGINAL command, not the injected navigate.
+    expect(chrome.tabs.create).not.toHaveBeenCalled();
+    expect(sentMessages.map((m) => m.msg.type)).toContain('PALETTE_COMMAND');
+  });
+});
+
 describe('navigate dispositions', () => {
   // Changed 2026-07-29: a bookmark is somewhere you want to go as well as where
   // you already are, so the default no longer discards the origin tab.

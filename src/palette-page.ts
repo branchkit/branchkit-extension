@@ -460,6 +460,7 @@ function renderCurrent(): void {
     // label prefix. Sections come from filterPalette so letter mode groups
     // bookmarks by folder exactly as search does — one layout, two input modes.
     queryNote = '';
+    publishQueryRows([]); // no query rows without a query — clear the map
     const sections = emptyStateSections();
     render(markPrefix === '' ? sections : sections
       .map((s) => ({
@@ -501,8 +502,28 @@ function renderCurrent(): void {
     if (url) sections.unshift(url);
     const search = buildSearchSection(queryInput.value, searchTemplate);
     if (search) sections.push(search);
+    publishQueryRows([...(url?.items ?? []), ...(search?.items ?? [])]);
   }
   render(sections);
+}
+
+/** Serialized last PALETTE_QUERY_ROWS payload — change gate, so a render
+ *  that didn't move the query rows sends nothing. */
+let queryRowsWire = '';
+
+/**
+ * Keep the background's row→dispatch map current for the query-derived rows
+ * (voice half): their codewords published at open, their dispatch embeds the
+ * query — so every render where they changed refreshes the map. Local
+ * runtime message only; the plugin's grammar is untouched.
+ */
+function publishQueryRows(items: readonly PaletteItem[]): void {
+  if (!voiceLive) return;
+  const rows = items.map((it) => ({ row_id: it.id, dispatch: it.dispatch }));
+  const wire = JSON.stringify(rows);
+  if (wire === queryRowsWire) return;
+  queryRowsWire = wire;
+  chrome.runtime.sendMessage({ type: 'PALETTE_QUERY_ROWS', rows } as Message).catch(() => {});
 }
 
 function moveSelection(delta: number): void {
@@ -769,7 +790,18 @@ function assignAndPublish(alphabet: string[]): void {
   } else {
     // Reserved letters are withheld: these codewords are TYPED in letter mode,
     // so a letter that walks the list cannot also label a row.
-    codewords = assignCodewords(all.map((r) => r.id), alphabet, reservedLetters);
+    //
+    // The query-derived rows (URL/search — DESIGN_PALETTE_URL_SEARCH.md) get
+    // codewords too, assigned HERE, once, though their rows appear only when
+    // a query exists: assignment at open is what keeps a badge stable for the
+    // palette's lifetime, and their spoken vocabulary must publish with
+    // everyone else's (the plugin's grammar is set per open, not per
+    // keystroke). Scope-gated to where renderCurrent shows them.
+    const queryIds = scope === 'all' || scope === 'bookmarks'
+      ? ['query:url', 'query:search'] : [];
+    codewords = assignCodewords(
+      [...all.map((r) => r.id), ...queryIds], alphabet, reservedLetters,
+    );
   }
   // The keyboard's view of the same assignment. Marks are already letters; word
   // codewords reduce to their letter form, which is exactly what a user types and
@@ -804,6 +836,25 @@ function assignAndPublish(alphabet: string[]): void {
     // instead of the opaque row_id it would otherwise derive.
     if (spoken) entries.push({ spoken, title: item.title, row_id: item.id });
     rows.push({ row_id: item.id, dispatch: item.dispatch });
+  }
+  // Query rows: spoken entries + narrowing claim like any row, but NO rows[]
+  // record — their dispatch embeds the query and doesn't exist yet. The
+  // frame keeps the background's map current via PALETTE_QUERY_ROWS as they
+  // appear/change; speaking one while its row is absent is a background-side
+  // no-op. Stable display titles: the HUD names the ROLE, the row on screen
+  // names the query.
+  const queryTitles: Record<string, string> = {
+    'query:url': 'Go to address', 'query:search': 'Search the web',
+  };
+  for (const [rowId, title] of Object.entries(queryTitles)) {
+    const cw = codewords.get(rowId);
+    if (!cw) continue;
+    const token = codewordToken(cw, alphabet);
+    if (token) {
+      tokens.set(rowId, token);
+      claim.push({ token, rowId });
+    }
+    entries.push({ spoken: cw, title, row_id: rowId });
   }
   // No spoken entries (voice off) → don't open a voice session / exclusive tag.
   if (entries.length === 0) return;
