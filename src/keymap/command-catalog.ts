@@ -257,8 +257,11 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // select the CONTAINER element — its border box doesn't move as content
   // scrolls, so chips sit on pane corners.
   { id: 'scroll_target_pick', label: 'Pick a scroll target', group: 'Scroll', mappable: true, params: [],
-    description: 'Badge every scrollable pane, then pick one — speak its codeword (or press f and type it) — to point the scroll commands at it. Escape cancels.',
+    description: 'Badge every scrollable pane, then pick one — speak its codeword (or press f and type it) — to point the scroll commands at it. Escape cancels; “scroll page” undoes.',
     voice: [{ pattern: 'scroll target' }, { pattern: 'scroll targets' }] },
+  { id: 'scroll_target_reset', label: 'Scroll the page again', group: 'Scroll', mappable: true, params: [],
+    description: 'Point the scroll commands back at the page itself, releasing a picked or cycled pane.',
+    voice: [{ pattern: 'scroll page' }] },
   // The generic parameterized scroll: a runtime action (direction/amount/count/
   // region), not a sensible single-key bind — hidden from the editor like
   // scroll_to_element. Its directional/count phrases now live on the discrete

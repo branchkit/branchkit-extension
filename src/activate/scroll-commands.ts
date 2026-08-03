@@ -19,7 +19,7 @@
 import { dispatcher } from '../core/singletons';
 import {
   scroll, scrollElement, scrollToPercent, scrollRegion, snapToElement,
-  cycleScrollTarget, getCycleTarget, findScrollableRegions, setScrollTarget,
+  cycleScrollTarget, getCycleTarget, findScrollableRegions, setScrollTarget, resetCycleTarget,
   type ScrollDirection, type ScrollAmount, type ScrollRegion,
 } from './scroller';
 import { startRangePick } from './range-disambiguation';
@@ -57,11 +57,9 @@ function startScrollTargetPick(): void {
     flashToast('No scrollable panes found');
     return;
   }
-  if (regions.length === 1) {
-    setScrollTarget(regions[0]);
-    flashToast('Scroll target set');
-    return;
-  }
+  // A single region still asks (one chip): the first field test auto-set it,
+  // and "sometimes chips, sometimes a silent flash" read as broken. Chips
+  // every time is the predictable contract — pick it or Escape.
   const ranges = regions.map((el) => {
     const r = document.createRange();
     r.selectNode(el);
@@ -101,6 +99,12 @@ export function registerScrollCommands(): void {
 
   dispatcher.register('cycle_scroll_target', () => { cycleScrollTarget(); });
   dispatcher.register('scroll_target_pick', () => { startScrollTargetPick(); });
+  // The way back: without this, a picked pane owns the scroll keys until a
+  // find commit happens to reset it — there was no deliberate exit.
+  dispatcher.register('scroll_target_reset', () => {
+    resetCycleTarget();
+    flashToast('Scrolling the page');
+  });
 
   // The generic voice form. NOTE: unlike the ten above, this one does NOT
   // consult the cycle target — it scrolls a named region or the page. That
