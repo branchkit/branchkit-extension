@@ -55,6 +55,26 @@ describe('buildHelpModel', () => {
     expect(scrollRow.info).toBe('');
   });
 
+  it('formats a nativeKey with the OS primary modifier — Cmd on mac, Ctrl elsewhere', () => {
+    const catalog: CommandMeta[] = [{
+      ...cmd('focus_address_bar', 'Navigation', ['address']), mappable: false, nativeKey: 'KeyL',
+    }];
+    const mac = buildHelpModel(catalog, [], true, undefined, undefined, 'mac');
+    const other = buildHelpModel(catalog, [], true, undefined, undefined, 'other');
+    expect(mac[0].rows[0].nativeKey).toEqual(['Cmd+L']);
+    expect(other[0].rows[0].nativeKey).toEqual(['Ctrl+L']);
+  });
+
+  it('keeps a nativeKey-carrying row visible when voice is disconnected — the browser key still works', () => {
+    const catalog: CommandMeta[] = [{
+      ...cmd('focus_address_bar', 'Navigation', ['address']), mappable: false, nativeKey: 'KeyL',
+    }];
+    const model = buildHelpModel(catalog, [], false, undefined, undefined, 'mac');
+    expect(model).toHaveLength(1);
+    expect(model[0].rows[0].voice).toEqual([]);
+    expect(model[0].rows[0].nativeKey).toEqual(['Cmd+L']);
+  });
+
   it('carries both keys and voice when a command has both', () => {
     const catalog = [cmd('scroll_down', 'Scroll', ['scroll down'])];
     const model = buildHelpModel(catalog, [{ keys: 'shift+KeyJ', command: 'scroll_down' }]);

@@ -16,6 +16,7 @@
 
 import { COMMAND_CATALOG, type CommandMeta, type KeymapEntry } from '../keymap/command-catalog';
 import { comboDisplay } from '../activate/key-combo';
+import { detectOS, type OS } from '../keymap/browser-shortcuts';
 import { letterToSpokenWord, isVoiceAlphabetLoaded } from '../labels/words';
 import { isBranchKitConnected } from '../plugin/connection-mirror';
 import { micGlyph, keyGlyph } from './mic-glyph';
@@ -31,6 +32,10 @@ export interface HelpRow {
   /** Space-split tokens of the command's mode-owned keyboard hint (caret-mode
    *  `o`/`y`/`aw`…) — shown as key chips even though the command isn't bindable. */
   keyHint: string[];
+  /** The browser's OWN shortcut, formatted for this OS ("Cmd+L" / "Ctrl+L") —
+   *  rendered as a ghost chip with a tooltip: BranchKit neither implements nor
+   *  can rebind it, and it works with the extension disabled. */
+  nativeKey: string[];
   /** Spoken phrases for this command (e.g. ["scroll down", "scroll down {number}"]). */
   voice: string[];
   label: string;
@@ -73,6 +78,7 @@ export function buildHelpModel(
   voiceConnected = true,
   overrides?: OverrideMap,
   aliases?: readonly OverrideRecord[],
+  os: OS = detectOS(),
 ): HelpGroup[] {
   const keysByCommand = new Map<string, string[]>();
   for (const e of keymap) {
@@ -91,7 +97,15 @@ export function buildHelpModel(
       ? effectiveVoice(c.id, (c.voice ?? []).map((v) => v.pattern), overrides, aliases)
       : [];
     const keyHint = c.keyHint ? c.keyHint.split(/\s+/).filter(Boolean) : [];
-    if (keys.length === 0 && voice.length === 0 && keyHint.length === 0) continue; // not reachable → skip
+    // The browser's own key: catalog stores the event.code, the OS primary
+    // modifier is applied here (browser-shortcuts.ts's model — Cmd on mac,
+    // Ctrl elsewhere), and comboDisplay keeps it in the same display grammar
+    // as every other chip.
+    const nativeKey = c.nativeKey
+      ? [comboDisplay((os === 'mac' ? 'meta+' : 'ctrl+') + c.nativeKey)]
+      : [];
+    if (keys.length === 0 && voice.length === 0 && keyHint.length === 0
+      && nativeKey.length === 0) continue; // not reachable → skip
     let gi = indexByGroup.get(c.group);
     if (gi === undefined) {
       gi = groups.length;
@@ -102,7 +116,7 @@ export function buildHelpModel(
     // mode-gated commands — Normal-mode commands need no explanation.
     const note = modeNote(c.voiceContext);
     const info = note ? `${note}\n\n${c.description}` : '';
-    groups[gi].rows.push({ keys, keyHint, voice, label: c.label, info });
+    groups[gi].rows.push({ keys, keyHint, nativeKey, voice, label: c.label, info });
   }
   return groups;
 }
@@ -263,6 +277,10 @@ kbd {
 /* Mode-owned key hint (caret-mode o/y/aw…): a key chip, dimmed + dashed so it
    reads as "only inside the mode", distinct from a real global binding. */
 kbd.hint { opacity: 0.7; border-style: dashed; }
+/* Browser-owned key (Cmd+L): the third key tier — a flat ghost chip, no keycap
+   depth or fill, because BranchKit neither implements nor can rebind it (it
+   works with the extension disabled). The title tooltip says so on hover. */
+kbd.native { background: transparent; color: #8b949e; border-bottom-width: 1px; cursor: help; }
 /* A flex row: [mic] [phrases]. The phrases span wraps, and because it's its own
    flex item its continuation lines stay aligned under the first line (not under
    the mic). The mic is a fixed item pinned top-left, so it's always visible. */
@@ -365,13 +383,19 @@ function buildHelpOverlay(
 
       // 2 — how to type it: keyboard glyph (the mic's twin) + aligned key
       // chips. Real registry binds first, then any mode-owned hint keys
-      // (dimmed — they only work inside the mode). Glyph only when there are
+      // (dimmed — they only work inside the mode), then a browser-owned
+      // native key (ghost — not ours at all). Glyph only when there are
       // keys, so an unbound command's cell stays empty rather than orphaning
       // an icon.
       const keys = el('div', 'keys');
-      if (r.keys.length + r.keyHint.length > 0) keys.appendChild(keyGlyph());
+      if (r.keys.length + r.keyHint.length + r.nativeKey.length > 0) keys.appendChild(keyGlyph());
       for (const k of r.keys) keys.appendChild(el('kbd', undefined, k));
       for (const k of r.keyHint) keys.appendChild(el('kbd', 'hint', k));
+      for (const k of r.nativeKey) {
+        const chip = el('kbd', 'native', k);
+        chip.title = 'The browser’s own shortcut — works even without BranchKit.';
+        keys.appendChild(chip);
+      }
       row.appendChild(keys);
 
       // 3 — how to say it: mic glyph + phrase(s), set apart from the keys.

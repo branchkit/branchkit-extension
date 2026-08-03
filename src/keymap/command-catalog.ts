@@ -136,6 +136,18 @@ export interface CommandMeta {
    * Not bindable and never read by the keymap — purely the cheat-sheet.
    */
   keyHint?: string;
+  /**
+   * The BROWSER'S OWN shortcut for this function, as an event.code combined
+   * with the OS primary modifier at render time (browser-shortcuts.ts's model:
+   * Cmd on mac, Ctrl elsewhere) — 'KeyL' shows as Cmd+L / Ctrl+L. The third
+   * key tier after registry binds and mode-owned keyHints: BranchKit neither
+   * implements nor can rebind it, and it works with the extension disabled, so
+   * the help renders it as a flat ghost chip with a tooltip saying exactly
+   * that. Only sensible when it is the command's ONLY keyboard route — rows
+   * with a real bind never list their native twins (⌘T/⌘W/⌘F would be
+   * clutter on new_tab/close_tab/find_open).
+   */
+  nativeKey?: string;
 }
 
 export interface KeymapEntry {
@@ -343,11 +355,13 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // extension API can focus. The PLUGIN intercepts this action before the SSE
   // forward and presses the browser's native shortcut (⌘L) via the keyboard
   // plugin; sse-events.ts keeps a defensive no-op arm so the voiced id still
-  // has an extension-side route (lint D). Voice-only: a keybind would be
-  // circular — the key for this IS ⌘L, which the browser already provides.
+  // has an extension-side route (lint D). No bind: a keybind would be circular
+  // — the key for this IS the browser's own Cmd/Ctrl+L, shown as a nativeKey
+  // ghost chip instead.
   { id: 'focus_address_bar', label: 'Focus address bar', group: 'Navigation', mappable: false, params: [],
-    description: 'Focus the browser’s address bar with its contents selected (⌘L) — then dictate or type a URL or search.',
-    voice: [{ pattern: 'address' }] },
+    description: 'Focus the browser’s address bar with its contents selected — then dictate or type a URL or search.',
+    voice: [{ pattern: 'address' }],
+    nativeKey: 'KeyL' },
   // Keyboard-only hint action (Vimium yf): enter hint mode, then a codeword
   // copies that link’s URL instead of following it. Voice yank would need a
   // contributed hint verb — deferred.
