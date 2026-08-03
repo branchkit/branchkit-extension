@@ -11,7 +11,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { bgState } from './state';
-import { resolveActiveContentTab, broadcastToAllTabs, resolveHintFromTab } from './frame-router';
+import { resolveActiveContentTab, broadcastToAllTabs, resolveHintFromTab, notifyActiveTab } from './frame-router';
 
 let getAll: ReturnType<typeof vi.fn>;
 let query: ReturnType<typeof vi.fn>;
@@ -123,5 +123,43 @@ describe('resolveHintFromTab', () => {
     const res = await resolveHintFromTab(3, 'cg');
     expect(res).toMatchObject({ ok: true });
     expect(sendMessage.mock.calls.map(c => c[2]?.frameId)).toEqual([0]);
+  });
+});
+
+describe('notifyActiveTab frame targeting', () => {
+  // The palette + help overlays are top-frame singletons whose content-script
+  // handlers TOGGLE. The all-frames broadcast self-cancelled on iframe-bearing
+  // pages: the top frame opened the palette, then a subframe's PALETTE_OPEN
+  // relay re-toggled frame 0 closed milliseconds later (field, 2026-08-03,
+  // accounts.google.com). These actions must target frame 0 alone.
+  it('routes palette toggles to frame 0 only', async () => {
+    bgState.cachedActiveTabId = 5;
+    await notifyActiveTab({
+      type: 'BRANCHKIT_ACTION',
+      payload: { action: 'toggle_tab_palette' },
+    } as never);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0][0]).toBe(5);
+    expect(sendMessage.mock.calls[0][2]).toEqual({ frameId: 0 });
+  });
+
+  it('routes toggle_help to frame 0 only', async () => {
+    bgState.cachedActiveTabId = 5;
+    await notifyActiveTab({
+      type: 'BRANCHKIT_ACTION',
+      payload: { action: 'toggle_help' },
+    } as never);
+    expect(sendMessage.mock.calls[0][2]).toEqual({ frameId: 0 });
+  });
+
+  it('still broadcasts codeword-less per-frame actions to all frames', async () => {
+    bgState.cachedActiveTabId = 5;
+    await notifyActiveTab({
+      type: 'BRANCHKIT_ACTION',
+      payload: { action: 'toggle_hints' },
+    } as never);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    // No frameId options arg — an omitted frameId is "all frames".
+    expect(sendMessage.mock.calls[0][2]).toBeUndefined();
   });
 });

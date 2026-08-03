@@ -183,10 +183,27 @@ export async function notifyActiveTab(message: Message): Promise<void> {
   }
 }
 
+/** Actions whose surface is a top-frame singleton: the palette scopes and the
+ * help overlay. A voice dispatch for these must reach frame 0 ONLY. The
+ * all-frames broadcast self-cancels: every subframe's handler relays
+ * PALETTE_OPEN back through here to frame 0, whose handler is a TOGGLE — so
+ * the top frame opens and the first subframe relay closes it milliseconds
+ * later (field, 2026-08-03: four consecutive "palette tabs" on
+ * accounts.google.com, an iframe-bearing page, each flashed open→closed in
+ * 3–6ms; plain pages worked, which is why it read as flaky rather than
+ * broken). The keyboard never hit this — a keybind fires in one frame.
+ * toggle_help rides along: its dispatcher handler is registered in every
+ * frame, so a broadcast opened overlays INSIDE subframes. */
+const TOP_FRAME_ACTIONS = new Set([
+  'toggle_palette', 'toggle_tab_palette', 'toggle_command_palette',
+  'toggle_bookmark_palette', 'toggle_help',
+]);
+
 /**
  * If the message is a hint activation that names a codeword, look up which
  * frame owns that codeword in the tab's label pool and return its frameId.
- * Returns null for actions that don't carry a codeword (toggle_hints, rescan,
+ * Top-frame-singleton actions (TOP_FRAME_ACTIONS) route to frame 0. Returns
+ * null for other actions that don't carry a codeword (toggle_hints, rescan,
  * reactivate, etc.) — caller then sends with no frameId, which delivers to
  * every frame in the tab (both Chrome and Firefox treat an omitted frameId as
  * "all frames"). Frames with nothing to do early-out cheaply on their side
@@ -199,6 +216,7 @@ export async function notifyActiveTab(message: Message): Promise<void> {
  */
 async function routeFrameForAction(tabId: number, message: Message): Promise<number | null> {
   if (message.type !== 'BRANCHKIT_ACTION') return null;
+  if (TOP_FRAME_ACTIONS.has(message.payload.action)) return 0;
   const params = message.payload.params;
   if (!params) return null;
 
