@@ -698,11 +698,11 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // launcher). Selection opens a NEW focused tab: a bookmark is somewhere you
   // want to go as well as where you already are, so replacing the current tab
   // discards context you never asked to lose. "stash" opens it behind instead.
-  // Plural-only on purpose: singular "bookmark" stays free for a possible
-  // future bookmark-this-page verb.
+  // Singular + plural both open it (user-directed 2026-08-03); a future
+  // bookmark-this-page verb will need a different phrase ("save page"?).
   { id: 'toggle_bookmark_palette', label: 'Bookmark palette', group: 'Palette', mappable: true, params: [],
     description: 'Open a bookmark in a new tab — say "bookmarks"; search by title, site, or folder. “stash” + badge opens it behind instead.',
-    voice: [{ pattern: 'bookmarks' }, { pattern: 'palette bookmarks' }] },
+    voice: [{ pattern: 'bookmarks' }, { pattern: 'bookmark' }, { pattern: 'palette bookmarks' }] },
   // Palette voice selection (voice half of Layer 2): every palette row shows
   // an alphabet codeword badge; `{palette}` is the plugin-owned slot for it,
   // and the background maps the resolved row_id back to the row's dispatch.
