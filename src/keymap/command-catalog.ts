@@ -185,7 +185,12 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // which spoken codewords can't express (no capitals in speech). Verbs match
   // the Rango convention; choice rationale in
   // notes/DESIGN_MULTI_TARGET_COMMANDS.md (phase 1).
+  // keyHint "aA": the affordance's established name (settings palette table,
+  // palette_select_newtab's description) — typing the badge with a capital
+  // inside f mode opens it in a new tab. A dashed mode-owned chip, so the row
+  // itself says a keyboard route exists; the "Badges — f" legend explains it.
   { id: 'activate_hint_newtab', label: 'Open badge in new tab', group: 'Badges', mappable: false, params: [],
+    keyHint: 'aA',
     description: 'Open the badge’s link in a new focused tab.',
     voice: [{ pattern: `${DISPOSITIONS.newtab.word} {hint}`, sharedWord: 'newtab' }] },
   // {hint+} = one or more hint codewords in a single breath ("stash huge gap
