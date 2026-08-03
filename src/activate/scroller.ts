@@ -17,10 +17,22 @@ let suppressScrollEvent = 0;
  * CSS check first, then verify by attempting a scroll and reverting.
  * Uses Surfingkeys' full-height probe + event suppression.
  */
-export function isScrollableElement(el: HTMLElement, dir: 'x' | 'y'): boolean {
+export function isScrollableElement(
+  el: HTMLElement,
+  dir: 'x' | 'y',
+  // `relaxed` admits `overflow: hidden` to the PROBE below. A hidden-overflow
+  // box with overflowing content is a real scroll container — programmatic
+  // scrollTop moves it, which is how every scroll command drives elements —
+  // and hover-revealed scrollers (QuickBase dashboard widgets: hidden at
+  // rest, auto on :hover) read as hidden whenever no mouse is over them.
+  // The region finder passes true; the ancestor walks stay strict so a
+  // clipped decorative box can't capture the default j/k scroll.
+  relaxed = false,
+): boolean {
   const overflowProp = dir === 'y' ? 'overflowY' : 'overflowX';
   const overflow = getComputedStyle(el)[overflowProp];
-  if (!/auto|scroll|overlay/.test(overflow)) {
+  const allowed = relaxed ? /auto|scroll|overlay|hidden/ : /auto|scroll|overlay/;
+  if (!allowed.test(overflow)) {
     // document.documentElement and document.body are special: they may
     // scroll even without explicit overflow (the viewport is the scroller).
     if (el !== document.documentElement && el !== document.body) return false;
@@ -375,7 +387,7 @@ export function findScrollableRegions(): HTMLElement[] {
   const candidates = document.querySelectorAll('*');
   for (const el of candidates) {
     if (!(el instanceof HTMLElement)) continue;
-    if (!isScrollableElement(el, 'y')) continue;
+    if (!isScrollableElement(el, 'y', true)) continue;
     // A pane, not a widget — judged by its BOX, not its child count. The old
     // `children.length < 5` filter excluded exactly the shape scrollable
     // tables take: one wrapper div with one <table> child (field 2026-08-03:
