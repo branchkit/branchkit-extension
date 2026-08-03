@@ -341,11 +341,17 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
       { pattern: 'escape', context: 'caret' },
     ] },
   // Pass-through: hand the keyboard to the site so its own shortcuts work.
-  // Keyboard-only (voice is unaffected by keyboard modes), so no `voice`.
+  // One verb, two durations — the spoken pair says so: "pass all" / "pass
+  // next" (user-chosen over press-collision caution 2026-08-03: a pass/press
+  // mishear fails to match rather than misfiring — "press" continues with key
+  // names, "pass" with all/next). Voice-enterable means voice-exitable:
+  // spoken "escape" leaves pass-through via the cascade's epilogue.
   { id: 'insert_mode', label: 'Pass keys to the page', group: 'Navigation', mappable: true, params: [],
-    description: 'Hand every keypress to the site until you press Escape — for pages with their own keyboard shortcuts (Gmail, GitHub, web apps, games).' },
+    description: 'Hand every keypress to the site until you press Escape (or say “escape”) — for pages with their own keyboard shortcuts (Gmail, GitHub, web apps, games).',
+    voice: [{ pattern: 'pass all' }] },
   { id: 'pass_next_key', label: 'Pass next key to the page', group: 'Navigation', mappable: true, params: [],
-    description: 'Send just the next keystroke straight to the site, then resume BranchKit shortcuts.' },
+    description: 'Send just the next keystroke straight to the site, then resume BranchKit shortcuts.',
+    voice: [{ pattern: 'pass next' }] },
   { id: 'go_next', label: 'Next page', group: 'Navigation', mappable: true, params: [],
     description: 'Follow the page’s "next" link (rel=next, or a link labelled Next/Newer/›) — paginated results, docs, galleries.',
     voice: [{ pattern: 'next page' }] },

@@ -503,14 +503,29 @@ describe('pass-through (explicit insert) mode', () => {
     expect(dispatchSpy).not.toHaveBeenCalled();
   });
 
-  it('Escape leaves pass-through and returns to normal', () => {
+  // The exit lives in the escape cascade's EPILOGUE (escape-cascade.ts) since
+  // "pass all" made forced insert voice-enterable — this wires the same
+  // production-shaped hook the cascade module installs on the singleton, so
+  // the key path is exercised through the one shared rule.
+  it('Escape leaves pass-through and returns to normal (via the cascade hook)', () => {
     const modeCb = vi.fn();
     handler.setModeChangeCallback(modeCb);
+    handler.setEscapeHook(() => {
+      if (!handler.isForcedInsert()) return '';
+      handler.exitInsertMode();
+      return 'insert';
+    });
     handler.enterInsertMode();
     const result = handler.handleKeyDown(makeKey('Escape'));
     expect(result).toBe(true); // intercepted to exit, not passed to page
     expect(handler.getMode()).toBe('normal');
     expect(modeCb).toHaveBeenLastCalledWith('normal');
+  });
+
+  it('without the hook, Escape passes to the page — the exit is the cascade’s', () => {
+    handler.enterInsertMode();
+    expect(handler.handleKeyDown(makeKey('Escape'))).toBe(false);
+    expect(handler.getMode()).toBe('insert');
   });
 
   it('toggleInsertMode flips in and out', () => {

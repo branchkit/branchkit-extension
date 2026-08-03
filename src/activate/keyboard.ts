@@ -285,6 +285,13 @@ export class KeyHandler {
   }
 
   /** Leave explicit pass-through mode. */
+  /** True in explicit pass-through ("pass all" / the i bind) — NOT per-site
+   *  exclusion or field-focus insert. The escape cascade's epilogue reads
+   *  this: forced insert is voice-enterable, so spoken "escape" must exit it. */
+  isForcedInsert(): boolean {
+    return this.forcedInsert;
+  }
+
   exitInsertMode(): void {
     if (!this.forcedInsert) return;
     this.forcedInsert = false;
@@ -405,8 +412,12 @@ export class KeyHandler {
     //
     // Deliberately ahead of the modal-capture routes: caret is a LAYER, and
     // letting the cascade own it is what keeps the order in one place. The
-    // keyboard-only transients below (mark arm, forced insert) are not layers —
-    // voice cannot be in them — so they stay here.
+    // mark arm below is a keyboard-only transient, not a layer — voice cannot
+    // be in it — so it stays here. Forced insert used to sit with it on the
+    // same reasoning, but "pass all" made it voice-enterable: its exit now
+    // lives in the cascade's EPILOGUE (after the stack is empty — the same
+    // layers-first order the old dedicated branch produced), so both escapes
+    // unwind through one rule.
     if (e.key === 'Escape' && this.onEscape?.()) {
       e.preventDefault();
       e.stopPropagation();
@@ -445,15 +456,10 @@ export class KeyHandler {
 
     // Explicit pass-through (insert toggle) or per-site exclusion: EVERY key
     // reaches the page — checked before the chord path so even Ctrl/Cmd combos
-    // go to the site. Escape leaves an explicit toggle; on an excluded site
+    // go to the site. Escape leaving forced insert happens ABOVE, in the
+    // cascade's epilogue (shared with spoken "escape"); on an excluded site
     // Escape just reaches the page (exclusion is toggled from the popup).
     if (!this.isModalCapture() && (this.forcedInsert || this.excluded)) {
-      if (e.key === 'Escape' && this.forcedInsert) {
-        this.exitInsertMode();
-        e.preventDefault();
-        e.stopPropagation();
-        return true;
-      }
       return false;
     }
 

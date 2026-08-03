@@ -29,6 +29,11 @@ vi.mock('../scan/find', () => ({
 
 const hintPeels: string[] = [];
 const videoExits: number[] = [];
+const insertExits: number[] = [];
+// Forced insert, as the epilogue reads it (production: KeyHandler.forcedInsert).
+// Outer bindings are safe here for the same reason the arrays are: only
+// written when a test calls into them, never at import.
+let forcedInsert = false;
 // setEscapeHook is called at escape-cascade's IMPORT now, so the fake has to
 // answer it — and capturing what it was handed is what lets the registration
 // itself be asserted below rather than merely assumed.
@@ -45,6 +50,8 @@ vi.mock('../core/singletons', () => {
     keyHandler: {
       escapeHintMode: () => { hintPeels.push('hint_mode'); },
       exitVideoMode: () => { videoExits.push(1); },
+      isForcedInsert: () => forcedInsert,
+      exitInsertMode: () => { forcedInsert = false; insertExits.push(1); },
       setEscapeHook: (cb: () => string) => { escapeHook = cb; },
       _installedEscapeHook: () => escapeHook,
     },
@@ -76,11 +83,13 @@ beforeEach(() => {
   modes.reset();
   clearInnerTransientProbes();
   hintPrefix = false;
+  forcedInsert = false;
   cancelled.length = 0;
   caretExits.length = 0;
   findClosed.length = 0;
   hintPeels.length = 0;
   videoExits.length = 0;
+  insertExits.length = 0;
 });
 afterEach(() => vi.clearAllMocks());
 
@@ -110,6 +119,25 @@ describe('the Escape key wiring belongs to this module', () => {
 describe('escape cascade (derived from the mode stack)', () => {
   it('peels nothing and says so when nothing is open', () => {
     expect(runEscapeCascade('test')).toBe('');
+  });
+
+  // The epilogue: forced insert ("pass all") is voice-enterable, so the
+  // cascade exits it — but only once the stack has nothing left to peel,
+  // preserving the layers-first order of the old keyboard-only branch.
+  it('exits forced insert as the epilogue, when the stack is empty', () => {
+    forcedInsert = true;
+    expect(runEscapeCascade('test')).toBe('insert');
+    expect(insertExits).toEqual([1]);
+    // Consumed: the next escape has nothing left.
+    expect(runEscapeCascade('test')).toBe('');
+  });
+
+  it('a layer peels first; forced insert survives to the next escape', () => {
+    forcedInsert = true;
+    modes.push('video');
+    expect(runEscapeCascade('test')).toBe('video');
+    expect(insertExits).toHaveLength(0);
+    expect(runEscapeCascade('test')).toBe('insert');
   });
 
   it('peels exactly ONE layer per invocation — the newest', () => {

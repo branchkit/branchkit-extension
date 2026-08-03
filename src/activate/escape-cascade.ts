@@ -32,11 +32,15 @@
  * decide whether the key was consumed.
  *
  * Deliberately NOT in the cascade: badge visibility. "dismiss"/"hide"/toggle
- * own that — escape closes things, it doesn't mute them. Keyboard-only
- * transients that are not layers (a half-typed mark, forced insert mode)
- * stay in keyboard.ts, because voice can't be in them; they sit BEHIND this
- * in handleKeyDown, so with a mark armed over an open layer, Escape peels
- * the layer and the mark arm survives to the next one.
+ * own that — escape closes things, it doesn't mute them. The half-typed mark
+ * arm is a keyboard-only transient, not a layer, and stays in keyboard.ts —
+ * voice can't be in it; it sits BEHIND this in handleKeyDown, so with a mark
+ * armed over an open layer, Escape peels the layer and the mark arm survives
+ * to the next one. Forced insert ("pass all" / the i bind) is ALSO not a
+ * layer — no capture, no frame ownership — but it IS voice-enterable, so its
+ * exit lives here as the EPILOGUE: when the stack has nothing left to peel,
+ * escape leaves pass-through. Same layers-first order the old keyboard-only
+ * branch produced, now shared by both inputs.
  *
  * Every frame of the active tab runs this; each frame's stack holds only the
  * modes that frame owns, so only the frame with the open layer acts.
@@ -80,11 +84,20 @@ setInnerTransientProbe('hint', () => keyHandler.peelHintPrefix());
 keyHandler.setEscapeHook(() => runEscapeCascade('key_escape'));
 
 export type EscapeLayer =
-  | 'range_pick' | 'hint_prefix' | 'hint_mode' | 'selection' | 'video' | 'find' | '';
+  | 'range_pick' | 'hint_prefix' | 'hint_mode' | 'selection' | 'video' | 'find'
+  | 'insert' | '';
 
 export function runEscapeCascade(reason: string): EscapeLayer {
   const peeled = modes.peelTop(reason);
-  if (peeled.peeled === 'none') return '';
+  if (peeled.peeled === 'none') {
+    // The epilogue (see header): forced insert exits only once the stack is
+    // empty — layers always peel first.
+    if (keyHandler.isForcedInsert()) {
+      keyHandler.exitInsertMode();
+      return 'insert';
+    }
+    return '';
+  }
   if (peeled.peeled === 'inner') {
     // An intra-mode transient consumed the escape; the entry stays. The
     // probe's NAME maps into the cascade's reporting vocabulary: hint's one
