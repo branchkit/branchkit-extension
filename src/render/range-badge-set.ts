@@ -375,6 +375,25 @@ export class RangeBadgeSet {
     this.republishDelta(isStrict);
   }
 
+  /**
+   * Re-place every member against its range's live rect.
+   *
+   * A chip's position bakes once in `paint()`; `reconcile()` moves membership,
+   * not pixels. That's fine under the normal settle cadence, but a pick hides
+   * the page badges and quiets that cadence — so a mid-pick scroll or layout
+   * shift moves what a chip stands for while the chip stays where it was
+   * (field 2026-08-03: pane chip stranded ~140px from its live-tracked tint).
+   * Owners with their own live-geometry trigger call this from it.
+   */
+  repositionAll(): void {
+    if (this.disposed) return;
+    for (const m of this.members.values()) {
+      if (isRangeDead(m.range)) continue;
+      const target = rangeTarget(m.range);
+      placeBadgeAtRect(m.badge, target.element, target.rect(), this.opts.anchor ?? 'text');
+    }
+  }
+
   /** Give back every codeword and badge. Idempotent. */
   dispose(reason: string): void {
     if (this.disposed) return;

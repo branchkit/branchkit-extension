@@ -23,7 +23,7 @@ import {
   getDefaultScrollTarget, flashRegionHighlight,
   type ScrollDirection, type ScrollAmount, type ScrollRegion,
 } from './scroller';
-import { startRangePick, isRangePickPending } from './range-disambiguation';
+import { startRangePick, isRangePickPending, repositionPickChips } from './range-disambiguation';
 import { flashToast } from '../render/toast';
 import { bkLog } from '../debug/bk-log';
 
@@ -125,6 +125,10 @@ function repositionPickOverlays(): void {
     overlay.style.width = `${r.width}px`;
     overlay.style.height = `${r.height}px`;
   }
+  // The chips bake their position at paint and the settle cadence that would
+  // re-place them is quiet during a pick — move them on the same trigger as
+  // the tints, or a mid-pick scroll strands them off their panes.
+  repositionPickChips();
 }
 
 function scheduleOverlayReposition(): void {

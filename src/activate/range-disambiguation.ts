@@ -166,6 +166,17 @@ export function isRangePickPending(codeword?: string): boolean {
 }
 
 /**
+ * Re-place the live pick's chips against their ranges' current rects. For
+ * owners that track geometry themselves while a pick is up (the scroll-pick's
+ * pane tints reposition on a capture-phase scroll listener): the chips must
+ * ride the same trigger, or a mid-pick scroll strands them where paint left
+ * them while the tints follow the panes. No-op when no pick is live.
+ */
+export function repositionPickChips(): void {
+  pending?.chips.repositionAll();
+}
+
+/**
  * The pick's resolve policy (RangeHolderSpec.resolve — the registry routes
  * both input paths here through the holder the set registers).
  *
