@@ -381,24 +381,23 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     description: 'Focus the browser’s address bar with its contents selected — then dictate or type a URL or search.',
     voice: [{ pattern: 'address' }],
     nativeKey: 'KeyL' },
-  // Hint action (Vimium yf): a codeword copies that link’s URL instead of
-  // following it.
-  // "copy link" beside copytext's "copy text" — the URL/text pair reads as
-  // the siblings they are. NOT "copy url {hint}": bare "copy url" is already
-  // a command, and a longer command through a shorter one violates the
-  // terminal-prefix rule.
-  { id: 'yank_hint', label: 'Copy a link (badge)', group: 'Badges', mappable: true, params: [],
-    description: 'Copy a badge link’s URL instead of opening it. Say "copy link" then its codeword, or press the key then type a letter.',
-    voice: [{ pattern: 'copy link {hint}' }] },
   // Hint action modes (Vimium): pick a badge, do X instead of clicking. Both
   // keyboard (arm + type a letter) and voice (say the verb + the codeword). See
-  // notes/DESIGN_HINT_ACTION_MODES.md.
-  { id: 'focus_hint', label: 'Focus a badge', group: 'Badges', mappable: true, params: [],
-    description: 'Focus a badge’s element without activating it — a form field to type in, or any element. Say "focus" then its codeword, or press the key then type a letter.',
-    voice: [{ pattern: 'focus {hint}' }] },
+  // notes/DESIGN_HINT_ACTION_MODES.md. The two copy verbs sit together —
+  // labels, phrases, and rows all read as the URL/text sibling pair.
+  //
+  // yank (yf): "copy link" beside copytext's "copy text". NOT "copy url
+  // {hint}": bare "copy url" is already a command, and a longer command
+  // through a shorter one violates the terminal-prefix rule.
+  { id: 'yank_hint', label: 'Copy a badge’s link', group: 'Badges', mappable: true, params: [],
+    description: 'Copy a badge link’s URL instead of opening it. Say "copy link" then its codeword, or press the key then type a letter.',
+    voice: [{ pattern: 'copy link {hint}' }] },
   { id: 'copytext_hint', label: 'Copy a badge’s text', group: 'Badges', mappable: true, params: [],
     description: 'Copy a badge’s visible text (not its URL). Say "copy text" then its codeword, or press the key then type a letter.',
     voice: [{ pattern: 'copy text {hint}' }] },
+  { id: 'focus_hint', label: 'Focus a badge', group: 'Badges', mappable: true, params: [],
+    description: 'Focus a badge’s element without activating it — a form field to type in, or any element. Say "focus" then its codeword, or press the key then type a letter.',
+    voice: [{ pattern: 'focus {hint}' }] },
   // retainsHints: hover doesn't follow/clear — badges stay up so the user can
   // chain a command on whatever the hover exposed. Voice contributed here (not
   // plugin-side) so every badge verb lives in one place (was the phase-3b
