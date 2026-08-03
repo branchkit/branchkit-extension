@@ -174,7 +174,8 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // `f` — enter badge-typing mode: badges (always visible for voice) become
   // keyboard-typeable here, and only here. See notes/DESIGN_KEYBOARD_MODES.md.
   { id: 'hint_mode', label: 'Type a badge', group: 'Badges', mappable: true, params: [],
-    description: 'Make the painted badges keyboard-typeable — then type a letter to activate one. Esc exits.' },
+    description: 'Make the painted badges keyboard-typeable — say "type" or press the key, then type a letter to activate one. Esc (or "escape") exits.',
+    voice: [{ pattern: 'type' }] },
   // There is deliberately NO entry for "activate the badge you just typed".
   // One existed from the scaffold commit until 2026-07-28 (`activate_hint`) and
   // in all that time nothing in the extension could dispatch it — typing a

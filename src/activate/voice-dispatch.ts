@@ -70,6 +70,7 @@ export const DISPATCH_PASSTHROUGH_ACTIONS = new Set([
   'toggle_bookmark_palette', // voice "palette bookmarks" — the bookmark source alone
   'toggle_help', // voice "help" — same handler as the ? bind
   'insert_mode', 'pass_next_key', // voice "pass all" / "pass next" — the i and \ binds
+  'hint_mode', // voice "type" — the f bind's badge-typing mode; a stack layer, so "escape" exits it
   'go_next', 'go_previous', // voice "next/previous page"
   'copy_url', // voice "copy url"
   'go_up', 'go_root', // voice "go up" / "site root"
