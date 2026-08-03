@@ -26,6 +26,7 @@
  */
 
 import { RangeBadgeSet } from '../render/range-badge-set';
+import type { AnchorKind } from '../placement/position';
 import { RANGE_PICK_VARIANT } from '../render/badge-variant';
 import { flashToast } from '../render/toast';
 import { clearFindPaint } from '../scan/find';
@@ -222,11 +223,16 @@ export function cancelRangePick(reason: string, restoreBadges = true): void {
  * prefix/sole/narrow surface that used to be exported from here is the
  * holder's now — one order, derived, both inputs.
  */
-export function startRangePick(ranges: Range[], onPick: (range: Range) => void): void {
+export function startRangePick(
+  ranges: Range[],
+  onPick: (range: Range) => void,
+  opts?: { anchor?: AnchorKind },
+): void {
   cancelRangePick('replaced');
 
   const chips = RangeBadgeSet.create({
     ranges,
+    anchor: opts?.anchor,
     variant: RANGE_PICK_VARIANT,
     budget: MAX_RANGE_BADGES,
     logTag: 'BK_RANGE_PICK',

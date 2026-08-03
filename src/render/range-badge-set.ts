@@ -44,7 +44,7 @@ import { HintBadge } from './hints';
 import { rangeTarget } from './badge-target';
 import { isRangeDead } from '../scan/range-liveness';
 import { canRecover, type BadgeVariant } from './badge-variant';
-import { placeBadgeAtRect } from '../placement/position';
+import { placeBadgeAtRect, type AnchorKind } from '../placement/position';
 import { isAncestorChainInVisibleViewport } from '../lifecycle/strict-viewport';
 import { type BandCandidate, bandOverhang, planBandWindow } from '../lifecycle/band-window';
 import { VIEWPORT_MARGIN_PX } from '../observe/intersection-tracker';
@@ -114,6 +114,12 @@ export interface RangeBadgeSetOptions {
    *  over this list, so the full set has to outlive the initial claim. */
   ranges: Range[];
   variant: BadgeVariant;
+  /** How a badge anchors to its range's rect: 'text' (default) hangs the chip
+   *  beside the first character — right for text matches; 'icon' hosts it
+   *  fully INSIDE a large box — the scroll-pane picks, where the box's corner
+   *  can sit flush against the viewport edge and a text-nudged chip would
+   *  hang off-screen (field: QuickBase side panel). */
+  anchor?: AnchorKind;
   /** The owner's holder policy; registration itself is the set's. */
   holder: RangeHolderSpec;
   /** Most badges to hold at once. A promise, not a target: the planner is
@@ -630,7 +636,7 @@ export class RangeBadgeSet {
     const target = rangeTarget(range);
     const badge = new HintBadge(target, label, getDisplayMode(), this.opts.variant);
     badge.show();
-    placeBadgeAtRect(badge, target.element, target.rect());
+    placeBadgeAtRect(badge, target.element, target.rect(), this.opts.anchor ?? 'text');
     return { range, badge, label, strict: false, published: false };
   }
 }

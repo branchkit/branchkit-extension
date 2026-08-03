@@ -65,12 +65,15 @@ function startScrollTargetPick(): void {
     r.selectNode(el);
     return r;
   });
+  // anchor 'icon': chips sit fully INSIDE the pane's corner — a pane flush
+  // against a viewport edge would clip a text-nudged chip half off-screen
+  // (field: QuickBase side panel).
   startRangePick(ranges, (range) => {
     const el = pickedElement(range);
     if (el === null) return;
     setScrollTarget(el);
     flashToast('Scroll target set');
-  });
+  }, { anchor: 'icon' });
 }
 
 /** The element a `selectNode` Range names: the child at its start boundary. */

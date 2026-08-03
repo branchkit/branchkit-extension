@@ -244,11 +244,16 @@ export function placeBadgeAtRect(
   hint: Pick<BadgeHandle, 'badgeSize' | 'updatePosition'>,
   styleRef: Element,
   anchorRect: DOMRect,
+  anchor: AnchorKind = 'text',
 ): void {
+  // The rect rides along so the icon branch can host the badge fully INSIDE a
+  // big box (the pane-pick chips, whose box corner can sit flush against the
+  // viewport edge — a text-nudged chip there hangs off-screen). The text
+  // branch ignores it, so the default is byte-identical to before.
   const result = computePlacement({
     targetRect: anchorRect,
     badgeSize: hint.badgeSize,
-    nudge: getNudge(styleRef, 'text'),
+    nudge: getNudge(styleRef, anchor, anchorRect),
   });
   hint.updatePosition(result);
 }
