@@ -31,11 +31,17 @@ export interface ParamSchema {
  * pattern that speaks them derives from this table and tags itself with
  * `sharedWord`, so renaming a word (keymap editor) is one edit that follows
  * the feature across its boundaries rather than one surface's copy drifting.
+ *
+ * `alias` is a shipped second word that also matches on every surface —
+ * "blank" is web-dev jargon (target="_blank") a non-developer can't decode,
+ * so "new" works too. It stays OUTSIDE the sharedWord rename machinery
+ * (its patterns carry no sharedWord): renaming/resetting the primary word
+ * never touches it, and it is not removable — only overridable per-command.
  */
 export const DISPOSITIONS = {
-  newtab: { word: 'blank', label: 'a new tab' },
-  background: { word: 'stash', label: 'a background tab' },
-  here: { word: 'here', label: 'this tab' },
+  newtab: { word: 'blank', alias: 'new', label: 'a new tab' },
+  background: { word: 'stash', alias: null, label: 'a background tab' },
+  here: { word: 'here', alias: null, label: 'this tab' },
 } as const;
 export type DispositionKey = keyof typeof DISPOSITIONS;
 
@@ -194,7 +200,10 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   { id: 'activate_hint_newtab', label: 'Open badge in new tab', group: 'Badges', mappable: false, params: [],
     keyHint: 'aA',
     description: 'Open the badge’s link in a new focused tab.',
-    voice: [{ pattern: `${DISPOSITIONS.newtab.word} {hint}`, sharedWord: 'newtab' }] },
+    voice: [
+      { pattern: `${DISPOSITIONS.newtab.word} {hint}`, sharedWord: 'newtab' },
+      { pattern: `${DISPOSITIONS.newtab.alias} {hint}` },
+    ] },
   // {hint+} = one or more hint codewords in a single breath ("stash huge gap
   // arch same" opens both) — the plugin expands it to its repeated capture
   // macro and delivers the ordered target list; the SW fans it out per target.
@@ -787,8 +796,11 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // (palette-open-storage.ts, ships as new-tab). Rows that aren't links
   // (tabs, commands) ignore the modifier and dispatch normally.
   { id: 'palette_select_newtab', label: 'Open palette row in new tab', group: 'Palette', mappable: false, params: [],
-    description: 'Open a palette row in a new focused tab, whatever your default (“blank” + its badge, or type a badge letter as a CAPITAL — the hint surface’s aA affordance).',
-    voice: [{ pattern: `${DISPOSITIONS.newtab.word} {palette}`, sharedWord: 'newtab' }],
+    description: 'Open a palette row in a new focused tab, whatever your default (“blank” or “new” + its badge, or type a badge letter as a CAPITAL — the hint surface’s aA affordance).',
+    voice: [
+      { pattern: `${DISPOSITIONS.newtab.word} {palette}`, sharedWord: 'newtab' },
+      { pattern: `${DISPOSITIONS.newtab.alias} {palette}` },
+    ],
     voiceContext: 'palette' },
   { id: 'palette_select_background', label: 'Open palette row in background tab', group: 'Palette', mappable: false, params: [],
     description: 'Open a palette row in a background tab — the page you are on keeps focus (“stash” + its badge, or Ctrl/Cmd+Enter).',

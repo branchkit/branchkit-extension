@@ -144,13 +144,17 @@ function renderSharedWords(): HTMLElement {
       chip.className = 'km-voice-phrase km-voice-added';
       chip.textContent = w;
       item.appendChild(chip);
-      const remove = document.createElement('button');
-      remove.type = 'button';
-      remove.className = 'km-voice-reset';
-      remove.textContent = '×';
-      remove.title = 'Remove this word — everywhere.';
-      remove.addEventListener('click', () => void removeDispositionAlias(key, w));
-      item.appendChild(remove);
+      if (w === DISPOSITIONS[key].alias) {
+        chip.title = 'Built-in synonym — always available.';
+      } else {
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'km-voice-reset';
+        remove.textContent = '×';
+        remove.title = 'Remove this word — everywhere.';
+        remove.addEventListener('click', () => void removeDispositionAlias(key, w));
+        item.appendChild(remove);
+      }
       phrases.appendChild(item);
     }
     phrases.appendChild(sharedAliasAddButton(key));
@@ -217,10 +221,13 @@ function sharedWordChip(key: DispositionKey): HTMLElement {
   return wrap;
 }
 
-/** Distinct added words for a shared word, across its members ("go to"
- *  alongside "blank"). Exported for the palette table's projection. */
+/** Distinct extra words for a shared word: the shipped alias ("new"
+ *  alongside "blank") plus user-added ones ("go to"). Exported for the
+ *  palette table's projection. */
 export function aliasWordsForDisposition(key: DispositionKey): string[] {
   const words = new Set<string>();
+  const shipped = DISPOSITIONS[key].alias;
+  if (shipped) words.add(shipped);
   for (const m of sharedMembers(key)) {
     for (const a of aliases) {
       if (a.action !== m.meta.id || a.default_pattern !== m.vp.pattern) continue;
@@ -823,6 +830,9 @@ export function effectiveDispositionWord(key: DispositionKey): string {
 async function saveDispositionWord(key: DispositionKey, word: string): Promise<string | null> {
   const members = sharedMembers(key);
   if (members.length === 0) return 'Unknown word.';
+  if (word.trim() === DISPOSITIONS[key].alias) {
+    return `“${word.trim()}” already works — it is a built-in synonym.`;
+  }
   const first = members[0];
   const caps = first.vp.pattern.split(/\s+/).filter((t) => t.startsWith('{'));
   const candidate = [word.trim(), ...caps].join(' ');

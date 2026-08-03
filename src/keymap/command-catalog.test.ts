@@ -280,4 +280,26 @@ describe('shared vocabulary (DISPOSITIONS)', () => {
     expect(byKey.get('background')?.sort()).toEqual(['activate_hint_background', 'palette_select_background']);
     expect(byKey.get('here')).toEqual(['palette_select_here']);
   });
+
+  it('a shipped alias is spoken on every surface its primary word is — outside the rename machinery', () => {
+    // The alias pattern must NOT carry sharedWord: renaming/resetting the
+    // primary word fans over sharedWord members, and an alias member would be
+    // rewritten into a duplicate of the renamed pattern.
+    for (const [key, d] of Object.entries(DISPOSITIONS)) {
+      if (!d.alias) continue;
+      const primary: string[] = [];
+      const aliased: string[] = [];
+      for (const c of COMMAND_CATALOG) {
+        for (const vp of c.voice ?? []) {
+          if (vp.sharedWord === key) primary.push(c.id);
+          // Alias form = the alias word followed by captures only ("new {hint}"),
+          // which keeps "new tab" (a fixed-word phrase) out of the count.
+          const rest = vp.pattern.split(/\s+/).slice(1);
+          if (!vp.sharedWord && vp.pattern.startsWith(d.alias + ' ')
+            && rest.every((t) => t.startsWith('{'))) aliased.push(c.id);
+        }
+      }
+      expect(aliased.sort(), `alias “${d.alias}” for ${key}`).toEqual(primary.sort());
+    }
+  });
 });
