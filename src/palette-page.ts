@@ -548,14 +548,50 @@ function renderCurrent(): void {
  *  that didn't move the query rows sends nothing. */
 let queryRowsWire = '';
 
+/** The open-time publish, minus query rows — the base the presence
+ *  republish merges onto. Set by assignAndPublish per open. */
+let publishedBaseEntries: PaletteVoiceEntry[] = [];
+let publishedBaseRows: PaletteVoiceRow[] = [];
+/** Query-row voice entries built (codeword, title, group) at open-time
+ *  assignment; published only while their row is on screen. */
+let queryEntryTemplates = new Map<string, PaletteVoiceEntry>();
+/** Presence gate: sorted query-row ids currently published. Coarser than
+ *  queryRowsWire on purpose — dispatch payloads change every keystroke (the
+ *  query is embedded), but a REPUBLISH is only owed when a row appears or
+ *  vanishes. */
+let publishedQueryIds = '';
+
 /**
- * Keep the background's row→dispatch map current for the query-derived rows
- * (voice half): their codewords published at open, their dispatch embeds the
- * query — so every render where they changed refreshes the map. Local
- * runtime message only; the plugin's grammar is untouched.
+ * Keep the voice half in step with the query-derived rows as they appear and
+ * change. Two legs, separately gated:
+ *
+ *  1. Presence (row appeared/vanished) → republish the palette ENTRIES with
+ *     the present query rows merged in. This is what keeps the Discovery HUD
+ *     honest: before 2026-08-03 the query entries published at open, so the
+ *     HUD showed "Go to address"/"Search the web" badges with no matching
+ *     row in the palette. Ordered BEFORE the map message so the background's
+ *     publish (which resets its row map to base rows) is corrected by the
+ *     dispatch refresh that follows.
+ *  2. Dispatch payloads (query text moved) → PALETTE_QUERY_ROWS refreshes
+ *     the background's row→dispatch map. Local runtime message only.
  */
 function publishQueryRows(items: readonly PaletteItem[]): void {
   if (!voiceLive) return;
+  const presentIds = items
+    .map((it) => it.id)
+    .filter((id) => queryEntryTemplates.has(id))
+    .sort();
+  const presenceWire = presentIds.join(',');
+  if (presenceWire !== publishedQueryIds) {
+    publishedQueryIds = presenceWire;
+    const entries = [
+      ...publishedBaseEntries,
+      ...presentIds.map((id) => queryEntryTemplates.get(id) as PaletteVoiceEntry),
+    ];
+    chrome.runtime.sendMessage(
+      { type: 'PALETTE_PUBLISH', entries, rows: publishedBaseRows } as Message).catch(() => {});
+    queryRowsWire = ''; // force the map refresh below after a republish
+  }
   const rows = items.map((it) => ({ row_id: it.id, dispatch: it.dispatch }));
   const wire = JSON.stringify(rows);
   if (wire === queryRowsWire) return;
@@ -851,11 +887,14 @@ function assignAndPublish(alphabet: string[]): void {
     // so a letter that walks the list cannot also label a row.
     //
     // The query-derived rows (URL/search — DESIGN_PALETTE_URL_SEARCH.md) get
-    // codewords too, assigned HERE, once, though their rows appear only when
-    // a query exists: assignment at open is what keeps a badge stable for the
-    // palette's lifetime, and their spoken vocabulary must publish with
-    // everyone else's (the plugin's grammar is set per open, not per
-    // keystroke). Scope-gated to where renderCurrent shows them.
+    // codewords too, assigned HERE, once: assignment at open is what keeps a
+    // badge stable for the palette's lifetime. Their ENTRIES, though, publish
+    // only while their rows are on screen (publishQueryRows) — publishing
+    // them at open put "Go to address"/"Search the web" in the Discovery HUD
+    // with no matching row in the palette (field, 2026-08-03: disorienting in
+    // the bookmarks scope). The spoken words stay alphabet-seeded either way,
+    // so the engine grammar is indifferent. Scope-gated to where
+    // renderCurrent shows them.
     const queryIds = scope === 'all' || scope === 'bookmarks'
       ? ['query:url', 'query:search'] : [];
     codewords = assignCodewords(
@@ -899,15 +938,18 @@ function assignAndPublish(alphabet: string[]): void {
     }
     rows.push({ row_id: item.id, dispatch: item.dispatch });
   }
-  // Query rows: spoken entries + narrowing claim like any row, but NO rows[]
-  // record — their dispatch embeds the query and doesn't exist yet. The
-  // frame keeps the background's map current via PALETTE_QUERY_ROWS as they
-  // appear/change; speaking one while its row is absent is a background-side
-  // no-op. Stable display titles: the HUD names the ROLE, the row on screen
-  // names the query.
+  // Query rows: narrowing claim like any row, but their ENTRIES are held
+  // back until the row is actually on screen (publishQueryRows republishes
+  // on presence change) — a HUD row with no palette row to match it reads as
+  // a broken palette. NO rows[] record either — their dispatch embeds the
+  // query; the frame keeps the background's map current via
+  // PALETTE_QUERY_ROWS as they appear/change, and speaking one while its row
+  // is absent stays a background-side no-op (the race guard). Stable display
+  // titles: the HUD names the ROLE, the row on screen names the query.
   const queryTitles: Record<string, string> = {
     'query:url': 'Go to address', 'query:search': 'Search the web',
   };
+  queryEntryTemplates = new Map();
   for (const [rowId, title] of Object.entries(queryTitles)) {
     const cw = codewords.get(rowId);
     if (!cw) continue;
@@ -916,11 +958,19 @@ function assignAndPublish(alphabet: string[]): void {
       tokens.set(rowId, token);
       claim.push({ token, rowId });
     }
-    entries.push({ spoken: cw, title, group: voiceGroupLabel('query'), row_id: rowId });
+    queryEntryTemplates.set(rowId,
+      { spoken: cw, title, group: voiceGroupLabel('query'), row_id: rowId });
   }
-  // No spoken entries (voice off) → don't open a voice session / exclusive tag.
+  // No spoken entries (voice off) → don't open a voice session / exclusive
+  // tag. (Also means an empty-but-for-query-rows palette — e.g. bookmarks
+  // scope with zero bookmarks — runs keyboard-only: entries=[] is the wire's
+  // CLOSE signal, so a session that could only ever hold query rows must not
+  // open at all.)
   if (entries.length === 0) return;
   voiceLive = true;
+  publishedBaseEntries = entries;
+  publishedBaseRows = rows;
+  publishedQueryIds = '';
   chrome.runtime.sendMessage({ type: 'PALETTE_PUBLISH', entries, rows } as Message).catch(() => {});
   // Hand the host our assignment so it can register the CodewordHolder that
   // makes mid-utterance narrowing reach these rows. Voice-live only: a
