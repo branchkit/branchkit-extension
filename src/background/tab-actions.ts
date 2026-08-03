@@ -32,7 +32,7 @@ export const ZOOM_ACTION_BY_ID: Readonly<Record<string, ZoomAction>> = {
 };
 
 // The one cross-window tab jump: focus the tab's window, then activate the
-// tab. Shared by the last_active verb, "tab <codeword>" (switchToTabById),
+// tab. Shared by the last_active verb, "jump <codeword>" (switchToTabById),
 // and the palette's switch_tab dispatch — cross-window by design in all
 // three. Returns false instead of throwing on a stale/closed id so each
 // caller keeps its own miss policy (try the next MRU candidate, refresh the
@@ -138,7 +138,7 @@ export async function handleZoomAction(action: ZoomAction): Promise<void> {
   }
 }
 
-// Voice "tab <codeword>": the matched collection entry's tab_id arrives as an
+// Voice "jump <codeword>": the matched collection entry's tab_id arrives as an
 // action param (the browser_tabs collection's value_field). A stale id (tab
 // closed since the last publish) just refreshes the collection so the dead
 // entry drops.

@@ -32,9 +32,10 @@ session's history; the short version:
   palette and HUD coexist without doubling up.
 
 **Landed (increment 1, ext):** palette `scope` param (`all` | `tabs`, later
-`commands`); `toggle_tab_palette` command (Ctrl+T + voice "palette tabs" —
-originally bare "tab", renamed 2026-07-25 so bare "tab" is a pure prefix of
-"tab {browser_tabs}" and discovery shows the codewords) opens the tabs-only
+`commands`); `toggle_tab_palette` command (Ctrl+T + voice — "palette tabs"
+since 2026-07-25, and since 2026-08-03 bare "tabs"/"tab" as the primary
+spoken form: the old bare-"tab" shadow of the codeword jump is gone because
+that verb is now "jump {browser_tabs}") opens the tabs-only
 overlay; `goto_tab`'s "tab {number}" voice retired (kept keyboard-mappable)
 so voice tab-addressing is one language.
 
@@ -67,11 +68,13 @@ yet). To match how every other command works — pre-published vocabulary, so
 one-breath and paused both resolve — each tab's mark is now published as its
 spoken word into the always-live `browser_tabs` collection (with priority: a
 mark claims its word ahead of any colliding title word, and publishes even for
-a titleless tab). `switch_to_tab`'s spoken form is now `tab {browser_tabs}`
-(the earlier `switch to {browser_tabs}` was dropped 2026-07-05 — one verb for
-tabs). `{browser_tabs}` matches both a mark and a title/site word, so:
-- **"tab huge"** (mark) and **"tab github"** (title word) both resolve in one
-  breath via the flat, pre-published path — no overlay.
+a titleless tab). `switch_to_tab`'s spoken form is now `jump {browser_tabs}`
+(`switch to {browser_tabs}` dropped 2026-07-05 — one verb for tabs;
+`tab {browser_tabs}` renamed to "jump" 2026-08-03 to free bare "tab" as the
+tab-palette opener). `{browser_tabs}` matches both a mark and a title/site
+word, so:
+- **"jump huge"** (mark) and **"jump github"** (title word) both resolve in
+  one breath via the flat, pre-published path — no overlay.
 - **"tab"** (alone) → still opens the palette (paused/browse path).
 The two coexist by the standard verb-vs-bare-verb disambiguation (like the old
 "tab {number}"). This makes the palette the *browse* affordance, not the only

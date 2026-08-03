@@ -103,7 +103,7 @@ initSSETransport({
     if (bgState.cachedActiveTabId != null) {
       republishActiveTab(bgState.cachedActiveTabId, 'sse_reconnect');
     }
-    // Seed the open-tab voice collection ("tab <codeword>"). The publish cache
+    // Seed the open-tab voice collection ("jump <codeword>"). The publish cache
     // is cleared first: a reconnected plugin may have restarted and lost its
     // per-connection tab entries, so the unchanged-set guard must not suppress
     // this re-seed.

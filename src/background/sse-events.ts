@@ -135,7 +135,7 @@ export function handleSSEEvent(data: any): void {
     // pre-background behavior (its frames no-op if truly nothing's there).
   }
 
-  // "tab <codeword>" — like the tab verbs, handled here so it works
+  // "jump <codeword>" — like the tab verbs, handled here so it works
   // regardless of the active page's content-script state.
   if (data.action === 'switch_to_tab') {
     const id = parseInt(data.params?.tab_id ?? '', 10);

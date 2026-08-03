@@ -419,16 +419,17 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // (background/tab-collection.ts) — spoken title/domain words resolve to a
   // tab_id through the matcher, no overlay. Not keyboard-bindable: the value
   // is a runtime spoken word (the palette is the keyboard analog, Layer 2).
-  // "tab <codeword>" — the flat, always-live path, so it resolves in one breath
-  // (the tab palette, "palette tabs", is the paused/browse path; bare "tab" is
-  // a pure prefix, so speaking it alone surfaces the codewords in the
-  // Discovery HUD). {browser_tabs}
-  // matches both the stable mark shown on the strip AND a distinctive title/
-  // site word, so "tab huge" and "tab github" both work. ("switch to <tab>" was
-  // dropped 2026-07-05 — one verb for tabs.)
-  { id: 'switch_to_tab', label: 'Switch to tab by codeword', group: 'Tabs', mappable: false, params: [],
-    description: 'Switch to an open tab — say "tab" then its codeword (or a distinctive word from its title or site).',
-    voice: [{ pattern: 'tab {browser_tabs}', params: { tab_id: '{browser_tabs}' } }] },
+  // "jump <codeword>" — the flat, always-live path, so it resolves in one
+  // breath (the tab palette is the paused/browse path; bare "jump" is a pure
+  // prefix, so speaking it alone surfaces the codewords in the Discovery
+  // HUD). {browser_tabs} matches both the stable mark shown on the strip AND
+  // a distinctive title/site word, so "jump huge" and "jump github" both
+  // work. Verb history: "switch to <tab>" dropped 2026-07-05 (one verb for
+  // tabs); "tab <codeword>" renamed to "jump" 2026-08-03 so bare "tab" could
+  // become the tab-palette opener without shadowing this pattern.
+  { id: 'switch_to_tab', label: 'Jump to tab by codeword', group: 'Tabs', mappable: false, params: [],
+    description: 'Switch to an open tab — say "jump" then its codeword (or a distinctive word from its title or site).',
+    voice: [{ pattern: 'jump {browser_tabs}', params: { tab_id: '{browser_tabs}' } }] },
 
   // --- Marks (Vimium m / `) ---
   // Two-step: the command arms capture, the NEXT key names the mark (a wildcard
@@ -670,13 +671,15 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // A real-modifier chord by design — it must open in every mode, mid-hint
   // and inside text fields (the Ctrl+K/Ctrl+T-fire-in-fields path).
   //
-  // Voice is a prefix-free "palette <scope>" family (2026-07-25): bare
-  // "palette" and bare "tab" are deliberately NOT commands, so speaking either
-  // word alone is a partial match and the Discovery HUD shows the
-  // continuations ("all"/"tabs"/"commands", or the tab codewords). Bare "tab"
-  // previously opened the tab palette, which made "tab {browser_tabs}"
-  // unreachable under emit-on-partial (terminal-command rule) and preempted
-  // the codeword discovery view.
+  // Voice: bare source words open their scoped palette (2026-08-03, user-
+  // directed — the palette is the primary surface, so its openers get the
+  // shortest words): "tab"/"tabs", "command"/"commands", "bookmarks". The
+  // "palette <scope>" family stays as an alias. Bare "tab" was a command once
+  // before, removed 2026-07-25 because it shadowed "tab {browser_tabs}" under
+  // emit-on-partial (the one-breath "tab huge" became unreachable); that
+  // conflict is resolved for real this time — the codeword verb moved to
+  // "jump {browser_tabs}", so no longer phrase starts with "tab" now.
+  // Bare "palette" stays a pure prefix (partial → HUD shows the scopes).
   { id: 'toggle_palette', label: 'Palette', group: 'Palette', mappable: true, params: [],
     description: 'Search open tabs and every command in one overlay.',
     voice: [{ pattern: 'palette all' }] },
@@ -684,20 +687,22 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // tabs by codeword or fuzzy title (see notes/DESIGN_TAB_MARKERS.md). Bare
   // `T` in Normal mode (Vimium-C's tab-search key).
   { id: 'toggle_tab_palette', label: 'Tab palette', group: 'Palette', mappable: true, params: [],
-    description: 'Switch tabs — search by title or codeword in the palette overlay.',
-    voice: [{ pattern: 'palette tabs' }] },
+    description: 'Switch tabs — say "tabs", then search by title or pick by codeword.',
+    voice: [{ pattern: 'tabs' }, { pattern: 'tab' }, { pattern: 'palette tabs' }] },
   // The commands source alone — the browsable catalog surface (grouped by
   // section on open, unlike the full palette's flat launcher list).
   { id: 'toggle_command_palette', label: 'Command palette', group: 'Palette', mappable: true, params: [],
-    description: 'Browse and search every command in the palette overlay.',
-    voice: [{ pattern: 'palette commands' }] },
+    description: 'Browse and search every command — say "commands".',
+    voice: [{ pattern: 'commands' }, { pattern: 'command' }, { pattern: 'palette commands' }] },
   // The bookmark source alone (scope-only: bookmarks would bloat the full
   // launcher). Selection opens a NEW focused tab: a bookmark is somewhere you
   // want to go as well as where you already are, so replacing the current tab
   // discards context you never asked to lose. "stash" opens it behind instead.
+  // Plural-only on purpose: singular "bookmark" stays free for a possible
+  // future bookmark-this-page verb.
   { id: 'toggle_bookmark_palette', label: 'Bookmark palette', group: 'Palette', mappable: true, params: [],
-    description: 'Open a bookmark in a new tab — search by title, site, or folder. “stash” + badge opens it behind instead.',
-    voice: [{ pattern: 'palette bookmarks' }] },
+    description: 'Open a bookmark in a new tab — say "bookmarks"; search by title, site, or folder. “stash” + badge opens it behind instead.',
+    voice: [{ pattern: 'bookmarks' }, { pattern: 'palette bookmarks' }] },
   // Palette voice selection (voice half of Layer 2): every palette row shows
   // an alphabet codeword badge; `{palette}` is the plugin-owned slot for it,
   // and the background maps the resolved row_id back to the row's dispatch.

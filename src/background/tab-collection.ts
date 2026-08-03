@@ -3,7 +3,7 @@
  * notes/DESIGN_TAB_NAVIGATION.md).
  *
  * Publishes the open-tab set to the browser plugin as spoken-word entries so
- * "tab <codeword>" resolves through the matcher's collection capture — the
+ * "jump <codeword>" resolves through the matcher's collection capture — the
  * same machinery as the apps list ("open <app>"). Each entry is a tab's stable
  * MARK codeword (the one shown on the strip). Voice-only: with no BranchKit
  * host connected nothing publishes and the feature is absent.
@@ -55,7 +55,7 @@ const MAX_TOTAL_ENTRIES = 150;
  * That title/site-word matching ("tab github") was removed 2026-07-12 because
  * it leaked open-tab/search history into the on-screen HUD and churned the
  * recognition grammar on every SPA retitle. Switch tabs by the mark
- * ("tab <codeword>") or the palette (Layer 2) instead.
+ * ("jump <codeword>") or the palette (Layer 2) instead.
  *
  * `mruStack` (index 0 = most recent) only orders which tabs' marks survive the
  * MAX_TOTAL_ENTRIES cap; marks are unique per tab, so there's no word contention.
@@ -107,7 +107,7 @@ export function resetTabPublishCache(): void {
 
 /**
  * Each tab's stable mark as its SPOKEN codeword (tabId → "huge"), for the
- * flat "tab <codeword>" path. Empty when the feature is off (no marks) or
+ * flat "jump <codeword>" path. Empty when the feature is off (no marks) or
  * voice isn't connected (no alphabet to speak the letter) — the marker letter
  * still works for the keyboard, but the spoken form needs the alphabet.
  */
