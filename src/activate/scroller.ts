@@ -121,7 +121,15 @@ export function getDefaultScrollTarget(axis: 'x' | 'y' = 'y'): HTMLElement {
     if (ancestor !== document.documentElement) return ancestor;
   }
 
-  return findScrollableAncestor(document.body, axis);
+  const root = findScrollableAncestor(document.body, axis);
+  if (root !== document.documentElement || isScrollableElement(root, axis)) return root;
+  // App-shell pages (QuickBase, Gmail): the root doesn't overflow — every
+  // scroller is an inner pane, so the walk above lands on a documentElement
+  // with nothing to scroll and "scroll down" silently no-ops (field,
+  // 2026-08-03: "scroll page" then "scroll down" moved nothing). What the
+  // user means by "the page" is whatever scroller owns the viewport's
+  // center — the same geometric 'main' the named-region form resolves.
+  return findRegion('main') ?? root;
 }
 
 // --- Smooth scroll animator ---
