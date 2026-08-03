@@ -84,6 +84,19 @@ under the `y*`/`g*` families (e.g. `yc` copy-text, `gh` hover, `gf`… taken by
 frame-nav-that-we-don't-have, so pick freely). The capital-letter new-tab
 affordance stays as-is (maps to `'newtab'`).
 
+**Amended 2026-08-03 — casing split by position.** The capital affordance now
+carries BOTH tab dispositions, split by where the capital lands in the
+codeword: a capital after the first letter arms `'newtab'` ("aA", unchanged in
+practice), a capital FIRST letter arms `'background'` ("Aa") — voice "stash"'s
+keyboard twin. Background opens via the SW (`OPEN_TAB_BACKGROUND`), peels the
+prefix but keeps hint mode and badges live (`activateWrapper` returns true →
+the store delegate skips its hide), so a keyboard gather chains without
+re-pressing `f`. Both capitals typed ("ArcH") → the first-letter commitment
+wins; an explicit verb (`yf` + any capital) still keeps precedence. The
+palette deliberately does NOT adopt the positional split: its typed marks are
+1–2 letters, so first position is often the only position — background there
+stays Ctrl/Cmd+Enter.
+
 ### Voice: one contribution home
 
 Add catalog entries with voice patterns — "focus {hint}", "select {hint}",

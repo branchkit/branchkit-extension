@@ -187,8 +187,9 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // notes/DESIGN_MULTI_TARGET_COMMANDS.md (phase 1).
   // keyHint "aA": the affordance's established name (settings palette table,
   // palette_select_newtab's description) — typing the badge with a capital
-  // inside f mode opens it in a new tab. A dashed mode-owned chip, so the row
-  // itself says a keyboard route exists; the "Badges — f" legend explains it.
+  // AFTER the first letter, inside f mode, opens it in a new tab. A dashed
+  // mode-owned chip, so the row itself says a keyboard route exists; the
+  // "Badges — f" legend explains it.
   { id: 'activate_hint_newtab', label: 'Open badge in new tab', group: 'Badges', mappable: false, params: [],
     keyHint: 'aA',
     description: 'Open the badge’s link in a new focused tab.',
@@ -196,7 +197,14 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // {hint+} = one or more hint codewords in a single breath ("stash huge gap
   // arch same" opens both) — the plugin expands it to its repeated capture
   // macro and delivers the ordered target list; the SW fans it out per target.
+  // keyHint "Aa": aA's positional twin — typing the badge's FIRST letter as a
+  // capital opens it behind and keeps the gather going (badges and f mode
+  // stay). Chosen over a verb prefix because casing is already the
+  // disposition axis on this surface. The palette can't adopt the positional
+  // split — its marks are 1–2 letters, so first position is often the ONLY
+  // position — which is why its background form stays Ctrl/Cmd+Enter.
   { id: 'activate_hint_background', label: 'Open badges in background tabs', group: 'Badges', mappable: false, params: [],
+    keyHint: 'Aa',
     description: 'Open one or more badge links in background tabs; badges stay up for the next command.',
     voice: [{ pattern: `${DISPOSITIONS.background.word} {hint+}`, sharedWord: 'background' }],
     retainsHints: true },

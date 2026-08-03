@@ -22,11 +22,16 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 type Mod = typeof import('./keyboard-activation');
 
-const keyHandler = { takeHintAction: vi.fn<() => string | null>(() => null) };
+const keyHandler = {
+  takeHintAction: vi.fn<() => string | null>(() => null),
+  peelHintPrefix: vi.fn(() => 'hint_prefix' as const),
+};
 const copyText = vi.fn(async (_t: string) => true);
 const flashToast = vi.fn((_m: string) => {});
 const activateElement = vi.fn((_el: HTMLElement, _o?: { newTab?: boolean }) => {});
 const dispatchHover = vi.fn((_el: HTMLElement) => {});
+// The real resolver's shape, minimally: the enclosing anchor or null.
+const resolveNavTarget = vi.fn((el: HTMLElement) => el.closest('a'));
 const caret = { enterAt: vi.fn((_el: HTMLElement) => {}) };
 const noteActivated = vi.fn((_el: HTMLElement) => {});
 const clearHintFilter = vi.fn(() => {});
@@ -39,7 +44,7 @@ async function load(): Promise<Mod> {
   vi.doMock('../core/singletons', () => ({ keyHandler }));
   vi.doMock('./clipboard', () => ({ copyText }));
   vi.doMock('../render/toast', () => ({ flashToast }));
-  vi.doMock('./event-sequence', () => ({ activateElement, dispatchHover }));
+  vi.doMock('./event-sequence', () => ({ activateElement, dispatchHover, resolveNavTarget }));
   vi.doMock('./selection-commands', () => ({ caret }));
   vi.doMock('../scan/references', () => ({ noteActivated }));
   vi.doMock('../render/badge-visibility', () => ({
@@ -209,6 +214,64 @@ describe('the visibility handoff', () => {
       activateWrapper(wrap('<a href="https://example.test/x">link</a>'));
       expect(scheduleHintRefresh, verb).toHaveBeenCalledTimes(1);
     }
+  });
+});
+
+// "Aa" — the background disposition. The SW opens the tab (content scripts
+// can't reach chrome.tabs), and the return value is the contract: true = the
+// gather continues, the caller must not hide.
+describe('activateWrapper — background ("Aa")', () => {
+  const sendMessage = vi.fn(async () => undefined);
+  beforeEach(() => {
+    (globalThis as { chrome?: unknown }).chrome = { runtime: { sendMessage } };
+    sendMessage.mockClear();
+  });
+  afterEach(() => {
+    delete (globalThis as { chrome?: unknown }).chrome;
+  });
+
+  it('opens the link via the SW, peels the prefix, and reports the gather continues', async () => {
+    const { activateWrapper } = await load();
+    keyHandler.takeHintAction.mockReturnValue('background');
+    const w = wrap('<a href="https://example.test/x">link</a>');
+    const kept = activateWrapper(w);
+    expect(kept).toBe(true);
+    expect(sendMessage).toHaveBeenCalledWith(
+      { type: 'OPEN_TAB_BACKGROUND', url: 'https://example.test/x' });
+    expect(keyHandler.peelHintPrefix).toHaveBeenCalledTimes(1);
+    expect(scheduleHintRefresh).toHaveBeenCalledTimes(1);
+    // The gather must NOT tear down: no in-page click, no filter clear (which
+    // exits hint mode), no hide.
+    expect(activateElement).not.toHaveBeenCalled();
+    expect(clearHintFilter).not.toHaveBeenCalled();
+    expect(hideBadges).not.toHaveBeenCalled();
+  });
+
+  it('in manual mode: keeps badges without scheduling a refresh', async () => {
+    const { activateWrapper } = await load();
+    shouldAutoShowBadges.mockReturnValue(false);
+    keyHandler.takeHintAction.mockReturnValue('background');
+    const kept = activateWrapper(wrap('<a href="https://example.test/x">link</a>'));
+    expect(kept).toBe(true);
+    expect(scheduleHintRefresh).not.toHaveBeenCalled();
+    expect(hideBadges).not.toHaveBeenCalled();
+  });
+
+  it('falls through to plain activation on a non-anchor, like the voice twin', async () => {
+    const { activateWrapper } = await load();
+    keyHandler.takeHintAction.mockReturnValue('background');
+    const kept = activateWrapper(wrap('<button>press</button>'));
+    expect(kept).toBe(false);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(activateElement).toHaveBeenCalledWith(expect.anything(), { newTab: false });
+  });
+
+  it('refuses a non-http(s) scheme and falls through', async () => {
+    const { activateWrapper } = await load();
+    keyHandler.takeHintAction.mockReturnValue('background');
+    const kept = activateWrapper(wrap('<a href="javascript:void(0)">js</a>'));
+    expect(kept).toBe(false);
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 });
 

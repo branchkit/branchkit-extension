@@ -1057,13 +1057,14 @@ const storeHolder = new StoreHolder(store, {
   narrow: (prefix) => narrowStoreHints(prefix),
   reveal: () => { if (!pageSession.badgesVisible) void showBadges(); },
   // Typed sole-completion, its bookkeeping folded in from the old filter
-  // callback: the "aA" affordance (capital mid-codeword = open in new tab)
-  // unless an explicit verb (yf then a capital) keeps precedence, then the
-  // same hide-after-activate the store branch did.
+  // callback: the casing affordances (capital mid-codeword "aA" = new tab,
+  // capital FIRST letter "Aa" = background tab) unless an explicit verb
+  // (yf then a capital) keeps precedence, then the same hide-after-activate
+  // the store branch did — EXCEPT a background open, whose gather continues
+  // (activateWrapper returns true: badges and hint mode stay).
   activate: (w) => {
-    keyHandler.promoteNewTabIfArmed();
-    activateWrapper(w);
-    hideBadges();
+    keyHandler.promoteArmedDisposition();
+    if (!activateWrapper(w)) hideBadges();
   },
   // DELIBERATE no-op: every registry-level republish fires from label-sync's
   // is_final hook — the tail of a finalizing store rebuild that just re-Put

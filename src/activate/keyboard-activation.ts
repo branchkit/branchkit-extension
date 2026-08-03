@@ -27,7 +27,7 @@
 import { keyHandler } from '../core/singletons';
 import { copyText } from './clipboard';
 import { flashToast } from '../render/toast';
-import { activateElement, dispatchHover } from './event-sequence';
+import { activateElement, dispatchHover, resolveNavTarget } from './event-sequence';
 import { caret } from './selection-commands';
 import { noteActivated } from '../scan/references';
 import {
@@ -47,7 +47,12 @@ function hintActionHandoff(): void {
   }
 }
 
-export function activateWrapper(wrapper: ElementWrapper): void {
+/**
+ * Returns true when the hint gather CONTINUES — a background open ("Aa")
+ * keeps badges painted and hint mode live, so the caller must not hide.
+ * Every other verb ends the interaction as before (false).
+ */
+export function activateWrapper(wrapper: ElementWrapper): boolean {
   const el = wrapper.element as HTMLElement;
   // Consume the keyboard hint action and reset immediately, so no path can leak
   // it to the next activation. See notes/DESIGN_HINT_ACTION_MODES.md.
@@ -71,7 +76,7 @@ export function activateWrapper(wrapper: ElementWrapper): void {
     if (href) void copyText(href).then((ok) => flashToast(ok ? 'Copied link' : 'Copy failed'));
     else flashToast('Not a link');
     hintActionHandoff();
-    return;
+    return false;
   }
   if (hintAction === 'copytext') {
     // Copy the element's visible text (Vimium copy-link-text).
@@ -80,7 +85,7 @@ export function activateWrapper(wrapper: ElementWrapper): void {
     if (text) void copyText(text).then((ok) => flashToast(ok ? 'Copied text' : 'Copy failed'));
     else flashToast('No text');
     hintActionHandoff();
-    return;
+    return false;
   }
   if (hintAction === 'focus') {
     // Focus without activating — a field to type in, or any element (Vimium focus).
@@ -88,7 +93,7 @@ export function activateWrapper(wrapper: ElementWrapper): void {
     el.focus();
     flashToast('Focused');
     hintActionHandoff();
-    return;
+    return false;
   }
   if (hintAction === 'hover') {
     // Reveal hover-state UI (menus, player controls) without clicking (Vimium
@@ -98,7 +103,7 @@ export function activateWrapper(wrapper: ElementWrapper): void {
     dispatchHover(el);
     flashToast('Hovered');
     hintActionHandoff();
-    return;
+    return false;
   }
   if (hintAction === 'caret') {
     // Start a caret/visual selection AT this element (Vimium hint→caret). Then
@@ -106,7 +111,26 @@ export function activateWrapper(wrapper: ElementWrapper): void {
     wrapper.hint?.flash();
     hintActionHandoff();
     caret.enterAt(el);
-    return;
+    return false;
+  }
+
+  // "Aa" — a capital FIRST letter: voice "stash"'s keyboard twin. Open the
+  // link behind (the SW owns chrome.tabs) and keep gathering: badges stay
+  // painted and hint mode stays live with the prefix peeled, so the next
+  // codeword types immediately. A non-anchor target falls through to plain
+  // activation below, exactly like the voice twin's fallback.
+  if (hintAction === 'background') {
+    const nav = resolveNavTarget(el);
+    const href = nav && (nav.protocol === 'http:' || nav.protocol === 'https:')
+      ? nav.href : null;
+    if (href) {
+      wrapper.hint?.flash();
+      noteActivated(el);
+      void chrome.runtime.sendMessage({ type: 'OPEN_TAB_BACKGROUND', url: href });
+      keyHandler.peelHintPrefix();
+      if (shouldAutoShowBadges()) scheduleHintRefresh();
+      return true;
+    }
   }
 
   noteActivated(el);
@@ -118,4 +142,5 @@ export function activateWrapper(wrapper: ElementWrapper): void {
   } else {
     activateElement(el, { newTab: hintAction === 'newtab' });
   }
+  return false;
 }

@@ -152,7 +152,8 @@ const MODAL_KEYS: readonly { mode: string; keys: string }[] = [
       + 'o swap ends · aw as ap select word/sentence/paragraph (iw is ip trims space) · '
       + 'y copy · Y copy line · / then n N find-in-selection · c caret · Esc steps back / exits' },
   { mode: 'Badges — f',
-    keys: "type a badge's letters to click it · a Capital letter opens it in a new tab · Esc exits" },
+    keys: "type a badge's letters to click it · a Capital after the first letter opens it in a new tab (aA) · "
+      + 'a Capital FIRST letter opens it behind and keeps the badges up (Aa) · Esc exits' },
   { mode: 'Marks — m, `',
     keys: 'then a letter to set or jump (Shift+letter = global, works in any tab) · '
       + '` twice returns to where you were before the last jump' },
@@ -456,8 +457,9 @@ function buildHelpOverlay(
 
   const usage = el('div', 'usage');
   usage.append(
-    'Press ', el('b', undefined, 'f'), ', then a badge’s letters to click it — or a ',
-    el('b', undefined, 'capital'), ' to open it in a new tab (', el('b', undefined, 'Esc'),
+    'Press ', el('b', undefined, 'f'), ', then a badge’s letters to click it — a ',
+    el('b', undefined, 'capital'), ' mid-word opens it in a new tab, a ',
+    el('b', undefined, 'capital first letter'), ' opens it behind (', el('b', undefined, 'Esc'),
     ' exits). Every other bare key is a Normal-mode shortcut, listed above.',
   );
   panel.appendChild(usage);

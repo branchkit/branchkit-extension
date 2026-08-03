@@ -165,13 +165,21 @@ describe('hint mode — codeword filtering', () => {
   });
 });
 
-describe('new-tab casing (capital mid-codeword)', () => {
+describe('disposition casing (aA mid-codeword, Aa first letter)', () => {
   it('arms new-tab when a capital is typed mid-codeword', () => {
     handler.enterHintMode();
     handler.handleKeyDown(makeKey('a')); // start codeword (lowercase)
     expect(handler.isNewTabArmed()).toBe(false);
     handler.handleKeyDown(makeKey('A', { shiftKey: true })); // capital, mid-codeword
     expect(handler.isNewTabArmed()).toBe(true);
+    expect(handler.isBackgroundArmed()).toBe(false);
+  });
+
+  it('arms background when the FIRST letter is a capital', () => {
+    handler.enterHintMode();
+    handler.handleKeyDown(makeKey('A', { shiftKey: true })); // capital, first letter
+    expect(handler.isBackgroundArmed()).toBe(true);
+    expect(handler.isNewTabArmed()).toBe(false);
   });
 
   it('does not arm for an all-lowercase codeword', () => {
@@ -179,6 +187,7 @@ describe('new-tab casing (capital mid-codeword)', () => {
     handler.handleKeyDown(makeKey('a'));
     handler.handleKeyDown(makeKey('b'));
     expect(handler.isNewTabArmed()).toBe(false);
+    expect(handler.isBackgroundArmed()).toBe(false);
   });
 
   it('disarms on exitHintMode (after a pick)', () => {
@@ -190,6 +199,14 @@ describe('new-tab casing (capital mid-codeword)', () => {
     expect(handler.isNewTabArmed()).toBe(false);
   });
 
+  it('disarms background on exitHintMode too', () => {
+    handler.enterHintMode();
+    handler.handleKeyDown(makeKey('A', { shiftKey: true }));
+    expect(handler.isBackgroundArmed()).toBe(true);
+    handler.exitHintMode();
+    expect(handler.isBackgroundArmed()).toBe(false);
+  });
+
   it('disarms when the prefix is cleared with Escape', () => {
     handler.enterHintMode();
     handler.handleKeyDown(makeKey('a'));
@@ -197,6 +214,14 @@ describe('new-tab casing (capital mid-codeword)', () => {
     expect(handler.isNewTabArmed()).toBe(true);
     handler.handleKeyDown(makeKey('Escape')); // clears the prefix
     expect(handler.isNewTabArmed()).toBe(false);
+  });
+
+  it('disarms background when Backspace empties the prefix', () => {
+    handler.enterHintMode();
+    handler.handleKeyDown(makeKey('A', { shiftKey: true }));
+    expect(handler.isBackgroundArmed()).toBe(true);
+    handler.handleKeyDown(makeKey('Backspace'));
+    expect(handler.isBackgroundArmed()).toBe(false);
   });
 });
 
@@ -234,15 +259,36 @@ describe('the pending hint action', () => {
     expect(handler.takeHintAction()).toBe('focus');
   });
 
-  describe('the capital-letter new-tab promotion', () => {
+  describe('the capital-letter disposition promotion', () => {
     it('promotes a plain activate to newtab when a capital armed new-tab', () => {
       handler.enterHintMode();
       handler.handleKeyDown(makeKey('a'));
       handler.handleKeyDown(makeKey('A', { shiftKey: true }));
       expect(handler.isNewTabArmed()).toBe(true);
 
-      handler.promoteNewTabIfArmed();
+      handler.promoteArmedDisposition();
       expect(handler.takeHintAction()).toBe('newtab');
+    });
+
+    it('promotes to background when the first letter was a capital', () => {
+      handler.enterHintMode();
+      handler.handleKeyDown(makeKey('A', { shiftKey: true }));
+      handler.handleKeyDown(makeKey('b'));
+
+      handler.promoteArmedDisposition();
+      expect(handler.takeHintAction()).toBe('background');
+    });
+
+    // "ArcH": the first-letter commitment wins over a later capital.
+    it('background wins when both capitals were typed', () => {
+      handler.enterHintMode();
+      handler.handleKeyDown(makeKey('A', { shiftKey: true }));
+      handler.handleKeyDown(makeKey('B', { shiftKey: true }));
+      expect(handler.isBackgroundArmed()).toBe(true);
+      expect(handler.isNewTabArmed()).toBe(true);
+
+      handler.promoteArmedDisposition();
+      expect(handler.takeHintAction()).toBe('background');
     });
 
     // An explicit verb keeps precedence: `yf` then a capital still yanks. The
@@ -255,14 +301,14 @@ describe('the pending hint action', () => {
       handler.handleKeyDown(makeKey('A', { shiftKey: true }));
       expect(handler.isNewTabArmed()).toBe(true);
 
-      handler.promoteNewTabIfArmed();
+      handler.promoteArmedDisposition();
       expect(handler.takeHintAction()).toBe('yank');
     });
 
     it('is a no-op when no capital was typed', () => {
       handler.enterHintMode();
       handler.handleKeyDown(makeKey('a'));
-      handler.promoteNewTabIfArmed();
+      handler.promoteArmedDisposition();
       expect(handler.takeHintAction()).toBe('activate');
     });
   });

@@ -45,17 +45,21 @@ function isInsertMode(): boolean {
  *  NOT exported: every arm site passes a literal, and the union is checked at
  *  those call sites. An export would invite a second module to hold one. */
 type HintAction =
-  'activate' | 'newtab' | 'yank' | 'hover' | 'focus' | 'copytext' | 'caret';
+  'activate' | 'newtab' | 'background' | 'yank' | 'hover' | 'focus' | 'copytext' | 'caret';
 
 export class KeyHandler {
   private sequence: string = '';
   private timeout: ReturnType<typeof setTimeout> | null = null;
   private filterText: string = '';
   // Set when a capital letter is typed mid-codeword — the "aA" affordance:
-  // finishing a codeword with a capital opens the pick in a new tab. Read by
-  // the content-side filter callback on the unique match; reset whenever the
-  // codeword / hint mode resets.
+  // finishing a codeword with a capital opens the pick in a new tab. Reset
+  // whenever the codeword / hint mode resets.
   private newTabArmed: boolean = false;
+  // Set when the codeword's FIRST letter is a capital — the "Aa" affordance,
+  // voice "stash"'s keyboard twin: the pick opens in a background tab and the
+  // gather continues (badges stay, mode stays). Same reset lifecycle as
+  // newTabArmed. Both armed ("ArcH") → the first-letter commitment wins.
+  private backgroundArmed: boolean = false;
   // What the NEXT badge resolved by keyboard should DO instead of a plain
   // click, armed by a verb command (yf/gf/yc/gh/gv) before or during hint
   // mode. The third field of this same hint-mode state machine, next to
@@ -320,6 +324,7 @@ export class KeyHandler {
   enterHintMode(): void {
     this.filterText = '';
     this.newTabArmed = false;
+    this.backgroundArmed = false;
     modes.push('hint'); // dedupes itself — re-entry joins the one lifetime
     this.notifyMode();
   }
@@ -328,14 +333,21 @@ export class KeyHandler {
     this.filterText = '';
     this.sequence = '';
     this.newTabArmed = false;
+    this.backgroundArmed = false;
     modes.pop('hint'); // no-op when the cascade already popped it
     this.notifyMode();
   }
 
   /** True when a capital was typed mid-codeword — the current pick should open
-   *  in a new tab. Read by the content-side filter callback on a unique match. */
+   *  in a new tab. */
   isNewTabArmed(): boolean {
     return this.newTabArmed;
+  }
+
+  /** True when the codeword's first letter was a capital — the current pick
+   *  should open in a background tab and the gather continue. */
+  isBackgroundArmed(): boolean {
+    return this.backgroundArmed;
   }
 
   // --- The pending hint action ---
@@ -365,14 +377,16 @@ export class KeyHandler {
   }
 
   /**
-   * The "aA" affordance: finishing a codeword with a capital opens the pick in
-   * a new tab — UNLESS an explicit verb is already armed, which keeps
-   * precedence (`yf` then a capital still yanks).
+   * The casing affordances: a capital mid-codeword ("aA") opens the pick in a
+   * new tab; a capital FIRST letter ("Aa") opens it in a background tab and
+   * keeps the gather going — UNLESS an explicit verb is already armed, which
+   * keeps precedence (`yf` then a capital still yanks). Both armed ("ArcH"):
+   * the first-letter commitment wins.
    */
-  promoteNewTabIfArmed(): void {
-    if (this.newTabArmed && this.pendingHintAction === 'activate') {
-      this.pendingHintAction = 'newtab';
-    }
+  promoteArmedDisposition(): void {
+    if (this.pendingHintAction !== 'activate') return;
+    if (this.backgroundArmed) this.pendingHintAction = 'background';
+    else if (this.newTabArmed) this.pendingHintAction = 'newtab';
   }
 
   handleKeyDown(e: KeyboardEvent): boolean {
@@ -555,6 +569,7 @@ export class KeyHandler {
     if (!modes.has('hint') || this.filterText.length === 0) return null;
     this.filterText = '';
     this.newTabArmed = false;
+    this.backgroundArmed = false;
     this.onFilterChange?.('');
     return 'hint_prefix';
   }
@@ -565,7 +580,10 @@ export class KeyHandler {
       e.stopPropagation();
       if (this.filterText.length > 0) {
         this.filterText = this.filterText.slice(0, -1);
-        if (this.filterText.length === 0) this.newTabArmed = false;
+        if (this.filterText.length === 0) {
+          this.newTabArmed = false;
+          this.backgroundArmed = false;
+        }
         this.onFilterChange?.(this.filterText);
       }
       return true;
@@ -582,13 +600,15 @@ export class KeyHandler {
       return true;
     }
 
-    // Codeword mode: single letter characters for filtering. A capital here is
-    // necessarily mid-codeword (a capital first keypress is diverted to commands
-    // by handleKeyDown), so it arms "open this pick in a new tab" — the user's
-    // "aA" affordance.
+    // Codeword mode: single letter characters for filtering. Casing is the
+    // disposition affordance, split by position: a capital FIRST letter arms
+    // "open in a background tab, keep gathering" ("Aa" — voice stash's
+    // keyboard twin), a capital anywhere later arms "open in a new focused
+    // tab" ("aA").
     if (e.key.length === 1 && /[a-zA-Z]/.test(e.key)) {
       e.preventDefault();
       e.stopPropagation();
+      const atStart = this.filterText.length === 0;
       const next = this.filterText + e.key.toLowerCase();
       // No-op a keystroke that no codeword starts with — otherwise the filter
       // matches nothing and every hint vanishes until Escape. A stray key while
@@ -605,7 +625,10 @@ export class KeyHandler {
         return true;
       }
       this.filterText = next;
-      if (e.shiftKey) this.newTabArmed = true;
+      if (e.shiftKey) {
+        if (atStart) this.backgroundArmed = true;
+        else this.newTabArmed = true;
+      }
       this.onFilterChange?.(this.filterText);
       return true;
     }
