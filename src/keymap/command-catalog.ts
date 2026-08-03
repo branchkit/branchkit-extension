@@ -381,11 +381,15 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
     description: 'Focus the browser’s address bar with its contents selected — then dictate or type a URL or search.',
     voice: [{ pattern: 'address' }],
     nativeKey: 'KeyL' },
-  // Keyboard-only hint action (Vimium yf): enter hint mode, then a codeword
-  // copies that link’s URL instead of following it. Voice yank would need a
-  // contributed hint verb — deferred.
+  // Hint action (Vimium yf): a codeword copies that link’s URL instead of
+  // following it.
+  // "copy link" beside copytext's "copy text" — the URL/text pair reads as
+  // the siblings they are. NOT "copy url {hint}": bare "copy url" is already
+  // a command, and a longer command through a shorter one violates the
+  // terminal-prefix rule.
   { id: 'yank_hint', label: 'Copy a link (badge)', group: 'Badges', mappable: true, params: [],
-    description: 'Enter badge-typing mode, then type a letter to copy that link’s URL instead of opening it.' },
+    description: 'Copy a badge link’s URL instead of opening it. Say "copy link" then its codeword, or press the key then type a letter.',
+    voice: [{ pattern: 'copy link {hint}' }] },
   // Hint action modes (Vimium): pick a badge, do X instead of clicking. Both
   // keyboard (arm + type a letter) and voice (say the verb + the codeword). See
   // notes/DESIGN_HINT_ACTION_MODES.md.

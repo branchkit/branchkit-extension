@@ -113,7 +113,8 @@ export function dispatchVoiceAction(action: string, params?: Record<string, stri
     history.forward();
   } else if (action === 'refresh') {
     location.reload();
-  } else if (action === 'hover_hint' || action === 'focus_hint' || action === 'copytext_hint' || action === 'caret_hint') {
+  } else if (action === 'hover_hint' || action === 'focus_hint' || action === 'copytext_hint'
+    || action === 'caret_hint' || action === 'yank_hint') {
     // Element-verb voice actions (Vimium hint modes): resolve the codeword to
     // a wrapper and act ON it without following it —
     //   hover        → pointer-in event sequence (pointerover/enter/move +
@@ -123,6 +124,7 @@ export function dispatchVoiceAction(action: string, params?: Record<string, stri
     //   focus_hint   → focus the element (a field to type in, or any element).
     //   copytext_hint→ copy the element's visible text.
     //   caret_hint   → start a caret/visual selection at the element.
+    //   yank_hint    → copy the enclosing link's URL ("copy link", yf's twin).
     // All share the same three-tier resolution as activate so codewords stay
     // consistent across verbs. None tear down wrappers or hide hints
     // (always-mode keeps badges so the user can follow up on what appeared).
@@ -147,6 +149,11 @@ export function dispatchVoiceAction(action: string, params?: Record<string, stri
       } else if (action === 'caret_hint') {
         caret.enterAt(target);
         detail = 'caret at element';
+      } else if (action === 'yank_hint') {
+        const href = (target.closest('a') as HTMLAnchorElement | null)?.href ?? '';
+        if (href) void copyText(href).then((ok) => flashToast(ok ? 'Copied link' : 'Copy failed'));
+        else flashToast('Not a link');
+        detail = href ? 'link copied' : 'not a link';
       } else {
         const text = (target.textContent || '').trim();
         if (text) void copyText(text).then((ok) => flashToast(ok ? 'Copied text' : 'Copy failed'));
