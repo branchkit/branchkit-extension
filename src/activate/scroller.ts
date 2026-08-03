@@ -398,9 +398,17 @@ export function findScrollableRegions(): HTMLElement[] {
     // big enough to be a region someone would target.
     const r = el.getBoundingClientRect();
     if (r.width < 100 || r.height < 60) continue;
+    // Trivial overflow (sub-row rounding artifacts) scrolls in principle and
+    // is useless in practice — a chip for a pane that moves 3px reads as a
+    // bug. Vimium probes by ±1 and accepts everything; Rango requires any
+    // dimension mismatch; a floor of one text line is the useful middle.
+    if (el.scrollHeight - el.clientHeight < 16) continue;
     const style = getComputedStyle(el);
     // Exclude fixed/sticky overlays (modals, dropdowns)
     if (style.position === 'fixed' || style.position === 'sticky') continue;
+    // Invisible-but-laid-out candidates paint ghost chips over nothing
+    // (Vimium's shouldScroll excludes these for the same reason).
+    if (style.visibility === 'hidden' || style.visibility === 'collapse') continue;
     found.push({ el, hidden: style.overflowY === 'hidden' });
   }
   // A hidden-overflow container that CONTAINS another admitted scroller is a
