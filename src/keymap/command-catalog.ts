@@ -247,9 +247,12 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   { id: 'scroll_right', label: 'Scroll right', group: 'Scroll', mappable: true, params: [],
     description: 'Scroll right one step.',
     voice: [{ pattern: 'scroll right' }] },
+  // The scroll-target trio is a spoken FAMILY (user-chosen 2026-08-03):
+  // "target" leads all three, so one prefix teaches the whole feature — the
+  // HUD lists cycle/scroll/page as its continuations mid-utterance.
   { id: 'cycle_scroll_target', label: 'Cycle scroll target', group: 'Scroll', mappable: true, params: [],
-    description: 'Step which scrollable pane the scroll commands act on — say "cycle" again (or press the key) to step to the next one.',
-    voice: [{ pattern: 'cycle' }] },
+    description: 'Step which scrollable pane the scroll commands act on — say "target cycle" again (or press the key) to step to the next one.',
+    voice: [{ pattern: 'target cycle' }] },
   // The pick twin of cycling: badge every scrollable pane (range-pick chips —
   // modal, exclusive claim, Escape cancels) and pick one directly instead of
   // stepping. Voice-native where cycling is keyboard-native; both feed the
@@ -257,11 +260,11 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   // select the CONTAINER element — its border box doesn't move as content
   // scrolls, so chips sit on pane corners.
   { id: 'scroll_target_pick', label: 'Pick a scroll target', group: 'Scroll', mappable: true, params: [],
-    description: 'Badge every scrollable pane, then pick one — speak its codeword (or press f and type it) — to point the scroll commands at it. Escape cancels; “scroll page” undoes.',
-    voice: [{ pattern: 'scroll target' }, { pattern: 'scroll targets' }] },
+    description: 'Badge every scrollable pane, then pick one — speak its codeword (or press f and type it) — to point the scroll commands at it. Escape cancels; “target page” undoes.',
+    voice: [{ pattern: 'target scroll' }] },
   { id: 'scroll_target_reset', label: 'Scroll the page again', group: 'Scroll', mappable: true, params: [],
     description: 'Point the scroll commands back at the page itself, releasing a picked or cycled pane.',
-    voice: [{ pattern: 'scroll page' }] },
+    voice: [{ pattern: 'target page' }] },
   // The generic parameterized scroll: a runtime action (direction/amount/count/
   // region), not a sensible single-key bind — hidden from the editor like
   // scroll_to_element. Its directional/count phrases now live on the discrete

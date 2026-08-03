@@ -61,9 +61,9 @@ export const DISPATCH_PASSTHROUGH_ACTIONS = new Set([
   'scroll_down', 'scroll_up', 'scroll_half_down', 'scroll_half_up',
   'scroll_full_down', 'scroll_full_up',
   'scroll_top', 'scroll_bottom', 'scroll_left', 'scroll_right',
-  'cycle_scroll_target', // voice "cycle" — step the scroll target, same as cs
-  'scroll_target_pick', // voice "scroll target(s)" — badge every pane, pick one
-  'scroll_target_reset', // voice "scroll page" — release the pane, scroll the page
+  'cycle_scroll_target', // voice "target cycle" — step the scroll target, same as cs
+  'scroll_target_pick', // voice "target scroll" — badge every pane, pick one
+  'scroll_target_reset', // voice "target page" — release the pane, scroll the page
   'find_open', 'find_close', 'find_next', 'find_previous', 'find_immediate',
   'select_to', // voice "extend to <phrase>" — dictated-argument find + extend
   'focus_input',
