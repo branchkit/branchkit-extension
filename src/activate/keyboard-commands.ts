@@ -19,6 +19,7 @@
  */
 
 import { dispatcher, keyHandler } from '../core/singletons';
+import { flashToast } from '../render/toast';
 
 /**
  * Enter hint mode with an action armed: the codeword the user then types acts
@@ -38,7 +39,15 @@ const armHint = (action: HintActionArg) => () => {
 
 export function registerKeyboardCommands(): void {
   dispatcher.register('insert_mode', () => { keyHandler.enterInsertMode(); });
-  dispatcher.register('pass_next_key', () => { keyHandler.armPassNextKey(); });
+  // The one-key transient gets a toast where pass-through gets the persistent
+  // mode chip: it's over after a single keystroke, so a chip would outlive
+  // the state it announces. Fires for both routes in ("pass next" / the \
+  // bind) — armed silently, the next keystroke behaving differently is
+  // unexplainable.
+  dispatcher.register('pass_next_key', () => {
+    keyHandler.armPassNextKey();
+    flashToast('Next key goes to the page');
+  });
 
   // Yank a link via hint (Vimium yf): the resolved codeword copies the link's
   // URL instead of following it. Keyboard-only.
