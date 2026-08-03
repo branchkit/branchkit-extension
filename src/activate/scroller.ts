@@ -383,7 +383,7 @@ export type ScrollRegion = 'main' | 'leftSidebar' | 'rightSidebar';
  * Filters to elements with >5 descendants to avoid tiny scroll containers.
  */
 export function findScrollableRegions(): HTMLElement[] {
-  const all: HTMLElement[] = [];
+  const found: { el: HTMLElement; hidden: boolean }[] = [];
   const candidates = document.querySelectorAll('*');
   for (const el of candidates) {
     if (!(el instanceof HTMLElement)) continue;
@@ -398,12 +398,22 @@ export function findScrollableRegions(): HTMLElement[] {
     // big enough to be a region someone would target.
     const r = el.getBoundingClientRect();
     if (r.width < 100 || r.height < 60) continue;
+    const style = getComputedStyle(el);
     // Exclude fixed/sticky overlays (modals, dropdowns)
-    const pos = getComputedStyle(el).position;
-    if (pos === 'fixed' || pos === 'sticky') continue;
-    all.push(el);
+    if (style.position === 'fixed' || style.position === 'sticky') continue;
+    found.push({ el, hidden: style.overflowY === 'hidden' });
   }
-  return all;
+  // A hidden-overflow container that CONTAINS another admitted scroller is a
+  // layout clip, not a pane anyone means to scroll (field 2026-08-03:
+  // QuickBase dashboard section wrapping the web-page widget + reports — its
+  // tint blanketed the row and scrolling it dragged every widget inside).
+  // The hover-revealed widgets the relaxed gate exists for are always
+  // LEAVES, so they keep their chips; auto/scroll ancestors (the main pane
+  // around its tables) are genuinely nested scrollers and stay.
+  return found
+    .filter(({ el, hidden }) =>
+      !hidden || !found.some((o) => o.el !== el && el.contains(o.el)))
+    .map(({ el }) => el);
 }
 
 /**

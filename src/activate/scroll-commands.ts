@@ -25,6 +25,7 @@ import {
 } from './scroller';
 import { startRangePick, isRangePickPending } from './range-disambiguation';
 import { flashToast } from '../render/toast';
+import { bkLog } from '../debug/bk-log';
 
 /**
  * Scroll whatever is currently in charge: the cycled target if the user picked
@@ -54,6 +55,21 @@ function scrollActive(direction: ScrollDirection, amount: ScrollAmount, count = 
  */
 function startScrollTargetPick(): void {
   const regions = findScrollableRegions();
+  // Which elements the pick admitted, greppable per field report ("why did
+  // THAT get a chip / why didn't the table get one"): tag#id.class + rect +
+  // overflow, enough to name an element without a live DOM.
+  bkLog('BK_SCROLL_REGIONS', {
+    regions: regions.slice(0, 20).map((el) => {
+      const r = el.getBoundingClientRect();
+      return {
+        el: `${el.tagName.toLowerCase()}${el.id ? '#' + el.id : ''}`
+          + (typeof el.className === 'string' && el.className
+            ? '.' + el.className.split(/\s+/).slice(0, 2).join('.') : ''),
+        rect: [Math.round(r.left), Math.round(r.top), Math.round(r.width), Math.round(r.height)],
+        overflow: getComputedStyle(el).overflowY,
+      };
+    }),
+  });
   if (regions.length === 0) {
     flashToast('No scrollable panes found');
     return;
