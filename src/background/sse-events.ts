@@ -135,6 +135,13 @@ export function handleSSEEvent(data: any): void {
     // pre-background behavior (its frames no-op if truly nothing's there).
   }
 
+  // "address" — the browser plugin intercepts this before the SSE forward and
+  // presses the browser's native ⌘L via the keyboard plugin (no extension API
+  // can focus browser chrome), so this arm should never fire. It exists so the
+  // voiced id has an extension-side route (lint D) and a regression in the
+  // plugin's intercept lands on a named no-op instead of console.warn.
+  if (data.action === 'focus_address_bar') return;
+
   // "jump <codeword>" — like the tab verbs, handled here so it works
   // regardless of the active page's content-script state.
   if (data.action === 'switch_to_tab') {

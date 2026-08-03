@@ -339,6 +339,15 @@ export const COMMAND_CATALOG: readonly CommandMeta[] = [
   { id: 'go_root', label: 'URL to site root', group: 'Navigation', mappable: true, params: [],
     description: 'Jump to the site root (the domain’s home).',
     voice: [{ pattern: 'site root' }, { pattern: 'go to root' }] },
+  // The browser's own address bar (omnibox) — browser chrome, which no
+  // extension API can focus. The PLUGIN intercepts this action before the SSE
+  // forward and presses the browser's native shortcut (⌘L) via the keyboard
+  // plugin; sse-events.ts keeps a defensive no-op arm so the voiced id still
+  // has an extension-side route (lint D). Voice-only: a keybind would be
+  // circular — the key for this IS ⌘L, which the browser already provides.
+  { id: 'focus_address_bar', label: 'Focus address bar', group: 'Navigation', mappable: false, params: [],
+    description: 'Focus the browser’s address bar with its contents selected (⌘L) — then dictate or type a URL or search.',
+    voice: [{ pattern: 'address' }] },
   // Keyboard-only hint action (Vimium yf): enter hint mode, then a codeword
   // copies that link’s URL instead of following it. Voice yank would need a
   // contributed hint verb — deferred.

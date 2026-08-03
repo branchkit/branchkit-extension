@@ -43,6 +43,9 @@ const VOICE_ONLY_BACKGROUND = [
   // Media fan-out verbs — the SW iterates audible tabs; no single-tab
   // content dispatch exists.
   'media_pause_all', 'media_mute_all',
+  // Intercepted PLUGIN-side (native ⌘L — browser chrome is beyond extension
+  // reach); the background arm is a defensive no-op, never expected to fire.
+  'focus_address_bar',
 ] as const;
 
 // Voice-only commands handled inline in content's BRANCHKIT_ACTION listener
