@@ -362,7 +362,7 @@ export type ScrollRegion = 'main' | 'leftSidebar' | 'rightSidebar';
  * Find all scrollable elements in the document with sufficient content.
  * Filters to elements with >5 descendants to avoid tiny scroll containers.
  */
-function findScrollableRegions(): HTMLElement[] {
+export function findScrollableRegions(): HTMLElement[] {
   const all: HTMLElement[] = [];
   const candidates = document.querySelectorAll('*');
   for (const el of candidates) {
@@ -563,23 +563,14 @@ let cycleTargets: HTMLElement[] = [];
 let cycleIndex = -1;
 let cycleHighlight: HTMLElement | null = null;
 
-/**
- * Cycle to the next scrollable container and briefly highlight it.
- */
-export function cycleScrollTarget(): HTMLElement | null {
-  cycleTargets = findScrollableRegions();
-  if (cycleTargets.length === 0) return null;
-
-  cycleIndex = (cycleIndex + 1) % cycleTargets.length;
-  const target = cycleTargets[cycleIndex];
-
+/** Briefly outline `target` so the user sees what the scroll keys now drive. */
+function flashRegionHighlight(target: HTMLElement): void {
   // Remove previous highlight
   if (cycleHighlight) {
     cycleHighlight.remove();
     cycleHighlight = null;
   }
 
-  // Show brief highlight overlay
   const rect = target.getBoundingClientRect();
   const overlay = document.createElement('div');
   overlay.style.cssText = `
@@ -604,8 +595,30 @@ export function cycleScrollTarget(): HTMLElement | null {
       cycleHighlight = null;
     }
   }, 800);
+}
 
+/**
+ * Cycle to the next scrollable container and briefly highlight it.
+ */
+export function cycleScrollTarget(): HTMLElement | null {
+  cycleTargets = findScrollableRegions();
+  if (cycleTargets.length === 0) return null;
+
+  cycleIndex = (cycleIndex + 1) % cycleTargets.length;
+  const target = cycleTargets[cycleIndex];
+  flashRegionHighlight(target);
   return target;
+}
+
+/**
+ * Point the scroll commands at `el` directly — the badge-pick twin of
+ * cycling (scroll-commands.ts startScrollTargetPick). Same state, same
+ * highlight; a later `c s` re-derives the full region list and cycles on.
+ */
+export function setScrollTarget(el: HTMLElement): void {
+  cycleTargets = [el];
+  cycleIndex = 0;
+  flashRegionHighlight(el);
 }
 
 /**

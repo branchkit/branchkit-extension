@@ -19,9 +19,11 @@
 import { dispatcher } from '../core/singletons';
 import {
   scroll, scrollElement, scrollToPercent, scrollRegion, snapToElement,
-  cycleScrollTarget, getCycleTarget,
+  cycleScrollTarget, getCycleTarget, findScrollableRegions, setScrollTarget,
   type ScrollDirection, type ScrollAmount, type ScrollRegion,
 } from './scroller';
+import { startRangePick } from './range-disambiguation';
+import { flashToast } from '../render/toast';
 
 /**
  * Scroll whatever is currently in charge: the cycled target if the user picked
@@ -37,6 +39,48 @@ function scrollActive(direction: ScrollDirection, amount: ScrollAmount, count = 
   const target = getCycleTarget();
   if (target) scrollElement(target, direction, amount, count);
   else scroll(direction, amount, count);
+}
+
+/**
+ * "scroll target(s)" — the badge-pick twin of cycling. Badge every scrollable
+ * pane via the range-pick machinery (modal chips, exclusive codeword claim,
+ * Escape cancels) and set whichever the user picks as the cycle target.
+ *
+ * Each chip's Range SELECTS the container element — its border box doesn't
+ * move as content scrolls, so the chip sits on the pane's corner, and the
+ * on-screen gate is intersection (bandOverhang 0), so a pane taller than the
+ * viewport is still pickable. One region skips the question entirely.
+ */
+function startScrollTargetPick(): void {
+  const regions = findScrollableRegions();
+  if (regions.length === 0) {
+    flashToast('No scrollable panes found');
+    return;
+  }
+  if (regions.length === 1) {
+    setScrollTarget(regions[0]);
+    flashToast('Scroll target set');
+    return;
+  }
+  const ranges = regions.map((el) => {
+    const r = document.createRange();
+    r.selectNode(el);
+    return r;
+  });
+  startRangePick(ranges, (range) => {
+    const el = pickedElement(range);
+    if (el === null) return;
+    setScrollTarget(el);
+    flashToast('Scroll target set');
+  });
+}
+
+/** The element a `selectNode` Range names: the child at its start boundary. */
+function pickedElement(range: Range): HTMLElement | null {
+  const el = range.startContainer.childNodes[range.startOffset];
+  if (el instanceof HTMLElement) return el;
+  return range.commonAncestorContainer instanceof HTMLElement
+    ? range.commonAncestorContainer : null;
 }
 
 const countOf = (params: Record<string, string>): number =>
@@ -56,6 +100,7 @@ export function registerScrollCommands(): void {
   dispatcher.register('scroll_right', () => scrollActive('right', 'step'));
 
   dispatcher.register('cycle_scroll_target', () => { cycleScrollTarget(); });
+  dispatcher.register('scroll_target_pick', () => { startScrollTargetPick(); });
 
   // The generic voice form. NOTE: unlike the ten above, this one does NOT
   // consult the cycle target — it scrolls a named region or the page. That

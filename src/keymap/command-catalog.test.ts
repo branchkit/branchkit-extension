@@ -16,7 +16,7 @@ const REGISTERED_ACTIONS = [
   'scroll_down', 'scroll_up', 'scroll_half_down', 'scroll_half_up',
   'scroll_full_down', 'scroll_full_up',
   'scroll_top', 'scroll_bottom', 'scroll_left', 'scroll_right',
-  'cycle_scroll_target', 'scroll', 'scroll_to_percent', 'scroll_to_element',
+  'cycle_scroll_target', 'scroll_target_pick', 'scroll', 'scroll_to_percent', 'scroll_to_element',
   'zoom_in', 'zoom_out', 'zoom_reset',
   'find_open', 'find_close', 'find_next', 'find_previous', 'find_immediate',
   'history_back', 'history_forward', 'refresh', 'focus_input',

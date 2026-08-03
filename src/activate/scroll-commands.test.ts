@@ -70,8 +70,8 @@ describe('registration', () => {
     expect([...registered.keys()].sort()).toEqual([
       'cycle_scroll_target', 'scroll', 'scroll_bottom', 'scroll_down',
       'scroll_full_down', 'scroll_full_up', 'scroll_half_down', 'scroll_half_up',
-      'scroll_left', 'scroll_right', 'scroll_to_element', 'scroll_to_percent',
-      'scroll_top', 'scroll_up',
+      'scroll_left', 'scroll_right', 'scroll_target_pick', 'scroll_to_element',
+      'scroll_to_percent', 'scroll_top', 'scroll_up',
     ]);
   });
 
