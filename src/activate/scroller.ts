@@ -376,7 +376,16 @@ export function findScrollableRegions(): HTMLElement[] {
   for (const el of candidates) {
     if (!(el instanceof HTMLElement)) continue;
     if (!isScrollableElement(el, 'y')) continue;
-    if (el.children.length < 5) continue;
+    // A pane, not a widget — judged by its BOX, not its child count. The old
+    // `children.length < 5` filter excluded exactly the shape scrollable
+    // tables take: one wrapper div with one <table> child (field 2026-08-03:
+    // QuickBase report tables, div.VRinDiv > table — a page full of
+    // independently scrolling tables offered zero of them).
+    // isScrollableElement above already PROVED it really scrolls (probe
+    // write, not style guess), so the only question left is whether it is
+    // big enough to be a region someone would target.
+    const r = el.getBoundingClientRect();
+    if (r.width < 100 || r.height < 60) continue;
     // Exclude fixed/sticky overlays (modals, dropdowns)
     const pos = getComputedStyle(el).position;
     if (pos === 'fixed' || pos === 'sticky') continue;
