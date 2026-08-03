@@ -287,7 +287,7 @@ window.addEventListener('message', (ev) => {
       .find((it) => it.id === leg.rowId);
     if (item) dispatchItem(item);
   } else if (d.type === RELAY_RELABEL) {
-    renderCurrent();
+    renderPreservingScroll();
   }
 });
 
@@ -469,12 +469,26 @@ function badgeSpan(badge: string, token: string): HTMLElement {
   return span;
 }
 
+/** Re-render without moving the viewport. The mid-utterance legs (narrow,
+ *  relabel) change row VISUALS only — rows neither appear, vanish, nor move,
+ *  by the holder contract — so the scroll position must survive the rebuild:
+ *  the user may have scrolled down to the very row they are speaking, and a
+ *  rebuild that snaps back to the top loses exactly that row (field,
+ *  2026-08-03). Restoring AFTER renderCurrent also overrides render()'s
+ *  `.sel` scrollIntoView, which would otherwise yank the view back to the
+ *  keyboard selection. */
+function renderPreservingScroll(): void {
+  const saved = listEl.scrollTop;
+  renderCurrent();
+  listEl.scrollTop = saved;
+}
+
 /** Host → frame narrowing leg. Re-render is the whole implementation: the
  *  list is a snapshot, so there is no incremental badge state to maintain. */
 function narrowRowBadges(prefix: string): void {
   if (prefix === narrowPrefix) return;
   narrowPrefix = prefix;
-  renderCurrent();
+  renderPreservingScroll();
 }
 
 function renderCurrent(): void {
