@@ -72,10 +72,15 @@ what was typed; normalization (prepending `https://`) happens in the dispatch
 payload, with the row label showing the normalized form so Enter has no
 surprises.
 
-**Scopes.** The rows appear in the full palette (`scope` absent) and the
-bookmarks scope — both answer "take me somewhere". The tabs and commands
-scopes are closed sets by intent; a search row there would break the scope's
-promise (and its empty-state message).
+**Scopes.** The rows appear in every scope except commands. Originally full
+palette + bookmarks only ("both answer 'take me somewhere'; tabs and
+commands are closed sets by intent") — the tabs half of that intent was
+field-rejected 2026-08-03: the tab palette is exactly where you learn the
+tab you wanted doesn't exist, and searching from it should work. Tabs-scope
+query rows draw word codewords AROUND the strip marks (a query badge letter
+can never collide with a mark; runs dry gracefully to unbadged). The
+commands scope stays closed — searching the web from the command catalog
+answers no question.
 
 **Placement.** Same `OpenWhere` surface as bookmarks, same default (`blank`).
 One rule, not two: "rows that navigate open a new tab unless you say

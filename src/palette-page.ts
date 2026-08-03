@@ -522,19 +522,22 @@ function renderCurrent(): void {
   const sections = filterPalette(
     tabItems, commandItems, resolved.query, scope === 'commands', bookmarkItems,
   );
-  // Query-derived rows, full + bookmarks scopes only — tabs and commands are
-  // closed sets by intent. Both appended after resolvePaletteQuery so
-  // neither can enter its corpus (a row matching every query would silently
-  // kill both recoveries above — the note's one load-bearing exclusion), and
-  // both read the BOX text, not the resolved query: a phonetic snap corrects
-  // toward what exists in the palette, but a destination or web search has
-  // no such corpus — the user's own words are the right thing.
-  // (dictated_retry re-seeds the box to the utterance above, so box text is
-  // already the right words there too.)
+  // Query-derived rows in every scope except commands — the command catalog
+  // is a closed set by intent (searching the web from it makes no sense),
+  // but the tab palette is exactly where you learn the tab you wanted does
+  // not exist, and the search fallthrough belongs there too (field,
+  // 2026-08-03; tabs joined all + bookmarks). Both appended after
+  // resolvePaletteQuery so neither can enter its corpus (a row matching
+  // every query would silently kill both recoveries above — the note's one
+  // load-bearing exclusion), and both read the BOX text, not the resolved
+  // query: a phonetic snap corrects toward what exists in the palette, but
+  // a destination or web search has no such corpus — the user's own words
+  // are the right thing. (dictated_retry re-seeds the box to the utterance
+  // above, so box text is already the right words there too.)
   // Positions are the design's asymmetry: URL row FIRST (URL-shaped input is
   // unambiguous intent — Enter should honor it), search row LAST (the
   // fallthrough, not the guess).
-  if (scope === 'all' || scope === 'bookmarks') {
+  if (scope !== 'commands') {
     const url = buildUrlSection(queryInput.value);
     if (url) sections.unshift(url);
     const search = buildSearchSection(queryInput.value, searchTemplate);
@@ -877,10 +880,25 @@ function assignAndPublish(alphabet: string[]): void {
   const all = publishOrder();
   if (scope === 'tabs') {
     codewords = new Map();
+    const markLetters = new Set<string>();
     for (const item of tabItems) {
       const id = tabIdOf(item.id);
       const mark = id != null ? markMap[id] : undefined;
-      if (mark) codewords.set(item.id, mark);
+      if (mark) {
+        codewords.set(item.id, mark);
+        markLetters.add(mark);
+      }
+    }
+    // Query rows ride in the tab palette too (2026-08-03): word codewords
+    // drawn AROUND the strip marks, so a query badge's letter can never
+    // collide with a mark. Runs dry gracefully — with marks + reserved
+    // letters exhausting the alphabet the rows go unbadged (Enter/click
+    // still work), same as everywhere else past the badge tier.
+    for (const [rowId, cw] of assignCodewords(
+      ['query:url', 'query:search'], alphabet,
+      new Set([...markLetters, ...reservedLetters]),
+    )) {
+      codewords.set(rowId, cw);
     }
   } else {
     // Reserved letters are withheld: these codewords are TYPED in letter mode,
