@@ -571,8 +571,10 @@ let cycleTargets: HTMLElement[] = [];
 let cycleIndex = -1;
 let cycleHighlight: HTMLElement | null = null;
 
-/** Briefly outline `target` so the user sees what the scroll keys now drive. */
-function flashRegionHighlight(target: HTMLElement): void {
+/** Briefly outline `target` so the user sees what the scroll keys now drive.
+ *  Exported for the "scroll page" reset, which flashes the resolved default
+ *  scroller so releasing a pane shows where scrolling went. */
+export function flashRegionHighlight(target: HTMLElement): void {
   // Remove previous highlight
   if (cycleHighlight) {
     cycleHighlight.remove();

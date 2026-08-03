@@ -82,6 +82,10 @@ export const MAX_RANGE_BADGES = 9;
 interface PendingPick {
   chips: RangeBadgeSet;
   onPick: (range: Range) => void;
+  /** Fires exactly once on ANY exit — picked, escaped, replaced, emptied,
+   *  orphaned — so a caller's pick-scoped visuals cannot outlive the
+   *  question (the scroll pick's pane overlays). */
+  onEnd?: () => void;
 }
 
 let pending: PendingPick | null = null;
@@ -226,7 +230,7 @@ export function cancelRangePick(reason: string, restoreBadges = true): void {
 export function startRangePick(
   ranges: Range[],
   onPick: (range: Range) => void,
-  opts?: { anchor?: AnchorKind },
+  opts?: { anchor?: AnchorKind; onEnd?: () => void },
 ): void {
   cancelRangePick('replaced');
 
@@ -255,11 +259,13 @@ export function startRangePick(
       // rides the stack entry, so this exit path cannot hold its own copy —
       // the pop hands back whatever push recorded, even when onEmpty fires
       // from inside create (the entry is pushed before the set can empty).
+      const onEnd = pending?.onEnd;
       pending = null;
       const floor = modes.pop('range_pick');
       clearFindPaint();
       publishPickWindow([]);
       if (floor) restoreScreen(floor.payload as PickEntry);
+      onEnd?.();
       flashToast('Lost the highlighted matches — try again');
     },
   });
@@ -281,7 +287,7 @@ export function startRangePick(
   // it back. Hiding the badges exits hint mode, so the borrow reads first;
   // the pick lands above whatever the user was in, temporally.
   const entry = borrowScreen();
-  pending = { chips, onPick };
+  pending = { chips, onPick, onEnd: opts?.onEnd };
   modes.push('range_pick', entry);
 
   if (ranges.length > chips.size) {
@@ -297,7 +303,7 @@ export function startRangePick(
 
 function teardown(reason: string, restoreBadges = true): void {
   if (!pending) return;
-  const { chips } = pending;
+  const { chips, onEnd } = pending;
   pending = null;
   const floor = modes.pop('range_pick');
   chips.dispose(reason);
@@ -313,4 +319,5 @@ function teardown(reason: string, restoreBadges = true): void {
   // Release the projection narrow AFTER the set gave its codewords back, so the
   // page's own hints are what the HUD falls back to.
   publishPickWindow([]);
+  onEnd?.();
 }

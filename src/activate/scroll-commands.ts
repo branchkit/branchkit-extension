@@ -20,9 +20,10 @@ import { dispatcher } from '../core/singletons';
 import {
   scroll, scrollElement, scrollToPercent, scrollRegion, snapToElement,
   cycleScrollTarget, getCycleTarget, findScrollableRegions, setScrollTarget, resetCycleTarget,
+  getDefaultScrollTarget, flashRegionHighlight,
   type ScrollDirection, type ScrollAmount, type ScrollRegion,
 } from './scroller';
-import { startRangePick } from './range-disambiguation';
+import { startRangePick, isRangePickPending } from './range-disambiguation';
 import { flashToast } from '../render/toast';
 
 /**
@@ -67,13 +68,52 @@ function startScrollTargetPick(): void {
   });
   // anchor 'icon': chips sit fully INSIDE the pane's corner — a pane flush
   // against a viewport edge would clip a text-nudged chip half off-screen
-  // (field: QuickBase side panel).
+  // (field: QuickBase side panel). onEnd retires the pane overlays on every
+  // exit; painted only if the pick actually armed (isRangePickPending), so
+  // the not-armed fallback can't strand them.
   startRangePick(ranges, (range) => {
     const el = pickedElement(range);
     if (el === null) return;
     setScrollTarget(el);
     flashToast('Scroll target set');
-  }, { anchor: 'icon' });
+  }, { anchor: 'icon', onEnd: clearPickOverlays });
+  if (isRangePickPending()) paintPickOverlays(regions);
+}
+
+// --- Pane overlays: which area each chip stands for -------------------------
+//
+// A chip on a pane's corner says "pickable", not "pickable WHAT" (field:
+// which region is this chip for?). While the pick is up, every candidate
+// pane wears a transparent tint — the same blue the cycle/set flash uses, so
+// one color consistently means "scroll area". Static rects: the page under a
+// modal pick doesn't move, and the overlays live only as long as the
+// question. Tagged as our own UI so the page MutationObserver skips them.
+
+let pickOverlays: HTMLElement[] = [];
+
+function paintPickOverlays(regions: HTMLElement[]): void {
+  clearPickOverlays();
+  for (const el of regions) {
+    const r = el.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) continue;
+    const o = document.createElement('div');
+    o.setAttribute('data-branchkit-hint', '');
+    o.style.cssText = `
+      position: fixed; left: ${r.left}px; top: ${r.top}px;
+      width: ${r.width}px; height: ${r.height}px;
+      border: 2px solid rgba(0, 122, 255, 0.55);
+      background: rgba(0, 122, 255, 0.08);
+      border-radius: 4px; pointer-events: none;
+      z-index: 2147483640;
+    `;
+    document.body.appendChild(o);
+    pickOverlays.push(o);
+  }
+}
+
+function clearPickOverlays(): void {
+  for (const o of pickOverlays) o.remove();
+  pickOverlays = [];
 }
 
 /** The element a `selectNode` Range names: the child at its start boundary. */
@@ -103,9 +143,13 @@ export function registerScrollCommands(): void {
   dispatcher.register('cycle_scroll_target', () => { cycleScrollTarget(); });
   dispatcher.register('scroll_target_pick', () => { startScrollTargetPick(); });
   // The way back: without this, a picked pane owns the scroll keys until a
-  // find commit happens to reset it — there was no deliberate exit.
+  // find commit happens to reset it — there was no deliberate exit. The flash
+  // outlines the scroller "the page" resolves to RIGHT NOW (on app-shell
+  // pages that's the geometric main pane, not the root), so releasing shows
+  // where scrolling went — the same blue the pick and cycle flashes use.
   dispatcher.register('scroll_target_reset', () => {
     resetCycleTarget();
+    flashRegionHighlight(getDefaultScrollTarget('y'));
     flashToast('Scrolling the page');
   });
 
