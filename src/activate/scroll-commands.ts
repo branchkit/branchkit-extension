@@ -101,11 +101,36 @@ function startScrollTargetPick(): void {
 // A chip on a pane's corner says "pickable", not "pickable WHAT" (field:
 // which region is this chip for?). While the pick is up, every candidate
 // pane wears a transparent tint — the same blue the cycle/set flash uses, so
-// one color consistently means "scroll area". Static rects: the page under a
-// modal pick doesn't move, and the overlays live only as long as the
-// question. Tagged as our own UI so the page MutationObserver skips them.
+// one color consistently means "scroll area". The tints FOLLOW their panes:
+// scrolling mid-pick (finding an off-screen chip is exactly when you scroll)
+// left static rects hanging in space (field 2026-08-03). A capture-phase
+// scroll listener — inner-pane scrolls don't bubble but do capture — plus
+// resize, rAF-coalesced, re-reads live rects. Pick-scoped sensing: installed
+// at paint, gone with the question (the onEnd contract), so it adds no
+// page-lifetime observer. Tagged as our own UI so the page MutationObserver
+// skips the nodes.
 
-let pickOverlays: HTMLElement[] = [];
+let pickOverlays: { el: HTMLElement; overlay: HTMLElement }[] = [];
+let overlayRaf = 0;
+
+function repositionPickOverlays(): void {
+  overlayRaf = 0;
+  for (const { el, overlay } of pickOverlays) {
+    const r = el.getBoundingClientRect();
+    const gone = !el.isConnected || (r.width === 0 && r.height === 0);
+    overlay.style.display = gone ? 'none' : '';
+    if (gone) continue;
+    overlay.style.left = `${r.left}px`;
+    overlay.style.top = `${r.top}px`;
+    overlay.style.width = `${r.width}px`;
+    overlay.style.height = `${r.height}px`;
+  }
+}
+
+function scheduleOverlayReposition(): void {
+  if (pickOverlays.length === 0 || overlayRaf !== 0) return;
+  overlayRaf = requestAnimationFrame(repositionPickOverlays);
+}
 
 function paintPickOverlays(regions: HTMLElement[]): void {
   clearPickOverlays();
@@ -123,12 +148,23 @@ function paintPickOverlays(regions: HTMLElement[]): void {
       z-index: 2147483640;
     `;
     document.body.appendChild(o);
-    pickOverlays.push(o);
+    pickOverlays.push({ el, overlay: o });
+  }
+  if (pickOverlays.length > 0) {
+    document.addEventListener('scroll', scheduleOverlayReposition, { capture: true, passive: true });
+    window.addEventListener('resize', scheduleOverlayReposition, { passive: true });
   }
 }
 
 function clearPickOverlays(): void {
-  for (const o of pickOverlays) o.remove();
+  if (pickOverlays.length === 0) return;
+  document.removeEventListener('scroll', scheduleOverlayReposition, { capture: true });
+  window.removeEventListener('resize', scheduleOverlayReposition);
+  if (overlayRaf !== 0) {
+    cancelAnimationFrame(overlayRaf);
+    overlayRaf = 0;
+  }
+  for (const { overlay } of pickOverlays) overlay.remove();
   pickOverlays = [];
 }
 
