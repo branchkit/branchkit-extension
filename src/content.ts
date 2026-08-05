@@ -557,6 +557,16 @@ if (typeof chrome !== 'undefined' && chrome.storage?.sync) {
     const matched = matchRules(window.location.href, rules);
     applyMatchedRules(matched);
     if (matched.length > 0) {
+      // The initial doScan raced ahead of this storage read, so wrappers may
+      // already exist for elements an exclude matches — with live codewords
+      // and typeable badges. The scheduled rescan below only ADDS (dedup
+      // skips existing wrappers), so sweep retroactively exactly like the
+      // rules-changed path: an excluded element must be unreachable by
+      // voice AND keyboard, not just badge-less. detachWrapper queues the
+      // plugin-side codeword delete.
+      for (const w of [...store.all]) {
+        if (isExcludedByRule(w.element, getExcludes())) detachWrapper(w.element);
+      }
       scheduleDoScan();
       schedulePushGrammar();
     }
