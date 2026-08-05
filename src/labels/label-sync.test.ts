@@ -34,6 +34,7 @@ import { setAlphabet } from './words';
 import {
   initLabelSync,
   queuePut,
+  retractAllGrammar,
   queueDelete,
   cancelPendingDelete,
   markSent,
@@ -104,6 +105,11 @@ describe('syncNow wholesale refusal (calibration_active)', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     setAlphabet(ALPHABET);
+    // Visible is the baseline for a page actively syncing grammar — the
+    // visibility⇔speakability gate defers every put while hidden
+    // (DESIGN_HINT_VISIBILITY_SPEAKABILITY), so hidden-state tests set this
+    // false explicitly. The mock is a singleton; reset it per test.
+    pageSession.badgesVisible = true;
     store = new WrapperStore();
     batchResponses = [];
     sendMessage = vi.fn((msg: { type: string }) => {
@@ -699,6 +705,9 @@ describe('republishAllGrammar', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     setAlphabet(ALPHABET);
+    // The singleton pageSession mock leaks across describes — republish
+    // models the shown edge, where badges are visible by definition.
+    pageSession.badgesVisible = true;
     store = new WrapperStore();
     sendMessage = vi.fn((msg: { type: string }) =>
       Promise.resolve(msg.type === 'GRAMMAR_BATCH'
@@ -724,6 +733,43 @@ describe('republishAllGrammar', () => {
     const before = getSessionId();
     republishAllGrammar('test');
     expect(getSessionId()).not.toBe(before);
+  });
+
+  // DESIGN_HINT_VISIBILITY_SPEAKABILITY: the failure class the deferral gate
+  // must not have — a put deferred while hidden that never reaches the wire
+  // after the shown edge (would present as a badge with no voice behind it).
+  it('defers puts while badges are hidden and flushes them on the shown edge', async () => {
+    makeWrapper('arch bake', store);
+    pageSession.badgesVisible = false;
+
+    queuePut(store.all[0]);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(pushedCodewords()).toEqual([]);
+
+    // The shown edge: setBadgesVisible(true) calls republishAllGrammar.
+    pageSession.badgesVisible = true;
+    republishAllGrammar('badges_shown');
+    await vi.advanceTimersByTimeAsync(400);
+    expect(pushedCodewords()).toEqual(['arch bake']);
+  });
+
+  // The hidden edge: every published codeword is retracted; holder records
+  // are exempt by construction (they are not store wrappers).
+  it('retractAllGrammar deletes every published store codeword', async () => {
+    makeWrapper('arch bake', store);
+    makeWrapper('cave dove', store);
+    markSent('arch bake');
+    markSent('cave dove');
+    pageSession.badgesVisible = false;
+
+    retractAllGrammar('badges_hidden');
+    await vi.advanceTimersByTimeAsync(400);
+
+    const deletes = sendMessage.mock.calls
+      .filter((c) => c[0]?.type === 'GRAMMAR_BATCH')
+      .flatMap((c) => c[0].request?.delete_codewords ?? []);
+    expect(deletes.sort()).toEqual(['arch bake', 'cave dove']);
+    expect(pushedCodewords()).toEqual([]);
   });
 
   it('re-queues every live codeworded wrapper and transmits them', async () => {

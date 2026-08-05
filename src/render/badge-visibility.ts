@@ -49,6 +49,7 @@ import { elementTarget } from './badge-target';
 import { isVisible } from '../scan/scanner';
 import { doScan } from '../scan/scan-orchestrator';
 import { overlayCodewordsLive } from '../labels/holder-registry';
+import { republishAllGrammar, retractAllGrammar } from '../labels/label-sync';
 import { connectVisibilityMO } from '../observe/visibility-tracker';
 import { placeBadges } from '../placement';
 import { cacheLayout, cacheConstruction, clearLayoutCache, isRectOnScreen } from '../core/layout-cache';
@@ -290,9 +291,18 @@ export function setBadgesVisible(visible: boolean): boolean {
     void doScan();
     void showBadges();
     enterHintModeIfManual();
+    // Visibility⇔speakability (DESIGN_HINT_VISIBILITY_SPEAKABILITY): the
+    // shown edge republishes everything the hide retracted (and flushes any
+    // puts the drain deferred while hidden).
+    republishAllGrammar('badges_shown');
   } else {
     hideBadges();
     keyHandler.exitHintMode();
+    // Hidden ⇒ unspeakable: retract the badge codewords so a mishear can't
+    // activate a link nobody can see. Deliberately HERE — the user-intent
+    // chokepoint (voice "toggle", Shift+F, popup) — and not in hideBadges,
+    // which the find/pick screen borrow calls transiently.
+    retractAllGrammar('badges_hidden');
   }
   return visible;
 }

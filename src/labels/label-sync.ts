@@ -163,6 +163,32 @@ export function republishAllGrammar(reason: string): void {
   scheduleSync(reason);
 }
 
+/**
+ * The hidden half of the visibility⇔speakability invariant
+ * (DESIGN_HINT_VISIBILITY_SPEAKABILITY): the user hid the badges, so their
+ * codewords must stop being matchable — a mishear must not activate a link
+ * nobody can see. Queues a delete for every PUBLISHED store-wrapper codeword
+ * and kicks a sync; the plugin's emptiness-aware gate drops the hints tag when
+ * the session empties. Holder records (find chips, palette rows) describe
+ * other UI that is still on screen — they are exempt and keep flowing through
+ * the `is_final` chokepoint untouched. Called from setBadgesVisible(false)
+ * (voice "toggle", Shift+F, the popup button) — NOT from the transient screen
+ * borrow, which hides pixels for milliseconds and must not churn grammar.
+ */
+export function retractAllGrammar(reason: string): void {
+  if (!deps) { bkLog('BK_GRAMMAR_RETRACT_PREINIT', { reason }, 'warn'); return; }
+  let queued = 0;
+  for (const w of deps.store.all) {
+    const cw = w.scanned.codeword;
+    if (cw && hasSent(cw)) {
+      queueDelete(cw);
+      queued++;
+    }
+  }
+  bkLog('BK_GRAMMAR_RETRACT', { reason, queued, wrappers: deps.store.all.length });
+  if (queued > 0) scheduleSync(reason);
+}
+
 // --- Transport ---
 
 export async function claimLabels(count: number, preferred: string[] = []): Promise<string[]> {
@@ -525,9 +551,22 @@ async function doSyncNow(reason: string): Promise<void> {
   // the store between schedule and drain (race with IT viewport-leave
   // or rebind).
   const drained = drainPendingPuts();
-  const puts = drained.filter(w =>
+  let puts = drained.filter(w =>
     w.scanned.codeword && deps.store.findWrapperFor(w.element) === w,
   );
+
+  // Visibility gates the puts (DESIGN_HINT_VISIBILITY_SPEAKABILITY): while
+  // badges are hidden, a put would publish a codeword for something the user
+  // cannot see — the catch-up scans that run during a hide would silently
+  // undo retractAllGrammar. DEFER, never drop: requeue and let the shown
+  // edge flush (republishAllGrammar re-queues everything anyway), so the
+  // transient screen borrow (find/pick) loses nothing. Deletes flow
+  // regardless — retraction and detach cleanup must work while hidden.
+  if (!pageSession.badgesVisible && puts.length > 0) {
+    for (const w of puts) requeuePut(w);
+    bkLog('BK_GRAMMAR_PUTS_DEFERRED', { reason, deferred: puts.length });
+    puts = [];
+  }
 
   // Pure-empty delta — nothing changed since last push. Skip the
   // round-trip entirely. This is the "hash-skip for free" case: in
