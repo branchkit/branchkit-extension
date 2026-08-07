@@ -28,6 +28,7 @@ import { assertBadgeScreenBorrow, returnBadgeScreenBorrow } from '../render/badg
 import { FIND_HIGHLIGHT } from '../render/find-highlight';
 import { isRangeDead } from './range-liveness';
 import { dispatcher } from '../core/singletons';
+import { mountInStack, reapStackIfEmpty, purgeOrphanedOverlayStacks } from '../render/overlay-stack';
 
 /**
  * What the box is collecting a phrase FOR.
@@ -388,15 +389,16 @@ function createFindBar(): void {
 
   barElement = document.createElement('div');
   barElement.setAttribute('data-branchkit-find', '');
-  // Compact floating pill in the bottom-right corner (Vimium-C style) rather
-  // than a full-width bar, so it overlaps almost no page content.
+  // Compact floating pill (Vimium-C style) rather than a full-width bar, so it
+  // overlaps almost no page content. Position/anchor/z belong to the shared
+  // overlay stack now (it mounts into the bottom-right column); this styles only
+  // the bar's own shape.
   barElement.style.cssText = `
-    position: fixed; bottom: 12px; right: 12px;
     width: 360px; max-width: calc(100vw - 24px); height: 34px; box-sizing: border-box;
     background: #1e1e1e; border: 1px solid rgba(255,255,255,0.18); border-radius: 8px;
     box-shadow: 0 4px 16px rgba(0,0,0,0.4);
     display: flex; align-items: center; padding: 0 10px; gap: 8px;
-    z-index: 2147483647; font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
     font-size: 13px; color: #fff;
   `;
 
@@ -479,7 +481,7 @@ function createFindBar(): void {
   countSpan.style.cssText = 'color: rgba(255,255,255,0.5); font-size: 11px; min-width: 60px;';
   barElement.appendChild(countSpan);
 
-  document.body.appendChild(barElement);
+  mountInStack(barElement, 'find');
   inputElement.focus();
 }
 
@@ -493,6 +495,7 @@ function removeFindBar(): void {
   barElement?.remove();
   barElement = null;
   inputElement = null;
+  reapStackIfEmpty();
 }
 
 // --- Committed pill (post-Enter / voice find) ---
@@ -507,13 +510,13 @@ function showCommittedPill(): void {
   // data-branchkit-find also excludes the pill's own text (it contains the
   // query) from findMatchRanges' walker.
   pillElement.setAttribute('data-branchkit-find', '');
+  // Position/anchor/z belong to the shared overlay stack; shape only here.
   pillElement.style.cssText = `
-    position: fixed; bottom: 12px; right: 12px;
     max-width: 360px; height: 34px; box-sizing: border-box;
     background: #1e1e1e; border: 1px solid rgba(255,255,255,0.18); border-radius: 8px;
     box-shadow: 0 4px 16px rgba(0,0,0,0.4);
     display: flex; align-items: center; padding: 0 10px; gap: 8px;
-    z-index: 2147483647; font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
     font-size: 13px; color: #fff;
   `;
 
@@ -538,13 +541,14 @@ function showCommittedPill(): void {
   hint.style.cssText = 'color: rgba(255,255,255,0.35); font-size: 11px; white-space: nowrap;';
   pillElement.appendChild(hint);
 
-  document.body.appendChild(pillElement);
+  mountInStack(pillElement, 'find');
   updateCountDisplay();
 }
 
 function removeCommittedPill(): void {
   pillElement?.remove();
   pillElement = null;
+  reapStackIfEmpty();
 }
 
 function updateCountDisplay(): void {
@@ -609,6 +613,9 @@ export function purgeOrphanedFindPaint(): void {
   api?.reg.delete(HL_PHRASE);
   for (const el of document.querySelectorAll('[data-branchkit-find]')) el.remove();
   document.querySelector(`[${STYLE_ATTR}]`)?.remove();
+  // The bar/pill now live inside the shared overlay-stack host; drop any orphaned
+  // host wholesale (also reaps a stranded mode chip / toast from the old script).
+  purgeOrphanedOverlayStacks();
 }
 
 function clearHighlights(): void {

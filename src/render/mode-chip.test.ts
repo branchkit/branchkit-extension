@@ -13,14 +13,17 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 vi.mock('../plugin/connection-mirror', () => ({ isBranchKitConnected: () => false }));
 
 import { setModeChip, flashModeChipRefusal, _resetModeChipForTesting } from './mode-chip';
+import { _stackForTesting, _resetOverlayStackForTesting } from './overlay-stack';
 
 const chipEl = (): HTMLElement | null => {
-  const host = document.querySelector('[data-branchkit-mode-chip]');
+  // The chip host now lives inside the shared overlay stack's shadow root.
+  const host = _stackForTesting()?.querySelector('[data-branchkit-mode-chip]');
   return (host?.shadowRoot?.querySelector('.chip') as HTMLElement | null) ?? null;
 };
 
 afterEach(() => {
   _resetModeChipForTesting();
+  _resetOverlayStackForTesting();
 });
 
 describe('setModeChip', () => {

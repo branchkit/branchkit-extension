@@ -13,16 +13,17 @@
 
 import type { KeyMode } from '../activate/keyboard';
 import { isBranchKitConnected } from '../plugin/connection-mirror';
+import { mountInStack, reapStackIfEmpty } from './overlay-stack';
 
 const HOST_ATTR = 'data-branchkit-mode-chip';
-const Z_INDEX = 2_147_483_645; // just below the help/palette tier
 
 let host: HTMLElement | null = null;
 
+// Position and z-index are the shared overlay stack's job now (the chip mounts
+// into the bottom-right column); this styles only the chip's own appearance.
 const STYLE = `
 :host { all: initial; }
 .chip {
-  position: fixed; bottom: 14px; right: 14px; z-index: ${Z_INDEX};
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 11px; font-weight: 700; letter-spacing: 0.06em;
   color: #c9d1d9; background: #1c2128;
@@ -134,7 +135,9 @@ export function setModeChip(mode: KeyMode): void {
     // Connection is sampled at build time; the chip rebuilds on every mode
     // change, so a connect/disconnect is reflected at the next mode entry.
     host = build(shown, isBranchKitConnected());
-    document.documentElement.appendChild(host);
+    mountInStack(host, 'mode');
+  } else {
+    reapStackIfEmpty();
   }
 }
 
@@ -160,6 +163,7 @@ export function flashModeChipRefusal(): void {
 export function _resetModeChipForTesting(): void {
   host?.remove();
   host = null;
+  reapStackIfEmpty();
 }
 
 /**
