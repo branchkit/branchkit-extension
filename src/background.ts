@@ -8,7 +8,6 @@
  * - Manage offscreen document lifecycle (Chrome only)
  */
 
-import { HintVisibility } from './types';
 import { clearAllStacks } from './labels/label-pool';
 import { buildCommandContributions } from './keymap/command-catalog';
 import { discoverPlugin, postToPlugin } from './plugin/actuator-client';
@@ -65,8 +64,10 @@ import { handleSSEEvent, storeAlphabet, sseBridgeMessageHandlers } from './backg
 // (backoff ladder, voice-pause intent, offscreen/direct split) lives in
 // plugin/sse-transport.ts; the hooks wired below are what a connect/event
 // MEANS — the behavior half of that split.
-
-let hintVisibility: HintVisibility = 'always';
+//
+// Hint visibility now lives in bgState.hintVisibility (single SW source) so the
+// focus side-channels can carry it to the plugin — see
+// notes/DESIGN_HINT_PROJECTION_SELF_HEAL.md.
 
 // SW crashes land in browser.log as BK_UNCAUGHT — via the coalescer so a pending boot summary flushes first.
 installUncaughtCapture((tag, data, level) => forwardCoalesced(tag, data, level), 'sw');
@@ -249,7 +250,7 @@ chrome.tabs.onActivated.addListener((activeInfo) => {
     // phase 1): the plugin deprojects the old tab and reprojects + re-arms
     // the hints tag from the postActiveTab recompute above, with zero
     // extension traffic. Session-start stays as idempotent skeleton insurance.
-    if (hintVisibility === 'always') {
+    if (bgState.hintVisibility === 'always') {
       forwardHintsSessionStart('tab_switch', activeInfo.tabId);
     }
   }
@@ -398,7 +399,7 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
       // Same as the tab-switch path: the postActiveTab recompute above
       // deprojects/reprojects and derives the hints tag plugin-side
       // (display-grade demotion phase 1).
-      if (newActive != null && hintVisibility === 'always') {
+      if (newActive != null && bgState.hintVisibility === 'always') {
         forwardHintsSessionStart('window_focus', newActive);
       }
     }
@@ -448,7 +449,7 @@ async function init(): Promise<void> {
 
   const result = await chrome.storage.sync.get(['hintVisibility', 'tabMarkersEnabled']);
   if (result.hintVisibility) {
-    hintVisibility = result.hintVisibility;
+    bgState.hintVisibility = result.hintVisibility;
   }
   // Tab markers: default ON (absent → on; only an explicit false disables).
   // Letter-first, so marks paint immediately — no connection dependency.
@@ -493,7 +494,7 @@ async function init(): Promise<void> {
 
 chrome.storage.onChanged.addListener((changes) => {
   if (changes.hintVisibility) {
-    hintVisibility = changes.hintVisibility.newValue || 'always';
+    bgState.hintVisibility = changes.hintVisibility.newValue || 'always';
   }
   // Tab-markers toggle flipped: decorate every tab, or strip every tab live.
   // Default ON — only an explicit false disables.

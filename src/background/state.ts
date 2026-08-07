@@ -9,12 +9,23 @@
  * importers can assign fields directly.
  */
 
+import { HintVisibility } from '../types';
+
 export const bgState = {
   /** True while the plugin SSE stream is connected (set by SSE connect/
    * disconnect/retry and the offscreen HEALTH_STATUS handler). */
   branchkitConnected: false,
   /** The tab the plugin should treat as this browser's active tab. */
   cachedActiveTabId: null as number | null,
+  /**
+   * Current hint visibility, kept in sync from chrome.storage by
+   * background.ts. Single SW source of truth: the focus side-channels
+   * (postFocus / postActiveTab) carry it so the plugin's HintVisibility is
+   * never stale when it decides recovery-rescan — the plugin otherwise learns
+   * it only from grammar batches, which lag a fresh focus. See
+   * notes/DESIGN_HINT_PROJECTION_SELF_HEAL.md.
+   */
+  hintVisibility: 'always' as HintVisibility,
 };
 
 // The extension never names its own browser. UA-sniffing the macOS bundle ID

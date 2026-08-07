@@ -262,7 +262,11 @@ export async function setQueryFieldActive(active: boolean): Promise<void> {
 // Best-effort: a dropped focus POST self-heals on the next focus transition.
 export async function postFocus(focused: boolean): Promise<void> {
   // Bail-on-miss (no discovery): focus claims only matter when already connected.
-  await postToPlugin('/focus', { conn_id: connId, focused });
+  // Carry hint_visibility so the plugin's HintVisibility is fresh at the focus
+  // recompute — otherwise it lags a grammar batch and the always-mode
+  // recovery-rescan on an empty focused source is silently skipped
+  // (notes/DESIGN_HINT_PROJECTION_SELF_HEAL.md).
+  await postToPlugin('/focus', { conn_id: connId, focused, hint_visibility: bgState.hintVisibility });
 }
 
 // Tell the plugin which tab is active in this browser's window. Distinct from
@@ -274,7 +278,8 @@ export async function postFocus(focused: boolean): Promise<void> {
 export async function postActiveTab(tabId: number | null): Promise<void> {
   if (tabId == null) return;
   // Bail-on-miss (no discovery): never affects the connection→bundle binding.
-  await postToPlugin('/active-tab', { conn_id: connId, tab_id: tabId });
+  // Carries hint_visibility for the same freshness reason as postFocus.
+  await postToPlugin('/active-tab', { conn_id: connId, tab_id: tabId, hint_visibility: bgState.hintVisibility });
 }
 
 // Claim focus at SSE-connect time if a window of this browser is currently the
