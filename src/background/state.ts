@@ -18,6 +18,17 @@ export const bgState = {
   /** The tab the plugin should treat as this browser's active tab. */
   cachedActiveTabId: null as number | null,
   /**
+   * The chrome.windows windowId of this browser's OS-focused window, or null
+   * when no window is focused (all windows lost OS focus). Set from
+   * chrome.windows.onFocusChanged — the least-lossy focus signal available, read
+   * straight off the event with no tabs.query round-trip. Carried to the plugin
+   * on /focus so it can pick the focused window's visible tab as the grammar
+   * projection source; this is what disambiguates two side-by-side windows of one
+   * browser, both of which hold a visible:true active tab. See
+   * notes/DESIGN_HINT_PROJECTION_SELF_HEAL.md.
+   */
+  focusedWindowId: null as number | null,
+  /**
    * Current hint visibility, kept in sync from chrome.storage by
    * background.ts. Single SW source of truth: the focus side-channels
    * (postFocus / postActiveTab) carry it so the plugin's HintVisibility is

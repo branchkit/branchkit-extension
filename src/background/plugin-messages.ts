@@ -34,13 +34,18 @@ export const pluginMessageHandlers: Record<string, MessageHandler> = {
     if (typeof tabId !== 'number' || typeof frameId !== 'number') {
       return transportFailure(message.request);
     }
+    // Also from the sender: the tab's window id. The content script can't know
+    // it; the plugin uses it to pick the projection source among a browser's
+    // windows (notes/DESIGN_HINT_PROJECTION_SELF_HEAL.md). 0 if unavailable —
+    // the plugin fails open on window then.
+    const windowId = sender.tab?.windowId ?? 0;
     for (const el of message.request.elements) {
       el.frame_id = frameId;
     }
     // A rejection here used to leave the sender awaiting forever — the old
     // `.then(sendResponse)` carried no catch. The router now closes the channel
     // on a rejected handler, so the scan fails fast instead of hanging.
-    return postGrammarBatch(tabId, frameId, message.request);
+    return postGrammarBatch(tabId, frameId, windowId, message.request);
   },
 
   DISPATCH_RESULT: (message) => {

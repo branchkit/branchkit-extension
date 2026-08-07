@@ -67,6 +67,26 @@ export interface GrammarBatchRequest {
   tab_id?: number;
   /** Set by background SW from sender.frameId. */
   frame_id?: number;
+  /**
+   * chrome.windows windowId of the sending tab. Stamped by the SW from
+   * sender.tab.windowId (the content script doesn't know its window), same
+   * pattern as tab_id/frame_id. The plugin matches it against the connection's
+   * OS-focused window (POST /focus) to distinguish the focused window from a
+   * side-by-side non-focused window of the same browser — both hold a
+   * visible:true active tab, so visibilityState alone can't tell them apart.
+   * See notes/DESIGN_HINT_PROJECTION_SELF_HEAL.md.
+   */
+  window_id?: number;
+  /**
+   * True when this frame is foreground (document.visibilityState === 'visible').
+   * Stamped centrally by postBatch (like doc_id), from the content script's own
+   * visibility — the CS authoritatively knows whether its tab is on screen. With
+   * window_id and the plugin's focused conn/window it identifies the tab the user
+   * is looking at, so the plugin no longer compares tab_id against the lossy
+   * /active-tab cache to decide what projects. A background tab reports false and
+   * is stored-not-projected by construction.
+   */
+  visible: boolean;
   /** UUID per logical scan; groups all batches of one scan. */
   session_id: string;
   /**

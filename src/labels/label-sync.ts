@@ -266,7 +266,7 @@ export function retireRecords(codewords: string[]): void {
 
 
 export async function postBatch(
-  request: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id' | 'doc_id'>,
+  request: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id' | 'doc_id' | 'visible'>,
   deletes: string[] = [],
 ): Promise<GrammarBatchResponse> {
   // Standalone (BranchKit absent): there is no plugin to receive the grammar.
@@ -291,14 +291,19 @@ export async function postBatch(
   // uniformly: applied (ok/stored — batch.go admits delete_codewords on any
   // batch) drops them from the shadow; anything else restores them for the
   // next attempt.
-  // doc_id is stamped here — the one choke point every grammar POST (scan
-  // path, catchup sync, pure-delete flush) flows through — so the plugin
-  // can bind this frame session to THIS document, not just to a reusable
-  // (tab, frame) slot. See GrammarBatchRequest.doc_id.
+  // doc_id AND visible are stamped here — the one choke point every grammar
+  // POST (scan path, catchup sync, pure-delete flush) flows through. doc_id
+  // binds this frame session to THIS document (not just a reusable (tab, frame)
+  // slot); visible carries the content script's own foreground state so the
+  // plugin can pick the projection source from the batch itself instead of a
+  // lossy /active-tab cache (notes/DESIGN_HINT_PROJECTION_SELF_HEAL.md). Read at
+  // send time so a tab that went to the background between schedule and flush
+  // ships the truthful value.
+  const visible = document.visibilityState === 'visible';
   const fullRequest: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'> =
     deletes.length > 0
-      ? { ...request, doc_id: documentInstanceId, delete_codewords: deletes }
-      : { ...request, doc_id: documentInstanceId };
+      ? { ...request, doc_id: documentInstanceId, visible, delete_codewords: deletes }
+      : { ...request, doc_id: documentInstanceId, visible };
   // Transport trace (round 22b): every outcome — including silently-caught
   // sendMessage failures and slow round-trips — lands in the snapshot's
   // sync_trace ring so a stalled post-swap sync names its mechanism.

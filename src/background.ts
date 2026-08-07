@@ -360,6 +360,9 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
   // dispatch scoping stop treating this browser as frontmost.
   if (windowId === chrome.windows.WINDOW_ID_NONE) {
     setBrowserWindowFocused(false);
+    // No window of this browser is OS-focused. Clear before postFocus so the
+    // plugin's window-arbitration input can't point at a now-unfocused window.
+    bgState.focusedWindowId = null;
     void postFocus(false);
     // media_active survives unfocus by design (background control); re-post
     // so the plugin's mirror is asserted from THIS conn even while unfocused.
@@ -376,6 +379,11 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
     const win = await chrome.windows.get(windowId);
     if (win.type !== 'normal') return;
 
+    // Record the newly OS-focused window before the claim so postFocus carries
+    // it — the plugin's window-focus arbitration input (the multi-window
+    // projection disambiguator). A window-to-window hop within this browser
+    // updates it here with no tabs.query round-trip.
+    bgState.focusedWindowId = windowId;
     // This browser gained OS focus. Claim it so the plugin binds this
     // connection to whatever bundle the OS reports as frontmost — the
     // browser never names itself (see DESIGN_BROWSER_IDENTITY_FOCUS_HANDSHAKE).

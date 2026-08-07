@@ -31,7 +31,7 @@ async function load(): Promise<Mod> {
   return await import('./plugin-messages');
 }
 
-const inTab = { tab: { id: 3, url: 'https://youtube.com/' }, frameId: 2, url: 'https://youtube.com/' } as any;
+const inTab = { tab: { id: 3, windowId: 7, url: 'https://youtube.com/' }, frameId: 2, url: 'https://youtube.com/' } as any;
 const noTab = { frameId: 2 } as any;
 
 beforeEach(() => {
@@ -50,7 +50,7 @@ describe('GRAMMAR_BATCH', () => {
     await h.GRAMMAR_BATCH({ type: 'GRAMMAR_BATCH', request }, inTab);
 
     expect(request.elements).toEqual([{ id: 'a', frame_id: 2 }, { id: 'b', frame_id: 2 }]);
-    expect(postGrammarBatch).toHaveBeenCalledWith(3, 2, request);
+    expect(postGrammarBatch).toHaveBeenCalledWith(3, 2, 7, request);
   });
 
   it('answers a transport failure when there is no tab or frame context', async () => {

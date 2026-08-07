@@ -90,7 +90,7 @@ describe('postGrammarBatch', () => {
     getPluginPort.mockReturnValue(null);
     ensureConnected.mockResolvedValue(false);
     const api = await loadApi();
-    const resp = await api.postGrammarBatch(1, 0, request);
+    const resp = await api.postGrammarBatch(1, 0, 5, request);
     expect(resp.result).toBe('error');
     expect(resp.succeeded).toEqual([]);
     expect(resp.failed).toEqual([
@@ -105,18 +105,19 @@ describe('postGrammarBatch', () => {
     ensureConnected.mockResolvedValue(true); // discovery finds the host
     postToPlugin.mockResolvedValue(okResponse({ result: 'ok', succeeded: [], failed: [] }));
     const api = await loadApi();
-    await api.postGrammarBatch(1, 0, request);
+    await api.postGrammarBatch(1, 0, 5, request);
     expect(connectSSE).toHaveBeenCalledTimes(1);
   });
 
   it('stamps tab/frame/conn ids and passes letter tokens through with no overlay', async () => {
     postToPlugin.mockResolvedValue(okResponse({ result: 'ok', succeeded: ['c'], failed: [] }));
     const api = await loadApi();
-    const resp = await api.postGrammarBatch(9, 2, request);
+    const resp = await api.postGrammarBatch(9, 2, 5, request);
     const [endpoint, body] = postToPlugin.mock.calls[0];
     expect(endpoint).toBe('/grammar/batch');
     expect(body.tab_id).toBe(9);
     expect(body.frame_id).toBe(2);
+    expect(body.window_id).toBe(5);
     expect(typeof body.conn_id).toBe('string');
     // No alphabet overlay loaded in this realm → identity translation.
     expect(body.elements.map((e: { codeword: string }) => e.codeword)).toEqual(['c', 'g']);
@@ -154,7 +155,7 @@ describe('postGrammarBatch', () => {
   it('maps an unparseable response to the transport-failure shape', async () => {
     postToPlugin.mockResolvedValue({ ok: true, json: async () => { throw new Error('bad'); } });
     const api = await loadApi();
-    const resp = await api.postGrammarBatch(1, 0, request);
+    const resp = await api.postGrammarBatch(1, 0, 5, request);
     expect(resp.result).toBe('error');
     expect(resp.failed).toHaveLength(2);
   });
@@ -163,10 +164,14 @@ describe('postGrammarBatch', () => {
 describe('focus signals', () => {
   it('postFocus and postActiveTab are bail-on-miss (no ensureConnected)', async () => {
     const api = await loadApi();
+    const { bgState } = await import('../background/state');
+    bgState.focusedWindowId = 12; // the OS-focused window from onFocusChanged
     await api.postFocus(true);
     await api.postActiveTab(4);
     expect(ensureConnected).not.toHaveBeenCalled();
-    expect(postToPlugin).toHaveBeenCalledWith('/focus', expect.objectContaining({ focused: true }));
+    // /focus carries the focused window id — the plugin's multi-window
+    // projection disambiguator.
+    expect(postToPlugin).toHaveBeenCalledWith('/focus', expect.objectContaining({ focused: true, window_id: 12 }));
     expect(postToPlugin).toHaveBeenCalledWith('/active-tab', expect.objectContaining({ tab_id: 4 }));
   });
 

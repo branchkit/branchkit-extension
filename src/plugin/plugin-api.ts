@@ -124,6 +124,7 @@ export async function forwardHintsSessionStart(reason: string, tabId: number): P
 export async function postGrammarBatch(
   tabId: number,
   frameId: number,
+  windowId: number,
   request: Omit<GrammarBatchRequest, 'tab_id' | 'frame_id'>,
 ): Promise<GrammarBatchResponse> {
   if (!getPluginPort() || !getPluginToken()) {
@@ -158,6 +159,10 @@ export async function postGrammarBatch(
     ...(translatedDeletes ? { delete_codewords: translatedDeletes } : {}),
     tab_id: tabId,
     frame_id: frameId,
+    // window_id from sender.tab.windowId (only the SW sees it). The plugin
+    // matches it against this connection's OS-focused window to pick the
+    // projection source among a browser's windows — see postFocus.
+    window_id: windowId,
     conn_id: connId,
   };
   const r = await postToPlugin('/grammar/batch', fullRequest);
@@ -264,9 +269,17 @@ export async function postFocus(focused: boolean): Promise<void> {
   // Bail-on-miss (no discovery): focus claims only matter when already connected.
   // Carry hint_visibility so the plugin's HintVisibility is fresh at the focus
   // recompute — otherwise it lags a grammar batch and the always-mode
-  // recovery-rescan on an empty focused source is silently skipped
-  // (notes/DESIGN_HINT_PROJECTION_SELF_HEAL.md).
-  await postToPlugin('/focus', { conn_id: connId, focused, hint_visibility: bgState.hintVisibility });
+  // recovery-rescan on an empty focused source is silently skipped.
+  // Carry window_id (the OS-focused window from onFocusChanged) so the plugin can
+  // pick the focused window's visible tab as the grammar projection source — the
+  // multi-window disambiguator (two windows each hold a visible active tab).
+  // 0 when no window is focused. See notes/DESIGN_HINT_PROJECTION_SELF_HEAL.md.
+  await postToPlugin('/focus', {
+    conn_id: connId,
+    focused,
+    window_id: bgState.focusedWindowId ?? 0,
+    hint_visibility: bgState.hintVisibility,
+  });
 }
 
 // Tell the plugin which tab is active in this browser's window. Distinct from
@@ -289,6 +302,10 @@ export async function assertFocusIfFocused(): Promise<void> {
   try {
     const win = await chrome.windows.getLastFocused();
     if (win.focused && win.type === 'normal') {
+      // Seed the focused window before the claim so /focus carries it at cold
+      // start (the browser is already frontmost when its extension connects, so
+      // no onFocusChanged fires to set it).
+      if (typeof win.id === 'number') bgState.focusedWindowId = win.id;
       void postFocus(true);
       void postActiveTab(bgState.cachedActiveTabId);
     }
