@@ -1,5 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { isHitOccluding, isOccluded, setOcclusionEnabled } from './occlusion';
+import {
+  isHitOccluding, isOccluded, setOcclusionEnabled, drainElementFromPointCalls,
+} from './occlusion';
 import { HintBadge, __refineScheduler } from '../render/hints';
 import { elementTarget } from '../render/badge-target';
 
@@ -214,6 +216,59 @@ describe('isOccluded — multi-point sampling', () => {
     });
     document.elementFromPoint = (() => t) as typeof document.elementFromPoint;
     expect(isOccluded(t)).toBe(false);
+  });
+});
+
+// Coarse (active-scroll) pass: center-only single probe
+// (notes/PERF_SCROLL_OCCLUSION.md). Full covers stay caught; partial covers
+// with a visible center read not-occluded and are repaired at scroll-settle.
+describe('isOccluded — coarse center-only pass', () => {
+  const origEFP = document.elementFromPoint;
+  afterEach(() => {
+    document.elementFromPoint = origEFP;
+    setOcclusionEnabled(false);
+  });
+
+  function boxAt(t: Element): void {
+    Object.defineProperty(t, 'getBoundingClientRect', {
+      value: () => new DOMRect(100, 100, 100, 100), // center = (150,150)
+      configurable: true,
+    });
+  }
+
+  it('full cover (center covered) is occluded under coarse', () => {
+    setOcclusionEnabled(true);
+    const root = mount('<button id="t">x</button><div id="c">c</div>');
+    const t = root.querySelector('#t')!;
+    const c = root.querySelector('#c')!;
+    boxAt(t);
+    document.elementFromPoint = (() => c) as typeof document.elementFromPoint;
+    expect(isOccluded(t, true)).toBe(true);
+  });
+
+  it('partial cover with a visible center reads NOT occluded under coarse (exact pass would catch it)', () => {
+    setOcclusionEnabled(true);
+    const root = mount('<button id="t">x</button><div id="c">c</div>');
+    const t = root.querySelector('#t')!;
+    const c = root.querySelector('#c')!;
+    boxAt(t);
+    // Center visible, the four corners covered: exact 5-point → 4 covered →
+    // occluded; coarse samples only the center → not occluded.
+    document.elementFromPoint = ((x: number, y: number) =>
+      x === 150 && y === 150 ? t : c) as typeof document.elementFromPoint;
+    expect(isOccluded(t, true)).toBe(false);
+    expect(isOccluded(t, false)).toBe(true);
+  });
+
+  it('coarse spends exactly one elementFromPoint probe', () => {
+    setOcclusionEnabled(true);
+    const root = mount('<button id="t">x</button>');
+    const t = root.querySelector('#t')!;
+    boxAt(t);
+    document.elementFromPoint = (() => t) as typeof document.elementFromPoint;
+    drainElementFromPointCalls();
+    isOccluded(t, true);
+    expect(drainElementFromPointCalls()).toBe(1);
   });
 });
 

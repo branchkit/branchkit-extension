@@ -62,8 +62,18 @@ export interface SettleGather {
  * enumeration involves no layout reads; the reads happen in two batches —
  * `cacheVisibility` for the visibility set (seed rects + ancestor-chain
  * styles, deduped) and direct gBCR for the remaining rect-set members.
+ *
+ * `coarseOcclusion` (notes/PERF_SCROLL_OCCLUSION.md): the caller passes
+ * `isScrollSettlePending()` — true while a scroll is active. Batch 3 then runs
+ * the center-only single-probe occlusion test and BYPASSES the memo (the memo
+ * is already all-dirty every scroll event, so it reuses nothing mid-scroll;
+ * bypassing keeps only exact verdicts in the cache). The trailing scroll-settle
+ * runs with the flag false → exact 5-point pass + normal memo.
  */
-export function gatherSettleReads(wrappers: readonly ElementWrapper[]): SettleGather {
+export function gatherSettleReads(
+  wrappers: readonly ElementWrapper[],
+  coarseOcclusion = false,
+): SettleGather {
   const __cpuStart = performance.now();
   const vw = window.innerWidth;
   const vh = window.innerHeight;
@@ -149,18 +159,22 @@ export function gatherSettleReads(wrappers: readonly ElementWrapper[]): SettleGa
   // lever for future tap changes.
   drainElementFromPointCalls();
   const memoMode = getOcclusionMemoMode();
-  const memoOn = occlusionOn && occlusionSet.length > 0 && memoMode !== 'off';
+  // The coarse (active-scroll) pass bypasses the memo entirely: it is already
+  // all-dirty every scroll event (scheduleScrollReposition → occlusionMemoAllDirty),
+  // so it would reuse nothing here, and a coarse verdict must never be stored
+  // where a later exact pass could reuse it.
+  const memoOn = !coarseOcclusion && occlusionOn && occlusionSet.length > 0 && memoMode !== 'off';
   if (memoOn) occlusionMemoResolveDirty(vw, vh);
   const overlayCovered = new Map<ElementWrapper, boolean>();
   for (const w of occlusionSet) {
     const box = occlusionBoxes.get(w);
-    if (!box) { overlayCovered.set(w, isOccluded(w.element)); continue; }
+    if (!box) { overlayCovered.set(w, isOccluded(w.element, coarseOcclusion)); continue; }
     const hit = memoOn ? occlusionMemoLookup(w, box.rect) : null;
     if (hit !== null && memoMode === 'on') {
       overlayCovered.set(w, hit.value);
       continue;
     }
-    const fresh = isOccludedBox(box.el, box.rect);
+    const fresh = isOccludedBox(box.el, box.rect, coarseOcclusion);
     overlayCovered.set(w, fresh);
     if (memoOn) occlusionMemoStore(w, box.rect, fresh, hit);
   }
@@ -182,6 +196,10 @@ export function gatherSettleReads(wrappers: readonly ElementWrapper[]): SettleGa
   recordCpu('settleGather:b2_rects', __b2End - __b1End);
   recordCpu('settleGather:b3_occlusion', __b3End - __b2End);
   if (efpCalls > 0) recordCpu('settleGather:size:efpCalls', efpCalls);
+  // Active-scroll coarse-pass tell (notes/PERF_SCROLL_OCCLUSION.md): the
+  // before/after signal for the debounce work — coarse gathers per window vs
+  // the b3 ms they cost.
+  if (coarseOcclusion && occlusionSet.length > 0) recordCpu('settleGather:coarse', 1);
   recordCpu('settleGather', performance.now() - __cpuStart);
 
   return { vw, vh, ancestorChainVisible, rects, cssVisible, overlayCovered };

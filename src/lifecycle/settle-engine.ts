@@ -683,7 +683,14 @@ export class SettleEngine {
       // the bounded sets. Taken before any write; safe to share because the
       // appliers' writes (badge DOM, flag repairs, queued releases) never
       // move target elements within this synchronous task.
-      const gather = gatherSettleReads(this.deps.store.all);
+      // Coarse occlusion while a scroll is active (notes/PERF_SCROLL_OCCLUSION.md):
+      // a mutation-storm 'store' settle firing mid-scroll runs the center-only
+      // single-probe pass instead of the 5-point sample (the memo is all-dirty
+      // during scroll, so every badge would otherwise retest all 5). The
+      // trailing scroll-settle nulls scrollSettleTimer BEFORE calling settle,
+      // so this is false there → the exact pass repairs partial covers at rest.
+      // Reuses the existing scroll signal — no new sensing (one-in-one-out).
+      const gather = gatherSettleReads(this.deps.store.all, this.isScrollSettlePending());
       // PLAN: the one desired-state derivation deciding every action class
       // over the snapshot, simulating the apply order (flag repairs feed
       // shown-ness; occlusion/cssHidden feed strict).

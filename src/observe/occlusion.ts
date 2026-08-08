@@ -158,15 +158,27 @@ export const SAMPLE_FRACTIONS: ReadonlyArray<readonly [number, number]> = [
 ];
 const OCCLUDED_MAJORITY = 3; // of SAMPLE_FRACTIONS.length (5)
 
+// Coarse sample set for the active-scroll pass (notes/PERF_SCROLL_OCCLUSION.md):
+// the center point only, one probe per badge. A full cover (frozen header,
+// sticky overlay, scrolled-in covering layer — the QuickBase ghost-badge case)
+// covers the center → still caught while the fling is in flight; a partial
+// cover that leaves the center in a visible sliver reads not-occluded and is
+// repaired by the exact multi-point pass at scroll-settle (~100ms). Center is
+// SAMPLE_FRACTIONS[0], kept in sync structurally.
+const COARSE_SAMPLE_FRACTIONS: ReadonlyArray<readonly [number, number]> = [
+  SAMPLE_FRACTIONS[0],
+];
+
 /**
  * Hit-test several points across a target to decide if it's visually covered.
  * Occluded when a majority of the sample points are covered by another element.
  * Returns false when the flag is off or the target has no area. Up to 5
  * synchronous `elementFromPoint` reads (early-exits once the majority is decided,
  * so typically 3–4); callers must gate to the visible set and debounce (see
- * `reconcileOcclusion`).
+ * `reconcileOcclusion`). `coarse` runs the center-only single-probe variant —
+ * the active-scroll pass (notes/PERF_SCROLL_OCCLUSION.md).
  */
-export function isOccluded(el: Element): boolean {
+export function isOccluded(el: Element, coarse = false): boolean {
   if (!occlusionEnabled) return false;
   // Judge the control's visual box, not the raw element: an autosized
   // combobox <input> is ~2px wide and sits UNDER its own placeholder/value
@@ -181,7 +193,7 @@ export function isOccluded(el: Element): boolean {
   } catch {
     return false;
   }
-  return isOccludedBox(el, r);
+  return isOccludedBox(el, r, coarse);
 }
 
 /**
@@ -209,8 +221,13 @@ export function visualBoxFor(w: ElementWrapper): Element {
  * The sampling core of `isOccluded`, with the visual box already resolved
  * and its rect already read (the settle gather reads it in batch 2 — the
  * fold that removes the duplicate per-wrapper gBCR batch 3 used to pay).
+ *
+ * `coarse` (notes/PERF_SCROLL_OCCLUSION.md): the active-scroll variant samples
+ * the center point only — one probe, occluded iff the center is covered. Full
+ * covers stay caught; partial (sliver-visible-center) covers read not-occluded
+ * and are repaired by the exact multi-point pass at scroll-settle.
  */
-export function isOccludedBox(el: Element, r: DOMRect): boolean {
+export function isOccludedBox(el: Element, r: DOMRect, coarse = false): boolean {
   if (!occlusionEnabled) return false;
   if (r.width < 1 || r.height < 1) return false;
   const doc = el.ownerDocument;
@@ -218,9 +235,11 @@ export function isOccludedBox(el: Element, r: DOMRect): boolean {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
 
+  const samples = coarse ? COARSE_SAMPLE_FRACTIONS : SAMPLE_FRACTIONS;
+  const majority = coarse ? 1 : OCCLUDED_MAJORITY;
   let covered = 0;
   let checked = 0;
-  for (const [fx, fy] of SAMPLE_FRACTIONS) {
+  for (const [fx, fy] of samples) {
     checked++;
     const x = r.left + r.width * fx;
     const y = r.top + r.height * fy;
@@ -230,9 +249,9 @@ export function isOccludedBox(el: Element, r: DOMRect): boolean {
     if (inViewport) efpCalls++;
     const hit = inViewport ? doc.elementFromPoint(x, y) : null;
     if (isHitOccluding(el, hit)) covered++;
-    if (covered >= OCCLUDED_MAJORITY) return true;
+    if (covered >= majority) return true;
     // Once enough points are confirmed NOT covered, a majority is impossible.
-    if (checked - covered >= SAMPLE_FRACTIONS.length - OCCLUDED_MAJORITY + 1) return false;
+    if (checked - covered >= samples.length - majority + 1) return false;
   }
-  return covered >= OCCLUDED_MAJORITY;
+  return covered >= majority;
 }

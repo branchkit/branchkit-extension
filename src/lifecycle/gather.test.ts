@@ -109,4 +109,20 @@ describe('gatherSettleReads set membership', () => {
       setOcclusionEnabled(false);
     }
   });
+
+  // The coarse (active-scroll) flag changes only the per-badge probe count and
+  // memo bypass inside batch 3; the occlusion set membership is identical, so
+  // consumers see the same map shape whether a scroll is active or not.
+  it('coarse occlusion pass preserves the visible-badge hit-test membership', () => {
+    const visibleBadge = make({ hint: true, hintVisible: true });
+    const dormantBadge = make({ hint: true });
+    setOcclusionEnabled(true);
+    try {
+      const g = gatherSettleReads([visibleBadge, dormantBadge], /* coarse */ true);
+      expect(g.overlayCovered.has(visibleBadge)).toBe(true);
+      expect(g.overlayCovered.has(dormantBadge)).toBe(false);
+    } finally {
+      setOcclusionEnabled(false);
+    }
+  });
 });

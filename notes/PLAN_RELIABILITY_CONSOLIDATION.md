@@ -210,6 +210,22 @@ for a ledgered miss is out of scope unless its reopen condition fires.
    above the cadence, and dispatch re-reads at action time. Reopens if: the
    cadence lengthens materially or dispatch stops re-reading.
 
+5. **Coarse occlusion during active scroll.** RATIFIED 2026-08-08 (user
+   sign-off). While a scroll gesture is active, the occlusion pass samples the
+   target's center point only (one `elementFromPoint`) instead of the 5-point
+   sample, so a *partially* covered target (center visible, edges covered) may
+   briefly show its badge; FULL covers (frozen header, sticky overlay — the
+   ghost-badge case occlusion exists for) are still caught. The exact multi-point
+   pass runs at scroll-settle (~100ms after the last scroll event) and repairs
+   it. A strict subset of entry 2, scoped to the active-scroll window and
+   self-healing. Safe: voice is unaffected — the sealed dispatch gate re-reads
+   occlusion live (full multi-point) at action time, and the speak loop is
+   1–2s ≫ the settle cadence. Motivation: `notes/PERF_SCROLL_OCCLUSION.md` —
+   the exact pass was ~97% of the gather during scroll (memo all-dirty, every
+   badge retesting), peaking at 1206ms per 5s window. Reopens if: real usage
+   shows sliver-cover ghost badges that persist past scroll-stop, or a dispatch
+   ever routes to a covered element.
+
 ## 6. Remaining work — rewritten 2026-07-19 (post-demotion queue)
 
 Everything the original section listed is CLOSED: ledger + policy ratified,
